@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use url::{Host, Url};
 
-use crate::embed::{is_scriptable_document, DocumentKind};
+use crate::embed::{is_scriptable_document, DATA_DOCUMENT_CSP};
 use crate::AppState;
 
 /// Set to `1` to let the route reach loopback and private addresses —
@@ -463,7 +463,7 @@ pub fn response(content_type: &str, body: Vec<u8>) -> Response<Body> {
     if is_scriptable_document(content_type) {
         headers.insert(
             header::CONTENT_SECURITY_POLICY,
-            HeaderValue::from_static(DocumentKind::Data.csp()),
+            HeaderValue::from_static(DATA_DOCUMENT_CSP),
         );
     }
     resp

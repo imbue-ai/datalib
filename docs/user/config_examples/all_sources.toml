@@ -958,11 +958,10 @@ family_device_id = "0123456789abcdef0123456789abcdef"
 device_udid = "fedcba9876543210fedcba9876543210"
 
 # The whole store renders as ONE page — `yolink/render_markdown/index.md` —
-# carrying a per-device summary plus one interactive scatter per physical
-# quantity (temperature, humidity, liquid volume), every device a series,
-# all values converted to SI. The plots are standalone HTML under
-# `plots/`, iframed from the page; they load Plotly from cdn.plot.ly, so
-# viewing them needs network access (the data itself is inlined).
+# carrying a per-device summary plus a chart per physical quantity
+# (temperature, humidity, liquid volume), every device a series. The
+# charts draw from the time-series index, which `render_time_series`
+# fills.
 #
 # The page names the raw tables it reads as a whole; if none of them
 # changed since the last render, the render is a no-op. No knobs.
@@ -1057,8 +1056,8 @@ path = "/Volumes/airvisual"
 [[steps.params.export.devices]]
 path = "/Volumes/airvisual-1"
 
-# One page — `ship-air/render_markdown/index.md` — with one interactive
-# plot per quantity (particulates, AQI, CO2, temperature, humidity, VOC),
+# One page — `ship-air/render_markdown/index.md` — with a chart per
+# quantity (particulates, AQI, CO2, temperature, humidity, VOC),
 # every device a series, same shape as yolink's. The page declares its
 # tables whole, so it re-renders only when a row of one of them moved.
 [[steps]]

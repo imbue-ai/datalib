@@ -9,7 +9,7 @@ point cost on disk?
 length into `time_series_points` keyed `(time_series_id, t)`, then
 applies one sync of 10 new points per series three ways. The design
 that rests on these numbers is
-[`docs/dev/plans/time_series.md`](../../docs/dev/plans/time_series.md).
+[`docs/dev/plans/completed/time_series.md`](../../docs/dev/plans/completed/time_series.md).
 
 ```sh
 bazelisk build //third-party/doltlite:doltlite

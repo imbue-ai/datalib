@@ -58,9 +58,10 @@ macro_rules! app_csp_directives {
 ///   shell loads this page from the server as a remote URL, so Tauri
 ///   does not rewrite the policy the way it would for a page it serves
 ///   itself, and its `invoke` is a `fetch` to those origins.
-/// - `frame-src 'self'`: the DACTAL card and the plot pages are
+/// - `frame-src 'self'`: the DACTAL card and a document's body are
 ///   same-origin iframes — which is why every document this origin
-///   serves as data gets a sandbox policy of its own ([`DocumentKind`]).
+///   serves as data gets a sandbox policy of its own
+///   ([`DATA_DOCUMENT_CSP`]).
 /// - `frame-ancestors 'none'`: no page may frame the app, so no page can
 ///   lay an invisible copy of it under its own buttons. A page on
 ///   another port of the same host would otherwise carry the session,
@@ -80,66 +81,21 @@ pub fn app_csp(trusted_proxy: Option<TrustedProxy>) -> &'static str {
     }
 }
 
-/// What a document this origin serves as *data* — not the app — may do.
-/// Every policy starts with `sandbox`, which puts the document in an
+/// What a document this origin serves as *data* — not the app — may do:
+/// an attachment out of a render tree, a fetched remote SVG. A sender
+/// wrote them, so they run no script at all and load nothing from
+/// outside — not even a read receipt. `sandbox` puts the document in an
 /// opaque origin: no cookie, no same-origin `fetch` to `/api/*`, no way
 /// to navigate the window it sits in. It is sent as a header because
 /// `sandbox` is ignored in a `<meta>` policy.
-///
-/// The kind is named by whoever knows what the bytes are; anything not
-/// named is [`DocumentKind::Data`], the policy that runs nothing.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Default,
-    strum::EnumString,
-    strum::IntoStaticStr,
-    strum::VariantArray,
-)]
-#[strum(serialize_all = "snake_case")]
-pub enum DocumentKind {
-    /// Bytes from upstream: an attachment out of a render tree, a fetched
-    /// remote SVG. A sender wrote them, so they run no script at all and
-    /// load nothing from outside — not even a read receipt.
-    #[default]
-    Data,
-    /// A Plotly page a time-series renderer wrote (`plots/*.html`). It
-    /// needs its own inline script and Plotly from the pinned CDN
-    /// (`timeseries_render::plot`; `scattergl` compiles shaders through
-    /// `new Function`), and nothing else: `connect-src 'none'`.
-    Plot,
-}
+pub const DATA_DOCUMENT_CSP: &str = "sandbox; default-src 'none'; style-src 'unsafe-inline'; \
+     img-src 'self' data:; media-src 'self' data:; font-src data:; \
+     base-uri 'none'; form-action 'none'";
 
 /// The DACTAL page (`/dactal/`) runs its own scripts in the sandbox. Its
 /// `<meta>` policy holds the rest (`ui/public/dactal/index.html`) — a
-/// header naming sources would intersect with it — and it is not a kind
-/// an applet can ask for.
+/// header naming sources would intersect with it.
 pub const DACTAL_SANDBOX_CSP: &str = "sandbox allow-scripts allow-downloads";
-
-impl DocumentKind {
-    pub fn parse(s: &str) -> Option<Self> {
-        s.parse().ok()
-    }
-
-    pub fn csp(self) -> &'static str {
-        match self {
-            DocumentKind::Data => {
-                "sandbox; default-src 'none'; style-src 'unsafe-inline'; \
-                 img-src 'self' data:; media-src 'self' data:; font-src data:; \
-                 base-uri 'none'; form-action 'none'"
-            }
-            DocumentKind::Plot => {
-                "sandbox allow-scripts allow-downloads; default-src 'none'; \
-                 script-src 'unsafe-inline' 'unsafe-eval' https://cdn.plot.ly; \
-                 style-src 'unsafe-inline'; img-src data: blob:; font-src data:; \
-                 worker-src blob:; connect-src 'none'; base-uri 'none'; form-action 'none'"
-            }
-        }
-    }
-}
 
 /// Content types a page would run as code from `<script src>` or
 /// `WebAssembly.instantiateStreaming`. A render tree holds none of its
@@ -316,7 +272,7 @@ mod tests {
     /// attack (audit 2026-10-02 finding 1).
     #[test]
     fn data_documents_run_nothing_and_reach_nothing() {
-        let csp = DocumentKind::Data.csp();
+        let csp = DATA_DOCUMENT_CSP;
         assert_eq!(directive(csp, "sandbox"), Some("sandbox"), "{csp}");
         assert_eq!(directive(csp, "default-src"), Some("default-src 'none'"));
         assert!(directive(csp, "script-src").is_none());
@@ -324,31 +280,6 @@ mod tests {
         for d in csp.split(';') {
             assert!(!d.contains("http"), "no remote origin in {d:?}");
         }
-    }
-
-    /// A plot page runs its own script and Plotly, and still sends
-    /// nothing anywhere.
-    #[test]
-    fn plot_documents_run_plotly_and_reach_nothing() {
-        let csp = DocumentKind::Plot.csp();
-        assert!(!csp.contains("allow-same-origin"), "{csp}");
-        assert_eq!(directive(csp, "default-src"), Some("default-src 'none'"));
-        assert_eq!(directive(csp, "connect-src"), Some("connect-src 'none'"));
-        assert_eq!(
-            directive(csp, "script-src"),
-            Some("script-src 'unsafe-inline' 'unsafe-eval' https://cdn.plot.ly")
-        );
-    }
-
-    #[test]
-    fn document_kinds_parse_as_they_print() {
-        use strum::VariantArray;
-        for &k in DocumentKind::VARIANTS {
-            let s: &'static str = k.into();
-            assert_eq!(DocumentKind::parse(s), Some(k));
-        }
-        assert_eq!(DocumentKind::parse("plot"), Some(DocumentKind::Plot));
-        assert_eq!(DocumentKind::parse("script"), None);
     }
 
     #[test]

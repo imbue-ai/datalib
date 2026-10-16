@@ -3,8 +3,8 @@
 A source whose data is numbers over time renders it twice: as documents, by `render_markdown`, and as
 time series, by `render_time_series`. This doc covers the time-series
 path: the stores, how points are encoded, units, the index and the
-applet. What is planned but not built is in
-[`plans/time_series.md`](plans/time_series.md).
+applet. The plan it was built from, with the questions it left open, is
+[`plans/completed/time_series.md`](plans/completed/time_series.md).
 
 Three sources do:
 
@@ -217,6 +217,37 @@ The Time series card (`docs/dev/cards.md`, `timeSeriesView()`) draws
 what the applet answers. It converts every value to SI units with
 `unit_factor` and `unit_offset`, gives each quantity its own axis (two
 at most), and prints each axis in a unit that suits it.
+
+## Charts in documents
+
+A render that wants a chart on a page writes
+
+```html
+<div class="time-series-chart" data-time-series="<id> <id>"></div>
+```
+
+naming the time series to draw (`time_series_chart` in
+`datalib/backend/etl/timeseries_render/src/time_series.rs`). The page
+stays markdown with an inert element in it; the backend never parses it
+back (AGENTS.md §"QMDs are write-only").
+
+The document view draws it. After each paint of a document's body,
+`mountTimeSeries` (`datalib/ui/src/cards/timeSeriesEmbed.ts`) mounts a
+`TimeSeriesEmbed` into every such element that has none. The embed asks
+the applet for those time series and their points over everything they
+hold, and draws them with `TimeSeriesChart`, the chart the Time series
+card uses. The document's frame runs no script of its own, so the chart
+is the app's code reaching into it, the same way chips and the copy
+buttons are; its styles are in the frame's own stylesheet. A time series
+the index does not hold is left out, and a chart with none says so.
+
+What draws where:
+
+- **The sensor page** (YoLink, AirVisual): a chart per quantity, and a
+  second one where the metric table puts some of the quantity's metrics
+  on the right (YoLink's water meter total).
+- **Garmin:** the overview's weight and body fat, a chart per quantity
+  on each family page, and an activity's heart rate and speed.
 
 ## Rebuilding
 

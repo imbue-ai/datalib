@@ -17,6 +17,21 @@ use sqlx::sqlite::SqlitePool;
 
 const STANZA: &str = "air-cucina";
 
+/// The time series ids of each `data-time-series` chart, in page order.
+pub fn charts(md: &str) -> Vec<Vec<String>> {
+    md.split("data-time-series=\"")
+        .skip(1)
+        .map(|rest| {
+            rest.split('"')
+                .next()
+                .unwrap_or("")
+                .split(' ')
+                .map(str::to_string)
+                .collect()
+        })
+        .collect()
+}
+
 /// `(device, ts_ms, pm25, co2, temperature)`; `None` is a blank cell.
 type Seed = (&'static str, i64, Option<f64>, Option<f64>, Option<f64>);
 
@@ -151,39 +166,32 @@ async fn renders_one_plot_per_quantity_with_data_then_skips_until_data_lands() {
 
     let page_dir = root.join(STANZA).join("render_markdown");
     let md = std::fs::read_to_string(page_dir.join("index.md")).unwrap();
-    let plots = page_dir.join("plots");
-
-    // Only the quantities with data get a plot; the rest get neither a
-    // file nor a broken iframe.
-    for key in ["particulates", "co2", "temperature"] {
-        assert!(
-            plots.join(format!("{key}.html")).is_file(),
-            "missing plots/{key}.html"
-        );
-        assert!(
-            md.contains(&format!("<iframe src=\"plots/{key}.html\"")),
-            "index.md does not iframe plots/{key}.html:\n{md}"
-        );
-    }
-    for key in ["aqi", "humidity", "voc"] {
-        assert!(
-            !plots.join(format!("{key}.html")).exists(),
-            "plots/{key}.html should not exist"
-        );
-        assert!(!md.contains(&format!("plots/{key}.html")), "{md}");
-    }
-
-    // Both devices are series on the one CO2 plot, under their names,
-    // not their serials; the sensor-off sample keeps Schlafzimmer off
-    // the particulates plot.
-    let co2 = std::fs::read_to_string(plots.join("co2.html")).unwrap();
-    assert!(co2.contains("\"name\":\"Cucina\""), "{co2}");
-    assert!(co2.contains("\"name\":\"Schlafzimmer\""), "{co2}");
-    let pm = std::fs::read_to_string(plots.join("particulates.html")).unwrap();
-    assert!(pm.contains("Cucina (PM2.5)"), "{pm}");
     assert!(
-        !pm.contains("Schlafzimmer"),
-        "a NULL cell must not become a point:\n{pm}"
+        !page_dir.join("plots").exists(),
+        "charts are drawn from the time-series store, not written as pages"
+    );
+
+    // Only the quantities with data get a chart, each naming the time
+    // series it draws, in legend order. The sensor-off sample keeps
+    // Schlafzimmer off the particulates chart.
+    let id = |name: &str| -> String {
+        datalib_etl_airvisual_render::render::time_series::read(&raw_path, STANZA)
+            .unwrap()
+            .into_iter()
+            .find(|s| s.name == name)
+            .unwrap_or_else(|| panic!("no time series {name}"))
+            .time_series_id
+    };
+    assert_eq!(
+        charts(&md),
+        [
+            vec![id("4133WV2JB9Z/pm25_ugm3")],
+            vec![id("4133WV2JB9Z/co2_ppm"), id("QKAO9PC1XDJ/co2_ppm")],
+            vec![
+                id("4133WV2JB9Z/temperature_c"),
+                id("QKAO9PC1XDJ/temperature_c")
+            ],
+        ]
     );
 
     assert!(md.contains("## Devices"), "{md}");
@@ -240,12 +248,6 @@ async fn renders_one_plot_per_quantity_with_data_then_skips_until_data_lands() {
         "the store moved, so the cursor must too"
     );
     assert_eq!(emitted.len(), 1, "an appended sample must re-render");
-    assert!(
-        std::fs::read_to_string(plots.join("co2.html"))
-            .unwrap()
-            .contains("1788222636000"),
-        "the new sample is missing from the CO2 plot"
-    );
     db.close().await;
 }
 
@@ -264,12 +266,7 @@ async fn an_empty_store_renders_a_page_without_plots() {
         .unwrap();
     assert!(md.contains("nothing to plot"), "{md}");
     assert!(md.contains("no samples yet"), "{md}");
-    assert!(!root
-        .join(STANZA)
-        .join("render_markdown")
-        .join("plots")
-        .join("co2.html")
-        .exists());
+    assert!(charts(&md).is_empty(), "no samples, no chart");
     db.close().await;
 }
 

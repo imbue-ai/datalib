@@ -1,15 +1,17 @@
 # Garmin render
 
 The render step of a `garmin` group turns the raw store into these
-markdown documents under `<data_root>/<group>/render_markdown/`, with
-standalone Plotly pages under `plots/`:
+markdown documents under `<data_root>/<group>/render_markdown/`. A
+chart on a page is a `data-time-series` element naming time series from
+§"Time series", which the document view draws
+(`docs/dev/time_series.md` §"Charts in documents"):
 
 | file | what it shows | grid rows |
 |---|---|---|
-| `index.md` | **Weight**: the latest weigh-in, a plot of every weigh-in (kilograms, with body fat on a second axis when the scale reports it) and a table of the newest thirty. **Devices**: one section per registered device. **Store**: counts, and a per-metric table of days walked against days with data. | `Garmin Weight` for the page (`author` the account's full name); `Garmin Device` per device, the device name in `channel` |
-| `<family>.md` | one family of per-day metrics: the latest day, a plot with one stacked panel per unit, and a table of the newest 90 days | `Garmin Metrics`, one per page |
+| `index.md` | **Weight**: the latest weigh-in, a chart of every weigh-in (kilograms, with body fat on a second axis when the scale reports it) and a table of the newest thirty. **Devices**: one section per registered device. **Store**: counts, and a per-metric table of days walked against days with data. | `Garmin Weight` for the page (`author` the account's full name); `Garmin Device` per device, the device name in `channel` |
+| `<family>.md` | one family of per-day metrics: the latest day, a chart per quantity among its number fields, and a table of the newest 90 days | `Garmin Metrics`, one per page |
 | `days.md` | the daily log: one section per day with any value, newest first, every family's values on its own line | `Garmin Daily Log` for the page; `Garmin Day` per day, its preview leading with sleep, resting HR, HRV, steps, stress, Body Battery and readiness |
-| `activities/<uuid>.md` | one activity: type, start, distance, time, pace, heart rate, calories, training effect and load, the device, whether its FIT file is held | `Garmin Activity`, the type in `channel` |
+| `activities/<uuid>.md` | one activity: when its FIT file is held, a chart of its heart rate and speed; then type, start, distance, time, pace, heart rate, calories, training effect and load, the device, whether its FIT file is held | `Garmin Activity`, the type in `channel` |
 | `records.md` | personal records, badges, gear, workouts and goals, a section each | `Garmin Records` for the page; `Garmin Record`, `Garmin Badge`, `Garmin Gear`, `Garmin Workout`, `Garmin Goal` per entry |
 
 A family page is written only when some day has a value for it. The
@@ -77,8 +79,3 @@ every document is rendered again; an unchanged one writes identical
 rows, which the render store records as no change, and a document not
 emitted (an activity Garmin deleted) leaves the store. `RENDER_VERSION`
 in `src/render/mod.rs` is the number to bump when the layout changes.
-
-The plots load Plotly from cdn.plot.ly (pinned, with an SRI hash, in
-`datalib/backend/etl/timeseries_render/src/plot.rs`); viewing them needs
-network access, but the data is inlined and an offline notice replaces
-the chart when the script does not load.

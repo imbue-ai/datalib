@@ -5,12 +5,13 @@ stores and steps with Garmin as the first source, the applet and the
 Time series card. On 2026-10-16 the stores changed from one row per
 point to encoded chunks, the index stopped copying points, and units
 became UCUM codes. What is built is described in
-[`../time_series.md`](../time_series.md), which replaces this plan's
+[`../../time_series.md`](../../time_series.md), which replaces this plan's
 sections on the stores, units and serving; §"Names" and §"Config" are
-kept as the record of what was decided. Not
-built: charts inside documents and retiring `plots/` (§"Order of
-work", item 5). YoLink and AirVisual as time series (item 5) and time
-series from Garmin's FIT files (item 6) are built.**
+kept as the record of what was decided. Every item of §"Order of
+work" is built, the last ones on 2026-10-16: YoLink and AirVisual as
+time series, charts inside documents with the Plotly `plots/` pages
+retired, and time series from Garmin's FIT files. What is left is
+§"Open questions".**
 
 ## The problem
 
@@ -92,7 +93,7 @@ roots forward (AGENTS.md §"Keep a forward path for existing data"):
 
 ## The stores, units and serving
 
-Built, and described in [`../time_series.md`](../time_series.md). The
+Built, and described in [`../../time_series.md`](../../time_series.md). The
 first version kept one row per point and replaced a time series whole
 when a hash of its points moved. Measured
 (`hack/doltlite_time_series_cost/`): a point cost about 48 bytes on
@@ -146,7 +147,7 @@ Each item is one PR, and each leaves the tree working.
    with `about_uuid` naming the activity's document, decoded from the
    FIT files Garmin's ingest already keeps.
 
-Items 1 to 4 and 6 are built.
+All six are built.
 
 ## Open questions
 

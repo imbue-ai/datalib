@@ -1,8 +1,8 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 # What the time-series providers' render crates share: the sensor
-# page, the Plotly page, the quantity/metric vocabulary, the series type
-# and the text helpers. A provider's render crate contributes its metric
+# page, the quantity/metric vocabulary, the series type, a sensor
+# source's time series and the text helpers. A provider's render crate contributes its metric
 # table and its parse, and little else.
 rust_library(
     name = "datalib_etl_timeseries_render",
