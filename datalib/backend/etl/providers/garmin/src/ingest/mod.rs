@@ -1367,7 +1367,11 @@ pub fn fit_from_zip(bytes: &[u8]) -> Result<Vec<u8>> {
     let mut zip = zip::ZipArchive::new(cursor).context("activity download is not a zip")?;
     let mut names: BTreeMap<String, usize> = BTreeMap::new();
     for i in 0..zip.len() {
-        let name = zip.by_index(i)?.name().to_string();
+        let name = zip
+            .by_index(i)?
+            .name()
+            .with_context(|| format!("name of entry {i} in activity zip"))?
+            .to_string();
         names.insert(name, i);
     }
     let (name, idx) = names
