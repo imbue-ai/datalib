@@ -91,6 +91,7 @@ function groupedName(
 ): string {
   if (!group.name) return defaultName(id);
   if (phase === "ingest") return group.name;
+  if (fn === "render_time_series") return `${group.name} (render time series)`;
   if (phase === "render") return `${group.name} (render markdown)`;
   if (fn === "keyword_index") return `${group.name} (keyword index)`;
   if (fn === "embed") return `${group.name} (embeddings)`;
@@ -103,7 +104,9 @@ function groupedName(
 const PHASE_BY_FUNCTION: Record<string, StepPhase> = {
   ingest: "ingest",
   render_markdown: "render",
+  render_time_series: "render",
   grid_index: "index",
+  time_series_index: "index",
   qmd_aggregator: "index",
   keyword_index: "index",
   embed: "index",
@@ -124,6 +127,8 @@ const DEFAULT_NAMES: Record<string, string> = {
   "unified_document_index/qmd_aggregator": "Document Index (QMD)",
   "unified_document_index/embedding_map": "Document Index (map)",
   unified_document_index: "Document Index (Applet)",
+  "unified_time_series_index/time_series_index": "Time Series Index",
+  unified_time_series_index: "Time Series Index (Applet)",
   datalib_contacts: "Contacts (Applet)",
 };
 
@@ -953,9 +958,14 @@ function setGroupLine(text: string, groupId: string, key: string, line: string |
 
 /// The fan-in steps, by function: the SQL index the grid reads, which
 /// consumes rendered markdown; the qmd aggregator, which runs after each
-/// source's own qmd steps; and the map, which reads the aggregator. A
-/// source can be in one and not another.
-export type FanInFunction = "grid_index" | "qmd_aggregator" | "embedding_map";
+/// source's own qmd steps; the map, which reads the aggregator; and the
+/// time-series index, which reads each source's time series. A source
+/// can be in one and not another.
+export type FanInFunction = "grid_index" | "qmd_aggregator" | "embedding_map" | "time_series_index";
+
+/// The groups the fan-ins are filed under: the document index and the
+/// time-series index.
+const FAN_IN_GROUPS = ["unified_document_index", "unified_time_series_index"];
 
 /// The fan-ins a render step feeds.
 const RENDER_FAN_INS: FanInFunction[] = ["grid_index"];
@@ -969,14 +979,16 @@ const STEP_TABLE = /(\[\[steps\]\])([\s\S]*?)(?=\n[ \t]*\[|$)/g;
 
 const INPUTS_OPEN = /^[ \t]*inputs[ \t]*=[ \t]*\[/m;
 
-/// Is this step body a fan-in — filed under the `unified_document_index` group,
-/// or, for a custom step, writing an `unified_document_index/…` id — and, when
-/// `only` names some, one of those?
+/// Is this step body a fan-in — filed under one of `FAN_IN_GROUPS`, or,
+/// for a custom step, writing an id under one — and, when `only` names
+/// some, one of those?
 function isFanIn(body: string, only?: FanInFunction[]): boolean {
-  const verbatim = /id\s*=\s*"unified_document_index\/([^"]*)"/.exec(body);
-  if (!verbatim && !/group\s*=\s*"unified_document_index"/.test(body)) return false;
+  const verbatim = /id\s*=\s*"([^"/]*)\/([^"]*)"/.exec(body);
+  const filed = /group\s*=\s*"([^"]*)"/.exec(body)?.[1];
+  const underFanIn = verbatim !== null && FAN_IN_GROUPS.includes(verbatim[1]!);
+  if (!underFanIn && !(filed !== undefined && FAN_IN_GROUPS.includes(filed))) return false;
   if (!only) return true;
-  const fn = /function\s*=\s*"([^"]*)"/.exec(body)?.[1] ?? verbatim?.[1];
+  const fn = /function\s*=\s*"([^"]*)"/.exec(body)?.[1] ?? (underFanIn ? verbatim?.[2] : undefined);
   return only.includes(fn as FanInFunction);
 }
 
@@ -1023,9 +1035,41 @@ export function unwireFromFanIns(text: string, stepId: string, only?: FanInFunct
 /// grouped step says so with `group` + `function`; a custom step filed
 /// outside any group says it in the id it writes.
 export function fanInFunctionOf(step: ConfiguredStep): string | null {
-  if (step.group === "unified_document_index") return step.function;
+  if (step.group !== null && FAN_IN_GROUPS.includes(step.group)) return step.function;
   const [group, fn] = step.id.split("/");
-  return step.group === null && group === "unified_document_index" ? (fn ?? null) : null;
+  return step.group === null && group !== undefined && FAN_IN_GROUPS.includes(group)
+    ? (fn ?? null)
+    : null;
+}
+
+/// The source types whose data is also time series. Mirrors
+/// `datalib_dag::config::TIME_SERIES_SOURCE_TYPES`; hand-kept in step with it.
+export const TIME_SERIES_TYPES = ["garmin", "yolink", "airvisual"];
+
+const TIME_SERIES_GROUP = "unified_time_series_index";
+
+/// Give a source of a time-series type its `render_time_series` step and
+/// a place in the time-series index's inputs, adding the index and the
+/// applet that serves it when the config has none. A source of any other type is left as it is.
+export function setTimeSeriesStep(text: string, group: string, type: string): string {
+  if (!TIME_SERIES_TYPES.includes(type)) return text;
+  const id = `${group}/render_time_series`;
+  let next = text;
+  if (!listSteps(next).some((s) => s.id === id)) {
+    next = insertEntries(
+      next,
+      `[[steps]]\ngroup = ${quote(group)}\nfunction = "render_time_series"\ninputs = [${quote(stepIdFor(group, "download"))}]`,
+    );
+  }
+  if (!listSteps(next).some((s) => fanInFunctionOf(s) === "time_series_index")) {
+    next =
+      `${next.replace(/\s*$/, "")}\n\n[[groups]]\nid = ${quote(TIME_SERIES_GROUP)}\n` +
+      `name = "Time Series Index"\n\n[[steps]]\ngroup = ${quote(TIME_SERIES_GROUP)}\n` +
+      `function = "time_series_index"\ninputs = []\n\n[[applets]]\n` +
+      `group = ${quote(TIME_SERIES_GROUP)}\nid = ${quote(TIME_SERIES_GROUP)}\n` +
+      `command = ${quote(`datalib-applet ${TIME_SERIES_GROUP}`)}\n`;
+  }
+  return wireIntoFanIns(next, id, "time_series_index");
 }
 
 /// A source's own qmd steps, as `[[steps]]` blocks: its keyword index,

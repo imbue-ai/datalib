@@ -197,10 +197,8 @@ spec's real subject is "this is on screen".
 
 Adding a spec that renders a grid? Add its filename to the `webkit`
 project's `testMatch`, or it runs in Chromium only. Note that WebKit is
-also stricter about `loading="lazy"` iframes (it will not load one far
-below the fold — scroll it into view first;
-[`yolink-plots.spec.ts`](/datalib/ui/tests/e2e/yolink-plots.spec.ts) shows
-the shape). And do not drive a native HTML5 drag with `page.mouse` in a
+also stricter about `loading="lazy"` iframes: it will not load one far
+below the fold, so scroll it into view first. And do not drive a native HTML5 drag with `page.mouse` in a
 spec the `webkit` project runs: Playwright's WebKit on macOS turns it into
 a native drag session that it sometimes loses under load — the page gets
 `dragstart` and one `dragenter`, then nothing, not even `dragend` on the

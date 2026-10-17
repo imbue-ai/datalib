@@ -40,11 +40,18 @@ export function contactsSource(): string {
   return "contactsView()";
 }
 
-/// What an applet row's Browse opens: the table of an applet whose rows
+/// The source of the Time series card.
+export function timeSeriesSource(): string {
+  return "timeSeriesView()";
+}
+
+/// What an applet row's Browse opens: the view of an applet whose rows
 /// are its own (the server enables Browse on exactly those), else
 /// nothing.
 export function appletBrowseSource(appletId: string): string | null {
-  return appletId === "datalib_contacts" ? contactsSource() : null;
+  if (appletId === "datalib_contacts") return contactsSource();
+  if (appletId === "unified_time_series_index") return timeSeriesSource();
+  return null;
 }
 
 /// The source of a search card on `q`.

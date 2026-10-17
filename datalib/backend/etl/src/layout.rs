@@ -22,3 +22,14 @@ pub fn ingest_root(data_root: &Path, stanza: &str) -> PathBuf {
 pub fn render_markdown_root(data_root: &Path, stanza: &str) -> PathBuf {
     stanza_dir(data_root, stanza).join(RENDER_MARKDOWN_DIR)
 }
+
+/// The time-series render step's function, and so the directory it
+/// writes: `<data_root>/<group>/render_time_series`.
+pub const RENDER_TIME_SERIES_DIR: &str = "render_time_series";
+
+/// A source's time-series store.
+pub fn render_time_series_db(data_root: &Path, stanza: &str) -> PathBuf {
+    stanza_dir(data_root, stanza)
+        .join(RENDER_TIME_SERIES_DIR)
+        .join(datalib_runtime::layout::TIME_SERIES_DB)
+}

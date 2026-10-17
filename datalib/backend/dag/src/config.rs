@@ -583,6 +583,15 @@ pub const RESERVED_STANZA_NAMES: &[&str] = &[
     "unified_time_series_index",
 ];
 
+/// The source types whose data is also time series: each such source gets
+/// a `render_time_series` step, read by the one `time_series_index` under
+/// [`TIME_SERIES_INDEX_GROUP`]. Mirrors `SourceType::renders_time_series`
+/// in `datalib-step`, which a test there holds to this list.
+pub const TIME_SERIES_SOURCE_TYPES: &[&str] = &["garmin", "yolink", "airvisual"];
+
+/// The group the time-series index is filed under, and the tree it writes.
+pub const TIME_SERIES_INDEX_GROUP: &str = "unified_time_series_index";
+
 fn reserved_dir(top: &str) -> Option<(&'static str, &'static str)> {
     RESERVED_DIRS.iter().copied().find(|(dir, _)| *dir == top)
 }

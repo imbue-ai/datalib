@@ -18,6 +18,7 @@ import {
   sourceStepsOf,
   removedWith,
   setQmdSteps,
+  setTimeSeriesStep,
   qmdIndexingOf,
   type QmdIndexing,
   unwireFromFanIns,
@@ -719,6 +720,7 @@ export function useSourcesCard(ctx: CardCtx) {
     } else {
       next = setQmdSteps(next, payload.id, "none");
     }
+    next = setTimeSeriesStep(next, payload.id, payload.entry.type);
 
     // Banners are for a person, so they say the name; the id is what the
     // config and the disk use.

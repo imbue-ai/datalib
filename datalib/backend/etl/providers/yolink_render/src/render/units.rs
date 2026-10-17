@@ -7,16 +7,12 @@ pub use datalib_etl_timeseries_render::units::{series_label, Axis, MetricSpec, Q
 pub const TEMPERATURE: Quantity = Quantity {
     key: "temperature",
     title: "Temperature",
-    left_unit: "°C",
-    right_unit: None,
     blurb: "Every temperature-capable device, in degrees Celsius.",
 };
 
 pub const HUMIDITY: Quantity = Quantity {
     key: "humidity",
     title: "Relative humidity",
-    left_unit: "%RH",
-    right_unit: None,
     blurb: "Relative humidity is already a dimensionless ratio — no conversion applies.",
 };
 
@@ -25,15 +21,13 @@ pub const HUMIDITY: Quantity = Quantity {
 /// only ever climbs (tens of thousands of litres), while
 /// `water_consumption_*` is the volume used since the previous sample
 /// (hundreds at most). Sharing one axis would flatten consumption into
-/// a line along the bottom, so the totalizer overlays on a right-hand
-/// axis and both stay readable in one frame.
+/// a line along the bottom, so the totalizer is charted on its own
+/// ([`Axis::Right`]).
 pub const VOLUME: Quantity = Quantity {
     key: "volume",
     title: "Liquid volume",
-    left_unit: "L (per sample)",
-    right_unit: Some("L (cumulative)"),
-    blurb: "Per-sample consumption on the left axis; the meter's lifetime \
-            total on the right axis. Click a legend entry to isolate a series.",
+    blurb: "Per-sample consumption, and the meter's lifetime total on a \
+            chart of its own.",
 };
 
 /// Every quantity, in the order their sections appear in the document.
@@ -64,6 +58,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Left,
         series_suffix: None,
         si_unit: "°C",
+        unit: "Cel",
         to_si: identity,
     },
     MetricSpec {
@@ -72,6 +67,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Left,
         series_suffix: None,
         si_unit: "°C",
+        unit: "[degF]",
         to_si: fahrenheit_to_celsius,
     },
     MetricSpec {
@@ -80,6 +76,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Left,
         series_suffix: None,
         si_unit: "%RH",
+        unit: "%",
         to_si: identity,
     },
     MetricSpec {
@@ -88,6 +85,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Left,
         series_suffix: Some("consumption"),
         si_unit: "L",
+        unit: "[gal_us]",
         to_si: gallons_to_litres,
     },
     MetricSpec {
@@ -96,6 +94,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Left,
         series_suffix: Some("consumption"),
         si_unit: "L",
+        unit: "L",
         to_si: identity,
     },
     MetricSpec {
@@ -104,6 +103,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Right,
         series_suffix: Some("meter total"),
         si_unit: "L",
+        unit: "[gal_us]",
         to_si: gallons_to_litres,
     },
     MetricSpec {
@@ -112,6 +112,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Right,
         series_suffix: Some("meter total"),
         si_unit: "L",
+        unit: "L",
         to_si: identity,
     },
 ];

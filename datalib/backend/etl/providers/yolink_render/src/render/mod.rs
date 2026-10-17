@@ -1,16 +1,17 @@
 //! YoLink render: the whole raw store collapses into **one** markdown
 //! document — a summary of everything non-timeseries the store knows,
-//! plus one interactive Plotly scatter per physical quantity, each
-//! device a series on its quantity's plot.
+//! plus a chart per physical quantity, each device a series on its
+//! quantity's chart, drawn from the time-series store.
 
 pub mod parse;
 // `render/render.rs` inside `render/` is the repo-wide stage layout, not
 // an accident — see the same allow in the perseus provider.
 #[allow(clippy::module_inception)]
 pub mod render;
+pub mod time_series;
 pub mod units;
 
-/// Bump when the rendered markdown layout, the plot HTML, or the grid
+/// Bump when the rendered markdown layout or the grid
 /// row shape changes enough that an existing `index.md` must be
 /// re-rendered. Stamped onto the `markdowns` row AND into the render
 /// cursor's `params` (see [`render::cursor_params`]), so a bump
@@ -19,4 +20,4 @@ pub mod units;
 /// `datalib_id` under the configured source, every row carries its
 /// backpointer, and a device's `upstream_id` is its name rather than
 /// its kind. Every uuid moved.
-pub const RENDER_VERSION: u32 = 7;
+pub const RENDER_VERSION: u32 = 8;

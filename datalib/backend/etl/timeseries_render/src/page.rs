@@ -1,5 +1,5 @@
-//! The one page a sensor source renders to: a summary, one Plotly plot
-//! per physical quantity, a section per device with its metric table,
+//! The one page a sensor source renders to: a summary, a chart per
+//! physical quantity (two where its metrics sit on two axes), a section per device with its metric table,
 //! and the store's counts. A provider's parse fills in a [`Page`]; what
 //! differs between providers — names, wording, the unit table — is a
 //! [`PageProfile`].
@@ -20,10 +20,10 @@ use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
 
-use crate::plot::{standalone_html, Trace};
 use crate::series::{by_device, earliest_ts_ms, latest_ts_ms, Series};
 use crate::text::{human_gap, iso, median_gap, short, short_ts, thousands};
-use crate::units::{series_label, spec_in, MetricSpec, Quantity};
+use crate::time_series::time_series_chart;
+use crate::units::{series_label, spec_in, Axis, MetricSpec, Quantity};
 
 const KIND_PAGE: &str = "timeseries";
 const KIND_DEVICE: &str = "device";
@@ -187,8 +187,10 @@ pub fn render_all(
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
     let page_dir = datalib_etl::layout::render_markdown_root(root, source_id);
-    let plots_dir = page_dir.join("plots");
-    fs::create_dir_all(&plots_dir).with_context(|| format!("mkdir -p {}", plots_dir.display()))?;
+    fs::create_dir_all(&page_dir).with_context(|| format!("mkdir -p {}", page_dir.display()))?;
+    // Where an earlier build wrote one Plotly page per quantity; a chart
+    // is now drawn from the time-series store.
+    remove_dir_if_there(&page_dir.join("plots"))?;
 
     let mut summary = RenderSummary {
         devices: page.devices.len(),
@@ -198,13 +200,11 @@ pub fn render_all(
     };
     progress.set_length(Some((profile.quantities.len() + 1) as u64));
 
-    // Plots first: the markdown links to whatever actually got written,
-    // so a quantity with no data yields no iframe rather than a broken
-    // one.
+    // A quantity with no data gets no chart.
     let mut rendered_plots: Vec<(&Quantity, PlotFacts)> = Vec::new();
     for quantity in profile.quantities {
-        progress.set_message(&format!("plot {}", quantity.key));
-        if let Some(facts) = render_plot(profile, page, quantity, &plots_dir)? {
+        progress.set_message(&format!("chart {}", quantity.key));
+        if let Some(facts) = plot_facts(profile, page, quantity, source_id)? {
             summary.plots += 1;
             rendered_plots.push((quantity, facts));
         }
@@ -275,21 +275,32 @@ pub fn write_page(
     .with_context(|| format!("on_doc_complete {m_uuid}"))
 }
 
-/// What the markdown needs to know about a plot that got written.
+fn remove_dir_if_there(dir: &Path) -> Result<()> {
+    match fs::remove_dir_all(dir) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e).with_context(|| format!("remove {}", dir.display())),
+    }
+}
+
+/// What the markdown needs to know about one quantity's chart.
 struct PlotFacts {
-    file: String,
+    /// The time series ids each chart draws: one chart per axis the
+    /// metric table puts the quantity's metrics on, left first.
+    charts: Vec<Vec<String>>,
     series: usize,
     points: usize,
     span: Option<(i64, i64)>,
 }
 
-fn render_plot(
+fn plot_facts(
     profile: &PageProfile,
     page: &Page<'_>,
     quantity: &Quantity,
-    plots_dir: &Path,
+    source_id: &str,
 ) -> Result<Option<PlotFacts>> {
-    let mut traces: Vec<Trace> = Vec::new();
+    let mut left: Vec<(String, String)> = Vec::new();
+    let mut right: Vec<(String, String)> = Vec::new();
     let mut points = 0usize;
     let mut span: Option<(i64, i64)> = None;
 
@@ -304,36 +315,32 @@ fn render_plot(
             Some((a, b)) => (a.min(lo), b.max(hi)),
             None => (lo, hi),
         });
-        traces.push(Trace {
-            name: series_label(page.device_name(&s.device), spec),
-            axis: spec.axis,
-            x_ms: s.ts_ms.clone(),
-            y: s.values.iter().map(|v| (spec.to_si)(*v)).collect(),
-            unit: spec.si_unit.to_string(),
-        });
+        let entry = (
+            series_label(page.device_name(&s.device), spec),
+            crate::time_series::time_series_id(profile, source_id, &s.device, &s.metric),
+        );
+        match spec.axis {
+            Axis::Left => left.push(entry),
+            Axis::Right => right.push(entry),
+        }
     }
 
-    if traces.is_empty() {
+    let series = left.len() + right.len();
+    if series == 0 {
         return Ok(None);
     }
-    // Stable legend order regardless of how the rows came back.
-    traces.sort_by(|a, b| a.name.cmp(&b.name));
-
-    let subtitle = format!(
-        "{} series · {} points · {}",
-        traces.len(),
-        thousands(points as i64),
-        span.map(|(a, b)| format!("{} — {}", short_ts(a), short_ts(b)))
-            .unwrap_or_else(|| format!("no {}", profile.noun)),
-    );
-    let html = standalone_html(quantity, &subtitle, &traces)?;
-    let file = format!("{}.html", quantity.key);
-    let path = plots_dir.join(&file);
-    fs::write(&path, html).with_context(|| format!("write {}", path.display()))?;
-
+    // Stable order regardless of how the rows came back.
+    let charts = [left, right]
+        .into_iter()
+        .filter(|ids| !ids.is_empty())
+        .map(|mut ids| {
+            ids.sort();
+            ids.into_iter().map(|(_, id)| id).collect()
+        })
+        .collect();
     Ok(Some(PlotFacts {
-        file,
-        series: traces.len(),
+        charts,
+        series,
         points,
         span,
     }))
@@ -420,24 +427,11 @@ fn render_plot_sections(out: &mut String, profile: &PageProfile, plots: &[(&Quan
                 .map(|(a, b)| format!(" · {} — {}", short_ts(a), short_ts(b)))
                 .unwrap_or_default()
         );
-        // Relative `src`, so the page works opened straight off disk and
-        // under a static file server; the UI rewrites it to
-        // `/api/asset/<markdown_uuid>/plots/<file>` when it renders the
-        // body (see ChatBody.ce.vue).
-        let _ = writeln!(
-            out,
-            "<iframe src=\"plots/{}\" title=\"{}\" width=\"100%\" height=\"520\" \
-             loading=\"lazy\" sandbox=\"allow-scripts allow-downloads\" \
-             style=\"border:1px solid rgba(128,128,128,.35);border-radius:6px\">\
-             </iframe>\n",
-            facts.file, quantity.title,
-        );
-        let _ = writeln!(
-            out,
-            "[Open the {} plot on its own]({})\n",
-            quantity.title.to_lowercase(),
-            format_args!("plots/{}", facts.file)
-        );
+        // The document view draws each from the time-series store
+        // (docs/dev/time_series.md §"Charts in documents").
+        for ids in &facts.charts {
+            let _ = writeln!(out, "{}\n", time_series_chart(ids));
+        }
     }
 }
 

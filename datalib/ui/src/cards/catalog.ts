@@ -146,6 +146,12 @@ export const BUILTIN_META: Record<keyof ViewLibs, BuiltinMeta> = {
     icon: "contacts",
     gallery: "contactsView()",
   },
+  timeSeriesView: {
+    title: "Time series",
+    description: "Every time series your sources keep, drawn together on one chart.",
+    icon: "chart",
+    gallery: "timeSeriesView()",
+  },
   syncDashboardView: {
     title: "Sync dashboard",
     description: "One source's sync: its steps, charts over the run, and its log.",

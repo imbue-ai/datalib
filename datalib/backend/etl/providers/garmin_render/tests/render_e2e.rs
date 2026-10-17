@@ -1,5 +1,5 @@
 //! Ingest the TNG account through playback, render it, and check every
-//! document: the overview's weight plot, table and device rows, the
+//! document: the overview's weight chart, table and device rows, the
 //! metric pages, the daily log, the activities and the records — and
 //! that an unchanged store renders the same rows the second time.
 
@@ -14,6 +14,7 @@ use datalib_etl_garmin_render::render::parse::parse;
 use datalib_etl_garmin_render::render::render::{
     activity_uuid, daily_log_uuid, document_uuid, listings_uuid, render_all,
 };
+use datalib_etl_garmin_render::render::time_series;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
 use datalib_etl_web::playback;
@@ -136,7 +137,16 @@ async fn renders_every_document_then_renders_an_unchanged_store_the_same() {
     let md = std::fs::read_to_string(page_dir.join("index.md")).unwrap();
     assert!(md.contains(">Garmin — Jean-Luc Picard</h1>"), "{md}");
     assert!(md.contains("**77.6 kg**"), "{md}");
-    assert!(md.contains("<iframe src=\"plots/weight.html\""), "{md}");
+    let chart =
+        |ids: Vec<String>| datalib_etl_timeseries_render::time_series::time_series_chart(&ids);
+    assert!(
+        md.contains(&chart(time_series::weight_chart(SOURCE))),
+        "{md}"
+    );
+    assert!(
+        !page_dir.join("plots").exists(),
+        "charts are drawn from the time-series store, not written as pages"
+    );
     assert!(
         md.contains("| 2369-04-14"),
         "table row for the latest weigh-in:\n{md}"
@@ -150,28 +160,35 @@ async fn renders_every_document_then_renders_an_unchanged_store_the_same() {
         "commit messages must not reach the page:\n{md}"
     );
 
-    let plot = std::fs::read_to_string(page_dir.join("plots/weight.html")).unwrap();
-    assert!(plot.contains("77.6"), "{plot}");
-    assert!(
-        plot.contains("12600168300000"),
-        "epoch ms inlined for the date axis"
-    );
-    assert!(
-        plot.contains("Body fat"),
-        "body fat from the payload draws on y2"
-    );
-
     let sleep = std::fs::read_to_string(page_dir.join("sleep.md")).unwrap();
     assert!(
         sleep.contains("**2369-04-14:** Sleep score 84 · Asleep 7 h 20 min"),
         "{sleep}"
     );
-    assert!(
-        sleep.contains("<iframe src=\"plots/sleep.html\""),
-        "{sleep}"
-    );
+    for name in ["sleep_score", "sleep_total"] {
+        assert!(
+            sleep.contains(&format!(
+                "data-time-series=\"{}",
+                time_series::time_series_id(SOURCE, name)
+            )),
+            "a chart of its own for {name}:\n{sleep}"
+        );
+    }
     assert!(sleep.contains("| 2369-04-14 | 84 | 7:20 |"), "{sleep}");
-    assert!(page_dir.join("plots/sleep.html").exists());
+
+    let activity_pages: Vec<String> = std::fs::read_dir(page_dir.join("activities"))
+        .unwrap()
+        .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+        .collect();
+    let run_chart = chart(time_series::activity_chart(SOURCE, "17010413001"));
+    assert_eq!(
+        activity_pages
+            .iter()
+            .filter(|p| p.contains(&run_chart))
+            .count(),
+        1,
+        "the run, whose FIT file is held, charts its heart rate and speed"
+    );
 
     let log = emitted
         .iter()
@@ -257,4 +274,75 @@ async fn renders_every_document_then_renders_an_unchanged_store_the_same() {
             .collect::<Vec<_>>()
     };
     assert_eq!(texts(&again), texts(&emitted));
+}
+
+/// The TNG account's time series land in a time-series store, the
+/// run's FIT file's among them and the ride's, which is no FIT, named
+/// as unreadable; a second render of an unchanged raw store writes no
+/// row and no chunk.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn time_series_are_stored_then_left_alone_when_nothing_moved() {
+    use datalib_time_series_schema::TimeKind;
+
+    let td = tempfile::tempdir().unwrap();
+    let root = td.path();
+    let raw = root.join(SOURCE).join("ingest");
+    ingest(&raw, &root.join("playback")).await;
+
+    let read = time_series::read(&raw, SOURCE, None).unwrap();
+    assert!(read.head.is_some());
+    let unreadable: Vec<&str> = read.unreadable.iter().map(|(id, _)| id.as_str()).collect();
+    assert_eq!(unreadable, ["17010414002"]);
+    let all = read.time_series;
+    let run: Vec<&datalib_time_series_schema::TimeSeries> =
+        all.iter().filter(|s| s.about_uuid.is_some()).collect();
+    let names: Vec<&str> = run.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "heart_rate",
+            "cadence",
+            "distance",
+            "enhanced_speed",
+            "enhanced_altitude"
+        ]
+    );
+    assert!(run
+        .iter()
+        .all(|s| s.points.len() == datalib_etl_garmin::synthesize::SYNTHETIC_FIT_SECONDS as usize));
+    assert!(run[0].about_name.as_deref().unwrap().contains("2369-04-13"));
+    let parsed = parse(&raw, RawRange::cold()).unwrap();
+    let weight = all.iter().find(|s| s.name == "weight").unwrap();
+    assert_eq!(weight.time_kind, TimeKind::Instant);
+    assert_eq!(weight.points.len(), parsed.weigh_ins.len());
+    let resting = all.iter().find(|s| s.name == "resting_hr").unwrap();
+    assert_eq!(
+        (resting.time_kind, resting.unit.as_str()),
+        (TimeKind::Day, "{beats}/min")
+    );
+    assert!(!resting.points.is_empty());
+    let ids: std::collections::BTreeSet<&str> =
+        all.iter().map(|s| s.time_series_id.as_str()).collect();
+    assert_eq!(ids.len(), all.len());
+
+    let store = datalib_etl_time_series::store::open(
+        &datalib_etl::layout::render_time_series_db(root, SOURCE),
+        datalib_etl::doltlite_raw::StoreKind::TimeSeries,
+    )
+    .await
+    .unwrap();
+    let first = datalib_etl_time_series::apply(&store, &all, SOURCE)
+        .await
+        .unwrap();
+    assert_eq!(first.written, all.len());
+    assert_eq!(first.chunks_written, all.len());
+    let again = time_series::read(&raw, SOURCE, None).unwrap().time_series;
+    let second = datalib_etl_time_series::apply(&store, &again, SOURCE)
+        .await
+        .unwrap();
+    assert_eq!(
+        (second.written, second.unchanged, second.chunks_written),
+        (0, all.len(), 0)
+    );
+    store.close().await;
 }

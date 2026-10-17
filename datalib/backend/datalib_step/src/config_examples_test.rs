@@ -47,7 +47,9 @@ fn validate_config(name: &str, path: &std::path::Path) {
                 | Function::QmdAggregator
                 | Function::KeywordIndex
                 | Function::Embed
-                | Function::EmbeddingMap,
+                | Function::EmbeddingMap
+                | Function::RenderTimeSeries
+                | Function::TimeSeriesIndex,
             ) => continue,
             None => panic!(
                 "{name}: step {}: datalib-step has no function {function:?}",

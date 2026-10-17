@@ -1,6 +1,6 @@
 ---
 name: release
-description: Cut a new datalib release — bump the workspace version, repin lockfiles, run the consistency tests, land the bump on main through a PR, tag vX.Y.Z (which triggers release.yml), watch the release publish, and bump the pin in the qi-imbue/datalib-inspiration repo. Use when asked to "make a new release", "cut a release", or "bump the version".
+description: Cut a new datalib release — bump the workspace version, repin lockfiles, run the consistency tests, land the bump on main through a PR, tag vX.Y.Z (which triggers release.yml), watch the release publish, and bump the pin in imbue-ai/default-workspace-template (DWT). Use when asked to "make a new release", "cut a release", or "bump the version".
 ---
 
 # Release
@@ -32,10 +32,10 @@ published from a local machine — the tag is the trigger.
 - `datalib/tauri/tauri.conf.json`'s `"version"` is the desktop
   app's own version and is **not** part of this procedure.
 - One repo outside this one pins the released version:
-  `qi-imbue/datalib-inspiration`, the published Minds template, which
-  installs the musl binaries from a tag at boot and links agents at
-  that tag's `docs/agent_user.md`. It is bumped *after* the release
-  publishes (step 12), not with it.
+  `imbue-ai/default-workspace-template` (DWT), the Minds workspace
+  template. Its `datalib` skill installs the musl binaries from a tag on
+  first use and reads that tag's `docs/agent_user.md`. It is bumped
+  *after* the release publishes (step 12), not with it.
 
 ## Procedure
 
@@ -166,75 +166,62 @@ published from a local machine — the tag is the trigger.
     the per-triple tarballs and the macOS dmg. Tarball filenames are
     stable/un-versioned on purpose — the install script fetches
     `releases/latest/download/<name>`.
-12. Bump the pin in the published inspiration repo,
-    `qi-imbue/datalib-inspiration`. Only after step 11 — every pin there
-    is a tag-relative URL that has to resolve for a fresh mind to boot.
-    This step is the one that gets dropped, so start by checking what
-    the repo actually pins (`git log -1` there) rather than assuming it
-    is one behind.
+12. Bump the pin in DWT, `imbue-ai/default-workspace-template`
+    (§"Updating DWT"). Only after step 11 — every pin there is a
+    tag-relative URL that has to resolve when a workspace first uses
+    datalib. This step is the one that gets dropped, so start by checking
+    what DWT actually pins rather than assuming it is one behind.
 
-## Updating the inspiration repo
+## Updating DWT
 
-`qi-imbue/datalib-inspiration` is a Minds template (their v2 format:
-`template.md` + `template.toml` + `template.svg` over a
-default-workspace-template base) whose agent mirrors your data
-with datalib. An env.d unit installs the fully-static musl binaries
-from a pinned tag at boot, and the `datalib` skill sends the agent to
-that same tag's `docs/agent_user.md` — deliberately, so the tools an
-agent has and the guide it reads can't drift apart.
+`imbue-ai/default-workspace-template` is the template every Minds
+workspace starts from. Nothing of datalib is installed at boot: on first
+use its `datalib` skill runs `scripts/install_datalib.sh`, which
+downloads the pinned release's musl build into
+`~/.local/share/datalib/<version>/` and saves that tag's
+`docs/agent_user.md` beside it, so the tools an agent has and the guide
+it reads cannot drift apart.
 
 1. Get a current clone. Don't assume one is already on the machine:
 
    ```sh
-   gh repo clone qi-imbue/datalib-inspiration   # or, in an existing clone:
-   git checkout main && git pull
+   gh repo clone imbue-ai/default-workspace-template   # or, in an existing clone:
+   git fetch origin && git checkout -b bump-datalib-vX.Y.Z origin/main
    ```
-2. Replace every `v<old>` datalib pin with `vX.Y.Z` in exactly four
-   files — `.agents/skills/datalib/SKILL.md`, `README.md`,
-   `template.md`, and `system/scripts/env.d/2000-datalib-binaries.sh`.
-   That covers `PINNED_VERSION` in the env.d unit (the one place the
-   binaries are fetched from), the `docs/agent_user.md` links
-   (including the relative-link base), and the "pinned to datalib
-   v..." prose in the skill, the README and the template's "How it
-   works". Find them by grepping the whole repo for the literal old
-   version rather than for a URL shape — the pins are spelled several
-   different ways:
+2. Replace the `v<old>` datalib pin with `vX.Y.Z` in exactly two files:
+   `.agents/skills/datalib/scripts/install_datalib.sh` (`PINNED_VERSION`,
+   the one place the binaries and the guide are fetched from) and
+   `.agents/skills/datalib/SKILL.md` (the "pinned to datalib v..." prose,
+   the local guide's path and the docs link).
+   `system/apps/datalib/test_datalib_pin.py` checks that the skill names
+   no version but the one the script installs. Find the pins by grepping
+   for the literal old version:
 
    ```sh
-   git grep -n v<old> -- ':!system/vendor' ':!*/changelog/*'
+   git grep -n v<old> -- ':!.agents/changelog' ':!system/changelog'
    ```
 
-   Anything that grep prints outside the four files is either a new
-   pin (bump it, and add the file to this list) or history (below).
-3. Leave three things alone:
-   - `system/vendor/mngr/**`, which is vendored from mngr. Its
-     `DATALIB_CURL_VERSION` pins the datalib *curl* release the latchkey
-     gateway ships and moves on mngr's own cadence, not this one.
-   - "as of datalib v..." capability notes (e.g. which providers work
-     inside Minds). Those record when a fact became true and are only
-     touched when the fact changes.
-   - History: the "Publication history" entries at the bottom of
-     `template.md` (the file itself says earlier entries are never
-     rewritten) and the per-change notes under `.agents/changelog/`
-     and `system/changelog/`. A `v<old>` there is a record of what
-     that version did, not a pin.
-4. Read the release's commits against the template's prose and fix
-   what went stale — the pin is not the whole contract. `template.md`
-   and the skill describe real behaviour (which sources work and under
-   what conditions, how a source is spelled in the config, where the
-   store lives, what needs a recent Minds app), so a change to any of
-   that lands here even when nothing about the install moved.
-5. Commit as `datalib inspiration: bump pinned version to vX.Y.Z`
-   and open the PR from a branch on the repo itself — check push
-   access with `gh api repos/qi-imbue/datalib-inspiration --jq
-   .permissions`:
+   Anything it prints outside those two files is either a new pin (bump
+   it, and add the file to this list) or history. The notes under
+   `.agents/changelog/` and `system/changelog/` are history: a `v<old>`
+   there records what that change did.
+3. Read the release's commits against the skill's prose and fix what
+   went stale — the pin is not the whole contract. The skill describes
+   real behaviour (which sources work and how one is spelled in the
+   config, where the store lives), so a change to any of that lands here
+   even when nothing about the install moved.
+4. Add the branch's note, `.agents/changelog/<branch>.md`: one paragraph
+   saying which datalib version the skill now installs and what it
+   brings that an agent or a person would notice.
+5. Run the pin test (`uv run pytest system/apps/datalib/test_datalib_pin.py`),
+   commit as `datalib: bump the pinned version to vX.Y.Z`, push the
+   branch and open the PR against `main`:
 
    ```sh
-   git checkout -b bump-datalib-vX.Y.Z && git push -u origin bump-datalib-vX.Y.Z
-   gh pr create --repo qi-imbue/datalib-inspiration --base main \
+   git push -u origin bump-datalib-vX.Y.Z
+   gh pr create --repo imbue-ai/default-workspace-template --base main \
      --head bump-datalib-vX.Y.Z
    ```
 
-   Check that the previous bump's PR was actually merged before
-   assuming the pin moved — earlier bumps have sat open for several
-   releases. Close a superseded one when you open its successor.
+   Check that the previous bump's PR was merged before assuming the pin
+   moved, and close a superseded one when you open its successor.

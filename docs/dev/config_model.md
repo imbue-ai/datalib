@@ -98,12 +98,19 @@ same id and definition would read as up to date and write nothing.
 - Step ids are unique and never nested: two steps under one tree would
   be two writers on one doltlite file.
 - The built-in functions are the directory names: `ingest`,
-  `render_markdown`, `keyword_index`, `embed`, `grid_index`,
-  `qmd_aggregator`, `embedding_map` (`datalib_step/src/function.rs`,
-  tested against the layout constants the render and index crates use).
-  `grid_index`, `qmd_aggregator` and `embedding_map` write
-  `unified_document_index/<function>` and nothing else, because the applet that
-  reads them finds them from the data root alone.
+  `render_markdown`, `render_time_series`, `keyword_index`, `embed`,
+  `grid_index`, `qmd_aggregator`, `embedding_map`, `time_series_index`
+  (`datalib_step/src/function.rs`, tested against the layout constants
+  the render and index crates use). `grid_index`, `qmd_aggregator` and
+  `embedding_map` write `unified_document_index/<function>`, and
+  `time_series_index` writes `unified_time_series_index/time_series_index`,
+  and nothing else, because the applet that reads each finds it from the
+  data root alone.
+- A source whose type has time series (`TIME_SERIES_SOURCE_TYPES` in
+  `dag/src/config.rs`: `garmin`, `yolink`, `airvisual`) has a `render_time_series` step beside
+  its `render_markdown`, reading its ingest, and the
+  `time_series_index` names every such step in its `inputs`.
+  `docs/dev/time_series.md` is the design.
 - The qmd steps are the exception to "a step writes its own tree": a
   source's `keyword_index` and `embed`, and `qmd_aggregator`, all write
   the one qmd index file in `unified_document_index/qmd_aggregator`, the
@@ -228,13 +235,16 @@ fingerprint, so changing it re-runs the group.
 - a step id that is not `<group>/<function>` as the environment
   spells them;
 - `ingest` or `render_markdown` under a group with no `type`;
+- `render_time_series` under a group with no `type`, or of a type with
+  no time series;
 - a `type` it has no provider for — a retired spelling (`*_api`,
   `*_backup`, `claude_export`, `carddav`) names `datalib-migrate-config`;
 - params still carrying `sync`, `common.input_path`, `common.raw_path`,
   `gmail_api` or a top-level `fetch_photos`, likewise naming the tool;
 - an `ingest` step whose params hold none of its type's methods;
 - `grid_index`, `qmd_aggregator` or `embedding_map` under any group but
-  `unified_document_index`.
+  `unified_document_index`, and `time_series_index` under any but
+  `unified_time_series_index`.
 
 A render reads its raw store from its first input; one that declares
 none reads its own group's `ingest` tree and logs a warning. A store
@@ -376,8 +386,8 @@ retired type words become the current ones, and `sync` /
 `common.input_path` / `common.raw_path` become method tables with
 their own `path` (`convert.rs`). The rewrite is value-level, so comments do not
 survive. The loader and `datalib-step` recognize the old shapes only
-well enough to name the tool. Two rewrites are made without asking,
-both text edits that keep comments, and each refuses a result that would
+well enough to name the tool. Three rewrites are made without asking,
+all text edits that keep comments, and each refuses a result that would
 drop an entry the original ran. `datalib-http` makes them in this order
 (`http/src/config_upgrade.rs`):
 
@@ -396,6 +406,14 @@ drop an entry the original ran. `datalib-http` makes them in this order
    `datalib-applet unified_index` still runs, and the gateway still
    answers `/applet/unified_index/…`, for a config or a card script
    written before the rename.
+3. The time-series steps (`upgrade_time_series_steps`,
+   `time_series_steps.rs`): a config with no `unified_time_series_index`
+   group and a source whose type has time series gets each such source's
+   `render_time_series` step, the index group with its
+   `time_series_index`, and the `unified_time_series_index` applet that
+   serves it, appended at the end of the file. Once the group
+   is there the time-series steps are the person's, and a step they took
+   out is not put back.
 
 A source may not take `unified_index`, `unified_document_index` or
 `unified_time_series_index` as its id

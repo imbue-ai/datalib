@@ -542,7 +542,8 @@ export default defineConfig({
         // The search field, a CodeMirror editor: the desktop app's typing.
         /search-field\.spec\.ts/,
         /column-reveal\.spec\.ts/,
-        /yolink-plots\.spec\.ts/,
+        // A chart mounted into the document frame by the app's own code.
+        /document-charts\.spec\.ts/,
         /gallery\.spec\.ts/,
         // The sandboxed DACTAL iframe: an opaque origin loading module
         // scripts, which WebKit and Chromium have disagreed about.
