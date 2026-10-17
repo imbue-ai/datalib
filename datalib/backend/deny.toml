@@ -31,6 +31,13 @@ ignore = [
     # pdf-inspector -> lopdf -> ttf-parser (font parsing for the pdf
     # provider). lopdf has not moved to skrifa.
     { id = "RUSTSEC-2026-0192", reason = "ttf-parser, via pdf-inspector's lopdf" },
+    # zip 7, ours and candle-core's. All three are in `extract`, which
+    # nothing calls: takeout, lightroom and garmin read entry by entry
+    # (`by_index`), candle reads .npz weights. The fix is zip 9, which
+    # candle 0.10 does not take; move to it when candle does.
+    { id = "RUSTSEC-2026-0367", reason = "zip extract keeps SUID bits; we never call extract" },
+    { id = "RUSTSEC-2026-0368", reason = "zip extract follows symlinks; we never call extract" },
+    { id = "RUSTSEC-2026-0369", reason = "zip extract chmods through symlinks; we never call extract" },
 ]
 
 [bans]
