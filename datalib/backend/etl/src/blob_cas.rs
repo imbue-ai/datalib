@@ -593,6 +593,25 @@ impl BlobBundle {
         upstream_name: Option<String>,
     ) {
         let blake3 = blake3_hex(&bytes);
+        self.add_hashed(ref_id, blake3, bytes, content_type, upstream_name);
+    }
+
+    /// Every ref `other` holds or misses; `other`'s wins a shared ref.
+    pub fn extend(&mut self, other: BlobBundle) {
+        self.by_ref.extend(other.by_ref);
+        self.missing.extend(other.missing);
+    }
+
+    /// [`add`](Self::add) for bytes the caller has already hashed, so a
+    /// large attachment is not hashed twice. `blake3` is trusted.
+    pub fn add_hashed(
+        &mut self,
+        ref_id: impl Into<String>,
+        blake3: String,
+        bytes: Vec<u8>,
+        content_type: Option<String>,
+        upstream_name: Option<String>,
+    ) {
         self.by_ref.insert(
             ref_id.into(),
             Blob {

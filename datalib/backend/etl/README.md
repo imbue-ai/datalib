@@ -644,7 +644,9 @@ arrive and drains the bundle at end of bucket; parse loads every document's
 bundle at once with `BlobBundle::load_many`; render then consumes an
 already-loaded bag of bytes — no SQL, no `block_in_place`, no dyn blob reader.
 Parse reads the edge table in one query for every document it loads,
-not one per document.
+not one per document. Email is the exception: a mailbox's `.eml`s are
+too many to hold at once, so its parse hands render an `EmlStore` that
+runs the same `load_many` for a batch of threads just before they render.
 
 **The CAS is plain SQLite, not doltlite**, created through the
 `doltlite_engine=sqlite` URI parameter like the run store. A
