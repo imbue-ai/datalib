@@ -86,12 +86,14 @@ fn extract_catalog(zip_path: &Path, dest: &Path) -> Result<PathBuf> {
     let mut catalogs: Vec<(usize, String)> = Vec::new();
     for i in 0..archive.len() {
         let entry = archive.by_index_raw(i)?;
-        let name = entry.name();
+        let name = entry
+            .name()
+            .with_context(|| format!("name of entry {i} in {}", zip_path.display()))?;
         // Finder's zips carry a resource-fork twin of every file here.
         if entry.is_dir() || name.starts_with("__MACOSX/") {
             continue;
         }
-        if is_catalog(Path::new(name)) {
+        if is_catalog(Path::new(name.as_ref())) {
             catalogs.push((i, name.to_string()));
         }
     }

@@ -258,7 +258,10 @@ impl Unpacker<'_> {
             if entry.is_dir() {
                 continue;
             }
-            let name = entry.name().to_string();
+            let name = entry
+                .name()
+                .with_context(|| format!("name of entry {i} in {}", part.display()))?
+                .to_string();
             self.entry(part, &name, &mut entry)?;
         }
         Ok(())
