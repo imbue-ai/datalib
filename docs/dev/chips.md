@@ -55,6 +55,7 @@ still works in another app, and `datalib:` otherwise:
 | a Slack user | `slack://user?team=T01&id=U02` (Slack's own deep link) | `Handle::to_uri` |
 | a LinkedIn member | `https://www.linkedin.com/in/<slug>` (their profile) | `Handle::to_uri` |
 | a person by a handle kind with no scheme | `datalib:handle/<kind>/<value>`, the value percent-encoded but for its `/`s, e.g. a Signal account id or `datalib:handle/facebook/name/Will%20Riker` | `Handle::to_uri` |
+| one of your contacts, by its id | `datalib:contact/<id>` (`contactFromUri` in `chipLinks.js`) | `datalib_contacts::contact_uri` |
 | a group | `datalib:group/<id>` | `datalib_columns::Entity::uri` |
 | a step | `datalib:step/<group>/<function>` | `datalib_columns::Entity::uri` |
 
@@ -182,6 +183,9 @@ A grid draws a chip from an `identity` typed cell
   `phone`, else any handle `source_contact_handles` holds for the
   contact). An identity cell whose `id` is no handle is drawn as plain
   text: a group of contacts, a contact with no handle at all.
+  One whose `id` is a `datalib:contact/` URI is drawn as that contact's
+  chip when the grid is given `chips.contact` (the contacts app's table,
+  for a contact with no handle).
 - **Several people**: an `identities` cell holds a list, each drawn as
   above. The search grid's Subject column is one (`subject_ref`, built
   by `columns.rs::subject_identities`): a contact's own row is its

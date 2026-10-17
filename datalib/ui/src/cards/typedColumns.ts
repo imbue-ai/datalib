@@ -7,9 +7,9 @@
 // hosts; a card with a grid of its own (`GridCard`) calls this and
 // keeps driving its grid itself.
 import type { Column, Formatter, GroupingFormatterItem } from "@slickgrid-universal/common";
-import { entityFromUri, handleFromUri } from "./chipLinks";
+import { contactFromUri, entityFromUri, handleFromUri } from "./chipLinks";
 import { entityCell, type EntityView } from "./entities";
-import { chipCell, type Who } from "./contacts";
+import { chipCell, contactCell, type NormalizedContact, type Who } from "./contacts";
 import { CELL_MEASURE, fitChips } from "./chipFit";
 import { Editors } from "@slickgrid-universal/common";
 import type {
@@ -59,6 +59,8 @@ export type SlickColumnOptions<T> = {
     canLink: () => boolean;
     /// A group or step identity (`Identity.entity`): what is known of it.
     entity?: (uri: string) => EntityView | undefined;
+    /// One of your contacts, whose id is a `datalib:contact/` URI.
+    contact?: (contactId: string) => NormalizedContact | undefined;
   };
 };
 
@@ -233,6 +235,10 @@ function identityChip<T>(
 ): HTMLAnchorElement | null {
   if (chips?.entity && v.entity && entityFromUri(v.entity)) {
     return entityCell(v.entity, v.label, chips.entity(v.entity), v.icon ?? null);
+  }
+  const contactId = chips?.contact ? contactFromUri(v.id) : null;
+  if (contactId && chips?.contact) {
+    return contactCell(contactId, v.label, chips.contact(contactId));
   }
   const handle = chips ? handleFromUri(v.id) : null;
   return handle && chips ? chipCell(handle, v.label, chips.who(handle), chips.canLink()) : null;
