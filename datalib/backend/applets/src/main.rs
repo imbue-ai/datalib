@@ -5,6 +5,7 @@ mod datalib_contacts;
 mod gate;
 mod slack;
 mod unified_document_index;
+mod unified_time_series_index;
 
 use std::path::PathBuf;
 
@@ -44,6 +45,10 @@ enum Which {
     // The old name stays for a config the server has not rewritten yet.
     #[command(name = "unified_document_index", alias = "unified_index")]
     UnifiedDocumentIndex,
+    /// Serve the time-series index: the time series, and their points over
+    /// a range, downsampled to a budget.
+    #[command(name = "unified_time_series_index")]
+    UnifiedTimeSeriesIndex,
     /// The contacts app: create contacts and link handles to them, and
     /// resolve a document's handles for its chips.
     #[command(name = "datalib_contacts")]
@@ -119,6 +124,11 @@ fn run() -> Result<()> {
         Which::UnifiedDocumentIndex => {
             let port = cli.port.context("-p <port> is required")?;
             unified_document_index::serve(port)
+        }
+        // The app's chart is a builtin; nothing to write first.
+        Which::UnifiedTimeSeriesIndex => {
+            let port = cli.port.context("-p <port> is required")?;
+            unified_time_series_index::serve(port)
         }
         // Builtins draw its chips and popovers; nothing to write first.
         Which::DatalibContacts => {

@@ -72,7 +72,7 @@ expression: snapshot
       "md_path": "garmin/render_markdown/days.md",
       "modified_at": null,
       "provider": "garmin",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "garmin",
       "title": "Daily log — Jean-Luc Picard"
     },
@@ -288,7 +288,7 @@ expression: snapshot
       "md_path": "garmin/render_markdown/records.md",
       "modified_at": null,
       "provider": "garmin",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "garmin",
       "title": "Records and badges — Jean-Luc Picard"
     },
@@ -336,7 +336,7 @@ expression: snapshot
       "md_path": "garmin/render_markdown/movement.md",
       "modified_at": null,
       "provider": "garmin",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "garmin",
       "title": "Steps and activity — Jean-Luc Picard"
     },
@@ -600,7 +600,7 @@ expression: snapshot
       "md_path": "garmin/render_markdown/heart.md",
       "modified_at": null,
       "provider": "garmin",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "garmin",
       "title": "Heart rate and HRV — Jean-Luc Picard"
     },
@@ -936,7 +936,7 @@ expression: snapshot
       "md_path": "ship-air/render_markdown/index.md",
       "modified_at": "2024-09-01T09:01:50+00:00",
       "provider": "airvisual",
-      "renderer_version": "rust-v1.5",
+      "renderer_version": "rust-v1.6",
       "source_id": "ship-air",
       "title": "AirVisual monitors — ship-air"
     },
@@ -1248,7 +1248,7 @@ expression: snapshot
       "md_path": "garmin/render_markdown/stress.md",
       "modified_at": null,
       "provider": "garmin",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "garmin",
       "title": "Stress and Body Battery — Jean-Luc Picard"
     },
@@ -1320,7 +1320,7 @@ expression: snapshot
       "md_path": "yolink/render_markdown/index.md",
       "modified_at": "2369-04-14T23:55:00+00:00",
       "provider": "yolink",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "yolink",
       "title": "YoLink sensors — yolink"
     },
@@ -1512,7 +1512,7 @@ expression: snapshot
       "md_path": "garmin/render_markdown/index.md",
       "modified_at": "2369-04-14T06:45:00+00:00",
       "provider": "garmin",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "garmin",
       "title": "Garmin — Jean-Luc Picard"
     },
@@ -1764,7 +1764,7 @@ expression: snapshot
       "md_path": "garmin/render_markdown/sleep.md",
       "modified_at": null,
       "provider": "garmin",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "garmin",
       "title": "Sleep — Jean-Luc Picard"
     },
@@ -1812,7 +1812,7 @@ expression: snapshot
       "md_path": "garmin/render_markdown/activities/0b75af5a-2640-8ac4-895d-bc5b29c8a0e7.md",
       "modified_at": null,
       "provider": "garmin",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "garmin",
       "title": "Holodeck run: Dixon Hill"
     },
@@ -1824,7 +1824,7 @@ expression: snapshot
       "md_path": "garmin/render_markdown/activities/0b75b6c5-de60-825f-9377-d4c871ea50f0.md",
       "modified_at": null,
       "provider": "garmin",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "garmin",
       "title": "Cycling: Deck 12 to Engineering"
     },

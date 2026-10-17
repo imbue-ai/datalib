@@ -20,6 +20,7 @@ rust_library(
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/id:datalib_id",
         "//datalib/backend/schema:datalib_schema",
+        "//datalib/backend/time_series_schema:datalib_time_series_schema",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tokio",

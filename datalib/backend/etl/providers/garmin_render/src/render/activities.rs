@@ -187,7 +187,11 @@ pub fn body(out: &mut String, a: &Activity, device: Option<&str>) {
     let _ = writeln!(
         out,
         "| Original FIT file | {} |",
-        if a.fit_held { "kept" } else { "not downloaded" }
+        if a.fit_blake3.is_some() {
+            "kept"
+        } else {
+            "not downloaded"
+        }
     );
     let _ = writeln!(out, "| Garmin activity id | {} |", escape_md_inline(&a.id));
     out.push('\n');
@@ -214,7 +218,7 @@ mod tests {
             id: "17010413001".into(),
             listing,
             detail: json!({"summaryDTO": {"trainingEffect": 3.4}}),
-            fit_held: true,
+            fit_blake3: Some("b3".into()),
         }
     }
 

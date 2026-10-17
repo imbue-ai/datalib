@@ -10,8 +10,6 @@ pub use datalib_etl_timeseries_render::units::{series_label, Axis, MetricSpec, Q
 pub const PARTICULATES: Quantity = Quantity {
     key: "particulates",
     title: "Particulate matter",
-    left_unit: "µg/m³",
-    right_unit: None,
     blurb: "PM1, PM2.5 and PM10 mass concentration from the device's laser \
             particle counter. PM1 ⊂ PM2.5 ⊂ PM10, so the three lines nest.",
 };
@@ -19,8 +17,6 @@ pub const PARTICULATES: Quantity = Quantity {
 pub const AQI: Quantity = Quantity {
     key: "aqi",
     title: "Air quality index",
-    left_unit: "AQI",
-    right_unit: None,
     blurb: "The device's own PM2.5 index on the US and Chinese scales, and \
             the index of the outdoor station it follows. An index, not a \
             concentration: 0–50 is good on the US scale.",
@@ -29,8 +25,6 @@ pub const AQI: Quantity = Quantity {
 pub const CO2: Quantity = Quantity {
     key: "co2",
     title: "CO₂",
-    left_unit: "ppm",
-    right_unit: None,
     blurb: "Carbon dioxide. Outdoor air is ~420 ppm; a closed room with \
             people in it climbs past 1000.",
 };
@@ -38,8 +32,6 @@ pub const CO2: Quantity = Quantity {
 pub const TEMPERATURE: Quantity = Quantity {
     key: "temperature",
     title: "Temperature",
-    left_unit: "°C",
-    right_unit: None,
     blurb: "Degrees Celsius. The device also logs Fahrenheit; that column \
             is kept in the sample payload and not plotted twice.",
 };
@@ -47,16 +39,12 @@ pub const TEMPERATURE: Quantity = Quantity {
 pub const HUMIDITY: Quantity = Quantity {
     key: "humidity",
     title: "Relative humidity",
-    left_unit: "%RH",
-    right_unit: None,
     blurb: "Relative humidity is already a dimensionless ratio — no conversion applies.",
 };
 
 pub const VOC: Quantity = Quantity {
     key: "voc",
     title: "Volatile organic compounds",
-    left_unit: "ppb",
-    right_unit: None,
     blurb: "Only a Pro with the VOC module reports this; the others log a \
             sentinel the ingest step drops.",
 };
@@ -74,6 +62,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Left,
         series_suffix: Some("PM1"),
         si_unit: "µg/m³",
+        unit: "ug/m3",
         to_si: identity,
     },
     MetricSpec {
@@ -82,6 +71,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Left,
         series_suffix: Some("PM2.5"),
         si_unit: "µg/m³",
+        unit: "ug/m3",
         to_si: identity,
     },
     MetricSpec {
@@ -90,6 +80,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Left,
         series_suffix: Some("PM10"),
         si_unit: "µg/m³",
+        unit: "ug/m3",
         to_si: identity,
     },
     MetricSpec {
@@ -98,6 +89,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Left,
         series_suffix: Some("US"),
         si_unit: "AQI",
+        unit: "{AQI}",
         to_si: identity,
     },
     MetricSpec {
@@ -106,6 +98,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Left,
         series_suffix: Some("CN"),
         si_unit: "AQI",
+        unit: "{AQI}",
         to_si: identity,
     },
     MetricSpec {
@@ -114,6 +107,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Left,
         series_suffix: Some("outdoor US"),
         si_unit: "AQI",
+        unit: "{AQI}",
         to_si: identity,
     },
     MetricSpec {
@@ -122,6 +116,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Left,
         series_suffix: Some("outdoor CN"),
         si_unit: "AQI",
+        unit: "{AQI}",
         to_si: identity,
     },
     MetricSpec {
@@ -130,6 +125,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Left,
         series_suffix: None,
         si_unit: "ppm",
+        unit: "[ppm]",
         to_si: identity,
     },
     MetricSpec {
@@ -138,6 +134,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Left,
         series_suffix: None,
         si_unit: "°C",
+        unit: "Cel",
         to_si: identity,
     },
     MetricSpec {
@@ -146,6 +143,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Left,
         series_suffix: None,
         si_unit: "%RH",
+        unit: "%",
         to_si: identity,
     },
     MetricSpec {
@@ -154,6 +152,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Left,
         series_suffix: None,
         si_unit: "ppb",
+        unit: "[ppb]",
         to_si: identity,
     },
 ];

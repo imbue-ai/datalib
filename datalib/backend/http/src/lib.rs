@@ -487,10 +487,9 @@ async fn proxy_impl(
 }
 
 /// An applet's answer, as the browser gets it. What an applet serves is
-/// data — a rendered plot page, an attachment out of a render tree — and
-/// a document among it must not run in the app's origin, where it would
-/// hold the session: it gets the sandbox policy of the kind the applet
-/// names, and runs nothing when it names none. A script or wasm file
+/// data — an attachment out of a render tree — and a document among it
+/// must not run in the app's origin, where it would hold the session: it
+/// gets the sandbox policy that runs nothing. A script or wasm file
 /// goes out as bytes, so the app page's `script-src 'self'` cannot run
 /// one a sender attached.
 fn proxied_response(r: applets::ProxyResponse) -> Response<Body> {
@@ -498,7 +497,7 @@ fn proxied_response(r: applets::ProxyResponse) -> Response<Body> {
         .status(StatusCode::from_u16(r.status).unwrap_or(StatusCode::BAD_GATEWAY))
         .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff");
     if embed::is_scriptable_document(&r.content_type) {
-        resp = resp.header(header::CONTENT_SECURITY_POLICY, r.document.csp());
+        resp = resp.header(header::CONTENT_SECURITY_POLICY, embed::DATA_DOCUMENT_CSP);
     }
     let content_type = if embed::is_executable(&r.content_type) {
         "application/octet-stream".to_string()
@@ -2175,11 +2174,10 @@ mod tests {
         assert_eq!(names, datalib_runs::key_names());
     }
 
-    fn proxied(content_type: &str, document: embed::DocumentKind) -> Response<Body> {
+    fn proxied(content_type: &str) -> Response<Body> {
         proxied_response(applets::ProxyResponse {
             status: 200,
             content_type: content_type.into(),
-            document,
             body: b"<script>1</script>".to_vec(),
         })
     }
@@ -2194,24 +2192,18 @@ mod tests {
     /// browser reads.
     #[test]
     fn proxied_documents_are_sandboxed_and_data_is_not() {
-        let html = proxied("text/html; charset=utf-8", embed::DocumentKind::Data);
+        let html = proxied("text/html; charset=utf-8");
         assert_eq!(html.status(), StatusCode::OK);
         assert_eq!(
             header_of(&html, header::CONTENT_SECURITY_POLICY),
-            Some(embed::DocumentKind::Data.csp())
+            Some(embed::DATA_DOCUMENT_CSP)
         );
         assert_eq!(
             header_of(&html, header::X_CONTENT_TYPE_OPTIONS),
             Some("nosniff")
         );
 
-        let plot = proxied("text/html", embed::DocumentKind::Plot);
-        assert_eq!(
-            header_of(&plot, header::CONTENT_SECURITY_POLICY),
-            Some(embed::DocumentKind::Plot.csp())
-        );
-
-        let json = proxied("application/json", embed::DocumentKind::Data);
+        let json = proxied("application/json");
         assert!(header_of(&json, header::CONTENT_SECURITY_POLICY).is_none());
         assert_eq!(
             header_of(&json, header::X_CONTENT_TYPE_OPTIONS),
@@ -2229,14 +2221,14 @@ mod tests {
             "application/javascript",
             "application/wasm",
         ] {
-            let r = proxied(ct, embed::DocumentKind::Data);
+            let r = proxied(ct);
             assert_eq!(
                 header_of(&r, header::CONTENT_TYPE),
                 Some("application/octet-stream"),
                 "{ct}"
             );
         }
-        let css = proxied("text/css", embed::DocumentKind::Data);
+        let css = proxied("text/css");
         assert_eq!(header_of(&css, header::CONTENT_TYPE), Some("text/css"));
     }
 

@@ -4,6 +4,9 @@
 <data_root>/<group>/ingest/entities.doltlite_db   per-source entities + sync bookkeeping
 <data_root>/<group>/ingest/blobs.sqlite           content-addressed blobs (plain SQLite)
 <data_root>/<group>/render_markdown/…             the rendered tree + its render store
+<data_root>/<group>/render_time_series/time_series.doltlite_db
+                                                  a source's time series and their points,
+                                                  as encoded chunks (`docs/dev/time_series.md`)
 <data_root>/unified_document_index/grid_index/db.doltlite_db   grid_rows / markdowns / edges / problems /
                                                   source_contacts (who each handle is, per source)
 <data_root>/unified_document_index/grid_index/search_terms.sqlite every id, handle, title, label and name each
@@ -16,6 +19,10 @@
                                                   every embedded document's place on
                                                   the map card; replaced whole by
                                                   each run, deleted by a reset
+<data_root>/unified_time_series_index/time_series_index/time_series.doltlite_db
+                                                  every source's time series rows, and the
+                                                  store and commit to read each source's
+                                                  points from; no points
 <data_root>/datalib_curated/datalib_contacts/contacts.doltlite_db
                                                   contacts a person made, the handles
                                                   linked to them and the photo they put

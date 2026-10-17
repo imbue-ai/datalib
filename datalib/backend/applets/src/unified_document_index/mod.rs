@@ -1421,27 +1421,9 @@ async fn asset(
         .first_or_octet_stream()
         .essence_str()
         .to_string();
-    let mut resp = Response::builder().header(header::CONTENT_TYPE, &mime);
-    if let Some(kind) = document_kind(
-        target_canon
-            .strip_prefix(&parent_canon)
-            .unwrap_or(&target_canon),
-        &mime,
-    ) {
-        resp = resp.header(crate::gate::DOCUMENT_HEADER, kind);
-    }
+    let resp = Response::builder().header(header::CONTENT_TYPE, &mime);
     resp.body(Body::from(bytes))
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
-}
-
-/// A plot page under `plots/` is one a time-series renderer wrote from
-/// numbers, and runs its own script; everything else beside a markdown —
-/// `blobs/` above all — is what a sender sent, and is left unnamed so the
-/// gateway serves it inert. `rel` is the resolved path, so `plots/../`
-/// cannot borrow the name.
-fn document_kind(rel: &std::path::Path, mime: &str) -> Option<&'static str> {
-    let first = rel.components().next()?;
-    (first.as_os_str() == "plots" && mime == "text/html").then_some("plot")
 }
 
 /// Strip a leading YAML front-matter block: a `---` line, then everything
@@ -1481,27 +1463,6 @@ mod tests {
             scope(&format!("tea source_id:{}", datalib_source_id())),
             CollectionScope::All
         );
-    }
-
-    /// Only a renderer's own plot page may ask the gateway to run its
-    /// script; an attachment named `.html` may not (audit 2026-10-02
-    /// finding 1).
-    #[test]
-    fn only_plot_pages_are_named_documents() {
-        use std::path::Path;
-        assert_eq!(
-            document_kind(Path::new("plots/temperature.html"), "text/html"),
-            Some("plot")
-        );
-        assert_eq!(
-            document_kind(Path::new("blobs/0123abcd.html"), "text/html"),
-            None
-        );
-        assert_eq!(
-            document_kind(Path::new("plots/x.svg"), "image/svg+xml"),
-            None
-        );
-        assert_eq!(document_kind(Path::new("plots.html"), "text/html"), None);
     }
 
     /// Frontmatter trimming is text handling, not parsing — a body
