@@ -187,6 +187,14 @@ follows Google:
   entry whose date does not read is stored with no `when_ts` and its
   date as written, and the render reports it on the entry's document;
   Chat's render reads `created_date` with the same parser.
+- A Voice file is named `<who> - <Type> - <stamp>.html`, except where
+  Google leaves the type out (`<who> - <stamp>.html`, mostly placed
+  calls; `Group Conversation - <stamp>.html`) or cuts a long name short
+  (`<who> - Pla(3).html`, type and stamp gone). Where the name does not
+  say, the markup does (`google_voice::parse::record_of`): an
+  `hChatLog` is a thread, an `haudio` a call of the kind its
+  `rel="tag"` links name (`…/voice#placed`), else its title's first
+  word. A file that is neither is a `skipped:google_voice` row.
 - A Maps photo's sidecar is named after its media, extension and all:
   `<photo>.jpg.json` describes `<photo>.jpg`.
 - A Gemini entry's links are percent-encoded (`Prime%20Directive.pdf`), and

@@ -1295,7 +1295,7 @@ async fn rung_1_reads_the_feeds_whose_reader_changed_again() {
     e.sync().await;
     assert_eq!(
         e.schema_version().await,
-        "3",
+        "4",
         "a new store starts at the top"
     );
     assert_eq!(e.sync().await.gemini_activity, 0, "nothing changed");
@@ -1303,7 +1303,7 @@ async fn rung_1_reads_the_feeds_whose_reader_changed_again() {
     e.exec("UPDATE _datalib_meta SET value = '0' WHERE key = 'schema_version'")
         .await;
     let s = e.sync().await;
-    assert_eq!(e.schema_version().await, "3");
+    assert_eq!(e.schema_version().await, "4");
     assert_eq!(
         (
             s.maps_photos,
@@ -1329,7 +1329,7 @@ async fn rung_2_reads_the_feeds_with_zoned_timestamps_again() {
     e.exec("UPDATE _datalib_meta SET value = '1' WHERE key = 'schema_version'")
         .await;
     let s = e.sync().await;
-    assert_eq!(e.schema_version().await, "3");
+    assert_eq!(e.schema_version().await, "4");
     assert_eq!(
         (s.youtube_watch_history, s.gemini_activity, s.chat_messages),
         (3, 3, 2 + SPACE_MESSAGES as usize),
@@ -1357,13 +1357,71 @@ async fn rung_3_reads_the_chat_files_again() {
     e.exec("UPDATE _datalib_meta SET value = '2' WHERE key = 'schema_version'")
         .await;
     let s = e.sync().await;
-    assert_eq!(e.schema_version().await, "3");
+    assert_eq!(e.schema_version().await, "4");
     assert_eq!(s.chat_messages, 2 + SPACE_MESSAGES as usize, "{s:?}");
     assert_eq!(
         (s.youtube_watch_history, s.gemini_activity, s.maps_photos),
         (0, 0, 0),
         "a feed whose reader did not change is not read again: {s:?}"
     );
+}
+
+/// Rung 4 forgets the Voice files, whose reader now reads a call whose
+/// name leaves its type out by its markup, and only those.
+#[tokio::test(flavor = "multi_thread")]
+async fn rung_4_reads_the_voice_files_again() {
+    let e = Export::new();
+    e.sync().await;
+    e.exec("UPDATE _datalib_meta SET value = '3' WHERE key = 'schema_version'")
+        .await;
+    let s = e.sync().await;
+    assert_eq!(e.schema_version().await, "4");
+    assert!(s.voice_messages > 0, "{s:?}");
+    assert_eq!(
+        (s.chat_messages, s.gemini_activity, s.maps_photos),
+        (0, 0, 0),
+        "a feed whose reader did not change is not read again: {s:?}"
+    );
+}
+
+/// Google names some calls `<who> - <stamp>.html`, with no type, and cuts
+/// a long name to `<who> - Pla(2).html` or `<who> - Voi.html`; each read as
+/// a text thread with no message and failed. They are call records, by their markup, and a
+/// `Group Conversation - <stamp>.html` is still a thread.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_voice_file_whose_name_leaves_its_type_out_is_read_by_its_markup() {
+    let e = Export::new();
+    e.sync().await;
+    assert_eq!(e.skipped_parts().await, Vec::<String>::new());
+    let db = RawDb::open(&e.db_path).await.unwrap();
+    let kinds: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT kind, count(*) FROM voice_messages WHERE folder = 'calls' GROUP BY kind ORDER BY kind",
+    )
+    .fetch_all(db.pool())
+    .await
+    .unwrap();
+    db.close().await;
+    assert_eq!(
+        kinds,
+        [
+            ("missed".to_string(), 1),
+            ("placed".to_string(), 2),
+            ("text".to_string(), 5),
+            ("voicemail".to_string(), 2),
+        ]
+    );
+    // A cut-short voicemail's link names its recording in full, and the
+    // recording on disk is cut short like the record.
+    let db = RawDb::open(&e.db_path).await.unwrap();
+    let audio: Vec<(String, Option<String>)> = sqlx::query_as(
+        "SELECT ref_name, blake3 FROM voice_attachments WHERE ref_name LIKE '% - Voi.mp3'",
+    )
+    .fetch_all(db.pool())
+    .await
+    .unwrap();
+    db.close().await;
+    assert_eq!(audio.len(), 1, "{audio:?}");
+    assert!(audio[0].1.is_some(), "{audio:?}");
 }
 
 /// An export from an English locale outside North America names its zone

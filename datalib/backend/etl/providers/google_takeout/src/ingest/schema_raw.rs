@@ -209,6 +209,11 @@ pub const LADDER: &[Migration] = &[
         name: "the Chat files are read again for the files of a message's earlier versions",
         apply: |conn| Box::pin(read_again(conn, REREAD_V3)),
     },
+    Migration {
+        version: 4,
+        name: "the Voice files are read again for the calls whose names do not say what they are",
+        apply: |conn| Box::pin(read_again(conn, REREAD_V4)),
+    },
 ];
 
 /// The feeds whose reader changed what it makes of an unchanged file:
@@ -233,6 +238,12 @@ pub const REREAD_V2: &[&str] = &[
 /// A Chat message's earlier versions name files of their own, which the
 /// reader now stores too.
 pub const REREAD_V3: &[&str] = &["google_takeout/google_chat"];
+
+/// A Voice file whose name leaves out its type (`<who> - <stamp>.html`)
+/// or cuts it short (`<who> - Pla(3).html`) is now read by its markup.
+/// A failed file was left unstamped, but the parts of a zipped export
+/// were marked read, so only this brings it back.
+pub const REREAD_V4: &[&str] = &["google_takeout/google_voice"];
 
 /// Forget what these feeds' files hashed to, so the next sync reads
 /// them whole, as if new. Which archive parts were read goes too, or an
