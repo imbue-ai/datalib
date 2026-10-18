@@ -215,39 +215,55 @@ TAKEOUT_CHAT_ATTACHMENT_NOT_IN_EXPORT = (
 # path: a warning where nothing reads it, a note where it is left out on
 # purpose.
 TAKEOUT_UNREAD_FILES = [
-    "0b9b217a-c9c3-5247-971c-58196290fc61|info|fetch|entity"
-    "|skipped:unread_files:0d2eec9b183d1d83||file|noted"
-    "|archive_browser.html: 1 file (757 bytes) left out on purpose:"
-    " Takeout's own index of the export",
-    "3c9428df-aa3d-591f-a4a8-8a568bc14ace|info|fetch|entity"
-    "|skipped:unread_files:2fbca57a07910868||file|noted"
-    "|Chrome/History.json: 1 file (27 bytes) left out on purpose:"
-    " browser history, bookmarks, settings and autofill",
-    "4d7311bb-8751-593b-a3e2-80c298e0ae3b|warning|fetch|entity"
-    "|skipped:unread_files:cdda41ed1b897705||file|uncovered_type"
-    "|Tasks/Tasks.json: 1 file (716 bytes) that no feed reads",
-    "e348beb8-1f24-5da7-b962-193299a74a22|warning|fetch|entity"
-    "|skipped:unread_files:0bf544a34be30f8f||file|uncovered_type"
-    "|Gemini/gemini_scheduled_actions_data.html: 1 file (14 bytes) that no feed reads",
-    "e9c2e034-ddb1-5a2a-871d-79455adc1169|warning|fetch|entity"
-    "|skipped:unread_files:b46675de73f27a2b||file|uncovered_type"
-    "|Keep/<name>.json: 1 file (419 bytes) that no feed reads",
-    "eb0f0733-b37b-504e-80a5-d90d38997842|warning|fetch|entity"
-    "|skipped:unread_files:e7e2c6623c092428||file|uncovered_type"
-    "|Gemini/gemini_gems_data.html: 1 file (14 bytes) that no feed reads",
+    (
+        "0b9b217a-c9c3-5247-971c-58196290fc61|info|fetch|entity"
+        "|skipped:unread_files:0d2eec9b183d1d83||file|noted"
+        "|archive_browser.html: 1 file (757 bytes) left out on purpose:"
+        " Takeout's own index of the export"
+    ),
+    (
+        "3c9428df-aa3d-591f-a4a8-8a568bc14ace|info|fetch|entity"
+        "|skipped:unread_files:2fbca57a07910868||file|noted"
+        "|Chrome/History.json: 1 file (27 bytes) left out on purpose:"
+        " browser history, bookmarks, settings and autofill"
+    ),
+    (
+        "4d7311bb-8751-593b-a3e2-80c298e0ae3b|warning|fetch|entity"
+        "|skipped:unread_files:cdda41ed1b897705||file|uncovered_type"
+        "|Tasks/Tasks.json: 1 file (716 bytes) that no feed reads"
+    ),
+    (
+        "e348beb8-1f24-5da7-b962-193299a74a22|warning|fetch|entity"
+        "|skipped:unread_files:0bf544a34be30f8f||file|uncovered_type"
+        "|Gemini/gemini_scheduled_actions_data.html: 1 file (14 bytes) that no feed reads"
+    ),
+    (
+        "e9c2e034-ddb1-5a2a-871d-79455adc1169|warning|fetch|entity"
+        "|skipped:unread_files:b46675de73f27a2b||file|uncovered_type"
+        "|Keep/<name>.json: 1 file (419 bytes) that no feed reads"
+    ),
+    (
+        "eb0f0733-b37b-504e-80a5-d90d38997842|warning|fetch|entity"
+        "|skipped:unread_files:e7e2c6623c092428||file|uncovered_type"
+        "|Gemini/gemini_gems_data.html: 1 file (14 bytes) that no feed reads"
+    ),
 ]
 # What the account's `user_info.json` says of the Ten Forward space,
 # noted on its first message.
 TAKEOUT_CHAT_SPACE_NOTES = [
-    "d745bedd-c4b4-5df8-b5ec-0df96f05d97c|info|parse|markdown"
-    "|00000000-0000-82fb-8e25-f16025ef745f"
-    "|019573e8-ee00-8ccc-bca0-7b369a4046d2"
-    "|membership_state|noted"
-    "|the account's membership of this conversation is MEMBER_NOT_A_MEMBER",
-    "e19f9822-c282-5fdf-a54d-8592f38d60e6|info|parse|markdown"
-    "|00000000-0000-82fb-8e25-f16025ef745f"
-    "|019573e8-ee00-8ccc-bca0-7b369a4046d2"
-    "|starred_group_id|noted|the account starred this conversation",
+    (
+        "d745bedd-c4b4-5df8-b5ec-0df96f05d97c|info|parse|markdown"
+        "|00000000-0000-82fb-8e25-f16025ef745f"
+        "|019573e8-ee00-8ccc-bca0-7b369a4046d2"
+        "|membership_state|noted"
+        "|the account's membership of this conversation is MEMBER_NOT_A_MEMBER"
+    ),
+    (
+        "e19f9822-c282-5fdf-a54d-8592f38d60e6|info|parse|markdown"
+        "|00000000-0000-82fb-8e25-f16025ef745f"
+        "|019573e8-ee00-8ccc-bca0-7b369a4046d2"
+        "|starred_group_id|noted|the account starred this conversation"
+    ),
 ]
 TAKEOUT_SAVED_PLACE_WITHOUT_KEY = (
     "5e4f794e-967e-5d6e-ac01-3e5031ebe907"
