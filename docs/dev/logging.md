@@ -251,6 +251,13 @@ What it serves (`http/src/prometheus.rs`):
   source that has not synced in a day.
 - **`datalib_tree_bytes{tree=…}`** and **`datalib_root_bytes`**: what
   the usage sampler last measured.
+- **`datalib_applet_rss_bytes{applet=…}`** and
+  **`datalib_applet_rss_peak_bytes{applet=…}`**: the resident memory of
+  each running applet and every process below it, read every five
+  seconds (`http/src/applet_memory.rs`), and the most since it started.
+  No run records an applet, so these live only here; the line that says
+  an applet stopped or exited carries its `peak_rss_bytes`. A step's own
+  memory is the `rss_bytes` series above (`step_protocol.md`).
 
 `//tests/fixtures:metrics_export_e2e_test` scrapes a real server and
 parses the answer with `prometheus_client`, the Prometheus project's

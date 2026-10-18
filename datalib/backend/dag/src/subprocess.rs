@@ -1363,20 +1363,24 @@ mod tests {
 
     /// The runner reports what a step holds in memory, counting what the
     /// step spawned: the shell here holds a megabyte or two, the `dd` below
-    /// it a 64 MiB buffer it keeps filling. Once the step ends its reading
-    /// goes to zero and its peak stays.
+    /// it a 64 MiB buffer. Once the step ends its reading goes to zero and
+    /// its peak stays.
     #[cfg(unix)]
     #[tokio::test]
     async fn a_step_reports_the_memory_it_and_what_it_spawned_hold() {
         use crate::memory::{RSS_BYTES, RSS_PEAK_BYTES};
         const BUFFER: i64 = 64 * 1024 * 1024;
         let root = tempfile::tempdir().unwrap();
-        // `count` bounds the dd, so a failed run does not leave it copying.
+        // dd fills its buffer once and then blocks writing it to a pipe
+        // nobody reads, so the memory stays resident without a clock or a
+        // busy core. Random bytes, because macOS compresses an idle page of
+        // zeros away once the machine is busy, and RSS stops counting it.
+        // Killing the `sleep` ends the dd; so does its minute.
         let spec = StepSpec::new(
             "g/out",
             sh(r#"
                 mkdir -p "$DATALIB_DAG_DATA_ROOT/g/out"
-                dd if=/dev/zero of=/dev/null bs=67108864 count=1000 2>/dev/null &
+                dd if=/dev/urandom bs=67108864 count=1 2>/dev/null | sleep 60 &
                 while [ ! -f "$DATALIB_DAG_DATA_ROOT/release" ]; do sleep 0.1; done
                 kill $!
             "#),
@@ -1399,10 +1403,15 @@ mod tests {
                 .collect()
         };
 
-        until("a reading that counts the step's child", || {
-            readings(RSS_BYTES).iter().any(|&v| v >= BUFFER)
-        })
-        .await;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while !readings(RSS_BYTES).iter().any(|&v| v >= BUFFER) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no reading counted the step's child: {:?}",
+                readings(RSS_BYTES)
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
         std::fs::write(root.path().join("release"), "").unwrap();
         let rep = round.await.unwrap().unwrap();
 

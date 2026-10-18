@@ -1,7 +1,8 @@
-//! What a running subprocess step holds in memory: the resident memory of
-//! the step and every process below it, sampled on an interval and
-//! reported as two of the step's metrics. It measures; nothing here limits
-//! a step.
+//! What a process we started holds in memory: the resident memory of it
+//! and every process below it. A subprocess step's is sampled on an
+//! interval and reported as two of the step's metrics; the server reads its
+//! applets' through [`TreeMemory`] too. It measures; nothing here limits a
+//! process.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Once};
@@ -57,27 +58,31 @@ fn tree_rss(procs: &HashMap<u32, Proc>, root: u32) -> u64 {
     total
 }
 
-struct Sampler {
+/// Reads the resident memory of process trees. Keep one and call
+/// [`TreeMemory::measure`] on an interval; it holds what it learned of every
+/// process between calls.
+pub struct TreeMemory {
     sys: System,
-    root: u32,
 }
 
-impl Sampler {
-    fn new(root: u32) -> Self {
+impl Default for TreeMemory {
+    fn default() -> Self {
         // On Linux sysinfo otherwise keeps a `/proc` file open for every
         // process it has read, up to half the descriptor limit, and the
-        // runner shares that limit with every store it opens.
+        // process shares that limit with every store it opens.
         static NO_HELD_FILES: Once = Once::new();
         NO_HELD_FILES.call_once(|| {
             sysinfo::set_open_files_limit(0);
         });
-        Self {
-            sys: System::new(),
-            root,
-        }
+        Self { sys: System::new() }
     }
+}
 
-    fn sample(&mut self) -> u64 {
+impl TreeMemory {
+    /// The resident bytes under each of `roots`, in order, from one read
+    /// of every process on the machine: a few milliseconds of system
+    /// calls, so not on an async worker.
+    pub fn measure(&mut self, roots: &[u32]) -> Vec<u64> {
         self.sys.refresh_processes_specifics(
             ProcessesToUpdate::All,
             true,
@@ -98,7 +103,7 @@ impl Sampler {
                 (pid.as_u32(), proc)
             })
             .collect();
-        tree_rss(&procs, self.root)
+        roots.iter().map(|&root| tree_rss(&procs, root)).collect()
     }
 }
 
@@ -116,21 +121,19 @@ impl MemoryWatch {
             let step = step.to_string();
             let sink = sink.clone();
             tokio::spawn(async move {
-                let mut sampler = Sampler::new(pid);
+                let mut memory = TreeMemory::default();
                 let mut peak = 0;
                 let mut tick = tokio::time::interval(SAMPLE_EVERY);
                 tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                 loop {
                     tick.tick().await;
-                    // Reading every process's memory is a few milliseconds of
-                    // system calls, too long to hold a runtime worker for.
                     let sampled = tokio::task::spawn_blocking(move || {
-                        let rss = sampler.sample();
-                        (sampler, rss)
+                        let rss = memory.measure(&[pid])[0];
+                        (memory, rss)
                     })
                     .await;
                     let Ok((back, rss)) = sampled else { return };
-                    sampler = back;
+                    memory = back;
                     emit(&sink, &step, RSS_BYTES, rss);
                     if rss > peak {
                         peak = rss;
