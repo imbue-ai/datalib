@@ -1373,14 +1373,18 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         // dd fills its buffer once and then blocks writing it to a pipe
         // nobody reads, so the memory stays resident without a clock or a
-        // busy core. Random bytes, because macOS compresses an idle page of
-        // zeros away once the machine is busy, and RSS stops counting it.
-        // Killing the `sleep` ends the dd; so does its minute.
+        // busy core. Killing the `sleep` ends the dd; so does its minute.
+        // Random bytes, because macOS compresses an idle page of zeros away
+        // once the machine is busy; from a file, because a loaded machine
+        // can answer one read of `/dev/urandom` short, and `count=1` reads
+        // once.
         let spec = StepSpec::new(
             "g/out",
             sh(r#"
-                mkdir -p "$DATALIB_DAG_DATA_ROOT/g/out"
-                dd if=/dev/urandom bs=67108864 count=1 2>/dev/null | sleep 60 &
+                out="$DATALIB_DAG_DATA_ROOT/g/out"
+                mkdir -p "$out"
+                head -c 67108864 /dev/urandom > "$out/noise"
+                dd if="$out/noise" bs=67108864 count=1 2>/dev/null | sleep 60 &
                 while [ ! -f "$DATALIB_DAG_DATA_ROOT/release" ]; do sleep 0.1; done
                 kill $!
             "#),
