@@ -44,6 +44,19 @@ impl CallKind {
             _ => None,
         }
     }
+    /// A `rel="tag"` link's fragment (`…/voice#placed`), Google's label
+    /// for what the record is.
+    fn from_tag(fragment: &str) -> Option<Self> {
+        match fragment {
+            "voicemail" => Some(Self::Voicemail),
+            "missed" => Some(Self::Missed),
+            "placed" => Some(Self::Placed),
+            "received" => Some(Self::Received),
+            "recorded" => Some(Self::Recorded),
+            _ => None,
+        }
+    }
+
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Voicemail => "voicemail",
@@ -67,6 +80,57 @@ pub struct ParsedEvent {
     pub audio_src: Option<String>,
     /// ISO-8601 duration (`PT13S`), if present.
     pub duration: Option<String>,
+}
+
+/// What a Voice file is, read off its markup where its name does not say:
+/// Google leaves the type out of some names (`<who> - <stamp>.html`) and
+/// cuts it short in a long one (`<who> - Pla(3).html`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Record {
+    /// An `hChatLog`: a text thread or a group conversation.
+    Thread,
+    /// An `haudio`: a call or voicemail, of the kind its tags name, or
+    /// its title's first word.
+    Call(CallKind),
+}
+
+pub fn record_of(html: &str) -> Option<Record> {
+    let pre = preprocess(html);
+    let mut r = reader(&pre);
+    let mut buf = Vec::new();
+    let (mut thread, mut call) = (false, false);
+    let mut tagged: Option<CallKind> = None;
+    let (mut in_title, mut title) = (false, String::new());
+    loop {
+        match r.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => match e.name().as_ref() {
+                b"div" if has_class(&e, "hChatLog") => thread = true,
+                b"div" if has_class(&e, "haudio") => call = true,
+                b"a" if attr(&e, b"rel").as_deref() == Some("tag") => {
+                    let href = attr(&e, b"href").unwrap_or_default();
+                    let fragment = href.rsplit_once('#').map_or("", |(_, f)| f);
+                    tagged = tagged.or(CallKind::from_tag(fragment));
+                }
+                b"title" => in_title = true,
+                _ => {}
+            },
+            Ok(Event::Text(t)) if in_title => {
+                title.push_str(&t.decode().map(|c| c.into_owned()).unwrap_or_default());
+            }
+            Ok(Event::End(e)) if e.name().as_ref() == b"title" => in_title = false,
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    if thread {
+        return Some(Record::Thread);
+    }
+    let titled = title
+        .split_whitespace()
+        .next()
+        .and_then(CallKind::from_type_token);
+    call.then(|| tagged.or(titled)).flatten().map(Record::Call)
 }
 
 pub fn tel_from_href(href: &str) -> Option<String> {
@@ -459,6 +523,44 @@ Transcript:
         assert_eq!(headers, vec!["Date/Time", "Type", "Money"]);
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0], vec!["Free credit", "Credit", "$0.50"]);
+    }
+
+    /// A placed call Google named `<who> - <stamp>.html`, and one whose
+    /// long name it cut to `<who> - Pla(3).html`, read as text threads
+    /// holding no message and failed.
+    #[test]
+    fn a_record_is_read_off_its_markup() {
+        let call = |tag: &str, title: &str| {
+            format!(
+                "<html><head><title>{title}</title></head><body><div class=\"haudio\">\
+                 <abbr class=\"published\" title=\"2364-03-05T08:00:00.000-08:00\">Mar 5</abbr>\
+                 <div class=\"tags\">Labels: {tag}</div></div></body></html>"
+            )
+        };
+        let placed = call(
+            "<a rel=\"tag\" href=\"http://www.google.com/voice#placed\">Placed</a>",
+            "Placed call to Geordi La Forge",
+        );
+        assert_eq!(record_of(&placed), Some(Record::Call(CallKind::Placed)));
+        let voicemail = call(
+            "<a rel=\"tag\" href=\"http://www.google.com/voice#inbox\">Inbox</a>, \
+             <a rel=\"tag\" href=\"http://www.google.com/voice#voicemail\">Voicemail</a>",
+            "Voicemail from Worf",
+        );
+        assert_eq!(
+            record_of(&voicemail),
+            Some(Record::Call(CallKind::Voicemail))
+        );
+        let untagged = call("", "Received call from Guinan");
+        assert_eq!(record_of(&untagged), Some(Record::Call(CallKind::Received)));
+        assert_eq!(
+            record_of("<html><body><div class=\"hChatLog hfeed\"></div></body></html>"),
+            Some(Record::Thread)
+        );
+        assert_eq!(
+            record_of("<html><body><p>Tea, Earl Grey</p></body></html>"),
+            None
+        );
     }
 
     #[test]

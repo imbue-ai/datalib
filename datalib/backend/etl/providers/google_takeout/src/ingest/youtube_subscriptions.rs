@@ -51,7 +51,10 @@ pub async fn ingest(
             if cells.len() < 3 {
                 skipped.push(SkippedRecord {
                     entry: line.to_string(),
-                    problem: Problem::record(Reason::Undeserializable, line),
+                    problem: Problem::record(
+                        Reason::Undeserializable,
+                        &format!("a row of {} characters", line.chars().count()),
+                    ),
                 });
                 continue;
             }
@@ -61,7 +64,11 @@ pub async fn ingest(
             if channel_id.is_empty() {
                 skipped.push(SkippedRecord {
                     entry: line.to_string(),
-                    problem: Problem::field("Channel Id", Reason::NoIdentity, line),
+                    problem: Problem::field(
+                        "Channel Id",
+                        Reason::NoIdentity,
+                        &format!("a row of {} characters", line.chars().count()),
+                    ),
                 });
                 continue;
             }

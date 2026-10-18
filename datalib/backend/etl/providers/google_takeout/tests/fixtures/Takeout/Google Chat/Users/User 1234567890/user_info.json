@@ -3,5 +3,26 @@
     "name": "Jean-Luc Picard",
     "email": "picard@enterprise.starfleet",
     "user_type": "Human"
-  }
+  },
+  "membership_info": [
+    {
+      "group_id": "DM TNG-BRIDGE",
+      "membership_state": "MEMBER_JOINED"
+    },
+    {
+      "group_name": "Ten Forward regulars",
+      "group_id": "Space AAAATenFwd",
+      "membership_state": "MEMBER_NOT_A_MEMBER"
+    },
+    {
+      "group_id": "DM EMPTYdm01",
+      "membership_state": "MEMBER_JOINED"
+    }
+  ],
+  "starred_group_id": [
+    "Space AAAATenFwd"
+  ],
+  "starred_message_ids": [
+    "AAAATenFwd/N1/N2"
+  ]
 }
