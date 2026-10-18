@@ -1,0 +1,25 @@
+{
+  "kind": "tasks#taskLists",
+  "items": [
+    {
+      "kind": "tasks#taskList",
+      "id": "MTAtng",
+      "title": "Bridge duties",
+      "updated": "2364-03-01T09:00:00.000000Z",
+      "create_time": "2364-03-01T08:00:00.000Z",
+      "selfLink": "https://www.googleapis.com/tasks/v1/users/@me/lists/MTAtng",
+      "items": [
+        {
+          "kind": "tasks#task",
+          "id": "t1",
+          "title": "Calibrate the sensors",
+          "notes": "Ask Geordi first.",
+          "status": "needsAction",
+          "task_type": "PERSONAL_TASK",
+          "updated": "2364-03-01T09:00:00.000000Z",
+          "selfLink": "https://www.googleapis.com/tasks/v1/lists/MTAtng/tasks/t1"
+        }
+      ]
+    }
+  ]
+}

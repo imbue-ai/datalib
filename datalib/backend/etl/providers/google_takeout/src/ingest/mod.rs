@@ -1,6 +1,7 @@
 //! Google Takeout extractor entry point.
 
 pub mod attachment_path;
+pub mod coverage;
 pub mod db;
 pub mod gemini_apps;
 pub mod google_chat;
@@ -10,6 +11,7 @@ pub mod maps_reviews;
 pub mod maps_saved_places;
 pub mod mdl_html;
 pub mod schema_raw;
+pub mod shape;
 pub mod time;
 pub mod unpack;
 pub mod youtube_subscriptions;
@@ -137,7 +139,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let parts = unpack::parts_in(&opts.input_path)?;
     if parts.is_empty() {
-        let (summary, _) = read_tree(&opts, &opts.input_path, &found).await?;
+        let (summary, scan) = read_tree(&opts, &opts.input_path, &found).await?;
+        let files = scan.files.iter().map(|f| (f.rel.as_str(), f.size));
+        found.skipped(coverage::PART, coverage::report(files, &opts.sync));
         return Ok(summary);
     }
     read_archives(&opts, &parts, &found).await
@@ -201,6 +205,11 @@ async fn read_archives(
             .await
             .context("unpack task panicked")??
     };
+    let listed = unpacked
+        .listed
+        .iter()
+        .map(|(rel, size)| (rel.as_str(), *size));
+    found.skipped(coverage::PART, coverage::report(listed, &opts.sync));
     let read = read_tree(opts, &root, found).await;
     forget_fingerprints_under(&opts.cache, &root).await?;
     let (mut summary, scan) = read?;
@@ -214,7 +223,7 @@ async fn read_archives(
         }
     }
     summary.archives = parts.len();
-    summary.unpacked = unpacked;
+    summary.unpacked = unpacked.files;
     Ok(summary)
 }
 

@@ -15,10 +15,9 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 # on our side. Remove an entry when a tauri bump drops the crate.
 ignore = [
     { id = "RUSTSEC-2024-0370", reason = "proc-macro-error, via tauri -> muda -> gtk -> glib-macros 0.18" },
-    # Folded into zbus 6; tauri-plugin-opener 2.7.2 is still on zbus 5.
-    { id = "RUSTSEC-2026-0370", reason = "zvariant, via tauri-plugin-opener -> zbus 5" },
-    { id = "RUSTSEC-2026-0371", reason = "zbus_names, via tauri-plugin-opener -> zbus 5" },
-    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive, via tauri-plugin-opener -> zbus 5" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant, via tauri-plugin-opener -> zbus 5 (D-Bus on Linux)" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names, via tauri-plugin-opener -> zbus 5 (D-Bus on Linux)" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive, via tauri-plugin-opener -> zbus 5 (D-Bus on Linux)" },
 ]
 
 [bans]

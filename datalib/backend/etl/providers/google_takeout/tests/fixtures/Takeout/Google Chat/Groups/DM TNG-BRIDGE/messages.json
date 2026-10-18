@@ -6,8 +6,56 @@
         "email": "picard@enterprise.starfleet",
         "user_type": "Human"
       },
-      "created_date": "Tuesday, February 11, 2025 at 11:33:35 AM UTC",
+      "created_date": "Tuesday, February 11, 2025 at 11:33:35 AM UTC",
       "text": "Number One, set a course for Risa.",
+      "annotations": [
+        {
+          "start_index": 30,
+          "length": 4,
+          "url_metadata": {
+            "title": "Risa",
+            "snippet": "A pleasure planet.",
+            "image_url": "",
+            "url": {
+              "private_do_not_access_or_else_safe_url_do_not_use": "https://memory-alpha.example/wiki/Risa"
+            }
+          }
+        },
+        {
+          "start_index": 0,
+          "length": 10,
+          "format_metadata": {
+            "format_type": "BOLD"
+          }
+        }
+      ],
+      "reactions": [
+        {
+          "emoji": {
+            "unicode": "🖖"
+          },
+          "reactor_emails": [
+            "riker@enterprise.starfleet"
+          ]
+        }
+      ],
+      "message_labels": [
+        {
+          "label_type": "STARRED",
+          "creator": {
+            "name": "Jean-Luc Picard",
+            "email": "picard@enterprise.starfleet",
+            "user_type": "Human"
+          }
+        }
+      ],
+      "updated_date": "Tuesday, February 11, 2025 at 11:35:00 AM UTC",
+      "previous_message_versions": [
+        {
+          "text": "Number One, set a course for Earth.",
+          "created_date": "Tuesday, February 11, 2025 at 11:33:35 AM UTC"
+        }
+      ],
       "topic_id": "T1",
       "message_id": "TNG-BRIDGE/T1/T1"
     },
@@ -17,8 +65,16 @@
         "email": "riker@enterprise.starfleet",
         "user_type": "Human"
       },
-      "created_date": "Wednesday, March 5, 2025 at 9:34:00 PM UTC",
+      "created_date": "Wednesday, March 5, 2025 at 9:34:00 PM UTC",
       "text": "Aye, sir.",
+      "quoted_message_metadata": {
+        "creator": {
+          "name": "Jean-Luc Picard",
+          "email": "picard@enterprise.starfleet",
+          "user_type": "Human"
+        },
+        "text": "Number One, set a course for Risa."
+      },
       "attached_files": [
         {
           "original_name": "course-laid-in.txt",
@@ -27,6 +83,17 @@
         {
           "original_name": "risa-shore-leave.png",
           "export_name": "risa-shore-leave.png"
+        }
+      ],
+      "annotations": [
+        {
+          "start_index": 0,
+          "length": 0,
+          "drive_metadata": {
+            "id": "1TNGdutyRoster",
+            "title": "Duty roster",
+            "thumbnail_url": ""
+          }
         }
       ],
       "topic_id": "T2",

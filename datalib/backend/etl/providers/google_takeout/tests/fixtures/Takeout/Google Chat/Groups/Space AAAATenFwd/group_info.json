@@ -1,0 +1,20 @@
+{
+  "name": "Ten Forward regulars",
+  "members": [
+    {
+      "name": "Guinan",
+      "email": "guinan@tenforward.example",
+      "user_type": "Human"
+    },
+    {
+      "name": "Data",
+      "email": "data@enterprise.starfleet",
+      "user_type": "Human"
+    },
+    {
+      "name": "William Riker",
+      "email": "riker@enterprise.starfleet",
+      "user_type": "Human"
+    }
+  ]
+}

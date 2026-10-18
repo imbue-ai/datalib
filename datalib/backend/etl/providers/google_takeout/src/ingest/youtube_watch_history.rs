@@ -50,7 +50,7 @@ pub async fn ingest(
                     problem: Problem::lossy(
                         "youtube_watch_not_a_video",
                         Some("videoUrl".to_string()),
-                        &video_url,
+                        &super::shape::url_kind(&video_url),
                     )
                     .severity(Severity::Warning),
                 });
