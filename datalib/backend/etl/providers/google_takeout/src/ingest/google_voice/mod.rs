@@ -80,7 +80,10 @@ pub async fn ingest(
     let mut unread = |f: &fsscan::ScannedFile, reason: Reason, detail: String| {
         skipped.push(SkippedRecord {
             entry: f.rel.clone(),
-            problem: Problem::record(reason, &format!("{}: {detail}", f.rel)),
+            problem: Problem::record(
+                reason,
+                &format!("{}: {detail}", crate::ingest::shape::shape_rel(&f.rel)),
+            ),
         });
     };
     // Files that would not read at all; their records are unknown.
@@ -471,10 +474,13 @@ fn ingest_text_thread(
                         *n_attachments += 1;
                         attachment_refs.push(ref_name);
                     }
-                    Err(e) => missing.push(format!("read {}: {e}", blob_path.display())),
+                    Err(e) => missing.push(format!("read {}: {e}", shown_name(&blob_path))),
                 }
             } else {
-                missing.push(format!("{src} is not in the export"));
+                missing.push(format!(
+                    "{} is not in the export",
+                    shown_name(Path::new(src))
+                ));
             }
         }
         let payload = json!({
@@ -540,10 +546,13 @@ fn ingest_event(
                     *n_attachments += 1;
                     audio_ref = Some(ref_name);
                 }
-                Err(e) => missing.push(format!("read {}: {e}", blob_path.display())),
+                Err(e) => missing.push(format!("read {}: {e}", shown_name(&blob_path))),
             }
         } else {
-            missing.push(format!("{src} is not in the export"));
+            missing.push(format!(
+                "{} is not in the export",
+                shown_name(Path::new(src))
+            ));
         }
     }
     let payload = json!({
@@ -604,7 +613,7 @@ fn ingest_orphan_audio(
             acc.add_fetched(&id, &ref_name, bytes, guess_content_type(path));
             *n_attachments += 1;
         }
-        Err(e) => missing.push(format!("read {}: {e}", path.display())),
+        Err(e) => missing.push(format!("read {}: {e}", shown_name(path))),
     }
     let payload = json!({
         "id": id.clone(),
@@ -752,6 +761,13 @@ fn guess_content_type(path: &Path) -> Option<String> {
         _ => return None,
     };
     Some(ct.to_string())
+}
+
+/// A file's name as a problem row may show it: its shape, not the person
+/// or number it is named after.
+fn shown_name(path: &Path) -> String {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    crate::ingest::shape::shape_rel(&format!("Voice/Calls/{name}"))
 }
 
 #[cfg(test)]

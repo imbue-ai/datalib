@@ -204,6 +204,11 @@ pub const LADDER: &[Migration] = &[
                outside North America",
         apply: |conn| Box::pin(read_again(conn, REREAD_V2)),
     },
+    Migration {
+        version: 3,
+        name: "the Chat files are read again for the files of a message's earlier versions",
+        apply: |conn| Box::pin(read_again(conn, REREAD_V3)),
+    },
 ];
 
 /// The feeds whose reader changed what it makes of an unchanged file:
@@ -224,6 +229,10 @@ pub const REREAD_V2: &[&str] = &[
     "google_takeout/gemini_apps",
     "google_takeout/google_chat",
 ];
+
+/// A Chat message's earlier versions name files of their own, which the
+/// reader now stores too.
+pub const REREAD_V3: &[&str] = &["google_takeout/google_chat"];
 
 /// Forget what these feeds' files hashed to, so the next sync reads
 /// them whole, as if new. Which archive parts were read goes too, or an

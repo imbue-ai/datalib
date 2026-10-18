@@ -73,7 +73,7 @@ pub async fn ingest(
             entry: f.rel.clone(),
             problem: Problem::record(
                 Reason::Undeserializable,
-                &format!("{}: {}", f.rel, e.root_cause()),
+                &format!("{}: {}", super::shape::shape_rel(&f.rel), e.root_cause()),
             ),
         });
     };
@@ -282,14 +282,22 @@ pub async fn ingest(
     Ok(summary)
 }
 
-/// The `export_name` of every file a message names.
+/// The `export_name` of every file a message names, its earlier
+/// versions' included.
 fn attached_export_names(msg: &Value) -> impl Iterator<Item = &str> {
-    msg.get("attached_files")
+    let versions = msg
+        .get("previous_message_versions")
         .and_then(|v| v.as_array())
         .into_iter()
+        .flatten();
+    let mut seen = HashSet::new();
+    std::iter::once(msg)
+        .chain(versions)
+        .filter_map(|v| v.get("attached_files").and_then(|v| v.as_array()))
         .flatten()
         .filter_map(|f| f.get("export_name").and_then(|v| v.as_str()))
         .filter(|name| !name.is_empty())
+        .filter(move |name| seen.insert(*name))
 }
 
 /// Google truncates long on-disk names while keeping the full name in the
@@ -302,7 +310,10 @@ fn attach(acc: &mut CasEdgeAccumulator, group_dir: &Path, owning: &str, export_n
                 owning,
                 export_name,
                 Reason::NotFound,
-                format!("{export_name} is not in the export"),
+                format!(
+                    "{} is not in the export",
+                    super::shape::shape_name(export_name)
+                ),
             );
             return;
         }
@@ -317,7 +328,7 @@ fn attach(acc: &mut CasEdgeAccumulator, group_dir: &Path, owning: &str, export_n
         Err(e) => acc.add_failed(
             owning,
             export_name,
-            format!("read {}: {e}", resolved.display()),
+            format!("read {}: {e}", super::shape::shape_name(export_name)),
         ),
     }
 }

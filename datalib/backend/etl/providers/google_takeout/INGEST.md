@@ -76,6 +76,38 @@ string (`"maps_review:{ftid}:{date}"`, `"youtube:watch:{id}:{ts}"`);
 see `ns_id` in `schema_raw.rs` and
 [`docs/dev/entity_ids.md`](../../../../../docs/dev/entity_ids.md).
 
+## What no feed reads is a problem row
+
+`src/ingest/coverage.rs`. Every run that reads the export compares its
+files with what the feeds read (`feed_of`), and files a
+`skipped:unread_files:<hash>` row for each kind of file no feed that is
+on reads. A kind is the file's path with every name that might be the
+account's replaced (`shape_rel`): `Keep/<name>.json`,
+`Google Chat/Groups/DM <id>/<name>.png`,
+`Voice/Calls/<name> - Text - <stamp>-N-N.jpg`. Product folders and
+Google's own file names stay. The row counts the files and their bytes,
+and says why:
+
+- **a warning** where no feed reads that kind of file at all: what a run
+  over a new export says is still missing;
+- **a note** where the feed that reads it is off;
+- **a note** where the source leaves it out on purpose (`left_out`):
+  mail, calendars and contacts, which their own sources read; Chrome,
+  payments, health, location, home devices and account settings, which
+  are not something a person wrote.
+
+The rows are replaced whole by every run that reads the export, the
+zipped one included (the unpacker lists every entry it passes over); a
+run that finds the parts unchanged reads nothing and keeps them.
+
+## A problem row says the shape, not the content
+
+The export is private, and its problems table should be safe to read.
+`src/ingest/shape.rs` is what a row may say: a file by `shape_rel` or
+`shape_name`, never by its path; a URL by `url_kind`, its host and first
+word; an entry by its size, never by its text. The render's rows give a
+value's JSON shape (`string(12 chars)`, `object{a,b}`).
+
 ## A feed that fails costs only itself
 
 `fetch` runs each feed through `RunProblems::run_phase`, which turns an
@@ -112,6 +144,8 @@ or stamped with its problem. Each kind is a `problems` row:
   no message, a call record with no time, a `Bills.html` with no table
   header. It deletes nothing, where a `messages.json` whose list is
   empty, or a bills table with no rows, empties what it holds.
+- **A Chat attachment** is a file a message names, or one of its
+  earlier versions does (`previous_message_versions`).
 - **A Chat or Gemini attachment** that is not in the export is a
   `not_found` warning on its edge (`chat_attachments:<message>#<name>`,
   `gemini_attachments:<activity>#<name>`), and one that is there but
@@ -174,7 +208,16 @@ whole. `tests/fixture_walk.rs`'s `rung_1_…` is the test to copy.
 
 `datalib_etl_google_takeout_render` draws every feed through
 chat-common. A Google Chat space or a Voice conversation is a page per
-month; Gemini, YouTube history and Google Maps are each one activity
+month. A named Chat space is titled by its `group_info.json` name, a DM
+by its members. A Chat message (`google_takeout_render/src/chat.rs`)
+draws its text, the message it quotes, whose thread it answers, the
+links, Drive files, videos and Meet links its annotations name that its
+text does not show, a call, its attachments, its reactions, its labels
+and the account's star, and says when it was edited. Its earlier
+versions fold in above it. Every key of a message, `group_info.json` or
+`user_info.json` the render does not read is a warning on the message
+(or the conversation's first one), by the value's shape; a message with
+nothing to show is a note. Gemini, YouTube history and Google Maps are each one activity
 feed (`google_takeout_render/src/feeds.rs`), a page per year, and YouTube
 subscriptions, which have no dates, one page. A Gemini entry is two
 items, the prompt by the account and the response by Gemini, its HTML
