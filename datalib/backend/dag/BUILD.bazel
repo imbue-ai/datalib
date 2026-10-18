@@ -42,6 +42,7 @@ rust_library(
         "@datalib_crates//:shlex",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:strum",
+        "@datalib_crates//:sysinfo",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
         "@datalib_crates//:toml",

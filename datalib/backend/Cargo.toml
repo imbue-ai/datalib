@@ -116,6 +116,8 @@ sqlx = { version = "0.9", default-features = false, features = [
 strum = { version = "0.28", features = ["derive"] }
 subtle = "2.6"
 syn = { version = "2", features = ["full"] }
+# Only `system`: the step runner reads the memory its steps hold.
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 tar = "0.4"
 tempfile = "3"
 thiserror = "2.0"

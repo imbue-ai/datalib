@@ -280,6 +280,9 @@ pub(crate) async fn run_subprocess(
         .with_context(|| format!("spawn {prog:?}"))
         .map_err(internal)?;
     let _pid_guard = child.id().map(RegisteredChild::new);
+    let memory = child
+        .id()
+        .map(|pid| crate::memory::MemoryWatch::start(pid, &ctx.step_id, sink));
     // Aborted once the step has exited and its pipes have closed. Not at
     // the exit alone: a child the step left behind is still in the group,
     // holding stderr, and the drain below waits on it. While any member is
@@ -375,6 +378,7 @@ pub(crate) async fn run_subprocess(
         .await
         .context("wait for subprocess")
         .map_err(internal)?;
+    drop(memory);
     let stderr_tail = stderr_task.await.unwrap_or_default();
     if let Some(t) = stop_task {
         t.abort();
@@ -1355,6 +1359,57 @@ mod tests {
             })
             .collect();
         assert_eq!(seals, vec![("v1".to_string(), Some(7))]);
+    }
+
+    /// The runner reports what a step holds in memory, counting what the
+    /// step spawned: the shell here holds a megabyte or two, the `dd` below
+    /// it a 64 MiB buffer it keeps filling. Once the step ends its reading
+    /// goes to zero and its peak stays.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_step_reports_the_memory_it_and_what_it_spawned_hold() {
+        use crate::memory::{RSS_BYTES, RSS_PEAK_BYTES};
+        const BUFFER: i64 = 64 * 1024 * 1024;
+        let root = tempfile::tempdir().unwrap();
+        // `count` bounds the dd, so a failed run does not leave it copying.
+        let spec = StepSpec::new(
+            "g/out",
+            sh(r#"
+                mkdir -p "$DATALIB_DAG_DATA_ROOT/g/out"
+                dd if=/dev/zero of=/dev/null bs=67108864 count=1000 2>/dev/null &
+                while [ ! -f "$DATALIB_DAG_DATA_ROOT/release" ]; do sleep 0.1; done
+                kill $!
+            "#),
+        );
+        let g = Graph::build(vec![spec]).unwrap();
+        let rec = Arc::new(Recorder::default());
+        let runner = Runner::new(root.path()).sink(rec.clone());
+        let round = tokio::spawn(async move { runner.run(&g).await });
+        let readings = |series: &str| -> Vec<i64> {
+            rec.0
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|e| match e {
+                    Event::Metric {
+                        step, name, value, ..
+                    } if step == "g/out" && name == series => Some(*value),
+                    _ => None,
+                })
+                .collect()
+        };
+
+        until("a reading that counts the step's child", || {
+            readings(RSS_BYTES).iter().any(|&v| v >= BUFFER)
+        })
+        .await;
+        std::fs::write(root.path().join("release"), "").unwrap();
+        let rep = round.await.unwrap().unwrap();
+
+        assert!(rep.all_ok(), "{rep:#?}");
+        assert_eq!(readings(RSS_BYTES).last(), Some(&0));
+        let peak = readings(RSS_PEAK_BYTES).last().copied().unwrap_or(0);
+        assert!(peak >= BUFFER, "peak {peak}");
     }
 
     #[tokio::test]
