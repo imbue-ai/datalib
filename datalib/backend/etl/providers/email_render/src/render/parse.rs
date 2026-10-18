@@ -259,15 +259,15 @@ fn extract_attachments_from_emls(bucket: &mut EmailThreadBucket) {
         // and only show up via the html-body index). Filter out the
         // alternate text/html body parts mail-parser sometimes
         // surfaces in `attachments`.
-        let body_idx: HashSet<usize> = msg
+        let body_idx: HashSet<u32> = msg
             .text_body
             .iter()
             .copied()
             .chain(msg.html_body.iter().copied())
             .collect();
-        let mut seen_idx: HashSet<usize> = HashSet::new();
+        let mut seen_idx: HashSet<u32> = HashSet::new();
         let mut atts: Vec<datalib_etl_email::ingest::db::LoadedAttachment> = Vec::new();
-        let candidate_idxs: Vec<usize> = msg
+        let candidate_idxs: Vec<u32> = msg
             .attachments
             .iter()
             .copied()
