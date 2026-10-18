@@ -547,14 +547,22 @@ fn message_items(
         problems: Vec::new(),
     };
     if let Some(call) = shown.call {
-        if text.trim().is_empty() && item.attachments.is_empty() {
+        // A call with nothing else to show is a system note; one with a
+        // text, a link or a file says so under them.
+        if item.text.is_none() && item.attachments.is_empty() {
             item.kind = ItemKind::System;
             item.system_note = Some(call);
         } else {
             let mut t = item.text.take().unwrap_or_default();
-            t.push_str(&format!("\n\n*{call}*"));
+            if !t.is_empty() {
+                t.push_str("\n\n");
+            }
+            t.push_str(&format!("*{call}*"));
             item.text = Some(t);
         }
+    }
+    if !item.attachments.is_empty() {
+        item.kind = ItemKind::Attachment;
     }
     if item.text.is_none() && item.attachments.is_empty() && item.system_note.is_none() {
         item.kind = ItemKind::System;
@@ -649,7 +657,11 @@ fn versions(
             message_uuid: id.uuid,
             date_ms,
             text: (!parts.is_empty()).then(|| parts.join("\n\n")),
-            kind: ItemKind::Text,
+            kind: if files.is_empty() {
+                ItemKind::Text
+            } else {
+                ItemKind::Attachment
+            },
             attachments: files,
             reactions: Vec::new(),
             labels: Vec::new(),
@@ -1109,6 +1121,26 @@ mod tests {
         assert_eq!(got[1].system_note.as_deref(), Some("Call ended"));
     }
 
+    /// A call that names its Meet link is a message, so the link shows.
+    #[test]
+    fn a_call_with_a_meet_link_keeps_the_link() {
+        let call = msg(
+            "m1",
+            "t1",
+            json!({"text": "", "annotations": [
+                {"start_index": 0, "length": 1, "gsuite_integration_metadata": {"call_data": {"call_status": "CALL_ENDED"}}},
+                {"start_index": 0, "length": 1, "video_call_metadata": {"meeting_space": {"meeting_url": "https://meet.google.com/tng-tenf-wrd"}}},
+            ]}),
+        );
+        let chats = build("src", &[call], &[group()], &[]);
+        let item = items(&chats)[0];
+        assert_eq!(item.kind, ItemKind::Text);
+        assert_eq!(
+            item.text.as_deref(),
+            Some("📹 [https://meet.google.com/tng-tenf-wrd](https://meet.google.com/tng-tenf-wrd)\n\n*Call ended*")
+        );
+    }
+
     #[test]
     fn a_starred_message_is_labelled_and_an_unread_key_is_reported_by_shape() {
         let m = msg("m1", "t1", json!({"future_field": {"a": 1}}));
@@ -1138,6 +1170,7 @@ mod tests {
             json!({"attached_files": [{"original_name": "spot.png", "export_name": "spot.png"}]}),
         );
         let chats = build("src", std::slice::from_ref(&m), &[group()], &[]);
+        assert_eq!(items(&chats)[0].kind, ItemKind::Attachment);
         let a = &items(&chats)[0].attachments[0];
         assert_eq!(a.file_name.as_deref(), Some("spot.png"));
         assert_eq!(a.mime_type.as_deref(), Some("image/png"));

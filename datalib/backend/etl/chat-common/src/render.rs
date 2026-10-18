@@ -42,7 +42,8 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// (`subject` terms), so the Subject cell draws them as chips.
 /// v18: participants are who wrote a message, never a tool call or a
 /// stand-in label ("Me", "Unknown"; `AuthorKind`).
-pub const LAYOUT_VERSION: u32 = 18;
+/// v19: an item with attachments draws its labels too.
+pub const LAYOUT_VERSION: u32 = 19;
 
 /// What every chat-common provider declares through
 /// `RenderProcessor::render_params`, merged with its own knobs: the
@@ -663,9 +664,10 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
             }
         }
         ItemKind::Attachment => {
-            if let Some(caption) = item.text.as_deref().filter(|t| !t.is_empty()) {
+            let caption = labelled(body(item.text.as_deref().unwrap_or("")));
+            if !caption.is_empty() {
                 s.push('\n');
-                s.push_str(&body(caption));
+                s.push_str(&caption);
                 s.push('\n');
             }
             if item.attachments.is_empty() {
@@ -1311,6 +1313,29 @@ mod tests {
 
     /// An email's To and Cc reach the search by handle, and its labels as
     /// written; a recipient with no handle has nothing to match exactly.
+    /// A starred Google Chat message with a file kept its file and lost
+    /// its star: an attachment item drew its caption without its labels.
+    #[test]
+    fn an_attachment_item_draws_its_labels() {
+        let profile = test_profile();
+        let mut chat = mk_chat();
+        let item = &mut chat.buckets[0].items[0];
+        item.kind = ItemKind::Attachment;
+        item.labels = vec!["Starred".to_string()];
+        item.text = Some("Spot's portrait".to_string());
+        item.attachments = vec![NormalizedAttachment {
+            rel_path: None,
+            file_name: Some("spot.png".to_string()),
+            mime_type: Some("image/png".to_string()),
+            byte_len: None,
+            source_url: None,
+            ref_id: None,
+        }];
+        let md = join(&render_markdown(&profile, &chat, &chat.buckets[0], "Test"));
+        assert!(md.contains("🏷 Starred\n\nSpot's portrait"), "{md}");
+        assert!(md.contains("spot.png"), "{md}");
+    }
+
     #[test]
     fn a_messages_recipients_and_labels_are_its_search_terms_and_its_documents_participants() {
         use crate::types::{Recipient, RecipientRole};
