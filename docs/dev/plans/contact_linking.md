@@ -9,8 +9,7 @@ it.*
 
 The same person shows up in a mirror under many identifiers. Handles
 and the contacts app (built) let a person say which are one person and
-see it on every chip. What remains is the rest of linking (merge,
-groups, adopting what a source already ties together, the triage
+see it on every chip. What remains is the rest of linking (groups, adopting what a source already ties together, the triage
 grid), answering "everything about this person" in search, and the
 identifiers no source has a handle for yet.
 
@@ -58,9 +57,6 @@ counts them, and a `contact:` value is matched against them
 The tables are built ([`../contacts.md`](../contacts.md) §"The
 contacts app"); these parts of them are not used yet:
 
-- **Merge.** A merge keeps the survivor's id and sets `merged_into` on
-  the other, so a link or URL holding the old id still resolves. Search
-  already leaves merged-away contacts out.
 - **Groups and members.** An address two people share belongs to a
   group contact whose members are those people; `members` holds them.
 - **`linked_how`** gains `card` (adopted from an address-book card)
@@ -70,7 +66,6 @@ Routes still to add to the applet:
 
 | route | does |
 |---|---|
-| `POST merge` | merge two contacts |
 | `POST members` | add or remove a group member |
 | `GET search?q=` | also unlinked address-book cards, for the typeahead |
 | `POST contacts` | also adopting every handle on an address-book card |
@@ -202,7 +197,7 @@ Phases 1 to 3 (handles end to end, the store and its applet and chips,
 pieces of phase 1 above: the person kinds in the search terms
 (`search_tabs.md` step 4), and mentions outside Slack.
 
-4. **Linking.** Merge, groups and members, the triage grid, adopting
+4. **Linking.** Groups and members, the triage grid, adopting
    a source's handles. The contact card, undo and the export are
    [`contact_editing.md`](contact_editing.md)'s.
 5. **Contacts as rows.** The snapshot step and `live_view`. The

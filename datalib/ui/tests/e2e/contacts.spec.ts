@@ -5,6 +5,8 @@ import {
   selectRowByUuid,
   gridSettled,
   inDocFrame,
+  MENU_DISABLED,
+  menuEntry,
   searchAndSettle,
   shownCards,
   typeInto,
@@ -169,4 +171,54 @@ test("a contact picked with @ finds everything that reached its handles", async 
   await expect(field).toHaveAttribute("data-query", `with:contact:${id} `);
   await expect(field.locator(`a.chip[data-contact="${id}"]`)).toContainText("Jean-Luc");
   expect(await total(`with:contact:${id}`)).toBe(byHandle);
+});
+
+/// Two contacts made for one person by mistake: the one with no handle is
+/// still a chip, selecting both and right-clicking the one to keep merges
+/// the other into it, and Delete takes the survivor away.
+test("the contacts table draws a contact with no handle as a chip, merges and deletes", async ({
+  page,
+  request,
+}) => {
+  const name = `Guinan ${Date.now()}`;
+  const make = async (handles: string[]) => {
+    const r = await request.post("/applet/datalib_contacts/contacts", {
+      data: { name, handles },
+    });
+    expect(r.ok(), await r.text()).toBeTruthy();
+    return ((await r.json()) as { contact_id: string }).contact_id;
+  };
+  const keep = await make(["email:guinan@ten-forward.test"]);
+  const dup = await make([]);
+
+  await page.goto("/contactsView()");
+  const card = page.locator(".contacts-card");
+  await card.getByLabel("Filter contacts").fill(name);
+  const row = (id: string) => card.locator(`.slick-row[data-key="${id}"]`);
+  await expect(row(dup).locator(`a.chip[data-contact="${dup}"]`)).toContainText(name);
+  await expect(row(keep).locator("a.chip[data-handle]")).toContainText(name);
+
+  await row(dup).locator('[col-id="kind"]').click();
+  await row(keep).locator('[col-id="kind"]').click({ button: "right" });
+  await expect(menuEntry(page, /^Merge into this one/)).toHaveClass(MENU_DISABLED);
+  await page.keyboard.press("Escape");
+  await row(dup).locator('[col-id="kind"]').click();
+  await row(keep)
+    .locator('[col-id="kind"]')
+    .click({ modifiers: ["ControlOrMeta"] });
+  await row(keep).locator('[col-id="kind"]').click({ button: "right" });
+  await menuEntry(page, "Merge the other selected contact into this one").click();
+  await expect(row(dup)).toHaveCount(0);
+  await expect(row(keep)).toHaveCount(1);
+  const merged = await request.get(`/applet/datalib_contacts/contact/${dup}`);
+  expect(((await merged.json()) as { key: string }).key, "the old id answers as the survivor").toBe(
+    keep,
+  );
+
+  page.once("dialog", (d) => void d.accept());
+  await row(keep).locator('[col-id="kind"]').click({ button: "right" });
+  await menuEntry(page, "Delete contact…").click();
+  await expect(row(keep)).toHaveCount(0);
+  const gone = await request.get(`/applet/datalib_contacts/contact/${keep}`);
+  expect(gone.status()).toBe(404);
 });
