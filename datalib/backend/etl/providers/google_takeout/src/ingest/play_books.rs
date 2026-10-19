@@ -55,7 +55,7 @@ pub async fn ingest(
 fn class_of(e: &BytesStart) -> Vec<String> {
     e.attributes()
         .flatten()
-        .find(|a| a.key.as_ref() == b"class")
+        .find(|a| a.key.as_ref() == "class")
         .and_then(|a| {
             datalib_etl::xml::attr_value(&a)
                 .ok()
@@ -68,7 +68,7 @@ fn class_of(e: &BytesStart) -> Vec<String> {
 fn href_of(e: &BytesStart) -> Option<String> {
     e.attributes()
         .flatten()
-        .find(|a| a.key.as_ref() == b"href")
+        .find(|a| a.key.as_ref() == "href")
         .and_then(|a| {
             datalib_etl::xml::attr_value(&a)
                 .ok()
@@ -86,7 +86,7 @@ enum Into_ {
 }
 
 struct Frame {
-    tag: Vec<u8>,
+    tag: String,
     into: Into_,
 }
 
@@ -115,21 +115,21 @@ pub fn parse(rel: &str, html: &str) -> Result<Vec<PlayBooksAnnotationRow>> {
             .context("read the book's page")?;
         match event {
             Event::Start(e) => {
-                let tag = e.name().as_ref().to_vec();
+                let tag = e.name().as_ref().to_string();
                 let classes = class_of(&e);
                 let parent = stack
                     .last()
                     .map(|f| f.into.clone())
                     .unwrap_or(Into_::Nowhere);
-                if tag == b"body" {
+                if tag == "body" {
                     in_body = true;
                 }
                 let into = if !in_body {
                     Into_::Nowhere
-                } else if tag == b"h2" {
+                } else if tag == "h2" {
                     section.clear();
                     Into_::Section
-                } else if tag == b"div"
+                } else if tag == "div"
                     && classes.iter().any(|c| ENTRY_CLASSES.contains(&c.as_str()))
                 {
                     let kind = classes
@@ -140,17 +140,14 @@ pub fn parse(rel: &str, html: &str) -> Result<Vec<PlayBooksAnnotationRow>> {
                     entries.push((section.trim().to_string(), kind.clone(), Map::new()));
                     Into_::Entry(kind)
                 } else if let Into_::Entry(_) = parent {
-                    let key = classes
-                        .first()
-                        .cloned()
-                        .unwrap_or_else(|| String::from_utf8_lossy(&tag).into_owned());
-                    if tag == b"a" {
+                    let key = classes.first().cloned().unwrap_or_else(|| tag.clone());
+                    if tag == "a" {
                         if let (Some(h), Some(entry)) = (href_of(&e), entries.last_mut()) {
                             entry.2.insert("link".to_string(), Value::String(h));
                         }
                     }
                     Into_::Entry(key)
-                } else if tag == b"h1" {
+                } else if tag == "h1" {
                     Into_::Book("title".to_string())
                 } else if let Some(c) = classes.first().filter(|c| {
                     !matches!(
@@ -162,7 +159,7 @@ pub fn parse(rel: &str, html: &str) -> Result<Vec<PlayBooksAnnotationRow>> {
                             | "document-positions"
                     )
                 }) {
-                    if tag == b"a" {
+                    if tag == "a" {
                         if let Some(h) = href_of(&e) {
                             links.push(json!({"class": c, "href": h}));
                         }
@@ -173,7 +170,7 @@ pub fn parse(rel: &str, html: &str) -> Result<Vec<PlayBooksAnnotationRow>> {
                 };
                 stack.push(Frame { tag, into });
             }
-            Event::Empty(e) if e.name().as_ref() == b"br" => match stack.last().map(|f| &f.into) {
+            Event::Empty(e) if e.name().as_ref() == "br" => match stack.last().map(|f| &f.into) {
                 Some(Into_::Book(key)) => push_text(&mut book, key, "\n"),
                 Some(Into_::Entry(key)) => {
                     if let Some(entry) = entries.last_mut() {
@@ -183,7 +180,7 @@ pub fn parse(rel: &str, html: &str) -> Result<Vec<PlayBooksAnnotationRow>> {
                 _ => {}
             },
             Event::End(e) => {
-                let tag = e.name().as_ref().to_vec();
+                let tag = e.name().as_ref().to_string();
                 if let Some(at) = stack.iter().rposition(|f| f.tag == tag) {
                     match &stack[at].into {
                         Into_::Book(key) => push_text(&mut book, key, "\n"),
@@ -199,9 +196,9 @@ pub fn parse(rel: &str, html: &str) -> Result<Vec<PlayBooksAnnotationRow>> {
             }
             Event::Text(_) | Event::GeneralRef(_) | Event::CData(_) => {
                 let text = match &event {
-                    Event::Text(t) => t.decode().map(|c| c.into_owned()).unwrap_or_default(),
+                    Event::Text(t) => t.to_string(),
                     Event::GeneralRef(g) => datalib_etl::xml::reference_text(g, true),
-                    Event::CData(c) => String::from_utf8_lossy(c).into_owned(),
+                    Event::CData(c) => c.to_string(),
                     _ => unreachable!(),
                 };
                 match stack.last().map(|f| &f.into) {
