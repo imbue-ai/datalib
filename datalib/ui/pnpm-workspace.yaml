@@ -5,7 +5,3 @@
 # the same allowlist.
 allowBuilds:
   esbuild: true
-
-# The 7-day burn-in MODULE.bazel describes, applied by pnpm itself: a
-# version published less than this many minutes ago is not picked.
-minimumReleaseAge: 10080
