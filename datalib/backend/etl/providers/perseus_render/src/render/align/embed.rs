@@ -1,15 +1,12 @@
 //! Ancient-Greek-BERT sentence embedder via candle-transformers.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::bert::{BertModel, Config, DTYPE};
-use hf_hub::api::tokio::Api;
-use hf_hub::{Repo, RepoType};
-use sha2::{Digest, Sha256};
 use tokenizers::Tokenizer;
 
 /// HuggingFace model ID, pinned to one commit: `resolve/main/…` is a
@@ -20,8 +17,9 @@ pub const MODEL_REVISION: &str = "5e3e29ece1d63029baa226f11105b1e8277c4f07";
 
 /// sha256 of each file at [`MODEL_REVISION`]: the weights' digest is
 /// HuggingFace's LFS oid for the blob (which is its sha256), the two
-/// small files were hashed after download. Checked after every fetch
-/// and on every load, since hf-hub's cache is just files on disk.
+/// small files were hashed after download. Checked on every load: a copy
+/// that hashes wrong is fetched again, and a fetch that hashes wrong is
+/// refused (`datalib_fetch::download_verified`).
 const PINNED_FILES: &[(&str, &str)] = &[
     (
         "config.json",
@@ -51,16 +49,17 @@ struct EmbedderInner {
 impl Embedder {
     pub async fn load() -> Result<Self> {
         let device = Device::Cpu;
-        let api = Api::new().context("init hf-hub Api")?;
-        let repo = api.repo(Repo::with_revision(
-            MODEL_ID.to_string(),
-            RepoType::Model,
-            MODEL_REVISION.to_string(),
-        ));
-
-        let config_path = fetch(&repo, "config.json").await?;
-        let tokenizer_path = fetch(&repo, "tokenizer.json").await?;
-        let weights_path = fetch(&repo, "model.safetensors").await?;
+        let dir = model_dir()?;
+        let [config_path, tokenizer_path, weights_path] =
+            tokio::task::spawn_blocking(move || -> Result<[PathBuf; 3]> {
+                Ok([
+                    fetch(&dir, "config.json")?,
+                    fetch(&dir, "tokenizer.json")?,
+                    fetch(&dir, "model.safetensors")?,
+                ])
+            })
+            .await
+            .context("join the model fetch")??;
 
         let config: Config =
             serde_json::from_slice(&std::fs::read(&config_path).context("read config.json")?)
@@ -118,43 +117,27 @@ impl Embedder {
     }
 }
 
-async fn fetch(repo: &hf_hub::api::tokio::ApiRepo, file: &str) -> Result<PathBuf> {
-    let path = repo
-        .get(file)
-        .await
-        .with_context(|| format!("hf-hub fetch {MODEL_ID}@{MODEL_REVISION}/{file}"))?;
+/// `models/<MODEL_ID>/<MODEL_REVISION>/` in the machine cache, shared by
+/// every data root on this host.
+fn model_dir() -> Result<PathBuf> {
+    let cache = datalib_runtime::cache::cache_dir()
+        .context("neither $XDG_CACHE_HOME nor $HOME is set: nowhere to keep the model")?;
+    Ok(cache.join("models").join(MODEL_ID).join(MODEL_REVISION))
+}
+
+fn fetch(dir: &Path, file: &str) -> Result<PathBuf> {
     let want = PINNED_FILES
         .iter()
         .find(|(name, _)| *name == file)
         .map(|(_, sha)| *sha)
         .with_context(|| format!("{file} has no pinned sha256"))?;
-    let got = sha256_file(&path)?;
-    if got != want {
-        bail!(
-            "{} is not the pinned {MODEL_ID}@{MODEL_REVISION}/{file}: sha256 {got}, expected {want}",
-            path.display()
-        );
+    let path = dir.join(file);
+    if path.is_file() && datalib_fetch::sha256_file(&path)? == want {
+        return Ok(path);
     }
+    std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+    let url = format!("https://huggingface.co/{MODEL_ID}/resolve/{MODEL_REVISION}/{file}");
+    datalib_fetch::download_verified("[perseus-model]", &url, want, &path)
+        .with_context(|| format!("fetch {MODEL_ID}@{MODEL_REVISION}/{file}"))?;
     Ok(path)
-}
-
-fn sha256_file(path: &std::path::Path) -> Result<String> {
-    use std::io::Read;
-    let mut f = std::fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
-    let mut hasher = Sha256::new();
-    let mut buf = vec![0u8; 1 << 20];
-    loop {
-        let n = f
-            .read(&mut buf)
-            .with_context(|| format!("read {}", path.display()))?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    Ok(hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect())
 }
