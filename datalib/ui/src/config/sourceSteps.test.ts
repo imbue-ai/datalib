@@ -8,6 +8,7 @@ import {
   insertEntries,
   buildDiffSource,
   buildStep,
+  emptyTableState,
   listGroups,
   listSteps,
   seedFieldValues,
@@ -217,5 +218,22 @@ inputs = ["slack/render_markdown"]
     const fanIn = listSteps(next).find((s) => s.id === "unified_document_index/grid_index")!;
     expect(fanIn.inputs).toContain("slack-diff/render_markdown");
     expect(next).toContain('source = "slack"');
+  });
+});
+
+describe("emptyTableState", () => {
+  /// The Sources card said "Nothing configured yet" for as long as its
+  /// first `/api/manage/rows` took, which mid-sync can be many seconds.
+  it("is loading, not empty, before the first answer", () => {
+    expect(emptyTableState({ answered: false, error: null, rowCount: 0 })).toBe("loading");
+  });
+
+  it("says the first request failed rather than calling the table empty", () => {
+    expect(emptyTableState({ answered: false, error: "HTTP 500", rowCount: 0 })).toBe("failed");
+  });
+
+  it("is empty only once an answer came back with no rows", () => {
+    expect(emptyTableState({ answered: true, error: null, rowCount: 0 })).toBe("empty");
+    expect(emptyTableState({ answered: true, error: null, rowCount: 3 })).toBeNull();
   });
 });

@@ -100,7 +100,7 @@ read-only connection, which holds one commit (`DoltRepo::pinned` in
 `unified_document_index/src/dolt_repo.rs`;
 [`doltlite.md`](doltlite.md#three-ways-to-read-one-commit)) — so a
 `grid_index` pass in flight is never served. `runs.sqlite` is the exception because it is not doltlite: plain
-SQLite in rollback-journal mode, written by whoever runs the loop (its
+SQLite in WAL mode, written by whoever runs the loop (its
 runs) and the server (its own log) — one process while the server is
 up, two while a `datalib-dag` runs the loop — which SQLite's own locking
 makes ordinary; `runs_two_process_test` is the measurement.

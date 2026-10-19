@@ -33,6 +33,8 @@ const {
   configPath,
   droppedRows,
   emptyDiagnosis,
+  emptyTable,
+  rowsError,
   manage,
   rows,
   syncAll,
@@ -59,7 +61,8 @@ const {
 /// What the header says when no action of this card has anything to
 /// say: how the last sync went.
 const runLine = computed(() => {
-  const run = manage.value?.run;
+  if (!manage.value) return { ok: true, text: "Loading…" };
+  const run = manage.value.run;
   if (!run) return { ok: true, text: "Not synced yet" };
   if (run.live) return { ok: true, text: "Syncing now" };
   return { ok: true, text: `Last sync finished ${formatRelative(run.finished_at, Date.now())}` };
@@ -222,7 +225,13 @@ const rowHeight = computed(() => Math.round(28 + 8 * density.value));
       </span>
       <button class="sx-btn" @click="openConfig">Show the config</button>
     </div>
-    <p v-else-if="rows.length === 0 && !parseError" class="sx-empty">
+    <p v-else-if="emptyTable === 'loading' && !parseError" class="sx-empty" role="status">
+      Loading the sources…
+    </p>
+    <p v-else-if="emptyTable === 'failed' && !parseError" class="sx-strip sx-strip-bad">
+      <span class="sx-strip-text">Could not load the sources: {{ rowsError }}</span>
+    </p>
+    <p v-else-if="emptyTable === 'empty' && !parseError" class="sx-empty">
       Nothing configured yet. <b>Add source</b> walks you through one.
     </p>
 

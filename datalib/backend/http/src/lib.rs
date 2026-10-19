@@ -1348,11 +1348,24 @@ pub struct DagRecord {
     /// step id → the Items cell: what its store held the last time it
     /// counted, and the series behind that. Only render steps report it.
     pub items: std::collections::HashMap<String, datalib_columns::Timeseries>,
+    /// How long each read took, for the line a slow Manage answer writes.
+    pub took: RecordTimings,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RecordTimings {
+    /// The loop's record, in `system/supervisor.sqlite`.
+    pub loop_record: std::time::Duration,
+    /// The rest is the run store, `system/runs/runs.sqlite`: the live
+    /// run's progress, then the metrics behind Problems and Items.
+    pub run_progress: std::time::Duration,
+    pub run_metrics: std::time::Duration,
 }
 
 /// An open run in the record while nothing is running is a run that died,
 /// so `live` is [`supervisor::SyncControl::running`].
 pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) -> DagRecord {
+    let started = std::time::Instant::now();
     let loaded = match sync.mailbox().await {
         Ok(store) => store.load_record().await,
         Err(e) => Err(e),
@@ -1379,6 +1392,7 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
     // the runner writing its first row, the newest run in the store is
     // still the run before — and painting its numbers onto this run's
     // steps is worse than showing none at all.
+    let loop_record = started.elapsed();
     let store = datalib_runs::snapshot(root).await;
     let progress = match (&run, &store.run_id) {
         (Some(r), Some(store_run)) if &r.run_id == store_run => {
@@ -1386,6 +1400,7 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
         }
         _ => Default::default(),
     };
+    let run_progress = started.elapsed() - loop_record;
 
     let problems =
         manage::counts_by_step(&datalib_runs::latest_metric(root, datalib_problems::METRIC).await);
@@ -1397,6 +1412,11 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
         &datalib_runs::latest_metric(root, datalib_metrics::DOCUMENTS).await,
         &datalib_runs::metric_history(root, datalib_metrics::ITEMS, &since).await,
     );
+    let took = RecordTimings {
+        loop_record,
+        run_progress,
+        run_metrics: started.elapsed() - loop_record - run_progress,
+    };
 
     DagRecord {
         run,
@@ -1405,6 +1425,7 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
         progress,
         problems,
         items,
+        took,
     }
 }
 
@@ -1422,6 +1443,7 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
         progress,
         problems: _,
         items: _,
+        took: _,
     } = dag_record(&s.root, &s.sync).await;
 
     let build = || -> anyhow::Result<Vec<DagStepInfo>> {
