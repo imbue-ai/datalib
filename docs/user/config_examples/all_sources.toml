@@ -1222,7 +1222,7 @@ inputs = ["linkedin/keyword_index"]
 # One provider, many feeds: every feed is OFF by default, so opt into the
 # slices you want beside the path. Chat and Voice render as conversations,
 # a page per month; Maps, YouTube and Gemini as activity feeds, a page per
-# year. A sync also says, as problem rows, which files of the export no
+# year; each Saved list, My Maps map and Play Books book as a page. A sync also says, as problem rows, which files of the export no
 # feed reads.
 #
 # NOTE: Gmail is a separate `email` source (it reads the Takeout `.mbox`);
@@ -1250,6 +1250,9 @@ maps_photos = false
 youtube_watch_history = false
 youtube_subscriptions = false
 gemini_apps = false
+maps_saved_lists = false
+my_maps = false
+play_books = false
 
 [[steps]]
 group = "google-takeout"

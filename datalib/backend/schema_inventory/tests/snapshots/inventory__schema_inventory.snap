@@ -877,11 +877,51 @@ maps_reviews_bookkeeping
     volatile_payload
     tz_offset
     held_version
+maps_saved_lists
+    id
+    payload
+    file
+maps_saved_lists_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+    held_version
 maps_saved_places
     id
     payload
     when_ts
 maps_saved_places_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+    held_version
+my_maps_placemarks
+    id
+    payload
+    file
+my_maps_placemarks_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+    held_version
+play_books_annotations
+    id
+    payload
+    file
+    when_ts
+play_books_annotations_bookkeeping
     id
     fetched_at_utc
     attempt_count
