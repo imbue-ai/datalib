@@ -658,6 +658,7 @@ pub struct Supervisor {
     running: Mutex<BTreeMap<String, Running>>,
     /// [`START_TIMEOUT`], except where a caller narrowed it.
     start_timeout: Duration,
+    memory: crate::applet_memory::AppletMemory,
 }
 
 impl Default for Supervisor {
@@ -671,6 +672,7 @@ impl Supervisor {
         Self {
             running: Mutex::new(BTreeMap::new()),
             start_timeout,
+            memory: Default::default(),
         }
     }
 
@@ -832,6 +834,7 @@ impl Supervisor {
             }
         };
 
+        self.memory.track(&entry.id, child.id());
         if let Ok(mut map) = self.running.lock() {
             map.insert(
                 entry.id.clone(),
@@ -858,10 +861,12 @@ impl Supervisor {
                         .child
                         .wait()
                         .map_or_else(|e| format!("wait failed: {e}"), |s| s.to_string());
+                    let peak_rss_bytes = self.memory.forget(id).map(|r| r.peak_rss_bytes);
                     tracing::error!(
                         applet = %id,
                         pid = dead.child.id(),
                         %status,
+                        peak_rss_bytes,
                         "the applet exited; it starts again when the config next changes"
                     );
                 }
@@ -887,6 +892,8 @@ impl Supervisor {
                 // Reap: `kill` only signals, and an unwaited child stays
                 // a zombie until its parent exits.
                 let _ = r.child.wait();
+                let peak_rss_bytes = self.memory.forget(&id).map(|r| r.peak_rss_bytes);
+                tracing::info!(applet = %id, peak_rss_bytes, "stopped the applet");
             }
         }
     }
@@ -899,6 +906,10 @@ impl Supervisor {
 impl AppletRegistry {
     pub fn shutdown(&self) {
         self.supervisor.stop_all();
+    }
+
+    pub fn memory(&self) -> BTreeMap<String, crate::applet_memory::Reading> {
+        self.supervisor.memory.readings()
     }
 }
 
@@ -1298,5 +1309,66 @@ mod tests {
     #[test]
     fn reports_a_missing_header_terminator() {
         assert!(parse_response(b"HTTP/1.1 200 OK").is_err());
+    }
+
+    /// A running applet's memory is read from its whole process tree:
+    /// the shell here holds a megabyte or two, the `dd` below it a 64 MiB
+    /// buffer. Stopping the applet forgets its reading.
+    #[cfg(unix)]
+    #[test]
+    fn a_running_applets_memory_counts_what_it_spawned() {
+        const BUFFER: u64 = 64 * 1024 * 1024;
+        let root = tempfile::tempdir().unwrap();
+        let holder_pid = root.path().join("holder.pid");
+        // dd rewrites its buffer for as long as it runs, so the pages stay
+        // active: an idle buffer is compressed or swapped out of RSS once
+        // the machine is under memory pressure, which a full test run is.
+        // The test kills it; the watchdog bounds it if the test cannot.
+        let script = format!(
+            "dd if=/dev/zero of=/dev/null bs=67108864 count=1000000 2>/dev/null & d=$!; \
+             (sleep 60; kill $d) >/dev/null 2>&1 & \
+             echo $d > '{}'; echo {APPLET_PORT_LINE}1; wait $d",
+            holder_pid.display(),
+        );
+        let entry = AppletEntry {
+            id: "mem".into(),
+            group: None,
+            command: format!("/bin/sh -c {}", shlex::try_quote(&script).unwrap()),
+            params: None,
+            env: BTreeMap::new(),
+        };
+        // A stopped applet's children are not in a group the gateway
+        // signals, so the test ends the holder itself, on every path out.
+        struct KillHolder(PathBuf);
+        impl Drop for KillHolder {
+            fn drop(&mut self) {
+                if let Some(pid) = std::fs::read_to_string(&self.0)
+                    .ok()
+                    .and_then(|p| p.trim().parse().ok())
+                {
+                    // Safety: plain kill(2) on the dd this test started.
+                    unsafe { libc::kill(pid, libc::SIGKILL) };
+                }
+            }
+        }
+        let _holder = KillHolder(holder_pid);
+        let supervisor = Supervisor::default();
+        supervisor
+            .start(&entry, root.path(), None, root.path(), "secret")
+            .expect("the applet announced its port");
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        let rss = || supervisor.memory.readings().get("mem").map(|r| r.rss_bytes);
+        while rss().unwrap_or(0) < BUFFER {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no reading counted the applet's child: {:?}",
+                supervisor.memory.readings()
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        supervisor.stop_all();
+
+        assert_eq!(rss(), None, "a stopped applet keeps no reading");
     }
 }

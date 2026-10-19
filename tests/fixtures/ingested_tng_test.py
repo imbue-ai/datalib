@@ -117,10 +117,11 @@ MAX_STAMP_MS = (1 << 48) - 1
 # deliberately absent from the export, the PDF built to be corrupt.
 # One is the record built to fail: conversation `c0000006`'s reply
 # carries `created_at = "stardate 47988.1"`, which the claude renderer
-# records as a nulled `created_at` on that message. Google Takeout's
-# three are entries shaped like a real export's: an attachment its
-# message names and the export lacks, a watch-history entry that is not
-# a video, a saved place with no date.
+# records as a nulled `created_at` on that message. Google Takeout's are
+# entries shaped like a real export's: an attachment its message names
+# and the export lacks, a watch-history entry that is not a video, a
+# saved place with no date; the files no feed reads; and what the
+# account's Chat membership says of a space.
 #
 # A fetch row about an attachment names the grid row of what owns it,
 # so the screen can open it: the conversation for claude (minted from
@@ -201,15 +202,91 @@ TAKEOUT_POST_NOT_A_VIDEO = (
     "50d82e65-dc5d-522f-afdd-0ded04b3d8f0"
     "|warning|fetch|entity"
     "|skipped:youtube_watch_history:e81888464c90ec04"
-    "||videoUrl|deliberate_loss|https://www.youtube.com/post/UgkxTenForward"
+    "||videoUrl|deliberate_loss|www.youtube.com/post"
 )
 TAKEOUT_CHAT_ATTACHMENT_NOT_IN_EXPORT = (
     "c662c0a8-aa0a-5a9c-a618-a9f36e2d47d5"
     "|warning|fetch|entity"
     "|chat_attachments:TNG-BRIDGE/T2/T2#risa-shore-leave.png"
     "|0195683a-d140-87f9-bdf6-234da6d6880c"  # Riker's message
-    "||not_found|risa-shore-leave.png is not in the export"
+    "||not_found|<name>.png is not in the export"
 )
+# Every kind of file no feed reads is a row, named by the shape of its
+# path: a warning where nothing reads it, a note where it is left out on
+# purpose.
+TAKEOUT_UNREAD_FILES = [
+    (
+        "0b9b217a-c9c3-5247-971c-58196290fc61|info|fetch|entity"
+        "|skipped:unread_files:0d2eec9b183d1d83||file|noted"
+        "|archive_browser.html: 1 file (757 bytes) left out on purpose:"
+        " Takeout's own index of the export"
+    ),
+    (
+        "3c9428df-aa3d-591f-a4a8-8a568bc14ace|info|fetch|entity"
+        "|skipped:unread_files:2fbca57a07910868||file|noted"
+        "|Chrome/History.json: 1 file (27 bytes) left out on purpose:"
+        " browser history, bookmarks, settings and autofill"
+    ),
+    (
+        "4d7311bb-8751-593b-a3e2-80c298e0ae3b|warning|fetch|entity"
+        "|skipped:unread_files:cdda41ed1b897705||file|uncovered_type"
+        "|Tasks/Tasks.json: 1 file (716 bytes) that no feed reads"
+    ),
+    (
+        "e348beb8-1f24-5da7-b962-193299a74a22|warning|fetch|entity"
+        "|skipped:unread_files:0bf544a34be30f8f||file|uncovered_type"
+        "|Gemini/gemini_scheduled_actions_data.html: 1 file (14 bytes) that no feed reads"
+    ),
+    (
+        "e9c2e034-ddb1-5a2a-871d-79455adc1169|warning|fetch|entity"
+        "|skipped:unread_files:b46675de73f27a2b||file|uncovered_type"
+        "|Keep/<name>.json: 1 file (419 bytes) that no feed reads"
+    ),
+    (
+        "f67c52ab-bc75-5d8f-a41e-99c4a4f0b8b6|info|fetch|entity"
+        "|skipped:unread_files:36e7e4c1c5fd7e8a||file|noted"
+        "|Google Play Books/<name>/<name>.pdf: 1 file (18 bytes) left out"
+        " on purpose: the books themselves"
+    ),
+    (
+        "eb0f0733-b37b-504e-80a5-d90d38997842|warning|fetch|entity"
+        "|skipped:unread_files:e7e2c6623c092428||file|uncovered_type"
+        "|Gemini/gemini_gems_data.html: 1 file (14 bytes) that no feed reads"
+    ),
+]
+# Where Google has no location for a place it writes a sentence in its
+# `Comment`: a note on the review and on the saved place, not text.
+TAKEOUT_NO_LOCATION_NOTES = [
+    (
+        "46f72732-7bb5-57ca-abfc-f0926e0cea9a|info|parse|markdown"
+        "|00000000-0000-8274-a762-150808777b86"
+        "|019d7bfb-e900-8689-b06f-03ee09f0819c"
+        "|Comment|noted|Google has no location for this place"
+    ),
+    (
+        "53e76917-0f9b-58fc-838c-8561c5681fda|info|parse|markdown"
+        "|00000000-0000-8274-a762-150808777b86"
+        "|019ca869-5000-8c1e-8c4a-e9f5104df6a9"
+        "|Comment|noted|Google has no location for this place"
+    ),
+]
+# What the account's `user_info.json` says of the Ten Forward space,
+# noted on its first message.
+TAKEOUT_CHAT_SPACE_NOTES = [
+    (
+        "d745bedd-c4b4-5df8-b5ec-0df96f05d97c|info|parse|markdown"
+        "|00000000-0000-82fb-8e25-f16025ef745f"
+        "|019573e8-ee00-8ccc-bca0-7b369a4046d2"
+        "|membership_state|noted"
+        "|the account's membership of this conversation is MEMBER_NOT_A_MEMBER"
+    ),
+    (
+        "e19f9822-c282-5fdf-a54d-8592f38d60e6|info|parse|markdown"
+        "|00000000-0000-82fb-8e25-f16025ef745f"
+        "|019573e8-ee00-8ccc-bca0-7b369a4046d2"
+        "|starred_group_id|noted|the account starred this conversation"
+    ),
+]
 TAKEOUT_SAVED_PLACE_WITHOUT_KEY = (
     "5e4f794e-967e-5d6e-ac01-3e5031ebe907"
     "|error|fetch|entity"
@@ -229,11 +306,16 @@ EXPECTED_PROBLEMS = {
         ]
     ),
     "tng_pdfs": [PDF_THAT_WILL_NOT_IDENTIFY],
-    "google-takeout": [
-        TAKEOUT_POST_NOT_A_VIDEO,
-        TAKEOUT_SAVED_PLACE_WITHOUT_KEY,
-        TAKEOUT_CHAT_ATTACHMENT_NOT_IN_EXPORT,
-    ],
+    "google-takeout": sorted(
+        [
+            TAKEOUT_POST_NOT_A_VIDEO,
+            TAKEOUT_SAVED_PLACE_WITHOUT_KEY,
+            TAKEOUT_CHAT_ATTACHMENT_NOT_IN_EXPORT,
+            *TAKEOUT_UNREAD_FILES,
+            *TAKEOUT_CHAT_SPACE_NOTES,
+            *TAKEOUT_NO_LOCATION_NOTES,
+        ]
+    ),
 }
 
 

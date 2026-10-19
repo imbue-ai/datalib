@@ -13,8 +13,8 @@ use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::changed_chats;
 use datalib_etl_chat_common::render::{render_all as cc_render_all, Buckets, RenderProfile};
 use datalib_etl_chat_common::types::{
-    own_stamp_ms, AuthorKind, ItemKind, NamedPerson, NormalizedAttachment, NormalizedChat,
-    NormalizedChatItem, NormalizedDoc, UpstreamRef,
+    own_stamp_ms, AuthorKind, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
+    NormalizedDoc, UpstreamRef,
 };
 use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
@@ -25,7 +25,7 @@ use datalib_schema::problems::Problem;
 use serde_json::Value;
 
 use crate::feeds::{self, Row};
-use crate::{gemini, ids, maps, youtube};
+use crate::{chat, gemini, ids, maps, pages, youtube};
 
 use datalib_etl_google_takeout::ingest::google_voice::schema_raw::VoiceAttachmentRow;
 use datalib_etl_google_takeout::ingest::{db_path_for, RawDb};
@@ -41,7 +41,13 @@ use datalib_schema::providers::Provider;
 /// v5: the author span carries the author's handle as `data-handle`.
 /// v6: a `+1` number without ten digits after the 1 has no handle.
 /// v7: Gemini, YouTube and Google Maps render, a document per year.
-pub const RENDER_VERSION: u32 = 7;
+/// v9: Maps reviews draw their follow-up answers, and Google's
+///     no-location sentence is a note; Saved lists, My Maps maps and
+///     Play Books books render, a page each.
+/// v8: a Chat message draws its attachments, earlier versions, quote,
+///     thread, previews, reactions and labels, and a space its name; a
+///     problem row for every field render leaves unread.
+pub const RENDER_VERSION: u32 = 9;
 
 /// Projection for [`BlobBundle::load_many`] over the Voice CAS edge: the
 /// `ref_name` (attachment filename) is the bundle key; `content_type`
@@ -61,7 +67,7 @@ fn profile() -> RenderProfile {
         reaction_kind: "Google Chat Reaction".to_string(),
         chat_entity_kind: ids::KIND_SPACE,
         render_version: RENDER_VERSION,
-        text_format: TextFormat::Plain,
+        text_format: TextFormat::Markdown,
     }
 }
 
@@ -79,6 +85,12 @@ fn voice_profile() -> RenderProfile {
     }
 }
 
+/// A Chat attachment edge's row id is the bundle key.
+const CHAT_BLOB_PROJECTION: &str = "SELECT id AS ref_id, blake3, \
+            NULL AS content_type, export_name AS upstream_name \
+     FROM chat_attachments \
+     WHERE id IN ({placeholders}) AND blake3 IS NOT NULL";
+
 /// The Gemini attachment edge's row id is the bundle key.
 const GEMINI_BLOB_PROJECTION: &str = "SELECT id AS ref_id, blake3, \
             NULL AS content_type, filename AS upstream_name \
@@ -95,6 +107,7 @@ const MAPS_PHOTO_BLOB_PROJECTION: &str = "SELECT id AS ref_id, blake3, \
 struct Loaded {
     messages: Vec<(String, Value)>,
     groups: Vec<(String, Value)>,
+    users: Vec<(String, Value)>,
     voice_messages: Vec<(String, Value)>,
     gemini: Vec<Row>,
     watches: Vec<Row>,
@@ -102,6 +115,9 @@ struct Loaded {
     reviews: Vec<Row>,
     saved: Vec<Row>,
     photos: Vec<Row>,
+    saved_lists: Vec<pages::FileRow>,
+    placemarks: Vec<pages::FileRow>,
+    book_entries: Vec<pages::FileRow>,
     /// Per chat id, the bytes its attachments reference.
     blobs: HashMap<String, BlobBundle>,
     scan: datalib_etl::doltlite_raw::DiffScan,
@@ -149,12 +165,15 @@ pub fn render(
         return Ok(RenderOutcome::default());
     };
 
-    let mut all_chats = build_chats(source_id, &l.messages, &l.groups);
+    let mut all_chats = chat::build(source_id, &l.messages, &l.groups, &l.users);
     all_chats.extend(build_voice_chats(source_id, &l.voice_messages));
     all_chats.extend(gemini::build(source_id, &l.gemini));
     all_chats.extend(youtube::build_history(source_id, &l.watches));
     all_chats.extend(youtube::build_subscriptions(source_id, &l.subscriptions));
     all_chats.extend(maps::build(source_id, &l.reviews, &l.saved, &l.photos));
+    all_chats.extend(pages::saved_lists(source_id, &l.saved_lists));
+    all_chats.extend(pages::my_maps(source_id, &l.placemarks));
+    all_chats.extend(pages::play_books(source_id, &l.book_entries));
     let changed = changed_chats(all_chats, range, l.scan.render.as_ref(), |id| {
         chat_uuid_for(source_id, id)
     });
@@ -170,13 +189,12 @@ pub fn render(
         chats.into_iter().partition(|c| is_voice(&c.id));
 
     if !chats.is_empty() {
-        let blobs: HashMap<String, BlobBundle> = HashMap::new();
         let s = cc_render_all(
             &profile(),
             &chats,
             out_root,
             source_id,
-            &blobs,
+            &l.blobs,
             progress,
             on_doc_complete,
         )?;
@@ -216,12 +234,30 @@ async fn load(db: &RawDb, cursor: Option<&str>, pin: &datalib_etl::pin::Pin) -> 
     // (dir name, group_info payload) — the directory name carries the
     // space id, which `group_info.json` itself does not.
     let groups = db.load_payloads_with_id("chat_groups").await?;
+    let users = db.load_payloads_with_id("chat_users").await?;
     let voice_messages = db.load_payloads_with_id("voice_messages").await?;
     let gemini = load_rows(db, "gemini_activity", Dated::Yes).await?;
     let photos = load_rows(db, "maps_photos", Dated::Yes).await?;
     let mut blobs = load_voice_blobs(db, &voice_messages).await?;
     let gemini_refs: Vec<String> = gemini.iter().flat_map(gemini::attachment_ids).collect();
     let photo_refs: Vec<String> = photos.iter().map(|p| p.id.clone()).collect();
+    let mut chat_refs: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (_, m) in &messages {
+        let space = chat::space_of(m.get("message_id").and_then(Value::as_str).unwrap_or(""));
+        chat_refs
+            .entry(space)
+            .or_default()
+            .extend(chat::attachment_ids(m));
+    }
+    blobs.extend(
+        BlobBundle::load_many(
+            db.pool(),
+            Some(db.cas().pool()),
+            CHAT_BLOB_PROJECTION,
+            chat_refs,
+        )
+        .await?,
+    );
     for (chat_id, projection, refs) in [
         (feeds::GEMINI, GEMINI_BLOB_PROJECTION, gemini_refs),
         (feeds::MAPS, MAPS_PHOTO_BLOB_PROJECTION, photo_refs),
@@ -239,6 +275,7 @@ async fn load(db: &RawDb, cursor: Option<&str>, pin: &datalib_etl::pin::Pin) -> 
     Ok(Loaded {
         messages,
         groups,
+        users,
         voice_messages,
         gemini,
         watches: load_rows(db, "youtube_watch_history", Dated::Yes).await?,
@@ -246,6 +283,9 @@ async fn load(db: &RawDb, cursor: Option<&str>, pin: &datalib_etl::pin::Pin) -> 
         reviews: load_rows(db, "maps_reviews", Dated::Yes).await?,
         saved: load_rows(db, "maps_saved_places", Dated::Yes).await?,
         photos,
+        saved_lists: load_file_rows(db, "maps_saved_lists", Dated::No).await?,
+        placemarks: load_file_rows(db, "my_maps_placemarks", Dated::No).await?,
+        book_entries: load_file_rows(db, "play_books_annotations", Dated::Yes).await?,
         blobs,
         scan: scan_diff(db.pool(), cursor, pin).await?,
     })
@@ -275,6 +315,37 @@ async fn load_rows(db: &RawDb, table: &'static str, dated: Dated) -> Result<Vec<
                 None => Value::Null,
             };
             Ok(Row { id, payload, when })
+        })
+        .collect()
+}
+
+/// A table whose rows each name the export file they came from.
+async fn load_file_rows(
+    db: &RawDb,
+    table: &'static str,
+    dated: Dated,
+) -> Result<Vec<pages::FileRow>> {
+    let when = match dated {
+        Dated::Yes => "when_ts",
+        Dated::No => "NULL",
+    };
+    // Audited: `table` is a literal at every call, `when` one of two.
+    let sql = format!("SELECT id, json(payload), {when}, file FROM {table} ORDER BY id");
+    let rows: Vec<(String, Option<String>, Option<String>, String)> =
+        sqlx::query_as(sqlx::AssertSqlSafe(sql))
+            .fetch_all(db.pool())
+            .await
+            .with_context(|| format!("select {table}"))?;
+    rows.into_iter()
+        .map(|(id, payload, when, file)| {
+            let payload = match payload {
+                Some(p) => serde_json::from_str(&p).with_context(|| format!("{table} {id}"))?,
+                None => Value::Null,
+            };
+            Ok(pages::FileRow {
+                row: Row { id, payload, when },
+                file,
+            })
         })
         .collect()
 }
@@ -330,6 +401,20 @@ async fn scan_diff(
                       JOIN chat_messages m ON m.group_id = coalesce(g.to_id, g.from_id)
                      WHERE g.from_ref = ?1 AND g.to_ref = ?2 AND g.diff_type != 'unchanged'
                     UNION
+                    SELECT CASE WHEN instr(m.id, '/') > 0
+                                THEN substr(m.id, 1, instr(m.id, '/') - 1)
+                                ELSE m.id END
+                      FROM dolt_diff_chat_attachments a
+                      JOIN chat_messages m ON m.id = coalesce(a.to_message_id, a.from_message_id)
+                     WHERE a.from_ref = ?1 AND a.to_ref = ?2 AND a.diff_type != 'unchanged'
+                    UNION
+                    SELECT CASE WHEN instr(m.id, '/') > 0
+                                THEN substr(m.id, 1, instr(m.id, '/') - 1)
+                                ELSE m.id END
+                      FROM chat_messages m
+                     WHERE EXISTS (SELECT 1 FROM dolt_diff_chat_users
+                                    WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged')
+                    UNION
                     SELECT 'voice:' || coalesce(to_conversation_key, from_conversation_key)
                       FROM dolt_diff_voice_messages
                      WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
@@ -359,6 +444,18 @@ async fn scan_diff(
                     UNION
                     SELECT 'feed:maps' FROM dolt_diff_maps_photos
                      WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
+                    UNION
+                    SELECT 'feed:saved_list:' || coalesce(to_file, from_file)
+                      FROM dolt_diff_maps_saved_lists
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
+                    UNION
+                    SELECT 'feed:my_map:' || coalesce(to_file, from_file)
+                      FROM dolt_diff_my_maps_placemarks
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
+                    UNION
+                    SELECT 'feed:play_book:' || coalesce(to_file, from_file)
+                      FROM dolt_diff_play_books_annotations
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                 )
                 WHERE bucket IS NOT NULL AND bucket != '' AND bucket != 'voice:'
             ",
@@ -387,189 +484,6 @@ async fn load_voice_blobs(
         refs_by_chat,
     )
     .await
-}
-
-/// Messages as `(row id, payload)`, groups as `(dir name, payload)`;
-/// the ids are what each space declares it read.
-fn build_chats(
-    source_id: &str,
-    messages: &[(String, Value)],
-    groups: &[(String, Value)],
-) -> Vec<NormalizedChat> {
-    // space id -> (group dir, its members), from each group dir. A space
-    // is named after its members: Takeout gives a space no title.
-    let mut members_by_space: HashMap<String, (String, Vec<NamedPerson>)> = HashMap::new();
-    for (dir, payload) in groups {
-        let space = space_of_dir(dir);
-        let mut members: Vec<NamedPerson> = payload
-            .get("members")
-            .and_then(Value::as_array)
-            .map(|a| {
-                a.iter()
-                    .filter_map(|m| {
-                        let name = m.get("name").and_then(Value::as_str)?;
-                        Some(NamedPerson {
-                            shown: name.to_string(),
-                            handle: m
-                                .get("email")
-                                .and_then(Value::as_str)
-                                .and_then(Handle::email),
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        members.dedup();
-        if !members.is_empty() {
-            members_by_space.insert(space, (dir.clone(), members));
-        }
-    }
-
-    let mut by_space: BTreeMap<String, (Vec<&Value>, Inputs)> = BTreeMap::new();
-    for (row_id, m) in messages {
-        let space = space_of(m.get("message_id").and_then(Value::as_str).unwrap_or(""));
-        let (rows, inputs) = by_space.entry(space).or_default();
-        inputs.read("chat_messages", row_id);
-        rows.push(m);
-    }
-
-    let mut chats = Vec::with_capacity(by_space.len());
-    for (space, (msgs, inputs)) in by_space {
-        let mut items: Vec<NormalizedChatItem> = msgs
-            .iter()
-            .map(|m| {
-                let creator = m.get("creator");
-                let name = creator.and_then(|c| c.get("name")).and_then(Value::as_str);
-                let handle = creator
-                    .and_then(|c| c.get("email"))
-                    .and_then(Value::as_str)
-                    .and_then(Handle::email);
-                let id = m.get("message_id").and_then(Value::as_str).unwrap_or("");
-                let text = m.get("text").and_then(Value::as_str);
-                let mut problems = Vec::new();
-                let date_ms = own_stamp_ms(
-                    m.get("created_date").and_then(Value::as_str),
-                    "created_date",
-                    parse_date_ms,
-                    &mut problems,
-                );
-                let msg_id = ids::message(source_id, id, date_ms);
-                NormalizedChatItem {
-                    message_uuid: msg_id.uuid.clone(),
-                    author_handle: handle,
-                    author_kind: match name {
-                        Some(_) => AuthorKind::Named,
-                        None => AuthorKind::Unknown,
-                    },
-                    author_display: name.unwrap_or("Unknown").to_string(),
-                    date_ms,
-                    text: text.filter(|s| !s.is_empty()).map(str::to_string),
-                    kind: ItemKind::Text,
-                    attachments: Vec::new(),
-                    reactions: Vec::new(),
-                    labels: Vec::new(),
-                    system_note: None,
-                    source_url: None,
-                    kind_label: None,
-                    source_ref: Some(UpstreamRef::new(msg_id.entity_kind, msg_id.natural_key)),
-                    is_aside: false,
-                    branch: Vec::new(),
-                    unread: false,
-                    recipients: Vec::new(),
-                    mentions: Vec::new(),
-                    problems,
-                }
-            })
-            .collect();
-        items.sort_by_key(|i| i.date_ms);
-
-        // Month buckets (`YYYY-MM`), oldest first — one rendered doc per
-        // month so a busy space isn't a single monolithic page.
-        let mut by_month: BTreeMap<String, Vec<NormalizedChatItem>> = BTreeMap::new();
-        for it in items {
-            by_month.entry(month_of(it.date_ms)).or_default().push(it);
-        }
-        let buckets: Vec<NormalizedDoc> = by_month
-            .into_iter()
-            .map(|(period_key, items)| {
-                let month = ids::space_month(source_id, &space, &period_key);
-                NormalizedDoc {
-                    orphan_reactions: Vec::new(),
-                    markdown_uuid: month.uuid,
-                    source_ref: Some(UpstreamRef::new(month.entity_kind, month.natural_key)),
-                    period_key,
-                    items,
-                }
-            })
-            .collect();
-
-        let (display, named_after) = match members_by_space.get(&space) {
-            Some((dir, members)) => {
-                inputs.read("chat_groups", dir);
-                let names: Vec<&str> = members.iter().map(|m| m.shown.as_str()).collect();
-                (names.join(", "), members.clone())
-            }
-            None => (space.clone(), Vec::new()),
-        };
-
-        let chat_id = ids::space(source_id, &space);
-        chats.push(NormalizedChat {
-            named_after,
-            contacts: Vec::new(),
-            inputs: inputs.declared(),
-            path_prefix: None,
-            id: space.clone(),
-            chat_uuid: chat_id.uuid,
-            display,
-            author: None,
-            account: None,
-            project: None,
-            external_id: Some(chat_id.natural_key),
-            source_url: None,
-            upstream_account: None,
-            title: None,
-            org_uuid: None,
-            org_name: None,
-            buckets,
-        });
-    }
-    chats
-}
-
-/// The owning space id for a message. Real Takeout `message_id`s are
-/// `"<space>/<topic>/<message>"`, so the first path segment is the
-/// space. Falls back to the whole id when there's no `/`.
-fn space_of(message_id: &str) -> String {
-    message_id
-        .split('/')
-        .next()
-        .filter(|s| !s.is_empty())
-        .unwrap_or(message_id)
-        .to_string()
-}
-
-/// The space id embedded in a `chat_groups` directory name. Takeout
-/// names group dirs `"DM <spaceId>"` / `"Space <spaceId>"` / etc., so
-/// the trailing whitespace-separated token is the space id — the same
-/// value [`space_of`] parses out of a `message_id`.
-fn space_of_dir(dir: &str) -> String {
-    dir.rsplit(' ')
-        .next()
-        .filter(|s| !s.is_empty())
-        .unwrap_or(dir)
-        .to_string()
-}
-
-/// Parse Google Chat's `Tuesday, February 11, 2025 at 11:33:35 AM UTC`
-/// timestamp to unix millis, or `None` on any shape we don't recognize —
-/// which the caller records through `own_stamp_ms`.
-/// The ingest's reading of a Chat `created_date`, so a zone it knows is
-/// one the render knows.
-fn parse_date_ms(s: &str) -> Option<i64> {
-    let rfc3339 = datalib_etl_google_takeout::ingest::time::parse_chat_long_form(s)?;
-    datalib_time::parse_strict(&rfc3339)
-        .ok()
-        .map(|t| t.to_unix_millis())
 }
 
 // ── Google Voice ────────────────────────────────────────────────────
@@ -855,7 +769,7 @@ fn voice_date_ms(m: &Value, problems: &mut Vec<Problem>) -> Option<i64> {
     )
 }
 
-fn month_of(ms: Option<i64>) -> String {
+pub(crate) fn month_of(ms: Option<i64>) -> String {
     use chrono::TimeZone;
     chrono::Utc
         .timestamp_millis_opt(ms.unwrap_or(0))
@@ -918,7 +832,7 @@ mod tests {
             "DM AAA".to_string(),
             json!({"members":[{"name":"Jean-Luc Picard"},{"name":"William Riker"}]}),
         )];
-        let chats = build_chats("gt", &with_ids(&messages, "message_id"), &groups);
+        let chats = chat::build("gt", &with_ids(&messages, "message_id"), &groups, &[]);
         assert_eq!(chats.len(), 1, "two messages in one space => one chat");
         assert_eq!(chats[0].id, "AAA");
         assert_eq!(chats[0].display, "Jean-Luc Picard, William Riker");
@@ -940,7 +854,7 @@ mod tests {
             json!({"message_id":"BBB/T2/M2","created_date":"Wednesday, March 5, 2025 at 9:34:00\u{202f}PM UTC","creator":{"name":"Riker","email":"r@e"},"text":"March."}),
         ];
         let groups: Vec<(String, Value)> = vec![];
-        let chats = build_chats("gt", &with_ids(&messages, "message_id"), &groups);
+        let chats = chat::build("gt", &with_ids(&messages, "message_id"), &groups, &[]);
         assert_eq!(chats.len(), 1);
         let keys: Vec<&str> = chats[0]
             .buckets
@@ -955,16 +869,16 @@ mod tests {
     #[test]
     fn space_prefix() {
         // Real shape: first path segment is the space id.
-        assert_eq!(space_of("AAA/T1/M1"), "AAA");
-        assert_eq!(space_of("weird"), "weird");
+        assert_eq!(chat::space_of("AAA/T1/M1"), "AAA");
+        assert_eq!(chat::space_of("weird"), "weird");
         // Dir name carries the space id in its trailing token.
-        assert_eq!(space_of_dir("DM AAA"), "AAA");
-        assert_eq!(space_of_dir("Space FooBar"), "FooBar");
+        assert_eq!(chat::space_of_dir("DM AAA"), "AAA");
+        assert_eq!(chat::space_of_dir("Space FooBar"), "FooBar");
     }
 
     #[test]
     fn parse_date_ms_handles_narrow_no_break_space() {
-        let feb = parse_date_ms("Tuesday, February 11, 2025 at 11:33:35\u{202f}AM UTC");
+        let feb = chat::parse_date_ms("Tuesday, February 11, 2025 at 11:33:35\u{202f}AM UTC");
         assert!(
             feb.is_some_and(|ms| ms > 0),
             "narrow no-break space must still parse"
@@ -977,10 +891,12 @@ mod tests {
     #[test]
     fn a_chat_date_in_any_zone_the_ingest_reads_parses() {
         assert_eq!(
-            parse_date_ms("Tuesday, February 11, 2025 at 11:33:35 AM CET"),
-            parse_date_ms("Tuesday, February 11, 2025 at 10:33:35 AM UTC"),
+            chat::parse_date_ms("Tuesday, February 11, 2025 at 11:33:35 AM CET"),
+            chat::parse_date_ms("Tuesday, February 11, 2025 at 10:33:35 AM UTC"),
         );
-        assert!(parse_date_ms("Tuesday, February 11, 2025 at 11:33:35 AM GMT+5:30").is_some());
+        assert!(
+            chat::parse_date_ms("Tuesday, February 11, 2025 at 11:33:35 AM GMT+5:30").is_some()
+        );
     }
 
     /// A shape we don't recognize must produce no timestamp, never the
@@ -997,9 +913,9 @@ mod tests {
             "Tuesday, February 11, 2025 at 11:33:35 AM IST",
         ] {
             assert_eq!(
-                parse_date_ms(bad),
+                chat::parse_date_ms(bad),
                 None,
-                "parse_date_ms({bad:?}) fabricated a stamp"
+                "chat::parse_date_ms({bad:?}) fabricated a stamp"
             );
         }
         // …and an undated item still files, under the epoch bucket.
@@ -1047,8 +963,7 @@ mod tests {
     }
 
     /// A text and a transcript are what was said; the bold label around
-    /// the transcript is ours. Google Chat's profile is plain, so
-    /// chat-common escapes its messages itself.
+    /// the transcript is ours.
     #[test]
     fn voice_text_in_markup_renders_escaped() {
         let messages = vec![
@@ -1073,7 +988,6 @@ mod tests {
             items[1].text.as_deref(),
             Some("**Voicemail:** &lt;script&gt;x&lt;/script&gt; &amp; co")
         );
-        assert_eq!(profile().text_format, TextFormat::Plain);
     }
 
     #[test]

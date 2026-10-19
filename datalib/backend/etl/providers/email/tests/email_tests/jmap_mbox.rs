@@ -277,16 +277,24 @@ async fn render_only_labels_filters_to_thread_subset() {
     assert_eq!(rendered, expected, "rendered exactly the Sent threads");
 }
 
+/// Parse hands render the threads' rows and none of their `.eml` bytes,
+/// which render reads a batch of threads at a time. Loading every one up
+/// front held a whole mailbox in memory and showed no progress until it
+/// was done.
 #[tokio::test(flavor = "multi_thread")]
 async fn star_trek_mbox_renders_through_render_all() {
     let (_tmp_extract, db_path) = fetch_into_tmp(fixture_path()).await;
-    let parsed = parse(
+    let mut parsed = parse(
         &db_path_for(&db_path),
         "star-trek-mbox",
         RawRange::cold(),
         false,
     )
     .expect("parse cold start");
+    assert!(
+        parsed.docs.iter().all(|b| b.blobs.is_empty()),
+        "parse loaded `.eml` bytes before the render asked for them"
+    );
 
     let tmp = tempfile::tempdir().unwrap();
     let progress = Progress::noop();
@@ -304,6 +312,7 @@ async fn star_trek_mbox_renders_through_render_all() {
         },
     )
     .expect("render_all");
+    parsed.close();
 
     // One rendered document per thread.
     assert_eq!(docs.len(), 4);

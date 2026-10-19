@@ -100,6 +100,9 @@ describe("Google Takeout", () => {
     "gemini_apps",
     "google_voice",
     "google_voice_include_spam",
+    "maps_saved_lists",
+    "my_maps",
+    "play_books",
   ];
 
   /// `GoogleTakeoutSync` in google_takeout_config: a feed with no box

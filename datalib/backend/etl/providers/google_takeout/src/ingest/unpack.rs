@@ -146,6 +146,21 @@ const FEEDS: &[Feed] = &[
         dir: "Voice",
     },
     Feed {
+        name: "maps_saved_lists",
+        on: |s| s.maps_saved_lists,
+        dir: "Saved",
+    },
+    Feed {
+        name: "my_maps",
+        on: |s| s.my_maps,
+        dir: "My Maps",
+    },
+    Feed {
+        name: "play_books",
+        on: |s| s.play_books,
+        dir: "Google Play Books",
+    },
+    Feed {
         name: "google_voice_include_spam",
         on: |s| s.google_voice && s.google_voice_include_spam,
         dir: "Voice/Spam",
@@ -219,14 +234,27 @@ pub fn entry_rel(name: &str) -> Option<String> {
 
 pub const STOPPED: &str = "stopped while unpacking the export; nothing was read";
 
+/// What [`unpack`] did: how many files came out, and every file the
+/// parts hold, under `Takeout/`, with its size.
+#[derive(Debug, Default)]
+pub struct Unpacked {
+    pub files: usize,
+    pub listed: Vec<(String, i64)>,
+}
+
 /// Unpack the files a feed that is on reads from `parts` into `dest`, the
-/// `Takeout/` folder to walk, and say how many came out.
-pub fn unpack(parts: &[PathBuf], sync: &SyncFlags, dest: &Path, stop: &StopFlag) -> Result<usize> {
+/// `Takeout/` folder to walk.
+pub fn unpack(
+    parts: &[PathBuf],
+    sync: &SyncFlags,
+    dest: &Path,
+    stop: &StopFlag,
+) -> Result<Unpacked> {
     let mut out = Unpacker {
         sync,
         dest,
         stop,
-        files: 0,
+        done: Unpacked::default(),
     };
     for part in parts {
         let name = part.file_name().and_then(|n| n.to_str()).unwrap_or("");
@@ -237,14 +265,14 @@ pub fn unpack(parts: &[PathBuf], sync: &SyncFlags, dest: &Path, stop: &StopFlag)
             None => bail!("{} is not a .zip or a .tgz", part.display()),
         }
     }
-    Ok(out.files)
+    Ok(out.done)
 }
 
 struct Unpacker<'a> {
     sync: &'a SyncFlags,
     dest: &'a Path,
     stop: &'a StopFlag,
-    files: usize,
+    done: Unpacked,
 }
 
 impl Unpacker<'_> {
@@ -262,7 +290,8 @@ impl Unpacker<'_> {
                 .name()
                 .with_context(|| format!("name of entry {i} in {}", part.display()))?
                 .to_string();
-            self.entry(part, &name, &mut entry)?;
+            let size = i64::try_from(entry.size()).unwrap_or(i64::MAX);
+            self.entry(part, &name, size, &mut entry)?;
         }
         Ok(())
     }
@@ -282,18 +311,23 @@ impl Unpacker<'_> {
                 .with_context(|| format!("read an entry's name in {}", part.display()))?
                 .to_string_lossy()
                 .into_owned();
-            self.entry(part, &name, &mut entry)?;
+            let size = i64::try_from(entry.header().size().unwrap_or(0)).unwrap_or(i64::MAX);
+            self.entry(part, &name, size, &mut entry)?;
         }
         Ok(())
     }
 
-    fn entry(&mut self, part: &Path, name: &str, bytes: &mut dyn Read) -> Result<()> {
+    fn entry(&mut self, part: &Path, name: &str, size: i64, bytes: &mut dyn Read) -> Result<()> {
         if self.stop.requested() {
             bail!(STOPPED);
         }
-        let Some(rel) = entry_rel(name).filter(|rel| admits(self.sync, rel)) else {
+        let Some(rel) = entry_rel(name) else {
             return Ok(());
         };
+        self.done.listed.push((rel.clone(), size));
+        if !admits(self.sync, &rel) {
+            return Ok(());
+        }
         let path = self.dest.join(&rel);
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
@@ -301,7 +335,7 @@ impl Unpacker<'_> {
         let mut out = File::create(&path).with_context(|| format!("create {}", path.display()))?;
         std::io::copy(bytes, &mut out)
             .with_context(|| format!("unpack {name} from {}", part.display()))?;
-        self.files += 1;
+        self.done.files += 1;
         Ok(())
     }
 }

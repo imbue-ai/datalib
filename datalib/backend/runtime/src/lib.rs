@@ -3,6 +3,7 @@
 
 pub mod atomic;
 pub mod build_id;
+pub mod cache;
 pub mod layout;
 pub mod node_runtime;
 pub mod plain_sqlite;

@@ -4,6 +4,7 @@
 pub mod account;
 pub mod branches;
 pub mod changed;
+pub mod findings;
 pub mod normalize;
 pub mod people;
 pub mod period;

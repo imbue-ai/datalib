@@ -465,7 +465,7 @@ pub fn term_values_sql(grid_rows: &str, where_sql: &str, kinds: &[u8], by_name: 
 /// Attaches the root's search terms file read-only under
 /// [`ATTACHED_AS`], so a term on a terms key is a clause of the grid's own
 /// query (`crate::terms_keys`). Outside any transaction, as SQLite
-/// requires; the file has no WAL through doltlite (dolthub/doltlite#3740),
+/// requires; the file keeps a rollback journal (its writer never asks for WAL),
 /// so a reader in a transaction holds off the terms writer for as long as
 /// it reads, which each request's transaction keeps short.
 async fn attach_terms(reader: &mut Reader, root: &Path) -> Result<(), sqlx::Error> {

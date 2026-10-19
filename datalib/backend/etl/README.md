@@ -345,7 +345,7 @@ time-series applet's read), and, on that open or on
 the held read transaction's connection to `main`, an `ATTACH` of a
 plain SQLite file read-only with an FTS5 `MATCH` on it and a join from
 it to the store's tables — and that list is the allowlist. The plain
-file keeps a rollback journal (dolthub/doltlite#3740), so a transaction
+file is in rollback-journal mode (its writer never asks for WAL), so a transaction
 that reads it holds off its writer's commits for as long as it is open:
 keep one to a request's queries. A transaction around one query waits
 a few milliseconds at most
@@ -644,7 +644,9 @@ arrive and drains the bundle at end of bucket; parse loads every document's
 bundle at once with `BlobBundle::load_many`; render then consumes an
 already-loaded bag of bytes — no SQL, no `block_in_place`, no dyn blob reader.
 Parse reads the edge table in one query for every document it loads,
-not one per document.
+not one per document. Email is the exception: a mailbox's `.eml`s are
+too many to hold at once, so its parse hands render an `EmlStore` that
+runs the same `load_many` for a batch of threads just before they render.
 
 **The CAS is plain SQLite, not doltlite**, created through the
 `doltlite_engine=sqlite` URI parameter like the run store. A

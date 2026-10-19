@@ -49,6 +49,9 @@ fn sync_flags(s: GoogleTakeoutSync) -> ingest::SyncFlags {
         gemini_apps: s.gemini_apps,
         google_voice: s.google_voice,
         google_voice_include_spam: s.google_voice_include_spam,
+        maps_saved_lists: s.maps_saved_lists,
+        my_maps: s.my_maps,
+        play_books: s.play_books,
     }
 }
 

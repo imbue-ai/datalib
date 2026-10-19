@@ -1,11 +1,13 @@
 //! Parse the email raw store, driven by **`dolt_diff_<table>`**.
 
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{self, BlobBundle, CasEdgeRow};
+use datalib_etl::doltlite_raw::Reader;
 use datalib_etl_render::inputs::{Inputs, RawRange};
 use datalib_etl_render::processor::Unparsed;
 use serde_json::Value;
@@ -49,7 +51,11 @@ pub struct ScanResult {
     pub scan_elapsed: Option<Duration>,
 }
 
-#[derive(Clone, Default)]
+/// How many threads' `.eml`s are read and mail-parsed together. A full
+/// render holds this many threads' bytes at once, not the mailbox's.
+pub const EML_BATCH: usize = 200;
+
+#[derive(Default)]
 pub struct ParsedEmail {
     /// `(account id, payload)`. The id rides beside the payload rather
     /// than inside it: a JMAP `Account` object has no `id` field — the
@@ -68,12 +74,71 @@ pub struct ParsedEmail {
     /// Rows whose stored payload would not read as JSON, dropped —
     /// reported by the processor rather than skipped in silence.
     pub unparsed: Vec<Unparsed>,
+    /// Where `docs`' `.eml`s are read from as they render. `None` when
+    /// the buckets already carry their bytes, as a test's do.
+    pub emls: Option<EmlStore>,
+}
+
+impl ParsedEmail {
+    pub fn close(&mut self) {
+        if let Some(emls) = self.emls.take() {
+            emls.close();
+        }
+    }
+}
+
+/// The raw store and its blob CAS, held open through the render so each
+/// thread's `.eml`s are read just before it renders, a batch at a time.
+pub struct EmlStore {
+    reader: Reader,
+    cas: Option<SqlitePool>,
+}
+
+impl EmlStore {
+    /// Copies of `batch` with their `.eml`s and attachment parts loaded.
+    pub fn load(&self, batch: &[&EmailThreadBucket]) -> Result<Vec<EmailThreadBucket>> {
+        block_on(self.load_async(batch))
+    }
+
+    async fn load_async(&self, batch: &[&EmailThreadBucket]) -> Result<Vec<EmailThreadBucket>> {
+        let mut docs: Vec<EmailThreadBucket> = batch.iter().map(|b| (*b).clone()).collect();
+        let refs = docs
+            .iter()
+            .enumerate()
+            .map(|(i, bucket)| (i, bucket.emails.iter().map(|em| em.blob_id.as_str())));
+        let mut blobs = BlobBundle::load_many(
+            self.reader.pool(),
+            self.cas.as_ref(),
+            EML_PROJECTION_SQL,
+            refs,
+        )
+        .await?;
+        for (i, bucket) in docs.iter_mut().enumerate() {
+            if let Some(b) = blobs.remove(&i) {
+                bucket.blobs = b;
+                extract_attachments_from_emls(bucket);
+            }
+        }
+        Ok(docs)
+    }
+
+    pub fn close(self) {
+        block_on(async {
+            self.reader.close().await;
+            if let Some(cas) = self.cas {
+                cas.close().await;
+            }
+        })
+    }
+}
+
+fn block_on<F: Future>(f: F) -> F::Output {
+    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(f))
 }
 
 /// One rendered-markdown bucket: every email in a single JMAP Thread
-/// plus its joins. Carries the per-doc [`BlobBundle`] of attachment
-/// bytes (.eml bodies + each attachment part) loaded in two SQL
-/// queries by `parse`.
+/// plus its joins. Its [`BlobBundle`] (the `.eml`s and each attachment
+/// part) is empty until [`EmlStore::load`] fills a copy.
 #[derive(Debug, Clone, Default)]
 pub struct EmailThreadBucket {
     pub account_id: String,
@@ -104,10 +169,7 @@ pub fn parse(
     if !db_path.is_file() {
         return Ok(ParsedEmail::default());
     }
-    tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current()
-            .block_on(async move { parse_async(&db_path, source_id, range, label_filter).await })
-    })
+    block_on(parse_async(&db_path, source_id, range, label_filter))
 }
 
 async fn parse_async(
@@ -127,10 +189,6 @@ async fn parse_async(
     };
     let pool = reader.pool().clone();
     let pin = reader.pin().clone();
-
-    let cas_pool = blob_cas::open_cas_for_render(db_path)
-        .await
-        .with_context(|| format!("open the blob store beside {}", db_path.display()))?;
 
     let mut unparsed: Vec<Unparsed> = Vec::new();
     let accounts = load_accounts(&pool, &mut unparsed).await?;
@@ -154,34 +212,16 @@ async fn parse_async(
     };
 
     // ── Phase 2: targeted load for to-render buckets ──────────────
-    let mut docs = if to_load.is_empty() {
+    // Rows only: the `.eml` bytes wait for the render, which reads them
+    // a batch at a time through the `EmlStore`.
+    let docs = if to_load.is_empty() {
         Vec::new()
     } else {
         load_buckets(&pool, &to_load).await?
     };
-
-    // Per-bucket BlobBundle: gather every email's blob_id (the .eml
-    // CAS pointer) and bulk-load the .eml bytes via the projection
-    // SQL. Then mail-parse each loaded .eml to download attachment
-    // parts, adding each part's bytes back into the bundle under a
-    // synthesized content-hash ref id and populating
-    // `bucket.joins.attachments[email_id]` so render's existing
-    // `bucket.blobs.get(&att.blob_id)` lookup resolves uniformly.
-    let refs = docs
-        .iter()
-        .enumerate()
-        .map(|(i, bucket)| (i, bucket.emails.iter().map(|em| em.blob_id.as_str())));
-    let loaded = BlobBundle::load_many(&pool, cas_pool.as_ref(), EML_PROJECTION_SQL, refs).await;
-    if let Some(cas) = cas_pool {
-        cas.close().await;
-    }
-    let mut blobs = loaded?;
-    for (i, bucket) in docs.iter_mut().enumerate() {
-        if let Some(b) = blobs.remove(&i) {
-            bucket.blobs = b;
-            extract_attachments_from_emls(bucket);
-        }
-    }
+    let cas = blob_cas::open_cas_for_render(db_path)
+        .await
+        .with_context(|| format!("open the blob store beside {}", db_path.display()))?;
 
     Ok(ParsedEmail {
         accounts,
@@ -191,6 +231,7 @@ async fn parse_async(
         docs_skipped,
         scan,
         unparsed,
+        emls: Some(EmlStore { reader, cas }),
     })
 }
 
@@ -204,12 +245,13 @@ async fn parse_async(
 fn extract_attachments_from_emls(bucket: &mut EmailThreadBucket) {
     use mail_parser::{MessageParser, MimeHeaders, PartType};
 
+    // Gathered, then added: the bundle is borrowed for the `.eml`s meanwhile.
+    let mut parts = BlobBundle::new();
     for em in &bucket.emails {
         let Some(eml_blob) = bucket.blobs.get(&em.blob_id) else {
             continue;
         };
-        let eml_bytes = eml_blob.bytes.clone();
-        let Some(msg) = MessageParser::default().parse(&eml_bytes) else {
+        let Some(msg) = MessageParser::default().parse(&eml_blob.bytes) else {
             continue;
         };
         // Walk both `msg.attachments` and `msg.html_body` (the latter
@@ -217,15 +259,15 @@ fn extract_attachments_from_emls(bucket: &mut EmailThreadBucket) {
         // and only show up via the html-body index). Filter out the
         // alternate text/html body parts mail-parser sometimes
         // surfaces in `attachments`.
-        let body_idx: HashSet<usize> = msg
+        let body_idx: HashSet<u32> = msg
             .text_body
             .iter()
             .copied()
             .chain(msg.html_body.iter().copied())
             .collect();
-        let mut seen_idx: HashSet<usize> = HashSet::new();
+        let mut seen_idx: HashSet<u32> = HashSet::new();
         let mut atts: Vec<datalib_etl_email::ingest::db::LoadedAttachment> = Vec::new();
-        let candidate_idxs: Vec<usize> = msg
+        let candidate_idxs: Vec<u32> = msg
             .attachments
             .iter()
             .copied()
@@ -259,23 +301,22 @@ fn extract_attachments_from_emls(bucket: &mut EmailThreadBucket) {
             });
             let size = bytes.len() as i64;
             let blob_id = datalib_etl::blob_cas::blake3_hex(&bytes);
-            bucket
-                .blobs
-                .add(&blob_id, bytes, content_type.clone(), name.clone());
             atts.push(datalib_etl_email::ingest::db::LoadedAttachment {
                 part_id: format!("p{idx}"),
-                blob_id,
-                name,
-                content_type,
+                blob_id: blob_id.clone(),
+                name: name.clone(),
+                content_type: content_type.clone(),
                 size: Some(size),
                 disposition,
                 cid,
             });
+            parts.add_hashed(blob_id.clone(), blob_id, bytes, content_type, name);
         }
         if !atts.is_empty() {
             bucket.joins.attachments.insert(em.id.clone(), atts);
         }
     }
+    bucket.blobs.extend(parts);
 }
 
 /// Per-bucket dolt_diff scan. Delegates to the shared
