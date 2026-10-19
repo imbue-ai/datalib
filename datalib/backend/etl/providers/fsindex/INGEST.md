@@ -242,8 +242,17 @@ The standalone CLI (`datalib-fsindex`, the `fsindex` Bazel target) takes
 `--db <file> --branch <name>`, so two roots can be scanned into two
 branches of one file and share every identical subtree's chunks. That
 is how [`datalib-dirtree-diff`](/datalib/backend/dirtree_diff/README.md)
-compares two trees. A config-driven scan has no branch knob: each
-`fsindex` group gets its own store under `<group>/ingest/`.
+compares two trees; its README has a worked recipe for two folders on a
+Mac. A config-driven scan has no branch knob: each `fsindex` group gets
+its own store under `<group>/ingest/`, and the step publishes each scan
+to `main`.
+
+Without `--branch`, a standalone scan is sealed the way the step's is
+and published to `main`. With it, the scan is committed on that branch
+and `main` does not move, so a read-only open, which reads `main`, sees
+none of it. Name the branch in every read of one:
+`dolt_at_files('<branch>')`, `dolt_diff_files('<a>', '<b>')`, or
+`PATH#<branch>` to `datalib-dirtree-diff`.
 
 ## Inspecting a scan: what changed?
 
@@ -264,6 +273,9 @@ doltlite -readonly -box $db \
   "SELECT diff_type, from_id, to_id, hex(to_blake3) AS to_blake3
      FROM dolt_diff_files('HEAD^1', 'HEAD');"
 ```
+
+A read-only `HEAD` is `main`. For a scan on a branch of its own, write
+the branch where `HEAD` is: `dolt_diff_files('mybranch^1', 'mybranch')`.
 
 Per-table counts, the commit log and the other ref spellings are in
 [`docs/dev/doltlite.md`](/docs/dev/doltlite.md#what-changed-between-two-commits).

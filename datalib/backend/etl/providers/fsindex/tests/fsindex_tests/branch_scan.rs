@@ -184,6 +184,45 @@ async fn rescanning_an_unchanged_tree_commits_nothing() {
     );
 }
 
+/// A scan with no branch is readable the moment it is sealed. A seal that
+/// only commits on the writer branch leaves `main` empty until some later
+/// writer opens the file, so a reader in between — `datalib-doltlite`,
+/// `datalib-dirtree-diff` with no `#ref` — sees no rows and reports
+/// nothing changed.
+#[tokio::test]
+async fn a_branchless_scan_is_on_main_when_sealed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db_path = tmp.path().join("scan.doltlite_db");
+    let cache = FingerprintCache::open(&tmp.path().join("fingerprints.sqlite"))
+        .await
+        .unwrap();
+    let root = tmp.path().join("tree");
+    write(&root, "a.txt", "one\n");
+
+    scan_and_commit(&db_path, &root, "s", None, &cache).await;
+
+    let opts = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(&db_path)
+        .read_only(true);
+    let reader = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
+        .connect_with(opts)
+        .await
+        .unwrap();
+    let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM files ORDER BY id")
+        .fetch_all(&reader)
+        .await
+        .unwrap();
+    reader.close().await;
+    assert_eq!(
+        ids,
+        vec!["a.txt".to_string()],
+        "a reader on main sees the scan"
+    );
+}
+
 /// `checkout_branch` must fail loudly rather than leaving the caller on
 /// whatever branch it happened to be on. A silent no-op here is the
 /// dangerous shape: the scan would succeed and write to the wrong

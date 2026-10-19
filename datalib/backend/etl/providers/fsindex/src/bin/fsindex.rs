@@ -36,8 +36,9 @@ struct Args {
     #[arg(long)]
     cache_db: Option<PathBuf>,
 
-    /// Doltlite branch to write into. Defaults to whatever branch the
-    /// db is currently on (`main` on first open).
+    /// Doltlite branch to commit the scan on, created if missing; `main`
+    /// does not move, so name the branch in every read. Without it the
+    /// scan is published to `main`.
     #[arg(long)]
     branch: Option<String>,
 

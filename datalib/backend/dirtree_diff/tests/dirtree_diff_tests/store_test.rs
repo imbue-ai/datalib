@@ -229,7 +229,9 @@ async fn reads_see_the_commit_not_the_working_set() {
     pool.close().await;
 }
 
-/// The digest lookup behind "deleted, or moved somewhere else?".
+/// The digest lookup behind "deleted, or moved somewhere else?". It asks
+/// for more digests than one statement once took, so a lookup that splits
+/// or truncates the set loses the one that resolves.
 #[tokio::test]
 async fn digest_lookup_finds_surviving_copies() {
     let tmp = tempfile::tempdir().unwrap();
@@ -244,8 +246,9 @@ async fn digest_lookup_finds_surviving_copies() {
     .await;
 
     let pool = store::open_scratch(&path).await.unwrap();
-    let want = [digest(0x44), digest(0x99)]
-        .into_iter()
+    let absent = (0..1000u32).map(|i| format!("{i:064x}"));
+    let want = absent
+        .chain([digest(0x99), digest(0x44)])
         .map(|d| ("file".to_string(), d.to_uppercase()))
         .collect();
     let found = store::lookup_digests(&pool, &commit, &want).await.unwrap();

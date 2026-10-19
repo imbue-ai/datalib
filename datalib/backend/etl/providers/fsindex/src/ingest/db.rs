@@ -117,13 +117,13 @@ impl RawDb {
         Ok(removed)
     }
 
-    /// Switch the open connection's active branch, creating it if it
-    /// doesn't exist. See the module docs for the spelling and the
-    /// ordering, both of which are load-bearing.
+    /// Put the connection on `branch`, creating it from the writer branch
+    /// if it does not exist.
     pub async fn checkout_branch(&self, branch: &str) -> Result<()> {
-        // `dolt_checkout(branch)` errors when the branch is absent, so
-        // the error is the signal to create it rather than a failure.
-        let existing = sqlx::query("SELECT dolt_checkout(?)")
+        // `dolt_connect_branch` errors when the branch is absent, so the
+        // error is the signal to create it. Connect, not checkout: a
+        // checkout writes a working set on every scan, a connect nothing.
+        let existing = sqlx::query("SELECT dolt_connect_branch(?)")
             .bind(branch)
             .execute(&self.pool)
             .await;
@@ -134,7 +134,7 @@ impl RawDb {
                 .await
                 .with_context(|| {
                     format!(
-                        "dolt checkout -b {branch} (after checkout {branch}                          reported: {no_such_branch})"
+                        "dolt checkout -b {branch} (after connecting to it reported: {no_such_branch})"
                     )
                 })?;
         }
@@ -142,12 +142,12 @@ impl RawDb {
         let active: String = sqlx::query("SELECT active_branch() AS b")
             .fetch_one(&self.pool)
             .await
-            .with_context(|| format!("read back active branch after checkout {branch}"))?
+            .with_context(|| format!("read back active branch after switching to {branch}"))?
             .try_get("b")
-            .with_context(|| format!("decode active branch after checkout {branch}"))?;
+            .with_context(|| format!("decode active branch after switching to {branch}"))?;
         anyhow::ensure!(
             active == branch,
-            "checkout of branch {branch:?} reported success but the connection              is on {active:?}"
+            "switching to branch {branch:?} reported success but the connection is on {active:?}"
         );
         Ok(())
     }
@@ -188,22 +188,12 @@ impl RawDb {
         Ok(started.elapsed())
     }
 
-    /// The one version-control commit per scan. Seals the whole
-    /// scan's working set into a single `dolt_log` entry,
-    /// so `dolt diff HEAD^ HEAD` is exactly "what this scan changed,"
-    /// and — crucially — nothing is left dirty for the next
-    /// [`RawDb::open`] to discard. `None` when the scan changed nothing,
-    /// which a rescan of an unchanged tree does.
+    /// The one commit per scan, so `HEAD^..HEAD` is what the scan changed;
+    /// `None` when it changed nothing. `commit_run` publishes to `main`
+    /// only from the writer branch, so a scan with no `--branch` is on
+    /// `main` when this returns and one on a named branch stays there.
     pub async fn commit(&self, msg: &str) -> Result<Option<String>> {
-        let committed = sqlx::query_scalar::<_, Option<String>>("SELECT dolt_commit('-Am', ?)")
-            .bind(datalib_etl::doltlite_raw::stamp_run(msg))
-            .fetch_one(&self.pool)
-            .await;
-        match committed {
-            Ok(hash) => Ok(hash),
-            Err(e) if e.to_string().contains("nothing to commit") => Ok(None),
-            Err(e) => Err(anyhow::Error::new(e).context("dolt_commit")),
-        }
+        dr::commit_run(&self.pool, msg).await
     }
 
     /// Root-relative ids of every directory row, in id order. Used by
