@@ -386,9 +386,9 @@ retired type words become the current ones, and `sync` /
 `common.input_path` / `common.raw_path` become method tables with
 their own `path` (`convert.rs`). The rewrite is value-level, so comments do not
 survive. The loader and `datalib-step` recognize the old shapes only
-well enough to name the tool. Three rewrites are made without asking,
+well enough to name the tool. Four rewrites are made without asking,
 all text edits that keep comments, and each refuses a result that would
-drop an entry the original ran. `datalib-http` makes them in this order
+drop an entry the original ran, other than one it exists to take out. `datalib-http` makes them in this order
 (`http/src/config_upgrade.rs`), at boot, on any change to the file, and
 on a save through `PUT /api/config` before it answers. Its rewrites and
 its saves take turns, since a rewrite that read one save and wrote after
@@ -417,6 +417,15 @@ the next would put the first back:
    serves it, appended at the end of the file. Once the group
    is there the time-series steps are the person's, and a step they took
    out is not put back.
+4. The time-series embeds (`upgrade_time_series_embeds`,
+   `time_series_embeds.rs`): a source whose type has time series loses
+   its `embed` step, with the comments above it, and every `inputs`
+   that named the step stops naming it. Its markdown is daily summaries
+   of numbers, which the keyword index already finds, so the wizard
+   never offers the step (`embedAllowed` in
+   `ui/src/config/sourceSteps.ts`). This rewrite is the only one of the
+   four that is meant to take an entry out; it still refuses a result
+   that loses any other entry.
 
 A source may not take `unified_index`, `unified_document_index` or
 `unified_time_series_index` as its id

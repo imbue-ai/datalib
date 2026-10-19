@@ -1048,6 +1048,16 @@ export const TIME_SERIES_TYPES = ["garmin", "yolink", "airvisual"];
 
 const TIME_SERIES_GROUP = "unified_time_series_index";
 
+/// Whether a source of `type` may have an `embed` step. A time-series
+/// source's markdown is daily summaries of numbers: the keyword index
+/// finds everything in it, and embedding it costs minutes and gigabytes
+/// for nothing. Mirrors `datalib_migrate_config`'s
+/// `upgrade_time_series_embeds`, which takes the step out of a config
+/// that has one.
+export function embedAllowed(type: string | null | undefined): boolean {
+  return !type || !TIME_SERIES_TYPES.includes(type);
+}
+
 /// Give a source of a time-series type its `render_time_series` step and
 /// a place in the time-series index's inputs, adding the index and the
 /// applet that serves it when the config has none. A source of any other type is left as it is.
@@ -1096,14 +1106,17 @@ export function qmdIndexingOf(steps: ConfiguredStep[], group: string): QmdIndexi
   return has("embed") ? "keyword_and_embed" : "keyword";
 }
 
-/// Give a source the qmd steps `indexing` asks for — those it lacks — and
-/// a place in the aggregator's inputs, and take away the ones it does not
-/// ask for, with every step that reads them. Only where the config has the
+/// Give a source the qmd steps `asked` for — those it lacks — and a place
+/// in the aggregator's inputs, and take away the ones it does not ask
+/// for, with every step that reads them. Never an `embed` step for a
+/// type that may not have one (`embedAllowed`). Only where the config has the
 /// aggregator: search is off without one, and the aggregator is what
 /// retires a source's collection once it goes.
-export function setQmdSteps(text: string, group: string, indexing: QmdIndexing): string {
+export function setQmdSteps(text: string, group: string, asked: QmdIndexing): string {
   const [keyword, embed] = buildQmdSteps(group);
   const all = listSteps(text);
+  const type = listGroups(text).find((g) => g.id === group)?.type;
+  const indexing = asked === "keyword_and_embed" && !embedAllowed(type) ? "keyword" : asked;
   const aggregated = all.some((s) => s.kind === "step" && fanInFunctionOf(s) === "qmd_aggregator");
   const wanted =
     !aggregated || indexing === "none" ? [] : indexing === "keyword" ? [keyword] : [keyword, embed];

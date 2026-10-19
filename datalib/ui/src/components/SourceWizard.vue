@@ -41,6 +41,7 @@ import {
   applyAnswer,
   buildSource,
   chosenAnswer,
+  embedAllowed,
   fieldIsActive,
   fieldsFor,
   layoutOf,
@@ -208,8 +209,11 @@ const embedWanted = ref(props.editing ? props.editing.qmdIndexing === "keyword_a
 /// index, and embeddings only on top of a keyword index.
 const qmdIndexing = computed<QmdIndexing>(() => {
   if (!renders.value || !keywordWanted.value) return "none";
-  return embedWanted.value ? "keyword_and_embed" : "keyword";
+  return embedWanted.value && embeds.value ? "keyword_and_embed" : "keyword";
 });
+
+/// Whether this source's type may be embedded at all (`embedAllowed`).
+const embeds = computed(() => embedAllowed(chosen.value?.type));
 
 /// The fields the form shows for one phase: the descriptor's, less any
 /// whose gate is shut.
@@ -2112,7 +2116,7 @@ function submit() {
                       </small>
                     </span>
                   </label>
-                  <label class="wiz-choice">
+                  <label v-if="embeds" class="wiz-choice">
                     <input
                       v-model="embedWanted"
                       type="checkbox"
