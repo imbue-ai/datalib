@@ -1,14 +1,15 @@
 //! Pinned first-use fetches. The caller knows the sha256 before the
 //! bytes are fetched; a download that hashes wrong is refused and
-//! nothing of it is kept. Two users: qmd's GGUF models
-//! (`datalib_qmd_models`) and the Node runtime a release tarball names
-//! in its manifest ([`runtime`]).
+//! nothing of it is kept. Three users: qmd's GGUF models
+//! (`datalib_qmd_models`), the perseus embedder's model files, and the
+//! Node runtime a release tarball names in its manifest ([`runtime`]).
 
 pub mod runtime;
 
 use std::fs;
 use std::io::{Read, Write};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -19,6 +20,20 @@ const CHUNK: usize = 1 << 20;
 const ATTEMPTS: u32 = 6;
 
 pub use runtime::{enable_runtime_fetch, ensure_runtime, ReleaseRuntimeFetcher};
+
+/// The TLS every HTTP client here is built with
+/// (`ClientBuilder::tls_backend_preconfigured`): rustls on ring, trusting
+/// webpki's bundled roots and nothing the host has installed.
+pub fn tls_config() -> rustls::ClientConfig {
+    let roots = rustls::RootCertStore {
+        roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+    };
+    rustls::ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+        .with_safe_default_protocol_versions()
+        .expect("ring's provider supports rustls's default protocol versions")
+        .with_root_certificates(roots)
+        .with_no_client_auth()
+}
 
 pub fn sha256_file(path: &Path) -> Result<String> {
     let mut f = fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
@@ -47,6 +62,7 @@ fn hex(bytes: &[u8]) -> String {
 /// rather than failing the sync on the first refusal.
 pub fn download_verified(tag: &str, url: &str, want: &str, dest: &Path) -> Result<()> {
     let client = reqwest::blocking::Client::builder()
+        .tls_backend_preconfigured(tls_config())
         .connect_timeout(Duration::from_secs(30))
         // The whole-request timeout would cap a multi-GB download; a
         // stalled body read is caught by the connection's own timeouts

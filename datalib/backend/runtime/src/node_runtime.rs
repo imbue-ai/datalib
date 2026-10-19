@@ -179,17 +179,12 @@ pub fn manifest() -> Result<&'static Manifest, FetchOutcome> {
         .map_err(Clone::clone)
 }
 
-/// Where fetched runtimes live: `$XDG_CACHE_HOME/datalib/runtime`, else
-/// `~/.cache/datalib/runtime` — beside qmd's model cache, and the same
-/// on every platform. A cache directory rather than the data root so
-/// two roots on one machine share one copy and the `latchkey` launcher
-/// can find it with no data root in hand.
+/// Where fetched runtimes live: `runtime/` in the machine cache
+/// ([`crate::cache`]), beside qmd's model cache. A cache directory rather
+/// than the data root so two roots on one machine share one copy and the
+/// `latchkey` launcher can find it with no data root in hand.
 pub fn runtime_cache_dir() -> Option<PathBuf> {
-    let base = match std::env::var_os("XDG_CACHE_HOME") {
-        Some(xdg) if !xdg.is_empty() => PathBuf::from(xdg),
-        _ => PathBuf::from(std::env::var_os("HOME")?).join(".cache"),
-    };
-    Some(base.join("datalib").join("runtime"))
+    Some(crate::cache::cache_dir()?.join("runtime"))
 }
 
 /// The tree a manifest's CPU runtime unpacks into: named by the asset's
