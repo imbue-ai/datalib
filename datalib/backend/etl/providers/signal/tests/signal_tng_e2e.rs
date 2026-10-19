@@ -453,14 +453,27 @@ async fn fetch_once(snapshot_root: &Path, store: &Path, cache: &Path) -> Result<
         .map(|_| ())
 }
 
-/// One fetch and its commit: `None` when the run changed nothing.
+/// One fetch and its closing commit: HEAD after it, or `None` when the
+/// run changed nothing.
 async fn fetch_with(
     snapshot_root: &Path,
     store: &Path,
     cache: &Path,
     control: DownloadControl,
 ) -> Result<Option<String>> {
+    fetch_summary(snapshot_root, store, cache, control)
+        .await
+        .map(|(_, moved)| moved)
+}
+
+async fn fetch_summary(
+    snapshot_root: &Path,
+    store: &Path,
+    cache: &Path,
+    control: DownloadControl,
+) -> Result<(ingest::FetchSummary, Option<String>)> {
     let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(store)).await?;
+    let before = head(db.pool()).await;
     let summary = ingest::fetch(FetchOptions {
         db: db.clone(),
         cache: FingerprintCache::open(cache).await?,
@@ -472,9 +485,17 @@ async fn fetch_with(
     })
     .await;
     // The CAS beside it is plain SQLite and commits as it writes.
-    let committed = datalib_etl::doltlite_raw::commit_run(db.pool(), "test download").await?;
+    datalib_etl::doltlite_raw::commit_run(db.pool(), "test download").await?;
+    let after = head(db.pool()).await;
     db.close().await;
-    summary.map(|_| committed)
+    summary.map(|s| (s, (after != before).then_some(after)))
+}
+
+async fn head(pool: &sqlx::SqlitePool) -> String {
+    sqlx::query_scalar("SELECT commit_hash FROM dolt_log LIMIT 1")
+        .fetch_one(pool)
+        .await
+        .unwrap_or_default()
 }
 
 async fn problems(store: &Path) -> Result<Vec<(String, String)>> {
@@ -487,6 +508,15 @@ async fn problems(store: &Path) -> Result<Vec<(String, String)>> {
 }
 
 fn write_frames(root: &Path, name: &str, frames: &[backup::Frame]) -> Result<()> {
+    write_frames_at(root, name, 12442118400000, frames)
+}
+
+fn write_frames_at(
+    root: &Path,
+    name: &str,
+    backup_time_ms: u64,
+    frames: &[backup::Frame],
+) -> Result<()> {
     write_snapshot(
         &root.join(name),
         &SnapshotInput {
@@ -496,7 +526,7 @@ fn write_frames(root: &Path, name: &str, frames: &[backup::Frame]) -> Result<()>
             main_iv: &[0u8; 16],
             backup_info: backup::BackupInfo {
                 version: 1,
-                backup_time_ms: 12442118400000,
+                backup_time_ms,
                 ..Default::default()
             },
             frames,
@@ -859,6 +889,320 @@ async fn reading_an_unchanged_backup_again_commits_nothing() -> Result<()> {
     assert_eq!(
         second, None,
         "reading an unchanged backup again changes nothing in the store"
+    );
+    Ok(())
+}
+
+// ── A folder of snapshots ─────────────────────────────────────────────
+
+const DAY_MS: u64 = 86_400_000;
+/// 2364-04-11 00:00:00 UTC.
+const APRIL_11_MS: u64 = 12442118400000;
+
+/// The snapshot Signal would write `day` days after April 11th, named and
+/// dated as Signal names and dates it.
+fn write_day(root: &Path, day: u64, frames: &[backup::Frame]) -> Result<String> {
+    let name = format!("signal-backup-2364-04-{:02}-00-00-00", 11 + day);
+    write_frames_at(root, &name, APRIL_11_MS + day * DAY_MS, frames)?;
+    Ok(name)
+}
+
+fn bridge_crew() -> Vec<backup::Frame> {
+    vec![
+        recipient_self(1, "Jean-Luc Picard"),
+        recipient_contact(2, "Will Riker", 17015550101),
+        chat_frame(100, 2),
+    ]
+}
+
+/// `(first line of message, date)` of every snapshot commit, oldest first.
+async fn backup_log(store: &Path) -> Result<Vec<(String, String)>> {
+    let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(store)).await?;
+    let mut rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT message, date FROM dolt_log WHERE message LIKE 'download signal: backup %'",
+    )
+    .fetch_all(db.pool())
+    .await?;
+    db.close().await;
+    rows.reverse();
+    Ok(rows
+        .into_iter()
+        .map(|(m, d)| (m.lines().next().unwrap_or("").to_string(), d))
+        .collect())
+}
+
+async fn texts(store: &Path) -> Result<Vec<String>> {
+    let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(store)).await?;
+    let rows: Vec<String> = sqlx::query_scalar(
+        "SELECT (SELECT value FROM json_tree(payload) WHERE key = 'body') FROM chat_items ORDER BY id",
+    )
+    .fetch_all(db.pool())
+    .await?;
+    db.close().await;
+    Ok(rows)
+}
+
+/// Only the newest snapshot was read, so a folder of daily backups left
+/// no history to diff: a message lost or changed between two backups was
+/// invisible. Each is now a commit, dated when it was taken, and the
+/// diff between two of them names what went and what changed.
+#[tokio::test(flavor = "multi_thread")]
+async fn each_backup_is_a_commit_and_two_diff_to_show_what_was_lost() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let snapshots = tmp.path().join("snapshots");
+    let store = tmp.path().join("raw").join("signal");
+    let cache = tmp.path().join("fingerprints.sqlite");
+
+    let status = chat_item(100, 1, 12442118400000, "Status report.", true);
+    let green = chat_item(100, 2, 12442118460000, "All decks at green status.", false);
+    let vessel = chat_item(100, 2, 12442118520000, "Sensors detect a vessel.", false);
+    let mut day0 = bridge_crew();
+    day0.extend([status.clone(), green.clone()]);
+    let mut day1 = day0.clone();
+    day1.push(vessel);
+    // Day two: Riker's green-status message is gone, and Picard's report
+    // says something else under the same id.
+    let mut day2 = bridge_crew();
+    day2.push(chat_item(
+        100,
+        1,
+        12442118400000,
+        "Status report, Number One.",
+        true,
+    ));
+    day2.push(chat_item(
+        100,
+        2,
+        12442118520000,
+        "Sensors detect a vessel.",
+        false,
+    ));
+    // Written newest first, so directory order is not what orders them.
+    let names = [
+        write_day(&snapshots, 2, &day2)?,
+        write_day(&snapshots, 0, &day0)?,
+        write_day(&snapshots, 1, &day1)?,
+    ];
+
+    let (summary, moved) =
+        fetch_summary(&snapshots, &store, &cache, DownloadControl::default()).await?;
+    assert!(moved.is_some());
+    assert_eq!(summary.backups_found, 3);
+    assert_eq!(
+        summary.backups_read,
+        [names[1].as_str(), &names[2], &names[0]]
+    );
+    assert_eq!(
+        backup_log(&store).await?,
+        [
+            (
+                format!("download signal: backup {}", names[1]),
+                "2364-04-11 00:00:00".to_string()
+            ),
+            (
+                format!("download signal: backup {}", names[2]),
+                "2364-04-12 00:00:00".to_string()
+            ),
+            (
+                format!("download signal: backup {}", names[0]),
+                "2364-04-13 00:00:00".to_string()
+            ),
+        ]
+    );
+    assert_eq!(
+        texts(&store).await?,
+        ["Status report, Number One.", "Sensors detect a vessel."],
+        "HEAD holds the newest backup"
+    );
+
+    let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(&store)).await?;
+    let hashes: Vec<String> = sqlx::query_scalar(
+        "SELECT commit_hash FROM dolt_log WHERE message LIKE 'download signal: backup %' \
+          ORDER BY date",
+    )
+    .fetch_all(db.pool())
+    .await?;
+    let diff: Vec<(String, String)> = sqlx::query_as(
+        "SELECT diff_type, coalesce(to_id, from_id) FROM dolt_diff_chat_items(?, ?) \
+          ORDER BY 2",
+    )
+    .bind(&hashes[1])
+    .bind(&hashes[2])
+    .fetch_all(db.pool())
+    .await?;
+    // The bookkeeping of a row a day did not change is not written again,
+    // so the day's commit holds only what changed.
+    let restamped: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM dolt_diff_chat_items_bookkeeping(?, ?)")
+            .bind(&hashes[0])
+            .bind(&hashes[1])
+            .fetch_one(db.pool())
+            .await?;
+    db.close().await;
+    let id = |author: &str, sent: i64| ingest::schema_raw::chat_item_id_recipe("100", author, sent);
+    assert_eq!(
+        diff,
+        [
+            ("modified".to_string(), id("1", 12442118400000)),
+            ("removed".to_string(), id("2", 12442118460000)),
+        ]
+    );
+    assert_eq!(restamped, 1, "only the vessel message is new on day one");
+
+    // Nothing new: the next run reads nothing and commits nothing.
+    let (again, moved) =
+        fetch_summary(&snapshots, &store, &cache, DownloadControl::default()).await?;
+    assert!(again.backups_read.is_empty());
+    assert_eq!(moved, None);
+    Ok(())
+}
+
+/// A backup older than the newest one held, found late, is read like any
+/// other; HEAD then returns to the newest, so the store never ends on
+/// the past.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_late_older_backup_is_read_and_the_newest_put_back_on_top() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let snapshots = tmp.path().join("snapshots");
+    let store = tmp.path().join("raw").join("signal");
+    let cache = tmp.path().join("fingerprints.sqlite");
+    let mut newer = bridge_crew();
+    newer.push(chat_item(100, 1, 12442118400000, "Make it so.", true));
+    let newest = write_day(&snapshots, 2, &newer)?;
+    fetch_once(&snapshots, &store, &cache).await?;
+
+    let mut older = bridge_crew();
+    older.push(chat_item(100, 2, 12442118460000, "Engage.", false));
+    let late = write_day(&snapshots, 0, &older)?;
+    let (summary, _) =
+        fetch_summary(&snapshots, &store, &cache, DownloadControl::default()).await?;
+    assert_eq!(summary.backups_read, [late.as_str(), &newest]);
+    assert_eq!(texts(&store).await?, ["Make it so."]);
+    let log = backup_log(&store).await?;
+    assert_eq!(log.len(), 3, "{log:?}");
+    assert!(
+        log[2]
+            .0
+            .ends_with("read again to put the newest back on top"),
+        "{log:?}"
+    );
+
+    // HEAD is on the newest now, so nothing is read again.
+    let (summary, moved) =
+        fetch_summary(&snapshots, &store, &cache, DownloadControl::default()).await?;
+    assert!(summary.backups_read.is_empty());
+    assert_eq!(moved, None);
+    Ok(())
+}
+
+/// Reading an older backup on top of one that has left the folder would
+/// delete from HEAD what only the newer one held, and read as data loss.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_newest_backup_gone_from_the_folder_leaves_head_alone() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let snapshots = tmp.path().join("snapshots");
+    let store = tmp.path().join("raw").join("signal");
+    let cache = tmp.path().join("fingerprints.sqlite");
+    let mut older = bridge_crew();
+    older.push(chat_item(100, 1, 12442118400000, "Status report.", true));
+    let mut newer = older.clone();
+    newer.push(chat_item(
+        100,
+        2,
+        12442118460000,
+        "All decks at green status.",
+        false,
+    ));
+    write_day(&snapshots, 0, &older)?;
+    let gone = write_day(&snapshots, 1, &newer)?;
+    fetch_once(&snapshots, &store, &cache).await?;
+
+    std::fs::remove_dir_all(snapshots.join(&gone))?;
+    fetch_once(&snapshots, &store, &cache).await?;
+    assert_eq!(texts(&store).await?.len(), 2);
+    assert_eq!(
+        problems(&store).await?,
+        [(
+            format!("record:ingested_backups:{gone}"),
+            "error".to_string()
+        )]
+    );
+    Ok(())
+}
+
+/// One backup that will not open costs that backup, not the folder: the
+/// rest are read, and it is retried on the next run.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_backup_that_will_not_open_is_a_problem_and_the_rest_are_read() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let snapshots = tmp.path().join("snapshots");
+    let store = tmp.path().join("raw").join("signal");
+    let cache = tmp.path().join("fingerprints.sqlite");
+    let mut frames = bridge_crew();
+    frames.push(chat_item(100, 1, 12442118400000, "Status report.", true));
+    let good = write_day(&snapshots, 0, &frames)?;
+    let broken = write_day(&snapshots, 1, &frames)?;
+    std::fs::write(snapshots.join(&broken).join("main"), b"not a backup")?;
+    let unsynced = write_day(&snapshots, 2, &frames)?;
+    std::fs::remove_file(snapshots.join(&unsynced).join("files"))?;
+
+    let (summary, _) =
+        fetch_summary(&snapshots, &store, &cache, DownloadControl::default()).await?;
+    assert_eq!(summary.backups_read, [good.as_str()]);
+    assert_eq!(
+        problems(&store).await?,
+        [
+            (
+                format!("record:ingested_backups:{broken}"),
+                "error".to_string()
+            ),
+            (
+                format!("record:ingested_backups:{unsynced}"),
+                "error".to_string()
+            ),
+        ]
+    );
+
+    // The folder finishes syncing: that backup reads, and its problem goes.
+    write_day(&snapshots, 2, &frames)?;
+    fetch_once(&snapshots, &store, &cache).await?;
+    assert_eq!(
+        problems(&store).await?,
+        [(
+            format!("record:ingested_backups:{broken}"),
+            "error".to_string()
+        )]
+    );
+    Ok(())
+}
+
+/// A passphrase that opens none of the backups is not one problem per
+/// backup: the run fails, and says why.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_passphrase_that_opens_nothing_fails_the_run() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let snapshots = tmp.path().join("snapshots");
+    let store = tmp.path().join("raw").join("signal");
+    let cache = tmp.path().join("fingerprints.sqlite");
+    write_day(&snapshots, 0, &bridge_crew())?;
+    write_day(&snapshots, 1, &bridge_crew())?;
+
+    let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(&store)).await?;
+    let run = ingest::fetch(FetchOptions {
+        db: db.clone(),
+        cache: FingerprintCache::open(&cache).await?,
+        snapshot_root: snapshots.clone(),
+        files_root: None,
+        aep: "1".repeat(64),
+        progress: Progress::noop(),
+        control: DownloadControl::default(),
+    })
+    .await;
+    db.close().await;
+    let err = format!("{:#}", run.expect_err("no backup opens"));
+    assert!(
+        err.contains("no Signal backup this run tried would read"),
+        "{err}"
     );
     Ok(())
 }

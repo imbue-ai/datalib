@@ -1521,7 +1521,7 @@ export const CATALOG: CatalogEntry[] = [
         required: true,
         target: "backup.path",
         label: "Backup folder",
-        help: "The folder holding your signal-backup-* files. The newest one in it is the one read.",
+        help: "The folder holding your signal-backup-* files. Each one is kept as a version, so you can see what changed from one backup to the next.",
       },
       {
         kind: "text",
