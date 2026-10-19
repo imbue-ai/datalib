@@ -8,7 +8,6 @@ rust_library(
         "src/grid_rows_builder.rs",
         "src/edges.rs",
         "src/search_terms.rs",
-        "src/supplied_search_terms.rs",
         "src/markdowns.rs",
         "src/providers.rs",
         "src/source_cursors.rs",
@@ -35,6 +34,7 @@ rust_library(
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:blake3",
         "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:strum",
     ],
@@ -45,7 +45,4 @@ rust_test(
     size = "small",
     crate = ":datalib_schema",
     edition = "2021",
-    deps = [
-        "@datalib_crates//:serde_json",
-    ],
 )

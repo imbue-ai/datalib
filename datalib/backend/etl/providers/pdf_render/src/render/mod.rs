@@ -331,7 +331,6 @@ fn render_one(
         render_version: RENDER_VERSION,
         rows,
         sections: Vec::new(),
-        search_terms: Vec::new(),
         edges: Vec::new(),
         contacts: Vec::new(),
         problems,

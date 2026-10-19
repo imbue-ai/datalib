@@ -269,8 +269,13 @@ async fn render_cast(root: &Path) -> HashSet<(String, SearchTermKind, String)> {
 
     let supplied = docs
         .iter()
-        .flat_map(|md| &md.search_terms)
-        .map(|t| (t.uuid.clone(), t.kind, t.value.clone()))
+        .flat_map(|md| &md.rows)
+        .flat_map(|row| {
+            row.supplied_terms()
+                .unwrap()
+                .into_iter()
+                .map(|t| (row.uuid.clone(), t.kind, t.value))
+        })
         .collect();
     let pool = open_index(&datalib_runtime::layout::grid_index_db(root))
         .await

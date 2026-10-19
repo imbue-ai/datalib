@@ -379,6 +379,31 @@ sorted and `|`-joined. A non-NULL `diff_status` is the one thing that
 says a row came from a diff tree; nothing else about the row changes —
 `provider` is still the source's, so its icon and CSS apply.
 
+### `supplied_terms`
+
+What a row answers to in search that its other columns do not say:
+who an email went to, who a message mentions, which labels it is filed
+under, who took part in a conversation (on the document's own row),
+who a contact's card is about. A JSON array of `[kind, value]` pairs,
+sorted and each once, so an unchanged row writes the same bytes; NULL
+when there are none. A renderer sets it with
+`GridRow::set_supplied_terms` and reads it back with
+`GridRow::supplied_terms`.
+
+**Nothing searches this column.** SQLite cannot index the elements of
+a JSON array, so the search bar never looks inside it. After each
+`grid_index` pass the search terms file (`search_terms.sqlite`,
+`etl/render/src/search_terms.rs`) melts every changed row into one
+indexed row per term, these together with the terms its other columns
+give (`search_terms_of`). The wide row is what is stored; the tall,
+indexed form is derived from it.
+
+The terms live on the row so that they go wherever the row goes. When
+a row moves to another document, the document that takes it over
+writes the row and its terms in one step. A table of their own, owned
+by document, leaves a moved row's terms behind with the document it
+left, and every full read of that store then fails (#1202).
+
 ## Storage rows: what a source weighs
 
 Every source's render wave ends by measuring its own raw store and

@@ -412,7 +412,6 @@ fn to_rendered(id: &str, doc: &Doc, md_path: PathBuf, version: u32) -> RenderedM
         render_version: version,
         rows,
         sections: Vec::new(),
-        search_terms: Vec::new(),
         edges,
         contacts: Vec::new(),
         problems: Vec::new(),

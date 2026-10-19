@@ -1441,9 +1441,14 @@ class IngestedTngPipelineTest(unittest.TestCase):
             self._diff_rows_by_text(SLACK_DIFF_GROUP, "raising shields"),
             [
                 ("Slack Message", "modified", "byte_size|content_hash|preview"),
-                ("Slack Thread", "modified", "byte_size|content_hash|preview"),
+                (
+                    "Slack Thread",
+                    "modified",
+                    "byte_size|content_hash|preview|supplied_terms",
+                ),
             ],
-            "the edited message names its text (and its length), and its thread follows",
+            "the edited message names its text (and its length), and its thread "
+            "follows, its participants joined by the new reaction's author",
         )
         self.assertEqual(
             self._diff_rows_by_text(SLACK_DIFF_GROUP, "Warbird, decloaking"),
@@ -1452,10 +1457,14 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 (
                     "Slack Thread",
                     "modified",
-                    "byte_size|content_hash|item_count|modified_at|preview|touched_at",
+                    (
+                        "byte_size|content_hash|item_count|modified_at|preview"
+                        "|supplied_terms|touched_at"
+                    ),
                 ),
             ],
-            "the reply added to the grown thread, whose own row grew with it",
+            "the reply added to the grown thread, whose own row grew with it "
+            "and names the reply's author among those who took part",
         )
         status_report = self._markdown(SLACK_DIFF_GROUP, "Warbird, decloaking")
         self.assertEqual(

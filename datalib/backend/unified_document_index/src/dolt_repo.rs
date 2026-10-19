@@ -23,7 +23,7 @@ use crate::search::SearchRow;
 use crate::sort::{default_order, order_by, Sort};
 use crate::terms_keys::ATTACHED_AS;
 use datalib_core::repo::RepoError;
-use datalib_pin::{is_missing_table, open_reader};
+use datalib_pin::{is_missing_table, missing_schema, open_reader, Missing};
 use datalib_query::table::{Column, SearchTable};
 use datalib_schema::edges::EdgeRow;
 use datalib_schema::grid_rows::GridRowColumn;
@@ -116,15 +116,17 @@ async fn add_subject_people<'r>(
     let wanted = serde_json::to_string(&docs)
         .map_err(|e| RepoError::Internal(format!("encode documents: {e}")))?;
     let found: Vec<(String, String, Option<String>, Option<i64>)> = match sqlx::query_as(
-        "SELECT t.markdown_uuid, t.value, MAX(c.name), MAX(c.seen_items) \
-           FROM supplied_search_terms t \
+        // A document's own row has the document's uuid; its supplied
+        // terms are `[kind, value]` pairs.
+        "SELECT g.uuid, json_extract(t.value, '$[1]') AS person, MAX(c.name), MAX(c.seen_items) \
+           FROM grid_rows g, json_each(g.supplied_terms) t \
            LEFT JOIN source_contact_handles h \
-             ON h.markdown_uuid = t.markdown_uuid AND h.handle = t.value \
+             ON h.markdown_uuid = g.uuid AND h.handle = json_extract(t.value, '$[1]') \
            LEFT JOIN source_contacts c \
              ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key \
-          WHERE t.kind = ? AND t.uuid = t.markdown_uuid \
-            AND t.markdown_uuid IN (SELECT value FROM json_each(?)) \
-          GROUP BY t.markdown_uuid, t.value",
+          WHERE g.uuid IN (SELECT value FROM json_each(?2)) \
+            AND json_extract(t.value, '$[0]') = ?1 \
+          GROUP BY g.uuid, person",
     )
     .bind(datalib_schema::search_terms::SearchTermKind::Subject.as_str())
     .bind(wanted)
@@ -132,7 +134,11 @@ async fn add_subject_people<'r>(
     .await
     {
         Ok(found) => found,
-        Err(e) if is_missing_table(&e, "supplied_search_terms") => return Ok(()),
+        Err(e) if is_missing_table(&e, "source_contact_handles") => return Ok(()),
+        // An index an older build wrote, until `grid_index` rebuilds it.
+        Err(e) if matches!(missing_schema(&e), Some(Missing::Column(c)) if c.ends_with("supplied_terms")) => {
+            return Ok(())
+        }
         Err(e) => return Err(RepoError::Internal(format!("read subject people: {e}"))),
     };
     let mut people: std::collections::HashMap<String, Vec<crate::search::SubjectPerson>> =
