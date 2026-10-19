@@ -1457,8 +1457,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 (
                     "Slack Thread",
                     "modified",
-                    "byte_size|content_hash|item_count|modified_at|preview"
-                    "|supplied_terms|touched_at",
+                    (
+                        "byte_size|content_hash|item_count|modified_at|preview"
+                        "|supplied_terms|touched_at"
+                    ),
                 ),
             ],
             "the reply added to the grown thread, whose own row grew with it "
