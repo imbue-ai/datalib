@@ -788,9 +788,13 @@ join back, 27 ms and 6 ms.
   sidecar. **A plain SQLite file takes the mode it is asked for**, as
   stock SQLite does: `wal` marks its header WAL, `delete` keeps a
   rollback journal (dolthub/doltlite#3740, fixed in 0.50.16; before
-  that a plain file always kept a rollback journal). Our own plain
-  stores ask for `delete`, so by SQLite's rules a reader of one waits
-  while its writer commits (not measured here). `synchronous`
+  that a plain file always kept a rollback journal). The run store
+  asks for `wal`, because in a rollback journal its readers waited out
+  every commit (measured in [`logging.md`](logging.md) § One store);
+  our other plain stores ask for `delete`. On a WAL file, doltlite's
+  reset (`SQLITE_DBCONFIG_RESET_DATABASE`, then `VACUUM`) waits for
+  every other connection to close, where stock SQLite resets with an
+  idle one open. `synchronous`
   at anything above `OFF` syncs every commit (upstream
   `doc/doltlite/pragmas.md`).
 - **Doltlite reads a WAL another program wrote.** A plain SQLite

@@ -9,7 +9,7 @@ page is the map.
 ## One store
 
 Everything any datalib process says lands in one file,
-`<data_root>/system/runs/runs.sqlite` — plain SQLite in rollback-journal mode, so
+`<data_root>/system/runs/runs.sqlite` — plain SQLite in WAL mode, so
 `sqlite3` opens it and two writers share it through SQLite's own
 locking. The runner writes it during a run; `datalib-http` writes it
 for the life of the server. The tables:
@@ -43,10 +43,30 @@ it: a reader that opened the old file would stay on the deleted one,
 where no writer holds a lock, take the new file's journal for a crashed
 writer's and delete it — and the new writer's commit would fail. So
 the remake is SQLite's own reset, under the file's lock like any write
-(`open_or_recreate` in `datalib/backend/runs/src/store.rs`).
+(`open_or_recreate` in `datalib/backend/runs/src/store.rs`). In WAL
+mode doltlite's reset waits for every other connection to the file to
+close. Our reads open and close per call, in milliseconds; a process
+that held the file open past the ten-second wait (an older build's
+server, still running) would leave the remaking writer refused at its
+start.
 `runs_two_process_test` runs four writers
 at once — on a fresh root, and on one this build has to remake — and
 checks that every line published reaches the store.
+
+**A reader never waits on a writer.** That is what WAL buys. Every
+Manage answer, chip and log page reads this file while a sync writes
+it. In a rollback journal each of those reads queued behind each commit,
+and a disk busy with a sync and a build made a commit seconds long: a
+Manage answer took fifteen seconds, and the Sources card read as
+empty for all of it. On a copy of a real store, with two writers and
+the disk saturated, WAL cut a Manage answer's reads from a p95 of
+3.4–3.9 s to 1.0–1.2 s, and a commit's from 1.1 s to about 0.1 s.
+`reader_beside_a_writer` in `runs/tests/runs_tests/` holds the store to
+it: a read must be answered while a writer holds the write lock. A
+store an older build left in a rollback journal turns to WAL at its
+first open, rows and all. Recent rows can sit in `runs.sqlite-wal`
+until SQLite folds them into the main file, so copy the store with
+`sqlite3 … ".backup …"` or `VACUUM INTO`, never with `cp` alone.
 
 One thing this rests on: SQLite's file locking is not dependable on a
 network or file-syncing filesystem. **A data root belongs on local

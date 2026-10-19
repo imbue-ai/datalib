@@ -58,9 +58,11 @@ fn options(path: &Path, create: bool) -> SqliteConnectOptions {
     SqliteConnectOptions::new()
         .filename(datalib_runtime::plain_sqlite::uri(path))
         .create_if_missing(create)
-        // Rollback journal, the mode every existing file is in, so a
-        // reader waits out a writer's commit (`BUSY_TIMEOUT`).
-        .journal_mode(sqlx::sqlite::SqliteJournalMode::Delete)
+        // WAL, so a reader never waits on a writer. In a rollback
+        // journal every read queued behind every commit, which a busy
+        // disk made seconds long (docs/dev/logging.md § One store). A
+        // file in the old mode turns over at its first open.
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
         // Nothing here is load-bearing, so nothing is worth an fsync. A
         // file torn by a power cut is emptied and remade on the next
         // open (see `open_or_recreate`).
@@ -170,10 +172,11 @@ enum Emptying {
     /// `VACUUM`), which takes the file's lock like any write and works
     /// on a corrupt page.
     Reset,
-    /// Cut the file to nothing, and its journal with it. Doltlite reads
-    /// a file without SQLite's header as its own format and refuses the
-    /// reset, and it refuses every other connection's use of the file
-    /// the same way, so none can be reading or writing it.
+    /// Cut the file to nothing, and its journal and WAL with it.
+    /// Doltlite reads a file without SQLite's header as its own format
+    /// and refuses the reset, and it refuses every other connection's
+    /// use of the file the same way, so none can be reading or writing
+    /// it.
     Truncate,
 }
 
@@ -249,13 +252,15 @@ async fn empty_in_place(path: &Path, emptying: &Emptying) -> Result<(), sqlx::Er
     match emptying {
         Emptying::Reset => reset(path).await,
         Emptying::Truncate => {
-            let mut journal = path.as_os_str().to_os_string();
-            journal.push("-journal");
-            match std::fs::remove_file(journal) {
-                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                    return Err(sqlx::Error::Io(e))
+            for sidecar in ["-journal", "-wal", "-shm"] {
+                let mut file = path.as_os_str().to_os_string();
+                file.push(sidecar);
+                match std::fs::remove_file(file) {
+                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                        return Err(sqlx::Error::Io(e))
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
             std::fs::OpenOptions::new()
                 .write(true)
@@ -2059,12 +2064,15 @@ mod tests {
     }
 
     /// A store from another schema version, with a reader that opened
-    /// it before a writer remade it — `datalib-http`'s reads take no
-    /// lock. When the remake unlinked the file, the reader stayed on
+    /// it before a writer remade it — `datalib-http` opens one per
+    /// read. When the remake unlinked the file, the reader stayed on
     /// the old inode, took the new file's journal for a crashed
     /// writer's, rolled it back and deleted it, and the writer's commit
     /// failed with 5898 (`SQLITE_IOERR_DELETE_NOENT`). CI run
-    /// 36441513702 lost a whole writer's lines this way.
+    /// 36441513702 lost a whole writer's lines this way. In WAL mode
+    /// doltlite's reset waits for the reader to close, as a read does
+    /// within milliseconds; then a reader mid-transaction must not
+    /// cost the writer its commit.
     #[tokio::test]
     async fn a_reader_open_across_the_remake_leaves_the_writers_journal_alone() {
         let td = tempfile::tempdir().unwrap();
@@ -2083,7 +2091,29 @@ mod tests {
             .await
             .unwrap();
 
-        let writer = open_or_recreate(&path).await.unwrap();
+        let remake = tokio::spawn({
+            let path = path.clone();
+            async move { open_or_recreate(&path).await }
+        });
+        // The copy is the step before the reset, so the remake is at
+        // the reset when the reader goes.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !std::fs::read_dir(td.path()).unwrap().any(|e| {
+            e.unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("runs.bak_")
+        }) {
+            assert!(Instant::now() < deadline, "the remake never kept a copy");
+            tokio::task::yield_now().await;
+        }
+        reader.close().await;
+        let writer = remake
+            .await
+            .unwrap()
+            .expect("the remake, once the reader closed");
+
+        let reader = open_existing(&path).await.unwrap();
         let mut tx = writer.begin().await.unwrap();
         sqlx::query(
             "INSERT INTO log (process_id, attempt, ts_utc, level, msg) \
