@@ -326,6 +326,7 @@ kind* of failure this is, which drives retry policy:
 | `auth` | credentials need a human | fail fast |
 | `data` | bad input; retrying won't help | fail fast (default when absent) |
 | `cancelled` | you were interrupted | fail fast, exit code 130 convention |
+| `incomplete` | you gave up with work still owed, after committing what you got | fail fast: your own retries are what ran out, and the next run resumes |
 
 (`RetryPolicy` in `dag/src/scheduler.rs`.)
 

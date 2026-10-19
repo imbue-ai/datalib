@@ -333,10 +333,10 @@ impl Ctx<'_> {
     /// The give-up guard tripped: every further request would be refused
     /// the same way, so the run does no more of them.
     fn give_up(&self, at: &str, reason: &str) {
-        self.found.phase(
-            at,
-            format!("stopped at the rate limit; the rest is left for the next run: {reason}"),
-        );
+        let detail =
+            format!("stopped at the rate limit; the rest is left for the next run: {reason}");
+        self.found.phase(at, detail.clone());
+        self.found.gave_up(format!("{at}: {detail}"));
     }
 
     /// One row per org this credential cannot read, so the Manage row

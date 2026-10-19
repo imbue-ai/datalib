@@ -1719,7 +1719,7 @@ mod tests {
         let mut tail = ErrorTail::default();
         let warn =
             r#"{"level":"WARN","fields":{"message":"an entry was skipped"},"target":"takeout"}"#;
-        let recorded = r#"{"level":"ERROR","fields":{"message":"records were lost; each is a problems row","event":"problems_recorded","count":3},"target":"datalib_problems::recorded"}"#;
+        let recorded = r#"{"level":"ERROR","fields":{"message":"records are missing; each is a problems row","event":"problems_recorded","count":3},"target":"datalib_problems::recorded"}"#;
         let lines = [
             warn,
             warn,

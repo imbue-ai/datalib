@@ -47,8 +47,12 @@ impl RetryPolicy {
             FailureKind::Transient => self.transient_attempts,
             FailureKind::RateLimited => self.rate_limited_attempts,
             // Auth: a human has to act. Data: retrying won't help.
-            // Cancelled: the user asked us to stop.
-            FailureKind::Auth | FailureKind::Data | FailureKind::Cancelled => 1,
+            // Cancelled: the user asked us to stop. Incomplete: the
+            // step's own retries already ran out.
+            FailureKind::Auth
+            | FailureKind::Data
+            | FailureKind::Cancelled
+            | FailureKind::Incomplete => 1,
         }
     }
 }

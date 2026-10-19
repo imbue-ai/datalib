@@ -12,6 +12,11 @@ use crate::events::{Emitter, OutputClaim};
 /// chain. The scheduler's retry policy keys off the answer, so this is
 /// the runner's vocabulary rather than a label of our own.
 pub fn classify(e: &anyhow::Error) -> FailureKind {
+    if e.chain()
+        .any(|c| c.is::<datalib_etl::run_problems::GaveUp>())
+    {
+        return FailureKind::Incomplete;
+    }
     let s: String = e
         .chain()
         .map(|c| c.to_string())
@@ -304,6 +309,16 @@ mod tests {
         assert_eq!(classify(&tr), FailureKind::Transient);
         let other = anyhow::anyhow!("unparseable row 17");
         assert_eq!(classify(&other), FailureKind::Data);
+    }
+
+    /// A give-up says `timeout` or `HTTP 429` in its words; it is still
+    /// `incomplete`, never a kind the runner would retry at once (#1157).
+    #[test]
+    fn a_give_up_is_incomplete_whatever_its_words() {
+        let said = "HTTP 429 too many requests; stopped after 50 failed in a row";
+        let e = anyhow::Error::new(datalib_etl::run_problems::GaveUp(said.to_string()))
+            .context("source tng-mail");
+        assert_eq!(classify(&e), FailureKind::Incomplete);
     }
 
     #[test]

@@ -267,7 +267,7 @@ pub struct Drained {
 
 /// Fetch `owed` through `f`. The loop ends early on a stop, after
 /// `Loop::failures_in_a_row` fruitless requests, or on a terminal error;
-/// the last two are a `phase:` row and `cut_short`. However it ends,
+/// the last two are a `phase:` row and a give-up. However it ends,
 /// what was answered is written. An abort is returned after that.
 pub async fn drain<T: Send, F: Fetcher<T>>(
     l: &Loop<'_>,
@@ -446,14 +446,12 @@ async fn write<T: Send, F: Fetcher<T>>(
 
 fn give_up(l: &Loop<'_>, done: &Drained, why: &str, said: &str) {
     // The problem's sample shows eighty characters: the cause first.
-    l.found.phase(
-        l.phase,
-        format!(
-            "{said}; stopped after {why}: {} fetched, {} left for the next run",
-            done.got, done.left
-        ),
+    let detail = format!(
+        "{said}; stopped after {why}: {} fetched, {} left for the next run",
+        done.got, done.left
     );
-    l.found.cut_short();
+    l.found.phase(l.phase, detail.clone());
+    l.found.gave_up(format!("{}: {detail}", l.phase));
 }
 
 /// Every record of `asked` with its outcome, the ones `fetch` said
@@ -474,6 +472,7 @@ fn with_the_unanswered<T>(asked: Vec<Listed>, answered: Vec<Fetched<T>>) -> Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datalib_etl::run_problems::noting_give_up;
     use datalib_problems::Reason;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
@@ -782,7 +781,9 @@ mod tests {
             .collect();
         let mut f = Scripted::all_got();
         f.stop = Some(stop.clone());
-        let drained = drain(&l, listing.clone(), &f).await.unwrap();
+        let (drained, gave_up) = noting_give_up(drain(&l, listing.clone(), &f)).await;
+        let drained = drained.unwrap();
+        assert_eq!(gave_up, None, "a stop is not a give-up");
         assert_eq!(
             drained.got, 1,
             "the request that saw the stop still answered"
@@ -796,7 +797,8 @@ mod tests {
     }
 
     /// Fruitless requests in a row end the run's loop with one `phase:`
-    /// row and leave the rest owed; a terminal error does the same at
+    /// row, leave the rest owed and say so to the step, which then ends
+    /// `incomplete` rather than `succeeded` (#1157); a terminal error does the same at
     /// once and is handed back; an abort writes what came and returns
     /// the error.
     #[tokio::test]
@@ -813,8 +815,12 @@ mod tests {
         let l = a_loop(&pool, &stop, &found, 1, 2);
         let mut f = Scripted::all_got();
         f.batch_error = Some(|| BatchError::Batch(anyhow::anyhow!("HTTP 503")));
-        let drained = drain(&l, listing.clone(), &f).await.unwrap();
+        let (drained, gave_up) = noting_give_up(drain(&l, listing.clone(), &f)).await;
+        let drained = drained.unwrap();
         assert_eq!((drained.failed, drained.left), (2, 2));
+        let gave_up = gave_up.expect("a give-up is said to the step, which ends incomplete");
+        assert!(gave_up.contains("things: HTTP 503"), "{gave_up}");
+        assert!(gave_up.contains("2 left"), "{gave_up}");
         let phases = found.run_problems();
         assert_eq!(phases.len(), 1);
         assert_eq!(phases[0].key(), "phase:things");

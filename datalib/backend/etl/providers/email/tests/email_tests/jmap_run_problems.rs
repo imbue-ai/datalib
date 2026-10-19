@@ -4,6 +4,7 @@
 //! landed; and each row clears only once the thing it is about is tried
 //! again and works.
 
+use datalib_etl::run_problems::noting_give_up;
 use datalib_etl_email::ingest::{FetchOptions, FetchSummary, RawDb};
 
 use crate::jmap_tape::{mailbox_get_args, query_args, status, Account, Tape, HOST};
@@ -103,8 +104,9 @@ async fn a_refused_download_stops_the_phase_and_keeps_what_downloaded() {
 }
 
 /// Twenty downloads failing in a row end the phase the same way: the
-/// bodies before them are kept, each failure keeps its own row, and the
-/// bodies the phase never asked for are downloaded by the next run.
+/// bodies before them are kept, each failure keeps its own row, the step
+/// is told the run gave up, and the bodies the phase never asked for are
+/// downloaded by the next run.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_run_of_failed_downloads_stops_the_phase_and_keeps_what_downloaded() {
     let m = Mirror::new();
@@ -115,10 +117,14 @@ async fn a_run_of_failed_downloads_stops_the_phase_and_keeps_what_downloaded() {
     for id in &ids[3..23] {
         tape.blob(id, status(404));
     }
-    let first = run(&m, |o| o.blob_download_concurrency = Some(1))
-        .await
-        .expect("a spent failure budget keeps the run's work");
+    let (first, gave_up) = noting_give_up(run(&m, |o| o.blob_download_concurrency = Some(1))).await;
+    let first = first.expect("a spent failure budget keeps the run's work");
     assert_eq!(first.blobs_downloaded, 3, "{first:?}");
+    // The step ends `incomplete`, not `succeeded`, once this is committed
+    // (#1157).
+    let gave_up = gave_up.expect("the give-up is said to the step");
+    assert!(gave_up.starts_with("eml_download: "), "{gave_up}");
+    assert!(gave_up.contains("2 left for the next run"), "{gave_up}");
     let stored = blobs(&m).await;
     assert_eq!(
         stored.iter().filter(|(_, landed)| *landed).count(),
@@ -139,7 +145,9 @@ async fn a_run_of_failed_downloads_stops_the_phase_and_keeps_what_downloaded() {
     );
 
     tape.serve(&Account::new(&[("MB1", "Inbox")], &mail));
-    let second = run(&m, |_| {}).await.expect("second run");
+    let (second, gave_up) = noting_give_up(run(&m, |_| {})).await;
+    let second = second.expect("second run");
+    assert_eq!(gave_up, None, "a run that finished did not give up");
     assert_eq!(second.blobs_downloaded, 22, "{second:?}");
     assert!(blobs(&m).await.iter().all(|(_, landed)| *landed));
     assert!(problems(&m).await.is_empty(), "{:?}", problems(&m).await);
