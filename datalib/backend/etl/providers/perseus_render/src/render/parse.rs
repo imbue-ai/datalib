@@ -254,8 +254,7 @@ fn parse_one(path: &Path) -> Result<FlatMap> {
                     continue;
                 }
                 if let Some(top) = stack.last_mut() {
-                    let decoded = t.decode().with_context(|| "decoding TEI text node")?;
-                    push_normalized(&mut top.text, &decoded);
+                    push_normalized(&mut top.text, &t);
                 }
             }
             Ok(Event::GeneralRef(r)) => {
@@ -271,8 +270,7 @@ fn parse_one(path: &Path) -> Result<FlatMap> {
                     continue;
                 }
                 if let Some(top) = stack.last_mut() {
-                    let s = std::str::from_utf8(&c).unwrap_or("");
-                    push_normalized(&mut top.text, s);
+                    push_normalized(&mut top.text, &c);
                 }
             }
             Ok(Event::Empty(_)) => {}
@@ -301,9 +299,9 @@ impl DivFrame {
             let val = datalib_etl::xml::attr_value(&attr)
                 .map(|v| v.into_owned())
                 .unwrap_or_default();
-            if key == b"subtype" {
+            if key == "subtype" {
                 f.subtype = val;
-            } else if key == b"n" {
+            } else if key == "n" {
                 f.n = val;
             }
         }
@@ -399,13 +397,12 @@ fn read_cts(input_path: &Path) -> Result<BTreeMap<String, (String, String)>> {
             }
             Ok(Event::Text(t)) => {
                 if !sink.is_empty() {
-                    let decoded = t.decode().unwrap_or_default();
                     let target = if sink == "label" {
                         &mut label
                     } else {
                         &mut description
                     };
-                    target.push_str(&decoded);
+                    target.push_str(&t);
                 }
             }
             Ok(Event::GeneralRef(r)) => {
@@ -451,9 +448,9 @@ fn edition_attrs(e: &BytesStart) -> (String, String) {
         let val = datalib_etl::xml::attr_value(&attr)
             .map(|v| v.into_owned())
             .unwrap_or_default();
-        if key == b"urn" {
+        if key == "urn" {
             urn = val;
-        } else if key.ends_with(b"lang") {
+        } else if key.ends_with("lang") {
             lang = val;
         }
     }
@@ -489,17 +486,16 @@ fn attribution(desc: &str) -> Option<String> {
     None
 }
 
-fn local_name_bytes(name: &[u8]) -> &str {
-    let local = name.rsplit(|b| *b == b':').next().unwrap_or(name);
-    std::str::from_utf8(local).unwrap_or("")
+fn local_part(name: &str) -> &str {
+    name.rsplit(':').next().unwrap_or(name)
 }
 
 fn local_name(e: &BytesStart<'_>) -> String {
-    local_name_bytes(e.name().as_ref()).to_string()
+    local_part(e.name().as_ref()).to_string()
 }
 
 fn local_name_end(e: &quick_xml::events::BytesEnd<'_>) -> String {
-    local_name_bytes(e.name().as_ref()).to_string()
+    local_part(e.name().as_ref()).to_string()
 }
 
 fn push_normalized(buf: &mut String, s: &str) {
@@ -636,6 +632,50 @@ mod tests {
             parsed.editions[0].title,
             "History of the Peloponnesian War — Crawley"
         );
+    }
+
+    /// TEI is UTF-8. An edition with a byte that is not (here Latin-1's
+    /// `í`) fails the parse and names the file, rather than rendering
+    /// with the text missing.
+    #[test]
+    fn an_edition_that_is_not_utf8_fails_naming_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut body = TINY_GRC
+            .replace("Θουκυδίδης Ἀθηναῖος ξυνέγραψε.", "Thucyd@des wrote.")
+            .into_bytes();
+        let at = body.iter().position(|&b| b == b'@').unwrap();
+        body[at] = 0xED;
+        std::fs::write(
+            dir.path()
+                .join(format!("{TLG_FILE_PREFIX}perseus-eng6.xml")),
+            body,
+        )
+        .unwrap();
+        let e = format!("{:#}", parse(dir.path()).unwrap_err());
+        assert!(e.contains("perseus-eng6.xml"), "{e}");
+    }
+
+    /// The same for the CTS metadata: a label that is not UTF-8 fails
+    /// the parse by name instead of quietly losing the title.
+    #[test]
+    fn a_cts_file_that_is_not_utf8_fails_naming_it() {
+        let dir = tempfile::tempdir().unwrap();
+        write_edition(dir.path(), "perseus-eng6", TINY_GRC);
+        let mut cts = br#"<?xml version="1.0"?>
+<ti:work xmlns:ti="http://chs.harvard.edu/xmlns/cts" urn="urn:cts:greekLit:tlg0003.tlg001">
+  <ti:translation urn="urn:cts:greekLit:tlg0003.tlg001.perseus-eng6" xml:lang="eng">
+    <ti:label xml:lang="eng">Thucyd@des</ti:label>
+  </ti:translation>
+</ti:work>"#
+            .to_vec();
+        let at = cts.iter().position(|&b| b == b'@').unwrap();
+        cts[at] = 0xED;
+        std::fs::write(dir.path().join("__cts__.xml"), cts).unwrap();
+        let e = match parse(dir.path()) {
+            Ok(p) => panic!("parsed, with the title {:?}", p.editions[0].title),
+            Err(e) => format!("{e:#}"),
+        };
+        assert!(e.contains("__cts__.xml"), "{e}");
     }
 
     #[test]

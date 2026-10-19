@@ -450,9 +450,10 @@ pub fn parse_multistatus<P: DavProps>(body: &str) -> Result<Multistatus<P>, quic
     Ok(out)
 }
 
-fn local_name(name: &[u8]) -> String {
-    let s = std::str::from_utf8(name).unwrap_or("");
-    s.rsplit_once(':').map_or(s, |(_, local)| local).to_string()
+fn local_name(name: &str) -> String {
+    name.rsplit_once(':')
+        .map_or(name, |(_, local)| local)
+        .to_string()
 }
 
 /// `HTTP/1.1 404 Not Found` → 404.

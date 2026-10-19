@@ -67,8 +67,7 @@ impl DavProps for CalendarProps {
         if name == "comp" && parent == "supported-calendar-component-set" {
             // A component name is plain ASCII: nothing to unescape.
             if let Ok(Some(attr)) = element.try_get_attribute("name") {
-                self.components
-                    .push(String::from_utf8_lossy(&attr.value).to_ascii_uppercase());
+                self.components.push(attr.value.to_ascii_uppercase());
             }
         }
     }
