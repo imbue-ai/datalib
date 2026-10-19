@@ -207,14 +207,14 @@ pub fn xml_to_json(xml: &str) -> Result<Value> {
     }];
     let mut buf = Vec::new();
     let open = |e: &quick_xml::events::BytesStart| Node {
-        tag: String::from_utf8_lossy(e.name().as_ref()).into_owned(),
+        tag: e.name().as_ref().to_string(),
         attrs: e
             .attributes()
             .flatten()
-            .filter(|a| !a.key.as_ref().starts_with(b"xmlns"))
+            .filter(|a| !a.key.as_ref().starts_with("xmlns"))
             .map(|a| {
                 (
-                    String::from_utf8_lossy(a.key.as_ref()).into_owned(),
+                    a.key.as_ref().to_string(),
                     datalib_etl::xml::attr_value(&a)
                         .map(|c| c.into_owned())
                         .unwrap_or_default(),
@@ -243,8 +243,7 @@ pub fn xml_to_json(xml: &str) -> Result<Value> {
             }
             Event::Text(t) => {
                 if let Some(top) = stack.last_mut() {
-                    top.text
-                        .push_str(&t.decode().map(|c| c.into_owned()).unwrap_or_default());
+                    top.text.push_str(&t);
                 }
             }
             Event::GeneralRef(g) => {
@@ -255,7 +254,7 @@ pub fn xml_to_json(xml: &str) -> Result<Value> {
             }
             Event::CData(c) => {
                 if let Some(top) = stack.last_mut() {
-                    top.text.push_str(&String::from_utf8_lossy(&c));
+                    top.text.push_str(&c);
                 }
             }
             Event::Eof => break,
