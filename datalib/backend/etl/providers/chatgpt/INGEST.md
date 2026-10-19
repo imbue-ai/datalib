@@ -165,10 +165,11 @@ goes on with what it has:
   exponential backoff when the header is absent, inside the shared
   `latchkey_curl` chokepoint; when that gives up, the loop it struck
   ends the run's requests, since every later request would be refused
-  too, and records `phase:conversations` or `phase:attachments`. What
-  was left is still owed, so the next run fetches it, and that run's
-  report clears the row. Twenty-five failures in a row end a loop the
-  same way.
+  too, and records `phase:conversations` or `phase:attachments`
+  (`listing:conversations` when it struck the listing). The step ends
+  `incomplete`, not `succeeded`. What was left is still owed, so the
+  next run fetches it, and that run's report clears the row.
+  Twenty-five failures in a row end a loop the same way.
 - **A named conversation** (`conv_uuids`) that answers `404` is
   `config:conv_uuids:<value>`; any other failure is its
   `conversations:<id>` row, as above. Every named conversation is

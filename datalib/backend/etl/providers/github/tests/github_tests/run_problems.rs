@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use datalib_etl::progress::{Progress, ProgressSink};
+use datalib_etl::run_problems::noting_give_up;
 use datalib_etl::stop::StopFlag;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_forge_ingest_common::Bounds;
@@ -231,18 +232,21 @@ async fn a_pr_that_is_gone_stops_being_retried() {
 
 /// The PR's detail page answers 503: retryable, so it spends the retry
 /// loop's budget.
-fn unavailable(pb: &Path, num: u32) {
+fn unavailable(pb: &Path, url: &str) {
+    tape_of(pb, url);
     let mut unavailable = json_response(&json!({"message": "Service Unavailable"}));
     unavailable.status = 503;
     write_fixture(
         pb,
-        &HttpRequest::get(
-            HttpService::Github,
-            format!("{BASE}/repos/{REPO}/pulls/{num}"),
-        ),
+        &HttpRequest::get(HttpService::Github, url),
         &unavailable,
     )
     .unwrap();
+}
+
+fn give_up_at_once() -> Arc<RetryGuard> {
+    let quick = Duration::from_millis(1);
+    RetryGuard::new(Duration::from_secs(3600), 1, quick, quick, StopFlag::new())
 }
 
 /// When the shared retry loop gives up, the requests stop there — the
@@ -265,11 +269,9 @@ async fn a_give_up_keeps_what_it_fetched() {
     db.commit_all("an earlier run").await.unwrap();
     db.close().await;
     let pb = tape(&d.path().join("one"), &[1, 2, 3, 4]);
-    unavailable(&pb, 3);
+    unavailable(&pb, &format!("{BASE}/repos/{REPO}/pulls/3"));
     // One failed request spends the whole budget.
-    let quick = Duration::from_millis(1);
-    let guard = RetryGuard::new(Duration::from_secs(3600), 1, quick, quick, StopFlag::new());
-    datalib_etl_web::retry::scope(guard, run(&out, &pb, |o| o))
+    datalib_etl_web::retry::scope(give_up_at_once(), run(&out, &pb, |o| o))
         .await
         .expect("a give-up keeps what the run fetched");
 
@@ -290,6 +292,27 @@ async fn a_give_up_keeps_what_it_fetched() {
     run(&out, &pb, |o| o).await.unwrap();
     assert_eq!(stored_prs(&out), [1, 2, 3, 4]);
     assert_eq!(problems(&out).await, []);
+}
+
+/// A search the shared retry loop gives up on is a `phase:search` row,
+/// and the step ends `incomplete` rather than `succeeded`: the searches
+/// after it never ran (#1157).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_search_that_gives_up_ends_the_step_incomplete() {
+    let d = tempdir().unwrap();
+    let out = d.path().join("out");
+    let pb = tape(&d.path().join("one"), &[1]);
+    unavailable(&pb, &search_url(DEFAULT_SCOPES[0], &Bounds::default()));
+
+    let (ran, gave_up) = noting_give_up(datalib_etl_web::retry::scope(
+        give_up_at_once(),
+        run(&out, &pb, |o| o),
+    ))
+    .await;
+    ran.expect("a give-up keeps what the run got");
+    let gave_up = gave_up.expect("a search give-up is said to the step");
+    assert!(gave_up.starts_with("search: "), "{gave_up}");
+    assert_eq!(problems(&out).await, [row("phase:search", "error")]);
 }
 
 /// A PR that fails every run is tried again, but the ones never tried

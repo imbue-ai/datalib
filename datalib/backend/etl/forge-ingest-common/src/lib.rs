@@ -250,8 +250,8 @@ async fn work<F: Forge>(
         if let Some(gave_up) = discover(forge, client, &me, opts, found).await? {
             // No request after this one will fare better: the next run
             // searches again, and what this one listed is owed to it.
+            found.gave_up(format!("search: {}", gave_up.detail));
             found.push(gave_up);
-            found.cut_short();
             return Ok(());
         }
         let listed = listing(pool).await?;
