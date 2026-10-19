@@ -1249,6 +1249,10 @@ impl RowCtx<'_> {
         };
         let (sync, stop_request_ids) = self.sync_action(&id, sync_offer);
         let dashboard = (matches!(e, Entry::Step(_)) && group.is_some()).then(dashboard_action);
+        let choose_again = buttons::choose_again(
+            &status.key,
+            self.step(&id).and_then(|st| st.last_run.as_ref()),
+        );
         let turned_off_by = self.step(&id).and_then(|st| st.turned_off_by.clone());
         let switch = match e {
             Entry::Step(_) => Some(buttons::switch(
@@ -1290,6 +1294,7 @@ impl RowCtx<'_> {
             disk,
             actions: [browse, sync]
                 .into_iter()
+                .chain(choose_again)
                 .chain(dashboard)
                 .chain(switch)
                 .collect(),
@@ -1472,6 +1477,14 @@ impl RowCtx<'_> {
         } else {
             self.sync_action(&g.id, sync_offer)
         };
+        // A step the OS refused offers its picker on the group's row too,
+        // where a source is usually looked at.
+        let choose_again = child_rows.iter().find_map(|r| {
+            r.actions
+                .iter()
+                .find(|a| a.id == buttons::CHOOSE_AGAIN)
+                .cloned()
+        });
         // A group is off when every step under it is.
         let turned_off: Vec<Option<String>> = steps
             .iter()
@@ -1566,7 +1579,11 @@ impl RowCtx<'_> {
             last_synced,
             last_success,
             disk,
-            actions: vec![browse, sync, dashboard_action(), switch],
+            actions: [browse, sync]
+                .into_iter()
+                .chain(choose_again)
+                .chain([dashboard_action(), switch])
+                .collect(),
             seeds,
             reveal_blocked: on_disk.is_none().then(|| {
                 "Nothing on disk yet \u{2014} this group hasn't produced anything.".to_string()

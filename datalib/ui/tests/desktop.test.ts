@@ -129,7 +129,9 @@ describe("pickPath", () => {
     // the reveal test does: the package owns the command name and the
     // `{ options }` envelope, so a Tauri upgrade that renames either
     // turns this red instead of leaving a button that does nothing.
-    const invoke = fakeTauri(() => Promise.resolve("/Users/x/backups/WhatsApp"));
+    const invoke = fakeTauri((cmd) =>
+      Promise.resolve(cmd === "plugin:dialog|open" ? "/Users/x/backups/WhatsApp" : null),
+    );
     await expect(pickPath(folder)).resolves.toEqual({
       outcome: "picked",
       path: "/Users/x/backups/WhatsApp",
@@ -157,6 +159,36 @@ describe("pickPath", () => {
     expect((invoke.mock.calls[0][1] as any).options).toMatchObject({
       directory: false,
       filters: [{ name: "Supported files", extensions: ["lrcat"] }],
+    });
+  });
+
+  /// macOS can refuse a read of a folder chosen moments ago; the pick
+  /// says so then, not a sync days later.
+  it("says what refused when the app cannot read the pick", async () => {
+    const refused = "/Users/x/backups/WhatsApp: Operation not permitted (os error 1)";
+    const invoke = fakeTauri((cmd) =>
+      Promise.resolve(cmd === "plugin:dialog|open" ? "/Users/x/backups/WhatsApp" : refused),
+    );
+    await expect(pickPath(folder)).resolves.toEqual({
+      outcome: "picked",
+      path: "/Users/x/backups/WhatsApp",
+      unreadable: refused,
+    });
+    expect(invoke).toHaveBeenCalledWith("check_read_access", {
+      path: "/Users/x/backups/WhatsApp",
+    });
+  });
+
+  it("claims nothing about the pick when the check is not allowed", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    fakeTauri((cmd) =>
+      cmd === "plugin:dialog|open"
+        ? Promise.resolve("/Users/x/backups/WhatsApp")
+        : Promise.reject(new Error("check_read_access not allowed")),
+    );
+    await expect(pickPath(folder)).resolves.toEqual({
+      outcome: "picked",
+      path: "/Users/x/backups/WhatsApp",
     });
   });
 

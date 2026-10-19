@@ -386,6 +386,38 @@ mod tests {
         datalib_etl_whatsapp::schema_raw::WA_MEDIA_FILES_DDL,
     ];
 
+    /// A store whose sidecar tables were committed before any backup was
+    /// mirrored into it (the launch's migrate pass does this) renders
+    /// nothing; it used to fail with "no such table: jid".
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_store_no_backup_was_mirrored_into_renders_nothing() {
+        let td = tempfile::tempdir().expect("tempdir");
+        let raw_dir = td.path().join("raw");
+        std::fs::create_dir_all(&raw_dir).expect("mkdir raw");
+        let db_path = datalib_etl::doltlite_raw::db_path_for(&raw_dir);
+        let pool = open_doltlite(&db_path, datalib_etl_whatsapp::schema_raw::ALL_DDL)
+            .await
+            .expect("open doltlite");
+        if !has_dolt_extensions(&pool).await {
+            return;
+        }
+        for q in [
+            "SELECT dolt_config('user.name', 'datalib-test')",
+            "SELECT dolt_config('user.email', 'test@datalib.local')",
+        ] {
+            sqlx::query(q).execute(&pool).await.expect("dolt_config");
+        }
+        // Opening commits the sidecar tables already; this is a no-op
+        // unless that ever stops being so.
+        commit_run(&pool, "schema: apply DDL")
+            .await
+            .expect("commit_run");
+        pool.close().await;
+
+        let (docs, _, _) = render_capture(&raw_dir, &td.path().join("out"), None).await;
+        assert!(docs.is_empty(), "{docs:?}");
+    }
+
     /// Full incremental-render loop end-to-end:
     ///   1. populate a fresh raw doltlite db with two chats, commit
     ///   2. render → expect both chats rendered, cursor written

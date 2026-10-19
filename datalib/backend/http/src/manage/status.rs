@@ -208,6 +208,7 @@ mod tests {
                 status: "succeeded".into(),
                 attempts: 1,
                 error: None,
+                failure: None,
             }),
             last_success_at: Some(YESTERDAY.into()),
             ..Default::default()

@@ -96,6 +96,13 @@ async fn parse_async(
     else {
         return Ok(ParsedWhatsApp::default());
     };
+    // The store's own sidecar tables are committed when it is first
+    // opened, so a commit can exist before any backup has been mirrored
+    // into it; until one has, there is nothing to render.
+    if !datalib_etl::doltlite_raw::table_exists(reader.pool(), "jid").await? {
+        reader.close().await;
+        return Ok(ParsedWhatsApp::default());
+    }
     let pool: SqlitePool = reader.pool().clone();
 
     let jids = load_jids(&pool).await?;

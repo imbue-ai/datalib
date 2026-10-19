@@ -5,6 +5,7 @@
 use std::path::Path;
 
 use datalib_dag::supervisor::record::{CurrentRun, LastRun, Record, StepRecord};
+use datalib_dag::FailureKind;
 use serde_json::Value;
 
 fn text(v: &Value, key: &str) -> Option<String> {
@@ -25,6 +26,7 @@ fn record(v: &Value) -> Record {
                 status: text(l, "status").unwrap_or_default(),
                 attempts: l.get("attempts").and_then(Value::as_u64).unwrap_or(0) as u32,
                 error: text(l, "error"),
+                failure: text(l, "failure").as_deref().and_then(FailureKind::parse),
             });
             let step = StepRecord {
                 succeeded: st

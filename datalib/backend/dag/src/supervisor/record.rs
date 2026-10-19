@@ -12,7 +12,7 @@ use sqlx::Row;
 
 use super::store::Store;
 use super::tick::StateKind;
-use crate::step::StepId;
+use crate::step::{FailureKind, StepId};
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Record {
@@ -49,6 +49,8 @@ pub struct LastRun {
     /// How many attempts this took, retries included.
     pub attempts: u32,
     pub error: Option<String>,
+    /// Why it failed, when it did.
+    pub failure: Option<FailureKind>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -153,6 +155,7 @@ pub(super) const DDL: [&str; 5] = [
         last_status TEXT,
         last_attempts INTEGER,
         last_error TEXT,
+        last_failure_kind TEXT,
         last_success_at_utc TEXT,
         tz_offset TEXT,
         state TEXT,
@@ -186,12 +189,13 @@ pub(super) const DDL: [&str; 5] = [
 
 /// Columns added to a table after it first shipped: (table, column,
 /// declaration).
-pub(super) const ADDED_COLUMNS: [(&str, &str, &str); 5] = [
+pub(super) const ADDED_COLUMNS: [(&str, &str, &str); 6] = [
     ("steps", "state", "TEXT"),
     ("steps", "state_detail", "TEXT"),
     ("steps", "turned_off_by", "TEXT"),
     ("steps", "requests", "TEXT"),
     ("steps", "needs_rerun", "INTEGER NOT NULL DEFAULT 0"),
+    ("steps", "last_failure_kind", "TEXT"),
 ];
 
 /// A process the loop started, as its row names it.
@@ -282,6 +286,10 @@ impl Store {
                         .try_into()
                         .unwrap_or(0),
                     error: r.try_get("last_error")?,
+                    failure: r
+                        .try_get::<Option<String>, _>("last_failure_kind")?
+                        .as_deref()
+                        .and_then(FailureKind::parse),
                 }),
             };
             let state = StepRecord {
@@ -363,9 +371,9 @@ impl Store {
                     sqlx::query(
                         "INSERT OR REPLACE INTO steps (step, succeeded, fingerprint, reads, \
                          last_run_id, last_started_at_utc, last_finished_at_utc, last_status, \
-                         last_attempts, last_error, last_success_at_utc, tz_offset, state, \
-                         state_detail, turned_off_by, requests, needs_rerun) \
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         last_attempts, last_error, last_failure_kind, last_success_at_utc, \
+                         tz_offset, state, state_detail, turned_off_by, requests, needs_rerun) \
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     )
                     .bind(id)
                     .bind(st.succeeded)
@@ -377,6 +385,7 @@ impl Store {
                     .bind(last.map(|l| &l.status))
                     .bind(last.map(|l| i64::from(l.attempts)))
                     .bind(last.and_then(|l| l.error.as_ref()))
+                    .bind(last.and_then(|l| l.failure).map(FailureKind::as_str))
                     .bind(utc(&st.last_success_at))
                     .bind(offset)
                     .bind(st.state.map(StateKind::as_str))
@@ -591,9 +600,10 @@ mod tests {
                         run_id: "run-1".into(),
                         started_at: "2026-08-31T10:00:00+01:00".into(),
                         finished_at: Some("2026-08-31T10:00:09+01:00".into()),
-                        status: "succeeded".into(),
+                        status: "failed".into(),
                         attempts: 1,
-                        error: None,
+                        error: Some("read /x: Operation not permitted".into()),
+                        failure: Some(FailureKind::Permission),
                     }),
                     last_success_at: Some("2026-08-31T10:00:09+01:00".into()),
                     state: Some(StateKind::Waiting),

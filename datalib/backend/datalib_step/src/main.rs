@@ -459,7 +459,7 @@ async fn run_function(
                 params,
             )?;
             let res = ingest::run(&planned, &env.step, now, control, emitter).await;
-            hints::emit_auth_hint_on_failure(emitter, planned.source_type, &res);
+            hints::emit_hint_on_failure(emitter, planned.source_type, &res);
             res
         }
         Function::RenderMarkdown if env.is_diff_group() => {
@@ -485,7 +485,7 @@ async fn run_function(
             )?;
             let source_type = planned.source_type;
             let res = render::run(planned, &env, &raw_rel, data_root, now, emitter, control).await;
-            hints::emit_auth_hint_on_failure(emitter, source_type, &res);
+            hints::emit_hint_on_failure(emitter, source_type, &res);
             res
         }
         Function::GridIndex => {
