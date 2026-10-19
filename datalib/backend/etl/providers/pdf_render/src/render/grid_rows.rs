@@ -192,6 +192,7 @@ pub fn rows_for_document(
         item_count: Some(1),
         diff_status: None,
         diff_changed_columns: None,
+        supplied_terms: None,
     });
 
     for (number, text) in pages {
@@ -239,6 +240,7 @@ pub fn rows_for_document(
             item_count: None,
             diff_status: None,
             diff_changed_columns: None,
+            supplied_terms: None,
         });
     }
     rows

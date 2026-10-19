@@ -1554,7 +1554,6 @@ mod tests {
                 render_version: 1,
                 rows: vec![row],
                 sections: Vec::new(),
-                search_terms: Vec::new(),
                 edges: Vec::new(),
                 contacts: Vec::new(),
                 problems: Vec::new(),
@@ -1639,13 +1638,18 @@ mod tests {
         )>,
     ) {
         use datalib_etl_render::grid_index::{apply_one, open_index, RenderedMarkdown, WriteLock};
-        use datalib_schema::search_terms::SuppliedSearchTerm;
+        use datalib_schema::search_terms::SearchTerm;
 
         let pool = open_index(&datalib_runtime::layout::grid_index_db(root))
             .await
             .unwrap();
         let lock = WriteLock::new(pool.clone());
-        for (row, supplied) in rows {
+        for (mut row, supplied) in rows {
+            row.set_supplied_terms(
+                supplied
+                    .into_iter()
+                    .map(|(kind, value)| SearchTerm::new(kind, value)),
+            );
             let uuid = row.uuid.clone();
             let md = RenderedMarkdown {
                 markdown_uuid: uuid.to_string(),
@@ -1656,14 +1660,6 @@ mod tests {
                 render_version: 1,
                 rows: vec![row],
                 sections: Vec::new(),
-                search_terms: supplied
-                    .into_iter()
-                    .map(|(kind, value)| SuppliedSearchTerm {
-                        uuid: uuid.clone(),
-                        kind,
-                        value: value.to_string(),
-                    })
-                    .collect(),
                 edges: Vec::new(),
                 contacts: Vec::new(),
                 problems: Vec::new(),

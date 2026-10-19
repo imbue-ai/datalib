@@ -145,11 +145,16 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
             "the call names Troi by number"
         );
         let geordi = doc_of("Geordi La Forge");
-        let participants: Vec<&str> = geordi
-            .search_terms
+        let participants: Vec<String> = geordi
+            .rows
             .iter()
-            .filter(|t| t.uuid == geordi.markdown_uuid && t.kind.as_str() == "participant")
-            .map(|t| t.value.as_str())
+            .find(|r| r.uuid == geordi.markdown_uuid)
+            .unwrap()
+            .supplied_terms()
+            .unwrap()
+            .into_iter()
+            .filter(|t| t.kind.as_str() == "participant")
+            .map(|t| t.value)
             .collect();
         assert_eq!(
             participants,

@@ -28,8 +28,8 @@ email:
   checked: linkedin 1, tng_contacts 8, tng_contacts-diff 4
   never: beeper, chatgpt-api, claude-api, claude-code, codex, datalib, facebook, garmin, github, gitlab, google-takeout, notion, ship-air, signal, slack, slack-diff, sms-backup-restore, tng_calendar, tng_email, tng_pdfs, whatsapp, yolink
 fields: about
-  checked: facebook 6, linkedin 7, tng_contacts 24
-  never: beeper, chatgpt-api, claude-api, claude-code, codex, datalib, garmin, github, gitlab, google-takeout, notion, ship-air, signal, slack, slack-diff, sms-backup-restore, tng_calendar, tng_contacts-diff, tng_email, tng_pdfs, whatsapp, yolink
+  checked: facebook 6, linkedin 7, tng_contacts 24, tng_contacts-diff 12
+  never: beeper, chatgpt-api, claude-api, claude-code, codex, datalib, garmin, github, gitlab, google-takeout, notion, ship-air, signal, slack, slack-diff, sms-backup-restore, tng_calendar, tng_email, tng_pdfs, whatsapp, yolink
 fields: author
   checked: beeper 12, chatgpt-api 28, claude-api 64, claude-code 26, codex 36, facebook 61, garmin 15, github 10, gitlab 9, google-takeout 42, linkedin 8, notion 8, ship-air 2, signal 12, slack 23, slack-diff 10, sms-backup-restore 10, tng_calendar 5, tng_email 6, tng_pdfs 7, whatsapp 24, yolink 4
   never: datalib, tng_contacts, tng_contacts-diff
@@ -57,8 +57,8 @@ fields: name
   checked: beeper 18, chatgpt-api 33, claude-api 70, facebook 74, garmin 3, linkedin 17, ship-air 2, slack 35, slack-diff 13, tng_calendar 9, tng_contacts 9, tng_contacts-diff 5, tng_email 10, yolink 4
   never: claude-code, codex, datalib, github, gitlab, google-takeout, notion, signal, sms-backup-restore, tng_pdfs, whatsapp
 fields: participant
-  checked: beeper 8, chatgpt-api 7, claude-api 6, claude-code 3, codex 4, facebook 26, google-takeout 12, linkedin 4, signal 8, slack 20, sms-backup-restore 3, tng_email 12, whatsapp 9
-  never: datalib, garmin, github, gitlab, notion, ship-air, slack-diff, tng_calendar, tng_contacts, tng_contacts-diff, tng_pdfs, yolink
+  checked: beeper 8, chatgpt-api 7, claude-api 6, claude-code 3, codex 4, facebook 26, google-takeout 12, linkedin 4, signal 8, slack 20, slack-diff 7, sms-backup-restore 3, tng_email 12, whatsapp 9
+  never: datalib, garmin, github, gitlab, notion, ship-air, tng_calendar, tng_contacts, tng_contacts-diff, tng_pdfs, yolink
 fields: subject
   checked: facebook 6, google-takeout 4, linkedin 2, signal 1, slack 7, sms-backup-restore 4, whatsapp 4
   never: beeper, chatgpt-api, claude-api, claude-code, codex, datalib, garmin, github, gitlab, notion, ship-air, slack-diff, tng_calendar, tng_contacts, tng_contacts-diff, tng_email, tng_pdfs, yolink
@@ -114,8 +114,8 @@ terms: to:
   checked: sms-backup-restore 3, tng_email 6
   never: beeper, chatgpt-api, claude-api, claude-code, codex, datalib, facebook, garmin, github, gitlab, google-takeout, linkedin, notion, ship-air, signal, slack, slack-diff, tng_calendar, tng_contacts, tng_contacts-diff, tng_pdfs, whatsapp, yolink
 terms: with:
-  checked: beeper 20, chatgpt-api 35, claude-api 70, claude-code 29, codex 40, facebook 138, garmin 15, github 10, gitlab 9, google-takeout 73, linkedin 26, notion 8, ship-air 2, signal 29, slack 67, slack-diff 20, sms-backup-restore 23, tng_calendar 5, tng_contacts 24, tng_email 34, tng_pdfs 7, whatsapp 50, yolink 4
-  never: datalib, tng_contacts-diff
+  checked: beeper 20, chatgpt-api 35, claude-api 70, claude-code 29, codex 40, facebook 138, garmin 15, github 10, gitlab 9, google-takeout 73, linkedin 26, notion 8, ship-air 2, signal 29, slack 67, slack-diff 27, sms-backup-restore 23, tng_calendar 5, tng_contacts 24, tng_contacts-diff 12, tng_email 34, tng_pdfs 7, whatsapp 50, yolink 4
+  never: datalib
 touched_at:
   checked: beeper 18, chatgpt-api 33, claude-api 66, claude-code 29, codex 40, datalib 227, facebook 70, garmin 4, github 10, gitlab 9, google-takeout 47, linkedin 14, notion 8, ship-air 3, signal 13, slack 35, slack-diff 13, sms-backup-restore 14, tng_calendar 9, tng_contacts 5, tng_contacts-diff 3, tng_email 10, tng_pdfs 5, whatsapp 29, yolink 5
 words: its rarest word

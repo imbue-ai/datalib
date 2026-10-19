@@ -48,6 +48,7 @@ fn row(uuid: &str, kind: &str, qmd_path: &str, provider: &str) -> GridRow {
         item_count: None,
         diff_status: None,
         diff_changed_columns: None,
+        supplied_terms: None,
     }
 }
 

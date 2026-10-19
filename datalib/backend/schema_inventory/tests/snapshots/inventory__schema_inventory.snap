@@ -1852,6 +1852,7 @@ grid_rows
     item_count
     diff_status
     diff_changed_columns
+    supplied_terms
 markdowns
     markdown_uuid
     source_id

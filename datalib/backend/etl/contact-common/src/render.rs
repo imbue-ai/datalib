@@ -17,7 +17,7 @@ use datalib_etl_render::section::{join, Section};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
-use datalib_schema::search_terms::{SearchTermKind, SuppliedSearchTerm};
+use datalib_schema::search_terms::{SearchTerm, SearchTermKind};
 
 use datalib_contact_schema::{is_drawable_photo, ContactHandle, Medium, NormalizedContact, Photo};
 use datalib_handle::Handle;
@@ -134,11 +134,10 @@ fn render_one(
         .into_owned();
 
     let mut problems: Vec<ProblemRow> = Vec::new();
-    let row = build_grid_row(profile, doc, source_id, &md_rel, &mut problems);
-    let search_terms = match &row {
-        Some(row) => about_terms(&row.uuid, contact),
-        None => Vec::new(),
-    };
+    let mut row = build_grid_row(profile, doc, source_id, &md_rel, &mut problems);
+    if let Some(row) = &mut row {
+        row.set_supplied_terms(about_terms(contact));
+    }
 
     // `row` reaches the index through `on_doc_complete` below; the
     // renderer writes no projection of its own any more.
@@ -154,7 +153,6 @@ fn render_one(
         render_version: profile.render_version,
         rows: row.into_iter().collect(),
         sections,
-        search_terms,
         edges: Vec::new(),
         // The page is about this person, so it carries them: the index
         // can then say who any of their handles is, and where their
@@ -293,7 +291,7 @@ fn split_qualifier(label: &str) -> (String, Option<String>) {
 
 /// Who the card is about, as `with:` finds it: each handle it holds and
 /// each name it gives.
-fn about_terms(uuid: &str, contact: &NormalizedContact) -> Vec<SuppliedSearchTerm> {
+fn about_terms(contact: &NormalizedContact) -> impl Iterator<Item = SearchTerm> + '_ {
     let handles = contact
         .handles
         .iter()
@@ -305,18 +303,9 @@ fn about_terms(uuid: &str, contact: &NormalizedContact) -> Vec<SuppliedSearchTer
         .map(|n| n.trim())
         .filter(|n| !n.is_empty())
         .map(str::to_string);
-    let mut out: Vec<SuppliedSearchTerm> = Vec::new();
-    for value in handles.chain(names) {
-        let term = SuppliedSearchTerm {
-            uuid: uuid.to_string(),
-            kind: SearchTermKind::About,
-            value,
-        };
-        if !out.contains(&term) {
-            out.push(term);
-        }
-    }
-    out
+    handles
+        .chain(names)
+        .map(|value| SearchTerm::new(SearchTermKind::About, value))
 }
 
 /// A contact's first email address or phone number, as the source wrote it.
@@ -995,17 +984,20 @@ mod tests {
             ContactHandle::email(None, "Riker@Enterprise.org"),
             ContactHandle::phone(None, "(555) 010-1234"),
         ];
-        let terms: Vec<(SearchTermKind, String)> = about_terms("u", &c)
-            .into_iter()
-            .map(|t| (t.kind, t.value))
-            .collect();
+        let column = datalib_schema::search_terms::encode_supplied(about_terms(&c));
+        let terms: Vec<(SearchTermKind, String)> =
+            datalib_schema::search_terms::decode_supplied(&column.unwrap())
+                .unwrap()
+                .into_iter()
+                .map(|t| (t.kind, t.value))
+                .collect();
         let about = |v: &str| (SearchTermKind::About, v.to_string());
         assert_eq!(
             terms,
             [
-                about("email:riker@enterprise.org"),
+                about("Number One"),
                 about("Will Riker"),
-                about("Number One")
+                about("email:riker@enterprise.org")
             ]
         );
     }

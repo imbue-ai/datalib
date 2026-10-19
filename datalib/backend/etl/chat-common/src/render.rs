@@ -74,7 +74,7 @@ use datalib_etl_render::title::Title;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
 use datalib_schema::providers::Provider;
-use datalib_schema::search_terms::{SearchTermKind, SuppliedSearchTerm};
+use datalib_schema::search_terms::{SearchTerm, SearchTermKind};
 
 use crate::types::{AuthorKind, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
 use datalib_etl_render::front_matter::yaml_scalar;
@@ -285,7 +285,7 @@ fn render_one(
         .into_owned();
 
     let mut problems: Vec<ProblemRow> = Vec::new();
-    let rows = build_grid_rows(
+    let mut rows = build_grid_rows(
         profile,
         chat,
         doc,
@@ -294,7 +294,7 @@ fn render_one(
         source_id,
         &mut problems,
     );
-    let search_terms = supplied_search_terms(chat, doc, &rows);
+    put_supplied_terms(chat, doc, &mut rows);
 
     let items_rendered = doc
         .items
@@ -312,7 +312,6 @@ fn render_one(
         render_version: profile.render_version,
         rows,
         sections,
-        search_terms,
         edges: Vec::new(),
         contacts: crate::people::document_contacts(
             source_id,
@@ -1015,69 +1014,55 @@ fn build_grid_rows(
 /// Who each message was addressed to, who it mentions and where it is
 /// filed, as search terms on its own row: the people by handle (one with
 /// no handle has nothing to match exactly), every one of them however
-/// many. Only for a row the document kept.
-fn supplied_search_terms(
-    chat: &NormalizedChat,
-    doc: &NormalizedDoc,
-    rows: &[GridRow],
-) -> Vec<SuppliedSearchTerm> {
-    let kept: std::collections::HashSet<&str> = rows.iter().map(|r| r.uuid.as_str()).collect();
-    let mut out: Vec<SuppliedSearchTerm> = Vec::new();
-    for item in doc
+/// many. The document's own row names who took part and who it is named
+/// after.
+fn put_supplied_terms(chat: &NormalizedChat, doc: &NormalizedDoc, rows: &mut [GridRow]) {
+    let participants = {
+        let kept: std::collections::HashSet<&str> = rows.iter().map(|r| r.uuid.as_str()).collect();
+        participants(doc, &kept)
+    };
+    let items: std::collections::HashMap<&str, &NormalizedChatItem> = doc
         .items
         .iter()
-        .filter(|i| kept.contains(i.message_uuid.as_str()))
-    {
-        let people = item.recipients.iter().filter_map(|r| {
-            let kind = match r.role {
-                crate::types::RecipientRole::To => SearchTermKind::To,
-                crate::types::RecipientRole::Cc => SearchTermKind::Cc,
-                crate::types::RecipientRole::Bcc => SearchTermKind::Bcc,
-            };
-            r.handle.as_ref().map(|h| (kind, h.as_str().to_string()))
-        });
-        let mentions = item
-            .mentions
-            .iter()
-            .map(|h| (SearchTermKind::Mention, h.as_str().to_string()));
-        let labels = item
-            .labels
-            .iter()
-            .map(|l| l.trim())
-            .filter(|l| !l.is_empty())
-            .map(|l| (SearchTermKind::Label, l.to_string()));
-        for (kind, value) in people.chain(mentions).chain(labels) {
-            let term = SuppliedSearchTerm {
-                uuid: item.message_uuid.clone(),
-                kind,
-                value,
-            };
-            if !out.contains(&term) {
-                out.push(term);
-            }
+        .map(|i| (i.message_uuid.as_str(), i))
+        .collect();
+    for row in rows.iter_mut() {
+        if row.uuid == doc.markdown_uuid {
+            let took_part = participants
+                .iter()
+                .map(|value| SearchTerm::new(SearchTermKind::Participant, value.clone()));
+            let named_after = chat
+                .named_after
+                .iter()
+                .filter_map(|p| person_term(p.handle.as_ref(), &p.shown))
+                .map(|value| SearchTerm::new(SearchTermKind::Subject, value));
+            row.set_supplied_terms(took_part.chain(named_after));
+        } else if let Some(item) = items.get(row.uuid.as_str()) {
+            row.set_supplied_terms(message_terms(item));
         }
     }
-    if kept.contains(doc.markdown_uuid.as_str()) {
-        let participants = participants(doc, &kept)
-            .into_iter()
-            .map(|value| (SearchTermKind::Participant, value));
-        let named_after = chat
-            .named_after
-            .iter()
-            .filter_map(|p| person_term(p.handle.as_ref(), &p.shown))
-            .map(|value| (SearchTermKind::Subject, value));
-        for (kind, value) in participants.chain(named_after) {
-            let term = SuppliedSearchTerm {
-                uuid: doc.markdown_uuid.clone(),
-                kind,
-                value,
-            };
-            if !out.contains(&term) {
-                out.push(term);
-            }
-        }
-    }
-    out
+}
+
+fn message_terms(item: &NormalizedChatItem) -> impl Iterator<Item = SearchTerm> + '_ {
+    let people = item.recipients.iter().filter_map(|r| {
+        let kind = match r.role {
+            crate::types::RecipientRole::To => SearchTermKind::To,
+            crate::types::RecipientRole::Cc => SearchTermKind::Cc,
+            crate::types::RecipientRole::Bcc => SearchTermKind::Bcc,
+        };
+        r.handle.as_ref().map(|h| SearchTerm::new(kind, h.as_str()))
+    });
+    let mentions = item
+        .mentions
+        .iter()
+        .map(|h| SearchTerm::new(SearchTermKind::Mention, h.as_str()));
+    let labels = item
+        .labels
+        .iter()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .map(|l| SearchTerm::new(SearchTermKind::Label, l));
+    people.chain(mentions).chain(labels)
 }
 
 /// A person as a term's value: their handle, else the name shown.
@@ -1237,6 +1222,21 @@ mod tests {
     use super::*;
     use datalib_schema::problems::{Outcome, Reason, ScopeKind, Severity, Stage};
 
+    /// `(row uuid, kind, value)` for every term the render puts on `chat`'s
+    /// rows, in row order and each row's terms sorted.
+    fn supplied_terms_of(chat: &NormalizedChat) -> Vec<(String, SearchTermKind, String)> {
+        let mut rows = rows_of(&test_profile(), chat);
+        put_supplied_terms(chat, &chat.buckets[0], &mut rows);
+        rows.iter()
+            .flat_map(|r| {
+                r.supplied_terms()
+                    .unwrap()
+                    .into_iter()
+                    .map(|t| (r.uuid.clone(), t.kind, t.value))
+            })
+            .collect()
+    }
+
     fn rows_of(profile: &RenderProfile, chat: &NormalizedChat) -> Vec<GridRow> {
         let mut problems = Vec::new();
         let rows = build_grid_rows(
@@ -1362,29 +1362,28 @@ mod tests {
             },
         ];
         item.labels = vec!["Inbox".into(), " ".into(), "Away team".into()];
-        let rows = rows_of(&test_profile(), &chat);
-        let supplied = supplied_search_terms(&chat, &chat.buckets[0], &rows);
+        let supplied = supplied_terms_of(&chat);
         let terms: Vec<(&str, &str, &str)> = supplied
             .iter()
-            .map(|t| (t.uuid.as_str(), t.kind.as_str(), t.value.as_str()))
+            .map(|(uuid, kind, value)| (uuid.as_str(), kind.as_str(), value.as_str()))
             .collect();
         let message = "33333333-3333-3333-3333-333333333333";
         let document = "22222222-2222-2222-2222-222222222222";
         assert_eq!(
             terms,
             [
-                (message, "to", "email:troi@enterprise.org"),
-                (message, "cc", "email:worf@enterprise.org"),
-                (message, "label", "Inbox"),
-                (message, "label", "Away team"),
                 // Everyone in the document, on its own row: the author
                 // and a recipient without a handle by the name shown,
                 // the rest by handle, the reactor too.
                 (document, "participant", "Picard"),
-                (document, "participant", "email:troi@enterprise.org"),
                 (document, "participant", "Ship's counsel"),
-                (document, "participant", "email:worf@enterprise.org"),
                 (document, "participant", "Will Riker"),
+                (document, "participant", "email:troi@enterprise.org"),
+                (document, "participant", "email:worf@enterprise.org"),
+                (message, "cc", "email:worf@enterprise.org"),
+                (message, "label", "Away team"),
+                (message, "label", "Inbox"),
+                (message, "to", "email:troi@enterprise.org"),
             ]
         );
     }
@@ -1413,11 +1412,10 @@ mod tests {
         me_by_handle.author_handle = datalib_handle::Handle::tel("+15550100001");
         me_by_handle.reactions.clear();
         chat.buckets[0].items = vec![picard, tool, me, me_by_handle];
-        let rows = rows_of(&test_profile(), &chat);
-        let participants: Vec<String> = supplied_search_terms(&chat, &chat.buckets[0], &rows)
+        let participants: Vec<String> = supplied_terms_of(&chat)
             .into_iter()
-            .filter(|t| t.kind == SearchTermKind::Participant)
-            .map(|t| t.value)
+            .filter(|(_, kind, _)| *kind == SearchTermKind::Participant)
+            .map(|(_, _, value)| value)
             .collect();
         assert_eq!(participants, ["Picard", "Will Riker", "tel:+15550100001"]);
     }
@@ -1429,11 +1427,10 @@ mod tests {
     fn a_chat_named_by_its_people_names_them_on_its_document_row() {
         use crate::types::NamedPerson;
         let subject_terms = |chat: &NormalizedChat| -> Vec<(String, String)> {
-            let rows = rows_of(&test_profile(), chat);
-            supplied_search_terms(chat, &chat.buckets[0], &rows)
+            supplied_terms_of(chat)
                 .into_iter()
-                .filter(|t| t.kind == SearchTermKind::Subject)
-                .map(|t| (t.uuid, t.value))
+                .filter(|(_, kind, _)| *kind == SearchTermKind::Subject)
+                .map(|(uuid, _, value)| (uuid, value))
                 .collect()
         };
         let mut chat = mk_chat();
@@ -1452,8 +1449,8 @@ mod tests {
         assert_eq!(
             subject_terms(&chat),
             [
-                (document.into(), "email:riker@enterprise.org".into()),
                 (document.into(), "Q".into()),
+                (document.into(), "email:riker@enterprise.org".into()),
             ]
         );
     }
@@ -2520,10 +2517,9 @@ mod tests {
             "Test",
         ));
         assert!(!md.contains("msg-recipients"), "{md}");
-        let rows = rows_of(&test_profile(), &chat);
-        let terms: Vec<(String, String)> = supplied_search_terms(&chat, &chat.buckets[0], &rows)
+        let terms: Vec<(String, String)> = supplied_terms_of(&chat)
             .into_iter()
-            .map(|t| (t.kind.as_str().to_string(), t.value))
+            .map(|(_, kind, value)| (kind.as_str().to_string(), value))
             .collect();
         assert!(terms.contains(&("to".into(), "tel:+12025550103".into())));
         assert!(terms.contains(&("participant".into(), "tel:+12025550103".into())));

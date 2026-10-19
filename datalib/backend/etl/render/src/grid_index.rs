@@ -30,7 +30,6 @@ use datalib_schema::problems::{ProblemRow, Severity, DDL as PROBLEMS_DDL};
 use datalib_schema::source_contact_handles::DDL as SOURCE_CONTACT_HANDLES_DDL;
 use datalib_schema::source_contacts::DDL as SOURCE_CONTACTS_DDL;
 use datalib_schema::source_cursors::{SourceCursorRow, DDL as SOURCE_CURSORS_DDL};
-use datalib_schema::supplied_search_terms::DDL as SUPPLIED_SEARCH_TERMS_DDL;
 use serde::Serialize;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
@@ -405,8 +404,6 @@ pub(crate) const DOCUMENT_LOOKUP_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS edges_by_src_markdown ON edges (src_markdown_uuid)",
     // A chip asks who a handle is.
     "CREATE INDEX IF NOT EXISTS source_contact_handles_by_handle ON source_contact_handles (handle)",
-    "CREATE INDEX IF NOT EXISTS supplied_search_terms_by_markdown \
-     ON supplied_search_terms (markdown_uuid)",
 ];
 
 /// What a qmd hit is mapped to its rows by
@@ -426,6 +423,12 @@ const RETIRED_INDEXES: &[&str] = &[
     "DROP INDEX IF EXISTS grid_rows_by_author_handle",
 ];
 
+/// Tables an older build made in every store that holds documents.
+/// `supplied_search_terms` kept each row's supplied terms apart from the
+/// row, owned by document; a row that moved left them behind (#1202).
+/// They are `grid_rows.supplied_terms` now.
+pub(crate) const RETIRED_TABLES: &[&str] = &["DROP TABLE IF EXISTS supplied_search_terms"];
+
 /// Every `CREATE TABLE` in the grid index, in creation order. One list, so
 /// the DDL pass and the schema check can't drift into covering different
 /// sets of tables.
@@ -437,7 +440,6 @@ fn index_ddl() -> impl Iterator<Item = &'static str> {
         .chain(EDGES_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(SOURCE_CONTACTS_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(SOURCE_CONTACT_HANDLES_DDL.iter().map(|(_table, ddl)| *ddl))
-        .chain(SUPPLIED_SEARCH_TERMS_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(PROBLEMS_DDL.iter().map(|(_table, ddl)| *ddl))
         // `source_cursors` belongs in this list, not beside it: the reconcile
         // drops and rebuilds every table named here together, and a cursor
@@ -479,11 +481,11 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
             .await
             .with_context(|| format!("create index: {ddl}"))?;
     }
-    for ddl in RETIRED_INDEXES {
+    for ddl in RETIRED_INDEXES.iter().chain(RETIRED_TABLES) {
         sqlx::query(*ddl)
             .execute(pool)
             .await
-            .with_context(|| format!("drop index: {ddl}"))?;
+            .with_context(|| format!("retire: {ddl}"))?;
     }
     Ok(())
 }
@@ -642,10 +644,6 @@ pub struct RenderedMarkdown {
     /// The people this document describes or mentions, as its source
     /// describes them; owned by the document like its edges.
     pub contacts: Vec<NormalizedContact>,
-    /// The search terms the rows answer to beyond their own columns
-    /// (`datalib_schema::search_terms`), each for one of `rows`; owned by
-    /// the document like its edges.
-    pub search_terms: Vec<datalib_schema::search_terms::SuppliedSearchTerm>,
     /// What render could not do while producing this document: records
     /// dropped, fields nulled, lossy rules that fired. Travels with the
     /// document so the rows and the record of what was lost commit together.
@@ -1243,7 +1241,6 @@ pub(crate) async fn delete_document_rows(
         "DELETE FROM edges WHERE src_markdown_uuid = ?",
         "DELETE FROM source_contacts WHERE markdown_uuid = ?",
         "DELETE FROM source_contact_handles WHERE markdown_uuid = ?",
-        "DELETE FROM supplied_search_terms WHERE markdown_uuid = ?",
         "DELETE FROM markdowns WHERE markdown_uuid = ?",
     ] {
         sqlx::query(sql)
@@ -1332,13 +1329,6 @@ async fn apply_markdown(
     for contact in &md.contacts {
         insert_source_contact(conn, &md.markdown_uuid, contact).await?;
     }
-    sqlx::query("DELETE FROM supplied_search_terms WHERE markdown_uuid = ?")
-        .bind(&md.markdown_uuid)
-        .execute(&mut **conn)
-        .await
-        .context("delete prior search terms")?;
-    insert_supplied_search_terms(conn, md).await?;
-
     upsert_markdown(conn, md, canonical, qmd_path)
         .await
         .context("upsert markdowns")?;
@@ -1466,38 +1456,6 @@ async fn insert_source_contact(
         .execute(&mut **conn)
         .await
         .with_context(|| format!("insert handle {handle} of {}", contact.key))?;
-    }
-    Ok(())
-}
-
-async fn insert_supplied_search_terms(
-    conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
-    md: &RenderedMarkdown,
-) -> Result<()> {
-    let rows: std::collections::HashSet<&str> = md.rows.iter().map(|r| r.uuid.as_str()).collect();
-    if let Some(stray) = md
-        .search_terms
-        .iter()
-        .find(|t| !rows.contains(t.uuid.as_str()))
-    {
-        bail!(
-            "{} supplies a search term for {}, which is not one of its rows",
-            md.markdown_uuid,
-            stray.uuid
-        );
-    }
-    for term in &md.search_terms {
-        sqlx::query(
-            "INSERT OR IGNORE INTO supplied_search_terms (markdown_uuid, uuid, kind, value) \
-             VALUES (?, ?, ?, ?)",
-        )
-        .bind(&md.markdown_uuid)
-        .bind(&term.uuid)
-        .bind(term.kind.as_str())
-        .bind(&term.value)
-        .execute(&mut **conn)
-        .await
-        .with_context(|| format!("insert a search term for {}", term.uuid))?;
     }
     Ok(())
 }
@@ -1639,7 +1597,6 @@ mod open_index_tests {
             &[
                 "DELETE FROM grid_rows WHERE markdown_uuid = ?",
                 "DELETE FROM edges WHERE src_markdown_uuid = ?",
-                "DELETE FROM supplied_search_terms WHERE markdown_uuid = ?",
             ],
         )
         .await;
@@ -1753,6 +1710,7 @@ mod insert_round_trip_tests {
             item_count: Some(17),
             diff_status: Some("modified".into()),
             diff_changed_columns: Some("text|author".into()),
+            supplied_terms: Some(r#"[["to","email:troi@enterprise.org"]]"#.into()),
         }
     }
 
@@ -1880,6 +1838,7 @@ mod write_lock_tests {
             item_count: None,
             diff_status: None,
             diff_changed_columns: None,
+            supplied_terms: None,
         };
         RenderedMarkdown {
             markdown_uuid: uuid.clone(),
@@ -1890,7 +1849,6 @@ mod write_lock_tests {
             render_version: 1,
             rows: vec![row],
             sections: Vec::new(),
-            search_terms: Vec::new(),
             edges: Vec::new(),
             contacts: Vec::new(),
             problems: Vec::new(),
@@ -2335,6 +2293,28 @@ mod schema_reconcile_tests {
         }
     }
 
+    /// The table an older build kept each row's supplied terms in, apart
+    /// from the row, goes when the index is opened (#1202).
+    #[tokio::test]
+    async fn the_retired_search_terms_table_is_dropped() {
+        let dir = tempdir().unwrap();
+        let pool = open_pool(&dir.path().join("grid.doltlite_db")).await;
+        sqlx::query("CREATE TABLE supplied_search_terms (uuid TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        init_schema(&pool).await.expect("init_schema");
+
+        let left: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM sqlite_master WHERE name = 'supplied_search_terms'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(left, 0);
+    }
+
     /// An index an older build made, for a search key since retired, is
     /// dropped rather than kept current on every write for nobody.
     #[tokio::test]
@@ -2428,7 +2408,6 @@ mod source_cursor_tests {
             render_version: 1,
             rows: vec![row],
             sections: Vec::new(),
-            search_terms: Vec::new(),
             edges: Vec::new(),
             contacts: Vec::new(),
             problems: Vec::new(),
@@ -3183,6 +3162,46 @@ mod source_cursor_tests {
             left,
             vec!["md-1".to_string(), "md-3".to_string()],
             "src's dropped document is gone and the other source is untouched"
+        );
+    }
+
+    /// A message that moves to another document takes its search terms
+    /// with it. With the terms in a table of their own, owned by document,
+    /// the old document kept them when only the new one re-rendered, and
+    /// every full read of the store then failed (#1202).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_row_that_moves_takes_its_search_terms_with_it() {
+        use datalib_schema::search_terms::{SearchTerm, SearchTermKind};
+        let td = tempdir().unwrap();
+        let root = td.path();
+        let holding = |doc_uuid: &str| {
+            let mut md = doc(root, "src", doc_uuid, doc_uuid);
+            let mut message = md.rows[0].clone();
+            message.uuid = "msg-u".to_string();
+            message.is_document = false;
+            message.set_supplied_terms([SearchTerm::new(SearchTermKind::Mention, "slack:U1")]);
+            md.rows.push(message);
+            md
+        };
+        render(root, "src", &[holding("md-a")]);
+        render(root, "src", &[holding("md-b")]);
+
+        let pool = index_pool(root).await;
+        build_grid_index(&pool, root, |_| {}, None)
+            .await
+            .expect("a store whose row moved still reads whole");
+        let moved: (String, Option<String>) = sqlx::query_as(
+            "SELECT markdown_uuid, supplied_terms FROM grid_rows WHERE uuid = 'msg-u'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            moved,
+            (
+                "md-b".to_string(),
+                Some(r#"[["mention","slack:U1"]]"#.to_string())
+            )
         );
     }
 }

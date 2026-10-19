@@ -9,6 +9,7 @@ use datalib_time::validate_iso_offset;
 
 use crate::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
 use crate::providers::Provider;
+use crate::search_terms::SearchTerm;
 
 /// How many characters of a body the `preview` column keeps.
 pub const PREVIEW_CHARS: usize = 240;
@@ -120,6 +121,17 @@ impl GridRow {
         }
         let (first, _) = self.qmd_path.as_deref()?.split_once('/')?;
         Some(first.to_string())
+    }
+
+    pub fn set_supplied_terms(&mut self, terms: impl IntoIterator<Item = SearchTerm>) {
+        self.supplied_terms = crate::search_terms::encode_supplied(terms);
+    }
+
+    /// `Err` for a column this build cannot read: a kind it does not know.
+    pub fn supplied_terms(&self) -> Result<Vec<SearchTerm>, String> {
+        self.supplied_terms
+            .as_deref()
+            .map_or(Ok(Vec::new()), crate::search_terms::decode_supplied)
     }
 }
 
@@ -413,6 +425,7 @@ impl GridRowBuilder {
             // A renderer never sets these: a diff marks a finished row.
             diff_status: None,
             diff_changed_columns: None,
+            supplied_terms: None,
         })
     }
 }
