@@ -678,6 +678,11 @@ pair from PerseusDL's `canonical-greekLit`; `files` picks others. Since
 it needs nothing of yours, it is a good first sync to check an install
 with.
 
+Aligning two editions sentence by sentence uses a pinned
+Ancient-Greek-BERT model, about 450 MB, fetched once on first use into
+`~/.cache/datalib/models` (or `$XDG_CACHE_HOME/datalib/models`) and
+checked against its pinned sha256 on every load.
+
 ## Signal
 
 `type = "signal"` — an Android backup file (`backup.path`). Mirrors

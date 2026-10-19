@@ -230,6 +230,7 @@ pub async fn fetch(raw: &str, policy: &RemotePolicy) -> Result<Fetched, Refusal>
         // One client per hop, because a redirect to another host has to
         // be resolved and judged again before anything connects to it.
         let client = reqwest::Client::builder()
+            .tls_backend_preconfigured(datalib_fetch::tls_config())
             .resolve_to_addrs(&host, &addrs)
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(CONNECT_TIMEOUT)
