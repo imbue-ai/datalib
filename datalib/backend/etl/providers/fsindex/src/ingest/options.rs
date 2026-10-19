@@ -23,7 +23,7 @@ pub struct FsindexOptions {
     pub identity: Option<Identity>,
 }
 
-/// Machine-managed breadcrumb block. See EXTRACT.md §"Stamping policy."
+/// Machine-managed breadcrumb block. See INGEST.md §"Stamping policy".
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Identity {
     pub uuid: String,
