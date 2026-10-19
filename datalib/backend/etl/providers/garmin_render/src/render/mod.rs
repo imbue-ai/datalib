@@ -1,10 +1,17 @@
-//! Garmin render: the raw store collapses into **one** markdown page —
-//! the weigh-in history as an interactive plot and a table, plus the
-//! account's devices. The rest of the store (per-day metrics,
-//! activities, FIT files) is mirrored but not yet rendered.
+//! Garmin render: the overview (weigh-ins as a chart and a table, the
+//! devices), a page per family of daily metrics with its charts, a
+//! daily log with a row per day, a page per activity with a chart of
+//! its heart rate and speed, and one page of records, badges, gear,
+//! workouts and goals. A chart is a `data-time-series` element the
+//! document view draws from the time-series store.
 
+pub mod activities;
+pub mod daily;
+pub mod fit;
 pub mod parse;
-pub mod plot;
+pub mod records;
+pub mod stamps;
+pub mod time_series;
 // `render/render.rs` inside `render/` is the repo-wide stage layout.
 #[allow(clippy::module_inception)]
 pub mod render;
@@ -13,4 +20,4 @@ pub mod render;
 /// that an existing `index.md` must be re-rendered.
 /// v2: ids are minted through `datalib_id` under the configured source
 ///     and every row carries its backpointer. Every uuid moved.
-pub const RENDER_VERSION: u32 = 5;
+pub const RENDER_VERSION: u32 = 7;

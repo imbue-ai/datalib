@@ -73,8 +73,9 @@ impl Phase {
     fn of_function(function: Option<&str>) -> Self {
         match function {
             Some("ingest") => Phase::Ingest,
-            Some("render_markdown") => Phase::Render,
+            Some("render_markdown") | Some("render_time_series") => Phase::Render,
             Some("grid_index")
+            | Some("time_series_index")
             | Some("qmd_aggregator")
             | Some("keyword_index")
             | Some("embed")
@@ -133,7 +134,7 @@ pub struct ManageRow {
     /// keyed on.
     pub id: String,
     /// The grid's row id. The entry id for a step or an applet; for a
-    /// group, `group:<id>`, because the `unified_index` applet shares
+    /// group, `group:<id>`, because the `unified_document_index` applet shares
     /// its group's id and both are rows.
     pub key: String,
     /// Where the row sits in the tree: `[key]` at the top level, or
@@ -234,6 +235,10 @@ pub struct ManageResponse {
     pub run: Option<DagRunInfo>,
     pub storage: RootStorage,
     pub rows: Vec<ManageRow>,
+    /// Why no sync can be opened from this screen right now, when one
+    /// cannot: the launch is updating the stores for this build. Every
+    /// row's Sync says the same.
+    pub sync_paused: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -292,6 +297,7 @@ async fn manage_rows(s: &AppState) -> ManageResponse {
                 run: record.run,
                 storage: root_storage,
                 rows: Vec::new(),
+                sync_paused: None,
             }
         }
     };
@@ -299,6 +305,11 @@ async fn manage_rows(s: &AppState) -> ManageResponse {
     let applet_errors = s.applets.frontend_view().applet_errors;
 
     let raw_stores = raw_stores(&storage.outputs);
+    let sync_paused = s
+        .sync
+        .upgrade()
+        .migrating
+        .then_some(buttons::SYNC_PAUSED_FOR_UPGRADE);
     let rows = Snapshot {
         written: &written,
         diagnostics: &diagnostics,
@@ -307,6 +318,7 @@ async fn manage_rows(s: &AppState) -> ManageResponse {
         outputs: &storage.outputs,
         raw_stores: &raw_stores,
         applet_errors: &applet_errors,
+        sync_paused,
     }
     .rows();
     ManageResponse {
@@ -317,6 +329,7 @@ async fn manage_rows(s: &AppState) -> ManageResponse {
         run: record.run,
         storage: root_storage,
         rows,
+        sync_paused: sync_paused.map(str::to_string),
     }
 }
 
@@ -433,6 +446,8 @@ struct Snapshot<'a> {
     /// Each tree holding a raw store, by step id, to the store's path.
     raw_stores: &'a HashMap<String, String>,
     applet_errors: &'a std::collections::BTreeMap<String, String>,
+    /// Why every Sync is disabled, over whatever each row would offer.
+    sync_paused: Option<&'static str>,
 }
 
 /// A step or applet as written, in the one shape the group rules read.
@@ -483,17 +498,19 @@ impl Child for Entry<'_> {
 /// the name in the grid.
 fn default_name(id: &str) -> String {
     match id {
-        "unified_index/grid_index" => "Unified Index (table)",
-        "unified_index/qmd_aggregator" => "Unified Index (QMD)",
-        "unified_index/embedding_map" => "Unified Index (map)",
-        "unified_index" => "Unified Index (Applet)",
+        "unified_document_index/grid_index" => "Document Index (table)",
+        "unified_document_index/qmd_aggregator" => "Document Index (QMD)",
+        "unified_document_index/embedding_map" => "Document Index (map)",
+        "unified_document_index" => "Document Index (Applet)",
+        "unified_time_series_index/time_series_index" => "Time Series Index",
+        "unified_time_series_index" => "Time Series Index (Applet)",
         other => other,
     }
     .to_string()
 }
 
 /// A group's Name cell leads with its source's mark, the type's label
-/// on hover. A group that mirrors nothing — the unified index — is the
+/// on hover. A group that mirrors nothing — the unified document index — is the
 /// search over every source, and is marked as that.
 fn group_name(g: &WrittenGroup, r#type: Option<&Identity>) -> Identity {
     let (icon, detail) = match r#type {
@@ -516,6 +533,8 @@ fn child_label(step: &WrittenStep) -> String {
     match step.function.as_deref() {
         Some("ingest") => "Ingest",
         Some("render_markdown") => "Render markdown",
+        Some("render_time_series") => "Render time series",
+        Some("time_series_index") => "Time series index",
         Some("grid_index") => "Grid index",
         Some("qmd_aggregator") => "QMD aggregator",
         Some("keyword_index") => "Keyword index",
@@ -902,6 +921,10 @@ impl RowCtx<'_> {
         if step.is_some_and(|s| s.state == Some(StateKind::Running)) {
             return (stop_button("Stopping the sync".into(), true), Vec::new());
         }
+        let offer = match self.snap.sync_paused {
+            Some(why) => Err(why.to_string()),
+            None => offer,
+        };
         let (hint, blocked) = match offer {
             Ok(hint) => (Some(hint), None),
             Err(why) => (None, Some(why)),
@@ -1145,6 +1168,15 @@ impl RowCtx<'_> {
                 "Open every contact in the contacts app.",
                 None,
             ),
+            // So are the time-series index's: Browse opens the Time series
+            // card (`timeSeriesView()`).
+            Entry::Applet(a) if a.id == datalib_dag::config::TIME_SERIES_INDEX_GROUP => {
+                browse_action(
+                    "Browse time series",
+                    "Open every time series your sources keep, on one chart.",
+                    None,
+                )
+            }
             _ => browse_action(
                 "Browse this data",
                 "Open this source\u{2019}s rows in the grid.",

@@ -2,7 +2,7 @@
 name = "datalib-tauri"
 version = "0.10.0"
 edition = "2021"
-rust-version = "1.83"
+rust-version = "1.89"
 publish = false
 license = "MIT"
 
@@ -30,6 +30,9 @@ tauri-plugin-dialog = "2"
 # Only the reveal command is granted to the webview; see
 # `capabilities/reveal-local-files.json` for why that matters.
 tauri-plugin-opener = "2"
+# Moves a deleted library to the Trash (`launcher_delete`), so a delete
+# can be undone from Finder.
+trash = "5"
 anyhow = "1.0"
 # The launcher's recent-roots file (`src/launcher.rs`). Already in the
 # lock as a transitive tauri dep; named directly here because the

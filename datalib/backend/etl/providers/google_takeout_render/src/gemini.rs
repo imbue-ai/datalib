@@ -30,9 +30,8 @@ pub fn build(source_id: &str, rows: &[Row]) -> Vec<NormalizedChat> {
         let mut problems = Vec::new();
         let date_ms = feeds::stamp_ms(row, &mut problems);
 
-        let prompt = feeds::item(
+        let prompt = feeds::own_item(
             ids::feed_item(source_id, ids::KIND_GEMINI_PROMPT, &row.id, date_ms),
-            feeds::ME,
             date_ms,
             "Gemini Prompt",
             problems,
@@ -119,19 +118,13 @@ fn attachment(activity_id: &str, file: &str, name: &str) -> NormalizedAttachment
 /// The response's HTML as markdown. Its `<img>`s are the drawn images,
 /// which render as the response's attachments instead.
 fn response_markdown(html: &str) -> String {
-    htmd::HtmlToMarkdown::builder()
-        .skip_tags(vec!["script", "style", "img"])
-        .build()
-        .convert(html)
-        .unwrap_or_default()
-        .trim()
-        .to_string()
+    feeds::html_markdown(html)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datalib_etl_chat_common::types::ItemKind;
+    use datalib_etl_chat_common::types::{AuthorKind, ItemKind};
     use serde_json::json;
 
     fn row(id: &str, when: &str, payload: Value) -> Row {
@@ -177,6 +170,7 @@ mod tests {
             panic!("{:?}", chat.buckets[0].items)
         };
         assert_eq!(prompt.author_display, "Me");
+        assert_eq!(prompt.author_kind, AuthorKind::Account);
         assert_eq!(prompt.kind_label.as_deref(), Some("Gemini Prompt"));
         assert_eq!(
             prompt.attachments[0].file_name.as_deref(),

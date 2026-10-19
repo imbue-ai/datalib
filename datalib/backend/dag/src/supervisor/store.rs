@@ -498,6 +498,46 @@ impl Store {
         Ok(())
     }
 
+    /// Carry what the loop keeps per step over to the step's new id, for
+    /// every step under the group `old` now named `new`: whether it is
+    /// turned off, its last success and what it read then, and its tree's
+    /// version. The run history keeps the ids it ran under. A row the new
+    /// id already has is left as it is. Returns how many rows moved.
+    pub async fn rename_group_steps(&self, old: &str, new: &str) -> Result<u64> {
+        let old_prefix = format!("{old}/");
+        let new_prefix = format!("{new}/");
+        // Both an input path and a step id: `reads` is JSON keyed by path.
+        let (old_key, new_key) = (format!("\"{old_prefix}"), format!("\"{new_prefix}"));
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let mut moved = 0;
+        for (table, column) in [("turned_off", "step"), ("steps", "step"), ("sinks", "path")] {
+            // Safe: `table` and `column` are literals from the list above.
+            let rename = sqlx::AssertSqlSafe(format!(
+                "UPDATE OR IGNORE {table} SET {column} = ? || substr({column}, ?) \
+                 WHERE substr({column}, 1, ?) = ?"
+            ));
+            moved += sqlx::query(rename)
+                .bind(&new_prefix)
+                .bind(old_prefix.len() as i64 + 1)
+                .bind(old_prefix.len() as i64)
+                .bind(&old_prefix)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
+        }
+        sqlx::query("UPDATE steps SET reads = replace(reads, ?, ?) WHERE instr(reads, ?) > 0")
+            .bind(&old_key)
+            .bind(&new_key)
+            .bind(&old_key)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        if moved > 0 {
+            self.announce(&format!("renamed {old}/ to {new}/"));
+        }
+        Ok(moved)
+    }
+
     /// Step id → who turned it off.
     pub async fn turned_off(&self) -> Result<BTreeMap<String, String>> {
         let rows = sqlx::query("SELECT step, turned_off_by FROM turned_off")
@@ -611,8 +651,8 @@ fn options(path: &Path) -> SqliteConnectOptions {
     SqliteConnectOptions::new()
         .filename(datalib_runtime::plain_sqlite::uri(path))
         .create_if_missing(true)
-        // What the plain-SQLite engine really does: asked for WAL it
-        // answers `wal` and stays in rollback-journal mode.
+        // Rollback journal, the mode every existing file is in; the
+        // plain-SQLite engine switches a file it is asked to.
         .journal_mode(sqlx::sqlite::SqliteJournalMode::Delete)
         .busy_timeout(BUSY_TIMEOUT)
 }
@@ -658,6 +698,67 @@ mod tests {
         }
         store.load_record().await.unwrap();
         assert_eq!(store.turned_off().await.unwrap().len(), 1);
+        store.close().await;
+    }
+
+    /// A step turned off under the index's old group id stays off under
+    /// the new one, and a step merely sharing the prefix is not moved.
+    #[tokio::test]
+    async fn renaming_a_group_carries_its_steps_rows_over() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        store
+            .turn_off("unified_index/embedding_map", "test")
+            .await
+            .unwrap();
+        store
+            .turn_off("unified_index_extra/x", "test")
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO steps (step, succeeded, fingerprint, reads) \
+             VALUES ('unified_index/embedding_map', 1, 'f', ?)",
+        )
+        .bind(r#"{"unified_index/qmd_aggregator":"v1"}"#)
+        .execute(store.pool())
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO sinks (path, version) VALUES ('unified_index/grid_index', 'v2')")
+            .execute(store.pool())
+            .await
+            .unwrap();
+
+        let moved = store
+            .rename_group_steps("unified_index", "unified_document_index")
+            .await
+            .unwrap();
+        assert_eq!(moved, 3);
+        let off: Vec<String> = store.turned_off().await.unwrap().into_keys().collect();
+        assert_eq!(
+            off,
+            [
+                "unified_document_index/embedding_map",
+                "unified_index_extra/x"
+            ]
+        );
+        let (step, reads): (String, String) = sqlx::query_as("SELECT step, reads FROM steps")
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+        assert_eq!(step, "unified_document_index/embedding_map");
+        assert_eq!(reads, r#"{"unified_document_index/qmd_aggregator":"v1"}"#);
+        let sink: String = sqlx::query_scalar("SELECT path FROM sinks")
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+        assert_eq!(sink, "unified_document_index/grid_index");
+        assert_eq!(
+            store
+                .rename_group_steps("unified_index", "unified_document_index")
+                .await
+                .unwrap(),
+            0
+        );
         store.close().await;
     }
 

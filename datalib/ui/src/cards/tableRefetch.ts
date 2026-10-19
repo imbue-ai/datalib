@@ -6,9 +6,9 @@ import { changed, type RootEvent } from "@/live";
 
 export function refetchesOn(url: string, e: RootEvent): boolean {
   const path = url.split("?")[0];
-  // The unified-index applet serves from the index: the grid's rows,
+  // The document-index applet serves from the index: the grid's rows,
   // the `problems` table.
-  if (path.startsWith("/applet/unified_index/")) return e.kind === "index_changed";
+  if (path.startsWith("/applet/unified_document_index/")) return e.kind === "index_changed";
   if (path === "/api/manage/rows") return changed(e, "manage.rows");
   // No frame names the rest (the remote-media tables); any frame is a
   // cue to look again, except the `log` one, which a request of our own

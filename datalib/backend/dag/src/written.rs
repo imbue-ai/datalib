@@ -123,7 +123,7 @@ pub fn entries_as_written(text: &str) -> Result<WrittenEntries, String> {
     })
 }
 
-/// `datalib-applet unified_index` → `unified_index`. None for anything
+/// `datalib-applet unified_document_index` → `unified_document_index`. None for anything
 /// else, which is legitimate — an applet may be any executable.
 fn applet_type(command: &str) -> Option<String> {
     let mut words = command.split_whitespace();
@@ -164,7 +164,7 @@ name = " Custom "
 
 [[applets]]
 id = "view"
-command = "/opt/bin/datalib-applet unified_index"
+command = "/opt/bin/datalib-applet unified_document_index"
 
 [[applets]]
 id = "other"
@@ -189,7 +189,10 @@ command = "'/x/bin/datalib_applet' slack"
         assert_eq!(got.steps[1].id, "custom/one");
         assert_eq!(got.steps[1].inputs, vec!["slack/ingest".to_string()]);
         assert_eq!(got.steps[1].name.as_deref(), Some("Custom"));
-        assert_eq!(got.applets[0].r#type.as_deref(), Some("unified_index"));
+        assert_eq!(
+            got.applets[0].r#type.as_deref(),
+            Some("unified_document_index")
+        );
         assert_eq!(got.applets[1].r#type, None);
         assert_eq!(got.applets[2].r#type.as_deref(), Some("slack"));
     }

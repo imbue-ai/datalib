@@ -6,7 +6,7 @@
 // paint — and the chat body renders it the same way.
 import MarkdownIt from "markdown-it";
 import hljs from "highlight.js";
-import { assetUrl, isAbsoluteOrUrl, rewriteIframeSrcs } from "./asset_urls";
+import { assetUrl, isAbsoluteOrUrl } from "./asset_urls";
 import { chipLinks } from "./chipLinks";
 import { sanitizeRenderedHtml, type Sanitized, type SanitizeOptions } from "./sanitize";
 
@@ -29,7 +29,7 @@ const md = new MarkdownIt({
 });
 md.use(chipLinks);
 
-// Rewrite relative asset references (`blobs/foo.png`, `plots/x.html`) to
+// Rewrite relative asset references (`blobs/foo.png`) to
 // backend asset URLs. Absolute paths (`/...`) and full URLs
 // (`http://...`, `data:...`, `//cdn/...`) pass through unchanged. The
 // rules live in `./asset_urls` so they are unit-testable on their own.
@@ -57,16 +57,6 @@ md.renderer.rules.image = (tokens, idx, options, env, self) => {
   }
   return defaultImageRender(tokens, idx, options, env, self);
 };
-
-// Same rewrite for `<iframe src>`, which arrives as raw HTML rather than
-// as a parsed token — see `rewriteIframeSrcs`.
-for (const rule of ["html_block", "html_inline"] as const) {
-  const fallback = md.renderer.rules[rule];
-  md.renderer.rules[rule] = (tokens, idx, options, env, self) => {
-    const rendered = fallback ? fallback(tokens, idx, options, env, self) : tokens[idx].content;
-    return rewriteIframeSrcs(rendered, envUuid(env));
-  };
-}
 
 /// The body as HTML for the page: rendered, rewritten, sanitized —
 /// sanitized last, after every rewrite, because the body is whatever

@@ -75,8 +75,8 @@ pub async fn ingest(
                 problem: Problem::record(
                     Reason::FetchFailed,
                     &format!(
-                        "an activity entry with no date line: {}",
-                        mdl_html::strip_tags(raw)
+                        "an activity entry with no date line ({} chars of text)",
+                        mdl_html::strip_tags(raw).chars().count()
                     ),
                 ),
             });
@@ -273,7 +273,10 @@ fn attach(acc: &mut CasEdgeAccumulator, cell_dir: &Path, owning: &str, file_name
             owning,
             file_name,
             Reason::NotFound,
-            format!("{file_name} is not in the export"),
+            format!(
+                "{} is not in the export",
+                super::shape::shape_name(file_name)
+            ),
         );
         return;
     };
@@ -282,7 +285,11 @@ fn attach(acc: &mut CasEdgeAccumulator, cell_dir: &Path, owning: &str, file_name
             let ct = guess_content_type(Path::new(file_name));
             acc.add_fetched(owning, file_name, bytes, ct);
         }
-        Err(e) => acc.add_failed(owning, file_name, format!("read {}: {e}", path.display())),
+        Err(e) => acc.add_failed(
+            owning,
+            file_name,
+            format!("read {}: {e}", super::shape::shape_name(file_name)),
+        ),
     }
 }
 

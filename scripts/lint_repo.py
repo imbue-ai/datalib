@@ -1042,9 +1042,10 @@ _PLACEHOLDER_RUN = re.compile(
 
 # `?` runs sized by something that is not data, with the reason.
 _RUN_ALLOWED: dict[tuple[str, str], str] = {
-    ("datalib/backend/applets/src/unified_index/problems.rs", "columns.len()"): (
-        "one row's VALUES, one `?` per column of a table the code declares"
-    ),
+    (
+        "datalib/backend/applets/src/unified_document_index/problems.rs",
+        "columns.len()",
+    ): ("one row's VALUES, one `?` per column of a table the code declares"),
     ("datalib/backend/etl/render/src/search_terms.rs", "per_row"): (
         "the helper's own `(?, ?)` tuple; its callers are checked"
     ),

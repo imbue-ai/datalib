@@ -9,13 +9,26 @@ use std::path::{Path, PathBuf};
 pub const SYSTEM_DIR: &str = "system";
 
 /// The top-level tree holding every search index. Owned end to end by
-/// the `unified_index` applet and the two steps that write it; nothing
+/// the `unified_document_index` applet and the two steps that write it; nothing
 /// in `datalib-http` or `datalib-dag` reads what is under here.
-pub const UNIFIED_INDEX_DIR: &str = "unified_index";
+pub const UNIFIED_DOCUMENT_INDEX_DIR: &str = "unified_document_index";
+/// What [`UNIFIED_DOCUMENT_INDEX_DIR`] was called before the index was
+/// named for what it indexes. A launch moves it to the new name.
+pub const RETIRED_UNIFIED_INDEX_DIR: &str = "unified_index";
 /// The `grid_index` step's tree (grid_rows + markdowns + edges), relative
-/// to [`UNIFIED_INDEX_DIR`]. Named after the step's function, like every
+/// to [`UNIFIED_DOCUMENT_INDEX_DIR`]. Named after the step's function, like every
 /// tree a step writes.
 pub const GRID_DIR: &str = "grid_index";
+/// The top-level tree holding the time-series index, beside the
+/// document indexes. Owned by the `time_series_index` step that writes
+/// it and the time-series applet that reads it.
+pub const UNIFIED_TIME_SERIES_INDEX_DIR: &str = "unified_time_series_index";
+/// The `time_series_index` step's tree, relative to
+/// [`UNIFIED_TIME_SERIES_INDEX_DIR`]. Named after the step's function.
+pub const TIME_SERIES_INDEX_DIR: &str = "time_series_index";
+/// A time-series store's file, in a source's `render_time_series` tree
+/// and in [`TIME_SERIES_INDEX_DIR`] alike.
+pub const TIME_SERIES_DB: &str = "time_series.doltlite_db";
 /// The top-level tree of the apps whose state a person curates, one
 /// directory per app (`datalib_contacts/`). Nothing can rebuild it, and no
 /// reset or removal of a source touches it.
@@ -24,7 +37,7 @@ pub const CURATED_DIR: &str = "datalib_curated";
 pub const GRID_DB: &str = "db.doltlite_db";
 /// The grid's terms index, beside its store.
 pub const SEARCH_TERMS_DB: &str = "search_terms.sqlite";
-/// The qmd index's directory, relative to [`UNIFIED_INDEX_DIR`]: the
+/// The qmd index's directory, relative to [`UNIFIED_DOCUMENT_INDEX_DIR`]: the
 /// `qmd_aggregator` step's tree, so its size is counted against that
 /// step. Every qmd step writes the one index under it, which qmd lays
 /// out as `qmd/index.sqlite` — see `crate::qmd::qmd_cache_home`.
@@ -79,10 +92,9 @@ pub const LOCK_FILE: &str = "lock";
 // them: `datalib_dag::config::RESERVED_STANZA_NAMES`, checked by
 // `validate_steps` on the path every entry point already takes. A
 // constant here had no callers at all, so nothing stopped a source
-// named `system` — and it predated `unified_index/` becoming a second
-// reserved top-level directory. `datalib-dag` deliberately doesn't
-// depend on this crate, so the policy lives where it is applied and
-// the path constants stay here.
+// named `system`. `datalib-dag` deliberately doesn't depend on this
+// crate, so the policy lives where it is applied and the path constants
+// stay here.
 
 pub fn system_dir(data_root: &Path) -> PathBuf {
     data_root.join(SYSTEM_DIR)
@@ -92,15 +104,15 @@ pub fn curated_dir(data_root: &Path) -> PathBuf {
     data_root.join(CURATED_DIR)
 }
 
-pub fn unified_index_dir(data_root: &Path) -> PathBuf {
-    data_root.join(UNIFIED_INDEX_DIR)
+pub fn unified_document_index_dir(data_root: &Path) -> PathBuf {
+    data_root.join(UNIFIED_DOCUMENT_INDEX_DIR)
 }
 
 pub fn grid_index_dir(data_root: &Path) -> PathBuf {
-    unified_index_dir(data_root).join(GRID_DIR)
+    unified_document_index_dir(data_root).join(GRID_DIR)
 }
 
-/// `data_root/unified_index/grid_index/db.doltlite_db` — the
+/// `data_root/unified_document_index/grid_index/db.doltlite_db` — the
 /// grid_rows/markdowns/edges index. Resolved from `data_root` alone by
 /// both the step that writes it and the applet that reads it, so this
 /// helper is the contract between them.
@@ -108,7 +120,7 @@ pub fn grid_index_db(data_root: &Path) -> PathBuf {
     grid_index_dir(data_root).join(GRID_DB)
 }
 
-/// `data_root/unified_index/grid_index/search_terms.sqlite` — every id, person,
+/// `data_root/unified_document_index/grid_index/search_terms.sqlite` — every id, person,
 /// title and name a grid row answers to, as a full-text index. Plain
 /// SQLite: written by the `grid_index` step after each pass, read by the
 /// applet beside its grid commit.
@@ -116,8 +128,21 @@ pub fn search_terms_db(data_root: &Path) -> PathBuf {
     grid_index_dir(data_root).join(SEARCH_TERMS_DB)
 }
 
+pub fn unified_time_series_index_dir(data_root: &Path) -> PathBuf {
+    data_root.join(UNIFIED_TIME_SERIES_INDEX_DIR)
+}
+
+/// `data_root/unified_time_series_index/time_series_index/time_series.doltlite_db`:
+/// every source's time series. Resolved from `data_root` alone by the
+/// step that writes it and the applet that reads it.
+pub fn time_series_index_db(data_root: &Path) -> PathBuf {
+    unified_time_series_index_dir(data_root)
+        .join(TIME_SERIES_INDEX_DIR)
+        .join(TIME_SERIES_DB)
+}
+
 pub fn qmd_dir(data_root: &Path) -> PathBuf {
-    unified_index_dir(data_root).join(QMD_DIR)
+    unified_document_index_dir(data_root).join(QMD_DIR)
 }
 
 pub fn media_dir(data_root: &Path) -> PathBuf {

@@ -76,7 +76,7 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
         assert_eq!(rows(&db, FRIENDS_TABLE).await.len(), 3);
         assert_eq!(rows(&db, PROFILE_TABLE).await.len(), 1);
         // Two versions of one post share an fbid; both are kept.
-        assert_eq!(rows(&db, POST_EDITS_TABLE).await.len(), 3);
+        assert_eq!(rows(&db, POST_EDITS_TABLE).await.len(), 5);
         assert_eq!(rows(&db, COMMENT_EDITS_TABLE).await.len(), 2);
         // A file nothing renders is ingested all the same, under its
         // path's slug with the chunk-index rule leaving `7_days` alone.
@@ -246,6 +246,11 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
             .rows
             .iter()
             .all(|r| r.channel.as_deref() == Some("Friends"))));
+        // A friend is their chip, by name; the handle's spelling is not
+        // in their Contents.
+        for r in friends.iter().flat_map(|d| &d.rows) {
+            assert!(!r.preview.contains("name/"), "{}", r.preview);
+        }
 
         // Messenger: a conversation is a chat, its people chips by name.
         let conversation = |name: &str| {
@@ -368,7 +373,6 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
                  list (left the conversation?)",
                 "info title - = a group post whose group the membership file does not name",
                 "warning call_duration /message/call_duration = int",
-                "warning label_values: /label_values/7 = object{timestamp_value}",
             ]
         );
         // A post on another page edited after it was posted says so.
@@ -400,6 +404,17 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
             .expect("the edit of a deleted post is a post of its own");
         let md = fs::read_to_string(&gone.md_path)?;
         assert!(md.contains("a post the export no longer has"), "{md}");
+        // A life event's words are its description: its two edit records,
+        // the words it has now with and without the mention's markup, are
+        // its versions and show nothing it does not.
+        let life_event = docs
+            .iter()
+            .find(|d| d.rows.iter().any(|r| r.preview.contains("a new ship, a new crew")))
+            .expect("life event rendered");
+        let md = fs::read_to_string(&life_event.md_path)?;
+        assert!(md.contains("William Riker"), "{md}");
+        assert!(!md.contains("Another version"), "{md}");
+        assert!(!md.contains("@["), "{md}");
         let md = fs::read_to_string(&year.md_path)?;
         assert!(
             md.find("Enjoy the chair, Number One.") < md.find("Enjoy the chair, Will."),

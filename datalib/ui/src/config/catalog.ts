@@ -1342,6 +1342,10 @@ export const CATALOG: CatalogEntry[] = [
           "export.gemini_apps",
         ],
       },
+      {
+        heading: "Lists, maps and books",
+        fields: ["export.maps_saved_lists", "export.my_maps", "export.play_books"],
+      },
     ],
     fields: [
       {
@@ -1413,6 +1417,27 @@ export const CATALOG: CatalogEntry[] = [
         target: "export.gemini_apps",
         label: "Gemini activity",
         default: true,
+      },
+      {
+        kind: "bool",
+        target: "export.maps_saved_lists",
+        label: "Maps saved lists",
+        default: true,
+        help: "Your lists of places, with the notes you wrote on them.",
+      },
+      {
+        kind: "bool",
+        target: "export.my_maps",
+        label: "My Maps",
+        default: true,
+        help: "The maps you drew: pins, lines and shapes, and what you wrote on them.",
+      },
+      {
+        kind: "bool",
+        target: "export.play_books",
+        label: "Play Books notes and highlights",
+        default: true,
+        help: "What you highlighted, noted and bookmarked, a page per book.",
       },
     ],
   },
@@ -1676,8 +1701,8 @@ export const CATALOG: CatalogEntry[] = [
         label: "Write UUID breadcrumbs into the tree",
         default: false,
         help:
-          "Off keeps the scan read-only. On writes a UUID into the .fsindex.yaml of any " +
-          "directory that set stamp_me_with_uuid: true, so it keeps one identity across moves " +
+          "Off keeps the scan read-only. On writes a UUID into the .fsindex.toml of any " +
+          "directory that set stamp_me_with_uuid = true, so it keeps one identity across moves " +
           "and renames.",
       },
     ],

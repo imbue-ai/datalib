@@ -3,7 +3,7 @@
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use datalib_core::app_store::AppStore;
-use datalib_http::{router, ApiToken, AppState};
+use datalib_http::{router, ApiToken, AppState, TrustedProxy};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tower::ServiceExt;
@@ -18,6 +18,10 @@ fn unique_db_path() -> PathBuf {
 }
 
 async fn app() -> (axum::Router, ApiToken) {
+    app_behind(None).await
+}
+
+async fn app_behind(trusted_proxy: Option<TrustedProxy>) -> (axum::Router, ApiToken) {
     let db_path = unique_db_path();
     let root = Arc::new(db_path.parent().unwrap().to_path_buf());
     let app = AppStore::open(root.as_path())
@@ -41,6 +45,7 @@ async fn app() -> (axum::Router, ApiToken) {
             None,
         )),
         api_token: api_token.clone(),
+        trusted_proxy,
     };
     (router(state), api_token)
 }
@@ -110,14 +115,14 @@ async fn unauthenticated_requests_are_refused() {
     assert_eq!(status(&app, put_lib).await, StatusCode::UNAUTHORIZED);
 
     // The applet proxy. The grid's data left this binary for the
-    // `unified_index` applet, and the token gate is an outermost layer
+    // `unified_document_index` applet, and the token gate is an outermost layer
     // — so it still covers a route this process knows nothing about.
     // Worth pinning: an applet reached without the gate would be an
     // unauthenticated read of the whole mirror.
     assert_eq!(
         status(
             &app,
-            Request::get("/applet/unified_index/search?q=&limit=1")
+            Request::get("/applet/unified_document_index/search?q=&limit=1")
                 .body(Body::empty())
                 .unwrap()
         )
@@ -377,4 +382,139 @@ async fn the_agent_guides_stay_public() {
             "{path} is how an agent learns to authenticate"
         );
     }
+}
+
+const OWNER: &str = r#"{"owner":true,"user_id":"u-owner","email":"owner@example.test"}"#;
+const VISITOR: &str = r#"{"owner":false,"user_id":"u-guest","email":"guest@example.test"}"#;
+
+/// Behind the proxy, the proxy's word is the credential: the owner gets
+/// the page and the API with no token, and no session cookie is minted,
+/// since the proxy's page is another site and the browser would not
+/// send one anyway.
+#[tokio::test]
+async fn behind_a_trusted_proxy_the_owner_needs_no_token() {
+    let (app, _) = app_behind(Some(TrustedProxy::Imbue)).await;
+    for path in ["/", "/some/card/route", "/api/health"] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::get(path)
+                    .header("x-imbue-identity", OWNER)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "{path}");
+        assert!(
+            resp.headers().get(header::SET_COOKIE).is_none(),
+            "{path}: the proxy's header authenticates every request; no cookie to mint"
+        );
+    }
+}
+
+/// A shared workspace's visitor reaches the same server through the same
+/// proxy, marked `owner:false`. The mirror is the owner's alone.
+#[tokio::test]
+async fn behind_a_trusted_proxy_a_visitor_is_refused() {
+    let (app, _) = app_behind(Some(TrustedProxy::Imbue)).await;
+    for path in [
+        "/",
+        "/api/health",
+        "/applet/unified_document_index/search?q=&limit=1",
+    ] {
+        let req = Request::get(path)
+            .header("x-imbue-identity", VISITOR)
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(status(&app, req).await, StatusCode::FORBIDDEN, "{path}");
+    }
+}
+
+/// The token still works behind the proxy (an agent's curl on the same
+/// host sends no identity header), and a request with neither is
+/// refused as it always was — a malformed header included.
+#[tokio::test]
+async fn behind_a_trusted_proxy_the_token_still_works_and_nothing_else_does() {
+    let (app, _) = app_behind(Some(TrustedProxy::Imbue)).await;
+    let with_token = Request::get("/api/health")
+        .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(status(&app, with_token).await, StatusCode::OK);
+
+    let bare = Request::get("/api/health").body(Body::empty()).unwrap();
+    assert_eq!(status(&app, bare).await, StatusCode::UNAUTHORIZED);
+    for bad in ["", "owner", r#"{"owner":"yes"}"#, "{}"] {
+        let req = Request::get("/api/health")
+            .header("x-imbue-identity", bad)
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            status(&app, req).await,
+            StatusCode::UNAUTHORIZED,
+            "identity {bad:?} must not authenticate"
+        );
+    }
+}
+
+/// Without the switch, the header is just bytes a client sent: a page
+/// that forges it on a laptop deployment gets nowhere.
+#[tokio::test]
+async fn without_a_trusted_proxy_the_identity_header_is_ignored() {
+    let (app, _) = app().await;
+    for path in ["/", "/api/health"] {
+        let req = Request::get(path)
+            .header("x-imbue-identity", OWNER)
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(status(&app, req).await, StatusCode::UNAUTHORIZED, "{path}");
+    }
+}
+
+/// The proxy stamps the owner on everything it forwards, so a sibling
+/// app's page could make the browser send an authenticated `POST`. The
+/// browser's `Sec-Fetch-Site` says where a request came from; a write
+/// from anywhere but the app's own origin is refused, a read is not.
+#[tokio::test]
+async fn behind_a_trusted_proxy_a_write_from_another_origin_is_refused() {
+    let (app, _) = app_behind(Some(TrustedProxy::Imbue)).await;
+    let check = |site: Option<&str>| {
+        let mut req = Request::post("/api/config/check")
+            .header("x-imbue-identity", OWNER)
+            .header("content-type", "application/json");
+        if let Some(site) = site {
+            req = req.header("sec-fetch-site", site);
+        }
+        req.body(Body::from(
+            serde_json::to_vec(&serde_json::json!({"text": ""})).unwrap(),
+        ))
+        .unwrap()
+    };
+    for site in ["same-site", "cross-site"] {
+        assert_eq!(
+            status(&app, check(Some(site))).await,
+            StatusCode::FORBIDDEN,
+            "a write with Sec-Fetch-Site: {site}"
+        );
+    }
+    // The app's own request, and a non-browser client the proxy let
+    // through: past the gate, whatever the endpoint then says.
+    for site in [Some("same-origin"), Some("none"), None] {
+        let got = status(&app, check(site)).await;
+        assert!(
+            got != StatusCode::FORBIDDEN && got != StatusCode::UNAUTHORIZED,
+            "Sec-Fetch-Site: {site:?} must pass the gate, got {got}"
+        );
+    }
+    let read = Request::get("/api/health")
+        .header("x-imbue-identity", OWNER)
+        .header("sec-fetch-site", "cross-site")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(
+        status(&app, read).await,
+        StatusCode::OK,
+        "a read is not a write"
+    );
 }

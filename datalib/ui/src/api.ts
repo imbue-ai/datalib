@@ -12,7 +12,7 @@ export type SearchRow = {
   uuid: string;
   conversation_uuid: string;
   // FK into the markdowns table — every grid row knows which rendered
-  // .md it lives inside. Drives `{UNIFIED_INDEX}/chat/{markdown_uuid}` lookups
+  // .md it lives inside. Drives `{UNIFIED_DOCUMENT_INDEX}/chat/{markdown_uuid}` lookups
   // when the user clicks a row in the preview pane.
   markdown_uuid: string | null;
   message_index: number | null;
@@ -76,7 +76,7 @@ export type SearchRow = {
   contact_ref?: Identity | null;
   // The Subject cell the applet resolves: a contact's own row's Contact
   // chip, else the conversation's name.
-  subject_ref?: Identity | null;
+  subject_ref?: Identity[];
   // Where the row is filed when that is not its subject: an address
   // book, a calendar, a device. Empty on a chat.
   channel: string;
@@ -173,7 +173,7 @@ export type SearchResponse = RowsResponse<SearchRow> & { query_echo: QueryEcho }
 // the same as the grid row's `uuid` column.
 // One row from the `edges` table joined with the destination
 // markdown's title. The backend produces this list on every
-// `{UNIFIED_INDEX}/chat/{uuid}` response — see `EdgeRowOut` in
+// `{UNIFIED_DOCUMENT_INDEX}/chat/{uuid}` response — see `EdgeRowOut` in
 // `datalib/backend/core/src/repo.rs`. `src_anchor_uuid`/
 // `dst_anchor_uuid` reference values the renderer emits as
 // `data-section-uuid` attributes in the body; null means the
@@ -248,7 +248,7 @@ export type ChatResponse = {
 
 // One rendered document (a `markdowns` row), as listed by the applet
 // for the document-picker card. `markdown_uuid` is the same UUID
-// `documentView(...)` / `{UNIFIED_INDEX}/chat/{uuid}` take.
+// `documentView(...)` / `{UNIFIED_DOCUMENT_INDEX}/chat/{uuid}` take.
 export type DocEntry = {
   markdown_uuid: string;
   title: string | null;
@@ -336,20 +336,20 @@ export async function forgetRemoteAllow(allowUuid: string): Promise<void> {
   if (!r.ok && r.status !== 404) throw new Error(`DELETE allow → ${r.status}: ${await r.text()}`);
 }
 
-// --- The unified_index applet --------------------------------------------
-export const UNIFIED_INDEX = "/applet/unified_index";
+// --- The unified_document_index applet --------------------------------------------
+export const UNIFIED_DOCUMENT_INDEX = "/applet/unified_document_index";
 
 // Newest-first listing of rendered documents (capped server-side).
 export function fetchDocs(signal?: AbortSignal): Promise<DocEntry[]> {
-  return getJson<DocEntry[]>(`${UNIFIED_INDEX}/docs`, signal);
+  return getJson<DocEntry[]>(`${UNIFIED_DOCUMENT_INDEX}/docs`, signal);
 }
 
 // --- The embedding map ------------------------------------------------------
-// `unified_index/embedding_map`, joined to the grid by the applet
-// (applets/src/unified_index/map.rs). Hand-kept in step with it.
+// `unified_document_index/embedding_map`, joined to the grid by the applet
+// (applets/src/unified_document_index/map.rs). Hand-kept in step with it.
 
 /// The step that writes the map, as `config.toml` composes its id.
-export const EMBEDDING_MAP_STEP = "unified_index/embedding_map";
+export const EMBEDDING_MAP_STEP = "unified_document_index/embedding_map";
 
 export type MapPoint = {
   markdown_uuid: string;
@@ -381,7 +381,7 @@ export type EmbeddingMapResponse = {
 };
 
 export async function fetchEmbeddingMap(signal?: AbortSignal): Promise<EmbeddingMapResponse> {
-  const r = await getJson<EmbeddingMapResponse>(`${UNIFIED_INDEX}/embedding_map`, signal);
+  const r = await getJson<EmbeddingMapResponse>(`${UNIFIED_DOCUMENT_INDEX}/embedding_map`, signal);
   for (const e of r.errors ?? []) pushToast(e);
   return r;
 }
@@ -390,7 +390,7 @@ export async function fetchEmbeddingMap(signal?: AbortSignal): Promise<Embedding
 export async function fetchMapMatches(q: string, signal?: AbortSignal): Promise<Set<string>> {
   const params = new URLSearchParams({ q });
   const r = await getJson<{ markdown_uuids: string[]; errors?: string[] }>(
-    `${UNIFIED_INDEX}/embedding_map/matches?${params.toString()}`,
+    `${UNIFIED_DOCUMENT_INDEX}/embedding_map/matches?${params.toString()}`,
     signal,
   );
   for (const e of r.errors ?? []) pushToast(e);
@@ -423,14 +423,14 @@ export async function fetchQmdState(
   markdownUuids: string[],
   signal?: AbortSignal,
 ): Promise<QmdStateResponse> {
-  const r = await fetch(`${UNIFIED_INDEX}/qmd_state`, {
+  const r = await fetch(`${UNIFIED_DOCUMENT_INDEX}/qmd_state`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ markdown_uuids: markdownUuids }),
     signal,
   });
   if (!r.ok) {
-    throw new Error(`POST ${UNIFIED_INDEX}/qmd_state → ${r.status}`);
+    throw new Error(`POST ${UNIFIED_DOCUMENT_INDEX}/qmd_state → ${r.status}`);
   }
   const data = (await r.json()) as QmdStateResponse;
   if (data.errors && data.errors.length > 0) {
@@ -530,7 +530,7 @@ export type KeyValues = {
 export type ValueSuggestion = { value: string; count?: number; label?: string };
 
 /// The keys the search bar at `base` takes: `${base}/keys`, for `base` a
-/// table's search (`/applet/unified_index/search`, `/api/log`).
+/// table's search (`/applet/unified_document_index/search`, `/api/log`).
 export function fetchSearchKeys(base: string, signal?: AbortSignal): Promise<SearchKeySpec[]> {
   return getJson<SearchKeySpec[]>(`${base}/keys`, signal, { toast: false });
 }
@@ -561,7 +561,7 @@ export async function fetchHealth(signal?: AbortSignal): Promise<Health> {
 /// `[[column, value], …]` as JSON.
 /// Which answer to free text a search asks for: the grid's own fields,
 /// the words of the documents, or their meaning. Mirrors `SearchTab` in
-/// `applets/src/unified_index/tabs.rs`.
+/// `applets/src/unified_document_index/tabs.rs`.
 export type SearchTab = "fields" | "words" | "meaning";
 
 export type SearchPageSpec = {
@@ -572,7 +572,7 @@ export type SearchPageSpec = {
   tab?: SearchTab | null;
 };
 
-export const SEARCH = `${UNIFIED_INDEX}/search`;
+export const SEARCH = `${UNIFIED_DOCUMENT_INDEX}/search`;
 
 export function fetchSearch(
   q: string,
@@ -652,7 +652,10 @@ export function fetchChat(markdownUuid: string, signal?: AbortSignal): Promise<C
   // One UUID per rendered `.md` file — no disambiguation needed.
   // Provider-specific sharding (beeper's per-period files) is already
   // encoded in the markdown_uuid scheme.
-  return getJson<ChatResponse>(`${UNIFIED_INDEX}/chat/${encodeURIComponent(markdownUuid)}`, signal);
+  return getJson<ChatResponse>(
+    `${UNIFIED_DOCUMENT_INDEX}/chat/${encodeURIComponent(markdownUuid)}`,
+    signal,
+  );
 }
 
 // --- Config / setup API ----------------------------------------------------
@@ -702,7 +705,7 @@ export type ConfigResponse = {
   diagnostics: Diagnostic[];
   // Whether the app can serve its own views at all. False when the
   // file is not a config, or when it loads without a usable
-  // `unified_index` applet — that applet serves the grid, search and
+  // `unified_document_index` applet — that applet serves the grid, search and
   // the document view, so without it every view is a 502 — or when
   // the root was written by a newer datalib (`newer_root`). A root
   // with no config is `exists: false` and the first-run screen's
@@ -1041,6 +1044,7 @@ export type ColumnType =
   | "timeseries"
   | "quantity"
   | "identity"
+  | "identities"
   | "status"
   | "chips"
   | "actions"
@@ -1199,6 +1203,9 @@ export type ManageResponse = {
     measured_at_utc: string | null;
   };
   rows: ManageRow[];
+  /// Why no sync can be opened right now: the launch is updating the
+  /// stores for this version. Every row's Sync says the same.
+  sync_paused: string | null;
 };
 
 /// The Manage screen's rows, joined server-side. `refresh` walks the

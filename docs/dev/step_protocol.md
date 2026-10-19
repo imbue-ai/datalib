@@ -195,6 +195,14 @@ series, and draws a blank Items cell and no counts. They are
 tree; nothing else makes the reporter and the screen agree on the
 spelling.
 
+Two series you never send: the runner measures your memory itself.
+Every two seconds it adds up the resident memory of your process and
+every process below it, and reports the sum as **`rss_bytes`** and the
+highest reading this attempt as **`rss_peak_bytes`**; `rss_bytes` goes
+to zero when you exit (`dag/src/memory.rs`). A child you spawned whose
+parent then exited is no longer below you and drops out, so the sum is
+a floor. Nothing caps it.
+
 A step that counts one thing and knows its total may use the shorter
 form instead, which the runner translates into the `done_total` and `queued`
 metrics for it:
@@ -606,10 +614,12 @@ emit({"event": "outcome",
 
 The built-in step types are one binary implementing this protocol,
 run with no arguments of its own. It reads `DATALIB_DAG_FUNCTION` to
-learn what to do — `ingest`, `render_markdown`, `keyword_index`,
-`embed`, `grid_index`, `qmd_aggregator` or `embedding_map`; anything else is
+learn what to do — `ingest`, `render_markdown`, `render_time_series`,
+`keyword_index`, `embed`, `grid_index`, `qmd_aggregator`, `embedding_map`
+or `time_series_index`; anything else is
 refused with the list — and `DATALIB_DAG_GROUP_TYPE` to learn which
-provider to run, which `ingest` and `render_markdown` require and the
+provider to run, which `ingest`, `render_markdown` and
+`render_time_series` require and the
 rest ignore. It
 writes the tree `DATALIB_DAG_STEP` names, after checking that it is
 `<DATALIB_DAG_GROUP>/<DATALIB_DAG_FUNCTION>`; a render reads its raw
@@ -623,6 +633,6 @@ providers; beeper/signal `period`, perseus `alignment_pairs`, email
 commits there, and emits versions where it has them (the grid index claims its dolt commit hash). Use it as the
 reference implementation.
 
-The index functions' ids are fixed at `unified_index/<function>`, and
+The index functions' ids are fixed at `unified_document_index/<function>`, and
 the qmd steps share one index file; the rules are in
 [`config_model.md`](config_model.md) § "Naming rules".

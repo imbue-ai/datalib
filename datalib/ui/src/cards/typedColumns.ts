@@ -10,6 +10,7 @@ import type { Column, Formatter, GroupingFormatterItem } from "@slickgrid-univer
 import { entityFromUri, handleFromUri } from "./chipLinks";
 import { entityCell, type EntityView } from "./entities";
 import { chipCell, type Who } from "./contacts";
+import { CELL_MEASURE, fitChips } from "./chipFit";
 import { Editors } from "@slickgrid-universal/common";
 import type {
   Action,
@@ -223,6 +224,71 @@ function text(value: unknown): string {
 
 const plain: Formatter = (_r, _c, value) => ({ text: text(value), toolTip: text(value) });
 
+/// An identity as the chip it names — a group or step, else a person by
+/// handle — or null for one that names neither, or when the grid draws
+/// no chips.
+function identityChip<T>(
+  v: Identity,
+  chips: SlickColumnOptions<T>["chips"],
+): HTMLAnchorElement | null {
+  if (chips?.entity && v.entity && entityFromUri(v.entity)) {
+    return entityCell(v.entity, v.label, chips.entity(v.entity), v.icon ?? null);
+  }
+  const handle = chips ? handleFromUri(v.id) : null;
+  return handle && chips ? chipCell(handle, v.label, chips.who(handle), chips.canLink()) : null;
+}
+
+/// Show `text` on a drawn chip in place of its full label, which its
+/// tooltip and menu keep.
+function setChipText(chip: HTMLElement, text: string) {
+  const label = [...chip.childNodes].reverse().find((n) => n.nodeType === Node.TEXT_NODE);
+  if (label) label.textContent = text;
+}
+
+/// A list of identities in one cell: each as its chip, or as a plain
+/// pill for one that names nothing the grid resolves; the labels cut in
+/// their middle to share `widthPx`, and what does not fit folded into a
+/// "+N" pill whose tooltip names them. One plain identity alone reads as
+/// an identity cell does.
+function renderIdentities<T>(
+  list: Identity[] | null | undefined,
+  widthPx: number,
+  chips: SlickColumnOptions<T>["chips"],
+): HTMLElement {
+  const all = list ?? [];
+  const drawn = all.map((v) => identityChip(v, chips));
+  if (all.length === 1 && !drawn[0]) return renderIdentity(all[0], false);
+  const wrap = document.createElement("span");
+  wrap.className = "tg-identities";
+  const labels = all.map((v, i) => drawn[i]?.dataset.label ?? v.label);
+  const fit = fitChips(labels, widthPx, CELL_MEASURE);
+  fit.shown.forEach((shown, i) => {
+    const chip = drawn[i];
+    if (chip) {
+      setChipText(chip, shown);
+      wrap.appendChild(chip);
+      return;
+    }
+    const pill = document.createElement("span");
+    pill.className = "handle-chip handle-unresolved tg-plain-chip";
+    pill.textContent = shown;
+    pill.title = all[i].detail ?? all[i].label;
+    wrap.appendChild(pill);
+  });
+  if (fit.folded) {
+    const more = document.createElement("span");
+    more.className = "handle-chip handle-unresolved tg-more-chip";
+    more.textContent = `+${fit.folded}`;
+    more.title = labels.slice(fit.shown.length).join("\n");
+    wrap.appendChild(more);
+  }
+  return wrap;
+}
+
+function identitiesText(value: unknown): string {
+  return ((value as Identity[] | null) ?? []).map((v) => v.label).join(", ");
+}
+
 /// What a cell copies as: what it shows, except that a stamp copies as
 /// the stamp and a number undecorated, so a paste loses nothing.
 export function copyText(type: ColumnType, value: unknown): string {
@@ -230,6 +296,8 @@ export function copyText(type: ColumnType, value: unknown): string {
   switch (type) {
     case "identity":
       return (value as Identity).label ?? "";
+    case "identities":
+      return identitiesText(value);
     case "markdown_uuid":
       return typeof value === "string" ? value : ((value as Identity).label ?? "");
     case "status": {
@@ -290,7 +358,9 @@ export function typedColumns<T extends Record<string, unknown>>(
       headerCellAttrs: { "col-id": f },
       formatter: plain,
       sortComparer: (a, b, dir) => compareText(a, b, dir ?? 1),
-      ...(spec.editable && spec.type !== "identity" ? { editor: { model: Editors.text } } : {}),
+      ...(spec.editable && spec.type !== "identity" && spec.type !== "identities"
+        ? { editor: { model: Editors.text } }
+        : {}),
       ...(opts.groupable
         ? { grouping: { getter: f, formatter: groupTitle(spec.header), collapsed: false } }
         : {}),
@@ -302,13 +372,8 @@ export function typedColumns<T extends Record<string, unknown>>(
           const badges = spec.badges;
           const inner: Formatter<T> = (_r, _c, _v, _col, row) => {
             const v = row?.[f] as Identity | null;
-            if (opts.chips?.entity && v?.entity && entityFromUri(v.entity)) {
-              return entityCell(v.entity, v.label, opts.chips.entity(v.entity), v.icon ?? null);
-            }
-            const handle = opts.chips && v ? handleFromUri(v.id) : null;
-            if (handle && opts.chips) {
-              return chipCell(handle, v!.label, opts.chips.who(handle), opts.chips.canLink());
-            }
+            const chip = v ? identityChip(v, opts.chips) : null;
+            if (chip) return chip;
             return renderIdentity(
               v,
               !!row?.__hasChildren,
@@ -340,6 +405,26 @@ export function typedColumns<T extends Record<string, unknown>>(
               : {}),
           };
         }
+        case "identities":
+          return {
+            formatter: (_r, _c, value, col) =>
+              renderIdentities(
+                value as Identity[] | null,
+                (col.width ?? WIDTH.identities) - 12,
+                opts.chips,
+              ),
+            sortComparer: (a, b, dir) =>
+              compareText(identitiesText(a), identitiesText(b), dir ?? 1),
+            ...(opts.groupable
+              ? {
+                  grouping: {
+                    getter: (row: T) => identitiesText(row[f]),
+                    formatter: groupTitle(spec.header),
+                    collapsed: false,
+                  },
+                }
+              : {}),
+          };
         case "status":
           return {
             formatter: (_r, _c, value) => renderStatus(value as StatusView | null),

@@ -7,6 +7,7 @@ use datalib_etl::progress::Progress;
 use datalib_etl_contact_common::{render_all as cc_render_all, ContactDoc, ContactRenderProfile};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{changed_rows, Input, Inputs};
+use datalib_handle::Handle;
 use serde_json::Value;
 
 use crate::ids;
@@ -31,6 +32,7 @@ pub fn render_connections(
         out_dir,
         name: source_id,
         account,
+        owner: _,
         account_inputs,
         range,
     } = *source;
@@ -136,6 +138,7 @@ fn to_contact(source_id: &str, p: &Value) -> ContactDoc {
     person.handles = nonempty("Email Address")
         .map(|e| ContactHandle::email(None, e))
         .into_iter()
+        .chain(Handle::linkedin_profile_url(url).map(ContactHandle::of))
         .collect();
     // The original `16 Jun 2026` stays readable beside the stamp the
     // grid sorts on.
@@ -198,6 +201,7 @@ mod tests {
             out_dir: raw,
             name: "linkedin",
             account: None,
+            owner: None,
             account_inputs: &[],
             range: datalib_etl_render::inputs::RawRange {
                 cursor: None,
@@ -279,8 +283,9 @@ mod tests {
         );
         assert_eq!(c.contact.org.as_deref(), Some("Simon Fraser University"));
         assert_eq!(c.contact.title.as_deref(), Some("Associate Professor"));
-        // An empty Email Address is no handle at all.
-        assert!(c.contact.handles.is_empty());
+        // The profile is a handle; an empty Email Address is none.
+        let handles: Vec<_> = c.contact.handles.iter().map(|h| h.handle.clone()).collect();
+        assert_eq!(handles, [Handle::linkedin("angelicajeannelim")]);
         assert_eq!(c.contact.details[0].value, "16 Jun 2026");
     }
 

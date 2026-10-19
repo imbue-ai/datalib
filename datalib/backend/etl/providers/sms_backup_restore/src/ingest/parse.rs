@@ -90,8 +90,8 @@ pub fn detect_root(xml: &str) -> Result<RootKind> {
         {
             Event::Start(e) | Event::Empty(e) => {
                 return Ok(match e.name().as_ref() {
-                    b"smses" => RootKind::Smses,
-                    b"calls" => RootKind::Calls,
+                    "smses" => RootKind::Smses,
+                    "calls" => RootKind::Calls,
                     _ => RootKind::Other,
                 });
             }
@@ -120,20 +120,20 @@ pub fn parse_smses(xml: &str) -> Result<(Vec<SmsRecord>, Vec<MmsRecord>)> {
 
     loop {
         match reader.read_event_into(&mut buf).context("read xml event")? {
-            Event::Empty(e) if e.name().as_ref() == b"smses" => closed = true,
-            Event::End(e) if e.name().as_ref() == b"smses" => closed = true,
-            Event::Empty(e) if e.name().as_ref() == b"sms" => {
+            Event::Empty(e) if e.name().as_ref() == "smses" => closed = true,
+            Event::End(e) if e.name().as_ref() == "smses" => closed = true,
+            Event::Empty(e) if e.name().as_ref() == "sms" => {
                 smses.push(sms_from_attrs(&attrs(&e)?));
             }
             // An `<sms>` is normally self-closing; tolerate a Start form.
-            Event::Start(e) if e.name().as_ref() == b"sms" => {
+            Event::Start(e) if e.name().as_ref() == "sms" => {
                 smses.push(sms_from_attrs(&attrs(&e)?));
             }
-            Event::Start(e) if e.name().as_ref() == b"mms" => {
+            Event::Start(e) if e.name().as_ref() == "mms" => {
                 let head = attrs(&e)?;
                 mmses.push(parse_mms_body(&mut reader, head)?);
             }
-            Event::Empty(e) if e.name().as_ref() == b"mms" => {
+            Event::Empty(e) if e.name().as_ref() == "mms" => {
                 // An MMS with no parts (rare) — header only.
                 mmses.push(mms_from_attrs(&attrs(&e)?));
             }
@@ -153,9 +153,9 @@ pub fn parse_calls(xml: &str) -> Result<Vec<CallRecord>> {
     let mut closed = false;
     loop {
         match reader.read_event_into(&mut buf).context("read xml event")? {
-            Event::Empty(e) if e.name().as_ref() == b"calls" => closed = true,
-            Event::End(e) if e.name().as_ref() == b"calls" => closed = true,
-            Event::Empty(e) | Event::Start(e) if e.name().as_ref() == b"call" => {
+            Event::Empty(e) if e.name().as_ref() == "calls" => closed = true,
+            Event::End(e) if e.name().as_ref() == "calls" => closed = true,
+            Event::Empty(e) | Event::Start(e) if e.name().as_ref() == "call" => {
                 let a = attrs(&e)?;
                 calls.push(CallRecord {
                     number: a.get("number").cloned().unwrap_or_default(),
@@ -184,7 +184,7 @@ fn parse_mms_body(reader: &mut Reader<&[u8]>, head: Attrs) -> Result<MmsRecord> 
     let mut buf = Vec::new();
     loop {
         match reader.read_event_into(&mut buf).context("read mms child")? {
-            Event::Empty(e) | Event::Start(e) if e.name().as_ref() == b"part" => {
+            Event::Empty(e) | Event::Start(e) if e.name().as_ref() == "part" => {
                 let a = attrs(&e)?;
                 let ct = a.get("ct").map(String::as_str).unwrap_or("");
                 if ct == "application/smil" {
@@ -215,7 +215,7 @@ fn parse_mms_body(reader: &mut Reader<&[u8]>, head: Attrs) -> Result<MmsRecord> 
                     }
                 }
             }
-            Event::End(e) if e.name().as_ref() == b"mms" => break,
+            Event::End(e) if e.name().as_ref() == "mms" => break,
             Event::Eof => break,
             _ => {}
         }
@@ -271,7 +271,7 @@ fn attrs(e: &BytesStart) -> Result<Attrs> {
     let mut map = HashMap::new();
     for attr in e.attributes() {
         let attr = attr.context("parse attribute")?;
-        let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+        let key = attr.key.as_ref().to_string();
         let val = datalib_etl::xml::attr_value(&attr)
             .context("unescape attribute")?
             .into_owned();

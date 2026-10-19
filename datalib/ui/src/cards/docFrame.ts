@@ -13,27 +13,22 @@
 // clicked. Chromium does run them. The policy blocks the document's
 // script in both and leaves the app's listeners alone.
 //
-// A plot page framed in the body is a document of its own, under the
-// policy the server sends it with: its own script, no network
-// (`DocumentKind::Plot`, http/src/embed.rs). The sanitizer lets only a
-// renderer's `plots/*.html` through, and this frame may frame nothing
-// but the asset route.
-import { UNIFIED_INDEX } from "@/api";
+// A chart in the body is the app's own code too
+// (`timeSeriesEmbed.ts`), drawn into the frame; the frame itself frames
+// nothing.
 import themeCss from "@/theme.css?inline";
 import hljsCss from "highlight.js/styles/github-dark.css?inline";
 import bodyCss from "./documentBody.css?inline";
 import chipCss from "./chip.css?inline";
+import chartCss from "./timeSeriesChart.css?inline";
 
 /** The frame document's policy, on top of the app page's, which a
  *  `srcdoc` frame inherits. Never loosen `script-src`: the frame shares
  *  the app's origin, so a script that ran in it would hold the session. */
-export function docFrameCsp(origin: string): string {
-  return (
-    "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; " +
-    "img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data:; " +
-    `frame-src ${origin}${UNIFIED_INDEX}/asset/; base-uri 'none'; form-action 'none'`
-  );
-}
+export const DOC_FRAME_CSP =
+  "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; " +
+  "img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data:; " +
+  "frame-src 'none'; base-uri 'none'; form-action 'none'";
 
 // The frame is its own scroll pane, so a long message's sticky header
 // sticks while the body scrolls. `.chat-preview` on the root is where
@@ -48,8 +43,8 @@ body { margin: 0; padding: 0 1rem 0.75rem; }
  *  so a re-render keeps the scroll position and the decorations. */
 export const DOC_FRAME_SRCDOC =
   `<!doctype html><html class="chat-preview"><head><meta charset="utf-8">` +
-  `<meta http-equiv="Content-Security-Policy" content="${docFrameCsp(location.origin)}">` +
-  `<style>${themeCss}\n${hljsCss}\n${bodyCss}\n${chipCss}\n${FRAME_CSS}</style></head>` +
+  `<meta http-equiv="Content-Security-Policy" content="${DOC_FRAME_CSP}">` +
+  `<style>${themeCss}\n${hljsCss}\n${bodyCss}\n${chipCss}\n${chartCss}\n${FRAME_CSS}</style></head>` +
   `<body class="chat-body markdown-body"></body></html>`;
 
 /** An event's target as an Element, whichever window made it. An

@@ -791,8 +791,20 @@ fn branch_readers_beside_a_writer_that_pauses_after_each_seal() {
 /// `<file>@<tip>` read-only (a detached snapshot), reads, closes, and goes
 /// again, beside the `commit_run` writer. Before doltlite 0.50.13 that open
 /// failed for a file named `*.doltlite_db` (dolthub/doltlite#3231).
-#[allow(clippy::disallowed_macros)]
 fn detached_readers_beside_a_sealing_writer(readers: usize, commits: u64, txn_ms: u64) {
+    detached_readers_reading(readers, commits, txn_ms, &[]);
+}
+
+/// [`detached_readers_beside_a_sealing_writer`] with `flags` passed to
+/// each `rev-read`; the readers' reports, or none when this doltlite has
+/// no commits to read.
+#[allow(clippy::disallowed_macros)]
+fn detached_readers_reading(
+    readers: usize,
+    commits: u64,
+    txn_ms: u64,
+    flags: &[&'static str],
+) -> Vec<Value> {
     let t = Scratch::new();
     let ready: Vec<String> = (0..readers)
         .map(|i| t.path(&format!("reader-{i}-ready")))
@@ -819,21 +831,25 @@ fn detached_readers_beside_a_sealing_writer(readers: usize, commits: u64, txn_ms
         &t.path("writer.json"),
     ]);
     let seed = t.await_file("pin", &mut writer);
+    let (db, until) = (t.db(), t.path("writer.json"));
     let mut children: Vec<Child> = (0..readers)
         .map(|i| {
-            t.spawn(&[
+            let out = t.path(&format!("reader-{i}.json"));
+            let mut argv = vec![
                 "rev-read",
                 "--db",
-                &t.db(),
+                &db,
                 "--until",
-                &t.path("writer.json"),
+                &until,
                 "--hold-ms",
                 "20",
                 "--ready-out",
                 &ready[i],
                 "--out",
-                &t.path(&format!("reader-{i}.json")),
-            ])
+                &out,
+            ];
+            argv.extend(flags);
+            t.spawn(&argv)
         })
         .collect();
     t.wait("writer", &mut writer);
@@ -842,7 +858,7 @@ fn detached_readers_beside_a_sealing_writer(readers: usize, commits: u64, txn_ms
     }
     let writer = t.report("writer.json");
     if writer["dolt"] == Value::Bool(false) {
-        return;
+        return Vec::new();
     }
     let reports: Vec<Value> = (0..readers)
         .map(|i| t.report(&format!("reader-{i}.json")))
@@ -895,11 +911,30 @@ fn detached_readers_beside_a_sealing_writer(readers: usize, commits: u64, txn_ms
         assert_each_transaction_read_one_commit(r);
         assert_committed_throughout(&writer, r);
     }
+    reports
 }
 
 #[test]
 fn detached_readers_are_snapshots_while_the_writer_seals() {
     detached_readers_beside_a_sealing_writer(3, 500, 0);
+}
+
+/// The time-series applet's read: the rows of a key range, blobs and
+/// all, on a detached open of a commit the writer has since moved past,
+/// as the applet opens the commit the index recorded.
+#[test]
+fn detached_readers_of_an_older_commit_read_ranges_while_the_writer_seals() {
+    for r in detached_readers_reading(3, 500, 0, &["--range", "--at-first"]) {
+        let heads: std::collections::BTreeSet<&str> = samples(&r)
+            .iter()
+            .filter_map(|s| s["head"].as_str())
+            .collect();
+        assert_eq!(
+            heads.len(),
+            1,
+            "every window opened the first commit it saw"
+        );
+    }
 }
 
 /// A detached open takes no write lock, so a writer holding its batch open
@@ -915,7 +950,7 @@ fn detached_readers_open_while_the_writer_holds_a_transaction() {
 /// one older row's, while readers open `main`'s tip detached, attach the
 /// terms file read-only and match it. Neither side may see an error, and
 /// every sample's full-text index must agree with its terms table. The
-/// file keeps a rollback journal (dolthub/doltlite#3740), so a reader can
+/// file is in rollback-journal mode (its writer never asks for WAL), so a reader can
 /// wait on the writer's commit; the busy timeout covers that wait, and
 /// the slowest sample is printed.
 #[test]

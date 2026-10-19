@@ -1,5 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
-load("//datalib/backend/unified_index:qmd_fixture.bzl", "QMD_FIXTURE_DATA", "QMD_FIXTURE_ENV")
+load("//datalib/backend/unified_document_index:qmd_fixture.bzl", "QMD_FIXTURE_DATA", "QMD_FIXTURE_ENV")
 load("//tools:insta.bzl", "insta_update")
 
 # `datalib-applet` — the applet host (see docs/dev/applets.md), one
@@ -27,12 +27,14 @@ rust_binary(
         "//datalib/backend/parent_watch:datalib_parent_watch",
         "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/etl/render:datalib_etl_render",
+        "//datalib/backend/etl/time_series:datalib_etl_time_series",
+        "//datalib/backend/time_series_schema:datalib_time_series_schema",
         "//datalib/backend/qmd_indexer:datalib_qmd_indexer",
         "//datalib/backend/qmd_models:datalib_qmd_models",
         "//datalib/backend/query:datalib_query",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",
-        "//datalib/backend/unified_index:datalib_unified_index",
+        "//datalib/backend/unified_document_index:datalib_unified_document_index",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:axum",
         "@datalib_crates//:chrono",
@@ -49,14 +51,14 @@ rust_binary(
     ],
 )
 
-# The unified_index applet's searches run a real `qmd mcp` over the TNG
+# The unified_document_index applet's searches run a real `qmd mcp` over the TNG
 # fixture, so this carries the fixture and a staged qmd; and the applet
 # binary itself, which serve_tests.rs starts the way the gateway does.
 rust_test(
     name = "applet_unittests",
     size = "medium",
     crate = ":datalib_applet",
-    data = glob(["src/unified_index/snapshots/*.snap"], allow_empty = True) +
+    data = glob(["src/unified_document_index/snapshots/*.snap"], allow_empty = True) +
            QMD_FIXTURE_DATA + [":datalib_applet"],
     edition = "2021",
     env = QMD_FIXTURE_ENV | {
@@ -68,7 +70,7 @@ rust_test(
     deps = [
         "//datalib/backend/etl/chat-common:datalib_etl_chat_common",
         "//datalib/backend/etl/contact-common:datalib_etl_contact_common",
-        "//datalib/backend/unified_index:qmd_fixture",
+        "//datalib/backend/unified_document_index:qmd_fixture",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/table:datalib_table",

@@ -6,7 +6,7 @@ import { test, expect, type APIRequestContext, type Page } from "@playwright/tes
 import { EVERY_ROW, SEARCH_ROWS, searchHeader, type GridApi } from "./grid-helpers";
 
 async function searchUuids(request: APIRequestContext, params: string): Promise<string[]> {
-  const r = await request.get(`/applet/unified_index/search?q=&${params}`);
+  const r = await request.get(`/applet/unified_document_index/search?q=&${params}`);
   expect(r.ok()).toBe(true);
   return ((await r.json()) as { rows: { uuid: string }[] }).rows.map((row) => row.uuid);
 }

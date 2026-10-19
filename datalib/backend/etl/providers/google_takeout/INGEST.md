@@ -66,6 +66,9 @@ form's.
 | `google_chat` | `chat_groups`, `chat_users`, `chat_messages`, `chat_attachments` |
 | `gemini_apps` | `gemini_activity`, `gemini_attachments` |
 | `google_voice` | `voice_messages`, `voice_bills`, `voice_greetings`, `voice_attachments` |
+| `maps_saved_lists` | `maps_saved_lists` |
+| `my_maps` | `my_maps_placemarks` |
+| `play_books` | `play_books_annotations` |
 
 `DATA_TABLES` and `EDGE_TABLES` in `src/ingest/schema_raw.rs` list the
 tables the store is created with. Google Voice keeps its own
@@ -75,6 +78,68 @@ Ids are uuidv5 under a per-provider namespace, minted from a recipe
 string (`"maps_review:{ftid}:{date}"`, `"youtube:watch:{id}:{ts}"`);
 see `ns_id` in `schema_raw.rs` and
 [`docs/dev/entity_ids.md`](../../../../../docs/dev/entity_ids.md).
+
+## A list, a map, a book: a file is the whole of its records
+
+`src/ingest/per_file.rs`. A Saved list (`Saved/<list>.csv`), a My Maps
+map (`My Maps/<map>.kmz`) and a Play Books book
+(`Google Play Books/<book>/<book>.html`) each hold all of their records,
+and none has an id upstream. A changed file is read whole; its rows
+replace what it held, and a file gone takes its rows, unless its whole
+product folder is gone. A row is keyed by its file, what it says (a
+place's title and URL; a placemark's layer, name and geometry; an
+entry's section, quote, note and date) and how many times the same
+came before it in the file, so two identical entries keep two rows.
+Each row keeps what the export said whole, by the names the export
+gives it, so render can say what it leaves out:
+
+- **A Saved list** is a row per place, keyed by Google's header
+  (`Title,Note,URL,Tags,Comment`). A list's description is on the lines
+  before its header. A list has no dates.
+- **A My Maps map** is a zipped KML. Each placemark is kept as JSON
+  (`@attr`, `#text`, a repeated child as a list) with its layer
+  (`Folder`) and its map (`Document`); styles are left out. A map has no
+  dates.
+- **A Play Books page** is a header (title, author, narrator, links)
+  and sections (`My notes`, `My bookmarks`, `Listening History`) of
+  entries whose parts are `div`s named by class. An entry's date is
+  three lines, `Last modified on`, the date and the zone in words
+  (`Pacific Time`), read as that place's clock
+  (`time::parse_play_books_stamp`); the tz database's daylight rules run
+  out in the 2100s, so the fixture's 2364 dates are in winter. The book
+  itself (a PDF or EPUB beside the page) is left out.
+
+## What no feed reads is a problem row
+
+`src/ingest/coverage.rs`. Every run that reads the export compares its
+files with what the feeds read (`feed_of`), and files a
+`skipped:unread_files:<hash>` row for each kind of file no feed that is
+on reads. A kind is the file's path with every name that might be the
+account's replaced (`shape_rel`): `Keep/<name>.json`,
+`Google Chat/Groups/DM <id>/<name>.png`,
+`Voice/Calls/<name> - Text - <stamp>-N-N.jpg`. Product folders and
+Google's own file names stay. The row counts the files and their bytes,
+and says why:
+
+- **a warning** where no feed reads that kind of file at all: what a run
+  over a new export says is still missing;
+- **a note** where the feed that reads it is off;
+- **a note** where the source leaves it out on purpose (`left_out`):
+  mail, calendars and contacts, which their own sources read; Chrome,
+  payments, health, location, home devices and account settings, which
+  are not something a person wrote.
+
+The rows are replaced whole by every run that reads the export, the
+zipped one included (the unpacker lists every entry it passes over); a
+run that finds the parts unchanged reads nothing and keeps them.
+
+## A problem row says the shape, not the content
+
+The export is private, and its problems table should be safe to read.
+`src/ingest/shape.rs` is what a row may say: a file by `shape_rel` or
+`shape_name`, never by its path; a URL by `url_kind`, its host and first
+word; an entry by its size, never by its text. The render's rows give a
+value's JSON shape (`string(12 chars)`, `object{a,b}`).
 
 ## A feed that fails costs only itself
 
@@ -112,6 +177,8 @@ or stamped with its problem. Each kind is a `problems` row:
   no message, a call record with no time, a `Bills.html` with no table
   header. It deletes nothing, where a `messages.json` whose list is
   empty, or a bills table with no rows, empties what it holds.
+- **A Chat attachment** is a file a message names, or one of its
+  earlier versions does (`previous_message_versions`).
 - **A Chat or Gemini attachment** that is not in the export is a
   `not_found` warning on its edge (`chat_attachments:<message>#<name>`,
   `gemini_attachments:<activity>#<name>`), and one that is there but
@@ -153,6 +220,14 @@ follows Google:
   entry whose date does not read is stored with no `when_ts` and its
   date as written, and the render reports it on the entry's document;
   Chat's render reads `created_date` with the same parser.
+- A Voice file is named `<who> - <Type> - <stamp>.html`, except where
+  Google leaves the type out (`<who> - <stamp>.html`, mostly placed
+  calls; `Group Conversation - <stamp>.html`) or cuts a long name short
+  (`<who> - Pla(3).html`, type and stamp gone). Where the name does not
+  say, the markup does (`google_voice::parse::record_of`): an
+  `hChatLog` is a thread, an `haudio` a call of the kind its
+  `rel="tag"` links name (`…/voice#placed`), else its title's first
+  word. A file that is neither is a `skipped:google_voice` row.
 - A Maps photo's sidecar is named after its media, extension and all:
   `<photo>.jpg.json` describes `<photo>.jpg`.
 - A Gemini entry's links are percent-encoded (`Prime%20Directive.pdf`), and
@@ -174,7 +249,21 @@ whole. `tests/fixture_walk.rs`'s `rung_1_…` is the test to copy.
 
 `datalib_etl_google_takeout_render` draws every feed through
 chat-common. A Google Chat space or a Voice conversation is a page per
-month; Gemini, YouTube history and Google Maps are each one activity
+month; a Saved list, a My Maps map and a Play Books book are a page
+each (`google_takeout_render/src/pages.rs`), every key a row holds that
+the render does not read a warning on its entry. A Maps review draws
+the questions Maps asked after it, with the answers; a review's or
+saved place's `Comment` is the sentence Google writes where it has no
+location for the place, and is a note, not text. A named Chat space is titled by its `group_info.json` name, a DM
+by its members. A Chat message (`google_takeout_render/src/chat.rs`)
+draws its text, the message it quotes, whose thread it answers, the
+links, Drive files, videos and Meet links its annotations name that its
+text does not show, a call, its attachments, its reactions, its labels
+and the account's star, and says when it was edited. Its earlier
+versions fold in above it. Every key of a message, `group_info.json` or
+`user_info.json` the render does not read is a warning on the message
+(or the conversation's first one), by the value's shape; a message with
+nothing to show is a note. Gemini, YouTube history and Google Maps are each one activity
 feed (`google_takeout_render/src/feeds.rs`), a page per year, and YouTube
 subscriptions, which have no dates, one page. A Gemini entry is two
 items, the prompt by the account and the response by Gemini, its HTML

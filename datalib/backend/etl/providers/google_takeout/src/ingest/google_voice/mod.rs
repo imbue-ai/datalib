@@ -21,7 +21,7 @@ use datalib_time::IsoOffsetTimestamp;
 use serde_json::json;
 use sqlx::{Sqlite, Transaction};
 
-use self::parse::{parse_bills, parse_chat_log, parse_haudio, CallKind, Party};
+use self::parse::{parse_bills, parse_chat_log, parse_haudio, record_of, CallKind, Party, Record};
 use self::schema_raw::{
     ns_id, sha8, VoiceAttachmentRow, VoiceBillRow, VoiceGreetingRow, VoiceMessageRow,
 };
@@ -80,7 +80,10 @@ pub async fn ingest(
     let mut unread = |f: &fsscan::ScannedFile, reason: Reason, detail: String| {
         skipped.push(SkippedRecord {
             entry: f.rel.clone(),
-            problem: Problem::record(reason, &format!("{}: {detail}", f.rel)),
+            problem: Problem::record(
+                reason,
+                &format!("{}: {detail}", crate::ingest::shape::shape_rel(&f.rel)),
+            ),
         });
     };
     // Files that would not read at all; their records are unknown.
@@ -362,38 +365,39 @@ fn ingest_record(
     if ext.as_deref() == Some("html") {
         let html =
             std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-        match type_token.as_deref() {
-            // Text thread / unnamed-type "Group Conversation" → hChatLog.
-            Some("Text") | None => {
-                ingest_text_thread(
-                    folder,
-                    path,
-                    &label,
-                    &html,
-                    rows,
-                    acc,
-                    n_attachments,
-                    missing,
-                )?;
-                Ok(true)
-            }
-            Some(tok) if CallKind::from_type_token(tok).is_some() => {
-                let kind = CallKind::from_type_token(tok).unwrap();
-                ingest_event(
-                    folder,
-                    path,
-                    &label,
-                    kind,
-                    &html,
-                    rows,
-                    acc,
-                    n_attachments,
-                    missing,
-                )?;
-                Ok(true)
-            }
-            _ => Ok(false),
+        // The name says what the file is, except where Google left its
+        // type out or cut it short; then the markup does.
+        let record = match type_token.as_deref() {
+            Some("Text") => Some(Record::Thread),
+            Some(tok) => CallKind::from_type_token(tok).map(Record::Call),
+            None => None,
         }
+        .or_else(|| record_of(&html));
+        match record {
+            Some(Record::Thread) => ingest_text_thread(
+                folder,
+                path,
+                &label,
+                &html,
+                rows,
+                acc,
+                n_attachments,
+                missing,
+            )?,
+            Some(Record::Call(kind)) => ingest_event(
+                folder,
+                path,
+                &label,
+                kind,
+                &html,
+                rows,
+                acc,
+                n_attachments,
+                missing,
+            )?,
+            None => bail!("neither a thread nor a call record"),
+        }
+        Ok(true)
     } else {
         // Non-HTML: an orphan call/voicemail recording whose `.html`
         // index was deleted is a real event; ingest it. Anything else
@@ -471,10 +475,13 @@ fn ingest_text_thread(
                         *n_attachments += 1;
                         attachment_refs.push(ref_name);
                     }
-                    Err(e) => missing.push(format!("read {}: {e}", blob_path.display())),
+                    Err(e) => missing.push(format!("read {}: {e}", shown_name(&blob_path))),
                 }
             } else {
-                missing.push(format!("{src} is not in the export"));
+                missing.push(format!(
+                    "{} is not in the export",
+                    shown_name(Path::new(src))
+                ));
             }
         }
         let payload = json!({
@@ -532,7 +539,9 @@ fn ingest_event(
 
     let mut audio_ref: Option<String> = None;
     if let Some(src) = &ev.audio_src {
-        if let Some(blob_path) = resolve_sibling(path, src) {
+        // Google cuts a long name short on disk but not in the link, so
+        // the recording is also the one named like its record.
+        if let Some(blob_path) = resolve_sibling(path, src).or_else(|| audio_beside(path)) {
             let ref_name = file_name(&blob_path);
             match std::fs::read(&blob_path) {
                 Ok(bytes) => {
@@ -540,10 +549,13 @@ fn ingest_event(
                     *n_attachments += 1;
                     audio_ref = Some(ref_name);
                 }
-                Err(e) => missing.push(format!("read {}: {e}", blob_path.display())),
+                Err(e) => missing.push(format!("read {}: {e}", shown_name(&blob_path))),
             }
         } else {
-            missing.push(format!("{src} is not in the export"));
+            missing.push(format!(
+                "{} is not in the export",
+                shown_name(Path::new(src))
+            ));
         }
     }
     let payload = json!({
@@ -604,7 +616,7 @@ fn ingest_orphan_audio(
             acc.add_fetched(&id, &ref_name, bytes, guess_content_type(path));
             *n_attachments += 1;
         }
-        Err(e) => missing.push(format!("read {}: {e}", path.display())),
+        Err(e) => missing.push(format!("read {}: {e}", shown_name(path))),
     }
     let payload = json!({
         "id": id.clone(),
@@ -714,6 +726,14 @@ fn normalize_ts(raw: &str) -> Option<String> {
 /// Resolve an HTML `src`/`href` to a sibling file. Audio `src` carries
 /// the full filename (exact match); MMS `img src` drops the extension,
 /// so fall back to a stem match.
+/// The recording named like the record it belongs to: `<stem>.mp3`.
+fn audio_beside(html_path: &Path) -> Option<PathBuf> {
+    ["mp3", "m4a", "amr", "ogg", "wav"]
+        .iter()
+        .map(|ext| html_path.with_extension(ext))
+        .find(|p| p.is_file())
+}
+
 fn resolve_sibling(html_path: &Path, src: &str) -> Option<PathBuf> {
     let dir = html_path.parent()?;
     let exact = dir.join(src);
@@ -752,6 +772,13 @@ fn guess_content_type(path: &Path) -> Option<String> {
         _ => return None,
     };
     Some(ct.to_string())
+}
+
+/// A file's name as a problem row may show it: its shape, not the person
+/// or number it is named after.
+fn shown_name(path: &Path) -> String {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    crate::ingest::shape::shape_rel(&format!("Voice/Calls/{name}"))
 }
 
 #[cfg(test)]

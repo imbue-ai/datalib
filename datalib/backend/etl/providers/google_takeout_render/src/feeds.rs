@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use datalib_etl_chat_common::period::by_year;
 use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
 use datalib_etl_chat_common::types::{
-    own_stamp_ms, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
+    own_stamp_ms, AuthorKind, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
     NormalizedDoc, UpstreamRef,
 };
 use datalib_etl_render::inputs::Inputs;
@@ -23,6 +23,11 @@ pub const GEMINI: &str = "feed:gemini";
 pub const YOUTUBE_HISTORY: &str = "feed:youtube_history";
 pub const YOUTUBE_SUBSCRIPTIONS: &str = "feed:youtube_subscriptions";
 pub const MAPS: &str = "feed:maps";
+/// One page per Saved list, My Maps map and Play Books book: the prefix,
+/// then the export file it comes from.
+pub const SAVED_LIST: &str = "feed:saved_list:";
+pub const MY_MAP: &str = "feed:my_map:";
+pub const PLAY_BOOK: &str = "feed:play_book:";
 
 /// Who every feed's own items are by: the account the export is of.
 pub const ME: &str = "Me";
@@ -45,6 +50,11 @@ pub fn profile(chat_id: &str) -> RenderProfile {
         GEMINI => ("Gemini", "Gemini Activity", "Gemini Prompt"),
         YOUTUBE_HISTORY => ("YouTube", "YouTube History", "YouTube Watch"),
         YOUTUBE_SUBSCRIPTIONS => ("YouTube", "YouTube Subscriptions", "YouTube Subscription"),
+        id if id.starts_with(SAVED_LIST) => {
+            ("Google Maps", "Google Maps List", "Google Maps Saved Item")
+        }
+        id if id.starts_with(MY_MAP) => ("My Maps", "My Maps Map", "My Maps Placemark"),
+        id if id.starts_with(PLAY_BOOK) => ("Play Books", "Play Books Book", "Play Books Entry"),
         _ => ("Google Maps", "Google Maps Activity", "Google Maps Place"),
     };
     RenderProfile {
@@ -72,6 +82,7 @@ pub fn item(
     NormalizedChatItem {
         message_uuid: id.uuid,
         author_handle: None,
+        author_kind: AuthorKind::Named,
         author_display: author.to_string(),
         date_ms,
         text: None,
@@ -90,6 +101,49 @@ pub fn item(
         mentions: Vec::new(),
         problems,
     }
+}
+
+/// An item of the account's own, under the "Me" that stands in for it.
+pub fn own_item(
+    id: Identity,
+    date_ms: Option<i64>,
+    kind_label: &str,
+    problems: Vec<Problem>,
+) -> NormalizedChatItem {
+    NormalizedChatItem {
+        author_kind: AuthorKind::Account,
+        ..item(id, ME, date_ms, kind_label, problems)
+    }
+}
+
+/// A line at the top of a page saying what it is — a list's description,
+/// a book's author — as a system note.
+pub fn note_item(source_id: &str, chat_id: &str, note: String) -> NormalizedChatItem {
+    let id = ids::feed_item(source_id, ids::KIND_FEED_NOTE, chat_id, None);
+    NormalizedChatItem {
+        kind: ItemKind::System,
+        system_note: Some(note),
+        ..item(id, ME, None, "Note", Vec::new())
+    }
+}
+
+/// What the account wrote about a whole page — a list's or a map's
+/// description — as its first entry, so it is searched with the rest.
+pub fn description_item(source_id: &str, chat_id: &str, text: String) -> NormalizedChatItem {
+    let id = ids::feed_item(source_id, ids::KIND_FEED_NOTE, chat_id, None);
+    with_text(own_item(id, None, "Description", Vec::new()), Some(text))
+}
+
+/// HTML someone wrote (a pin's description, Gemini's answer) as
+/// markdown. Pictures are left to the attachments that carry them.
+pub fn html_markdown(html: &str) -> String {
+    htmd::HtmlToMarkdown::builder()
+        .skip_tags(vec!["script", "style", "img"])
+        .build()
+        .convert(html)
+        .unwrap_or_default()
+        .trim()
+        .to_string()
 }
 
 pub fn with_text(mut item: NormalizedChatItem, text: Option<String>) -> NormalizedChatItem {
@@ -186,6 +240,7 @@ fn chat(
 ) -> NormalizedChat {
     let feed = ids::feed(source_id, chat_id);
     NormalizedChat {
+        named_after: Vec::new(),
         contacts: Vec::new(),
         inputs: inputs.declared(),
         path_prefix: None,

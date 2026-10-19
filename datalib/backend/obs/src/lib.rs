@@ -6,9 +6,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use indicatif::MultiProgress;
 use opentelemetry::trace::TracerProvider as _;
-use opentelemetry::KeyValue;
 use opentelemetry_otlp::WithExportConfig;
-use opentelemetry_sdk::trace::TracerProvider;
+use opentelemetry_sdk::trace::SdkTracerProvider;
 use opentelemetry_sdk::Resource;
 use tracing_indicatif::writer::IndicatifWriter;
 use tracing_subscriber::layer::SubscriberExt;
@@ -57,7 +56,7 @@ pub struct ObsArgs {
 /// Returned from [`init`]. Drop on shutdown so the OTLP batch exporter
 /// gets a chance to flush before the process exits.
 pub struct TracingGuard {
-    provider: Option<TracerProvider>,
+    provider: Option<SdkTracerProvider>,
     multi: Arc<MultiProgress>,
 }
 
@@ -104,12 +103,13 @@ pub fn init(args: &ObsArgs, service_name: &'static str) -> Result<TracingGuard> 
                 .with_endpoint(endpoint)
                 .build()
                 .with_context(|| format!("build otlp exporter for {endpoint}"))?;
-            let provider = TracerProvider::builder()
-                .with_batch_exporter(exporter, opentelemetry_sdk::runtime::Tokio)
-                .with_resource(Resource::new(vec![KeyValue::new(
-                    "service.name",
-                    service_name,
-                )]))
+            let provider = SdkTracerProvider::builder()
+                .with_batch_exporter(exporter)
+                .with_resource(
+                    Resource::builder_empty()
+                        .with_service_name(service_name)
+                        .build(),
+                )
                 .build();
             let tracer = provider.tracer(service_name);
             let layer = tracing_opentelemetry::layer().with_tracer(tracer);

@@ -1,0 +1,106 @@
+{
+  "messages": [
+    {
+      "creator": {
+        "name": "Guinan",
+        "email": "guinan@tenforward.example",
+        "user_type": "Human"
+      },
+      "created_date": "Friday, March 7, 2025 at 8:00:00 PM PST",
+      "text": "Who wants to hear about the Nexus?",
+      "topic_id": "N1",
+      "message_id": "AAAATenFwd/N1/N1"
+    },
+    {
+      "creator": {
+        "name": "Data",
+        "email": "data@enterprise.starfleet",
+        "user_type": "Human"
+      },
+      "created_date": "Friday, March 7, 2025 at 8:05:00 PM PST",
+      "text": "I would. I have attached my notes.",
+      "attached_files": [
+        {
+          "original_name": "nexus notes",
+          "export_name": "nexus notes"
+        },
+        {
+          "original_name": "nexus-draft.txt",
+          "export_name": "nexus-draft.txt"
+        }
+      ],
+      "previous_message_versions": [
+        {
+          "text": "I would.",
+          "created_date": "Friday, March 7, 2025 at 8:05:00 PM PST",
+          "attached_files": [
+            {
+              "original_name": "nexus-draft.txt",
+              "export_name": "nexus-draft.txt"
+            }
+          ]
+        }
+      ],
+      "updated_date": "Friday, March 7, 2025 at 8:06:30 PM PST",
+      "topic_id": "N1",
+      "message_id": "AAAATenFwd/N1/N2"
+    },
+    {
+      "creator": {
+        "name": "William Riker",
+        "email": "riker@enterprise.starfleet",
+        "user_type": "Human",
+        "acting_user": {
+          "name": "Trombone Bot",
+          "user_id": "100000000000000000001",
+          "user_type": "Bot"
+        }
+      },
+      "created_date": "Saturday, March 8, 2025 at 9:00:00 PM PST",
+      "text": "Jam session tonight: https://youtu.be/tngJazz01",
+      "annotations": [
+        {
+          "start_index": 22,
+          "length": 26,
+          "youtube_metadata": {
+            "id": "tngJazz01",
+            "start_time": 0
+          }
+        }
+      ],
+      "topic_id": "N3",
+      "message_id": "AAAATenFwd/N3/N3"
+    },
+    {
+      "creator": {
+        "name": "Guinan",
+        "email": "guinan@tenforward.example",
+        "user_type": "Human"
+      },
+      "created_date": "Sunday, March 9, 2025 at 7:00:00 PM PST",
+      "text": "",
+      "annotations": [
+        {
+          "start_index": 0,
+          "length": 1,
+          "gsuite_integration_metadata": {
+            "call_data": {
+              "call_status": "CALL_ENDED"
+            }
+          }
+        },
+        {
+          "start_index": 0,
+          "length": 1,
+          "video_call_metadata": {
+            "meeting_space": {
+              "meeting_url": "https://meet.google.com/tng-tenf-wrd"
+            }
+          }
+        }
+      ],
+      "topic_id": "N4",
+      "message_id": "AAAATenFwd/N4/N4"
+    }
+  ]
+}

@@ -280,6 +280,9 @@ pub(crate) async fn run_subprocess(
         .with_context(|| format!("spawn {prog:?}"))
         .map_err(internal)?;
     let _pid_guard = child.id().map(RegisteredChild::new);
+    let memory = child
+        .id()
+        .map(|pid| crate::memory::MemoryWatch::start(pid, &ctx.step_id, sink));
     // Aborted once the step has exited and its pipes have closed. Not at
     // the exit alone: a child the step left behind is still in the group,
     // holding stderr, and the drain below waits on it. While any member is
@@ -375,6 +378,7 @@ pub(crate) async fn run_subprocess(
         .await
         .context("wait for subprocess")
         .map_err(internal)?;
+    drop(memory);
     let stderr_tail = stderr_task.await.unwrap_or_default();
     if let Some(t) = stop_task {
         t.abort();
@@ -1237,7 +1241,7 @@ mod tests {
         let consumer = {
             let passes = passes.clone();
             StepSpec::new(
-                "unified_index/grid",
+                "unified_document_index/grid",
                 StepRun::in_process(move |ctx: crate::step::StepCtx| {
                     let passes = passes.clone();
                     async move {
@@ -1282,7 +1286,7 @@ mod tests {
             .filter_map(|e| match e {
                 Event::Metric {
                     step, name, value, ..
-                } if step == "unified_index/grid" && name == "queued" => Some(*value),
+                } if step == "unified_document_index/grid" && name == "queued" => Some(*value),
                 _ => None,
             })
             .collect();
@@ -1355,6 +1359,68 @@ mod tests {
             })
             .collect();
         assert_eq!(seals, vec![("v1".to_string(), Some(7))]);
+    }
+
+    /// The runner reports what a step holds in memory, counting what the
+    /// step spawned: the shell here holds a megabyte or two, the `dd` below
+    /// it a 64 MiB buffer. Once the step ends its reading goes to zero and
+    /// its peak stays.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_step_reports_the_memory_it_and_what_it_spawned_hold() {
+        use crate::memory::{RSS_BYTES, RSS_PEAK_BYTES};
+        const BUFFER: i64 = 64 * 1024 * 1024;
+        let root = tempfile::tempdir().unwrap();
+        // dd rewrites its buffer for as long as it runs, so the pages stay
+        // active: an idle buffer is compressed or swapped out of RSS once
+        // the machine is under memory pressure, which a full test run is.
+        // The step kills it when released; the watchdog bounds it if the
+        // test never gets that far, its output closed so it holds none of
+        // the step's pipes.
+        let spec = StepSpec::new(
+            "g/out",
+            sh(r#"
+                mkdir -p "$DATALIB_DAG_DATA_ROOT/g/out"
+                dd if=/dev/zero of=/dev/null bs=67108864 count=1000000 2>/dev/null & d=$!
+                (sleep 60; kill $d) >/dev/null 2>&1 &
+                while [ ! -f "$DATALIB_DAG_DATA_ROOT/release" ]; do sleep 0.1; done
+                kill $d
+            "#),
+        );
+        let g = Graph::build(vec![spec]).unwrap();
+        let rec = Arc::new(Recorder::default());
+        let runner = Runner::new(root.path()).sink(rec.clone());
+        let round = tokio::spawn(async move { runner.run(&g).await });
+        let readings = |series: &str| -> Vec<i64> {
+            rec.0
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|e| match e {
+                    Event::Metric {
+                        step, name, value, ..
+                    } if step == "g/out" && name == series => Some(*value),
+                    _ => None,
+                })
+                .collect()
+        };
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while !readings(RSS_BYTES).iter().any(|&v| v >= BUFFER) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no reading counted the step's child: {:?}",
+                readings(RSS_BYTES)
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        std::fs::write(root.path().join("release"), "").unwrap();
+        let rep = round.await.unwrap().unwrap();
+
+        assert!(rep.all_ok(), "{rep:#?}");
+        assert_eq!(readings(RSS_BYTES).last(), Some(&0));
+        let peak = readings(RSS_PEAK_BYTES).last().copied().unwrap_or(0);
+        assert!(peak >= BUFFER, "peak {peak}");
     }
 
     #[tokio::test]

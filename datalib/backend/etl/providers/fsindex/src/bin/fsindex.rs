@@ -42,7 +42,7 @@ struct Args {
     branch: Option<String>,
 
     /// Disable identity-UUID breadcrumb stamping, regardless of
-    /// `.fsindex.yaml` config. The scanner is read-only when set.
+    /// `.fsindex.toml` config. The scanner is read-only when set.
     #[arg(long)]
     no_stamp: bool,
 

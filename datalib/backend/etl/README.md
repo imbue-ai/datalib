@@ -119,10 +119,15 @@ re-download, which defeats incremental render.
 Declare them per-provider as `VolatilePath`s next to the table definition;
 `split_volatile` moves them into the sidecar's `volatile_payload`, and
 `overlay` reconstructs the wire object exactly. A path is object keys,
-plus `*` (`EVERY_ELEMENT`) to reach into each element of an array:
+plus `*` (`EVERY_ELEMENT`) to reach into each element of an array or
+each value of an object:
 `["blocks", "*", "block_id"]` takes the id Slack mints on every read out
 of each block, and the sidecar keeps them in order
 (`{"blocks": [{"block_id": …}, {}, …]}`, `{}` for a block without one).
+Under an object the sidecar is keyed like the object and names only the
+values that had the field: ChatGPT's
+`["mapping", "*", "message", "metadata", "model_switcher_deny"]` keeps
+`{"mapping": {"<node id>": {"message": …}}}`.
 
 Writing the sidecar replaces it. When two endpoints return one record
 with different volatile fields, as Slack's history and replies copies of
@@ -334,11 +339,13 @@ reads through `dolt_at_` modules,
 `dolt_diff_summary`, `dolt_diff_stat`, `dolt_status`, a `COUNT(*)` per
 table, `BEGIN`/`COMMIT` around plain reads (the held read transaction),
 `dolt_branches`, a read-only open of `<file>@<hash>` with a
-`COUNT(*)` and a `_datalib_meta` read on it, and, on that open or on
+`COUNT(*)`, a `_datalib_meta` read and the rows of a key range with
+their blobs, at a commit the writer has since moved past (the
+time-series applet's read), and, on that open or on
 the held read transaction's connection to `main`, an `ATTACH` of a
 plain SQLite file read-only with an FTS5 `MATCH` on it and a join from
 it to the store's tables — and that list is the allowlist. The plain
-file keeps a rollback journal (dolthub/doltlite#3740), so a transaction
+file is in rollback-journal mode (its writer never asks for WAL), so a transaction
 that reads it holds off its writer's commits for as long as it is open:
 keep one to a request's queries. A transaction around one query waits
 a few milliseconds at most
@@ -637,7 +644,9 @@ arrive and drains the bundle at end of bucket; parse loads every document's
 bundle at once with `BlobBundle::load_many`; render then consumes an
 already-loaded bag of bytes — no SQL, no `block_in_place`, no dyn blob reader.
 Parse reads the edge table in one query for every document it loads,
-not one per document.
+not one per document. Email is the exception: a mailbox's `.eml`s are
+too many to hold at once, so its parse hands render an `EmlStore` that
+runs the same `load_many` for a batch of threads just before they render.
 
 **The CAS is plain SQLite, not doltlite**, created through the
 `doltlite_engine=sqlite` URI parameter like the run store. A

@@ -16,14 +16,19 @@ use crate::retry_and_stop::StopAt;
 
 const FIT_13: &str = "/download-service/files/activity/17010413001";
 
-fn hash(b: &str) -> Option<String> {
-    Some(blake3_hex(b.as_bytes()))
+fn hash(b: &[u8]) -> Option<String> {
+    Some(blake3_hex(b))
 }
 
 fn fit_edges() -> Vec<(String, Option<String>)> {
     vec![
-        ("17010413001".into(), hash(".FIT synthetic 17010413001")),
-        ("17010414002".into(), hash(".FIT ride of 2369-04-14")),
+        (
+            "17010413001".into(),
+            hash(&datalib_etl_garmin::synthesize::synthetic_fit(
+                "17010413001",
+            )),
+        ),
+        ("17010414002".into(), hash(b".FIT ride of 2369-04-14")),
     ]
 }
 
@@ -178,8 +183,8 @@ async fn a_failed_wellness_day_is_fetched_again_and_a_day_with_no_bundle_is_held
     assert_eq!(
         a.pairs(WELLNESS_EDGES_SQL).await[1..3],
         [
-            ("2369-04-02".to_string(), hash("bundle of 2369-04-02")),
-            ("2369-04-04".to_string(), hash("bundle of 2369-04-04")),
+            ("2369-04-02".to_string(), hash(b"bundle of 2369-04-02")),
+            ("2369-04-04".to_string(), hash(b"bundle of 2369-04-04")),
         ],
         "a day whose request failed has no row: nothing was answered for it"
     );
@@ -196,7 +201,7 @@ async fn a_failed_wellness_day_is_fetched_again_and_a_day_with_no_bundle_is_held
     assert!(a.problems().await.is_empty(), "{:?}", a.problems().await);
     assert_eq!(
         a.pairs(WELLNESS_EDGES_SQL).await[2],
-        ("2369-04-03".to_string(), hash("bundle of 2369-04-03"))
+        ("2369-04-03".to_string(), hash(b"bundle of 2369-04-03"))
     );
 
     let s3 = a.run().await;
@@ -232,7 +237,7 @@ async fn a_wellness_bundle_fetched_before_its_day_was_over_is_fetched_again() {
     assert_eq!((s2.errors, s2.wellness_files), (0, 1), "{}", s2.line());
     assert_eq!(
         a.pairs(WELLNESS_EDGES_SQL).await[13],
-        ("2369-04-14".to_string(), hash("the 14th, whole"))
+        ("2369-04-14".to_string(), hash(b"the 14th, whole"))
     );
 
     let s3 = a.run().await;

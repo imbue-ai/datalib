@@ -5,15 +5,15 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use super::ids;
-use super::parse::ParsedEmail;
+use super::parse::{EmailThreadBucket, ParsedEmail, EML_BATCH};
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{blake3_hex, BlobBundle};
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::normalize::iso_to_ms;
 use datalib_etl_chat_common::render::{Buckets, ChatRenderer, RenderProfile};
 use datalib_etl_chat_common::types::{
-    own_stamp_ms, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, Recipient,
-    RecipientRole, UpstreamRef,
+    own_stamp_ms, AuthorKind, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc,
+    Recipient, RecipientRole, UpstreamRef,
 };
 use datalib_etl_chat_common::TextFormat;
 use datalib_etl_email::ingest::db::{LoadedAttachment, LoadedEmail};
@@ -219,7 +219,7 @@ pub fn render_all(
     // Thread-level inclusion: keep the whole thread if ANY of its
     // emails is filed under an allowed mailbox, so conversations
     // aren't fragmented across the filter boundary.
-    let allowed = |bucket: &&super::parse::EmailThreadBucket| {
+    let allowed = |bucket: &&EmailThreadBucket| {
         label_allow.as_ref().is_none_or(|allow| {
             bucket.emails.iter().any(|em| {
                 bucket
@@ -239,9 +239,10 @@ pub fn render_all(
         .iter()
         .map(|b| ids::thread(source_id, &b.account_id, &b.thread_id).uuid)
         .collect();
-    // One document per thread. Each thread is built as it renders:
-    // building means parsing every `.eml` and converting its HTML, which
-    // for a large mailbox is minutes of work nobody would see.
+    // One document per thread. Each thread is built as it renders, its
+    // `.eml`s read a batch of threads ahead: reading, parsing and hashing
+    // them is most of the work, and up front a large mailbox spends it
+    // with no progress to show and every byte in memory at once.
     let profile = profile();
     let mut renderer = ChatRenderer::new(
         &profile,
@@ -251,11 +252,22 @@ pub fn render_all(
         progress,
         on_doc_complete,
     );
-    for bucket in threads {
-        let (chat, bundle) = build_chat(source_id, bucket, &mailbox_name, &account_label, outlink);
-        renderer
-            .render_chat(&chat, &bundle)
-            .context("email chat-common render")?;
+    for batch in threads.chunks(EML_BATCH) {
+        let loaded;
+        let batch: Vec<&EmailThreadBucket> = match &parsed.emls {
+            Some(emls) => {
+                loaded = emls.load(batch)?;
+                loaded.iter().collect()
+            }
+            None => batch.to_vec(),
+        };
+        for bucket in batch {
+            let (chat, bundle) =
+                build_chat(source_id, bucket, &mailbox_name, &account_label, outlink);
+            renderer
+                .render_chat(&chat, &bundle)
+                .context("email chat-common render")?;
+        }
     }
     Ok(Rendered {
         buckets: renderer.finish().buckets,
@@ -274,7 +286,7 @@ fn account_label_from_payload(id: &str, payload: &serde_json::Value) -> Option<S
 
 fn build_chat(
     source_id: &str,
-    bucket: &super::parse::EmailThreadBucket,
+    bucket: &EmailThreadBucket,
     mailbox_name: &HashMap<String, String>,
     account_label: &HashMap<String, String>,
     outlink: Option<OutlinkFormat>,
@@ -327,8 +339,9 @@ fn build_chat(
                 if !is_inline_attachment(a) {
                     listed_hashes.insert(blob.blake3.clone());
                 }
-                render_bundle.add(
+                render_bundle.add_hashed(
                     a.blob_id.clone(),
+                    blob.blake3.clone(),
                     blob.bytes.clone(),
                     blob.content_type.clone(),
                     blob.upstream_name.clone(),
@@ -343,8 +356,9 @@ fn build_chat(
         for inline in &parsed_eml.inline_parts {
             let b3 = blake3_hex(&inline.bytes);
             let ref_id = format!("inline:{b3}");
-            render_bundle.add(
+            render_bundle.add_hashed(
                 ref_id.clone(),
+                b3.clone(),
                 inline.bytes.clone(),
                 inline.content_type.clone(),
                 None,
@@ -465,6 +479,7 @@ fn build_chat(
         items.push(NormalizedChatItem {
             message_uuid: email_id.uuid.clone(),
             author_handle: parsed_eml.from_handle.clone(),
+            author_kind: AuthorKind::Named,
             author_display: if parsed_eml.from_display.is_empty() {
                 "(unknown sender)".to_string()
             } else {
@@ -493,6 +508,7 @@ fn build_chat(
     // The thread's title `↗` points at the root (first) email's outlink.
     let thread_source_url = items.first().and_then(|i| i.source_url.clone());
     let mut chat = NormalizedChat {
+        named_after: Vec::new(),
         contacts: Vec::new(),
         inputs: Vec::new(),
         path_prefix: None,
@@ -550,7 +566,7 @@ fn flag_labels(keywords: Option<&Vec<String>>) -> Vec<String> {
 
 fn mailboxes_for_email(
     em: &LoadedEmail,
-    bucket: &super::parse::EmailThreadBucket,
+    bucket: &EmailThreadBucket,
     mailbox_name: Lookup<'_, HashMap<String, String>>,
 ) -> Vec<String> {
     bucket
@@ -688,6 +704,7 @@ impl ParsedEml {
                         role,
                         display: display.to_string(),
                         handle: Handle::email(address),
+                        drawn: true,
                     })
                 })
         })

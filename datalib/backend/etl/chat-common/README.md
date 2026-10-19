@@ -54,7 +54,10 @@ An item with `recipients` (an email's To, Cc and Bcc) gets one more line
 straight under the header, a paragraph rather than an HTML block
 because markdown is not parsed inside a block:
 `<span class="msg-recipients">To [Will Riker](mailto:… "…"), <span
-class="msg-recipient">Deanna Troi</span>; Cc …</span>`.
+class="msg-recipient">Deanna Troi</span>; Cc …</span>`. A recipient
+the conversation already names (`Recipient::drawn` false: the number a
+text went to) is left off the line, so every message does not repeat
+it, and is searched and counted all the same.
 
 Each document also carries a `NormalizedContact` per handle in it
 (`src/people.rs`): authors with what they wrote, recipients and
@@ -92,7 +95,18 @@ that, clicking a tool-call row in the grid would scroll to something
 invisible.
 
 An aside keeps its own grid row, but its document's row leaves it out:
-that row's Contents is what was said, not the plumbing.
+that row's Contents is what was said, not the plumbing, and its
+`participant` terms are who said it, so a tool named as an aside's
+author is nobody `with:` finds.
+
+## Stand-in authors
+
+Where a provider has no person to show, it shows a stand-in: "Me" for
+the account's own messages, "Unknown" for a sender the source does not
+name, a heading on a page whose sections have no author. Say so with
+the item's `author_kind` (a reaction's `reactor_kind`): `Account` or
+`Unknown` rather than `Named`. The label is still drawn, but it is not
+a participant; only a handle behind it is.
 
 Decide `is_aside` from what the item *is* upstream, not from its
 `kind_label`. ChatGPT files `system` messages under the same "Tool
@@ -257,10 +271,9 @@ so markup that gets past the sanitizer still cannot run.
 straight into a document's frame. The UI's own code still reaches into
 the frame, so the `data-section-uuid` wrappers work as before.
 
-An `<iframe>` survives the sanitizer only when it frames
-`plots/<name>.html`, and the frame's policy allows frames from the asset
-route alone. The server runs such a page's scripts with no
-network (`DocumentKind::Plot` in `http/src/embed.rs`). It knows the page
-is a plot because the `unified_index` applet names it so. Every other
-document beside a markdown, such as an `.html` attachment in `blobs/`,
-runs no script at all.
+No `<iframe>` survives the sanitizer, and the frame's policy frames
+nothing. A document beside a markdown, such as an `.html` attachment in
+`blobs/`, is served under a policy that runs no script at all
+(`DATA_DOCUMENT_CSP` in `http/src/embed.rs`). A chart in a document is
+a `<div data-time-series="…">`, which the UI's own code draws into the
+frame (`docs/dev/time_series.md` §"Charts in documents").

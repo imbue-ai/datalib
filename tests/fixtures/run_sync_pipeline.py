@@ -521,10 +521,10 @@ params = {params}
         )
         blocks.append(
             f"""[[groups]]
-id = "unified_index"
+id = "unified_document_index"
 
 [[steps]]
-group = "unified_index"
+group = "unified_document_index"
 function = "grid_index"
 inputs = [{rendered_list}]"""
         )
@@ -536,16 +536,16 @@ inputs = [{rendered_list}]"""
         # be browsable.
         root_blocks.append(
             f"""[[groups]]
-id = "unified_index"
-name = "Unified Index"
+id = "unified_document_index"
+name = "Document Index"
 
 [[steps]]
-group = "unified_index"
+group = "unified_document_index"
 function = "grid_index"
 inputs = [{rendered_list}]
 
 [[steps]]
-group = "unified_index"
+group = "unified_document_index"
 function = "qmd_aggregator"
 inputs = [{qmd_list}]"""
         )
@@ -927,6 +927,9 @@ def _source_config(
             "maps_saved_places": True,
             "maps_photos": True,
             "gemini_apps": True,
+            "maps_saved_lists": True,
+            "my_maps": True,
+            "play_books": True,
         }
     elif type_str == "sms_backup_restore":
         source["backup"] = {"path": str(input_path)}

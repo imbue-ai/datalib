@@ -7,7 +7,8 @@ use std::collections::BTreeMap;
 use datalib_etl_chat_common::period::by_year;
 use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
 use datalib_etl_chat_common::types::{
-    ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, NormalizedReaction, UpstreamRef,
+    AuthorKind, ItemKind, NamedPerson, NormalizedChat, NormalizedChatItem, NormalizedDoc,
+    NormalizedReaction, UpstreamRef,
 };
 use datalib_etl_facebook::ingest::schema_raw::{MESSENGER_MESSAGES_TABLE, MESSENGER_THREADS_TABLE};
 use datalib_etl_render::html::{escape_md_block, escape_md_inline, md_link_dest};
@@ -91,12 +92,16 @@ struct People<'a> {
 }
 
 impl People<'_> {
-    fn who(&self, name: &str) -> (String, Option<Handle>) {
+    fn who(&self, name: &str) -> (String, Option<Handle>, AuthorKind) {
         if !is_deleted_account(name) {
             let name = name.trim();
-            return (name.to_string(), Handle::facebook_name(name));
+            return (
+                name.to_string(),
+                Handle::facebook_name(name),
+                AuthorKind::Named,
+            );
         }
-        match self.deleted {
+        let (shown, handle) = match self.deleted {
             0 => ("Facebook user".to_string(), None),
             1 => (
                 "Facebook user".to_string(),
@@ -106,7 +111,8 @@ impl People<'_> {
                 format!("Facebook user (one of {n} deleted accounts here)"),
                 None,
             ),
-        }
+        };
+        (shown, handle, AuthorKind::Unknown)
     }
 }
 
@@ -190,6 +196,7 @@ fn conversation(
 
     let chat = ids::conversation(&owner.source_id, row_id);
     NormalizedChat {
+        named_after: named_after(thread, &participants, owner, &people),
         contacts: Vec::new(),
         inputs: inputs.declared(),
         path_prefix: None,
@@ -290,6 +297,39 @@ fn display(row_id: &str, thread: &Value, participants: &[&str], owner: &Owner) -
     }
 }
 
+/// Who a conversation is named after when its name is its people: one
+/// with no title, or whose title is only the other people's names, as
+/// the export titles a one-to-one conversation. A deleted account is
+/// one of them under the handle `People` gives it.
+fn named_after(
+    thread: &Value,
+    participants: &[&str],
+    owner: &Owner,
+    people: &People,
+) -> Vec<NamedPerson> {
+    let others: Vec<&str> = participants
+        .iter()
+        .map(|n| n.trim())
+        .filter(|n| *n != owner.name)
+        .collect();
+    let named: Vec<&str> = others
+        .iter()
+        .copied()
+        .filter(|n| !is_deleted_account(n))
+        .collect();
+    let title = str_field(thread, "title").unwrap_or("").trim();
+    if !is_deleted_account(title) && title != named.join(", ") {
+        return Vec::new();
+    }
+    others
+        .into_iter()
+        .map(|n| {
+            let (shown, handle, _) = people.who(n);
+            NamedPerson { shown, handle }
+        })
+        .collect()
+}
+
 fn folder_label(folder: &str) -> String {
     match folder {
         "inbox" => "Messenger",
@@ -342,7 +382,7 @@ fn message(
             );
         }
     }
-    let (author, handle) = people.who(m.get("sender_name").and_then(Value::as_str).unwrap_or(""));
+    let author = people.who(m.get("sender_name").and_then(Value::as_str).unwrap_or(""));
 
     let content = str_field(m, "content");
     let mut parts: Vec<String> = content.map(escape_md_block).into_iter().collect();
@@ -396,7 +436,7 @@ fn message(
         ));
     }
     let id = ids::message(&owner.source_id, row_id, date_ms);
-    let mut item = chat_item(id, (author, handle), date_ms, text, attachments);
+    let mut item = chat_item(id, author, date_ms, text, attachments);
     // A message the export carries nothing of still happened: say so
     // rather than draw a bare header.
     if empty {
@@ -436,10 +476,11 @@ fn reaction(
         .filter(|s| *s > 0)
         .map(|s| s * 1000);
     let id = ids::message_reaction(&owner.source_id, message_row_id, actor, emoji, date_ms);
-    let (reactor_display, reactor_handle) = people.who(actor);
+    let (reactor_display, reactor_handle, reactor_kind) = people.who(actor);
     Some(NormalizedReaction {
         reaction_uuid: id.uuid,
         reactor_handle,
+        reactor_kind,
         reactor_display,
         emoji: emoji.to_string(),
         date_ms,
@@ -456,6 +497,7 @@ mod tests {
         Owner {
             source_id: "fb".to_string(),
             name: "Jean-Luc Picard".to_string(),
+            name_kind: AuthorKind::Named,
             handle: datalib_handle::Handle::facebook_name("Jean-Luc Picard"),
             account: None,
             inputs: Vec::new(),

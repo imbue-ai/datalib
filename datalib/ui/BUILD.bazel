@@ -124,7 +124,7 @@ copy_to_bin(
 
 _E2E_DATA = [
     "//datalib/backend/http:datalib_http_bin",
-    # The grid is served by the `unified_index` applet now, and the
+    # The grid is served by the `unified_document_index` applet now, and the
     # fixture config names its binary by absolute path — so it has to be
     # in the runfiles or every grid spec sees an empty page.
     "//datalib/backend/applets:datalib_applet",

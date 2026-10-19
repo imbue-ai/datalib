@@ -143,18 +143,18 @@ function bareRoot(prefix: string): string {
     `data_root = "${root}"
 
 [[groups]]
-id = "unified_index"
-name = "Unified Index"
+id = "unified_document_index"
+name = "Document Index"
 
 [[steps]]
-group = "unified_index"
+group = "unified_document_index"
 function = "grid_index"
 inputs = []
 
 [[applets]]
-group = "unified_index"
-id = "unified_index"
-command = "'${APPLET_BIN}' unified_index"
+group = "unified_document_index"
+id = "unified_document_index"
+command = "'${APPLET_BIN}' unified_document_index"
 `,
   );
   return root;
@@ -388,7 +388,7 @@ function servers(): Server[] {
     spawnBackend("empty", EMPTY_ROOT),
     // The one server whose PATH carries the dash-named binaries. The
     // scaffold config names `datalib-dag`, its steps and the
-    // `unified_index` applet bare, so PATH is how all three are found —
+    // `unified_document_index` applet bare, so PATH is how all three are found —
     // the installed-user arrangement, which the other two never exercise.
     spawnBackend("onboarding", ONBOARDING_ROOT, {
       PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
@@ -542,7 +542,8 @@ export default defineConfig({
         // The search field, a CodeMirror editor: the desktop app's typing.
         /search-field\.spec\.ts/,
         /column-reveal\.spec\.ts/,
-        /yolink-plots\.spec\.ts/,
+        // A chart mounted into the document frame by the app's own code.
+        /document-charts\.spec\.ts/,
         /gallery\.spec\.ts/,
         // The sandboxed DACTAL iframe: an opaque origin loading module
         // scripts, which WebKit and Chromium have disagreed about.

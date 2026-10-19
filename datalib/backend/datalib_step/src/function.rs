@@ -39,6 +39,10 @@ pub enum Function {
     Embed,
     /// Lay the qmd index's document embeddings out on a plane.
     EmbeddingMap,
+    /// Turn a raw store into its time series.
+    RenderTimeSeries,
+    /// Stack every source's time series into the time-series index.
+    TimeSeriesIndex,
 }
 
 impl Function {
@@ -82,14 +86,22 @@ mod tests {
             Function::RenderMarkdown.as_str(),
             datalib_etl::layout::RENDER_MARKDOWN_DIR
         );
+        assert_eq!(
+            Function::RenderTimeSeries.as_str(),
+            datalib_etl::layout::RENDER_TIME_SERIES_DIR
+        );
         assert_eq!(Function::GridIndex.as_str(), datalib_core::layout::GRID_DIR);
+        assert_eq!(
+            Function::TimeSeriesIndex.as_str(),
+            datalib_core::layout::TIME_SERIES_INDEX_DIR
+        );
         assert_eq!(
             Function::QmdAggregator.as_str(),
             datalib_core::layout::QMD_DIR
         );
         assert_eq!(
             Function::EmbeddingMap.as_str(),
-            datalib_unified_index::embedding_map::DIR
+            datalib_unified_document_index::embedding_map::DIR
         );
     }
 }

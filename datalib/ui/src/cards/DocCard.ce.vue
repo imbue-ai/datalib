@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Document card: fetches the unified_index applet's /chat/{markdownUuid} and renders it via
+// Document card: fetches the unified_document_index applet's /chat/{markdownUuid} and renders it via
 // ChatBody. Fully determined by its props (which come from the card
 // source, e.g. `documentView("md-uuid", "section-uuid")`):
 // - navigation (edge clicks, inline /chat/<uuid> links) opens a new

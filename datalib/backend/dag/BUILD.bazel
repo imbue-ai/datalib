@@ -42,6 +42,7 @@ rust_library(
         "@datalib_crates//:shlex",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:strum",
+        "@datalib_crates//:sysinfo",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
         "@datalib_crates//:toml",
@@ -72,7 +73,7 @@ rust_binary(
     edition = "2021",
     # Must match [package].version in datalib/backend/Cargo.toml;
     # //datalib/backend:version_consistency_test asserts that.
-    version = "0.42.0",
+    version = "0.43.0",
     # Stamp STABLE_GIT_DESCRIBE into `datalib-dag --version` (release.yml
     # smoke-tests that the published tarball reports the tag). `stamp = -1`
     # defers to the --stamp flag (on under --config=release); day-to-day

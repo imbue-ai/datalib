@@ -268,22 +268,22 @@ function = "embed"
 inputs = ["claude/keyword_index"]
 
 [[groups]]
-id = "unified_index"
+id = "unified_document_index"
 
 [[steps]]
-group = "unified_index"
+group = "unified_document_index"
 function = "grid_index"
 inputs = ["claude/render_markdown"]
 
 [[steps]]
-group = "unified_index"
+group = "unified_document_index"
 function = "qmd_aggregator"
 inputs = ["claude/keyword_index", "claude/embed"]
 
 [[applets]]
-group = "unified_index"
-id = "unified_index"
-command = "datalib-applet unified_index"
+group = "unified_document_index"
+id = "unified_document_index"
+command = "datalib-applet unified_document_index"
 ```
 
 Each step says which group it belongs to and what it does there, and
@@ -332,7 +332,10 @@ It keeps the original beside the result as `config.toml.orig`. Comments
 from the old file don't carry over, so review the result. A config whose
 search is still one shared `qmd_index` step needs none of this: the app
 gives each source its own search steps the first time it reads the
-file, and keeps the old one as `config.toml.bak`. A much older root with
+file, and keeps the old one as `config.toml.bak`. The same is true of a
+config whose index is still called `unified_index`: the app renames it
+`unified_document_index`, and moves the index's folder to match rather
+than rebuilding it. A much older root with
 only a `config.yaml` is not convertible any more: set it up again from
 the app.
 
@@ -392,7 +395,7 @@ faster.
 - A `render_markdown` step per source: each conversation or document
   rendered into readable markdown, attachments included.
 - The `grid_index` step: one row per message or document written into
-  the SQL store at `<data_root>/unified_index/grid_index/db.doltlite_db`.
+  the SQL store at `<data_root>/unified_document_index/grid_index/db.doltlite_db`.
 - A `keyword_index` and an `embed` step per source: that source's part
   of free-text search — its words, then its embeddings, which let a
   search match on meaning. The first `embed` downloads its model once.
@@ -421,7 +424,7 @@ faster.
 │   └── render_markdown/
 ├── gmail-takeout/
 │   └── …
-├── unified_index/                  # the shared indexes, rebuildable
+├── unified_document_index/                  # the shared indexes, rebuildable
 │   ├── grid_index/db.doltlite_db   #   grid rows + markdowns + edges
 │   └── qmd_aggregator/qmd/index.sqlite  #   the semantic search index
 └── system/                         # everything that isn't a source
@@ -436,7 +439,7 @@ faster.
 ```
 
 > **Backups:** the bulky **derived** trees — each `<group>/render_markdown/`,
-> and `unified_index/` — are rebuilt from your raw
+> and `unified_document_index/` — are rebuilt from your raw
 > stores by re-running the pipeline, and each carries a `CACHEDIR.TAG`,
 > so cache-aware backup tools skip them automatically:
 >
@@ -486,6 +489,16 @@ A fresh token is minted every time the server starts, so re-read that
 file rather than saving a copy. `DATALIB_TOKEN=<value>` pins one if you
 need it stable across restarts.
 
+The token is for a server a browser reaches directly. Behind a reverse
+proxy that signs every requester in itself, strips and stamps an identity
+header, and frames the app in a page of its own (Imbue Studio's
+workspace forwarder), set `DATALIB_TRUSTED_PROXY=imbue`: a request the
+proxy marks as the owner's then needs no token, one it marks as a
+visitor's is refused, and the page's `frame-ancestors` is left to the
+proxy. The token keeps working for scripts on the same host. Never set
+it for a server a browser can reach without such a proxy — that header
+is then just text any page can send.
+
 ## 6. Re-syncing
 
 Re-run the sync (**Sync everything** in the app, or `datalib-dag config.toml`)
@@ -501,7 +514,7 @@ the `INDEX_PATH` env var:
 
 ```sh
 rt=$(echo ~/.cache/datalib/runtime/*/)
-INDEX_PATH=~/datalib/unified_index/qmd_aggregator/qmd/index.sqlite \
+INDEX_PATH=~/datalib/unified_document_index/qmd_aggregator/qmd/index.sqlite \
     "$rt/node/bin/node" "$rt"/qmd/*/node_modules/@tobilu/qmd/dist/cli/qmd.js query "hello"
 ```
 
@@ -531,7 +544,7 @@ are already in open formats you can read with no datalib at all:
   your language's stdlib — opens directly:
 
   ```sh
-  datalib-doltlite -readonly ~/datalib/unified_index/grid_index/db.doltlite_db .dump \
+  datalib-doltlite -readonly ~/datalib/unified_document_index/grid_index/db.doltlite_db .dump \
     | sqlite3 ~/grid.sqlite
 
   sqlite3 ~/grid.sqlite "SELECT provider, count(*) FROM grid_rows GROUP BY 1;"

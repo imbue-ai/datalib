@@ -21,7 +21,7 @@ type Row = {
 };
 
 async function rows(request: import("@playwright/test").APIRequestContext) {
-  const resp = await request.get("/applet/unified_index/search?q=&limit=2000");
+  const resp = await request.get("/applet/unified_document_index/search?q=&limit=2000");
   expect(resp.ok()).toBeTruthy();
   const data = (await resp.json()) as { rows: Row[] };
   expect(data.rows.length, "fixture must have rows").toBeGreaterThan(0);

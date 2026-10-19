@@ -17,7 +17,9 @@ rust_library(
         "//datalib/backend/etl/providers/perseus_config:datalib_etl_perseus_config",
         "//datalib/backend/etl/render:datalib_etl_render",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/fetch:datalib_fetch",
         "//datalib/backend/id:datalib_id",
+        "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
@@ -25,16 +27,15 @@ rust_library(
         "@datalib_crates//:candle-nn",
         "@datalib_crates//:candle-transformers",
         "@datalib_crates//:chrono",
-        "@datalib_crates//:hf-hub",
-        "@datalib_crates//:sha2",
         "@datalib_crates//:quick-xml",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tokenizers",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
         # Sentence-level alignment via Ancient-Greek-BERT runs through
-        # candle-transformers; weights are pulled lazily by hf-hub and
-        # tokenized by `tokenizers`. See `src/translate/align/embed.rs`.
+        # candle-transformers; the pinned files are fetched lazily by
+        # datalib_fetch and tokenized by `tokenizers`. See
+        # `src/render/align/embed.rs`.
     ],
 )
 

@@ -193,13 +193,13 @@ describe("a photo", () => {
     );
     const slack = withPhoto(
       contact("slack", "Riker", [[TEL, null]]),
-      "/applet/unified_index/asset/u/blobs/r.png",
+      "/applet/unified_document_index/asset/u/blobs/r.png",
     );
     expect(chipLook(TEL, "+1 555", { mine, sourceContacts: [slack] }, true).photo).toBe(
       "/applet/datalib_contacts/photo/c1",
     );
     expect(chipLook(TEL, "+1 555", { mine: null, sourceContacts: [slack] }, true).photo).toBe(
-      "/applet/unified_index/asset/u/blobs/r.png",
+      "/applet/unified_document_index/asset/u/blobs/r.png",
     );
     expect(chipLook(TEL, "+1 555", NOBODY, true).photo).toBeNull();
     const el = dom(`<a class="chip" data-handle="${TEL}">+1 555</a>`)

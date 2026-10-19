@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use url::{Host, Url};
 
-use crate::embed::{is_scriptable_document, DocumentKind};
+use crate::embed::{is_scriptable_document, DATA_DOCUMENT_CSP};
 use crate::AppState;
 
 /// Set to `1` to let the route reach loopback and private addresses —
@@ -230,6 +230,7 @@ pub async fn fetch(raw: &str, policy: &RemotePolicy) -> Result<Fetched, Refusal>
         // One client per hop, because a redirect to another host has to
         // be resolved and judged again before anything connects to it.
         let client = reqwest::Client::builder()
+            .tls_backend_preconfigured(datalib_fetch::tls_config())
             .resolve_to_addrs(&host, &addrs)
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(CONNECT_TIMEOUT)
@@ -463,7 +464,7 @@ pub fn response(content_type: &str, body: Vec<u8>) -> Response<Body> {
     if is_scriptable_document(content_type) {
         headers.insert(
             header::CONTENT_SECURITY_POLICY,
-            HeaderValue::from_static(DocumentKind::Data.csp()),
+            HeaderValue::from_static(DATA_DOCUMENT_CSP),
         );
     }
     resp

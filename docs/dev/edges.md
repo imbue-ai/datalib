@@ -6,7 +6,7 @@ inside documents. The schema is the `EdgeRow` struct in
 `#[derive(PortableTable)]`). A renderer returns a document's outgoing
 edges on `RenderedMarkdown::edges`; they are stored in the source's
 render store beside its rows, and the `grid_index` step copies them into
-`<root>/unified_index/grid_index/db.doltlite_db` beside `grid_rows` and
+`<root>/unified_document_index/grid_index/db.doltlite_db` beside `grid_rows` and
 `markdowns` (`init_schema` in
 `datalib/backend/etl/render/src/grid_index.rs` creates the table).
 
@@ -52,7 +52,7 @@ clickable spans in the body, so their `label` can be metadata
 
 ## Consumers
 
-- `GET /applet/unified_index/chat/{markdown_uuid}` returns
+- `GET /applet/unified_document_index/chat/{markdown_uuid}` returns
   `outgoing_edges`, each joined with the destination's title
   (`dst_title`).
 - `DocCard.ce.vue` lists the whole-doc outgoing edges at the top of the

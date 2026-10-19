@@ -219,11 +219,21 @@ fn group_of<'a>(v: &Value, groups: &[&'a str]) -> Option<&'a str> {
     groups.iter().copied().find(|g| title.contains(g))
 }
 
+/// The words of a timeline post an edit is a version of: what the post
+/// says, and a life event's description.
 fn timeline_text(v: &Value) -> String {
+    let descriptions = attachment_entries(v)
+        .filter_map(|entry| entry.get("life_event"))
+        .filter_map(life_event_description);
     data_values(v, "post")
         .filter_map(Value::as_str)
+        .chain(descriptions)
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn life_event_description(event: &Value) -> Option<&str> {
+    str_field(event, "description")
 }
 
 /// The versions of a post the export does not have: its last version
@@ -292,7 +302,7 @@ fn timeline_post(table: &str, row_id: &str, v: &Value, owner: &Owner) -> Normali
         if let Some(event) = entry.get("life_event") {
             let title = str_field(event, "title").unwrap_or("Life event");
             let mut s = format!("**{}**", escape_md_inline(title));
-            if let Some(d) = str_field(event, "description") {
+            if let Some(d) = life_event_description(event) {
                 s.push_str("\n\n");
                 s.push_str(&escape_md_block(&strip_mentions(d)));
             }
@@ -491,6 +501,7 @@ fn one_item_chat(
     }
     let post = ids::post(&owner.source_id, row_id);
     NormalizedChat {
+        named_after: Vec::new(),
         contacts: Vec::new(),
         inputs: inputs.declared(),
         path_prefix: None,
@@ -519,13 +530,14 @@ fn one_item_chat(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datalib_etl_chat_common::types::ItemKind;
+    use datalib_etl_chat_common::types::{AuthorKind, ItemKind};
     use serde_json::json;
 
     fn owner() -> Owner {
         Owner {
             source_id: "fb".to_string(),
             name: "Jean-Luc Picard".to_string(),
+            name_kind: AuthorKind::Named,
             handle: datalib_handle::Handle::facebook_name("Jean-Luc Picard"),
             account: Some("picard@enterprise.starfleet".to_string()),
             inputs: Vec::new(),
@@ -586,6 +598,10 @@ mod tests {
         assert_eq!(nobody.name, "Me");
         let chats = build_posts(&rows, &nobody);
         assert_eq!(chats[0].buckets[0].items[0].author_handle, None);
+        assert_eq!(
+            chats[0].buckets[0].items[0].author_kind,
+            AuthorKind::Account
+        );
     }
 
     /// What the person wrote and the place's name are text: escaped on
@@ -679,6 +695,56 @@ mod tests {
             chats[0].display,
             "Jean-Luc Picard added a life event: Took command"
         );
+    }
+
+    /// A life event's words are its description, and its edits are
+    /// versions of it: two edit records of one life event, each the text
+    /// it has now give or take the mention markup, used to land as two
+    /// posts "the export no longer has", each repeating the event.
+    #[test]
+    fn edits_of_a_life_event_are_its_versions() {
+        let post = json!({
+            "timestamp": 100,
+            "attachments": [{"data": [{"life_event": {
+                "title": "Took command",
+                "description": "A new ship, a new crew.\n\n2048:William Riker",
+            }}]}],
+            "data": [{"backdated_timestamp": 5}, {}],
+            "title": "Jean-Luc Picard added a life event: Took command",
+        });
+        let edit = |fbid: &str, text: &str| {
+            json!({
+                "fbid": fbid,
+                "timestamp": 100,
+                "label_values": [{"label": "Text", "value": text}],
+                "media": [],
+            })
+        };
+        let edits = [
+            (
+                "e1".to_string(),
+                edit(
+                    "1",
+                    "A new ship, a new crew.\n\n@[170100000000003:2048:William Riker]",
+                ),
+            ),
+            (
+                "e2".to_string(),
+                edit("2", "A new ship, a new crew.\n\n2048:William Riker"),
+            ),
+        ];
+        let chats = build_posts(
+            &PostRows {
+                posts: &[("r1".to_string(), post)],
+                edits: &edits,
+                ..Default::default()
+            },
+            &owner(),
+        );
+        assert_eq!(chats.len(), 1, "no post of its own for either edit");
+        let items = &chats[0].buckets[0].items;
+        assert_eq!(items.len(), 1, "no other version of the same words");
+        assert!(items[0].problems.is_empty(), "{:?}", items[0].problems);
     }
 
     #[test]

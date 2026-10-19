@@ -70,7 +70,7 @@ impl SourceRender for EmailRender {
         }
 
         // Two-phase parse driven by the render cursor's commit.
-        let parsed = parse(
+        let mut parsed = parse(
             &db,
             ctx.name,
             ctx.raw_range(),
@@ -90,7 +90,9 @@ impl SourceRender for EmailRender {
             &self.only_render_labels,
             ctx.progress,
             &mut on_doc,
-        )?;
+        );
+        parsed.close();
+        let rendered = rendered?;
         // A thread this run looked at that no email still belongs to
         // builds no chat: declared with nothing, its documents go once
         // the diff says its emails left. One the label filter keeps out

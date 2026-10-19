@@ -300,7 +300,7 @@ back by render as the natural key.
 | facebook | none — keyed on the raw row id (`fbid` where the record has one, else a hash of it) | posts, comments, reactions, photos |
 | garmin | none — the page keyed on the source id, a device on Garmin's id | none |
 | github, gitlab | none — the repository / project leads the key: `{repo}#{number}` | PRs, MRs, comments, reviews, notes — the record's own `created_at` |
-| google_takeout | none — a Chat message id names its space, a Voice row id is the ingest's | messages |
+| google_takeout | none — a Chat message id names its space, a Voice row id is the ingest's | messages, a Chat message's earlier versions |
 | linkedin | none — keyed on the profile URL, the post link, the raw row id | messages, shares, comments |
 | notion | none — page, discussion and comment ids are Notion UUIDs, the backpointer rather than the key; `notion_page_uuid` holds the page's datalib id | pages, comments — Notion's `created_time` |
 | pdf | none — keyed on the blake3, so two copies within a source are one row | documents and pages, when the Info dictionary dates the file |

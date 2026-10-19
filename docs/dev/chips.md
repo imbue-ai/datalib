@@ -53,6 +53,7 @@ still works in another app, and `datalib:` otherwise:
 | a person by email | `mailto:riker@enterprise.org` | `Handle::to_uri` |
 | a person by phone | `tel:+12025550101` | `Handle::to_uri` |
 | a Slack user | `slack://user?team=T01&id=U02` (Slack's own deep link) | `Handle::to_uri` |
+| a LinkedIn member | `https://www.linkedin.com/in/<slug>` (their profile) | `Handle::to_uri` |
 | a person by a handle kind with no scheme | `datalib:handle/<kind>/<value>`, the value percent-encoded but for its `/`s, e.g. a Signal account id or `datalib:handle/facebook/name/Will%20Riker` | `Handle::to_uri` |
 | a group | `datalib:group/<id>` | `datalib_columns::Entity::uri` |
 | a step | `datalib:step/<group>/<function>` | `datalib_columns::Entity::uri` |
@@ -153,7 +154,7 @@ The two instances:
 | | `people` (`contacts.ts`) | `entities` (`entities.ts`) |
 |---|---|---|
 | keyed by | handle (`email:…`) | entity URI (`datalib:group/…`) |
-| asks | the unified index's `POST /people` and the contacts app's `POST /resolve` | datalib-http's `POST /api/entities` (`manage::post_entities`, from the rows the Manage table reads) |
+| asks | the unified document index's `POST /people` and the contacts app's `POST /resolve` | datalib-http's `POST /api/entities` (`manage::post_entities`, from the rows the Manage table reads) |
 | answer | each source's record of the person, and the contact a person made | label, icon token, detail, status |
 | goes stale when | a person edits a contact (create, link, unlink, no longer works): in this page the call forgets the handles it changed; from anywhere else — another window, an agent — the contacts app's commit reaches every page as a `curated` frame, on which `people` and `contactsById` revalidate (`movesPeople`), as on a resync | a sync moves a status, or the config changes: `entities` follows the live connection and revalidates on every frame `movesEntities` names, and on a resync |
 
@@ -178,8 +179,19 @@ A grid draws a chip from an `identity` typed cell
   `grid_rows.author_handle`), and so is its Contact column on a
   contact's own row (`contact_ref`, built by
   `columns.rs::contact_identity` from `grid_rows.contact`, `email` and
-  `phone`). An identity cell whose `id` is no handle is drawn as plain
-  text: a group of contacts, a contact with no address or full number.
+  `phone`, else any handle `source_contact_handles` holds for the
+  contact). An identity cell whose `id` is no handle is drawn as plain
+  text: a group of contacts, a contact with no handle at all.
+- **Several people**: an `identities` cell holds a list, each drawn as
+  above. The search grid's Subject column is one (`subject_ref`, built
+  by `columns.rs::subject_identities`): a contact's own row is its
+  Contact chip, a conversation named by its people is a chip for each
+  of them, and anything else is its conversation's name. Who a
+  conversation is named after is the provider's to say
+  (`NormalizedChat::named_after`: a DM's other party, an untitled
+  group's members); chat-common writes them as `subject` terms on the
+  document's row, and the applet reads them beside the row with the name
+  this conversation knows each by, most active first.
 - **A group or a step**: the cell's `entity` is the URI, *beside* a
   bare `id`. The id stays bare because other code keys on it: the
   document view stores a source's "always load images" setting under
@@ -188,8 +200,10 @@ A grid draws a chip from an `identity` typed cell
   config declares).
 
 `typedColumns.ts` draws such a cell through `chipCell` or `entityCell`
-when given its `chips` option, and `GridCard` redraws the Author and
-Source columns when `people` or `entities` says an answer changed. The
+when given its `chips` option, and `GridCard` redraws the Author,
+Contact, Subject and Source columns when `people` or `entities` says an
+answer changed. A right-click acts on the chip it landed on, so each
+chip in a cell of several has its own menu. The
 run log draws its Group and Step columns as chips the same way
 (`RunLogPanel.ce.vue`), and `TableGrid` takes the option too, as the
 contacts app's table does (`ContactsCard.ce.vue`). `tableGrid.css` keeps

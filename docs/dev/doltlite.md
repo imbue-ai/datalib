@@ -26,7 +26,7 @@ then whatever in the tree leaned on it.
 
 Every store the pipeline writes — the raw stores under
 `<data_root>/<group>/ingest/`, each source's render store, and the grid
-index (`<data_root>/unified_index/grid_index/db.doltlite_db`) — is a
+index (`<data_root>/unified_document_index/grid_index/db.doltlite_db`) — is a
 [doltlite](https://github.com/dolthub/doltlite) database: SQLite with
 content-addressed prolly-tree storage and a `git`-shaped commit history
 exposed through SQL. The bazel build statically links doltlite into our
@@ -67,7 +67,7 @@ a fact about the on-disk format, not about lock-in — the shell above
 dumps any store to ordinary SQL, which stock SQLite loads:
 
 ```sh
-datalib-doltlite -readonly unified_index/grid_index/db.doltlite_db .dump \
+datalib-doltlite -readonly unified_document_index/grid_index/db.doltlite_db .dump \
   | sqlite3 grid.sqlite
 ```
 
@@ -365,7 +365,7 @@ The common-use subset:
 
 ## How doltlite behaves
 
-The facts our rules rest on, checked on the pinned doltlite (0.50.14)
+The facts our rules rest on, checked on the pinned doltlite (0.50.16)
 by the tests below; a number measured on an older release names it. A fact in one process is a test in
 `doltlite_facts_test`, in the module named for its section. Anything
 about a writer and a reader in two processes is measured with
@@ -539,11 +539,12 @@ name itself and then switches branches in SQL, so `doltlite -readonly
 ### Diffs
 
 - **`dolt_diff_<table>` takes its two refs as arguments,
-  `dolt_diff_t('<from>', '<to>')`, or as filters** on `from_ref` /
-  `to_ref` or on `from_commit` / `to_commit`; all three give the same
-  rows, and every ref spelling works. (On 0.50.3, filtering the bare
-  vtab on `from_commit` / `to_commit` across a non-adjacent range
-  returned 0 rows.)
+  `dolt_diff_t('<from>', '<to>')`, or as filters on `from_ref` /
+  `to_ref`**; both give the same rows, and every ref spelling works.
+  **A filter on `from_commit` / `to_commit` filters the walk of
+  adjacent pairs**, so a non-adjacent pair matches no row; to compare
+  two commits, name them as refs. (0.50.14 answered that filter like
+  the refs; 0.50.3 and 0.50.16 do not.)
 - **With no refs it walks every adjacent commit pair on the branch.**
 - **A range as a ref, `'<a>..<b>'`, is one comparison of `a` with
   `b`**, not a walk: every row has `to_commit` = `b`.
@@ -563,7 +564,8 @@ name itself and then switches branches in SQL, so `doltlite -readonly
 - **An unchanged row is no change.** Re-writing a table with the same
   rows — upsert, delete and re-insert, or drop and recreate with the
   same schema — leaves `dolt_status` clean and the next `dolt_commit`
-  fails with `nothing to commit, working tree clean`.
+  fails with `nothing to commit, working tree clean`. So does the first
+  `dolt_commit` of a new store with nothing in it.
 - **The diff goes by table name.** Rename a table to a new name and
   that name's diff shows every row as added; swap a staging table in
   (`DROP TABLE t` and `ALTER TABLE t_staging RENAME TO t` in one
@@ -781,17 +783,17 @@ join back, 27 ms and 6 ms.
   file's copy is plain.
 - **`VACUUM INTO` of a live SQLite file in WAL mode includes the WAL's
   rows**, which is how the SQLite mirrors snapshot a source in use.
-- **`journal_mode` is inert**: any mode is accepted and reads back
-  `wal`, and doltlite makes no `-wal` or `-shm` sidecar. **A plain
-  SQLite file opened through doltlite answers `wal` too, but keeps a
-  rollback journal**: a `-journal` sidecar during a write, its header
-  never marked WAL, and stock `sqlite3` reads its mode as `delete`
-  (dolthub/doltlite#3740). By
-  SQLite's rules for a rollback journal, a reader of a plain file then
-  waits while its writer commits (not measured here). `synchronous`
+- **On a doltlite store `journal_mode` is inert**: any mode is
+  accepted and reads back `wal`, and doltlite makes no `-wal` or `-shm`
+  sidecar. **A plain SQLite file takes the mode it is asked for**, as
+  stock SQLite does: `wal` marks its header WAL, `delete` keeps a
+  rollback journal (dolthub/doltlite#3740, fixed in 0.50.16; before
+  that a plain file always kept a rollback journal). Our own plain
+  stores ask for `delete`, so by SQLite's rules a reader of one waits
+  while its writer commits (not measured here). `synchronous`
   at anything above `OFF` syncs every commit (upstream
   `doc/doltlite/pragmas.md`).
-- **Doltlite cannot write a WAL, but it reads one.** A plain SQLite
+- **Doltlite reads a WAL another program wrote.** A plain SQLite
   file another program keeps in WAL mode, as qmd keeps its index, reads
   through doltlite with the rows only its `-wal` holds, so a reader
   sees what qmd wrote before any checkpoint. The test reads a pair
@@ -835,6 +837,7 @@ What each pin was taken for, newest first:
 
 | version | what it brought us |
 |---|---|
+| 0.50.16 | upstream fixes to concurrent writes and to recovery after an interrupted `VACUUM` or `dolt_gc()`. Three facts moved: a plain SQLite file honours `journal_mode` (dolthub/doltlite#3740), a `from_commit` / `to_commit` filter matches only adjacent pairs again, and a new empty store's first commit is `nothing to commit`. (0.50.17 was passed over: its read lock on a `<store>@<commit>` open gives up after about 100 ms, and readers here open that way.) |
 | 0.50.14 | a detached open runs `IN` and `DISTINCT` (dolthub/doltlite#3392), so readers open `<store>@<commit>` directly |
 | 0.50.13 | a revision opened by path works on any file name (dolthub/doltlite#3231); an unindexed filter plans as scan + sort |
 | 0.50.12 | per-table modules registered on first use; `dolt_at_` and `dolt_history_` seek a text primary key; a ref-moving reader no longer refuses the writer's seals |

@@ -36,8 +36,8 @@ describe("sanitizeRenderedHtml", () => {
     const md =
       `<details open><summary>3 tool calls</summary><p>x</p></details>` +
       `<time class="msg-ts" datetime="2364-04-11T00:00:00+00:00" title="full">short</time>` +
-      `<audio controls src="/applet/unified_index/asset/u/blobs/a.m4a"></audio>` +
-      `<video controls src="/applet/unified_index/asset/u/blobs/a.mp4"></video>` +
+      `<audio controls src="/applet/unified_document_index/asset/u/blobs/a.m4a"></audio>` +
+      `<video controls src="/applet/unified_document_index/asset/u/blobs/a.mp4"></video>` +
       `<a class="source-link" href="https://example.com/x" target="_blank" rel="noopener noreferrer">↗</a>` +
       `<a class="chip" href="slack://user?team=T1&amp;id=U2" title="Data (slack:T1/U2)" data-handle="slack:T1/U2">Data</a>` +
       `<a class="chip" href="datalib:group/slack">Slack</a>` +
@@ -45,7 +45,7 @@ describe("sanitizeRenderedHtml", () => {
       `<a href="gopher://old.example/">x</a>` +
       `<h1 class="page-title" data-page-title-uuid="p1">Title</h1>` +
       `<table><tr><th>a</th><td>b</td></tr></table>` +
-      `<img src="/applet/unified_index/asset/u/blobs/a.png" alt="a" loading="lazy">`;
+      `<img src="/applet/unified_document_index/asset/u/blobs/a.png" alt="a" loading="lazy">`;
     const out = sanitizeRenderedHtml(md);
     for (const keep of [
       '<details open="">',
@@ -80,39 +80,22 @@ describe("sanitizeRenderedHtml", () => {
 
   // An `.html` a sender attached sits in `blobs/`; framed from a message
   // body it would run inside the app's chrome (audit 2026-10-02 finding 1).
-  it("drops an iframe that frames anything but a plot page", () => {
-    for (const notPlot of [
+  // No renderer frames anything, so no iframe survives.
+  it("drops every iframe", () => {
+    for (const src of [
       "blobs/0123456789abcdef.html",
-      "/applet/unified_index/asset/u/blobs/0123456789abcdef.html",
-      "/applet/unified_index/asset/u/plots/../blobs/x.html",
-      "/applet/unified_index/asset/u/plots/%2e%2e/blobs/x.html",
-      "/applet/unified_index/asset/%2e%2e/plots/x.html",
-      "plots\\..\\blobs\\x.html",
-      "plots/t.html?x=1",
-      "plots/t.svg",
-      "/api/remote_media?url=x",
+      "/applet/unified_document_index/asset/u/blobs/0123456789abcdef.html",
+      "plots/t.html",
+      "https://evil.example/",
+      "javascript:alert(1)",
     ]) {
-      const out = sanitizeRenderedHtml(`<iframe src="${notPlot}"></iframe>`);
-      expect(out, notPlot).not.toContain("src=");
+      const out = sanitizeRenderedHtml(`<iframe src="${src}"></iframe>`);
+      expect(out, src).not.toContain("iframe");
     }
   });
 
-  it("keeps an iframe that frames a plot page, relative or rewritten", () => {
-    const own = sanitizeRenderedHtml(
-      `<iframe src="/applet/unified_index/asset/u/plots/t.html" title="t" width="100%" height="520" style="border:1px solid gray"></iframe>`,
-    );
-    expect(own).toContain('src="/applet/unified_index/asset/u/plots/t.html"');
-    expect(own).toContain('height="520"');
-    const relative = sanitizeRenderedHtml(`<iframe src="plots/t.html"></iframe>`);
-    expect(relative).toContain('src="plots/t.html"');
-    for (const foreign of [
-      "https://evil.example/",
-      "//evil.example/",
-      "javascript:alert(1)",
-      "data:text/html,<script>alert(1)</script>",
-    ]) {
-      const out = sanitizeRenderedHtml(`<iframe src="${foreign}"></iframe>`);
-      expect(out, foreign).not.toContain("src=");
-    }
+  it("keeps a chart's ids for the document view to draw", () => {
+    const chart = `<div class="time-series-chart" data-time-series="a-1 b-2"></div>`;
+    expect(sanitizeRenderedHtml(chart)).toBe(chart);
   });
 });

@@ -1,5 +1,5 @@
 //! The render half of the ETL framework: the per-source render store,
-//! the unified-index load, and the run context a render processor is
+//! the document-index load, and the run context a render processor is
 //! handed.
 //!
 //! It sits above [`datalib_etl`] rather than inside it because this is

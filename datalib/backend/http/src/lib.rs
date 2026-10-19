@@ -28,6 +28,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+pub mod applet_memory;
 pub mod applets;
 pub mod auth;
 pub mod binaries;
@@ -53,7 +54,7 @@ pub mod ui_state;
 pub mod usage;
 pub mod watch;
 
-pub use auth::ApiToken;
+pub use auth::{ApiToken, TrustedProxy};
 pub use boot::build_state;
 
 #[derive(Clone)]
@@ -81,6 +82,11 @@ pub struct AppState {
     /// startup and published to `<root>/system/api-token`; see
     /// [`crate::auth`] for the scheme and why it exists.
     pub api_token: ApiToken,
+    /// The reverse proxy whose identity header stands in for the token,
+    /// and whose page frames the app. `None` for a server reached
+    /// directly, which is every desktop and `datalib-http` from a
+    /// terminal.
+    pub trusted_proxy: Option<TrustedProxy>,
     /// Bytes on disk, over time. A background task folds what it finds in
     /// here so `GET /api/pipeline/storage` reads a snapshot rather than
     /// walking the disk per open tab. See [`crate::usage`].
@@ -183,7 +189,10 @@ pub fn user_bin_dir() -> Option<PathBuf> {
 
 pub fn router(state: AppState) -> Router {
     // Cloned out before `state` is moved into `with_state` below.
-    let api_token = state.api_token.clone();
+    let gate = auth::Gate {
+        token: state.api_token.clone(),
+        trusted_proxy: state.trusted_proxy,
+    };
     Router::new()
         .route("/api/health", get(health))
         .route("/api/accounts", get(accounts))
@@ -286,7 +295,7 @@ pub fn router(state: AppState) -> Router {
         // the token gate in front a cross-origin page cannot get a usable
         // response anyway, and nothing in-tree needs cross-origin access.
         .layer(axum::middleware::from_fn_with_state(
-            api_token,
+            gate,
             auth::require_token,
         ))
         // Outside the token gate, so a refused request is logged too.
@@ -451,6 +460,11 @@ async fn proxy_impl(
         Err(e) => return applet_error(StatusCode::BAD_REQUEST, &format!("read body: {e}")),
     };
     let target = format!("{path}{query}");
+    // Card scripts written before the rename still call the old prefix.
+    let id = match id.as_str() {
+        "unified_index" => UNIFIED_DOCUMENT_INDEX_APPLET.to_string(),
+        _ => id,
+    };
     let registry = s.applets.clone();
     let result = tokio::task::spawn_blocking(move || {
         // A read: the applet is there or it is not. A config change
@@ -474,10 +488,9 @@ async fn proxy_impl(
 }
 
 /// An applet's answer, as the browser gets it. What an applet serves is
-/// data — a rendered plot page, an attachment out of a render tree — and
-/// a document among it must not run in the app's origin, where it would
-/// hold the session: it gets the sandbox policy of the kind the applet
-/// names, and runs nothing when it names none. A script or wasm file
+/// data — an attachment out of a render tree — and a document among it
+/// must not run in the app's origin, where it would hold the session: it
+/// gets the sandbox policy that runs nothing. A script or wasm file
 /// goes out as bytes, so the app page's `script-src 'self'` cannot run
 /// one a sender attached.
 fn proxied_response(r: applets::ProxyResponse) -> Response<Body> {
@@ -485,7 +498,7 @@ fn proxied_response(r: applets::ProxyResponse) -> Response<Body> {
         .status(StatusCode::from_u16(r.status).unwrap_or(StatusCode::BAD_GATEWAY))
         .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff");
     if embed::is_scriptable_document(&r.content_type) {
-        resp = resp.header(header::CONTENT_SECURITY_POLICY, r.document.csp());
+        resp = resp.header(header::CONTENT_SECURITY_POLICY, embed::DATA_DOCUMENT_CSP);
     }
     let content_type = if embed::is_executable(&r.content_type) {
         "application/octet-stream".to_string()
@@ -805,13 +818,13 @@ fn source_ids(checked: &datalib_dag::config::ConfigCheck) -> Vec<String> {
 }
 
 /// The applet id that serves the grid, search and the document view.
-const UNIFIED_INDEX_APPLET: &str = "unified_index";
+const UNIFIED_DOCUMENT_INDEX_APPLET: &str = "unified_document_index";
 /// The contacts app's applet id: its mount prefix, and the row whose
 /// Browse opens its table.
 pub(crate) const CONTACTS_APPLET: &str = "datalib_contacts";
 
 fn configured_source_count(fringe: &[String]) -> usize {
-    let prefix = format!("{}/", datalib_core::layout::UNIFIED_INDEX_DIR);
+    let prefix = format!("{}/", datalib_core::layout::UNIFIED_DOCUMENT_INDEX_DIR);
     fringe.iter().filter(|id| !id.starts_with(&prefix)).count()
 }
 
@@ -839,7 +852,7 @@ pub struct ConfigResponse {
     pub diagnostics: Vec<datalib_dag::Diagnostic>,
     /// Whether the app can serve its own views at all. False in three
     /// cases: the file is not a config, or it declares no usable
-    /// `unified_index` applet — one screen for both, because they have
+    /// `unified_document_index` applet — one screen for both, because they have
     /// one consequence: that applet serves the grid, search and the
     /// document view, so without it every view is a 502 — or the root
     /// was written by a newer datalib (`newer_root` says which stores),
@@ -933,7 +946,10 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
             configured_source_count(&source_ids(c)),
             c.diagnostics.clone(),
             !c.is_fatal()
-                && c.cfg.applets.iter().any(|a| a.id == UNIFIED_INDEX_APPLET)
+                && c.cfg
+                    .applets
+                    .iter()
+                    .any(|a| a.id == UNIFIED_DOCUMENT_INDEX_APPLET)
                 && newer_root.is_none(),
         ),
         None => (false, None, 0, Vec::new(), false),
@@ -1473,7 +1489,7 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
 /// keeping the root self-contained.
 fn scaffold_toml() -> String {
     "\
-# ── the unified index ──────────────────────────────────────────────────
+# ── the unified document index ─────────────────────────────────────────
 # A group is one thing on the Manage screen; its steps are what run.
 # Every source feeds these two — the grid reads its rendered markdown,
 # the qmd aggregator its search steps. A step's id is
@@ -1490,29 +1506,29 @@ fn scaffold_toml() -> String {
 # <origin>/agent/config.md.
 
 [[groups]]
-id = \"unified_index\"
-name = \"Unified Index\"
+id = \"unified_document_index\"
+name = \"Document Index\"
 
 [[steps]]
-group = \"unified_index\"
+group = \"unified_document_index\"
 function = \"grid_index\"
 inputs = []
 
 [[steps]]
-group = \"unified_index\"
+group = \"unified_document_index\"
 function = \"qmd_aggregator\"
 inputs = []
 
 # The applet that serves the grid: the app has no search, no document
 # view and no document picker without it. It is an applet like any
 # other — a server the gateway spawns and proxies at
-# `/applet/unified_index/` — which is why it is written here rather
+# `/applet/unified_document_index/` — which is why it is written here rather
 # than compiled into the backend.
 
 [[applets]]
-group = \"unified_index\"
-id = \"unified_index\"
-command = \"datalib-applet unified_index\"
+group = \"unified_document_index\"
+id = \"unified_document_index\"
+command = \"datalib-applet unified_document_index\"
 
 # The contacts app: the contacts a person makes and the handles they
 # link to them, which the person chips and search read. Without it the
@@ -1520,7 +1536,7 @@ command = \"datalib-applet unified_index\"
 # to link. Its store is `datalib_curated/datalib_contacts/`.
 
 [[applets]]
-group = \"unified_index\"
+group = \"unified_document_index\"
 id = \"datalib_contacts\"
 command = \"datalib-applet datalib_contacts\"
 "
@@ -2159,11 +2175,10 @@ mod tests {
         assert_eq!(names, datalib_runs::key_names());
     }
 
-    fn proxied(content_type: &str, document: embed::DocumentKind) -> Response<Body> {
+    fn proxied(content_type: &str) -> Response<Body> {
         proxied_response(applets::ProxyResponse {
             status: 200,
             content_type: content_type.into(),
-            document,
             body: b"<script>1</script>".to_vec(),
         })
     }
@@ -2178,24 +2193,18 @@ mod tests {
     /// browser reads.
     #[test]
     fn proxied_documents_are_sandboxed_and_data_is_not() {
-        let html = proxied("text/html; charset=utf-8", embed::DocumentKind::Data);
+        let html = proxied("text/html; charset=utf-8");
         assert_eq!(html.status(), StatusCode::OK);
         assert_eq!(
             header_of(&html, header::CONTENT_SECURITY_POLICY),
-            Some(embed::DocumentKind::Data.csp())
+            Some(embed::DATA_DOCUMENT_CSP)
         );
         assert_eq!(
             header_of(&html, header::X_CONTENT_TYPE_OPTIONS),
             Some("nosniff")
         );
 
-        let plot = proxied("text/html", embed::DocumentKind::Plot);
-        assert_eq!(
-            header_of(&plot, header::CONTENT_SECURITY_POLICY),
-            Some(embed::DocumentKind::Plot.csp())
-        );
-
-        let json = proxied("application/json", embed::DocumentKind::Data);
+        let json = proxied("application/json");
         assert!(header_of(&json, header::CONTENT_SECURITY_POLICY).is_none());
         assert_eq!(
             header_of(&json, header::X_CONTENT_TYPE_OPTIONS),
@@ -2213,14 +2222,14 @@ mod tests {
             "application/javascript",
             "application/wasm",
         ] {
-            let r = proxied(ct, embed::DocumentKind::Data);
+            let r = proxied(ct);
             assert_eq!(
                 header_of(&r, header::CONTENT_TYPE),
                 Some("application/octet-stream"),
                 "{ct}"
             );
         }
-        let css = proxied("text/css", embed::DocumentKind::Data);
+        let css = proxied("text/css");
         assert_eq!(header_of(&css, header::CONTENT_TYPE), Some("text/css"));
     }
 
@@ -2362,13 +2371,16 @@ mod tests {
         // nothing is a no-op, not an error.
         assert_eq!(
             source_ids(&checked),
-            ["unified_index/grid_index", "unified_index/qmd_aggregator"]
+            [
+                "unified_document_index/grid_index",
+                "unified_document_index/qmd_aggregator"
+            ]
         );
         // And it declares the applet without which the app has no
         // views at all — the thing `app_ready` reports on — and the
         // contacts app, which a new root gets on by default.
         let applets: Vec<&str> = checked.cfg.applets.iter().map(|a| a.id.as_str()).collect();
-        assert_eq!(applets, [UNIFIED_INDEX_APPLET, CONTACTS_APPLET]);
+        assert_eq!(applets, [UNIFIED_DOCUMENT_INDEX_APPLET, CONTACTS_APPLET]);
     }
 
     /// A scaffolded root has no *sources*, even though its two index
@@ -2380,7 +2392,10 @@ mod tests {
         let fringe = fringe_of(&scaffold_toml());
         assert_eq!(
             fringe,
-            ["unified_index/grid_index", "unified_index/qmd_aggregator"]
+            [
+                "unified_document_index/grid_index",
+                "unified_document_index/qmd_aggregator"
+            ]
         );
         assert_eq!(configured_source_count(&fringe), 0);
     }
@@ -2437,7 +2452,7 @@ mod tests {
             .cfg
             .applets
             .iter()
-            .any(|a| a.id == UNIFIED_INDEX_APPLET));
+            .any(|a| a.id == UNIFIED_DOCUMENT_INDEX_APPLET));
 
         // …and the PUT refuses it anyway, naming every problem so the
         // caller needs one round-trip rather than one per mistake.

@@ -19,7 +19,7 @@ pub struct FsindexConfig {
     #[serde(default)]
     pub fswalk: Option<LocalPath>,
 
-    /// Write `.fsindex.yaml` UUID breadcrumbs into the scanned tree for any
+    /// Write `.fsindex.toml` UUID breadcrumbs into the scanned tree for any
     /// directory that opts in via `stamp_me_with_uuid`. **Off by default** for
     /// a config-driven scan, so the source stays read-only against its input —
     /// the only framework provider that can mutate its upstream stays opt-in.

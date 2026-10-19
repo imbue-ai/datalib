@@ -1,0 +1,16 @@
+{
+  "color": "DEFAULT",
+  "isTrashed": false,
+  "isPinned": false,
+  "isArchived": true,
+  "title": "Away team",
+  "listContent": [
+    {
+      "textHtml": "<p dir=\"ltr\" style=\"line-height:1.38;margin-top:0.0pt;margin-bottom:0.0pt;\"><span>Tricorder</span></p>",
+      "text": "Tricorder",
+      "isChecked": true
+    }
+  ],
+  "userEditedTimestampUsec": 2364030112000000,
+  "createdTimestampUsec": 2364030110000000
+}

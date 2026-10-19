@@ -12,12 +12,18 @@
 //! `datalib-step download <type>` command lines, the `_api` / `_backup`
 //! type words, and the `sync` / `common.input_path` / `common.raw_path`
 //! params — and, after it, `qmd_steps.rs`: the `qmd_index` fan-in becomes
-//! `qmd_aggregator`, downstream of each source's own qmd steps. That second
-//! rewrite is also the one `datalib-http` makes by itself
-//! (`upgrade_qmd_steps`).
+//! `qmd_aggregator`, downstream of each source's own qmd steps; then
+//! `document_index.rs`: the `unified_index` group, its steps and its
+//! applet become `unified_document_index`; then `time_series_steps.rs`:
+//! a source with time series gets its `render_time_series` step and the
+//! config its time-series index. Those last three rewrites are also the
+//! ones `datalib-http` makes by itself (`upgrade_qmd_steps`,
+//! `upgrade_document_index`, `upgrade_time_series_steps`).
 
 pub mod convert;
+pub mod document_index;
 pub mod qmd_steps;
+pub mod time_series_steps;
 
 use std::path::{Path, PathBuf};
 
@@ -41,15 +47,29 @@ pub fn detect(text: &str) -> Result<LegacyFormat> {
     if qmd_steps::is_retired(text)? {
         return Ok(LegacyFormat::QmdIndex);
     }
+    if document_index::is_retired(text)? {
+        return Ok(LegacyFormat::UnifiedIndex);
+    }
+    if time_series_steps::is_retired(text)? {
+        return Ok(LegacyFormat::NoTimeSeries);
+    }
     bail!("this config is already in the current shape — there is nothing to migrate")
 }
 
 pub fn convert(text: &str) -> Result<String> {
     let out = match detect(text)? {
-        LegacyFormat::QmdIndex => text.to_string(),
+        LegacyFormat::QmdIndex | LegacyFormat::UnifiedIndex | LegacyFormat::NoTimeSeries => {
+            text.to_string()
+        }
         _ => convert::rewrite(text)?,
     };
     let out = qmd_steps::rewrite(&out)?;
+    let out = document_index::rewrite(&out)?;
+    let out = if time_series_steps::is_retired(&out)? {
+        time_series_steps::rewrite(&out)?
+    } else {
+        out
+    };
     // The conversion is value-level, so anything the loader would refuse in
     // the result surfaces here rather than on the next run. Report what the
     // runner rejected and let the message speak.
@@ -70,11 +90,49 @@ pub fn upgrade_qmd_steps(text: &str) -> Result<Option<String>> {
         return Ok(None);
     }
     let out = qmd_steps::rewrite(text)?;
+    refuse_a_loss(text, &out, |e| e.to_string())?;
+    Ok(Some(out))
+}
+
+/// The rewrite `datalib-http` makes unattended, to a config whose index
+/// group is still `unified_index`. `None` when there is nothing to do.
+/// Refused, as [`upgrade_qmd_steps`] is, when the result would not load
+/// every entry the original did, each under its new id.
+pub fn upgrade_document_index(text: &str) -> Result<Option<String>> {
+    if !document_index::is_retired(text).unwrap_or(false) {
+        return Ok(None);
+    }
+    let out = document_index::rewrite(text)?;
+    refuse_a_loss(text, &out, |e| {
+        let (kind, id) = e.split_once(' ').unwrap_or(("", e));
+        match document_index::renamed(id) {
+            Some(new) => format!("{kind} {new}"),
+            None => e.to_string(),
+        }
+    })?;
+    Ok(Some(out))
+}
+
+/// Give a config's time-series sources their `render_time_series` steps
+/// and add the time-series index, when it has none (`time_series_steps.rs`).
+pub fn upgrade_time_series_steps(text: &str) -> Result<Option<String>> {
+    if !time_series_steps::is_retired(text).unwrap_or(false) {
+        return Ok(None);
+    }
+    let out = time_series_steps::rewrite(text)?;
+    refuse_a_loss(text, &out, str::to_string)?;
+    Ok(Some(out))
+}
+
+/// Refuse `out` when it loads fewer entries than `text`, or loses one
+/// `text` loaded, as `follow` names it after the rewrite.
+fn refuse_a_loss(text: &str, out: &str, follow: impl Fn(&str) -> String) -> Result<()> {
     let before = datalib_dag::config::check_text(text);
-    let after = datalib_dag::config::check_text(&out);
+    let after = datalib_dag::config::check_text(out);
     let kept = loaded(&after.cfg);
     let lost: Vec<String> = loaded(&before.cfg)
         .into_iter()
+        .map(|e| follow(&e))
         .filter(|e| !kept.contains(e))
         .collect();
     if !lost.is_empty() || after.dropped() > before.dropped() {
@@ -88,7 +146,7 @@ pub fn upgrade_qmd_steps(text: &str) -> Result<Option<String>> {
             after.render(std::path::Path::new(datalib_dag::config::CONFIG_FILE_NAME))
         );
     }
-    Ok(Some(out))
+    Ok(())
 }
 
 /// Every entry that reached the graph, by kind and id.
@@ -499,7 +557,7 @@ inputs = ["slack/render_markdown"]
             "{out}"
         );
         assert!(
-            out.contains("group = \"unified_index\"\nfunction = \"grid_index\""),
+            out.contains("group = \"unified_document_index\"\nfunction = \"grid_index\""),
             "{out}"
         );
         assert!(!out.contains("id = \"slack/raw\""), "{out}");
@@ -525,8 +583,8 @@ inputs = ["slack/render_markdown"]
         assert!(diags.is_empty(), "{diags:?}\n{out}");
         let by_id = |id: &str| cfg.applets.iter().find(|a| a.id == id).unwrap().clone();
         assert_eq!(
-            by_id("unified_index").group.as_deref(),
-            Some("unified_index")
+            by_id("unified_document_index").group.as_deref(),
+            Some("unified_document_index")
         );
         assert_eq!(by_id("slack_view").group.as_deref(), Some("slack"));
         assert_eq!(cfg.groups.len(), 2);
@@ -660,6 +718,40 @@ inputs = ["mail/render_markdown"]
         let err = upgrade_qmd_steps(&clash).unwrap_err().to_string();
         assert!(err.contains("would not load"), "{err}");
         assert!(err.contains(&format!("step {extra}")), "{err}");
+    }
+
+    /// The server runs both unattended rewrites in turn; the second
+    /// renames what the first wrote, and then has nothing left to do.
+    #[test]
+    fn the_unattended_upgrades_chain_to_the_current_shape() {
+        let out = upgrade_qmd_steps(SHARED_QMD_INDEX).unwrap().unwrap();
+        let out = upgrade_document_index(&out).unwrap().unwrap();
+        let check = datalib_dag::config::check_text(&out);
+        assert!(check.is_clean(), "{:?}\n{out}", check.diagnostics);
+        assert!(check
+            .cfg
+            .steps
+            .iter()
+            .any(|s| s.id == "unified_document_index/qmd_aggregator"));
+        assert!(!out.contains("\"unified_index"), "{out}");
+        assert_eq!(upgrade_document_index(&out).unwrap(), None);
+        assert_eq!(upgrade_document_index("not [ toml").unwrap(), None);
+        assert_eq!(convert(SHARED_QMD_INDEX).unwrap(), out);
+    }
+
+    /// A custom step that already writes where a renamed step will is a
+    /// clash the loader settles by dropping one of them, so the rename is
+    /// refused rather than made.
+    #[test]
+    fn the_document_index_upgrade_refuses_a_rename_that_drops_a_step() {
+        let current = upgrade_qmd_steps(SHARED_QMD_INDEX).unwrap().unwrap();
+        let clash = format!(
+            "{current}\n[[steps]]\nid = \"unified_document_index/qmd_aggregator\"\n\
+             command = \"x\"\ninputs = [\"mail/render_markdown\"]\n"
+        );
+        assert!(datalib_dag::config::check_text(&clash).is_clean());
+        let err = upgrade_document_index(&clash).unwrap_err().to_string();
+        assert!(err.contains("would not load"), "{err}");
     }
 
     #[test]

@@ -178,9 +178,10 @@
         overflow: hidden;
       }
       /* A row is the library (a button that opens it, or the same
-         content when its folder is gone) and, for a library outside the
-         libraries folder, a Forget button beside it: two controls side by
-         side, since a button cannot hold another. */
+         content when its folder is gone) and, beside it, a Forget button
+         for a library outside the libraries folder or a Delete button for
+         one inside it: controls side by side, since a button cannot hold
+         another. */
       .lib {
         display: flex;
         align-items: center;
@@ -217,8 +218,8 @@
         align-items: center;
         justify-content: center;
       }
-      /* Every row has the slot, so the folder icons line up; a library
-         in the libraries folder leaves it empty. */
+      /* Every row has the slot, so the folder icons line up: Forget or
+         Delete, never both. */
       .forget {
         margin-right: 2px;
       }
@@ -449,6 +450,8 @@
 
       const CROSS =
         '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+      const TRASH =
+        '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg>';
       const FOLDER =
         '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
 
@@ -566,6 +569,32 @@
             }
           });
           row.append(forget);
+        } else if (lib.deletable) {
+          const del = document.createElement("button");
+          del.className = "forget";
+          del.innerHTML = TRASH;
+          del.title = "Delete (the folder moves to the Trash)";
+          del.setAttribute("aria-label", `Delete ${lib.name}`);
+          del.addEventListener("click", async () => {
+            // The shell asks before it deletes; nothing else is clickable
+            // while it does.
+            setBusy(true);
+            $("error").hidden = true;
+            let failure = null;
+            try {
+              await invoke("launcher_delete", { path: lib.path });
+            } catch (e) {
+              failure = e;
+            }
+            setBusy(false);
+            // The rows are drawn again whatever the answer, and the name
+            // field with them: deleting Default makes it the name to
+            // offer again.
+            await render().catch(fail);
+            await resolveField();
+            if (failure) fail(failure);
+          });
+          row.append(del);
         } else {
           const slot = document.createElement("span");
           slot.className = "forget";

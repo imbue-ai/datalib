@@ -5,7 +5,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use datalib_core::app_store::AppStore;
-use datalib_http::{router, ApiToken, AppState};
+use datalib_http::{router, ApiToken, AppState, TrustedProxy};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tower::ServiceExt;
@@ -18,6 +18,13 @@ async fn fetch(path: &str) -> (StatusCode, String) {
 }
 
 async fn fetch_with_headers(path: &str) -> (StatusCode, axum::http::HeaderMap, String) {
+    fetch_behind(path, None).await
+}
+
+async fn fetch_behind(
+    path: &str,
+    trusted_proxy: Option<TrustedProxy>,
+) -> (StatusCode, axum::http::HeaderMap, String) {
     let db_path = tempfile::TempDir::with_prefix("datalib-http-csp-itest-")
         .expect("create tempdir")
         .keep()
@@ -43,6 +50,7 @@ async fn fetch_with_headers(path: &str) -> (StatusCode, axum::http::HeaderMap, S
             None,
         )),
         api_token: ApiToken::from_value(TOKEN, root.as_path()),
+        trusted_proxy,
     };
     let req = Request::get(path)
         .header("x-datalib-token", TOKEN)
@@ -135,6 +143,40 @@ async fn the_app_page_carries_its_csp() {
     let (status, headers, _) = fetch_with_headers("/dactal/main.js").await;
     assert_eq!(status, StatusCode::OK);
     assert!(headers.get("content-security-policy").is_none());
+}
+
+/// Behind a trusted proxy the proxy appends its own `frame-ancestors`,
+/// naming the page that frames the app; two policies intersect, so the
+/// app's `'none'` has to go, and only that — every other directive is
+/// the same policy.
+#[tokio::test]
+async fn behind_a_trusted_proxy_the_app_page_leaves_framing_to_the_proxy() {
+    let (status, alone, _) = fetch_with_headers("/").await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, framed, html) = fetch_behind("/", Some(TrustedProxy::Imbue)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(html.contains("<div id=\"app\">"), "not the app shell");
+    let csp_of = |headers: &axum::http::HeaderMap| {
+        headers
+            .get("content-security-policy")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string()
+    };
+    let (alone, framed) = (csp_of(&alone), csp_of(&framed));
+    assert_eq!(
+        header_directive(&alone, "frame-ancestors"),
+        "frame-ancestors 'none'",
+        "{alone}"
+    );
+    assert_eq!(header_directive(&framed, "frame-ancestors"), "", "{framed}");
+    let without = |csp: &str| {
+        csp.split(';')
+            .map(|d| d.split_whitespace().collect::<Vec<_>>().join(" "))
+            .filter(|d| !d.is_empty() && !d.starts_with("frame-ancestors"))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(without(&alone), without(&framed));
 }
 
 #[tokio::test]

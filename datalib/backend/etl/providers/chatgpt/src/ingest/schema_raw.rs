@@ -41,6 +41,19 @@ pub struct ConversationRow {
     pub update_time: Option<String>,
 }
 
+/// ChatGPT copies onto every assistant message the models its switcher
+/// refuses there, and the list grows whenever OpenAI ships a model while
+/// the conversation's `update_time` stays put. It describes the product,
+/// not the conversation, so it lives in the sidecar where the diff does
+/// not see it. Render never reads it.
+pub const CONVERSATION_VOLATILE_PATHS: &[dr::VolatilePath] = &[&[
+    "mapping",
+    dr::EVERY_ELEMENT,
+    "message",
+    "metadata",
+    "model_switcher_deny",
+]];
+
 pub const CONVERSATIONS_UPDATE_INDEX_DDL: &str =
     "CREATE INDEX IF NOT EXISTS conversations_update ON conversations(update_time)";
 

@@ -13,7 +13,7 @@ use datalib_etl_chat_common::render::{
     render_all as cc_render_all, Buckets, RenderProfile, ENTITY_KIND_CONVERSATION,
 };
 use datalib_etl_chat_common::types::{
-    own_stamp_ms, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
+    own_stamp_ms, AuthorKind, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
     NormalizedDoc, UpstreamRef,
 };
 use datalib_etl_chat_common::TextFormat;
@@ -164,6 +164,11 @@ fn build_chat(
                 .unwrap_or_else(|| "Assistant".to_string()),
             _ => capitalize(m.role.as_deref().unwrap_or("unknown")),
         };
+        let author_kind = match (kind_label, &m.role) {
+            ("User Input", _) => AuthorKind::Account,
+            (_, None) => AuthorKind::Unknown,
+            _ => AuthorKind::Named,
+        };
 
         let mut parts = parts_by_msg
             .get(m.message_id.as_str())
@@ -190,6 +195,7 @@ fn build_chat(
         items.push(NormalizedChatItem {
             message_uuid: msg_id.uuid.clone(),
             author_handle: None,
+            author_kind,
             author_display,
             date_ms: ms,
             text: body,
@@ -220,6 +226,7 @@ fn build_chat(
         .unwrap_or_else(|| "(untitled)".to_string());
     let chat_uuid = ids::conversation(source_id, &conv_id).uuid;
     NormalizedChat {
+        named_after: Vec::new(),
         contacts: Vec::new(),
         inputs: Vec::new(),
         path_prefix: None,

@@ -6,9 +6,9 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::LazyLock;
 use std::time::Duration;
 
-use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::Value;
 
@@ -20,7 +20,8 @@ use datalib_etl_web::http::{
 pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(60);
 pub const PER_PAGE: u32 = 100;
 
-static LINK_NEXT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"<([^>]+)>;\s*rel="next""#).unwrap());
+static LINK_NEXT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"<([^>]+)>;\s*rel="next""#).unwrap());
 
 #[derive(thiserror::Error, Debug)]
 pub enum ForgeError {

@@ -11,7 +11,7 @@ use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::processor::PlanContext;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::render_all as chat_render_all;
-use datalib_etl_chat_common::types::NormalizedChat;
+use datalib_etl_chat_common::types::{AuthorKind, NormalizedChat};
 use datalib_etl_contact_common::{render_all as contact_render_all, ContactDoc};
 use datalib_etl_facebook::ingest::schema_raw::{
     ALBUMS_TABLE, COMMENTS_TABLE, COMMENT_EDITS_TABLE, FRIENDS_TABLE, GROUPS_JOINED_TABLE,
@@ -53,6 +53,8 @@ pub struct Owner {
     /// The source's group id — a component of every id minted here.
     pub source_id: String,
     pub name: String,
+    /// `Account` where `name` is the "Me" a store with no profile shows.
+    pub name_kind: AuthorKind,
     /// The owner by name, as Messenger writes them; none for a store
     /// with no profile, whose owner is only "Me".
     pub handle: Option<Handle>,
@@ -83,14 +85,18 @@ impl Owner {
             source_id: source_id.to_string(),
             handle: name.as_deref().and_then(Handle::facebook_name),
             name: name.clone().unwrap_or_else(|| "Me".to_string()),
+            name_kind: match name {
+                Some(_) => AuthorKind::Named,
+                None => AuthorKind::Account,
+            },
             account: datalib_etl_chat_common::account_label("", email, name.as_deref()),
             inputs,
         }
     }
 
     /// The owner as the author of what they posted, commented or reacted.
-    pub fn author(&self) -> (String, Option<Handle>) {
-        (self.name.clone(), self.handle.clone())
+    pub fn author(&self) -> (String, Option<Handle>, AuthorKind) {
+        (self.name.clone(), self.handle.clone(), self.name_kind)
     }
 }
 

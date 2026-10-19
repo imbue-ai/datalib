@@ -59,7 +59,11 @@ pub async fn ingest(
                 };
                 skipped.push(SkippedRecord {
                     entry: f.to_string(),
-                    problem: Problem::field(field, Reason::NoIdentity, value),
+                    problem: Problem::field(
+                        field,
+                        Reason::NoIdentity,
+                        &super::shape::url_kind(value),
+                    ),
                 });
                 continue;
             }

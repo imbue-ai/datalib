@@ -102,7 +102,7 @@
           {
             "life_event": {
               "title": "Took command of the Enterprise",
-              "description": "Stardate 41153.7 \u00e2\u0080\u0094 a new ship, a new crew. \u00e2\u009c\u00a8",
+              "description": "Stardate 41153.7 \u00e2\u0080\u0094 a new ship, a new crew. \u00e2\u009c\u00a8\n\n2048:William Riker",
               "start_date": {
                 "year": 2364,
                 "month": 1,

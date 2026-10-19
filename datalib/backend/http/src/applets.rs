@@ -36,7 +36,6 @@ use datalib_dag::config::AppletEntry;
 use serde::Serialize;
 use tokio::sync::broadcast;
 
-use crate::embed::DocumentKind;
 use crate::watch::{RootEvent, RootFrame};
 
 /// The applet's own id, as the gateway knows it. The reference applet
@@ -57,13 +56,6 @@ pub const ENV_APPLET_BASE: &str = "DATALIB_APPLET_BASE";
 /// process and to a web page that resolves its own hostname to 127.0.0.1.
 pub const ENV_APPLET_SECRET: &str = "DATALIB_APPLET_SECRET";
 pub const APPLET_SECRET_HEADER: &str = "X-Datalib-Applet-Secret";
-
-/// What an applet calls a document it serves, when it is one of the
-/// kinds [`crate::embed::DocumentKind`] names: the applet knows which of
-/// its files it wrote itself. A document without it is data and runs
-/// nothing. `datalib_applet::gate::DOCUMENT_HEADER` is the other
-/// spelling.
-pub const APPLET_DOCUMENT_HEADER: &str = "X-Datalib-Document";
 
 /// The prefix of the one line an applet prints to **stdout** once it
 /// has written its components and bound its port: the readiness
@@ -482,7 +474,7 @@ impl AppletRegistry {
             // they used to produce the same message: the applet really
             // isn't configured, or the config could not be read at all
             // — which yields an empty list and so reports every applet
-            // as missing. Saying "no applet \"unified_index\"" when the
+            // as missing. Saying "no applet \"unified_document_index\"" when the
             // truth is "your config.toml has a syntax error" sends
             // people looking in exactly the wrong place.
             None => {
@@ -666,6 +658,7 @@ pub struct Supervisor {
     running: Mutex<BTreeMap<String, Running>>,
     /// [`START_TIMEOUT`], except where a caller narrowed it.
     start_timeout: Duration,
+    memory: crate::applet_memory::AppletMemory,
 }
 
 impl Default for Supervisor {
@@ -679,6 +672,7 @@ impl Supervisor {
         Self {
             running: Mutex::new(BTreeMap::new()),
             start_timeout,
+            memory: Default::default(),
         }
     }
 
@@ -840,6 +834,7 @@ impl Supervisor {
             }
         };
 
+        self.memory.track(&entry.id, child.id());
         if let Ok(mut map) = self.running.lock() {
             map.insert(
                 entry.id.clone(),
@@ -866,10 +861,12 @@ impl Supervisor {
                         .child
                         .wait()
                         .map_or_else(|e| format!("wait failed: {e}"), |s| s.to_string());
+                    let peak_rss_bytes = self.memory.forget(id).map(|r| r.peak_rss_bytes);
                     tracing::error!(
                         applet = %id,
                         pid = dead.child.id(),
                         %status,
+                        peak_rss_bytes,
                         "the applet exited; it starts again when the config next changes"
                     );
                 }
@@ -895,6 +892,8 @@ impl Supervisor {
                 // Reap: `kill` only signals, and an unwaited child stays
                 // a zombie until its parent exits.
                 let _ = r.child.wait();
+                let peak_rss_bytes = self.memory.forget(&id).map(|r| r.peak_rss_bytes);
+                tracing::info!(applet = %id, peak_rss_bytes, "stopped the applet");
             }
         }
     }
@@ -907,6 +906,10 @@ impl Supervisor {
 impl AppletRegistry {
     pub fn shutdown(&self) {
         self.supervisor.stop_all();
+    }
+
+    pub fn memory(&self) -> BTreeMap<String, crate::applet_memory::Reading> {
+        self.supervisor.memory.readings()
     }
 }
 
@@ -925,9 +928,6 @@ impl Drop for Supervisor {
 pub struct ProxyResponse {
     pub status: u16,
     pub content_type: String,
-    /// Read from [`APPLET_DOCUMENT_HEADER`]; a value this build does not
-    /// know reads as [`DocumentKind::Data`], the stricter policy.
-    pub document: DocumentKind,
     pub body: Vec<u8>,
 }
 
@@ -1103,21 +1103,17 @@ fn parse_response(raw: &[u8]) -> Result<ProxyResponse, String> {
         .and_then(|s| s.parse().ok())
         .ok_or_else(|| format!("applet response has no status: {status_line:?}"))?;
     let mut content_type = "application/octet-stream".to_string();
-    let mut document = DocumentKind::Data;
     for line in lines {
         if let Some((k, v)) = line.split_once(':') {
             let k = k.trim();
             if k.eq_ignore_ascii_case("content-type") {
                 content_type = v.trim().to_string();
-            } else if k.eq_ignore_ascii_case(APPLET_DOCUMENT_HEADER) {
-                document = DocumentKind::parse(v.trim()).unwrap_or_default();
             }
         }
     }
     Ok(ProxyResponse {
         status,
         content_type,
-        document,
         body,
     })
 }
@@ -1301,20 +1297,6 @@ mod tests {
         applet.join().unwrap();
     }
 
-    /// The applet names a plot page; a name this build does not know,
-    /// or none, leaves it data.
-    #[test]
-    fn the_document_kind_is_read_from_its_header() {
-        let plot =
-            b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nx-datalib-document: plot\r\n\r\n<p>";
-        assert_eq!(parse_response(plot).unwrap().document, DocumentKind::Plot);
-        let odd =
-            b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nX-Datalib-Document: trusted\r\n\r\n<p>";
-        assert_eq!(parse_response(odd).unwrap().document, DocumentKind::Data);
-        let none = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<p>";
-        assert_eq!(parse_response(none).unwrap().document, DocumentKind::Data);
-    }
-
     #[test]
     fn parses_a_minimal_response() {
         let raw = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"ok\":true}";
@@ -1327,5 +1309,66 @@ mod tests {
     #[test]
     fn reports_a_missing_header_terminator() {
         assert!(parse_response(b"HTTP/1.1 200 OK").is_err());
+    }
+
+    /// A running applet's memory is read from its whole process tree:
+    /// the shell here holds a megabyte or two, the `dd` below it a 64 MiB
+    /// buffer. Stopping the applet forgets its reading.
+    #[cfg(unix)]
+    #[test]
+    fn a_running_applets_memory_counts_what_it_spawned() {
+        const BUFFER: u64 = 64 * 1024 * 1024;
+        let root = tempfile::tempdir().unwrap();
+        let holder_pid = root.path().join("holder.pid");
+        // dd rewrites its buffer for as long as it runs, so the pages stay
+        // active: an idle buffer is compressed or swapped out of RSS once
+        // the machine is under memory pressure, which a full test run is.
+        // The test kills it; the watchdog bounds it if the test cannot.
+        let script = format!(
+            "dd if=/dev/zero of=/dev/null bs=67108864 count=1000000 2>/dev/null & d=$!; \
+             (sleep 60; kill $d) >/dev/null 2>&1 & \
+             echo $d > '{}'; echo {APPLET_PORT_LINE}1; wait $d",
+            holder_pid.display(),
+        );
+        let entry = AppletEntry {
+            id: "mem".into(),
+            group: None,
+            command: format!("/bin/sh -c {}", shlex::try_quote(&script).unwrap()),
+            params: None,
+            env: BTreeMap::new(),
+        };
+        // A stopped applet's children are not in a group the gateway
+        // signals, so the test ends the holder itself, on every path out.
+        struct KillHolder(PathBuf);
+        impl Drop for KillHolder {
+            fn drop(&mut self) {
+                if let Some(pid) = std::fs::read_to_string(&self.0)
+                    .ok()
+                    .and_then(|p| p.trim().parse().ok())
+                {
+                    // Safety: plain kill(2) on the dd this test started.
+                    unsafe { libc::kill(pid, libc::SIGKILL) };
+                }
+            }
+        }
+        let _holder = KillHolder(holder_pid);
+        let supervisor = Supervisor::default();
+        supervisor
+            .start(&entry, root.path(), None, root.path(), "secret")
+            .expect("the applet announced its port");
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        let rss = || supervisor.memory.readings().get("mem").map(|r| r.rss_bytes);
+        while rss().unwrap_or(0) < BUFFER {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no reading counted the applet's child: {:?}",
+                supervisor.memory.readings()
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        supervisor.stop_all();
+
+        assert_eq!(rss(), None, "a stopped applet keeps no reading");
     }
 }

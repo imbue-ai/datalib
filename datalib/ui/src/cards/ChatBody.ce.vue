@@ -55,6 +55,7 @@ import { copyToClipboard } from "@/clipboard";
 import { openExternal } from "@/externalLinks";
 import { pushToast } from "@/toasts";
 import { renderDocument } from "./renderDocument";
+import { mountTimeSeries } from "./timeSeriesEmbed";
 import {
   isBrowserClick,
   linkFromClick,
@@ -97,7 +98,7 @@ const props = defineProps<{
   /**
    * The markdown_uuid of the body we're rendering. Used to rewrite
    * relative image references (`![](blobs/foo.png)`) to backend asset
-   * URLs (`/applet/unified_index/asset/{markdownUuid}/blobs/foo.png`) so the browser
+   * URLs (`/applet/unified_document_index/asset/{markdownUuid}/blobs/foo.png`) so the browser
    * actually fetches them. Optional: when absent, relative refs pass
    * through unchanged.
    */
@@ -531,13 +532,22 @@ function applySelection(scroll = true) {
 }
 
 /// Fill the frame and decorate.
+/// What unmounts the charts mounted into the body as it stands.
+let chartStops: (() => void)[] = [];
+function unmountCharts() {
+  for (const stop of chartStops) stop();
+  chartStops = [];
+}
+
 function paint() {
   const el = body.value;
   if (!el) return;
   if (painted !== html.value) {
+    unmountCharts();
     el.innerHTML = html.value;
     painted = html.value;
   }
+  chartStops.push(mountTimeSeries(el));
   injectCopyUuidButtons(el);
   decorateRemoteMedia(el);
   decorateLongMessages(el);
@@ -565,6 +575,7 @@ function onFrameLinkClick(ev: MouseEvent) {
 }
 
 function releaseFrame() {
+  unmountCharts();
   for (const stop of frameStops) stop();
   frameStops = [];
   frameBody.value = null;

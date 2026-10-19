@@ -28,6 +28,7 @@ mod reset;
 mod source;
 mod source_type;
 mod synth;
+mod time_series;
 mod topo_sort_config;
 
 #[cfg(test)]
@@ -505,6 +506,18 @@ async fn run_function(
             writes_the_index_tree(&env, &embedding_map::out_rel())?;
             embedding_map::run(data_root, now, emitter).await
         }
+        Function::RenderTimeSeries => time_series::run_render(&env, data_root, emitter).await,
+        Function::TimeSeriesIndex => {
+            anyhow::ensure!(
+                env.step == time_series::index_rel(),
+                "`time_series_index` writes {:?} and nothing else, but this step's id is {:?}: \
+                 declare it under the `{}` group",
+                time_series::index_rel(),
+                env.step,
+                datalib_core::layout::UNIFIED_TIME_SERIES_INDEX_DIR
+            );
+            time_series::run_index(&env, data_root, emitter).await
+        }
     }
 }
 
@@ -543,7 +556,7 @@ fn version_through_runtime(mut cmd: std::process::Command) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// The index steps have one reader each — the `unified_index` applet
+/// The index steps have one reader each — the `unified_document_index` applet
 /// — which finds them from the data root alone, so their trees are
 /// fixed. A config that files them under another group would have
 /// the runner tracking a tree nothing ever writes.
@@ -551,7 +564,7 @@ fn writes_the_index_tree(env: &StepEnv, expected: &str) -> Result<()> {
     anyhow::ensure!(
         env.step == expected,
         "`{}` writes {expected:?} and nothing else, but this step's id is {:?}: declare it \
-         under the `unified_index` group",
+         under the `unified_document_index` group",
         env.function,
         env.step
     );

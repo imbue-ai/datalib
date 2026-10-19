@@ -33,7 +33,9 @@ async function anAuthorChip(page: import("@playwright/test").Page) {
 }
 
 test("an author with a handle is drawn as a chip link", async ({ page, request }) => {
-  const resp = await request.get("/applet/unified_index/search?q=source_id%3Aslack&limit=200");
+  const resp = await request.get(
+    "/applet/unified_document_index/search?q=source_id%3Aslack&limit=200",
+  );
   expect(resp.ok()).toBeTruthy();
   const { rows } = (await resp.json()) as { rows: Row[] };
   const withHandle = rows.find((r) => r.author_handle);
@@ -111,7 +113,7 @@ test("a storage report's group and step are chips that open their cards", async 
   request,
 }) => {
   const resp = await request.get(
-    `/applet/unified_index/search?q=${encodeURIComponent("source_id:datalib")}&limit=500`,
+    `/applet/unified_document_index/search?q=${encodeURIComponent("source_id:datalib")}&limit=500`,
   );
   expect(resp.ok()).toBeTruthy();
   const { rows } = (await resp.json()) as {

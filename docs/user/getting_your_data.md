@@ -33,7 +33,7 @@ storing any.
 
 `type = "airvisual"` — reads each monitor's own history files
 (`export`). Mirrors particulates, AQI, CO₂, temperature, humidity and
-VOC as time series, rendered as one page of interactive plots.
+VOC as time series, rendered as one page of charts.
 
 An AirVisual Pro (IQAir's indoor air-quality monitor) keeps its history
 on the unit — no cloud account is involved — and serves it over a Samba
@@ -410,7 +410,11 @@ nothing else; `addressbooks` narrows it to the address books you name.
 `type = "garmin"` — Garmin Connect's API through latchkey (`api`). Mirrors per-day health metrics (sleep, heart
 rate, stress, body battery, HRV, SpO₂, …), weigh-ins, activities with
 their original FIT files, devices, records, gear, badges, workouts and
-goals; the weigh-ins render as one page with an interactive plot.
+goals. The weigh-ins, each family of daily metrics (sleep, heart rate
+and HRV, stress and Body Battery, steps, respiration and SpO₂,
+training) and the daily log render as pages with charts; each
+activity's page charts its heart rate and speed from its FIT file;
+each activity, day, personal record and badge is a row in the grid.
 
 latchkey reaches Garmin through its Garmin plugin, which the Add a
 source dialog installs into `~/.latchkey/plugins/garmin` the first time
@@ -674,6 +678,11 @@ pair from PerseusDL's `canonical-greekLit`; `files` picks others. Since
 it needs nothing of yours, it is a good first sync to check an install
 with.
 
+Aligning two editions sentence by sentence uses a pinned
+Ancient-Greek-BERT model, about 450 MB, fetched once on first use into
+`~/.cache/datalib/models` (or `$XDG_CACHE_HOME/datalib/models`) and
+checked against its pinned sha256 on every load.
+
 ## Signal
 
 `type = "signal"` — an Android backup file (`backup.path`). Mirrors
@@ -778,7 +787,7 @@ the store. Three tables of app bookkeeping are left out by default
 
 `type = "yolink"` — YoLink's API (`api`). Mirrors per-device sensor
 history — temperature, humidity, water — rendered as one page of
-interactive plots.
+charts.
 
 Each device is one `devices` entry naming its `kind`
 (`temperature_humidity` or `watermeter`), the `start` date to mirror

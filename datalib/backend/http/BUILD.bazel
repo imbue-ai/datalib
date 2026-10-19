@@ -27,6 +27,7 @@ platform_transition_filegroup(
 rust_library(
     name = "datalib_http",
     srcs = [
+        "src/applet_memory.rs",
         "src/applets.rs",
         "src/auth.rs",
         "src/binaries.rs",
@@ -73,7 +74,7 @@ rust_library(
     # desktop app's version. Must match [package].version in
     # datalib/backend/Cargo.toml; the
     # //datalib/backend:version_consistency_test asserts that.
-    version = "0.42.0",
+    version = "0.43.0",
     # The rust-embed proc macro reads `$DATALIB_UI_DIST` (env-var
     # interpolation via the `interpolate-folder-path` feature). We
     # point it at the hermetic Bazel-built dist (via `:ui_dist_host`,
@@ -104,6 +105,7 @@ rust_library(
         "//datalib/backend/parent_watch:datalib_parent_watch",
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/dag:datalib_dag",
+        "//datalib/backend/fetch:datalib_fetch",
         "//datalib/backend/history:datalib_history",
         "//datalib/backend/migrate_config:datalib_migrate_config",
         "//datalib/backend/pin:datalib_pin",
@@ -143,6 +145,7 @@ rust_test(
         "@datalib_crates//:async-trait",
     ],
     deps = [
+        "@datalib_crates//:libc",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tower",

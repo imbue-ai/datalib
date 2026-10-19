@@ -340,8 +340,8 @@
     ]
   },
   "google_takeout": {
-    "schema_hash": "dd4b6017a184f85a8d55de498b16335eff9cfcfac64050fcf51320284b88ef1f",
-    "schema_version": 2,
+    "schema_hash": "061066f1cebce7b850d691b8bc5814094bd1334bca73a11286d791100458438d",
+    "schema_version": 4,
     "shared_schema_version": 1,
     "sql": [
       "CREATE TABLE chat_attachments( id TEXT PRIMARY KEY, message_id TEXT NOT NULL, export_name TEXT NOT NULL, blake3 TEXT NULL, CHECK(blake3 IS NULL OR length(blake3) = 64))",
@@ -365,8 +365,14 @@
       "CREATE TABLE maps_photos_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE maps_reviews( id TEXT PRIMARY KEY, payload TEXT NULL, when_ts TEXT NULL)",
       "CREATE TABLE maps_reviews_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
+      "CREATE TABLE maps_saved_lists( id TEXT PRIMARY KEY, payload TEXT NULL, file TEXT NOT NULL)",
+      "CREATE TABLE maps_saved_lists_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE maps_saved_places( id TEXT PRIMARY KEY, payload TEXT NULL, when_ts TEXT NULL)",
       "CREATE TABLE maps_saved_places_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
+      "CREATE TABLE my_maps_placemarks( id TEXT PRIMARY KEY, payload TEXT NULL, file TEXT NOT NULL)",
+      "CREATE TABLE my_maps_placemarks_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
+      "CREATE TABLE play_books_annotations( id TEXT PRIMARY KEY, payload TEXT NULL, file TEXT NOT NULL, when_ts TEXT NULL)",
+      "CREATE TABLE play_books_annotations_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)",

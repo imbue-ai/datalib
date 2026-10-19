@@ -4,13 +4,34 @@
 //! not.
 
 use axum::body::Body;
+use axum::extract::State;
 use axum::http::{header, HeaderValue, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use rust_embed::RustEmbed;
 
+use crate::auth::TrustedProxy;
+use crate::AppState;
+
 #[derive(RustEmbed)]
 #[folder = "$DATALIB_UI_DIST"]
 struct UiAssets;
+
+macro_rules! app_csp_directives {
+    () => {
+        "default-src 'self'; \
+         script-src 'self' 'unsafe-eval'; \
+         style-src 'self' 'unsafe-inline'; \
+         img-src 'self' data: blob:; \
+         media-src 'self' data: blob:; \
+         font-src 'self' data:; \
+         connect-src 'self' ipc: http://ipc.localhost; \
+         frame-src 'self'; \
+         worker-src 'self' blob:; \
+         object-src 'none'; \
+         base-uri 'none'; \
+         form-action 'self'"
+    };
+}
 
 /// The app page's Content-Security-Policy: the second layer behind
 /// DOMPurify. A message body that gets past the sanitizer still cannot
@@ -37,83 +58,44 @@ struct UiAssets;
 ///   shell loads this page from the server as a remote URL, so Tauri
 ///   does not rewrite the policy the way it would for a page it serves
 ///   itself, and its `invoke` is a `fetch` to those origins.
-/// - `frame-src 'self'`: the DACTAL card and the plot pages are
+/// - `frame-src 'self'`: the DACTAL card and a document's body are
 ///   same-origin iframes — which is why every document this origin
-///   serves as data gets a sandbox policy of its own ([`DocumentKind`]).
-pub const APP_CSP: &str = "default-src 'self'; \
-    script-src 'self' 'unsafe-eval'; \
-    style-src 'self' 'unsafe-inline'; \
-    img-src 'self' data: blob:; \
-    media-src 'self' data: blob:; \
-    font-src 'self' data:; \
-    connect-src 'self' ipc: http://ipc.localhost; \
-    frame-src 'self'; \
-    worker-src 'self' blob:; \
-    object-src 'none'; \
-    base-uri 'none'; \
-    form-action 'self'; \
-    frame-ancestors 'none'";
+///   serves as data gets a sandbox policy of its own
+///   ([`DATA_DOCUMENT_CSP`]).
+/// - `frame-ancestors 'none'`: no page may frame the app, so no page can
+///   lay an invisible copy of it under its own buttons. A page on
+///   another port of the same host would otherwise carry the session,
+///   since `SameSite` ignores the port.
+pub const APP_CSP: &str = concat!(app_csp_directives!(), "; frame-ancestors 'none'");
 
-/// What a document this origin serves as *data* — not the app — may do.
-/// Every policy starts with `sandbox`, which puts the document in an
+/// [`APP_CSP`] without `frame-ancestors`, for a server behind a
+/// [`TrustedProxy`]: the proxy appends a `frame-ancestors` of its own,
+/// naming the host application that frames the app, and two policies
+/// intersect — `'none'` here would blank that frame.
+pub const APP_CSP_FRAMED: &str = app_csp_directives!();
+
+pub fn app_csp(trusted_proxy: Option<TrustedProxy>) -> &'static str {
+    match trusted_proxy {
+        None => APP_CSP,
+        Some(_) => APP_CSP_FRAMED,
+    }
+}
+
+/// What a document this origin serves as *data* — not the app — may do:
+/// an attachment out of a render tree, a fetched remote SVG. A sender
+/// wrote them, so they run no script at all and load nothing from
+/// outside — not even a read receipt. `sandbox` puts the document in an
 /// opaque origin: no cookie, no same-origin `fetch` to `/api/*`, no way
 /// to navigate the window it sits in. It is sent as a header because
 /// `sandbox` is ignored in a `<meta>` policy.
-///
-/// The kind is named by whoever knows what the bytes are; anything not
-/// named is [`DocumentKind::Data`], the policy that runs nothing.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Default,
-    strum::EnumString,
-    strum::IntoStaticStr,
-    strum::VariantArray,
-)]
-#[strum(serialize_all = "snake_case")]
-pub enum DocumentKind {
-    /// Bytes from upstream: an attachment out of a render tree, a fetched
-    /// remote SVG. A sender wrote them, so they run no script at all and
-    /// load nothing from outside — not even a read receipt.
-    #[default]
-    Data,
-    /// A Plotly page a time-series renderer wrote (`plots/*.html`). It
-    /// needs its own inline script and Plotly from the pinned CDN
-    /// (`timeseries_render::plot`; `scattergl` compiles shaders through
-    /// `new Function`), and nothing else: `connect-src 'none'`.
-    Plot,
-}
+pub const DATA_DOCUMENT_CSP: &str = "sandbox; default-src 'none'; style-src 'unsafe-inline'; \
+     img-src 'self' data:; media-src 'self' data:; font-src data:; \
+     base-uri 'none'; form-action 'none'";
 
 /// The DACTAL page (`/dactal/`) runs its own scripts in the sandbox. Its
 /// `<meta>` policy holds the rest (`ui/public/dactal/index.html`) — a
-/// header naming sources would intersect with it — and it is not a kind
-/// an applet can ask for.
+/// header naming sources would intersect with it.
 pub const DACTAL_SANDBOX_CSP: &str = "sandbox allow-scripts allow-downloads";
-
-impl DocumentKind {
-    pub fn parse(s: &str) -> Option<Self> {
-        s.parse().ok()
-    }
-
-    pub fn csp(self) -> &'static str {
-        match self {
-            DocumentKind::Data => {
-                "sandbox; default-src 'none'; style-src 'unsafe-inline'; \
-                 img-src 'self' data:; media-src 'self' data:; font-src data:; \
-                 base-uri 'none'; form-action 'none'"
-            }
-            DocumentKind::Plot => {
-                "sandbox allow-scripts allow-downloads; default-src 'none'; \
-                 script-src 'unsafe-inline' 'unsafe-eval' https://cdn.plot.ly; \
-                 style-src 'unsafe-inline'; img-src data: blob:; font-src data:; \
-                 worker-src blob:; connect-src 'none'; base-uri 'none'; form-action 'none'"
-            }
-        }
-    }
-}
 
 /// Content types a page would run as code from `<script src>` or
 /// `WebAssembly.instantiateStreaming`. A render tree holds none of its
@@ -164,13 +146,14 @@ pub fn is_scriptable_document(content_type: &str) -> bool {
 /// sends no cookie with a module load.
 pub const PUBLIC_PREFIX: &str = "dactal/";
 
-pub async fn serve_ui(uri: Uri) -> Response {
+pub async fn serve_ui(State(state): State<AppState>, uri: Uri) -> Response {
+    let trusted_proxy = state.trusted_proxy;
     let path = uri.path().trim_start_matches('/');
     if path.is_empty() {
-        return serve_index();
+        return serve_index(trusted_proxy);
     }
     match UiAssets::get(path) {
-        Some(content) => asset_response(path, content),
+        Some(content) => asset_response(path, content, trusted_proxy),
         // A public path names a file or nothing: the SPA fallback would
         // hand the app shell to a caller with no session.
         None if path.starts_with(PUBLIC_PREFIX) => StatusCode::NOT_FOUND.into_response(),
@@ -179,13 +162,13 @@ pub async fn serve_ui(uri: Uri) -> Response {
             (StatusCode::NOT_FOUND, format!("no endpoint /{path}")).into_response()
         }
         // SPA fallback — let the client router handle unknown routes.
-        None => serve_index(),
+        None => serve_index(trusted_proxy),
     }
 }
 
-fn serve_index() -> Response {
+fn serve_index(trusted_proxy: Option<TrustedProxy>) -> Response {
     match UiAssets::get("index.html") {
-        Some(c) => asset_response("index.html", c),
+        Some(c) => asset_response("index.html", c, trusted_proxy),
         // Built without a UI bundle present. Surface a clear error
         // rather than a confusing 404 — the right fix is to populate
         // DATALIB_UI_DIST and rebuild.
@@ -197,7 +180,11 @@ fn serve_index() -> Response {
     }
 }
 
-fn asset_response(path: &str, content: rust_embed::EmbeddedFile) -> Response {
+fn asset_response(
+    path: &str,
+    content: rust_embed::EmbeddedFile,
+    trusted_proxy: Option<TrustedProxy>,
+) -> Response {
     let mime = mime_guess::from_path(path).first_or_octet_stream();
     let mut resp = Response::new(Body::from(content.data));
     let headers = resp.headers_mut();
@@ -226,7 +213,7 @@ fn asset_response(path: &str, content: rust_embed::EmbeddedFile) -> Response {
     if path == "index.html" {
         headers.insert(
             header::CONTENT_SECURITY_POLICY,
-            HeaderValue::from_static(APP_CSP),
+            HeaderValue::from_static(app_csp(trusted_proxy)),
         );
     }
     if path.starts_with(PUBLIC_PREFIX) {
@@ -285,7 +272,7 @@ mod tests {
     /// attack (audit 2026-10-02 finding 1).
     #[test]
     fn data_documents_run_nothing_and_reach_nothing() {
-        let csp = DocumentKind::Data.csp();
+        let csp = DATA_DOCUMENT_CSP;
         assert_eq!(directive(csp, "sandbox"), Some("sandbox"), "{csp}");
         assert_eq!(directive(csp, "default-src"), Some("default-src 'none'"));
         assert!(directive(csp, "script-src").is_none());
@@ -293,31 +280,6 @@ mod tests {
         for d in csp.split(';') {
             assert!(!d.contains("http"), "no remote origin in {d:?}");
         }
-    }
-
-    /// A plot page runs its own script and Plotly, and still sends
-    /// nothing anywhere.
-    #[test]
-    fn plot_documents_run_plotly_and_reach_nothing() {
-        let csp = DocumentKind::Plot.csp();
-        assert!(!csp.contains("allow-same-origin"), "{csp}");
-        assert_eq!(directive(csp, "default-src"), Some("default-src 'none'"));
-        assert_eq!(directive(csp, "connect-src"), Some("connect-src 'none'"));
-        assert_eq!(
-            directive(csp, "script-src"),
-            Some("script-src 'unsafe-inline' 'unsafe-eval' https://cdn.plot.ly")
-        );
-    }
-
-    #[test]
-    fn document_kinds_parse_as_they_print() {
-        use strum::VariantArray;
-        for &k in DocumentKind::VARIANTS {
-            let s: &'static str = k.into();
-            assert_eq!(DocumentKind::parse(s), Some(k));
-        }
-        assert_eq!(DocumentKind::parse("plot"), Some(DocumentKind::Plot));
-        assert_eq!(DocumentKind::parse("script"), None);
     }
 
     #[test]
