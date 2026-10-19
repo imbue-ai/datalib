@@ -60,6 +60,7 @@ rust_test(
     crate = ":datalib_etl_whatsapp",
     edition = "2021",
     deps = [
+        "//datalib/backend/obs:datalib_obs",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tempfile",
     ],

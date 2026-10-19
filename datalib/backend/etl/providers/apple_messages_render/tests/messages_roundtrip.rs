@@ -355,3 +355,22 @@ async fn the_join_tables_are_keyed_on_their_unique_pair() -> Result<()> {
     pool.close().await;
     Ok(())
 }
+
+/// A store the mirror has never filled — the migrate pass opened it, or
+/// a download that then could not read `chat.db` — renders nothing and
+/// consumes no commit, and the first mirror into it renders as a cold
+/// start (#1251).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_store_the_mirror_never_filled_renders_nothing() -> Result<()> {
+    let fx = Fixture::new();
+    datalib_etl_apple_messages::processor::migrate(&fx.raw).await?;
+
+    let (docs, gone, outcome) = fx.render(None).await;
+    assert!(docs.is_empty() && gone.is_empty(), "{docs:?} {gone:?}");
+    assert_eq!(outcome.new_head, None);
+
+    fx.ingest().await?.expect("first ingest commits");
+    let (docs, _, _) = fx.render(None).await;
+    assert_eq!(docs.len(), 3);
+    Ok(())
+}

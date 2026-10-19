@@ -73,68 +73,57 @@ pub fn render_all(
     // Incremental gate: with a cursor, ask doltlite which chats changed
     // between that hash and the pinned commit, join the buckets the
     // driver found stale through their declared inputs, and skip the
-    // rest. Cold start (no cursor) or no doltlite db on disk renders
-    // every chat.
+    // rest. Cold start (no cursor) renders every chat.
     let db_path = doltlite_raw::db_path_for(raw_dir);
-
-    let (filtered_owned, new_head, named): (
-        Option<Vec<NormalizedChat>>,
-        Option<String>,
-        Vec<String>,
-    ) = if db_path.exists() {
-        let scan = tokio::task::block_in_place(|| match tokio::runtime::Handle::try_current() {
-            Ok(h) => h.block_on(scan_diff(&db_path, range)),
-            Err(_) => tokio::runtime::Runtime::new()?.block_on(scan_diff(&db_path, range)),
-        })?;
-        tracing::info!(
-            source = source_id,
-            scan_elapsed_ms = scan.elapsed.map(|d| d.as_millis() as u64),
-            changed_chats = scan
-                .changed
-                .as_ref()
-                .map(|c| c.live.len() as i64)
-                .unwrap_or(-1),
-            gone_chats = scan
-                .changed
-                .as_ref()
-                .map(|c| c.gone.len() as i64)
-                .unwrap_or(-1),
-            cold_start = scan.changed.is_none(),
-            "[render] whatsapp dolt_diff scan"
-        );
-        // The driver names stale buckets by chat uuid; the chats are by JID.
-        let by_uuid: HashMap<String, &str> = chats
+    let scan = tokio::task::block_in_place(|| match tokio::runtime::Handle::try_current() {
+        Ok(h) => h.block_on(scan_diff(&db_path, range)),
+        Err(_) => tokio::runtime::Runtime::new()?.block_on(scan_diff(&db_path, range)),
+    })?;
+    tracing::info!(
+        source = source_id,
+        scan_elapsed_ms = scan.elapsed.map(|d| d.as_millis() as u64),
+        changed_chats = scan
+            .changed
+            .as_ref()
+            .map(|c| c.live.len() as i64)
+            .unwrap_or(-1),
+        gone_chats = scan
+            .changed
+            .as_ref()
+            .map(|c| c.gone.len() as i64)
+            .unwrap_or(-1),
+        cold_start = scan.changed.is_none(),
+        "[render] whatsapp dolt_diff scan"
+    );
+    // The driver names stale buckets by chat uuid; the chats are by JID.
+    let by_uuid: HashMap<String, &str> = chats
+        .iter()
+        .map(|c| (c.chat_uuid.clone(), c.id.as_str()))
+        .collect();
+    let narrowed = range.narrow_by(scan.changed.as_ref().map(|c| &c.live), |key| {
+        by_uuid.get(key).map(|jid| jid.to_string())
+    });
+    let filtered = narrowed.render.as_ref().map(|live| {
+        chats
             .iter()
-            .map(|c| (c.chat_uuid.clone(), c.id.as_str()))
-            .collect();
-        let narrowed = range.narrow_by(scan.changed.as_ref().map(|c| &c.live), |key| {
-            by_uuid.get(key).map(|jid| jid.to_string())
-        });
-        let filtered = narrowed.render.as_ref().map(|live| {
-            chats
-                .iter()
-                .filter(|chat| live.contains(&chat.id))
-                .cloned()
-                .collect::<Vec<_>>()
-        });
-        // Every named JID, live or gone: every backup is a full snapshot
-        // (the mirror drops and refills), so a chat the diff named that
-        // HEAD no longer carries is one the phone deleted, and declaring
-        // it with nothing is what removes its documents. A stale bucket
-        // whose chat is gone is already a key.
-        let mut named: Vec<String> = narrowed
-            .render
-            .iter()
-            .flatten()
-            .chain(scan.changed.iter().flat_map(|c| c.gone.iter()))
-            .map(|jid| super::ids::chat(source_id, jid).uuid)
-            .collect();
-        named.extend(narrowed.gone);
-        (filtered, scan.head, named)
-    } else {
-        (None, None, Vec::new())
-    };
-    let to_render: &[NormalizedChat] = filtered_owned.as_deref().unwrap_or(chats);
+            .filter(|chat| live.contains(&chat.id))
+            .cloned()
+            .collect::<Vec<_>>()
+    });
+    // Every named JID, live or gone: every backup is a full snapshot
+    // (the mirror drops and refills), so a chat the diff named that
+    // HEAD no longer carries is one the phone deleted, and declaring
+    // it with nothing is what removes its documents. A stale bucket
+    // whose chat is gone is already a key.
+    let mut named: Vec<String> = narrowed
+        .render
+        .iter()
+        .flatten()
+        .chain(scan.changed.iter().flat_map(|c| c.gone.iter()))
+        .map(|jid| super::ids::chat(source_id, jid).uuid)
+        .collect();
+    named.extend(narrowed.gone);
+    let to_render: &[NormalizedChat] = filtered.as_deref().unwrap_or(chats);
     let summary = datalib_etl_chat_common::render::render_all(
         &profile(),
         to_render,
@@ -155,7 +144,7 @@ pub fn render_all(
         })
         .collect();
     buckets.extend(summary.buckets);
-    Ok((new_head, buckets))
+    Ok((scan.head, buckets))
 }
 
 /// What changed between two commits, as chat JIDs: the ones HEAD still
@@ -525,6 +514,47 @@ mod tests {
         );
     }
 
+    /// A store no download has filled — opened by the launch's migrate
+    /// pass, or by an ingest that then failed for want of its key —
+    /// renders nothing rather than failing on a msgstore table it lacks
+    /// (#1251).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_store_no_download_filled_renders_nothing() {
+        let td = tempfile::tempdir().expect("tempdir");
+        let raw_dir = td.path().join("raw");
+        std::fs::create_dir_all(&raw_dir).expect("mkdir raw");
+        datalib_etl_whatsapp::processor::migrate(&raw_dir)
+            .await
+            .expect("migrate");
+
+        let out_dir = td.path().join("out");
+        let (docs, gone, cursor) = render_capture(&raw_dir, &out_dir, None).await;
+        assert!(docs.is_empty(), "rendered {docs:?}");
+        assert!(gone.is_empty(), "reported gone {gone:?}");
+        assert_eq!(
+            cursor, None,
+            "a pass that read no msgstore consumes no commit"
+        );
+
+        // The first mirror that succeeds lands in that same store.
+        let db_path = datalib_etl::doltlite_raw::db_path_for(&raw_dir);
+        let pool = open_doltlite(&db_path, MSGSTORE_DDL).await.expect("open");
+        if !has_dolt_extensions(&pool).await {
+            return;
+        }
+        for q in [
+            "SELECT dolt_config('user.name', 'datalib-test')",
+            "SELECT dolt_config('user.email', 'test@datalib.local')",
+        ] {
+            sqlx::query(q).execute(&pool).await.expect("dolt_config");
+        }
+        seed_chat(&pool, 1, "alice@s.whatsapp.net", "k_a1", "hi from alice").await;
+        commit_run(&pool, "first mirror").await.expect("commit_run");
+        pool.close().await;
+        let (docs, _, _) = render_capture(&raw_dir, &out_dir, cursor.as_deref()).await;
+        assert_eq!(docs.len(), 1, "rendered {docs:?}");
+    }
+
     /// One jid, chat and message, all sharing `rowid` — the shape the
     /// mirror engine lays down from a real msgstore.
     async fn seed_chat(pool: &SqlitePool, rowid: i64, chat_jid: &str, key_id: &str, text: &str) {
@@ -578,7 +608,9 @@ mod tests {
                 pin: None,
                 stale: Some(&stale),
             };
-            let parsed = parse(&raw_dir, Period::All, "test", range).expect("parse");
+            let Some(parsed) = parse(&raw_dir, Period::All, "test", range).expect("parse") else {
+                return (Vec::new(), Vec::new(), None);
+            };
             let mut emitted: Vec<String> = Vec::new();
             let progress = datalib_etl::progress::Progress::noop();
             let mut on_complete =
