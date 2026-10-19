@@ -1320,19 +1320,15 @@ mod tests {
         const BUFFER: u64 = 64 * 1024 * 1024;
         let root = tempfile::tempdir().unwrap();
         let holder_pid = root.path().join("holder.pid");
-        let noise = root.path().join("noise");
-        // dd fills its buffer once and then blocks writing it to a pipe
-        // nobody reads, so the memory stays resident without a clock or a
-        // busy core. The `sleep` bounds it. Random bytes, because macOS
-        // compresses an idle page of zeros away once the machine is busy;
-        // from a file, because a loaded machine can answer one read of
-        // `/dev/urandom` short, and `count=1` reads once.
+        // dd rewrites its buffer for as long as it runs, so the pages stay
+        // active: an idle buffer is compressed or swapped out of RSS once
+        // the machine is under memory pressure, which a full test run is.
+        // The test kills it; the watchdog bounds it if the test cannot.
         let script = format!(
-            "head -c 67108864 /dev/urandom > '{noise}'; \
-             dd if='{noise}' bs=67108864 count=1 2>/dev/null | sleep 60 & \
-             echo $! > '{pid}'; echo {APPLET_PORT_LINE}1; wait",
-            noise = noise.display(),
-            pid = holder_pid.display(),
+            "dd if=/dev/zero of=/dev/null bs=67108864 count=1000000 2>/dev/null & d=$!; \
+             (sleep 60; kill $d) >/dev/null 2>&1 & \
+             echo $d > '{}'; echo {APPLET_PORT_LINE}1; wait $d",
+            holder_pid.display(),
         );
         let entry = AppletEntry {
             id: "mem".into(),
@@ -1350,7 +1346,7 @@ mod tests {
                     .ok()
                     .and_then(|p| p.trim().parse().ok())
                 {
-                    // Safety: plain kill(2) on the `sleep` this test started.
+                    // Safety: plain kill(2) on the dd this test started.
                     unsafe { libc::kill(pid, libc::SIGKILL) };
                 }
             }

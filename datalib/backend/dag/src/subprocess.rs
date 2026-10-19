@@ -1371,22 +1371,20 @@ mod tests {
         use crate::memory::{RSS_BYTES, RSS_PEAK_BYTES};
         const BUFFER: i64 = 64 * 1024 * 1024;
         let root = tempfile::tempdir().unwrap();
-        // dd fills its buffer once and then blocks writing it to a pipe
-        // nobody reads, so the memory stays resident without a clock or a
-        // busy core. Killing the `sleep` ends the dd; so does its minute.
-        // Random bytes, because macOS compresses an idle page of zeros away
-        // once the machine is busy; from a file, because a loaded machine
-        // can answer one read of `/dev/urandom` short, and `count=1` reads
-        // once.
+        // dd rewrites its buffer for as long as it runs, so the pages stay
+        // active: an idle buffer is compressed or swapped out of RSS once
+        // the machine is under memory pressure, which a full test run is.
+        // The step kills it when released; the watchdog bounds it if the
+        // test never gets that far, its output closed so it holds none of
+        // the step's pipes.
         let spec = StepSpec::new(
             "g/out",
             sh(r#"
-                out="$DATALIB_DAG_DATA_ROOT/g/out"
-                mkdir -p "$out"
-                head -c 67108864 /dev/urandom > "$out/noise"
-                dd if="$out/noise" bs=67108864 count=1 2>/dev/null | sleep 60 &
+                mkdir -p "$DATALIB_DAG_DATA_ROOT/g/out"
+                dd if=/dev/zero of=/dev/null bs=67108864 count=1000000 2>/dev/null & d=$!
+                (sleep 60; kill $d) >/dev/null 2>&1 &
                 while [ ! -f "$DATALIB_DAG_DATA_ROOT/release" ]; do sleep 0.1; done
-                kill $!
+                kill $d
             "#),
         );
         let g = Graph::build(vec![spec]).unwrap();
