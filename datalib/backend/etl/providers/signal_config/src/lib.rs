@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use datalib_source_common::{RenderCommon, SourceCommon};
 use serde::{Deserialize, Serialize};
 
-/// The signal-owned slice of a `signal` source. `backup` (decrypt the
-/// newest snapshot under its `path`) is its one way in; an `ingest`
+/// The signal-owned slice of a `signal` source. `backup` (decrypt every
+/// snapshot under its `path`) is its one way in; an `ingest`
 /// step without it is refused (`IngestMethods` below).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -42,17 +42,17 @@ pub struct SignalRenderConfig {
     pub period: Option<String>,
 }
 
-/// The `backup` table. The extractor finds the newest `signal-backup-*`
-/// subdir under `path`, decrypts it using the AEP read from
-/// `$aep_env_var` at download time, and UPSERTs frames into a doltlite
-/// raw store. No network; no credentials in this struct — the secret
+/// The `backup` table. The extractor reads every `signal-backup-*`
+/// subdir under `path` the store does not hold, oldest first, decrypting
+/// each with the AEP read from `$aep_env_var` at download time, one
+/// commit per snapshot. No network; no credentials in this struct — the secret
 /// lives in the user's shell (or .envrc.private).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct SignalSync {
     /// Directory containing one or more `signal-backup-*` snapshot
-    /// subdirs (Signal Android's "Save backup" target). The newest is
-    /// ingested.
+    /// subdirs (Signal Android's "Save backup" target). Each is a
+    /// commit, and HEAD ends on the newest.
     pub path: PathBuf,
     /// Env var holding the AEP (Account Entropy Pool). Defaults to
     /// `SIGNAL_BACKUP_PASSPHRASE` when omitted. Overridable so a multi-account

@@ -30,6 +30,7 @@ rust_library(
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:blake3",
+        "@datalib_crates//:chrono",
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
@@ -43,9 +44,6 @@ rust_test(
     size = "small",
     crate = ":datalib_etl_signal",
     edition = "2021",
-    deps = [
-        "@datalib_crates//:tempfile",
-    ],
 )
 
 # End-to-end against an inline TNG snapshot built via the

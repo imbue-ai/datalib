@@ -41,8 +41,8 @@ pub fn plan_ingest(ctx: PlanContext, config: SignalConfig) -> Result<Vec<Box<dyn
 }
 
 /// Signal's download processor. Owns its raw doltlite store end to end: opens
-/// it, registers an opaque interrupt-commit hook, decrypts the newest snapshot
-/// under `backup.path`, commits, closes.
+/// it, registers an opaque interrupt-commit hook, reads every snapshot under
+/// `backup.path` the store lacks, one commit each, closes.
 struct SignalIngest {
     id: String,
     raw_path: PathBuf,
@@ -74,8 +74,15 @@ impl DataProcessor for SignalIngest {
             })
             .await?;
             Ok(format!(
-                "recipients={} chats={} chat_items={} media_files={} snapshot={}",
-                s.recipients, s.chats, s.chat_items, s.media_files, s.snapshot,
+                "backups_found={} backups_read={} recipients={} chats={} chat_items={} \
+                 media_files={} snapshot={}",
+                s.backups_found,
+                s.backups_read.len(),
+                s.recipients,
+                s.chats,
+                s.chat_items,
+                s.media_files,
+                s.snapshot,
             ))
         })
         .await

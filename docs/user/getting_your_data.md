@@ -687,8 +687,10 @@ checked against its pinned sha256 on every load.
 
 ## Signal
 
-`type = "signal"` — an Android backup file (`backup.path`). Mirrors
-messages and media.
+`type = "signal"` — a folder of Android backups (`backup.path`). Mirrors
+messages and media. Every backup in the folder is kept as a version of
+the store, dated when it was taken, so two days' backups can be compared
+for messages that went missing or changed.
 
 Signal stores encrypted backups on the phone. Enable backups in the app
 (Settings → Chats → Backups), then pull the backup directory off the

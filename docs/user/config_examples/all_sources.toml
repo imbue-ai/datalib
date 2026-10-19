@@ -1077,8 +1077,8 @@ inputs = ["ship-air/keyword_index"]
 
 # --- Signal (Android backup) --------------------------------------------
 
-# Decrypts the newest `signal-backup-*` snapshot under `backup.path`
-# using the AEP read from the named env var at download time. See
+# Decrypts every `signal-backup-*` snapshot under `backup.path`, one
+# commit each, using the AEP read from the named env var at download time. See
 # docs/user/getting_your_data.md for pulling the backup off the phone.
 [[groups]]
 id = "signal"

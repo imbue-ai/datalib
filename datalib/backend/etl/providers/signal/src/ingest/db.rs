@@ -1,9 +1,11 @@
 //! Open + non-DDL data-manipulation for the Signal raw store.
 
+use std::path::Path;
+
 use anyhow::{Context, Result};
 use datalib_time::IsoOffsetTimestamp;
-use sqlx::Row;
 
+use super::backups::{self, Held};
 use super::schema_raw::full_ddl;
 
 pub use datalib_etl::doltlite_raw::db_path_for;
@@ -11,24 +13,25 @@ pub use datalib_etl::doltlite_raw::db_path_for;
 datalib_etl::raw_db!(pub RawDb: CasEntityStore, full_ddl());
 
 impl RawDb {
-    // ── ingested_backups (resume cursor) ────────────────────────────
-
-    /// Returns true if a row with this snapshot fingerprint already
-    /// exists. Cheap (single PK lookup against the fingerprint
-    /// computed from `stat()` alone, no body I/O) — callers use this
-    /// to short-circuit before any decrypt/blake3 work.
-    pub async fn snapshot_already_ingested(&self, fingerprint: &str) -> Result<bool> {
-        let row = sqlx::query("SELECT 1 FROM ingested_backups WHERE fingerprint = ? LIMIT 1")
-            .bind(fingerprint)
-            .fetch_optional(self.pool())
-            .await
-            .context("snapshot_already_ingested")?;
-        Ok(row.is_some())
+    pub async fn read_ledger(&self) -> Result<Vec<Held>> {
+        let rows: Vec<(String, Option<String>, String)> = sqlx::query_as(
+            "SELECT fingerprint, snapshot_dir, ingested_at_utc FROM ingested_backups",
+        )
+        .fetch_all(self.pool())
+        .await
+        .context("read ingested_backups")?;
+        Ok(rows
+            .into_iter()
+            .map(|(fingerprint, dir, ingested_at_utc)| Held {
+                fingerprint,
+                name: dir.and_then(|d| backups::name_of(Path::new(&d))),
+                ingested_at_utc,
+            })
+            .collect())
     }
 
-    /// Record a successful ingestion. Idempotent (`INSERT OR IGNORE`)
-    /// so re-running after a partial-then-recovered ingest doesn't
-    /// fail loudly.
+    /// Stamped again when a snapshot already held is read again, so the
+    /// newest stamp names the snapshot HEAD holds.
     pub async fn record_snapshot_ingested(
         &self,
         fingerprint: &str,
@@ -38,9 +41,13 @@ impl RawDb {
     ) -> Result<()> {
         let (now, tz_offset) = IsoOffsetTimestamp::now_local().to_utc_and_offset();
         sqlx::query(
-            "INSERT OR IGNORE INTO ingested_backups
+            "INSERT INTO ingested_backups
                  (fingerprint, blake3, snapshot_dir, total_byte_size, ingested_at_utc, tz_offset)
-             VALUES (?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT(fingerprint) DO UPDATE SET
+                 snapshot_dir = excluded.snapshot_dir,
+                 ingested_at_utc = excluded.ingested_at_utc,
+                 tz_offset = excluded.tz_offset",
         )
         .bind(fingerprint)
         .bind(blake3_hex)
@@ -52,19 +59,5 @@ impl RawDb {
         .await
         .context("record_snapshot_ingested")?;
         Ok(())
-    }
-
-    pub async fn last_ingested_snapshot(&self) -> Result<Option<(String, String)>> {
-        let row = sqlx::query(
-            "SELECT snapshot_dir, blake3 FROM ingested_backups
-             ORDER BY ingested_at_utc DESC LIMIT 1",
-        )
-        .fetch_optional(self.pool())
-        .await
-        .context("last_ingested_snapshot")?;
-        let Some(r) = row else { return Ok(None) };
-        let d: Option<String> = r.try_get("snapshot_dir").context("snapshot_dir")?;
-        let b: String = r.try_get("blake3").context("blake3")?;
-        Ok(Some((d.unwrap_or_default(), b)))
     }
 }
