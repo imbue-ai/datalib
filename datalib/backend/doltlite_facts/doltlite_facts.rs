@@ -596,7 +596,7 @@ mod diffs {
     const ROW: &str = "coalesce(to_id, from_id) || ':' || diff_type";
 
     #[tokio::test]
-    async fn refs_as_arguments_or_either_pair_of_filters_agree() {
+    async fn refs_as_arguments_or_as_ref_filters_agree() {
         let (s, [c1, _, c3]) = history().await;
         let mut r = s.ro().await;
         let args = texts(
@@ -608,10 +608,24 @@ mod diffs {
         let by_ref =
             format!("SELECT {ROW} FROM dolt_diff_t WHERE from_ref = '{c1}' AND to_ref = '{c3}'");
         assert_eq!(texts(&mut r, &by_ref).await, args);
-        let by_commit = format!(
-            "SELECT {ROW} FROM dolt_diff_t WHERE from_commit = '{c1}' AND to_commit = '{c3}'"
+    }
+
+    /// `from_commit` / `to_commit` filter the walk of adjacent pairs, so
+    /// a pair of commits that are not adjacent matches no row.
+    #[tokio::test]
+    async fn commit_filters_match_only_an_adjacent_pair() {
+        let (s, [c1, c2, c3]) = history().await;
+        let mut r = s.ro().await;
+        let by_commit = |from: &str, to: &str| {
+            format!(
+                "SELECT {ROW} FROM dolt_diff_t WHERE from_commit = '{from}' AND to_commit = '{to}'"
+            )
+        };
+        assert_eq!(texts(&mut r, &by_commit(&c2, &c3)).await, vec!["c:added"]);
+        assert_eq!(
+            texts(&mut r, &by_commit(&c1, &c3)).await,
+            Vec::<String>::new()
         );
-        assert_eq!(texts(&mut r, &by_commit).await, args);
     }
 
     #[tokio::test]
@@ -1793,7 +1807,7 @@ mod compat {
         assert!(!wal.exists(), "doltlite made a -wal sidecar");
     }
 
-    /// Doltlite cannot write a WAL, but it reads one: a stock-SQLite file
+    /// Doltlite reads a WAL another program wrote: a stock-SQLite file
     /// in WAL mode, as qmd's index is between checkpoints, reads with the
     /// rows its `-wal` holds. Without the `-wal` the same file holds only
     /// what was checkpointed. `scripts/make_doltlite_wal_fixture.py` wrote the
@@ -1830,29 +1844,38 @@ mod compat {
         assert_eq!(count(main_only.path()).await, 1);
     }
 
-    /// A plain SQLite file opened through doltlite answers `wal` too, but
-    /// keeps a rollback journal: its header never says WAL (bytes 18 and
-    /// 19 stay 1), so a reader waits while its writer commits.
+    /// A plain SQLite file opened through doltlite takes the journal mode
+    /// it is asked for, as stock SQLite does: `wal` marks its header WAL
+    /// (bytes 18 and 19 become 2), `delete` keeps a rollback journal
+    /// (they stay 1), which is what our own plain stores ask for.
     #[tokio::test]
-    async fn a_plain_sqlite_file_keeps_a_rollback_journal_whatever_it_answers() {
+    async fn a_plain_sqlite_file_takes_the_journal_mode_it_is_asked_for() {
         let s = Store::new();
-        let plain = s.path.with_file_name("plain.sqlite");
-        let mut c = connect(
-            &format!("file:{}?doltlite_engine=sqlite", plain.display()),
-            false,
-            Duration::from_secs(5),
-        )
-        .await;
-        assert_eq!(
-            text(&mut c, "PRAGMA journal_mode = WAL").await.as_deref(),
-            Some("wal")
-        );
-        ok(&mut c, "CREATE TABLE a (x)").await;
-        ok(&mut c, "INSERT INTO a VALUES (1)").await;
-        c.close().await.expect("close");
-        let bytes = std::fs::read(&plain).unwrap();
-        assert_eq!(&bytes[..16], b"SQLite format 3\0");
-        assert_eq!(&bytes[18..20], &[1, 1], "the header now says WAL");
+        let header = |mode: &'static str| {
+            let plain = s.path.with_file_name(format!("plain-{mode}.sqlite"));
+            async move {
+                let mut c = connect(
+                    &format!("file:{}?doltlite_engine=sqlite", plain.display()),
+                    false,
+                    Duration::from_secs(5),
+                )
+                .await;
+                assert_eq!(
+                    text(&mut c, &format!("PRAGMA journal_mode = {mode}"))
+                        .await
+                        .as_deref(),
+                    Some(mode)
+                );
+                ok(&mut c, "CREATE TABLE a (x)").await;
+                ok(&mut c, "INSERT INTO a VALUES (1)").await;
+                c.close().await.expect("close");
+                let bytes = std::fs::read(&plain).unwrap();
+                assert_eq!(&bytes[..16], b"SQLite format 3\0");
+                [bytes[18], bytes[19]]
+            }
+        };
+        assert_eq!(header("wal").await, [2, 2]);
+        assert_eq!(header("delete").await, [1, 1]);
     }
 
     #[tokio::test]
