@@ -677,6 +677,16 @@ mod diffs {
         );
     }
 
+    #[tokio::test]
+    async fn a_new_store_with_nothing_in_it_has_nothing_to_commit() {
+        let s = Store::new();
+        let mut w = s.rw().await;
+        err_contains(
+            exec(&mut w, "SELECT dolt_commit('-Am', 'empty')").await,
+            "nothing to commit",
+        );
+    }
+
     /// The SQLite mirrors drop and refill a keyless table; the diff pairs
     /// rows by rowid, so one row gone reads as a run of `modified`.
     #[tokio::test]
