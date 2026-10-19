@@ -403,7 +403,9 @@ faster.
   minutes per thousand chunks on CPU. It's resumable, so Ctrl-C and
   re-run is safe, and one source's `embed` can be turned off on the
   Data sources card without touching the others. Re-runs after the backlog
-  drains take seconds.
+  drains take seconds. A Garmin, YoLink or AirVisual source has no
+  `embed` step: its markdown is daily summaries of numbers, which the
+  keyword index already finds. The app takes out one a config already has.
 - The `qmd_aggregator` step, once every source's search steps are
   done: it drops any source no longer in the config from the search
   index and reports what the index holds.

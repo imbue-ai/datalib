@@ -1,11 +1,13 @@
 //! A config in a shape the server can bring forward unattended is
 //! rewritten in place as soon as the server sees it: at boot, and whenever
-//! the file changes. Three rewrites, in order: a `qmd_index` step from
+//! the file changes. Four rewrites, in order: a `qmd_index` step from
 //! before `qmd_aggregator` (`datalib_migrate_config::upgrade_qmd_steps`),
 //! the index group still named `unified_index`
-//! (`datalib_migrate_config::upgrade_document_index`), and a config with
+//! (`datalib_migrate_config::upgrade_document_index`), a config with
 //! time-series sources and no time-series index
-//! (`datalib_migrate_config::upgrade_time_series_steps`). The text they
+//! (`datalib_migrate_config::upgrade_time_series_steps`), and a
+//! time-series source with an `embed` step
+//! (`datalib_migrate_config::upgrade_time_series_embeds`). The text they
 //! replaced is kept as `config.toml.bak`.
 //!
 //! At boot only, [`move_index_dir`] then brings the document index's tree
@@ -21,7 +23,7 @@ use crate::watch::{RootEvent, RootFrame};
 type Rewrite = fn(&str) -> anyhow::Result<Option<String>>;
 
 /// Each unattended rewrite: what it is for, in the log, and what it does.
-const REWRITES: [(&str, &str, Rewrite); 3] = [
+const REWRITES: [(&str, &str, Rewrite); 4] = [
     (
         "still has a `qmd_index` step",
         "`qmd_index` is now `qmd_aggregator`, reading each source's own \
@@ -39,6 +41,12 @@ const REWRITES: [(&str, &str, Rewrite); 3] = [
         "each source with time series has a `render_time_series` step, read by \
          the new `unified_time_series_index` group's `time_series_index`",
         datalib_migrate_config::upgrade_time_series_steps,
+    ),
+    (
+        "has a time-series source with an `embed` step",
+        "a time-series source's markdown is summaries of numbers, which its \
+         keyword index already finds; its `embed` step is taken out",
+        datalib_migrate_config::upgrade_time_series_embeds,
     ),
 ];
 

@@ -16,13 +16,16 @@
 //! `document_index.rs`: the `unified_index` group, its steps and its
 //! applet become `unified_document_index`; then `time_series_steps.rs`:
 //! a source with time series gets its `render_time_series` step and the
-//! config its time-series index. Those last three rewrites are also the
-//! ones `datalib-http` makes by itself (`upgrade_qmd_steps`,
-//! `upgrade_document_index`, `upgrade_time_series_steps`).
+//! config its time-series index; then `time_series_embeds.rs`: a
+//! time-series source loses its `embed` step. Those last four rewrites
+//! are also the ones `datalib-http` makes by itself (`upgrade_qmd_steps`,
+//! `upgrade_document_index`, `upgrade_time_series_steps`,
+//! `upgrade_time_series_embeds`).
 
 pub mod convert;
 pub mod document_index;
 pub mod qmd_steps;
+pub mod time_series_embeds;
 pub mod time_series_steps;
 
 use std::path::{Path, PathBuf};
@@ -53,14 +56,18 @@ pub fn detect(text: &str) -> Result<LegacyFormat> {
     if time_series_steps::is_retired(text)? {
         return Ok(LegacyFormat::NoTimeSeries);
     }
+    if time_series_embeds::is_retired(text)? {
+        return Ok(LegacyFormat::TimeSeriesEmbed);
+    }
     bail!("this config is already in the current shape — there is nothing to migrate")
 }
 
 pub fn convert(text: &str) -> Result<String> {
     let out = match detect(text)? {
-        LegacyFormat::QmdIndex | LegacyFormat::UnifiedIndex | LegacyFormat::NoTimeSeries => {
-            text.to_string()
-        }
+        LegacyFormat::QmdIndex
+        | LegacyFormat::UnifiedIndex
+        | LegacyFormat::NoTimeSeries
+        | LegacyFormat::TimeSeriesEmbed => text.to_string(),
         _ => convert::rewrite(text)?,
     };
     let out = qmd_steps::rewrite(&out)?;
@@ -70,6 +77,7 @@ pub fn convert(text: &str) -> Result<String> {
     } else {
         out
     };
+    let out = time_series_embeds::rewrite(&out)?;
     // The conversion is value-level, so anything the loader would refuse in
     // the result surfaces here rather than on the next run. Report what the
     // runner rejected and let the message speak.
@@ -124,16 +132,42 @@ pub fn upgrade_time_series_steps(text: &str) -> Result<Option<String>> {
     Ok(Some(out))
 }
 
+/// Take the `embed` step out of every time-series source
+/// (`time_series_embeds.rs`). Refused when the result would lose any
+/// entry but those steps, or drop more entries than the original.
+pub fn upgrade_time_series_embeds(text: &str) -> Result<Option<String>> {
+    let Ok(gone) = time_series_embeds::removed(text) else {
+        return Ok(None);
+    };
+    if gone.is_empty() {
+        return Ok(None);
+    }
+    let out = time_series_embeds::rewrite(text)?;
+    let gone: Vec<String> = gone.iter().map(|id| format!("step {id}")).collect();
+    refuse_a_loss_but(text, &out, str::to_string, &gone)?;
+    Ok(Some(out))
+}
+
 /// Refuse `out` when it loads fewer entries than `text`, or loses one
 /// `text` loaded, as `follow` names it after the rewrite.
 fn refuse_a_loss(text: &str, out: &str, follow: impl Fn(&str) -> String) -> Result<()> {
+    refuse_a_loss_but(text, out, follow, &[])
+}
+
+/// [`refuse_a_loss`], for a rewrite whose job is to take out `meant`.
+fn refuse_a_loss_but(
+    text: &str,
+    out: &str,
+    follow: impl Fn(&str) -> String,
+    meant: &[String],
+) -> Result<()> {
     let before = datalib_dag::config::check_text(text);
     let after = datalib_dag::config::check_text(out);
     let kept = loaded(&after.cfg);
     let lost: Vec<String> = loaded(&before.cfg)
         .into_iter()
         .map(|e| follow(&e))
-        .filter(|e| !kept.contains(e))
+        .filter(|e| !kept.contains(e) && !meant.contains(e))
         .collect();
     if !lost.is_empty() || after.dropped() > before.dropped() {
         bail!(
