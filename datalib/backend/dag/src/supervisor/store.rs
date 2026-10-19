@@ -651,8 +651,8 @@ fn options(path: &Path) -> SqliteConnectOptions {
     SqliteConnectOptions::new()
         .filename(datalib_runtime::plain_sqlite::uri(path))
         .create_if_missing(true)
-        // What the plain-SQLite engine really does: asked for WAL it
-        // answers `wal` and stays in rollback-journal mode.
+        // Rollback journal, the mode every existing file is in; the
+        // plain-SQLite engine switches a file it is asked to.
         .journal_mode(sqlx::sqlite::SqliteJournalMode::Delete)
         .busy_timeout(BUSY_TIMEOUT)
 }

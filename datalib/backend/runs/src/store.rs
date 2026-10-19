@@ -58,9 +58,8 @@ fn options(path: &Path, create: bool) -> SqliteConnectOptions {
     SqliteConnectOptions::new()
         .filename(datalib_runtime::plain_sqlite::uri(path))
         .create_if_missing(create)
-        // What the plain-SQLite engine really does: asked for WAL it
-        // answers `wal` and stays in rollback-journal mode, so a reader
-        // waits out a writer's commit (`BUSY_TIMEOUT`).
+        // Rollback journal, the mode every existing file is in, so a
+        // reader waits out a writer's commit (`BUSY_TIMEOUT`).
         .journal_mode(sqlx::sqlite::SqliteJournalMode::Delete)
         // Nothing here is load-bearing, so nothing is worth an fsync. A
         // file torn by a power cut is emptied and remade on the next

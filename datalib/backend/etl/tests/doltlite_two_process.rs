@@ -950,7 +950,7 @@ fn detached_readers_open_while_the_writer_holds_a_transaction() {
 /// one older row's, while readers open `main`'s tip detached, attach the
 /// terms file read-only and match it. Neither side may see an error, and
 /// every sample's full-text index must agree with its terms table. The
-/// file keeps a rollback journal (dolthub/doltlite#3740), so a reader can
+/// file is in rollback-journal mode (its writer never asks for WAL), so a reader can
 /// wait on the writer's commit; the busy timeout covers that wait, and
 /// the slowest sample is printed.
 #[test]
