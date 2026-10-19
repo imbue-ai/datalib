@@ -120,6 +120,12 @@ pub fn render(
             let Some(reader) = doltlite_raw::open_reader(&db_path, range.pin).await? else {
                 return Ok((Vec::new(), None, None));
             };
+            // chat.db's tables arrive with the first mirror; a store
+            // opened before one succeeded has nothing to render yet.
+            if !doltlite_raw::table_exists(reader.pool(), "handle").await? {
+                reader.close().await;
+                return Ok((Vec::new(), None, None));
+            }
             let loaded = load(reader.pool(), source_id, period, range, reader.pin()).await;
             // Closed, not dropped: the next open of this store is a
             // second connection until this one is actually gone.

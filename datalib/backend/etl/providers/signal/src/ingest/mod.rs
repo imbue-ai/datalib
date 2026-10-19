@@ -21,7 +21,7 @@ use tracing::info;
 pub use db::{db_path_for, RawDb};
 pub use schema_raw::{AccountRow, ChatItemRow, ChatRow, RecipientRow};
 
-const DEFAULT_AEP_ENV: &str = "SIGNAL_BACKUP_PASSPHRASE";
+pub const DEFAULT_AEP_ENV: &str = "SIGNAL_BACKUP_PASSPHRASE";
 
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
@@ -43,11 +43,8 @@ pub struct FetchOptions {
     /// produces. Override exists so a user can point at a separated
     /// files tree (e.g. on a different volume) without symlinking.
     pub files_root: Option<PathBuf>,
-    /// Name of the env var holding the AEP. Defaults to
-    /// `SIGNAL_BACKUP_PASSPHRASE`. Letting the user override means a single
-    /// process can keep AEPs for multiple Signal accounts segregated
-    /// at the shell level (`SIGNAL_BACKUP_PASSPHRASE_PERSONAL`, …).
-    pub aep_env_var: Option<String>,
+    /// The account entropy pool the backup is encrypted under.
+    pub aep: String,
     pub progress: Progress,
     pub control: DownloadControl,
 }
@@ -90,16 +87,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
 async fn read_snapshot(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let db = opts.db.clone();
-
-    let aep_env_var = opts
-        .aep_env_var
-        .clone()
-        .unwrap_or_else(|| DEFAULT_AEP_ENV.to_string());
-    let aep = std::env::var(&aep_env_var).map_err(|_| {
-        anyhow!(
-            "${aep_env_var} not set — pass the Signal AEP via that env var (sourced from .envrc.private etc.)"
-        )
-    })?;
 
     // `snapshot_dir` lives inside the `sync:` block (not on
     // SourceCommon.input_path), so core's load-time tilde expansion
@@ -162,7 +149,7 @@ async fn read_snapshot(opts: FetchOptions, found: RunProblems) -> Result<FetchSu
     // Heavy crypto work — gunzip + AES on tens of MB — runs in a
     // blocking thread so we don't block the tokio runtime.
     let snap = {
-        let snapshot_dir = snapshot_dir.clone();
+        let (snapshot_dir, aep) = (snapshot_dir.clone(), opts.aep.clone());
         tokio::task::spawn_blocking(move || Snapshot::open(&snapshot_dir, &aep))
             .await
             .context("join snapshot decrypt task")?

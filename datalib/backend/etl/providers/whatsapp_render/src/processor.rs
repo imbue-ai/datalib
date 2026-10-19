@@ -44,6 +44,9 @@ impl SourceRender for WhatsappRender {
         let period = Period::from_config(None).context("default whatsapp period")?;
         let parsed = parse(raw_path, period, ctx.name, ctx.raw_range())
             .with_context(|| format!("whatsapp parse {}", raw_path.display()))?;
+        let Some(parsed) = parsed else {
+            return Ok("no msgstore mirrored yet".into());
+        };
         let mut on_doc = |md| ctx.emit_doc(md);
         let (consumed, buckets) = render_all(
             &parsed.chats,

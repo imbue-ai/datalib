@@ -44,7 +44,6 @@ const ATTACHMENTS_PROJECTION_SQL: &str = "
 /// carrying every attachment's bytes pre-loaded from the sibling CAS — the
 /// synchronous bag the chat-common renderer reads at `materialize_to_dir`
 /// time, mirroring slack's shape.
-#[derive(Default)]
 pub struct ParsedWhatsApp {
     pub chats: Vec<NormalizedChat>,
     pub blobs_by_chat: HashMap<String, BlobBundle>,
@@ -58,15 +57,17 @@ pub struct MsgKey {
     pub from_me: i64,
 }
 
+/// `None` when nothing has been mirrored to render: no store, nothing
+/// committed, or a store the download opened but never filled.
 pub fn parse(
     raw_dir: &Path,
     period: Period,
     source_id: &str,
     range: RawRange<'_>,
-) -> Result<ParsedWhatsApp> {
+) -> Result<Option<ParsedWhatsApp>> {
     let db_path = datalib_etl::doltlite_raw::db_path_for(raw_dir);
     if !db_path.exists() {
-        return Ok(ParsedWhatsApp::default());
+        return Ok(None);
     }
     // Bridge to sync sqlx code: this fn is called from a sync context
     // (render phase). We need to spin up a tokio runtime since sqlx
@@ -86,7 +87,7 @@ async fn parse_async(
     period: Period,
     source_id: &str,
     range: RawRange<'_>,
-) -> Result<ParsedWhatsApp> {
+) -> Result<Option<ParsedWhatsApp>> {
     // Pinned at open: the driver's pin when it made one, else HEAD. No
     // commit means nothing has been committed to render, which is
     // emptiness rather than a reason to read the working set.
@@ -94,9 +95,16 @@ async fn parse_async(
         .await
         .with_context(|| format!("open {}", db_path.display()))?
     else {
-        return Ok(ParsedWhatsApp::default());
+        return Ok(None);
     };
     let pool: SqlitePool = reader.pool().clone();
+    // msgstore's tables arrive together with the first mirror. Until one
+    // succeeds — no key, a backup that will not decrypt — the store holds
+    // only the tables this provider declares.
+    if !table_exists(&pool, "jid").await? {
+        pool.close().await;
+        return Ok(None);
+    }
 
     let jids = load_jids(&pool).await?;
     let names = JidNames::load(&pool, &jids).await?;
@@ -480,10 +488,10 @@ async fn parse_async(
     blobs_by_chat.retain(|_, bundle| !bundle.is_empty() || bundle.has_missing());
     pool.close().await;
 
-    Ok(ParsedWhatsApp {
+    Ok(Some(ParsedWhatsApp {
         chats: out,
         blobs_by_chat,
-    })
+    }))
 }
 
 #[allow(clippy::too_many_arguments)]

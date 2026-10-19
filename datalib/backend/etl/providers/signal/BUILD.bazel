@@ -44,6 +44,7 @@ rust_test(
     crate = ":datalib_etl_signal",
     edition = "2021",
     deps = [
+        "//datalib/backend/obs:datalib_obs",
         "@datalib_crates//:tempfile",
     ],
 )
