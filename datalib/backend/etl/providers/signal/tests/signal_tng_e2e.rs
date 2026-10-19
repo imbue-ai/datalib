@@ -101,12 +101,6 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
     let raw_db_path = data_root.join("raw").join("signal");
     std::fs::create_dir_all(raw_db_path.parent().unwrap())?;
 
-    // SAFETY: bazel test runs each test target in a fresh process, so
-    // mutating the env here is hermetic — no other test sees it.
-    unsafe {
-        std::env::set_var("SIGNAL_BACKUP_PASSPHRASE", FIXTURE_AEP);
-    }
-
     // A temp cache: tests must never touch this host's real one.
     let cache = FingerprintCache::open(&tmp.path().join("fingerprints.sqlite")).await?;
     // One handle for the whole pass: the file takes one writer at
@@ -117,7 +111,7 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
         cache,
         snapshot_root: snapshot_root.clone(),
         files_root: None, // defaults to snapshot_root/files (the layout the fixture writes)
-        aep_env_var: None, // defaults to SIGNAL_BACKUP_PASSPHRASE
+        aep: FIXTURE_AEP.into(),
         progress: Progress::noop(),
         control: DownloadControl::default(),
     })
@@ -478,9 +472,6 @@ async fn fetch_summary(
     cache: &Path,
     control: DownloadControl,
 ) -> Result<(ingest::FetchSummary, Option<String>)> {
-    unsafe {
-        std::env::set_var("SIGNAL_BACKUP_PASSPHRASE", FIXTURE_AEP);
-    }
     let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(store)).await?;
     let before = head(db.pool()).await;
     let summary = ingest::fetch(FetchOptions {
@@ -488,7 +479,7 @@ async fn fetch_summary(
         cache: FingerprintCache::open(cache).await?,
         snapshot_root: snapshot_root.to_path_buf(),
         files_root: None,
-        aep_env_var: None,
+        aep: FIXTURE_AEP.into(),
         progress: Progress::noop(),
         control,
     })
@@ -847,8 +838,8 @@ async fn a_backup_not_read_whole_deletes_nothing() -> Result<()> {
     Ok(())
 }
 
-/// A backup folder that is gone, or a passphrase that is not set, is no
-/// backup at all: the run fails and the store keeps what it had.
+/// A backup folder that is gone is no backup at all: the run fails and
+/// the store keeps what it had.
 #[tokio::test(flavor = "multi_thread")]
 async fn no_backup_to_read_deletes_nothing() -> Result<()> {
     let tmp = tempfile::tempdir()?;
@@ -863,22 +854,6 @@ async fn no_backup_to_read_deletes_nothing() -> Result<()> {
     ];
     write_frames(&snapshots, "signal-backup-2364-04-09-12-00-00", &frames)?;
     fetch_once(&snapshots, &store, &cache).await?;
-
-    let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(&store)).await?;
-    let unset = ingest::fetch(FetchOptions {
-        db: db.clone(),
-        cache: FingerprintCache::open(&cache).await?,
-        snapshot_root: snapshots.clone(),
-        files_root: None,
-        aep_env_var: Some("SIGNAL_BACKUP_PASSPHRASE_NEVER_SET_IN_THIS_TEST".into()),
-        progress: Progress::noop(),
-        control: DownloadControl::default(),
-    })
-    .await;
-    datalib_etl::store_handle::RawStoreHandle::commit_all(&db, "test download").await?;
-    db.close().await;
-    assert!(unset.is_err());
-    assert_eq!(ids(&store, "chat_items").await?.len(), 1);
 
     std::fs::remove_dir_all(&snapshots)?;
     assert!(fetch_once(&snapshots, &store, &cache).await.is_err());
@@ -1213,15 +1188,12 @@ async fn a_passphrase_that_opens_nothing_fails_the_run() -> Result<()> {
     write_day(&snapshots, 1, &bridge_crew())?;
 
     let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(&store)).await?;
-    unsafe {
-        std::env::set_var("SIGNAL_TEST_OTHER_ACCOUNT", "1".repeat(64));
-    }
     let run = ingest::fetch(FetchOptions {
         db: db.clone(),
         cache: FingerprintCache::open(&cache).await?,
         snapshot_root: snapshots.clone(),
         files_root: None,
-        aep_env_var: Some("SIGNAL_TEST_OTHER_ACCOUNT".into()),
+        aep: "1".repeat(64),
         progress: Progress::noop(),
         control: DownloadControl::default(),
     })

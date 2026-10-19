@@ -127,6 +127,8 @@ pub enum Retired {
     /// No time-series index, and a source that has time series
     /// (`time_series_steps.rs`).
     NoTimeSeries,
+    /// A time-series source with an `embed` step (`time_series_embeds.rs`).
+    TimeSeriesEmbed,
 }
 
 /// Which retired shape this config is in, or `None` when it is already

@@ -40,6 +40,22 @@ pub fn sort_config(text: &str) -> Result<Option<String>, String> {
     Ok(Some(sorted))
 }
 
+/// Where each entry sits in `text`, cut as [`sort_config`] cuts it: an
+/// entry with its sub-tables and the comments and blank lines above its
+/// header. For a rewrite that takes an entry out and leaves the rest of
+/// the file as written.
+pub fn entry_ranges(text: &str) -> Vec<std::ops::Range<usize>> {
+    let base = text.as_ptr() as usize;
+    split(text)
+        .units
+        .iter()
+        .map(|unit| {
+            let start = unit.as_ptr() as usize - base;
+            start..start + unit.len()
+        })
+        .collect()
+}
+
 /// What a piece of the file is to the ordering.
 #[derive(Debug, Default)]
 struct Entry {

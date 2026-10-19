@@ -9,7 +9,7 @@ pub mod schema_raw;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use datalib_etl::bulk::{bulk_upsert_first_seen_in_tx, BulkUpsertable};
 use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw as dr;
@@ -26,7 +26,7 @@ use backups::{Found, Top, LEDGER};
 pub use db::{db_path_for, RawDb};
 pub use schema_raw::{AccountRow, ChatItemRow, ChatRow, RecipientRow};
 
-const DEFAULT_AEP_ENV: &str = "SIGNAL_BACKUP_PASSPHRASE";
+pub const DEFAULT_AEP_ENV: &str = "SIGNAL_BACKUP_PASSPHRASE";
 
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
@@ -47,10 +47,8 @@ pub struct FetchOptions {
     /// produces. Override exists so a user can point at a separated
     /// files tree (e.g. on a different volume) without symlinking.
     pub files_root: Option<PathBuf>,
-    /// Name of the env var holding the AEP. Defaults to
-    /// `SIGNAL_BACKUP_PASSPHRASE`. Letting the user override means a single
-    /// shell can carry secrets for several accounts.
-    pub aep_env_var: Option<String>,
+    /// The account entropy pool the backup is encrypted under.
+    pub aep: String,
     pub progress: Progress,
     pub control: DownloadControl,
 }
@@ -104,15 +102,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
 async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let db = &opts.db;
-    let aep_env_var = opts
-        .aep_env_var
-        .clone()
-        .unwrap_or_else(|| DEFAULT_AEP_ENV.to_string());
-    let aep = std::env::var(&aep_env_var).map_err(|_| {
-        anyhow!(
-            "${aep_env_var} not set — pass the Signal AEP via that env var (sourced from .envrc.private etc.)"
-        )
-    })?;
+    let aep = &opts.aep;
 
     // `path` lives inside the `backup` table (not on SourceCommon.input_path),
     // so core's load-time tilde expansion doesn't reach it.
@@ -157,7 +147,7 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
         if stop.requested() {
             break;
         }
-        match read_snapshot(db, &aep, &files_root, snap, &mut summary).await? {
+        match read_snapshot(db, aep, &files_root, snap, &mut summary).await? {
             Ok(read) => {
                 let date = commit_date(read.backup_time_ms);
                 let msg = format!("download signal: backup {}", snap.name);
@@ -181,7 +171,7 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     if !stop.requested() {
         match backups::top(&plan, &db.read_ledger().await?, &failed) {
             Top::Read(snap) => {
-                match read_snapshot(db, &aep, &files_root, snap, &mut summary).await? {
+                match read_snapshot(db, aep, &files_root, snap, &mut summary).await? {
                     Ok(read) => {
                         // Dated now: the reason for this commit is now, not
                         // when the backup was taken.

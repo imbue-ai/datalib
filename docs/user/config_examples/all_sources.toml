@@ -84,7 +84,7 @@ inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "claude
 [[steps]]
 group = "unified_document_index"
 function = "qmd_aggregator"
-inputs = ["claude-api/keyword_index", "claude-api/embed", "claude-export/keyword_index", "claude-export/embed", "claude-code/keyword_index", "claude-code/embed", "codex/keyword_index", "codex/embed", "chatgpt/keyword_index", "chatgpt/embed", "slack/keyword_index", "slack/embed", "github/keyword_index", "github/embed", "gitlab/keyword_index", "gitlab/embed", "notion/keyword_index", "notion/embed", "fastmail/keyword_index", "fastmail/embed", "gmail/keyword_index", "gmail/embed", "gmail-takeout/keyword_index", "gmail-takeout/embed", "fastmail-contacts/keyword_index", "fastmail-contacts/embed", "icloud-contacts/keyword_index", "icloud-contacts/embed", "vcard-contacts/keyword_index", "vcard-contacts/embed", "google-calendar/keyword_index", "google-calendar/embed", "fastmail-calendar/keyword_index", "fastmail-calendar/embed", "icloud-calendar/keyword_index", "icloud-calendar/embed", "ics-calendar/keyword_index", "ics-calendar/embed", "beeper/keyword_index", "beeper/embed", "perseus/keyword_index", "perseus/embed", "yolink/keyword_index", "yolink/embed", "garmin/keyword_index", "garmin/embed", "ship-air/keyword_index", "ship-air/embed", "signal/keyword_index", "signal/embed", "whatsapp/keyword_index", "whatsapp/embed", "facebook/keyword_index", "facebook/embed", "linkedin/keyword_index", "linkedin/embed", "google-takeout/keyword_index", "google-takeout/embed", "sms-backup-restore/keyword_index", "sms-backup-restore/embed", "pdfs/keyword_index", "pdfs/embed", "apple-messages/keyword_index", "apple-messages/embed"]
+inputs = ["claude-api/keyword_index", "claude-api/embed", "claude-export/keyword_index", "claude-export/embed", "claude-code/keyword_index", "claude-code/embed", "codex/keyword_index", "codex/embed", "chatgpt/keyword_index", "chatgpt/embed", "slack/keyword_index", "slack/embed", "github/keyword_index", "github/embed", "gitlab/keyword_index", "gitlab/embed", "notion/keyword_index", "notion/embed", "fastmail/keyword_index", "fastmail/embed", "gmail/keyword_index", "gmail/embed", "gmail-takeout/keyword_index", "gmail-takeout/embed", "fastmail-contacts/keyword_index", "fastmail-contacts/embed", "icloud-contacts/keyword_index", "icloud-contacts/embed", "vcard-contacts/keyword_index", "vcard-contacts/embed", "google-calendar/keyword_index", "google-calendar/embed", "fastmail-calendar/keyword_index", "fastmail-calendar/embed", "icloud-calendar/keyword_index", "icloud-calendar/embed", "ics-calendar/keyword_index", "ics-calendar/embed", "beeper/keyword_index", "beeper/embed", "perseus/keyword_index", "perseus/embed", "yolink/keyword_index", "garmin/keyword_index", "ship-air/keyword_index", "ship-air/embed", "signal/keyword_index", "signal/embed", "whatsapp/keyword_index", "whatsapp/embed", "facebook/keyword_index", "facebook/embed", "linkedin/keyword_index", "linkedin/embed", "google-takeout/keyword_index", "google-takeout/embed", "sms-backup-restore/keyword_index", "sms-backup-restore/embed", "pdfs/keyword_index", "pdfs/embed", "apple-messages/keyword_index", "apple-messages/embed"]
 
 # --- Claude / Anthropic -------------------------------------------------
 
@@ -975,11 +975,6 @@ group = "yolink"
 function = "keyword_index"
 inputs = ["yolink/render_markdown"]
 
-[[steps]]
-group = "yolink"
-function = "embed"
-inputs = ["yolink/keyword_index"]
-
 # --- Garmin Connect -----------------------------------------------------
 
 # Everything a Garmin watch uploads to Garmin Connect, over the API the
@@ -1022,11 +1017,6 @@ inputs = ["garmin/ingest"]
 group = "garmin"
 function = "keyword_index"
 inputs = ["garmin/render_markdown"]
-
-[[steps]]
-group = "garmin"
-function = "embed"
-inputs = ["garmin/keyword_index"]
 # --- AirVisual (IQAir) monitors -----------------------------------------
 
 # AirVisual Pros' own history files, read off each unit's Samba share

@@ -44,6 +44,10 @@ rust_test(
     size = "small",
     crate = ":datalib_etl_signal",
     edition = "2021",
+    deps = [
+        "//datalib/backend/obs:datalib_obs",
+        "@datalib_crates//:tempfile",
+    ],
 )
 
 # End-to-end against an inline TNG snapshot built via the
