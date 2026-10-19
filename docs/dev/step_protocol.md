@@ -205,6 +205,15 @@ a floor. Nothing caps it. The peak also goes on your attempt's row in
 the run store's `processes`, as `peak_rss_bytes` (`logging.md`
 §"Every line has an author").
 
+The first sample is taken as you start, so a step that ends within two
+seconds would have only that reading. On macOS the runner also reads
+your own process's lifetime peak once you have exited, from the kernel,
+and raises `rss_peak_bytes` to it when it is higher. That figure is the
+peak *physical footprint*, the number Activity Monitor shows as Memory;
+it covers your process alone, not what you spawned. Linux keeps no peak
+past exit for anyone but the process that reaps you, so there a short
+step's peak is still its first reading.
+
 A step that counts one thing and knows its total may use the shorter
 form instead, which the runner translates into the `done_total` and `queued`
 metrics for it:

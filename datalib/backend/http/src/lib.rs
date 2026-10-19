@@ -1062,7 +1062,7 @@ async fn put_config(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
     }
-    if let Err(e) = datalib_runtime::atomic::write_owner_only(&path, req.text.as_bytes()) {
+    if let Err(e) = config_upgrade::save(&s.root, &req.text) {
         tracing::error!("put_config: write {}: {e}", path.display());
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }

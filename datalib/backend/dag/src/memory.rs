@@ -5,6 +5,7 @@
 //! process.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Once};
 use std::time::Duration;
 
@@ -18,7 +19,9 @@ use crate::step::StepId;
 /// reading as a current one.
 pub const RSS_BYTES: &str = "rss_bytes";
 
-/// The most [`RSS_BYTES`] has read during this attempt.
+/// The most [`RSS_BYTES`] has read during this attempt, raised at exit to
+/// the step process's own lifetime peak where the kernel keeps one
+/// ([`lifetime_peak_after_exit`]).
 pub const RSS_PEAK_BYTES: &str = "rss_peak_bytes";
 
 /// Shorter than the run store's five-second floor between samples, so the
@@ -108,21 +111,24 @@ impl TreeMemory {
 }
 
 /// Reports a step's memory while it runs. Dropping it stops the sampling
-/// and reports [`RSS_BYTES`] as zero, on every path out of the step.
+/// and reports [`RSS_BYTES`] as zero, on every path out of the step;
+/// [`MemoryWatch::finish`] does that too, after a last word on the peak.
 pub(crate) struct MemoryWatch {
     task: tokio::task::JoinHandle<()>,
+    peak: Arc<AtomicU64>,
     step: StepId,
     sink: Arc<dyn EventSink>,
 }
 
 impl MemoryWatch {
     pub(crate) fn start(pid: u32, step: &str, sink: &Arc<dyn EventSink>) -> Self {
+        let peak = Arc::new(AtomicU64::new(0));
         let task = {
             let step = step.to_string();
             let sink = sink.clone();
+            let peak = peak.clone();
             tokio::spawn(async move {
                 let mut memory = TreeMemory::default();
-                let mut peak = 0;
                 let mut tick = tokio::time::interval(SAMPLE_EVERY);
                 tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                 loop {
@@ -135,18 +141,71 @@ impl MemoryWatch {
                     let Ok((back, rss)) = sampled else { return };
                     memory = back;
                     emit(&sink, &step, RSS_BYTES, rss);
-                    if rss > peak {
-                        peak = rss;
-                        emit(&sink, &step, RSS_PEAK_BYTES, peak);
+                    if rss > peak.fetch_max(rss, Ordering::Relaxed) {
+                        emit(&sink, &step, RSS_PEAK_BYTES, rss);
                     }
                 }
             })
         };
         Self {
             task,
+            peak,
             step: step.to_string(),
             sink: sink.clone(),
         }
+    }
+
+    /// Ends the watch once the step has exited. A step that lived less
+    /// than one interval was sampled only as it started, so its own
+    /// lifetime peak, where there is one, is the better answer.
+    pub(crate) fn finish(self, lifetime_peak: Option<u64>) {
+        self.task.abort();
+        if let Some(lifetime) = lifetime_peak {
+            if lifetime > self.peak.load(Ordering::Relaxed) {
+                emit(&self.sink, &self.step, RSS_PEAK_BYTES, lifetime);
+            }
+        }
+    }
+}
+
+/// The most memory `pid`, a child of this process, ever held: its lifetime
+/// peak physical footprint, which macOS keeps for an exited child until it
+/// is reaped. Blocks until the child exits and leaves it unreaped, for the
+/// `wait` that follows. `None` where the kernel keeps no peak past exit —
+/// Linux hands it only to the reaper, and the reap belongs to `process-wrap`.
+pub(crate) fn lifetime_peak_after_exit(pid: u32) -> Option<u64> {
+    #[cfg(target_os = "macos")]
+    {
+        let pid = libc::pid_t::try_from(pid).ok()?;
+        // Safety: `waitid` with `WNOWAIT` reaps nothing, so until the
+        // `wait` that follows, `pid` is our zombie and cannot be reused;
+        // the rusage read names this process and no other.
+        unsafe {
+            let mut info: libc::siginfo_t = std::mem::zeroed();
+            while libc::waitid(
+                libc::P_PID,
+                pid as libc::id_t,
+                &mut info,
+                libc::WEXITED | libc::WNOWAIT,
+            ) != 0
+            {
+                if std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
+                    return None;
+                }
+            }
+            let mut usage: libc::rusage_info_v4 = std::mem::zeroed();
+            let read = libc::proc_pid_rusage(
+                pid,
+                libc::RUSAGE_INFO_V4,
+                &mut usage as *mut libc::rusage_info_v4 as *mut libc::rusage_info_t,
+            );
+            (read == 0).then_some(usage.ri_lifetime_max_phys_footprint)
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = pid;
+        None
     }
 }
 

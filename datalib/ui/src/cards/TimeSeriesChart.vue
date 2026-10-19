@@ -13,6 +13,7 @@ import {
   formatTime,
   formatTimeTick,
   formatValue,
+  lineLabels,
   lineOf,
   nearest,
   quantitiesOf,
@@ -35,6 +36,7 @@ const size = ref({ w: 600, h: 320 });
 
 const M = { top: 12, bottom: 28, left: 56 };
 const quantities = computed(() => quantitiesOf(props.picked));
+const labels = computed(() => lineLabels(props.picked));
 const marginRight = computed(() => (quantities.value.length > 1 ? 56 : 16));
 const plotW = computed(() => Math.max(10, size.value.w - M.left - marginRight.value));
 const plotH = computed(() => Math.max(10, size.value.h - M.top - M.bottom));
@@ -148,8 +150,9 @@ const hover = computed(() => {
     return p
       ? [
           {
+            id: d.listed.time_series_id,
             color: d.color,
-            label: d.listed.human_name,
+            label: labels.value.get(d.listed.time_series_id) ?? d.listed.human_name,
             value: formatValue(p.y, d.axis.shown),
             x: p.x,
             kind: d.listed.time_kind,
@@ -195,7 +198,7 @@ onBeforeUnmount(() => observer?.disconnect());
       :width="size.w"
       :height="size.h"
       role="img"
-      :aria-label="picked.map((p) => p.human_name).join(', ')"
+      :aria-label="picked.map((p) => labels.get(p.time_series_id)).join(', ')"
     >
       <g v-if="axes[0]">
         <g v-for="t in axes[0].ticks" :key="`l${t}`">
@@ -255,7 +258,7 @@ onBeforeUnmount(() => observer?.disconnect());
       :style="hover.flip ? { right: `${size.w - hover.x + 10}px` } : { left: `${hover.x + 10}px` }"
     >
       <div class="ts-when">{{ hover.when }}</div>
-      <div v-for="r in hover.rows" :key="r.label">
+      <div v-for="r in hover.rows" :key="r.id">
         <span :style="{ color: r.color }">●</span> {{ r.label }} {{ r.value }}
       </div>
     </div>

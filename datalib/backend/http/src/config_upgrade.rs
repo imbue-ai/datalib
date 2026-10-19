@@ -1,6 +1,7 @@
 //! A config in a shape the server can bring forward unattended is
-//! rewritten in place as soon as the server sees it: at boot, and whenever
-//! the file changes. Three rewrites, in order: a `qmd_index` step from
+//! rewritten in place as soon as the server sees it: at boot, on a save
+//! through the API, and whenever the file changes. Three rewrites, in
+//! order: a `qmd_index` step from
 //! before `qmd_aggregator` (`datalib_migrate_config::upgrade_qmd_steps`),
 //! the index group still named `unified_index`
 //! (`datalib_migrate_config::upgrade_document_index`), and a config with
@@ -13,6 +14,7 @@
 //! anything opens them.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 
 use tokio::sync::broadcast;
 
@@ -42,9 +44,31 @@ const REWRITES: [(&str, &str, Rewrite); 3] = [
     ),
 ];
 
+/// A rewrite reads the file and writes it back, so a save landing between
+/// the two would be lost: this process's writers of the config take turns.
+static WRITING: Mutex<()> = Mutex::new(());
+
+fn writing() -> MutexGuard<'static, ()> {
+    WRITING.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Write `text` as the root's config, already brought forward.
+pub fn save(root: &Path, text: &str) -> std::io::Result<()> {
+    let _turn = writing();
+    let path = datalib_dag::config::root_config_path(root);
+    datalib_runtime::atomic::write_owner_only(&path, text.as_bytes())?;
+    upgrade_in_turn(root);
+    Ok(())
+}
+
 /// Rewrite the root's config if it is in an old shape, and say so in the
 /// log. Returns where the old text went, when it did.
 pub fn upgrade(root: &Path) -> Option<PathBuf> {
+    let _turn = writing();
+    upgrade_in_turn(root)
+}
+
+fn upgrade_in_turn(root: &Path) -> Option<PathBuf> {
     let path = datalib_dag::config::root_config_path(root);
     let text = std::fs::read_to_string(&path).ok()?;
     let mut upgraded = text.clone();

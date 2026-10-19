@@ -373,12 +373,23 @@ pub(crate) async fn run_subprocess(
         }
     }
 
+    let lifetime_peak = match child.id() {
+        Some(pid) if memory.is_some() => {
+            tokio::task::spawn_blocking(move || crate::memory::lifetime_peak_after_exit(pid))
+                .await
+                .ok()
+                .flatten()
+        }
+        _ => None,
+    };
     let status = child
         .wait()
         .await
         .context("wait for subprocess")
         .map_err(internal)?;
-    drop(memory);
+    if let Some(memory) = memory {
+        memory.finish(lifetime_peak);
+    }
     let stderr_tail = stderr_task.await.unwrap_or_default();
     if let Some(t) = stop_task {
         t.abort();
@@ -1420,6 +1431,50 @@ mod tests {
         assert!(rep.all_ok(), "{rep:#?}");
         assert_eq!(readings(RSS_BYTES).last(), Some(&0));
         let peak = readings(RSS_PEAK_BYTES).last().copied().unwrap_or(0);
+        assert!(peak >= BUFFER, "peak {peak}");
+    }
+
+    /// A step that ends before the first sample after its start still
+    /// reports a true peak: the runner reads the step's lifetime peak once
+    /// it has exited, before it is reaped. Without that read this step's
+    /// peak was the few hundred kilobytes it held as it started. macOS
+    /// only, the one kernel that keeps the peak past exit for us.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn a_step_too_short_to_sample_still_reports_its_peak() {
+        use crate::memory::RSS_PEAK_BYTES;
+        const BUFFER: i64 = 64 * 1024 * 1024;
+        let root = tempfile::tempdir().unwrap();
+        // `exec`, so the step's own process is the one holding the buffer.
+        let spec = StepSpec::new(
+            "g/out",
+            sh("exec dd if=/dev/zero of=/dev/null bs=67108864 count=2 2>/dev/null"),
+        );
+        let g = Graph::build(vec![spec]).unwrap();
+        let rec = Arc::new(Recorder::default());
+        let started = std::time::Instant::now();
+        let rep = Runner::new(root.path())
+            .sink(rec.clone())
+            .run(&g)
+            .await
+            .unwrap();
+        assert!(rep.all_ok(), "{rep:#?}");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "the step must end before a second sample for this to test anything"
+        );
+
+        let peak = rec
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                Event::Metric { name, value, .. } if name == RSS_PEAK_BYTES => Some(*value),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0);
         assert!(peak >= BUFFER, "peak {peak}");
     }
 
