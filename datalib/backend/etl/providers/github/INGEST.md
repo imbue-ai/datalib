@@ -102,9 +102,9 @@ row, and the sync goes on with the rest.
 - **The shared retry loop giving up** (rate limits or failures past
   the source's budget) stops the requests there, rather than failing
   every PR after it; the run keeps what it fetched. A `phase:fetch`
-  row (`phase:search` when it was a search) says so, what the searches
-  listed stays owed, and the next run fetches the rest; the row goes
-  with it.
+  row (`phase:search` when it was a search) says so, and the step ends
+  `incomplete`, not `succeeded`. What the searches listed stays owed,
+  and the next run fetches the rest; the row goes with it.
 - **A search** that fails is a `listing:search <scope>` row — a
   warning when GitHub refused the credential (401/403), an error
   otherwise. It covers nothing, so the next run searches the same

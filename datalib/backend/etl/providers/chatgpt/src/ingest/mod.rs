@@ -288,14 +288,13 @@ impl Ctx<'_> {
                 // The transport refused it because of the stop.
                 Err(_) if self.stop().requested() => break,
                 Err(ChatGPTError::RateLimited { reason, .. }) => {
-                    self.found.phase(
-                        "conversations",
-                        format!(
-                            "rate-limited after {} fetched; {} left for the next run: {reason}",
-                            s.fetched,
-                            named.len() - i
-                        ),
+                    let detail = format!(
+                        "rate-limited after {} fetched; {} left for the next run: {reason}",
+                        s.fetched,
+                        named.len() - i
                     );
+                    self.found.phase("conversations", detail.clone());
+                    self.found.gave_up(format!("conversations: {detail}"));
                     return Ok(true);
                 }
                 Err(ChatGPTError::Permanent(msg)) if msg.contains("HTTP 404") => {
@@ -346,9 +345,10 @@ impl Ctx<'_> {
             if items.is_empty() && !self.db.has_any_conversation().await? {
                 return Err(anyhow::anyhow!("list conversations: {e}"));
             }
-            self.found.listing("conversations", e);
+            self.found.listing("conversations", e.clone());
             // Every detail fetch would be refused the same way.
             if rate_limited {
+                self.found.gave_up(format!("listing conversations: {e}"));
                 return Ok(true);
             }
         }

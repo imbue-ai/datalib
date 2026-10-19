@@ -6,6 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use datalib_etl::run_problems::noting_give_up;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_chatgpt::ingest::{db_path_for, fetch, FetchOptions, FetchSummary, RawDb};
 use datalib_etl_chatgpt::synthesize::ChatgptSynth;
@@ -116,6 +117,19 @@ impl Account {
     }
 
     async fn run(&self, conv_uuids: &[&str]) -> anyhow::Result<FetchSummary> {
+        self.run_noting(conv_uuids).await.0
+    }
+
+    /// A run, and the give-up it said to the step, which ends the step
+    /// `incomplete`.
+    async fn run_noting(
+        &self,
+        conv_uuids: &[&str],
+    ) -> (anyhow::Result<FetchSummary>, Option<String>) {
+        noting_give_up(self.run_inner(conv_uuids)).await
+    }
+
+    async fn run_inner(&self, conv_uuids: &[&str]) -> anyhow::Result<FetchSummary> {
         let db = RawDb::open(&db_path_for(&self.raw)).await.unwrap();
         let control = datalib_etl::control::DownloadControl::default();
         // One failure is the give-up: a 429 ends as `RateLimited` at once.
@@ -174,10 +188,9 @@ async fn a_rate_limit_is_a_phase_row_until_the_rest_is_fetched() {
     let acct = Account::new(&convs);
     acct.answer(&conversation_request("c-b"), 429);
 
-    let s = acct
-        .run(&[])
-        .await
-        .expect("a rate limit is not a failed step");
+    let (s, gave_up) = acct.run_noting(&[]).await;
+    let s = s.expect("a rate limit is not a failed step");
+    assert!(gave_up.is_some(), "the step ends incomplete");
     assert_eq!(s.fetched, 1, "c-a landed before the limit: {s:?}");
     let problems = acct.problems().await;
     assert_eq!(problems.len(), 1, "{problems:?}");
@@ -203,7 +216,9 @@ async fn a_failed_listing_page_keeps_the_pages_before_it_and_prunes_nothing() {
     assert_eq!(first.fetched, 101);
 
     acct.forget(&listing_page(100));
-    let s = acct.run(&[]).await.expect("the first page listed");
+    let (s, gave_up) = acct.run_noting(&[]).await;
+    let s = s.expect("the first page listed");
+    assert_eq!(gave_up, None, "what was listed was all fetched");
     assert_eq!(s.listing, 100, "page 1 is kept: {s:?}");
     assert_eq!(s.pruned, 0, "an incomplete listing deletes nothing");
     let stored = acct
@@ -215,6 +230,23 @@ async fn a_failed_listing_page_keeps_the_pages_before_it_and_prunes_nothing() {
     acct.list(&convs);
     acct.run(&[]).await.unwrap();
     assert_eq!(acct.keys().await, Vec::<String>::new());
+}
+
+/// A rate limit on the listing ends the run's requests, since every
+/// fetch after it would be refused the same way. The step used to end
+/// `succeeded` with only a `listing:` row to say so (#1157).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_rate_limited_listing_ends_the_step_incomplete() {
+    let convs = [conversation("c-a", 2.0), conversation("c-b", 1.0)];
+    let acct = Account::new(&convs);
+    acct.run(&[]).await.unwrap();
+
+    acct.answer(&listing_page(0), 429);
+    let (s, gave_up) = acct.run_noting(&[]).await;
+    s.expect("the store still has what earlier runs fetched");
+    let gave_up = gave_up.expect("a rate-limited listing is said to the step");
+    assert!(gave_up.starts_with("listing conversations: "), "{gave_up}");
+    assert_eq!(acct.keys().await, ["listing:conversations"]);
 }
 
 /// With nothing listed and nothing stored the run has done nothing, which
@@ -283,6 +315,21 @@ async fn a_later_page_that_is_not_a_listing_prunes_nothing() {
     acct.list(&convs);
     acct.run(&[]).await.unwrap();
     assert_eq!(acct.keys().await, Vec::<String>::new());
+}
+
+/// A rate limit partway through the named conversations leaves the rest
+/// for the next run, and the step ends `incomplete` (#1157).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_rate_limit_among_named_conversations_ends_the_step_incomplete() {
+    let acct = Account::new(&[conversation("c-a", 1.0), conversation("c-b", 1.0)]);
+    acct.answer(&conversation_request("c-b"), 429);
+
+    let (s, gave_up) = acct.run_noting(&["c-a", "c-b"]).await;
+    let s = s.expect("a rate limit is not a failed step");
+    assert_eq!(s.fetched, 1, "{s:?}");
+    let gave_up = gave_up.expect("the named rate limit is said to the step");
+    assert!(gave_up.contains("1 left for the next run"), "{gave_up}");
+    assert_eq!(acct.keys().await, ["phase:conversations"]);
 }
 
 /// One named conversation that would not fetch used to fail the step and
