@@ -1,7 +1,8 @@
 //! Searches answered from the grid's search terms file rather than qmd: the
 //! Fields tab, and a search made only of identifiers (a uuid, an email
-//! address, a handle) whichever tab asks. Every row that answers to each
-//! word, best match first. The file and what it holds:
+//! address, a handle) whichever tab asks. The rows that answer to each
+//! word, best match first, as deep as the other tabs rank. The file and
+//! what it holds:
 //! `datalib_etl_render::search_terms`.
 
 use std::path::Path;
@@ -13,6 +14,7 @@ use datalib_unified_document_index::query::{extract_uuid_suffix, is_uuid_shape};
 use datalib_unified_document_index::terms_keys::handle_of;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection};
+use strum::VariantArray;
 
 /// What a search asks the search terms file: FTS5 expressions over the terms'
 /// values, each of which a row must answer to, and those it must not.
@@ -58,11 +60,17 @@ pub fn fields(free_text: &str) -> Option<Match> {
             None if word.len() >= 2 && word.starts_with('"') && word.ends_with('"') => {
                 phrase(&word[1..word.len() - 1])
             }
+            None if word.chars().count() < MIN_PREFIX_CHARS => phrase(&word),
             None => format!("{}*", phrase(&word)),
         });
     }
     (!m.include.is_empty()).then_some(m)
 }
+
+/// The fewest characters a word needs before the Fields tab takes it as the
+/// start of a term; a shorter one starts too many to look up, so it is
+/// matched whole.
+const MIN_PREFIX_CHARS: usize = 3;
 
 /// `s` as one FTS5 string, a quote inside it doubled so it cannot end it.
 fn phrase(s: &str) -> String {
@@ -92,71 +100,74 @@ pub struct Hit {
     pub touched_at_utc: Option<String>,
 }
 
-/// The rows every included expression matched and no excluded one did,
-/// each at its best match: the most telling kind first
-/// (`SearchTermKind::affinity`), then newest. The score is that affinity, and the
-/// words shown are the kind and the value matched.
+/// Each row [`lookup`] found, best first, scored by the affinity of its
+/// best match; the words shown are the kind and the value matched.
 pub fn rank(found: &Found) -> Vec<(String, (f64, String))> {
-    let excluded: std::collections::HashSet<&str> = found
-        .excluded
+    found
+        .hits
         .iter()
-        .flatten()
-        .map(|h| h.uuid.as_str())
-        .collect();
-    let per_identifier = &found.included;
-    let affinity = |h: &Hit| SearchTermKind::from_code(h.kind).map_or(0, SearchTermKind::affinity);
-    let kind = |h: &Hit| SearchTermKind::from_code(h.kind).map_or("term", SearchTermKind::as_str);
-    let Some((first, rest)) = per_identifier.split_first() else {
-        return Vec::new();
-    };
-    let mut best: std::collections::HashMap<&str, &Hit> = std::collections::HashMap::new();
-    for hit in first {
-        let in_every = rest
-            .iter()
-            .all(|hits| hits.iter().any(|h| h.uuid == hit.uuid));
-        if !in_every || excluded.contains(hit.uuid.as_str()) {
-            continue;
-        }
-        let slot = best.entry(hit.uuid.as_str()).or_insert(hit);
-        if affinity(hit) > affinity(slot) {
-            *slot = hit;
-        }
-    }
-    let mut ranked: Vec<&Hit> = best.into_values().collect();
-    ranked.sort_by(|a, b| {
-        affinity(b)
-            .cmp(&affinity(a))
-            .then_with(|| b.touched_at_utc.cmp(&a.touched_at_utc))
-            .then_with(|| a.uuid.cmp(&b.uuid))
-    });
-    ranked
-        .into_iter()
         .map(|h| {
+            let kind = SearchTermKind::from_code(h.kind);
+            let affinity = kind.map_or(0, SearchTermKind::affinity);
+            let kind = kind.map_or("term", SearchTermKind::as_str);
             (
                 h.uuid.clone(),
-                (f64::from(affinity(h)), format!("{}: {}", kind(h), h.value)),
+                (f64::from(affinity), format!("{kind}: {}", h.value)),
             )
         })
         .collect()
 }
 
-/// What the search terms file says about a [`Match`], read in one transaction:
-/// the hits of each expression, in its order.
+/// What the search terms file says about a [`Match`], read in one transaction.
 #[derive(Debug, Default)]
 pub struct Found {
-    pub included: Vec<Vec<Hit>>,
-    pub excluded: Vec<Vec<Hit>>,
+    /// The rows every included expression matched and no excluded one did,
+    /// each at its best match: the most telling kind first
+    /// (`SearchTermKind::affinity`), then newest.
+    pub hits: Vec<Hit>,
     /// The grid commit the file reflects. A ranking read at any other
     /// commit may be one pass out, so it is not kept.
     pub grid_commit: Option<String>,
 }
 
+/// The rows of [`Found::hits`], at most `depth` of them. The file holds a
+/// term per row and value, so a short prefix matches a large share of it:
+/// the intersecting, ranking and cut happen in SQLite, never in a list here.
+const HITS_SQL: &str = "\
+    WITH inc AS (SELECT key AS n, value AS expr FROM json_each(?1)), \
+    exc AS (SELECT value AS expr FROM json_each(?2)), \
+    aff AS (SELECT value ->> 0 AS kind, value ->> 1 AS affinity FROM json_each(?3)), \
+    matched AS ( \
+        SELECT inc.n, t.row_id, t.kind, v.value FROM inc \
+        JOIN vals_fts ON vals_fts MATCH inc.expr \
+        JOIN vals v ON v.val_id = vals_fts.rowid \
+        JOIN terms t ON t.val_id = v.val_id), \
+    kept AS ( \
+        SELECT row_id FROM matched GROUP BY row_id \
+        HAVING COUNT(DISTINCT n) = (SELECT COUNT(*) FROM inc) \
+        EXCEPT \
+        SELECT t.row_id FROM exc \
+        JOIN vals_fts ON vals_fts MATCH exc.expr \
+        JOIN terms t ON t.val_id = vals_fts.rowid), \
+    best AS ( \
+        SELECT m.row_id, m.kind, m.value, MAX(COALESCE(a.affinity, 0)) AS affinity \
+        FROM matched m JOIN kept USING (row_id) LEFT JOIN aff a ON a.kind = m.kind \
+        GROUP BY m.row_id) \
+    SELECT r.uuid, b.kind, b.value, r.touched_at_utc FROM best b \
+    JOIN rows r ON r.row_id = b.row_id \
+    ORDER BY b.affinity DESC, r.touched_at_utc DESC, r.uuid \
+    LIMIT ?4";
+
 /// `None` when the root has no search terms file yet.
-pub async fn lookup(root: &Path, m: &Match) -> Result<Option<Found>> {
+pub async fn lookup(root: &Path, m: &Match, depth: usize) -> Result<Option<Found>> {
     let path = datalib_runtime::layout::search_terms_db(root);
     if !path.exists() {
         return Ok(None);
     }
+    let affinities: Vec<(u8, u8)> = SearchTermKind::VARIANTS
+        .iter()
+        .map(|k| (k.code(), k.affinity()))
+        .collect();
     let mut conn = SqliteConnectOptions::new()
         .filename(datalib_runtime::plain_sqlite::uri(&path))
         .read_only(true)
@@ -172,29 +183,15 @@ pub async fn lookup(root: &Path, m: &Match) -> Result<Option<Found>> {
                 .bind(META_GRID_COMMIT)
                 .fetch_optional(&mut conn)
                 .await?;
-        let mut found = Found {
-            grid_commit,
-            ..Found::default()
-        };
-        for (exprs, into) in [
-            (&m.include, &mut found.included),
-            (&m.exclude, &mut found.excluded),
-        ] {
-            for expr in exprs {
-                let hits: Vec<Hit> = sqlx::query_as(
-                    "SELECT r.uuid, t.kind, v.value, r.touched_at_utc FROM vals_fts \
-                     JOIN vals v ON v.val_id = vals_fts.rowid \
-                     JOIN terms t ON t.val_id = v.val_id \
-                     JOIN rows r ON r.row_id = t.row_id WHERE vals_fts MATCH ?",
-                )
-                .bind(expr)
-                .fetch_all(&mut conn)
-                .await?;
-                into.push(hits);
-            }
-        }
+        let hits: Vec<Hit> = sqlx::query_as(HITS_SQL)
+            .bind(serde_json::to_string(&m.include)?)
+            .bind(serde_json::to_string(&m.exclude)?)
+            .bind(serde_json::to_string(&affinities)?)
+            .bind(i64::try_from(depth).unwrap_or(i64::MAX))
+            .fetch_all(&mut conn)
+            .await?;
         sqlx::query("COMMIT").execute(&mut conn).await?;
-        anyhow::Ok(found)
+        anyhow::Ok(Found { hits, grid_commit })
     }
     .await
     .context("read the search terms file");
@@ -259,54 +256,146 @@ mod tests {
         assert_eq!(fields("-spam"), None);
     }
 
-    fn hit(uuid: &str, kind: &str, touched: &str) -> Hit {
-        Hit {
-            uuid: uuid.into(),
-            kind: i64::from(SearchTermKind::parse(kind).expect("a kind").code()),
-            value: "v".into(),
-            touched_at_utc: Some(touched.into()),
+    /// A search terms file at `root` holding `(row, kind, value, touched)`.
+    async fn terms_file(root: &Path, terms: &[(&str, &str, &str, &str)]) {
+        let path = datalib_runtime::layout::search_terms_db(root);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut conn = SqliteConnectOptions::new()
+            .filename(datalib_runtime::plain_sqlite::uri(&path))
+            .create_if_missing(true)
+            .connect()
+            .await
+            .unwrap();
+        for ddl in datalib_schema::search_terms::TERMS_DDL {
+            sqlx::query(sqlx::AssertSqlSafe(*ddl))
+                .execute(&mut conn)
+                .await
+                .unwrap();
         }
-    }
-
-    fn found(included: Vec<Vec<Hit>>, excluded: Vec<Vec<Hit>>) -> Found {
-        Found {
-            included,
-            excluded,
-            grid_commit: None,
+        for (uuid, kind, value, touched) in terms {
+            sqlx::query("INSERT OR IGNORE INTO rows (uuid, touched_at_utc) VALUES (?, ?)")
+                .bind(uuid)
+                .bind(touched)
+                .execute(&mut conn)
+                .await
+                .unwrap();
+            sqlx::query("INSERT OR IGNORE INTO vals (value) VALUES (?)")
+                .bind(value)
+                .execute(&mut conn)
+                .await
+                .unwrap();
+            sqlx::query(
+                "INSERT INTO vals_fts (rowid, value) SELECT val_id, value FROM vals \
+                 WHERE value = ? AND val_id NOT IN (SELECT rowid FROM vals_fts)",
+            )
+            .bind(value)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO terms (val_id, kind, row_id) SELECT v.val_id, ?, r.row_id \
+                 FROM vals v, rows r WHERE v.value = ? AND r.uuid = ?",
+            )
+            .bind(i64::from(
+                SearchTermKind::parse(kind).expect("a kind").code(),
+            ))
+            .bind(value)
+            .bind(uuid)
+            .execute(&mut conn)
+            .await
+            .unwrap();
         }
+        conn.close().await.unwrap();
     }
 
-    #[test]
-    fn rows_rank_by_their_best_kind_then_newest() {
-        let ranked = rank(&found(
-            vec![vec![
-                hit("r-name", "name", "2026-03"),
-                hit("r-old", "from", "2026-01"),
-                hit("r-new", "from", "2026-02"),
-                hit("r-id", "id", "2025-01"),
-                hit("r-id", "name", "2026-04"),
-            ]],
-            Vec::new(),
-        ));
-        let order: Vec<&str> = ranked.iter().map(|(u, _)| u.as_str()).collect();
-        assert_eq!(order, ["r-id", "r-new", "r-old", "r-name"]);
-        assert_eq!(ranked[0].1, (5.0, "id: v".to_string()));
+    async fn ranked(root: &Path, q: &str, depth: usize) -> Vec<(String, (f64, String))> {
+        let found = lookup(root, &fields(q).expect("a word to look up"), depth)
+            .await
+            .unwrap()
+            .expect("a search terms file");
+        rank(&found)
     }
 
-    #[test]
-    fn rows_must_match_every_included_word_and_no_excluded_one() {
-        let ranked = rank(&found(
-            vec![
-                vec![
-                    hit("a", "from", "1"),
-                    hit("b", "from", "1"),
-                    hit("c", "from", "1"),
-                ],
-                vec![hit("b", "container", "1"), hit("c", "title", "1")],
+    fn order(ranked: &[(String, (f64, String))]) -> Vec<&str> {
+        ranked.iter().map(|(u, _)| u.as_str()).collect()
+    }
+
+    #[tokio::test]
+    async fn rows_rank_by_their_best_kind_then_newest() {
+        let tmp = tempfile::tempdir().unwrap();
+        terms_file(
+            tmp.path(),
+            &[
+                ("r-name", "name", "warp", "2026-03"),
+                ("r-old", "from", "warp", "2026-01"),
+                ("r-new", "from", "warp", "2026-02"),
+                ("r-id", "id", "warp", "2025-01"),
+                ("r-id", "name", "warp", "2025-01"),
             ],
-            vec![vec![hit("c", "name", "1")]],
-        ));
-        let order: Vec<&str> = ranked.iter().map(|(u, _)| u.as_str()).collect();
-        assert_eq!(order, ["b"]);
+        )
+        .await;
+        let ranked = ranked(tmp.path(), "warp", 10).await;
+        assert_eq!(order(&ranked), ["r-id", "r-new", "r-old", "r-name"]);
+        assert_eq!(ranked[0].1, (5.0, "id: warp".to_string()));
+    }
+
+    #[tokio::test]
+    async fn rows_must_match_every_included_word_and_no_excluded_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        terms_file(
+            tmp.path(),
+            &[
+                ("a", "from", "warp", "1"),
+                ("b", "from", "warp", "1"),
+                ("c", "from", "warp", "1"),
+                ("b", "container", "core", "1"),
+                ("c", "title", "core", "1"),
+                ("c", "name", "breach", "1"),
+            ],
+        )
+        .await;
+        assert_eq!(
+            order(&ranked(tmp.path(), "warp core -breach", 10).await),
+            ["b"]
+        );
+    }
+
+    /// The cut is taken after the rows are ranked and intersected, so the
+    /// rows kept are the best of those that match every word.
+    #[tokio::test]
+    async fn a_search_keeps_its_best_rows_up_to_the_depth() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rows: Vec<String> = (0..20).map(|i| format!("r-{i:02}")).collect();
+        let mut terms: Vec<(&str, &str, &str, &str)> = rows
+            .iter()
+            .map(|r| (r.as_str(), "name", "warp", "1"))
+            .collect();
+        terms.push(("r-19", "id", "warpcore", "1"));
+        terms.push(("r-07", "from", "warp", "1"));
+        terms.push(("r-19", "title", "deck", "1"));
+        terms.push(("r-07", "title", "deck", "1"));
+        terms.push(("r-03", "title", "deck", "1"));
+        terms_file(tmp.path(), &terms).await;
+        assert_eq!(
+            order(&ranked(tmp.path(), "warp", 3).await),
+            ["r-19", "r-07", "r-00"]
+        );
+        assert_eq!(
+            order(&ranked(tmp.path(), "warp deck", 2).await),
+            ["r-19", "r-07"]
+        );
+    }
+
+    #[test]
+    fn a_word_too_short_to_start_many_is_matched_whole() {
+        assert_eq!(
+            fields("ri x rik é").map(|m| m.include),
+            Some(vec![
+                "\"ri\"".into(),
+                "\"x\"".into(),
+                "\"rik\"*".into(),
+                "\"é\"".into(),
+            ])
+        );
     }
 }
