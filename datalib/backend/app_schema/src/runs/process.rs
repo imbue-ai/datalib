@@ -1,8 +1,9 @@
 // One row per process that took part: a run of the runner, each
-// attempt of each of its steps, a launch of the app's server, or a
-// page of the app open in a browser tab (the server records it). What
-// a line's file and line number are relative to lives here, once,
-// rather than on every line — and so does how a process ended.
+// attempt of each of its steps, a launch of the app's server, an applet
+// it started, or a page of the app open in a browser tab (the server
+// records the last two). What a line's file and line number are
+// relative to lives here, once, rather than on every line — and so do
+// how a process ended and the most memory it held.
 
 use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};
@@ -50,4 +51,13 @@ pub struct ProcessRow {
     /// step program, and nothing for a custom command.
     #[col(sql = "VARCHAR(64)")]
     pub git_hash: Option<String>,
+    /// For an applet's process: which applet, by its config id.
+    #[col(sql = "VARCHAR(255)")]
+    pub applet: Option<String>,
+    /// The most resident memory the process and everything below it
+    /// held, in bytes, as whoever watched it measured: the runner for a
+    /// step's attempt, the server for an applet. `None` for a process
+    /// nobody measured.
+    #[col(sql = "BIGINT")]
+    pub peak_rss_bytes: Option<i64>,
 }

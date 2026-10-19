@@ -201,7 +201,9 @@ every process below it, and reports the sum as **`rss_bytes`** and the
 highest reading this attempt as **`rss_peak_bytes`**; `rss_bytes` goes
 to zero when you exit (`dag/src/memory.rs`). A child you spawned whose
 parent then exited is no longer below you and drops out, so the sum is
-a floor. Nothing caps it.
+a floor. Nothing caps it. The peak also goes on your attempt's row in
+the run store's `processes`, as `peak_rss_bytes` (`logging.md`
+§"Every line has an author").
 
 A step that counts one thing and knows its total may use the shorter
 form instead, which the runner translates into the `done_total` and `queued`
