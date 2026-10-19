@@ -52,12 +52,12 @@ async fn run_all() -> (tempfile::TempDir, ingest::FetchSummary, PathBuf) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn maps_reviews_lands_two_rows() {
+async fn maps_reviews_lands_three_rows() {
     let (_work, summary, db_path) = run_all().await;
-    assert_eq!(summary.maps_reviews, 2);
+    assert_eq!(summary.maps_reviews, 3);
     let db = RawDb::open(&db_path).await.unwrap();
     let rows = db.load_payloads("maps_reviews").await.unwrap();
-    assert_eq!(rows.len(), 2);
+    assert_eq!(rows.len(), 3);
     let names: Vec<String> = rows
         .iter()
         .filter_map(|v| {
@@ -543,6 +543,10 @@ async fn unread_files_are_rows_by_shape() {
                 "warning",
                 "Gemini/gemini_scheduled_actions_data.html: 1 file (14 bytes) that no feed reads"
             ),
+            (
+                "info",
+                "Google Play Books/<name>/<name>.pdf: 1 file (18 bytes) left out on purpose: the books themselves"
+            ),
             ("warning", "Keep/<name>.json: 1 file (419 bytes) that no feed reads"),
             ("warning", "Tasks/Tasks.json: 1 file (716 bytes) that no feed reads"),
             (
@@ -551,6 +555,130 @@ async fn unread_files_are_rows_by_shape() {
             ),
         ]
     );
+}
+
+// ── Lists, maps and books: a file is the whole of its records ───────
+
+const SHORE_LEAVE: &str = "Saved/Shore leave.csv";
+const AWAY_MISSIONS: &str = "My Maps/Away missions.kmz";
+const DIPLOMACY: &str = "Google Play Books/The Art of Diplomacy/The Art of Diplomacy.html";
+
+async fn payloads_of(e: &Export, table: &str, file: &str) -> Vec<serde_json::Value> {
+    let db = RawDb::open(&e.db_path).await.unwrap();
+    // Audited: `table` is a literal at every call; `file` is bound.
+    let sql = format!("SELECT json(payload) FROM {table} WHERE file = ? ORDER BY id");
+    let rows: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+        .bind(file)
+        .fetch_all(db.pool())
+        .await
+        .unwrap();
+    db.close().await;
+    rows.iter()
+        .map(|r| serde_json::from_str(r).unwrap())
+        .collect()
+}
+
+/// A list's places land whole under Google's header, the blank row is not
+/// a place, and a list whose description comes before its header keeps
+/// it.
+#[tokio::test(flavor = "multi_thread")]
+async fn saved_lists_land_a_row_per_place() {
+    let e = Export::new();
+    let s = e.sync().await;
+    assert_eq!(s.maps_saved_lists, 5, "{s:?}");
+    let shore = payloads_of(&e, "maps_saved_lists", SHORE_LEAVE).await;
+    assert_eq!(shore.len(), 3);
+    let ten_forward = shore
+        .iter()
+        .find(|p| p["row"]["Title"] == "Ten Forward")
+        .unwrap();
+    assert_eq!(
+        ten_forward["row"]["Note"],
+        "Guinan's bar, Deck 10.\nAsk for the green drink."
+    );
+    let away = payloads_of(&e, "maps_saved_lists", "Saved/Away team favourites.csv").await;
+    assert_eq!(away.len(), 2, "the same place twice is two rows");
+    assert_eq!(
+        away[0]["description"],
+        "Places the away team keeps going back to"
+    );
+    assert_eq!(e.skipped_parts().await, Vec::<String>::new());
+}
+
+/// A list re-read loses what it dropped; a list gone takes its places.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_list_that_changed_or_went_loses_its_places() {
+    let e = Export::new();
+    e.sync().await;
+    e.rewrite(SHORE_LEAVE, |csv| {
+        csv.lines()
+            .filter(|l| !l.starts_with("Risa"))
+            .collect::<Vec<_>>()
+            .join("\r\n")
+    });
+    let s = e.sync().await;
+    assert_eq!((s.maps_saved_lists, s.removed), (2, 1), "{s:?}");
+    e.remove(SHORE_LEAVE);
+    let s = e.sync().await;
+    assert_eq!(s.removed, 2, "{s:?}");
+    assert_eq!(e.count("maps_saved_lists").await, 2);
+}
+
+/// Every placemark lands with its layer and its map; styles are left out.
+#[tokio::test(flavor = "multi_thread")]
+async fn my_maps_land_a_row_per_placemark() {
+    let e = Export::new();
+    // A second map, so that removing the first leaves `My Maps/` in the
+    // export: a product missing whole deletes nothing.
+    std::fs::copy(
+        e.root.join(AWAY_MISSIONS),
+        e.root.join("My Maps/Patrol.kmz"),
+    )
+    .unwrap();
+    let s = e.sync().await;
+    assert_eq!(s.my_maps_placemarks, 8, "{s:?}");
+    let rows = payloads_of(&e, "my_maps_placemarks", AWAY_MISSIONS).await;
+    let risa = rows
+        .iter()
+        .find(|p| p["placemark"]["name"] == "Risa")
+        .unwrap();
+    assert_eq!(risa["map"]["name"], "Away missions");
+    assert_eq!(risa["folder"]["name"], "Shore leave");
+    assert!(risa["map"].get("Style").is_none());
+    assert_eq!(
+        risa["placemark"]["ExtendedData"]["Data"]["@name"],
+        "gx_media_links"
+    );
+    e.remove(AWAY_MISSIONS);
+    let s = e.sync().await;
+    assert_eq!(s.removed, 4, "{s:?}");
+    assert_eq!(e.count("my_maps_placemarks").await, 4);
+}
+
+/// Every highlight, note, bookmark and listening position lands with its
+/// book, its date read in the zone Google names in words.
+#[tokio::test(flavor = "multi_thread")]
+async fn play_books_land_a_row_per_entry() {
+    let e = Export::new();
+    let s = e.sync().await;
+    assert_eq!(s.play_books_annotations, 4, "{s:?}");
+    let rows = payloads_of(&e, "play_books_annotations", DIPLOMACY).await;
+    assert_eq!(rows.len(), 3);
+    let note = rows
+        .iter()
+        .find(|p| p["fields"]["annotation-text"] == "The captain's motto.")
+        .unwrap();
+    assert_eq!(note["book"]["title"], "The Art of Diplomacy");
+    assert_eq!(note["section"], "My notes");
+    let db = RawDb::open(&e.db_path).await.unwrap();
+    let when: Vec<Option<String>> =
+        sqlx::query_scalar("SELECT when_ts FROM play_books_annotations ORDER BY when_ts")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+    db.close().await;
+    assert_eq!(when[0].as_deref(), Some("2364-01-12T09:41:00-08:00"));
+    assert!(when.iter().all(Option::is_some), "{when:?}");
 }
 
 // ── A single-file feed's file is the whole of its table ─────────────
@@ -599,12 +727,12 @@ fn drop_last_cell(html: String) -> String {
 async fn a_review_dropped_from_a_newer_export_is_gone() {
     let e = Export::new();
     e.sync().await;
-    assert_eq!(e.count("maps_reviews").await, 2);
+    assert_eq!(e.count("maps_reviews").await, 3);
 
     e.rewrite(REVIEWS, drop_first_feature);
     let s = e.sync().await;
     assert_eq!(s.removed, 1, "{s:?}");
-    assert_eq!(e.count("maps_reviews").await, 1);
+    assert_eq!(e.count("maps_reviews").await, 2);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -669,7 +797,7 @@ async fn a_reviews_file_without_a_list_deletes_nothing() {
     e.rewrite(REVIEWS, |_| "{}".to_string());
     let s = e.sync().await;
     assert_eq!(s.removed, 0, "{s:?}");
-    assert_eq!(e.count("maps_reviews").await, 2);
+    assert_eq!(e.count("maps_reviews").await, 3);
 }
 
 /// A single-file feed whose file is missing deletes nothing: an export
@@ -684,7 +812,7 @@ async fn a_missing_single_file_feed_deletes_nothing() {
     }
     let s = e.sync().await;
     assert_eq!(s.removed, 0, "{s:?}");
-    assert_eq!(e.count("maps_reviews").await, 2);
+    assert_eq!(e.count("maps_reviews").await, 3);
     assert_eq!(e.count("maps_saved_places").await, 3);
     assert_eq!(e.count("youtube_subscriptions").await, 3);
     assert_eq!(e.count("youtube_watch_history").await, 3);
@@ -839,7 +967,7 @@ async fn a_feed_that_fails_is_a_phase_problem_until_it_reads() {
     std::fs::write(e.root.join(REVIEWS), good).unwrap();
     e.sync().await;
     assert_eq!(e.keys().await, Vec::<String>::new());
-    assert_eq!(e.count("maps_reviews").await, 2);
+    assert_eq!(e.count("maps_reviews").await, 3);
 }
 
 /// A sidecar that will not parse is left unstamped and named; a photo
@@ -1027,7 +1155,7 @@ async fn a_feed_that_fails_is_a_problem_row_and_the_rest_land() {
     let s = e.sync().await;
     assert_eq!(s.feeds_failed, 1, "{s:?}");
     assert_eq!(s.maps_saved_places, 0, "{s:?}");
-    assert_eq!(s.maps_reviews, 2, "{s:?}");
+    assert_eq!(s.maps_reviews, 3, "{s:?}");
     assert_eq!(s.youtube_watch_history, 3, "{s:?}");
 
     let db = RawDb::open(&e.db_path).await.unwrap();
@@ -1181,7 +1309,7 @@ async fn a_file_in_a_layout_this_reader_does_not_know_deletes_nothing_and_says_s
         rel: REVIEWS,
         feed: "maps_reviews",
         table: "maps_reviews",
-        rows: 2,
+        rows: 3,
         edit,
     };
     let gemini = |edit| Rewrite {

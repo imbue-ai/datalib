@@ -12,8 +12,8 @@ use datalib_problems::{Problem, Reason, Severity};
 
 use super::shape::shape_rel;
 use super::{
-    maps_photos, maps_reviews, maps_saved_places, youtube_subscriptions, youtube_watch_history,
-    SyncFlags,
+    maps_photos, maps_reviews, maps_saved_places, my_maps, play_books, saved_lists,
+    youtube_subscriptions, youtube_watch_history, SyncFlags,
 };
 
 /// The `skipped:` part the rows are filed under, replaced whole each run
@@ -47,6 +47,12 @@ pub fn feed_of(rel: &str) -> Option<&'static str> {
         Some("google_voice")
     } else if under("Voice/Spam") {
         Some("google_voice_include_spam")
+    } else if under(saved_lists::FEED.dir) && (saved_lists::FEED.reads)(rel) {
+        Some(saved_lists::FEED.name)
+    } else if under(my_maps::FEED.dir) && (my_maps::FEED.reads)(rel) {
+        Some(my_maps::FEED.name)
+    } else if under(play_books::FEED.dir) && (play_books::FEED.reads)(rel) {
+        Some(play_books::FEED.name)
     } else {
         None
     }
@@ -63,6 +69,9 @@ fn is_on(sync: &SyncFlags, feed: &str) -> bool {
         "gemini_apps" => sync.gemini_apps,
         "google_voice" => sync.google_voice,
         "google_voice_include_spam" => sync.google_voice && sync.google_voice_include_spam,
+        "maps_saved_lists" => sync.maps_saved_lists,
+        "my_maps" => sync.my_maps,
+        "play_books" => sync.play_books,
         _ => false,
     }
 }
@@ -75,6 +84,9 @@ fn left_out(rel: &str) -> Option<&'static str> {
     }
     if rel == "Voice/Phones.vcf" {
         return Some("the account's own phone numbers");
+    }
+    if fsscan::is_under(rel, play_books::FEED.dir) {
+        return Some("the books themselves");
     }
     let product = rel.split('/').next().unwrap_or("");
     Some(match product {

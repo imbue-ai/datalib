@@ -66,6 +66,9 @@ form's.
 | `google_chat` | `chat_groups`, `chat_users`, `chat_messages`, `chat_attachments` |
 | `gemini_apps` | `gemini_activity`, `gemini_attachments` |
 | `google_voice` | `voice_messages`, `voice_bills`, `voice_greetings`, `voice_attachments` |
+| `maps_saved_lists` | `maps_saved_lists` |
+| `my_maps` | `my_maps_placemarks` |
+| `play_books` | `play_books_annotations` |
 
 `DATA_TABLES` and `EDGE_TABLES` in `src/ingest/schema_raw.rs` list the
 tables the store is created with. Google Voice keeps its own
@@ -75,6 +78,36 @@ Ids are uuidv5 under a per-provider namespace, minted from a recipe
 string (`"maps_review:{ftid}:{date}"`, `"youtube:watch:{id}:{ts}"`);
 see `ns_id` in `schema_raw.rs` and
 [`docs/dev/entity_ids.md`](../../../../../docs/dev/entity_ids.md).
+
+## A list, a map, a book: a file is the whole of its records
+
+`src/ingest/per_file.rs`. A Saved list (`Saved/<list>.csv`), a My Maps
+map (`My Maps/<map>.kmz`) and a Play Books book
+(`Google Play Books/<book>/<book>.html`) each hold all of their records,
+and none has an id upstream. A changed file is read whole; its rows
+replace what it held, and a file gone takes its rows, unless its whole
+product folder is gone. A row is keyed by its file, what it says (a
+place's title and URL; a placemark's layer, name and geometry; an
+entry's section, quote, note and date) and how many times the same
+came before it in the file, so two identical entries keep two rows.
+Each row keeps what the export said whole, by the names the export
+gives it, so render can say what it leaves out:
+
+- **A Saved list** is a row per place, keyed by Google's header
+  (`Title,Note,URL,Tags,Comment`). A list's description is on the lines
+  before its header. A list has no dates.
+- **A My Maps map** is a zipped KML. Each placemark is kept as JSON
+  (`@attr`, `#text`, a repeated child as a list) with its layer
+  (`Folder`) and its map (`Document`); styles are left out. A map has no
+  dates.
+- **A Play Books page** is a header (title, author, narrator, links)
+  and sections (`My notes`, `My bookmarks`, `Listening History`) of
+  entries whose parts are `div`s named by class. An entry's date is
+  three lines, `Last modified on`, the date and the zone in words
+  (`Pacific Time`), read as that place's clock
+  (`time::parse_play_books_stamp`); the tz database's daylight rules run
+  out in the 2100s, so the fixture's 2364 dates are in winter. The book
+  itself (a PDF or EPUB beside the page) is left out.
 
 ## What no feed reads is a problem row
 
@@ -216,7 +249,12 @@ whole. `tests/fixture_walk.rs`'s `rung_1_…` is the test to copy.
 
 `datalib_etl_google_takeout_render` draws every feed through
 chat-common. A Google Chat space or a Voice conversation is a page per
-month. A named Chat space is titled by its `group_info.json` name, a DM
+month; a Saved list, a My Maps map and a Play Books book are a page
+each (`google_takeout_render/src/pages.rs`), every key a row holds that
+the render does not read a warning on its entry. A Maps review draws
+the questions Maps asked after it, with the answers; a review's or
+saved place's `Comment` is the sentence Google writes where it has no
+location for the place, and is a note, not text. A named Chat space is titled by its `group_info.json` name, a DM
 by its members. A Chat message (`google_takeout_render/src/chat.rs`)
 draws its text, the message it quotes, whose thread it answers, the
 links, Drive files, videos and Meet links its annotations name that its

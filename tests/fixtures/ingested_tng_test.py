@@ -243,9 +243,31 @@ TAKEOUT_UNREAD_FILES = [
         "|Keep/<name>.json: 1 file (419 bytes) that no feed reads"
     ),
     (
+        "f67c52ab-bc75-5d8f-a41e-99c4a4f0b8b6|info|fetch|entity"
+        "|skipped:unread_files:36e7e4c1c5fd7e8a||file|noted"
+        "|Google Play Books/<name>/<name>.pdf: 1 file (18 bytes) left out"
+        " on purpose: the books themselves"
+    ),
+    (
         "eb0f0733-b37b-504e-80a5-d90d38997842|warning|fetch|entity"
         "|skipped:unread_files:e7e2c6623c092428||file|uncovered_type"
         "|Gemini/gemini_gems_data.html: 1 file (14 bytes) that no feed reads"
+    ),
+]
+# Where Google has no location for a place it writes a sentence in its
+# `Comment`: a note on the review and on the saved place, not text.
+TAKEOUT_NO_LOCATION_NOTES = [
+    (
+        "46f72732-7bb5-57ca-abfc-f0926e0cea9a|info|parse|markdown"
+        "|00000000-0000-8274-a762-150808777b86"
+        "|019d7bfb-e900-8689-b06f-03ee09f0819c"
+        "|Comment|noted|Google has no location for this place"
+    ),
+    (
+        "53e76917-0f9b-58fc-838c-8561c5681fda|info|parse|markdown"
+        "|00000000-0000-8274-a762-150808777b86"
+        "|019ca869-5000-8c1e-8c4a-e9f5104df6a9"
+        "|Comment|noted|Google has no location for this place"
     ),
 ]
 # What the account's `user_info.json` says of the Ten Forward space,
@@ -291,6 +313,7 @@ EXPECTED_PROBLEMS = {
             TAKEOUT_CHAT_ATTACHMENT_NOT_IN_EXPORT,
             *TAKEOUT_UNREAD_FILES,
             *TAKEOUT_CHAT_SPACE_NOTES,
+            *TAKEOUT_NO_LOCATION_NOTES,
         ]
     ),
 }
