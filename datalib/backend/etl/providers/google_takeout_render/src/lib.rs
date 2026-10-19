@@ -6,6 +6,7 @@ pub mod feeds;
 pub mod gemini;
 pub mod ids;
 pub mod maps;
+pub mod pages;
 pub mod processor;
 pub mod render;
 pub mod youtube;

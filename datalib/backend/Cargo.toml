@@ -82,7 +82,7 @@ prost-types = "0.14"
 # Nothing links it: //tools/prost_toolchain runs its binary, which
 # crate_universe only generates for a crate in this list.
 protoc-gen-prost = "0.5"
-quick-xml = { version = "0.41", features = ["escape-html"] }
+quick-xml = { version = "0.42", features = ["escape-html"] }
 quote = "1"
 rayon = "1.10"
 regex = "1.11"
@@ -121,6 +121,8 @@ sqlx = { version = "0.9", default-features = false, features = [
 strum = { version = "0.28", features = ["derive"] }
 subtle = "2.6"
 syn = { version = "2", features = ["full"] }
+# Only `system`: the step runner reads the memory its steps hold.
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 tar = "0.4"
 tempfile = "3"
 thiserror = "2.0"

@@ -16,6 +16,9 @@ pub const DATA_TABLES: &[&str] = &[
     "chat_users",
     "chat_messages",
     "gemini_activity",
+    "maps_saved_lists",
+    "my_maps_placemarks",
+    "play_books_annotations",
     // Google Voice feed (own `schema_raw`); see `google_voice::schema_raw`.
     "voice_messages",
     "voice_bills",
@@ -92,6 +95,38 @@ pub struct YoutubeWatchRow {
 pub struct YoutubeSubscriptionRow {
     pub id_and_payload: WirePayload,
     pub channel_title: Option<String>,
+}
+
+/// `maps_saved_lists` — one row per place on a list under `Saved/`. A
+/// list has no id upstream, and neither has its entry: the id is the
+/// list's file, the entry's title and URL, and how many times that pair
+/// came before it in the file.
+#[derive(Debug, Clone, WirePayloadRow)]
+#[wire_payload_row(table = "maps_saved_lists")]
+pub struct MapsSavedListRow {
+    pub id_and_payload: WirePayload,
+    /// The export file it came from, which holds the whole of its list.
+    pub file: String,
+}
+
+/// `my_maps_placemarks` — one row per pin, line or shape on a My Maps
+/// map, from the `.kmz` under `My Maps/`. Keyed by the map's file, the
+/// layer's and the placemark's name, its geometry, and the occurrence.
+#[derive(Debug, Clone, WirePayloadRow)]
+#[wire_payload_row(table = "my_maps_placemarks")]
+pub struct MyMapsPlacemarkRow {
+    pub id_and_payload: WirePayload,
+    pub file: String,
+}
+
+/// `play_books_annotations` — one row per highlight, note, bookmark or
+/// listening position in a book's page under `Google Play Books/`.
+#[derive(Debug, Clone, WirePayloadRow)]
+#[wire_payload_row(table = "play_books_annotations")]
+pub struct PlayBooksAnnotationRow {
+    pub id_and_payload: WirePayload,
+    pub file: String,
+    pub when_ts: Option<String>,
 }
 
 // ── Google Chat ─────────────────────────────────────────────────────
@@ -175,6 +210,9 @@ pub fn full_ddl() -> Vec<String> {
         ChatUserRow::ddl(),
         ChatMessageRow::ddl(),
         GeminiActivityRow::ddl(),
+        MapsSavedListRow::ddl(),
+        MyMapsPlacemarkRow::ddl(),
+        PlayBooksAnnotationRow::ddl(),
         // Shared file-cursor table; we own one or more
         // `google_takeout/<feed>` scopes inside it.
         datalib_etl_files::file_checkpoint::INGESTED_FILES_DDL.to_string(),

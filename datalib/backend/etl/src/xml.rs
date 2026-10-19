@@ -15,35 +15,18 @@ use quick_xml::events::{BytesRef, Event};
 /// deprecated it for `normalized_value`, which also folds every literal
 /// newline and tab in the value into a space. An SMS body is an
 /// attribute here, and its line breaks are content.
-pub fn attr_value<'a>(attr: &'a Attribute<'a>) -> Result<Cow<'a, str>, AttrError> {
-    let raw = std::str::from_utf8(&attr.value).map_err(|_| AttrError::NotUtf8)?;
-    unescape(raw).map_err(AttrError::Escape)
+pub fn attr_value<'a>(attr: &'a Attribute<'a>) -> Result<Cow<'a, str>, EscapeError> {
+    unescape(&attr.value)
 }
-
-#[derive(Debug)]
-pub enum AttrError {
-    NotUtf8,
-    Escape(EscapeError),
-}
-
-impl std::fmt::Display for AttrError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            AttrError::NotUtf8 => write!(f, "attribute value is not UTF-8"),
-            AttrError::Escape(e) => write!(f, "{e}"),
-        }
-    }
-}
-
-impl std::error::Error for AttrError {}
 
 /// The text an event adds to the element it sits in, or `None` for an
 /// event that carries none. CDATA is text too, verbatim: Fastmail's
-/// WebDAV wraps every property value in it.
-pub fn text_of<'a>(event: &Event<'a>, html: bool) -> Option<Cow<'a, str>> {
+/// WebDAV wraps every property value in it. Line endings stay as the
+/// source wrote them, which the `*_content` methods would normalize.
+pub fn text_of<'e>(event: &'e Event<'_>, html: bool) -> Option<Cow<'e, str>> {
     match event {
-        Event::Text(t) => Some(t.decode().unwrap_or_default()),
-        Event::CData(t) => Some(t.decode().unwrap_or_default()),
+        Event::Text(t) => Some(Cow::Borrowed(&**t)),
+        Event::CData(t) => Some(Cow::Borrowed(&**t)),
         Event::GeneralRef(r) => Some(Cow::Owned(reference_text(r, html))),
         _ => None,
     }
@@ -56,14 +39,11 @@ pub fn reference_text(r: &BytesRef<'_>, html: bool) -> String {
     if let Ok(Some(c)) = r.resolve_char_ref() {
         return c.to_string();
     }
-    let name = match r.decode() {
-        Ok(name) => name,
-        Err(_) => return String::new(),
-    };
+    let name: &str = r;
     let resolved = if html {
-        resolve_html5_entity(&name)
+        resolve_html5_entity(name)
     } else {
-        resolve_xml_entity(&name)
+        resolve_xml_entity(name)
     };
     match resolved {
         Some(text) => text.to_string(),

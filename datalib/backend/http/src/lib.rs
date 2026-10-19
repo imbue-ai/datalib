@@ -28,6 +28,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+pub mod applet_memory;
 pub mod applets;
 pub mod auth;
 pub mod binaries;

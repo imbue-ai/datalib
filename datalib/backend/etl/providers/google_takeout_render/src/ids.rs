@@ -28,6 +28,11 @@ pub const KIND_YOUTUBE_SUBSCRIPTION: &str = "youtube_subscription";
 pub const KIND_MAPS_REVIEW: &str = "maps_review";
 pub const KIND_MAPS_SAVED_PLACE: &str = "maps_saved_place";
 pub const KIND_MAPS_PHOTO: &str = "maps_photo";
+pub const KIND_SAVED_LIST_ITEM: &str = "saved_list_item";
+pub const KIND_MY_MAPS_PLACEMARK: &str = "my_maps_placemark";
+pub const KIND_PLAY_BOOKS_ENTRY: &str = "play_books_entry";
+/// The note at the top of a page, keyed by the page.
+pub const KIND_FEED_NOTE: &str = "feed_note";
 
 const IDS: Minter = Minter::new(ID_NAMESPACE, STAMP_PRECISION);
 

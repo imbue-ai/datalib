@@ -118,13 +118,7 @@ fn attachment(activity_id: &str, file: &str, name: &str) -> NormalizedAttachment
 /// The response's HTML as markdown. Its `<img>`s are the drawn images,
 /// which render as the response's attachments instead.
 fn response_markdown(html: &str) -> String {
-    htmd::HtmlToMarkdown::builder()
-        .skip_tags(vec!["script", "style", "img"])
-        .build()
-        .convert(html)
-        .unwrap_or_default()
-        .trim()
-        .to_string()
+    feeds::html_markdown(html)
 }
 
 #[cfg(test)]
