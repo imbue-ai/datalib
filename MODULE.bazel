@@ -53,18 +53,22 @@ bazel_dep(name = "platforms", version = "1.1.0")
 # what the root module can *see*, not what the build uses.
 bazel_dep(name = "bazel_skylib", version = "1.9.0")
 
-# doltlite v0.50.17: the amalgamation, a single-file `doltlite.c` with the
+# doltlite v0.50.16: the amalgamation, a single-file `doltlite.c` with the
 # SQLite core, the prolly-tree engine and the `dolt_*` SQL surface, built
 # by `//third-party/doltlite:sqlite3` into every binary.
+#
+# Not 0.50.17: there an open of `<store>@<commit>` takes a read lock that
+# gives up after about 100 ms of retries, before any busy timeout can
+# apply, and `doltlite_two_process_test` fails on Linux on it.
 #
 # What each earlier pin was taken for: docs/dev/doltlite.md § Versions.
 # How to bump: third-party/doltlite/README.md § Upgrading doltlite.
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 http_archive(
     name = "doltlite_amalgamation",
-    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.50.17/doltlite-amalgamation-0.50.17.zip"],
-    sha256 = "6308eaf761604684f8a157208ac506957301460b52917e34775a023e125f9b22",
-    strip_prefix = "doltlite-amalgamation-0.50.17",
+    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.50.16/doltlite-amalgamation-0.50.16.zip"],
+    sha256 = "bf8887cdfbce09a4f6d42b362ad1848d6fa4b9cb49437afbbd73d9ff2883f729",
+    strip_prefix = "doltlite-amalgamation-0.50.16",
     build_file = "//third-party/doltlite:amalgamation.BUILD",
 )
 
@@ -83,9 +87,9 @@ http_archive(
 # `//tools:version_pins_test` fails if the two pins drift.
 http_archive(
     name = "doltlite_autoconf",
-    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.50.17/doltlite-autoconf-0.50.17.tar.gz"],
-    sha256 = "c0f44e749c9e2efb2c4f7b02e76e675f0bf3c85efddebeb6844b0f004938ab87",
-    strip_prefix = "doltlite-autoconf-0.50.17",
+    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.50.16/doltlite-autoconf-0.50.16.tar.gz"],
+    sha256 = "07085cac8cd484d84759db5f8acbf14b0cd392fc9444b30ea4ad5c94aa46ec1e",
+    strip_prefix = "doltlite-autoconf-0.50.16",
     build_file = "//third-party/doltlite:autoconf.BUILD",
 )
 

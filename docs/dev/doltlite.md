@@ -365,7 +365,7 @@ The common-use subset:
 
 ## How doltlite behaves
 
-The facts our rules rest on, checked on the pinned doltlite (0.50.17)
+The facts our rules rest on, checked on the pinned doltlite (0.50.16)
 by the tests below; a number measured on an older release names it. A fact in one process is a test in
 `doltlite_facts_test`, in the module named for its section. Anything
 about a writer and a reader in two processes is measured with
@@ -544,7 +544,7 @@ name itself and then switches branches in SQL, so `doltlite -readonly
   **A filter on `from_commit` / `to_commit` filters the walk of
   adjacent pairs**, so a non-adjacent pair matches no row; to compare
   two commits, name them as refs. (0.50.14 answered that filter like
-  the refs; 0.50.3 and 0.50.17 do not.)
+  the refs; 0.50.3 and 0.50.16 do not.)
 - **With no refs it walks every adjacent commit pair on the branch.**
 - **A range as a ref, `'<a>..<b>'`, is one comparison of `a` with
   `b`**, not a walk: every row has `to_commit` = `b`.
@@ -837,7 +837,7 @@ What each pin was taken for, newest first:
 
 | version | what it brought us |
 |---|---|
-| 0.50.17 | upstream fixes to reader/writer coordination (a reader no longer sees a commit before its publication completes; a writer is no longer starved by concurrent reads) and to recovery after an interrupted `VACUUM` or `dolt_gc()`. Three facts moved: a plain SQLite file honours `journal_mode` (dolthub/doltlite#3740), a `from_commit` / `to_commit` filter matches only adjacent pairs again, and a new empty store's first commit is `nothing to commit` |
+| 0.50.16 | upstream fixes to concurrent writes and to recovery after an interrupted `VACUUM` or `dolt_gc()`. Three facts moved: a plain SQLite file honours `journal_mode` (dolthub/doltlite#3740), a `from_commit` / `to_commit` filter matches only adjacent pairs again, and a new empty store's first commit is `nothing to commit`. (0.50.17 was passed over: its read lock on a `<store>@<commit>` open gives up after about 100 ms, and readers here open that way.) |
 | 0.50.14 | a detached open runs `IN` and `DISTINCT` (dolthub/doltlite#3392), so readers open `<store>@<commit>` directly |
 | 0.50.13 | a revision opened by path works on any file name (dolthub/doltlite#3231); an unindexed filter plans as scan + sort |
 | 0.50.12 | per-table modules registered on first use; `dolt_at_` and `dolt_history_` seek a text primary key; a ref-moving reader no longer refuses the writer's seals |
