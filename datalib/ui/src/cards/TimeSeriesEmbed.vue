@@ -3,7 +3,7 @@
 // `<div data-time-series="<id> <id>">`, over everything they hold.
 // Mounted into the document's frame by timeSeriesEmbed.ts.
 import { computed, onMounted, ref } from "vue";
-import { toMs, type Answered, type Listed } from "./timeSeries";
+import { lineLabels, toMs, type Answered, type Listed } from "./timeSeries";
 import { fetchPoints, fetchTimeSeries } from "./timeSeriesApi";
 import TimeSeriesChart from "./TimeSeriesChart.vue";
 
@@ -17,6 +17,7 @@ const error = ref<string | null>(null);
 const loaded = ref(false);
 const width = ref(600);
 
+const labels = computed(() => lineLabels(picked.value));
 const colorOf = (id: string) => COLORS[Math.max(0, props.ids.indexOf(id)) % COLORS.length]!;
 
 const span = computed(() => {
@@ -59,7 +60,7 @@ onMounted(() => void load());
     <div class="ts-embed-key">
       <span v-for="p in picked" :key="p.time_series_id">
         <span class="ts-embed-swatch" :style="{ background: colorOf(p.time_series_id) }"></span>
-        {{ p.human_name }}
+        {{ labels.get(p.time_series_id) }}
       </span>
     </div>
     <div v-if="error" class="ts-embed-note">{{ error }}</div>

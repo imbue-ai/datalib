@@ -146,6 +146,23 @@ export function refusal(picked: Listed[], candidate: Listed): string | null {
   return `The chart already has two axes (${named}); take one off to add ${unitText(candidate)}.`;
 }
 
+/// What a chart calls each line: whichever of what it measures and what
+/// it is about tells it apart from the others drawn with it. Five YoLink
+/// temperatures are five devices; one run's heart rate and speed are two
+/// measures.
+export function lineLabels(picked: Listed[]): Map<string, string> {
+  const about = (s: Listed) => s.about_name ?? s.source_id;
+  const varies = (f: (s: Listed) => string) => new Set(picked.map(f)).size > 1;
+  const byAbout = varies(about);
+  const byMeasure = varies((s) => s.human_name) || !byAbout;
+  return new Map(
+    picked.map((s) => [
+      s.time_series_id,
+      [byMeasure ? s.human_name : null, byAbout ? about(s) : null].filter(Boolean).join(" · "),
+    ]),
+  );
+}
+
 /// The time series about one document (an activity), listed together.
 export type About = { uuid: string; name: string; items: Listed[] };
 

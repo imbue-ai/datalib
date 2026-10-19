@@ -57,7 +57,7 @@ Two tables (`datalib/backend/time_series_schema/src/`).
 | `about_uuid` | The document the time series belongs to (an activity), or null for one about the source as a whole |
 | `about_name` | What a list calls that document, such as `Morning run · 2369-04-14`; the card groups a document's time series under it |
 | `name` | The provider's key for what is measured, such as `resting_hr`; unique within the source and `about_uuid` |
-| `human_name` | What a chart legend shows, such as `Resting HR` |
+| `human_name` | What is measured, as a person says it, such as `Resting HR`. A chart names a line by whichever of this and `about_name` (or the source, when there is none) tells it apart from the lines beside it: five YoLink temperatures are labelled by device |
 | `unit` | A UCUM code (§"Units") |
 | `value_type` | `integer`, `float` or `text` (`ValueType`) |
 | `time_kind` | `instant`: `t` is unix milliseconds. `day`: `t` is days since 1970-01-01, a calendar day as the person lived it, never stored as midnight UTC (`TimeKind`) |

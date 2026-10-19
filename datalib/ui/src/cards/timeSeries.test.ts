@@ -11,6 +11,7 @@ import {
   formatTime,
   formatTimeTick,
   grouped,
+  lineLabels,
   lineOf,
   nearest,
   newestMs,
@@ -148,6 +149,28 @@ describe("the list", () => {
     expect(grouped(all, "morning speed")[0]!.abouts[0]!.items.map((s) => s.human_name)).toEqual([
       "Speed",
     ]);
+  });
+});
+
+describe("line labels", () => {
+  /// Five YoLink devices' temperatures were five lines all called "Temperature".
+  it("name each line by what tells it apart from the others", () => {
+    const at = (id: string, about: string | null, human: string) =>
+      listed({ time_series_id: id, about_uuid: about, about_name: about, human_name: human });
+    const labels = (picked: Listed[]) => [...lineLabels(picked).values()];
+    expect(
+      labels([at("a", "Basement freezer", "Temperature"), at("b", "Garage", "Temperature")]),
+    ).toEqual(["Basement freezer", "Garage"]);
+    expect(labels([at("a", "Morning run", "Heart rate"), at("b", "Morning run", "Speed")])).toEqual(
+      ["Heart rate", "Speed"],
+    );
+    expect(
+      labels([at("a", "Garage", "Temperature"), at("b", "Attic", "Relative humidity")]),
+    ).toEqual(["Temperature · Garage", "Relative humidity · Attic"]);
+    expect(labels([at("a", "Garage", "Temperature")])).toEqual(["Temperature"]);
+    expect(
+      labels([at("a", null, "Resting HR"), { ...at("b", null, "Resting HR"), source_id: "data" }]),
+    ).toEqual(["riker", "data"]);
   });
 });
 
