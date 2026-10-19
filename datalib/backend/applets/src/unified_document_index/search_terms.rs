@@ -386,6 +386,50 @@ mod tests {
         );
     }
 
+    /// A word is looked up through the full-text index and a row by its
+    /// key. A plan that scans `terms`, `vals` or `rows`, or reads
+    /// `vals_fts` without its MATCH, reads the whole file for every word:
+    /// on a 300k-row file that is the difference between milliseconds and
+    /// seconds a keystroke.
+    #[tokio::test]
+    async fn the_lookup_reads_by_index_never_by_scan() {
+        let tmp = tempfile::tempdir().unwrap();
+        terms_file(tmp.path(), &[("a", "from", "warp", "1")]).await;
+        let mut conn = SqliteConnectOptions::new()
+            .filename(datalib_runtime::plain_sqlite::uri(
+                &datalib_runtime::layout::search_terms_db(tmp.path()),
+            ))
+            .read_only(true)
+            .connect()
+            .await
+            .unwrap();
+        // A constant statement with a constant prefix.
+        let plan: Vec<(i64, i64, i64, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "EXPLAIN QUERY PLAN {HITS_SQL}"
+        )))
+        .bind(r#"["\"warp\"*", "\"core\"*"]"#)
+        .bind(r#"["\"deck\"*"]"#)
+        .bind("[[1, 5]]")
+        .bind(10_i64)
+        .fetch_all(&mut conn)
+        .await
+        .unwrap();
+        conn.close().await.unwrap();
+        let steps: Vec<&str> = plan.iter().map(|(.., step)| step.as_str()).collect();
+        let fts: Vec<&&str> = steps.iter().filter(|s| s.contains("vals_fts")).collect();
+        assert!(!fts.is_empty(), "{steps:#?}");
+        assert!(fts.iter().all(|s| s.contains(":M")), "{steps:#?}");
+        let scanned: Vec<&str> = steps
+            .iter()
+            .filter_map(|s| s.strip_prefix("SCAN "))
+            .map(|rest| rest.trim_start_matches("TABLE "))
+            .filter_map(|rest| rest.split_whitespace().next())
+            .collect();
+        for table in ["t", "v", "r", "terms", "vals", "rows"] {
+            assert!(!scanned.contains(&table), "scans {table}: {steps:#?}");
+        }
+    }
+
     #[test]
     fn a_word_too_short_to_start_many_is_matched_whole() {
         assert_eq!(
