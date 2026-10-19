@@ -9,5 +9,6 @@ mod interrupt;
 mod live;
 mod playback_roundtrip;
 mod run_problems;
+mod token_renewal;
 mod upgrade;
 mod volatile_metadata;

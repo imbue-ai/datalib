@@ -157,10 +157,12 @@ latchkey auth browser chatgpt
 
 The second command opens chatgpt.com, waits for you to log in, and
 stores the token itself — nothing to copy or paste. The token lasts
-about ten days and `services info chatgpt` cannot tell when it has
-gone (it reports `unknown`, not `invalid`); when a sync or **Test
-connection** comes back `HTTP 401 token_expired`, run that same
-`auth browser` line again.
+about ten days. When it runs out, a sync runs that same `auth browser`
+line for you: while the browser is still signed in to chatgpt.com, a
+window opens and closes by itself within seconds. If the browser has
+been signed out too, the window waits on the sign-in page for two
+minutes; sign in there, or run the line yourself later. **Test
+connection** does not do this, and says `HTTP 401 token_expired`.
 
 If it still says `token_expired` right after a fresh login, look for
 a *second* service on the same address: `latchkey curl` picks the

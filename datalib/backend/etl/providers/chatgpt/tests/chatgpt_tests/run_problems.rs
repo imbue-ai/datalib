@@ -162,6 +162,21 @@ impl Account {
     }
 }
 
+/// latchkey keeps one browser session for every account, so a sign-in
+/// can hand this source another account's token. Its listing must never
+/// be taken as this account's, which would prune everything held.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_credential_for_another_account_lists_and_prunes_nothing() {
+    let acct = Account::new(&[conversation("c-a", 1.0), conversation("c-b", 2.0)]);
+    acct.run(&[]).await.unwrap();
+
+    write_json(&acct.api.join("me.json"), &json!({"id": "u-2"}));
+    acct.list(&[conversation("c-z", 3.0)]);
+    let err = acct.run(&[]).await.expect_err("another account's /me");
+    assert!(format!("{err:#}").contains("this source holds"), "{err:#}");
+    assert_eq!(acct.stored_conversations().await, 2);
+}
+
 /// The rate limit used to end the walk with a `warn!` and a run that read
 /// as clean.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

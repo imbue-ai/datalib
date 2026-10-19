@@ -154,6 +154,20 @@ already holds a different account for it: a second Claude or ChatGPT
 account. The decision is `freshBrowser` in
 `datalib/ui/src/config/accountNaming.ts`.
 
+## Signing in again without a person
+
+A token-capture service (ChatGPT) stores a token the page mints from
+its session, and that token expires; latchkey has no refresh for it.
+But `auth browser` starts from the saved browser session, so while
+that session is still signed in the login finishes in about ten
+seconds with nobody at the keyboard. A download can therefore renew
+its own credential on a `401` with
+`datalib_etl_web::latchkey::renew_by_browser_login`, which runs it
+under a time limit and refuses under a gateway or in playback. The
+saved session belongs to whoever used it last, so a provider that
+renews must check the account it got before using it
+(`chatgpt/src/ingest/api.rs`).
+
 ## When it fails
 
 - `latchkey curl` exits 1 when latchkey will not send the request at
