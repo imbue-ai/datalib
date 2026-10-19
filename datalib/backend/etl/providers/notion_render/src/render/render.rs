@@ -10,6 +10,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
@@ -18,7 +19,6 @@ use datalib_etl_render::front_matter::yaml_scalar;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{escape_md_block, escape_md_inline};
 use datalib_etl_render::inputs::{Bucket, Buckets};
-use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::Value;
 
@@ -33,7 +33,7 @@ use super::parse::ParsedNotion;
 pub const RENDER_VERSION: u32 = 7;
 pub const SLUG_MAX_LEN: usize = 60;
 
-static SLUG_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[^a-z0-9]+").unwrap());
+static SLUG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[^a-z0-9]+").unwrap());
 
 pub fn slugify(name: &str) -> String {
     if name.is_empty() {

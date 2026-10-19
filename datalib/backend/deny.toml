@@ -24,26 +24,25 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 ignore = [
     # candle-core -> gemm -> paste. Archived by its author; candle has
     # not moved off it. Only linked by the perseus provider.
-    { id = "RUSTSEC-2024-0436", reason = "paste, via candle-core's gemm; no replacement in candle 0.10" },
-    # indicatif -> number_prefix. A byte-formatting helper; indicatif
-    # still depends on it.
-    { id = "RUSTSEC-2025-0119", reason = "number_prefix, via indicatif" },
-    # pdf-inspector -> lopdf -> ttf-parser (font parsing for the pdf
-    # provider). lopdf has not moved to skrifa.
-    { id = "RUSTSEC-2026-0192", reason = "ttf-parser, via pdf-inspector's lopdf" },
-    # candle-core -> zip 7. All three are in extracting an archive to
+    { id = "RUSTSEC-2024-0436", reason = "paste, via candle-core's gemm; no replacement in candle 0.11" },
+    # pdf-inspector -> ttf-parser (font parsing for the pdf provider).
+    # lopdf itself has moved to skrifa; pdf-inspector has not.
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser, via pdf-inspector" },
+    # candle-core -> zip 8. All three are in extracting an archive to
     # disk (`ZipArchive::extract`, `ZipStreamReader::extract`), fixed in
     # zip 9; candle 0.11 still requires zip 8. Our own zip dependency is
     # on 9, and candle only reads entries by name; nothing calls extract.
-    { id = "RUSTSEC-2026-0367", reason = "zip 7 extract keeps SUID/SGID bits, via candle-core, which never calls extract" },
-    { id = "RUSTSEC-2026-0368", reason = "zip 7 extract writes symlinks outside the destination, via candle-core, which never calls extract" },
-    { id = "RUSTSEC-2026-0369", reason = "zip 7 extract applies permissions through symlinks, via candle-core, which never calls extract" },
+    { id = "RUSTSEC-2026-0367", reason = "zip 8 extract keeps SUID/SGID bits, via candle-core, which never calls extract" },
+    { id = "RUSTSEC-2026-0368", reason = "zip 8 extract writes symlinks outside the destination, via candle-core, which never calls extract" },
+    { id = "RUSTSEC-2026-0369", reason = "zip 8 extract applies permissions through symlinks, via candle-core, which never calls extract" },
 ]
 
 [bans]
-# 56 duplicate versions at the time of writing (tokenizers x2, lopdf
-# x2, axum 0.7 + 0.8, thiserror 1 + 2, ...). Worth trimming, not worth
-# gating: a warn keeps the list visible in every run.
+# About 30 duplicate versions, most of them the windows-* target
+# crates and the RustCrypto/rand generations moving underneath (base64
+# 0.22 + 0.23, rand 0.9 + 0.10, thiserror 1 via candle's gemm). Worth
+# trimming, not worth gating: a warn keeps the list visible in every
+# run.
 multiple-versions = "warn"
 wildcards = "deny"
 allow-wildcard-paths = true
