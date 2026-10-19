@@ -152,7 +152,14 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         "conv_uuids": opts.conv_uuids,
     });
     let run = DownloadRun::start(db.pool(), &run_config).await?;
-    let client = ChatGPTClient::with_latchkey(opts.latchkey.clone());
+    let held = db.load_me().await?;
+    let client = ChatGPTClient::with_latchkey(opts.latchkey.clone())
+        .holding_account(
+            held.as_ref()
+                .and_then(|me| me["id"].as_str())
+                .map(String::from),
+        )
+        .renewing_by_browser_login();
     let ctx = Ctx {
         client: &client,
         db: &db,

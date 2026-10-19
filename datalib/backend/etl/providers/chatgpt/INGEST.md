@@ -197,16 +197,32 @@ the `Authorization: Bearer <accessToken>` registered under the
 
 ### Refreshing the access token
 
-ChatGPT rotates the bearer token frequently. When `latchkey services
-info chatgpt` reports `invalid`, or requests come back `HTTP 401
-token_expired`, refresh it from the browser:
+The bearer token lasts about ten days. When a request comes back
+`HTTP 401`, the download signs in again by itself: it runs
 
 ```sh
 latchkey auth browser chatgpt
 ```
 
-That opens chatgpt.com, waits for you to log in, reads the fresh
-`accessToken` itself and stores it. No DevTools, no clipboard.
+which opens chatgpt.com in the browser session latchkey keeps. While
+that session is still signed in, the page hands over a fresh
+`accessToken` and the window closes after about ten seconds, with
+nobody touching it. The download then checks `/me`: the new token is
+used only if it is for the account the store already holds, because
+latchkey keeps one browser session for every account and the login
+cannot tell which account it captured. Every request that saw the 401
+waits on that one sign-in and is sent again.
+
+The download signs in once per run, gives up after two minutes, and
+does not sign in at all on a source's first run (no account is held
+yet to check against), under a latchkey gateway, or in a replayed
+test. When the browser's own session has expired too, the window sits
+on the sign-in page; sign in there within the two minutes, or run the
+command above yourself, and the next sync picks the token up.
+
+`/me` answering as an account other than the one held fails the step
+before anything is listed, since that account's listing would prune
+every conversation this one holds.
 
 It works because the `chatgpt` service is registered with latchkey's
 `token-capture` login flow. `latchkey services info chatgpt` says
@@ -313,7 +329,8 @@ filegroup. Every hermetic test is a module of
 `:chatgpt_tests`: `chatgpt_render` renders the fixture, and
 `incremental_skip`, `playback_roundtrip`, `run_problems` (what a
 partial failure records, and when it clears), `interrupt` (a run cut
-off anywhere resumes to the same store) and `upgrade` (an older store
+off anywhere resumes to the same store), `token_renewal` (an expired
+token is signed in again once, and kept only for the account held) and `upgrade` (an older store
 opens holding what it had) replay small snapshots of the same shape
 through a playback tape (`docs/dev/testing.md` § "Watching a sync stream" explains the
 tapes). The shared `tests/fixtures` root ingests it too.
