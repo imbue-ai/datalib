@@ -49,6 +49,12 @@ pub struct GoogleTakeoutSync {
     pub google_voice: bool,
     /// When `google_voice` is on, also process `Voice/Spam/`.
     pub google_voice_include_spam: bool,
+    /// Maps lists under `Saved/`, with the notes on their places.
+    pub maps_saved_lists: bool,
+    /// My Maps maps: pins, lines and shapes, and what was written on them.
+    pub my_maps: bool,
+    /// Play Books highlights, notes, bookmarks and listening positions.
+    pub play_books: bool,
 }
 
 impl GoogleTakeoutSync {

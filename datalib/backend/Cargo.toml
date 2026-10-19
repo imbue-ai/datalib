@@ -82,7 +82,7 @@ prost-types = "0.14"
 # Nothing links it: //tools/prost_toolchain runs its binary, which
 # crate_universe only generates for a crate in this list.
 protoc-gen-prost = "0.5"
-quick-xml = { version = "0.41", features = ["escape-html"] }
+quick-xml = { version = "0.42", features = ["escape-html"] }
 quote = "1"
 rayon = "1.10"
 regex = "1.11"

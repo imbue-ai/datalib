@@ -25,7 +25,7 @@ use datalib_schema::problems::Problem;
 use serde_json::Value;
 
 use crate::feeds::{self, Row};
-use crate::{chat, gemini, ids, maps, youtube};
+use crate::{chat, gemini, ids, maps, pages, youtube};
 
 use datalib_etl_google_takeout::ingest::google_voice::schema_raw::VoiceAttachmentRow;
 use datalib_etl_google_takeout::ingest::{db_path_for, RawDb};
@@ -41,10 +41,13 @@ use datalib_schema::providers::Provider;
 /// v5: the author span carries the author's handle as `data-handle`.
 /// v6: a `+1` number without ten digits after the 1 has no handle.
 /// v7: Gemini, YouTube and Google Maps render, a document per year.
+/// v9: Maps reviews draw their follow-up answers, and Google's
+///     no-location sentence is a note; Saved lists, My Maps maps and
+///     Play Books books render, a page each.
 /// v8: a Chat message draws its attachments, earlier versions, quote,
 ///     thread, previews, reactions and labels, and a space its name; a
 ///     problem row for every field render leaves unread.
-pub const RENDER_VERSION: u32 = 8;
+pub const RENDER_VERSION: u32 = 9;
 
 /// Projection for [`BlobBundle::load_many`] over the Voice CAS edge: the
 /// `ref_name` (attachment filename) is the bundle key; `content_type`
@@ -112,6 +115,9 @@ struct Loaded {
     reviews: Vec<Row>,
     saved: Vec<Row>,
     photos: Vec<Row>,
+    saved_lists: Vec<pages::FileRow>,
+    placemarks: Vec<pages::FileRow>,
+    book_entries: Vec<pages::FileRow>,
     /// Per chat id, the bytes its attachments reference.
     blobs: HashMap<String, BlobBundle>,
     scan: datalib_etl::doltlite_raw::DiffScan,
@@ -165,6 +171,9 @@ pub fn render(
     all_chats.extend(youtube::build_history(source_id, &l.watches));
     all_chats.extend(youtube::build_subscriptions(source_id, &l.subscriptions));
     all_chats.extend(maps::build(source_id, &l.reviews, &l.saved, &l.photos));
+    all_chats.extend(pages::saved_lists(source_id, &l.saved_lists));
+    all_chats.extend(pages::my_maps(source_id, &l.placemarks));
+    all_chats.extend(pages::play_books(source_id, &l.book_entries));
     let changed = changed_chats(all_chats, range, l.scan.render.as_ref(), |id| {
         chat_uuid_for(source_id, id)
     });
@@ -274,6 +283,9 @@ async fn load(db: &RawDb, cursor: Option<&str>, pin: &datalib_etl::pin::Pin) -> 
         reviews: load_rows(db, "maps_reviews", Dated::Yes).await?,
         saved: load_rows(db, "maps_saved_places", Dated::Yes).await?,
         photos,
+        saved_lists: load_file_rows(db, "maps_saved_lists", Dated::No).await?,
+        placemarks: load_file_rows(db, "my_maps_placemarks", Dated::No).await?,
+        book_entries: load_file_rows(db, "play_books_annotations", Dated::Yes).await?,
         blobs,
         scan: scan_diff(db.pool(), cursor, pin).await?,
     })
@@ -303,6 +315,37 @@ async fn load_rows(db: &RawDb, table: &'static str, dated: Dated) -> Result<Vec<
                 None => Value::Null,
             };
             Ok(Row { id, payload, when })
+        })
+        .collect()
+}
+
+/// A table whose rows each name the export file they came from.
+async fn load_file_rows(
+    db: &RawDb,
+    table: &'static str,
+    dated: Dated,
+) -> Result<Vec<pages::FileRow>> {
+    let when = match dated {
+        Dated::Yes => "when_ts",
+        Dated::No => "NULL",
+    };
+    // Audited: `table` is a literal at every call, `when` one of two.
+    let sql = format!("SELECT id, json(payload), {when}, file FROM {table} ORDER BY id");
+    let rows: Vec<(String, Option<String>, Option<String>, String)> =
+        sqlx::query_as(sqlx::AssertSqlSafe(sql))
+            .fetch_all(db.pool())
+            .await
+            .with_context(|| format!("select {table}"))?;
+    rows.into_iter()
+        .map(|(id, payload, when, file)| {
+            let payload = match payload {
+                Some(p) => serde_json::from_str(&p).with_context(|| format!("{table} {id}"))?,
+                None => Value::Null,
+            };
+            Ok(pages::FileRow {
+                row: Row { id, payload, when },
+                file,
+            })
         })
         .collect()
 }
@@ -400,6 +443,18 @@ async fn scan_diff(
                      WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                     UNION
                     SELECT 'feed:maps' FROM dolt_diff_maps_photos
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
+                    UNION
+                    SELECT 'feed:saved_list:' || coalesce(to_file, from_file)
+                      FROM dolt_diff_maps_saved_lists
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
+                    UNION
+                    SELECT 'feed:my_map:' || coalesce(to_file, from_file)
+                      FROM dolt_diff_my_maps_placemarks
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
+                    UNION
+                    SELECT 'feed:play_book:' || coalesce(to_file, from_file)
+                      FROM dolt_diff_play_books_annotations
                      WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                 )
                 WHERE bucket IS NOT NULL AND bucket != '' AND bucket != 'voice:'

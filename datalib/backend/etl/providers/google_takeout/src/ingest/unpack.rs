@@ -146,6 +146,21 @@ const FEEDS: &[Feed] = &[
         dir: "Voice",
     },
     Feed {
+        name: "maps_saved_lists",
+        on: |s| s.maps_saved_lists,
+        dir: "Saved",
+    },
+    Feed {
+        name: "my_maps",
+        on: |s| s.my_maps,
+        dir: "My Maps",
+    },
+    Feed {
+        name: "play_books",
+        on: |s| s.play_books,
+        dir: "Google Play Books",
+    },
+    Feed {
         name: "google_voice_include_spam",
         on: |s| s.google_voice && s.google_voice_include_spam,
         dir: "Voice/Spam",

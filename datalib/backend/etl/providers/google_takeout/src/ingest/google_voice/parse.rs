@@ -104,20 +104,20 @@ pub fn record_of(html: &str) -> Option<Record> {
     loop {
         match r.read_event_into(&mut buf) {
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) => match e.name().as_ref() {
-                b"div" if has_class(&e, "hChatLog") => thread = true,
-                b"div" if has_class(&e, "haudio") => call = true,
-                b"a" if attr(&e, b"rel").as_deref() == Some("tag") => {
-                    let href = attr(&e, b"href").unwrap_or_default();
+                "div" if has_class(&e, "hChatLog") => thread = true,
+                "div" if has_class(&e, "haudio") => call = true,
+                "a" if attr(&e, "rel").as_deref() == Some("tag") => {
+                    let href = attr(&e, "href").unwrap_or_default();
                     let fragment = href.rsplit_once('#').map_or("", |(_, f)| f);
                     tagged = tagged.or(CallKind::from_tag(fragment));
                 }
-                b"title" => in_title = true,
+                "title" => in_title = true,
                 _ => {}
             },
             Ok(Event::Text(t)) if in_title => {
-                title.push_str(&t.decode().map(|c| c.into_owned()).unwrap_or_default());
+                title.push_str(&t);
             }
-            Ok(Event::End(e)) if e.name().as_ref() == b"title" => in_title = false,
+            Ok(Event::End(e)) if e.name().as_ref() == "title" => in_title = false,
             Ok(Event::Eof) | Err(_) => break,
             _ => {}
         }
@@ -147,7 +147,7 @@ fn preprocess(html: &str) -> String {
         .replace("<br>", "\n")
 }
 
-fn attr(e: &BytesStart, name: &[u8]) -> Option<String> {
+fn attr(e: &BytesStart, name: &str) -> Option<String> {
     e.attributes()
         .flatten()
         .find(|a| a.key.as_ref() == name)
@@ -159,7 +159,7 @@ fn attr(e: &BytesStart, name: &[u8]) -> Option<String> {
 }
 
 fn has_class(e: &BytesStart, want: &str) -> bool {
-    attr(e, b"class")
+    attr(e, "class")
         .map(|c| c.split_whitespace().any(|t| t == want))
         .unwrap_or(false)
 }
@@ -191,7 +191,7 @@ pub fn parse_chat_log(html: &str) -> Vec<ParsedMessage> {
             Ok(Event::Start(e)) => {
                 let owned = e.name();
                 match owned.as_ref() {
-                    b"div" => {
+                    "div" => {
                         div_depth += 1;
                         if has_class(&e, "message") {
                             cur = Some(ParsedMessage {
@@ -204,38 +204,38 @@ pub fn parse_chat_log(html: &str) -> Vec<ParsedMessage> {
                             msg_div_depth = Some(div_depth);
                         }
                     }
-                    b"abbr" => {
+                    "abbr" => {
                         if has_class(&e, "dt") {
-                            if let (Some(m), Some(t)) = (cur.as_mut(), attr(&e, b"title")) {
+                            if let (Some(m), Some(t)) = (cur.as_mut(), attr(&e, "title")) {
                                 m.dt = t;
                             }
                         } else if has_class(&e, "fn") {
                             capture_fn = true;
                         }
                     }
-                    b"a" if has_class(&e, "tel") => {
+                    "a" if has_class(&e, "tel") => {
                         in_tel = true;
-                        if let (Some(m), Some(h)) = (cur.as_mut(), attr(&e, b"href")) {
+                        if let (Some(m), Some(h)) = (cur.as_mut(), attr(&e, "href")) {
                             m.sender.tel = tel_from_href(&h);
                         }
                     }
-                    b"span" if has_class(&e, "fn") => capture_fn = true,
-                    b"q" => {
+                    "span" if has_class(&e, "fn") => capture_fn = true,
+                    "q" => {
                         in_q = true;
                         q_text.clear();
                     }
                     _ => {}
                 }
             }
-            Ok(Event::Empty(e)) if e.name().as_ref() == b"img" => {
-                if let (Some(m), Some(src)) = (cur.as_mut(), attr(&e, b"src")) {
+            Ok(Event::Empty(e)) if e.name().as_ref() == "img" => {
+                if let (Some(m), Some(src)) = (cur.as_mut(), attr(&e, "src")) {
                     m.attachments.push(src);
                 }
             }
             // A reference (`&amp;`, `&#8217;`) is text too — same handling.
             Ok(event @ (Event::Text(_) | Event::GeneralRef(_))) => {
                 let txt = match event {
-                    Event::Text(t) => t.decode().map(|c| c.into_owned()).unwrap_or_default(),
+                    Event::Text(t) => t.to_string(),
                     Event::GeneralRef(r) => datalib_etl::xml::reference_text(&r, true),
                     _ => unreachable!(),
                 };
@@ -258,18 +258,18 @@ pub fn parse_chat_log(html: &str) -> Vec<ParsedMessage> {
             Ok(Event::End(e)) => {
                 let owned = e.name();
                 match owned.as_ref() {
-                    b"q" => {
+                    "q" => {
                         in_q = false;
                         if let Some(m) = cur.as_mut() {
                             m.body = q_text.trim().to_string();
                         }
                     }
-                    b"a" => {
+                    "a" => {
                         in_tel = false;
                         capture_fn = false;
                     }
-                    b"span" | b"abbr" => capture_fn = false,
-                    b"div" => {
+                    "span" | "abbr" => capture_fn = false,
+                    "div" => {
                         if Some(div_depth) == msg_div_depth {
                             if let Some(m) = cur.take() {
                                 msgs.push(m);
@@ -305,33 +305,33 @@ pub fn parse_haudio(html: &str) -> ParsedEvent {
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
                 let owned = e.name();
                 match owned.as_ref() {
-                    b"a" if has_class(&e, "tel") => {
+                    "a" if has_class(&e, "tel") => {
                         in_tel = true;
-                        if let Some(h) = attr(&e, b"href") {
+                        if let Some(h) = attr(&e, "href") {
                             ev.party.tel = tel_from_href(&h);
                         }
                     }
                     // `<a rel="enclosure" href="…mp3">` — audio fallback.
-                    b"a" if attr(&e, b"rel").as_deref() == Some("enclosure") => {
-                        if let Some(h) = attr(&e, b"href") {
+                    "a" if attr(&e, "rel").as_deref() == Some("enclosure") => {
+                        if let Some(h) = attr(&e, "href") {
                             ev.audio_src.get_or_insert(h);
                         }
                     }
-                    b"span" if has_class(&e, "fn") => capture_fn = true,
-                    b"span" if has_class(&e, "full-text") => {
+                    "span" if has_class(&e, "fn") => capture_fn = true,
+                    "span" if has_class(&e, "full-text") => {
                         in_full_text = true;
                         full_text.clear();
                     }
-                    b"abbr" if has_class(&e, "published") => {
-                        if let Some(t) = attr(&e, b"title") {
+                    "abbr" if has_class(&e, "published") => {
+                        if let Some(t) = attr(&e, "title") {
                             ev.published = t;
                         }
                     }
-                    b"abbr" if has_class(&e, "duration") => {
-                        ev.duration = attr(&e, b"title");
+                    "abbr" if has_class(&e, "duration") => {
+                        ev.duration = attr(&e, "title");
                     }
-                    b"audio" => {
-                        if let Some(src) = attr(&e, b"src") {
+                    "audio" => {
+                        if let Some(src) = attr(&e, "src") {
                             ev.audio_src = Some(src);
                         }
                     }
@@ -341,7 +341,7 @@ pub fn parse_haudio(html: &str) -> ParsedEvent {
             // A reference (`&amp;`, `&#8217;`) is text too — same handling.
             Ok(event @ (Event::Text(_) | Event::GeneralRef(_))) => {
                 let txt = match event {
-                    Event::Text(t) => t.decode().map(|c| c.into_owned()).unwrap_or_default(),
+                    Event::Text(t) => t.to_string(),
                     Event::GeneralRef(r) => datalib_etl::xml::reference_text(&r, true),
                     _ => unreachable!(),
                 };
@@ -356,11 +356,11 @@ pub fn parse_haudio(html: &str) -> ParsedEvent {
                 }
             }
             Ok(Event::End(e)) => match e.name().as_ref() {
-                b"a" => {
+                "a" => {
                     in_tel = false;
                     capture_fn = false;
                 }
-                b"span" => {
+                "span" => {
                     capture_fn = false;
                     if in_full_text {
                         in_full_text = false;
@@ -395,36 +395,36 @@ pub fn parse_bills(html: &str) -> (Vec<String>, Vec<Vec<String>>) {
     loop {
         match r.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => match e.name().as_ref() {
-                b"tr" => {
+                "tr" => {
                     in_row = true;
                     cur_row = Vec::new();
                 }
-                b"th" => {
+                "th" => {
                     in_th = true;
                     cell.clear();
                 }
-                b"td" => {
+                "td" => {
                     in_td = true;
                     cell.clear();
                 }
                 _ => {}
             },
             Ok(Event::Text(t)) if in_th || in_td => {
-                cell.push_str(&t.decode().map(|c| c.into_owned()).unwrap_or_default());
+                cell.push_str(&t);
             }
             Ok(Event::GeneralRef(r)) if in_th || in_td => {
                 cell.push_str(&datalib_etl::xml::reference_text(&r, true));
             }
             Ok(Event::End(e)) => match e.name().as_ref() {
-                b"th" => {
+                "th" => {
                     in_th = false;
                     headers.push(cell.trim().to_string());
                 }
-                b"td" => {
+                "td" => {
                     in_td = false;
                     cur_row.push(cell.trim().to_string());
                 }
-                b"tr" => {
+                "tr" => {
                     in_row = false;
                     if !cur_row.is_empty() {
                         rows.push(std::mem::take(&mut cur_row));
