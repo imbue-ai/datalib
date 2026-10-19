@@ -3,10 +3,12 @@
 // it (`GET /applet/datalib_contacts/contacts`), so an edit made anywhere
 // shows at once. The person is a chip, as in any grid: a click links it,
 // a double-click on a row opens the person card, a right-click offers
-// the card, everything with them, and copying the name. A new contact
-// is made from the box at the top.
+// the card, everything with them, copying the name, merging the selected
+// rows into the one clicked, and deleting. A new contact is made from the
+// box at the top.
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from "vue";
 import { copyToClipboard } from "@/clipboard";
+import { confirmAction } from "@/desktop";
 import { filterToken } from "@/grid/query";
 import type { MenuEntry } from "@/grid/menu";
 import { subscribeLive } from "@/live";
@@ -18,12 +20,15 @@ import { isBrowserClick } from "./chatLink";
 import {
   CONTACTS_APPLET,
   canLinkHandles,
+  contactsById,
   createContact,
+  deleteContact,
+  mergeContacts,
   movesPeople,
   people,
   type NormalizedContact,
 } from "./contacts";
-import { filterContacts, rowHandle, type ContactRow } from "./contactsTable";
+import { filterContacts, mergeInto, rowHandle, type ContactRow } from "./contactsTable";
 import HandlePopover from "./HandlePopover.ce.vue";
 import TableGrid from "./TableGrid.ce.vue";
 import type { TableGridApi } from "./tableGridApi";
@@ -35,8 +40,10 @@ props.ctx.setHelp(`
 <p>Every contact you have made in the contacts app, read from it as it
 is now: a link or a new contact shows here at once. A contact is drawn
 by its first working address or number, pale blue because it is yours.
-Double-click a row to open the person card: your contact and what every
-source says about them. Right-click for everything with them.</p>
+A contact with no handle yet is drawn as itself. Double-click a row to
+open the person card: your contact and what every source says about
+them. Right-click for everything with them, or to delete the contact.
+To merge duplicates, select them all and right-click the one to keep.</p>
 `);
 
 const columns = ref<ColumnSpec[]>([]);
@@ -91,8 +98,33 @@ function everythingWith(row: ContactRow) {
   props.ctx.host.openCards(searchSource(filterToken("with", `${CONTACT}${row.key}`, false)));
 }
 
-function menu(row: ContactRow): MenuEntry[] {
+async function merge(into: ContactRow, from: ContactRow[]) {
+  try {
+    for (const r of from) await mergeContacts(r.key, into.key);
+    pushToast(
+      `Merged ${from.length === 1 ? "1 contact" : `${from.length} contacts`} into ${into.contact_ref.label}`,
+      "info",
+    );
+  } catch (e) {
+    error.value = (e as Error).message;
+  }
+  await load();
+}
+
+async function remove(rows: ContactRow[]) {
+  const what = rows.length === 1 ? `“${rows[0].contact_ref.label}”` : `${rows.length} contacts`;
+  if (!(await confirmAction(`Delete ${what}? Their handles will be linked to nobody.`))) return;
+  try {
+    for (const r of rows) await deleteContact(r.key);
+  } catch (e) {
+    error.value = (e as Error).message;
+  }
+  await load();
+}
+
+function menu(row: ContactRow, targets: ContactRow[]): MenuEntry[] {
   const name = row.contact_ref.label;
+  const others = mergeInto(row, targets);
   return [
     {
       name: "Open person card",
@@ -107,6 +139,23 @@ function menu(row: ContactRow): MenuEntry[] {
         void copyToClipboard(name).then((ok) =>
           ok ? pushToast(`Copied ${name}`, "info") : pushToast("The clipboard refused the copy"),
         ),
+    },
+    { separator: true, name: "" },
+    {
+      name:
+        others.length > 0
+          ? `Merge ${others.length === 1 ? "the other selected contact" : `${others.length} selected contacts`} into this one`
+          : "Merge into this one…",
+      disabled:
+        others.length > 0
+          ? null
+          : "Select the duplicates too (⌘- or Shift-click), then right-click the one to keep.",
+      action: () => void merge(row, others),
+    },
+    {
+      name: targets.length === 1 ? "Delete contact…" : `Delete ${targets.length} contacts…`,
+      danger: true,
+      action: () => void remove(targets),
     },
   ];
 }
@@ -141,9 +190,11 @@ function onChipClick(ev: MouseEvent) {
 const chips = {
   who: (handle: string) => people.lookup(handle),
   canLink: () => canLinkHandles(),
+  contact: (id: string) => contactsById.lookup(id),
 };
 
 const stopPeople = people.subscribe(() => grid.value?.refreshCells(["contact_ref"]));
+const stopContacts = contactsById.subscribe(() => grid.value?.refreshCells(["contact_ref"]));
 let stopLive: (() => void) | null = null;
 onMounted(() => {
   void load();
@@ -159,6 +210,7 @@ onMounted(() => {
 });
 onBeforeUnmount(() => {
   stopPeople();
+  stopContacts();
   stopLive?.();
 });
 </script>
@@ -197,7 +249,7 @@ onBeforeUnmount(() => {
         rowKey="key"
         :selectable="true"
         :chips="chips"
-        :menu="(anchor) => menu(anchor)"
+        :menu="(anchor, targets) => menu(anchor, targets)"
         @ready="(api) => (grid = api)"
         @cellDoubleClick="(row) => openPerson(row)"
       />

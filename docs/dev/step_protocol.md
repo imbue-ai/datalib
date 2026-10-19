@@ -195,6 +195,14 @@ series, and draws a blank Items cell and no counts. They are
 tree; nothing else makes the reporter and the screen agree on the
 spelling.
 
+Two series you never send: the runner measures your memory itself.
+Every two seconds it adds up the resident memory of your process and
+every process below it, and reports the sum as **`rss_bytes`** and the
+highest reading this attempt as **`rss_peak_bytes`**; `rss_bytes` goes
+to zero when you exit (`dag/src/memory.rs`). A child you spawned whose
+parent then exited is no longer below you and drops out, so the sum is
+a floor. Nothing caps it.
+
 A step that counts one thing and knows its total may use the shorter
 form instead, which the runner translates into the `done_total` and `queued`
 metrics for it:

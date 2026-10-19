@@ -17,7 +17,7 @@ pub use datalib_contact_schema::ContactKind;
 pub mod read;
 use datalib_contact_schema::{ContactHandle, Medium, NormalizedContact};
 use datalib_etl::bulk::bulk_upsert_entity_in_tx;
-use datalib_etl::doltlite_raw;
+use datalib_etl::{doltlite_raw, draft};
 use datalib_handle::{Handle, HandleKind};
 use datalib_store_meta::{Migration, StoreKind};
 use datalib_time::IsoOffsetTimestamp;
@@ -52,6 +52,12 @@ use schema::DDL;
 /// origin; what [`Store::contact`] answers as `photo_url`.
 pub fn photo_url(contact_id: &str) -> String {
     format!("/applet/datalib_contacts/photo/{contact_id}")
+}
+
+/// The URI a chip names one of your contacts by, whether or not it holds
+/// a handle; `contactFromUri` in `ui/src/cards/chipLinks.js` reads it.
+pub fn contact_uri(contact_id: &str) -> String {
+    format!("datalib:contact/{contact_id}")
 }
 
 /// The image types a photo may be: those a browser draws in an `<img>`.
@@ -419,7 +425,19 @@ impl Store {
         search_in(&self.pool, q, limit).await
     }
 
+    /// A merged-away contact answers as the one it was merged into.
     pub async fn contact(&self, contact_id: &str) -> Result<Option<NormalizedContact>> {
+        let Some(contact_id) = sqlx::query_scalar::<_, String>(
+            "SELECT COALESCE(merged_into, contact_id) FROM contacts WHERE contact_id = ?",
+        )
+        .bind(contact_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("read whether a contact was merged")?
+        else {
+            return Ok(None);
+        };
+        let contact_id = contact_id.as_str();
         let Some(r) = sqlx::query(
             "SELECT contact_id, name, kind, note, created_at_utc, updated_at_utc \
                FROM contacts WHERE contact_id = ?",
@@ -718,6 +736,135 @@ impl Store {
         Ok(true)
     }
 
+    /// Delete a contact: its row, its links, fields, photo, draft and
+    /// memberships, and every contact merged into it, which were the same
+    /// person. Its handles are nobody's afterwards. The commit before it
+    /// still holds all of it.
+    pub async fn delete(&self, contact_id: &str) -> Result<()> {
+        let _held = self.drafts.lock().await;
+        let mut tx = self.pool.begin().await?;
+        let name = name_of_existing(&mut tx, contact_id).await?;
+        let mut gone: Vec<String> =
+            sqlx::query_scalar("SELECT contact_id FROM contacts WHERE merged_into = ?")
+                .bind(contact_id)
+                .fetch_all(&mut *tx)
+                .await
+                .context("read the contacts merged into one")?;
+        gone.push(contact_id.to_string());
+        for id in &gone {
+            for sql in [
+                "DELETE FROM handles WHERE contact_id = ?1",
+                "DELETE FROM fields WHERE contact_id = ?1",
+                "DELETE FROM photos WHERE contact_id = ?1",
+                "DELETE FROM members WHERE group_id = ?1 OR member_id = ?1",
+                "DELETE FROM contacts WHERE contact_id = ?1",
+            ] {
+                sqlx::query(sql)
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await
+                    .context("delete a contact")?;
+            }
+        }
+        tx.commit().await?;
+        self.seal(&format!("contacts: delete {name:?}")).await?;
+        for id in &gone {
+            draft::discard(&self.pool, &draft::branch_of(id)).await?;
+        }
+        Ok(())
+    }
+
+    /// Merge `from` into `into`, which survives: its links, fields and
+    /// memberships move over, its photo and note fill in where the
+    /// survivor has none, and `from` is kept as a row pointing at `into`
+    /// so an id saved anywhere (a `contact:` search) still reaches the
+    /// person. A contact already merged into `from` now points at `into`,
+    /// so a chain is never more than one step.
+    pub async fn merge(&self, from: &str, into: &str) -> Result<()> {
+        if from == into {
+            bail!("a contact cannot be merged into itself");
+        }
+        let _held = self.drafts.lock().await;
+        let (now, tz) = IsoOffsetTimestamp::now_local().to_utc_and_offset();
+        let mut tx = self.pool.begin().await?;
+        let (from_name, from_kind, from_note) = merge_side(&mut tx, from).await?;
+        let (into_name, into_kind, into_note) = merge_side(&mut tx, into).await?;
+        if from_kind != into_kind {
+            bail!(
+                "{from_name:?} is a {} and {into_name:?} a {}: only two people, or two groups, can be merged",
+                from_kind.as_str(),
+                into_kind.as_str()
+            );
+        }
+        let after: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(MAX(position), -1) + 1 FROM fields WHERE contact_id = ?",
+        )
+        .bind(into)
+        .fetch_one(&mut *tx)
+        .await
+        .context("read where the survivor's fields end")?;
+        for (sql, what) in [
+            (
+                "UPDATE handles SET contact_id = ?2 WHERE contact_id = ?1",
+                "move the links",
+            ),
+            (
+                "UPDATE photos SET contact_id = ?2 WHERE contact_id = ?1 \
+                  AND NOT EXISTS (SELECT 1 FROM photos WHERE contact_id = ?2)",
+                "move the photo",
+            ),
+            ("DELETE FROM photos WHERE contact_id = ?1", "drop the photo"),
+            (
+                "INSERT OR IGNORE INTO members (group_id, member_id, added_at_utc, tz_offset) \
+                 SELECT group_id, ?2, added_at_utc, tz_offset FROM members WHERE member_id = ?1",
+                "move the memberships",
+            ),
+            (
+                "INSERT OR IGNORE INTO members (group_id, member_id, added_at_utc, tz_offset) \
+                 SELECT ?2, member_id, added_at_utc, tz_offset FROM members WHERE group_id = ?1",
+                "move the members",
+            ),
+            (
+                "DELETE FROM members WHERE group_id = ?1 OR member_id = ?1 OR group_id = member_id",
+                "drop the old memberships",
+            ),
+            (
+                "UPDATE contacts SET merged_into = ?2 WHERE merged_into = ?1 OR contact_id = ?1",
+                "point the merged-away contacts at the survivor",
+            ),
+        ] {
+            sqlx::query(sql)
+                .bind(from)
+                .bind(into)
+                .execute(&mut *tx)
+                .await
+                .context(what)?;
+        }
+        sqlx::query(
+            "UPDATE fields SET contact_id = ?, position = position + ? WHERE contact_id = ?",
+        )
+        .bind(into)
+        .bind(after)
+        .bind(from)
+        .execute(&mut *tx)
+        .await
+        .context("move the fields")?;
+        sqlx::query(
+            "UPDATE contacts SET note = ?, updated_at_utc = ?, tz_offset = ? WHERE contact_id = ?",
+        )
+        .bind(merged_note(into_note, from_note))
+        .bind(&now)
+        .bind(&tz)
+        .bind(into)
+        .execute(&mut *tx)
+        .await
+        .context("update the survivor")?;
+        tx.commit().await?;
+        self.seal(&format!("contacts: merge {from_name:?} into {into_name:?}"))
+            .await?;
+        draft::discard(&self.pool, &draft::branch_of(from)).await
+    }
+
     async fn seal(&self, msg: &str) -> Result<()> {
         doltlite_raw::commit_run(&self.pool, msg).await?;
         Ok(())
@@ -741,6 +888,41 @@ async fn name_of_existing(conn: &mut sqlx::SqliteConnection, contact_id: &str) -
         .await
         .context("read a contact's name")?;
     name.ok_or_else(|| anyhow::anyhow!("no contact {contact_id}"))
+}
+
+/// One side of a merge: its name, kind and note. Refused for a contact
+/// the store lacks or one already merged away.
+async fn merge_side(
+    conn: &mut sqlx::SqliteConnection,
+    contact_id: &str,
+) -> Result<(String, ContactKind, Option<String>)> {
+    let row =
+        sqlx::query("SELECT name, kind, note, merged_into FROM contacts WHERE contact_id = ?")
+            .bind(contact_id)
+            .fetch_optional(&mut *conn)
+            .await
+            .context("read a contact to merge")?
+            .ok_or_else(|| anyhow::anyhow!("no contact {contact_id}"))?;
+    let name: String = row.get("name");
+    if row.get::<Option<String>, _>("merged_into").is_some() {
+        bail!("{name:?} was already merged into another contact");
+    }
+    let kind: String = row.get("kind");
+    Ok((
+        name,
+        ContactKind::parse(&kind).unwrap_or(ContactKind::Person),
+        row.get("note"),
+    ))
+}
+
+/// The survivor's note, then the merged-away one's, each kept whole.
+fn merged_note(into: Option<String>, from: Option<String>) -> Option<String> {
+    let keep = |n: Option<String>| n.filter(|n| !n.trim().is_empty());
+    match (keep(into), keep(from)) {
+        (Some(a), Some(b)) if a.trim() == b.trim() => Some(a),
+        (Some(a), Some(b)) => Some(format!("{a}\n\n{b}")),
+        (a, b) => a.or(b),
+    }
 }
 
 async fn name_of(tx: &mut sqlx::SqliteConnection, contact_id: &str) -> Result<String> {
@@ -1231,6 +1413,170 @@ mod tests {
             "each change to a photo is a commit, and a refused one is none"
         );
         store.close().await;
+    }
+
+    /// Two contacts made for one person by mistake become one: the
+    /// survivor takes the other's links, fields, photo, note and
+    /// memberships, and the other's id still answers as the survivor.
+    #[tokio::test]
+    async fn a_merge_moves_everything_onto_the_survivor_and_keeps_the_old_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&store_path(dir.path())).await.unwrap();
+        let work = email("riker@enterprise.org");
+        let home = email("will@risa.test");
+        let keep = store
+            .create(
+                "Will Riker",
+                ContactKind::Person,
+                std::slice::from_ref(&work),
+            )
+            .await
+            .unwrap();
+        let dup = store
+            .create(
+                "Will Riker",
+                ContactKind::Person,
+                std::slice::from_ref(&home),
+            )
+            .await
+            .unwrap();
+        let older = store
+            .create("W. Riker", ContactKind::Person, &[])
+            .await
+            .unwrap();
+        store.merge(&older, &dup).await.unwrap();
+        store
+            .set_photo(&dup, "image/png", b"\x89PNG\r\n\x1a\n")
+            .await
+            .unwrap();
+        let crew = store
+            .create("Bridge crew", ContactKind::Group, &[])
+            .await
+            .unwrap();
+        store.add_member(&crew, &dup).await.unwrap();
+        sqlx::query("UPDATE contacts SET note = 'trombone' WHERE contact_id = ?")
+            .bind(&dup)
+            .execute(&store.pool)
+            .await
+            .unwrap();
+
+        store.merge(&dup, &keep).await.unwrap();
+
+        let got = store.resolve(&[work.clone(), home.clone()]).await.unwrap();
+        assert_eq!(got[home.as_str()].key, keep, "the link moved");
+        let survivor = store.contact(&keep).await.unwrap().unwrap();
+        assert_eq!(survivor.handles.len(), 2);
+        assert_eq!(survivor.note.as_deref(), Some("trombone"));
+        assert_eq!(survivor.photo_url, Some(photo_url(&keep)));
+        for old in [&dup, &older] {
+            assert_eq!(
+                store.contact(old).await.unwrap().unwrap().key,
+                keep,
+                "an old id answers as the survivor"
+            );
+        }
+        let listed: Vec<String> = store
+            .list()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|c| c.key)
+            .collect();
+        assert_eq!(listed, [crew.clone(), keep.clone()]);
+        let members: Vec<String> =
+            sqlx::query_scalar("SELECT member_id FROM members WHERE group_id = ?")
+                .bind(&crew)
+                .fetch_all(&store.pool)
+                .await
+                .unwrap();
+        assert_eq!(members, [keep.as_str()]);
+        let chain: Vec<String> =
+            sqlx::query_scalar("SELECT merged_into FROM contacts WHERE merged_into IS NOT NULL")
+                .fetch_all(&store.pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            chain,
+            [keep.clone(), keep.clone()],
+            "never more than one step"
+        );
+
+        for (from, into, says) in [
+            (&keep, &keep, "into itself"),
+            (&dup, &keep, "already merged"),
+            (&crew, &keep, "only two people, or two groups"),
+        ] {
+            let err = store.merge(from, into).await.unwrap_err().to_string();
+            assert!(err.contains(says), "{err}");
+        }
+        store.close().await;
+    }
+
+    /// Deleting a contact takes everything of it, and of the contacts
+    /// merged into it, and leaves its handles nobody's.
+    #[tokio::test]
+    async fn a_deleted_contact_leaves_its_handles_unlinked() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&store_path(dir.path())).await.unwrap();
+        let tel = Handle::tel("+15550123456").unwrap();
+        let keep = store
+            .create("Deanna Troi", ContactKind::Person, &[])
+            .await
+            .unwrap();
+        let dup = store
+            .create(
+                "Deanna Troi",
+                ContactKind::Person,
+                std::slice::from_ref(&tel),
+            )
+            .await
+            .unwrap();
+        let older = store
+            .create("D. Troi", ContactKind::Person, &[])
+            .await
+            .unwrap();
+        store.merge(&older, &dup).await.unwrap();
+        store
+            .set_photo(&dup, "image/png", b"\x89PNG\r\n\x1a\n")
+            .await
+            .unwrap();
+        store.draft(&dup).await.unwrap();
+
+        store.delete(&dup).await.unwrap();
+
+        assert!(store
+            .resolve(std::slice::from_ref(&tel))
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(store.contact(&dup).await.unwrap().is_none());
+        assert!(store.contact(&older).await.unwrap().is_none());
+        assert!(store.photo(&dup).await.unwrap().is_none());
+        assert!(
+            store.draft_view(&dup).await.unwrap().is_none(),
+            "its draft went too"
+        );
+        let listed: Vec<String> = store
+            .list()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|c| c.key)
+            .collect();
+        assert_eq!(listed, [keep]);
+        let err = store.delete(&dup).await.unwrap_err().to_string();
+        assert!(err.contains("no contact"), "{err}");
+        store.link(&tel, &listed[0]).await.unwrap();
+        store.close().await;
+    }
+
+    #[test]
+    fn a_merged_note_keeps_both_once() {
+        let s = |v: &str| Some(v.to_string());
+        assert_eq!(merged_note(s("a"), s("b")), s("a\n\nb"));
+        assert_eq!(merged_note(s("a"), s(" a ")), s("a"));
+        assert_eq!(merged_note(None, s("b")), s("b"));
+        assert_eq!(merged_note(s(" "), None), None);
     }
 
     /// A reader sees every edit as soon as it returns: each write is

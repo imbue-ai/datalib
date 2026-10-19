@@ -927,6 +927,9 @@ def _source_config(
             "maps_saved_places": True,
             "maps_photos": True,
             "gemini_apps": True,
+            "maps_saved_lists": True,
+            "my_maps": True,
+            "play_books": True,
         }
     elif type_str == "sms_backup_restore":
         source["backup"] = {"path": str(input_path)}

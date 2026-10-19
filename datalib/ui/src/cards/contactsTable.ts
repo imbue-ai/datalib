@@ -21,6 +21,12 @@ export function rowHandle(row: ContactRow): string | null {
   return handleFromUri(row.contact_ref.id) ?? null;
 }
 
+/** What merging the rows a right-click aims at comes to: every target
+ *  but the row clicked goes into it. Empty when only one row is aimed at. */
+export function mergeInto(anchor: ContactRow, targets: ContactRow[]): ContactRow[] {
+  return targets.filter((r) => r.key !== anchor.key);
+}
+
 /** The rows whose name, address, number or note holds every word of
  *  `text`, ignoring case; every row for blank text. */
 export function filterContacts(rows: ContactRow[], text: string): ContactRow[] {

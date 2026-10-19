@@ -403,6 +403,24 @@ export async function setStoppedWorking(handle: string, by: string | null): Prom
   people.forget([handle]);
 }
 
+// A merge or a delete moves every handle of a contact, which this page
+// may not hold the list of: everything held is asked again.
+
+/** `from` is merged into `into`, which keeps its id; `from`'s id still
+ *  answers as `into`. */
+export async function mergeContacts(from: string, into: string): Promise<void> {
+  await post("/merge", { from, into });
+  people.revalidate();
+  contactsById.revalidate();
+}
+
+/** The contact and everything of it; its handles are nobody's after. */
+export async function deleteContact(contactId: string): Promise<void> {
+  await call(`/contact/${encodeURIComponent(contactId)}`, { method: "DELETE" });
+  people.revalidate();
+  contactsById.revalidate();
+}
+
 // ── Who a handle is, for the whole app ────────────────────────────────
 
 export const NOBODY: Who = { mine: null, sourceContacts: [] };

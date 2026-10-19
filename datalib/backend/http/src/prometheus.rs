@@ -75,6 +75,7 @@ pub struct Inputs<'a> {
     pub trees: &'a [OutputStorage],
     pub root_bytes: u64,
     pub disk: &'a crate::disk_free::DiskFree,
+    pub applets: &'a BTreeMap<String, crate::applet_memory::Reading>,
 }
 
 /// A name as Prometheus allows one: `[a-zA-Z_:][a-zA-Z0-9_:]*`, anything
@@ -271,6 +272,31 @@ pub fn families(inputs: &Inputs<'_>) -> Vec<Family> {
     ] {
         add(name.into(), help.into(), Kind::Gauge, gauge(value));
     }
+    for (id, r) in inputs.applets {
+        let labels = vec![("applet".to_string(), id.clone())];
+        for (name, help, value) in [
+            (
+                "datalib_applet_rss_bytes",
+                "Resident bytes the applet and every process below it hold, as last sampled.",
+                r.rss_bytes,
+            ),
+            (
+                "datalib_applet_rss_peak_bytes",
+                "The most `datalib_applet_rss_bytes` has read since the applet started.",
+                r.peak_rss_bytes,
+            ),
+        ] {
+            add(
+                name.into(),
+                help.into(),
+                Kind::Gauge,
+                Sample {
+                    labels: labels.clone(),
+                    value: value as f64,
+                },
+            );
+        }
+    }
     out.into_values().collect()
 }
 
@@ -347,6 +373,7 @@ pub async fn get_metrics(State(s): State<AppState>) -> impl IntoResponse {
         trees: &storage.outputs,
         root_bytes: storage.root.bytes,
         disk: &disk,
+        applets: &s.applets.memory(),
     }));
     ([(header::CONTENT_TYPE, CONTENT_TYPE)], body)
 }
@@ -383,6 +410,14 @@ mod tests {
             trees: &[],
             root_bytes: 1000,
             disk: &disk(),
+            applets: &BTreeMap::from([(
+                "search".to_string(),
+                crate::applet_memory::Reading {
+                    pid: 42,
+                    rss_bytes: 300,
+                    peak_rss_bytes: 700,
+                },
+            )]),
         }))
     }
 
@@ -422,6 +457,20 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("datalib_root_bytes 1000\n"), "{text}");
+    }
+
+    /// What each applet holds, which no run records: an applet is a
+    /// server that outlives every sync.
+    #[test]
+    fn an_applets_memory_is_a_gauge_labelled_with_its_id() {
+        let text = scrape(&[]);
+        for line in [
+            "# TYPE datalib_applet_rss_bytes gauge\n",
+            "datalib_applet_rss_bytes{applet=\"search\"} 300\n",
+            "datalib_applet_rss_peak_bytes{applet=\"search\"} 700\n",
+        ] {
+            assert!(text.contains(line), "{line:?} missing from:\n{text}");
+        }
     }
 
     /// The disk the root lives on, and the floor the loop holds steps
@@ -505,6 +554,7 @@ mod tests {
             trees: &[],
             root_bytes: 0,
             disk: &disk(),
+            applets: &BTreeMap::new(),
         }));
         assert!(
             text.contains("datalib_step_state{step=\"s\",state=\"running\"} 1\n"),

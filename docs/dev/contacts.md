@@ -57,7 +57,7 @@ above it:
    rebuild. Its answer ranks above every source's.
 
 What is still to build: [`plans/contact_linking.md`](plans/contact_linking.md)
-(merge, groups, numbers without a country code), [`plans/search_autocomplete.md`](plans/search_autocomplete.md)
+(groups, numbers without a country code), [`plans/search_autocomplete.md`](plans/search_autocomplete.md)
 (contacts in search) and [`plans/contact_editing.md`](plans/contact_editing.md)
 (the contact card: its fields, drafts, saving, undo, the export).
 How every chip is written, drawn, resolved and clicked — a person's, a
@@ -377,9 +377,11 @@ is a 409 with the store's words; a handle that does not parse is a
 |---|---|
 | `POST /resolve` | `{handles}` → `{resolved: {<handle>: NormalizedContact}}`, each handle's contact; a handle nobody holds is absent |
 | `GET /search?q=` | contacts whose name contains `q`, for the popover's typeahead |
-| `GET /contacts` | every contact, by name, as a typed table (`columns`, `rows`): the person as a chip by their first working address, else number, else any handle; the first address and number; how many handles; the note; group or person; when it changed. What the contacts app's own table shows |
+| `GET /contacts` | every contact, by name, as a typed table (`columns`, `rows`): the person as a chip by their first working address, else number, else any handle, else as the contact itself (`datalib:contact/<id>`); the first address and number; how many handles; the note; group or person; when it changed. What the contacts app's own table shows |
 | `POST /contacts` | create, with `name`, optional `kind`, and the `handles` to link at once |
-| `GET /contact/{id}` | one contact, working handles first |
+| `GET /contact/{id}` | one contact, working handles first; a merged-away id answers as its survivor |
+| `DELETE /contact/{id}` | delete the contact and every contact merged into it: their links, fields, photo, drafts and memberships. Its handles are nobody's afterwards; the commit before holds it all |
+| `POST /merge` | `{from, into}`: `into` survives and takes `from`'s links, fields and memberships, its photo and note where it has none (two notes are kept one after the other); `from` stays as a row whose `merged_into` names `into`, so a `contact:<id>` saved anywhere still reaches the person, and anything merged into `from` now points at `into`. Two people or two groups, never one of each |
 | `POST /link`, `POST /unlink` | one handle to or from a contact |
 | `POST /stopped_working` | `{handle, by}`; `by: null` means it works again |
 | `POST /rename` | |
@@ -465,7 +467,11 @@ Everything is in `datalib/ui/src/cards/`:
   table: every contact, read live from the app's `GET /contacts`, never
   through the index, so it needs no sync and shows an edit made
   anywhere as soon as the `curated` frame arrives. Browse on the app's
-  Manage row opens it. Your contacts are not in the search grid: the
+  Manage row opens it. A contact with no handle is drawn as a contact
+  chip (`contactCell`, through `contactsById`). Its right-click deletes
+  the rows it aims at, and merges every other selected row into the one
+  clicked, so duplicates are merged by selecting them all and
+  right-clicking the one to keep. Your contacts are not in the search grid: the
   index holds what sources render, and nothing renders this store.
 - The grid's Author column is a chip too: `grid_rows.author_handle`
   (which `from:` finds through the search terms) comes with each
@@ -610,7 +616,7 @@ chip in the UI is separate and always uses the latest answer.
 
 ## Not built
 
-Editing a contact on its card, merge, groups and members, undo, the triage grid of
+Editing a contact on its card, merging or deleting from the person card, groups and members, undo, the triage grid of
 unresolved handles, a
 handle for a number without its country code, a handle that stopped
 working in some apps but not others, mentions in Google Chat,

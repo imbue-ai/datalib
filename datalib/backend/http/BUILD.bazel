@@ -27,6 +27,7 @@ platform_transition_filegroup(
 rust_library(
     name = "datalib_http",
     srcs = [
+        "src/applet_memory.rs",
         "src/applets.rs",
         "src/auth.rs",
         "src/binaries.rs",
@@ -144,6 +145,7 @@ rust_test(
         "@datalib_crates//:async-trait",
     ],
     deps = [
+        "@datalib_crates//:libc",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tower",

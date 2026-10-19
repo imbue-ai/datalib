@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { entityFromUri, handleFromUri, uriFromHandle } from "../src/cards/chipLinks";
+import {
+  contactFromUri,
+  entityFromUri,
+  handleFromUri,
+  uriFromHandle,
+} from "../src/cards/chipLinks";
 import { renderDocument } from "../src/cards/renderDocument";
 
 /// A chip is a link whose href names a handle (docs/dev/chips.md).
@@ -69,6 +74,17 @@ describe("entityFromUri", () => {
     expect(entityFromUri("datalib:group/")).toBeNull();
     expect(entityFromUri("datalib:handle/tel/+15550123456")).toBeNull();
     expect(entityFromUri("mailto:riker@enterprise.org")).toBeNull();
+  });
+});
+
+/// The URI `datalib_contacts::contact_uri` writes for one of your contacts.
+describe("contactFromUri", () => {
+  it("reads a contact's id, and nothing else", () => {
+    expect(contactFromUri("datalib:contact/7f1c-uuid")).toBe("7f1c-uuid");
+    expect(contactFromUri("datalib:contact/")).toBeNull();
+    expect(contactFromUri("datalib:group/slack")).toBeNull();
+    expect(handleFromUri("datalib:contact/7f1c-uuid")).toBeNull();
+    expect(entityFromUri("datalib:contact/7f1c-uuid")).toBeNull();
   });
 });
 
