@@ -25,7 +25,6 @@ rust_library(
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:emojis",
-        "@datalib_crates//:once_cell",
         "@datalib_crates//:regex",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",

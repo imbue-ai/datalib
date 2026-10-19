@@ -2,34 +2,34 @@
 //! slack/mrkdwn.py`.
 
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 
 use datalib_etl_render::html::{code_span_parts, escape_md_inline, escape_md_syntax, md_link_dest};
 use datalib_etl_render::inputs::Lookup;
 use datalib_etl_render::message::chip_link;
 use datalib_handle::Handle;
-use once_cell::sync::Lazy;
 use regex::{Captures, Regex};
 
-static USER_REF: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"<@([UW][A-Z0-9_]+)(?:\|([^>]+))?>").unwrap());
+static USER_REF: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<@([UW][A-Z0-9_]+)(?:\|([^>]+))?>").unwrap());
 // The label may be empty (`<#C123|>`): Slack emits that for a channel
 // the message's author can see but the reader may not.
-static CHANNEL_REF: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"<#([CG][A-Z0-9_]+)(?:\|([^>]*))?>").unwrap());
-static SUBTEAM_REF: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"<!subteam\^[A-Z0-9_]+(?:\|([^>]+))?>").unwrap());
-static SPECIAL_REF: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"<!(here|channel|everyone)(?:\|[^>]+)?>").unwrap());
-static URL_REF: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"<((?:https?|mailto):[^|>\s]+)(?:\|([^>]*))?>").unwrap());
+static CHANNEL_REF: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<#([CG][A-Z0-9_]+)(?:\|([^>]*))?>").unwrap());
+static SUBTEAM_REF: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<!subteam\^[A-Z0-9_]+(?:\|([^>]+))?>").unwrap());
+static SPECIAL_REF: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<!(here|channel|everyone)(?:\|[^>]+)?>").unwrap());
+static URL_REF: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<((?:https?|mailto):[^|>\s]+)(?:\|([^>]*))?>").unwrap());
 // Bold/strike use look-around-style boundary checks but Rust's `regex`
 // crate has no look-around. We compensate by including the boundary
 // char in the match and re-emitting it. See [`reflow_bold`] / [`reflow_strike`].
-static BOLD: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(^|[^\w*])\*([^\s*][^*\n]*?[^\s*]|[^\s*])\*([^\w*]|$)").unwrap());
-static STRIKE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(^|[^\w~])~([^\s~][^~\n]*?[^\s~]|[^\s~])~([^\w~]|$)").unwrap());
-static SHORTCODE: Lazy<Regex> = Lazy::new(|| Regex::new(r":([a-zA-Z0-9_+\-]+):").unwrap());
+static BOLD: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(^|[^\w*])\*([^\s*][^*\n]*?[^\s*]|[^\s*])\*([^\w*]|$)").unwrap());
+static STRIKE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(^|[^\w~])~([^\s~][^~\n]*?[^\s~]|[^\s~])~([^\w~]|$)").unwrap());
+static SHORTCODE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r":([a-zA-Z0-9_+\-]+):").unwrap());
 
 pub fn emojize_shortcodes(text: &str) -> String {
     SHORTCODE
@@ -248,7 +248,8 @@ pub fn to_commonmark(text: &str, labels: Labels<'_>) -> String {
 /// text has no business carrying.
 const NAME_OPEN: char = '\u{E000}';
 const NAME_CLOSE: char = '\u{E001}';
-static NAME_HELD: Lazy<Regex> = Lazy::new(|| Regex::new("\u{E000}([0-9]+)\u{E001}").unwrap());
+static NAME_HELD: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new("\u{E000}([0-9]+)\u{E001}").unwrap());
 
 /// [`escape_md_syntax`] over what someone typed: not inside a `<…>`,
 /// which is Slack's own markup (a typed `<` arrives as `&lt;`), and not
@@ -311,10 +312,11 @@ fn code_parts_whole_constructs(text: &str) -> Vec<(String, bool)> {
         .collect()
 }
 
-static SLACK_CONSTRUCT: Lazy<Regex> = Lazy::new(|| Regex::new(r"<[^<>]*>").unwrap());
+static SLACK_CONSTRUCT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<[^<>]*>").unwrap());
 const CONSTRUCT_OPEN: char = '\u{E002}';
 const CONSTRUCT_CLOSE: char = '\u{E003}';
-static CONSTRUCT_HELD: Lazy<Regex> = Lazy::new(|| Regex::new("\u{E002}([0-9]+)\u{E003}").unwrap());
+static CONSTRUCT_HELD: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new("\u{E002}([0-9]+)\u{E003}").unwrap());
 
 /// Slack's entities stay entities in running text, so a `<b>` someone
 /// typed shows as typed rather than being read as HTML. They are decoded
@@ -365,21 +367,20 @@ mod tests {
     use super::*;
 
     use datalib_etl_render::inputs::Inputs;
-    use once_cell::sync::Lazy;
 
-    static USERS: Lazy<BTreeMap<String, String>> = Lazy::new(|| {
+    static USERS: LazyLock<BTreeMap<String, String>> = LazyLock::new(|| {
         let mut m = BTreeMap::new();
         m.insert("U_PICARD".to_string(), "Jean-Luc Picard".to_string());
         m.insert("U_DATA".to_string(), "Lt. Cmdr. Data".to_string());
         m
     });
-    static CHANNELS: Lazy<BTreeMap<String, String>> = Lazy::new(|| {
+    static CHANNELS: LazyLock<BTreeMap<String, String>> = LazyLock::new(|| {
         let mut m = BTreeMap::new();
         m.insert("C_BRIDGE".to_string(), "bridge".to_string());
         m
     });
-    static NONE: Lazy<BTreeMap<String, String>> = Lazy::new(BTreeMap::new);
-    static INPUTS: Lazy<Inputs> = Lazy::new(Inputs::default);
+    static NONE: LazyLock<BTreeMap<String, String>> = LazyLock::new(BTreeMap::new);
+    static INPUTS: LazyLock<Inputs> = LazyLock::new(Inputs::default);
 
     fn labels() -> Labels<'static> {
         Labels {
@@ -515,7 +516,7 @@ mod tests {
     /// is text on a markdown line (#992).
     #[test]
     fn a_name_in_markdown_renders_as_typed() {
-        static ODD: Lazy<BTreeMap<String, String>> = Lazy::new(|| {
+        static ODD: LazyLock<BTreeMap<String, String>> = LazyLock::new(|| {
             BTreeMap::from([("U_Q".to_string(), "[Q](https://e.test) *".to_string())])
         });
         let lbl = Labels {
