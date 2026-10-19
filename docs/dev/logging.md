@@ -79,8 +79,10 @@ one, `process_log_days` / `process_log_lines` for the lines outside
 any run — the server's and the pages'. One more key, `disk_usage_days`,
 is for the disk samples rather than this store
 ([`app_stores.md`](app_stores.md) § "Disk stats"). The store is not load-bearing:
-one that will not open is emptied and remade, and a schema bump does
-the same. The old file is copied first to `runs.bak_<UTC stamp>.sqlite`
+one that will not open is emptied and remade. A store from an older
+schema version climbs the rungs in `store.rs`'s `UPGRADES` in place,
+keeping its rows; one at a version with no rung, a newer build's
+included, is emptied and remade too. The old file is copied first to `runs.bak_<UTC stamp>.sqlite`
 beside it, so its lines can still be read with `sqlite3`; nothing
 deletes those copies, so remove them by hand when you are done with
 them. A copy that fails is an ERROR and costs the old lines, never the
@@ -100,7 +102,27 @@ when something saw, and the commit it was built from — what a line's
 | `dag` | a run of the runner | itself | it records nothing; the run row closes |
 | `step` | one attempt of one step — or one pass of a streaming consumer, which is spawned once per producer checkpoint; every pass is its own process, all under `attempt 1` | the runner, at spawn and at `wait(2)` | `exit_code` or `signal` |
 | `http` | a launch of the server, and what its applets said | itself | it cannot see its own end |
+| `applet` | one start of one applet, its config id in `applet`; it writes no lines, which stay the server's | the server, at spawn and when it stops or reaps it | `exit_code` or `signal` |
 | `ui` | one load of the app in one browser tab | the server, on the page's behalf | the page says so on `pagehide` |
+
+A process that was measured also carries **`peak_rss_bytes`**: the most
+resident memory it and everything below it held. The runner fills it
+for a step's attempt from the step's `rss_peak_bytes` series
+([`step_protocol.md`](step_protocol.md)), and the server for an applet
+from its own sampling every five seconds (`http/src/applet_memory.rs`).
+Each writes the row again as the peak rises, so a process whose watcher
+died still leaves its peak so far. It is the place to ask which
+process held the most:
+
+```sh
+sqlite3 <root>/system/runs/runs.sqlite \
+  "SELECT process, COALESCE(step, applet), attempt, peak_rss_bytes / 1048576 AS mib
+     FROM processes WHERE peak_rss_bytes IS NOT NULL
+    ORDER BY peak_rss_bytes DESC LIMIT 20"
+```
+
+An applet's row has no lines, so the retention that prunes the server's
+lines prunes it too, `process_log_days` after it started.
 
 A line also keeps its **subject** — `run_id`, `step`, `attempt` — which
 is not the same thing: the runner's line "step X failed" is authored by
@@ -280,9 +302,9 @@ What it serves (`http/src/prometheus.rs`):
   **`datalib_applet_rss_peak_bytes{applet=…}`**: the resident memory of
   each running applet and every process below it, read every five
   seconds (`http/src/applet_memory.rs`), and the most since it started.
-  No run records an applet, so these live only here; the line that says
-  an applet stopped or exited carries its `peak_rss_bytes`. A step's own
-  memory is the `rss_bytes` series above (`step_protocol.md`).
+  The peak is also on the applet's row in `processes`, which outlives
+  the server (§"Every line has an author"). A step's own memory is the
+  `rss_bytes` series above (`step_protocol.md`).
 
 `//tests/fixtures:metrics_export_e2e_test` scrapes a real server and
 parses the answer with `prometheus_client`, the Prometheus project's

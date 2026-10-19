@@ -28,10 +28,9 @@ pub enum Field<C: 'static> {
 /// return the input unchanged. The leading slug is non-load-bearing — it
 /// exists only to make URLs/tokens self-describing.
 pub fn extract_uuid_suffix(value: &str) -> &str {
-    if value.len() < 36 {
+    let Some(candidate) = value.len().checked_sub(36).and_then(|at| value.get(at..)) else {
         return value;
-    }
-    let candidate = &value[value.len() - 36..];
+    };
     if is_uuid_shape(candidate) && (value.len() == 36 || value.as_bytes()[value.len() - 37] == b'-')
     {
         candidate
@@ -503,6 +502,14 @@ mod tests {
             extract_uuid_suffix("xxx00000001-1701-4d00-8000-000000000001"),
             "xxx00000001-1701-4d00-8000-000000000001"
         );
+    }
+
+    /// A word whose 36th byte from the end falls inside a character
+    /// panicked on the byte slice; every free-text search reaches this.
+    #[test]
+    fn extract_uuid_suffix_leaves_a_word_split_mid_character_alone() {
+        let word = format!("é{}", "a".repeat(35));
+        assert_eq!(extract_uuid_suffix(&word), word);
     }
 
     #[test]

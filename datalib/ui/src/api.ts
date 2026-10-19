@@ -1393,7 +1393,7 @@ export async function purgeGroups(groups: string[]): Promise<"done" | "queued"> 
 // Which datalib program a process was: the runner (its own lines), a
 // step it spawned, the app's server (its own, and its applets'), or a
 // page of the app in a tab (what `telemetry.ts` reported from it).
-export type LogProcess = "dag" | "step" | "http" | "ui";
+export type LogProcess = "dag" | "step" | "http" | "applet" | "ui";
 
 // One run. A job started from the app has the job's id as its run id.
 export type RunInfo = {
@@ -1404,8 +1404,8 @@ export type RunInfo = {
 };
 
 // One process the store holds: a run of the runner, one attempt of one
-// of its steps, or a launch of the server. The log's unit — every line
-// belongs to one.
+// of its steps, a launch of the server, an applet it started, or a page.
+// The log's unit — every line belongs to one.
 export type ProcessInfo = {
   process_id: string;
   process: LogProcess | string;
@@ -1424,6 +1424,11 @@ export type ProcessInfo = {
   tz_offset: string | null;
   // The commit it was built from, when known.
   git_hash: string | null;
+  // For an applet's process: which applet, by its config id.
+  applet: string | null;
+  // The most resident memory it and everything below it held, in bytes;
+  // null for a process nobody measured.
+  peak_rss_bytes: number | null;
 };
 
 // Processes newest first; `run` narrows to one run's (its runner and

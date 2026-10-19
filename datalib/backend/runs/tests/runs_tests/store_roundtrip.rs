@@ -652,6 +652,95 @@ async fn a_store_from_another_schema_version_is_replaced() {
     assert_eq!(msgs, ["from before"]);
 }
 
+/// A store from the version before is upgraded in place, not remade:
+/// its runs and their lines are still there, nothing is set aside, and
+/// its processes take the columns this version added. Without the rung
+/// the old run's line was gone and a `runs.bak_` copy sat beside it.
+#[tokio::test]
+async fn a_store_from_version_10_is_upgraded_in_place() {
+    let td = tempfile::tempdir().unwrap();
+    {
+        let w = start(td.path(), "run-1");
+        w.log(line("a", "info", "from before"));
+    }
+    let path = datalib_runs::runs_path(td.path());
+    let pool = datalib_runs::open_or_create(&path).await.unwrap();
+    // Version 10's shape is this one without the two columns 11 added.
+    sqlx::raw_sql(
+        "ALTER TABLE processes DROP COLUMN peak_rss_bytes; \
+         ALTER TABLE processes DROP COLUMN applet; \
+         PRAGMA user_version = 10",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
+
+    let server = ProcessLogWriter::start(td.path(), Process::Http, None, Retention::default())
+        .expect("the upgraded store opens");
+    server.process(ProcessRow {
+        process_id: "applet-1".into(),
+        process: Process::Applet.as_str().into(),
+        applet: Some("search".into()),
+        started_at_utc: T0.into(),
+        peak_rss_bytes: Some(4096),
+        ..Default::default()
+    });
+    server.flush().await;
+    drop(server);
+
+    assert_eq!(log_after(td.path(), "run-1", None, 0, 10).await.len(), 1);
+    let applet = datalib_runs::process(td.path(), "applet-1").await.unwrap();
+    assert_eq!(
+        (applet.applet.as_deref(), applet.peak_rss_bytes),
+        (Some("search"), Some(4096))
+    );
+    let dir = path.parent().unwrap();
+    let set_aside = std::fs::read_dir(dir)
+        .unwrap()
+        .filter(|e| {
+            e.as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("runs.bak_")
+        })
+        .count();
+    assert_eq!(set_aside, 0, "nothing was set aside");
+}
+
+/// A process another one reports is written again as its peak rises and
+/// once more as it ends; the last row need not repeat the peak for the
+/// store to keep it.
+#[tokio::test]
+async fn a_process_keeps_its_peak_when_its_last_row_names_none() {
+    let td = tempfile::tempdir().unwrap();
+    let server = ProcessLogWriter::start(td.path(), Process::Http, None, Retention::default())
+        .expect("start the store");
+    let row = ProcessRow {
+        process_id: "applet-1".into(),
+        process: Process::Applet.as_str().into(),
+        applet: Some("search".into()),
+        started_at_utc: T0.into(),
+        ..Default::default()
+    };
+    server.process(ProcessRow {
+        peak_rss_bytes: Some(4096),
+        ..row.clone()
+    });
+    server.flush().await;
+    server.process(ProcessRow {
+        finished_at_utc: Some(T0.into()),
+        signal: Some(9),
+        ..row
+    });
+    server.flush().await;
+
+    let stored = datalib_runs::process(td.path(), "applet-1").await.unwrap();
+    assert_eq!(stored.peak_rss_bytes, Some(4096));
+    assert_eq!(stored.signal, Some(9));
+}
+
 /// A chart over the run needs its ends. The writer samples a series
 /// when its value changed and the floor between samples has passed, and
 /// always once more at the end — so a series that moved twice inside the

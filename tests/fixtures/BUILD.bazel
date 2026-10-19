@@ -177,6 +177,8 @@ genrule(
         # emits no download step and renders over the store this binary
         # writes.
         "//datalib/backend/etl/providers/yolink:yolink_make_fixture",
+        # Reads the index back for check_ingested.py.
+        "//third-party/doltlite:doltlite",
     ],
     outs = [
         "ingested/backend_index.doltlite_db",
@@ -186,6 +188,7 @@ genrule(
         "ingested/config_body.toml",
     ],
     tools = [
+        "check_ingested.py",
         "quiet.sh",
         "run_sync_pipeline.py",
         "sync_drivers.py",
@@ -270,6 +273,14 @@ genrule(
         # The sources as render-only groups, for materialize_tng_root.sh
         # to splice into the root's config.toml.
         "cp $(RULEDIR)/sync_workspace/config_body.toml $(execpath ingested/config_body.toml)",
+        # A sync can end without error and leave a source out of the
+        # index; such a fixture must not build, or it is cached.
+        " ".join([
+            "python3 $(execpath check_ingested.py)",
+            "$(execpath //third-party/doltlite:doltlite)",
+            "$(execpath ingested/backend_index.doltlite_db)",
+            "$(execpath ingested/config_body.toml)",
+        ]),
         # Tar the render_markdown tree hermetically: the whole tree into
         # qmd.tar, and markdown alone into qmd_md.tar. See tar_qmd.py for
         # why the embedding action gets its own narrower archive.
@@ -319,6 +330,25 @@ _TNG_FIXTURE_ARGS = [
     # Calendar (arg 29, appended likewise).
     "datalib/backend/etl/providers/calendar/tests/fixtures/calendar_tng",
 ]
+
+# The check `:ingested_tng` makes before it succeeds, against the fixture
+# it built and against copies of it with a source taken out.
+py_test(
+    name = "check_ingested_test",
+    size = "small",
+    srcs = ["check_ingested_test.py"],
+    args = [
+        "$(rootpath //third-party/doltlite:doltlite)",
+        "$(rootpath ingested/backend_index.doltlite_db)",
+        "$(rootpath ingested/config_body.toml)",
+    ],
+    data = [
+        "check_ingested.py",
+        "ingested/backend_index.doltlite_db",
+        "ingested/config_body.toml",
+        "//third-party/doltlite:doltlite",
+    ],
+)
 
 # py_test that drives the same `run_sync_pipeline.py` invocation as
 # :ingested_tng. Three reasons it exists:

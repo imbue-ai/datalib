@@ -200,3 +200,65 @@ async fn a_hand_edit_in_the_old_shape_is_upgraded_while_running() {
         SHARED_QMD_INDEX
     );
 }
+
+/// A time-series source from before `render_time_series`: a shape the
+/// loader still takes, so a save can write it.
+const NO_TIME_SERIES_INDEX: &str = r#"# my sources
+[[groups]]
+id = "watch"
+type = "garmin"
+
+[[steps]]
+group = "watch"
+function = "ingest"
+[steps.params.api]
+since = "2369-04-01"
+
+[[steps]]
+group = "watch"
+function = "render_markdown"
+inputs = ["watch/ingest"]
+"#;
+
+/// A save in an old shape is on disk in the current one by the time the
+/// PUT answers. Left to the watcher, a rewrite could read one save and
+/// write it back over the next: the TNG fixture lost its last source.
+#[tokio::test]
+async fn a_save_in_the_old_shape_lands_upgraded() {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let app = datalib_http::router(crate::support::state(tmp.path()).await);
+    let body = serde_json::json!({ "text": NO_TIME_SERIES_INDEX }).to_string();
+    let resp = app
+        .oneshot(
+            Request::put("/api/config")
+                .header("x-datalib-token", crate::support::TEST_TOKEN)
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let verdict: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(verdict["ok"], true, "{verdict}");
+
+    let text = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
+    assert!(text.contains("function = \"render_time_series\""), "{text}");
+    assert!(
+        text.contains("id = \"unified_time_series_index\""),
+        "{text}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("config.toml.bak")).unwrap(),
+        NO_TIME_SERIES_INDEX
+    );
+}

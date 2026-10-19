@@ -40,6 +40,18 @@ struct Acc {
     counters: HashMap<(String, String), (i64, bool)>,
 }
 
+/// The attempt's process row with its peak raised to `bytes`, to write
+/// again; `None` when the row already says as much, or the attempt has
+/// ended.
+fn raise_peak(process: Option<&mut ProcessRow>, bytes: i64) -> Option<ProcessRow> {
+    let p = process.filter(|p| p.finished_at_utc.is_none())?;
+    if p.peak_rss_bytes.is_some_and(|peak| peak >= bytes) {
+        return None;
+    }
+    p.peak_rss_bytes = Some(bytes);
+    Some(p.clone())
+}
+
 /// Record a running total's new value, and say what it was if this is
 /// the first time within the attempt it has gone down.
 fn counter_fell(
@@ -127,20 +139,31 @@ impl RunStoreSink {
 
     fn metric(&self, step: &StepId, name: &str, labels: &BTreeMap<String, String>, value: i64) {
         let labels = canonical_labels(labels);
-        let fell_from = {
+        let (fell_from, raised) = {
             let mut steps = self.steps.lock().expect("run store sink mutex");
             let acc = steps.entry(step.clone()).or_default();
             if name == QUEUED {
                 acc.queued.insert(labels.clone());
             }
-            if datalib_metrics::is_counter(name) {
+            let raised = if name == crate::memory::RSS_PEAK_BYTES {
+                raise_peak(acc.process.as_mut(), value)
+            } else {
+                None
+            };
+            let fell_from = if datalib_metrics::is_counter(name) {
                 counter_fell(&mut acc.counters, name, &labels, value)
             } else {
                 None
-            }
+            };
+            (fell_from, raised)
         };
         if let Some(before) = fell_from {
             self.warn_counter_fell(step, name, &labels, before, value);
+        }
+        // Written as it rises, not only at the end, so a runner that dies
+        // mid-step still leaves the attempt's peak so far.
+        if let Some(process) = raised {
+            self.writer.process(process);
         }
         self.write_metric(step, name, labels, value);
     }
@@ -672,6 +695,50 @@ mod tests {
             .find(|s| s.step == "unified_document_index/grid")
             .expect("the step row");
         assert_eq!(step.state, "running");
+    }
+
+    /// The most memory a step's attempt held goes on that attempt's
+    /// process row, not on the run's series alone: a retry's peak is its
+    /// own, and a fall after the peak does not lower it.
+    #[tokio::test]
+    async fn a_step_attempts_peak_memory_goes_on_its_process() {
+        let peak = |value| Event::Metric {
+            step: "slack/raw".into(),
+            name: crate::memory::RSS_PEAK_BYTES.into(),
+            labels: BTreeMap::new(),
+            value,
+        };
+        let start = |attempt| Event::StepStart {
+            step: "slack/raw".into(),
+            attempt,
+            builtin: true,
+        };
+        let finish = |exit_code| Event::StepFinish {
+            step: "slack/raw".into(),
+            status: RunState::Failed,
+            error: None,
+            exit_code: Some(exit_code),
+            signal: None,
+        };
+        let (td, _snap) = run(&[
+            start(1),
+            peak(1000),
+            peak(5000),
+            peak(3000),
+            finish(3),
+            start(2),
+            peak(2000),
+            finish(0),
+        ])
+        .await;
+        let mut attempts: Vec<_> = processes(td.path(), None, None, 10)
+            .await
+            .into_iter()
+            .filter(|p| p.process == "step")
+            .collect();
+        attempts.sort_by_key(|p| p.attempt);
+        let peaks: Vec<_> = attempts.iter().map(|p| p.peak_rss_bytes).collect();
+        assert_eq!(peaks, [Some(5000), Some(2000)], "{attempts:?}");
     }
 
     /// Each attempt of a step is a process of the run: what came out of

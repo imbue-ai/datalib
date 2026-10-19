@@ -83,10 +83,8 @@ fn normalize_spaces(s: &str) -> String {
 /// whitespace-separated token. Returns `None` when there's no
 /// whitespace to split on.
 fn split_trailing_abbrev(s: &str) -> Option<(&str, &str)> {
-    let s = s.trim();
-    let idx = s.rfind(char::is_whitespace)?;
-    let body = s[..idx].trim_end();
-    let abbr = s[idx + 1..].trim();
+    let (body, abbr) = s.trim().rsplit_once(char::is_whitespace)?;
+    let body = body.trim_end();
     if body.is_empty() || abbr.is_empty() {
         return None;
     }
@@ -246,6 +244,14 @@ mod tests {
     fn a_name_two_zones_share_yields_none() {
         assert!(parse_mdl_grid("Jun 4, 2026, 11:48:37 AM IST").is_none());
         assert!(parse_mdl_grid("Jun 4, 2026, 11:48:37 AM XYZT").is_none());
+    }
+
+    /// A whitespace character wider than one byte before the zone panicked
+    /// on the byte slice past it.
+    #[test]
+    fn a_multibyte_space_before_the_zone_still_splits() {
+        let out = parse_mdl_grid("Jun 4, 2026, 11:48:37 PM\u{2009}PDT").expect("parse");
+        assert!(out.starts_with("2026-06-04T23:48:37"));
     }
 
     /// Play Books names the zone in words, and only the place says

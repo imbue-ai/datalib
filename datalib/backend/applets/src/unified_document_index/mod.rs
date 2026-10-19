@@ -763,7 +763,7 @@ async fn from_terms(
     s: &Index,
     m: &search_terms::Match,
 ) -> Result<Option<(Vec<(String, (f64, String))>, Option<Option<String>>)>, SearchFailure> {
-    Ok(search_terms::lookup(&s.root, m)
+    Ok(search_terms::lookup(&s.root, m, QMD_DEPTH)
         .await
         .map_err(index)?
         .map(|found| (search_terms::rank(&found), Some(found.grid_commit))))

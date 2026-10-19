@@ -857,11 +857,14 @@ impl Supervisor {
             Ok(None) => Some(r.port),
             _ => {
                 if let Some(mut dead) = map.remove(id) {
-                    let status = dead
-                        .child
-                        .wait()
+                    let waited = dead.child.wait();
+                    let status = waited
+                        .as_ref()
                         .map_or_else(|e| format!("wait failed: {e}"), |s| s.to_string());
-                    let peak_rss_bytes = self.memory.forget(id).map(|r| r.peak_rss_bytes);
+                    let peak_rss_bytes = self
+                        .memory
+                        .forget(id, waited.ok())
+                        .map(|r| r.peak_rss_bytes);
                     tracing::error!(
                         applet = %id,
                         pid = dead.child.id(),
@@ -891,8 +894,8 @@ impl Supervisor {
                 let _ = r.child.kill();
                 // Reap: `kill` only signals, and an unwaited child stays
                 // a zombie until its parent exits.
-                let _ = r.child.wait();
-                let peak_rss_bytes = self.memory.forget(&id).map(|r| r.peak_rss_bytes);
+                let waited = r.child.wait().ok();
+                let peak_rss_bytes = self.memory.forget(&id, waited).map(|r| r.peak_rss_bytes);
                 tracing::info!(applet = %id, peak_rss_bytes, "stopped the applet");
             }
         }

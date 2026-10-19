@@ -344,13 +344,29 @@ async fn write_meta(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
-/// `true` when the file carries this build's schema; `false` for another
-/// version's. A brand-new file (version 0, no tables) gets the schema
+/// The rungs from an older version: the statements that bring a store at
+/// the version named to the next one, in place. Every rung is one
+/// transaction, under the open lock [`open_or_recreate`] holds.
+const UPGRADES: &[(i32, &[&str])] = &[(
+    10,
+    &[
+        "ALTER TABLE processes ADD COLUMN applet VARCHAR(255)",
+        "ALTER TABLE processes ADD COLUMN peak_rss_bytes BIGINT",
+    ],
+)];
+
+/// `true` when the file carries this build's schema, climbing the
+/// [`UPGRADES`] to it first where there are rungs; `false` for a version
+/// with none. A brand-new file (version 0, no tables) gets the schema
 /// installed and reads as a match.
 async fn schema_matches(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
-    let version: i32 = sqlx::query_scalar("PRAGMA user_version")
+    let mut version: i32 = sqlx::query_scalar("PRAGMA user_version")
         .fetch_one(pool)
         .await?;
+    while let Some((_, statements)) = UPGRADES.iter().find(|(from, _)| *from == version) {
+        climb(pool, statements, version + 1).await?;
+        version += 1;
+    }
     if version == SCHEMA_VERSION {
         return Ok(true);
     }
@@ -362,6 +378,21 @@ async fn schema_matches(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
         return Ok(true);
     }
     Ok(false)
+}
+
+async fn climb(pool: &SqlitePool, statements: &[&str], to: i32) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    for statement in statements {
+        // Safe: every statement is a compile-time literal in `UPGRADES`.
+        sqlx::query(sqlx::AssertSqlSafe(*statement))
+            .execute(&mut *tx)
+            .await?;
+    }
+    // Safe: a compile-time integer, not input.
+    sqlx::query(sqlx::AssertSqlSafe(format!("PRAGMA user_version = {to}")))
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await
 }
 
 /// One transaction, because another process deciding what to do with
@@ -483,7 +514,7 @@ pub async fn processes(
     };
     let rows = sqlx::query(
         "SELECT process_id, process, run_id, step, attempt, started_at_utc, finished_at_utc, \
-           exit_code, signal, tz_offset, git_hash \
+           exit_code, signal, tz_offset, git_hash, applet, peak_rss_bytes \
          FROM processes WHERE (? IS NULL OR run_id = ?) AND (? IS NULL OR process = ?) \
          ORDER BY started_at_utc DESC LIMIT ?",
     )
@@ -863,7 +894,7 @@ pub async fn process(data_root: &Path, process_id: &str) -> Option<ProcessRow> {
     let pool = open_existing(&path).await.ok()?;
     let row = sqlx::query(
         "SELECT process_id, process, run_id, step, attempt, started_at_utc, finished_at_utc, \
-           exit_code, signal, tz_offset, git_hash \
+           exit_code, signal, tz_offset, git_hash, applet, peak_rss_bytes \
          FROM processes WHERE process_id = ?",
     )
     .bind(process_id)
@@ -888,6 +919,8 @@ fn process_row_from(r: &sqlx::sqlite::SqliteRow) -> ProcessRow {
         signal: r.get("signal"),
         tz_offset: r.get("tz_offset"),
         git_hash: r.get("git_hash"),
+        applet: r.get("applet"),
+        peak_rss_bytes: r.get("peak_rss_bytes"),
     }
 }
 
@@ -1461,8 +1494,8 @@ async fn insert_process(
     let inserted = sqlx::query(
         "INSERT OR IGNORE INTO processes \
            (process_id, process, run_id, step, attempt, started_at_utc, finished_at_utc, \
-            exit_code, signal, tz_offset, git_hash) \
-         VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)",
+            exit_code, signal, tz_offset, git_hash, applet, peak_rss_bytes) \
+         VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?)",
     )
     .bind(&p.process_id)
     .bind(&p.process)
@@ -1472,6 +1505,8 @@ async fn insert_process(
     .bind(&p.started_at_utc)
     .bind(&p.tz_offset)
     .bind(&p.git_hash)
+    .bind(&p.applet)
+    .bind(p.peak_rss_bytes)
     .execute(&mut **tx)
     .await?
     .rows_affected()
@@ -1479,8 +1514,10 @@ async fn insert_process(
     Ok(inserted)
 }
 
-/// A step's process, as the runner reports it: the whole row at start,
-/// and the same row with its end and exit once it is over.
+/// A process another one reports — a step's attempt by the runner, an
+/// applet or a page by the server: the whole row at start, again as its
+/// peak memory rises, and with its end and exit once it is over. A row
+/// that names no peak keeps the one already stored.
 async fn upsert_process(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     p: &ProcessRow,
@@ -1488,10 +1525,11 @@ async fn upsert_process(
     sqlx::query(
         "INSERT INTO processes \
            (process_id, process, run_id, step, attempt, started_at_utc, finished_at_utc, \
-            exit_code, signal, tz_offset, git_hash) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+            exit_code, signal, tz_offset, git_hash, applet, peak_rss_bytes) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
          ON CONFLICT(process_id) DO UPDATE SET finished_at_utc = excluded.finished_at_utc, \
-           exit_code = excluded.exit_code, signal = excluded.signal",
+           exit_code = excluded.exit_code, signal = excluded.signal, \
+           peak_rss_bytes = COALESCE(excluded.peak_rss_bytes, processes.peak_rss_bytes)",
     )
     .bind(&p.process_id)
     .bind(&p.process)
@@ -1504,6 +1542,8 @@ async fn upsert_process(
     .bind(p.signal)
     .bind(&p.tz_offset)
     .bind(&p.git_hash)
+    .bind(&p.applet)
+    .bind(p.peak_rss_bytes)
     .execute(&mut **tx)
     .await?;
     Ok(())
