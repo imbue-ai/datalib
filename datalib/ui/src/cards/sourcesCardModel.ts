@@ -25,6 +25,7 @@ import {
   wireIntoFanIns,
   entryForStep,
   emptyTableDiagnosis,
+  emptyTableState,
   DIFF_TYPE,
   type ConfiguredGroup,
   type ConfiguredStep,
@@ -296,7 +297,19 @@ export function useSourcesCard(ctx: CardCtx) {
     return all.map((r) => decorate(r, groups));
   });
 
-  const syncAll = computed(() => syncAllButton(rows.value, manage.value?.sync_paused ?? null));
+  const emptyTable = computed(() =>
+    emptyTableState({
+      answered: manage.value !== null,
+      error: rowsError.value,
+      rowCount: rows.value.length,
+    }),
+  );
+
+  const syncAll = computed(() =>
+    emptyTable.value === "loading" || emptyTable.value === "failed"
+      ? { ...syncAllButton([]), blocked: "The sources haven’t loaded yet." }
+      : syncAllButton(rows.value, manage.value?.sync_paused ?? null),
+  );
 
   function decorate(r: ManageRow, groups: Map<string, ManageRow>): Row {
     const browsing = withBrowse(r, groups, canReveal);
@@ -596,16 +609,20 @@ export function useSourcesCard(ctx: CardCtx) {
 
   const commitRows = freshest<ManageResponse>((m) => {
     manage.value = m;
+    rowsError.value = null;
   });
+  /// Why the rows could not be read, while no answer has arrived yet.
+  const rowsError = ref<string | null>(null);
 
   /// Read the rows. `refresh` asks the backend to walk the disk before
   /// answering rather than serving its last tick — see `fetchManageRows`.
   async function loadRows(refresh = false) {
     try {
       await commitRows(() => fetchManageRows(refresh));
-    } catch {
+    } catch (e) {
       // The last answer stands; an empty table over an error banner would
       // read as "no sources".
+      if (manage.value === null) rowsError.value = (e as Error).message;
     }
   }
 
@@ -984,6 +1001,8 @@ export function useSourcesCard(ctx: CardCtx) {
     configPath,
     droppedRows,
     emptyDiagnosis,
+    emptyTable,
+    rowsError,
     manage,
     storage,
     rows,

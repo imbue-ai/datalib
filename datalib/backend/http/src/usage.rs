@@ -447,14 +447,22 @@ pub async fn sample_once(
     coalesce_since: Option<Instant>,
     events: &crate::watch::RootTx,
 ) -> bool {
+    let queued_at = Instant::now();
     // Serialize first, then re-check: while this was queued behind
     // another walk, that walk may have answered the question.
     let _walking = monitor.walking.lock().await;
+    let queued = queued_at.elapsed();
+    let on_demand = coalesce_since.is_some();
     if let Some(arrived) = coalesce_since {
         if monitor.walked_since(arrived).await {
+            tracing::debug!(
+                queued_ms = queued.as_millis() as u64,
+                "usage: a walk that finished while this one queued answered it"
+            );
             return false;
         }
     }
+    let walk_started = Instant::now();
     let config_path = datalib_dag::config::root_config_path(&root);
     // A recursive read_dir of a large root is not something to do on
     // the async executor.
@@ -463,16 +471,30 @@ pub async fn sample_once(
         measure(&root, &want)
     })
     .await;
-    let Ok(m) = measured else {
-        // The walk panicked. Skipping beats taking the server's whole
-        // usage history down with it.
-        return false;
+    let m = match measured {
+        Ok(m) => m,
+        Err(e) => {
+            // Skipping beats taking the server's whole usage history
+            // down with it.
+            tracing::warn!("usage: the walk of the data root panicked, so it is skipped: {e}");
+            return false;
+        }
     };
+    let walk = walk_started.elapsed();
     let now_iso = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
     let rows = monitor.observe(&m, Instant::now(), &now_iso).await;
+    let record_started = Instant::now();
     if let Err(e) = repo.record_disk_usage(&rows).await {
         tracing::warn!("usage: could not record {} sample(s): {e}", rows.len());
     }
+    tracing::debug!(
+        on_demand,
+        queued_ms = queued.as_millis() as u64,
+        walk_ms = walk.as_millis() as u64,
+        record_ms = record_started.elapsed().as_millis() as u64,
+        samples = rows.len(),
+        "usage: walked the data root"
+    );
     // `Err` means nobody is subscribed. The Manage rows carry each
     // tree's bytes, so they moved too. A walk a request asked for is
     // that request's echo, and the frames say so.

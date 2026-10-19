@@ -20,8 +20,10 @@ mod summary;
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use axum::extract::{Query, State};
+use axum::http::HeaderMap;
 use axum::Json;
 use datalib_columns::{
     source_catalog, Action, Chip, ColumnSpec, ColumnType, Identity, Quantity, Sample, Timeseries,
@@ -34,7 +36,7 @@ use datalib_dag::{Diagnostic, EntryKind, Severity};
 use serde::{Deserialize, Serialize};
 
 use crate::usage::OutputStorage;
-use crate::{usage, AppState, DagRecord, DagRunInfo};
+use crate::{usage, AppState, DagRecord, DagRunInfo, RecordTimings};
 use buttons::SyncOffer;
 use group::{Child, ChildKind, ChildStamp, ChildStatus};
 use status::{StatusView, StepEdges};
@@ -249,14 +251,38 @@ pub struct ManageParams {
     refresh: Option<String>,
 }
 
+/// A Manage answer that takes this long says where the time went: the
+/// request line has only the total, and the run store's slow-statement
+/// warnings do not say who asked.
+const SLOW_ANSWER: Duration = Duration::from_secs(1);
+
+/// Where one Manage answer spent its time, besides the walk.
+#[derive(Debug, Default)]
+struct Took {
+    record: RecordTimings,
+    requests: Duration,
+    /// Everything after the run and request reads: the sampler's last
+    /// numbers, the config's check, the join.
+    assembly: Duration,
+}
+
+fn ms(d: Duration) -> u64 {
+    d.as_millis() as u64
+}
+
 pub async fn get_manage_rows(
     State(s): State<AppState>,
     Query(p): Query<ManageParams>,
+    headers: HeaderMap,
 ) -> Json<ManageResponse> {
-    if crate::flag_is_set(p.refresh.as_deref()) {
+    let started = Instant::now();
+    let refresh = crate::flag_is_set(p.refresh.as_deref());
+    if refresh {
         usage::sample_on_demand(&s.usage, &s.app, s.root.clone(), &s.root_tx).await;
     }
-    let response = manage_rows(&s).await;
+    let walk = started.elapsed();
+    let (response, took) = manage_rows(&s).await;
+    let summary_started = Instant::now();
     if response.ok {
         summary::record(
             &s.root,
@@ -265,18 +291,45 @@ pub async fn get_manage_rows(
             response.storage.root.bytes,
         );
     }
+    let summary = summary_started.elapsed();
+    let total = started.elapsed();
+    if total >= SLOW_ANSWER {
+        let card = headers
+            .get(crate::ui_events::CARD_HEADER)
+            .and_then(|v| v.to_str().ok());
+        tracing::info!(
+            ms = ms(total),
+            refresh,
+            walk_ms = ms(walk),
+            loop_record_ms = ms(took.record.loop_record),
+            run_progress_ms = ms(took.record.run_progress),
+            run_metrics_ms = ms(took.record.run_metrics),
+            requests_ms = ms(took.requests),
+            assembly_ms = ms(took.assembly),
+            summary_ms = ms(summary),
+            card,
+            "the Manage rows were slow to assemble"
+        );
+    }
     Json(response)
 }
 
 /// Every row of the Manage table as it stands: the config as written,
 /// the loop's record, the disk. What the table and a chip both read.
-async fn manage_rows(s: &AppState) -> ManageResponse {
+async fn manage_rows(s: &AppState) -> (ManageResponse, Took) {
     let config_path = s.config_path();
     let text = std::fs::read_to_string(&config_path).unwrap_or_default();
     let record = crate::dag_record(&s.root, &s.sync).await;
     // After the record: a request it names was opened before the record
     // was saved, so it is there to read, open or not.
+    let requests_started = Instant::now();
     let requests = requests_named(s, &record).await;
+    let assembly_started = Instant::now();
+    let mut took = Took {
+        record: record.took,
+        requests: assembly_started - requests_started,
+        assembly: Duration::ZERO,
+    };
     let storage = s
         .usage
         .snapshot(s.root.as_path(), &usage::measured_trees(&config_path))
@@ -289,7 +342,8 @@ async fn manage_rows(s: &AppState) -> ManageResponse {
     let written = match datalib_dag::written::entries_as_written(&text) {
         Ok(w) => w,
         Err(e) => {
-            return ManageResponse {
+            took.assembly = assembly_started.elapsed();
+            let response = ManageResponse {
                 ok: false,
                 error: Some(e),
                 columns: columns(),
@@ -298,7 +352,8 @@ async fn manage_rows(s: &AppState) -> ManageResponse {
                 storage: root_storage,
                 rows: Vec::new(),
                 sync_paused: None,
-            }
+            };
+            return (response, took);
         }
     };
     let diagnostics = datalib_dag::config::check_text(&text).diagnostics;
@@ -321,7 +376,8 @@ async fn manage_rows(s: &AppState) -> ManageResponse {
         sync_paused,
     }
     .rows();
-    ManageResponse {
+    took.assembly = assembly_started.elapsed();
+    let response = ManageResponse {
         ok: true,
         error: None,
         columns: columns(),
@@ -330,7 +386,8 @@ async fn manage_rows(s: &AppState) -> ManageResponse {
         storage: root_storage,
         rows,
         sync_paused: sync_paused.map(str::to_string),
-    }
+    };
+    (response, took)
 }
 
 #[derive(Debug, Deserialize)]
@@ -355,7 +412,7 @@ pub async fn post_entities(
     State(s): State<AppState>,
     Json(body): Json<EntitiesBody>,
 ) -> Json<serde_json::Value> {
-    let rows = manage_rows(&s).await.rows;
+    let rows = manage_rows(&s).await.0.rows;
     let answers: serde_json::Map<String, serde_json::Value> = body
         .entities
         .iter()

@@ -1499,9 +1499,28 @@ export function suggestId(taken: Set<string>, base: string, fallback: string): s
   return stem;
 }
 
+/// What the Sources table is while it has no rows: still waiting for the
+/// first `GET /api/manage/rows`, unable to get it, or truly empty. Until
+/// the first answer, no rows means nothing — that request can take
+/// seconds while a sync runs, and "Nothing configured yet" in the
+/// meantime reads as a lost config.
+export type EmptyTable = "loading" | "failed" | "empty";
+
+export function emptyTableState(input: {
+  /// Whether any answer has arrived.
+  answered: boolean;
+  /// Why the first request failed, before any answer arrived.
+  error: string | null;
+  rowCount: number;
+}): EmptyTable | null {
+  if (input.rowCount > 0) return null;
+  if (input.answered) return "empty";
+  return input.error ? "failed" : "loading";
+}
+
 /// Why the table is empty, when it shouldn't be.
 ///
-/// The grid derives its rows from the config text in the browser, while
+/// The browser parses the config text for the wizard, while
 /// `GET /api/config` reports what the backend's loader made of the same file.
 /// When those disagree the bug is on this side, and the empty state has to say
 /// so rather than offering a friendly "nothing configured yet".

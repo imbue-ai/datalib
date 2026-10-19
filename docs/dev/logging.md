@@ -140,10 +140,15 @@ and the log card opens at `min_level:info`, so the lower levels are
 there when asked for and not otherwise. Little emits `trace` today:
 the few `trace!` lines in the tree are a step's progress ticks
 (`etl/src/progress.rs`), so a log with none is the normal case, not a
-sign the level is lost. The server's one `debug` line in ordinary
-service is a live refetch: a request a page made on a `root` frame,
-which while a sync runs is about one a second for each Manage card
-on screen.
+sign the level is lost. The server's `debug` lines in ordinary
+service are a live refetch — a request a page made on a `root` frame,
+which while a sync runs is about one a second for each Manage card on
+screen — and the disk walk (`usage: walked the data root`, with how
+long it queued and walked), every five seconds while a sync runs.
+A `GET /api/manage/rows` that takes a second or more also writes an
+`info` line, "the Manage rows were slow to assemble", splitting its
+time between the walk, the loop's record, the run store and the join,
+since the request line has only the total.
 
 ## What is not a log line
 
