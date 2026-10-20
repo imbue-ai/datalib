@@ -1204,6 +1204,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             ["slack:T1701D/U0PICARD|0", "slack:T1701D/U0WORF|1"],
             "Beeper's Slack people, Worf with his avatar",
         )
+        self._assert_beeper_signal_ids_match_the_backup()
         # WhatsApp's account of a person is the phone's address book:
         # every name its entries give, then the name they gave
         # themselves, keyed by the number — reached through a linked id
@@ -2158,6 +2159,44 @@ class IngestedTngPipelineTest(unittest.TestCase):
             if docs:
                 rendered[step] = rendered.get(step, 0) + docs
         return rendered
+
+    def _assert_beeper_signal_ids_match_the_backup(self) -> None:
+        """A Signal message Beeper bridged and the same message in the
+        phone's Signal backup share an id: the bridge stores
+        `<sender ACI>|<sent ms>`, the backup the sender's ACI on their
+        recipient and the sent time on the message. Nothing joins them
+        yet; this keeps the join possible (beeper/INGEST.md §"Matching a
+        message to a phone's backup")."""
+        signal = self._signal_entities_db
+        beeper = self.workspace / "beeper" / "ingest" / "entities.doltlite_db"
+        recipient_of: dict[str, str] = {}
+        for line in self._query(
+            signal, "SELECT id || '|' || json(payload) FROM recipients;"
+        ):
+            recipient, frame = line.split("|", 1)
+            contact = json.loads(frame).get("destination", {}).get("Contact") or {}
+            if contact.get("aci"):
+                aci = str(uuidlib.UUID(bytes=bytes(contact["aci"])))
+                recipient_of[aci] = recipient
+        sent = set(
+            self._query(signal, "SELECT author_id || '|' || date_sent FROM chat_items;")
+        )
+        matched = []
+        for line in self._query(
+            beeper,
+            "SELECT mxid || '|' || id FROM message WHERE bridge_id = 'local-signal';",
+        ):
+            mxid, aci, sent_ms = line.split("|")
+            if aci in recipient_of and f"{recipient_of[aci]}|{sent_ms}" in sent:
+                matched.append(mxid)
+        self.assertEqual(
+            sorted(matched),
+            [
+                "$tng-crew-002:ba_TNG.local-signal.localhost",
+                "$tng-crew-003:ba_TNG.local-signal.localhost",
+            ],
+            "Riker's and Q's bridged messages are the backup's, by ACI and sent time",
+        )
 
     def _assert_problems_reach_the_log(self, expected: dict[str, list[str]]) -> None:
         """Every problem a step stores reaches its log at the row's level

@@ -269,6 +269,18 @@ expression: snapshot
       "title": "Facebook user · 1000000003"
     },
     {
+      "bucket_key": "00000000-0000-8b2d-bd38-e68431f325dd",
+      "created_at": "2364-04-11T00:00:00.000+00:00",
+      "kind": "chat",
+      "markdown_uuid": "00000000-0000-81e9-9eb8-1f2bf478cbc7",
+      "md_path": "beeper/render_markdown/signal/00000000-0000-8b2d-bd38-e68431f325dd/2364-04.md",
+      "modified_at": "2364-04-11T00:10:00.000+00:00",
+      "provider": "beeper",
+      "renderer_version": "rust-v1.6",
+      "source_id": "beeper",
+      "title": "Bridge crew"
+    },
+    {
       "bucket_key": null,
       "created_at": "2369-04-15T00:00:00+00:00",
       "kind": "storage",
@@ -2053,7 +2065,7 @@ expression: snapshot
       "message": "schema: grid index"
     },
     {
-      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=178 markdowns_read=178 markdowns_removed=3 rows_inserted=820"
+      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=179 markdowns_read=179 markdowns_removed=3 rows_inserted=824"
     }
   ],
   "grid_rows": [
@@ -2716,6 +2728,36 @@ expression: snapshot
       "upstream_entity_kind": "conversation_year",
       "upstream_id": "1000000003#2369",
       "uuid": "00000000-0000-81e5-92ea-63412c79f4a0"
+    },
+    {
+      "account": "local-signal_ba_TNG",
+      "author": null,
+      "byte_size": 87,
+      "channel": null,
+      "content_hash": "5ca6c92f74cd81ca",
+      "conversation_name": "Bridge crew",
+      "conversation_uuid": "00000000-0000-8b2d-bd38-e68431f325dd",
+      "created_at": "2364-04-11T00:00:00.000+00:00",
+      "entire_chat": "/chat/00000000-0000-81e9-9eb8-1f2bf478cbc7",
+      "git_sha": null,
+      "item_count": 3,
+      "kind": "Signal Chat",
+      "markdown_uuid": "00000000-0000-81e9-9eb8-1f2bf478cbc7",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "preview_len": 89,
+      "project": "tng-picard-account-uuid",
+      "provider": "beeper",
+      "qmd_path": "beeper/render_markdown/signal/00000000-0000-8b2d-bd38-e68431f325dd/2364-04.md",
+      "source_label": "Beeper:Signal",
+      "source_url": null,
+      "upstream_account": null,
+      "upstream_entity_kind": "room_period",
+      "upstream_id": "!tng-bridge-crew:ba_TNG.local-signal.localhost#2364-04",
+      "uuid": "00000000-0000-81e9-9eb8-1f2bf478cbc7"
     },
     {
       "account": null,
@@ -9228,6 +9270,36 @@ expression: snapshot
       "uuid": "0b50e80c-2800-80ba-ad92-7dade4f4d7f3"
     },
     {
+      "account": "local-signal_ba_TNG",
+      "author": "Jean-Luc Picard",
+      "byte_size": 14,
+      "channel": null,
+      "content_hash": "31109dd34d889cf4",
+      "conversation_name": "Bridge crew",
+      "conversation_uuid": "00000000-0000-8b2d-bd38-e68431f325dd",
+      "created_at": "2364-04-11T00:00:00.000+00:00",
+      "entire_chat": "/chat/00000000-0000-81e9-9eb8-1f2bf478cbc7",
+      "git_sha": null,
+      "item_count": 1,
+      "kind": "Signal Message",
+      "markdown_uuid": "00000000-0000-81e9-9eb8-1f2bf478cbc7",
+      "message_index": 0,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "preview_len": 14,
+      "project": "tng-picard-account-uuid",
+      "provider": "beeper",
+      "qmd_path": "beeper/render_markdown/signal/00000000-0000-8b2d-bd38-e68431f325dd/2364-04.md",
+      "source_label": "Beeper:Signal",
+      "source_url": null,
+      "upstream_account": null,
+      "upstream_entity_kind": "event",
+      "upstream_id": "$tng-crew-001:ba_TNG.local-signal.localhost",
+      "uuid": "0b50e80c-2800-8174-8afa-57c01863c808"
+    },
+    {
       "account": null,
       "author": "Me",
       "byte_size": 14,
@@ -9286,6 +9358,36 @@ expression: snapshot
       "upstream_entity_kind": "message",
       "upstream_id": "100#2#12442118460000",
       "uuid": "0b50e80d-1260-8b85-858a-bd344f43db9d"
+    },
+    {
+      "account": "local-signal_ba_TNG",
+      "author": "Will Riker",
+      "byte_size": 35,
+      "channel": null,
+      "content_hash": "5bbff41d0e581332",
+      "conversation_name": "Bridge crew",
+      "conversation_uuid": "00000000-0000-8b2d-bd38-e68431f325dd",
+      "created_at": "2364-04-11T00:01:00.000+00:00",
+      "entire_chat": "/chat/00000000-0000-81e9-9eb8-1f2bf478cbc7",
+      "git_sha": null,
+      "item_count": 1,
+      "kind": "Signal Message",
+      "markdown_uuid": "00000000-0000-81e9-9eb8-1f2bf478cbc7",
+      "message_index": 1,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "preview_len": 35,
+      "project": "tng-picard-account-uuid",
+      "provider": "beeper",
+      "qmd_path": "beeper/render_markdown/signal/00000000-0000-8b2d-bd38-e68431f325dd/2364-04.md",
+      "source_label": "Beeper:Signal",
+      "source_url": null,
+      "upstream_account": null,
+      "upstream_entity_kind": "event",
+      "upstream_id": "$tng-crew-002:ba_TNG.local-signal.localhost",
+      "uuid": "0b50e80d-1260-8c48-bb33-153f2b2d1863"
     },
     {
       "account": null,
@@ -10036,6 +10138,36 @@ expression: snapshot
       "upstream_entity_kind": "message",
       "upstream_id": "100#8#12442119000000",
       "uuid": "0b50e815-4fc0-8175-80bb-76d072e91753"
+    },
+    {
+      "account": "local-signal_ba_TNG",
+      "author": "Q",
+      "byte_size": 38,
+      "channel": null,
+      "content_hash": "0a8471661565eb67",
+      "conversation_name": "Bridge crew",
+      "conversation_uuid": "00000000-0000-8b2d-bd38-e68431f325dd",
+      "created_at": "2364-04-11T00:10:00.000+00:00",
+      "entire_chat": "/chat/00000000-0000-81e9-9eb8-1f2bf478cbc7",
+      "git_sha": null,
+      "item_count": 1,
+      "kind": "Signal Message",
+      "markdown_uuid": "00000000-0000-81e9-9eb8-1f2bf478cbc7",
+      "message_index": 2,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "preview_len": 38,
+      "project": "tng-picard-account-uuid",
+      "provider": "beeper",
+      "qmd_path": "beeper/render_markdown/signal/00000000-0000-8b2d-bd38-e68431f325dd/2364-04.md",
+      "source_label": "Beeper:Signal",
+      "source_url": null,
+      "upstream_account": null,
+      "upstream_entity_kind": "event",
+      "upstream_id": "$tng-crew-003:ba_TNG.local-signal.localhost",
+      "uuid": "0b50e815-4fc0-8853-86ba-17d7b35737db"
     },
     {
       "account": null,
@@ -18573,15 +18705,15 @@ expression: snapshot
     },
     {
       "kind": "Table",
-      "members_sha": "sha256:a9b36eb212ee77536991d3bdcf9b2128044062dbb23a380007e58ee768fd5170",
+      "members_sha": "sha256:fedc45bf5c99ceadd2a5353a8898a8d44e9f1cf5f5f7ea256fb466fd9c4e6b37",
       "rows": 176,
       "source": ""
     }
   ],
   "summary": {
-    "documents_count": 170,
+    "documents_count": 171,
     "dolt_log_count": 3,
-    "grid_rows_count": 550,
+    "grid_rows_count": 554,
     "storage_rows_count": 233
   }
 }
