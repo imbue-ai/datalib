@@ -568,14 +568,19 @@ are already in open formats you can read with no datalib at all:
 just explore in place — `datalib-doltlite -readonly <file>` drops you
 in a REPL. Pass `-readonly` whenever you are only looking: anything a
 writable session commits is overwritten by your next sync, and a
-transaction it leaves open stalls that sync. If you prefer a
-GUI, a build of DB Browser for SQLite patched to open doltlite files is
-at <https://github.com/thadd3us/sqlitebrowser/releases> (macOS). In the
-desktop app, **Browse** on a source's download row opens its raw store
+transaction it leaves open stalls that sync. 
+
+If you prefer a GUI, you have two options:
+
+1. The Dolt team makes [the Dolt Workbench](https://github.com/dolthub/dolt-workbench),
+   an open source database workbench with version control features.
+2. A build of DB Browser for SQLite patched to open doltlite files is
+   at <https://github.com/thadd3us/sqlitebrowser/releases> (macOS).
+
+In the desktop app, **Browse** on a source's download row opens its raw store
 read-only for you — in that DB Browser when it is installed, otherwise
-in `datalib-doltlite` in Terminal. More
-recipes, including the commit history and per-sync diffs, are in
-[`docs/dev/doltlite.md`](../dev/doltlite.md).
+in `datalib-doltlite` in Terminal. More recipes, including the commit history 
+and per-sync diffs, are in [`docs/dev/doltlite.md`](../dev/doltlite.md).
 
 ## 9. Feedback
 
