@@ -89,6 +89,7 @@ async fn app_for(root: &Path) -> axum::Router {
         shutting_down: Default::default(),
         api_token: ApiToken::from_value(TEST_TOKEN, root.as_path()),
         trusted_proxy: None,
+        allowed_hosts: Default::default(),
         applets: Arc::new(AppletRegistry::build(Vec::new(), (*root).clone(), None)),
     })
 }

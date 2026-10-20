@@ -41,6 +41,7 @@ async fn state(root: &Path, root_tx: broadcast::Sender<RootFrame>) -> AppState {
         shutting_down: Default::default(),
         api_token: ApiToken::from_value(TEST_TOKEN, root.as_path()),
         trusted_proxy: None,
+        allowed_hosts: Default::default(),
         applets: Arc::new(AppletRegistry::from_data_root(&root, None)),
     }
 }

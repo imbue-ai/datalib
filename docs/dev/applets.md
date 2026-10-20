@@ -266,8 +266,10 @@ a same-origin cookie, which it attaches to the component's own
 `fetch("/applet/<id>/…")` and to the `import("/modules/<hash>")` that loaded
 it. An applet author therefore writes no auth code — but the corollary
 is that a component may only reach the gateway from the page's own
-origin. Fetching a `/applet/` URL from an iframe on another origin, or from
-outside the browser without a token, gets a `401`.
+origin. Fetching a `/applet/` URL from a page on another site or port
+gets a `403` (`fetch_policy` in `auth.rs` reads the browser's
+`Sec-Fetch-Site`), and one from outside the browser without a token
+gets a `401`.
 
 The applet's own server needs no token logic either. It binds loopback
 and is reached only through the gateway, which is already past the

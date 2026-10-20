@@ -64,6 +64,7 @@ async fn boot(root: &Path, bin: &Path) -> AppState {
         None,
         ApiToken::from_value(TOKEN, root),
         None,
+        Default::default(),
     )
     .await
     .expect("the server boots")

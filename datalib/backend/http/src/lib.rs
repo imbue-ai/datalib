@@ -54,7 +54,7 @@ pub mod ui_state;
 pub mod usage;
 pub mod watch;
 
-pub use auth::{ApiToken, TrustedProxy};
+pub use auth::{AllowedHosts, ApiToken, TrustedProxy};
 pub use boot::build_state;
 
 #[derive(Clone)]
@@ -87,6 +87,9 @@ pub struct AppState {
     /// directly, which is every desktop and `datalib-http` from a
     /// terminal.
     pub trusted_proxy: Option<TrustedProxy>,
+    /// The names a request's `Host` may carry, beyond `localhost` and IP
+    /// literals (`$DATALIB_ALLOWED_HOSTS`).
+    pub allowed_hosts: AllowedHosts,
     /// Bytes on disk, over time. A background task folds what it finds in
     /// here so `GET /api/pipeline/storage` reads a snapshot rather than
     /// walking the disk per open tab. See [`crate::usage`].
@@ -192,6 +195,7 @@ pub fn router(state: AppState) -> Router {
     let gate = auth::Gate {
         token: state.api_token.clone(),
         trusted_proxy: state.trusted_proxy,
+        hosts: state.allowed_hosts.clone(),
     };
     Router::new()
         .route("/api/health", get(health))

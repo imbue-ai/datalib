@@ -56,6 +56,7 @@ async fn post_feedback_inserts_row() {
         )),
         api_token,
         trusted_proxy: None,
+        allowed_hosts: Default::default(),
     };
     let app = router(app_state.clone());
 

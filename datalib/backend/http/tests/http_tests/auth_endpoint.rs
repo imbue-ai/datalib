@@ -46,6 +46,7 @@ async fn app_behind(trusted_proxy: Option<TrustedProxy>) -> (axum::Router, ApiTo
         )),
         api_token: api_token.clone(),
         trusted_proxy,
+        allowed_hosts: Default::default(),
     };
     (router(state), api_token)
 }
@@ -474,8 +475,8 @@ async fn without_a_trusted_proxy_the_identity_header_is_ignored() {
 
 /// The proxy stamps the owner on everything it forwards, so a sibling
 /// app's page could make the browser send an authenticated `POST`. The
-/// browser's `Sec-Fetch-Site` says where a request came from; a write
-/// from anywhere but the app's own origin is refused, a read is not.
+/// browser's `Sec-Fetch-Site` says where a request came from; anything
+/// from another site but a navigation is refused.
 #[tokio::test]
 async fn behind_a_trusted_proxy_a_write_from_another_origin_is_refused() {
     let (app, _) = app_behind(Some(TrustedProxy::Imbue)).await;
@@ -507,14 +508,136 @@ async fn behind_a_trusted_proxy_a_write_from_another_origin_is_refused() {
             "Sec-Fetch-Site: {site:?} must pass the gate, got {got}"
         );
     }
-    let read = Request::get("/api/health")
-        .header("x-imbue-identity", OWNER)
-        .header("sec-fetch-site", "cross-site")
-        .body(Body::empty())
+    // The proxy's own page framing the app is a navigation from another
+    // site; a script there reading the API is not.
+    let read = |mode: &str| {
+        Request::get("/")
+            .header("x-imbue-identity", OWNER)
+            .header("sec-fetch-site", "cross-site")
+            .header("sec-fetch-mode", mode)
+            .body(Body::empty())
+            .unwrap()
+    };
+    assert_eq!(status(&app, read("navigate")).await, StatusCode::OK);
+    assert_eq!(status(&app, read("cors")).await, StatusCode::FORBIDDEN);
+}
+
+async fn cookie_for(app: &axum::Router) -> String {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/?token={TOKEN}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
         .unwrap();
+    session_cookie(
+        resp.headers()
+            .get(header::SET_COOKIE)
+            .expect("the launch URL mints a session")
+            .to_str()
+            .unwrap(),
+    )
+}
+
+/// A link from anywhere still opens the app: a top-level navigation
+/// carries the `SameSite=Lax` cookie, and it is served whatever site it
+/// came from. A non-navigation read from another site is not.
+#[tokio::test]
+async fn a_navigation_from_another_site_is_served_and_a_fetch_is_not() {
+    let (app, _) = app().await;
+    let cookie = cookie_for(&app).await;
+    let from_elsewhere = |path: &str, mode: &str| {
+        Request::get(path)
+            .header(header::HOST, "127.0.0.1:8731")
+            .header(header::COOKIE, &cookie)
+            .header("sec-fetch-site", "cross-site")
+            .header("sec-fetch-mode", mode)
+            .body(Body::empty())
+            .unwrap()
+    };
     assert_eq!(
-        status(&app, read).await,
-        StatusCode::OK,
-        "a read is not a write"
+        status(&app, from_elsewhere("/some/card/route", "navigate")).await,
+        StatusCode::OK
     );
+    for mode in ["cors", "no-cors"] {
+        assert_eq!(
+            status(&app, from_elsewhere("/api/health", mode)).await,
+            StatusCode::FORBIDDEN,
+            "a {mode} read from another site"
+        );
+    }
+}
+
+/// A `Host` the server does not answer to is a page that pointed its own
+/// name at this address (DNS rebinding). Behind the proxy it could forge
+/// the owner's identity header, so the name is checked before the header
+/// is believed.
+#[tokio::test]
+async fn a_rebound_host_is_refused_even_with_the_owners_identity() {
+    let (app, _) = app_behind(Some(TrustedProxy::Imbue)).await;
+    let as_owner = |host: &str| {
+        Request::get("/api/health")
+            .header(header::HOST, host)
+            .header("x-imbue-identity", OWNER)
+            .header("sec-fetch-site", "same-origin")
+            .header("sec-fetch-mode", "cors")
+            .body(Body::empty())
+            .unwrap()
+    };
+    assert_eq!(
+        status(&app, as_owner("rebind.evil.example:8731")).await,
+        StatusCode::FORBIDDEN
+    );
+    // What the Imbue forwarder sends: the registered `localhost:<port>`.
+    assert_eq!(
+        status(&app, as_owner("localhost:8731")).await,
+        StatusCode::OK
+    );
+}
+
+/// A browser too old to send `Sec-Fetch-Site` still sends `Origin` on a
+/// write; with only the cookie to go on, that has to name this server.
+/// A caller that presents the token proved more than a cookie can.
+#[tokio::test]
+async fn a_cookie_write_without_fetch_metadata_needs_this_servers_origin() {
+    let (app, _) = app().await;
+    let cookie = cookie_for(&app).await;
+    let check = |origin: Option<&str>, cookie: Option<&str>| {
+        let mut req = Request::post("/api/config/check")
+            .header(header::HOST, "127.0.0.1:8731")
+            .header("content-type", "application/json");
+        if let Some(origin) = origin {
+            req = req.header(header::ORIGIN, origin);
+        }
+        req = match cookie {
+            Some(cookie) => req.header(header::COOKIE, cookie),
+            None => req.header("x-datalib-token", TOKEN),
+        };
+        req.body(Body::from(r#"{"text":""}"#)).unwrap()
+    };
+    for origin in [
+        None,
+        Some("http://evil.example"),
+        Some("http://127.0.0.1:9999"),
+    ] {
+        assert_eq!(
+            status(&app, check(origin, Some(&cookie))).await,
+            StatusCode::FORBIDDEN,
+            "a cookie write from {origin:?}"
+        );
+    }
+    for (origin, cookie) in [
+        (Some("http://127.0.0.1:8731"), Some(cookie.as_str())),
+        (None, None),
+        (Some("http://evil.example"), None),
+    ] {
+        let got = status(&app, check(origin, cookie)).await;
+        assert!(
+            got != StatusCode::FORBIDDEN && got != StatusCode::UNAUTHORIZED,
+            "origin {origin:?}, cookie {}: must pass the gate, got {got}",
+            cookie.is_some()
+        );
+    }
 }

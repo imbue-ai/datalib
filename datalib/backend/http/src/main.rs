@@ -1,7 +1,7 @@
 //! `datalib-http` — single-binary search backend.
 
 use clap::Parser;
-use datalib_http::{router, ApiToken, TrustedProxy};
+use datalib_http::{router, AllowedHosts, ApiToken, TrustedProxy};
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
@@ -109,6 +109,7 @@ async fn main() -> anyhow::Result<()> {
     // loading `<url>?token=…` once, then ride the session cookie.
     let api_token = ApiToken::mint(&root)?;
     let trusted_proxy = TrustedProxy::from_env()?;
+    let allowed_hosts = AllowedHosts::from_env()?;
     if let Some(proxy) = trusted_proxy {
         tracing::info!(
             "behind the {} proxy: its identity header stands in for the token, \
@@ -167,6 +168,7 @@ async fn main() -> anyhow::Result<()> {
         args.now.clone(),
         api_token,
         trusted_proxy,
+        allowed_hosts,
     )
     .await?;
 

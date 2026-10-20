@@ -19,6 +19,7 @@ async fn server(root: &Path) -> AppState {
         None,
         ApiToken::from_value(TOKEN, root),
         None,
+        Default::default(),
     )
     .await
     .expect("the server boots")
@@ -535,6 +536,62 @@ async fn a_config_the_loop_cannot_read_refuses_the_request_and_says_why() {
     let open = call(&state, "GET", "/api/requests", None).await;
     assert_eq!(open, serde_json::json!([]));
     assert!(datalib_runs::runs(&root, None, 10).await.is_empty());
+    state.sync.shutdown(Duration::from_secs(5)).await;
+}
+
+/// `turn_off` takes an empty body, so a page on another port of
+/// 127.0.0.1 — the same site — could send it as a form `POST` the
+/// browser does not preflight, and the `SameSite=Lax` cookie rides
+/// along. `Sec-Fetch-Site` is what tells that from the app's own call.
+#[tokio::test]
+async fn a_cookie_post_from_the_same_site_does_not_turn_a_step_off() {
+    let td = tempfile::tempdir().unwrap();
+    let root = td.path();
+    std::fs::write(root.join("config.toml"), source(root, "a", HELD)).unwrap();
+    let state = server(root).await;
+    let launch = router(state.clone())
+        .oneshot(
+            Request::get(format!("/?token={TOKEN}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let cookie = launch.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    let turn_off = |site: &str| {
+        Request::post("/api/steps/a%2Fout/turn_off")
+            .header("host", "127.0.0.1:8731")
+            .header("cookie", &cookie)
+            .header("sec-fetch-site", site)
+            .header("sec-fetch-mode", "navigate")
+            .body(Body::empty())
+            .unwrap()
+    };
+
+    let refused = router(state.clone())
+        .oneshot(turn_off("same-site"))
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+    let still_on = row(&state, "a/out").await;
+    assert!(still_on["turned_off_by"].is_null(), "{still_on}");
+    assert_eq!(action(&still_on, "in_syncs")["on"], true, "{still_on}");
+
+    let own = router(state.clone())
+        .oneshot(turn_off("same-origin"))
+        .await
+        .unwrap();
+    assert_eq!(own.status(), StatusCode::NO_CONTENT);
+    until("the row to read off", Duration::from_secs(10), || async {
+        row(&state, "a/out").await["turned_off_by"] == "ui"
+    })
+    .await;
     state.sync.shutdown(Duration::from_secs(5)).await;
 }
 

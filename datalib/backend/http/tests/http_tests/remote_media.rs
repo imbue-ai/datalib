@@ -391,6 +391,7 @@ async fn app() -> (PathBuf, axum::Router) {
         )),
         api_token: ApiToken::from_value(TOKEN, root.as_path()),
         trusted_proxy: None,
+        allowed_hosts: Default::default(),
     };
     ((*root).clone(), router(state))
 }

@@ -12,10 +12,10 @@
 //! the page authenticates with no per-callsite changes.
 //!
 //! The cookie is the right carrier here, and a token injected into the HTML
-//! is not: a page on `evil.com` can neither read ours (`HttpOnly`) nor make
-//! the browser send it (`SameSite=Lax`), and DNS rebinding fails closed,
-//! whereas a token in the served HTML is readable by anything that can read
-//! the page.
+//! is not: a page on `evil.com` can neither read ours (`HttpOnly`) nor have
+//! the browser attach it to anything but a top-level navigation
+//! (`SameSite=Lax`), and DNS rebinding fails closed, whereas a token in the
+//! served HTML is readable by anything that can read the page.
 //!
 //! Behind a reverse proxy that authenticates every request itself and frames
 //! the app in its own page, both measures get in the way: the proxy's page
@@ -27,6 +27,15 @@
 //! `frame-ancestors` to the proxy (`embed::app_csp`). The token keeps
 //! working for everything else — an agent's `curl` on the same host — and a
 //! request that carries neither is refused as before.
+//!
+//! Holding a credential is not enough on its own: the cookie and the
+//! proxy's header ride along on requests other pages make the browser
+//! send. `SameSite=Lax` does not stop a page on another port of
+//! `127.0.0.1`, which is the same site, and a page whose own hostname
+//! resolves to this address (DNS rebinding) can forge the proxy's header.
+//! So [`fetch_policy`] also judges every request by the headers a page
+//! cannot set — `Host`, `Sec-Fetch-Site`, `Sec-Fetch-Mode`, `Origin` —
+//! before the credential is looked at. Its rules are on the function.
 
 use axum::body::Body;
 use axum::extract::{Request, State};
@@ -149,27 +158,213 @@ fn parse_imbue_identity(raw: &[u8]) -> Requester {
     }
 }
 
-/// A state-changing request the proxy vouched for but a page on another
-/// origin made the browser send. The proxy stamps the owner's identity on
-/// everything it forwards, a sibling app's `POST` included; the browser's
-/// own `Sec-Fetch-Site` tells that from the app's own request. Absent on a
-/// non-browser client, which the proxy has already authenticated.
-fn is_cross_site_write(method: &Method, headers: &HeaderMap) -> bool {
-    if method.is_safe() {
-        return false;
+/// Env listing host names, beyond `localhost` and IP literals, that a
+/// request's `Host` may carry: comma-separated, each a name or `*.<domain>`
+/// for any name under it. For a server reached through a proxy that
+/// passes the browser's own `Host` through, such as a share gateway.
+pub const ALLOWED_HOSTS_ENV: &str = "DATALIB_ALLOWED_HOSTS";
+
+/// The names a request's `Host` may carry. `localhost` and every IP
+/// literal are always among them: DNS rebinding needs a name the attacker
+/// controls, and neither is one. The port is not checked, since it is the
+/// one the client dialed — Docker's `-p`, Vite's dev proxy and an SSH
+/// tunnel all put a port other than the bound one there.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AllowedHosts {
+    names: Vec<String>,
+    /// Each with its leading dot: `*.example.com` is `.example.com`.
+    suffixes: Vec<String>,
+}
+
+impl AllowedHosts {
+    pub fn parse(list: &str) -> anyhow::Result<Self> {
+        let mut hosts = Self::default();
+        for entry in list.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+            let entry = entry.to_ascii_lowercase();
+            let (wildcard, name) = match entry.strip_prefix("*.") {
+                Some(domain) => (true, domain),
+                None => (false, entry.as_str()),
+            };
+            let is_name = !name.is_empty()
+                && name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.'));
+            if !is_name {
+                anyhow::bail!(
+                    "{ALLOWED_HOSTS_ENV}: {entry:?} is not a host name or `*.<domain>`; \
+                     list names without a scheme or port"
+                );
+            }
+            if wildcard {
+                hosts.suffixes.push(format!(".{name}"));
+            } else {
+                hosts.names.push(name.to_string());
+            }
+        }
+        Ok(hosts)
     }
-    match headers.get("sec-fetch-site").and_then(|v| v.to_str().ok()) {
-        None | Some("same-origin") | Some("none") => false,
-        Some(_) => true,
+
+    /// `$DATALIB_ALLOWED_HOSTS`; unset admits only the names every server
+    /// answers to.
+    pub fn from_env() -> anyhow::Result<Self> {
+        Self::parse(&std::env::var(ALLOWED_HOSTS_ENV).unwrap_or_default())
+    }
+
+    fn admits(&self, host: &str) -> bool {
+        let Some(name) = host_name(host) else {
+            return false;
+        };
+        if name.starts_with('[') {
+            return name[1..name.len() - 1]
+                .parse::<std::net::Ipv6Addr>()
+                .is_ok();
+        }
+        let name = name.to_ascii_lowercase();
+        name == "localhost"
+            || name.parse::<std::net::Ipv4Addr>().is_ok()
+            || self.names.contains(&name)
+            || self
+                .suffixes
+                .iter()
+                .any(|s| name.ends_with(s.as_str()) && name.len() > s.len())
     }
 }
 
-/// What [`require_token`] is configured with: the token, and the proxy
-/// whose word is taken in its place, if any.
+/// `Host` without its port, brackets kept on an IPv6 literal; `None` for
+/// a value no browser sends.
+fn host_name(host: &str) -> Option<&str> {
+    let (name, port) = if host.starts_with('[') {
+        let end = host.find(']')?;
+        (&host[..=end], &host[end + 1..])
+    } else {
+        match host.rsplit_once(':') {
+            Some((name, _)) => (name, &host[name.len()..]),
+            None => (host, ""),
+        }
+    };
+    let port_ok = port.is_empty()
+        || port
+            .strip_prefix(':')
+            .is_some_and(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+    (!name.is_empty() && port_ok).then_some(name)
+}
+
+/// What a request carries that lets it in, as far as [`fetch_policy`]
+/// cares.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Carrier {
+    /// The token itself, by header or query: no page can attach it for us.
+    Token,
+    /// The session cookie, which the browser attaches on its own.
+    Cookie,
+    /// A trusted proxy's word that the owner sent it — attached by the
+    /// proxy to whatever the owner's browser sends, like a cookie.
+    ProxyOwner,
+    /// Nothing that lets it in; the gate refuses it after the policy.
+    Nothing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FetchVerdict {
+    Allow,
+    ForeignHost,
+    FromAnotherSite,
+    CookieWriteFromElsewhere,
+}
+
+impl FetchVerdict {
+    fn refusal(self) -> Option<&'static str> {
+        match self {
+            FetchVerdict::Allow => None,
+            FetchVerdict::ForeignHost => Some(
+                "the request's Host does not name this server (a page that pointed its \
+                 own name at this address)",
+            ),
+            FetchVerdict::FromAnotherSite => {
+                Some("a page on another site or port made this request")
+            }
+            FetchVerdict::CookieWriteFromElsewhere => {
+                Some("a write with only the session cookie must carry an Origin naming this server")
+            }
+        }
+    }
+}
+
+/// Where a request came from, judged by headers a page cannot set:
+///
+/// 1. `Host` must name this server ([`AllowedHosts`]), on every route.
+///    A request with no `Host` at all did not come from a browser, which
+///    always sends one, so there is nothing to rebind.
+/// 2. A public route needs nothing more.
+/// 3. A navigation — `GET` or `HEAD` with `Sec-Fetch-Mode: navigate` — is
+///    allowed from anywhere, so a link or the proxy's frame opens the app.
+///    That rests on no `GET` route having a side effect, and on every
+///    document served as data carrying its `sandbox` policy.
+/// 4. Anything else marked `Sec-Fetch-Site: cross-site` or `same-site` (a
+///    page on another port of `127.0.0.1` is the same site) is refused;
+///    `same-origin` and `none` (typed in the address bar) are not.
+/// 5. With no `Sec-Fetch-Site` (`curl`, an older browser), a write that
+///    has only the cookie must carry an `Origin` naming the `Host` it was
+///    sent to. The token proves more than a cookie can; the proxy has
+///    authenticated a non-browser client itself.
+pub(crate) fn fetch_policy(
+    method: &Method,
+    host: Option<&str>,
+    headers: &HeaderMap,
+    carrier: Carrier,
+    public: bool,
+    hosts: &AllowedHosts,
+) -> FetchVerdict {
+    if host.is_some_and(|h| !hosts.admits(h)) {
+        return FetchVerdict::ForeignHost;
+    }
+    if public {
+        return FetchVerdict::Allow;
+    }
+    let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+    let navigation = (*method == Method::GET || *method == Method::HEAD)
+        && header("sec-fetch-mode") == Some("navigate");
+    if navigation {
+        return FetchVerdict::Allow;
+    }
+    match header("sec-fetch-site") {
+        Some("same-origin") | Some("none") => FetchVerdict::Allow,
+        Some(_) => FetchVerdict::FromAnotherSite,
+        None if carrier == Carrier::Cookie && !method.is_safe() => {
+            let own_origin = host.is_some_and(|host| {
+                header("origin").is_some_and(|origin| {
+                    origin
+                        .strip_prefix("http://")
+                        .or_else(|| origin.strip_prefix("https://"))
+                        == Some(host)
+                })
+            });
+            if own_origin {
+                FetchVerdict::Allow
+            } else {
+                FetchVerdict::CookieWriteFromElsewhere
+            }
+        }
+        None => FetchVerdict::Allow,
+    }
+}
+
+/// The `Host` header, or an HTTP/2 request's `:authority`, which hyper
+/// leaves in the URI instead.
+fn request_host(req: &Request<Body>) -> Option<String> {
+    match req.headers().get(header::HOST) {
+        Some(v) => Some(String::from_utf8_lossy(v.as_bytes()).into_owned()),
+        None => req.uri().authority().map(|a| a.as_str().to_string()),
+    }
+}
+
+/// What [`require_token`] is configured with: the token, the proxy whose
+/// word is taken in its place, if any, and the host names it answers to.
 #[derive(Clone)]
 pub struct Gate {
     pub token: ApiToken,
     pub trusted_proxy: Option<TrustedProxy>,
+    pub hosts: AllowedHosts,
 }
 
 fn is_url_safe(s: &str) -> bool {
@@ -400,16 +595,46 @@ fn is_api(path: &str) -> bool {
 
 pub async fn require_token(State(gate): State<Gate>, req: Request<Body>, next: Next) -> Response {
     let path = req.uri().path().to_string();
-    if is_public(&path) {
+    let public = is_public(&path);
+    let auth = &gate.token;
+    let credential = if public { None } else { auth.credential(&req) };
+    let requester = match credential {
+        None => gate.trusted_proxy.map(|p| p.requester(req.headers())),
+        Some(_) => None,
+    };
+    let carrier = match (credential, requester) {
+        (Some(Credential::Cookie), _) => Carrier::Cookie,
+        (Some(_), _) => Carrier::Token,
+        (None, Some(Requester::Owner)) => Carrier::ProxyOwner,
+        (None, _) => Carrier::Nothing,
+    };
+    let host = request_host(&req);
+    let verdict = fetch_policy(
+        req.method(),
+        host.as_deref(),
+        req.headers(),
+        carrier,
+        public,
+        &gate.hosts,
+    );
+    if let Some(why) = verdict.refusal() {
+        tracing::warn!(
+            "refused {} {path} (Host {:?}, Sec-Fetch-Site {:?}): {why}",
+            req.method(),
+            host.as_deref().unwrap_or(""),
+            req.headers()
+                .get("sec-fetch-site")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("")
+        );
+        return forbidden(&path, why);
+    }
+    if public {
         return next.run(req).await;
     }
-    let auth = &gate.token;
 
-    match auth.credential(&req) {
-        None => match gate.trusted_proxy.map(|p| p.requester(req.headers())) {
-            Some(Requester::Owner) if is_cross_site_write(req.method(), req.headers()) => {
-                forbidden(&path, "a page on another origin made this request")
-            }
+    match credential {
+        None => match requester {
             Some(Requester::Owner) => next.run(req).await,
             Some(Requester::Visitor) => forbidden(
                 &path,
@@ -641,38 +866,117 @@ mod tests {
         );
     }
 
+    type Case<'a> = (
+        Method,
+        Option<&'a str>,
+        Option<&'a str>,
+        Option<&'a str>,
+        Carrier,
+        bool,
+        Option<&'a str>,
+        FetchVerdict,
+    );
+
+    /// The policy's case table: method × `Sec-Fetch-Site` × `Sec-Fetch-Mode`
+    /// × `Origin` × credential (the proxy's word standing for proxy mode) ×
+    /// public route × `Host`.
     #[test]
-    fn a_write_from_another_origin_is_told_by_sec_fetch_site() {
-        let with = |site: Option<&str>| {
-            let mut headers = HeaderMap::new();
-            if let Some(site) = site {
-                headers.insert("sec-fetch-site", HeaderValue::from_str(site).unwrap());
-            }
-            headers
+    fn the_fetch_policy_case_table() {
+        use Carrier::{Cookie, Nothing, ProxyOwner, Token};
+        use FetchVerdict::{
+            Allow, CookieWriteFromElsewhere as NoOrigin, ForeignHost as Host,
+            FromAnotherSite as Site,
         };
-        // The browser's own request from the app page, and a non-browser
-        // client that sends no fetch metadata.
-        assert!(!is_cross_site_write(
-            &Method::POST,
-            &with(Some("same-origin"))
-        ));
-        assert!(!is_cross_site_write(&Method::PUT, &with(Some("none"))));
-        assert!(!is_cross_site_write(&Method::POST, &with(None)));
-        // A sibling app on the same site, and a foreign site.
-        assert!(is_cross_site_write(&Method::POST, &with(Some("same-site"))));
-        assert!(is_cross_site_write(
-            &Method::DELETE,
-            &with(Some("cross-site"))
-        ));
-        // Reads are never writes, wherever they come from.
-        assert!(!is_cross_site_write(
-            &Method::GET,
-            &with(Some("cross-site"))
-        ));
-        assert!(!is_cross_site_write(
-            &Method::HEAD,
-            &with(Some("same-site"))
-        ));
+        const H: Option<&str> = Some("127.0.0.1:8731");
+        let hosts = AllowedHosts::parse("datalib.example, *.share.example").unwrap();
+        #[rustfmt::skip]
+        let table: &[Case] = &[
+            // method      site                 mode              origin                          carrier     public host                              verdict
+            // The app's own requests, and the address bar.
+            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           Cookie,     false, H,                                 Allow),
+            (Method::POST, Some("same-origin"), Some("cors"),     Some("http://127.0.0.1:8731"),  Cookie,     false, H,                                 Allow),
+            (Method::GET,  Some("none"),        Some("navigate"), None,                           Cookie,     false, H,                                 Allow),
+            (Method::PUT,  Some("none"),        Some("cors"),     None,                           Token,      false, H,                                 Allow),
+            // A navigation from anywhere, to any path.
+            (Method::GET,  Some("cross-site"),  Some("navigate"), None,                           Cookie,     false, H,                                 Allow),
+            (Method::HEAD, Some("same-site"),   Some("navigate"), None,                           ProxyOwner, false, Some("localhost:8731"),            Allow),
+            (Method::GET,  Some("cross-site"),  Some("navigate"), None,                           Nothing,    false, H,                                 Allow),
+            // Anything else from another site or another port: refused,
+            // the token and the proxy's word included.
+            (Method::POST, Some("same-site"),   Some("navigate"), None,                           Cookie,     false, H,                                 Site),
+            (Method::POST, Some("same-site"),   Some("no-cors"),  Some("http://127.0.0.1:9000"),  Cookie,     false, H,                                 Site),
+            (Method::GET,  Some("cross-site"),  Some("no-cors"),  None,                           Cookie,     false, H,                                 Site),
+            (Method::GET,  Some("same-site"),   Some("cors"),     None,                           Token,      false, H,                                 Site),
+            (Method::DELETE, Some("cross-site"), Some("cors"),    None,                           ProxyOwner, false, Some("localhost:8731"),            Site),
+            (Method::POST, Some("cross-site"),  None,             None,                           Nothing,    false, H,                                 Site),
+            (Method::POST, Some("bogus"),       Some("cors"),     None,                           Cookie,     false, H,                                 Site),
+            // No fetch metadata: the token and the proxy's word pass, a
+            // cookie-only write needs this server's Origin.
+            (Method::POST, None,                None,             None,                           Token,      false, H,                                 Allow),
+            (Method::POST, None,                None,             None,                           ProxyOwner, false, Some("localhost:8731"),            Allow),
+            (Method::GET,  None,                None,             None,                           Cookie,     false, H,                                 Allow),
+            (Method::POST, None,                None,             Some("http://127.0.0.1:8731"),  Cookie,     false, H,                                 Allow),
+            (Method::POST, None,                None,             None,                           Cookie,     false, H,                                 NoOrigin),
+            (Method::POST, None,                None,             Some("http://127.0.0.1:9000"),  Cookie,     false, H,                                 NoOrigin),
+            (Method::PUT,  None,                None,             Some("http://evil.example"),    Cookie,     false, H,                                 NoOrigin),
+            (Method::POST, None,                None,             Some("http://127.0.0.1:8731"),  Cookie,     false, None,                              NoOrigin),
+            // Host: loopback and IP literals at any port, the configured
+            // names, and no Host at all (not a browser).
+            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           Cookie,     false, Some("localhost:5173"),            Allow),
+            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           Cookie,     false, Some("[::1]:8731"),                Allow),
+            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           Cookie,     false, Some("192.168.1.20:8731"),         Allow),
+            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           ProxyOwner, false, Some("datalib-x7k9.share.example"), Allow),
+            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           ProxyOwner, false, Some("DATALIB.example:443"),       Allow),
+            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           Token,      false, None,                              Allow),
+            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           ProxyOwner, false, Some("rebind.evil.example:8731"),  Host),
+            (Method::GET,  Some("none"),        Some("navigate"), None,                           Token,      false, Some("share.example"),             Host),
+            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           Cookie,     false, Some("localhost.evil.example"),    Host),
+            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           Cookie,     false, Some("127.0.0.1:abc"),             Host),
+            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           Cookie,     false, Some(""),                          Host),
+            // A public route needs a right Host and nothing else.
+            (Method::GET,  Some("cross-site"),  Some("no-cors"),  None,                           Nothing,    true,  H,                                 Allow),
+            (Method::GET,  Some("cross-site"),  Some("no-cors"),  None,                           Nothing,    true,  Some("rebind.evil.example"),       Host),
+        ];
+        for (i, (method, site, mode, origin, carrier, public, host, want)) in
+            table.iter().enumerate()
+        {
+            let mut headers = HeaderMap::new();
+            for (name, value) in [
+                ("sec-fetch-site", site),
+                ("sec-fetch-mode", mode),
+                ("origin", origin),
+            ] {
+                if let Some(value) = value {
+                    headers.insert(name, HeaderValue::from_str(value).unwrap());
+                }
+            }
+            let got = fetch_policy(method, *host, &headers, *carrier, *public, &hosts);
+            assert_eq!(got, *want, "row {i}: {:?}", table[i]);
+        }
+    }
+
+    #[test]
+    fn allowed_hosts_are_names_or_wildcard_domains() {
+        assert_eq!(AllowedHosts::parse("").unwrap(), AllowedHosts::default());
+        assert!(AllowedHosts::parse(" a.example , *.b.example ,").is_ok());
+        for bad in [
+            "http://a.example",
+            "a.example:8731",
+            "*",
+            "*.",
+            "a b",
+            "a/b",
+        ] {
+            assert!(AllowedHosts::parse(bad).is_err(), "{bad:?}");
+        }
+        let none = AllowedHosts::default();
+        assert!(none.admits("localhost"));
+        assert!(none.admits("127.0.0.1"));
+        assert!(none.admits("[::1]"));
+        assert!(!none.admits("[::1"));
+        assert!(!none.admits("[not-v6]:80"));
+        assert!(!none.admits("example.com"));
+        assert!(!none.admits(":8731"));
     }
 
     #[test]

@@ -51,6 +51,7 @@ async fn fetch_behind(
         )),
         api_token: ApiToken::from_value(TOKEN, root.as_path()),
         trusted_proxy,
+        allowed_hosts: Default::default(),
     };
     let req = Request::get(path)
         .header("x-datalib-token", TOKEN)

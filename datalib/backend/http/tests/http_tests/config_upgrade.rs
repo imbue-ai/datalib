@@ -39,6 +39,7 @@ async fn boot(root: &Path) -> datalib_http::AppState {
         None,
         ApiToken::from_value("config-upgrade-test-token", root),
         None,
+        Default::default(),
     )
     .await
     .expect("the server boots")

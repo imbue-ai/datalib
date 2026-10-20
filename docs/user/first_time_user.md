@@ -501,6 +501,15 @@ proxy. The token keeps working for scripts on the same host. Never set
 it for a server a browser can reach without such a proxy — that header
 is then just text any page can send.
 
+Whatever carries the credential, the server also refuses a request
+another web page made your browser send: anything from another site or
+another port but a plain navigation, and anything whose `Host` names a
+host other than `localhost` or an IP address. A server reached by a
+host name — `datalib.home.example`, or a proxy that passes the
+browser's own `Host` through — needs that name listed:
+`DATALIB_ALLOWED_HOSTS=datalib.home.example`, comma-separated, with
+`*.example.com` for every name under a domain.
+
 ## 6. Re-syncing
 
 Re-run the sync (**Sync everything** in the app, or `datalib-dag config.toml`)
