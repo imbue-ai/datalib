@@ -136,7 +136,8 @@ upstream still has the data, `--reset <source>/ingest --sync
 id and group, in topo order), then `step_start` / `progress_*` / `log` / `hint` /
 `step_finish` per step, closed by one `run_summary` — parse it instead
 of scraping human output. Failures carry a kind
-(`transient` / `rate_limited` / `auth` / `data` / `cancelled`); the
+(`transient` / `rate_limited` / `auth` / `permission` / `data` /
+`cancelled` / `incomplete`); the
 runner already retries transient/rate-limited ones with backoff, and
 what a failed step committed is still read downstream; only a step
 whose inputs were never written at all is `blocked`. Ctrl-C is graceful:
@@ -407,8 +408,10 @@ document.
 - **"Why did/didn't this step run?"**: `system/supervisor.sqlite` is
   plain SQLite. `select step, state, state_detail from steps` says what
   each step is doing and what it waits on; `select step, reads,
-  last_status, last_error from steps` gives each step's input versions
-  at its last success and how it last ended; `select * from sinks` the version each tree was published at.
+  last_status, last_failure_kind, last_error from steps` gives each
+  step's input versions at its last success and how it last ended (a
+  `permission` failure is the OS refusing a read: choose the folder
+  again in the app, or grant Full Disk Access); `select * from sinks` the version each tree was published at.
   A step re-runs when an input version moved (download steps always run
   — their input is a remote service). `select step, started_at_utc from
   invocations where outcome is null` is what is running now.

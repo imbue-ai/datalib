@@ -335,6 +335,7 @@ kind* of failure this is, which drives retry policy:
 | `transient` | network blip, lock contention | retry, up to 3 attempts in all, 1s then 2s apart |
 | `rate_limited` | HTTP 429 and friends | retry, as for `transient` |
 | `auth` | credentials need a human | fail fast |
+| `permission` | the OS would not let you read a path your settings name (macOS privacy) | fail fast; the app's Manage row offers "Choose folder again" |
 | `data` | bad input; retrying won't help | fail fast (default when absent) |
 | `cancelled` | you were interrupted | fail fast, exit code 130 convention |
 | `incomplete` | you gave up with work still owed, after committing what you got | fail fast: your own retries are what ran out, and the next run resumes |

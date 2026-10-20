@@ -486,6 +486,9 @@ pub enum FailureKind {
     RateLimited,
     /// Fail fast; a human must fix credentials.
     Auth,
+    /// Fail fast; the OS refused to let the app read a file the config
+    /// names (macOS privacy), and a human must grant access again.
+    Permission,
     /// The input/data is bad; retrying won't help. Fails this step
     /// (poisoning its subtree), not the graph.
     Data,

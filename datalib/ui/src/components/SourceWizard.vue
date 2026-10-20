@@ -586,6 +586,10 @@ const canPick = isDesktopApp();
 /// like a dead button.
 const pickFailed = ref<Record<string, string>>({});
 
+/// Keyed by field target: what refused when the app tried to read the
+/// path just chosen. The pick still stands; a sync would fail on it.
+const pickUnreadable = ref<Record<string, string>>({});
+
 async function browse(f: Field) {
   if (f.kind !== "path") return;
   const result = await pickPath({
@@ -599,6 +603,8 @@ async function browse(f: Field) {
   if (result.outcome === "picked") {
     values.value[f.target] = result.path;
     delete pickFailed.value[f.target];
+    if (result.unreadable) pickUnreadable.value[f.target] = result.unreadable;
+    else delete pickUnreadable.value[f.target];
   } else if (result.outcome === "unavailable") {
     pickFailed.value[f.target] = result.reason;
   }
@@ -2074,6 +2080,11 @@ function submit() {
                       <small v-if="pickFailed[f.target]" class="wiz-error">
                         Couldn’t open the file picker ({{ pickFailed[f.target] }}). Type or paste
                         the path instead.
+                      </small>
+                      <small v-if="pickUnreadable[f.target]" class="wiz-error">
+                        Datalib can’t read what you chose ({{ pickUnreadable[f.target] }}), so a
+                        sync would fail. Choose it again, or grant Datalib Full Disk Access in
+                        System Settings → Privacy &amp; Security.
                       </small>
                     </div>
                   </template>

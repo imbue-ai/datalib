@@ -50,6 +50,7 @@ impl RetryPolicy {
             // Cancelled: the user asked us to stop. Incomplete: the
             // step's own retries already ran out.
             FailureKind::Auth
+            | FailureKind::Permission
             | FailureKind::Data
             | FailureKind::Cancelled
             | FailureKind::Incomplete => 1,
@@ -439,6 +440,10 @@ impl Runner {
             last.status = st.state().as_str().to_string();
             last.attempts = attempts;
             last.error = error;
+            last.failure = match &st {
+                StepStatus::Failed { kind } => Some(*kind),
+                _ => None,
+            };
             if matches!(st.state(), RunState::Succeeded | RunState::SkippedUpToDate) {
                 entry.last_success_at = Some(stamp);
             }
@@ -470,6 +475,7 @@ pub(crate) fn mark_running(state: &mut Record, id: &StepId, stamp: &str) {
         status: String::new(),
         attempts: 0,
         error: None,
+        failure: None,
     });
 }
 

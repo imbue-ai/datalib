@@ -4,6 +4,7 @@
 
 mod launcher;
 mod raw_store;
+mod read_access;
 mod zoom;
 
 use std::path::{Path, PathBuf};
@@ -421,6 +422,16 @@ fn leave_library(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+// --- Check a chosen path can be read (src/read_access.rs) ------------------
+
+/// What refused, or `None` when the path reads. Runs in this process
+/// because the grant a picker earns is recorded against the app, which
+/// the steps it spawns read under.
+#[tauri::command]
+fn check_read_access(path: String) -> Option<String> {
+    read_access::check(Path::new(&path)).err()
+}
+
 // --- Browse a raw store (src/raw_store.rs) ---------------------------------
 
 /// Returns what the store was opened in, for the page to say.
@@ -567,7 +578,8 @@ fn main() {
             library_menu,
             library_switch,
             libraries_show,
-            open_raw_store
+            open_raw_store,
+            check_read_access
         ])
         .manage(HttpChild(Mutex::new(None)))
         .manage(DataRoot(Mutex::new(None)))
