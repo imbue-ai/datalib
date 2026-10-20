@@ -144,19 +144,21 @@ test("a hostile email's links run nothing and write nothing", async ({ page, con
   const body = page.frameLocator("iframe.doc-frame").locator("body.chat-body");
   await body.getByText("Unsubscribe").click();
   await body.getByText("Ask Quark").click();
-  const [account] = await Promise.all([
-    context.waitForEvent("page"),
-    body.getByRole("link", { name: "Review your account" }).click(),
-  ]);
-  // The control: this click does open the app on the path the email chose, and that
-  // path reaches the card machinery, which says it does not parse rather than running it.
-  const [claimed] = await Promise.all([
-    context.waitForEvent("page"),
-    body.getByRole("link", { name: "Claim your holosuite upgrade" }).click(),
-  ]);
-  await expect(claimed.locator(".ct-card")).toContainText("does not parse");
+  await body.getByRole("link", { name: "Review your account" }).click();
+  await body.getByRole("link", { name: "Claim your holosuite upgrade" }).click();
+  // The control: the claim link does open the app on the path the email chose, and
+  // that path reaches the card machinery, which says it does not parse rather than
+  // running it. Found by what it shows: the other clicks open windows of their own,
+  // in an order the engines do not agree on.
+  const refused = async () => {
+    for (const p of context.pages()) {
+      if (await p.locator(".ct-card", { hasText: "does not parse" }).count()) return true;
+    }
+    return false;
+  };
+  await expect.poll(refused, { timeout: 10_000 }).toBe(true);
 
-  for (const p of [page, account, claimed, ...context.pages()]) {
+  for (const p of context.pages()) {
     if (p.url().startsWith("http")) expect(await ranIn(p), p.url()).toBeUndefined();
   }
   expect(writes).toEqual([]);
