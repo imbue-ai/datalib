@@ -19,7 +19,7 @@ struct UiAssets;
 macro_rules! app_csp_directives {
     () => {
         "default-src 'self'; \
-         script-src 'self' 'unsafe-eval'; \
+         script-src 'self'; \
          style-src 'self' 'unsafe-inline'; \
          img-src 'self' data: blob:; \
          media-src 'self' data: blob:; \
@@ -36,12 +36,12 @@ macro_rules! app_csp_directives {
 /// The app page's Content-Security-Policy: the second layer behind
 /// DOMPurify. A message body that gets past the sanitizer still cannot
 /// run as a script, because only the bundle's own files may — no inline
-/// script, no `javascript:` URL, no foreign origin.
+/// script, no `javascript:` URL, no foreign origin. No `'unsafe-eval'`
+/// either: card source is parsed as a call, never evaluated
+/// (docs/dev/cards.md § "Card source"), so a string that reaches an
+/// evaluator by mistake is refused by the browser.
 ///
 /// The escape hatches, each load-bearing:
-/// - `'unsafe-eval'`: a card's source is evaluated with `new Function`
-///   (docs/dev/cards.md). It permits `eval` of strings the page already
-///   has; it does not let an injected `<script>` element run.
 /// - `style-src 'unsafe-inline'`: the custom elements put `<style>` in
 ///   their shadow roots, and the renderers emit `style=`. Inline style
 ///   is not a code path.
