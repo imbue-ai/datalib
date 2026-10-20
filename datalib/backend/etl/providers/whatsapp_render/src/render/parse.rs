@@ -102,7 +102,7 @@ async fn parse_async(
     // into it; until one has, there is nothing to render.
     if !datalib_etl::doltlite_raw::table_exists(reader.pool(), "jid").await? {
         reader.close().await;
-        return Ok(ParsedWhatsApp::default());
+        return Ok(None);
     }
     let pool: SqlitePool = reader.pool().clone();
     // msgstore's tables arrive together with the first mirror. Until one
