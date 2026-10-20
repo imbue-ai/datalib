@@ -754,6 +754,17 @@ bound. **A set of values to match is one bound JSON array**,
 binds at most 32,766 values per statement, and only a real user's data
 gets there (`datalib/backend/etl/README.md` §"Binding a set of values").
 
+## Card source is data
+
+**Nothing that came from outside becomes code.** A card's source, in a
+URL, a saved layout or a card's header, is one call of a known view or
+component with JSON5 values. It is parsed, never evaluated, and the app
+page's CSP has no `'unsafe-eval'` (`docs/dev/cards.md` § "Card
+source"). Any site can send the browser to a card URL, so **opening a
+card never writes**: a card's arguments come from whoever wrote the
+link. `//:lint_repo` refuses an evaluator anywhere in `datalib/ui/src`,
+and HTML drawn from a string outside its short allowlist.
+
 ## Timestamp convention
 
 **A stamp we mint goes in a column named `<x>_at_utc`, in UTC, with one

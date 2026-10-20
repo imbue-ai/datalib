@@ -117,3 +117,49 @@ test("the app's own controls still work inside the frame", async ({ page }) => {
   await copy.click();
   await expect(copy).toHaveClass(/copied|copy-failed/);
 });
+
+/** Quark's prize email in the TNG fixture carries every trick the audits found in a body:
+ *  a link whose path is card source, a link to the API, a `javascript:` link, a malformed
+ *  `datalib:` link and a frame on our own `blobs/` route. Clicking across it must run no
+ *  code from the email and write nothing. */
+test("a hostile email's links run nothing and write nothing", async ({ page, context }) => {
+  const resp = await page.request.get("/applet/unified_document_index/search?q=&limit=2000");
+  expect(resp.ok()).toBeTruthy();
+  const { rows } = (await resp.json()) as {
+    rows: { markdown_uuid: string | null; conversation_name: string }[];
+  };
+  const prize = rows.find((r) => r.markdown_uuid && /holosuite/i.test(r.conversation_name));
+  expect(prize, "the fixture must have Quark's prize email").toBeTruthy();
+
+  const writes: string[] = [];
+  context.on("request", (r) => {
+    if (r.method() !== "GET" && /\/api\/(config|lib|requests)\b/.test(r.url())) {
+      writes.push(`${r.method()} ${r.url()}`);
+    }
+  });
+  const ranIn = (p: typeof page) =>
+    p.evaluate(() => (window as unknown as { __hostileRan?: number }).__hostileRan);
+
+  await page.goto(`/chat/${prize!.markdown_uuid}`);
+  const body = page.frameLocator("iframe.doc-frame").locator("body.chat-body");
+  await body.getByText("Unsubscribe").click();
+  await body.getByText("Ask Quark").click();
+  await body.getByRole("link", { name: "Review your account" }).click();
+  await body.getByRole("link", { name: "Claim your holosuite upgrade" }).click();
+  // The control: the claim link does open the app on the path the email chose, and
+  // that path reaches the card machinery, which says it does not parse rather than
+  // running it. Found by what it shows: the other clicks open windows of their own,
+  // in an order the engines do not agree on.
+  const refused = async () => {
+    for (const p of context.pages()) {
+      if (await p.locator(".ct-card", { hasText: "does not parse" }).count()) return true;
+    }
+    return false;
+  };
+  await expect.poll(refused, { timeout: 10_000 }).toBe(true);
+
+  for (const p of context.pages()) {
+    if (p.url().startsWith("http")) expect(await ranIn(p), p.url()).toBeUndefined();
+  }
+  expect(writes).toEqual([]);
+});

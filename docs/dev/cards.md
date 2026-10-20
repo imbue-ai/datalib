@@ -1,8 +1,9 @@
 # Cards — source-defined cards and the layouts that host them
 
-The datalib UI is a surface of cards: each card is a piece of
-JavaScript source the user can read (and edit) in the card's header
-bar in edit mode. The host evaluates that source to produce the card's content.
+The datalib UI is a surface of cards: each card is defined by its
+source, a call the user can read (and edit) in the card's header bar in
+edit mode. The host parses that source and calls what it names to
+produce the card's content.
 `datalib/ui/src/cards/types.ts` is the canonical home of every
 shape described here; this doc is the narrative version.
 
@@ -13,21 +14,53 @@ what a card gets, what it can ask for, and what it must not assume.
 
 ## Card source
 
-A card's source is a JS **expression**, e.g.
+A card's source is **one call** of a view or component the app already
+has, with values:
 
 ```js
 searchView()
 documentView("e28ed67d-507b-5319-8732-00e249b6ebf6")
 documentView("e28ed67d-…", "11ec65e9-…")   // doc + section to highlight
+gridView({ q: "picard", columns: ["kind", "title"] })
+comp.user.tetris()
 ```
 
-`compileCardSource` (`datalib/ui/src/cards/cardSource.ts`) wraps
-the expression in `new Function(...viewLibNames, "return (<source>)")`
-and calls it with the view factories as arguments, plus one more name:
-`comp`. Two kinds of name are in scope, then, along with JS globals —
-the builtin factories in `ViewLibs`
-(`datalib/ui/src/cards/libs/index.ts`), and every custom component as
-`comp.<namespace>.<name>`.
+That is the whole language (`datalib/ui/src/cards/cardCall.ts`):
+
+```
+source := id "(" [ arg ("," arg)* [","] ] ")"
+id     := name ("." name)*
+arg    := a JSON5 value
+```
+
+The arguments are [JSON5](https://json5.org/): JSON plus unquoted keys,
+single quotes and trailing commas. Code that builds a source writes
+strict JSON (`formatCardCall`), which is valid JSON5.
+
+`compileCardSource` (`datalib/ui/src/cards/cardSource.ts`) parses the
+call, looks the name up, and calls it with the values. A name is one of
+two things, found by exact lookup of an own property, never by walking
+objects (so `constructor` or `__proto__` name nothing):
+
+- a builtin factory in `ViewLibs` (`datalib/ui/src/cards/libs/index.ts`);
+- a custom component, `comp.<namespace>.<name>`.
+
+**Card source is data, never code.** The same grammar holds wherever
+source comes from: the URL, a saved layout, the box in a card's header.
+There is no evaluator in the page, and the app page's CSP has no
+`'unsafe-eval'`, so a string that reaches one by mistake still cannot
+run. Source that does not parse opens a card saying so, with its text.
+To run your own code in a card, write a component
+(`datalib/backend/http/src/agent_cards_guide.md`).
+
+**Opening a card never writes.** A card's arguments come from whoever
+wrote the source, which may be a link in an email or a page on another
+site (any site may navigate the browser to a card URL). So a view or
+component may read and show what its arguments name, but must not save,
+sync, delete or start work because of them; that waits for the person
+to act inside the card. Text from an argument that goes into HTML (help,
+a title drawn as markup) is escaped (`escapeHtml` in
+`datalib/ui/src/cards/help.ts`).
 
 `comp` is namespaced because the components come from a store that is
 too: `system/frontend/user/` holds what a person or an agent wrote, and
@@ -36,16 +69,6 @@ one directory per applet holds what that applet wrote (see
 never a global — which is what lets two applet instances both offer
 `channels`, and what lets a user component be called `gridView` without
 shadowing the builtin.
-
-Because the source is plain JS, a user-authored card is just a bigger
-expression. An IIFE that composes the factories works:
-
-```js
-(() => {
-  // decide arguments programmatically, then delegate
-  return documentView("e28ed67d-…");
-})()
-```
 
 ## CardRender: the rendering contract
 
@@ -395,7 +418,9 @@ window; the e2e suite sets it, so specs sharing one library do not
 trade tabs.
 
 **The URL.** A path naming cards (`/code:size:state/…`,
-`router/columns.ts`) is a link: the layout opens those cards as a tab
+`router/columns.ts`, where `code` is card source as in § "Card source",
+so the URL is data like any other source) is a link: the layout opens
+those cards as a tab
 and puts the address back to `/`, since what is open is kept in the
 tree. A `/chat/<uuid>` link — the shape every renderer writes into a
 document body — is routed to that document alone (`router/index.ts`).
@@ -429,8 +454,8 @@ source wizard, feedback).
 
 ## Prebuilt views
 
-The factories in `ViewLibs` are the public surface card source
-programs against:
+The factories in `ViewLibs` are the names card source can call
+besides components:
 
 - The Dashboard's sections, each a card of its own, which the Dashboard
   composite — what a new window opens on — lays out as a solidified

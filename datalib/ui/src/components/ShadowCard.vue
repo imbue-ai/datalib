@@ -1,23 +1,19 @@
 <script setup lang="ts">
 // Mounts one card inside a Shadow DOM. The card is defined by its
-// source (a JS expression like `documentView("abcd…")`): we compile
-// it via cardSource.ts and run the resulting CardRender inside the
+// source (a call like `documentView("abcd…")`): we compile it via
+// cardSource.ts and run the resulting CardRender inside the
 // shadow root. The render function gets full DOM ownership of the
 // shadow root — Vue doesn't render anything inside. When the source
 // changes we tear the old card down and run the new one; on unmount
 // we call the teardown returned by the render.
 import { onMounted, onBeforeUnmount, shallowRef, useTemplateRef, watch } from "vue";
 import { compileCardSource } from "@/cards/cardSource";
+import { CardSourceError } from "@/cards/cardCall";
 import { inCard } from "@/cards/cardScope";
 import { track } from "@/telemetry";
 import { setCardHelp } from "@/cards/help";
 import { editMode } from "@/editMode";
-import {
-  ensureFrontend,
-  followRenames,
-  frontendManifest,
-  referencedNamespaces,
-} from "@/cards/frontendRegistry";
+import { ensureFrontend, followRenames, frontendManifest } from "@/cards/frontendRegistry";
 import type { CardCtx, Teardown } from "@/cards/types";
 
 const props = defineProps<{
@@ -146,7 +142,6 @@ async function runCard() {
         "galleryView()",
         "aliasView()",
         "dactalView()",
-        '(root) => { root.textContent = "hello, world" }',
       ];
       for (const ex of examples) {
         const code = document.createElement("code");
@@ -177,7 +172,10 @@ async function runCard() {
     const div = document.createElement("div");
     div.style.cssText =
       "color:#e35d6a;padding:8px;font-family:ui-monospace,monospace;font-size:12px;white-space:pre-wrap";
-    div.textContent = "card error: " + ((e as Error).stack ?? (e as Error).message ?? String(e));
+    div.textContent =
+      e instanceof CardSourceError
+        ? `this card's source does not parse: ${e.message}\n\n${props.source}`
+        : "card error: " + ((e as Error).stack ?? (e as Error).message ?? String(e));
     root.appendChild(div);
   }
 }

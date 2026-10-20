@@ -215,8 +215,8 @@ export function galleryView(): CardRender {
         const foot = document.createElement("div");
         foot.className = "gv-foot";
         foot.textContent =
-          "edit mode: every card is a JS expression — you can also type " +
-          "source directly into the box above and press Enter.";
+          'edit mode: every card is a call like gridView({ q: "…" }) — you can ' +
+          "also type one into the box above and press Enter.";
         wrap.appendChild(foot);
       }
     }
