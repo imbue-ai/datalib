@@ -213,7 +213,7 @@ What each source has today:
 | address books | | a card's numbers and addresses, in the source contact |
 | LinkedIn | a message's sender, by `SENDER PROFILE URL`; the account's owner, by their primary address, on every post and comment | a connection's profile and email address, in the source contact |
 | Facebook | a Messenger message's sender, by name; a deleted account by its conversation, where it is that conversation's only one; the account's owner, by name, on every post, album, comment, reaction and edit (a store with no profile knows them only as "Me", and gives none) | each Messenger reaction's; a friend's name, in the source contact |
-| Beeper | none yet: a Matrix user id has no kind | |
+| Beeper | a Slack user by `slack:<team>/<user>`, read out of the bridge's Matrix id (the owner by the Slack user the room was bridged for); anyone else by a number or address the app lists for them (`participant_identifiers`); a Matrix id alone has no kind | each reaction's; the person's numbers, addresses and cached avatar, in the source contact |
 
 The AI chats, calendar, GitHub, GitLab and Notion write no handles.
 Where a source renders the owner's side as "Me" (WhatsApp, Signal,
@@ -277,7 +277,8 @@ Four producers, each needing less of a provider than the one before:
 - **A chat provider, for what only it knows**, in
   `NormalizedChat::contacts`: Slack's profiles (names, title, avatar,
   the email), WhatsApp's address book (`JidNames::contact`), Signal's
-  recipients (number and ACI together). These are rows, not documents.
+  recipients (number and ACI together), Beeper's participants (names,
+  numbers and addresses, the avatar the app cached). These are rows, not documents.
 - **chat-common, for free** (`chat-common/src/people.rs`): a baseline
   per handle per document from what the provider showed: each author
   with the names it wrote under, how many items and the last one's
@@ -304,16 +305,19 @@ absent. This works with no contacts app at all.
 ### Photos
 
 `photo` is what the source gave: the image itself (`Photo::Inline`,
-written beside the rendered page as `blobs/<uuid>.<ext>` and never
-stored as a row) or a URL nothing fetched (`Photo::Url`, a Slack
+written beside the rendered page under `blobs/` and never stored as a
+row) or a URL nothing fetched (`Photo::Url`, a Slack
 avatar). `photo_url` is what a chip draws: a path on the app's own
 origin, never another host's, since the app fetches nothing remote
 unasked, and only for an image a browser draws: png, jpeg, gif or
 webp (`contact_schema::DRAWABLE_PHOTO_TYPES`, the one list, which the
-contacts app's photo rule shares). contact-common fills it with
+contacts app's photo rule shares). contact-common and chat-common fill
+it with
 `/applet/unified_document_index/asset/<markdown_uuid>/blobs/<file>`, which the
-index's asset route serves; a photo of another type keeps its file
-beside the page and gets no URL. The contacts app fills it with
+index's asset route serves (`datalib_etl_render::photo`): contact-common
+for the one person its page is about, chat-common for each of a chat's
+source contacts, a file per photo named by its bytes. A photo of another
+type keeps its file beside the page and gets no URL. The contacts app fills it with
 `/applet/datalib_contacts/photo/<contact_id>` for a photo a person put
 on their contact. With no photo, or one the browser fails to load, a
 chip linked to a contact draws the person's initial, and any other

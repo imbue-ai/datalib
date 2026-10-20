@@ -14,8 +14,18 @@ meaning into it is here (`src/render/parse.rs`):
   the `text` in its `message` JSON.
 - **A reaction** is either an `mx_room_messages` row of type `REACTION`
   or an `mx_reactions` row.
-- **A person's name** is their `participants` row in that room
-  (`full_name`, then `nickname`), else their Matrix id.
+- **A person** is their `participants` row in that room: named by
+  `full_name`, then `nickname`, else their Matrix id. Their handle is
+  `slack:<team>/<user>` for a Slack user, whose Matrix id the bridge
+  spells `@slackgo_<team>-<user>` in lower case (the account's owner in
+  a Slack room, who appears under their Beeper id, by the Slack user the
+  room was bridged for), else the first number or address
+  `participant_identifiers` lists for them; a Matrix id alone gets none.
+  Every person with a handle is a source contact of the chat, with those
+  numbers and addresses and their avatar (`img_url`) where the app
+  cached it; render sniffs its image type, since the cache's file names
+  have no extension. A chat with no `title` is called by its people
+  other than the owner.
 - **An attachment** is an entry of the message JSON's `attachments`. Its
   `mxc://<server>/<id>` names the cached file `media/<server>/<id>`, and
   an on-device bridge's `localmxc://<bridge>/<id>` names
@@ -49,9 +59,10 @@ reply is drawn as a quoted "in reply to" line naming the upstream id it
 points at. A `HIDDEN` event gets a one-line system note, so a room made
 only of those still renders.
 
-Each document declares the `threads`, `mx_room_messages` and
-`mx_reactions` rows it read, so a room whose messages all left the store
-loses its documents.
+Each document declares the `threads`, `participants`,
+`mx_room_messages` and `mx_reactions` rows it read, so a room whose
+messages all left the store loses its documents; a change to a
+person's `participant_identifiers` reaches every room they are in.
 
 ## Ids
 

@@ -1177,6 +1177,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "SELECT DISTINCT c.source_id FROM source_contacts c ORDER BY 1;",
             ),
             [
+                "beeper",
                 "facebook",
                 "google-takeout",
                 "linkedin",
@@ -1188,6 +1189,20 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "whatsapp",
             ],
             "every source that knows people put them in the index",
+        )
+        # Beeper knows a bridged Slack user by their Slack id, and serves
+        # the avatar the app had cached.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT DISTINCT c.contact_key || '|' || "
+                "(coalesce(json_extract(c.contact_json, '$.photo_url'), '') LIKE "
+                "'/applet/unified_document_index/asset/%') "
+                "FROM source_contacts c WHERE c.source_id = 'beeper' "
+                "AND c.contact_key LIKE 'slack:%' ORDER BY 1;",
+            ),
+            ["slack:T1701D/U0PICARD|0", "slack:T1701D/U0WORF|1"],
+            "Beeper's Slack people, Worf with his avatar",
         )
         # WhatsApp's account of a person is the phone's address book:
         # every name its entries give, then the name they gave

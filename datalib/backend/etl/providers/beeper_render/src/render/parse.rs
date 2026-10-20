@@ -5,14 +5,17 @@
 //! room is a `threads` row, a message an `mx_room_messages` row, a
 //! reaction either a `REACTION` message or an `mx_reactions` row, and a
 //! cached attachment a `beeper_media_files` row. Their Matrix ids are the
-//! identity. Everything Beeper keeps in its JSON columns is read here.
+//! identity. Everything Beeper keeps in its JSON columns is read here, and
+//! who each person is: their handle and avatar (`Person`).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use datalib_contact_schema::ContactHandle;
 use datalib_etl::doltlite_raw;
 use datalib_etl_render::inputs::{changed_rows, Inputs, RawRange};
+use datalib_handle::Handle;
 use datalib_schema::problems::{Problem, Reason};
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
@@ -31,6 +34,10 @@ const FORWARD_TABLES: &[&str] = &[
 
 const MEDIA_FILES: &str = "beeper_media_files";
 
+/// A person's phone numbers and addresses; its key leads with no room,
+/// so a change reaches the rooms its person is in.
+const IDENTIFIERS: &str = "participant_identifiers";
+
 #[derive(Debug, Clone)]
 pub struct Room {
     pub room_uuid: String,
@@ -45,6 +52,31 @@ pub struct Room {
     pub source_url: Option<String>,
 }
 
+/// Someone in a room, as the room's `participants` row and Beeper's
+/// identifiers for them say.
+#[derive(Debug, Clone)]
+pub struct Person {
+    pub mxid: String,
+    /// The name Beeper shows first.
+    pub names: Vec<String>,
+    /// The one a document names them by.
+    pub handle: Option<Handle>,
+    /// Every way the source knows to reach them, `handle` among them.
+    pub handles: Vec<ContactHandle>,
+    pub is_self: bool,
+    /// blake3 of their avatar in the blob CAS, where the app had cached it.
+    pub avatar: Option<String>,
+}
+
+impl Person {
+    pub fn label(&self) -> String {
+        self.names
+            .first()
+            .cloned()
+            .unwrap_or_else(|| self.mxid.clone())
+    }
+}
+
 /// One rendered-event entry. Both top-level messages and reactions
 /// flow through this same shape; renderers branch on
 /// [`Event::is_reaction`].
@@ -55,6 +87,7 @@ pub struct Event {
     pub event_type: String,
     pub timestamp_ms: i64,
     pub sender_label: Option<String>,
+    pub sender_handle: Option<Handle>,
     pub text_content: Option<String>,
     pub reply_to_native_event_id: Option<String>,
     pub reaction_emoji: Option<String>,
@@ -114,6 +147,8 @@ pub struct ScanResult {
 #[derive(Debug, Default)]
 pub struct ParsedBeeper {
     pub rooms: HashMap<String, Room>,
+    /// The people of each loaded room, by room uuid.
+    pub people: HashMap<String, Vec<Person>>,
     /// Ordered by `(room_uuid, period_key)`.
     pub docs: Vec<DocBucket>,
     /// The raw rows each loaded room reads, by room uuid.
@@ -201,16 +236,38 @@ async fn load(
 
     // ── which rooms to load ────────────────────────────────────────
     // Every forward table's key holds its room id, the one part a Matrix
-    // room id can be: it starts with `!`.
-    let forward = changed_rows(pool, range, pin, FORWARD_TABLES)
+    // room id can be: it starts with `!`. An identifier's key is
+    // `account|person|identifier`, and reaches every room its person is in.
+    let rooms_of: HashMap<String, Vec<String>> =
+        sqlx::query_as::<_, (String, String)>("SELECT id, room_id FROM participants")
+            .fetch_all(pool)
+            .await
+            .context("read participants' rooms")?
+            .into_iter()
+            .fold(HashMap::new(), |mut acc, (person, room)| {
+                acc.entry(person).or_default().push(room);
+                acc
+            });
+    let mut forward_tables = FORWARD_TABLES.to_vec();
+    forward_tables.push(IDENTIFIERS);
+    let forward = changed_rows(pool, range, pin, &forward_tables)
         .await?
         .map(|changed| {
-            changed
-                .values()
+            let by_room = FORWARD_TABLES
+                .iter()
+                .filter_map(|t| changed.get(*t))
                 .flatten()
                 .filter_map(|key| key.split('|').find(|part| part.starts_with('!')))
-                .filter(|room| rooms.contains_key(*room))
-                .map(String::from)
+                .map(String::from);
+            let by_person = changed
+                .get(IDENTIFIERS)
+                .into_iter()
+                .flatten()
+                .filter_map(|key| key.split('|').nth(1))
+                .flat_map(|person| rooms_of.get(person).into_iter().flatten().cloned());
+            by_room
+                .chain(by_person)
+                .filter(|room| rooms.contains_key(room))
                 .collect::<HashSet<String>>()
         });
     let room_by_bucket: HashMap<String, &str> = rooms
@@ -239,34 +296,25 @@ async fn load(
             .read("threads", room);
     }
 
-    // ── each room's people, by (room, user) ────────────────────────
-    let mut labels: HashMap<(String, String), String> = HashMap::new();
-    for r in sqlx::query(
-        "SELECT room_id, id, full_name, nickname FROM participants \
-         WHERE room_id IN (SELECT value FROM json_each(?))",
-    )
-    .bind(&loading_json)
-    .fetch_all(pool)
-    .await
-    .context("read participants")?
-    {
-        let user: String = r.try_get("id")?;
-        let full: Option<String> = r.try_get("full_name")?;
-        let nick: Option<String> = r.try_get("nickname")?;
-        let label = full.or(nick).unwrap_or_else(|| user.clone());
-        labels.insert((r.try_get("room_id")?, user), label);
-    }
-    let label_of = |room: &str, user: &Option<String>| {
-        let user = user.as_ref()?;
-        Some(
-            labels
-                .get(&(room.to_string(), user.clone()))
-                .cloned()
-                .unwrap_or_else(|| user.clone()),
-        )
-    };
-
     let media = MediaIndex::read(pool, db_path).await?;
+    let people = people(pool, &loading_json, &rooms, &media, &mut inputs).await?;
+    let person_of: HashMap<(&str, &str), &Person> = people
+        .iter()
+        .flat_map(|(room, ps)| {
+            ps.iter()
+                .map(move |p| ((room.as_str(), p.mxid.as_str()), p))
+        })
+        .collect();
+    // A sender who is no participant of the room shows as their Matrix id.
+    let sender_of = |room: &str, user: &Option<String>| -> (Option<String>, Option<Handle>) {
+        let Some(user) = user else {
+            return (None, None);
+        };
+        match person_of.get(&(room, user.as_str())) {
+            Some(p) => (Some(p.label()), p.handle.clone()),
+            None => (Some(user.clone()), None),
+        }
+    };
 
     // ── messages, and the reactions kept as messages ───────────────
     let mut events: Vec<(String, i64, Event)> = Vec::new();
@@ -303,6 +351,7 @@ async fn load(
         read.read("mx_room_messages", &format!("{room}|{event_id}"));
         let (blobs, problems) = attachments(&message, &media, read);
         let order: i64 = r.try_get::<Option<i64>, _>("hsOrder")?.unwrap_or(0);
+        let (sender_label, sender_handle) = sender_of(&room, &r.try_get("senderContactID")?);
         events.push((
             room.clone(),
             order,
@@ -311,7 +360,8 @@ async fn load(
                 native_event_id: event_id,
                 event_type,
                 timestamp_ms: r.try_get("timestamp")?,
-                sender_label: label_of(&room, &r.try_get("senderContactID")?),
+                sender_label,
+                sender_handle,
                 text_content: text,
                 reply_to_native_event_id: r.try_get("inReplyToID")?,
                 reaction_emoji,
@@ -338,6 +388,7 @@ async fn load(
             .entry(room.clone())
             .or_default()
             .read("mx_reactions", &format!("{room}|{reaction_id}"));
+        let (sender_label, sender_handle) = sender_of(&room, &r.try_get("senderID")?);
         events.push((
             room.clone(),
             0,
@@ -346,7 +397,8 @@ async fn load(
                 native_event_id: reaction_id,
                 event_type: "REACTION".to_string(),
                 timestamp_ms: r.try_get("timestamp")?,
-                sender_label: label_of(&room, &r.try_get("senderID")?),
+                sender_label,
+                sender_handle,
                 text_content: None,
                 reply_to_native_event_id: None,
                 reaction_emoji: r.try_get("description")?,
@@ -367,10 +419,106 @@ async fn load(
 
     Ok(ParsedBeeper {
         docs: bucket(events.into_iter().map(|(room, _, e)| (room, e)), period),
+        people,
         rooms,
         inputs,
         scan,
     })
+}
+
+/// Each loaded room's people, with the handle each is known by: a Slack
+/// user by their Slack id, which the bridge spells into the Matrix id
+/// (`@slackgo_<team>-<user>`, lowercased); the account's owner in a Slack
+/// room by the Slack user the room was bridged for; anyone by a number or
+/// address Beeper lists for them. Every read is declared on its room.
+async fn people(
+    pool: &SqlitePool,
+    loading_json: &str,
+    rooms: &HashMap<String, Room>,
+    media: &MediaIndex,
+    inputs: &mut HashMap<String, Inputs>,
+) -> Result<HashMap<String, Vec<Person>>> {
+    let mut reach: HashMap<String, Vec<ContactHandle>> = HashMap::new();
+    if doltlite_raw::table_exists(pool, IDENTIFIERS).await? {
+        for (person, identifier, kind) in sqlx::query_as::<_, (String, String, String)>(
+            "SELECT participant_id, identifier, identifier_type FROM participant_identifiers \
+             WHERE participant_id IN (SELECT id FROM participants \
+                                      WHERE room_id IN (SELECT value FROM json_each(?)))",
+        )
+        .bind(loading_json)
+        .fetch_all(pool)
+        .await
+        .context("read participant_identifiers")?
+        {
+            let handle = match kind.as_str() {
+                "phone" => ContactHandle::phone(None, identifier),
+                "email" => ContactHandle::email(None, identifier),
+                _ => continue,
+            };
+            reach.entry(person).or_default().push(handle);
+        }
+    }
+
+    let mut out: HashMap<String, Vec<Person>> = HashMap::new();
+    for r in sqlx::query(
+        "SELECT room_id, id, full_name, nickname, img_url, is_self FROM participants \
+         WHERE room_id IN (SELECT value FROM json_each(?)) ORDER BY room_id, id",
+    )
+    .bind(loading_json)
+    .fetch_all(pool)
+    .await
+    .context("read participants")?
+    {
+        let room_id: String = r.try_get("room_id")?;
+        let mxid: String = r.try_get("id")?;
+        let is_self = r.try_get::<Option<i64>, _>("is_self")?.unwrap_or(0) != 0;
+        let read = inputs.entry(room_id.clone()).or_default();
+        read.read("participants", &format!("{room_id}|{mxid}"));
+        let room = rooms.get(&room_id);
+        let own = slack_user(&mxid).or_else(|| {
+            let room = room.filter(|r| is_self && r.network == "slack")?;
+            let (team, user) = room.external_workspace_id.as_deref()?.split_once('-')?;
+            Handle::slack(team, user)
+        });
+        let mut handles: Vec<ContactHandle> = own.iter().cloned().map(ContactHandle::of).collect();
+        handles.extend(reach.get(&mxid).cloned().unwrap_or_default());
+        let names: Vec<String> = [
+            r.try_get::<Option<String>, _>("full_name")?,
+            r.try_get::<Option<String>, _>("nickname")?,
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|n| !n.trim().is_empty())
+        .fold(Vec::new(), |mut acc, n| {
+            if !acc.contains(&n) {
+                acc.push(n);
+            }
+            acc
+        });
+        let files = read.lookup(MEDIA_FILES, &media.blake3_by_path);
+        let avatar = r
+            .try_get::<Option<String>, _>("img_url")?
+            .as_deref()
+            .and_then(media_path)
+            .and_then(|path| files.get(&path).cloned());
+        out.entry(room_id).or_default().push(Person {
+            handle: handles.iter().find_map(|h| h.handle.clone()),
+            mxid,
+            names,
+            handles,
+            is_self,
+            avatar,
+        });
+    }
+    Ok(out)
+}
+
+/// The Slack user a bridged Slack account's Matrix id names. The bridge
+/// lowercases Slack's ids, which are upper-case letters and digits.
+fn slack_user(mxid: &str) -> Option<Handle> {
+    let local = mxid.strip_prefix("@slackgo_")?.split(':').next()?;
+    let (team, user) = local.split_once('-')?;
+    Handle::slack(&team.to_ascii_uppercase(), &user.to_ascii_uppercase())
 }
 
 /// File each message under its `(room, period)`, and each reaction under
@@ -611,6 +759,16 @@ mod tests {
             Some("server/abc")
         );
         assert_eq!(media_path("https://example.com/warp.png"), None);
+    }
+
+    #[test]
+    fn a_bridged_slack_user_is_their_slack_handle() {
+        assert_eq!(
+            slack_user("@slackgo_t1701d-u0worf:beeper.local").map(|h| h.as_str().to_string()),
+            Some("slack:T1701D/U0WORF".to_string())
+        );
+        assert_eq!(slack_user("@signal_abc:local-signal.localhost"), None);
+        assert_eq!(slack_user("@picard:beeper.com"), None);
     }
 
     #[test]

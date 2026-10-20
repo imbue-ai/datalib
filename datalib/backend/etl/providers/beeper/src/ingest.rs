@@ -74,9 +74,11 @@ pub fn default_beeper_data_dir() -> PathBuf {
         .join("Library/Application Support/BeeperTexts")
 }
 
-/// The tables of `index.db` render reads. `mx_room_messages` declares
-/// its local row number as its key, which a re-index renumbers; a
-/// message is its Matrix event in its room.
+/// The tables of `index.db` render reads: the chats, their people and
+/// the numbers and addresses Beeper knows for them, the messages and the
+/// reactions. `mx_room_messages` declares its local row number as its
+/// key, which a re-index renumbers; a message is its Matrix event in its
+/// room.
 fn index_options(index_db: &Path) -> MirrorOptions {
     MirrorOptions {
         include_tables: [
@@ -84,6 +86,7 @@ fn index_options(index_db: &Path) -> MirrorOptions {
             "participants",
             "mx_room_messages",
             "mx_reactions",
+            "participant_identifiers",
         ]
         .map(String::from)
         .to_vec(),
