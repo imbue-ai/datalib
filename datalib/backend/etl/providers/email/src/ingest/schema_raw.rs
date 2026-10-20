@@ -157,9 +157,12 @@ impl MailboxRow {
 }
 
 /// `threads` — one row per JMAP Thread or Mbox-derived thread
-/// grouping.
+/// grouping. No index on `account_id`: its entries sort by the thread
+/// id, which is random relative to the download's order, so every
+/// checkpoint kept about one page of it per thread written. The few
+/// per-account reads scan the table instead.
 #[derive(Debug, Clone, RawTable)]
-#[raw_table(table = "threads", index = "threads_by_account:account_id")]
+#[raw_table(table = "threads")]
 pub struct ThreadRow {
     pub id_and_payload: WirePayload,
     pub account_id: String,
@@ -427,6 +430,18 @@ pub const LADDER: &[Migration] = &[
         version: 3,
         name: "what is held is the listing sidecar's held_version",
         apply: |conn| Box::pin(super::listed::migrate_held_into_the_sidecar(conn)),
+    },
+    Migration {
+        version: 4,
+        name: "threads lose their account index",
+        apply: |conn| {
+            Box::pin(async move {
+                sqlx::query("DROP INDEX IF EXISTS threads_by_account")
+                    .execute(&mut *conn)
+                    .await?;
+                Ok(())
+            })
+        },
     },
 ];
 

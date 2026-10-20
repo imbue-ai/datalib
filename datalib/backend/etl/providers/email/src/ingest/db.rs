@@ -598,6 +598,47 @@ mod tests {
         db.close().await;
     }
 
+    /// The fourth rung drops `threads_by_account`, whose random thread
+    /// ids made every checkpoint keep a page per thread written (#1259),
+    /// and keeps the threads.
+    #[tokio::test]
+    async fn the_fourth_rung_drops_the_thread_account_index() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("j.doltlite_db");
+        {
+            let ddl = full_ddl();
+            let ddl: Vec<&str> = ddl.iter().map(String::as_str).collect();
+            let pool = dr::open(&path, &ddl).await.unwrap();
+            for sql in [
+                "CREATE INDEX threads_by_account ON threads(account_id)",
+                "INSERT INTO threads (id, payload, account_id) VALUES ('T1', jsonb('{}'), 'A1')",
+                "UPDATE _datalib_meta SET value = '3' WHERE key = 'schema_version'",
+            ] {
+                sqlx::query(sql).execute(&pool).await.unwrap();
+            }
+            dr::commit_run(&pool, "the third rung's rows")
+                .await
+                .unwrap();
+            pool.close().await;
+        }
+
+        let db = RawDb::open(&path)
+            .await
+            .expect("the fourth rung carries it");
+        let index: Option<String> =
+            sqlx::query_scalar("SELECT name FROM sqlite_master WHERE name = 'threads_by_account'")
+                .fetch_optional(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(index, None);
+        let threads: Vec<String> = sqlx::query_scalar("SELECT id FROM threads")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(threads, ["T1"]);
+        db.close().await;
+    }
+
     #[tokio::test]
     async fn email_round_trips_with_joins() {
         let (_d, db) = tmp_db().await;
