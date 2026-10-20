@@ -1,6 +1,6 @@
 # Untrusted data stays data
 
-**Status: agreed 2026-10-20; being built in three parts (§4).** This
+**Status: agreed 2026-10-20; §3.1 and §3.3 built (#1268), §3.2 in #1269.** This
 replaces the first version of this plan (#1241, `bbc500272`), which
 proposed five pieces. Two of them were dropped after review, and two were
 changed; §5 says which and why. Line numbers are at `56d70dd61`.
@@ -180,4 +180,17 @@ cookie attached.
 
 - **Which `Host` the Imbue forwarder sends**, its own name or the
   server's address. Rule 4 accepts either.
-- **The `GET` side-effect audit** in §3.2 may find routes to change.
+- **`GET` routes with side effects.** §3.2's rule 1 lets a navigation
+  from any site reach any path with the cookie, so it assumes none. The
+  audit done with §3.2 found two that break it:
+  - `GET /api/remote_media` fetches a caller-named remote URL into the
+    content store (up to 50 MB), and its allow-list check trusts the
+    `source=` and `document=` the caller supplies without checking the
+    URL appears in them.
+  - The search applet's first free-text query starts `qmd mcp` and a
+    node embedder.
+
+  Smaller ones: `?refresh=1` on `/api/manage/rows` and
+  `/api/pipeline/storage` walks the data root; reading a finished
+  connect or probe result drops it from memory. The first two are the
+  next work.

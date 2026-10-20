@@ -149,6 +149,18 @@ expression: snapshot
       "title": "drone.4.of.12@unimatrix01.borg"
     },
     {
+      "bucket_key": "00000000-0000-8148-a613-8c1397015ea8",
+      "created_at": "2026-01-08T09:00:00+00:00",
+      "kind": "chat",
+      "markdown_uuid": "00000000-0000-8148-a613-8c1397015ea8",
+      "md_path": "tng_email/render_markdown/00000000-0000-8148-a613-8c1397015ea8/all.md",
+      "modified_at": "2026-01-08T09:00:00+00:00",
+      "provider": "email",
+      "renderer_version": "rust-v1.13",
+      "source_id": "tng_email",
+      "title": "You've won a holosuite upgrade!"
+    },
+    {
       "bucket_key": "00000000-0000-85d9-b5a3-420c27c71680",
       "created_at": "2369-04-15T11:00:00+00:00",
       "kind": "chat",
@@ -2053,7 +2065,7 @@ expression: snapshot
       "message": "schema: grid index"
     },
     {
-      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=178 markdowns_read=178 markdowns_removed=3 rows_inserted=820"
+      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=179 markdowns_read=179 markdowns_removed=3 rows_inserted=822"
     }
   ],
   "grid_rows": [
@@ -2386,6 +2398,36 @@ expression: snapshot
       "upstream_entity_kind": "contact",
       "upstream_id": "Borg#Borg:Borg:3",
       "uuid": "00000000-0000-8140-88d9-42badf1b195b"
+    },
+    {
+      "account": "picard@enterprise.starfleet",
+      "author": null,
+      "byte_size": 276,
+      "channel": null,
+      "content_hash": "8d3518731fe42620",
+      "conversation_name": "You've won a holosuite upgrade!",
+      "conversation_uuid": "00000000-0000-8148-a613-8c1397015ea8",
+      "created_at": "2026-01-08T09:00:00+00:00",
+      "entire_chat": "/chat/00000000-0000-8148-a613-8c1397015ea8",
+      "git_sha": null,
+      "item_count": 1,
+      "kind": "Email Thread",
+      "markdown_uuid": "00000000-0000-8148-a613-8c1397015ea8",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "preview_len": 157,
+      "project": null,
+      "provider": "email",
+      "qmd_path": "tng_email/render_markdown/00000000-0000-8148-a613-8c1397015ea8/all.md",
+      "source_label": "Mail",
+      "source_url": "https://mail.google.com/mail/u/0/#search/rfc822msgid:holosuite-win-001%40quarks.example",
+      "upstream_account": "picard@enterprise.starfleet",
+      "upstream_entity_kind": "thread",
+      "upstream_id": "1853740000000007190",
+      "uuid": "00000000-0000-8148-a613-8c1397015ea8"
     },
     {
       "account": null,
@@ -8176,6 +8218,36 @@ expression: snapshot
       "upstream_entity_kind": "email",
       "upstream_id": "19b98c1db001a2b5",
       "uuid": "019b98c1-db00-89bf-8e74-14d9155da327"
+    },
+    {
+      "account": "picard@enterprise.starfleet",
+      "author": "Quark's Bar <prizes@quarks.example>",
+      "byte_size": 276,
+      "channel": null,
+      "content_hash": "8d3518731fe42620",
+      "conversation_name": "You've won a holosuite upgrade!",
+      "conversation_uuid": "00000000-0000-8148-a613-8c1397015ea8",
+      "created_at": "2026-01-08T09:00:00+00:00",
+      "entire_chat": "/chat/00000000-0000-8148-a613-8c1397015ea8",
+      "git_sha": null,
+      "item_count": 1,
+      "kind": "Email",
+      "markdown_uuid": "00000000-0000-8148-a613-8c1397015ea8",
+      "message_index": 0,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "preview_len": 157,
+      "project": null,
+      "provider": "email",
+      "qmd_path": "tng_email/render_markdown/00000000-0000-8148-a613-8c1397015ea8/all.md",
+      "source_label": "Mail",
+      "source_url": "https://mail.google.com/mail/u/0/#search/rfc822msgid:holosuite-win-001%40quarks.example",
+      "upstream_account": "picard@enterprise.starfleet",
+      "upstream_entity_kind": "email",
+      "upstream_id": "19b9ceb55deedc16",
+      "uuid": "019b9cd5-8e80-8562-98ed-abfb7e8a4cac"
     },
     {
       "account": null,
@@ -18573,15 +18645,15 @@ expression: snapshot
     },
     {
       "kind": "Table",
-      "members_sha": "sha256:a9b36eb212ee77536991d3bdcf9b2128044062dbb23a380007e58ee768fd5170",
+      "members_sha": "sha256:4a64bf366f16b7e7536995840373eacf5dbff622d49942a97ade4df50fdd7be2",
       "rows": 176,
       "source": ""
     }
   ],
   "summary": {
-    "documents_count": 170,
+    "documents_count": 171,
     "dolt_log_count": 3,
-    "grid_rows_count": 550,
+    "grid_rows_count": 552,
     "storage_rows_count": 233
   }
 }
