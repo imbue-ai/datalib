@@ -282,21 +282,29 @@ async fn sync_to_commit(out: &Path, api: &Path, playback: &Path) -> String {
     head
 }
 
-/// The markdown of each rendered thread, keyed by its root's text.
+/// The markdown of each rendered thread, keyed by its root's text, and
+/// the threads the run was narrowed to. One thread a page, so every
+/// page boundary is crossed.
 fn render_threads(
     raw: &Path,
     range: datalib_etl_render::inputs::RawRange<'_>,
 ) -> (
-    datalib_etl_slack_render::render::ParsedSlack,
+    Option<std::collections::HashSet<String>>,
     BTreeMap<String, String>,
 ) {
-    let parsed = datalib_etl_slack_render::render::parse(raw, "src", range).unwrap();
+    let store = datalib_etl_slack_render::render::open(raw, "src", range)
+        .unwrap()
+        .expect("a committed store");
     let out = tempdir().unwrap();
     let mut docs = BTreeMap::new();
-    datalib_etl_slack_render::render::render::render_all(
-        &parsed,
+    datalib_etl_slack_render::render::render::render_store(
+        &store,
         out.path(),
         "src",
+        datalib_etl_render::pages::PageSize {
+            buckets: 1,
+            bytes: 1,
+        },
         &datalib_etl::progress::Progress::noop(),
         &mut |doc| {
             let md: String = doc.sections.iter().map(|s| s.md.as_str()).collect();
@@ -307,9 +315,12 @@ fn render_threads(
             docs.insert(root.to_string(), md);
             Ok(())
         },
+        &mut |_| Ok(()),
     )
     .unwrap();
-    (parsed, docs)
+    let narrowed = store.scan.render.clone();
+    store.close();
+    (narrowed, docs)
 }
 
 fn unread_count(md: &str) -> usize {
@@ -347,7 +358,7 @@ async fn read_marks_render_and_a_moved_mark_rerenders_only_what_it_crossed() {
     assert_ne!(first, second, "the moved mark is a commit of its own");
 
     let nothing_stale = std::collections::HashSet::new();
-    let (parsed, incremental) = render_threads(
+    let (narrowed, incremental) = render_threads(
         &out,
         datalib_etl_render::inputs::RawRange {
             cursor: Some(&first),
@@ -355,7 +366,7 @@ async fn read_marks_render_and_a_moved_mark_rerenders_only_what_it_crossed() {
             stale: Some(&nothing_stale),
         },
     );
-    let named = parsed.scan.render.expect("a narrowed render");
+    let named = narrowed.expect("a narrowed render");
     assert!(named.contains(&format!("T1#C1#{B}")), "{named:?}");
     assert!(
         !named.contains(&format!("T1#C1#{C}")),

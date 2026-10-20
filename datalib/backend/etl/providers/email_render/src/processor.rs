@@ -8,6 +8,7 @@ use datalib_etl::processor::PlanContext;
 use datalib_etl_email::ingest;
 use datalib_etl_email_config::EmailOutlink;
 use datalib_etl_email_config::EmailRenderConfig;
+use datalib_etl_render::pages::PageSize;
 use datalib_etl_render::processor::{
     plan_source_render, ReadScope, RenderCtx, RenderProcessor, SourceRender,
 };
@@ -56,8 +57,8 @@ impl SourceRender for EmailRender {
     }
 
     async fn run(&self, raw_path: &Path, ctx: &RenderCtx<'_>) -> Result<String> {
-        use crate::render::parse::parse;
-        use crate::render::render::render_all;
+        use crate::render::parse::open;
+        use crate::render::render::{render_store, PageEnd};
 
         let db = ingest::db_path_for(raw_path);
         if !db.exists() {
@@ -69,46 +70,52 @@ impl SourceRender for EmailRender {
             return Ok("skipped (no raw db)".into());
         }
 
-        // Two-phase parse driven by the render cursor's commit.
-        let mut parsed = parse(
+        let Some(store) = open(
             &db,
             ctx.name,
             ctx.raw_range(),
             !self.only_render_labels.is_empty(),
-        )?;
+        )?
+        else {
+            return Ok("rendered".into());
+        };
+        // `threads` is read by no render, so a stale parse problem on
+        // one is cleared with the rest.
         ctx.report_unparsed(
             &ReadScope::Whole(vec!["accounts", "mailboxes", "threads"]),
-            &parsed.unparsed,
+            &store.unparsed,
             Some(self.render_version()),
         )?;
-        let mut on_doc = |md| ctx.emit_doc(md);
-        let rendered = render_all(
-            &parsed,
+        ctx.declare_empty(store.scan.gone.iter().map(String::as_str))?;
+        // Each page is declared before the next is read. A stale thread
+        // no email still belongs to builds no chat: declared with
+        // nothing, its documents go once the diff says its emails left.
+        // One the label filter keeps out goes on the filter's word. The
+        // rendered ones follow and replace that.
+        let mut on_page = |page: PageEnd| -> Result<()> {
+            ctx.declare_empty(page.looked_at.iter().map(String::as_str))?;
+            for thread in &page.rendered.excluded {
+                ctx.exclude_bucket(thread)?;
+            }
+            ctx.declare_buckets(&page.rendered.buckets)
+        };
+        let rendered = render_store(
+            &store,
             ctx.root,
             ctx.name,
             self.outlink,
             &self.only_render_labels,
+            PageSize::DEFAULT,
             ctx.progress,
-            &mut on_doc,
+            &mut |md| ctx.emit_doc(md),
+            &mut on_page,
         );
-        parsed.close();
-        let rendered = rendered?;
-        // A thread this run looked at that no email still belongs to
-        // builds no chat: declared with nothing, its documents go once
-        // the diff says its emails left. One the label filter keeps out
-        // goes on the filter's word. The rendered ones follow and
-        // replace that.
-        for (account_id, thread_id) in parsed.scan.render.iter().flatten() {
-            ctx.declare_bucket(
-                &crate::render::ids::thread(ctx.name, account_id, thread_id).uuid,
-                &[],
-            )?;
+        let head = store.scan.new_head.clone();
+        store.close();
+        rendered?;
+        if let Some(head) = head {
+            ctx.consumed(&head);
         }
-        ctx.declare_empty(parsed.scan.gone.iter().map(String::as_str))?;
-        for thread in &rendered.excluded {
-            ctx.exclude_bucket(thread)?;
-        }
-        ctx.finish(&rendered.buckets, parsed.scan.new_head.as_deref())?;
         Ok("rendered".into())
     }
 }

@@ -4,8 +4,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
-use datalib_etl_render::inputs::RawRange;
-use datalib_etl_slack_render::render::{ids, parse, render::render_all};
+use datalib_etl_slack_render::render::{ids, parse_raw_json_dir, render::render_all};
 use insta::{assert_json_snapshot, assert_snapshot};
 
 fn fixture_root() -> PathBuf {
@@ -34,7 +33,7 @@ fn collect_md(root: &std::path::Path) -> BTreeMap<String, String> {
 
 #[test]
 fn renders_tng_fixture() {
-    let parsed = parse(&fixture_root(), "slack_api", RawRange::cold()).expect("parse");
+    let parsed = parse_raw_json_dir(&fixture_root()).expect("parse");
     let tmp = tempfile::tempdir().expect("tmp");
     let mut docs: Vec<datalib_etl_render::grid_index::RenderedMarkdown> = Vec::new();
     let mut on_done =
@@ -54,7 +53,6 @@ fn renders_tng_fixture() {
     // each standalone message is its own thread bucket).
     assert_eq!(summary.threads_total, 11);
     assert_eq!(summary.threads_rendered, 11);
-    assert_eq!(summary.threads_skipped, 0);
     assert_eq!(docs.len(), 11);
 
     let md_tree = collect_md(tmp.path());
@@ -78,7 +76,7 @@ fn renders_tng_fixture() {
 
 #[test]
 fn renders_tng_fixture_grid_rows() {
-    let parsed = parse(&fixture_root(), "slack_api", RawRange::cold()).expect("parse");
+    let parsed = parse_raw_json_dir(&fixture_root()).expect("parse");
     let tmp = tempfile::tempdir().expect("tmp");
 
     // Capture every grid row the chat-common renderer emits.
