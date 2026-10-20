@@ -146,7 +146,7 @@ fn to_chat(source_id: &str, room: &Room, doc: &DocBucket, inputs: &Inputs) -> No
         // bridge's own id stays on `project`'s neighbour columns.
         external_id: Some(room.native_room_id.clone()),
         upstream_account: None,
-        source_url: None,
+        source_url: room.source_url.clone(),
         org_uuid: None,
         org_name: None,
         // A Beeper stanza bridges several networks, so they stay apart
@@ -205,7 +205,7 @@ fn to_item(source_id: &str, room: &Room, doc: &DocBucket, m: &Event) -> Normaliz
             unread: false,
             recipients: Vec::new(),
             mentions: Vec::new(),
-            problems: Vec::new(),
+            problems: m.problems.clone(),
         };
     }
 
@@ -233,7 +233,7 @@ fn to_item(source_id: &str, room: &Room, doc: &DocBucket, m: &Event) -> Normaliz
         unread: false,
         recipients: Vec::new(),
         mentions: Vec::new(),
-        problems: Vec::new(),
+        problems: m.problems.clone(),
     }
 }
 
@@ -254,7 +254,7 @@ fn to_attachment(m: &Event, b: &Blob) -> NormalizedAttachment {
                 _ => None,
             }),
         byte_len: b.byte_len,
-        source_url: b.source_url.clone(),
+        source_url: None,
         ref_id: b.blake3.clone(),
     }
 }

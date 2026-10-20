@@ -1,85 +1,68 @@
--- ST:TNG-themed fixture for the megabridge enrichment pass.
+-- ST:TNG-themed `local-signal/megabridge.db`: the on-device Signal
+-- bridge's own record of each message, pairing the Matrix event (`mxid`)
+-- with Signal's id for it.
 --
--- Each message and reaction here pairs `mxid` (the Matrix event
--- id our extractor stored as `native_event_id`) with the bridge's
--- own native id. The enrichment UPDATE walks this table after the
--- index.db pass and stamps `external_event_id` for matched rows.
+-- `message` is the real bridgev2 table, column for column, keyed by a
+-- local `rowid` as the real one is; its foreign keys to the bridge's
+-- `portal` and `ghost` tables are left out with those tables, which
+-- nothing reads.
 --
--- Only the columns our enricher SELECTs are present. The real
--- megabridge has dozens of NOT NULL columns + foreign-key
--- constraints; the fixture stays terse.
---
--- Pipe into sqlite3 from `build_fixture.sh`:
---     sqlite3 <BeeperTexts>/local-signal/megabridge.db < local_signal_megabridge.sql
+-- Laid out by //tests/fixtures:make_beeper_texts.py.
 
 PRAGMA journal_mode = DELETE;
 
--- ─────────────────────────────────────────────────────────────────────
--- message — mxid ↔ id pairing for Signal messages
--- ─────────────────────────────────────────────────────────────────────
+CREATE TABLE message (
+    rowid              INTEGER PRIMARY KEY,
 
-CREATE TABLE IF NOT EXISTS message (
-    bridge_id TEXT NOT NULL,
-    id        TEXT NOT NULL,
-    part_id   TEXT NOT NULL,
-    mxid      TEXT NOT NULL,
-    PRIMARY KEY(bridge_id, mxid)
+    bridge_id        TEXT    NOT NULL,
+    id               TEXT    NOT NULL,
+    part_id          TEXT    NOT NULL,
+    mxid             TEXT    NOT NULL,
+
+    room_id          TEXT    NOT NULL,
+    room_receiver    TEXT    NOT NULL,
+    sender_id        TEXT    NOT NULL,
+    sender_mxid      TEXT    NOT NULL,
+    timestamp        BIGINT  NOT NULL,
+    edit_count       INTEGER NOT NULL,
+    double_puppeted  BOOLEAN,
+    thread_root_id   TEXT,
+    reply_to_id      TEXT,
+    reply_to_part_id TEXT,
+    send_txn_id      TEXT,
+    metadata         jsonb   NOT NULL,
+
+    CONSTRAINT message_real_pkey UNIQUE (bridge_id, room_receiver, id, part_id),
+    CONSTRAINT message_mxid_unique UNIQUE (bridge_id, mxid),
+    CONSTRAINT message_txn_id_unique UNIQUE (bridge_id, room_receiver, send_txn_id)
 );
 
--- Signal-native ids look like `<sender-account-uuid>|<unix-ms>` on
--- mautrix-signal. Match that shape so the enrichment output looks
--- realistic.
-INSERT INTO message VALUES
-    ('local-signal', 'tng-picard-account-uuid|1710493200000', '',
-        '$tng-data-001:ba_TNG.local-signal.localhost'),
-    ('local-signal', 'tng-data-conv-uuid-0001|1710493500000', '',
-        '$tng-data-002:ba_TNG.local-signal.localhost'),
-    ('local-signal', 'tng-picard-account-uuid|1710493800000', '',
-        '$tng-data-003:ba_TNG.local-signal.localhost'),
-    ('local-signal', 'tng-data-conv-uuid-0001|1712057400000', '',
-        '$tng-data-004:ba_TNG.local-signal.localhost'),
-    ('local-signal', 'tng-picard-account-uuid|1712057700000', '',
-        '$tng-data-005:ba_TNG.local-signal.localhost'),
-    ('local-signal', 'tng-crusher-conv-uuid-0002|1712775600000', '',
-        '$tng-bev-001:ba_TNG.local-signal.localhost'),
-    ('local-signal', 'tng-picard-account-uuid|1712775660000', '',
-        '$tng-bev-002:ba_TNG.local-signal.localhost');
+-- Signal's id for a message is `<sender ACI>|<sent ms>`, which is also
+-- how a Signal backup names it.
+CREATE TEMP TABLE tng_message (id TEXT, room_id TEXT, sender_mxid TEXT, mxid TEXT);
+INSERT INTO tng_message VALUES
+    ('tng-picard-account-uuid|1710493200000', 'tng-data-conv-uuid-0001',
+        '@picard:beeper.com', '$tng-data-001:ba_TNG.local-signal.localhost'),
+    ('tng-data-conv-uuid-0001|1710493500000', 'tng-data-conv-uuid-0001',
+        '@signal_+15551234001:local-signal.localhost', '$tng-data-002:ba_TNG.local-signal.localhost'),
+    ('tng-picard-account-uuid|1710493800000', 'tng-data-conv-uuid-0001',
+        '@picard:beeper.com', '$tng-data-003:ba_TNG.local-signal.localhost'),
+    ('tng-data-conv-uuid-0001|1712057400000', 'tng-data-conv-uuid-0001',
+        '@signal_+15551234001:local-signal.localhost', '$tng-data-004:ba_TNG.local-signal.localhost'),
+    ('tng-picard-account-uuid|1712057700000', 'tng-data-conv-uuid-0001',
+        '@picard:beeper.com', '$tng-data-005:ba_TNG.local-signal.localhost'),
+    ('tng-crusher-conv-uuid-0002|1712775600000', 'tng-crusher-conv-uuid-0002',
+        '@signal_+15551234002:local-signal.localhost', '$tng-bev-001:ba_TNG.local-signal.localhost'),
+    ('tng-picard-account-uuid|1712775660000', 'tng-crusher-conv-uuid-0002',
+        '@picard:beeper.com', '$tng-bev-002:ba_TNG.local-signal.localhost'),
+    -- The bridge keeps a message the app's cache has let go.
+    ('tng-data-conv-uuid-0001|1709000000000', 'tng-data-conv-uuid-0001',
+        '@signal_+15551234001:local-signal.localhost',
+        '$tng-data-000:ba_TNG.local-signal.localhost');
 
--- A megabridge row whose mxid doesn't match anything in index.db.
--- Enrichment should count this as `events_orphaned`.
-INSERT INTO message VALUES
-    ('local-signal', 'tng-orphan|9999999999999', '',
-        '$tng-orphan-not-in-index-db:ba_TNG.local-signal.localhost');
-
--- ─────────────────────────────────────────────────────────────────────
--- reaction — pairs the reaction mxid with the bridge-native target
--- ─────────────────────────────────────────────────────────────────────
-
-CREATE TABLE IF NOT EXISTS reaction (
-    bridge_id        TEXT NOT NULL,
-    message_id       TEXT NOT NULL,
-    message_part_id  TEXT NOT NULL,
-    sender_id        TEXT NOT NULL,
-    sender_mxid      TEXT NOT NULL DEFAULT '',
-    emoji_id         TEXT NOT NULL,
-    room_id          TEXT NOT NULL,
-    room_receiver    TEXT NOT NULL,
-    mxid             TEXT NOT NULL,
-    timestamp        INTEGER NOT NULL,
-    emoji            TEXT NOT NULL,
-    PRIMARY KEY (bridge_id, room_receiver, message_id, message_part_id, sender_id, emoji_id)
-);
-
-INSERT INTO reaction VALUES
-    -- Picard's ❤️ on Data's image (March).
-    ('local-signal', 'tng-picard-account-uuid|1710493800000', '',
-        'tng-data-conv-uuid-0001', '@signal_+15551234001:local-signal.localhost',
-        '❤️', 'tng-data-conv-uuid-0001', 'tng-picard-account-uuid',
-        '$tng-data-react-001:ba_TNG.local-signal.localhost',
-        1710494100000, '❤️'),
-    -- Data's 🤔 (April), reacting to the March image (cross-month).
-    ('local-signal', 'tng-picard-account-uuid|1710493800000', '',
-        'tng-data-conv-uuid-0001', '@signal_+15551234001:local-signal.localhost',
-        '🤔', 'tng-data-conv-uuid-0001', 'tng-picard-account-uuid',
-        '$tng-data-react-002:ba_TNG.local-signal.localhost',
-        1712100000000, '🤔');
+INSERT INTO message (bridge_id, id, part_id, mxid, room_id, room_receiver, sender_id,
+                     sender_mxid, timestamp, edit_count, double_puppeted, metadata)
+SELECT 'local-signal', id, '', mxid, room_id, 'tng-picard-account-uuid',
+       substr(id, 1, instr(id, '|') - 1), sender_mxid,
+       CAST(substr(id, instr(id, '|') + 1) AS INTEGER), 0, 0, '{}'
+FROM tng_message;

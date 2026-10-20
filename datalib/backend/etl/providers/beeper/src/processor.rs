@@ -1,8 +1,5 @@
-//! Program-A `DataProcessor`s for the beeper source. Beeper contributes an
-//! **download** processor ([`BeeperIngest`] — reads Beeper Texts' on-disk
-//! SQLite stores) when `texts` is present, plus an always-present
-//! **render** processor ([`BeeperRender`]). [`plan_ingest`] /
-//! [`plan_render`] build the per-wave processors the orchestrator drives.
+//! Program-A `DataProcessor` for the `beeper` source: present when `texts`
+//! is configured. The render processor lives in `datalib_etl_beeper_render`.
 
 use std::path::PathBuf;
 
@@ -10,38 +7,33 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
+use datalib_etl::run_problems;
 use datalib_etl_beeper_config::{BeeperConfig, BeeperSync};
 
-use crate::ingest;
+use crate::ingest::{self, RawDb};
 
 pub async fn migrate(raw_dir: &std::path::Path) -> anyhow::Result<()> {
-    let db = ingest::RawDb::open(&datalib_etl::raw_layout::entities_db(raw_dir)).await?;
+    let db = RawDb::open(&datalib_etl::raw_layout::entities_db(raw_dir)).await?;
     db.close().await;
     Ok(())
 }
 
-/// Ingest wave: present iff `texts`.
 pub fn plan_ingest(ctx: PlanContext, config: BeeperConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
-    let name = ctx.name;
-    let raw_path = config.common.raw_path().to_path_buf();
-    let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
-    if let Some(sync) = config.texts {
-        if sync.period.is_some() {
-            anyhow::bail!(
-                "beeper `texts.period` is a render knob — put `period` in the \
-                 render step's params instead"
-            );
-        }
-        procs.push(Box::new(BeeperIngest {
-            id: format!("beeper/{name}/download"),
-            raw_path,
-            sync,
-        }));
-    }
-    Ok(procs)
+    Ok(config
+        .texts
+        .map(|sync| -> Box<dyn DataProcessor> {
+            Box::new(BeeperIngest {
+                id: format!("beeper/{}/download", ctx.name),
+                raw_path: config.common.raw_path().to_path_buf(),
+                sync,
+            })
+        })
+        .into_iter()
+        .collect())
 }
 
-/// Beeper's download processor. Owns its raw doltlite store end to end.
+/// Owns its raw doltlite store end to end: open, register the interrupt
+/// hook, mirror, commit + close via `run_store`.
 struct BeeperIngest {
     id: String,
     raw_path: PathBuf,
@@ -55,29 +47,30 @@ impl DataProcessor for BeeperIngest {
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        let entity_db = ingest::db_path_for(&self.raw_path);
-        let db = ingest::RawDb::open(&entity_db).await?;
+        let beeper_dir = self
+            .sync
+            .path()
+            .unwrap_or_else(ingest::default_beeper_data_dir);
+        // Before the store: a store that exists reads as published to the
+        // render and the migrate pass.
+        let index_db = beeper_dir.join("index.db");
+        if !index_db.is_file() {
+            anyhow::bail!(
+                "no index.db at {}: is Beeper Texts installed, and has it run once? \
+                 `texts.path` names another data directory",
+                index_db.display()
+            );
+        }
+        let db = RawDb::open(&datalib_etl::doltlite_raw::db_path_for(&self.raw_path)).await?;
         let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
-        ctx.run_store(pool, Some(cas_pool), |_| async {
-            let s = ingest::fetch(ingest::FetchOptions {
-                db,
-                sources: self.sync.sources.clone(),
-                beeper_data_dir: self.sync.path(),
-                media: self.sync.media,
-                progress: ctx.progress.clone(),
-                control: ctx.control.clone(),
+        let db = &db;
+        ctx.run_store(pool.clone(), Some(cas_pool), |_| async move {
+            run_problems::collecting(&pool, &ctx.control.stop, |found| async move {
+                let summary =
+                    ingest::fetch(&beeper_dir, db, self.sync.media, ctx.progress, &found).await?;
+                Ok(summary.summary())
             })
-            .await?;
-            Ok(format!(
-                "rooms={} users={} events={} blobs={} blob_errors={} enriched={} orphaned={}",
-                s.rooms,
-                s.users,
-                s.events,
-                s.blobs,
-                s.blob_errors,
-                s.events_enriched,
-                s.events_orphaned,
-            ))
+            .await
         })
         .await
     }
