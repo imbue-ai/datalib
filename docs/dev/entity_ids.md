@@ -289,7 +289,7 @@ back by render as the natural key.
 |---|---|---|
 | airvisual | none — the page keyed on the source id, a device on its serial | none — a device's stamp is its latest reading |
 | apple_messages | none — `message.guid` is a UUID Messages mints | messages, tapbacks |
-| beeper | none — `rooms.account_id` is nullable; keys are Matrix ids | events, at millisecond precision |
+| beeper | none — `threads.accountID` is nullable; keys are Matrix ids | events, at millisecond precision |
 | calendar | none — keyed on `{calendar}#{UID}` (iCalendar) or `{calendar}#{event id}` (Google); a changed iCalendar occurrence adds its `RECURRENCE-ID` as a UTC instant | none — an event's start moves when it is rescheduled |
 | chatgpt | none — keys are OpenAI's conversation id, and a message's `{conversation}#{message}`, since a conversation branched into a new chat repeats the original's message ids | messages |
 | claude | none — `org_uuid` is nullable (see above); keys are Anthropic's uuids | messages, blocks, project documents |
@@ -321,7 +321,7 @@ backup, and expect a re-key when you do:
   column is nullable and the fixture leaves it so.
 - **signal** — `ParsedRecipient.identifier` is the e164 or ACI of the
   *peer*; the backup carries no identifier for the account itself.
-- **beeper** — `rooms.account_id` is nullable.
+- **beeper** — `threads.accountID` is nullable.
 
 ### Adding a provider, or changing a recipe
 

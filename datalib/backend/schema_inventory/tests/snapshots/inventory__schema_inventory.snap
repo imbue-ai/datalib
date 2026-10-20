@@ -42,84 +42,10 @@ sync_scope_state
     tz_offset
 
 == beeper/raw ==
-beeper_media_attachments
-    id
-    event_uuid
-    ref_id
+beeper_media_files
+    rel_path
     blake3
-beeper_media_attachments_bookkeeping
-    id
-    fetched_at_utc
-    attempt_count
-    last_attempt_at_utc
-    last_error
-    volatile_payload
-    tz_offset
-    held_version
-events
-    id
-    source
-    network
-    room_uuid
-    sender_uuid
-    native_event_id
-    external_event_id
-    event_type
-    timestamp_ms
-    text_content
-    reply_to_native_event_id
-    edit_of_native_event_id
-    reaction_emoji
-    reaction_target_native_event_id
-events_bookkeeping
-    id
-    fetched_at_utc
-    attempt_count
-    last_attempt_at_utc
-    last_error
-    volatile_payload
-    tz_offset
-    held_version
-rooms
-    id
-    source
-    network
-    native_room_id
-    external_room_id
-    external_workspace_id
-    account_id
-    room_type
-    title
-    description
-    is_dm
-    is_space
-rooms_bookkeeping
-    id
-    fetched_at_utc
-    attempt_count
-    last_attempt_at_utc
-    last_error
-    volatile_payload
-    tz_offset
-    held_version
-users
-    id
-    source
-    network
-    native_user_id
-    display_name
-    full_name
-    remote_id
-    avatar_blob_id
-users_bookkeeping
-    id
-    fetched_at_utc
-    attempt_count
-    last_attempt_at_utc
-    last_error
-    volatile_payload
-    tz_offset
-    held_version
+    size_bytes
 
 == chatgpt/raw ==
 chatgpt_attachments

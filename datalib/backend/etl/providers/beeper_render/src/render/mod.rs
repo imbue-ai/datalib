@@ -21,5 +21,5 @@ pub use datalib_etl::periodize::Period;
 
 // Public re-exports for the sync orchestrator
 
-pub use parse::{parse_raw_dir, ParsedBeeper};
+pub use parse::ParsedBeeper;
 pub use render::{render_all, RenderSummary, RENDER_VERSION};

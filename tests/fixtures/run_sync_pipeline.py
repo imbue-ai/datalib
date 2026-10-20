@@ -128,6 +128,7 @@ from pathlib import Path
 # A py_test's interpreter runs with safe-path on, which leaves this
 # script's own directory off `sys.path`.
 sys.path.insert(0, str(Path(__file__).parent))
+import make_beeper_texts
 from sync_drivers import CliDriver, HttpDriver, point_playback
 
 # Public fixture AEP — the signal-tng fixture is generated and
@@ -264,7 +265,8 @@ def prepare(argv: list[str]) -> Prepared:
     # media fixtures. Beeper doesn't go through the synth/playback
     # flow — its extractor reads on-disk SQLite directly — so we
     # build the dbs here once and point `beeper_data_dir` at them.
-    beeper_data_dir = _materialize_beeper_fixture(beeper_fx, workspace / "beeper_data")
+    beeper_data_dir = workspace / "beeper_data"
+    make_beeper_texts.lay_out(beeper_fx, beeper_data_dir)
 
     # Signal: expand the JSON spec into an encrypted snapshot dir. The
     # extractor will scan this dir for `signal-backup-*` subdirs and
@@ -866,15 +868,8 @@ def _source_config(
         # so its request would differ by the day and miss the tape.
         source["api"] = {"media": False, "dms": True, "refresh_window_days": 0}
     elif type_str == "beeper":
-        # `sources` here is the canonical-network list that filters
-        # which rooms get ingested. `path` points at the materialized
-        # BeeperTexts fixture.
-        #
-        # Built as its own `dict[str, object]` before being attached:
-        # assigning the literal first would narrow `source["texts"]` to
-        # `dict[str, list[str]]`, and the `str` value below then fails
-        # to typecheck even though it is correct at runtime.
-        beeper_texts: dict[str, object] = {"sources": ["signal", "googlechat"]}
+        # `path` points at the materialized BeeperTexts fixture.
+        beeper_texts: dict[str, object] = {}
         if beeper_data_dir is not None:
             beeper_texts["path"] = str(beeper_data_dir)
         source["texts"] = beeper_texts
@@ -975,52 +970,6 @@ def _render_config(type_str: str) -> dict | None:
     if type_str == "email":
         return {"outlink_format": "gmail"}
     return None
-
-
-def _materialize_beeper_fixture(fx_dir: Path, target: Path) -> Path:
-    """Build a BeeperTexts-shaped data directory from the SQL +
-    media checked in at `fx_dir`. Mirrors `build_fixture.sh`, but
-    uses Python's stdlib sqlite3 so we don't depend on the system
-    `sqlite3` CLI being on the sandbox PATH at *build* time. (The
-    extract step at run time does shell out to `sqlite3`; that's a
-    separate concern, addressed by the genrule's runtime sandbox.)
-    """
-    target.mkdir(parents=True, exist_ok=True)
-    (target / "local-signal").mkdir(exist_ok=True)
-    (target / "media" / "local.beeper.com").mkdir(parents=True, exist_ok=True)
-    (target / "media" / "localhostlocal-signal").mkdir(parents=True, exist_ok=True)
-
-    _load_sql(fx_dir / "index_db.sql", target / "index.db")
-    _load_sql(
-        fx_dir / "local_signal_megabridge.sql",
-        target / "local-signal" / "megabridge.db",
-    )
-
-    shutil.copy(
-        fx_dir / "media" / "local.beeper.com" / "TNGRPT01",
-        target / "media" / "local.beeper.com" / "TNGRPT01",
-    )
-    shutil.copy(
-        fx_dir / "media" / "localhostlocal-signal" / "TNGART01",
-        target / "media" / "localhostlocal-signal" / "TNGART01",
-    )
-    return target
-
-
-def _load_sql(sql_path: Path, db_path: Path) -> None:
-    """Execute every statement in `sql_path` against a fresh
-    sqlite3 file at `db_path`. Stdlib's sqlite3 module has
-    JSON1 enabled by default (we rely on `json_object` /
-    `json_array` in the fixture), and `executescript` handles
-    multi-statement SQL."""
-    if db_path.exists():
-        db_path.unlink()
-    conn = sqlite3.connect(str(db_path))
-    try:
-        conn.executescript(sql_path.read_text())
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def _first_notion_page_id(notion_fx: Path) -> str | None:

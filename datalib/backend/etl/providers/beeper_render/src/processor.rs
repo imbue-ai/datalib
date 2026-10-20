@@ -17,7 +17,10 @@ pub fn plan_render(
     Ok(plan_source_render(
         ctx,
         config.common.raw_path(),
-        BeeperRender { period },
+        BeeperRender {
+            period,
+            networks: config.networks,
+        },
     ))
 }
 
@@ -25,6 +28,8 @@ pub fn plan_render(
 /// markdown per `(room, period)` through the fused-Load callback.
 struct BeeperRender {
     period: Period,
+    /// The networks whose rooms render; `None` is every network.
+    networks: Option<Vec<String>>,
 }
 
 #[async_trait]
@@ -35,17 +40,23 @@ impl SourceRender for BeeperRender {
         crate::render::render::RENDER_VERSION
     }
 
-    // `period` decides how messages bucket into documents.
     fn render_params(&self) -> serde_json::Value {
         datalib_etl_chat_common::render::layout_params_with(serde_json::json!({
             "period": self.period.as_config_str(),
+            "networks": self.networks,
         }))
     }
 
     async fn run(&self, raw_path: &Path, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse::parse, render::render_all};
-        let parsed = parse(raw_path, ctx.name, self.period, ctx.raw_range())
-            .with_context(|| format!("beeper parse {}", raw_path.display()))?;
+        let parsed = parse(
+            raw_path,
+            ctx.name,
+            self.period,
+            self.networks.as_deref(),
+            ctx.raw_range(),
+        )
+        .with_context(|| format!("beeper parse {}", raw_path.display()))?;
         let raw_db_path = datalib_etl::doltlite_raw::db_path_for(raw_path);
         let mut on_doc = |md| ctx.emit_doc(md);
         let summary = render_all(

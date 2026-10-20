@@ -93,10 +93,7 @@ fn stores() -> Vec<(&'static str, Vec<String>)> {
             "every raw store",
             owned(datalib_etl::doltlite_raw::SHARED_DDL),
         ),
-        (
-            "beeper/raw",
-            datalib_etl_beeper::ingest::schema_raw::full_ddl(),
-        ),
+        ("beeper/raw", owned(datalib_etl_beeper::ingest::ALL_DDL)),
         (
             "chatgpt/raw",
             datalib_etl_chatgpt::ingest::schema_raw::full_ddl(),

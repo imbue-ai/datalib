@@ -97,13 +97,15 @@ at that folder gives you their EXIF and content hashes.
 
 ## Beeper
 
-`type = "beeper"` — reads the Beeper Texts desktop app's local data
-directory (`texts.path`). Mirrors the chats of whichever networks you
-pick — Signal, Google Chat and the rest Beeper bridges.
+`type = "beeper"` — mirrors the Beeper Texts desktop app's local data
+directory (`texts.path`): every chat the app holds, from Signal, Google
+Chat, Slack and the rest Beeper bridges. The render step's `networks`
+picks which networks to show; unset, it shows them all.
 
 On macOS the directory is `~/Library/Application Support/BeeperTexts`;
-no credentials. Lightly used — expect rough edges. It never notices a
-deletion (the provider's `INGEST.md` says why).
+no credentials. Lightly used — expect rough edges. It keeps what the
+app's cache lets go, so it never notices a deletion (the provider's
+`INGEST.md` says why).
 
 ## CalDAV
 

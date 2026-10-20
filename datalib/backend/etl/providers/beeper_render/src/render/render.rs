@@ -28,7 +28,9 @@ use super::parse::ParsedBeeper;
 ///     The raw store keys rooms, users and events by their Matrix ids,
 ///     so an existing root resets and downloads again; every uuid
 ///     moved, `chat_uuid` among them.
-pub const RENDER_VERSION: u32 = 4;
+/// v5: rendered from the mirrored `index.db` tables; a Slack room links
+///     to its channel.
+pub const RENDER_VERSION: u32 = 5;
 
 #[derive(Debug, Default, Clone)]
 pub struct RenderSummary {
