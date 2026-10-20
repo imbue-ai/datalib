@@ -55,6 +55,14 @@ INSERT INTO tng_message VALUES
         '@signal_+15551234002:local-signal.localhost', '$tng-bev-001:ba_TNG.local-signal.localhost'),
     ('tng-picard-account-uuid|1712775660000', 'tng-crusher-conv-uuid-0002',
         '@picard:beeper.com', '$tng-bev-002:ba_TNG.local-signal.localhost'),
+    -- The bridge-crew chat: Riker's and Q's ids are the ACIs the Signal
+    -- backup lists them by; the owner's is the account's own.
+    ('tng-picard-account-uuid|12442118400000', 'tng-bridge-crew-conv-uuid',
+        '@picard:beeper.com', '$tng-crew-001:ba_TNG.local-signal.localhost'),
+    ('0195683a-d140-87f9-bdf6-234da6d6880c|12442118460000', 'tng-bridge-crew-conv-uuid',
+        '@signal_riker:local-signal.localhost', '$tng-crew-002:ba_TNG.local-signal.localhost'),
+    ('0195683a-d140-87f9-bdf6-234da6d6880f|12442119000000', 'tng-bridge-crew-conv-uuid',
+        '@signal_q:local-signal.localhost', '$tng-crew-003:ba_TNG.local-signal.localhost'),
     -- The bridge keeps a message the app's cache has let go.
     ('tng-data-conv-uuid-0001|1709000000000', 'tng-data-conv-uuid-0001',
         '@signal_+15551234001:local-signal.localhost',

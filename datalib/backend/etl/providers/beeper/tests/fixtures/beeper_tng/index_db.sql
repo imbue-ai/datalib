@@ -110,6 +110,35 @@ INSERT INTO threads (threadID, accountID, thread, timestamp) VALUES (
     1710943200000
 );
 
+-- Signal's bridge-crew chat: the same chat the Signal source's TNG
+-- backup holds (signal/tests/fixtures/signal_tng/tng.json), so Riker's
+-- and Q's messages here are that backup's, at the same sent times.
+INSERT INTO threads (threadID, accountID, thread, timestamp) VALUES (
+    '!tng-bridge-crew:ba_TNG.local-signal.localhost',
+    'local-signal_ba_TNG',
+    json_object(
+        'id',          '!tng-bridge-crew:ba_TNG.local-signal.localhost',
+        'accountID',   'local-signal_ba_TNG',
+        'type',        'group',
+        'title',       'Bridge crew',
+        'extra', json_object(
+            'bridge', json_object(
+                'com.beeper.bridge_name', 'local-signal',
+                'com.beeper.room_type',   'group',
+                'channel', json_object(
+                    'id',              'tng-bridge-crew-conv-uuid',
+                    'fi.mau.receiver', 'tng-picard-account-uuid'
+                ),
+                'protocol', json_object(
+                    'id',          'signal',
+                    'displayname', 'Signal'
+                )
+            )
+        )
+    ),
+    12442119000000
+);
+
 -- Slack's #bridge, through the cloud Slack bridge: the channel and the
 -- workspace are the network's own ids, `<team>-<channel>`.
 INSERT INTO threads (threadID, accountID, thread, timestamp) VALUES (
@@ -189,6 +218,12 @@ INSERT INTO participants (account_id, room_id, id, full_name, is_self) VALUES
         '@picard:beeper.com',                              'Jean-Luc Picard', 1),
     ('googlechat',          '!tng-gchat-riker:beeper.local',
         '@googlechat_115552341:beeper.local',              'William T. Riker', 0),
+    ('local-signal_ba_TNG', '!tng-bridge-crew:ba_TNG.local-signal.localhost',
+        '@picard:beeper.com',                              'Jean-Luc Picard', 1),
+    ('local-signal_ba_TNG', '!tng-bridge-crew:ba_TNG.local-signal.localhost',
+        '@signal_riker:local-signal.localhost',            'Will Riker',      0),
+    ('local-signal_ba_TNG', '!tng-bridge-crew:ba_TNG.local-signal.localhost',
+        '@signal_q:local-signal.localhost',                'Q',               0),
     ('slackgo.T1701D-U0PICARD', '!tng-slack-bridge:beeper.com',
         '@picard:beeper.com',                              'Jean-Luc Picard', 1),
     ('slackgo.T1701D-U0PICARD', '!tng-slack-bridge:beeper.com',
@@ -474,6 +509,32 @@ INSERT INTO tng_messages VALUES (
     'HIDDEN', 298, 0, 0, NULL, NULL,
     'm.bridge',
     json_object('extra', json_object('eventType', 'm.bridge'))
+);
+
+-- ───── Signal: bridge crew (April 2364) — the backup's own messages ─────
+INSERT INTO tng_messages VALUES (
+    '$tng-crew-001:ba_TNG.local-signal.localhost',
+    '!tng-bridge-crew:ba_TNG.local-signal.localhost',
+    '@picard:beeper.com',
+    12442118400000,
+    'TEXT', 500, 0, 0, NULL, NULL, NULL,
+    json_object('text', 'Status report.', 'attachments', json('[]'))
+);
+INSERT INTO tng_messages VALUES (
+    '$tng-crew-002:ba_TNG.local-signal.localhost',
+    '!tng-bridge-crew:ba_TNG.local-signal.localhost',
+    '@signal_riker:local-signal.localhost',
+    12442118460000,
+    'TEXT', 501, 0, 0, NULL, NULL, NULL,
+    json_object('text', 'All decks at green status, Captain.', 'attachments', json('[]'))
+);
+INSERT INTO tng_messages VALUES (
+    '$tng-crew-003:ba_TNG.local-signal.localhost',
+    '!tng-bridge-crew:ba_TNG.local-signal.localhost',
+    '@signal_q:local-signal.localhost',
+    12442119000000,
+    'TEXT', 502, 0, 0, NULL, NULL, NULL,
+    json_object('text', 'Mon capitaine, you are so predictable.', 'attachments', json('[]'))
 );
 
 -- ───── Slack: #bridge (March 2024) — cloud bridge ─────
