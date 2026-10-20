@@ -310,6 +310,16 @@ PR 2; not needed for anything else.
    intermediate pages are then garbage only a gc frees. The fold gets
    the same result without changing the render. Not worth a PR of its
    own.
+
+   The other direction costs more. On the synthetic Slack render store,
+   a render that also committed SQL every ~32 MB of documents (a
+   throwaway knob, not in the tree) left 10.6 GB and 46 commits, against
+   7.5 GB and 22 for the 15 s checkpoints alone. gc alone took it to
+   9.65 GB (−9%); folding then gc took it to 1.47 GB, the same as the
+   other render. So whatever a render's batching does to its pages
+   between seals, only folding gives it back. (The commit count doubled
+   too, so this run does not say how much of the extra came from SQL
+   commits and how much from the extra seals.)
 4. **Retention across runs**, opt-in: §6.
 
 ## 6. Retention and "really delete what's been deleted"
