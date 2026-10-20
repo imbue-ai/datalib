@@ -10,7 +10,14 @@
 use std::time::{Duration, Instant};
 
 /// How often a producer seals what it has written: at most this long
-/// between commits, asked at the producer's own consistent points.
+/// between commits, asked at the producer's own consistent points — or a
+/// tenth of the run so far, once that is longer.
+///
+/// The growth is for what a commit keeps: every page its writes touched,
+/// which in a randomly keyed table is about one page per row. A short run
+/// still seals every 15 s; a six-hour one seals about 70 times, not 1,400.
+/// A floor of zero means every consistent point and does not grow — the
+/// e2e specs that set it want to see each write sealed.
 ///
 /// There is no debounce half. A "seal once writes have been quiet" rule
 /// cannot fire from a producer that only asks *as* it writes, and every
@@ -35,6 +42,17 @@ impl Default for Cadence {
     }
 }
 
+impl Cadence {
+    const GROWTH_DIVISOR: u32 = 10;
+
+    pub fn interval_after(&self, elapsed: Duration) -> Duration {
+        if self.at_most_every.is_zero() {
+            return Duration::ZERO;
+        }
+        self.at_most_every.max(elapsed / Self::GROWTH_DIVISOR)
+    }
+}
+
 /// Asks "should I seal now?" — never fires on its own.
 ///
 /// It has to be asked rather than tick, because only the caller knows where
@@ -46,6 +64,7 @@ impl Default for Cadence {
 #[derive(Debug)]
 pub struct Checkpointer {
     cadence: Cadence,
+    started: Instant,
     last_commit: Instant,
     /// Rows written since the last commit. Zero means there is nothing to
     /// seal, and committing anyway would fill `dolt_log` with empty commits
@@ -58,6 +77,7 @@ impl Checkpointer {
         let now = Instant::now();
         Self {
             cadence,
+            started: now,
             last_commit: now,
             pending: 0,
         }
@@ -78,7 +98,10 @@ impl Checkpointer {
         if self.pending == 0 {
             return false;
         }
-        now.duration_since(self.last_commit) >= self.cadence.at_most_every
+        let interval = self
+            .cadence
+            .interval_after(now.duration_since(self.started));
+        now.duration_since(self.last_commit) >= interval
     }
 
     /// Record that the caller committed.
@@ -115,6 +138,47 @@ mod tests {
     fn nothing_written_never_seals() {
         let c = Checkpointer::new(Cadence::default());
         assert!(!at(&c, Duration::from_secs(600)));
+    }
+
+    /// A long backfill sealed every 15 s keeps about one page per row
+    /// per commit in any randomly keyed table (#1259); the interval grows
+    /// to a tenth of the run so far.
+    #[test]
+    fn the_interval_grows_with_the_run() {
+        let c = Cadence::default();
+        assert_eq!(
+            c.interval_after(Duration::from_secs(60)),
+            Duration::from_secs(15)
+        );
+        assert_eq!(
+            c.interval_after(Duration::from_secs(600)),
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            c.interval_after(Duration::from_secs(6 * 3600)),
+            Duration::from_secs(2160)
+        );
+    }
+
+    #[test]
+    fn a_long_run_does_not_seal_on_the_floor() {
+        let mut c = Checkpointer::new(Cadence::default());
+        c.last_commit = c.started + Duration::from_secs(3600);
+        c.wrote(1);
+        assert!(
+            !at(&c, Duration::from_secs(16)),
+            "an hour in, 15 s is too soon"
+        );
+        assert!(at(&c, Duration::from_secs(400)));
+    }
+
+    /// The e2e specs set a zero floor to see every write sealed.
+    #[test]
+    fn a_zero_floor_never_grows() {
+        let c = Cadence {
+            at_most_every: Duration::ZERO,
+        };
+        assert_eq!(c.interval_after(Duration::from_secs(3600)), Duration::ZERO);
     }
 
     #[test]

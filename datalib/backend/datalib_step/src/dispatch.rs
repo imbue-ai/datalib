@@ -569,21 +569,21 @@ mod tests {
         // `period` used to live in the ingest table; the download
         // planner points at its new home on the render step.
         let err = plan(
-            "beeper",
+            "signal",
             Phase::Ingest,
-            "beeper",
-            raw_dir(td.path(), "beeper", Phase::Ingest),
-            serde_json::json!({"texts": {"sources": ["signal"], "period": "day"}}),
+            "signal",
+            raw_dir(td.path(), "signal", Phase::Ingest),
+            serde_json::json!({"backup": {"path": "/backups", "period": "day"}}),
         )
         .unwrap_err()
         .to_string();
         assert!(err.contains("render step's params"), "{err}");
 
         let rn = plan(
-            "beeper",
+            "signal",
             Phase::Render,
-            "beeper",
-            raw_dir(td.path(), "beeper", Phase::Render),
+            "signal",
+            raw_dir(td.path(), "signal", Phase::Render),
             serde_json::json!({"period": "day"}),
         )
         .unwrap();
@@ -643,6 +643,7 @@ mod tests {
         use serde_json::json;
         let changed = [
             ("beeper", json!({"period": "day"})),
+            ("beeper", json!({"networks": ["signal"]})),
             ("claude", json!({"max_project_doc_bytes": 1000})),
             ("claude_code", json!({"max_tool_result_bytes": 1})),
             ("codex", json!({"max_tool_result_bytes": 1})),

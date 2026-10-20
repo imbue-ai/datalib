@@ -284,6 +284,9 @@ fn rewrite_ingest_params(ty: &str, params: &mut toml::Table) -> Result<()> {
             if let Some(dir) = t.remove("beeper_data_dir") {
                 t.insert("path".into(), dir);
             }
+            // The network filter is the render step's `networks` now; left
+            // unset there, every network renders.
+            t.remove("sources");
             insert(params, "texts", t);
         }
         "perseus" => {

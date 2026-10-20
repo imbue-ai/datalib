@@ -103,7 +103,7 @@ its id, which arrives in the environment.
 | `DATALIB_DAG_CHANGED_INPUTS` | the subset of the above whose version moved since this step's last success; empty when there is no last success to compare against (never completed, or the step's own config changed) — do all your work |
 | `DATALIB_READS` | a JSON object, input path → the version the runner started this invocation against; an input with no version yet is absent. A version for what you *read*, where the output's own would say less (the qmd index reports a hash of this) |
 | `DATALIB_DAG_NOW` | the run's pinned timestamp (RFC 3339). Stamp times with this instead of sampling your own clock, so one run's outputs agree |
-| `DATALIB_DAG_CHECKPOINT_CADENCE` | set when the config has `checkpoint_cadence`: the most seconds you should let pass between checkpoints |
+| `DATALIB_DAG_CHECKPOINT_CADENCE` | set when the config has `checkpoint_cadence`: the most seconds you should let pass between checkpoints early in a run. `datalib-step` lets the interval grow to a tenth of the run so far, since every commit keeps the pages it touched; `0` means every consistent point and never grows |
 | `DATALIB_DAG_RENDER_PAGES` | set when the config has `render_pages`: `<buckets>,<blob_mb>`, either side empty when the config leaves it out — how many buckets a render reads together and how many MB of their blobs it loads at once |
 | `RUST_LOG` | the run's log filter, in `tracing-subscriber`'s grammar, built from the config's `log_level` ([`logging.md`](logging.md) § "Where a line comes from"). A `RUST_LOG` already set where the runner was started is passed through instead. A step in another language may honor it or ignore it; what it prints is kept regardless |
 

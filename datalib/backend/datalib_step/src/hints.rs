@@ -294,17 +294,14 @@ See datalib/backend/etl/providers/garmin/INGEST.md for details."
         }
         SourceType::Beeper => {
             "\
-beeper download reads Beeper Texts' on-disk SQLite. No auth dance.
+beeper download mirrors Beeper Texts' on-disk SQLite. No auth dance.
 
   1. Make sure Beeper Texts is installed and has run at least once
      so its data dir exists. Default path:
        ~/Library/Application Support/BeeperTexts/index.db
-     (Pass --beeper-data-dir, or set `path` in the source's `texts`
-     table, to override.)
-  2. Confirm read access (Application Support is NOT Full Disk Access
-     protected, so this should just work):
-       sqlite3 ~/Library/Application\\ Support/BeeperTexts/index.db \\
-           \"SELECT COUNT(*) FROM threads;\"
+     (Set `path` in the source's `texts` table to override.)
+  2. Application Support is not Full Disk Access protected, so a
+     read should just work; a failure here is usually a wrong `path`.
 
 See datalib/backend/etl/providers/beeper/INGEST.md for details."
         }

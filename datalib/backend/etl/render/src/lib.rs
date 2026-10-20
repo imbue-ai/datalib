@@ -16,6 +16,7 @@ pub mod indexed_markdown;
 pub mod inputs;
 pub mod message;
 pub mod pages;
+pub mod photo;
 pub mod processor;
 pub mod search_terms;
 pub mod section;

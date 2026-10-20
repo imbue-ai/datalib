@@ -319,11 +319,15 @@ fn render_one(
         rows,
         sections,
         edges: Vec::new(),
-        contacts: crate::people::document_contacts(
-            source_id,
-            &doc.items,
-            &doc.orphan_reactions,
-            &chat.contacts,
+        contacts: datalib_etl_render::photo::place_photos(
+            crate::people::document_contacts(
+                source_id,
+                &doc.items,
+                &doc.orphan_reactions,
+                &chat.contacts,
+            ),
+            &page_dir,
+            &doc.markdown_uuid,
         ),
         problems,
     })

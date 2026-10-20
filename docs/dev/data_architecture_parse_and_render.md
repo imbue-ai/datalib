@@ -289,7 +289,7 @@ Unification should **never** happen in the raw store: Slack, Beeper,
 Signal, Claude, and ChatGPT each have their own raw tables, in their own
 doltlite DBs — and because each store is its own file, the tables need
 no provider prefix to stay apart. Slack's messages are in `messages`,
-Beeper's in `events`, Signal's in `chat_items`. The full list is the
+Beeper's in `mx_room_messages`, Signal's in `chat_items`. The full list is the
 `schema_inventory` golden. Once we
 *render*, though, we aspire to share as much as possible — projecting
 raw data into unified schemas where appropriate, then sending that

@@ -18,6 +18,7 @@ exports_files([
     "BUILD.bazel",
     "make_apple_messages_db.py",
     "make_apple_photos_library.py",
+    "make_beeper_texts.py",
     "make_lightroom_catalog.py",
 ])
 
@@ -189,6 +190,7 @@ genrule(
     ],
     tools = [
         "check_ingested.py",
+        "make_beeper_texts.py",
         "quiet.sh",
         "run_sync_pipeline.py",
         "sync_drivers.py",
@@ -381,6 +383,7 @@ py_test(
         "2369-04-15T00:00:00+00:00",
     ] + _TNG_FIXTURE_ARGS,
     data = [
+        "make_beeper_texts.py",
         "run_sync_pipeline.py",
         "sync_drivers.py",
         ":source_json",
@@ -418,6 +421,7 @@ py_test(
         "2369-04-15T00:00:00+00:00",
     ] + _TNG_FIXTURE_ARGS,
     data = [
+        "make_beeper_texts.py",
         "run_sync_pipeline.py",
         "sync_drivers.py",
         ":source_json",
@@ -604,6 +608,7 @@ py_test(
         "$(rootpath //datalib/backend/http:datalib_http_bin)",
     ],
     data = [
+        "make_beeper_texts.py",
         "run_sync_pipeline.py",
         "sync_drivers.py",
         ":source_json",

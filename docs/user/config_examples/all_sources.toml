@@ -861,10 +861,11 @@ inputs = ["ics-calendar/keyword_index"]
 
 # --- Beeper -------------------------------------------------------------
 
-# Beeper Texts mirror. The `texts` table reads the desktop app's own
-# data dir; pick the chat networks to ingest (at least one required).
-# Poorly supported — nobody is using it, so expect rough edges. It never
-# notices a deletion (see the provider's INGEST.md).
+# Beeper Texts mirror. The `texts` table mirrors the desktop app's own
+# data dir, every network in it; the render step picks which networks to
+# show (all of them when `networks` is unset). Poorly supported, so expect
+# rough edges. It keeps what the app's cache evicts (see the provider's
+# INGEST.md).
 [[groups]]
 id = "beeper"
 type = "beeper"
@@ -873,7 +874,6 @@ type = "beeper"
 group = "beeper"
 function = "ingest"
 [steps.params.texts]
-sources = ["signal", "googlechat"]
 media = true
 # path = "~/Library/Application Support/BeeperTexts"  # macOS default
 
@@ -883,6 +883,7 @@ function = "render_markdown"
 inputs = ["beeper/ingest"]
 [steps.params]
 period = "month"   # month (default) | day | year | all — span of each rendered doc
+networks = ["signal", "googlechat"]
 
 [[steps]]
 group = "beeper"
