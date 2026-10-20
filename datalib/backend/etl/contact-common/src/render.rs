@@ -13,13 +13,14 @@ use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{escape_attr, escape_md_inline, escape_text};
 use datalib_etl_render::inputs::{Bucket, Buckets};
 use datalib_etl_render::message::chip_link;
+use datalib_etl_render::photo::{with_photo_url, write_photo};
 use datalib_etl_render::section::{join, Section};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
 use datalib_schema::search_terms::{SearchTerm, SearchTermKind};
 
-use datalib_contact_schema::{is_drawable_photo, ContactHandle, Medium, NormalizedContact, Photo};
+use datalib_contact_schema::{ContactHandle, Medium, NormalizedContact, Photo};
 use datalib_handle::Handle;
 
 use crate::types::ContactDoc;
@@ -163,26 +164,6 @@ fn render_one(
     .with_context(|| format!("on_doc_complete {m_uuid}"))?;
 
     Ok(photo_written)
-}
-
-/// The contact as the index will hold it: with the photo this render
-/// wrote beside the page as the URL the app serves it at, where it is an
-/// image a browser draws. The index's asset route takes
-/// `<markdown_uuid>/<path relative to the page>`.
-fn with_photo_url(
-    contact: &NormalizedContact,
-    doc_uuid: &str,
-    photo_rel: Option<&str>,
-) -> NormalizedContact {
-    let drawable = matches!(
-        &contact.photo,
-        Some(Photo::Inline { content_type, .. }) if is_drawable_photo(content_type)
-    );
-    let mut out = contact.clone();
-    out.photo_url = photo_rel
-        .filter(|_| drawable)
-        .map(|rel| format!("/applet/unified_document_index/asset/{doc_uuid}/{rel}"));
-    out
 }
 
 fn output_paths(out_dir: &Path, source_id: &str, doc: &ContactDoc) -> (PathBuf, PathBuf) {
@@ -572,36 +553,6 @@ fn build_grid_row(
         .upstream_account(doc.upstream_account.clone())
         .markdown_uuid(Some(doc.doc_uuid.clone()))
         .build_or_record(source_id, &doc.doc_uuid, profile.render_version, problems)
-}
-
-fn write_photo(
-    page_dir: &Path,
-    doc_uuid: &str,
-    content_type: &str,
-    bytes: &[u8],
-) -> Result<String> {
-    let blobs_dir = page_dir.join("blobs");
-    fs::create_dir_all(&blobs_dir).with_context(|| format!("mkdir -p {}", blobs_dir.display()))?;
-    let ext = ext_for(content_type);
-    let filename = format!("{doc_uuid}.{ext}");
-    let path = blobs_dir.join(&filename);
-    fs::write(&path, bytes).with_context(|| format!("write {}", path.display()))?;
-    Ok(format!("blobs/{filename}"))
-}
-
-fn ext_for(content_type: &str) -> &'static str {
-    match content_type.to_ascii_lowercase().as_str() {
-        "image/jpeg" | "image/jpg" => "jpg",
-        "image/png" => "png",
-        "image/gif" => "gif",
-        "image/webp" => "webp",
-        "image/heic" => "heic",
-        // LinkedIn serves its default "ghost" avatar as an SVG og:image
-        // for connections with no public photo; keep the extension so it
-        // renders inline rather than as an opaque `.bin`.
-        "image/svg+xml" | "image/svg" => "svg",
-        _ => "bin",
-    }
 }
 
 #[cfg(test)]

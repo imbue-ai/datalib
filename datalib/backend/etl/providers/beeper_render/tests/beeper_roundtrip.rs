@@ -166,8 +166,8 @@ async fn each_room_renders_a_document_per_month() -> Result<()> {
         "{slack}"
     );
     let march = md_of(&docs, "/signal/", "2024-03.md");
-    assert!(march.contains("❤️ Mr. Data"), "{march}");
-    assert!(march.contains("🤔 Mr. Data"), "{march}");
+    assert!(march.contains("❤️ [Mr. Data](tel:+15551234001"), "{march}");
+    assert!(march.contains("🤔 [Mr. Data](tel:+15551234001"), "{march}");
     assert!(march.contains("![iconian-schematic.png]"), "{march}");
     assert!(
         march.contains("external_id: \"!tng-data:ba_TNG.local-signal.localhost\""),
@@ -331,6 +331,70 @@ async fn an_attachment_render_cannot_place_is_a_problem() -> Result<()> {
                 "uncovered_type".to_string()
             ),
         ]
+    );
+    Ok(())
+}
+
+/// A person is written by a handle the rest of datalib shares: a Slack
+/// user by their Slack id (the owner too, by the user the room was
+/// bridged for), anyone else by a number or address Beeper lists.
+#[tokio::test(flavor = "multi_thread")]
+async fn people_are_written_by_their_handles() -> Result<()> {
+    let fx = Fixture::new();
+    fx.ingest().await?;
+    let (_, docs) = fx.render()?;
+    let slack = md_of(&docs, "/slack/", "2024-03.md");
+    assert!(
+        slack.contains("slack://user?team=T1701D&amp;id=U0WORF")
+            || slack.contains("slack://user?team=T1701D&id=U0WORF"),
+        "{slack}"
+    );
+    assert!(slack.contains("id=U0PICARD"), "{slack}");
+    let data = md_of(&docs, "/signal/", "2024-03.md");
+    assert!(data.contains("(tel:+15551234001"), "{data}");
+    let riker = md_of(&docs, "/googlechat/", ".md");
+    assert!(riker.contains("(mailto:riker@enterprise.org"), "{riker}");
+    Ok(())
+}
+
+/// Each person with a handle is a source contact, with their avatar
+/// written beside the page where the app had cached it; a chat with no
+/// name of its own is called by its other person.
+#[tokio::test(flavor = "multi_thread")]
+async fn people_are_contacts_with_their_avatars() -> Result<()> {
+    let fx = Fixture::new();
+    fx.ingest().await?;
+    let (_, docs) = fx.render()?;
+    let contact = |doc_path: &str, key: &str| {
+        docs.iter()
+            .filter(|d| d.md_path.to_string_lossy().contains(doc_path))
+            .flat_map(|d| d.contacts.iter().map(move |c| (d, c)))
+            .find(|(_, c)| c.key == key)
+            .unwrap_or_else(|| panic!("no contact {key} under {doc_path}"))
+    };
+    let (doc, worf) = contact("/slack/", "slack:T1701D/U0WORF");
+    assert_eq!(worf.names, ["Worf"]);
+    let url = worf.photo_url.as_deref().expect("Worf's avatar is served");
+    let rel = url
+        .strip_prefix(&format!(
+            "/applet/unified_document_index/asset/{}/",
+            doc.markdown_uuid
+        ))
+        .expect("served beside the page");
+    assert!(doc.md_path.parent().unwrap().join(rel).is_file(), "{rel}");
+
+    let (_, data) = contact("/signal/", "tel:+15551234001");
+    assert!(
+        data.photo_url.is_some(),
+        "Data's on-device avatar is served"
+    );
+    let (_, riker) = contact("/googlechat/", "email:riker@enterprise.org");
+    assert_eq!(riker.photo_url, None, "Riker has no avatar");
+
+    let data_march = md_of(&docs, "/signal/", "2024-03.md");
+    assert!(
+        data_march.contains("Beeper:Signal · Mr. Data"),
+        "{data_march}"
     );
     Ok(())
 }

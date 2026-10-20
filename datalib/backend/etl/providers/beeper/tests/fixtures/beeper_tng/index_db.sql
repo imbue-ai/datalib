@@ -192,7 +192,34 @@ INSERT INTO participants (account_id, room_id, id, full_name, is_self) VALUES
     ('slackgo.T1701D-U0PICARD', '!tng-slack-bridge:beeper.com',
         '@picard:beeper.com',                              'Jean-Luc Picard', 1),
     ('slackgo.T1701D-U0PICARD', '!tng-slack-bridge:beeper.com',
-        '@slackgo_T1701D-U0WORF:beeper.com',               'Worf',            0);
+        '@slackgo_t1701d-u0worf:beeper.local',               'Worf',            0);
+
+-- Avatars, cached by the app under `media/`.
+UPDATE participants SET img_url = 'mxc://local.beeper.com/TNGAVWORF'
+ WHERE id = '@slackgo_t1701d-u0worf:beeper.local';
+UPDATE participants SET img_url = 'localmxc://local-signal/TNGAVDATA'
+ WHERE id = '@signal_+15551234001:local-signal.localhost';
+
+-- ─────────────────────────────────────────────────────────────────────
+-- participant_identifiers — the numbers and addresses Beeper knows
+-- ─────────────────────────────────────────────────────────────────────
+
+CREATE TABLE 'participant_identifiers' (
+  'account_id' TEXT NOT NULL,
+  'participant_id' TEXT NOT NULL,
+  'identifier' TEXT NOT NULL,
+  'identifier_type' TEXT NOT NULL,
+  PRIMARY KEY('account_id', 'participant_id', 'identifier')
+);
+
+INSERT INTO participant_identifiers VALUES
+    ('local-signal_ba_TNG', '@signal_+15551234001:local-signal.localhost',
+        '+15551234001', 'phone'),
+    ('local-signal_ba_TNG', '@signal_+15551234002:local-signal.localhost',
+        '+15551234002', 'phone'),
+    ('googlechat', '@googlechat_115552341:beeper.local',
+        'riker@enterprise.org', 'email'),
+    ('hungryserv', '@picard:beeper.com', '@picard:beeper.com', 'username');
 
 -- ─────────────────────────────────────────────────────────────────────
 -- mx_room_messages
@@ -453,13 +480,13 @@ INSERT INTO tng_messages VALUES (
 INSERT INTO tng_messages VALUES (
     '$tng-slack-001:beeper.com',
     '!tng-slack-bridge:beeper.com',
-    '@slackgo_T1701D-U0WORF:beeper.com',
+    '@slackgo_t1701d-u0worf:beeper.local',
     1711040400000,
     'TEXT', 400, 0, 0, NULL, NULL,
     NULL,
     json_object(
         'eventID',  '$tng-slack-001:beeper.com',
-        'senderID', '@slackgo_T1701D-U0WORF:beeper.com',
+        'senderID', '@slackgo_t1701d-u0worf:beeper.local',
         'timestamp', 1711040400000,
         'text', 'Captain, a Romulan warbird is decloaking off the port bow.',
         'attachments', json('[]')

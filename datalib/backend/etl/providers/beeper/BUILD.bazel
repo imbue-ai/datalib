@@ -28,7 +28,9 @@ genrule(
         "tng_beeper_texts/index.db",
         "tng_beeper_texts/local-signal/megabridge.db",
         "tng_beeper_texts/media/local.beeper.com/TNGRPT01",
+        "tng_beeper_texts/media/local.beeper.com/TNGAVWORF",
         "tng_beeper_texts/media/localhostlocal-signal/TNGART01",
+        "tng_beeper_texts/media/localhostlocal-signal/TNGAVDATA",
     ],
     cmd = "python3 $(execpath //tests/fixtures:make_beeper_texts.py) " +
           "$$(dirname $(execpath tests/fixtures/beeper_tng/index_db.sql)) " +

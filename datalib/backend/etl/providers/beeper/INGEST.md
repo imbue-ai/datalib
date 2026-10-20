@@ -50,9 +50,10 @@ finds nothing new commits nothing.
 
 1. **`index.db`**, through the shared SQLite mirror
    (`datalib/backend/etl/sqlite_mirror/`), from a `VACUUM INTO` snapshot
-   so the app can keep writing. Four tables, the ones render reads:
-   `threads` (one row per chat), `participants`, `mx_room_messages` and
-   `mx_reactions`. `mx_room_messages` declares a local `id` as its key,
+   so the app can keep writing. Five tables, the ones render reads:
+   `threads` (one row per chat), `participants`,
+   `participant_identifiers` (the numbers and addresses the app knows
+   for a person), `mx_room_messages` and `mx_reactions`. `mx_room_messages` declares a local `id` as its key,
    which a re-index renumbers, so the mirror leaves that column out and
    keys the table on `(roomID, eventID)`: a message is its Matrix event
    in its room.
@@ -64,7 +65,7 @@ finds nothing new commits nothing.
    the same schema, so their rows share the one table, told apart by
    `bridge_id`. Cloud bridges have no local file.
 3. **`media/`**: every cached file the store does not hold yet goes into
-   the blob CAS, with a `beeper_media_files` row naming it by its path
+   the blob CAS, people's avatars among them, with a `beeper_media_files` row naming it by its path
    under `media/`. The app names a file by its media id and never
    rewrites it, so a file already held is not read again. With
    `media = false` this pass is skipped and attachments render without
