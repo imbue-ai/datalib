@@ -819,6 +819,7 @@ impl World {
             } else {
                 Default::default()
             },
+            page_size: datalib_etl_render::pages::PageSize::DEFAULT,
             storage: None,
             raw_db: Some(self.raw_db.clone()),
             progress: Progress::noop(),

@@ -1,14 +1,7 @@
 //! Reading a raw store a page of buckets at a time, so what a render
-//! holds in memory follows the page and not the size of the source.
-//!
-//! A page is a run of bucket keys: on a full walk, the next keys of the
-//! table in key order (keyset pagination, one ordered range scan); on a
-//! narrowed run, the next keys of the stale set. The provider loads what
-//! hangs off a page's keys with one bound JSON array, renders it, and
-//! drops it before asking for the next. Within a page, [`batches`] cuts
-//! the blobs it loads by bytes. Why a page and not one bucket or all of
-//! them, and how the sizes were picked: `docs/dev/data_architecture_parse_and_render.md`
-//! §"Memory: a page at a time".
+//! holds in memory follows the page and not the size of the source:
+//! `docs/dev/data_architecture_parse_and_render.md` §"Memory: a page at
+//! a time".
 
 use std::collections::BTreeSet;
 use std::ops::Range;
@@ -17,7 +10,8 @@ use anyhow::{Context, Result};
 use sqlx::SqlitePool;
 
 /// How much a render holds at once: `buckets` per page of rows, and
-/// `bytes` of blobs per batch inside a page.
+/// `bytes` of blobs per batch inside a page. A config's `[render_pages]`
+/// overrides either.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PageSize {
     pub buckets: usize,

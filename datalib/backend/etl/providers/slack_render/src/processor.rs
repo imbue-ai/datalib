@@ -4,7 +4,6 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use datalib_etl::processor::PlanContext;
-use datalib_etl_render::pages::PageSize;
 use datalib_etl_render::processor::{
     plan_source_render, ReadScope, RenderCtx, RenderProcessor, SourceRender,
 };
@@ -94,7 +93,7 @@ impl SourceRender for SlackRender {
             &store,
             ctx.root,
             ctx.name,
-            PageSize::DEFAULT,
+            ctx.page_size,
             ctx.progress,
             &mut |md| ctx.emit_doc(md),
             &mut on_page,

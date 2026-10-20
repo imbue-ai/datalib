@@ -75,6 +75,10 @@ pub struct DagConfig {
     /// [`DiskFloor`].
     #[serde(default)]
     pub disk_space: Option<DiskFloor>,
+    /// How much a render reads at once. Omitted means the render's own
+    /// defaults.
+    #[serde(default)]
+    pub render_pages: Option<RenderPages>,
 }
 
 /// The retention rule for `system/runs/runs.sqlite`, as a person writes it in
@@ -170,6 +174,48 @@ impl CheckpointCadence {
             return None;
         }
         Some(Self { at_most_every_secs })
+    }
+}
+
+/// How much a render holds in memory at once, as a person writes it in
+/// `config.toml`: `buckets` threads (or conversations, or whatever the
+/// source renders as a unit) read from the raw store together, and at most
+/// `blob_mb` of their attachments loaded at a time. Smaller pages hold less
+/// and cost more queries. Either omitted means the render's default
+/// (`datalib_etl_render::pages::PageSize::DEFAULT`).
+///
+/// Plain numbers for the same reason as [`CheckpointCadence`]: the runner
+/// forwards them, and the step owns what a page is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RenderPages {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub buckets: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blob_mb: Option<u64>,
+}
+
+impl RenderPages {
+    /// The wire form: `<buckets>,<blob_mb>`, either side empty when omitted.
+    pub fn encode(&self) -> String {
+        let side = |v: Option<u64>| v.map(|n| n.to_string()).unwrap_or_default();
+        format!("{},{}", side(self.buckets), side(self.blob_mb))
+    }
+
+    /// `None` for anything this build cannot read, a zero included: the
+    /// step's defaults are a safe answer, as for [`CheckpointCadence`].
+    pub fn decode(s: &str) -> Option<Self> {
+        let (buckets, blob_mb) = s.trim().split_once(',')?;
+        let side = |v: &str| -> Option<Option<u64>> {
+            match v.trim() {
+                "" => Some(None),
+                n => n.parse::<u64>().ok().filter(|n| *n > 0).map(Some),
+            }
+        };
+        Some(Self {
+            buckets: side(buckets)?,
+            blob_mb: side(blob_mb)?,
+        })
     }
 }
 
@@ -826,6 +872,8 @@ struct RawConfig {
     log_level: Option<datalib_runs::LogLevel>,
     #[serde(default)]
     disk_space: Option<DiskFloor>,
+    #[serde(default)]
+    render_pages: Option<RenderPages>,
 }
 
 /// One entry on its way in: where it sits in the file, and what it
@@ -1986,6 +2034,7 @@ fn entries_of(text: &str) -> Entries {
             run_history: raw.run_history,
             log_level: raw.log_level,
             disk_space: raw.disk_space,
+            render_pages: raw.render_pages,
         },
         specs,
         lock_specs: accepted.lock_specs,
@@ -2122,6 +2171,7 @@ impl DagConfig {
             run_history: None,
             log_level: None,
             disk_space: None,
+            render_pages: None,
         }
     }
 }
@@ -2149,6 +2199,41 @@ mod cadence_tests {
                 None,
                 "{bad:?} must not parse"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod render_pages_tests {
+    use super::RenderPages;
+
+    #[test]
+    fn render_pages_survive_the_trip_through_the_env_var() {
+        for pages in [
+            RenderPages::default(),
+            RenderPages {
+                buckets: Some(200),
+                blob_mb: None,
+            },
+            RenderPages {
+                buckets: None,
+                blob_mb: Some(16),
+            },
+            RenderPages {
+                buckets: Some(1),
+                blob_mb: Some(1),
+            },
+        ] {
+            assert_eq!(RenderPages::decode(&pages.encode()), Some(pages));
+        }
+    }
+
+    /// A zero or a word is `None`, never a guess: the render falls back
+    /// to its own page size and logs.
+    #[test]
+    fn unreadable_render_pages_are_none() {
+        for bad in ["", "500", "0,64", "500,0", "-1,64", "five,64", "500,64,1"] {
+            assert_eq!(RenderPages::decode(bad), None, "{bad:?} must not parse");
         }
     }
 }
