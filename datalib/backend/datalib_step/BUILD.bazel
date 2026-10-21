@@ -186,6 +186,14 @@ insta_update(
 
 # Regenerates datalib/ui/src/config/ingestMethods.json from the provider
 # config crates' `IngestMethods` declarations.
+# Regenerates docs/user/config_examples/all_sources.toml from every
+# source's complete example stanza.
+insta_update(
+    name = "all_sources.update",
+    test = ":datalib_step_unittests",
+    test_args = ["all_sources_is_generated_from_the_stanzas"],
+)
+
 insta_update(
     name = "ingest_methods.update",
     test = ":datalib_step_unittests",
