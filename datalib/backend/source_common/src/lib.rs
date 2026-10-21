@@ -253,6 +253,16 @@ pub trait IngestMethods {
     const METHODS: &'static [IngestMethod];
 }
 
+/// Refuses a negative count or span from a config: the provider reads it
+/// `as usize` or `as u32`, and a negative one would wrap into a huge cap
+/// or be clamped without a word.
+pub fn not_negative(key: &str, value: Option<i64>) -> Result<(), String> {
+    match value {
+        Some(v) if v < 0 => Err(format!("`{key}` is {v}; it cannot be negative")),
+        _ => Ok(()),
+    }
+}
+
 /// A config stanza a source shows in `datalib-step help <type>`: its
 /// `[[groups]]` entry and its steps, the group's id the source type's own
 /// name. Each provider's config crate exports its own as `EXAMPLES`, a
