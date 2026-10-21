@@ -38,6 +38,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use datalib_cli_help::Example;
 use datalib_dag::subprocess::{ENV_CHECKPOINT_CADENCE, ENV_DATA_ROOT, ENV_NOW, ENV_STEP};
 use datalib_dag::FailureKind;
 
@@ -45,10 +46,46 @@ use crate::events::Emitter;
 use crate::function::Function;
 use crate::source::StepEnv;
 
+const LONG_ABOUT: &str = "\
+The built-in step program: datalib-dag runs it for every step in a config \
+with no `command`, and tells it through the environment which function to \
+perform (ingest, render_markdown, grid_index, …) for which group. You do \
+not run it that way yourself.
+
+Its subcommands are tools you can run: ask a source which account its \
+credentials reach, put the runtime and models in place ahead of a first \
+sync, and keep a config in the order data flows.";
+
+const EXAMPLES: &[Example] = &[
+    Example {
+        what: "ask which Slack account the credentials reach (writes nothing)",
+        command: "datalib-step probe slack",
+    },
+    Example {
+        what: "the same, with the source's ingest params as JSON, and the channels a picker would offer",
+        command: "datalib-step probe slack --params-file slack-params.json --list channels",
+    },
+    Example {
+        what: "put the Node runtime for qmd and latchkey in place before the first sync",
+        command: "datalib-step pull-runtime",
+    },
+    Example {
+        what: "fetch the search index's embedding models before the first embed",
+        command: "datalib-step pull-models",
+    },
+    Example {
+        what: "say whether a config lists each step below the steps it reads",
+        command: "datalib-step topo-sort-config ~/datalib/config.toml --check",
+    },
+];
+
 #[derive(Parser)]
 #[command(
     name = "datalib-step",
-    about = "The built-in step program for the datalib DAG runner"
+    bin_name = "datalib-step",
+    about = "The built-in step program datalib-dag runs, and tools for setting a source up",
+    long_about = LONG_ABOUT,
+    after_help = datalib_cli_help::render(EXAMPLES)
 )]
 struct Cli {
     /// Absent means "be a step": the function, group and tree come from
@@ -591,4 +628,15 @@ fn interrupt_own_group() {
     }
     datalib_parent_watch::report("the runner is gone; stopping this step and what it spawned");
     unsafe { libc::kill(0, libc::SIGINT) };
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use clap::CommandFactory;
+
+    #[test]
+    fn the_help_examples_parse() {
+        super::Cli::command().debug_assert();
+        datalib_cli_help::assert_examples_parse(super::Cli::command(), super::EXAMPLES);
+    }
 }

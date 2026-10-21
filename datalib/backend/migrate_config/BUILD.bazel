@@ -45,6 +45,16 @@ rust_binary(
     visibility = ["//visibility:public"],
     deps = [
         ":datalib_migrate_config",
+        "//datalib/backend/cli_help:datalib_cli_help",
         "@datalib_crates//:anyhow",
+        "@datalib_crates//:clap",
     ],
+)
+
+# The command line's parse: its `--help` examples.
+rust_test(
+    name = "migrate_config_bin_unittests",
+    size = "small",
+    crate = ":datalib_migrate_config_bin",
+    edition = "2021",
 )
