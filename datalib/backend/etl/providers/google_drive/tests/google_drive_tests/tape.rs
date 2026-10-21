@@ -346,10 +346,12 @@ pub const VIEW_ONLY_ODT: &[u8] = b"PK\x03\x04 odt of the counseling notes";
 /// revisions, and the Docs API refuses its suggestions with a 403, so
 /// its native JSON answers only without `suggestionsViewMode`, in the
 /// mode Google picks for a viewer. Adds it to `t`'s first listing page.
-pub fn view_only_doc(t: &Path) {
+/// Without `may_download` its owner has turned off download, and the
+/// tape answers no export for it.
+pub fn view_only_doc(t: &Path, may_download: bool) {
     let mut viewer = entry(VIEW_ONLY_DOC, FileKind::Document, 5, "Counseling notes", 1);
-    viewer["capabilities"] =
-        json!({"canEdit": false, "canComment": false, "canReadRevisions": false});
+    viewer["capabilities"] = json!({"canEdit": false, "canComment": false,
+                                    "canReadRevisions": false, "canDownload": may_download});
     viewer["ownedByMe"] = json!(false);
     listing(
         t,
@@ -403,12 +405,14 @@ pub fn view_only_doc(t: &Path) {
         )),
         json_response(&view_only_native()),
     );
-    let (odt, _) = api::export_type(FileKind::Document, ExportFormat::Odf);
-    put(
-        t,
-        api::req_bytes(&api::export_url(VIEW_ONLY_DOC, odt)),
-        bytes(200, VIEW_ONLY_ODT),
-    );
+    if may_download {
+        let (odt, _) = api::export_type(FileKind::Document, ExportFormat::Odf);
+        put(
+            t,
+            api::req_bytes(&api::export_url(VIEW_ONLY_DOC, odt)),
+            bytes(200, VIEW_ONLY_ODT),
+        );
+    }
 }
 
 pub fn view_only_native() -> Value {
