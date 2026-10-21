@@ -453,7 +453,8 @@ document.
 - **A config the runner rejects**: `datalib-dag --check
   <data_root>/config.toml` lists every problem with a line number;
   `PUT /api/config` (or the Manage tab) returns the same list in
-  `diagnostics` and writes nothing. A data root holding a pre-TOML
+  `diagnostics`, built-in steps whose params a sync would refuse
+  included, and writes nothing. A data root holding a pre-TOML
   `config.yaml` reads as unconfigured — set it up again from the app.
 - **Every step reads `waiting for disk space`**: the data root's disk
   went under the config's `[disk_space]` pause line (10 GB unless the

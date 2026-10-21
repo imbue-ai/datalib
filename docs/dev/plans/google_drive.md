@@ -69,6 +69,18 @@ included. That is the only complete record: on a doc with 3 comments and
 - **The list.** `drive/v3/files/{id}/revisions` gives each revision's
   number, time and author. It is empty when the account may only comment
   (`capabilities.canReadRevisions = false`).
+- **The list is not stable.** The first listing after a quiet spell can
+  leave out a file's oldest revision, and a listing made right after it
+  has it. Measured on 2026-10-21 on one deck with 10 revisions:
+  - six listings came back with 9, without revision `1`, each the first
+    in 2 minutes or more;
+  - every listing made a second later had all 10;
+  - so did every listing made within about 3 minutes of another;
+  - the short and full responses had identical headers.
+
+  A capture therefore lists twice, keeps every revision either listing
+  named, and counts the files where they disagreed
+  (`revision_listings_disagreed` in its `sync_runs` summary).
 - **An old revision's contents** come only from its `exportLinks`, which
   are `docs.google.com/feeds/download/...?revision=N&exportFormat=...`
   URLs.

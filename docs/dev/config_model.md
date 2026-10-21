@@ -178,8 +178,14 @@ reads them. A retired field a planner refuses stays readable by serde
 and leaves the schema with `#[schemars(skip)]`.
 
 `datalib-step check-params <config>` plans every built-in step's params
-the way a sync would and prints one JSON line per step it would refuse;
-`datalib-dag --check` runs it, since the runner links no provider.
+the way a sync would and prints one JSON line per step it would refuse.
+The runner and the server link no provider, so both ask it:
+`datalib-dag --check`, and `PUT /api/config` and `POST
+/api/config/check` (`http/src/params_check.rs`), which refuse to write
+a config a sync would refuse a step of. `params_diagnostics` in
+`dag/src/config.rs` turns the answer into ordinary `rejected`
+diagnostics at the misspelled key's line, so every door shows it the
+same way. A custom command's params are never asked about.
 
 ## `Reach`: origin or local
 

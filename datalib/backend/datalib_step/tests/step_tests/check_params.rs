@@ -40,7 +40,7 @@ fn check_reports_a_misspelled_param_at_its_line() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(2), "{stderr}");
     assert!(
-        stderr.contains("config.toml:10:1: error: step slack/ingest"),
+        stderr.contains("config.toml:10:1: rejected: step \"slack/ingest\": a sync would refuse"),
         "points at the misspelled key's line: {stderr}"
     );
     assert!(stderr.contains("chanels"), "{stderr}");

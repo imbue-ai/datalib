@@ -154,6 +154,25 @@ already holds a different account for it: a second Claude or ChatGPT
 account. The decision is `freshBrowser` in
 `datalib/ui/src/config/accountNaming.ts`.
 
+## Starting over
+
+To test a sign-in from scratch, clear every credential and the saved
+browser session at once:
+
+```sh
+npx -y latchkey@<LATCHKEY_VERSION> auth clear -y
+```
+
+With no service name it deletes `credentials.json.enc` and
+`browser_state.json.enc` from latchkey's directory (`~/.latchkey`
+unless `LATCHKEY_DIRECTORY` says otherwise). Every data root on the
+machine shares that directory, and under Minds the gateway's store is
+the host's, so this signs out everywhere. Latchkey's browser keeps no
+profile of its own, so the cookies go with that file. It leaves
+`config.json` (the browser path and the services the wizard
+registered), `plugins/` and the keychain key; to test those first-run
+steps too, move the whole directory aside instead.
+
 ## Signing in again without a person
 
 A token-capture service (ChatGPT) stores a token the page mints from

@@ -738,6 +738,7 @@ pub async fn build_grid_index_for(
 
     let mut stanzas: Vec<(String, PathBuf)> = Vec::new();
     let mut pass = PassCounts::default();
+    let mut not_yet_rendered: Vec<&str> = Vec::new();
     for source in sources {
         let rendered_root = out_dir
             .join(source)
@@ -746,8 +747,16 @@ pub async fn build_grid_index_for(
             stanzas.push((source.clone(), rendered_root));
         } else {
             pass.not_yet_rendered += 1;
-            tracing::debug!(source, "no render store yet; skipping it this pass");
+            not_yet_rendered.push(source);
         }
+    }
+    // One line a pass: a fan-in takes a pass each time a render seals,
+    // and a line per waiting source each time drowns the step's log.
+    if !not_yet_rendered.is_empty() {
+        tracing::debug!(
+            sources = %not_yet_rendered.join(", "),
+            "no render store yet for these sources; skipping them this pass"
+        );
     }
     stanzas.sort();
     stanzas.dedup();
