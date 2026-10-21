@@ -225,7 +225,7 @@ kind's export becomes a cross-check rather than the backup.
      live account by hand.
 2. **Old revisions.** Teach latchkey's Google services to sign
    `docs.google.com`'s export URLs (`/feeds/download/`,
-   `/{document,spreadsheets,presentation}/export`), upstream in latchkey.
+   `/{document,spreadsheets,presentation}/export`), upstream in latchkey (imbue-ai/latchkey#181).
    Then every listed revision is owed an export of its own, and the
    history before the first sync comes back in export form. Native JSON
    for those versions does not exist anywhere, so the native history
@@ -233,10 +233,22 @@ kind's export becomes a cross-check rather than the backup.
 3. **Delta listing.** Drive's `changes` API, with its `startPageToken`,
    in place of the full listing each run. The full listing is 1 request
    per 1,000 files, so this matters only for a large Drive.
-4. **ODF from the native JSON**, Sheets first (above), then the
+4. **A markdown render**, the first render, because it is what the rest
+   of datalib reads. A `google_drive_render` crate and a
+   `render_markdown` step would make each file one document, from its
+   newest capture's native JSON:
+   - *Docs:* headings, lists, tables and images as markdown;
+   - *Sheets:* each sheet as a table;
+   - *Slides:* each slide's text.
+
+   Its comment threads would be sections of their own, with the
+   `m-{uuid}` wrappers feedback anchors to. That puts the files in the
+   grid and in search like any other source. Deferred for now: phase 1 is
+   the backup.
+5. **ODF from the native JSON**, Sheets first (above), then the
    ODF-with-versions export step built on it.
-5. **A republish command**, export upload first, Sheets replay second.
-6. **The wizard.** One catalog entry has one `credentialService`, and
+6. **A republish command**, export upload first, Sheets replay second.
+7. **The wizard.** One catalog entry has one `credentialService`, and
    this source needs four. Either latchkey grows one service covering all
    four scopes, or the catalog learns several.
 
