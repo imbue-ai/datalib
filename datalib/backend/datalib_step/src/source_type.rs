@@ -76,6 +76,10 @@ pub enum SourceType {
     Garmin,
     Github,
     Gitlab,
+    /// Google Docs, Sheets and Slides, reached through the Drive API
+    /// (docs/dev/plans/google_drive.md). Named for Drive because that is
+    /// where a person finds them, and where the other kinds will come from.
+    GoogleDrive,
     GoogleTakeout,
     Lightroom,
     Linkedin,
@@ -116,6 +120,7 @@ impl SourceType {
                 | SourceType::Garmin
                 | SourceType::Github
                 | SourceType::Gitlab
+                | SourceType::GoogleDrive
                 | SourceType::Notion
                 | SourceType::Slack
         )
@@ -140,6 +145,7 @@ impl SourceType {
             SourceType::Media => Some("media_files"),
             SourceType::Lightroom => Some("Adobe_images"),
             SourceType::ApplePhotos => Some("ZASSET"),
+            SourceType::GoogleDrive => Some("files"),
             _ => None,
         }
     }
@@ -219,6 +225,7 @@ mod tests {
                 t,
                 SourceType::ApplePhotos
                     | SourceType::Fsindex
+                    | SourceType::GoogleDrive
                     | SourceType::Lightroom
                     | SourceType::Media
             );

@@ -501,6 +501,38 @@ Request a Takeout with **Chat** ticked and unpack it — see
 feed of. The Add source form ticks it; in a hand-written config, set
 `google_chat = true` beside `export.path`.
 
+## Google Drive
+
+`type = "google_drive"` — your Google Docs, Sheets and Slides through
+the Drive API and latchkey (`api`). A backup, not yet a view: nothing is
+rendered or searched. Each sync keeps every file whose version moved,
+whole and in Google's own form, beside its comments, its revision list,
+the images it shows and an OpenDocument copy (`.odt`, `.ods`, `.odp`)
+that LibreOffice opens. Older versions stay, and a file you delete from
+Drive stays in the backup.
+
+The download reaches four Google APIs, and latchkey signs each with its
+own service, so sign in to all four as the same account. Approve every
+scope each one asks for:
+
+```sh
+latchkey auth browser google-drive
+latchkey auth browser google-docs
+latchkey auth browser google-sheets
+latchkey auth browser google-slides
+```
+
+If Google answers that an API is not enabled, run
+`latchkey auth browser-prepare <service>` for that one first. There is
+no Add source form for it yet; add it to the config by hand, as in
+[`all_sources.toml`](config_examples/all_sources.toml). `owned_only`
+keeps it to the files you own, and `file_ids` to the ones you name.
+
+The first sync fetches every file. A later one costs one listing
+request per thousand files, plus a few requests per file that changed.
+Each version kept costs its native JSON (tens of KB gzipped) plus
+1–4 MB per export, since Google embeds the fonts in each.
+
 ## Google Takeout
 
 `type = "google_takeout"` — an unpacked Takeout tree on disk

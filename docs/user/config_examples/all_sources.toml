@@ -1018,6 +1018,36 @@ inputs = ["garmin/ingest"]
 group = "garmin"
 function = "keyword_index"
 inputs = ["garmin/render_markdown"]
+
+# --- Google Drive (Docs, Sheets, Slides) --------------------------------
+
+# A backup of the account's Google Docs, Sheets and Slides. Every time a
+# file's Drive `version` moves, a sync keeps that version whole: Google's
+# own JSON for it (gzipped, in the blob store), every image it shows,
+# its comments with their replies (resolved and deleted ones included),
+# its revision list, and an OpenDocument export LibreOffice opens. Older
+# versions stay; nothing is deleted when a file leaves Drive. Download
+# only for now: nothing is rendered or searched.
+#
+# Through four of latchkey's built-in services, one per API, signed in as
+# the same account: `latchkey auth browser google-drive`, then the same
+# for `google-docs`, `google-sheets` and `google-slides`. Run
+# `latchkey auth browser-prepare <service>` first if Google says the API
+# is not enabled.
+[[groups]]
+id = "google_drive"
+type = "google_drive"
+
+[[steps]]
+group = "google_drive"
+function = "ingest"
+
+[steps.params.api]
+# kinds = ["document", "spreadsheet", "presentation"]  # which kinds to mirror
+# exports = ["odf"]          # beside the native JSON: "odf", "ooxml", "pdf";
+                             # 1-4 MB a version each, since Google embeds fonts
+# owned_only = false         # true: only the files the account owns
+# file_ids = ["https://docs.google.com/document/d/<id>/edit"]  # exactly these
 # --- AirVisual (IQAir) monitors -----------------------------------------
 
 # AirVisual Pros' own history files, read off each unit's Samba share

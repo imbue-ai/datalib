@@ -1,0 +1,65 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//tools:live.bzl", "live_run")
+
+rust_library(
+    name = "datalib_etl_google_drive",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_google_drive",
+    edition = "2021",
+    proc_macro_deps = [
+        "//datalib/backend/etl/macros:datalib_etl_macros",
+        "@datalib_crates//:async-trait",
+    ],
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/google_drive_config:datalib_etl_google_drive_config",
+        "//datalib/backend/etl/web:datalib_etl_web",
+        "//datalib/backend/problems:datalib_problems",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:flate2",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "google_drive_unittests",
+    size = "small",
+    crate = ":datalib_etl_google_drive",
+    edition = "2021",
+)
+
+# Every hermetic Google Drive test in one binary; the modules are listed
+# in its `main.rs`. The `live` module reaches the real account and is
+# skipped here; `bazel run :google_drive_live` runs it.
+rust_test(
+    name = "google_drive_tests",
+    srcs = glob(["tests/google_drive_tests/*.rs"]),
+    args = [
+        "--skip",
+        "live::",
+    ],
+    crate_root = "tests/google_drive_tests/main.rs",
+    edition = "2021",
+    proc_macro_deps = ["@datalib_crates//:async-trait"],
+    deps = [
+        ":datalib_etl_google_drive",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/google_drive_config:datalib_etl_google_drive_config",
+        "//datalib/backend/etl/web:datalib_etl_web",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:flate2",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+live_run(
+    name = "google_drive_live",
+    test = ":google_drive_tests",
+)
