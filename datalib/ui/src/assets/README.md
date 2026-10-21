@@ -21,8 +21,20 @@ and dark backgrounds and fails one that doesn't show up on either.
 
 ## Where each mark comes from
 
-- **Brand marks** are [Simple Icons](https://simpleicons.org) (CC0) in
-  the brand's colour, except:
+- **A brand whose mark is several colours keeps them all**, so the eye
+  finds it by the colours it already knows. These are
+  [SVG Logos](https://github.com/gilbarbara/logos) (CC0), taken from
+  commit `dafdf2df`:
+  - `gmail.svg`, `google_calendar.svg` and `google_drive.svg`: the
+    current (2020) product icons, `google-*-2020.svg` there;
+  - `gitlab.svg`: `gitlab-icon.svg`.
+
+  `slack.svg` is Simple Icons' shape with each part filled in Slack's
+  four colours. `lightroom.svg` stays Simple Icons' LrC: the SVG Logos
+  mark is the cloud Lightroom's, and its navy square all but vanishes on
+  the dark theme.
+- **Every other brand mark** is [Simple Icons](https://simpleicons.org)
+  (CC0) in the brand's colour, except:
   - `airvisual.svg`: IQAir publishes no vector mark. This redraws the
     favicon dashboard.iqair.com serves, a white cross on red, from its
     48px bitmap.

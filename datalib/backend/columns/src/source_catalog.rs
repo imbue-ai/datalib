@@ -63,6 +63,7 @@ const CATALOG: &[Entry] = &[
     e("contacts", None, "Contacts", Some("contacts")),
     e("garmin", None, "Garmin", Some("garmin")),
     e("yolink", None, "YoLink", Some("yolink")),
+    e("google_drive", None, "Google Drive", Some("google_drive")),
     e(
         "google_takeout",
         None,

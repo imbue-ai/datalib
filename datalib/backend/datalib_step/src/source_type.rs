@@ -180,6 +180,22 @@ impl SourceType {
 mod tests {
     use super::*;
 
+    /// A type the row catalog does not know reaches the Manage screen
+    /// and the grid as its bare type name with no mark, which is how
+    /// `google_drive` first shipped.
+    #[test]
+    fn every_type_has_a_label_and_a_mark_in_the_row_catalog() {
+        for &t in SourceType::VARIANTS {
+            let shown =
+                datalib_columns::source_catalog::source_type(t.as_str(), &serde_json::json!({}));
+            assert!(
+                shown.icon.is_some(),
+                "{t} has no entry in datalib/backend/columns/src/source_catalog.rs: give it \
+                 a label and an icon from datalib/ui/src/assets/"
+            );
+        }
+    }
+
     #[test]
     fn every_type_round_trips_and_is_distinct() {
         let mut names: Vec<&str> = SourceType::VARIANTS.iter().map(|t| t.as_str()).collect();
