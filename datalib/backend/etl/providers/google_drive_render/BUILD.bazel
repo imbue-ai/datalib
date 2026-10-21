@@ -14,6 +14,7 @@ rust_library(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/contact_schema:datalib_contact_schema",
         "//datalib/backend/etl/providers/google_drive:datalib_etl_google_drive",
         "//datalib/backend/etl/providers/google_drive_config:datalib_etl_google_drive_config",
         "//datalib/backend/etl/render:datalib_etl_render",
@@ -46,6 +47,7 @@ rust_test(
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/providers/google_drive:datalib_etl_google_drive",
         "//datalib/backend/etl/render:datalib_etl_render",
+        "//datalib/backend/schema:datalib_schema",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",

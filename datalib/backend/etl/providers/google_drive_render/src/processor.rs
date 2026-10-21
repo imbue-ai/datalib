@@ -1,7 +1,6 @@
 //! The render wave for the google_drive source: its planner and the
 //! [`RenderProcessor`] it plans.
 
-use std::collections::BTreeSet;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -79,66 +78,54 @@ async fn render_all(db: &RawDb, ctx: &RenderCtx<'_>) -> Result<String> {
     ctx.progress.set_length(Some(listing.docs.len() as u64));
 
     let mut buckets: Vec<Bucket> = Vec::new();
-    let mut rendered = 0;
-    let mut failed = 0;
     for (file_id, capture) in work {
         ctx.progress.inc(1);
-        let loaded = match store::native(db, &capture).await {
-            Ok(native) => store::images(db, &capture)
-                .await
-                .map(|images| (native, images)),
-            Err(e) => Err(e),
+        let native = store::native(db, &capture).await?;
+        let images = store::images(db, &capture).await?;
+        let inputs = Inputs::default();
+        let comments: &[(String, serde_json::Value)] = match listing.comments.get(&file_id) {
+            Some(c) => c,
+            None => &[],
         };
-        let built = loaded.and_then(|(native, images)| {
-            let inputs = Inputs::default();
-            let comments: &[(String, serde_json::Value)] = match listing.comments.get(&file_id) {
-                Some(c) => c,
-                None => &[],
-            };
-            let md = render_doc(
-                ctx.root,
-                ctx.name,
-                &DocInput {
-                    file_id: &file_id,
-                    entry: &listing.docs[&file_id],
-                    capture: &capture,
-                    native: &native,
-                    images: &images,
-                    comments,
-                },
-                &inputs,
-            )?;
-            Ok((md, inputs.declared()))
+        let md = render_doc(
+            ctx.root,
+            ctx.name,
+            &DocInput {
+                file_id: &file_id,
+                entry: &listing.docs[&file_id],
+                capture: &capture,
+                native: native.as_ref(),
+                images: &images,
+                comments,
+            },
+            &inputs,
+        )?;
+        ctx.emit_doc(md)
+            .with_context(|| format!("store the document for {file_id}"))?;
+        buckets.push(Bucket {
+            key: file_id,
+            inputs: inputs.declared(),
         });
-        match built {
-            Ok((md, inputs)) => {
-                ctx.emit_doc(md)
-                    .with_context(|| format!("store the document for {file_id}"))?;
-                buckets.push(Bucket {
-                    key: file_id,
-                    inputs,
-                });
-                rendered += 1;
-            }
-            Err(e) => {
-                ctx.fail_bucket(&file_id, &format!("{e:#}"))?;
-                failed += 1;
-            }
-        }
     }
-    // A file this run looked at that rendered nothing — its capture or
-    // its listing entry gone, or not a Doc — is declared with nothing, so
-    // a document it had goes once its rows have.
-    let declared: BTreeSet<&str> = buckets.iter().map(|b| b.key.as_str()).collect();
-    let empty: Vec<String> = listing
+    // A file that is not a Doc, or a Doc with no capture, renders nothing
+    // and is known to: whatever document it had goes.
+    let no_capture = listing
+        .docs
+        .keys()
+        .filter(|id| !listing.captures.contains_key(*id));
+    for id in listing.others.iter().chain(no_capture) {
+        ctx.exclude_bucket(id)?;
+    }
+    // A file whose listing entry is gone: its document goes once its rows
+    // have, which the driver reads from the diff.
+    let gone: Vec<&String> = listing
         .render
         .iter()
         .flatten()
-        .filter(|k| !declared.contains(k.as_str()))
-        .filter(|k| !listing.captures.contains_key(*k) || !listing.docs.contains_key(*k))
-        .cloned()
+        .filter(|id| !listing.listed.contains(*id))
         .collect();
-    ctx.declare_empty(empty.iter().map(String::as_str))?;
+    ctx.declare_empty(gone.iter().map(|s| s.as_str()))?;
+    let rendered = buckets.len();
     ctx.finish(&buckets, head.as_deref())?;
-    Ok(format!("rendered {rendered} Doc(s), {failed} failed"))
+    Ok(format!("rendered {rendered} Doc(s)"))
 }

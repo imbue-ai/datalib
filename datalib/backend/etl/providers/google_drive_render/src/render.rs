@@ -37,7 +37,9 @@ pub struct DocInput<'a> {
     pub file_id: &'a str,
     pub entry: &'a Value,
     pub capture: &'a Capture,
-    pub native: &'a Value,
+    /// The native JSON, or why the store could not give it: the Doc
+    /// still renders its title and comments, with the problem on it.
+    pub native: Result<&'a Value, &'a Problem>,
     pub images: &'a BlobBundle,
     pub comments: &'a [(String, Value)],
 }
@@ -87,8 +89,19 @@ pub fn render_doc(
         })
         .collect();
 
-    let file = FileFacts::of(source_id, file_id, entry, native);
-    let body = doc::convert(native, &image_paths);
+    let nothing = Value::Null;
+    let file = FileFacts::of(source_id, file_id, entry, native.unwrap_or(&nothing));
+    let mut body = match native {
+        Ok(native) => doc::convert(native, &image_paths),
+        Err(_) => doc::DocBody::default(),
+    };
+    if native.is_err() {
+        body.blocks.push(Block {
+            md: "*The text of this Doc is not in the mirror.*".to_string(),
+            text: String::new(),
+            kind: BlockKind::Plain,
+        });
+    }
     let threads = comments::threads(source_id, comment_rows, file.me.as_ref());
     let placed = comments::place(&threads, &body.blocks);
 
@@ -130,6 +143,9 @@ pub fn render_doc(
     for p in unsupported::problems(&body.unsupported) {
         problems.push(problem_row(Some(&file.id.uuid), Outcome::Ok, p));
     }
+    if let Err(p) = native {
+        problems.push(problem_row(Some(&file.id.uuid), Outcome::Nulled, p.clone()));
+    }
     for pointer in &body.images_missing {
         let p = Problem::field("image", Reason::BlobMissing, pointer).at(pointer.clone());
         problems.push(problem_row(Some(&file.id.uuid), Outcome::Nulled, p));
@@ -145,7 +161,7 @@ pub fn render_doc(
         rows,
         sections,
         edges: Vec::new(),
-        contacts: Vec::new(),
+        contacts: comments::authors(source_id, &threads),
         problems,
     })
 }

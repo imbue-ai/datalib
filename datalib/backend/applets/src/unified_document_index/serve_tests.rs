@@ -153,7 +153,13 @@ fn people_by_handle_gives_each_sources_account() {
     sources.sort();
     assert_eq!(
         sources,
-        ["google-takeout", "slack", "tng_contacts", "tng_email"],
+        [
+            "google-drive",
+            "google-takeout",
+            "slack",
+            "tng_contacts",
+            "tng_email"
+        ],
         "{body}"
     );
     for c in people[picard].as_array().unwrap() {

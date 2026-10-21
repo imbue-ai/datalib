@@ -144,7 +144,7 @@ async fn a_doc_in_the_store_renders_with_its_image_and_its_thread() {
         "a Sheet does not render"
     );
     let capture = &listing.captures[DOC];
-    let native = store::native(&db, capture).await.unwrap();
+    let native = store::native(&db, capture).await.unwrap().unwrap();
     let images = store::images(&db, capture).await.unwrap();
     let inputs = Inputs::default();
     let md = render_doc(
@@ -154,7 +154,7 @@ async fn a_doc_in_the_store_renders_with_its_image_and_its_thread() {
             file_id: DOC,
             entry: &listing.docs[DOC],
             capture,
-            native: &native,
+            native: Ok(&native),
             images: &images,
             comments: &listing.comments[DOC],
         },
@@ -226,4 +226,40 @@ async fn a_doc_in_the_store_renders_with_its_image_and_its_thread() {
             "{table} not declared: {read:?}"
         );
     }
+}
+
+/// A Doc whose native JSON the store has lost still renders its title
+/// and comments, with the loss on it, so a cold render and an
+/// incremental one agree on what exists.
+#[test]
+fn a_doc_whose_text_is_lost_renders_with_the_loss_on_it() {
+    use datalib_schema::problems::{Problem, Reason};
+    let dir = tempfile::tempdir().unwrap();
+    let doc = capture(DOC, store::DOC_MIME, Vec::new(), Vec::new());
+    let entry: Value = serde_json::from_str(&doc.file.row.id_and_payload.payload).unwrap();
+    let lost = Problem::field("native", Reason::BlobMissing, "the blob store has lost it");
+    let md = render_doc(
+        dir.path(),
+        "drive",
+        &DocInput {
+            file_id: DOC,
+            entry: &entry,
+            capture: &store::Capture {
+                id: CaptureRow::id_for(DOC, "12"),
+                parts: Vec::new(),
+            },
+            native: Err(&lost),
+            images: &Default::default(),
+            comments: &[],
+        },
+        &Inputs::default(),
+    )
+    .unwrap();
+    let text = std::fs::read_to_string(&md.md_path).unwrap();
+    assert!(
+        text.contains("Captain's log, supplemental") && text.contains("not in the mirror"),
+        "{text}"
+    );
+    let reasons: Vec<Reason> = md.problems.iter().map(|p| p.reason).collect();
+    assert_eq!(reasons, vec![Reason::BlobMissing]);
 }

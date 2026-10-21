@@ -414,6 +414,8 @@ EXPECTED_PROVIDERS = frozenset(
         # Ingested through playback like the chat providers; its pages,
         # days, activities and records are what land in the grid.
         "garmin",
+        # Ingested through playback; each Doc and each of its comments.
+        "google_drive",
     }
 )
 
@@ -1130,9 +1132,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "every source that rendered must also have measured itself",
         )
         # Who a handle is, as each source that mentions it says: the
-        # rows a chip reads. One address, four sources, one name — Slack's
-        # through its profile, which ties his Slack user to the address, and
-        # the address book's, whose photo is what his chips draw.
+        # rows a chip reads. One address, five sources, one name — Slack's
+        # through its profile, which ties his Slack user to the address,
+        # Drive's through the comments the account wrote, and the address
+        # book's, whose photo is what his chips draw.
         self.assertEqual(
             self._query(
                 self._index_db,
@@ -1142,6 +1145,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "WHERE h.handle = 'email:picard@enterprise.starfleet' ORDER BY 1;",
             ),
             [
+                "google-drive|Jean-Luc Picard",
                 "google-takeout|Jean-Luc Picard",
                 "slack|Jean-Luc Picard",
                 "tng_contacts|Jean-Luc Picard",
@@ -1179,6 +1183,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             [
                 "beeper",
                 "facebook",
+                "google-drive",
                 "google-takeout",
                 "linkedin",
                 "signal",
@@ -1375,6 +1380,26 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "linkedin:wriker|William Riker",
             ],
             "a LinkedIn connection and a message sender by their profile",
+        )
+        # Drive names a comment's author and nothing else, so a comment
+        # author is a `google:name/` handle; the account's own comments
+        # are its address, which the file's owner entry gives.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT DISTINCT h.handle || '|' || c.name "
+                "FROM source_contact_handles h JOIN source_contacts c "
+                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
+                "JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
+                "WHERE m.source_id = 'google-drive' ORDER BY 1;",
+            ),
+            [
+                "email:picard@enterprise.starfleet|Jean-Luc Picard",
+                "google:name/Data|Data",
+                "google:name/Deanna Troi|Deanna Troi",
+                "google:name/Geordi La Forge|Geordi La Forge",
+            ],
+            "a Drive comment's author by name, the account by its address",
         )
         # A Slack mention is a chip link: the viewer resolves the href to
         # the person, and any other markdown viewer shows a link whose

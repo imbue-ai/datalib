@@ -13,6 +13,7 @@ use datalib_etl_google_drive::ingest::schema_raw::{
 };
 use datalib_etl_google_drive::ingest::RawDb;
 use datalib_etl_render::inputs::{changed_rows, RawRange};
+use datalib_schema::problems::{Problem, Reason};
 use serde_json::Value;
 use sqlx::Row as _;
 
@@ -37,6 +38,11 @@ pub struct Listing {
     pub captures: HashMap<String, Capture>,
     /// Each file's comments, as `(raw key, payload)`.
     pub comments: HashMap<String, Vec<(String, Value)>>,
+    /// Every other file this run looked at: a Sheet, a deck, a listing
+    /// entry with no payload. None of them is a document.
+    pub others: Vec<String>,
+    /// Every file id the store has a `files` row for, in scope or not.
+    pub listed: HashSet<String>,
     /// The files to render; `None` renders every Doc.
     pub render: Option<HashSet<String>>,
 }
@@ -72,13 +78,18 @@ pub async fn load(db: &RawDb, range: RawRange<'_>) -> Result<Listing> {
         .context("read files")?
     {
         let id: String = row.try_get("id")?;
-        let Some(payload) = row.try_get::<Option<String>, _>("payload")? else {
+        out.listed.insert(id.clone());
+        if !out.renders(&id) {
             continue;
-        };
-        let entry: Value = serde_json::from_str(&payload)
-            .with_context(|| format!("files row {id} is not JSON"))?;
-        if out.renders(&id) && entry.get("mimeType").and_then(Value::as_str) == Some(DOC_MIME) {
-            out.docs.insert(id, entry);
+        }
+        let entry = row
+            .try_get::<Option<String>, _>("payload")?
+            .and_then(|p| serde_json::from_str::<Value>(&p).ok());
+        match entry {
+            Some(e) if e.get("mimeType").and_then(Value::as_str) == Some(DOC_MIME) => {
+                out.docs.insert(id, e);
+            }
+            _ => out.others.push(id),
         }
     }
 
@@ -141,26 +152,29 @@ pub async fn load(db: &RawDb, range: RawRange<'_>) -> Result<Listing> {
     Ok(out)
 }
 
-/// One capture's native JSON, unpacked.
-pub async fn native(db: &RawDb, capture: &Capture) -> Result<Value> {
-    let (_, _, blake3) = capture
+/// One capture's native JSON, unpacked, or what keeps it from being
+/// read. The error is the store's; the problem is the record's.
+pub async fn native(db: &RawDb, capture: &Capture) -> Result<Result<Value, Problem>> {
+    let missing = |why: String| Ok(Err(Problem::field("native", Reason::BlobMissing, &why)));
+    let Some((_, _, blake3)) = capture
         .parts
         .iter()
         .find(|(_, part, _)| part == PART_NATIVE)
-        .with_context(|| format!("capture {} has no native part", capture.id))?;
-    let blake3 = blake3
-        .as_deref()
-        .with_context(|| format!("capture {} stored no native bytes", capture.id))?;
-    let object = db
-        .cas()
-        .get(blake3)
-        .await?
-        .with_context(|| format!("the blob store has lost {blake3}"))?;
+    else {
+        return missing(format!("capture {} has no native part", capture.id));
+    };
+    let Some(blake3) = blake3.as_deref() else {
+        return missing(format!("capture {} stored no native bytes", capture.id));
+    };
+    let Some(object) = db.cas().get(blake3).await? else {
+        return missing(format!("the blob store has lost {blake3}"));
+    };
+    let unreadable = |why: String| Problem::field("native", Reason::Undeserializable, &why);
     let mut json = Vec::new();
-    flate2::read::GzDecoder::new(&object.bytes[..])
-        .read_to_end(&mut json)
-        .with_context(|| format!("{blake3} is not gzip"))?;
-    serde_json::from_slice(&json).with_context(|| format!("{blake3} is not JSON"))
+    if let Err(e) = flate2::read::GzDecoder::new(&object.bytes[..]).read_to_end(&mut json) {
+        return Ok(Err(unreadable(format!("{blake3} is not gzip: {e}"))));
+    }
+    Ok(serde_json::from_slice(&json).map_err(|e| unreadable(format!("{blake3} is not JSON: {e}"))))
 }
 
 /// The capture's images, keyed by their part row id.

@@ -85,7 +85,14 @@ on text since deleted or rewritten.
 no address. The author's handle is `google:name/<the name>`, which the
 contacts app can link to a person. The account's own comments use its
 address, where the file names the account among its owners, last editor
-or sharer.
+or sharer. Each author with a handle is a source contact of the Doc:
+the names they showed, how many messages they wrote, and when.
+
+**A Doc whose text is lost.** When the store no longer holds a capture's
+native JSON, or it will not unpack, the Doc still renders its title and
+comment threads, says its text is not in the mirror, and carries a
+`blob_missing` or `undeserializable` problem. A file that is not a Doc,
+or a Doc with no capture, renders nothing, and any document it had goes.
 
 ## Rows
 

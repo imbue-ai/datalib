@@ -7,9 +7,13 @@
 use datalib_etl_render::html::{escape_md_block, escape_text};
 use datalib_etl_render::message::MessageHeader;
 use datalib_etl_render::section::{msg_div_open, Section, MSG_DIV_CLOSE};
+use std::collections::BTreeMap;
+
+use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact, Seen};
 use datalib_handle::Handle;
 use datalib_id::Identity;
 use datalib_schema::providers::Provider;
+use datalib_time::IsoOffsetTimestamp;
 use serde_json::Value;
 
 use crate::doc::Block;
@@ -230,6 +234,33 @@ pub fn sections(t: &Thread) -> Vec<Section> {
     out
 }
 
+/// Each comment author with a handle, as this file's comments describe
+/// them: the names they showed, how many messages they wrote and when
+/// the newest was — what chat-common's baseline says of a chat's authors.
+pub fn authors(source_id: &str, threads: &[Thread]) -> Vec<NormalizedContact> {
+    let mut by_handle: BTreeMap<&str, (NormalizedContact, Option<i64>)> = BTreeMap::new();
+    for m in threads.iter().flat_map(|t| &t.messages) {
+        let Some(handle) = &m.handle else { continue };
+        let (c, last) = by_handle.entry(handle.as_str()).or_insert_with(|| {
+            let mut c = NormalizedContact::new(source_id, handle.as_str(), ContactKind::Person);
+            c.handles = vec![ContactHandle::of(handle.clone())];
+            (c, None)
+        });
+        if !c.names.contains(&m.author) {
+            c.names.push(m.author.clone());
+        }
+        let items = c.seen.as_ref().map_or(0, |s| s.items) + 1;
+        *last = (*last).max(m.created.as_deref().and_then(datalib_time::record_stamp_ms));
+        c.seen = Some(Seen {
+            items,
+            last_at: last
+                .and_then(IsoOffsetTimestamp::from_unix_millis)
+                .map(|t| t.to_rfc3339_secs()),
+        });
+    }
+    by_handle.into_values().map(|(c, _)| c).collect()
+}
+
 /// A quote as Drive sends it, HTML-escaped, back to the text it was.
 fn decode_entities(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -425,6 +456,35 @@ mod tests {
         assert!(
             md.contains("&lt;script&gt;x&lt;/script&gt; &amp; co\n\\# not a heading"),
             "{md}"
+        );
+    }
+
+    #[test]
+    fn each_author_with_a_handle_is_a_source_contact() {
+        let me = Handle::email("picard@enterprise.test").unwrap();
+        let contacts = authors("src", &threads("src", &thread_rows(), Some(&me)));
+        let got: Vec<(String, Vec<String>, u64)> = contacts
+            .iter()
+            .map(|c| {
+                let seen = c.seen.as_ref().map_or(0, |s| s.items);
+                (c.key.clone(), c.names.clone(), seen)
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (
+                    "email:picard@enterprise.test".to_string(),
+                    vec!["Jean-Luc Picard".to_string()],
+                    2
+                ),
+                (
+                    "google:name/Geordi La Forge".to_string(),
+                    vec!["Geordi La Forge".to_string()],
+                    1
+                ),
+                ("google:name/Worf".to_string(), vec!["Worf".to_string()], 1),
+            ]
         );
     }
 

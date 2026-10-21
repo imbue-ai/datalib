@@ -163,7 +163,11 @@ sqlite3 blobs.sqlite "SELECT writefile('native.json.gz', bytes) FROM cas_objects
 ```
 
 The hermetic tests are `//datalib/backend/etl/providers/google_drive:google_drive_tests`,
-on a TNG tape (`tests/google_drive_tests/tape.rs`). The live check runs
+on a TNG tape (`tests/google_drive_tests/tape.rs`). The TNG fixture
+pipeline (`//tests/fixtures:ingested_tng`) syncs the account in
+`tests/fixtures/google_drive_tng/tng.json`, which
+`datalib-step synthesize google_drive` (`src/synthesize.rs`) expands into
+playback tapes. The live check runs
 against the signed-in account:
 `GOOGLE_DRIVE_TEST_FILE_IDS=<id>,<id> DATALIB_RUNTIME_DIR=<staged runtime> bazel run //datalib/backend/etl/providers/google_drive:google_drive_live`
 (`scripts/stage_runtime.sh` stages one).
