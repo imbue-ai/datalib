@@ -12,7 +12,7 @@ use datalib_etl_web::http::LatchkeySettings;
 use datalib_etl_web::interrupt::dump_tables;
 use datalib_etl_web::playback;
 
-use crate::tape::{self, Edition, DECK, DOC, SHEET};
+use crate::tape::{self, Edition, DECK, DOC, SHEET, VIEW_ONLY_DOC};
 
 pub const TABLES: &[&str] = &[
     "files",
@@ -247,6 +247,30 @@ async fn a_first_sync_captures_every_file_in_its_native_form() {
     db.close().await;
 }
 
+/// The Docs API refuses a Doc's suggestions (403) to an account that may
+/// only view it, so asking for them inline left every such Doc owed
+/// forever. Its listing entry says so up front, and it is read without
+/// them, in the mode Google answers with, which the stored JSON keeps.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_doc_the_account_may_only_view_is_read_without_suggestions() {
+    let d = tempfile::tempdir().unwrap();
+    let t = tape::tape(d.path(), Edition::Before);
+    tape::view_only_doc(&t);
+    let store = d.path().join("store");
+    let s = run(&t, &store).await;
+    assert_eq!((s.listed, s.captured, s.failed), (4, 4, 0), "{s:?}");
+
+    let db = open(&store).await;
+    let parts = parts_of(&db, &format!("{VIEW_ONLY_DOC}#5")).await;
+    let names: Vec<&str> = parts.iter().map(|(p, _)| p.as_str()).collect();
+    assert_eq!(names, vec!["export.odt", "native.json.gz"]);
+    let native: serde_json::Value =
+        serde_json::from_slice(&gunzip(&blob(&db, parts[1].1.as_deref().unwrap()).await)).unwrap();
+    assert_eq!(native, tape::view_only_native());
+    assert_eq!(native["suggestionsViewMode"], "PREVIEW_WITHOUT_SUGGESTIONS");
+    db.close().await;
+}
+
 /// A file whose `version` has not moved is not fetched again, whatever
 /// else its listing entry says: an export is not byte-stable, so a
 /// second one would store a copy of the same version.
@@ -382,7 +406,7 @@ async fn a_kind_whose_service_is_refused_stops_alone() {
     let t = tape::tape(d.path(), Edition::Before);
     tape::put(
         &t,
-        api::req_bytes(&api::native_url(FileKind::Spreadsheet, SHEET)),
+        api::req_bytes(&api::native_url(FileKind::Spreadsheet, SHEET, true)),
         tape::bytes(
             403,
             br#"{"error": {"code": 403, "message": "Request had insufficient authentication scopes.",

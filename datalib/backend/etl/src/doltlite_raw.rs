@@ -2214,7 +2214,7 @@ async fn record_fetch_problem(
         Scope::Entity(&entity_id),
         None,
         outcome,
-        Problem::record(reason, err).severity(severity),
+        Problem::explained(reason, None, err).severity(severity),
         None,
     )
     .stamped(earlier.as_ref(), &now, Some(&tz_offset));
@@ -3444,14 +3444,18 @@ mod tests {
         assert_eq!(first[0].1, "widgets:w1");
         assert_eq!(first[0].2, "HTTP 500");
 
+        // An error that spends its first 80 characters on the URL, as
+        // an HTTP failure does, is kept whole: the status is at the end.
+        let long = "GET https://api.example.test/v1/widgets/w1?includeEverything=true\
+                    &view=FULL: 403: You do not have permission to access this widget.";
         let mut tx = pool.begin().await.unwrap();
-        record_object_error(&mut tx, "widgets", "w1", "HTTP 503")
+        record_object_error(&mut tx, "widgets", "w1", long)
             .await
             .unwrap();
         tx.commit().await.unwrap();
         let again = rows(&pool).await;
         assert_eq!(again.len(), 1, "one row per entity, not one per attempt");
-        assert_eq!(again[0].2, "HTTP 503", "the newest error");
+        assert_eq!(again[0].2, long, "the newest error, whole");
         assert_eq!(again[0].3, first[0].3, "first seen is kept");
 
         let mut tx = pool.begin().await.unwrap();

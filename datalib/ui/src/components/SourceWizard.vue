@@ -146,10 +146,10 @@ const emit = defineEmits<{
       /// Null when editing: the group already exists.
       groupBody: string | null;
       /// The `[[steps]]` blocks: the ingest step, then the render step
-      /// for a provider that renders.
+      /// unless rendering is off.
       stepsBody: string;
       /// The render step's composed id, for the caller to wire into the
-      /// fan-ins. Null for a provider that renders nothing.
+      /// fan-ins. Null when rendering is off.
       renderId: string | null;
       /// Which of its `keyword_index` and `embed` steps the source gets.
       /// `none` leaves the markdown out of free-text search; the grid
@@ -183,10 +183,10 @@ const values = ref<FieldValues>({});
 /// choice the user made.
 const idTouched = ref(false);
 
-/// Can this provider render at all? A download-only provider (a photo
-/// catalog, a media tree) has no text to render, and no choice to
-/// offer.
-const providerRenders = computed(() => !!chosen.value && chosen.value.renderStep !== false);
+/// Does this provider render documents? A download-only provider (a
+/// photo catalog, a media tree) has no text to render, and no choice to
+/// offer, though it still gets its render step (`rendersDocuments`).
+const providerRenders = computed(() => !!chosen.value && chosen.value.rendersDocuments !== false);
 
 /// Whether this source wants its render step. On by default: mirrored
 /// data that is never rendered reaches neither the grid nor search, so
@@ -194,9 +194,9 @@ const providerRenders = computed(() => !!chosen.value && chosen.value.renderStep
 /// already has.
 const renderWanted = ref(props.editing ? !!props.editing.steps.render : true);
 
-/// Does this source write a render step — the provider can, and this
-/// source asked for it.
-const renders = computed(() => providerRenders.value && renderWanted.value);
+/// Does this source write a render step: always for a download-only
+/// provider, otherwise when this source asked for it.
+const renders = computed(() => !!chosen.value && (!providerRenders.value || renderWanted.value));
 
 /// Whether this source's markdown gets a keyword index, and embeddings
 /// on top of it. Both on by default, for the same reason rendering is: a
@@ -208,7 +208,7 @@ const embedWanted = ref(props.editing ? props.editing.qmdIndexing === "keyword_a
 /// How far into qmd this source goes: only as far as there is markdown to
 /// index, and embeddings only on top of a keyword index.
 const qmdIndexing = computed<QmdIndexing>(() => {
-  if (!renders.value || !keywordWanted.value) return "none";
+  if (!renders.value || !providerRenders.value || !keywordWanted.value) return "none";
   return embedWanted.value && embeds.value ? "keyword_and_embed" : "keyword";
 });
 
@@ -331,9 +331,9 @@ const missingSteps = computed<string[]>(() => {
   return out;
 });
 
-/// A render step this source has that its provider does not write — a
-/// hand-written one under a download-only type. Saving removes it, and
-/// that is worth a sentence for the same reason a missing step is.
+/// A render step this source has though rendering is off. Saving
+/// removes it, and that is worth a sentence for the same reason a
+/// missing step is.
 const orphanRender = computed<string | null>(() =>
   props.editing && !renders.value && props.editing.steps.render
     ? props.editing.steps.render.id
@@ -1401,16 +1401,9 @@ function submit() {
           >. Saving writes {{ missingSteps.length === 1 ? "it" : "them" }}.
         </p>
         <p v-if="orphanRender" class="wiz-cred">
-          <template v-if="providerRenders">
-            Rendering is off under Advanced options, and this source has a render step,
-            <code>{{ orphanRender }}</code
-            >.
-          </template>
-          <template v-else>
-            This source has a render step, <code>{{ orphanRender }}</code
-            >, but {{ chosen.label }} renders nothing.
-          </template>
-          Saving removes it, and takes it out of the index steps’ inputs.
+          Rendering is off under Advanced options, and this source has a render step,
+          <code>{{ orphanRender }}</code
+          >. Saving removes it, and takes it out of the index steps’ inputs.
         </p>
         <p v-if="untouched.length" class="wiz-cred">
           This form has no field for
