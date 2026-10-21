@@ -94,10 +94,12 @@ header, and a step's `params` sub-tables come after its plain keys — a
 
 - **Complete commented example:**
   [`configs/dag_example.toml`](../configs/dag_example.toml).
-- **Per-source knobs and step pairs**:
+- **Every source, every option**:
   [`docs/user/config_examples/all_sources.toml`](user/config_examples/all_sources.toml)
-  — one commented group with its `ingest` + `render_markdown` step pair
-  per supported source, ready to copy. A `config.toml` in the retired
+  — one commented group per way into each source, with its steps and
+  every option set, and the index groups reading them all. It is
+  generated from the stanzas `datalib-step help <type> --example
+  complete` prints, so it is always one that loads. A `config.toml` in the retired
   shape (steps naming a `datalib-step download …` command) is refused;
   rewrite it once with `datalib-migrate-config <data_root> --force`.
 - **Credentials**: web-API sources authenticate through
