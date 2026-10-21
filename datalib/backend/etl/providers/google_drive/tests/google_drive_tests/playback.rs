@@ -5,11 +5,12 @@ use std::path::Path;
 
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_google_drive::ingest::{self, api, db_path_for, FetchSummary, RawDb};
-use datalib_etl_google_drive_config::{FileKind, GoogleDriveApi};
+use datalib_etl_google_drive_config::{
+    ExportFormat, Exports, FileKind, GoogleDriveApi, PerKindExports,
+};
 use datalib_etl_web::http::LatchkeySettings;
 use datalib_etl_web::interrupt::dump_tables;
 use datalib_etl_web::playback;
-use datalib_etl_web::synthesize::json_response;
 
 use crate::tape::{self, Edition, DECK, DOC, SHEET};
 
@@ -22,11 +23,15 @@ pub const TABLES: &[&str] = &[
 ];
 
 pub async fn run(playback: &Path, store: &Path) -> FetchSummary {
+    run_with(playback, store, GoogleDriveApi::default()).await
+}
+
+async fn run_with(playback: &Path, store: &Path, api: GoogleDriveApi) -> FetchSummary {
     let db = RawDb::open(&db_path_for(store)).await.expect("open store");
     let download = ingest::fetch(ingest::FetchOptions {
         db: db.clone(),
         latchkey: LatchkeySettings::default(),
-        api: GoogleDriveApi::default(),
+        api,
         progress: Default::default(),
         control: Default::default(),
         sealer: None,
@@ -147,11 +152,30 @@ async fn a_first_sync_captures_every_file_in_its_native_form() {
             "native.json.gz",
         ]
     );
-    let native = blob(&db, parts[2].1.as_deref().unwrap()).await;
+    let native: serde_json::Value =
+        serde_json::from_slice(&gunzip(&blob(&db, parts[2].1.as_deref().unwrap()).await)).unwrap();
+    let mut sent = tape::doc_native(Edition::Before);
+    let link = sent
+        .pointer_mut("/tabs/0/documentTab/inlineObjects/kix.enterprise/inlineObjectProperties/embeddedObject/imageProperties")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .remove("contentUri")
+        .unwrap();
     assert_eq!(
-        gunzip(&native),
-        json_response(&tape::doc_native(Edition::Before)).body,
-        "the native JSON is kept exactly as Google sent it"
+        native, sent,
+        "the native JSON is kept as Google sent it, less its image link"
+    );
+    let volatile: String =
+        sqlx::query_scalar("SELECT json(volatile_payload) FROM captures_bookkeeping WHERE id = ?")
+            .bind(format!("{DOC}#12"))
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+    let volatile: serde_json::Value = serde_json::from_str(&volatile).unwrap();
+    assert_eq!(
+        volatile["image_links"][parts[1].0.trim_start_matches("image:")],
+        link
     );
     assert_eq!(
         blob(&db, parts[1].1.as_deref().unwrap()).await,
@@ -332,5 +356,44 @@ async fn a_kind_whose_service_is_refused_stops_alone() {
         said.contains("latchkey auth browser google-sheets"),
         "{said}"
     );
+    db.close().await;
+}
+
+/// Each kind is exported only in the formats its own list names; an
+/// empty list asks Drive for no export at all, so a capture holds the
+/// native JSON and its images alone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exports_follow_each_kinds_list() {
+    let d = tempfile::tempdir().unwrap();
+    let t = tape::tape(d.path(), Edition::Before);
+    let store = d.path().join("store");
+    let api = GoogleDriveApi {
+        exports: Exports::PerKind(PerKindExports {
+            document: vec![ExportFormat::Odf],
+            spreadsheet: vec![],
+            presentation: vec![],
+        }),
+        ..Default::default()
+    };
+    let s = run_with(&t, &store, api).await;
+    assert_eq!(
+        (s.captured, s.exports, s.exports_declined),
+        (3, 1, 0),
+        "{s:?}"
+    );
+
+    let db = open(&store).await;
+    let exports: Vec<String> =
+        sqlx::query_scalar("SELECT id FROM capture_parts WHERE part LIKE 'export.%' ORDER BY id")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+    assert_eq!(exports, vec![format!("{DOC}#12#export.odt")]);
+    let names: Vec<String> = parts_of(&db, &format!("{SHEET}#7"))
+        .await
+        .into_iter()
+        .map(|(p, _)| p)
+        .collect();
+    assert_eq!(names, vec!["native.json.gz".to_string()]);
     db.close().await;
 }

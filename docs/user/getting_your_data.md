@@ -527,6 +527,9 @@ If Google answers that an API is not enabled, run
 no Add source form for it yet; add it to the config by hand, as in
 [`all_sources.toml`](config_examples/all_sources.toml). `owned_only`
 keeps it to the files you own, and `file_ids` to the ones you name.
+`exports` says which copies Drive converts each version to: `["odf"]`
+by default, `[]` for none (the native JSON is still kept), or a list per
+kind.
 
 The first sync fetches every file. A later one costs one listing
 request per thousand files, plus a few requests per file that changed.
