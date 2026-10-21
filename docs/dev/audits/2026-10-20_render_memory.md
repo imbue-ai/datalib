@@ -119,8 +119,11 @@ Folding the history to one commit and then `dolt_gc` brought both to
 
 ## Still open
 
-- google_takeout, whatsapp, sms_backup_restore, linkedin, beeper:
-  every blob up front. Next on the list after email and slack.
 - The other renders read their stores whole; `pages` is the pattern.
+  google_takeout, whatsapp, sms_backup_restore, linkedin and beeper
+  load their blobs a batch at a time since the follow-up to #1267
+  (`chat_common::blobs`), but still read their rows whole.
+- ChatGPT, Claude, Notion, Facebook and Signal load every rendered
+  document's blobs at once.
 - The `embed` steps (3–5.5 GB in the issue's run log).
 - A test per large source that fails on a peak over budget.

@@ -94,7 +94,9 @@ disk_usage_days = 30
 # source renders as one unit), and loads at most `blob_mb` of their
 # attachments together. Smaller pages hold less and cost more queries;
 # changing them changes no document. Omit the table, or either key, for
-# the defaults, which are these. Email and Slack read them so far.
+# the defaults, which are these. Email and Slack read both; WhatsApp,
+# SMS Backup & Restore, Google Takeout, Beeper and LinkedIn read
+# `blob_mb`.
 [render_pages]
 buckets = 500
 blob_mb = 64

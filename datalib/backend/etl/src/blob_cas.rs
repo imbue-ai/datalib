@@ -767,6 +767,81 @@ impl BlobBundle {
         Ok(out)
     }
 
+    /// What [`Self::load_many`] would load for each key, in bytes, read
+    /// from the blob store's `byte_len` without touching a byte: what a
+    /// render cuts its blob batches by. A key whose refs hold nothing is 0.
+    pub async fn sizes_many<K, R>(
+        refs_pool: &SqlitePool,
+        cas_pool: Option<&SqlitePool>,
+        projection_sql_template: &str,
+        refs_by_key: impl IntoIterator<Item = (K, R)>,
+    ) -> Result<HashMap<K, u64>>
+    where
+        K: Eq + Hash + Clone,
+        R: IntoIterator,
+        R::Item: Into<String>,
+    {
+        let mut out: HashMap<K, u64> = HashMap::new();
+        let mut refs_of: Vec<(K, Vec<String>)> = Vec::new();
+        let mut all_refs: HashSet<String> = HashSet::new();
+        for (key, refs) in refs_by_key {
+            let refs: Vec<String> = refs.into_iter().map(Into::into).collect();
+            all_refs.extend(refs.iter().cloned());
+            out.entry(key.clone()).or_insert(0);
+            refs_of.push((key, refs));
+        }
+        let Some(cas_pool) = cas_pool.filter(|_| !all_refs.is_empty()) else {
+            return Ok(out);
+        };
+        let ref_ids = serde_json::to_string(&all_refs.iter().collect::<Vec<_>>())?;
+        let occurrences = projection_sql_template.matches("{placeholders}").count();
+        let sql =
+            projection_sql_template.replace("{placeholders}", "SELECT value FROM json_each(?)");
+        // Audited: as in `load_many` — a module-level `const` template, the
+        // one substitution a `json_each` over one bound parameter.
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+        for _ in 0..occurrences {
+            q = q.bind(&ref_ids);
+        }
+        let rows = q
+            .fetch_all(refs_pool)
+            .await
+            .context("BlobBundle::sizes_many projection")?;
+        let hash_of: HashMap<String, String> = rows
+            .iter()
+            .filter_map(|r| {
+                Some((
+                    r.try_get::<String, _>("ref_id").ok()?,
+                    r.try_get::<String, _>("blake3").ok()?,
+                ))
+            })
+            .collect();
+        drop(rows);
+        let hashes: Vec<&String> = hash_of
+            .values()
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        let mut len_of: HashMap<String, u64> = HashMap::with_capacity(hashes.len());
+        for chunk in hashes.chunks(crate::bulk::SQL_CHUNK) {
+            let lens: Vec<(String, i64)> = sqlx::query_as(
+                "SELECT blake3, byte_len FROM cas_objects \
+                  WHERE blake3 IN (SELECT value FROM json_each(?))",
+            )
+            .bind(serde_json::to_string(chunk)?)
+            .fetch_all(cas_pool)
+            .await
+            .context("BlobBundle::sizes_many cas_objects")?;
+            len_of.extend(lens.into_iter().map(|(h, n)| (h, n.max(0) as u64)));
+        }
+        for (key, refs) in refs_of {
+            let distinct: HashSet<&String> = refs.iter().filter_map(|r| hash_of.get(r)).collect();
+            let bytes: u64 = distinct.iter().filter_map(|h| len_of.get(*h)).sum();
+            *out.entry(key).or_insert(0) += bytes;
+        }
+        Ok(out)
+    }
+
     // ── render side (sync) ───────────────────────────────────────────
 
     fn names_by_blake3(&self) -> BTreeMap<&str, String> {

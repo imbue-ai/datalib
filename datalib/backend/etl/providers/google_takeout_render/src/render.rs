@@ -4,19 +4,19 @@
 //! [`crate::feeds`]) a document per year.
 
 use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use datalib_etl::blob_cas::{BlobBundle, CasEdgeRow};
+use datalib_etl::blob_cas::CasEdgeRow;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::changed_chats;
-use datalib_etl_chat_common::render::{render_all as cc_render_all, Buckets, RenderProfile};
+use datalib_etl_chat_common::render::{Buckets, ChatRenderer, RenderProfile};
 use datalib_etl_chat_common::types::{
     own_stamp_ms, AuthorKind, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
     NormalizedDoc, UpstreamRef,
 };
 use datalib_etl_chat_common::TextFormat;
+use datalib_etl_chat_common::{render_batched, ChatBlobs};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::escape_md_block;
 use datalib_etl_render::inputs::{Inputs, RawRange};
@@ -49,7 +49,7 @@ use datalib_schema::providers::Provider;
 ///     problem row for every field render leaves unread.
 pub const RENDER_VERSION: u32 = 9;
 
-/// Projection for [`BlobBundle::load_many`] over the Voice CAS edge: the
+/// Projection for `BlobBundle::load_many` over the Voice CAS edge: the
 /// `ref_name` (attachment filename) is the bundle key; `content_type`
 /// falls back to `cas_objects` (we don't store it on the edge).
 const VOICE_BLOB_PROJECTION: &str = "SELECT ref_name AS ref_id, blake3, \
@@ -103,7 +103,8 @@ const MAPS_PHOTO_BLOB_PROJECTION: &str = "SELECT id AS ref_id, blake3, \
      FROM maps_photos \
      WHERE id IN ({placeholders}) AND blake3 IS NOT NULL";
 
-/// Everything one pass reads off the store, read while it is open.
+/// Every row one pass reads off the store. Attachment bytes are not
+/// among them: render reads those a batch of chats at a time.
 struct Loaded {
     messages: Vec<(String, Value)>,
     groups: Vec<(String, Value)>,
@@ -118,8 +119,6 @@ struct Loaded {
     saved_lists: Vec<pages::FileRow>,
     placemarks: Vec<pages::FileRow>,
     book_entries: Vec<pages::FileRow>,
-    /// Per chat id, the bytes its attachments reference.
-    blobs: HashMap<String, BlobBundle>,
     scan: datalib_etl::doltlite_raw::DiffScan,
 }
 
@@ -132,6 +131,8 @@ pub struct RenderOutcome {
     pub new_head: Option<String>,
 }
 
+/// Renders the store under `raw_dir`, its attachment bytes read a batch
+/// of at most `blob_bytes` at a time.
 pub fn render(
     raw_dir: &Path,
     out_root: &Path,
@@ -139,47 +140,62 @@ pub fn render(
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
     range: RawRange<'_>,
+    blob_bytes: u64,
 ) -> Result<RenderOutcome> {
     let db_path = db_path_for(raw_dir);
     if !db_path.exists() {
         return Ok(RenderOutcome::default());
     }
-    let Some(l) = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async {
-            // Pinned at open: the driver's pin when it made one, else
-            // HEAD. No commit means nothing has been committed here to
-            // render, which is emptiness rather than a reason to read
-            // the working set.
-            let Some(db) = RawDb::open_reader(&db_path, range.pin).await? else {
-                return Ok(None);
-            };
-            let pin = db.pin().expect("a reader is pinned at open").clone();
-            let loaded = load(&db, range.cursor, &pin).await;
-            // Closed, not dropped: the next open of this store is a
-            // second connection until this one is actually gone.
-            db.close().await;
-            loaded.map(Some)
-        })
-    })?
-    else {
+    // Pinned at open: the driver's pin when it made one, else HEAD. No
+    // commit means nothing has been committed here to render, which is
+    // emptiness rather than a reason to read the working set.
+    let Some(db) = block_on(RawDb::open_reader(&db_path, range.pin))? else {
         return Ok(RenderOutcome::default());
     };
+    let rendered = render_open(
+        &db,
+        out_root,
+        source_id,
+        progress,
+        on_doc_complete,
+        range,
+        blob_bytes,
+    );
+    // Closed, not dropped: the next open of this store is a second
+    // connection until this one is actually gone.
+    block_on(db.close());
+    rendered
+}
 
-    let mut all_chats = chat::build(source_id, &l.messages, &l.groups, &l.users);
-    all_chats.extend(build_voice_chats(source_id, &l.voice_messages));
-    all_chats.extend(gemini::build(source_id, &l.gemini));
-    all_chats.extend(youtube::build_history(source_id, &l.watches));
-    all_chats.extend(youtube::build_subscriptions(source_id, &l.subscriptions));
-    all_chats.extend(maps::build(source_id, &l.reviews, &l.saved, &l.photos));
-    all_chats.extend(pages::saved_lists(source_id, &l.saved_lists));
-    all_chats.extend(pages::my_maps(source_id, &l.placemarks));
-    all_chats.extend(pages::play_books(source_id, &l.book_entries));
-    let changed = changed_chats(all_chats, range, l.scan.render.as_ref(), |id| {
+fn render_open(
+    db: &RawDb,
+    out_root: &Path,
+    source_id: &str,
+    progress: &Progress,
+    on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+    range: RawRange<'_>,
+    blob_bytes: u64,
+) -> Result<RenderOutcome> {
+    let pin = db.pin().expect("a reader is pinned at open").clone();
+    let (all_chats, scan) = {
+        let l = block_on(load(db, range.cursor, &pin))?;
+        let mut all_chats = chat::build(source_id, &l.messages, &l.groups, &l.users);
+        all_chats.extend(build_voice_chats(source_id, &l.voice_messages));
+        all_chats.extend(gemini::build(source_id, &l.gemini));
+        all_chats.extend(youtube::build_history(source_id, &l.watches));
+        all_chats.extend(youtube::build_subscriptions(source_id, &l.subscriptions));
+        all_chats.extend(maps::build(source_id, &l.reviews, &l.saved, &l.photos));
+        all_chats.extend(pages::saved_lists(source_id, &l.saved_lists));
+        all_chats.extend(pages::my_maps(source_id, &l.placemarks));
+        all_chats.extend(pages::play_books(source_id, &l.book_entries));
+        (all_chats, l.scan)
+    };
+    let changed = changed_chats(all_chats, range, scan.render.as_ref(), |id| {
         chat_uuid_for(source_id, id)
     });
     let mut outcome = RenderOutcome {
         buckets: changed.buckets,
-        new_head: l.scan.new_head,
+        new_head: scan.new_head,
     };
     let (feed_chats, chats): (Vec<NormalizedChat>, Vec<NormalizedChat>) = changed
         .chats
@@ -188,105 +204,62 @@ pub fn render(
     let (voice_chats, chats): (Vec<NormalizedChat>, Vec<NormalizedChat>) =
         chats.into_iter().partition(|c| is_voice(&c.id));
 
-    if !chats.is_empty() {
-        let s = cc_render_all(
-            &profile(),
-            &chats,
+    let blobs = ChatBlobs::new(db.pool(), Some(db.cas().pool()), &blob_projection);
+    let mut render_as = |profile: &RenderProfile, chats: &[NormalizedChat]| -> Result<()> {
+        if chats.is_empty() {
+            return Ok(());
+        }
+        let mut renderer = ChatRenderer::new(
+            profile,
             out_root,
             source_id,
-            &l.blobs,
+            chats.iter().map(|c| c.buckets.len()).sum(),
             progress,
-            on_doc_complete,
-        )?;
-        outcome.buckets.extend(s.buckets);
-    }
-
-    if !voice_chats.is_empty() {
-        let s = cc_render_all(
-            &voice_profile(),
-            &voice_chats,
-            out_root,
-            source_id,
-            &l.blobs,
-            progress,
-            on_doc_complete,
-        )?;
-        outcome.buckets.extend(s.buckets);
-    }
-
+            &mut *on_doc_complete,
+        );
+        render_batched(&mut renderer, chats, &blobs, blob_bytes)?;
+        outcome.buckets.extend(renderer.finish().buckets);
+        Ok(())
+    };
+    render_as(&profile(), &chats)?;
+    render_as(&voice_profile(), &voice_chats)?;
     for feed in feed_chats {
-        let s = cc_render_all(
-            &feeds::profile(&feed.id),
-            std::slice::from_ref(&feed),
-            out_root,
-            source_id,
-            &l.blobs,
-            progress,
-            on_doc_complete,
-        )?;
-        outcome.buckets.extend(s.buckets);
+        render_as(&feeds::profile(&feed.id), std::slice::from_ref(&feed))?;
     }
     Ok(outcome)
 }
 
+/// The edge table a chat's attachments are named in.
+fn blob_projection(chat: &NormalizedChat) -> &'static str {
+    match chat.id.as_str() {
+        feeds::GEMINI => GEMINI_BLOB_PROJECTION,
+        feeds::MAPS => MAPS_PHOTO_BLOB_PROJECTION,
+        id if is_voice(id) => VOICE_BLOB_PROJECTION,
+        _ => CHAT_BLOB_PROJECTION,
+    }
+}
+
+fn block_on<F: std::future::Future>(f: F) -> F::Output {
+    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(f))
+}
+
 async fn load(db: &RawDb, cursor: Option<&str>, pin: &datalib_etl::pin::Pin) -> Result<Loaded> {
-    let messages = db.load_payloads_with_id("chat_messages").await?;
-    // (dir name, group_info payload) — the directory name carries the
-    // space id, which `group_info.json` itself does not.
-    let groups = db.load_payloads_with_id("chat_groups").await?;
-    let users = db.load_payloads_with_id("chat_users").await?;
-    let voice_messages = db.load_payloads_with_id("voice_messages").await?;
-    let gemini = load_rows(db, "gemini_activity", Dated::Yes).await?;
-    let photos = load_rows(db, "maps_photos", Dated::Yes).await?;
-    let mut blobs = load_voice_blobs(db, &voice_messages).await?;
-    let gemini_refs: Vec<String> = gemini.iter().flat_map(gemini::attachment_ids).collect();
-    let photo_refs: Vec<String> = photos.iter().map(|p| p.id.clone()).collect();
-    let mut chat_refs: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for (_, m) in &messages {
-        let space = chat::space_of(m.get("message_id").and_then(Value::as_str).unwrap_or(""));
-        chat_refs
-            .entry(space)
-            .or_default()
-            .extend(chat::attachment_ids(m));
-    }
-    blobs.extend(
-        BlobBundle::load_many(
-            db.pool(),
-            Some(db.cas().pool()),
-            CHAT_BLOB_PROJECTION,
-            chat_refs,
-        )
-        .await?,
-    );
-    for (chat_id, projection, refs) in [
-        (feeds::GEMINI, GEMINI_BLOB_PROJECTION, gemini_refs),
-        (feeds::MAPS, MAPS_PHOTO_BLOB_PROJECTION, photo_refs),
-    ] {
-        blobs.extend(
-            BlobBundle::load_many(
-                db.pool(),
-                Some(db.cas().pool()),
-                projection,
-                [(chat_id.to_string(), refs)],
-            )
-            .await?,
-        );
-    }
     Ok(Loaded {
-        messages,
-        groups,
-        users,
-        voice_messages,
-        gemini,
+        messages: db.load_payloads_with_id("chat_messages").await?,
+        // (dir name, group_info payload) — the directory name carries the
+        // space id, which `group_info.json` itself does not.
+        groups: db.load_payloads_with_id("chat_groups").await?,
+        users: db.load_payloads_with_id("chat_users").await?,
+        voice_messages: db.load_payloads_with_id("voice_messages").await?,
+        gemini: load_rows(db, "gemini_activity", Dated::Yes).await?,
         watches: load_rows(db, "youtube_watch_history", Dated::Yes).await?,
         subscriptions: load_rows(db, "youtube_subscriptions", Dated::No).await?,
         reviews: load_rows(db, "maps_reviews", Dated::Yes).await?,
         saved: load_rows(db, "maps_saved_places", Dated::Yes).await?,
-        photos,
+        photos: load_rows(db, "maps_photos", Dated::Yes).await?,
         saved_lists: load_file_rows(db, "maps_saved_lists", Dated::No).await?,
         placemarks: load_file_rows(db, "my_maps_placemarks", Dated::No).await?,
         book_entries: load_file_rows(db, "play_books_annotations", Dated::Yes).await?,
-        blobs,
         scan: scan_diff(db.pool(), cursor, pin).await?,
     })
 }
@@ -460,28 +433,6 @@ async fn scan_diff(
                 WHERE bucket IS NOT NULL AND bucket != '' AND bucket != 'voice:'
             ",
         },
-    )
-    .await
-}
-
-async fn load_voice_blobs(
-    db: &RawDb,
-    voice_messages: &[(String, Value)],
-) -> Result<HashMap<String, BlobBundle>> {
-    // Group ref_names by conversation_key (== the chat.id we mint).
-    let mut refs_by_chat: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for (_, m) in voice_messages {
-        let key = voice_chat_id(m);
-        let bag = refs_by_chat.entry(key).or_default();
-        for r in voice_attachment_refs(m) {
-            bag.push(r);
-        }
-    }
-    BlobBundle::load_many(
-        db.pool(),
-        Some(db.cas().pool()),
-        VOICE_BLOB_PROJECTION,
-        refs_by_chat,
     )
     .await
 }

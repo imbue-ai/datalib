@@ -251,6 +251,8 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             owner: account.handle.as_ref(),
             account_inputs: &account.inputs,
             range: RawRange::cold(),
+            // One photo a batch, so each loads apart.
+            blob_bytes: 1,
         };
         let mut docs: Vec<RenderedMarkdown> = Vec::new();
         {

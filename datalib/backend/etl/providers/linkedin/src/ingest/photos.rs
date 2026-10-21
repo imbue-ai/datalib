@@ -5,7 +5,6 @@
 //! connections.
 
 use anyhow::{Context, Result};
-use datalib_etl::blob_cas::BlobCas;
 use sqlx::Row;
 
 use super::RawDb;
@@ -64,54 +63,111 @@ pub struct PhotoBlob {
     pub content_type: Option<String>,
 }
 
+/// A stored photo without its bytes: the `contact_photos` row and the
+/// hash its bytes are kept under.
+#[derive(Debug, Clone)]
+pub struct PhotoEdge {
+    pub row_id: String,
+    pub blake3: String,
+}
+
 /// Every stored connection photo, keyed by `owner_id` (the connection's
 /// URL). Empty when the store never held one.
 pub async fn load_photo_blobs(db: &RawDb) -> Result<std::collections::HashMap<String, PhotoBlob>> {
-    let pool = db.pool();
-    let mut out = std::collections::HashMap::new();
-    if !table_exists(pool, CONTACT_PHOTOS_TABLE).await? {
-        return Ok(out);
-    }
+    let edges = load_photo_edges(db).await?;
+    let hashes: Vec<&str> = edges.values().map(|e| e.blake3.as_str()).collect();
+    let mut bytes = load_photo_bytes(db, &hashes).await?;
+    Ok(edges
+        .into_iter()
+        .filter_map(|(owner, edge)| {
+            let (bytes, content_type) = bytes.remove(&edge.blake3)?;
+            Some((
+                owner,
+                PhotoBlob {
+                    row_id: edge.row_id,
+                    bytes,
+                    content_type,
+                },
+            ))
+        })
+        .collect())
+}
 
-    // owner_id → blake3 for the rows that actually have bytes.
+/// The edge of every connection that has a photo's bytes stored, keyed
+/// by `owner_id`, without reading a byte.
+pub async fn load_photo_edges(db: &RawDb) -> Result<std::collections::HashMap<String, PhotoEdge>> {
+    let pool = db.pool();
+    if !table_exists(pool, CONTACT_PHOTOS_TABLE).await? {
+        return Ok(Default::default());
+    }
     // Audited: the only interpolation is a table name the caller chose --
     // a literal.
-    let edges = sqlx::query(sqlx::AssertSqlSafe(format!(
+    let edges: Vec<(String, String, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT id, owner_id, blake3 FROM {} WHERE blake3 IS NOT NULL",
         CONTACT_PHOTOS_TABLE
     )))
     .fetch_all(pool)
     .await
     .context("load contact_photos")?;
-    if edges.is_empty() {
-        return Ok(out);
-    }
-    // A reader whose store never had a photo fetched has no CAS file, so
-    // there are no bytes to resolve — the edges above say the same thing
-    // whenever it is genuinely absent.
+    Ok(edges
+        .into_iter()
+        .map(|(row_id, owner_id, blake3)| (owner_id, PhotoEdge { row_id, blake3 }))
+        .collect())
+}
+
+/// What each photo weighs, by hash, from the blob store's `byte_len`.
+pub async fn photo_sizes(
+    db: &RawDb,
+    hashes: &[&str],
+) -> Result<std::collections::HashMap<String, u64>> {
     let Some(cas) = db.cas() else {
-        return Ok(out);
+        return Ok(Default::default());
     };
-    let loaded = async {
-        for row in edges {
-            let row_id: String = row.get("id");
-            let owner_id: String = row.get("owner_id");
-            let blake3: String = row.get("blake3");
-            if let Some((bytes, content_type)) = load_cas_bytes(cas, &blake3).await? {
-                out.insert(
-                    owner_id,
-                    PhotoBlob {
-                        row_id,
-                        bytes,
-                        content_type,
-                    },
-                );
-            }
-        }
-        Ok(out)
+    let mut out = std::collections::HashMap::new();
+    for chunk in hashes.chunks(datalib_etl::bulk::SQL_CHUNK) {
+        let rows: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT blake3, byte_len FROM cas_objects
+              WHERE blake3 IN (SELECT value FROM json_each(?))",
+        )
+        .bind(serde_json::to_string(chunk)?)
+        .fetch_all(cas.pool())
+        .await
+        .context("load photo sizes")?;
+        out.extend(rows.into_iter().map(|(h, n)| (h, n.max(0) as u64)));
     }
-    .await;
-    loaded
+    Ok(out)
+}
+
+/// Each photo's bytes and type, by hash. A store whose photos were never
+/// fetched has no blob store, and so nothing to return.
+pub async fn load_photo_bytes(
+    db: &RawDb,
+    hashes: &[&str],
+) -> Result<std::collections::HashMap<String, (Vec<u8>, Option<String>)>> {
+    let Some(cas) = db.cas() else {
+        return Ok(Default::default());
+    };
+    let mut out = std::collections::HashMap::new();
+    for chunk in hashes.chunks(datalib_etl::bulk::SQL_CHUNK) {
+        let rows = sqlx::query(
+            "SELECT blake3, bytes, content_type FROM cas_objects
+              WHERE blake3 IN (SELECT value FROM json_each(?))",
+        )
+        .bind(serde_json::to_string(chunk)?)
+        .fetch_all(cas.pool())
+        .await
+        .context("load photo bytes")?;
+        for r in rows {
+            out.insert(
+                r.get::<String, _>("blake3"),
+                (
+                    r.get::<Vec<u8>, _>("bytes"),
+                    r.get::<Option<String>, _>("content_type"),
+                ),
+            );
+        }
+    }
+    Ok(out)
 }
 
 async fn table_exists(pool: &sqlx::SqlitePool, table: &str) -> Result<bool> {
@@ -122,18 +178,4 @@ async fn table_exists(pool: &sqlx::SqlitePool, table: &str) -> Result<bool> {
             .await
             .with_context(|| format!("probe {table}"))?;
     Ok(found.is_some())
-}
-
-async fn load_cas_bytes(cas: &BlobCas, blake3: &str) -> Result<Option<(Vec<u8>, Option<String>)>> {
-    let row = sqlx::query("SELECT bytes, content_type FROM cas_objects WHERE blake3 = ?")
-        .bind(blake3)
-        .fetch_optional(cas.pool())
-        .await
-        .context("load cas bytes")?;
-    Ok(row.map(|r| {
-        (
-            r.get::<Vec<u8>, _>("bytes"),
-            r.get::<Option<String>, _>("content_type"),
-        )
-    }))
 }

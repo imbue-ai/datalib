@@ -896,9 +896,23 @@ values"), renders it, and declares the page's buckets before reading
 the next, so nothing about a bucket outlives its page. Only the small
 tables every bucket looks up (users, channels, accounts, mailboxes)
 are read whole, up front. Email and Slack render this way; the other
-renders still read their stores whole
+renders still read their rows whole
 ([`audits/2026-10-20_render_memory.md`](audits/2026-10-20_render_memory.md)
 lists them).
+
+Blob bytes are the larger part of most stores, and a render that still
+reads its rows whole can at least leave them where they are until they
+are needed. WhatsApp, SMS Backup & Restore, Google Takeout and Beeper
+build their chats from the rows, narrow to the ones this run renders,
+and then load a batch of chats' attachments at a time, cut by
+`blob_mb`, just before the batch renders. For a chat-shaped source that
+is `datalib_etl_chat_common::blobs`: `ChatBlobs` reads a chat's refs off
+its attachments, weighs them with `BlobBundle::sizes_many` (the blob
+store's `byte_len`, no bytes read), and `render_batched` loads and
+renders one batch at a time. LinkedIn does the same for its
+connections' photos. A chat's bundle is never split, because its period
+pages share one `blobs/` folder and the filenames the bundle picks, so
+one very large chat is still one batch.
 
 **The size is the person's to choose.** A config's `[render_pages]`
 table sets `buckets` (per page) and `blob_mb` (per blob batch); the
