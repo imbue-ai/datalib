@@ -571,6 +571,37 @@ when it was taken, so the store holds the catalog's history from before
 you started syncing it. Every later sync adds the backups taken since,
 then mirrors the catalog on top.
 
+## Linear
+
+`type = "linear"` — Linear's GraphQL API through latchkey (`api`).
+Copies one workspace: issues with their history, comments, documents,
+project updates and attachments, plus the teams, people, states,
+labels, cycles, projects, milestones and initiatives they refer to.
+Nothing is rendered; each kind of object is a table of the objects as
+Linear sent them.
+
+Sign in once in the browser:
+
+```sh
+latchkey auth browser linear
+```
+
+Or make a personal API key in Linear (**Settings** → **Security &
+access** → **Personal API keys**; read access is enough) and store it
+without `Bearer`:
+
+```sh
+latchkey auth set linear -H "Authorization: lin_api_…"
+```
+
+An empty `api` table copies the whole workspace. To copy part of it,
+name teams by key or name in `teams` and projects by name in
+`projects`. An issue is copied when its team or its project is named,
+and most issues belong to no project, so name their teams. The first
+sync copies everything, newest first. Each sync after that reads only
+what changed since, and for a quiet workspace that takes seconds.
+`datalib/backend/etl/providers/linear/INGEST.md` has the details.
+
 ## LinkedIn
 
 `type = "linkedin"` — LinkedIn's "Get a copy of your data" export

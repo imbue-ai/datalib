@@ -209,7 +209,8 @@ datalib/
                    over etl/files/src/fswalk.rs); four mirror a SQLite
                    file through etl/sqlite_mirror/; three render time
                    series (airvisual, yolink, garmin). fsindex, media,
-                   lightroom and apple_photos have no <p>_render.
+                   lightroom, apple_photos and linear have no
+                   <p>_render.
     etl/sqlite_mirror/ the table-for-table SQLite→doltlite mirror engine.
     table/         `BulkUpsertable`, alone.
     probe/         what "Check connection" and a picker's "Load" ask

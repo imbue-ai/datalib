@@ -103,7 +103,14 @@ export type Field =
 /// The wizard says `labels` and `mailboxes` in the source's own word for
 /// them (`CatalogEntry.mailboxNoun`), the rest as written.
 export type ProbeNoun =
-  "labels" | "mailboxes" | "conversations" | "channels" | "calendars" | "addressbooks";
+  | "labels"
+  | "mailboxes"
+  | "conversations"
+  | "channels"
+  | "calendars"
+  | "addressbooks"
+  | "teams"
+  | "projects";
 
 /// One answer to a section's question. Choosing it writes `sets` and
 /// shows `fields` under it; the fields of the answers not chosen are
@@ -565,6 +572,52 @@ export const CATALOG: CatalogEntry[] = [
     nameHint: "Team Notion",
     wizard: false,
     credentialService: "notion",
+  },
+  {
+    type: "linear",
+    method: "api",
+    label: "Linear",
+    blurb: "Copy issues, comments, projects and documents from one Linear workspace.",
+    keywords: ["linear", "issues", "tickets", "projects", "tracker"],
+    kind: "api",
+    icon: "linear",
+    defaultName: "linear",
+    nameHint: "Work Linear",
+    wizard: true,
+    // Download-only: the copy is Linear's own objects, kept as they
+    // came, and nothing is rendered.
+    renderStep: false,
+    credentialService: "linear",
+    canProbe: true,
+    sections: [
+      {
+        heading: "Which issues?",
+        answers: [
+          { label: "The whole workspace" },
+          {
+            label: "Only the teams and projects I choose",
+            help: "Most issues belong to a team and no project, so choose their teams.",
+            fields: ["api.teams", "api.projects"],
+          },
+        ],
+      },
+    ],
+    fields: [
+      {
+        kind: "string_list",
+        probe: "teams",
+        target: "api.teams",
+        label: "Teams",
+        help: "Every issue in these teams, and the projects they work on.",
+      },
+      {
+        kind: "string_list",
+        probe: "projects",
+        target: "api.projects",
+        label: "Projects",
+        help: "Every issue in these projects, whichever team it is in.",
+      },
+    ],
   },
 
   // ── the two `email` variants ──────────────────────────────────────

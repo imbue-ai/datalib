@@ -92,6 +92,8 @@ pub enum HttpService {
     GoogleCalendar,
     /// A JMAP server (Fastmail and friends), another `email` mode.
     Jmap,
+    /// Linear's GraphQL API (`api.linear.app`).
+    Linear,
     /// The official `api.notion.com` REST API. Does **not** impersonate:
     /// the Cloudflare-fronted host was `www.notion.so`, reached only by
     /// the retired unofficial client. `api.notion.com` accepts a vanilla
