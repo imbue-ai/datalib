@@ -1620,13 +1620,73 @@ export const CATALOG: CatalogEntry[] = [
     type: "beeper",
     label: "Beeper",
     blurb:
-      "Read Beeper Texts' local store across its networks. Poorly supported — expect rough edges.",
-    keywords: ["beeper", "matrix", "chat", "imessage"],
-    kind: "export",
+      "Copy the chats Beeper keeps on this Mac, from every network it connects. Poorly " +
+      "supported — expect rough edges.",
+    keywords: ["beeper", "matrix", "chat", "signal", "whatsapp", "slack", "google chat"],
+    kind: "local",
     icon: "beeper",
     defaultName: "beeper",
     nameHint: "Beeper on this Mac",
-    wizard: false,
+    wizard: true,
+    intro:
+      "Copies the chats the Beeper desktop app keeps on this Mac, for every network you " +
+      "connected in it. Only what Beeper has downloaded is here: a chat you never opened in " +
+      "Beeper may have only its latest messages.",
+    sections: [
+      { heading: "Beeper folder", fields: ["texts.path"] },
+      {
+        heading: "Which networks?",
+        answers: [
+          { label: "All of them" },
+          { label: "Only the networks I choose", fields: ["networks"] },
+        ],
+      },
+      { heading: "Photos and files", fields: ["texts.media"] },
+    ],
+    fields: [
+      {
+        kind: "path",
+        // The folder, not `index.db`: a sync also reads each on-device
+        // bridge's database and the cached files beside it.
+        picks: "dir",
+        pickTitle: "Choose your Beeper folder",
+        startIn: "~/Library/Application Support/BeeperTexts",
+        required: true,
+        target: "texts.path",
+        label: "Beeper folder",
+        help: "The folder Beeper keeps its data in, ~/Library/Application Support/BeeperTexts.",
+      },
+      {
+        kind: "string_list",
+        phase: "render",
+        target: "networks",
+        label: "Networks",
+        help:
+          "signal, whatsapp, slack, googlechat, telegram, discord, instagram, facebook, " +
+          "linkedin, twitter or sms. Every network is still copied; this picks what is shown.",
+      },
+      {
+        kind: "bool",
+        target: "texts.media",
+        label: "Copy photos and files",
+        default: true,
+        help: "Only the ones Beeper has downloaded. Off, a message still says what was attached.",
+      },
+      {
+        kind: "select",
+        target: "period",
+        phase: "render",
+        label: "Document span",
+        default: "month",
+        options: [
+          { value: "day", label: "A day" },
+          { value: "month", label: "A month" },
+          { value: "year", label: "A year" },
+          { value: "all", label: "The whole conversation" },
+        ],
+        help: "How much of a conversation goes in one rendered page.",
+      },
+    ],
   },
 
   {
