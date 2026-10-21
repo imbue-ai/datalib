@@ -1,4 +1,5 @@
-//! `GET /api/pipeline/storage` — bytes on disk, and how fresh they are.
+//! `GET /api/pipeline/storage` — bytes on disk, and how fresh they are;
+//! `POST /api/pipeline/storage/refresh` walks the disk first.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -40,11 +41,21 @@ inputs = ["pdfs/ingest"]
 "#;
 
 async fn storage(app: &axum::Router, query: &str) -> serde_json::Value {
+    answer(app, "GET", &format!("/api/pipeline/storage{query}")).await
+}
+
+/// A walk, then the answer.
+async fn refresh(app: &axum::Router) -> serde_json::Value {
+    answer(app, "POST", "/api/pipeline/storage/refresh").await
+}
+
+async fn answer(app: &axum::Router, method: &str, uri: &str) -> serde_json::Value {
     let resp = app
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/api/pipeline/storage{query}"))
+                .method(method)
+                .uri(uri)
                 .header("x-datalib-token", TEST_TOKEN)
                 .body(Body::empty())
                 .unwrap(),
@@ -84,7 +95,7 @@ async fn a_step_that_has_written_nothing_is_present_false() {
     std::fs::write(td.path().join("config.toml"), CONFIG).unwrap();
     let app = router(state(td.path()).await);
 
-    let v = storage(&app, "?refresh=1").await;
+    let v = refresh(&app).await;
     assert_eq!(tree(&v, "pdfs/ingest")["present"], false);
     assert_eq!(tree(&v, "pdfs/ingest")["bytes"], 0);
     assert_eq!(tree(&v, "pdfs/render_markdown")["present"], false);
@@ -98,7 +109,7 @@ async fn a_refresh_sees_bytes_written_since_the_last_walk() {
     let app = router(state(td.path()).await);
 
     // First walk: nothing on disk.
-    let before = storage(&app, "?refresh=1").await;
+    let before = refresh(&app).await;
     assert_eq!(tree(&before, "pdfs/ingest")["present"], false);
     let root_before = before["root"]["bytes"].as_u64().unwrap();
 
@@ -111,7 +122,7 @@ async fn a_refresh_sees_bytes_written_since_the_last_walk() {
     .unwrap();
     std::fs::write(td.path().join("pdfs/ingest/blobs.sqlite"), vec![7u8; 1024]).unwrap();
 
-    let after = storage(&app, "?refresh=1").await;
+    let after = refresh(&app).await;
     let raw = tree(&after, "pdfs/ingest");
     assert_eq!(raw["present"], true);
     assert_eq!(raw["bytes"], 5120);
@@ -148,17 +159,7 @@ async fn the_response_carries_a_history_and_names_its_window() {
         "before any walk the zero is 'not measured', not 'empty disk'"
     );
 
-    // The spellings a person, a curl or an agent actually writes. A
-    // `bool` field here answers 400 to `?refresh=1` — rejecting the
-    // whole request over a flag, rather than merely ignoring it.
-    for q in ["?refresh=1", "?refresh=true", "?refresh"] {
-        assert!(
-            storage(&app, q).await["measured_at_utc"].is_string(),
-            "{q} should have walked"
-        );
-    }
-
-    let v = storage(&app, "?refresh=1").await;
+    let v = refresh(&app).await;
     assert!(v["measured_at_utc"].is_string());
     assert_eq!(v["window_secs"], 300);
     // The root is measured on every walk, so it always has at least the
@@ -178,7 +179,7 @@ async fn a_group_directory_is_a_measured_tree_of_its_own() {
 
     // Declared, nothing written: the group has a row and it is absent,
     // like a step's.
-    let before = storage(&app, "?refresh=1").await;
+    let before = refresh(&app).await;
     assert_eq!(tree(&before, "pdfs")["present"], false);
 
     std::fs::create_dir_all(td.path().join("pdfs/ingest")).unwrap();
@@ -186,7 +187,7 @@ async fn a_group_directory_is_a_measured_tree_of_its_own() {
     std::fs::write(td.path().join("pdfs/ingest/blobs.sqlite"), vec![7u8; 1024]).unwrap();
     std::fs::write(td.path().join("pdfs/render_markdown/a.md"), vec![7u8; 100]).unwrap();
 
-    let after = storage(&app, "?refresh=1").await;
+    let after = refresh(&app).await;
     let group = tree(&after, "pdfs");
     assert_eq!(group["present"], true);
     assert_eq!(group["bytes"], 1124, "both steps' trees, under the group");
@@ -232,7 +233,16 @@ async fn a_get_never_walks_the_data_root() {
             )
             .await
             .unwrap();
-        assert!(resp.status().is_success(), "{uri}: {}", resp.status());
+        // Refused by name, so a caller that still asks this way learns
+        // where the walk went rather than reading a stale answer.
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{uri}");
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 16)
+            .await
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&bytes).contains("/refresh"),
+            "{uri}: the refusal names the POST"
+        );
     }
 
     let v = storage(&app, "").await;

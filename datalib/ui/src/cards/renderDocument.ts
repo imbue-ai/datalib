@@ -66,5 +66,5 @@ export function renderDocument(
   markdownUuid: string | null,
   options: SanitizeOptions = {},
 ): Sanitized {
-  return sanitizeRenderedHtml(md.render(body, { markdownUuid }), options);
+  return sanitizeRenderedHtml(md.render(body, { markdownUuid }), { ...options, markdownUuid });
 }

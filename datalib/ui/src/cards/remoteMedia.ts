@@ -55,11 +55,12 @@ export function proxied(value: string, ctx: RemoteContext): string {
 
 // ── Rewriting ──────────────────────────────────────────────────────────
 
-/** Every remote URL in a `srcset`, and the srcset with each mapped —
- *  `null` from `map` drops that candidate. */
+/** Every remote URL in a `srcset` (or every URL `which` picks), and the
+ *  srcset with each mapped — `null` from `map` drops that candidate. */
 export function rewriteSrcset(
   srcset: string,
   map: (url: string) => string | null,
+  which: (url: string) => boolean = isRemoteUrl,
 ): { srcset: string; remote: string[] } {
   const remote: string[] = [];
   const kept: string[] = [];
@@ -67,7 +68,7 @@ export function rewriteSrcset(
     const parts = candidate.trim().split(/\s+/);
     const url = parts[0] ?? "";
     if (!url) continue;
-    if (!isRemoteUrl(url)) {
+    if (!which(url)) {
       kept.push(candidate.trim());
       continue;
     }
@@ -80,16 +81,18 @@ export function rewriteSrcset(
 
 const CSS_URL = /url\(\s*(['"]?)([^'")]*)\1\s*\)/gi;
 
-/** Every remote `url(…)` in an inline style, and the style with each
- *  mapped — `null` from `map` replaces the whole `url(…)` with `none`,
- *  which is a valid value wherever an image was. */
+/** Every remote `url(…)` in an inline style (or every one `which`
+ *  picks), and the style with each mapped — `null` from `map` replaces
+ *  the whole `url(…)` with `none`, which is a valid value wherever an
+ *  image was. */
 export function rewriteStyleUrls(
   style: string,
   map: (url: string) => string | null,
+  which: (url: string) => boolean = isRemoteUrl,
 ): { style: string; remote: string[] } {
   const remote: string[] = [];
   const rewritten = style.replace(CSS_URL, (whole: string, _quote: string, url: string) => {
-    if (!isRemoteUrl(url)) return whole;
+    if (!which(url)) return whole;
     remote.push(url);
     const mapped = map(url);
     return mapped === null ? "none" : `url("${mapped}")`;

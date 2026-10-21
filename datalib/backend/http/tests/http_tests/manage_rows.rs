@@ -20,10 +20,15 @@ async fn rows_of(state: AppState) -> serde_json::Value {
 }
 
 async fn rows_at(state: AppState, uri: &str) -> serde_json::Value {
+    rows_by(state, "GET", uri).await
+}
+
+async fn rows_by(state: AppState, method: &str, uri: &str) -> serde_json::Value {
     let app = router(state);
     let resp = app
         .oneshot(
             Request::builder()
+                .method(method)
                 .uri(uri)
                 .header("x-datalib-token", TEST_TOKEN)
                 .body(Body::empty())
@@ -685,16 +690,16 @@ async fn a_download_step_names_its_raw_store_once_it_exists() {
         b"CTLD",
     )
     .unwrap();
-    let uri = "/api/manage/rows?refresh=1";
+    let uri = "/api/manage/rows/refresh";
 
-    let before = by_key(&rows_at(state(tmp.path()).await, uri).await);
+    let before = by_key(&rows_by(state(tmp.path()).await, "POST", uri).await);
     assert_eq!(
         before["slack/ingest"]["raw_store_path"],
         serde_json::Value::Null
     );
 
     std::fs::write(ingest.join("entities.doltlite_db"), b"CTLD").unwrap();
-    let rows = by_key(&rows_at(state(tmp.path()).await, uri).await);
+    let rows = by_key(&rows_by(state(tmp.path()).await, "POST", uri).await);
     let named: Vec<(&String, &serde_json::Value)> = rows
         .iter()
         .filter(|(_, r)| !r["raw_store_path"].is_null())

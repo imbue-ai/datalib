@@ -4,8 +4,14 @@
 // seed) so it always carries the origin the card is being viewed on.
 import type { CardRender } from "../types";
 import { copyWayfinder, createWayfinder } from "@/handoff";
+import { isComponentName } from "../frontendRegistry";
 
 export function agentSeedView(name: string): CardRender {
+  // The name goes into a prompt an agent with a shell will follow, and
+  // card source can come from a link.
+  if (!isComponentName(name)) {
+    throw new Error('agentSeedView takes a component\'s name, as in agentSeedView("card_1x2y3z")');
+  }
   return (root, ctx) => {
     ctx.setTitle("New component");
     const style = document.createElement("style");

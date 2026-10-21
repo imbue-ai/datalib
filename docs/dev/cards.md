@@ -60,7 +60,12 @@ component may read and show what its arguments name, but must not save,
 sync, delete or start work because of them; that waits for the person
 to act inside the card. Text from an argument that goes into HTML (help,
 a title drawn as markup) is escaped (`escapeHtml` in
-`datalib/ui/src/cards/help.ts`).
+`datalib/ui/src/cards/help.ts`). An argument that becomes part of a
+request path is checked to be what the view takes (a number, a
+component's name, an applet's id), so it cannot climb to another route
+with `..`. The cards a URL opens get a tab that the layout kept in the
+library leaves out (`kept` in `views/containerTree.ts`) until the person
+names or pins it, so a link cannot put a card back at every launch.
 
 `comp` is namespaced because the components come from a store that is
 too: `system/frontend/user/` holds what a person or an agent wrote, and

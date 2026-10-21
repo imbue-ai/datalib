@@ -9,7 +9,18 @@
 // a side panel.
 
 export default function channels(appletId) {
-  const base = `/applet/${appletId}`;
+  // Card source can come from a link, so the id must stay one path
+  // segment under /applet/ rather than climb to another route: a config
+  // id's characters (`valid_id_segment`), and never `.` or `..`.
+  if (
+    typeof appletId !== "string" ||
+    !/^[A-Za-z0-9._][A-Za-z0-9._-]*$/.test(appletId) ||
+    appletId === "." ||
+    appletId === ".."
+  ) {
+    throw new Error('channels takes the applet\'s id, as in channels("slack")');
+  }
+  const base = `/applet/${encodeURIComponent(appletId)}`;
 
   return (root, ctx) => {
     let cancelled = false;

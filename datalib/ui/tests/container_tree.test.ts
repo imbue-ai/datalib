@@ -3,6 +3,7 @@ import {
   find,
   instantiate,
   isSolidified,
+  kept,
   landing,
   makeBox,
   makeCard,
@@ -343,5 +344,29 @@ describe("pinned tabs", () => {
   it("a stored pin is read back", () => {
     const stored: unknown = JSON.parse(JSON.stringify(pinnedFixture()));
     expect(pinnedTabs(parseTree(stored)!).map((t) => t.id)).toEqual(["dash"]);
+  });
+});
+
+describe("what a link opened", () => {
+  // The fixture with a tab a link opened, selected, as ContainersView adds one.
+  function linkedFixture(): BoxNode {
+    const link = {
+      ...makeBox("link", "columns", [makeCard("l1", "tableView({})")]),
+      fromLink: true,
+    } as const;
+    return { ...fixture(), children: [...fixture().children, link], selected: "link" };
+  }
+
+  /// A link's author wrote its source, so the layout the library keeps
+  /// must not bring it back at the next launch.
+  it("is left out of what the library keeps", () => {
+    const root = kept(linkedFixture());
+    expect(ids(root)).toEqual(["dash", "sandbox"]);
+    expect(root.selected).toBe("sandbox");
+  });
+
+  it("is kept once the person names or pins it", () => {
+    expect(ids(kept(rename(linkedFixture(), "link", "Mine") as BoxNode))).toContain("link");
+    expect(ids(kept(setPinned(linkedFixture(), "link", true) as BoxNode))).toContain("link");
   });
 });

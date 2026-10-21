@@ -190,7 +190,8 @@ cookie attached.
   - The search applet's first free-text query starts `qmd mcp` and a
     node embedder.
 
-  Smaller ones: `?refresh=1` on `/api/manage/rows` and
-  `/api/pipeline/storage` walks the data root; reading a finished
-  connect or probe result drops it from memory. The first two are the
-  next work.
+  Smaller ones: reading a finished connect or probe result drops it
+  from memory. (`?refresh=1` on `/api/manage/rows` and
+  `/api/pipeline/storage` walked the data root; a walk is a `POST
+  …/refresh` now, and a GET asking for one is refused.) The first two
+  are the next work.

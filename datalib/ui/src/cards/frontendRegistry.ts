@@ -157,6 +157,12 @@ export function gallerySource(ns: string, name: string, args: unknown[] = []): s
 /// Pick a name not currently taken in the `user` namespace. Valid as a
 /// JavaScript identifier, since it is written as `comp.user.<name>`,
 /// and prefixed so it cannot look like something a person chose.
+/// What the server takes as a component's name (`frontend.rs`
+/// `valid_name`): a JavaScript identifier of at most 64 characters.
+export function isComponentName(name: unknown): name is string {
+  return typeof name === "string" && /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/.test(name);
+}
+
 export function freshUserName(): string {
   const taken = frontendManifest.value.get(USER_NAMESPACE) ?? new Map();
   for (;;) {
