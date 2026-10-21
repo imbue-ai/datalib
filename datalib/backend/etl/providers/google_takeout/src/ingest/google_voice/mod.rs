@@ -735,6 +735,9 @@ fn audio_beside(html_path: &Path) -> Option<PathBuf> {
 }
 
 fn resolve_sibling(html_path: &Path, src: &str) -> Option<PathBuf> {
+    if !super::attachment_path::is_plain_file_name(src) {
+        return None;
+    }
     let dir = html_path.parent()?;
     let exact = dir.join(src);
     if exact.is_file() {

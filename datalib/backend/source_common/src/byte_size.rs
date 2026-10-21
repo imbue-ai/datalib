@@ -57,6 +57,21 @@ fn unit_multiplier(unit: &str) -> Option<u64> {
     Some(base.pow(power))
 }
 
+/// A size: an integer of bytes, or a number and a unit. Named in
+/// `#[schemars(with = "Option<byte_size::ByteSize>")]` beside a
+/// `deserialize_opt` field, which is what reads the value; this type is
+/// only its schema, and is never built.
+#[derive(schemars::JsonSchema)]
+#[serde(untagged)]
+#[allow(dead_code)]
+pub enum ByteSize {
+    /// An integer of bytes: `5_000_000`.
+    Bytes(u64),
+    /// A number and a unit: `"5 MB"`, `"512 KiB"`. KB/MB/GB are ×1000,
+    /// KiB/MiB/GiB ×1024.
+    WithUnit(String),
+}
+
 /// `#[serde(default, deserialize_with = "byte_size::deserialize_opt")]`
 /// on an `Option<u64>` field.
 pub fn deserialize_opt<'de, D: Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {

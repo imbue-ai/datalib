@@ -1,0 +1,22 @@
+# Signal messages from the Android app's local backups: every
+# `signal-backup-*` snapshot in `backup.path`, pulled off the phone with
+# `adb pull /sdcard/Signal/SignalBackups ~/Downloads/signal-backup`.
+# Decrypting them needs the 30-digit backup passphrase in the
+# environment, never in this file:
+#   export SIGNAL_BACKUP_PASSPHRASE='<your 30-digit passphrase>'
+[[groups]]
+id = "signal"
+name = "Signal"
+type = "signal"
+
+[[steps]]
+group = "signal"
+function = "ingest"
+
+[steps.params.backup]
+path = "~/Downloads/signal-backup"
+
+[[steps]]
+group = "signal"
+function = "render_markdown"
+inputs = ["signal/ingest"]

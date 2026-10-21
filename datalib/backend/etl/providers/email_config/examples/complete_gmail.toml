@@ -1,0 +1,67 @@
+# Gmail over the Gmail API, signed in through latchkey (`latchkey auth
+# browser google-gmail`), with every option set, and searchable.
+[[groups]]
+id = "email"
+name = "Gmail"
+type = "email"
+
+[[steps]]
+group = "email"
+function = "ingest"
+
+# Mirror only mail under these labels. Labels are full paths and match
+# exactly: `Work` does not take in `Work/Projects`, so list nested ones.
+# Several labels add up, each costing one more walk of the mailbox. The
+# default, [], mirrors everything.
+[steps.params]
+only_extract_labels = ["Inbox", "Starfleet/Reports"]
+
+[steps.params.common]
+blob_size_limit_bytes = "25 MB"  # skip a message (its .eml, attachments and all) larger
+                                 # than this; unset is no limit
+
+# When to give up on a failing server. The download always backs off and
+# retries; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one; name it once `google-gmail` holds two.
+[steps.params.latchkey_settings]
+account = "picard@example.com"
+
+[steps.params.gmail]
+user_id = "me"                        # Gmail's userId; the default `me` is the signed-in account
+account_id = "picard@example.com"     # id of the account row; default the address Gmail reports
+display_name = "Jean-Luc Picard"      # the account row's name; default its account_id
+email_address = "picard@example.com"  # the account row's address; default the one Gmail reports
+full_resync = false                   # walk every label again this run (messages already held
+                                      # are not fetched again); default false
+request_concurrency = 8               # message fetches in flight; default 8
+quota_units_per_minute = 5000         # ceiling on Gmail quota spent a minute (Google allows
+                                      # 6000); default 5000, lowered on its own when rate-limited
+message_budget = 20000                # stop after this many messages and finish the rest next
+                                      # run; unset (the default) has no limit
+
+[[steps]]
+group = "email"
+function = "render_markdown"
+inputs = ["email/ingest"]
+
+[steps.params]
+outlink_format = "gmail"        # each message's `↗` link opens it in Gmail; omit for no link
+only_render_labels = ["Inbox"]  # render only threads with a message under these labels
+                                # (exact paths, like `only_extract_labels`); default [] is all
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "email"
+function = "keyword_index"
+inputs = ["email/render_markdown"]
+
+[[steps]]
+group = "email"
+function = "embed"
+inputs = ["email/keyword_index"]

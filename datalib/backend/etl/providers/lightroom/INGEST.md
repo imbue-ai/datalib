@@ -16,7 +16,9 @@ differs there.
 
 The result is an incremental, versioned backup that costs one pass over
 the catalog per run and stores only what actually changed, with every
-prior state still queryable. There is no render step; see
+prior state still queryable. It renders no documents: its
+`render_markdown` step writes only the storage report, which gives the
+source its row in the grid and its Items count (`Adobe_images`); see
 [What render will need](#what-render-will-need).
 
 [`CASE_STUDY.md`](CASE_STUDY.md) tells the story of this provider with

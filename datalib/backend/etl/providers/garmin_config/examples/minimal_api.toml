@@ -1,0 +1,26 @@
+# Garmin Connect over the API the Connect phone app uses, signed in through
+# latchkey's Garmin plugin (`latchkey auth browser garmin`; the Add a source
+# dialog installs the plugin). An empty `api` table mirrors every per-day
+# metric, weigh-ins and activities from a year back.
+[[groups]]
+id = "garmin"
+name = "Garmin Connect"
+type = "garmin"
+
+[[steps]]
+group = "garmin"
+function = "ingest"
+
+[steps.params.api]
+
+[[steps]]
+group = "garmin"
+function = "render_markdown"
+inputs = ["garmin/ingest"]
+
+# Its numbers as time series, for charts and the time-series index: add
+# `garmin/render_time_series` to `unified_time_series_index/time_series_index`'s inputs.
+[[steps]]
+group = "garmin"
+function = "render_time_series"
+inputs = ["garmin/ingest"]

@@ -80,8 +80,9 @@ fn header_directive(csp: &str, name: &str) -> String {
 /// The app page's policy is a header, so it covers the SPA fallback too
 /// (`/anything` is the same document). What it must keep: no inline
 /// script and no foreign script, which is what makes a sanitizer bypass
-/// inert; `'unsafe-eval'`, which the card system needs; Tauri's IPC
-/// origins in `connect-src`, or the desktop app's file pickers go dead.
+/// inert; no `'unsafe-eval'`, since card source is parsed and never
+/// evaluated; Tauri's IPC origins in `connect-src`, or the desktop app's
+/// file pickers go dead.
 #[tokio::test]
 async fn the_app_page_carries_its_csp() {
     for path in ["/", "/some/card/route"] {
@@ -97,7 +98,7 @@ async fn the_app_page_carries_its_csp() {
             .unwrap_or_default();
         assert_eq!(
             header_directive(csp, "script-src"),
-            "script-src 'self' 'unsafe-eval'",
+            "script-src 'self'",
             "{path}: {csp}"
         );
         assert!(

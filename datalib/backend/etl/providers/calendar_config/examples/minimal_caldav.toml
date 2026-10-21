@@ -1,0 +1,19 @@
+# Any other CalDAV server (iCloud, Nextcloud, Radicale, …). Register a
+# latchkey service for the server's host (`latchkey services register`),
+# then give it an app password with `latchkey auth set`.
+[[groups]]
+id = "calendar"
+name = "CalDAV Calendar"
+type = "calendar"
+
+[[steps]]
+group = "calendar"
+function = "ingest"
+
+[steps.params.caldav]
+server_url = "https://cloud.example.com/remote.php/dav/"
+
+[[steps]]
+group = "calendar"
+function = "render_markdown"
+inputs = ["calendar/ingest"]

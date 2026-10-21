@@ -1,0 +1,18 @@
+# Slack over its API, signed in through latchkey (`latchkey auth browser
+# slack`). An empty `api` table mirrors every channel the account is a
+# member of, from 2024-01-01 on; DMs stay off unless asked for.
+[[groups]]
+id = "slack"
+name = "Slack"
+type = "slack"
+
+[[steps]]
+group = "slack"
+function = "ingest"
+
+[steps.params.api]
+
+[[steps]]
+group = "slack"
+function = "render_markdown"
+inputs = ["slack/ingest"]

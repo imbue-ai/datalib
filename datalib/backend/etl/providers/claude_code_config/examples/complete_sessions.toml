@@ -1,0 +1,39 @@
+# Claude Code sessions read off a copy of another machine's transcripts,
+# with every option set, and searchable. No sign-in: the files are read
+# off disk.
+[[groups]]
+id = "claude_code"
+name = "Claude Code"
+type = "claude_code"
+
+[[steps]]
+group = "claude_code"
+function = "ingest"
+
+[steps.params.sessions]
+path = "~/Downloads/claude-code-backup/projects"  # a copy of another machine's
+                                                  # ~/.claude/projects; default
+                                                  # ~/.claude/projects
+
+[[steps]]
+group = "claude_code"
+function = "render_markdown"
+inputs = ["claude_code/ingest"]
+
+# How much of one tool result reaches the page. The raw store keeps all of
+# it; a result that echoes a whole file is cut here, with a marker saying
+# so. Raising it and re-rendering fills the pages back in.
+[steps.params]
+max_tool_result_bytes = 16384  # the default
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "claude_code"
+function = "keyword_index"
+inputs = ["claude_code/render_markdown"]
+
+[[steps]]
+group = "claude_code"
+function = "embed"
+inputs = ["claude_code/keyword_index"]

@@ -42,7 +42,7 @@ plus the URLs its credential is good for and how to get one.
 
 | kind | examples | where it comes from |
 |---|---|---|
-| **built-in** | `slack`, `google-gmail`, `google-calendar`, `github`, `fastmail`, `fastmail-dav`, `notion` | ships inside latchkey |
+| **built-in** | `slack`, `google-gmail`, `google-calendar`, `github`, `fastmail`, `fastmail-dav`, `linear`, `notion` | ships inside latchkey |
 | **plugin** | `garmin` | a package under `<latchkey dir>/plugins/<name>/`. datalib vendors the ones it needs (`third-party/latchkey-garmin/`) and installs them on the first sign-in (`http/src/plugins.rs`); a copy without datalib's stamp is the person's own and is never touched. |
 | **registered** | `claude-ai`, `chatgpt` | `latchkey services register`, run by the wizard on the first sign-in from the catalog entry's `credentialRegister`. latchkey refuses to re-register a name it already holds, so a registration someone made by hand stays theirs. |
 
@@ -67,7 +67,7 @@ login. `latchkey services info` says which, as
 
 | | browser login (`auth browser`) | pasted credential (`auth set`, `auth set-nocurl`) |
 |---|---|---|
-| **detects the login account** (Slack, Gmail, Fastmail, GitHub, Garmin) | The service names the account: the login asks who you signed in as (an email, a workspace user) and stores the credential under that. `--account X` is accepted only when X is already stored, which refreshes it. A new name is refused before any browser opens. | Stored under the name you give. |
+| **detects the login account** (Slack, Gmail, Fastmail, GitHub, Garmin, Linear) | The service names the account: the login asks who you signed in as (an email, a workspace user) and stores the credential under that. `--account X` is accepted only when X is already stored, which refreshes it. A new name is refused before any browser opens. | Stored under the name you give. |
 | **does not** (every registered service, so Claude and ChatGPT; `openrouter`, `ngrok`) | You name it: `--account X` stores under X, a new name included. With none, the default account. | Stored under the name you give. |
 
 The flag describes a browser login, so it means nothing for a service
@@ -153,6 +153,25 @@ the session) when the service does not detect the account and latchkey
 already holds a different account for it: a second Claude or ChatGPT
 account. The decision is `freshBrowser` in
 `datalib/ui/src/config/accountNaming.ts`.
+
+## Starting over
+
+To test a sign-in from scratch, clear every credential and the saved
+browser session at once:
+
+```sh
+npx -y latchkey@<LATCHKEY_VERSION> auth clear -y
+```
+
+With no service name it deletes `credentials.json.enc` and
+`browser_state.json.enc` from latchkey's directory (`~/.latchkey`
+unless `LATCHKEY_DIRECTORY` says otherwise). Every data root on the
+machine shares that directory, and under Minds the gateway's store is
+the host's, so this signs out everywhere. Latchkey's browser keeps no
+profile of its own, so the cookies go with that file. It leaves
+`config.json` (the browser path and the services the wizard
+registered), `plugins/` and the keychain key; to test those first-run
+steps too, move the whole directory aside instead.
 
 ## Signing in again without a person
 

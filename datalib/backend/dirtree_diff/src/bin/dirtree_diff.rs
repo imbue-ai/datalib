@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use datalib_cli_help::Example;
 
 use datalib_dirtree_diff::analyze::{explained_subtrees, pair_moves};
 use datalib_dirtree_diff::model::{Diff, Entry, Inputs, SideInput};
@@ -12,11 +13,24 @@ use datalib_dirtree_diff::store::{self, SideSpec, Skip, Table};
 use datalib_dirtree_diff::{analyze, parse_size, render};
 use datalib_obs::{init as init_obs, ObsArgs};
 
+const EXAMPLES: &[Example] = &[
+    Example {
+        what: "what changed in a folder between two scans on branches of one store",
+        command: "datalib-dirtree-diff --left ~/scans/pictures.doltlite_db#2026-10-01 --right ~/scans/pictures.doltlite_db#2026-10-21 -o pictures.html",
+    },
+    Example {
+        what: "compare a laptop's scan with a backup drive's, and keep the diff as JSON too",
+        command: "datalib-dirtree-diff --left ~/scans/laptop.doltlite_db --right ~/scans/backup.doltlite_db --json diff.json",
+    },
+];
+
 #[derive(Parser, Debug)]
 #[command(
     name = "datalib-dirtree-diff",
+    bin_name = "datalib-dirtree-diff",
     about = "Diff two fsindex directory scans into one self-contained HTML page, \
-             with moves detected via directory tree-hashes."
+             with moves detected via directory tree-hashes.",
+    after_help = datalib_cli_help::render(EXAMPLES)
 )]
 struct Args {
     /// Left scan as PATH[#REF]; REF is a branch, HEAD~N, or a commit
@@ -221,4 +235,15 @@ fn unmatched(diff: &Diff) -> (BTreeSet<(String, String)>, BTreeSet<(String, Stri
         residual_removed.iter().map(key).collect(),
         residual_added.iter().map(key).collect(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::CommandFactory;
+
+    #[test]
+    fn the_help_examples_parse() {
+        super::Args::command().debug_assert();
+        datalib_cli_help::assert_examples_parse(super::Args::command(), super::EXAMPLES);
+    }
 }

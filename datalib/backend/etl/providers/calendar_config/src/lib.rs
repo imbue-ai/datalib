@@ -5,13 +5,57 @@
 use datalib_source_common::{LatchkeySettings, LocalPath, SourceCommon};
 use serde::{Deserialize, Serialize};
 
+/// This source's config stanzas, for `datalib-step help`.
+pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "google",
+        toml: include_str!("../examples/minimal_google.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "google",
+        toml: include_str!("../examples/complete_google.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "fastmail",
+        toml: include_str!("../examples/minimal_fastmail.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "fastmail",
+        toml: include_str!("../examples/complete_fastmail.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "caldav",
+        toml: include_str!("../examples/minimal_caldav.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "caldav",
+        toml: include_str!("../examples/complete_caldav.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "ics",
+        toml: include_str!("../examples/minimal_ics.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "ics",
+        toml: include_str!("../examples/complete_ics.toml"),
+    },
+];
+
 /// Fastmail's CalDAV root. Its bare host answers 404 to a PROPFIND, so
 /// discovery has to start here (or at `/.well-known/caldav`).
 pub const FASTMAIL_CALDAV_URL: &str = "https://caldav.fastmail.com/dav/";
 
 /// The ingest step's params for a `calendar` source. Exactly one of the
 /// four method tables is set.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CalendarConfig {
     #[serde(default)]
@@ -24,7 +68,7 @@ pub struct CalendarConfig {
     /// `google-calendar` service).
     #[serde(default)]
     pub google: Option<CalendarSelection>,
-    /// Fastmail, over CalDAV at [`FASTMAIL_CALDAV_URL`] (latchkey's
+    /// Fastmail, over CalDAV at Fastmail's own address (latchkey's
     /// `fastmail-dav` service, which holds an app password).
     #[serde(default)]
     pub fastmail: Option<CalendarSelection>,
@@ -175,7 +219,7 @@ impl CalendarConfig {
 }
 
 /// Which of an account's calendars to mirror.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CalendarSelection {
     /// Calendar names as the service shows them, or their ids. Empty
@@ -205,7 +249,7 @@ impl CalendarSelection {
 }
 
 /// The `caldav` table: a server, plus the same selection.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CaldavSync {
     /// Where discovery starts. The server's root is usually enough:
@@ -213,13 +257,17 @@ pub struct CaldavSync {
     /// answer. Examples: `https://caldav.icloud.com/`,
     /// `https://cloud.example.com/remote.php/dav/`.
     pub server_url: String,
-    /// As [`CalendarSelection::calendars`].
+    /// Calendar names as the server shows them, or their ids. Empty
+    /// mirrors every calendar the account can see. Adding one here
+    /// later downloads it whole on the next run.
     #[serde(default)]
     pub calendars: Vec<String>,
-    /// As [`CalendarSelection::since`].
+    /// The first day to mirror, `YYYY-MM-DD`. With `until`, a window:
+    /// only events with some part inside it are mirrored. A windowed
+    /// calendar is listed whole every run rather than resumed.
     #[serde(default)]
     pub since: Option<String>,
-    /// As [`CalendarSelection::until`].
+    /// The last day to mirror, `YYYY-MM-DD`, included.
     #[serde(default)]
     pub until: Option<String>,
 }

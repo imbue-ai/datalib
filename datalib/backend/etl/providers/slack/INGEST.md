@@ -167,13 +167,14 @@ span, and is asked from `since` each run.
 A span's ends are `ts`es padded to one width (`ts_key`), so they sort as
 instants do. The TNG fixtures' stardate `ts`es have an eleventh digit.
 
-**Threads.** After a channel's history, `RawDb::threads_listed` lists
+**Threads.** At the start of the walk, `RawDb::threads_listed` lists
 every stored root with replies at the `latest_reply` its payload
 carries, and `datalib_etl_web::owed` subtracts the threads held at that
 version (`held_version` in `threads_bookkeeping`, keyed like the root).
 It is a query over every stored root, not over the roots this run
 happened to list, so a root stored by a run that died before its replies
-is owed. A thread is one record whose fetch is paged: `owed::drain` asks
+is owed. Each history page then adds the threads its own roots owe. A
+thread is one record whose fetch is paged: `owed::drain` asks
 for one at a time, `conversations.replies` is walked to its end, and one
 transaction stores the thread's row and messages, deletes the stored
 replies the walk did not return, and holds the thread at the version it
@@ -215,6 +216,32 @@ stores as no change. That needs one field set aside: Slack mints a new
 `blocks[].block_id` is volatile (`MESSAGE_VOLATILE_PATHS`) and kept in
 `messages_bookkeeping.volatile_payload`. A message stored before that
 loses its block ids from the content row the next time it is read, once.
+
+## The order a run fetches in
+
+Newest first, across every conversation the run mirrors, so a run cut
+off part way has stored the newest of the workspace rather than the
+whole of whichever channels were listed first (`ingest/frontier.rs`).
+
+Everything owed waits in one of three places, each in order of the
+newest message fetching it brings:
+
+- each channel's history walks, paused between pages, at the `ts` the
+  next page reaches down from;
+- the owed threads, at their `latest_reply`;
+- the owed files, at their message's `ts`.
+
+The next request is for the threads, then the files, owed at or above
+the newest page any walk has left, and otherwise for that page. Every
+channel's first page is asked for before any channel's second, because
+until it answers nothing says where a channel's newest message is. So a
+thread with a reply this morning on a root from last year is read
+before last month's history, and last year's history comes last.
+
+This changes only when a request is made, never what it asks: every
+request is one the walk of a single channel would make, with the same
+`oldest`, `latest` and cursor. Nothing about the order is stored. Each
+run works out what is owed from the store, as above, and orders that.
 
 ## Noticing a deleted message
 
@@ -343,8 +370,9 @@ not hosted elsewhere) is a `slack_attachments` row, written without a
 `blake3` in the transaction that stores the message, whether or not
 `media` is on. The bytes are owed from then on.
 
-When `media` is on, each channel's owed files are fetched after its
-history and threads through `owed::drain` (`ingest/files.rs`), from the
+When `media` is on, the owed files are fetched in the run's
+newest-first order (see [The order a run fetches in](#the-order-a-run-fetches-in))
+through `owed::drain` (`ingest/files.rs`), from the
 file object the stored message carries: a request is `FILE_BATCH` files,
 and storing them puts their bytes into the blob CAS (its own file, which
 commits itself) before the one transaction that gives their edges a

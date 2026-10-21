@@ -10,6 +10,7 @@ mod fixture_pipeline;
 mod history_prune;
 mod history_walk;
 mod interrupt;
+mod newest_first;
 mod playback_roundtrip;
 mod probe;
 mod progress_countdown;

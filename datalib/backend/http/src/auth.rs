@@ -158,15 +158,18 @@ fn parse_imbue_identity(raw: &[u8]) -> Requester {
     }
 }
 
-/// Env listing host names, beyond `localhost` and IP literals, that a
+/// Env listing host names, beyond `localhost`, its subdomains and IP
+/// literals, that a
 /// request's `Host` may carry: comma-separated, each a name or `*.<domain>`
 /// for any name under it. For a server reached through a proxy that
 /// passes the browser's own `Host` through, such as a share gateway.
 pub const ALLOWED_HOSTS_ENV: &str = "DATALIB_ALLOWED_HOSTS";
 
-/// The names a request's `Host` may carry. `localhost` and every IP
-/// literal are always among them: DNS rebinding needs a name the attacker
-/// controls, and neither is one. The port is not checked, since it is the
+/// The names a request's `Host` may carry. `localhost`, every name under
+/// it and every IP literal are always among them: DNS rebinding needs a
+/// name the attacker controls, and browsers resolve `*.localhost` to
+/// loopback themselves, never through DNS. Imbue Studio opens an app at
+/// `<label>.host-<hex>.localhost:<port>`. The port is not checked, since it is the
 /// one the client dialed — Docker's `-p`, Vite's dev proxy and an SSH
 /// tunnel all put a port other than the bound one there.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -221,6 +224,9 @@ impl AllowedHosts {
         }
         let name = name.to_ascii_lowercase();
         name == "localhost"
+            || name
+                .strip_suffix(".localhost")
+                .is_some_and(|sub| !sub.is_empty())
             || name.parse::<std::net::Ipv4Addr>().is_ok()
             || self.names.contains(&name)
             || self
@@ -971,6 +977,9 @@ mod tests {
         }
         let none = AllowedHosts::default();
         assert!(none.admits("localhost"));
+        assert!(none.admits("datalib-x7k9q2w1.host-0123abcd.localhost:8421"));
+        assert!(!none.admits(".localhost"));
+        assert!(!none.admits("localhost.evil.example"));
         assert!(none.admits("127.0.0.1"));
         assert!(none.admits("[::1]"));
         assert!(!none.admits("[::1"));

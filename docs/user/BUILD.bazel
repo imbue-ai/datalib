@@ -1,3 +1,7 @@
 # The Docker walkthrough is read at test time by //datalib/docker:doc_test,
 # which runs its shell blocks against a published image.
-exports_files(["docker.md"])
+# getting_your_data.md is compiled into `datalib-step help <type>`.
+exports_files([
+    "docker.md",
+    "getting_your_data.md",
+])

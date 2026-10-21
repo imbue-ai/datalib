@@ -31,12 +31,21 @@ rust_binary(
         ":datalib_dirtree_diff",
         "//datalib/backend/obs:datalib_obs",
         "@datalib_crates//:anyhow",
+        "//datalib/backend/cli_help:datalib_cli_help",
         "@datalib_crates//:clap",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
     ],
+)
+
+# The command line's parse: its `--help` examples.
+rust_test(
+    name = "dirtree_diff_bin_unittests",
+    size = "small",
+    crate = ":dirtree_diff",
+    edition = "2021",
 )
 
 # Inline unit tests: the byte-size parser, the `path#ref` parser, the

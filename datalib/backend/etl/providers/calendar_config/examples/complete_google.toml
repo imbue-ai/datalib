@@ -1,0 +1,52 @@
+# Google Calendar through Google's API, signed in through latchkey
+# (`latchkey auth browser google-calendar`), with every option set, and
+# searchable.
+[[groups]]
+id = "calendar"
+name = "Google Calendar"
+type = "calendar"
+
+[[steps]]
+group = "calendar"
+function = "ingest"
+
+# When to give up on a failing server. The download always backs off and
+# retries; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "picard@example.com"
+
+[steps.params.google]
+calendars = ["Bridge Duty", "Away Missions"]  # names as the service shows them, or ids;
+                                               # omit for every calendar. One added later
+                                               # downloads whole on the next run
+since = "2024-01-01"  # first day mirrored, YYYY-MM-DD; omit for all of history
+until = "2026-12-31"  # last day mirrored, included; omit for no end. With either set,
+                      # the calendar is listed whole every run rather than resumed
+
+[[steps]]
+group = "calendar"
+function = "render_markdown"
+inputs = ["calendar/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "calendar"
+function = "keyword_index"
+inputs = ["calendar/render_markdown"]
+
+[[steps]]
+group = "calendar"
+function = "embed"
+inputs = ["calendar/keyword_index"]

@@ -3,9 +3,9 @@
 // blocks something the app needs fails silently — a missing image, a
 // dead style, a component that never mounts — so this walks the main
 // screens with a violation listener installed and expects it to stay
-// empty. `unsafe-eval` for card source, inline styles for the shadow
-// roots, and the applet proxy for every fetch are the things most
-// likely to regress.
+// empty. A dependency that starts to need `eval` (the policy has no
+// `'unsafe-eval'`), inline styles for the shadow roots, and the applet
+// proxy for every fetch are the things most likely to regress.
 
 import { test, expect, type Page } from "@playwright/test";
 import { GRID, SEARCH_ROWS, TABLE_ROWS, firstRowUuid, selectRowByUuid } from "./grid-helpers";

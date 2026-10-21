@@ -136,11 +136,12 @@ async fn each_room_renders_a_document_per_month() -> Result<()> {
     fx.ingest().await?;
 
     let parsed = fx.parse(None)?;
-    // Data, Crusher, Riker, #bridge; the `$space` thread is no room.
-    assert_eq!(parsed.rooms.len(), 4);
+    // Data, Crusher, the bridge crew, Riker, #bridge; the `$space` thread
+    // is no room.
+    assert_eq!(parsed.rooms.len(), 5);
     // Riker/2024-03, #bridge/2024-03, Data/2024-03, Data/2024-04,
-    // Crusher/2024-04.
-    assert_eq!(parsed.docs.len(), 5);
+    // Crusher/2024-04, bridge crew/2364-04.
+    assert_eq!(parsed.docs.len(), 6);
     let data = |month: &str| {
         parsed
             .docs
@@ -158,7 +159,7 @@ async fn each_room_renders_a_document_per_month() -> Result<()> {
     assert!(data("2024-04").reactions_by_target.is_empty());
 
     let (summary, docs) = fx.render()?;
-    assert_eq!(summary.docs_rendered, 5);
+    assert_eq!(summary.docs_rendered, 6);
     assert_eq!(summary.blobs_materialized, 2);
     let slack = md_of(&docs, "/slack/", "2024-03.md");
     assert!(
@@ -191,9 +192,9 @@ async fn render_shows_only_the_networks_it_names() -> Result<()> {
     let fx = Fixture::new();
     fx.ingest().await?;
     let parsed = fx.parse(Some(&["signal".to_string()]))?;
-    assert_eq!(parsed.rooms.len(), 2);
+    assert_eq!(parsed.rooms.len(), 3);
     assert!(parsed.rooms.values().all(|r| r.network == "signal"));
-    assert_eq!(parsed.docs.len(), 3);
+    assert_eq!(parsed.docs.len(), 4);
     Ok(())
 }
 
@@ -209,7 +210,7 @@ async fn the_bridges_message_ids_are_kept() -> Result<()> {
             .fetch_all(db.pool())
             .await?;
     db.close().await;
-    assert_eq!(ids.len(), 8);
+    assert_eq!(ids.len(), 11);
     assert!(ids.contains(&(
         "$tng-data-001:ba_TNG.local-signal.localhost".to_string(),
         "tng-picard-account-uuid|1710493200000".to_string()
@@ -238,7 +239,7 @@ async fn what_the_app_evicts_is_kept() -> Result<()> {
     assert_eq!(fx.ingest().await?, None, "an eviction changes nothing");
 
     let (summary, _) = fx.render()?;
-    assert_eq!(summary.docs_rendered, 5);
+    assert_eq!(summary.docs_rendered, 6);
     assert_eq!(summary.blobs_materialized, 2);
     Ok(())
 }

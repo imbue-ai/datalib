@@ -504,7 +504,8 @@ is then just text any page can send.
 Whatever carries the credential, the server also refuses a request
 another web page made your browser send: anything from another site or
 another port but a plain navigation, and anything whose `Host` names a
-host other than `localhost` or an IP address. A server reached by a
+host other than `localhost`, a name under it (`app.localhost`) or an
+IP address. A server reached by a
 host name — `datalib.home.example`, or a proxy that passes the
 browser's own `Host` through — needs that name listed:
 `DATALIB_ALLOWED_HOSTS=datalib.home.example`, comma-separated, with

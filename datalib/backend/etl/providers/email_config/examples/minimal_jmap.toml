@@ -1,0 +1,19 @@
+# Fastmail mail over JMAP, signed in through latchkey (`latchkey auth
+# browser fastmail`). Another JMAP server works the same way: register its
+# host with latchkey and put that host in `hostname`.
+[[groups]]
+id = "email"
+name = "Fastmail"
+type = "email"
+
+[[steps]]
+group = "email"
+function = "ingest"
+
+[steps.params.jmap]
+hostname = "api.fastmail.com"
+
+[[steps]]
+group = "email"
+function = "render_markdown"
+inputs = ["email/ingest"]

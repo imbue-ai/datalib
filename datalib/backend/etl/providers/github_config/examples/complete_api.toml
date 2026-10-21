@@ -1,0 +1,49 @@
+# GitHub pull requests and their review threads, over GitHub's API, signed
+# in through latchkey (`latchkey auth browser github`), with every option
+# set, and searchable.
+[[groups]]
+id = "github"
+name = "GitHub"
+type = "github"
+
+[[steps]]
+group = "github"
+function = "ingest"
+
+# When to give up on rate limits. The download always backs off and
+# retries; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "picard"
+
+[steps.params.api]
+refresh_window_days = 30  # how many trailing days each run's search must have covered;
+                          # default 0, which sets no limit
+max_prs = 50              # fetch at most this many PRs a run; the rest wait for the
+                          # next run. Default: no cap
+pull_requests = [         # only these PRs, as `owner/repo#NUM` or a github.com PR URL;
+  "enterprise/warp-core#42",  # set, it skips finding your PRs. Default: empty, find them
+  "https://github.com/enterprise/warp-core/pull/43",
+]
+
+[[steps]]
+group = "github"
+function = "render_markdown"
+inputs = ["github/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "github"
+function = "keyword_index"
+inputs = ["github/render_markdown"]
+
+[[steps]]
+group = "github"
+function = "embed"
+inputs = ["github/keyword_index"]

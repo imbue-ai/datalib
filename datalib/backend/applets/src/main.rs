@@ -11,9 +11,24 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use datalib_cli_help::Example;
+
+const EXAMPLES: &[Example] = &[Example {
+    what: "serve the search applet on a port the OS picks, as the gateway does",
+    command: "datalib-applet unified_document_index --port 0 --params-file params.json",
+}];
 
 #[derive(Parser)]
-#[command(name = "datalib-applet", about = "Applet host for the datalib app")]
+#[command(
+    name = "datalib-applet",
+    bin_name = "datalib-applet",
+    about = "Applet host for the datalib app",
+    long_about = "Applet host for the datalib app. datalib-http's gateway starts one \
+                  for each [[applets]] entry in the config and reads the port it \
+                  prints. You do not run it yourself except to work on an applet \
+                  (docs/dev/applets.md).",
+    after_help = datalib_cli_help::render(EXAMPLES)
+)]
 struct Cli {
     #[command(subcommand)]
     applet: Which,
@@ -135,5 +150,16 @@ fn run() -> Result<()> {
             let port = cli.port.context("-p <port> is required")?;
             datalib_contacts::serve(port)
         }
+    }
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use clap::CommandFactory;
+
+    #[test]
+    fn the_help_examples_parse() {
+        super::Cli::command().debug_assert();
+        datalib_cli_help::assert_examples_parse(super::Cli::command(), super::EXAMPLES);
     }
 }

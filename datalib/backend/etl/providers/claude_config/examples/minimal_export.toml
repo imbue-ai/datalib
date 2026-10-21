@@ -1,0 +1,18 @@
+# An unpacked Claude data export on disk, requested from claude.ai's
+# settings. No sign-in: `path` is the folder holding `conversations.json`.
+[[groups]]
+id = "claude"
+name = "Claude export"
+type = "claude"
+
+[[steps]]
+group = "claude"
+function = "ingest"
+
+[steps.params.export]
+path = "~/Downloads/claude-export"
+
+[[steps]]
+group = "claude"
+function = "render_markdown"
+inputs = ["claude/ingest"]

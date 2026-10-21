@@ -8,6 +8,20 @@ use std::path::{Path, PathBuf};
 use datalib_source_common::{glob_match, LocalPath, SourceCommon};
 use serde::{Deserialize, Serialize};
 
+/// This source's config stanzas, for `datalib-step help`.
+pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "library",
+        toml: include_str!("../examples/minimal_library.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "library",
+        toml: include_str!("../examples/complete_library.toml"),
+    },
+];
+
 /// Tables folded out by [`ApplePhotosConfig::skip_history`]. Core Data's
 /// persistent history (`ACHANGE`, `ATRANSACTION`, `ATRANSACTIONSTRING`)
 /// is a change log that grows on every write and that the mirror's own
@@ -37,23 +51,23 @@ pub const DATABASE_IN_BUNDLE: &str = "database/Photos.sqlite";
 /// The apple_photos-owned slice of an `apple_photos` source. The library
 /// is `library.path`; the doltlite mirror lands in the ingest step's
 /// tree.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct ApplePhotosConfig {
-    /// Shared per-source envelope (paths + cross-source tunables),
-    /// resolved by the orchestrator's `normalize()`.
+    /// The options every source takes: an attachment size limit, when to
+    /// give up on failing requests, and the debugging event tape.
     pub common: SourceCommon,
 
-    /// The `.photoslibrary` bundle to mirror (or its `Photos.sqlite`
-    /// directly; see [`photos_sqlite_path`]).
+    /// The `.photoslibrary` bundle to mirror (or its
+    /// `database/Photos.sqlite` directly).
     pub library: Option<LocalPath>,
 
     /// Table-name globs to mirror. Default `["*"]` — every table in the
     /// library. Matched against the bare table name; `*` and `?` are the
-    /// only metacharacters (see [`glob_match`]).
+    /// only wildcards.
     pub include_tables: Vec<String>,
 
-    /// Table-name globs to skip, applied after [`Self::include_tables`].
+    /// Table-name globs to skip, applied after `include_tables`.
     pub exclude_tables: Vec<String>,
 
     /// `Table.column` globs to drop from the mirror. The column is absent
@@ -61,8 +75,9 @@ pub struct ApplePhotosConfig {
     /// nothing in the store and never shows up in a diff.
     pub exclude_columns: Vec<String>,
 
-    /// Fold [`HISTORY_TABLE_PATTERNS`] and [`HISTORY_COLUMN_PATTERNS`]
-    /// into the exclusions. On by default, unlike lightroom's
+    /// Also leave out Core Data's change log (`ACHANGE`, `ATRANSACTION`,
+    /// …), the daemons' work queue and counters, and every row's `Z_OPT`
+    /// version counter. On by default, unlike lightroom's
     /// `skip_xmp`: with it off, a library nobody touched still produces
     /// a commit on every run, because the daemons never stop writing
     /// their bookkeeping.
@@ -76,7 +91,7 @@ pub struct ApplePhotosConfig {
     pub stable_key_columns: Vec<String>,
 
     /// Per-table primary-key override, `table -> [columns]`. Beats both
-    /// [`Self::stable_key_columns`] and the declared key. An empty column
+    /// `stable_key_columns` and the declared key. An empty column
     /// list forces the table to be mirrored keyless.
     pub primary_keys: BTreeMap<String, Vec<String>>,
 

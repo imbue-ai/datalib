@@ -19,7 +19,8 @@ chats.
 
 1. Install Beeper Texts, sign in, connect the networks you want, and let
    it run long enough to fill its cache.
-2. Add the source to `config.toml`:
+2. Add it from the "Add source" dialog (Beeper, under "On this
+   computer"), choosing the Beeper folder, or by hand in `config.toml`:
    ```toml
    [[groups]]
    id = "beeper"
@@ -73,6 +74,33 @@ finds nothing new commits nothing.
 
 Every network the app holds is mirrored; the render step's `networks`
 picks which ones become documents.
+
+## Matching a message to a phone's backup
+
+A Signal or WhatsApp chat can reach datalib twice: through Beeper's
+on-device bridge, and through the phone's own backup (the `signal` and
+`whatsapp` sources). Nothing joins the two yet, but the ids that would
+are kept on both sides:
+
+- **Signal.** The bridge's `message.id` is `<sender ACI>|<sent ms>`,
+  Signal's own name for a message. The `signal` source keeps the same
+  two facts: `chat_items.author_id` and `date_sent`, and the author's
+  ACI in their `recipients` row (the stored frame's
+  `destination.Contact.aci`, as bytes). A message matches when the
+  bridge's ACI is its author's and the times are equal.
+  `ingested_tng_test` joins the two TNG fixtures this way, so a change
+  that loses either side fails there. The owner's own messages carry the
+  account's ACI, which the TNG backup does not list, so those match only
+  where a backup does.
+- **WhatsApp.** The `whatsapp` source keys a message by
+  `(chat_jid, key_id, from_me)`, and `key_id` is WhatsApp's own id for
+  it, the same on every device. The bridge's `message.id` should carry
+  it, but its format has not been seen on a populated bridge; check one
+  before relying on it.
+
+Only an on-device bridge keeps these ids. A network Beeper bridges in
+its cloud has no local `megabridge.db`, so its messages carry only Matrix
+ids.
 
 ## When part of a run fails
 

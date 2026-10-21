@@ -1,10 +1,11 @@
 //! `datalib-dag` — run a DAG config file (see `datalib_dag::config`
 //! for the schema).
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
+use clap::{CommandFactory, FromArgMatches};
 
 // `DATALIB_VERSION` is `git describe` at build time under Bazel
 // release stamping (see BUILD.bazel `rustc_env_files`); dev builds and
@@ -21,12 +22,12 @@ const VERSION_RESOLVED: &str = {
         raw
     }
 };
+use datalib_dag::cli::{Cli, Verb};
 use datalib_dag::events::FanOutSink;
 use datalib_dag::supervisor::host;
 use datalib_dag::supervisor::reload::ConfigFile;
 use datalib_dag::supervisor::store::{RequestOutcome, Store};
 use datalib_dag::{config, subprocess, EventSink, NdjsonSink, Runner};
-use strum::{EnumString, IntoStaticStr};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -56,89 +57,41 @@ async fn main() -> Result<()> {
         std::process::exit(130);
     })
     .map_err(|e| anyhow::anyhow!("{e}"))?;
-    const USAGE: &str = "usage: datalib-dag <config.toml> [--binary-dir DIR] \
-         [--sync STEP_ID[,STEP_ID…]]… [--reset STEP_ID[,STEP_ID…]]… [--now RFC3339] \
-         [--run-id ID] [--parallelism N] [--by WHO]\n       \
-         datalib-dag --check <config.toml>\n\n\
-         --reset empties what a step wrote (its store; an ingest step's blob CAS keeps \
-         its bytes), keeping its doltlite history, so the next run does its work \
-         from the start. Alone, that is all the invocation does; with --sync it runs \
-         first.\n\n\
-         --sync runs the named steps and everything downstream of them. A source step \
-         (one with no inputs) always runs; any other runs only if it is out of date, \
-         and nothing upstream of it runs.\n\n\
-         A sync is a request in <root>/system/supervisor.sqlite, tagged --by (default \
-         `cli`). If another process is already running the loop on this root — the app, \
-         or another datalib-dag — this one hands it the request and follows it; either \
-         way it exits with the request's outcome. Ctrl-C asks for this request to stop.\n\n\
-         datalib-dag status <config.toml>                          open requests, steps off, running steps\n\
-         datalib-dag stop <config.toml> <request-id> [--by WHO]    ask a request to stop\n\
-         datalib-dag turn-off <config.toml> <step-id> [--by WHO]   skip a step in every sync; stop it if running\n\
-         datalib-dag turn-on <config.toml> <step-id>               include it in syncs again\n\n\
-         Each writes a row and returns; whoever runs the loop acts on it within a second.";
-    if let Some(verb) = std::env::args().nth(1).as_deref().and_then(Verb::parse) {
-        return run_verb(verb, std::env::args().skip(2).collect(), USAGE).await;
-    }
-    let mut config_path: Option<PathBuf> = None;
-    let mut binary_dir: Option<PathBuf> = None;
-    let mut sync_only: Vec<String> = Vec::new();
-    let mut now: Option<String> = None;
-    let mut run_id: Option<String> = None;
-    let mut parallelism: Option<usize> = None;
-    let mut reset: Vec<String> = Vec::new();
-    let mut check_only = false;
-    let mut by = "cli".to_string();
-    let mut args = std::env::args().skip(1);
-    while let Some(a) = args.next() {
-        match a.as_str() {
-            "--binary-dir" => {
-                binary_dir = Some(PathBuf::from(
-                    args.next().context("--binary-dir needs a value")?,
-                ))
-            }
-            "--sync" => {
-                let v = args.next().context("--sync needs a step id")?;
-                sync_only.extend(v.split(',').map(|s| s.trim().to_string()));
-            }
-            "--now" => now = Some(args.next().context("--now needs a value")?),
-            "--run-id" => run_id = Some(args.next().context("--run-id needs a value")?),
-            "--parallelism" => {
-                parallelism = Some(
-                    args.next()
-                        .context("--parallelism needs a value")?
-                        .parse()
-                        .context("--parallelism must be a positive integer")?,
-                )
-            }
-            "--reset" => {
-                let v = args.next().context("--reset needs a step id")?;
-                reset.extend(v.split(',').map(|s| s.trim().to_string()));
-            }
-            "--check" => check_only = true,
-            "--by" => by = args.next().context("--by needs a name")?,
-            "--version" | "-V" => {
-                #[allow(clippy::disallowed_macros)]
-                {
-                    println!("datalib-dag {VERSION_RESOLVED}");
-                }
-                return Ok(());
-            }
-            "-h" | "--help" => {
-                // stdout is this tool's interface; no bars in play.
-                #[allow(clippy::disallowed_macros)]
-                {
-                    println!("{USAGE}");
-                }
-                return Ok(());
-            }
-            _ if config_path.is_none() => config_path = Some(PathBuf::from(a)),
-            other => bail!("unexpected argument {other:?}"),
+    let parsed = Cli::command()
+        .version(VERSION_RESOLVED)
+        .try_get_matches()
+        .and_then(|m| Cli::from_arg_matches(&m));
+    let cli = match parsed {
+        Ok(cli) => cli,
+        Err(e) => {
+            // clap's own exit code for a usage error is 2, which here
+            // means a sync failed; a command line that does not parse is
+            // a setup error, 1.
+            let _ = e.print();
+            std::process::exit(if e.use_stderr() { 1 } else { 0 });
         }
+    };
+    let Cli {
+        verb,
+        config: config_path,
+        check: check_only,
+        sync: sync_only,
+        reset,
+        by,
+        binary_dir,
+        parallelism,
+        now,
+        run_id,
+    } = cli;
+    if let Some(verb) = verb {
+        return run_verb(verb).await;
     }
-    let config_path = config_path.context(USAGE)?;
-    if let Some(0) = parallelism {
-        bail!("--parallelism must be at least 1");
-    }
+    let config_path = config_path.expect("clap requires a config when there is no verb");
+    let trimmed = |ids: Vec<String>| -> Vec<String> {
+        ids.into_iter().map(|s| s.trim().to_string()).collect()
+    };
+    let sync_only = trimmed(sync_only);
+    let reset = trimmed(reset);
 
     let (checked, data_root) = config::load_graded(&config_path)?;
 
@@ -176,22 +129,31 @@ async fn main() -> Result<()> {
         );
     }
     if check_only {
+        let refused = check_params(&config_path, &checked, binary_dir.as_deref());
         #[allow(clippy::disallowed_macros)]
         {
             println!(
-                "{}: {} step(s), {} applet(s){}",
+                "{}: {} step(s), {} applet(s){}{}",
                 config_path.display(),
                 checked.cfg.steps.len(),
                 checked.cfg.applets.len(),
                 match checked.dropped() {
                     0 => String::new(),
                     n => format!(", {n} entr{} dropped", if n == 1 { "y" } else { "ies" }),
+                },
+                match refused {
+                    0 => String::new(),
+                    n => format!(", {n} step(s) whose params a sync would refuse"),
                 }
             );
         }
         // Same door as `PUT /api/config`: a warning drops nothing, so it
         // is printed above and does not fail the check.
-        std::process::exit(if checked.nothing_dropped() { 0 } else { 2 });
+        std::process::exit(if checked.nothing_dropped() && refused == 0 {
+            0
+        } else {
+            2
+        });
     }
     let dropped_entries = checked.dropped();
     let cfg = checked.cfg;
@@ -362,7 +324,7 @@ async fn main() -> Result<()> {
             .stop_on(stop_rx)
             .reload_from(Arc::new(ConfigFile::new(&config_path)));
         if let Some(p) = parallelism {
-            runner = runner.parallelism(p);
+            runner = runner.parallelism(p.get());
         }
         // The first time this build runs on the root, every step that takes
         // the verb is asked to migrate before anything else runs
@@ -441,6 +403,56 @@ async fn main() -> Result<()> {
     std::process::exit(code);
 }
 
+/// Asks `datalib-step check-params` which built-in steps' params a sync
+/// would refuse, prints each against its line, and returns how many. The
+/// runner links no provider, so the step program is the one that can read
+/// them. A config with no built-in ingest or render step is not asked
+/// about; a `datalib-step` that cannot be run is said so, and counts none.
+#[allow(clippy::disallowed_macros)]
+fn check_params(
+    config_path: &Path,
+    checked: &config::ConfigCheck,
+    binary_dir: Option<&Path>,
+) -> usize {
+    let has_builtin = checked.cfg.steps.iter().any(|s| {
+        s.command.is_none() && matches!(s.function.as_deref(), Some("ingest" | "render_markdown"))
+    });
+    if !has_builtin {
+        return 0;
+    }
+    let beside = config::resolve_binary_dir(&checked.cfg, binary_dir)
+        .map(|d| d.join("datalib-step"))
+        .filter(|p| p.is_file());
+    let program = beside.unwrap_or_else(|| "datalib-step".into());
+    let out = match std::process::Command::new(&program)
+        .arg("check-params")
+        .arg(config_path)
+        .output()
+    {
+        Ok(out) if out.status.success() => out,
+        Ok(out) => {
+            eprintln!(
+                "note: step params not checked: `{} check-params` failed: {}",
+                program.display(),
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+            return 0;
+        }
+        Err(e) => {
+            eprintln!(
+                "note: step params not checked: could not run {}: {e}",
+                program.display()
+            );
+            return 0;
+        }
+    };
+    let refused = config::params_diagnostics(&checked.text, &String::from_utf8_lossy(&out.stdout));
+    for d in &refused {
+        eprintln!("{}", d.render(config_path, &checked.text));
+    }
+    refused.len()
+}
+
 enum Taken {
     /// This process runs the loop.
     Lock(datalib_dag::lock::RunnerLock),
@@ -515,69 +527,31 @@ fn exit_code(outcome: Option<RequestOutcome>, dropped_entries: usize) -> i32 {
     }
 }
 
-/// The steering verbs: each writes intent into the store and returns.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString, IntoStaticStr)]
-#[strum(serialize_all = "snake_case")]
-enum Verb {
-    Status,
-    Stop,
-    // A person may still type what these were called before the switch.
-    #[strum(to_string = "turn-off", serialize = "pause")]
-    TurnOff,
-    #[strum(to_string = "turn-on", serialize = "resume")]
-    TurnOn,
-}
-
-impl Verb {
-    fn parse(s: &str) -> Option<Self> {
-        s.parse().ok()
-    }
-}
-
-async fn run_verb(verb: Verb, args: Vec<String>, usage: &str) -> Result<()> {
-    let mut positional: Vec<String> = Vec::new();
-    let mut by = "cli".to_string();
-    let mut args = args.into_iter();
-    while let Some(a) = args.next() {
-        match a.as_str() {
-            "--by" => by = args.next().context("--by needs a name")?,
-            _ if a.starts_with("--") => bail!("unexpected argument {a:?}\n\n{usage}"),
-            _ => positional.push(a),
-        }
-    }
-    let wants = if verb == Verb::Status { 1 } else { 2 };
-    if positional.len() != wants {
-        bail!(
-            "{} takes {wants} argument(s)\n\n{usage}",
-            <&str>::from(verb)
-        );
-    }
-    let (checked, data_root) = config::load_graded(Path::new(&positional[0]))?;
+async fn run_verb(verb: Verb) -> Result<()> {
+    let (checked, data_root) = config::load_graded(verb.config())?;
     if checked.is_fatal() {
         bail!(
             "{} is not a config: nothing in it could be read",
-            positional[0]
+            verb.config().display()
         );
     }
     let store = Store::open(&data_root).await?;
-    let said = match verb {
-        Verb::Status => status_lines(&store).await?,
-        Verb::Stop => {
-            let id = &positional[1];
-            match store.request(id).await?.map(|r| r.closed) {
-                None => bail!("no request {id} in {}", data_root.display()),
-                Some(Some(outcome)) => vec![format!(
-                    "request {id} is already over: {}",
-                    outcome.map(RequestOutcome::as_str).unwrap_or("closed")
-                )],
-                Some(None) => {
-                    store.request_stop(id, &by).await?;
-                    vec![format!("asked request {id} to stop")]
-                }
+    let said = match &verb {
+        Verb::Status { .. } => status_lines(&store).await?,
+        Verb::Stop {
+            request_id: id, by, ..
+        } => match store.request(id).await?.map(|r| r.closed) {
+            None => bail!("no request {id} in {}", data_root.display()),
+            Some(Some(outcome)) => vec![format!(
+                "request {id} is already over: {}",
+                outcome.map(RequestOutcome::as_str).unwrap_or("closed")
+            )],
+            Some(None) => {
+                store.request_stop(id, by).await?;
+                vec![format!("asked request {id} to stop")]
             }
-        }
-        Verb::TurnOff => {
-            let step = &positional[1];
+        },
+        Verb::TurnOff { step, by, .. } => {
             if !checked.graph.by_id.contains_key(step) {
                 let mut ids: Vec<&str> = checked.graph.by_id.keys().map(String::as_str).collect();
                 ids.sort();
@@ -589,21 +563,18 @@ async fn run_verb(verb: Verb, args: Vec<String>, usage: &str) -> Result<()> {
             match store.turned_off().await?.get(step) {
                 Some(who) => vec![format!("{step} is already off, turned off by {who}")],
                 None => {
-                    store.turn_off(step, &by).await?;
+                    store.turn_off(step, by).await?;
                     vec![format!("turned off {step}")]
                 }
             }
         }
-        Verb::TurnOn => {
-            let step = &positional[1];
-            match store.turned_off().await?.get(step) {
-                None => vec![format!("{step} was not off")],
-                Some(who) => {
-                    store.turn_on(step).await?;
-                    vec![format!("turned on {step}, which {who} had turned off")]
-                }
+        Verb::TurnOn { step, .. } => match store.turned_off().await?.get(step) {
+            None => vec![format!("{step} was not off")],
+            Some(who) => {
+                store.turn_on(step).await?;
+                vec![format!("turned on {step}, which {who} had turned off")]
             }
-        }
+        },
     };
     store.close().await;
     #[allow(clippy::disallowed_macros)]

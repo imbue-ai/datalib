@@ -217,6 +217,23 @@ pub fn create_data_root(data_root: &Path) -> std::io::Result<()> {
     builder.create(data_root)
 }
 
+/// Take group and other access off an existing `data_root`, which holds
+/// a person's whole mirror. Roots made before new ones were created
+/// owner-only, or made by something that did not ask, open this way.
+pub fn restrict_data_root(data_root: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(data_root)?.permissions().mode();
+        if mode & 0o077 != 0 {
+            std::fs::set_permissions(data_root, std::fs::Permissions::from_mode(mode & 0o700))?;
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = data_root;
+    Ok(())
+}
+
 /// Body of the `CACHEDIR.TAG` files we drop into derived directories. The
 /// first line is the spec-mandated magic that `restic`/`borg`/`tar
 /// --exclude-caches` (and others) recognize; see <https://bford.info/cachedir/>.
@@ -272,6 +289,27 @@ mod tests {
             std::fs::metadata(&root).unwrap().permissions().mode() & 0o777,
             0o755
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_existing_root_others_can_read_is_made_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path().join("root");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        restrict_data_root(&root).unwrap();
+        assert_eq!(mode(&root), 0o700);
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o500)).unwrap();
+        restrict_data_root(&root).unwrap();
+        assert_eq!(
+            mode(&root),
+            0o500,
+            "the owner's own bits are left as they are"
+        );
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
 
     #[test]

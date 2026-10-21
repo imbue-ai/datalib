@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { cardOf, GRID, SHOWN_CARDS, shownCards, tabLabels } from "./grid-helpers";
+import { cardOf, GRID, SHOWN_CARDS, shownCards, shownTabName, tabLabels } from "./grid-helpers";
 
 // A URL naming cards — a link, a popped-out card, a `/chat/<uuid>` link
 // every renderer writes into a document body — opens those cards as a
@@ -37,4 +37,23 @@ test("a /chat/<uuid> link is the document alone", async ({ page, request }) => {
     await expect(cardOf(page, `documentView("${md}")`)).toHaveCount(1);
     await expect(shownCards(page)).toHaveCount(1);
   }
+});
+
+/** The 2026-10-19 hole: a path segment holding JavaScript ran as card source. */
+test("a URL holding JavaScript opens a card that shows it and runs nothing", async ({ page }) => {
+  const code = "(() => { window.__cardRan = 1; return searchView() })()";
+  await page.goto("/" + encodeURIComponent(code));
+  const card = cardOf(page, code);
+  await expect(card).toContainText("does not parse");
+  await expect(card).toContainText(code);
+  expect(await page.evaluate(() => (window as unknown as { __cardRan?: number }).__cardRan)).toBe(
+    undefined,
+  );
+});
+
+test("card source arguments may be JSON5", async ({ page }) => {
+  const source = "searchView({q: 'warp'})";
+  await page.goto("/" + encodeURIComponent(source));
+  await expect(shownTabName(page)).toHaveText("Search: warp");
+  await expect(cardOf(page, source)).not.toContainText("does not parse");
 });

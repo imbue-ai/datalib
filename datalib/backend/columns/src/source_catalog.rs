@@ -63,6 +63,7 @@ const CATALOG: &[Entry] = &[
     e("contacts", None, "Contacts", Some("contacts")),
     e("garmin", None, "Garmin", Some("garmin")),
     e("yolink", None, "YoLink", Some("yolink")),
+    e("google_drive", None, "Google Drive", Some("google_drive")),
     e(
         "google_takeout",
         None,
@@ -80,6 +81,7 @@ const CATALOG: &[Entry] = &[
     e("media", None, "Music, photos & video", Some("media")),
     e("airvisual", None, "AirVisual", Some("airvisual")),
     e("lightroom", None, "Lightroom", Some("lightroom")),
+    e("linear", None, "Linear", Some("linear")),
     e("apple_photos", None, "Apple Photos", Some("apple_photos")),
     e(
         "apple_messages",

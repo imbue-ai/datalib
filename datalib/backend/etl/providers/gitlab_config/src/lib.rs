@@ -2,12 +2,26 @@
 //! #1). Schema-only (serde + anyhow), so the orchestrator and `http` can name
 //! `GitlabConfig` without linking the provider.
 
-use datalib_source_common::{LatchkeySettings, SourceCommon};
+use datalib_source_common::{not_negative, LatchkeySettings, SourceCommon};
 use serde::{Deserialize, Serialize};
+
+/// This source's config stanzas, for `datalib-step help`.
+pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "api",
+        toml: include_str!("../examples/minimal_api.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "api",
+        toml: include_str!("../examples/complete_api.toml"),
+    },
+];
 
 /// The gitlab-owned slice of a `gitlab` source. `api` is its one way
 /// in; an `ingest` step without it is refused (`IngestMethods` below).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GitlabConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by
@@ -28,21 +42,31 @@ impl GitlabConfig {
         self.latchkey_settings
             .validate()
             .map_err(anyhow::Error::msg)?;
+        if let Some(api) = &self.api {
+            not_negative("api.refresh_window_days", api.refresh_window_days)
+                .map_err(anyhow::Error::msg)?;
+            not_negative("api.max_mrs", api.max_mrs).map_err(anyhow::Error::msg)?;
+        }
         Ok(())
     }
 }
 
 /// GitLab MR-mirror sync knobs (refresh window + explicit MR refs).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GitlabApiSync {
+    /// How many days back from now each run's listing must have
+    /// covered; a run lists only what no earlier listing did. Unset or 0
+    /// sets no limit.
     #[serde(default)]
     pub refresh_window_days: Option<i64>,
+    /// Fetch at most this many MRs in one run; the rest wait for the
+    /// next. Unset: no cap.
     #[serde(default)]
     pub max_mrs: Option<i64>,
-    /// Explicit MR refs to fetch. Each entry is a paste-able reference
-    /// — either `namespace/project!IID` or a gitlab.com MR URL. When
-    /// non-empty, discovery is skipped and only these MRs are fetched.
+    /// Only these MRs, each written `namespace/project!IID` or as a
+    /// gitlab.com MR URL. When non-empty, the search for your MRs is
+    /// skipped and only these are fetched.
     #[serde(default)]
     pub merge_requests: Vec<String>,
 }
@@ -54,4 +78,31 @@ pub type GitlabRenderConfig = datalib_source_common::BareRenderConfig;
 impl datalib_source_common::IngestMethods for GitlabConfig {
     const METHODS: &'static [datalib_source_common::IngestMethod] =
         &[datalib_source_common::IngestMethod::origin("api")];
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A negative cap was cast `as usize` into one too big to reach,
+    /// and a negative window clamped to 0, which means no limit.
+    #[test]
+    fn negative_counts_are_refused_by_name() {
+        let with = |refresh_window_days, max_mrs| GitlabConfig {
+            api: Some(GitlabApiSync {
+                refresh_window_days,
+                max_mrs,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        for (cfg, named) in [
+            (with(Some(-1), None), "api.refresh_window_days"),
+            (with(None, Some(-5)), "api.max_mrs"),
+        ] {
+            let err = cfg.validate().unwrap_err().to_string();
+            assert!(err.contains(named), "{err}");
+        }
+        assert!(with(Some(0), Some(0)).validate().is_ok());
+    }
 }

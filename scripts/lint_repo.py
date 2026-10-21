@@ -330,6 +330,7 @@ def main() -> int:
     rc |= _check_bound_lists_are_chunked(root)
     rc |= _check_try_get_ok_is_flattened(root)
     rc |= _check_no_playback_set_var(root)
+    rc |= _check_no_ui_code_sinks(root)
     return rc
 
 
@@ -1174,6 +1175,63 @@ def _check_no_playback_set_var(root: Path) -> int:
         + "\n\n  Run the future under `datalib_etl_web::playback::scope(<tape>, …)`;\n"
         "  `Playback::delay`, `hold` and `hold_sealed` set the rest.\n"
         "  See lint_repo.py check 18.",
+        file=sys.stderr,
+    )
+    return 1
+
+
+# --- Check 19: nothing in the UI turns a string into code or markup -----
+#
+# Card source is parsed as a call and never evaluated, and the app
+# page's CSP has no 'unsafe-eval' (docs/dev/cards.md § "Card source").
+# An evaluator anywhere in datalib/ui/src would need the CSP widened
+# again and would undo that, so none is allowed. A string drawn as HTML,
+# or a module imported from a computed URL, is allowed only where the
+# entry below says why the string is not data someone else wrote.
+_UI_EVAL = re.compile(r"\bnew\s+Function\b|\beval\s*\(")
+_UI_HTML_OR_IMPORT = re.compile(
+    r"\.(?:inner|outer)HTML\s*\+?=(?!=)|\bv-html\b|\binsertAdjacentHTML\b"
+    r"|\bdocument\.write(?:ln)?\s*\(|\bimport\s*\(\s*(?![\"'])"
+)
+_UI_SINK_ALLOWED = {
+    "datalib/ui/src/cards/ChatBody.ce.vue": "a document body, through the "
+    "sanitizer, into the document frame, whose CSP has script-src 'none'",
+    "datalib/ui/src/components/CardControls.vue": "a card's help, which only "
+    "the card's own code sets (cards/help.ts)",
+    "datalib/ui/src/cards/frontendRegistry.ts": "a component from "
+    "/modules/<hash>, which only the token holder or a configured applet writes",
+}
+
+
+def _check_no_ui_code_sinks(root: Path) -> int:
+    hits: list[str] = []
+    for rel in _git_ls_files(root, "datalib/ui/src"):
+        if not rel.endswith((".ts", ".js", ".mjs", ".vue")) or ".test." in rel:
+            continue
+        try:
+            text = (root / rel).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for lineno, line in enumerate(text.splitlines(), 1):
+            if line.strip().startswith(("//", "*", "/*")):
+                continue
+            sink = _UI_EVAL.search(line) or (
+                rel not in _UI_SINK_ALLOWED and _UI_HTML_OR_IMPORT.search(line)
+            )
+            if sink:
+                hits.append(f"  {rel}:{lineno}: {line.strip()}")
+    if not hits:
+        print(
+            "OK: no evaluator in datalib/ui/src, and HTML from strings only where allowed."
+        )
+        return 0
+    print(
+        "ERROR: a string turned into code or markup in the UI:\n\n"
+        + "\n".join(hits)
+        + "\n\n  `new Function` and `eval` are never allowed: the page's CSP has no\n"
+        "  'unsafe-eval'. For HTML, set `textContent` instead; if the string\n"
+        "  really is the app's own markup, add the file to _UI_SINK_ALLOWED in\n"
+        "  scripts/lint_repo.py with the reason it is not someone else's data.",
         file=sys.stderr,
     )
     return 1

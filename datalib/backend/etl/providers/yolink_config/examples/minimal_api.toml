@@ -1,0 +1,33 @@
+# YoLink sensor history, one CSV download per device. No sign-in: a
+# device's two ids are what let anyone fetch its history, so keep a config
+# that holds real ones to yourself. At least one device is required.
+[[groups]]
+id = "yolink"
+name = "YoLink"
+type = "yolink"
+
+[[steps]]
+group = "yolink"
+function = "ingest"
+
+[steps.params.api]
+
+# Quote `start`: a bare 2026-01-01 is a TOML date, not the string expected.
+[[steps.params.api.devices]]
+name = "ten_forward_freezer"
+kind = "temperature_humidity"
+start = "2026-01-01"
+family_device_id = "0123456789abcdef0123456789abcdef"
+device_udid = "fedcba9876543210fedcba9876543210"
+
+[[steps]]
+group = "yolink"
+function = "render_markdown"
+inputs = ["yolink/ingest"]
+
+# Its numbers as time series, for charts and the time-series index: add
+# `yolink/render_time_series` to `unified_time_series_index/time_series_index`'s inputs.
+[[steps]]
+group = "yolink"
+function = "render_time_series"
+inputs = ["yolink/ingest"]
