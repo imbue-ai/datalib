@@ -7,6 +7,14 @@ touch — config, sync, querying, extending — and points to the deeper
 docs for each. It is about *using* datalib; for working on the datalib
 codebase itself, see [`AGENTS.md`](../AGENTS.md).
 
+From a shell, **`datalib-step help`** is the map: the steps from an
+empty directory to a first sync, each with its command, and
+`datalib-step help <type>` (what a source mirrors, how it signs in, its
+ingest methods) and `datalib-step help <function>` (what a step does
+and how to run it) from there. `datalib-step help agent` prints this
+guide, which a release also carries beside its binaries as
+`docs/agent_user.md`. Every binary's `--help` ends with examples.
+
 The human-facing guides are worth reading first, and worth pointing the
 user at: the [first-time user guide](user/first_time_user.md) is the
 walkthrough from install to first sync, with the warnings about what a
@@ -131,6 +139,17 @@ cannot be reached from by adding columns" is a raw store an older build
 wrote in a shape this one cannot keep; nothing was changed, and if
 upstream still has the data, `--reset <source>/ingest --sync
 <source>/ingest` is the way through.
+
+**To run one step, `--sync` it** — never run `datalib-step` for it by
+hand. The runner is what sets the step's environment, takes the root's
+lock and records the version the step published, which is how the steps
+that read it learn it moved; a step run by hand records nothing. An
+ingest step always runs when synced; any other runs only if what it
+reads moved, so to rebuild a source's documents from what is already
+downloaded, reset its render step in the same command:
+`datalib-dag <config> --reset slack/render_markdown --sync
+slack/render_markdown`. `datalib-step help <function>` gives the
+command for each kind of step.
 
 **The stderr stream is NDJSON and made for you**: `run_plan` (every step's
 id and group, in topo order), then `step_start` / `progress_*` / `log` / `hint` /

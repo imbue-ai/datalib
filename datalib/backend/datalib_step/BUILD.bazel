@@ -12,6 +12,11 @@ load("//tools:insta.bzl", "insta_update")
 rust_binary(
     name = "datalib_step",
     srcs = glob(["src/**/*.rs"]),
+    # `datalib-step help` prints these (src/help.rs).
+    compile_data = [
+        "//docs:agent_user.md",
+        "//docs/user:getting_your_data.md",
+    ],
     crate_name = "datalib_step",
     crate_root = "src/main.rs",
     edition = "2021",

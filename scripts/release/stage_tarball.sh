@@ -2,8 +2,8 @@
 # The `build` job's "Stage tarball" step of release.yml, minus the
 # upload: lay out `datalib-<version>-<triple>/` from the binaries bazel
 # built, with the `latchkey` launcher, the commit hash, the manifest of
-# the runtime asset the binaries fetch on first use, and the third-party
-# notices; then tar it. Writes `datalib-<triple>.tar.gz` and its
+# the runtime asset the binaries fetch on first use, the agent guide and
+# the third-party notices; then tar it. Writes `datalib-<triple>.tar.gz` and its
 # `.sha256` sidecar into the current directory and prints the tarball's
 # name.
 #
@@ -92,6 +92,13 @@ if [[ -n "${GITHUB_SHA:-}" ]]; then
 else
     git -C "$repo_root" rev-parse HEAD > "$stage/git-hash"
 fi
+
+# The agent guide, written by the `datalib-step` it ships beside, so the
+# file and `datalib-step help agent` cannot disagree; its links name the
+# commit just written. A directory, because install.sh links every file
+# at the top into the user's PATH.
+mkdir -p "$stage/docs"
+"$stage/datalib-step" help agent > "$stage/docs/agent_user.md"
 
 # `runtime.manifest`: which runtime asset of THIS release the binaries
 # fetch on first use, with its sha256 and size read back from what the

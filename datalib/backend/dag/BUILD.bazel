@@ -25,6 +25,7 @@ rust_library(
         # events.rs). Keeps the timestamp format identical to the rest of
         # the tree's logs; the binary already depended on it.
         "//datalib/backend/app_schema:app_schema",
+        "//datalib/backend/cli_help:datalib_cli_help",
         "//datalib/backend/flock:datalib_flock",
         "//datalib/backend/metrics:datalib_metrics",
         "//datalib/backend/parent_watch:datalib_parent_watch",
@@ -35,6 +36,7 @@ rust_library(
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:blake3",
+        "@datalib_crates//:clap",
         "@datalib_crates//:libc",
         "@datalib_crates//:process-wrap",
         "@datalib_crates//:serde",
@@ -89,22 +91,12 @@ rust_binary(
         "//datalib/backend/runs:datalib_runs",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/store_meta:datalib_store_meta",
-        "//datalib/backend/cli_help:datalib_cli_help",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:clap",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing-subscriber",
     ],
-)
-
-# The command line's parse: its `--help` examples and the spellings
-# people already type.
-rust_test(
-    name = "datalib_dag_bin_unittests",
-    size = "small",
-    crate = ":datalib_dag_bin",
-    edition = "2021",
 )
 
 # Every hermetic runner test in one binary; the modules are listed in
