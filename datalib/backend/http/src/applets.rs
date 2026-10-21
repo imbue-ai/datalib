@@ -88,7 +88,11 @@ fn base_command(
     secret: &str,
 ) -> anyhow::Result<Command> {
     let argv = split_command(&entry.id, &entry.command)?;
-    let mut cmd = Command::new(&argv[0]);
+    let program = match &entry.package_dir {
+        Some(dir) => data_root.join(datalib_dag::config::package_program(dir, &argv[0])?),
+        None => PathBuf::from(&argv[0]),
+    };
+    let mut cmd = Command::new(program);
     cmd.args(&argv[1..]);
     cmd.current_dir(data_root);
     if let Some(path) = child_path(binary_dir, crate::user_bin_dir())
@@ -1337,6 +1341,8 @@ mod tests {
             id: "mem".into(),
             group: None,
             command: format!("/bin/sh -c {}", shlex::try_quote(&script).unwrap()),
+            package: None,
+            package_dir: None,
             params: None,
             env: BTreeMap::new(),
         };

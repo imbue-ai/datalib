@@ -66,6 +66,10 @@
                                                   (`layout`) and saved composites
                                                   (`composites`); opaque to the server
                                                   (`http/src/ui_state.rs`)
+<data_root>/system/packages/<pin>/                 the packages config.toml lists, one
+                                                  unpacked build each, by the first 16
+                                                  hex digits of the manifest's sha256
+                                                  (`packages.md`)
 <data_root>/system/library-summary.json           source count, bytes on disk and the last
                                                   sync's end, for the desktop app's list of
                                                   libraries; datalib-http rewrites it when

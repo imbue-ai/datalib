@@ -86,6 +86,10 @@ and forgets the group's steps in its record, without waiting for a sync
 to end (`datalib/backend/dag/README.md` §"Resets and purges"); without that, a group re-added under the
 same id and definition would read as up to date and write nothing.
 
+A fourth table, `[[packages]]`, lists the packages the library uses,
+each pinned by its manifest's hash. A step or applet that runs one of a
+package's programs names it with `package`; `packages.md` is the rest.
+
 `configs/dag_example.toml` is the commented, complete version;
 `docs/user/config_examples/` has the shapes people start from.
 

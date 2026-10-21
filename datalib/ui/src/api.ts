@@ -672,7 +672,7 @@ export type Diagnostic = {
   // is null for problems raised after loading, where the array position
   // has already shifted and the id is the identity.
   entry: {
-    kind: "group" | "step" | "applet" | "lock";
+    kind: "group" | "step" | "applet" | "lock" | "package";
     index: number | null;
     id: string | null;
   } | null;
@@ -920,6 +920,79 @@ export async function saveConfig(text: string, signal?: AbortSignal): Promise<Sa
     throw new Error(detail ? `${r.status}: ${detail}` : `PUT /api/config → ${r.status}`);
   }
   return (await r.json()) as SaveConfigResponse;
+}
+
+// --- Packages (docs/dev/packages.md) ---------------------------------------
+
+/// One build in a package manifest.
+export type PackageArtifact = { url: string; sha256: string; size?: number | null };
+
+/// A source type a package adds: its group `type`, the command each
+/// function runs, and its add-source form in the shape of `CatalogEntry`.
+export type PackageSource = {
+  type: string;
+  commands: Record<string, string>;
+  wizard: Record<string, unknown>;
+};
+
+export type PackageApplet = {
+  id: string;
+  command: string;
+  params?: Record<string, unknown> | null;
+};
+
+/// `datalib-package.toml`, as the server parsed it.
+export type PackageManifest = {
+  schema: number;
+  name: string;
+  version: string;
+  description?: string | null;
+  homepage?: string | null;
+  step_protocol?: number | null;
+  artifacts: Record<string, PackageArtifact>;
+  sources: PackageSource[];
+  applets: PackageApplet[];
+};
+
+/// A manifest fetched for review: what adding it would pin.
+export type PackageLookup = {
+  url: string;
+  sha256: string;
+  manifest: PackageManifest;
+  target: string;
+  /// The build this platform would get, `[target or "any", build]`.
+  artifact: [string, PackageArtifact] | null;
+};
+
+export type PackageState = "installed" | "fetching" | "failed";
+
+/// A `[[packages]]` entry and whether it is unpacked here.
+export type PackageView = {
+  id: string;
+  source: string | null;
+  url: string;
+  sha256: string;
+  state: PackageState;
+  error: string | null;
+  manifest: PackageManifest | null;
+  used_by: string[];
+};
+
+export type PackagesResponse = { target: string; packages: PackageView[] };
+
+export function fetchPackages(signal?: AbortSignal): Promise<PackagesResponse> {
+  return getJson<PackagesResponse>("/api/packages", signal, { toast: false });
+}
+
+/// Fetch a package's manifest for review. Writes nothing.
+export async function lookupPackage(source: string): Promise<PackageLookup> {
+  return (await (await post("/api/packages/lookup", { source })).json()) as PackageLookup;
+}
+
+/// Unpack the package pinned at (`url`, `sha256`) in this library,
+/// answering once it is there.
+export async function installPackage(url: string, sha256: string): Promise<PackageManifest> {
+  return (await (await post("/api/packages/fetch", { url, sha256 })).json()) as PackageManifest;
 }
 
 // --- Sync API --------------------------------------------------------------

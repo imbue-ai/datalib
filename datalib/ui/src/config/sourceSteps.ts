@@ -59,6 +59,8 @@ export type ConfiguredStep = {
   /// `datalib-applet` for an applet; null for anything else, which is a
   /// legitimate config with no catalog entry.
   type: string | null;
+  /// The `[[packages]]` entry whose program it runs, if any.
+  package: string | null;
   /// The ids this step declares as inputs.
   inputs: string[];
   params: Record<string, unknown>;
@@ -140,7 +142,7 @@ export function defaultName(id: string): string {
 
 type ParsedConfig = {
   ast: ReturnType<typeof parseTOML>;
-  root: { groups?: unknown; steps?: unknown; applets?: unknown };
+  root: { groups?: unknown; steps?: unknown; applets?: unknown; packages?: unknown };
 };
 
 /// Parse the config text, throwing with the parser's message (and line,
@@ -198,6 +200,37 @@ function nonBlank(v: unknown): string | null {
   return typeof v === "string" && v.trim() !== "" ? v.trim() : null;
 }
 
+/// A `[[packages]]` entry and where it is in the text.
+export type ConfiguredPackage = {
+  id: string;
+  source: string | null;
+  url: string;
+  sha256: string;
+  start: number;
+  end: number;
+};
+
+/// The `[[packages]]` entries a config declares, in file order.
+export function listPackages(text: string): ConfiguredPackage[] {
+  const { ast, root } = parseConfig(text);
+  const raw = root.packages;
+  if (!Array.isArray(raw)) return [];
+  const at = ranges(ast, "packages");
+  return raw.map((p, i) => {
+    const e = (p ?? {}) as Record<string, unknown>;
+    const str = (v: unknown) => (typeof v === "string" ? v : "");
+    const [start, end] = at.get(i) ?? [0, 0];
+    return {
+      id: str(e.id),
+      source: typeof e.source === "string" ? e.source : null,
+      url: str(e.url),
+      sha256: str(e.sha256),
+      start,
+      end,
+    };
+  });
+}
+
 /// The `[[groups]]` entries a config declares, in file order.
 export function listGroups(text: string): ConfiguredGroup[] {
   return groupsOf(parseConfig(text));
@@ -222,6 +255,7 @@ export function listSteps(text: string): ConfiguredStep[] {
         function?: unknown;
         name?: unknown;
         command?: unknown;
+        package?: unknown;
         inputs?: unknown;
         params?: unknown;
       } | null;
@@ -259,6 +293,7 @@ export function listSteps(text: string): ConfiguredStep[] {
         // The group's type is the only place a step's provider is
         // written; a step outside any group has none.
         type: groupEntry?.type ?? null,
+        package: typeof step?.package === "string" ? step.package : null,
         inputs: (Array.isArray(step?.inputs) ? (step!.inputs as unknown[]) : []).filter(
           (v): v is string => typeof v === "string",
         ),
@@ -280,6 +315,7 @@ export function listSteps(text: string): ConfiguredStep[] {
         id?: unknown;
         group?: unknown;
         command?: unknown;
+        package?: unknown;
       } | null;
       const id = typeof applet?.id === "string" ? applet.id : `applet ${i + 1}`;
       const [start, end] = appletRanges.get(i) ?? [0, 0];
@@ -297,6 +333,7 @@ export function listSteps(text: string): ConfiguredStep[] {
         // The word after `datalib-applet`, when it is one — the same
         // shape as a step's provider word, and what names the applet.
         type: appletType(typeof applet?.command === "string" ? applet.command : ""),
+        package: typeof applet?.package === "string" ? applet.package : null,
         inputs: [],
         params: {},
         start,
@@ -813,10 +850,12 @@ export function buildStep(opts: {
   values: FieldValues;
 }): string {
   const { entry, group, phase, values } = opts;
+  const command = entry.package?.commands[functionOf(phase)];
   return stepToml({
     group,
     phase,
     inputs: opts.inputs,
+    package: entry.package && command ? { id: entry.package.id, command } : undefined,
     params: paramsToml(entry, values, phase),
   });
 }
@@ -829,14 +868,19 @@ export function stepToml(opts: {
   group: string;
   phase: FieldPhase;
   inputs?: string[];
+  /// A package source's step: the package and the command it runs.
+  package?: { id: string; command: string };
   params?: string;
 }): string {
   const inputs = opts.inputs ?? [];
   const inputsLine = inputs.length ? `\ninputs = [${inputs.map(quote).join(", ")}]` : "";
+  const packageLines = opts.package
+    ? `\npackage = ${quote(opts.package.id)}\ncommand = ${quote(opts.package.command)}`
+    : "";
   const params = opts.params ?? "";
   const block = `[[steps]]
 group = ${quote(opts.group)}
-function = ${quote(functionOf(opts.phase))}${inputsLine}${params ? `\n${params}` : ""}`;
+function = ${quote(functionOf(opts.phase))}${packageLines}${inputsLine}${params ? `\n${params}` : ""}`;
   return block.trimEnd();
 }
 

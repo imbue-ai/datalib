@@ -60,6 +60,7 @@ pub enum EntryKind {
     Step,
     Applet,
     Lock,
+    Package,
 }
 
 impl EntryKind {
@@ -69,6 +70,7 @@ impl EntryKind {
             EntryKind::Step => "step",
             EntryKind::Applet => "applet",
             EntryKind::Lock => "lock",
+            EntryKind::Package => "package",
         }
     }
 }
@@ -110,6 +112,13 @@ impl EntryRef {
             kind: EntryKind::Lock,
             index: Some(index),
             id: name,
+        }
+    }
+    pub fn package(index: usize, id: Option<String>) -> Self {
+        EntryRef {
+            kind: EntryKind::Package,
+            index: Some(index),
+            id,
         }
     }
     pub fn applet(index: usize, id: Option<String>) -> Self {

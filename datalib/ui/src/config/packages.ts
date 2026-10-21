@@ -1,0 +1,184 @@
+// What a library's packages mean for its config and its "Add source"
+// picker: the `[[packages]]` entries the Packages dialog writes, and the
+// catalog entries a package's sources add. docs/dev/packages.md.
+
+import { shallowRef } from "vue";
+import {
+  fetchPackages,
+  type PackageLookup,
+  type PackageManifest,
+  type PackagesResponse,
+} from "@/api";
+import { setPackageEntries, type CatalogEntry } from "./catalog";
+import { listPackages, listSteps, removeSteps, slugify, suggestId } from "./sourceSteps";
+import { quote } from "./tomlText";
+import { setIn } from "./tomlPatch";
+
+/// The catalog entries of every package unpacked here. A package still
+/// being fetched adds nothing yet: its form is in its manifest.
+export function catalogEntriesFrom(res: PackagesResponse): CatalogEntry[] {
+  return res.packages.flatMap((p) => (p.manifest ? entriesOfManifest(p.id, p.manifest) : []));
+}
+
+export function entriesOfManifest(id: string, m: PackageManifest): CatalogEntry[] {
+  return m.sources.map((s) => {
+    const wizard = s.wizard as Partial<CatalogEntry>;
+    const label = typeof wizard.label === "string" ? wizard.label : s.type;
+    return {
+      keywords: [],
+      icon: null,
+      defaultName: s.type,
+      nameHint: label,
+      blurb: m.description ?? "",
+      ...wizard,
+      label,
+      type: s.type,
+      kind: "package",
+      wizard: true,
+      renderStep: "render_markdown" in s.commands,
+      package: { id, name: m.name, version: m.version, commands: s.commands },
+    } as CatalogEntry;
+  });
+}
+
+/// The id a new package gets: its name, made path-safe, unless taken.
+export function packageIdFor(text: string, m: PackageManifest): string {
+  const taken = new Set(listPackages(text).map((p) => p.id));
+  return suggestId(taken, slugify(m.name), "package");
+}
+
+/// `text` with the looked-up package added as `[[packages]]` entry `id`,
+/// and its applets with it. The entry goes after the last package, or
+/// above the first table when there is none, so the packages read first.
+export function addPackage(
+  text: string,
+  opts: { id: string; source: string; lookup: PackageLookup },
+): string {
+  const { id, source, lookup } = opts;
+  const entry = [
+    "[[packages]]",
+    `id = ${quote(id)}`,
+    `source = ${quote(source.trim())}`,
+    `url = ${quote(lookup.url)}`,
+    `sha256 = ${quote(lookup.sha256)}`,
+  ].join("\n");
+  const existing = listPackages(text).filter((p) => p.end > 0);
+  const at = existing.length ? Math.max(...existing.map((p) => p.end)) : firstTableStart(text);
+  let next =
+    at === null
+      ? `${text.replace(/\s*$/, "")}\n\n${entry}\n`
+      : `${text.slice(0, at).replace(/\s*$/, "")}\n\n${entry}\n\n${text.slice(at).replace(/^\s*/, "")}`;
+  const takenApplets = new Set(
+    listSteps(next)
+      .filter((s) => s.kind === "applet")
+      .map((s) => s.id),
+  );
+  for (const a of lookup.manifest.applets) {
+    const appletId = suggestId(takenApplets, a.id, a.id).replace(/-/g, "_");
+    takenApplets.add(appletId);
+    next = `${next.replace(/\s*$/, "")}\n\n${appletBlock(appletId, id, a.command, a.params)}\n`;
+  }
+  return next.replace(/^\s+/, "");
+}
+
+function appletBlock(
+  id: string,
+  pkg: string,
+  command: string,
+  params?: Record<string, unknown> | null,
+): string {
+  const lines = [
+    "[[applets]]",
+    `id = ${quote(id)}`,
+    `package = ${quote(pkg)}`,
+    `command = ${quote(command)}`,
+  ];
+  const plain = Object.entries(params ?? {}).filter(
+    ([, v]) => typeof v === "string" || typeof v === "number" || typeof v === "boolean",
+  );
+  if (plain.length) {
+    lines.push("[applets.params]");
+    for (const [k, v] of plain) {
+      lines.push(`${k} = ${typeof v === "string" ? quote(v) : String(v)}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+/// Where the first `[[…]]` table starts, its banner comments included.
+function firstTableStart(text: string): number | null {
+  const m = /^\[\[/m.exec(text);
+  if (!m) return null;
+  let at = m.index;
+  for (;;) {
+    const prevEnd = text.lastIndexOf("\n", at - 1);
+    if (prevEnd < 0) break;
+    const prevStart = text.lastIndexOf("\n", prevEnd - 1) + 1;
+    const line = text.slice(prevStart, prevEnd).trim();
+    if (line !== "" && !line.startsWith("#")) break;
+    at = prevStart;
+    if (prevStart === 0) break;
+  }
+  return at;
+}
+
+/// `text` with package `id` pinned to the looked-up manifest instead.
+export function updatePackage(text: string, id: string, lookup: PackageLookup): string {
+  const index = listPackages(text).findIndex((p) => p.id === id);
+  if (index < 0) throw new Error(`No package ${id} in the config.`);
+  const ref = { array: "packages", index };
+  let next = setIn(text, ref, ["url"], quote(lookup.url));
+  next = setIn(next, ref, ["sha256"], quote(lookup.sha256));
+  return next;
+}
+
+/// The groups whose steps run a package's programs. A package they use
+/// cannot be removed without them.
+export function sourcesUsing(text: string, id: string): string[] {
+  return [
+    ...new Set(
+      listSteps(text)
+        .filter((s) => s.kind === "step" && s.package === id)
+        .map((s) => s.group ?? s.id),
+    ),
+  ];
+}
+
+/// `text` without package `id` and the applets that run it. Refused
+/// (throws) while a source still does.
+export function removePackage(text: string, id: string): string {
+  const using = sourcesUsing(text, id);
+  if (using.length) {
+    throw new Error(
+      `Remove ${using.join(", ")} first: ${using.length === 1 ? "it runs" : "they run"} this package.`,
+    );
+  }
+  const pkg = listPackages(text).find((p) => p.id === id);
+  if (!pkg) return text;
+  const applets = listSteps(text).filter((s) => s.kind === "applet" && s.package === id);
+  return removeSteps(text, [pkg, ...applets]);
+}
+
+/// The library's packages as the server last listed them, shared by the
+/// Sources card, its Packages dialog and the "Add source" picker.
+export const packagesState = shallowRef<PackagesResponse | null>(null);
+
+let pollTimer: ReturnType<typeof setTimeout> | undefined;
+
+/// Ask the server again, and put the packages' sources in the catalog.
+/// While one is still being fetched, ask again shortly: the listing
+/// itself is what starts a fetch, and it says when one is done.
+export async function refreshPackages(): Promise<PackagesResponse | null> {
+  clearTimeout(pollTimer);
+  try {
+    const res = await fetchPackages();
+    packagesState.value = res;
+    setPackageEntries(catalogEntriesFrom(res));
+    if (res.packages.some((p) => p.state === "fetching")) {
+      pollTimer = setTimeout(() => void refreshPackages(), 2000);
+    }
+    return res;
+  } catch {
+    return packagesState.value;
+  }
+}

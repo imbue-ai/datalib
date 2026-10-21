@@ -4,6 +4,7 @@
 // docs/dev/config_model.md (what the form writes) and
 // docs/dev/wizard_file_pickers.md (a path field offers a native picker).
 
+import { shallowRef } from "vue";
 import { NAME_IT_HELP } from "./accountNaming";
 
 /// A form field, mapped onto a dotted path into a step's `params` tree
@@ -150,8 +151,8 @@ export type CatalogEntry = {
   blurb: string;
   /// Matched by the picker's filter box alongside label and type.
   keywords: string[];
-  /// Grouping in the picker.
-  kind: "api" | "export" | "local";
+  /// Grouping in the picker. `package` is every entry a package added.
+  kind: "api" | "export" | "local" | "package";
   /// `ui/src/assets/<icon>.svg`, or null for the per-kind fallback.
   icon: string | null;
   /// Seeds the source name, and thus the step ids and artifact paths.
@@ -229,6 +230,18 @@ export type CatalogEntry = {
   /// one, drawn under its own label in Advanced options.
   sections?: Section[];
   fields?: Field[];
+  /// Set on an entry a package added (docs/dev/packages.md): its steps
+  /// name the package and run its commands instead of `datalib-step`.
+  package?: PackageOrigin;
+};
+
+/// Which package an entry came from, and the command each of its steps
+/// runs, by function (`ingest`, `render_markdown`).
+export type PackageOrigin = {
+  id: string;
+  name: string;
+  version: string;
+  commands: Record<string, string>;
 };
 
 /// A fixed params value, written without being asked about. See
@@ -2100,6 +2113,7 @@ export const CATALOG: CatalogEntry[] = [
 ];
 
 export const KIND_LABELS: Record<CatalogEntry["kind"], string> = {
+  package: "From packages in this library",
   api: "Connected accounts",
   export: "Exports & backups",
   local: "On this computer",
@@ -2111,9 +2125,22 @@ export function entryKey(entry: CatalogEntry): string {
   return entry.variantKey ? `${entry.type}:${entry.variantKey}` : entry.type;
 }
 
+/// The entries the library's packages add, set from `GET /api/packages`
+/// (`config/packages.ts`). Searched before the built-in ones, so a
+/// package that reuses a built-in type is drawn by its own form.
+const packageEntries = shallowRef<CatalogEntry[]>([]);
+
+export function setPackageEntries(entries: CatalogEntry[]): void {
+  packageEntries.value = entries;
+}
+
+function allEntries(): CatalogEntry[] {
+  return packageEntries.value.length ? [...packageEntries.value, ...CATALOG] : CATALOG;
+}
+
 /// The first entry for a step type, ignoring variants.
 export function catalogFor(type: string): CatalogEntry | undefined {
-  return CATALOG.find((e) => e.type === type);
+  return allEntries().find((e) => e.type === type);
 }
 
 /// The entry describing a step that already exists: its type, narrowed
@@ -2123,7 +2150,7 @@ export function catalogForStep(
   params: Record<string, unknown>,
 ): CatalogEntry | undefined {
   if (!type) return undefined;
-  const candidates = CATALOG.filter((e) => e.type === type);
+  const candidates = allEntries().filter((e) => e.type === type);
   return (
     candidates.find((e) => e.variantKey !== undefined && hasPath(params, e.variantKey)) ??
     candidates.find((e) => e.variantKey === undefined)
@@ -2147,8 +2174,8 @@ function hasPath(params: Record<string, unknown>, path: string): boolean {
 /// fuzzy: with ~20 entries a fuzzy matcher mostly adds surprise.
 export function filterCatalog(query: string): CatalogEntry[] {
   const q = query.trim().toLowerCase();
-  if (!q) return CATALOG;
-  return CATALOG.filter((e) =>
+  if (!q) return allEntries();
+  return allEntries().filter((e) =>
     [e.label, e.type, ...e.keywords].some((s) => s.toLowerCase().includes(q)),
   );
 }

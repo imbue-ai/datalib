@@ -53,7 +53,9 @@ or piping — wrap in `sh -c '…'` if you need real shell). The first
 word resolves via `PATH`, with the runner's `--binary-dir` (default:
 the directory `datalib-dag` itself lives in; also settable as
 `binary_dir` in the config, above the first `[[steps]]`) prepended —
-which is how `datalib-step` is found without an absolute path.
+which is how `datalib-step` is found without an absolute path. A step
+with `package = "<id>"` instead runs the first word as a path inside that
+package's unpacked directory (`packages.md`).
 
 ## What your command receives
 

@@ -36,6 +36,8 @@ through `params`, the way the slack applet takes `workspace`.
 and resolved through `binary_dir`, then `~/.datalib/bin`, then the
 inherited `PATH` — the same order a step's command resolves in, so a
 program installed in `~/.datalib/bin` works for either kind of entry.
+With `package = "<id>"`, the first word is a path inside that package's
+unpacked directory instead, as for a step (`packages.md`).
 `params` is forwarded as
 `--params-file <path>` (a JSON file only the owner can read, deleted
 when the applet stops — params can hold tokens, and `ps` shows every

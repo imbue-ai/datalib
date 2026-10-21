@@ -33,6 +33,7 @@ merge conflict waiting to happen.
 
 - [`datalib/backend/dag/README.md`](datalib/backend/dag/README.md) — the runner's rules: graph, staleness, versions, diagnostics, locks, progress. **Start here.**
 - [`docs/dev/step_protocol.md`](docs/dev/step_protocol.md) — how to write a custom step command; `datalib-step` is the reference implementation.
+- [`docs/dev/packages.md`](docs/dev/packages.md) — packages: custom steps and applets published at a URL, added to a library and pinned in its config.
 - [`docs/dev/config_model.md`](docs/dev/config_model.md) — what a config is made of: groups, steps as `(group, function)`, ingest methods and their reach, the fan-ins' `inputs`. [`configs/dag_example.toml`](configs/dag_example.toml) is a complete, commented one.
 - [`docs/dev/logging.md`](docs/dev/logging.md) — the one log store, who writes it, how to add a line from each writer and how to read it. Read before adding a `tracing` line, a UI event or a log endpoint.
 
@@ -233,6 +234,9 @@ datalib/
                    <p>_render.
     etl/sqlite_mirror/ the table-for-table SQLite→doltlite mirror engine.
     table/         `BulkUpsertable`, alone.
+    packages/      `datalib_packages`: a package's manifest, the lookup
+                   and the pinned fetch that unpacks it under
+                   `system/packages/` (docs/dev/packages.md).
     probe/         what "Check connection" and a picker's "Load" ask
                    and answer, alone.
     migrate_config/ `datalib-migrate-config`: rewrites the one retired

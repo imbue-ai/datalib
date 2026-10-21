@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::os::unix::process::CommandExt;
+use std::path::Path;
 use std::process::Stdio;
 use std::sync::Arc;
 
@@ -182,7 +183,14 @@ pub(crate) async fn run_subprocess(
         }
         None => None,
     };
-    let mut cmd = tokio::process::Command::new(prog);
+    // A relative path with a `/` in it (a package's program) is relative
+    // to the data root, the child's working directory; joined here so it
+    // does not depend on how the platform resolves one.
+    let mut cmd = if prog.contains('/') && Path::new(prog).is_relative() {
+        tokio::process::Command::new(ctx.data_root.join(prog))
+    } else {
+        tokio::process::Command::new(prog)
+    };
     cmd.args(args);
     if let Some(f) = &params_file {
         cmd.arg(PARAMS_FILE_FLAG).arg(f.path());

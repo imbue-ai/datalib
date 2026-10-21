@@ -1,8 +1,10 @@
 //! Pinned first-use fetches. The caller knows the sha256 before the
 //! bytes are fetched; a download that hashes wrong is refused and
-//! nothing of it is kept. Three users: qmd's GGUF models
-//! (`datalib_qmd_models`), the perseus embedder's model files, and the
-//! Node runtime a release tarball names in its manifest ([`runtime`]).
+//! nothing of it is kept. Users: qmd's GGUF models
+//! (`datalib_qmd_models`), the perseus embedder's model files, the
+//! Node runtime a release tarball names in its manifest ([`runtime`]),
+//! and packages (`datalib_packages`), whose manifest is the one document
+//! fetched unpinned ([`get_unpinned`]) so its hash can be shown and pinned.
 
 pub mod runtime;
 
@@ -55,13 +57,8 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// GET `url` to `<dest>.partial`, hashing as it streams; rename into
-/// place only on a matching digest. `tag` prefixes the status lines
-/// (`[qmd-models]`, `[runtime]`). HuggingFace has answered a cold fetch
-/// with 429 before, so a retryable status backs off and tries again
-/// rather than failing the sync on the first refusal.
-pub fn download_verified(tag: &str, url: &str, want: &str, dest: &Path) -> Result<()> {
-    let client = reqwest::blocking::Client::builder()
+fn client() -> Result<reqwest::blocking::Client> {
+    reqwest::blocking::Client::builder()
         .tls_backend_preconfigured(tls_config())
         .connect_timeout(Duration::from_secs(30))
         // The whole-request timeout would cap a multi-GB download; a
@@ -70,7 +67,56 @@ pub fn download_verified(tag: &str, url: &str, want: &str, dest: &Path) -> Resul
         .timeout(None)
         .user_agent(concat!("datalib/", env!("CARGO_PKG_VERSION")))
         .build()
-        .context("build http client")?;
+        .context("build http client")
+}
+
+/// A small document fetched before its hash was known.
+pub struct Unpinned {
+    pub bytes: Vec<u8>,
+    pub sha256: String,
+    /// Where the bytes came from after redirects: GitHub's
+    /// `releases/latest/download/…` answers from the tagged release's URL.
+    pub final_url: String,
+}
+
+/// GET a small document whose hash is not known yet — a package manifest
+/// being looked up — refusing one over `limit` bytes. A caller that goes
+/// on to trust the bytes pins the hash this returns.
+pub fn get_unpinned(url: &str, limit: u64) -> Result<Unpinned> {
+    let resp = client()?
+        .get(url)
+        .send()
+        .with_context(|| format!("GET {url}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        bail!("{url}: HTTP {status}");
+    }
+    let final_url = resp.url().to_string();
+    let mut body = Vec::new();
+    resp.take(limit + 1)
+        .read_to_end(&mut body)
+        .with_context(|| format!("read {url}"))?;
+    if body.len() as u64 > limit {
+        bail!("{url}: larger than {limit} bytes");
+    }
+    Ok(Unpinned {
+        sha256: sha256_bytes(&body),
+        bytes: body,
+        final_url,
+    })
+}
+
+pub fn sha256_bytes(bytes: &[u8]) -> String {
+    hex(&Sha256::digest(bytes))
+}
+
+/// GET `url` to `<dest>.partial`, hashing as it streams; rename into
+/// place only on a matching digest. `tag` prefixes the status lines
+/// (`[qmd-models]`, `[runtime]`). HuggingFace has answered a cold fetch
+/// with 429 before, so a retryable status backs off and tries again
+/// rather than failing the sync on the first refusal.
+pub fn download_verified(tag: &str, url: &str, want: &str, dest: &Path) -> Result<()> {
+    let client = client()?;
     let mut delay = Duration::from_secs(2);
     for attempt in 1..=ATTEMPTS {
         match fetch_once(&client, url, want, dest) {

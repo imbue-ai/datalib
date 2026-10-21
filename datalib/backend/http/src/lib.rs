@@ -43,6 +43,7 @@ pub mod lock;
 pub mod logging;
 pub mod loop_guard;
 pub mod manage;
+pub mod packages;
 pub mod params_check;
 pub mod plugins;
 pub mod probe;
@@ -218,6 +219,9 @@ pub fn router(state: AppState) -> Router {
             "/api/latchkey/connect/{id}/status",
             get(connect::connect_status),
         )
+        .route("/api/packages", get(packages::list))
+        .route("/api/packages/lookup", post(packages::lookup))
+        .route("/api/packages/fetch", post(packages::fetch))
         .route("/api/probe", post(probe::start_probe))
         .route("/api/probe/{id}", get(probe::probe_status))
         .route("/api/dag", get(get_dag))
