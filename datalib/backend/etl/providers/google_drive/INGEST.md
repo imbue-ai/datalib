@@ -43,7 +43,11 @@ its own.
 3. **Capture.** Up to four files are fetched at once
    (`Captures::capture`). Each fetch reads:
    - the revision list, paged, unless the account may only comment
-     (`capabilities.canReadRevisions = false`), when Drive lists none;
+     (`capabilities.canReadRevisions = false`), when Drive lists none.
+     It is listed twice, and every revision either listing named is
+     kept: Drive's first listing after a quiet spell can leave out the
+     oldest revision. A file whose two listings disagreed is logged and
+     counted in `revision_listings_disagreed`;
    - the comments, paged, with `includeDeleted=true`;
    - the native JSON, gzipped, as Google sent it less its image links,
      which go in the capture's sidecar (`volatile_payload`);

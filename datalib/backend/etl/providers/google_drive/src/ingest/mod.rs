@@ -62,13 +62,16 @@ pub struct FetchSummary {
     pub exports: usize,
     pub exports_declined: usize,
     pub images: usize,
+    /// Captured files whose two revision listings named different
+    /// revisions.
+    pub revision_listings_disagreed: usize,
 }
 
 impl FetchSummary {
     pub fn line(&self) -> String {
         format!(
             "listed={} owed={} captured={} failed={} left={} exports={} \
-             exports_declined={} images={}",
+             exports_declined={} images={} revision_listings_disagreed={}",
             self.listed,
             self.owed,
             self.captured,
@@ -77,6 +80,7 @@ impl FetchSummary {
             self.exports,
             self.exports_declined,
             self.images,
+            self.revision_listings_disagreed,
         )
     }
 }
@@ -147,6 +151,7 @@ async fn walk_files(
             exports_done: AtomicUsize::new(0),
             exports_declined: AtomicUsize::new(0),
             images: AtomicUsize::new(0),
+            revision_listings_disagreed: AtomicUsize::new(0),
         };
         let drained = owed::drain(
             &Loop {
@@ -172,6 +177,8 @@ async fn walk_files(
         summary.exports += captures.exports_done.load(Ordering::Relaxed);
         summary.exports_declined += captures.exports_declined.load(Ordering::Relaxed);
         summary.images += captures.images.load(Ordering::Relaxed);
+        summary.revision_listings_disagreed +=
+            captures.revision_listings_disagreed.load(Ordering::Relaxed);
     }
     Ok(())
 }
@@ -262,6 +269,7 @@ struct Captures<'a> {
     exports_done: AtomicUsize,
     exports_declined: AtomicUsize,
     images: AtomicUsize,
+    revision_listings_disagreed: AtomicUsize,
 }
 
 #[async_trait]
@@ -320,8 +328,24 @@ impl Captures<'_> {
             .pointer("/capabilities/canReadRevisions")
             .and_then(Value::as_bool)
             != Some(false);
+        // Drive's first listing after a quiet spell can leave out a
+        // file's oldest revision, and one made right after has it
+        // (docs/dev/plans/google_drive.md), so a capture lists twice and
+        // keeps both.
         let revisions = if can_read_revisions {
-            paged(|token| api::revisions_url(id, token), "revisions", lk).await?
+            let first = paged(|token| api::revisions_url(id, token), "revisions", lk).await?;
+            let second = paged(|token| api::revisions_url(id, token), "revisions", lk).await?;
+            let (revisions, disagreed) = shape::union_of_listings(&first, &second);
+            if !disagreed.is_empty() {
+                self.revision_listings_disagreed
+                    .fetch_add(1, Ordering::Relaxed);
+                tracing::info!(
+                    file = id,
+                    revisions = %disagreed.join(","),
+                    "two listings of this file's revisions disagreed; keeping every revision either named"
+                );
+            }
+            revisions
         } else {
             Vec::new()
         };

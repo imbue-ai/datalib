@@ -2,6 +2,7 @@
 //! unordered arrays in an order, taking the image links out of a native
 //! file, and packing the native JSON for the CAS.
 
+use std::collections::BTreeSet;
 use std::io::Write as _;
 
 use serde_json::Value;
@@ -99,6 +100,31 @@ fn escape(key: &str) -> String {
     key.replace('~', "~0").replace('/', "~1")
 }
 
+/// Every item either listing named, keyed by `id`, oldest first by
+/// `modifiedTime`, and the ids only one of them named.
+pub fn union_of_listings(a: &[Value], b: &[Value]) -> (Vec<Value>, Vec<String>) {
+    let id_of = |v: &Value| v.get("id").and_then(Value::as_str).map(str::to_string);
+    let ids_a: BTreeSet<String> = a.iter().filter_map(id_of).collect();
+    let ids_b: BTreeSet<String> = b.iter().filter_map(id_of).collect();
+    let disagreed: Vec<String> = ids_a.symmetric_difference(&ids_b).cloned().collect();
+    let mut seen = BTreeSet::new();
+    let mut out: Vec<Value> = b
+        .iter()
+        .chain(a)
+        .filter(|v| id_of(v).is_some_and(|id| seen.insert(id)))
+        .cloned()
+        .collect();
+    out.sort_by(|x, y| {
+        let at = |v: &Value| {
+            v.get("modifiedTime")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        };
+        at(x).cmp(&at(y))
+    });
+    (out, disagreed)
+}
+
 /// The native file's own revision token (Docs and Slides).
 pub fn native_revision_id(native: &Value) -> Option<String> {
     native
@@ -183,6 +209,28 @@ mod tests {
             serde_json::to_vec(&a).unwrap(),
             serde_json::to_vec(&b).unwrap()
         );
+    }
+
+    /// The listing Drive cut short and the one right after it: the
+    /// union is the whole list, in order, and names what one left out.
+    #[test]
+    fn a_revision_one_listing_left_out_is_kept() {
+        let rev = |id: &str, at: &str| json!({"id": id, "modifiedTime": at});
+        let short = vec![rev("4007", "2364-03-02"), rev("5308", "2364-03-03")];
+        let whole = vec![
+            rev("1", "2364-03-01"),
+            rev("4007", "2364-03-02"),
+            rev("5308", "2364-03-03"),
+        ];
+        for (a, b) in [(&short, &whole), (&whole, &short)] {
+            let (all, disagreed) = union_of_listings(a, b);
+            let ids: Vec<&str> = all.iter().map(|v| v["id"].as_str().unwrap()).collect();
+            assert_eq!(ids, ["1", "4007", "5308"]);
+            assert_eq!(disagreed, ["1"]);
+        }
+        let (all, disagreed) = union_of_listings(&whole, &whole);
+        assert_eq!(all.len(), 3);
+        assert!(disagreed.is_empty());
     }
 
     #[test]
