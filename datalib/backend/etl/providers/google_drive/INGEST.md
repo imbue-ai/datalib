@@ -45,7 +45,8 @@ its own.
    - the comments, paged, with `includeDeleted=true`;
    - the native JSON, kept byte for byte, gzipped;
    - every image link in it, once per distinct URL;
-   - one export per configured format.
+   - one export per format `exports` names for the file's kind: a list
+     for every kind, `[]` for none, or a table per kind.
 
    A capture is written whole, in one transaction, or not at all. If any
    request fails, the file stays owed with the error on its sidecar and

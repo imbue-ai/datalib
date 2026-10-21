@@ -121,7 +121,7 @@ async fn walk(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
         opts.progress.set_length(Some(owed.len() as u64));
         let captures = Captures {
             kind,
-            exports: &opts.api.exports,
+            exports: opts.api.exports.for_kind(kind),
             latchkey: &opts.latchkey,
             db: &opts.db,
             progress: &opts.progress,

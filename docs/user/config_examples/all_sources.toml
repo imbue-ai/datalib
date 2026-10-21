@@ -1044,10 +1044,16 @@ function = "ingest"
 
 [steps.params.api]
 # kinds = ["document", "spreadsheet", "presentation"]  # which kinds to mirror
-# exports = ["odf"]          # beside the native JSON: "odf", "ooxml", "pdf";
-                             # 1-4 MB a version each, since Google embeds fonts
+# exports = ["odf"]          # Drive's converted copies, beside the native JSON:
+                             # "odf", "ooxml", "pdf"; [] for none. A Doc's or a
+                             # deck's is 1-4 MB a version, since Google embeds fonts
 # owned_only = false         # true: only the files the account owns
 # file_ids = ["https://docs.google.com/document/d/<id>/edit"]  # exactly these
+#
+# Or a list per kind; a kind left out keeps ["odf"]:
+# [steps.params.api.exports]
+# document = []
+# spreadsheet = ["odf", "ooxml"]
 # --- AirVisual (IQAir) monitors -----------------------------------------
 
 # AirVisual Pros' own history files, read off each unit's Samba share
