@@ -778,6 +778,45 @@ impl RawDb {
             .collect())
     }
 
+    /// Of the edges `rows` carry, the ones without bytes, each with its
+    /// message's `ts`: what storing `rows` left owed.
+    pub async fn files_owed_by(&self, rows: &[MessageInput]) -> Result<Vec<(String, Listed)>> {
+        let mut ts_of: HashMap<String, &str> = HashMap::new();
+        for m in rows {
+            let message_uuid = slack_message_key(&m.team_id, &m.channel_id, &m.ts);
+            let files = m.payload.get("files").and_then(Value::as_array);
+            for file_id in files
+                .into_iter()
+                .flatten()
+                .filter_map(super::api::served_file_id)
+            {
+                ts_of.insert(
+                    SlackAttachmentRow::pk_recipe(&message_uuid, file_id),
+                    m.ts.as_str(),
+                );
+            }
+        }
+        if ts_of.is_empty() {
+            return Ok(Vec::new());
+        }
+        let keys: Vec<&String> = ts_of.keys().collect();
+        let owed: Vec<String> = sqlx::query_scalar(
+            "SELECT id FROM slack_attachments \
+             WHERE id IN (SELECT value FROM json_each(?)) AND blake3 IS NULL ORDER BY id",
+        )
+        .bind(serde_json::to_string(&keys)?)
+        .fetch_all(self.pool())
+        .await
+        .context("list the files just stored messages carry")?;
+        Ok(owed
+            .into_iter()
+            .map(|key| {
+                let ts = ts_of[&key].to_string();
+                (ts, Listed::new(key, None::<String>))
+            })
+            .collect())
+    }
+
     /// The file object each of `keys` names, as its stored message
     /// carries it: what a fetch asks Slack with. An edge whose message no
     /// longer carries the file is left out.
