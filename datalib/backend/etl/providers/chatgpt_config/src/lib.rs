@@ -112,7 +112,10 @@ mod tests {
             sleep_between: s,
             ..Default::default()
         };
-        assert_eq!(api(Some(0.5)).sleep_between(), std::time::Duration::from_millis(500));
+        assert_eq!(
+            api(Some(0.5)).sleep_between(),
+            std::time::Duration::from_millis(500)
+        );
         assert_eq!(api(None).sleep_between(), std::time::Duration::ZERO);
         for bad in [-1.0, f64::NAN, 1e9] {
             let cfg = ChatgptConfig {
@@ -133,6 +136,10 @@ mod tests {
             }),
             ..Default::default()
         };
-        assert!(cfg.validate().unwrap_err().to_string().contains("api.limit"));
+        assert!(cfg
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("api.limit"));
     }
 }

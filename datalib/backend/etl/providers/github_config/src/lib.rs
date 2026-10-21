@@ -88,24 +88,21 @@ mod tests {
     /// and a negative window clamped to 0, which means no limit.
     #[test]
     fn negative_counts_are_refused_by_name() {
-        for (window, cap, named) in [
-            (Some(-1), None, "api.refresh_window_days"),
-            (None, Some(-5), "api.max_prs"),
+        let with = |refresh_window_days, max_prs| GithubConfig {
+            api: Some(GithubApiSync {
+                refresh_window_days,
+                max_prs,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        for (cfg, named) in [
+            (with(Some(-1), None), "api.refresh_window_days"),
+            (with(None, Some(-5)), "api.max_prs"),
         ] {
-            let mut cfg = GithubConfig::default();
-            let mut api = GithubApiSync::default();
-            api.refresh_window_days = window;
-            api.max_prs = cap;
-            cfg.api = Some(api);
             let err = cfg.validate().unwrap_err().to_string();
             assert!(err.contains(named), "{err}");
         }
-        let mut cfg = GithubConfig::default();
-        cfg.api = Some(GithubApiSync {
-            refresh_window_days: Some(0),
-            max_prs: Some(0),
-            ..Default::default()
-        });
-        assert!(cfg.validate().is_ok());
+        assert!(with(Some(0), Some(0)).validate().is_ok());
     }
 }

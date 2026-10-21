@@ -88,24 +88,21 @@ mod tests {
     /// and a negative window clamped to 0, which means no limit.
     #[test]
     fn negative_counts_are_refused_by_name() {
-        for (window, cap, named) in [
-            (Some(-1), None, "api.refresh_window_days"),
-            (None, Some(-5), "api.max_mrs"),
+        let with = |refresh_window_days, max_mrs| GitlabConfig {
+            api: Some(GitlabApiSync {
+                refresh_window_days,
+                max_mrs,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        for (cfg, named) in [
+            (with(Some(-1), None), "api.refresh_window_days"),
+            (with(None, Some(-5)), "api.max_mrs"),
         ] {
-            let mut cfg = GitlabConfig::default();
-            let mut api = GitlabApiSync::default();
-            api.refresh_window_days = window;
-            api.max_mrs = cap;
-            cfg.api = Some(api);
             let err = cfg.validate().unwrap_err().to_string();
             assert!(err.contains(named), "{err}");
         }
-        let mut cfg = GitlabConfig::default();
-        cfg.api = Some(GitlabApiSync {
-            refresh_window_days: Some(0),
-            max_mrs: Some(0),
-            ..Default::default()
-        });
-        assert!(cfg.validate().is_ok());
+        assert!(with(Some(0), Some(0)).validate().is_ok());
     }
 }
