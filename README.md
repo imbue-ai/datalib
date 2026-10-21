@@ -109,7 +109,7 @@ export, or a backup pulled off a phone.
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#gmail"><img src="datalib/ui/src/assets/gmail.svg" width="40" height="40" alt=""><br><b>Gmail</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#google-calendar"><img src="datalib/ui/src/assets/google_calendar.svg" width="40" height="40" alt=""><br><b>Google Calendar</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#google-chat"><img src="docs/assets/google_chat.svg" width="40" height="40" alt=""><br><b>Google Chat</b></a></td>
-    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#google-drive"><img src="docs/assets/google_drive.svg" width="40" height="40" alt=""><br><b>Google Drive</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#google-drive"><img src="datalib/ui/src/assets/google_drive.svg" width="40" height="40" alt=""><br><b>Google Drive</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#google-takeout"><img src="datalib/ui/src/assets/google_takeout.svg" width="40" height="40" alt=""><br><b>Google Takeout</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#google-voice"><img src="docs/assets/google_voice.png" width="40" height="40" alt=""><br><b>Google Voice</b></a></td>
   </tr>
