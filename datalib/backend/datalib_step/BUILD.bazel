@@ -136,6 +136,7 @@ rust_binary(
         "@datalib_crates//:clap",
         "@datalib_crates//:futures",
         "@datalib_crates//:libc",
+        "@datalib_crates//:schemars",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:strum",
@@ -200,6 +201,7 @@ rust_test(
     crate_root = "tests/step_tests/main.rs",
     data = [
         ":datalib_step",
+        "//datalib/backend/dag:datalib_dag_bin",
         "//datalib/backend/etl/providers/calendar:split_fixture",
         "//datalib/backend/etl/providers/sms_backup_restore:tng_fixture",
         "//tests/fixtures:ingested/qmd-index.tar",
@@ -208,6 +210,7 @@ rust_test(
     edition = "2021",
     env = {
         "CALENDAR_SPLIT_FIXTURE_DIR": "datalib/backend/etl/providers/calendar/tests/fixtures/calendar_split_tng",
+        "DATALIB_DAG_BIN": "$(rootpath //datalib/backend/dag:datalib_dag_bin)",
         "DATALIB_STEP_BIN": "$(rootpath :datalib_step)",
         "DOLTLITE_BIN": "$(rootpath //third-party/doltlite:doltlite)",
         "QMD_INDEX_TAR": "$(rootpath //tests/fixtures:ingested/qmd-index.tar)",

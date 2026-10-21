@@ -7,8 +7,22 @@
 use datalib_source_common::{LatchkeySettings, SourceCommon};
 use serde::{Deserialize, Serialize};
 
+/// This source's config stanzas, for `datalib-step help`.
+pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "api",
+        toml: include_str!("../examples/minimal_api.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "api",
+        toml: include_str!("../examples/complete_api.toml"),
+    },
+];
+
 /// The google_drive-owned slice of a `google_drive` source.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GoogleDriveConfig {
     #[serde(default)]
@@ -36,7 +50,7 @@ impl GoogleDriveConfig {
 }
 
 /// The live-API method.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GoogleDriveApi {
     /// Which kinds of file to mirror. Default: all three.
@@ -46,7 +60,9 @@ pub struct GoogleDriveApi {
     /// beside the native JSON. Default: `odf` (`.odt`, `.ods`, `.odp`),
     /// which LibreOffice opens. Each costs a request, and a Doc's or a
     /// deck's roughly 1–4 MB per version, since Google embeds the fonts.
-    /// See [`Exports`].
+    /// A list applies to every kind (`[]` for none); a table names a list
+    /// per kind (`document`, `spreadsheet`, `presentation`), and a kind
+    /// left out keeps `["odf"]`.
     #[serde(default)]
     pub exports: Exports,
     /// Only the files the account owns, not the ones shared with it.
@@ -109,7 +125,7 @@ pub fn file_id_of(given: &str) -> Option<&str> {
 }
 
 /// A kind of Google-native file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum FileKind {
     Document,
@@ -118,7 +134,7 @@ pub enum FileKind {
 }
 
 /// A family of converted copy Drive's export makes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ExportFormat {
     /// OpenDocument: `.odt`, `.ods`, `.odp`.
@@ -144,14 +160,14 @@ fn default_formats() -> Vec<ExportFormat> {
 /// (`exports = ["odf", "pdf"]`, or `exports = []` for none), or a list per
 /// kind (`[…api.exports]` with `spreadsheet = ["odf"]`,
 /// `document = []`), where a kind left out keeps the default, `["odf"]`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum Exports {
     Every(Vec<ExportFormat>),
     PerKind(PerKindExports),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PerKindExports {
     #[serde(default = "default_formats")]

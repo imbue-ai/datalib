@@ -6,13 +6,26 @@
 use datalib_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
 
+/// This source's config stanzas, for `datalib-step help`.
+pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "api",
+        toml: include_str!("../examples/minimal_api.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "api",
+        toml: include_str!("../examples/complete_api.toml"),
+    },
+];
+
 /// The yolink-owned slice of a `yolink` source. `api` drives the
 /// per-device download.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct YolinkConfig {
-    /// Shared per-source envelope (paths + cross-source tunables), resolved by
-    /// the orchestrator's `normalize()`.
+    /// The options every source takes, whatever its method.
     #[serde(default)]
     pub common: SourceCommon,
     #[serde(default)]
@@ -22,7 +35,7 @@ pub struct YolinkConfig {
 /// Per-device download knobs. WARNING: `family_device_id` + `device_udid`
 /// are per-device read secrets; anyone with the pair can pull all CSV
 /// history for the device, forever. Scrub from any committed/public configs.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct YolinkSync {
     /// Re-fetch overlap (minutes). Default 5.
@@ -37,20 +50,22 @@ pub struct YolinkSync {
     pub devices: Vec<YolinkDevice>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct YolinkDevice {
-    /// Stable label; becomes the PK in `yolink_devices`. Changing it later
-    /// orphans prior history.
+    /// A stable label that keys the device's rows. Renaming it later
+    /// orphans the history fetched under the old name.
     pub name: String,
     /// `temperature_humidity` or `watermeter`.
     pub kind: String,
     /// Earliest timepoint to ever pull, as `YYYY-MM-DD`.
     pub start: String,
-    /// First URL path segment — the `<32hex>` in the download URL.
+    /// The first segment of the device's CSV download link: 32 lowercase
+    /// hex digits.
     pub family_device_id: String,
-    /// Per-device UUID returned by the YoLink open API as `deviceUDID`.
-    /// REDACT before publishing.
+    /// The device's id in YoLink's open API (`deviceUDID`): 32 lowercase
+    /// hex digits. Keep it private: with `family_device_id` it lets anyone
+    /// fetch the device's history.
     pub device_udid: String,
 }
 

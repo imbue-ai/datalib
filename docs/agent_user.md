@@ -123,9 +123,18 @@ datalib-dag --check <data_root>/config.toml   # validate, run nothing
 `--check` prints *every* problem with the config rather than the first,
 as `file:line:col: severity: message` with the offending line and a
 `help:` line under each — so fixing a config takes one round-trip, not
-one per typo. Exit 0 when every entry loads, 1 if the file is not a
-config at all (or the root was written by a newer datalib), 2 if some
-entries were dropped.
+one per typo. It also has `datalib-step` plan every built-in step's
+params, so a misspelled or misplaced option is reported at its line
+before a sync rather than when the step runs. Exit 0 when every entry
+loads and every step's params plan, 1 if the file is not a config at
+all (or the root was written by a newer datalib), 2 if some entries
+were dropped or some step's params would be refused.
+
+Each source's config stanza, ready to append, comes from `datalib-step
+help <type> --example minimal --id <group>` (or `--example complete`,
+every option set), and `datalib-step help <type> <method>` lists every
+option with its type, default and meaning. Both are read from the
+source's own config crate, and a test loads and plans every stanza.
 
 Useful flags: `--sync <step-id>` (repeatable; runs the named steps and
 everything downstream of them, and nothing else — pending work in other

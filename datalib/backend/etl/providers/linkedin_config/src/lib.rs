@@ -6,9 +6,23 @@ use std::path::PathBuf;
 use datalib_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
 
+/// This source's config stanzas, for `datalib-step help`.
+pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "export",
+        toml: include_str!("../examples/minimal_export.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "export",
+        toml: include_str!("../examples/complete_export.toml"),
+    },
+];
+
 /// Typed config for a `linkedin` source: `export`, the data export on
 /// disk.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LinkedinConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by
@@ -20,7 +34,7 @@ pub struct LinkedinConfig {
 }
 
 /// The `export` table: where the unpacked export is.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LinkedinExport {
     /// The unpacked LinkedIn data export: the directory of CSVs.

@@ -1,0 +1,19 @@
+# Fastmail's address books over CardDAV, signed in through latchkey's
+# `fastmail-dav` service with a read-only app password
+# (`latchkey auth set fastmail-dav -u "you@example.com:<app password>"`).
+# An empty `fastmail` table mirrors every address book the account holds.
+[[groups]]
+id = "contacts"
+name = "Fastmail Contacts"
+type = "contacts"
+
+[[steps]]
+group = "contacts"
+function = "ingest"
+
+[steps.params.fastmail]
+
+[[steps]]
+group = "contacts"
+function = "render_markdown"
+inputs = ["contacts/ingest"]

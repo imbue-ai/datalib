@@ -7,14 +7,28 @@ use std::path::PathBuf;
 use datalib_source_common::{RenderCommon, SourceCommon};
 use serde::{Deserialize, Serialize};
 
+/// This source's config stanzas, for `datalib-step help`.
+pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "texts",
+        toml: include_str!("../examples/minimal_texts.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "texts",
+        toml: include_str!("../examples/complete_texts.toml"),
+    },
+];
+
 /// The beeper-owned slice of a `beeper` source. `texts` — the Beeper
 /// Texts desktop app's own database — is its one way in; an `ingest`
 /// step without it is refused (`IngestMethods` below).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BeeperConfig {
-    /// Shared per-source envelope (paths + cross-source tunables), resolved by
-    /// the orchestrator's `normalize()`.
+    /// The options every source takes: an attachment size limit, when to
+    /// give up on failing requests, and the debugging event tape.
     #[serde(default)]
     pub common: SourceCommon,
     #[serde(default)]
@@ -30,7 +44,7 @@ impl BeeperConfig {
 /// Params for the beeper **render** step. Split from [`BeeperConfig`]
 /// (the download-step params) so each step's params carry only what
 /// that wave reads.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BeeperRenderConfig {
     #[serde(default)]
@@ -51,7 +65,7 @@ pub struct BeeperRenderConfig {
 
 /// The `texts` table: where Beeper Texts' data directory is, and whether
 /// to copy its cached media.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BeeperSync {
     /// Beeper Texts' data directory. Defaults to

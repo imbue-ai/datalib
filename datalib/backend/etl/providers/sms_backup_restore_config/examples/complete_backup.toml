@@ -1,0 +1,37 @@
+# Android texts and call logs from the SMS Backup & Restore app's XML
+# export, with every option set, and searchable. No credentials.
+[[groups]]
+id = "sms_backup_restore"
+name = "SMS Backup & Restore"
+type = "sms_backup_restore"
+
+[[steps]]
+group = "sms_backup_restore"
+function = "ingest"
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+# The directory is the whole archive: every *.xml in it is read, and a
+# message no backup file still holds leaves the mirror on the next sync.
+[steps.params.backup]
+path = "~/Downloads/sms-backup"
+
+[[steps]]
+group = "sms_backup_restore"
+function = "render_markdown"
+inputs = ["sms_backup_restore/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "sms_backup_restore"
+function = "keyword_index"
+inputs = ["sms_backup_restore/render_markdown"]
+
+[[steps]]
+group = "sms_backup_restore"
+function = "embed"
+inputs = ["sms_backup_restore/keyword_index"]

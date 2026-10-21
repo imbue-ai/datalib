@@ -6,6 +6,40 @@
 use datalib_source_common::{LatchkeySettings, LocalPath, SourceCommon};
 use serde::{Deserialize, Serialize};
 
+/// This source's config stanzas, for `datalib-step help`.
+pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "fastmail",
+        toml: include_str!("../examples/minimal_fastmail.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "fastmail",
+        toml: include_str!("../examples/complete_fastmail.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "carddav",
+        toml: include_str!("../examples/minimal_carddav.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "carddav",
+        toml: include_str!("../examples/complete_carddav.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "vcf",
+        toml: include_str!("../examples/minimal_vcf.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "vcf",
+        toml: include_str!("../examples/complete_vcf.toml"),
+    },
+];
+
 /// Fastmail's CardDAV root. Its bare host answers 404 to a PROPFIND, so
 /// discovery has to start here (or at `/.well-known/carddav`).
 pub const FASTMAIL_CARDDAV_URL: &str = "https://carddav.fastmail.com/dav/";
@@ -13,19 +47,17 @@ pub const FASTMAIL_CARDDAV_URL: &str = "https://carddav.fastmail.com/dav/";
 /// The contacts-owned slice of a `contacts` source. Exactly one of the
 /// three method tables is set: `fastmail` and `carddav` mirror a live
 /// CardDAV server, `vcf` ingests `.vcf` exports under a directory on disk.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ContactsConfig {
-    /// Shared per-source envelope (paths + cross-source tunables), resolved by
-    /// the orchestrator's `normalize()`.
+    /// Settings every source shares: the attachment size limit, when to
+    /// give up on a failing server, the debugging tape.
     #[serde(default)]
     pub common: SourceCommon,
-    /// Which latchkey identity this source mirrors. Composed only by the
-    /// providers that authenticate through the `latchkey` CLI, and
-    /// forwarded whole to the download client — see [`LatchkeySettings`].
+    /// Which stored latchkey account this source signs in as.
     #[serde(default)]
     pub latchkey_settings: LatchkeySettings,
-    /// Fastmail, over CardDAV at [`FASTMAIL_CARDDAV_URL`] (latchkey's
+    /// Fastmail, over CardDAV at Fastmail's own address (latchkey's
     /// `fastmail-dav` service, which holds an app password).
     #[serde(default)]
     pub fastmail: Option<AddressBookSelection>,
@@ -105,7 +137,7 @@ impl ContactsConfig {
 }
 
 /// Which of an account's address books to mirror.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AddressBookSelection {
     /// Address book names as the server shows them (each one's
@@ -116,18 +148,16 @@ pub struct AddressBookSelection {
 }
 
 /// The `carddav` table: a server, plus the same selection.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CarddavSync {
-    /// Server URL. Discovery walks
-    /// `current-user-principal` → `addressbook-home-set` from here, or
-    /// from the host's `/.well-known/carddav` when this URL does not
-    /// answer.
-    /// Examples:
-    ///   - `https://contacts.icloud.com/`
-    ///   - `https://cloud.example.com/remote.php/dav/`
+    /// Where discovery starts. The server's root is usually enough:
+    /// discovery follows `/.well-known/carddav` when the root does not
+    /// answer. Examples: `https://contacts.icloud.com/`,
+    /// `https://cloud.example.com/remote.php/dav/`.
     pub server_url: String,
-    /// As [`AddressBookSelection::addressbooks`].
+    /// Address book names as the server shows them, matched exactly.
+    /// Missing or empty mirrors every address book the account holds.
     #[serde(default)]
     pub addressbooks: Option<Vec<String>>,
 }

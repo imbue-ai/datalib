@@ -6,15 +6,15 @@ use serde::{Deserialize, Serialize};
 /// gives up on it. The shared HTTP chokepoint respects `Retry-After` on 429s
 /// and otherwise backs off exponentially; these two knobs decide *when to
 /// stop*. Both default when unset.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DownloadParams {
     /// Give up on a source once this many minutes pass with no successful
-    /// request. `None` → [`DownloadParams::DEFAULT_MAX_MINUTES_NO_PROGRESS`].
+    /// request. Unset is 30.
     #[serde(default)]
     pub maximum_time_without_progress_in_minutes: Option<u64>,
-    /// Give up after this many consecutive retryable failures with no success
-    /// in between. `None` → [`DownloadParams::DEFAULT_MAX_SEQUENTIAL_FAILURES`].
+    /// Give up after this many retryable failures in a row, with no success
+    /// in between. Unset is 50.
     #[serde(default)]
     pub maximum_sequential_failed_requests: Option<u64>,
 }

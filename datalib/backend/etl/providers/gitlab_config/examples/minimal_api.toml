@@ -1,0 +1,19 @@
+# GitLab merge requests and their discussions, over GitLab's API, signed
+# in through latchkey with a personal access token you create
+# (`latchkey auth set gitlab -H "PRIVATE-TOKEN: <token>"`). An empty `api`
+# table mirrors every MR you opened, are assigned or are reviewing.
+[[groups]]
+id = "gitlab"
+name = "GitLab"
+type = "gitlab"
+
+[[steps]]
+group = "gitlab"
+function = "ingest"
+
+[steps.params.api]
+
+[[steps]]
+group = "gitlab"
+function = "render_markdown"
+inputs = ["gitlab/ingest"]

@@ -1544,6 +1544,18 @@ fn inert_path_is_written(params: Option<&toml::Value>, path: &str) -> bool {
     at.is_some()
 }
 
+/// Where a step sits in the config text, for a problem found after the
+/// check (`datalib-step check-params`): the line of `key = …` in its
+/// params when a key is named and found there, else its `[[steps]]`
+/// header. `None` for a step the text does not declare.
+pub fn step_span(text: &str, step_id: &str, key: Option<&str>) -> Option<std::ops::Range<usize>> {
+    let header = entries_of(text).spans.get(step_id).cloned()?;
+    Some(match key {
+        Some(key) => params_key_span(text, header, key),
+        None => header,
+    })
+}
+
 /// Where `key = …` sits in this entry's body, its `[steps.params…]`
 /// sub-tables included, for a key nested in `params` that
 /// [`key_span`] stops short of. The entry's header when it is not found.

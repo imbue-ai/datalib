@@ -1,0 +1,38 @@
+# A folder of `.vcf` (vCard) files on disk, with every option set, and
+# searchable. No sign-in.
+[[groups]]
+id = "contacts"
+name = "Contacts export"
+type = "contacts"
+
+[[steps]]
+group = "contacts"
+function = "ingest"
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+[steps.params.vcf]
+# The folder. Each `.vcf` in it is an address book: a card a file no longer
+# carries, or every card of a file that is gone, leaves the mirror on the
+# next sync.
+path = "~/Downloads/contacts-export"
+
+[[steps]]
+group = "contacts"
+function = "render_markdown"
+inputs = ["contacts/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "contacts"
+function = "keyword_index"
+inputs = ["contacts/render_markdown"]
+
+[[steps]]
+group = "contacts"
+function = "embed"
+inputs = ["contacts/keyword_index"]

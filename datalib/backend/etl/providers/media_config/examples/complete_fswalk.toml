@@ -1,0 +1,32 @@
+# A folder of music, photos and video on disk, with every option set. Files
+# are keyed on content hash, so one song in three folders is one row with
+# three locations. See the provider's INGEST.md for queries.
+[[groups]]
+id = "media"
+name = "Media"
+type = "media"
+
+[[steps]]
+group = "media"
+function = "ingest"
+
+[steps.params]
+ignore = ["**/.Trash/**", "**/Thumbnails/**"]  # gitignore-style patterns left out of the
+                                               # scan, on top of any .gitignore; default none
+max_bytes = "64 GB"            # skip a larger file entirely (no row); unset is no limit
+payload_max_bytes = "8 GiB"    # above this, skip the tag-independent payload hash
+                               # (`payload_blake3` stays NULL); default 8 GiB
+playlists = true               # index .m3u / .m3u8 playlists; default true
+skip_dataless = true           # skip cloud placeholders (Dropbox online-only, iCloud
+                               # evicted files) rather than download them; default true
+
+[steps.params.fswalk]
+path = "~/Music"  # the folder to scan
+
+# Media renders no documents: query the raw store with `datalib-doltlite`.
+# This step writes the storage report every source gets, which is what
+# puts Media in the grid.
+[[steps]]
+group = "media"
+function = "render_markdown"
+inputs = ["media/ingest"]

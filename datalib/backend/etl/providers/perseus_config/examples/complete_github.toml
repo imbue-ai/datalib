@@ -1,0 +1,52 @@
+# Greek and Latin texts from the Perseus Digital Library, fetched from
+# PerseusDL's public GitHub repository, with every option set, and
+# searchable. No credentials.
+[[groups]]
+id = "perseus"
+name = "Perseus"
+type = "perseus"
+
+[[steps]]
+group = "perseus"
+function = "ingest"
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+[steps.params.github]
+# TEI files to fetch, as paths inside PerseusDL/canonical-greekLit's
+# `data/` tree. Default: the Thucydides Histories in every edition there.
+files = [
+  "tlg0003/tlg001/__cts__.xml",
+  "tlg0003/tlg001/tlg0003.tlg001.perseus-grc2.xml",
+  "tlg0003/tlg001/tlg0003.tlg001.perseus-eng4.xml",
+]
+
+[[steps]]
+group = "perseus"
+function = "render_markdown"
+inputs = ["perseus/ingest"]
+
+[steps.params]
+# Edition pairs to align sentence by sentence; default none. Aligning
+# fetches a ~450 MB model once, into ~/.cache/datalib/models.
+alignment_pairs = [["perseus-grc2", "perseus-eng4"]]
+
+# A tree of TEI files staged by hand, read instead of what the ingest step
+# fetched. Only for a source with no ingest step, so it stays off here.
+# [steps.params.common]
+# input_path = "~/Downloads/perseus-tei"
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "perseus"
+function = "keyword_index"
+inputs = ["perseus/render_markdown"]
+
+[[steps]]
+group = "perseus"
+function = "embed"
+inputs = ["perseus/keyword_index"]

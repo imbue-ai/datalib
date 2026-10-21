@@ -1,0 +1,44 @@
+# Every PDF under a folder on this machine, with every option set, and
+# searchable. No account and no credentials. A scanned, image-only PDF is
+# recorded but gives no text: there is no OCR yet.
+[[groups]]
+id = "pdf"
+name = "PDFs"
+type = "pdf"
+
+[[steps]]
+group = "pdf"
+function = "ingest"
+
+[steps.params]
+ignore = ["drafts/**", "**/.Trash/**"]  # gitignore-style patterns to skip, on top of any
+                                        # .gitignore in the tree; default none
+max_bytes = "512 MiB"  # skip a file larger than this; the default
+ocr = false            # OCR for pages with no text: not supported yet, so it must stay false
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+[steps.params.fswalk]
+path = "~/Documents/papers"  # the folder to scan, and everything under it
+
+# Render needs no params: it reads the scan root back out of the raw
+# store, so it converts exactly the tree the ingest step walked.
+[[steps]]
+group = "pdf"
+function = "render_markdown"
+inputs = ["pdf/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "pdf"
+function = "keyword_index"
+inputs = ["pdf/render_markdown"]
+
+[[steps]]
+group = "pdf"
+function = "embed"
+inputs = ["pdf/keyword_index"]

@@ -1,0 +1,31 @@
+# LinkedIn's "Get a copy of your data" export, unzipped, with every option
+# set, and searchable. Render emits the message threads and your
+# connections as contacts. Unzip each newer export over the folder.
+[[groups]]
+id = "linkedin"
+name = "LinkedIn"
+type = "linkedin"
+
+[[steps]]
+group = "linkedin"
+function = "ingest"
+
+[steps.params.export]
+path = "~/Downloads/linkedin-export"  # the unzipped export: the folder of CSVs
+
+[[steps]]
+group = "linkedin"
+function = "render_markdown"
+inputs = ["linkedin/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "linkedin"
+function = "keyword_index"
+inputs = ["linkedin/render_markdown"]
+
+[[steps]]
+group = "linkedin"
+function = "embed"
+inputs = ["linkedin/keyword_index"]

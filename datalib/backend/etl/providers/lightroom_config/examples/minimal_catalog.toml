@@ -1,0 +1,22 @@
+# An Adobe Lightroom Classic catalog (the `.lrcat` file, an ordinary SQLite
+# database) mirrored table for table, with every prior state kept. No
+# sign-in; it is safe to run while Lightroom has the catalog open.
+[[groups]]
+id = "lightroom"
+name = "Lightroom"
+type = "lightroom"
+
+[[steps]]
+group = "lightroom"
+function = "ingest"
+
+[steps.params.catalog]
+path = "~/Pictures/Lightroom/Enterprise.lrcat"
+
+# Lightroom renders no documents yet: query the raw store with
+# `datalib-doltlite`. This step writes the storage report every source
+# gets, which is what puts Lightroom in the grid.
+[[steps]]
+group = "lightroom"
+function = "render_markdown"
+inputs = ["lightroom/ingest"]

@@ -1,0 +1,22 @@
+# An Apple Photos library's database mirrored table for table, as a versioned
+# backup; no documents are rendered. No sign-in. macOS protects the library:
+# the terminal running the sync needs Full Disk Access.
+[[groups]]
+id = "apple_photos"
+name = "Apple Photos"
+type = "apple_photos"
+
+[[steps]]
+group = "apple_photos"
+function = "ingest"
+
+[steps.params.library]
+path = "~/Pictures/Photos Library.photoslibrary"
+
+# Apple Photos renders no documents: query the raw store with
+# `datalib-doltlite`. This step writes the storage report every source
+# gets, which is what puts Apple Photos in the grid.
+[[steps]]
+group = "apple_photos"
+function = "render_markdown"
+inputs = ["apple_photos/ingest"]
