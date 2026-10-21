@@ -10,12 +10,16 @@ pub struct Example {
     pub command: &'static str,
 }
 
+/// The line every binary's help ends with: where to begin when setting
+/// datalib up, whichever binary an agent happened to ask first.
+pub const START_HERE: &str = "Setting datalib up? Start with `datalib-step help`.";
+
 pub fn render(examples: &[Example]) -> String {
     let mut out = String::from("Examples:\n");
     for e in examples {
         out.push_str(&format!("  # {}\n  {}\n\n", e.what, e.command));
     }
-    out.truncate(out.trim_end().len());
+    out.push_str(START_HERE);
     out
 }
 
@@ -110,7 +114,7 @@ mod tests {
         assert_examples_parse(cmd(), &examples);
         assert_eq!(
             render(&examples),
-            "Examples:\n  # do it fast\n  tool '~/my dir' --fast"
+            format!("Examples:\n  # do it fast\n  tool '~/my dir' --fast\n\n{START_HERE}")
         );
     }
 }

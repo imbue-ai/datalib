@@ -1,0 +1,3 @@
+# The agent guide is compiled into `datalib-step help agent`, which is also
+# what writes the copy a release tarball carries.
+exports_files(["agent_user.md"])

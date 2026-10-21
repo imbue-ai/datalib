@@ -1,7 +1,7 @@
 # Help an agent can set datalib up from
 
-**Status: agreed 2026-10-21; nothing built yet.** Four pieces of work,
-the fourth deferred.
+**Status: agreed 2026-10-21; §2.1 is #1275, §2.2 is built on the branch
+after it, §2.3 is next and §2.4 is deferred.**
 
 ## 1. The problem
 
@@ -50,11 +50,12 @@ Each of our binaries' help says where to start: `datalib-step help`.
 ```
 datalib-step help                  the setup journey, each step's command; the sources and functions
 datalib-step help agent            agent_user.md, embedded
-datalib-step help <type>           what it mirrors, its methods, how it signs in, a minimal stanza, how to probe it
+datalib-step help <type>           what it mirrors, how it signs in, its ingest methods, what to run next
 datalib-step help <type> <method>  every field of that method: its doc, type and default
 datalib-step help <type> --example minimal|complete [--id <id>]
                                    bare TOML on stdout, ready to append to a config
-datalib-step help <function>       grid_index, embed, …
+datalib-step help <function>       what it does, where it goes, and how to run one
+datalib-step help <command>        one of datalib-step's commands (probe, …)
 ```
 
 The journey is config → credentials → `--check` → `probe` → sync →
@@ -62,9 +63,19 @@ query. An example can only prove a stanza's shape; `datalib-step
 probe` is what says the credentials reach anything, so each source's
 page names it as the next step.
 
-The docs ship too: the tarball and the Docker image carry
-`agent_user.md` and the docs it links to, and a lint refuses a
-relative link in a shipped doc that leaves the shipped set.
+A source's page is its sections of `docs/user/getting_your_data.md`,
+compiled in; `//:lint_repo` already holds that doc to a section per
+type. A function's page says how to run one step: through
+`datalib-dag --sync`, never `datalib-step` by hand, since only the
+runner records what a step published; and, for the steps that can be
+rebuilt, `--reset` and `--sync` together. The `datalib-dag` commands
+these pages quote are tested against its parser, which lives in
+`datalib_dag::cli` for that reason.
+
+The tarball (and so the Docker image) carries the agent guide as
+`docs/agent_user.md`, written at staging by the staged `datalib-step
+help agent`. Every relative link in what `help` prints points at the
+build's commit on GitHub, so nothing a doc links to has to ship.
 
 ### 2.3 Examples and fields from the config crates (PR 3)
 

@@ -12,6 +12,7 @@ mod events;
 mod exit_watchdog;
 mod function;
 mod grid_index;
+mod help;
 mod hints;
 mod ingest;
 mod introspect;
@@ -37,7 +38,7 @@ mod config_examples_test;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use datalib_cli_help::Example;
 use datalib_dag::subprocess::{ENV_CHECKPOINT_CADENCE, ENV_DATA_ROOT, ENV_NOW, ENV_STEP};
 use datalib_dag::FailureKind;
@@ -49,14 +50,24 @@ use crate::source::StepEnv;
 const LONG_ABOUT: &str = "\
 The built-in step program: datalib-dag runs it for every step in a config \
 with no `command`, and tells it through the environment which function to \
-perform (ingest, render_markdown, grid_index, …) for which group. You do \
-not run it that way yourself.
+perform (ingest, render_markdown, grid_index, …) for which group. Do not \
+run it that way yourself: to run one step, `datalib-dag <config> --sync \
+<group>/<function>` runs it, and every step that reads it after it, and \
+records what it published. `datalib-step help <function>` shows how for each.
 
 Its subcommands are tools you can run: ask a source which account its \
 credentials reach, put the runtime and models in place ahead of a first \
 sync, and keep a config in the order data flows.";
 
 const EXAMPLES: &[Example] = &[
+    Example {
+        what: "how to set datalib up from a shell, step by step",
+        command: "datalib-step help",
+    },
+    Example {
+        what: "what one source mirrors, how it signs in, and its ingest methods",
+        command: "datalib-step help slack",
+    },
     Example {
         what: "ask which Slack account the credentials reach (writes nothing)",
         command: "datalib-step probe slack",
@@ -85,7 +96,8 @@ const EXAMPLES: &[Example] = &[
     bin_name = "datalib-step",
     about = "The built-in step program datalib-dag runs, and tools for setting a source up",
     long_about = LONG_ABOUT,
-    after_help = datalib_cli_help::render(EXAMPLES)
+    after_help = datalib_cli_help::render(EXAMPLES),
+    disable_help_subcommand = true
 )]
 struct Cli {
     /// Absent means "be a step": the function, group and tree come from
@@ -134,6 +146,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// How to set datalib up from a shell: the steps, the source types,
+    /// the step functions, and the whole agent guide (`help agent`).
+    Help {
+        /// `agent`, a source type (`slack`), a function (`embed`) or one of
+        /// these commands (`probe`). None: the overview.
+        topic: Vec<String>,
+    },
     /// Utility (not a pipeline step): ask a provider which account
     /// these credentials reach — and, with `--list`, one list a picker
     /// offers — and print one JSON object on stdout. Progress goes to
@@ -231,6 +250,9 @@ const INTERRUPT_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
+    if let Some(Cmd::Help { topic }) = &cli.cmd {
+        std::process::exit(print_help(topic));
+    }
     let _obs_guard = datalib_obs::init(&cli.obs, "datalib-step").ok();
     // Before the first `qmd` or `latchkey` spawn, wherever it comes
     // from: a release tarball without `runtime/` beside its binaries
@@ -443,6 +465,7 @@ async fn run(
         // Handled in `main` before the step machinery starts; see
         // there for why it cannot come through the outcome path.
         Some(Cmd::Probe { .. }) => unreachable!("probe is answered in main"),
+        Some(Cmd::Help { .. }) => unreachable!("help is answered in main"),
         Some(Cmd::PullModels { .. }) => unreachable!("pull-models is answered in main"),
         Some(Cmd::PullRuntime) => unreachable!("pull-runtime is answered in main"),
         Some(Cmd::TopoSortConfig { .. }) => {
@@ -591,6 +614,36 @@ fn version_through_runtime(mut cmd: std::process::Command) -> Result<String> {
         String::from_utf8_lossy(&out.stderr).trim()
     );
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+// Links in the docs it prints point at the commit this binary was built
+// from, so they show the docs that describe it.
+#[allow(clippy::disallowed_macros)]
+fn print_help(topic: &[String]) -> i32 {
+    let mut cmd = Cli::command();
+    cmd.build();
+    if let [name] = topic {
+        if let Some(sub) = cmd.find_subcommand_mut(name) {
+            let _ = sub.print_long_help();
+            return 0;
+        }
+    }
+    let commands: Vec<String> = cmd
+        .get_subcommands()
+        .map(|c| c.get_name().to_string())
+        .filter(|name| name != "help")
+        .collect();
+    let git_ref = datalib_runtime::build_id::git_hash().unwrap_or_else(|| "main".to_string());
+    match help::page(topic, &commands, &git_ref) {
+        Ok(text) => {
+            println!("{text}");
+            0
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            2
+        }
+    }
 }
 
 /// The index steps have one reader each — the `unified_document_index` applet
