@@ -80,6 +80,7 @@ const CATALOG: &[Entry] = &[
     e("media", None, "Music, photos & video", Some("media")),
     e("airvisual", None, "AirVisual", Some("airvisual")),
     e("lightroom", None, "Lightroom", Some("lightroom")),
+    e("linear", None, "Linear", Some("linear")),
     e("apple_photos", None, "Apple Photos", Some("apple_photos")),
     e(
         "apple_messages",

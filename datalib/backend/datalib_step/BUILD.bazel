@@ -77,6 +77,8 @@ rust_binary(
         "//datalib/backend/etl/providers/facebook:datalib_etl_facebook",
         "//datalib/backend/etl/providers/facebook_render:datalib_etl_facebook_render",
         "//datalib/backend/etl/providers/facebook_config:datalib_etl_facebook_config",
+        "//datalib/backend/etl/providers/linear:datalib_etl_linear",
+        "//datalib/backend/etl/providers/linear_config:datalib_etl_linear_config",
         "//datalib/backend/etl/providers/linkedin:datalib_etl_linkedin",
         "//datalib/backend/etl/providers/linkedin_render:datalib_etl_linkedin_render",
         "//datalib/backend/etl/providers/linkedin_config:datalib_etl_linkedin_config",

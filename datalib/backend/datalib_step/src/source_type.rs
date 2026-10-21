@@ -82,6 +82,9 @@ pub enum SourceType {
     GoogleDrive,
     GoogleTakeout,
     Lightroom,
+    /// A Linear workspace, over its GraphQL API. Download-only: the raw
+    /// tables of Linear's objects are the mirror.
+    Linear,
     Linkedin,
     Media,
     Notion,
@@ -121,6 +124,7 @@ impl SourceType {
                 | SourceType::Github
                 | SourceType::Gitlab
                 | SourceType::GoogleDrive
+                | SourceType::Linear
                 | SourceType::Notion
                 | SourceType::Slack
         )
@@ -146,6 +150,7 @@ impl SourceType {
             SourceType::Lightroom => Some("Adobe_images"),
             SourceType::ApplePhotos => Some("ZASSET"),
             SourceType::GoogleDrive => Some("files"),
+            SourceType::Linear => Some("issues"),
             _ => None,
         }
     }
@@ -227,6 +232,7 @@ mod tests {
                     | SourceType::Fsindex
                     | SourceType::GoogleDrive
                     | SourceType::Lightroom
+                    | SourceType::Linear
                     | SourceType::Media
             );
             assert_eq!(

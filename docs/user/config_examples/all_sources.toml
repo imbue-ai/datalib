@@ -485,6 +485,31 @@ group = "notion"
 function = "embed"
 inputs = ["notion/keyword_index"]
 
+# --- Linear -------------------------------------------------------------
+
+# A Linear workspace over its GraphQL API. Download-only: each kind of
+# Linear object is a raw table of the objects as Linear sent them, and
+# nothing is rendered. Credentials via latchkey:
+#
+#   latchkey auth browser linear
+#
+# The first sync copies everything newest first; every later one reads
+# only what changed (datalib/backend/etl/providers/linear/INGEST.md).
+[[groups]]
+id = "linear"
+type = "linear"
+
+[[steps]]
+group = "linear"
+function = "ingest"
+
+[steps.params.api]
+# Both empty (or omitted) copies the whole workspace. Otherwise an issue
+# is copied when its team or its project is named here; most issues
+# belong to no project, so name their teams.
+teams = ["ENG"]
+projects = ["Warp core refit"]
+
 # --- Email: two input modes ---------------------------------------------
 
 # Mode A — JMAP server (Fastmail or any RFC 8620/8621 server). The

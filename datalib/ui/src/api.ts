@@ -1729,9 +1729,17 @@ export type ServiceRegistration = {
 /// `mailbox` (emails are filed here), `keyword` (a Gmail flag —
 /// downloadable, but never matched by the render-side filter),
 /// `conversation` (one chat thread — a Claude chat, a Slack DM),
-/// `channel` (a Slack channel), `calendar` or `address_book`.
+/// `channel` (a Slack channel), `calendar`, `address_book`, or a Linear
+/// `team` or `project`.
 export type ProbeItemKind =
-  "mailbox" | "keyword" | "conversation" | "channel" | "calendar" | "address_book";
+  | "mailbox"
+  | "keyword"
+  | "conversation"
+  | "channel"
+  | "calendar"
+  | "address_book"
+  | "team"
+  | "project";
 
 /// One row a probe offers a filter field. Mirrors `ProbeItem` in
 /// datalib/backend/probe/src/lib.rs.
