@@ -65,6 +65,15 @@ pub struct GoogleDriveApi {
     /// left out keeps `["odf"]`.
     #[serde(default)]
     pub exports: Exports,
+    /// Which exports to fetch of every revision Drive lists for a Doc or
+    /// a Sheet, once each: a revision does not change. The only copy
+    /// there is of a version from before the first sync, since Google
+    /// keeps no native JSON for old versions. A deck's revisions are
+    /// never fetched: its export links ignore the revision and export
+    /// the deck as it is now. Default `odf`, the same shape as
+    /// `exports`; `[]` for none.
+    #[serde(default)]
+    pub revision_exports: Exports,
     /// Only the files the account owns, not the ones shared with it.
     #[serde(default)]
     pub owned_only: bool,
@@ -79,6 +88,7 @@ impl Default for GoogleDriveApi {
         Self {
             kinds: all_kinds(),
             exports: Exports::default(),
+            revision_exports: Exports::default(),
             owned_only: false,
             file_ids: Vec::new(),
         }
@@ -221,7 +231,12 @@ mod tests {
         assert_eq!(from_toml.exports, built.exports);
         for kind in all_kinds() {
             assert_eq!(from_toml.exports.for_kind(kind), [ExportFormat::Odf]);
+            assert_eq!(
+                from_toml.revision_exports.for_kind(kind),
+                [ExportFormat::Odf]
+            );
         }
+        assert_eq!(from_toml.revision_exports, built.revision_exports);
         assert_eq!(from_toml.kinds.len(), 3);
         assert!(!from_toml.owned_only);
     }

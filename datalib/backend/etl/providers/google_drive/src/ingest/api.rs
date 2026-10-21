@@ -182,8 +182,9 @@ pub fn req_bytes(url: &str) -> HttpRequest {
     HttpRequest::get(HTTP_SERVICE, url).timeout(TIMEOUT)
 }
 
-/// An image link from the native JSON: signed already, so no latchkey.
-pub fn req_image(url: &str) -> HttpRequest {
+/// A URL that carries its own authority (an image link from the native
+/// JSON, a revision export's redirect): signed already, so no latchkey.
+pub fn req_signed(url: &str) -> HttpRequest {
     req_bytes(url).plain()
 }
 
@@ -233,7 +234,40 @@ pub async fn get_bytes(url: &str, lk: &LatchkeySettings) -> Result<Vec<u8>> {
 }
 
 pub async fn get_image(url: &str) -> Result<Vec<u8>> {
-    get(req_image(url)).await
+    get(req_signed(url)).await
+}
+
+/// A revision's export. Its link answers with a redirect to a signed
+/// download, which goes out plain, so the credential never follows it
+/// to another host.
+pub async fn get_revision_export(url: &str, lk: &LatchkeySettings) -> Result<Vec<u8>> {
+    let req = req_bytes(url).latchkey(lk.clone());
+    let resp = latchkey_curl_classified(&req, retryability)
+        .await
+        .map_err(|e| transport_error(e, url))?;
+    match resp.status {
+        200 => Ok(resp.body),
+        301 | 302 | 303 | 307 | 308 => {
+            let to = resp
+                .header("location")
+                .ok_or_else(|| anyhow!("GET {url}: {} with no Location", resp.status))?;
+            get(req_signed(to)).await
+        }
+        _ => Err(status_error(url, &resp).into()),
+    }
+}
+
+/// The link a revision's `exportLinks` gives for `format`. A revision
+/// names ODS `application/x-vnd.oasis.opendocument.spreadsheet`, where
+/// `files.export` takes it without the `x-`.
+pub fn export_link(kind: FileKind, format: ExportFormat, links: &Value) -> Option<String> {
+    let (mime, _) = export_type(kind, format);
+    let x_mime = mime.replacen("application/", "application/x-", 1);
+    links
+        .get(mime)
+        .or_else(|| links.get(x_mime.as_str()))
+        .and_then(Value::as_str)
+        .map(str::to_string)
 }
 
 async fn get(req: HttpRequest) -> Result<Vec<u8>> {
@@ -419,6 +453,21 @@ mod tests {
         assert!(!url.contains("spreadsheet"), "{url}");
         assert!(url.contains("%27me%27%20in%20owners"), "{url}");
         assert!(url.ends_with("&pageToken=tok"), "{url}");
+    }
+
+    #[test]
+    fn a_revision_s_link_is_found_under_either_spelling() {
+        let links = serde_json::json!({
+            "application/x-vnd.oasis.opendocument.spreadsheet": "https://docs.google.com/spreadsheets/export?id=x&revision=2&exportFormat=ods",
+            "application/pdf": "https://docs.google.com/spreadsheets/export?id=x&revision=2&exportFormat=pdf",
+        });
+        let ods = export_link(FileKind::Spreadsheet, ExportFormat::Odf, &links).unwrap();
+        assert!(ods.ends_with("exportFormat=ods"), "{ods}");
+        assert!(export_link(FileKind::Spreadsheet, ExportFormat::Pdf, &links).is_some());
+        assert_eq!(
+            export_link(FileKind::Spreadsheet, ExportFormat::Ooxml, &links),
+            None
+        );
     }
 
     #[test]

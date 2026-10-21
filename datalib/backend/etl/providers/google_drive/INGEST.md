@@ -61,6 +61,24 @@ its own.
    (`exportSizeLimitExceeded`, over 10 MB) is the one exception: the
    capture is kept, its export part has no bytes, and a warning on the
    file says which format was declined.
+4. **Old revisions.** For every Doc and Sheet in this run's listing,
+   each stored revision with an export link for a format
+   `revision_exports` names is owed that export, until it is held
+   (`revision_exports`, held at no version, since a revision's content
+   does not change). Each export is two requests:
+   - the revision's `exportLinks` URL on `docs.google.com`, which
+     latchkey signs (≥ 3.19.2) and Drive answers with a `307`;
+   - the `Location` it names, a signed `googleusercontent.com` download,
+     fetched plain so the credential never follows it to another host
+     (`api::get_revision_export`).
+
+   A `404` means Drive no longer has that revision's content: the edge
+   is kept with no bytes and a warning, and not asked for again. A
+   deck's revisions are never fetched: its export link ignores
+   `revision=` and exports the deck as it is now. Measured on one deck,
+   revision 1 and the newest exported identical ODP, PPTX and PDF.
+   Docs and Sheets honour it: three revisions of a Doc and three of a
+   Sheet each came back different.
 
 Each run leaves a row in `sync_runs`: its config, its summary (`listed`, `owed`, `captured`, …) and what it changed in each table.
 
@@ -88,6 +106,7 @@ Drive's:
 | `comments` | `{file}#{comment}` | each thread with its replies inline, deleted ones marked `deleted` |
 | `captures` | `{file}#{version}` | one row per version captured: the listing's `modifiedTime`, the native JSON's own `revisionId` (Docs and Slides), and the newest Drive revision listed |
 | `capture_parts` | `{capture}#{part}` | a CAS edge per part: `native.json.gz`, `export.<ext>`, `image:<JSON pointer>` |
+| `revision_exports` | `{file}#{revision}#export.<ext>` | a CAS edge per old revision's export, NULL `blake3` for one Drive no longer has |
 
 Every table has its `_bookkeeping` sidecar. `files_bookkeeping.held_version`
 is the one held version in the store.
@@ -118,10 +137,9 @@ The exports are big because Google embeds the document's fonts in each.
 
 ## What it does not do
 
-- **No old revisions' contents.** Only the current version can be
-  exported or read natively. Old revisions export only from
-  `docs.google.com` links, which latchkey does not sign, so history
-  starts at the first capture.
+- **No native JSON before the first sync.** Google's native APIs read
+  only the current version, so a version from before the first sync is
+  kept only as its export, and a deck's not at all.
 - **No delta listing.** Drive's `changes` API is not used; the whole
   listing is read every run.
 - **Only native files.** Other Drive files (PDFs, images, uploaded

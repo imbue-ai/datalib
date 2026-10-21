@@ -529,12 +529,18 @@ no Add source form for it yet; add it to the config by hand, as in
 keeps it to the files you own, and `file_ids` to the ones you name.
 `exports` says which copies Drive converts each version to: `["odf"]`
 by default, `[]` for none (the native JSON is still kept), or a list per
-kind.
+kind. `revision_exports` takes the same values for the revisions
+Drive lists, which is how versions from before your first sync are kept:
+each Doc and Sheet revision is fetched once, as an export. A deck's
+revisions are not, since Google exports a deck as it is now whatever
+revision is asked for.
 
 The first sync fetches every file. A later one costs one listing
 request per thousand files, plus a few requests per file that changed.
 Each version kept costs its native JSON (tens of KB gzipped) plus
-1–4 MB per export, since Google embeds the fonts in each.
+1–4 MB per export, since Google embeds the fonts in each; so does each
+old revision's export. The first sync of a file with a long history
+fetches every revision.
 
 ## Google Takeout
 

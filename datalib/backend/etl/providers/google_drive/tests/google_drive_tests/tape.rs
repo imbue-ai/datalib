@@ -7,6 +7,9 @@
 //! - a Sheet shared with it read-only, so Drive lists no revisions;
 //! - a deck whose ODP export Google declines as too large.
 //!
+//! The Doc's revision 1 has an export link, which redirects to a signed
+//! download; its revision 29's link answers that Drive no longer has it.
+//!
 //! The listing spans two pages. [`Edition::After`] moves the Doc to a new
 //! version with a new comment, and lists the other two unchanged except
 //! for the fields Drive changes on every read.
@@ -145,6 +148,26 @@ pub const RIGEL_PNG: &[u8] = b"\x89PNG\r\n\x1a\n rigel vii";
 pub const DOC_ODT_BEFORE: &[u8] = b"PK\x03\x04 odt of the log at version 12";
 pub const DOC_ODT_AFTER: &[u8] = b"PK\x03\x04 odt of the log at version 13";
 pub const SHEET_ODS: &[u8] = b"PK\x03\x04 ods of the roster";
+pub const DECK_REV88_LINK: &str =
+    "https://docs.google.com/feeds/download/presentations/Export?id=1RikerBriefingDeck&revision=88&exportFormat=odp";
+pub const DOC_ODT_REV1: &[u8] = b"PK\x03\x04 odt of the log at revision 1";
+pub const DOC_ODT_REV41: &[u8] = b"PK\x03\x04 odt of the log at revision 41";
+
+/// A revision's export link, in the shape Drive gives it.
+pub fn doc_revision_link(revision: &str) -> String {
+    format!(
+        "https://docs.google.com/feeds/download/documents/export/Export?id={DOC}&revision={revision}&exportFormat=odt"
+    )
+}
+
+/// The link answers with a redirect to a signed download, which answers
+/// with the bytes.
+pub fn revision_export(root: &Path, link: &str, signed: &str, body: &[u8]) {
+    let mut moved = bytes(307, b"");
+    moved.headers.insert("location".into(), signed.into());
+    put(root, api::req_bytes(link), moved);
+    put(root, api::req_signed(signed), bytes(200, body));
+}
 
 pub fn doc_version(edition: Edition) -> u32 {
     match edition {
@@ -218,15 +241,37 @@ pub fn tape(dir: &Path, edition: Edition) -> PathBuf {
     let mut revisions = vec![
         json!({"kind": "drive#revision", "id": "1", "mimeType": api::kind_info(FileKind::Document).mime_type,
                "modifiedTime": "2026-09-01T08:00:00.000Z", "lastModifyingUser": picard(),
-               "exportLinks": {"application/vnd.oasis.opendocument.text":
-                   format!("https://docs.google.com/feeds/download/documents/export/Export?id={DOC}&revision=1&exportFormat=odt")}}),
+               "exportLinks": {"application/vnd.oasis.opendocument.text": doc_revision_link("1")}}),
         json!({"kind": "drive#revision", "id": "29", "mimeType": api::kind_info(FileKind::Document).mime_type,
-               "modifiedTime": "2026-10-02T09:00:00.000Z", "lastModifyingUser": picard()}),
+               "modifiedTime": "2026-10-02T09:00:00.000Z", "lastModifyingUser": picard(),
+               "exportLinks": {"application/vnd.oasis.opendocument.text": doc_revision_link("29")}}),
     ];
     if edition == Edition::After {
         revisions.push(json!({"kind": "drive#revision", "id": "41",
             "mimeType": api::kind_info(FileKind::Document).mime_type,
-            "modifiedTime": "2026-10-04T09:00:00.000Z", "lastModifyingUser": picard()}));
+            "modifiedTime": "2026-10-04T09:00:00.000Z", "lastModifyingUser": picard(),
+            "exportLinks": {"application/vnd.oasis.opendocument.text": doc_revision_link("41")}}));
+        revision_export(
+            &t,
+            &doc_revision_link("41"),
+            "https://doc-0c-docstext.googleusercontent.test/export/log-rev41",
+            DOC_ODT_REV41,
+        );
+    } else {
+        // Drive lists revision 29 but no longer has its content.
+        put(
+            &t,
+            api::req_bytes(&doc_revision_link("29")),
+            bytes(404, br#"{"error": {"code": 404, "message": "Not Found"}}"#),
+        );
+        // Revision 1's export is on the first tape only: once held it is
+        // never asked for again, so a later sync that did would miss.
+        revision_export(
+            &t,
+            &doc_revision_link("1"),
+            "https://doc-0c-docstext.googleusercontent.test/export/log-rev1",
+            DOC_ODT_REV1,
+        );
     }
     // The revision list comes over two pages, to walk the page token.
     let (first, rest) = revisions.split_at(1);
@@ -248,7 +293,7 @@ pub fn tape(dir: &Path, edition: Edition) -> PathBuf {
     );
     put(
         &t,
-        api::req_image("https://docs.google.com/docs-images-rt/enterprise-d"),
+        api::req_signed("https://docs.google.com/docs-images-rt/enterprise-d"),
         bytes(200, ENTERPRISE_PNG),
     );
     let (odt, _) = api::export_type(FileKind::Document, ExportFormat::Odf);
@@ -289,8 +334,11 @@ pub fn tape(dir: &Path, edition: Edition) -> PathBuf {
             api::req_json(&api::revisions_url(DECK, None)),
             json_response(&json!({"kind": "drive#revisionList", "revisions": [
                 {"kind": "drive#revision", "id": "88", "modifiedTime": "2026-10-11T09:00:00.000Z",
-                 "lastModifyingUser": picard()}]})),
+                 "lastModifyingUser": picard(),
+                 "exportLinks": {"application/vnd.oasis.opendocument.presentation": DECK_REV88_LINK}}]})),
         );
+        // The deck's revision has a link, but nothing answers it: a
+        // deck's links ignore the revision, so none is ever asked for.
         put(
             &t,
             api::req_json(&api::comments_url(DECK, None)),
@@ -303,7 +351,7 @@ pub fn tape(dir: &Path, edition: Edition) -> PathBuf {
         );
         put(
             &t,
-            api::req_image("https://docs.google.com/slides-images-rt/rigel-vii"),
+            api::req_signed("https://docs.google.com/slides-images-rt/rigel-vii"),
             bytes(200, RIGEL_PNG),
         );
         let (odp, _) = api::export_type(FileKind::Presentation, ExportFormat::Odf);

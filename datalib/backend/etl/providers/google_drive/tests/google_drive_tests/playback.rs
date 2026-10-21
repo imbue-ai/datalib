@@ -20,6 +20,7 @@ pub const TABLES: &[&str] = &[
     "comments",
     "captures",
     "capture_parts",
+    "revision_exports",
 ];
 
 pub async fn run(playback: &Path, store: &Path) -> FetchSummary {
@@ -215,6 +216,34 @@ async fn a_first_sync_captures_every_file_in_its_native_form() {
             (DECK.to_string(), Some("30".to_string())),
         ]
     );
+
+    // Old revisions: revision 1's export came by way of its redirect;
+    // revision 29 is listed but gone, kept as an edge with no bytes and a
+    // warning; the deck's revision is not asked for, as a deck's links
+    // ignore the revision.
+    assert_eq!(
+        (s.revision_exports, s.revision_exports_gone),
+        (1, 1),
+        "{s:?}"
+    );
+    let exports: Vec<(String, Option<String>)> =
+        sqlx::query_as("SELECT id, blake3 FROM revision_exports ORDER BY id")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+    assert_eq!(exports.len(), 2, "{exports:?}");
+    assert_eq!(exports[0].0, format!("{DOC}#1#export.odt"));
+    assert_eq!(
+        blob(&db, exports[0].1.as_deref().unwrap()).await,
+        tape::DOC_ODT_REV1
+    );
+    assert_eq!(exports[1], (format!("{DOC}#29#export.odt"), None));
+    let gone: String = sqlx::query_scalar("SELECT severity FROM problems WHERE scope_key = ?")
+        .bind(format!("revision_exports:{DOC}#29#export.odt"))
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    assert_eq!(gone, "warning");
     db.close().await;
 }
 
@@ -290,6 +319,13 @@ async fn a_new_version_is_captured_beside_the_old_one() {
     run(&tape::tape(d.path(), Edition::Before), &store).await;
     let s = run(&tape::tape(d.path(), Edition::After), &store).await;
     assert_eq!((s.owed, s.captured, s.failed), (1, 1, 0), "{s:?}");
+    // Only the new revision's export is fetched: revision 1's is held,
+    // and the second tape could not answer for it.
+    assert_eq!(
+        (s.revision_exports, s.revision_exports_gone),
+        (1, 0),
+        "{s:?}"
+    );
 
     let db = open(&store).await;
     let captures: Vec<(String, Option<String>)> = sqlx::query_as(
@@ -327,6 +363,13 @@ async fn a_new_version_is_captured_beside_the_old_one() {
         .await,
         3
     );
+    let rev41: String = sqlx::query_scalar(
+        "SELECT blake3 FROM revision_exports WHERE id = '1PicardLogSupplemental#41#export.odt'",
+    )
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+    assert_eq!(blob(&db, &rev41).await, tape::DOC_ODT_REV41);
     db.close().await;
 }
 

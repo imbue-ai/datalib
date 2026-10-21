@@ -1,7 +1,7 @@
-//! Doltlite-backed raw store for the `google_drive` provider, and the one
-//! write a capture makes.
+//! Doltlite-backed raw store for the `google_drive` provider, and the
+//! writes a capture and a revision export make.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde_json::Value;
 use sqlx::{Sqlite, Transaction};
 
@@ -11,8 +11,8 @@ use datalib_etl::doltlite_raw as dr;
 use datalib_time::IsoOffsetTimestamp;
 
 use super::schema_raw::{
-    full_ddl, CapturePartRow, CaptureRow, CommentRow, FileRow, RevisionRow, CAPTURES, COMMENTS,
-    FILES, LADDER, REVISIONS,
+    full_ddl, CapturePartRow, CaptureRow, CommentRow, FileRow, RevisionExportRow, RevisionRow,
+    CAPTURES, COMMENTS, FILES, LADDER, REVISIONS,
 };
 
 pub use datalib_etl::doltlite_raw::db_path_for;
@@ -99,6 +99,86 @@ pub async fn store_captures(
     let rows: Vec<&Split<CaptureRow>> = captures.iter().map(|c| &c.row).collect();
     upsert_split(tx, CAPTURES, &rows, &now).await?;
     bulk_upsert_in_tx(tx, &edges, &now).await
+}
+
+/// A stored revision, with the `exportLinks` Drive gave for it (JSON
+/// `null` when it gave none).
+#[derive(Debug, Clone)]
+pub struct StoredRevision {
+    pub id: String,
+    pub file_id: String,
+    pub export_links: Value,
+}
+
+impl RawDb {
+    /// Every stored revision of every file whose listing entry has
+    /// `mime_type`, oldest file id first.
+    pub async fn revisions_of_kind(&self, mime_type: &str) -> Result<Vec<StoredRevision>> {
+        let rows: Vec<(String, String, Option<String>)> = sqlx::query_as(
+            "SELECT r.id, r.file_id, json_extract(r.payload, '$.exportLinks') \
+             FROM revisions r JOIN files f ON f.id = r.file_id \
+             WHERE json_extract(f.payload, '$.mimeType') = ? ORDER BY r.id",
+        )
+        .bind(mime_type)
+        .fetch_all(self.pool())
+        .await
+        .context("read the stored revisions")?;
+        rows.into_iter()
+            .map(|(id, file_id, links)| {
+                let export_links = match links {
+                    Some(text) => serde_json::from_str(&text)
+                        .with_context(|| format!("exportLinks of revision {id}"))?,
+                    None => Value::Null,
+                };
+                Ok(StoredRevision {
+                    id,
+                    file_id,
+                    export_links,
+                })
+            })
+            .collect()
+    }
+}
+
+/// One revision export as fetched: its edge's id and its bytes, or
+/// `None` for a revision Drive no longer has the content of.
+#[derive(Debug, Clone)]
+pub struct RevisionExport {
+    pub id: String,
+    pub revision_id: String,
+    pub part: String,
+    pub content_type: String,
+    pub bytes: Option<Vec<u8>>,
+}
+
+/// Write a flush of revision exports: the bytes into the CAS, which
+/// commits on its own, then their edges.
+pub async fn store_revision_exports(
+    tx: &mut Transaction<'static, Sqlite>,
+    cas: &BlobCas,
+    exports: &[&RevisionExport],
+) -> Result<()> {
+    let inserts: Vec<CasInsert<'_, String>> = exports
+        .iter()
+        .filter_map(|e| {
+            Some(CasInsert {
+                id: e.id.clone(),
+                bytes: e.bytes.as_deref()?,
+                content_type: Some(e.content_type.as_str()),
+            })
+        })
+        .collect();
+    let stored = cas.put_many(inserts).await?;
+    let edges: Vec<RevisionExportRow> = exports
+        .iter()
+        .map(|e| RevisionExportRow {
+            id: e.id.clone(),
+            revision_id: e.revision_id.clone(),
+            part: e.part.clone(),
+            blake3: stored.get(&e.id).cloned(),
+        })
+        .collect();
+    bulk_upsert_in_tx(tx, &edges, &IsoOffsetTimestamp::now_local()).await
 }
 
 /// Upsert the rows, then put each one's volatile half in its sidecar,
