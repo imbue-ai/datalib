@@ -39,6 +39,7 @@ rust_binary(
         "@datalib_crates//:anyhow",
         "@datalib_crates//:axum",
         "@datalib_crates//:chrono",
+        "//datalib/backend/cli_help:datalib_cli_help",
         "@datalib_crates//:clap",
         "@datalib_crates//:mime_guess",
         "@datalib_crates//:serde",

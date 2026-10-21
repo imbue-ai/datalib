@@ -29,6 +29,7 @@ use sqlx::{Sqlite, Transaction};
 use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw::{self as dr, WirePayload};
 use datalib_etl::download_problems::DownloadProblem;
+use datalib_etl::download_run::DownloadRun;
 use datalib_etl::progress::Progress;
 use datalib_etl::raw_store::Sealer;
 use datalib_etl::run_problems::{self, RunProblems};
@@ -50,7 +51,7 @@ pub struct FetchOptions {
     pub sealer: Option<Sealer>,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, serde::Serialize)]
 pub struct FetchSummary {
     pub listed: usize,
     pub owed: usize,
@@ -86,10 +87,23 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     run_problems::collecting_sealed(&pool, &stop, sealer.as_ref(), |found| walk(opts, found)).await
 }
 
+/// The run's own record in `sync_runs`: its config, its summary, and what
+/// it changed in each table, so a run that fetched nothing says so.
 async fn walk(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
+    let run = DownloadRun::start(opts.db.pool(), &serde_json::to_value(&opts.api)?).await?;
     let mut summary = FetchSummary::default();
+    let result = walk_files(&opts, &found, &mut summary).await;
+    run.finish(&result, &summary).await;
+    result.map(|()| summary)
+}
+
+async fn walk_files(
+    opts: &FetchOptions,
+    found: &RunProblems,
+    summary: &mut FetchSummary,
+) -> Result<()> {
     opts.progress.set_message("google_drive: listing files");
-    let entries = list(&opts, &found).await?;
+    let entries = list(opts, found).await?;
     summary.listed = entries.len();
 
     let mut by_kind: HashMap<FileKind, Vec<Value>> = HashMap::new();
@@ -140,7 +154,7 @@ async fn walk(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
                 table: FILES,
                 phase: info.latchkey_service,
                 stop: &opts.control.stop,
-                found: &found,
+                found,
                 sealer: opts.sealer.as_ref(),
                 batch: 1,
                 concurrency: 4,
@@ -159,7 +173,7 @@ async fn walk(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
         summary.exports_declined += captures.exports_declined.load(Ordering::Relaxed);
         summary.images += captures.images.load(Ordering::Relaxed);
     }
-    Ok(summary)
+    Ok(())
 }
 
 /// Every file the config asks for, as Drive's listing entry. A listing

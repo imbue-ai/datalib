@@ -7,6 +7,20 @@ use std::path::PathBuf;
 use datalib_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
 
+/// This source's config stanzas, for `datalib-step help`.
+pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "backup",
+        toml: include_str!("../examples/minimal_backup.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "backup",
+        toml: include_str!("../examples/complete_backup.toml"),
+    },
+];
+
 /// Tables folded out by [`WhatsappConfig::skip_churn`]. `props` is the
 /// app's own key/value settings, which WhatsApp rewrites (and renumbers)
 /// between backups; `backup_changes` is its "what changed since the last
@@ -19,25 +33,26 @@ pub const CHURN_TABLE_PATTERNS: &[&str] = &["props", "backup_changes", "frequent
 /// decrypt+mirror path) is its one way in; an `ingest` step without it is
 /// refused (`IngestMethods` below). The rest are the mirror engine's
 /// knobs, the same ones `apple_photos` exposes.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct WhatsappConfig {
-    /// Shared per-source envelope (paths + cross-source tunables), resolved by
-    /// the orchestrator's `normalize()`.
+    /// The options every source takes, whatever its method.
     pub common: SourceCommon,
     pub backup: Option<WhatsAppSync>,
 
     /// Table-name globs to mirror. Default `["*"]` — every table in
     /// msgstore. `*` and `?` are the only metacharacters.
     pub include_tables: Vec<String>,
-    /// Table-name globs to skip, applied after [`Self::include_tables`].
+    /// Table-name globs to skip, applied after `include_tables`.
     pub exclude_tables: Vec<String>,
     /// `Table.column` globs to drop from the mirror.
     pub exclude_columns: Vec<String>,
-    /// Fold [`CHURN_TABLE_PATTERNS`] into the exclusions. On by default:
-    /// with it off, a backup nobody messaged in still commits every run.
+    /// Also skip `props`, `backup_changes` and `frequent`, which WhatsApp
+    /// rewrites on every backup. On by default: with it off, a backup
+    /// nobody messaged in still records a change every run.
     pub skip_churn: bool,
-    /// Collect unreachable chunks (`dolt_gc()`) at the start of each run.
+    /// Reclaim the store's unused space (`dolt_gc()`) at the start of
+    /// each run.
     pub gc: bool,
 }
 
@@ -78,7 +93,7 @@ impl WhatsappConfig {
 /// plaintext attachments). The 32-byte root key is hex-encoded in the
 /// env var named by `key_env_var` (defaults to
 /// `WHATSAPP_BACKUP_DECRYPTION_KEY`).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WhatsAppSync {
     /// Directory containing `Databases/msgstore.db.crypt15` and the

@@ -58,6 +58,8 @@ its own.
    capture is kept, its export part has no bytes, and a warning on the
    file says which format was declined.
 
+Each run leaves a row in `sync_runs`: its config, its summary (`listed`, `owed`, `captured`, …) and what it changed in each table.
+
 **A second run** with nothing edited costs the listing alone: one request
 per 1,000 files. Measured on 2026-10-21, on 4 real files (a Doc, a
 Sheet, a deck and a Doc shared with the account): the first run made 4

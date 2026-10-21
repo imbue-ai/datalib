@@ -5,12 +5,26 @@
 use datalib_source_common::{LatchkeySettings, SourceCommon};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// This source's config stanzas, for `datalib-step help`.
+pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "api",
+        toml: include_str!("../examples/minimal_api.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "api",
+        toml: include_str!("../examples/complete_api.toml"),
+    },
+];
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LinearConfig {
     #[serde(default)]
     pub common: SourceCommon,
-    /// Which latchkey identity this source mirrors.
+    /// Which stored latchkey account this source signs in as.
     #[serde(default)]
     pub latchkey_settings: LatchkeySettings,
     /// Linear's GraphQL API, the one way in.
@@ -31,7 +45,7 @@ impl LinearConfig {
 /// workspace. Otherwise an issue is mirrored when its team is named in
 /// `teams` **or** its project in `projects`; most issues belong to no
 /// project, so a list of projects alone leaves them out.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LinearSync {
     /// Teams, by key (`ENG`, matched without regard to case) or by name.

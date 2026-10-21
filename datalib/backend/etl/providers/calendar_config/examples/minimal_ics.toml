@@ -1,0 +1,18 @@
+# A folder of `.ics` files on disk: Google Takeout's `Calendar/` folder,
+# or an export from Apple Calendar. Each file is one calendar. No sign-in.
+[[groups]]
+id = "calendar"
+name = "Calendar export"
+type = "calendar"
+
+[[steps]]
+group = "calendar"
+function = "ingest"
+
+[steps.params.ics]
+path = "~/Downloads/calendar-export"
+
+[[steps]]
+group = "calendar"
+function = "render_markdown"
+inputs = ["calendar/ingest"]

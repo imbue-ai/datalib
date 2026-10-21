@@ -1,0 +1,18 @@
+# LinkedIn's "Get a copy of your data" export, unzipped: the folder of CSVs.
+# No sign-in; request the export under Settings & Privacy → Data privacy.
+[[groups]]
+id = "linkedin"
+name = "LinkedIn"
+type = "linkedin"
+
+[[steps]]
+group = "linkedin"
+function = "ingest"
+
+[steps.params.export]
+path = "~/Downloads/linkedin-export"
+
+[[steps]]
+group = "linkedin"
+function = "render_markdown"
+inputs = ["linkedin/ingest"]

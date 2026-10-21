@@ -167,6 +167,7 @@ done
 [ -n "${installed}" ] || err "no binaries found in tarball"
 
 say "unpacked into ${LIB_DIR}"
+say "setting it up? start with \`datalib-step help\` (the agent guide: ${LIB_DIR}/docs/agent_user.md)"
 say "linked:${installed} -> ${INSTALL_DIR}"
 if [ -f "${LIB_DIR}/runtime.manifest" ]; then
     say "the Node runtime for qmd and latchkey is fetched on first use (once per release,"

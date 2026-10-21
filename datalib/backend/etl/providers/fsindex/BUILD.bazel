@@ -61,6 +61,7 @@ rust_binary(
         "//datalib/backend/obs:datalib_obs",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
+        "//datalib/backend/cli_help:datalib_cli_help",
         "@datalib_crates//:clap",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",

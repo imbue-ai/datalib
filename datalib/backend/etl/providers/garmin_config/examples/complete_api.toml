@@ -1,0 +1,60 @@
+# Garmin Connect over the API the Connect phone app uses, signed in through
+# latchkey's Garmin plugin (`latchkey auth browser garmin`), with every
+# option set, and keyword-searchable.
+[[groups]]
+id = "garmin"
+name = "Garmin Connect"
+type = "garmin"
+
+[[steps]]
+group = "garmin"
+function = "ingest"
+
+# When to give up on rate limits. The download always backs off and
+# retries; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "picard@example.com"
+
+# Quote the dates: a bare 2024-01-01 is a TOML date, not the string
+# this source checks.
+[steps.params.api]
+since = "2024-01-01"       # earliest day to mirror; default a year before the first run.
+                           # Move it earlier to backfill
+until = "2025-12-31"       # last day to mirror; default today. A past day fixes the
+                           # window, so the mirror stops growing: omit it to keep up
+refresh_days = 7           # days after a day ends that every run fetches it again
+                           # (late watch syncs, recomputed sleep); default 7
+metrics = ["daily_summary", "heart_rate", "sleep", "stress", "body_battery", "hrv"]
+                           # which per-day metrics to mirror; default all twenty.
+                           # An unknown name is refused with the full list
+activity_files = true      # each activity's original FIT file, into the blob store; default true
+wellness_files = false     # each day's wellness FIT bundle (one zip a day, sensor
+                           # resolution); default false
+
+# The weigh-ins and devices, a page per family of daily metrics, a daily
+# log with a row per day, a page per activity, and the personal records,
+# badges, gear, workouts and goals. No options.
+[[steps]]
+group = "garmin"
+function = "render_markdown"
+inputs = ["garmin/ingest"]
+
+# Its numbers as time series, for charts and the time-series index: add
+# `garmin/render_time_series` to `unified_time_series_index/time_series_index`'s inputs.
+[[steps]]
+group = "garmin"
+function = "render_time_series"
+inputs = ["garmin/ingest"]
+
+# Free-text search by keyword (BM25). Add it to
+# `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "garmin"
+function = "keyword_index"
+inputs = ["garmin/render_markdown"]

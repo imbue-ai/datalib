@@ -98,6 +98,17 @@ Reach for the simplest existing provider that's shaped like yours,
    refused, the Manage row reads "Download" or "Import" from it, and
    `bazel run //datalib/backend/datalib_step:ingest_methods.update`
    regenerates the UI's copy.
+   Give the config crate its examples too: a
+   `examples/minimal_<method>.toml` and `examples/complete_<method>.toml`
+   per method, listed in the crate's `EXAMPLES` (copy
+   `slack_config`'s), with `schemars::JsonSchema` derived on its
+   structs, and an arm for the type in
+   [`datalib_step/src/source_docs.rs`](../../datalib/backend/datalib_step/src/source_docs.rs).
+   `datalib-step help <name>` prints them, and that file's test loads
+   and plans each one and fails for an option of the method's table
+   that no complete stanza sets. The field docs are what `datalib-step
+   help <name> <method>` prints, so write them for a person filling in
+   a config.
 6. Write `providers/<name>/INGEST.md`, and
    `providers/<name>_render/TRANSLATE.md` too if the provider has a
    render side. See

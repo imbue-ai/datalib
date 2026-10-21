@@ -5,9 +5,23 @@
 use datalib_source_common::{byte_size, LocalPath, SourceCommon};
 use serde::{Deserialize, Serialize};
 
+/// This source's config stanzas, for `datalib-step help`.
+pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "fswalk",
+        toml: include_str!("../examples/minimal_fswalk.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "fswalk",
+        toml: include_str!("../examples/complete_fswalk.toml"),
+    },
+];
+
 /// The media-owned slice of a `media` source. The scan root is
 /// `fswalk.path`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MediaConfig {
     /// Shared per-source envelope (paths + cross-source tunables),
@@ -29,6 +43,7 @@ pub struct MediaConfig {
     /// Skip files larger than this entirely — no row at all. Bytes, or
     /// a string like `"4 GB"`.
     #[serde(default, deserialize_with = "byte_size::deserialize_opt")]
+    #[schemars(with = "Option<byte_size::ByteSize>")]
     pub max_bytes: Option<u64>,
 
     /// Give up on the metadata-excluding payload hash above this size,
@@ -37,6 +52,7 @@ pub struct MediaConfig {
         default = "default_payload_max_bytes",
         deserialize_with = "byte_size::deserialize_opt"
     )]
+    #[schemars(with = "Option<byte_size::ByteSize>")]
     pub payload_max_bytes: Option<u64>,
 
     /// Index `.m3u` / `.m3u8` playlists found in the tree.

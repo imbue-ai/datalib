@@ -1,0 +1,22 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# The examples every shipped binary's `--help` ends with, and the check
+# that each one still parses (docs/dev/plans/agent_help.md).
+rust_library(
+    name = "datalib_cli_help",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_cli_help",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "@datalib_crates//:clap",
+        "@datalib_crates//:shlex",
+    ],
+)
+
+rust_test(
+    name = "datalib_cli_help_unittests",
+    size = "small",
+    crate = ":datalib_cli_help",
+    edition = "2021",
+)

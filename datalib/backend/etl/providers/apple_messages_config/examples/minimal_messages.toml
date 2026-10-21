@@ -1,0 +1,19 @@
+# The Messages app's own database (`chat.db`) on this Mac, mirrored table for
+# table, every chat rendered as a page a month. No sign-in. macOS protects
+# `~/Library/Messages`: the terminal running the sync needs Full Disk Access.
+[[groups]]
+id = "apple_messages"
+name = "Apple Messages"
+type = "apple_messages"
+
+[[steps]]
+group = "apple_messages"
+function = "ingest"
+
+[steps.params.messages]
+path = "~/Library/Messages"
+
+[[steps]]
+group = "apple_messages"
+function = "render_markdown"
+inputs = ["apple_messages/ingest"]

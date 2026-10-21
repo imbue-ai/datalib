@@ -5,10 +5,24 @@
 use datalib_source_common::{LocalPath, SourceCommon};
 use serde::{Deserialize, Serialize};
 
+/// This source's config stanzas, for `datalib-step help`.
+pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "backup",
+        toml: include_str!("../examples/minimal_backup.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "backup",
+        toml: include_str!("../examples/complete_backup.toml"),
+    },
+];
+
 /// The sms_backup_restore-owned slice of an `sms_backup_restore` source.
 /// `backup` — the app's XML export, or a directory of them — is its one
 /// way in, and its only knob.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SmsBackupRestoreConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by

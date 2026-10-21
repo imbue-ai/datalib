@@ -10,21 +10,46 @@
 use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
+use clap::Parser;
+use datalib_cli_help::Example;
 
-const USAGE: &str = "\
-usage: datalib-migrate-config <data-root|config.toml> [-o OUT] [--stdout] [--force]
+const EXAMPLES: &[Example] = &[
+    Example {
+        what: "rewrite a data root's config in place, keeping the original as config.toml.orig",
+        command: "datalib-migrate-config ~/datalib --force",
+    },
+    Example {
+        what: "print the rewrite and write nothing",
+        command: "datalib-migrate-config ~/datalib/config.toml --stdout",
+    },
+];
 
-  <data-root|config.toml>  A data root (its config.toml is used) or the
-                           config file itself.
-  -o, --output OUT         Write here instead of <input dir>/config.toml.
-  --stdout                 Print the converted config; write nothing.
-  --force                  Overwrite the output file if it exists. Rewriting
-                           a config in place keeps the original beside it as
-                           config.toml.orig.
-  -h, --help               Show this message.";
+#[derive(Parser)]
+#[command(
+    name = "datalib-migrate-config",
+    bin_name = "datalib-migrate-config",
+    about = "Rewrite a config.toml from a shape the runner no longer accepts into the one it does.",
+    after_help = datalib_cli_help::render(EXAMPLES)
+)]
+struct Cli {
+    /// A data root (its config.toml is used) or the config file itself.
+    #[arg(value_name = "DATA_ROOT|CONFIG")]
+    input: PathBuf,
+    /// Write here instead of <input dir>/config.toml.
+    #[arg(short, long, value_name = "OUT", conflicts_with = "stdout")]
+    output: Option<PathBuf>,
+    /// Print the converted config; write nothing.
+    #[arg(long)]
+    stdout: bool,
+    /// Overwrite the output file if it exists. Rewriting a config in place
+    /// keeps the original beside it as config.toml.orig.
+    #[arg(long)]
+    force: bool,
+}
 
 fn main() -> Result<()> {
-    if let Err(e) = run() {
+    let cli = Cli::parse();
+    if let Err(e) = run(cli) {
         // A migration failure is a dead end for the user, not a panic:
         // report it plainly on stderr and exit non-zero.
         eprintln!("datalib-migrate-config: {e:#}");
@@ -33,34 +58,13 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn run() -> Result<()> {
-    let mut input: Option<PathBuf> = None;
-    let mut output: Option<PathBuf> = None;
-    let mut to_stdout = false;
-    let mut force = false;
-
-    let mut args = std::env::args().skip(1);
-    while let Some(a) = args.next() {
-        match a.as_str() {
-            "-o" | "--output" => {
-                output = Some(PathBuf::from(args.next().context("-o needs a value")?))
-            }
-            "--stdout" => to_stdout = true,
-            "--force" => force = true,
-            "-h" | "--help" => {
-                println!("{USAGE}");
-                return Ok(());
-            }
-            _ if input.is_none() => input = Some(PathBuf::from(a)),
-            other => bail!("unexpected argument {other:?}\n\n{USAGE}"),
-        }
-    }
-    let Some(arg) = input else {
-        bail!("no input given\n\n{USAGE}");
-    };
-    if to_stdout && output.is_some() {
-        bail!("--stdout and -o are mutually exclusive");
-    }
+fn run(cli: Cli) -> Result<()> {
+    let Cli {
+        input: arg,
+        output,
+        stdout: to_stdout,
+        force,
+    } = cli;
 
     let input = datalib_migrate_config::resolve_input(&arg);
     if !input.exists() {
@@ -113,5 +117,16 @@ fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
     match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
         (Ok(a), Ok(b)) => a == b,
         _ => a == b,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::CommandFactory;
+
+    #[test]
+    fn the_help_examples_parse() {
+        super::Cli::command().debug_assert();
+        datalib_cli_help::assert_examples_parse(super::Cli::command(), super::EXAMPLES);
     }
 }

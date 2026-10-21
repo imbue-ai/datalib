@@ -1,0 +1,18 @@
+# Codex CLI threads, read off the rollouts Codex keeps on this machine. No
+# sign-in: an empty `sessions` table reads the standard Codex home,
+# ~/.codex (its sessions/ and archived_sessions/ folders).
+[[groups]]
+id = "codex"
+name = "Codex"
+type = "codex"
+
+[[steps]]
+group = "codex"
+function = "ingest"
+
+[steps.params.sessions]
+
+[[steps]]
+group = "codex"
+function = "render_markdown"
+inputs = ["codex/ingest"]

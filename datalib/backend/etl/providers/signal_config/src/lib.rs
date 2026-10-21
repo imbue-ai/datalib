@@ -7,10 +7,24 @@ use std::path::PathBuf;
 use datalib_source_common::{RenderCommon, SourceCommon};
 use serde::{Deserialize, Serialize};
 
+/// This source's config stanzas, for `datalib-step help`.
+pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "backup",
+        toml: include_str!("../examples/minimal_backup.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "backup",
+        toml: include_str!("../examples/complete_backup.toml"),
+    },
+];
+
 /// The signal-owned slice of a `signal` source. `backup` (decrypt every
 /// snapshot under its `path`) is its one way in; an `ingest`
 /// step without it is refused (`IngestMethods` below).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SignalConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by
@@ -30,14 +44,13 @@ impl SignalConfig {
 /// Params for the signal **render** step. Split from [`SignalConfig`]
 /// (the download-step params) so each step's params carry only what
 /// that wave reads.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SignalRenderConfig {
     #[serde(default)]
     pub common: RenderCommon,
-    /// Period-bucketing knob for the rendered markdown tree —
-    /// `month` (default), `day`, `year`, or `all`. Shared across
-    /// every chat provider via `datalib_etl::periodize::Period`.
+    /// How much time each rendered document spans — `month` (default),
+    /// `day`, `year`, or `all`. Every chat source offers the same choice.
     #[serde(default)]
     pub period: Option<String>,
 }
@@ -47,23 +60,24 @@ pub struct SignalRenderConfig {
 /// each with the AEP read from `$aep_env_var` at download time, one
 /// commit per snapshot. No network; no credentials in this struct — the secret
 /// lives in the user's shell (or .envrc.private).
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SignalSync {
     /// Directory containing one or more `signal-backup-*` snapshot
-    /// subdirs (Signal Android's "Save backup" target). Each is a
-    /// commit, and HEAD ends on the newest.
+    /// subdirs (Signal Android's "Save backup" target). Each snapshot is
+    /// kept as one version of the store, and the newest is the current one.
     pub path: PathBuf,
-    /// Env var holding the AEP (Account Entropy Pool). Defaults to
-    /// `SIGNAL_BACKUP_PASSPHRASE` when omitted. Overridable so a multi-account
-    /// setup can scope per-account secrets at the shell layer.
+    /// The environment variable holding the backup passphrase (Signal's
+    /// AEP, Account Entropy Pool); `SIGNAL_BACKUP_PASSPHRASE` when omitted.
+    /// Name a different one per source to keep two accounts' passphrases apart.
     #[serde(default)]
     pub aep_env_var: Option<String>,
-    /// Legacy location of the render period — the knob now lives on
-    /// the render step's params ([`SignalRenderConfig::period`]).
-    /// Still parsed here so old-format configs migrate losslessly;
-    /// the download planner rejects it with a pointer to the new home.
+    /// Where `period` used to go. It now belongs on the render step's
+    /// params; an older config that still sets it here loads, and the
+    /// ingest step refuses it with a pointer to the render step. Out of
+    /// the schema, so `datalib-step help` does not offer it.
     #[serde(default)]
+    #[schemars(skip)]
     pub period: Option<String>,
 }
 

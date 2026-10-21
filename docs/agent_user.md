@@ -7,6 +7,14 @@ touch — config, sync, querying, extending — and points to the deeper
 docs for each. It is about *using* datalib; for working on the datalib
 codebase itself, see [`AGENTS.md`](../AGENTS.md).
 
+From a shell, **`datalib-step help`** is the map: the steps from an
+empty directory to a first sync, each with its command, and
+`datalib-step help <type>` (what a source mirrors, how it signs in, its
+ingest methods) and `datalib-step help <function>` (what a step does
+and how to run it) from there. `datalib-step help agent` prints this
+guide, which a release also carries beside its binaries as
+`docs/agent_user.md`. Every binary's `--help` ends with examples.
+
 The human-facing guides are worth reading first, and worth pointing the
 user at: the [first-time user guide](user/first_time_user.md) is the
 walkthrough from install to first sync, with the warnings about what a
@@ -115,9 +123,18 @@ datalib-dag --check <data_root>/config.toml   # validate, run nothing
 `--check` prints *every* problem with the config rather than the first,
 as `file:line:col: severity: message` with the offending line and a
 `help:` line under each — so fixing a config takes one round-trip, not
-one per typo. Exit 0 when every entry loads, 1 if the file is not a
-config at all (or the root was written by a newer datalib), 2 if some
-entries were dropped.
+one per typo. It also has `datalib-step` plan every built-in step's
+params, so a misspelled or misplaced option is reported at its line
+before a sync rather than when the step runs. Exit 0 when every entry
+loads and every step's params plan, 1 if the file is not a config at
+all (or the root was written by a newer datalib), 2 if some entries
+were dropped or some step's params would be refused.
+
+Each source's config stanza, ready to append, comes from `datalib-step
+help <type> --example minimal --id <group>` (or `--example complete`,
+every option set), and `datalib-step help <type> <method>` lists every
+option with its type, default and meaning. Both are read from the
+source's own config crate, and a test loads and plans every stanza.
 
 Useful flags: `--sync <step-id>` (repeatable; runs the named steps and
 everything downstream of them, and nothing else — pending work in other
@@ -131,6 +148,17 @@ cannot be reached from by adding columns" is a raw store an older build
 wrote in a shape this one cannot keep; nothing was changed, and if
 upstream still has the data, `--reset <source>/ingest --sync
 <source>/ingest` is the way through.
+
+**To run one step, `--sync` it** — never run `datalib-step` for it by
+hand. The runner is what sets the step's environment, takes the root's
+lock and records the version the step published, which is how the steps
+that read it learn it moved; a step run by hand records nothing. An
+ingest step always runs when synced; any other runs only if what it
+reads moved, so to rebuild a source's documents from what is already
+downloaded, reset its render step in the same command:
+`datalib-dag <config> --reset slack/render_markdown --sync
+slack/render_markdown`. `datalib-step help <function>` gives the
+command for each kind of step.
 
 **The stderr stream is NDJSON and made for you**: `run_plan` (every step's
 id and group, in topo order), then `step_start` / `progress_*` / `log` / `hint` /

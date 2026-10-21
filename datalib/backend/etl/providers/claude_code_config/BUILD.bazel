@@ -5,10 +5,12 @@ load("@rules_rust//rust:defs.bzl", "rust_library")
 rust_library(
     name = "datalib_etl_claude_code_config",
     srcs = glob(["src/**/*.rs"]),
+    compile_data = glob(["examples/*.toml"]),
     crate_name = "datalib_etl_claude_code_config",
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "//datalib/backend/etl/agent_sessions_config:datalib_etl_agent_sessions_config",
+        "//datalib/backend/source_common:datalib_source_common",
     ],
 )

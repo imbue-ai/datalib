@@ -1,0 +1,44 @@
+# An Apple Photos library's database (`database/Photos.sqlite`) mirrored table
+# for table, with every option set. No sign-in. macOS protects the library:
+# the terminal running the sync needs Full Disk Access.
+[[groups]]
+id = "apple_photos"
+name = "Apple Photos"
+type = "apple_photos"
+
+[[steps]]
+group = "apple_photos"
+function = "ingest"
+
+# Which tables and columns to mirror. Globs: `*` and `?` only.
+[steps.params]
+include_tables = ["*"]                          # the default: every table
+exclude_tables = ["ZCLOUD*"]                    # skip these, after include_tables; default none
+exclude_columns = ["ZASSET.*HIGHLIGHTBEING*"]   # `Table.column` globs left out entirely; default none
+skip_history = true  # leave out Core Data's change log, the daemons' work queue and
+                     # counters, and every row's `Z_OPT`, which Photos rewrites
+                     # constantly; with it off every run commits; default true
+# Photos keys its tables on `Z_PK`, a rowid it renumbers on a library repair;
+# `ZUUID` is the stable id beside it. A table with one of these columns is
+# keyed on it when it is unique on every row; [] keys every table on what it
+# declares. Default ["ZUUID"].
+stable_key_columns = ["ZUUID"]
+# Pin a table's key yourself, `table = [columns]`; an empty list mirrors the
+# table with no key. Default none.
+primary_keys = { ZDETECTEDFACE = ["Z_PK"] }
+snapshot = true      # read a `VACUUM INTO` copy, not the live file Photos keeps
+                     # open; default true
+gc = false           # collect unreachable chunks each run: a smaller store,
+                     # history kept, but it rewrites the store; default false
+
+# The `.photoslibrary` bundle, or its `database/Photos.sqlite` directly.
+[steps.params.library]
+path = "~/Pictures/Photos Library.photoslibrary"
+
+# Apple Photos renders no documents: query the raw store with
+# `datalib-doltlite`. This step writes the storage report every source
+# gets, which is what puts Apple Photos in the grid.
+[[steps]]
+group = "apple_photos"
+function = "render_markdown"
+inputs = ["apple_photos/ingest"]

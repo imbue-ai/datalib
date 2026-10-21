@@ -1,0 +1,50 @@
+# GitLab merge requests and their discussions, over GitLab's API, signed
+# in through latchkey with a personal access token you create
+# (`latchkey auth set gitlab -H "PRIVATE-TOKEN: <token>"`), with every
+# option set, and searchable.
+[[groups]]
+id = "gitlab"
+name = "GitLab"
+type = "gitlab"
+
+[[steps]]
+group = "gitlab"
+function = "ingest"
+
+# When to give up on rate limits. The download always backs off and
+# retries; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "riker"
+
+[steps.params.api]
+refresh_window_days = 30  # how many trailing days each run's listing must have covered;
+                          # default 0, which sets no limit
+max_mrs = 50              # fetch at most this many MRs a run; the rest wait for the
+                          # next run. Default: no cap
+merge_requests = [        # only these MRs, as `namespace/project!IID` or a gitlab.com
+  "enterprise/warp-core!7",   # MR URL; set, it skips finding your MRs. Default: empty, find them
+  "https://gitlab.com/enterprise/warp-core/-/merge_requests/8",
+]
+
+[[steps]]
+group = "gitlab"
+function = "render_markdown"
+inputs = ["gitlab/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "gitlab"
+function = "keyword_index"
+inputs = ["gitlab/render_markdown"]
+
+[[steps]]
+group = "gitlab"
+function = "embed"
+inputs = ["gitlab/keyword_index"]

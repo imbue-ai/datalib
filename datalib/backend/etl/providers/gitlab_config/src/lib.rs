@@ -5,9 +5,23 @@
 use datalib_source_common::{LatchkeySettings, SourceCommon};
 use serde::{Deserialize, Serialize};
 
+/// This source's config stanzas, for `datalib-step help`.
+pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "api",
+        toml: include_str!("../examples/minimal_api.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "api",
+        toml: include_str!("../examples/complete_api.toml"),
+    },
+];
+
 /// The gitlab-owned slice of a `gitlab` source. `api` is its one way
 /// in; an `ingest` step without it is refused (`IngestMethods` below).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GitlabConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by
@@ -33,16 +47,21 @@ impl GitlabConfig {
 }
 
 /// GitLab MR-mirror sync knobs (refresh window + explicit MR refs).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GitlabApiSync {
+    /// How many days back from now each run's listing must have
+    /// covered; a run lists only what no earlier listing did. Unset or 0
+    /// sets no limit.
     #[serde(default)]
     pub refresh_window_days: Option<i64>,
+    /// Fetch at most this many MRs in one run; the rest wait for the
+    /// next. Unset: no cap.
     #[serde(default)]
     pub max_mrs: Option<i64>,
-    /// Explicit MR refs to fetch. Each entry is a paste-able reference
-    /// — either `namespace/project!IID` or a gitlab.com MR URL. When
-    /// non-empty, discovery is skipped and only these MRs are fetched.
+    /// Only these MRs, each written `namespace/project!IID` or as a
+    /// gitlab.com MR URL. When non-empty, the search for your MRs is
+    /// skipped and only these are fetched.
     #[serde(default)]
     pub merge_requests: Vec<String>,
 }

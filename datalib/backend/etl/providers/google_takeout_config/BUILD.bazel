@@ -5,12 +5,14 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 rust_library(
     name = "datalib_etl_google_takeout_config",
     srcs = glob(["src/**/*.rs"]),
+    compile_data = glob(["examples/*.toml"]),
     crate_name = "datalib_etl_google_takeout_config",
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "//datalib/backend/source_common:datalib_source_common",
         "@datalib_crates//:anyhow",
+        "@datalib_crates//:schemars",
         "@datalib_crates//:serde",
     ],
 )

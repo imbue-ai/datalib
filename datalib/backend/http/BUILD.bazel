@@ -279,6 +279,7 @@ rust_binary(
     ],
     deps = [
         ":datalib_http",
+        "//datalib/backend/cli_help:datalib_cli_help",
         "//datalib/backend/fetch:datalib_fetch",
         "//datalib/backend/parent_watch:datalib_parent_watch",
         "@datalib_crates//:anyhow",
@@ -289,4 +290,12 @@ rust_binary(
         "@datalib_crates//:tracing",
         "@datalib_crates//:webbrowser",
     ],
+)
+
+# The command line's parse: its `--help` examples.
+rust_test(
+    name = "datalib_http_bin_unittests",
+    size = "small",
+    crate = ":datalib_http_bin",
+    edition = "2021",
 )

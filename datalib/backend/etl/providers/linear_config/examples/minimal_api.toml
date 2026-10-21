@@ -1,0 +1,20 @@
+# A Linear workspace over its GraphQL API, signed in through latchkey
+# (`latchkey auth browser linear`). An empty `api` table copies the whole
+# workspace, newest first; later syncs read only what changed.
+[[groups]]
+id = "linear"
+name = "Linear"
+type = "linear"
+
+[[steps]]
+group = "linear"
+function = "ingest"
+
+[steps.params.api]
+
+# Nothing renders as documents; this step writes the storage report that
+# puts the source in the grid and counts its issues.
+[[steps]]
+group = "linear"
+function = "render_markdown"
+inputs = ["linear/ingest"]
