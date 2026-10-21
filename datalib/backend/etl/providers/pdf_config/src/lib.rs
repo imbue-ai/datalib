@@ -70,7 +70,10 @@ impl PdfConfig {
             );
         }
         if let Some(0) = self.max_bytes {
-            anyhow::bail!("pdf: `max_bytes = 0` would skip every file; omit it for no limit");
+            anyhow::bail!(
+                "pdf: `max_bytes = 0` would skip every file; omit it for the 512 MiB \
+                 default, or set a larger size"
+            );
         }
         Ok(())
     }
@@ -111,7 +114,9 @@ mod tests {
             max_bytes: Some(0),
             ..Default::default()
         };
-        assert!(c.validate().is_err());
+        let err = c.validate().unwrap_err().to_string();
+        // It once said "omit it for no limit"; omitting it gives 512 MiB.
+        assert!(err.contains("512 MiB"), "{err}");
     }
 
     #[test]

@@ -2,7 +2,6 @@
 //! The source owns its raw store; the orchestrator only drives `run`.
 
 use std::path::PathBuf;
-use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -72,7 +71,7 @@ impl DataProcessor for ChatgptIngest {
                 latchkey: self.latchkey.clone(),
                 max_pages: self.sync.max_pages.map(|v| v as usize),
                 limit: self.sync.limit.map(|v| v as usize),
-                sleep_between: Duration::ZERO,
+                sleep_between: self.sync.sleep_between(),
                 since: self.sync.since.clone(),
                 conv_uuids: self.sync.conv_uuids.clone(),
                 now: Some(ctx.now.to_string()),

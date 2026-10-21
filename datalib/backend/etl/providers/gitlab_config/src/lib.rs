@@ -2,7 +2,7 @@
 //! #1). Schema-only (serde + anyhow), so the orchestrator and `http` can name
 //! `GitlabConfig` without linking the provider.
 
-use datalib_source_common::{LatchkeySettings, SourceCommon};
+use datalib_source_common::{not_negative, LatchkeySettings, SourceCommon};
 use serde::{Deserialize, Serialize};
 
 /// This source's config stanzas, for `datalib-step help`.
@@ -42,6 +42,11 @@ impl GitlabConfig {
         self.latchkey_settings
             .validate()
             .map_err(anyhow::Error::msg)?;
+        if let Some(api) = &self.api {
+            not_negative("api.refresh_window_days", api.refresh_window_days)
+                .map_err(anyhow::Error::msg)?;
+            not_negative("api.max_mrs", api.max_mrs).map_err(anyhow::Error::msg)?;
+        }
         Ok(())
     }
 }
@@ -73,4 +78,34 @@ pub type GitlabRenderConfig = datalib_source_common::BareRenderConfig;
 impl datalib_source_common::IngestMethods for GitlabConfig {
     const METHODS: &'static [datalib_source_common::IngestMethod] =
         &[datalib_source_common::IngestMethod::origin("api")];
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A negative cap was cast `as usize` into one too big to reach,
+    /// and a negative window clamped to 0, which means no limit.
+    #[test]
+    fn negative_counts_are_refused_by_name() {
+        for (window, cap, named) in [
+            (Some(-1), None, "api.refresh_window_days"),
+            (None, Some(-5), "api.max_mrs"),
+        ] {
+            let mut cfg = GitlabConfig::default();
+            let mut api = GitlabApiSync::default();
+            api.refresh_window_days = window;
+            api.max_mrs = cap;
+            cfg.api = Some(api);
+            let err = cfg.validate().unwrap_err().to_string();
+            assert!(err.contains(named), "{err}");
+        }
+        let mut cfg = GitlabConfig::default();
+        cfg.api = Some(GitlabApiSync {
+            refresh_window_days: Some(0),
+            max_mrs: Some(0),
+            ..Default::default()
+        });
+        assert!(cfg.validate().is_ok());
+    }
 }
