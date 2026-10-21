@@ -50,7 +50,13 @@ its own.
      counted in `revision_listings_disagreed`;
    - the comments, paged, with `includeDeleted=true`;
    - the native JSON, gzipped, as Google sent it less its image links,
-     which go in the capture's sidecar (`volatile_payload`);
+     which go in the capture's sidecar (`volatile_payload`). A Doc comes
+     with its suggestions inline, unless the account may only view it
+     (`capabilities.canComment = false`): the Docs API refuses a
+     viewer's suggestions with a 403, so that Doc is asked for in
+     Google's default mode, which leaves them out. The stored JSON's
+     `suggestionsViewMode` says which it got (`SUGGESTIONS_INLINE` or
+     `PREVIEW_WITHOUT_SUGGESTIONS`);
    - every image link in it, once per distinct URL;
    - one export per format `exports` names for the file's kind: a list
      for every kind, `[]` for none, or a table per kind.

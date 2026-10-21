@@ -324,10 +324,13 @@ impl Captures<'_> {
             .set_message(&format!("google_drive: file {id}"));
         let lk = self.latchkey;
 
-        let can_read_revisions = entry
-            .pointer("/capabilities/canReadRevisions")
-            .and_then(Value::as_bool)
-            != Some(false);
+        let can = |capability: &str| {
+            entry
+                .pointer(&format!("/capabilities/{capability}"))
+                .and_then(Value::as_bool)
+                != Some(false)
+        };
+        let can_read_revisions = can("canReadRevisions");
         // Drive's first listing after a quiet spell can leave out a
         // file's oldest revision, and one made right after has it
         // (docs/dev/plans/google_drive.md), so a capture lists twice and
@@ -351,7 +354,8 @@ impl Captures<'_> {
         };
         let comments = paged(|token| api::comments_url(id, token), "comments", lk).await?;
 
-        let native_bytes = api::get_bytes(&api::native_url(self.kind, id), lk).await?;
+        let native_bytes =
+            api::get_bytes(&api::native_url(self.kind, id, can("canComment")), lk).await?;
         let mut native: Value = serde_json::from_slice(&native_bytes)
             .with_context(|| format!("parse the native JSON of {id}"))?;
         let links = shape::take_image_links(&mut native);
