@@ -90,6 +90,9 @@ pub enum HttpService {
     Gmail,
     /// The Google Calendar API, one of the `calendar` source's modes.
     GoogleCalendar,
+    /// Drive and the Docs, Sheets and Slides APIs, for `google_drive`.
+    /// latchkey signs each host with its own Google service.
+    GoogleDrive,
     /// A JMAP server (Fastmail and friends), another `email` mode.
     Jmap,
     /// Linear's GraphQL API (`api.linear.app`).

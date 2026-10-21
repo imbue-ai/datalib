@@ -365,6 +365,11 @@ pub fn plan(
             datalib_etl_apple_photos_config::ApplePhotosRenderConfig,
             datalib_etl_apple_photos
         ),
+        SourceType::GoogleDrive => ingest_only!(
+            datalib_etl_google_drive_config::GoogleDriveConfig,
+            datalib_etl_google_drive_config::GoogleDriveRenderConfig,
+            datalib_etl_google_drive
+        ),
         SourceType::Fsindex => ingest_only!(
             datalib_etl_fsindex_config::FsindexConfig,
             datalib_etl_fsindex_config::FsindexRenderConfig,
@@ -410,6 +415,7 @@ pub async fn migrate(step_type: &str, raw_dir: &Path) -> Result<()> {
         SourceType::Linear => datalib_etl_linear::processor::migrate(raw_dir).await,
         SourceType::AppleMessages => datalib_etl_apple_messages::processor::migrate(raw_dir).await,
         SourceType::ApplePhotos => datalib_etl_apple_photos::processor::migrate(raw_dir).await,
+        SourceType::GoogleDrive => datalib_etl_google_drive::processor::migrate(raw_dir).await,
         SourceType::Fsindex => datalib_etl_fsindex::processor::migrate(raw_dir).await,
     }
 }

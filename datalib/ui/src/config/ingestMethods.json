@@ -127,6 +127,12 @@
       "reach": "origin"
     }
   ],
+  "google_drive": [
+    {
+      "path": "api",
+      "reach": "origin"
+    }
+  ],
   "google_takeout": [
     {
       "path": "export",
