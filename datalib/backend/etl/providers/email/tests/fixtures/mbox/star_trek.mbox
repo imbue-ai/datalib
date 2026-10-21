@@ -194,5 +194,7 @@ Content-Type: text/html; charset=utf-8
 <p><a href="javascript:window.__hostileRan=1">Unsubscribe</a></p>
 <p><a href="datalib:person/%%%">Ask Quark</a></p>
 <iframe src="blobs/prize.html" width="300" height="80"></iframe>
+<img src="/api/manage/rows?refresh=1&amp;from=holosuite" alt="" width="1" height="1">
+<img src="../api/pipeline/storage?refresh=1&amp;from=holosuite" alt="Your prize">
 <p>— Quark, proprietor</p>
 </body></html>

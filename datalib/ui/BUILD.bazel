@@ -516,6 +516,7 @@ vitest_bin.vitest_test(
         ":hostile_samples",
         ":node_modules",
         ":vitest_inputs",
+        "//datalib/backend/applets:card_components",
     ],
     tags = ["cpu:2"],
 )

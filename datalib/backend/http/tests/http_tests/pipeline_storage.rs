@@ -198,3 +198,47 @@ async fn a_group_directory_is_a_measured_tree_of_its_own() {
     assert_eq!(tree(&after, "pdfs/render_markdown")["bytes"], 100);
     assert!(group["abs"].as_str().unwrap().ends_with("/pdfs"));
 }
+
+/// A GET never walks the data root, whatever its query says. A link can
+/// send one with the person's cookie: an `<img src>` in an email, a
+/// card's argument, a navigation from another site. A walk of a large
+/// root is minutes of disk, and the frame it sends makes a table card
+/// on that URL ask again.
+#[tokio::test]
+async fn a_get_never_walks_the_data_root() {
+    let td = tempfile::tempdir().unwrap();
+    std::fs::write(td.path().join("config.toml"), CONFIG).unwrap();
+    let app = router(state(td.path()).await);
+    std::fs::create_dir_all(td.path().join("pdfs/ingest")).unwrap();
+    std::fs::write(
+        td.path().join("pdfs/ingest/entities.doltlite_db"),
+        vec![7u8; 4096],
+    )
+    .unwrap();
+
+    for uri in [
+        "/api/pipeline/storage?refresh=1",
+        "/api/pipeline/storage?refresh",
+        "/api/manage/rows?refresh=1",
+    ] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(uri)
+                    .header("x-datalib-token", TEST_TOKEN)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(resp.status().is_success(), "{uri}: {}", resp.status());
+    }
+
+    let v = storage(&app, "").await;
+    assert_eq!(
+        tree(&v, "pdfs/ingest")["present"],
+        false,
+        "a GET walked the root: {v}"
+    );
+}
