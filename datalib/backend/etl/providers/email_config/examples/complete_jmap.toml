@@ -1,0 +1,60 @@
+# Fastmail mail over JMAP, signed in through latchkey (`latchkey auth
+# browser fastmail`), with every option set, and searchable.
+[[groups]]
+id = "email"
+name = "Fastmail"
+type = "email"
+
+[[steps]]
+group = "email"
+function = "ingest"
+
+# Mirror only mail under these mailboxes. Labels are full paths and match
+# exactly: `Work` does not take in `Work/Projects`, so list nested ones.
+# Several labels add up. The default, [], mirrors everything.
+[steps.params]
+only_extract_labels = ["Inbox", "Starfleet/Reports"]
+
+[steps.params.common]
+blob_size_limit_bytes = "25 MB"  # skip a message (its .eml, attachments and all) larger
+                                 # than this; unset is no limit
+
+# When to give up on a failing server. The download always backs off and
+# retries; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "picard@example.com"
+
+[steps.params.jmap]
+hostname = "api.fastmail.com"  # the JMAP server; its session is at https://<hostname>/.well-known/jmap
+account_id = "u1701d"          # which JMAP account; default the session's primary mail account
+full_resync = false            # list and fetch every email again, ignoring the saved
+                               # change state; default false
+blob_download_concurrency = 8  # .eml files downloaded at once; default 8, 1 is one at a time
+
+[[steps]]
+group = "email"
+function = "render_markdown"
+inputs = ["email/ingest"]
+
+[steps.params]
+outlink_format = "fastmail"     # each message's `↗` link opens it in Fastmail; omit for no link
+only_render_labels = ["Inbox"]  # render only threads with a message under these labels
+                                # (exact paths, like `only_extract_labels`); default [] is all
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "email"
+function = "keyword_index"
+inputs = ["email/render_markdown"]
+
+[[steps]]
+group = "email"
+function = "embed"
+inputs = ["email/keyword_index"]

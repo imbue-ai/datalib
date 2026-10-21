@@ -1,0 +1,42 @@
+# A backup of a Google account's Docs, Sheets and Slides, signed in through
+# four latchkey services as the same account (`latchkey auth browser
+# google-drive`, then google-docs, google-sheets and google-slides), with
+# every option set.
+[[groups]]
+id = "google_drive"
+name = "Google Drive"
+type = "google_drive"
+
+[[steps]]
+group = "google_drive"
+function = "ingest"
+
+# When to give up on rate limits. The download always backs off and
+# retries; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one. All four services need an account by this name.
+[steps.params.latchkey_settings]
+account = "data@example.com"
+
+[steps.params.api]
+kinds = ["document", "spreadsheet", "presentation"]  # which kinds of file; default all three
+exports = ["odf", "pdf"]   # converted copies kept beside Google's own JSON: "odf"
+                           # (.odt/.ods/.odp), "ooxml" (.docx/.xlsx/.pptx), "pdf".
+                           # Default ["odf"]; each is 1-4 MB a version, since Google embeds fonts
+owned_only = false         # true: only the files the account owns, not ones shared
+                           # with it; default false
+file_ids = [               # only these files, as a bare id or a pasted docs.google.com
+  "1EnterpriseNCC1701DWarpCoreLog",  # link. Default: empty, every file
+  "https://docs.google.com/document/d/1PicardCaptainsLogStardate41153/edit",
+]
+
+# Renders no documents yet, only the storage report every source gets,
+# which is what puts the source in the grid. No options.
+[[steps]]
+group = "google_drive"
+function = "render_markdown"
+inputs = ["google_drive/ingest"]

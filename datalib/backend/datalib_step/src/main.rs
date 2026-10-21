@@ -6,6 +6,7 @@
 //! `DATALIB_DAG_GROUP_TYPE`, `DATALIB_DAG_STEP`). The subcommands are
 //! utilities that are not steps.
 
+mod check_params;
 mod dispatch;
 mod embedding_map;
 mod events;
@@ -27,6 +28,7 @@ mod render_diff;
 mod render_model_test;
 mod reset;
 mod source;
+mod source_docs;
 mod source_type;
 mod synth;
 mod time_series;
@@ -65,8 +67,16 @@ const EXAMPLES: &[Example] = &[
         command: "datalib-step help",
     },
     Example {
-        what: "what one source mirrors, how it signs in, and its ingest methods",
+        what: "what one source mirrors, how it signs in, and the least config it needs",
         command: "datalib-step help slack",
+    },
+    Example {
+        what: "every option of one way in to a source",
+        command: "datalib-step help email gmail",
+    },
+    Example {
+        what: "a stanza with every option set, under a group id of your own, to append to a config",
+        command: "datalib-step help slack --example complete --id work-slack",
     },
     Example {
         what: "ask which Slack account the credentials reach (writes nothing)",
@@ -83,6 +93,10 @@ const EXAMPLES: &[Example] = &[
     Example {
         what: "fetch the search index's embedding models before the first embed",
         command: "datalib-step pull-models",
+    },
+    Example {
+        what: "say which built-in steps' params a sync would refuse (datalib-dag --check runs this)",
+        command: "datalib-step check-params ~/datalib/config.toml",
     },
     Example {
         what: "say whether a config lists each step below the steps it reads",
@@ -149,9 +163,18 @@ enum Cmd {
     /// How to set datalib up from a shell: the steps, the source types,
     /// the step functions, and the whole agent guide (`help agent`).
     Help {
-        /// `agent`, a source type (`slack`), a function (`embed`) or one of
-        /// these commands (`probe`). None: the overview.
+        /// `agent`, a source type (`slack`) and optionally one of its
+        /// methods (`slack api`), a function (`embed`) or one of these
+        /// commands (`probe`). None: the overview.
         topic: Vec<String>,
+        /// Print a source's `minimal` or `complete` config stanza, bare
+        /// TOML to append to a config.
+        #[arg(long, value_name = "minimal|complete", value_parser = parse_example_kind)]
+        example: Option<datalib_source_common::ExampleKind>,
+        /// The group id the stanza uses: the folder the source's data goes
+        /// in, and the stem of its step ids. Default: the source type.
+        #[arg(long)]
+        id: Option<String>,
     },
     /// Utility (not a pipeline step): ask a provider which account
     /// these credentials reach — and, with `--list`, one list a picker
@@ -164,6 +187,14 @@ enum Cmd {
         /// `labels`, `mailboxes`, `calendars` or `addressbooks`.
         #[arg(long)]
         list: Option<String>,
+    },
+    /// Utility (not a pipeline step): plan every built-in step's params
+    /// in a config the way a sync would, and run nothing. Prints one JSON
+    /// object per step a sync would refuse, `{"step", "message"}`; nothing
+    /// when every one plans. `datalib-dag --check` runs it.
+    CheckParams {
+        /// The config file: `<data root>/config.toml`.
+        path: PathBuf,
     },
     /// Utility (not a pipeline step): put qmd's pinned GGUF models in
     /// place, sha256-verified — what an `embed` step does before
@@ -250,8 +281,12 @@ const INTERRUPT_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
-    if let Some(Cmd::Help { topic }) = &cli.cmd {
-        std::process::exit(print_help(topic));
+    if let Some(Cmd::Help { topic, example, id }) = &cli.cmd {
+        let ask = help::Ask {
+            example: *example,
+            id: id.as_deref(),
+        };
+        std::process::exit(print_help(topic, ask));
     }
     let _obs_guard = datalib_obs::init(&cli.obs, "datalib-step").ok();
     // Before the first `qmd` or `latchkey` spawn, wherever it comes
@@ -321,6 +356,9 @@ async fn main() {
                 std::process::exit(1);
             }
         }
+    }
+    if let Some(Cmd::CheckParams { path }) = &cli.cmd {
+        std::process::exit(check_params::run_cli(path));
     }
     // `topo-sort-config` likewise: it reads and writes one file.
     if let Some(Cmd::TopoSortConfig { path, check }) = &cli.cmd {
@@ -466,6 +504,7 @@ async fn run(
         // there for why it cannot come through the outcome path.
         Some(Cmd::Probe { .. }) => unreachable!("probe is answered in main"),
         Some(Cmd::Help { .. }) => unreachable!("help is answered in main"),
+        Some(Cmd::CheckParams { .. }) => unreachable!("check-params is answered in main"),
         Some(Cmd::PullModels { .. }) => unreachable!("pull-models is answered in main"),
         Some(Cmd::PullRuntime) => unreachable!("pull-runtime is answered in main"),
         Some(Cmd::TopoSortConfig { .. }) => {
@@ -616,10 +655,15 @@ fn version_through_runtime(mut cmd: std::process::Command) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+fn parse_example_kind(s: &str) -> Result<datalib_source_common::ExampleKind, String> {
+    datalib_source_common::ExampleKind::parse(s)
+        .ok_or_else(|| format!("{s:?} is not an example; `minimal` or `complete`"))
+}
+
 // Links in the docs it prints point at the commit this binary was built
 // from, so they show the docs that describe it.
 #[allow(clippy::disallowed_macros)]
-fn print_help(topic: &[String]) -> i32 {
+fn print_help(topic: &[String], ask: help::Ask) -> i32 {
     let mut cmd = Cli::command();
     cmd.build();
     if let [name] = topic {
@@ -634,7 +678,7 @@ fn print_help(topic: &[String]) -> i32 {
         .filter(|name| name != "help")
         .collect();
     let git_ref = datalib_runtime::build_id::git_hash().unwrap_or_else(|| "main".to_string());
-    match help::page(topic, &commands, &git_ref) {
+    match help::page(topic, ask, &commands, &git_ref) {
         Ok(text) => {
             println!("{text}");
             0

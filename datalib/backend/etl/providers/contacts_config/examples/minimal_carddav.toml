@@ -1,0 +1,19 @@
+# Any other CardDAV server (iCloud, Nextcloud, Radicale, …). Register a
+# latchkey service for the server's host (`latchkey services register`),
+# then give it an app password with `latchkey auth set`.
+[[groups]]
+id = "contacts"
+name = "CardDAV Contacts"
+type = "contacts"
+
+[[steps]]
+group = "contacts"
+function = "ingest"
+
+[steps.params.carddav]
+server_url = "https://cloud.example.com/remote.php/dav/"
+
+[[steps]]
+group = "contacts"
+function = "render_markdown"
+inputs = ["contacts/ingest"]

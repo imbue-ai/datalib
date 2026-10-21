@@ -1,0 +1,19 @@
+# ChatGPT conversations over chatgpt.com's web API, signed in through
+# latchkey (register the `chatgpt` service, then `latchkey auth browser
+# chatgpt`; see getting_your_data.md). An empty `api` table mirrors every
+# conversation.
+[[groups]]
+id = "chatgpt"
+name = "ChatGPT"
+type = "chatgpt"
+
+[[steps]]
+group = "chatgpt"
+function = "ingest"
+
+[steps.params.api]
+
+[[steps]]
+group = "chatgpt"
+function = "render_markdown"
+inputs = ["chatgpt/ingest"]

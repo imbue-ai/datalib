@@ -1,0 +1,35 @@
+# A folder of `.ics` files on disk (Google Takeout's `Calendar/`, an
+# Apple Calendar export), with every option set, and searchable. No sign-in.
+[[groups]]
+id = "calendar"
+name = "Calendar export"
+type = "calendar"
+
+[[steps]]
+group = "calendar"
+function = "ingest"
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+[steps.params.ics]
+path = "~/Downloads/calendar-export"  # the folder; each `.ics` file in it is one calendar
+
+[[steps]]
+group = "calendar"
+function = "render_markdown"
+inputs = ["calendar/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "calendar"
+function = "keyword_index"
+inputs = ["calendar/render_markdown"]
+
+[[steps]]
+group = "calendar"
+function = "embed"
+inputs = ["calendar/keyword_index"]

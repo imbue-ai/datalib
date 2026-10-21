@@ -129,22 +129,31 @@ async fn main() -> Result<()> {
         );
     }
     if check_only {
+        let refused = check_params(&config_path, &checked, binary_dir.as_deref());
         #[allow(clippy::disallowed_macros)]
         {
             println!(
-                "{}: {} step(s), {} applet(s){}",
+                "{}: {} step(s), {} applet(s){}{}",
                 config_path.display(),
                 checked.cfg.steps.len(),
                 checked.cfg.applets.len(),
                 match checked.dropped() {
                     0 => String::new(),
                     n => format!(", {n} entr{} dropped", if n == 1 { "y" } else { "ies" }),
+                },
+                match refused {
+                    0 => String::new(),
+                    n => format!(", {n} step(s) whose params a sync would refuse"),
                 }
             );
         }
         // Same door as `PUT /api/config`: a warning drops nothing, so it
         // is printed above and does not fail the check.
-        std::process::exit(if checked.nothing_dropped() { 0 } else { 2 });
+        std::process::exit(if checked.nothing_dropped() && refused == 0 {
+            0
+        } else {
+            2
+        });
     }
     let dropped_entries = checked.dropped();
     let cfg = checked.cfg;
@@ -392,6 +401,76 @@ async fn main() -> Result<()> {
         exit_code(outcome, dropped_entries)
     }; // every sink drops here, so the store flushes and joins before we exit
     std::process::exit(code);
+}
+
+/// Asks `datalib-step check-params` which built-in steps' params a sync
+/// would refuse, prints each against its line, and returns how many. The
+/// runner links no provider, so the step program is the one that can read
+/// them. A config with no built-in ingest or render step is not asked
+/// about; a `datalib-step` that cannot be run is said so, and counts none.
+#[allow(clippy::disallowed_macros)]
+fn check_params(
+    config_path: &Path,
+    checked: &config::ConfigCheck,
+    binary_dir: Option<&Path>,
+) -> usize {
+    let has_builtin = checked.cfg.steps.iter().any(|s| {
+        s.command.is_none() && matches!(s.function.as_deref(), Some("ingest" | "render_markdown"))
+    });
+    if !has_builtin {
+        return 0;
+    }
+    let beside = config::resolve_binary_dir(&checked.cfg, binary_dir)
+        .map(|d| d.join("datalib-step"))
+        .filter(|p| p.is_file());
+    let program = beside.unwrap_or_else(|| "datalib-step".into());
+    let out = match std::process::Command::new(&program)
+        .arg("check-params")
+        .arg(config_path)
+        .output()
+    {
+        Ok(out) if out.status.success() => out,
+        Ok(out) => {
+            eprintln!(
+                "note: step params not checked: `{} check-params` failed: {}",
+                program.display(),
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+            return 0;
+        }
+        Err(e) => {
+            eprintln!(
+                "note: step params not checked: could not run {}: {e}",
+                program.display()
+            );
+            return 0;
+        }
+    };
+    let mut refused = 0;
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let Ok(problem) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let step = problem["step"].as_str().unwrap_or("?");
+        let message = problem["message"].as_str().unwrap_or("");
+        let key = message
+            .split_once("unknown field `")
+            .and_then(|(_, rest)| rest.split_once('`'))
+            .map(|(key, _)| key);
+        let at = config::step_span(&checked.text, step, key)
+            .map(|span| {
+                let line = datalib_dag::diagnostics::line_of(&checked.text, span.start);
+                let column = datalib_dag::diagnostics::column_of(&checked.text, span.start);
+                format!("{}:{line}:{column}", config_path.display())
+            })
+            .unwrap_or_else(|| config_path.display().to_string());
+        eprintln!(
+            "{at}: error: step {step}: a sync would refuse its params: {message}\n  \
+             help: `datalib-step help <type> <method>` lists every option"
+        );
+        refused += 1;
+    }
+    refused
 }
 
 enum Taken {

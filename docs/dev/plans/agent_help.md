@@ -1,7 +1,8 @@
 # Help an agent can set datalib up from
 
-**Status: agreed 2026-10-21; §2.1 is #1275, §2.2 is built on the branch
-after it, §2.3 is next and §2.4 is deferred.**
+**Status: agreed 2026-10-21. §2.1 is #1275, §2.2 is #1278, §2.3 is
+built on the branch after it except the two items marked open, and
+§2.4 is deferred.**
 
 ## 1. The problem
 
@@ -80,22 +81,36 @@ build's commit on GitHub, so nothing a doc links to has to ship.
 ### 2.3 Examples and fields from the config crates (PR 3)
 
 - Each `<p>_config` crate keeps `examples/minimal_<method>.toml` and
-  `examples/complete_<method>.toml` and `include_str!`s them. A test
-  over every `SourceType` loads each through the config loader and
-  plans its params, as `config_examples_test.rs` does today, and fails
-  for a source with no minimal or no complete example.
+  `examples/complete_<method>.toml` and exports them as `EXAMPLES`, a
+  `const` rather than a trait: `claude_code` and `codex` share one
+  config struct and still need examples of their own.
+  `datalib_step/src/source_docs.rs` maps every `SourceType` to its
+  crate's examples and schema with an exhaustive `match`. Its test
+  loads and plans every stanza, checks each holds the method it is
+  named for and still loads under another group id, and fails for a
+  source with no minimal or no complete example per method.
 - The config structs derive `schemars::JsonSchema`, so the field
-  reference in `help <type> <method>` comes from the doc comments the
-  code already has. A test fails when a `complete` example leaves out a
-  field the schema has. The doc comments become user-facing, so they
-  get a pass for wording.
-- `docs/user/config_examples/all_sources.toml` is checked against the
-  examples (or generated from them), so there is one copy.
-- `datalib-step check-params <type> <function> --params-file F` parses
-  and plans, and runs nothing. `datalib-dag --check` and
-  `PUT /api/config` call it for the built-in steps, so a bad param is
-  reported with its line before a sync. A custom command is never
-  called by `--check`, which runs nothing today.
+  reference in `help <type> <method>` comes from their doc comments,
+  reworded for a person writing a config. A method's complete stanza
+  must write every option of its own table. The shared `common` and
+  `latchkey_settings` options are set only where the source reads
+  them, since a stanza teaching a sign-in to a source that reads local
+  files would mislead. A retired field a planner refuses leaves the
+  schema with `#[schemars(skip)]`. A time-series source's stanzas
+  declare `render_time_series`.
+- **Open:** `docs/user/config_examples/all_sources.toml` is not yet
+  checked against the examples, and the stanzas found it stale: no
+  `render_time_series` for garmin, yolink or airvisual; an `embed` on
+  airvisual, which the config upgrade removes; no render step for
+  apple_photos, lightroom or google_drive, whose storage report puts
+  them in the grid; a commented `databases = true` notion does not
+  accept; a GitHub ref form (`owner/repo/pull/NUM`) the parser refuses.
+  Generate it from the complete stanzas, or check it against them.
+- `datalib-step check-params <config>` plans every built-in step's
+  params and prints one JSON line per step a sync would refuse.
+  `datalib-dag --check` runs it (never a custom command) and reports
+  each at the misspelled key's line, or the step's, and exits 2.
+  **Open:** `PUT /api/config` does not call it yet.
 
 ### 2.4 Later: adding a source from the shell (deferred)
 

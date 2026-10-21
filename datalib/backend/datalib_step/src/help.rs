@@ -7,8 +7,11 @@ use datalib_cli_help::Example;
 use datalib_source_common::Reach;
 use strum::VariantArray;
 
+use datalib_source_common::ExampleKind;
+
 use crate::function::Function;
 use crate::methods::ingest_methods;
+use crate::source_docs::{fields, source_docs, with_group_id, Field};
 use crate::source_type::SourceType;
 
 const AGENT_GUIDE: &str = include_str!("../../../../docs/agent_user.md");
@@ -77,28 +80,99 @@ const SETUP: &[SetupStep] = &[
     },
 ];
 
-pub fn page(topic: &[String], commands: &[String], git_ref: &str) -> Result<String, String> {
+/// What `--example` and `--id` ask of a source's page.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Ask<'a> {
+    pub example: Option<ExampleKind>,
+    pub id: Option<&'a str>,
+}
+
+pub fn page(
+    topic: &[String],
+    ask: Ask,
+    commands: &[String],
+    git_ref: &str,
+) -> Result<String, String> {
     let base = format!("{REPO}/blob/{git_ref}");
-    match topic {
-        [] => Ok(overview(commands)),
-        [word] if word == "agent" => Ok(absolute_links(AGENT_GUIDE, AGENT_GUIDE_PATH, &base)),
-        [word] => {
-            if let Some(t) = SourceType::parse(word) {
-                return Ok(source_page(t, &base));
+    let source = topic.first().and_then(|w| SourceType::parse(w));
+    if source.is_none() && (ask.example.is_some() || ask.id.is_some()) {
+        return Err("`--example` and `--id` go with a source type: \
+                    `datalib-step help slack --example minimal --id work-slack`"
+            .to_string());
+    }
+    match (topic, source) {
+        ([], _) => Ok(overview(commands)),
+        ([word], _) if word == "agent" => Ok(absolute_links(AGENT_GUIDE, AGENT_GUIDE_PATH, &base)),
+        ([_], Some(t)) => match ask.example {
+            Some(kind) => example_text(t, None, kind, ask.id),
+            None => Ok(source_page(t, &base)),
+        },
+        ([_, method], Some(t)) => {
+            let method = known_method(t, method)?;
+            match ask.example {
+                Some(kind) => example_text(t, Some(method), kind, ask.id),
+                None => Ok(method_page(t, method)),
             }
-            if let Some(f) = Function::parse(word) {
-                return Ok(function_page(f));
-            }
-            Err(format!(
+        }
+        ([word], None) => match Function::parse(word) {
+            Some(f) => Ok(function_page(f)),
+            None => Err(format!(
                 "no help on {word:?}. Try `datalib-step help` for the topics: \
                  `agent`, a source type, a function or a command."
-            ))
-        }
+            )),
+        },
         _ => Err(format!(
-            "`datalib-step help` takes one topic, not {}",
+            "no help on `{}`: a topic is one word, or a source type and one of its methods",
             topic.join(" ")
         )),
     }
+}
+
+fn known_method(t: SourceType, method: &str) -> Result<&'static str, String> {
+    let methods = ingest_methods(t);
+    methods
+        .iter()
+        .find(|m| m.path == method)
+        .map(|m| m.path)
+        .ok_or_else(|| {
+            let names: Vec<&str> = methods.iter().map(|m| m.path).collect();
+            format!(
+                "{t} has no method {method:?}; its methods: {}",
+                names.join(", ")
+            )
+        })
+}
+
+fn example_text(
+    t: SourceType,
+    method: Option<&'static str>,
+    kind: ExampleKind,
+    id: Option<&str>,
+) -> Result<String, String> {
+    let methods = ingest_methods(t);
+    let method = match (method, methods) {
+        (Some(m), _) => m,
+        (None, [only]) => only.path,
+        (None, _) => {
+            let names: Vec<&str> = methods.iter().map(|m| m.path).collect();
+            return Err(format!(
+                "{t} is reached {} ways ({}); name one: `datalib-step help {t} {} --example {}`",
+                names.len(),
+                names.join(", "),
+                names[0],
+                kind.as_str()
+            ));
+        }
+    };
+    let example = source_docs(t)
+        .example(kind, method)
+        .ok_or_else(|| format!("{t} has no {} example for `{method}`", kind.as_str()))?;
+    Ok(match id {
+        Some(id) => with_group_id(example.toml, t.as_str(), id),
+        None => example.toml.to_string(),
+    }
+    .trim_end()
+    .to_string())
 }
 
 fn overview(commands: &[String]) -> String {
@@ -181,18 +255,33 @@ fn source_page(t: SourceType, base: &str) -> String {
         };
         out.push_str(&format!("  {:<12} {reach}\n", m.path));
     }
+    let docs = source_docs(t);
+    for m in ingest_methods(t) {
+        if let Some(example) = docs.example(ExampleKind::Minimal, m.path) {
+            out.push('\n');
+            out.push_str(&wrap(
+                &format!(
+                    "The least a config needs to sync it by `{m}` (`datalib-step help {t} \
+                     {m} --example complete` sets every option; `datalib-step help {t} {m}` \
+                     lists them):",
+                    m = m.path
+                ),
+                0,
+                0,
+            ));
+            out.push_str(&format!("\n{}\n", example.toml.trim_end()));
+        }
+    }
     out.push('\n');
     out.push_str(&wrap(
-        "Its steps: `<group>/ingest`, and `<group>/render_markdown` reading it; to \
-         search it, `<group>/keyword_index` and `<group>/embed` as well \
-         (`datalib-step help embed`). Every source's stanza, with each option \
-         commented:",
+        "Paste it into the config with `--id <group>` to name the group (the folder its \
+         data goes in; `--example minimal --id work-slack` prints just the TOML). Then \
+         put `<group>/render_markdown` in the inputs of \
+         `unified_document_index/grid_index`, so the grid and search read it.",
         0,
         0,
     ));
-    out.push_str(&format!(
-        "  {base}/docs/user/config_examples/all_sources.toml\n\n"
-    ));
+    out.push('\n');
     out.push_str(&wrap(
         &format!(
             "Then: `datalib-dag --check <config>`; `datalib-step probe {t}` if it reaches \
@@ -202,6 +291,68 @@ fn source_page(t: SourceType, base: &str) -> String {
         0,
     ));
     out.truncate(out.trim_end().len());
+    out
+}
+
+fn method_page(t: SourceType, method: &'static str) -> String {
+    let reach = ingest_methods(t)
+        .iter()
+        .find(|m| m.path == method)
+        .map_or("", |m| match m.reach {
+            Reach::Origin => "reaches a live service",
+            Reach::Local => "reads files on disk",
+        });
+    let methods: Vec<&str> = ingest_methods(t).iter().map(|m| m.path).collect();
+    let all = fields(&source_docs(t).schema);
+    let (own, shared): (Vec<&Field>, Vec<&Field>) = all
+        .iter()
+        .filter(|f| {
+            let top = f.path.split(['.', '[']).next().unwrap_or("");
+            top == method || !methods.contains(&top)
+        })
+        .partition(|f| f.path.split(['.', '[']).next() == Some(method));
+    let mut out = wrap(
+        &format!(
+            "{t} by `{method}` ({reach}): every option of the `ingest` step's params, \
+             from the structs that read them. `datalib-step help {t} {method} --example \
+             complete` prints a stanza that sets them all."
+        ),
+        0,
+        0,
+    );
+    out.push_str(&field_tables(&own));
+    out.push_str("\nAny method also takes:\n");
+    out.push_str(&field_tables(&shared));
+    out.truncate(out.trim_end().len());
+    out
+}
+
+// Fields grouped under the TOML table header that holds them, so the
+// reference reads like the config it describes.
+fn field_tables(fields: &[&Field]) -> String {
+    let mut out = String::new();
+    let mut table: Option<&str> = None;
+    for f in fields {
+        let (parent, key) = f.path.rsplit_once('.').unwrap_or(("", f.path.as_str()));
+        if table != Some(parent) {
+            let header = match parent.strip_suffix("[]") {
+                Some(list) => format!("[[steps.params.{list}]]"),
+                None if parent.is_empty() => "[steps.params]".to_string(),
+                None => format!("[steps.params.{parent}]"),
+            };
+            out.push_str(&format!("\n{header}\n"));
+            table = Some(parent);
+        }
+        let default = f
+            .default
+            .as_ref()
+            .map(|d| format!(", default {d}"))
+            .unwrap_or_default();
+        out.push_str(&format!("  {key}  ({}{default})\n", f.kind));
+        if let Some(d) = &f.description {
+            out.push_str(&wrap(d, 6, 6));
+        }
+    }
     out
 }
 
@@ -402,7 +553,7 @@ mod tests {
     /// terminal. A relative link there leads nowhere.
     #[test]
     fn the_agent_guide_has_no_relative_link_left() {
-        let page = page(&["agent".into()], &commands(), "abc123").unwrap();
+        let page = page(&["agent".into()], Ask::default(), &commands(), "abc123").unwrap();
         assert!(page.contains("# datalib — agent user guide"));
         assert_eq!(relative_links(&page), Vec::<String>::new());
     }
@@ -410,7 +561,7 @@ mod tests {
     #[test]
     fn every_source_type_has_a_page_with_its_own_sections() {
         for &t in SourceType::VARIANTS {
-            let page = page(&[t.as_str().into()], &commands(), "abc123").unwrap();
+            let page = page(&[t.as_str().into()], Ask::default(), &commands(), "abc123").unwrap();
             assert!(
                 page.contains(&format!("`type = \"{}\"`", t.as_str())),
                 "{t}: getting_your_data.md has no section for it:\n{page}"
@@ -425,7 +576,7 @@ mod tests {
 
     #[test]
     fn a_type_reached_several_ways_shows_every_way() {
-        let page = page(&["email".into()], &commands(), "abc123").unwrap();
+        let page = page(&["email".into()], Ask::default(), &commands(), "abc123").unwrap();
         for heading in ["## Email", "## Fastmail\n", "## Gmail"] {
             assert!(page.contains(heading), "{heading} missing:\n{page}");
         }
@@ -433,7 +584,7 @@ mod tests {
 
     #[test]
     fn the_overview_names_every_type_function_and_command() {
-        let page = page(&[], &commands(), "abc123").unwrap();
+        let page = page(&[], Ask::default(), &commands(), "abc123").unwrap();
         for &t in SourceType::VARIANTS {
             assert!(page.contains(t.as_str()), "{t}");
         }
@@ -446,14 +597,99 @@ mod tests {
     #[test]
     fn every_function_has_a_page() {
         for &f in Function::VARIANTS {
-            let page = page(&[f.as_str().into()], &commands(), "abc123").unwrap();
+            let page = page(&[f.as_str().into()], Ask::default(), &commands(), "abc123").unwrap();
             assert!(page.len() > f.as_str().len() + 40, "{f}: {page}");
         }
     }
 
+    fn ask(example: &str, id: Option<&'static str>) -> Ask<'static> {
+        Ask {
+            example: ExampleKind::parse(example),
+            id,
+        }
+    }
+
+    #[test]
+    fn an_example_is_bare_toml_under_the_id_asked_for() {
+        let minimal = page(
+            &["slack".into()],
+            ask("minimal", None),
+            &commands(),
+            "abc123",
+        )
+        .unwrap();
+        assert!(
+            minimal.starts_with('#') && minimal.contains("id = \"slack\""),
+            "{minimal}"
+        );
+        let renamed = page(
+            &["slack".into()],
+            ask("complete", Some("work-slack")),
+            &commands(),
+            "abc123",
+        )
+        .unwrap();
+        assert!(renamed.contains("id = \"work-slack\""), "{renamed}");
+        assert!(renamed.contains("type = \"slack\""), "{renamed}");
+        assert!(
+            renamed.contains("inputs = [\"work-slack/ingest\"]"),
+            "{renamed}"
+        );
+    }
+
+    #[test]
+    fn a_source_reached_several_ways_asks_which() {
+        let err = page(
+            &["email".into()],
+            ask("minimal", None),
+            &commands(),
+            "abc123",
+        )
+        .unwrap_err();
+        assert!(err.contains("jmap, gmail, mbox"), "{err}");
+        let err = page(
+            &["email".into(), "imap".into()],
+            Ask::default(),
+            &commands(),
+            "abc123",
+        )
+        .unwrap_err();
+        assert!(err.contains("no method \"imap\""), "{err}");
+    }
+
+    #[test]
+    fn a_method_page_lists_its_own_options_and_the_shared_ones() {
+        let page = page(
+            &["slack".into(), "api".into()],
+            Ask::default(),
+            &commands(),
+            "abc123",
+        )
+        .unwrap();
+        assert!(
+            page.contains("[steps.params.api]\n  all_channels  (boolean"),
+            "{page}"
+        );
+        assert!(
+            page.contains("[steps.params.common.download_params]"),
+            "{page}"
+        );
+        assert!(page.contains("[steps.params.latchkey_settings]"), "{page}");
+        let email = page_of(&["email", "gmail"]);
+        assert!(
+            !email.contains("[steps.params.jmap]"),
+            "another method's options:\n{email}"
+        );
+    }
+
+    fn page_of(words: &[&str]) -> String {
+        let topic: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+        page(&topic, Ask::default(), &commands(), "abc123").unwrap()
+    }
+
     #[test]
     fn an_unknown_topic_is_refused_by_name() {
-        let err = page(&["slak".into()], &commands(), "abc123").unwrap_err();
+        let err = page(&["slak".into()], Ask::default(), &commands(), "abc123").unwrap_err();
         assert!(err.contains("\"slak\""), "{err}");
     }
 

@@ -1,0 +1,35 @@
+# An unpacked Claude data export on disk, with every option set, and
+# searchable. No sign-in. The export is a complete snapshot: a
+# conversation a newer export no longer holds leaves the mirror.
+[[groups]]
+id = "claude"
+name = "Claude export"
+type = "claude"
+
+[[steps]]
+group = "claude"
+function = "ingest"
+
+[steps.params.export]
+path = "~/Downloads/claude-export"  # the folder holding `conversations.json`
+
+[[steps]]
+group = "claude"
+function = "render_markdown"
+inputs = ["claude/ingest"]
+
+[steps.params]
+max_project_doc_bytes = 131072  # cut a project knowledge document's text at this many
+                                # bytes on the project's page; default 131072 (128 KiB)
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "claude"
+function = "keyword_index"
+inputs = ["claude/render_markdown"]
+
+[[steps]]
+group = "claude"
+function = "embed"
+inputs = ["claude/keyword_index"]

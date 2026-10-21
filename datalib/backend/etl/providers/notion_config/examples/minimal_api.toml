@@ -1,0 +1,19 @@
+# Notion over its API, signed in through latchkey with one stored credential
+# carrying both the token and the version header (`latchkey auth set notion
+# -H "Authorization: Bearer ntn_…" -H "Notion-Version: 2026-03-11"`). An empty
+# `api` table mirrors every page the token can see.
+[[groups]]
+id = "notion"
+name = "Notion"
+type = "notion"
+
+[[steps]]
+group = "notion"
+function = "ingest"
+
+[steps.params.api]
+
+[[steps]]
+group = "notion"
+function = "render_markdown"
+inputs = ["notion/ingest"]

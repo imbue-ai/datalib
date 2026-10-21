@@ -1,0 +1,18 @@
+# Google Calendar through Google's API, signed in through latchkey
+# (`latchkey auth browser google-calendar`). An empty `google` table
+# mirrors every calendar on the account's list, all of its history.
+[[groups]]
+id = "calendar"
+name = "Google Calendar"
+type = "calendar"
+
+[[steps]]
+group = "calendar"
+function = "ingest"
+
+[steps.params.google]
+
+[[steps]]
+group = "calendar"
+function = "render_markdown"
+inputs = ["calendar/ingest"]

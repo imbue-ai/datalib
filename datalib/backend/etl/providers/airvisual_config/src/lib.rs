@@ -9,7 +9,21 @@ use std::path::PathBuf;
 use datalib_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// This source's config stanzas, for `datalib-step help`.
+pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "export",
+        toml: include_str!("../examples/minimal_export.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "export",
+        toml: include_str!("../examples/complete_export.toml"),
+    },
+];
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AirvisualConfig {
     #[serde(default)]
@@ -18,7 +32,7 @@ pub struct AirvisualConfig {
     pub export: Option<AirvisualExport>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AirvisualExport {
     /// One entry per Pro. Each has its own share, so each has its own
@@ -30,9 +44,10 @@ pub struct AirvisualExport {
 /// One AirVisual Pro's data folder: `smb://<ip>/airvisual` mounted, or
 /// the `*_AirVisual_values.txt` files copied out of it, archives
 /// included.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AirvisualDevice {
+    /// The device's data folder: its share, mounted, or a copy of it.
     pub path: PathBuf,
     /// The device's identity — its serial number, which keys every
     /// sample. Read from the folder's `latest_config_measurements.json`

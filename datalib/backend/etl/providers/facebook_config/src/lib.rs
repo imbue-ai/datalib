@@ -5,10 +5,24 @@
 use datalib_source_common::{LocalPath, SourceCommon};
 use serde::{Deserialize, Serialize};
 
+/// This source's config stanzas, for `datalib-step help`.
+pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "export",
+        toml: include_str!("../examples/minimal_export.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "export",
+        toml: include_str!("../examples/complete_export.toml"),
+    },
+];
+
 /// The `facebook` slice of a source. `export` — the unpacked
 /// "Download your information" export, in its JSON format — is its
 /// one way in, and its only knob.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FacebookConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by

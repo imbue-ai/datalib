@@ -1,0 +1,57 @@
+# Slack over its API, signed in through latchkey (`latchkey auth browser
+# slack`), with every option set, and searchable.
+[[groups]]
+id = "slack"
+name = "Slack"
+type = "slack"
+
+[[steps]]
+group = "slack"
+function = "ingest"
+
+[steps.params.common]
+blob_size_limit_bytes = "1 MB"  # skip an attachment larger than this; unset is no limit
+
+# When to give up on rate limits. The download always honours a 429's
+# Retry-After and backs off; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 100       # Slack rate-limits hard; the default is 50
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "enterprise"
+
+[steps.params.api]
+since = "2025-01-01"           # oldest message (YYYY-MM-DD or RFC 3339); default 2024-01-01
+channels = ["bridge", "engineering"]  # by name, without `#`; omit for every channel you are in
+all_channels = false           # also channels you can see but are not in (ignored with `channels`)
+media = true                   # download attachments into blobs
+dms = true                     # direct messages, 1:1 and group: off unless set
+dm_conversations = ["D024BE7LH", "https://enterprise.slack.com/archives/G0ABC12DE"]
+                               # only these DMs, by id or pasted link; needs `dms = true`
+refresh_window_days = 30       # re-walk this many trailing days for edits, reactions
+                               # and deletions; default 30, 0 turns it off
+
+[[steps]]
+group = "slack"
+function = "render_markdown"
+inputs = ["slack/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "slack"
+function = "keyword_index"
+inputs = ["slack/render_markdown"]
+
+[[steps]]
+group = "slack"
+function = "embed"
+inputs = ["slack/keyword_index"]

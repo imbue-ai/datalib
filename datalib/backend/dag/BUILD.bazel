@@ -94,6 +94,7 @@ rust_binary(
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:clap",
+        "@datalib_crates//:serde_json",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing-subscriber",
     ],

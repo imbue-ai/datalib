@@ -7,8 +7,22 @@
 use datalib_source_common::{LatchkeySettings, SourceCommon};
 use serde::{Deserialize, Serialize};
 
+/// This source's config stanzas, for `datalib-step help`.
+pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "api",
+        toml: include_str!("../examples/minimal_api.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "api",
+        toml: include_str!("../examples/complete_api.toml"),
+    },
+];
+
 /// The google_drive-owned slice of a `google_drive` source.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GoogleDriveConfig {
     #[serde(default)]
@@ -36,7 +50,7 @@ impl GoogleDriveConfig {
 }
 
 /// The live-API method.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GoogleDriveApi {
     /// Which kinds of file to mirror. Default: all three.
@@ -108,7 +122,7 @@ pub fn file_id_of(given: &str) -> Option<&str> {
 }
 
 /// A kind of Google-native file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum FileKind {
     Document,
@@ -117,7 +131,7 @@ pub enum FileKind {
 }
 
 /// A family of converted copy Drive's export makes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ExportFormat {
     /// OpenDocument: `.odt`, `.ods`, `.odp`.
