@@ -65,7 +65,7 @@ dactalView() card ──► <iframe sandbox="allow-scripts"> ──► /dactal/i
       │                                                          │
       │  fetchSearch()  ◄── postMessage dactal:search ◄──── bridge.js
       │  (this origin,                                           │
-      │   session cookie)                                        │
+      │   API token)                                             │
       └── postMessage dactal:rows ───────────────────────► rows→datasets
                                                             + survey()
                                                                  │

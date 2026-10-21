@@ -675,25 +675,32 @@ async fn component_paths_cannot_escape_the_store() {
     }
 }
 
-/// These routes serve executable JavaScript and proxy to a
-/// config-named program — exactly the surface the token gate exists to
-/// protect. The gate is an outermost layer, so this holds by
-/// construction; the test is here so a route added outside it fails
-/// loudly.
+/// The component manifest, which names every module, and the applet
+/// proxy, which reaches a config-named program, need the token. A
+/// module itself does not: the page loads it with `import()`, which
+/// sends no header, and its hash names it only to someone who already
+/// has its bytes or the manifest.
 #[tokio::test(flavor = "multi_thread")]
 async fn frontend_routes_are_behind_the_token_gate() {
     let tmp = tempfile::tempdir().unwrap();
     let hash = seed_user(tmp.path(), "tetris", "Tetris");
     let app = router(state_with(tmp.path(), "").await);
 
-    for uri in [
-        "/api/frontend".to_string(),
-        format!("/modules/{hash}"),
-        "/applet/demo/anything".to_string(),
-    ] {
+    let module = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/modules/{hash}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(module.status(), StatusCode::OK);
+
+    for uri in ["/api/frontend", "/applet/demo/anything"] {
         let resp = app
             .clone()
-            .oneshot(Request::get(&uri).body(Body::empty()).unwrap())
+            .oneshot(Request::get(uri).body(Body::empty()).unwrap())
             .await
             .unwrap();
         assert_eq!(

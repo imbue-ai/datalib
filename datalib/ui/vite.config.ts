@@ -7,8 +7,8 @@ const BACKEND = process.env.DATALIB_BACKEND ?? "http://127.0.0.1:8731";
 
 // The backend requires its per-process API token on every route (see
 // datalib/backend/http/src/auth.rs). In dev the browser loads the app
-// from *this* origin, so it never receives the backend's session
-// cookie; instead the proxy below — which runs in node, server-side,
+// from *this* origin with no `?token=`, so the page holds none; instead
+// the proxy below — which runs in node, server-side,
 // where no page can reach it — stamps the token onto every forwarded
 // request. `datalib/dev.sh` mints one token and exports it to both
 // processes; if you start Vite by hand, export the same DATALIB_TOKEN

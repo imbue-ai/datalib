@@ -4,6 +4,7 @@ import type { ProbeNoun } from "./config/catalog";
 import type { FeedbackContext } from "./feedback/context";
 import { ApiError, errorDetail, FailureError } from "./apiError";
 import { pushToast } from "./toasts";
+import { withToken } from "./apiToken";
 
 // `DiffStatus` in datalib_schema, hand-kept in step.
 export type DiffStatus = "added" | "removed" | "modified" | "unchanged";
@@ -297,7 +298,7 @@ function remoteContextParams(ctx: RemoteContext): string {
 /// behalf — and only when a row lets it: the app's CSP lets the page
 /// reach no remote host itself (`cards/remoteMedia.ts`).
 export function remoteMediaUrl(url: string, ctx: RemoteContext): string {
-  return `/api/remote_media?url=${encodeURIComponent(url)}${remoteContextParams(ctx)}`;
+  return withToken(`/api/remote_media?url=${encodeURIComponent(url)}${remoteContextParams(ctx)}`);
 }
 
 /// Which of `urls` a row lets load for `ctx`, each with its row. A

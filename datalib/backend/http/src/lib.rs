@@ -194,7 +194,9 @@ pub fn router(state: AppState) -> Router {
         token: state.api_token.clone(),
         trusted_proxy: state.trusted_proxy,
     };
-    Router::new()
+    // Every route that reads or changes data needs the token. A route
+    // added here is behind it; one added below the `merge` is public.
+    let gated = Router::new()
         .route("/api/health", get(health))
         .route("/api/accounts", get(accounts))
         .route("/api/feedback", post(submit_feedback))
@@ -232,14 +234,6 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/lib/{name}", get(get_lib).put(put_lib))
         .route("/api/lib/{name}/rename", post(rename_lib))
-        .route("/agent/cards.md", get(agent_cards_guide))
-        .route("/agent/config.md", get(agent_config_guide))
-        // The pre-split guide URL; wayfinders copied before the split
-        // may still reference it.
-        .route(
-            "/agent.md",
-            get(|| async { axum::response::Redirect::permanent("/agent/cards.md") }),
-        )
         .route("/api/sync/sources", get(sync_sources))
         .route("/api/pipeline/storage", get(pipeline_storage))
         .route("/api/pipeline/disk", get(pipeline_disk))
@@ -278,28 +272,38 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/remote_media/fetched", get(remote_media::list_media))
         .route("/api/remote_media/check", post(remote_media::check))
-        // Component code, addressed by content. Flat across every
-        // namespace, so byte-identical components resolve to one URL
-        // and the browser evaluates them once. See frontend.rs.
-        .route("/modules/{hash}", get(get_module))
         // The applet proxy. `{*rest}` keeps the whole remaining path,
         // which the applet sees verbatim.
         .route("/applet/{id}/{*rest}", any(proxy_applet))
-        .route("/applet/{id}/", any(proxy_applet_root))
-        // SPA fallback — anything not matched above is served from the
-        // embedded Vite bundle. Client-side routing turns unknown paths
-        // into `index.html`.
-        .fallback(embed::serve_ui)
-        .with_state(state)
-        // Outermost, so it covers every route plus the SPA fallback and the
-        // static mount. `CorsLayer::permissive()` is gone deliberately: with
-        // the token gate in front a cross-origin page cannot get a usable
-        // response anyway, and nothing in-tree needs cross-origin access.
-        .layer(axum::middleware::from_fn_with_state(
+        .route("/applet/{id}/", any(proxy_applet_root));
+    // No `CorsLayer`: a cross-origin page has no token to send, and
+    // nothing in-tree needs cross-origin access.
+    Router::new()
+        .merge(gated.route_layer(axum::middleware::from_fn_with_state(
             gate,
             auth::require_token,
-        ))
-        // Outside the token gate, so a refused request is logged too.
+        )))
+        .route("/agent/cards.md", get(agent_cards_guide))
+        .route("/agent/config.md", get(agent_config_guide))
+        // The pre-split guide URL; wayfinders copied before the split
+        // may still reference it.
+        .route(
+            "/agent.md",
+            get(|| async { axum::response::Redirect::permanent("/agent/cards.md") }),
+        )
+        // Component code, addressed by content. Flat across every
+        // namespace, so byte-identical components resolve to one URL
+        // and the browser evaluates them once. See frontend.rs. Public:
+        // a module is code, and its hash names it only to someone
+        // who already has its bytes or read `/api/frontend`.
+        .route("/modules/{hash}", get(get_module))
+        // SPA fallback — anything not matched above is served from the
+        // embedded Vite bundle, which holds no data: the app shell and
+        // the DACTAL page. Client-side routing turns unknown paths into
+        // `index.html`.
+        .fallback(embed::serve_ui)
+        .with_state(state)
+        // Outermost, so a refused request is logged too.
         .layer(axum::middleware::from_fn(request_log::record))
 }
 

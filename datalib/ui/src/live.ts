@@ -8,6 +8,8 @@
 // starving its own `fetch` calls with no symptom but hanging requests.
 // Here there is one connection however many subscribers there are.
 
+import { withToken } from "./apiToken";
+
 /// A dataset the server serves, named by what serves it. Mirrors
 /// `watch::Table` by hand. A consumer names the ones it reads and
 /// refetches on those; a change to anything else never reaches it.
@@ -171,7 +173,7 @@ function reconnect() {
 
 function connect() {
   if (source || subscribers.size === 0) return;
-  const es = new EventSource("/api/sync/stream");
+  const es = new EventSource(withToken("/api/sync/stream"));
   source = es;
 
   es.addEventListener("root", (m) => {

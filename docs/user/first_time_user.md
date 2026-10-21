@@ -360,9 +360,10 @@ everything** runs the pipeline (`datalib-dag` under the hood).
 
 The URL it opens carries a one-time `?token=…`, the way a Jupyter
 notebook server's does — the local API is authenticated, so that no web
-page you happen to have open can reach it. Your browser trades the
-token for a session cookie on that first load and drops it from the
-address bar. If you want to open the app in a *different* browser (or
+page you happen to have open can reach it. On that first load the page
+keeps the token in the browser's storage for this address and drops it
+from the address bar. If you want to open the app in a *different*
+browser (or
 you closed the tab and lost the URL), the line the server printed is
 still in your terminal, and the token is on disk at
 `<data_root>/system/api-token`.

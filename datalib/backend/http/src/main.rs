@@ -133,8 +133,8 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Minted before the announcement below because the announced URL
-    // carries it: the browser (and the Tauri webview) authenticate by
-    // loading `<url>?token=…` once, then ride the session cookie.
+    // carries it: the browser (and the Tauri webview) load `<url>?token=…`
+    // once, and the page keeps the token (`ui/src/apiToken.ts`).
     let api_token = ApiToken::mint(&root)?;
     let trusted_proxy = TrustedProxy::from_env()?;
     if let Some(proxy) = trusted_proxy {

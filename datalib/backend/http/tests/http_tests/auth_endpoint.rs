@@ -54,14 +54,6 @@ async fn status(app: &axum::Router, req: Request<Body>) -> StatusCode {
     app.clone().oneshot(req).await.unwrap().status()
 }
 
-fn session_cookie(set_cookie: &str) -> String {
-    set_cookie
-        .split(';')
-        .next()
-        .expect("Set-Cookie always has a name=value pair")
-        .to_string()
-}
-
 #[tokio::test]
 async fn unauthenticated_requests_are_refused() {
     let (app, _) = app().await;
@@ -115,8 +107,9 @@ async fn unauthenticated_requests_are_refused() {
     assert_eq!(status(&app, put_lib).await, StatusCode::UNAUTHORIZED);
 
     // The applet proxy. The grid's data left this binary for the
-    // `unified_document_index` applet, and the token gate is an outermost layer
-    // — so it still covers a route this process knows nothing about.
+    // `unified_document_index` applet, and the gate covers the whole
+    // `/applet/` route — so it still covers a path this process knows
+    // nothing about.
     // Worth pinning: an applet reached without the gate would be an
     // unauthenticated read of the whole mirror.
     assert_eq!(
@@ -129,12 +122,67 @@ async fn unauthenticated_requests_are_refused() {
         .await,
         StatusCode::UNAUTHORIZED
     );
-
-    // The SPA itself.
     assert_eq!(
-        status(&app, Request::get("/").body(Body::empty()).unwrap()).await,
+        status(&app, Request::get("/metrics").body(Body::empty()).unwrap()).await,
         StatusCode::UNAUTHORIZED
     );
+}
+
+/// The app shell holds no data, so it loads with no token: the page
+/// reads the token from its own `?token=` or `localStorage` and sends it
+/// with every call. The server never hands it back as a cookie, and
+/// never redirects, so the page can see the launch URL's token.
+#[tokio::test]
+async fn the_app_shell_is_public_and_no_response_sets_a_cookie() {
+    let (app, _) = app().await;
+    for uri in [
+        "/".to_string(),
+        "/data_sources".to_string(),
+        format!("/?token={TOKEN}"),
+        format!("/gridView()?token={TOKEN}&q=hi"),
+    ] {
+        let resp = app
+            .clone()
+            .oneshot(Request::get(&uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "{uri}");
+        assert!(resp.headers().get(header::SET_COOKIE).is_none(), "{uri}");
+    }
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get("/api/health")
+                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(resp.headers().get(header::SET_COOKIE).is_none());
+}
+
+/// A cookie is the one credential a browser attaches by itself, so a
+/// page on another origin could make it send one. None is accepted,
+/// whatever its name or value.
+#[tokio::test]
+async fn a_cookie_carrying_the_token_does_not_authenticate() {
+    let (app, _) = app().await;
+    for cookie in [
+        format!("datalib_token_0000={TOKEN}"),
+        format!("token={TOKEN}"),
+    ] {
+        let req = Request::get("/api/health")
+            .header(header::COOKIE, &cookie)
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            status(&app, req).await,
+            StatusCode::UNAUTHORIZED,
+            "{cookie}"
+        );
+    }
 }
 
 /// The DACTAL page and its scripts are the one static exception: they
@@ -268,9 +316,8 @@ async fn every_accepted_carrier_works() {
             .header("x-datalib-token", TOKEN)
             .body(Body::empty())
             .unwrap(),
-        // `?token=` is left alone on API routes: the `EventSource` on
-        // /api/sync/stream and any `<img src>` that needs it can't set
-        // headers, and a redirect would break them.
+        // The `EventSource` on /api/sync/stream and any `<img src>`
+        // can't set headers.
         Request::get(format!("/api/health?token={TOKEN}"))
             .body(Body::empty())
             .unwrap(),
@@ -282,71 +329,6 @@ async fn every_accepted_carrier_works() {
     ] {
         assert_eq!(status(&app, req).await, StatusCode::OK);
     }
-}
-
-#[tokio::test]
-async fn a_document_load_mints_a_session_cookie_and_it_authenticates() {
-    let (app, _) = app().await;
-
-    let req = Request::get("/")
-        .header("x-datalib-token", TOKEN)
-        .body(Body::empty())
-        .unwrap();
-    let resp = app.clone().oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let set_cookie = resp
-        .headers()
-        .get(header::SET_COOKIE)
-        .expect("document load must mint a session")
-        .to_str()
-        .unwrap()
-        .to_string();
-
-    // The two attributes doing the security work: unreadable from JS,
-    // and never attached to a cross-site subresource request — which is
-    // the whole of the #138 attack.
-    assert!(set_cookie.contains("HttpOnly"), "{set_cookie}");
-    assert!(set_cookie.contains("SameSite=Lax"), "{set_cookie}");
-    assert!(set_cookie.contains("Path=/"), "{set_cookie}");
-    // No `Secure`: we serve plain http on loopback, and the browser
-    // would drop a `Secure` cookie outright.
-    assert!(!set_cookie.contains("Secure"), "{set_cookie}");
-
-    // And the cookie alone gets the browser through the gate for the
-    // subresources the page will ask for next.
-    let req = Request::get("/api/health")
-        .header(header::COOKIE, session_cookie(&set_cookie))
-        .body(Body::empty())
-        .unwrap();
-    assert_eq!(status(&app, req).await, StatusCode::OK);
-}
-
-#[tokio::test]
-async fn a_token_in_a_document_url_is_redirected_away() {
-    let (app, _) = app().await;
-
-    // Bare launch URL.
-    let req = Request::get(format!("/?token={TOKEN}"))
-        .body(Body::empty())
-        .unwrap();
-    let resp = app.clone().oneshot(req).await.unwrap();
-    assert!(resp.status().is_redirection(), "{:?}", resp.status());
-    assert_eq!(resp.headers().get(header::LOCATION).unwrap(), "/");
-    assert!(
-        resp.headers().get(header::SET_COOKIE).is_some(),
-        "the redirect is what hands the browser its session"
-    );
-
-    // A card URL: the token is stripped, everything else survives —
-    // otherwise the redirect would drop the user's card state.
-    let req = Request::get(format!("/?token={TOKEN}&cols=abc&q=hi"))
-        .body(Body::empty())
-        .unwrap();
-    let resp = app.clone().oneshot(req).await.unwrap();
-    assert_eq!(
-        resp.headers().get(header::LOCATION).unwrap(),
-        "/?cols=abc&q=hi"
-    );
 }
 
 #[tokio::test]
@@ -388,38 +370,26 @@ const OWNER: &str = r#"{"owner":true,"user_id":"u-owner","email":"owner@example.
 const VISITOR: &str = r#"{"owner":false,"user_id":"u-guest","email":"guest@example.test"}"#;
 
 /// Behind the proxy, the proxy's word is the credential: the owner gets
-/// the page and the API with no token, and no session cookie is minted,
-/// since the proxy's page is another site and the browser would not
-/// send one anyway.
+/// the API with no token.
 #[tokio::test]
 async fn behind_a_trusted_proxy_the_owner_needs_no_token() {
     let (app, _) = app_behind(Some(TrustedProxy::Imbue)).await;
-    for path in ["/", "/some/card/route", "/api/health"] {
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::get(path)
-                    .header("x-imbue-identity", OWNER)
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
+    for path in ["/api/health", "/api/config"] {
+        let req = Request::get(path)
+            .header("x-imbue-identity", OWNER)
+            .body(Body::empty())
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK, "{path}");
-        assert!(
-            resp.headers().get(header::SET_COOKIE).is_none(),
-            "{path}: the proxy's header authenticates every request; no cookie to mint"
-        );
+        assert_eq!(status(&app, req).await, StatusCode::OK, "{path}");
     }
 }
 
 /// A shared workspace's visitor reaches the same server through the same
-/// proxy, marked `owner:false`. The mirror is the owner's alone.
+/// proxy, marked `owner:false`. The mirror is the owner's alone; the
+/// app shell, which holds none of it, is public as everywhere.
 #[tokio::test]
 async fn behind_a_trusted_proxy_a_visitor_is_refused() {
     let (app, _) = app_behind(Some(TrustedProxy::Imbue)).await;
     for path in [
-        "/",
         "/api/health",
         "/applet/unified_document_index/search?q=&limit=1",
     ] {
@@ -463,7 +433,7 @@ async fn behind_a_trusted_proxy_the_token_still_works_and_nothing_else_does() {
 #[tokio::test]
 async fn without_a_trusted_proxy_the_identity_header_is_ignored() {
     let (app, _) = app().await;
-    for path in ["/", "/api/health"] {
+    for path in ["/api/health", "/applet/unified_document_index/search"] {
         let req = Request::get(path)
             .header("x-imbue-identity", OWNER)
             .body(Body::empty())

@@ -547,7 +547,7 @@ fn main() {
         // Without `open_js_links_on_click(false)` the plugin injects a
         // click handler that sends every `target="_blank"` link to the OS
         // browser, same-origin included, so `on_new_window` never runs and
-        // the card's ↗ lands in a browser with no session cookie.
+        // the card's ↗ lands in a browser that has never seen the token.
         // Off-origin links are `ui/src/externalLinks.ts`'s job.
         .plugin(
             tauri_plugin_opener::Builder::new()
@@ -894,7 +894,7 @@ fn app_window<'a>(
 /// redefined, so the opener's runs first and wins: the new window
 /// believed it was `main`, and dragging its toolbar moved the main
 /// window. Both windows use the default website data store, so they
-/// still share the session cookie. Built on a task, not in the
+/// still share `localStorage`, where the page keeps the API token. Built on a task, not in the
 /// callback: Tauri warns that building a window from a synchronous
 /// handler deadlocks on Windows.
 fn open_card_window(app: &AppHandle, url: Url) {

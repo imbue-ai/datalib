@@ -15,6 +15,7 @@ import { uriFromHandle } from "./chipLinks";
 import { Resolver } from "./resolver";
 import { pushToast } from "@/toasts";
 import { UNIFIED_DOCUMENT_INDEX } from "@/api";
+import { withToken } from "@/apiToken";
 import { changed, subscribeLive, type RootEvent } from "@/live";
 
 export const CONTACTS_APPLET = "/applet/datalib_contacts";
@@ -587,7 +588,7 @@ export function drawChip(el: HTMLElement, look: ChipLook): void {
 function chipLead(doc: Document, look: ChipLook): Element | null {
   if (look.photo) {
     const img = doc.createElement("img");
-    img.src = look.photo;
+    img.src = withToken(look.photo);
     img.alt = "";
     img.className = "handle-photo";
     img.setAttribute("aria-hidden", "true");

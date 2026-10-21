@@ -113,9 +113,10 @@ export default (args) => (root, ctx) => {
   that opens what this card shows and how to work it.
 - **Data** comes from the backend HTTP API (same origin): e.g.
   `GET /applet/unified_document_index/search?q=…`, `GET /applet/unified_document_index/chat/{markdown_uuid}`. Fetch with
-  relative paths — and *don't* add an auth header in component code. The
-  browser holds the token as an HttpOnly session cookie it sends
-  automatically; the token is deliberately not reachable from page JS.
+  relative paths — and *don't* add an auth header in component code: the
+  page adds the API token to every `fetch` to its own origin. An `<img>`
+  or `<video>` pointed at a data route cannot send it and gets a 401;
+  fetch the bytes and show them through `URL.createObjectURL` instead.
 
 A pre-filtered grid needs no component at all: a card whose source is
 `gridView({ q: "…" })` is one.

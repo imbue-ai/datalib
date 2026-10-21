@@ -1,8 +1,11 @@
+import "./bootToken";
 import { createApp } from "vue";
 import { createPinia } from "pinia";
 import App from "./App.vue";
 import router from "./router";
 import { fetchHealth } from "./api";
+import { ApiError } from "./apiError";
+import { showTokenRequired } from "./apiToken";
 import { installExternalLinkHandler } from "./externalLinks";
 import { installTelemetry } from "./telemetry";
 // The grid theme, for every grid that is not inside a card's shadow
@@ -34,14 +37,20 @@ setupSystemThemeSync();
 // Installed at boot, before any card can render one.
 installExternalLinkHandler();
 
+const app = createApp(App);
+
 // Warm the health snapshot at boot: the agent hand-off (handoff.ts) needs
 // the API token's path out of it and builds its text inside a synchronous
-// click handler, so the fetch has to have already happened. Fire and
-// forget — the one consumer degrades to a generic hint if it hasn't
-// landed yet.
-void fetchHealth().catch(() => {});
+// click handler, so the fetch has to have already happened. It is also
+// the first call to need the token: refused, the page says how to get one
+// instead of drawing an app whose every call fails.
+void fetchHealth().catch((e) => {
+  if (e instanceof ApiError && e.status === 401) {
+    app.unmount();
+    showTokenRequired(document.getElementById("app")!);
+  }
+});
 
-const app = createApp(App);
 app.use(createPinia());
 app.use(router);
 // Before mount, so the first route and anything the mount throws are

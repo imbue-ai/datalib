@@ -64,8 +64,8 @@ macro_rules! app_csp_directives {
 ///   ([`DATA_DOCUMENT_CSP`]).
 /// - `frame-ancestors 'none'`: no page may frame the app, so no page can
 ///   lay an invisible copy of it under its own buttons. A page on
-///   another port of the same host would otherwise carry the session,
-///   since `SameSite` ignores the port.
+///   another port of the same host is the same site, so browsers do not
+///   partition storage for its frame: the copy would find the token.
 pub const APP_CSP: &str = concat!(app_csp_directives!(), "; frame-ancestors 'none'");
 
 /// [`APP_CSP`] without `frame-ancestors`, for a server behind a
@@ -85,7 +85,7 @@ pub fn app_csp(trusted_proxy: Option<TrustedProxy>) -> &'static str {
 /// an attachment out of a render tree, a fetched remote SVG. A sender
 /// wrote them, so they run no script at all and load nothing from
 /// outside — not even a read receipt. `sandbox` puts the document in an
-/// opaque origin: no cookie, no same-origin `fetch` to `/api/*`, no way
+/// opaque origin: no `localStorage`, no same-origin `fetch`, no way
 /// to navigate the window it sits in. It is sent as a header because
 /// `sandbox` is ignored in a `<meta>` policy.
 pub const DATA_DOCUMENT_CSP: &str = "sandbox; default-src 'none'; style-src 'unsafe-inline'; \
@@ -139,11 +139,10 @@ pub fn is_scriptable_document(content_type: &str) -> bool {
     ) || mime.ends_with("+xml")
 }
 
-/// Files the token gate lets through unauthenticated: the DACTAL page
-/// and its scripts. They are static and identical on every install,
-/// and the page runs sandboxed (see `serve_ui`), so it needs no
-/// session — and, being sandboxed, could not use one: an opaque origin
-/// sends no cookie with a module load.
+/// The DACTAL page and its scripts. The page runs sandboxed (see
+/// `serve_ui`), in an opaque origin, so its module loads are CORS
+/// requests and an unknown path under it is a 404 rather than the app
+/// shell.
 pub const PUBLIC_PREFIX: &str = "dactal/";
 
 pub async fn serve_ui(State(state): State<AppState>, uri: Uri) -> Response {

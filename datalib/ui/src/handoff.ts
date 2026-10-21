@@ -24,9 +24,9 @@ function seedSource(name: string): string {
 
 // Every wayfinder hands an agent a set of curl-able URLs, and the API
 // requires the server's per-process token (see
-// datalib/backend/http/src/auth.rs). The browser holds that token as an
-// HttpOnly cookie it can't read, and we wouldn't paste it into an agent
-// prompt anyway — a secret in a prompt ends up in transcripts and logs.
+// datalib/backend/http/src/auth.rs). The page holds that token, but we
+// don't paste it into an agent prompt: a secret in a prompt ends up in
+// transcripts and logs.
 // So point the agent at the file instead: it runs on this machine, as
 // this user, and can re-read it whenever it needs a fresh one.
 function authLines(): string[] {

@@ -8,6 +8,7 @@
 // right-click as a chip in a document (docs/dev/chips.md § Clicks).
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { copyToClipboard } from "@/clipboard";
+import { withToken } from "@/apiToken";
 import { iconUrl } from "@/config/icons";
 import { formatStamp } from "@/config/timeFormat";
 import { openExternal } from "@/externalLinks";
@@ -323,7 +324,7 @@ async function create() {
 }
 
 function photoOf(c: NormalizedContact): string | null {
-  return c.photo_url ?? null;
+  return c.photo_url ? withToken(c.photo_url) : null;
 }
 
 const headPhoto = computed(() => {

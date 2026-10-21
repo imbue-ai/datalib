@@ -5,22 +5,23 @@
 //! `http://127.0.0.1:8731/…`. With no auth that page could `PUT /api/config` a
 //! step whose `command` is an arbitrary shell string and then run it.
 //!
-//! So one random token is minted per process and required on every request,
-//! accepted as `Authorization: Bearer`, `X-Datalib-Token`, `?token=` (the
-//! launch URL), or the cookie. A request that presents the token by header or
-//! query *and* asks for a document gets it back as a cookie, so the rest of
-//! the page authenticates with no per-callsite changes.
+//! So one random token is minted per process and required on every route
+//! that reads or changes data, accepted as `Authorization: Bearer`,
+//! `X-Datalib-Token` or `?token=`. The app shell (the UI bundle, which holds
+//! no data), the agent guides and component modules are public; see
+//! [`crate::router`] for which routes sit behind [`require_token`].
 //!
-//! The cookie is the right carrier here, and a token injected into the HTML
-//! is not: a page on `evil.com` can neither read ours (`HttpOnly`) nor make
-//! the browser send it (`SameSite=Lax`), and DNS rebinding fails closed,
-//! whereas a token in the served HTML is readable by anything that can read
-//! the page.
+//! The server sets no cookie. The page keeps the token in `localStorage`,
+//! taken from the launch URL's `?token=` (`ui/src/apiToken.ts`), and sends it
+//! as a header. Nothing the browser attaches by itself proves anything, so a
+//! page on another origin, or on another port of this host, has nothing to
+//! send: `localStorage` is per origin, the port included, and the server
+//! never echoes the token. A URL that the browser loads without script (an
+//! image, a media file, an `EventSource`) carries `?token=` instead.
 //!
 //! Behind a reverse proxy that authenticates every request itself and frames
-//! the app in its own page, both measures get in the way: the proxy's page
-//! is another site, so the browser withholds the `SameSite=Lax` cookie from
-//! the frame, and `frame-ancestors 'none'` blanks it. `$DATALIB_TRUSTED_PROXY`
+//! the app in its own page, `frame-ancestors 'none'` would blank that frame.
+//! `$DATALIB_TRUSTED_PROXY`
 //! names such a proxy ([`TrustedProxy`]). Behind it, a request whose identity
 //! header says the requester is the owner is let in without the token, a
 //! request it marks as a visitor is refused, and the page's policy leaves
@@ -30,10 +31,9 @@
 
 use axum::body::Body;
 use axum::extract::{Request, State};
-use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
+use axum::http::{header, HeaderMap, Method, StatusCode};
 use axum::middleware::Next;
-use axum::response::{IntoResponse, Redirect, Response};
-use sha2::{Digest, Sha256};
+use axum::response::{IntoResponse, Response};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -178,14 +178,13 @@ fn is_url_safe(s: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~'))
 }
 
-/// The server's token plus the two paths derived from it: the cookie it
-/// mints and the file it's published in. Cheap to clone (one `Arc`).
+/// The server's token and the file it's published in. Cheap to clone (one
+/// `Arc`).
 #[derive(Clone)]
 pub struct ApiToken(Arc<Inner>);
 
 struct Inner {
     value: String,
-    cookie_name: String,
     token_file: PathBuf,
 }
 
@@ -218,22 +217,8 @@ impl ApiToken {
     }
 
     pub fn from_value(value: impl Into<String>, root: &Path) -> Self {
-        let value = value.into();
-        // Cookies ignore the port, so two datalib instances on
-        // 127.0.0.1 (the Tauri shell binds :0, dev.sh picks an
-        // ephemeral port) would otherwise fight over one cookie name
-        // and log each other out. Deriving the name from a hash of the
-        // token gives every process its own slot. Truncated to 8 hex
-        // chars: enough to not collide, and a preimage of the full
-        // token it is not.
-        let digest = Sha256::digest(value.as_bytes());
-        let cookie_name = format!(
-            "datalib_token_{:02x}{:02x}{:02x}{:02x}",
-            digest[0], digest[1], digest[2], digest[3]
-        );
         Self(Arc::new(Inner {
-            value,
-            cookie_name,
+            value: value.into(),
             token_file: token_file_path(root),
         }))
     }
@@ -260,19 +245,7 @@ impl ApiToken {
         Ok(())
     }
 
-    fn cookie_header(&self) -> HeaderValue {
-        // No `Secure`: we're on plain http over loopback, and `Secure`
-        // would make the browser drop the cookie entirely. No
-        // `Max-Age`/`Expires` either — a session cookie is right for a
-        // token that dies with the process anyway.
-        HeaderValue::from_str(&format!(
-            "{}={}; Path=/; HttpOnly; SameSite=Lax",
-            self.0.cookie_name, self.0.value
-        ))
-        .expect("token and cookie name are URL-safe ASCII")
-    }
-
-    fn credential(&self, req: &Request<Body>) -> Option<Credential> {
+    fn presented(&self, req: &Request<Body>) -> bool {
         let headers = req.headers();
 
         if let Some(v) = headers
@@ -284,37 +257,20 @@ impl ApiToken {
             })
         {
             if self.matches(v.trim()) {
-                return Some(Credential::Presented);
+                return true;
             }
         }
 
         if let Some(v) = headers.get(TOKEN_HEADER).and_then(|v| v.to_str().ok()) {
             if self.matches(v.trim()) {
-                return Some(Credential::Presented);
+                return true;
             }
         }
 
-        if let Some(v) = req.uri().query().and_then(query_token) {
-            if self.matches(v) {
-                return Some(Credential::Query);
-            }
-        }
-
-        // Several cookies can share the header; scan for ours by name.
-        for cookie in headers
-            .get_all(header::COOKIE)
-            .iter()
-            .filter_map(|v| v.to_str().ok())
-            .flat_map(|v| v.split(';'))
-        {
-            if let Some((name, val)) = cookie.split_once('=') {
-                if name.trim() == self.0.cookie_name && self.matches(val.trim()) {
-                    return Some(Credential::Cookie);
-                }
-            }
-        }
-
-        None
+        req.uri()
+            .query()
+            .and_then(query_token)
+            .is_some_and(|v| self.matches(v))
     }
 
     /// Constant-time comparison. Over loopback a timing oracle on a
@@ -332,18 +288,6 @@ impl ApiToken {
         }
         diff == 0
     }
-}
-
-/// How a request proved it holds the token. The distinction drives
-/// whether we hand back a cookie and whether we redirect.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Credential {
-    /// Already has the cookie — nothing to do.
-    Cookie,
-    /// `Authorization` / `X-Datalib-Token`.
-    Presented,
-    /// `?token=…` in the URL.
-    Query,
 }
 
 pub fn token_file_path(root: &Path) -> PathBuf {
@@ -383,79 +327,34 @@ pub(crate) fn query_without_token(query: &str) -> Option<String> {
     (!rest.is_empty()).then(|| rest.join("&"))
 }
 
-/// What needs no session: the agent guides, and the DACTAL page with its
-/// scripts — static files that run sandboxed (`embed.rs`), so a session
-/// would be neither needed nor usable.
-fn is_public(path: &str) -> bool {
-    path == "/agent.md"
-        || path.starts_with("/agent/")
-        || path
-            .strip_prefix('/')
-            .is_some_and(|p| p.starts_with(crate::embed::PUBLIC_PREFIX))
-}
-
 fn is_api(path: &str) -> bool {
     path.starts_with("/api/")
 }
 
 pub async fn require_token(State(gate): State<Gate>, req: Request<Body>, next: Next) -> Response {
     let path = req.uri().path().to_string();
-    if is_public(&path) {
+    let auth = &gate.token;
+    if auth.presented(&req) {
         return next.run(req).await;
     }
-    let auth = &gate.token;
-
-    match auth.credential(&req) {
-        None => match gate.trusted_proxy.map(|p| p.requester(req.headers())) {
-            Some(Requester::Owner) if is_cross_site_write(req.method(), req.headers()) => {
-                forbidden(&path, "a page on another origin made this request")
-            }
-            Some(Requester::Owner) => next.run(req).await,
-            Some(Requester::Visitor) => forbidden(
-                &path,
-                "this Datalib is only available to the workspace's owner",
-            ),
-            Some(Requester::Malformed) => {
-                tracing::warn!(
-                    "{} identity header the proxy would not have written on {} {path}; refused",
-                    gate.trusted_proxy.map_or("", |p| p.as_str()),
-                    req.method()
-                );
-                unauthorized(auth, &path)
-            }
-            None | Some(Requester::Unvouched) => unauthorized(auth, &path),
-        },
-
-        Some(Credential::Cookie) => next.run(req).await,
-
-        // Token in the URL of a document request: hand back the cookie
-        // and bounce to the same URL without it, so it doesn't survive
-        // in history / bookmarks / `Referer`. `/api/*` is left alone —
-        // a redirect would break the `fetch`/`EventSource` callers that
-        // legitimately use `?token=`.
-        Some(Credential::Query) if !is_api(&path) => {
-            let target = match req.uri().query().and_then(query_without_token) {
-                Some(q) => format!("{path}?{q}"),
-                None => path,
-            };
-            let mut resp = Redirect::to(&target).into_response();
-            resp.headers_mut()
-                .append(header::SET_COOKIE, auth.cookie_header());
-            resp
+    match gate.trusted_proxy.map(|p| p.requester(req.headers())) {
+        Some(Requester::Owner) if is_cross_site_write(req.method(), req.headers()) => {
+            forbidden(&path, "a page on another origin made this request")
         }
-
-        Some(Credential::Query) | Some(Credential::Presented) => {
-            let api = is_api(&path);
-            let mut resp = next.run(req).await;
-            // Mint the session on document loads only. An API caller
-            // that already sends the header has no use for a cookie,
-            // and this keeps `Set-Cookie` off every JSON response.
-            if !api {
-                resp.headers_mut()
-                    .append(header::SET_COOKIE, auth.cookie_header());
-            }
-            resp
+        Some(Requester::Owner) => next.run(req).await,
+        Some(Requester::Visitor) => forbidden(
+            &path,
+            "this Datalib is only available to the workspace's owner",
+        ),
+        Some(Requester::Malformed) => {
+            tracing::warn!(
+                "{} identity header the proxy would not have written on {} {path}; refused",
+                gate.trusted_proxy.map_or("", |p| p.as_str()),
+                req.method()
+            );
+            unauthorized(auth, &path)
         }
+        None | Some(Requester::Unvouched) => unauthorized(auth, &path),
     }
 }
 
@@ -484,8 +383,7 @@ fn unauthorized(auth: &ApiToken, path: &str) -> Response {
              a Jupyter notebook server does. Without it, any web page you have open \
              could reach this server.</p>\
              <p>If this is a tab left over from an earlier run, the token has changed: \
-             open the URL the launcher printed. Otherwise append the token to the URL \
-             once and this browser gets a session cookie:</p>\
+             open the URL the launcher printed. Otherwise append the token to the URL:</p>\
              <pre>{path}?token=$(cat {token_file})</pre>\
              <p>The running server's token is in <code>{token_file}</code>.</p>"
         ),
@@ -533,6 +431,7 @@ fn refusal_page(status: StatusCode, title: &str, body: &str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::HeaderValue;
 
     fn token() -> ApiToken {
         ApiToken::from_value("t0ken", Path::new("/tmp/root"))
@@ -543,14 +442,6 @@ mod tests {
         let t = ApiToken::mint(Path::new("/tmp/root")).unwrap();
         assert_eq!(t.value().len(), 64, "two simple-form uuids");
         assert!(is_url_safe(t.value()), "{}", t.value());
-    }
-
-    #[test]
-    fn two_processes_get_two_cookie_names() {
-        let a = ApiToken::from_value("aaaa", Path::new("/tmp/root"));
-        let b = ApiToken::from_value("bbbb", Path::new("/tmp/root"));
-        assert_ne!(a.0.cookie_name, b.0.cookie_name);
-        assert!(a.0.cookie_name.starts_with("datalib_token_"));
     }
 
     #[test]
@@ -588,18 +479,6 @@ mod tests {
         assert!(!is_url_safe("has space"));
         assert!(!is_url_safe("percent%20"));
         assert!(!is_url_safe(""));
-    }
-
-    #[test]
-    fn only_the_agent_guides_and_the_dactal_statics_are_public() {
-        assert!(is_public("/agent.md"));
-        assert!(is_public("/agent/cards.md"));
-        assert!(is_public("/dactal/index.html"));
-        assert!(is_public("/dactal/vendor/dactal.js"));
-        assert!(!is_public("/dactalx"));
-        assert!(!is_public("/api/health"));
-        assert!(!is_public("/"));
-        assert!(!is_public("/agentfoo"));
     }
 
     #[test]

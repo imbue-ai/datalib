@@ -156,10 +156,11 @@ for the design.
 Both launchers handle it for you:
 
 * `//datalib:serve` mints a token, exports `DATALIB_TOKEN` to the
-  backend, and opens `<url>?token=…`. The browser trades that for an
-  HttpOnly session cookie and is redirected to the clean URL.
+  backend, and opens `<url>?token=…`. The page keeps the token in
+  `localStorage`, takes it out of the address bar, and sends it with
+  every request ([`apiToken.ts`](../../datalib/ui/src/apiToken.ts)).
 * `//datalib:dev` mints one and gives it to *both* processes. The
-  browser talks to Vite, not the backend, so it never gets a cookie —
+  browser talks to Vite, not the backend, and the page holds no token —
   instead Vite's server-side `/api` proxy stamps
   `Authorization: Bearer …` on every forwarded request
   ([`vite.config.ts`](../../datalib/ui/vite.config.ts)). Starting Vite by

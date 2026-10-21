@@ -4,10 +4,10 @@
 // view the user can open in any card; it does not touch the default grid.
 //
 // The page runs in a sandboxed iframe: `sandbox="allow-scripts"` with no
-// `allow-same-origin`, so its origin is opaque — no cookie, no `/api/*`,
-// no reach into this window. It gets its rows from this card over
-// `postMessage`, and this card does the fetching with the session it
-// holds. The frame side is `public/dactal/bridge.js`; the message shapes
+// `allow-same-origin`, so its origin is opaque — no `localStorage`, so no
+// API token, and no reach into this window. It gets its rows from this
+// card over `postMessage`, and this card does the fetching with the token
+// it holds. The frame side is `public/dactal/bridge.js`; the message shapes
 // are shared between the two files and nowhere else.
 import { fetchSearch } from "../../api";
 import type { CardCtx, CardRender } from "../types";

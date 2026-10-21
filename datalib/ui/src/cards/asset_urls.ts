@@ -15,6 +15,7 @@
  */
 
 import { UNIFIED_DOCUMENT_INDEX } from "../api";
+import { withToken } from "../apiToken";
 
 /** Full URLs, protocol-relative URLs, absolute paths, and fragments. */
 export function isAbsoluteOrUrl(src: string): boolean {
@@ -23,8 +24,10 @@ export function isAbsoluteOrUrl(src: string): boolean {
 
 /** `blobs/foo.png` → `/applet/unified_document_index/asset/{uuid}/blobs/foo.png`. */
 export function assetUrl(markdownUuid: string, src: string): string {
-  return `${UNIFIED_DOCUMENT_INDEX}/asset/${encodeURIComponent(markdownUuid)}/${src
-    .split("/")
-    .map(encodeURIComponent)
-    .join("/")}`;
+  return withToken(
+    `${UNIFIED_DOCUMENT_INDEX}/asset/${encodeURIComponent(markdownUuid)}/${src
+      .split("/")
+      .map(encodeURIComponent)
+      .join("/")}`,
+  );
 }

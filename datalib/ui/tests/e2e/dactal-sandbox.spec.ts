@@ -11,8 +11,8 @@ const TOKEN = process.env.DATALIB_TOKEN;
 
 const CARD = "/" + encodeURIComponent('dactalView({ q: "rows/source" })');
 
-// Authenticate the way a browser does — `?token=` once, then the cookie
-// — rather than through the suite's ambient `Authorization` header.
+// Authenticate the way a browser does — `?token=` once, which the page
+// keeps — rather than through the suite's ambient `Authorization` header.
 // Playwright puts that header on every request the page makes, and on
 // a cross-origin one (the sandboxed frame loading its module script
 // from origin `null`) it forces a CORS preflight the server has no
