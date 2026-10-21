@@ -366,9 +366,12 @@ catalog entry's `sections`, with the render fields and everything else
 no section names under Advanced options
 ([`wizard_design.md`](wizard_design.md)). Editing renames the group in place and
 rewrites both steps where the first of them stood. A source missing one of its
-two steps gets it back on save; a render step under a provider that
-renders nothing (`renderStep: false` in `ui/src/config/catalog.ts`) is
-removed and unwired, and the dialog says so before Save.
+two steps gets it back on save. A download-only provider
+(`rendersDocuments: false` in `ui/src/config/catalog.ts`) still gets its
+render step: it renders no documents, but it writes the storage report and
+carries the download's problems into the index, so the Manage row's counts
+lead somewhere. The form offers it no Rendering section, since there is
+nothing to render or search.
 
 The screen lists groups, and the steps under each, in file order, and a
 header click's sort is undone by a third click. So the writers keep the
