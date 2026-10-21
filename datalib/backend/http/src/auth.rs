@@ -158,20 +158,20 @@ fn parse_imbue_identity(raw: &[u8]) -> Requester {
     }
 }
 
-/// Env listing host names, beyond `localhost`, its subdomains and IP
-/// literals, that a
-/// request's `Host` may carry: comma-separated, each a name or `*.<domain>`
-/// for any name under it. For a server reached through a proxy that
-/// passes the browser's own `Host` through, such as a share gateway.
+/// Env listing host names, beyond `localhost`, the names under it and IP
+/// literals, that a request's `Host` may carry in proxy mode:
+/// comma-separated, each a name or `*.<domain>` for any name under it. For
+/// a trusted proxy that passes the browser's own `Host` through.
 pub const ALLOWED_HOSTS_ENV: &str = "DATALIB_ALLOWED_HOSTS";
 
-/// The names a request's `Host` may carry. `localhost`, every name under
-/// it and every IP literal are always among them: DNS rebinding needs a
-/// name the attacker controls, and browsers resolve `*.localhost` to
-/// loopback themselves, never through DNS. Imbue Studio opens an app at
-/// `<label>.host-<hex>.localhost:<port>`. The port is not checked, since it is the
-/// one the client dialed — Docker's `-p`, Vite's dev proxy and an SSH
-/// tunnel all put a port other than the bound one there.
+/// The names a request's `Host` may carry in proxy mode, the one mode in
+/// which a rebound page has a credential to send ([`fetch_policy`]).
+/// `localhost`, every name under it and every IP literal are always among
+/// them: DNS rebinding needs a name the attacker controls, and browsers
+/// resolve `*.localhost` to loopback themselves, never through DNS. The
+/// port is not checked, since it is the one the client dialed — Docker's
+/// `-p`, Vite's dev proxy and an SSH tunnel all put a port other than the
+/// bound one there.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AllowedHosts {
     names: Vec<String>,
@@ -298,9 +298,14 @@ impl FetchVerdict {
 
 /// Where a request came from, judged by headers a page cannot set:
 ///
-/// 1. `Host` must name this server ([`AllowedHosts`]), on every route.
-///    A request with no `Host` at all did not come from a browser, which
-///    always sends one, so there is nothing to rebind.
+/// 1. In proxy mode, `Host` must name this server ([`AllowedHosts`]), on
+///    every route; otherwise a page that points its own name at this
+///    address (DNS rebinding) could send the identity header the proxy is
+///    trusted for. Outside proxy mode a rebound page has no credential to
+///    send: the browser keeps the cookie for the real name and the page
+///    does not know the token, so it reaches the public routes alone. A
+///    request with no `Host` did not come from a browser, which always
+///    sends one, so there is nothing to rebind.
 /// 2. A public route needs nothing more.
 /// 3. A navigation — `GET` or `HEAD` with `Sec-Fetch-Mode: navigate` — is
 ///    allowed from anywhere, so a link or the proxy's frame opens the app.
@@ -319,9 +324,13 @@ pub(crate) fn fetch_policy(
     headers: &HeaderMap,
     carrier: Carrier,
     public: bool,
-    hosts: &AllowedHosts,
+    proxy_hosts: Option<&AllowedHosts>,
 ) -> FetchVerdict {
-    if host.is_some_and(|h| !hosts.admits(h)) {
+    let rebound = match (proxy_hosts, host) {
+        (Some(hosts), Some(host)) => !hosts.admits(host),
+        _ => false,
+    };
+    if rebound {
         return FetchVerdict::ForeignHost;
     }
     if public {
@@ -365,7 +374,8 @@ fn request_host(req: &Request<Body>) -> Option<String> {
 }
 
 /// What [`require_token`] is configured with: the token, the proxy whose
-/// word is taken in its place, if any, and the host names it answers to.
+/// word is taken in its place, if any, and the host names it answers to
+/// in proxy mode.
 #[derive(Clone)]
 pub struct Gate {
     pub token: ApiToken,
@@ -621,7 +631,7 @@ pub async fn require_token(State(gate): State<Gate>, req: Request<Body>, next: N
         req.headers(),
         carrier,
         public,
-        &gate.hosts,
+        gate.trusted_proxy.is_some().then_some(&gate.hosts),
     );
     if let Some(why) = verdict.refusal() {
         tracing::warn!(
@@ -879,13 +889,13 @@ mod tests {
         Option<&'a str>,
         Carrier,
         bool,
+        bool,
         Option<&'a str>,
         FetchVerdict,
     );
 
     /// The policy's case table: method × `Sec-Fetch-Site` × `Sec-Fetch-Mode`
-    /// × `Origin` × credential (the proxy's word standing for proxy mode) ×
-    /// public route × `Host`.
+    /// × `Origin` × credential × proxy mode × public route × `Host`.
     #[test]
     fn the_fetch_policy_case_table() {
         use Carrier::{Cookie, Nothing, ProxyOwner, Token};
@@ -897,53 +907,61 @@ mod tests {
         let hosts = AllowedHosts::parse("datalib.example, *.share.example").unwrap();
         #[rustfmt::skip]
         let table: &[Case] = &[
-            // method      site                 mode              origin                          carrier     public host                              verdict
+            // method      site                 mode              origin                          carrier     proxy  public host                              verdict
             // The app's own requests, and the address bar.
-            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           Cookie,     false, H,                                 Allow),
-            (Method::POST, Some("same-origin"), Some("cors"),     Some("http://127.0.0.1:8731"),  Cookie,     false, H,                                 Allow),
-            (Method::GET,  Some("none"),        Some("navigate"), None,                           Cookie,     false, H,                                 Allow),
-            (Method::PUT,  Some("none"),        Some("cors"),     None,                           Token,      false, H,                                 Allow),
+            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           Cookie,     false, false, H,                                 Allow),
+            (Method::POST, Some("same-origin"), Some("cors"),     Some("http://127.0.0.1:8731"),  Cookie,     false, false, H,                                 Allow),
+            (Method::GET,  Some("none"),        Some("navigate"), None,                           Cookie,     false, false, H,                                 Allow),
+            (Method::PUT,  Some("none"),        Some("cors"),     None,                           Token,      false, false, H,                                 Allow),
             // A navigation from anywhere, to any path.
-            (Method::GET,  Some("cross-site"),  Some("navigate"), None,                           Cookie,     false, H,                                 Allow),
-            (Method::HEAD, Some("same-site"),   Some("navigate"), None,                           ProxyOwner, false, Some("localhost:8731"),            Allow),
-            (Method::GET,  Some("cross-site"),  Some("navigate"), None,                           Nothing,    false, H,                                 Allow),
+            (Method::GET,  Some("cross-site"),  Some("navigate"), None,                           Cookie,     false, false, H,                                 Allow),
+            (Method::HEAD, Some("same-site"),   Some("navigate"), None,                           ProxyOwner, true , false, Some("localhost:8731"),            Allow),
+            (Method::GET,  Some("cross-site"),  Some("navigate"), None,                           Nothing,    false, false, H,                                 Allow),
             // Anything else from another site or another port: refused,
             // the token and the proxy's word included.
-            (Method::POST, Some("same-site"),   Some("navigate"), None,                           Cookie,     false, H,                                 Site),
-            (Method::POST, Some("same-site"),   Some("no-cors"),  Some("http://127.0.0.1:9000"),  Cookie,     false, H,                                 Site),
-            (Method::GET,  Some("cross-site"),  Some("no-cors"),  None,                           Cookie,     false, H,                                 Site),
-            (Method::GET,  Some("same-site"),   Some("cors"),     None,                           Token,      false, H,                                 Site),
-            (Method::DELETE, Some("cross-site"), Some("cors"),    None,                           ProxyOwner, false, Some("localhost:8731"),            Site),
-            (Method::POST, Some("cross-site"),  None,             None,                           Nothing,    false, H,                                 Site),
-            (Method::POST, Some("bogus"),       Some("cors"),     None,                           Cookie,     false, H,                                 Site),
+            (Method::POST, Some("same-site"),   Some("navigate"), None,                           Cookie,     false, false, H,                                 Site),
+            (Method::POST, Some("same-site"),   Some("no-cors"),  Some("http://127.0.0.1:9000"),  Cookie,     false, false, H,                                 Site),
+            (Method::GET,  Some("cross-site"),  Some("no-cors"),  None,                           Cookie,     false, false, H,                                 Site),
+            (Method::GET,  Some("same-site"),   Some("cors"),     None,                           Token,      false, false, H,                                 Site),
+            (Method::DELETE, Some("cross-site"), Some("cors"),    None,                           ProxyOwner, true , false, Some("localhost:8731"),            Site),
+            (Method::POST, Some("cross-site"),  None,             None,                           Nothing,    false, false, H,                                 Site),
+            (Method::POST, Some("bogus"),       Some("cors"),     None,                           Cookie,     false, false, H,                                 Site),
             // No fetch metadata: the token and the proxy's word pass, a
             // cookie-only write needs this server's Origin.
-            (Method::POST, None,                None,             None,                           Token,      false, H,                                 Allow),
-            (Method::POST, None,                None,             None,                           ProxyOwner, false, Some("localhost:8731"),            Allow),
-            (Method::GET,  None,                None,             None,                           Cookie,     false, H,                                 Allow),
-            (Method::POST, None,                None,             Some("http://127.0.0.1:8731"),  Cookie,     false, H,                                 Allow),
-            (Method::POST, None,                None,             None,                           Cookie,     false, H,                                 NoOrigin),
-            (Method::POST, None,                None,             Some("http://127.0.0.1:9000"),  Cookie,     false, H,                                 NoOrigin),
-            (Method::PUT,  None,                None,             Some("http://evil.example"),    Cookie,     false, H,                                 NoOrigin),
-            (Method::POST, None,                None,             Some("http://127.0.0.1:8731"),  Cookie,     false, None,                              NoOrigin),
-            // Host: loopback and IP literals at any port, the configured
-            // names, and no Host at all (not a browser).
-            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           Cookie,     false, Some("localhost:5173"),            Allow),
-            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           Cookie,     false, Some("[::1]:8731"),                Allow),
-            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           Cookie,     false, Some("192.168.1.20:8731"),         Allow),
-            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           ProxyOwner, false, Some("datalib-x7k9.share.example"), Allow),
-            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           ProxyOwner, false, Some("DATALIB.example:443"),       Allow),
-            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           Token,      false, None,                              Allow),
-            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           ProxyOwner, false, Some("rebind.evil.example:8731"),  Host),
-            (Method::GET,  Some("none"),        Some("navigate"), None,                           Token,      false, Some("share.example"),             Host),
-            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           Cookie,     false, Some("localhost.evil.example"),    Host),
-            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           Cookie,     false, Some("127.0.0.1:abc"),             Host),
-            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           Cookie,     false, Some(""),                          Host),
-            // A public route needs a right Host and nothing else.
-            (Method::GET,  Some("cross-site"),  Some("no-cors"),  None,                           Nothing,    true,  H,                                 Allow),
-            (Method::GET,  Some("cross-site"),  Some("no-cors"),  None,                           Nothing,    true,  Some("rebind.evil.example"),       Host),
+            (Method::POST, None,                None,             None,                           Token,      false, false, H,                                 Allow),
+            (Method::POST, None,                None,             None,                           ProxyOwner, true , false, Some("localhost:8731"),            Allow),
+            (Method::GET,  None,                None,             None,                           Cookie,     false, false, H,                                 Allow),
+            (Method::POST, None,                None,             Some("http://127.0.0.1:8731"),  Cookie,     false, false, H,                                 Allow),
+            (Method::POST, None,                None,             None,                           Cookie,     false, false, H,                                 NoOrigin),
+            (Method::POST, None,                None,             Some("http://127.0.0.1:9000"),  Cookie,     false, false, H,                                 NoOrigin),
+            (Method::PUT,  None,                None,             Some("http://evil.example"),    Cookie,     false, false, H,                                 NoOrigin),
+            (Method::POST, None,                None,             Some("http://127.0.0.1:8731"),  Cookie,     false, false, None,                              NoOrigin),
+            // Host, in proxy mode: loopback, names under localhost and IP
+            // literals at any port, the configured names, and no Host at
+            // all (not a browser).
+            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           ProxyOwner, true,  false, Some("localhost:5173"),            Allow),
+            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           ProxyOwner, true,  false, Some("datalib-x7k9.host-ab12.localhost:8421"), Allow),
+            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           ProxyOwner, true,  false, Some("[::1]:8731"),                Allow),
+            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           ProxyOwner, true,  false, Some("192.168.1.20:8731"),         Allow),
+            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           ProxyOwner, true,  false, Some("datalib-x7k9.share.example"), Allow),
+            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           ProxyOwner, true,  false, Some("DATALIB.example:443"),       Allow),
+            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           ProxyOwner, true,  false, None,                              Allow),
+            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           ProxyOwner, true,  false, Some("rebind.evil.example:8731"),  Host),
+            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           Cookie,     true,  false, Some("share.example"),             Host),
+            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           Token,      true,  false, Some("localhost.evil.example"),    Host),
+            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           Nothing,    true,  false, Some("127.0.0.1:abc"),             Host),
+            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           ProxyOwner, true,  false, Some(""),                          Host),
+            // Outside proxy mode a rebound page has no credential to send,
+            // so Host is not checked.
+            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           Cookie,     false, false, Some("rebind.evil.example:8731"),  Allow),
+            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           Token,      false, false, Some("datalib-x7k9.share.example"), Allow),
+            (Method::GET,  Some("same-origin"), Some("cors"),     None,                           Nothing,    false, false, Some(""),                          Allow),
+            // A public route needs a right Host, in proxy mode, and nothing else.
+            (Method::GET,  Some("cross-site"),  Some("no-cors"),  None,                           Nothing,    false, true,  H,                                 Allow),
+            (Method::GET,  Some("cross-site"),  Some("no-cors"),  None,                           Nothing,    true,  true,  Some("rebind.evil.example"),       Host),
+            (Method::GET,  Some("cross-site"),  Some("no-cors"),  None,                           Nothing,    false, true,  Some("rebind.evil.example"),       Allow),
         ];
-        for (i, (method, site, mode, origin, carrier, public, host, want)) in
+        for (i, (method, site, mode, origin, carrier, proxy, public, host, want)) in
             table.iter().enumerate()
         {
             let mut headers = HeaderMap::new();
@@ -956,7 +974,8 @@ mod tests {
                     headers.insert(name, HeaderValue::from_str(value).unwrap());
                 }
             }
-            let got = fetch_policy(method, *host, &headers, *carrier, *public, &hosts);
+            let proxy_hosts = proxy.then_some(&hosts);
+            let got = fetch_policy(method, *host, &headers, *carrier, *public, proxy_hosts);
             assert_eq!(got, *want, "row {i}: {:?}", table[i]);
         }
     }

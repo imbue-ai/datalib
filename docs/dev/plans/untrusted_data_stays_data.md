@@ -109,14 +109,16 @@ cannot set:
 3. **A request with no `Sec-Fetch-Site`** (`curl`, an older browser) is
    let through when it presents the token. A cookie-only write without
    it must carry an `Origin` naming the server, or it is refused.
-4. **`Host` must name the server:** an IP literal, `localhost` or a name
-   under it (Imbue Studio opens an app at
-   `<label>.host-<hex>.localhost:8421`), or a name listed in
-   `DATALIB_ALLOWED_HOSTS` (a share gateway passes the browser's `Host`
-   through, so default-workspace-template lists `*.<share domain>`). The
-   port is not checked. This defeats DNS rebinding, which today, in
-   proxy mode, lets a page forge `X-Imbue-Identity: {"owner":true}`.
-   The applets already check `Host` the same way (`applets.md`).
+4. **In proxy mode, `Host` must name the server:** an IP literal,
+   `localhost` or a name under it, or a name listed in
+   `DATALIB_ALLOWED_HOSTS`. The port is not checked. This defeats DNS
+   rebinding, which today, in proxy mode, lets a page forge
+   `X-Imbue-Identity: {"owner":true}`. Outside proxy mode a rebound page
+   has no credential to send: the browser keeps the cookie for the real
+   name and the page does not know the token, so it reaches only the
+   public routes, which are static files from this repo. `Host` is not
+   checked there, so a gateway that passes the browser's `Host` through
+   (Imbue Studio's share gateway) needs no setting.
 
 The case table (method × `Sec-Fetch-Site` × `Sec-Fetch-Mode` × credential
 × proxy mode × `Host`) is the unit test.

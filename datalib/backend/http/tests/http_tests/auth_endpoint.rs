@@ -597,6 +597,22 @@ async fn a_rebound_host_is_refused_even_with_the_owners_identity() {
     );
 }
 
+/// Outside proxy mode a rebound page has no credential to send, so `Host`
+/// is not checked: a server behind a gateway that passes the browser's own
+/// `Host` through, as Imbue Studio's share gateway does, needs no list.
+#[tokio::test]
+async fn outside_proxy_mode_any_host_is_served() {
+    let (app, _) = app_behind(None).await;
+    let req = Request::get("/api/health")
+        .header(header::HOST, "datalib-x7k9.share.example")
+        .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+        .header("sec-fetch-site", "same-origin")
+        .header("sec-fetch-mode", "cors")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(status(&app, req).await, StatusCode::OK);
+}
+
 /// A browser too old to send `Sec-Fetch-Site` still sends `Origin` on a
 /// write; with only the cookie to go on, that has to name this server.
 /// A caller that presents the token proved more than a cookie can.
