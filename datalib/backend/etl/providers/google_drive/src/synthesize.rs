@@ -79,6 +79,7 @@ impl Synthesizer for GoogleDriveSynth {
         for file in &spec.files {
             let id = file.entry["id"].as_str().context("a file with no id")?;
             let mime = file.entry["mimeType"].as_str().unwrap_or("");
+            let can_comment = file.entry["capabilities"]["canComment"] != Value::Bool(false);
             let kind = api::kind_of_mime(mime)
                 .with_context(|| format!("{id}: {mime:?} is not a kind Drive mirrors"))?;
             put(
@@ -92,7 +93,7 @@ impl Synthesizer for GoogleDriveSynth {
                                       "comments": file.comments})),
             )?;
             put(
-                api::req_bytes(&api::native_url(kind, id)),
+                api::req_bytes(&api::native_url(kind, id, can_comment)),
                 json_response(&file.native),
             )?;
             for (url, name) in &file.images {
