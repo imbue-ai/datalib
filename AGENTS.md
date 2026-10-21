@@ -139,6 +139,26 @@ In docs — and in the few comments you keep — be clear and unhurried,
 explain a term the first time it appears, and don't assume the reader
 already shares your context. Plainspoken means *clear*, not *long*.
 
+## Explain a change by what it does, before and after
+
+**A PR description, a review, or any explanation of a change says what
+was true before, what is true now, and what a person using datalib
+will notice.** Write it for a reader who knows the product but has not
+read the code:
+
+- **Start with the problem as something that could happen**: "an
+  `<img>` in an email made the app re-measure the whole data root",
+  not "closes the GET-walk hole".
+- **Define a word the code uses in a narrow sense** the first time it
+  appears, or write the plain description instead. "Walks the data
+  root" means nothing to a reader until it says "measures the size of
+  every directory under the data root, which takes minutes on a large
+  one".
+- **Give each change a before, an after, and what a person notices.**
+  "Nothing visible" is a valid answer; say it, so the reader knows it
+  was checked. When a route or a flag changes, say what happens to a
+  script or an agent still using the old one.
+
 ## Functional core, imperative shell
 
 **Compute a decision as a pure function over values; act on it in a
