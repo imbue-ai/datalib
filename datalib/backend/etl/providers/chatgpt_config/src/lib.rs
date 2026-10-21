@@ -1,7 +1,7 @@
 //! Provider-owned config schema for the `chatgpt` source (Program A goal
 //! #1). Schema-only (serde + anyhow).
 
-use datalib_source_common::{LatchkeySettings, SourceCommon};
+use datalib_source_common::{not_negative, LatchkeySettings, SourceCommon};
 use serde::{Deserialize, Serialize};
 
 /// This source's config stanzas, for `datalib-step help`.
@@ -38,6 +38,16 @@ impl ChatgptConfig {
         self.latchkey_settings
             .validate()
             .map_err(anyhow::Error::msg)?;
+        if let Some(api) = &self.api {
+            not_negative("api.max_pages", api.max_pages).map_err(anyhow::Error::msg)?;
+            not_negative("api.limit", api.limit).map_err(anyhow::Error::msg)?;
+            if let Some(s) = api.sleep_between {
+                anyhow::ensure!(
+                    s.is_finite() && (0.0..=3600.0).contains(&s),
+                    "`api.sleep_between` is {s}; it is seconds between requests, from 0 to 3600"
+                );
+            }
+        }
         Ok(())
     }
 }
@@ -61,13 +71,24 @@ pub struct ChatgptApiSync {
     /// one that is owed.
     #[serde(default)]
     pub limit: Option<i64>,
-    /// Seconds to wait between requests. A sync does not use it yet.
+    /// Seconds to wait between requests, from 0 to 3600. Unset waits
+    /// none; the download still backs off on its own when rate-limited.
     #[serde(default)]
     pub sleep_between: Option<f64>,
     /// When non-empty, restrict the fetch to exactly these conversation ids
     /// (bare id or a paste-able `https://chatgpt.com/c/<id>` URL).
     #[serde(default)]
     pub conv_uuids: Vec<String>,
+}
+
+impl ChatgptApiSync {
+    /// The wait between requests; `validate` has refused a value this
+    /// would not fit.
+    pub fn sleep_between(&self) -> std::time::Duration {
+        self.sleep_between
+            .and_then(|s| std::time::Duration::try_from_secs_f64(s).ok())
+            .unwrap_or_default()
+    }
 }
 
 /// Params for the render step — no provider-specific render knobs, so
@@ -77,4 +98,48 @@ pub type ChatgptRenderConfig = datalib_source_common::BareRenderConfig;
 impl datalib_source_common::IngestMethods for ChatgptConfig {
     const METHODS: &'static [datalib_source_common::IngestMethod] =
         &[datalib_source_common::IngestMethod::origin("api")];
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `sleep_between` was read and then ignored: a sync hard-coded no
+    /// wait. A negative one would have panicked `Duration` once read.
+    #[test]
+    fn sleep_between_is_read_and_held_to_seconds() {
+        let api = |s: Option<f64>| ChatgptApiSync {
+            sleep_between: s,
+            ..Default::default()
+        };
+        assert_eq!(
+            api(Some(0.5)).sleep_between(),
+            std::time::Duration::from_millis(500)
+        );
+        assert_eq!(api(None).sleep_between(), std::time::Duration::ZERO);
+        for bad in [-1.0, f64::NAN, 1e9] {
+            let cfg = ChatgptConfig {
+                api: Some(api(Some(bad))),
+                ..Default::default()
+            };
+            let err = cfg.validate().unwrap_err().to_string();
+            assert!(err.contains("api.sleep_between"), "{err}");
+        }
+    }
+
+    #[test]
+    fn negative_counts_are_refused_by_name() {
+        let cfg = ChatgptConfig {
+            api: Some(ChatgptApiSync {
+                limit: Some(-3),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(cfg
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("api.limit"));
+    }
 }

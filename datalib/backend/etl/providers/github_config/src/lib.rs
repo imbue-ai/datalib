@@ -2,7 +2,7 @@
 //! #1). Schema-only (serde + anyhow), so the orchestrator can name
 //! `GithubConfig` without linking the provider.
 
-use datalib_source_common::{LatchkeySettings, SourceCommon};
+use datalib_source_common::{not_negative, LatchkeySettings, SourceCommon};
 use serde::{Deserialize, Serialize};
 
 /// This source's config stanzas, for `datalib-step help`.
@@ -42,6 +42,11 @@ impl GithubConfig {
         self.latchkey_settings
             .validate()
             .map_err(anyhow::Error::msg)?;
+        if let Some(api) = &self.api {
+            not_negative("api.refresh_window_days", api.refresh_window_days)
+                .map_err(anyhow::Error::msg)?;
+            not_negative("api.max_prs", api.max_prs).map_err(anyhow::Error::msg)?;
+        }
         Ok(())
     }
 }
@@ -73,4 +78,31 @@ pub type GithubRenderConfig = datalib_source_common::BareRenderConfig;
 impl datalib_source_common::IngestMethods for GithubConfig {
     const METHODS: &'static [datalib_source_common::IngestMethod] =
         &[datalib_source_common::IngestMethod::origin("api")];
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A negative cap was cast `as usize` into one too big to reach,
+    /// and a negative window clamped to 0, which means no limit.
+    #[test]
+    fn negative_counts_are_refused_by_name() {
+        let with = |refresh_window_days, max_prs| GithubConfig {
+            api: Some(GithubApiSync {
+                refresh_window_days,
+                max_prs,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        for (cfg, named) in [
+            (with(Some(-1), None), "api.refresh_window_days"),
+            (with(None, Some(-5)), "api.max_prs"),
+        ] {
+            let err = cfg.validate().unwrap_err().to_string();
+            assert!(err.contains(named), "{err}");
+        }
+        assert!(with(Some(0), Some(0)).validate().is_ok());
+    }
 }

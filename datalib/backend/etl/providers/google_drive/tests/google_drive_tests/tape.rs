@@ -7,6 +7,8 @@
 //! - a Sheet shared with it read-only, so Drive lists no revisions;
 //! - a deck whose ODP export Google declines as too large.
 //!
+//! [`view_only_doc`] adds a fourth file, a Doc the account may only view.
+//!
 //! The listing spans two pages. [`Edition::After`] moves the Doc to a new
 //! version with a new comment, and lists the other two unchanged except
 //! for the fields Drive changes on every read.
@@ -23,6 +25,7 @@ use serde_json::{json, Value};
 pub const DOC: &str = "1PicardLogSupplemental";
 pub const SHEET: &str = "1LaForgeDutyRoster";
 pub const DECK: &str = "1RikerBriefingDeck";
+pub const VIEW_ONLY_DOC: &str = "1TroiCounselingNotes";
 
 pub const KINDS: &[FileKind] = &[
     FileKind::Document,
@@ -243,7 +246,7 @@ pub fn tape(dir: &Path, edition: Edition) -> PathBuf {
     );
     put(
         &t,
-        api::req_bytes(&api::native_url(FileKind::Document, DOC)),
+        api::req_bytes(&api::native_url(FileKind::Document, DOC, true)),
         json_response(&doc_native(edition)),
     );
     put(
@@ -274,7 +277,7 @@ pub fn tape(dir: &Path, edition: Edition) -> PathBuf {
         );
         put(
             &t,
-            api::req_bytes(&api::native_url(FileKind::Spreadsheet, SHEET)),
+            api::req_bytes(&api::native_url(FileKind::Spreadsheet, SHEET, true)),
             json_response(&sheet_native()),
         );
         let (ods, _) = api::export_type(FileKind::Spreadsheet, ExportFormat::Odf);
@@ -298,7 +301,7 @@ pub fn tape(dir: &Path, edition: Edition) -> PathBuf {
         );
         put(
             &t,
-            api::req_bytes(&api::native_url(FileKind::Presentation, DECK)),
+            api::req_bytes(&api::native_url(FileKind::Presentation, DECK, true)),
             json_response(&deck_native()),
         );
         put(
@@ -335,4 +338,88 @@ pub fn listing(t: &Path, first: Vec<Value>, second: Vec<Value>) {
         json_response(&json!({"kind": "drive#fileList", "incompleteSearch": false,
                               "files": second})),
     );
+}
+
+pub const VIEW_ONLY_ODT: &[u8] = b"PK\x03\x04 odt of the counseling notes";
+
+/// A Doc shared with the account to view only: Drive lists it no
+/// revisions, and the Docs API refuses its suggestions with a 403, so
+/// its native JSON answers only without `suggestionsViewMode`, in the
+/// mode Google picks for a viewer. Adds it to `t`'s first listing page.
+pub fn view_only_doc(t: &Path) {
+    let mut viewer = entry(VIEW_ONLY_DOC, FileKind::Document, 5, "Counseling notes", 1);
+    viewer["capabilities"] =
+        json!({"canEdit": false, "canComment": false, "canReadRevisions": false});
+    viewer["ownedByMe"] = json!(false);
+    listing(
+        t,
+        vec![
+            entry(
+                DOC,
+                FileKind::Document,
+                doc_version(Edition::Before),
+                "Captain's log, supplemental",
+                1,
+            ),
+            entry(
+                SHEET,
+                FileKind::Spreadsheet,
+                7,
+                "Engineering duty roster",
+                1,
+            ),
+            viewer,
+        ],
+        vec![entry(
+            DECK,
+            FileKind::Presentation,
+            30,
+            "Away team briefing",
+            1,
+        )],
+    );
+    put(
+        t,
+        api::req_json(&api::comments_url(VIEW_ONLY_DOC, None)),
+        json_response(&json!({"kind": "drive#commentList", "comments": []})),
+    );
+    put(
+        t,
+        api::req_bytes(&format!(
+            "{}/documents/{VIEW_ONLY_DOC}?includeTabsContent=true&suggestionsViewMode=SUGGESTIONS_INLINE",
+            api::DOCS
+        )),
+        bytes(
+            403,
+            br#"{"error": {"code": 403, "message": "You do not have permission to access the document suggestions.",
+                "status": "PERMISSION_DENIED"}}"#,
+        ),
+    );
+    put(
+        t,
+        api::req_bytes(&format!(
+            "{}/documents/{VIEW_ONLY_DOC}?includeTabsContent=true",
+            api::DOCS
+        )),
+        json_response(&view_only_native()),
+    );
+    let (odt, _) = api::export_type(FileKind::Document, ExportFormat::Odf);
+    put(
+        t,
+        api::req_bytes(&api::export_url(VIEW_ONLY_DOC, odt)),
+        bytes(200, VIEW_ONLY_ODT),
+    );
+}
+
+pub fn view_only_native() -> Value {
+    json!({
+        "documentId": VIEW_ONLY_DOC,
+        "title": "Counseling notes",
+        "revisionId": "ALm37BW-troi5",
+        "suggestionsViewMode": "PREVIEW_WITHOUT_SUGGESTIONS",
+        "tabs": [{"tabProperties": {"tabId": "t.0", "title": "Tab 1", "index": 0},
+                  "documentTab": {"body": {"content": [{"startIndex": 1, "endIndex": 22, "paragraph": {
+                      "elements": [{"startIndex": 1, "endIndex": 22, "textRun": {
+                          "content": "The crew is anxious.\n"}}]}}]}}}]
+    })
 }

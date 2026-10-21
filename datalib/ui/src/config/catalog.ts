@@ -172,12 +172,12 @@ export type CatalogEntry = {
   mailboxNoun?: "labels" | "folders";
   /// False → in the picker for completeness, but no form exists yet.
   wizard: boolean;
-  /// False for a provider that declares no render step at all.
-  /// Defaults to true, and rendering no *documents* is not a reason to
-  /// set it false: the render step is also what emits the storage
-  /// report, which for a download-only source is the only thing that
-  /// puts it in the grid.
-  renderStep?: boolean;
+  /// False for a download-only provider, whose render step writes no
+  /// documents: only the storage report and the download's problems,
+  /// which is all that puts such a source in the grid. It always gets
+  /// that step, and the wizard offers no choice to render and no search
+  /// steps, since there is no markdown to search.
+  rendersDocuments?: boolean;
   /// The latchkey service name, when the source needs credentials. The
   /// wizard shows its account row only while the params the form
   /// would write reach an origin (`ingestReach`): an import has nothing
@@ -586,7 +586,7 @@ export const CATALOG: CatalogEntry[] = [
     wizard: true,
     // Download-only: the copy is Linear's own objects, kept as they
     // came, and nothing is rendered.
-    renderStep: false,
+    rendersDocuments: false,
     credentialService: "linear",
     canProbe: true,
     sections: [
@@ -1832,7 +1832,7 @@ export const CATALOG: CatalogEntry[] = [
     wizard: true,
     // Download-only: media has no text to convert, so nothing is
     // rendered and no render step is declared.
-    renderStep: false,
+    rendersDocuments: false,
     sections: [
       { heading: "Media folder", fields: ["fswalk.path"] },
       { heading: "Scan", fields: ["playlists", "skip_dataless"], advanced: true },
@@ -1896,7 +1896,7 @@ export const CATALOG: CatalogEntry[] = [
     wizard: true,
     // Download-only: a photo catalog isn't chat-shaped, so nothing is
     // rendered and no render step is declared.
-    renderStep: false,
+    rendersDocuments: false,
     requiresOneOf: ["catalog.path", "backups.path"],
     intro:
       "Copies a Lightroom Classic catalog, with full history. Choose the catalog, the backups " +
@@ -2031,7 +2031,7 @@ export const CATALOG: CatalogEntry[] = [
     nameHint: "Photos library",
     wizard: true,
     // Download-only, like lightroom: nothing is rendered.
-    renderStep: false,
+    rendersDocuments: false,
     intro:
       "Copies the database inside your Photos library (database/Photos.sqlite), with full history.",
     sections: [
