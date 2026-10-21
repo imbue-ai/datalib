@@ -60,7 +60,9 @@ pub struct GoogleDriveApi {
     /// beside the native JSON. Default: `odf` (`.odt`, `.ods`, `.odp`),
     /// which LibreOffice opens. Each costs a request, and a Doc's or a
     /// deck's roughly 1–4 MB per version, since Google embeds the fonts.
-    /// See [`Exports`].
+    /// A list applies to every kind (`[]` for none); a table names a list
+    /// per kind (`document`, `spreadsheet`, `presentation`), and a kind
+    /// left out keeps `["odf"]`.
     #[serde(default)]
     pub exports: Exports,
     /// Only the files the account owns, not the ones shared with it.
@@ -158,14 +160,14 @@ fn default_formats() -> Vec<ExportFormat> {
 /// (`exports = ["odf", "pdf"]`, or `exports = []` for none), or a list per
 /// kind (`[…api.exports]` with `spreadsheet = ["odf"]`,
 /// `document = []`), where a kind left out keeps the default, `["odf"]`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum Exports {
     Every(Vec<ExportFormat>),
     PerKind(PerKindExports),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PerKindExports {
     #[serde(default = "default_formats")]

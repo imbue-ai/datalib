@@ -81,6 +81,9 @@ pub fn source_docs(t: SourceType) -> SourceDocs {
         T::Lightroom => docs::<datalib_etl_lightroom_config::LightroomConfig>(
             datalib_etl_lightroom_config::EXAMPLES,
         ),
+        T::Linear => {
+            docs::<datalib_etl_linear_config::LinearConfig>(datalib_etl_linear_config::EXAMPLES)
+        }
         T::Linkedin => docs::<datalib_etl_linkedin_config::LinkedinConfig>(
             datalib_etl_linkedin_config::EXAMPLES,
         ),
@@ -184,7 +187,8 @@ fn resolve<'a>(root: &'a Value, node: &'a Value) -> &'a Value {
 }
 
 // A struct, or an `Option` of one: something whose fields are options of
-// their own rather than one value.
+// their own rather than one value. Either a list or a table (google_drive's
+// `exports`) is one value that takes two shapes, and stays one field.
 fn as_table<'a>(root: &'a Value, node: &'a Value) -> Option<&'a Value> {
     let node = resolve(root, node);
     if node.get("properties").is_some() {
@@ -194,12 +198,17 @@ fn as_table<'a>(root: &'a Value, node: &'a Value) -> Option<&'a Value> {
         .get("anyOf")
         .or_else(|| node.get("oneOf"))?
         .as_array()?;
-    let mut tables = variants.iter().filter_map(|v| {
-        let v = resolve(root, v);
-        v.get("properties").is_some().then_some(v)
-    });
-    let only = tables.next()?;
-    tables.next().is_none().then_some(only)
+    let (tables, others): (Vec<&Value>, Vec<&Value>) = variants
+        .iter()
+        .map(|v| resolve(root, v))
+        .partition(|v| v.get("properties").is_some());
+    let only_null_besides = others
+        .iter()
+        .all(|v| v.get("type").and_then(Value::as_str) == Some("null"));
+    match tables.as_slice() {
+        [table] if only_null_besides => Some(table),
+        _ => None,
+    }
 }
 
 // The values a node allows when it is a closed set: `enum`, `const`, or
@@ -523,7 +532,7 @@ mod tests {
         let drive = fields(&source_docs(SourceType::GoogleDrive).schema);
         let exports = drive.iter().find(|f| f.path == "api.exports").unwrap();
         assert_eq!(
-            exports.kind, r#"list of one of "pdf", "odf", "ooxml""#,
+            exports.kind, r#"list of one of "pdf", "odf", "ooxml" or table"#,
             "{exports:?}"
         );
     }
