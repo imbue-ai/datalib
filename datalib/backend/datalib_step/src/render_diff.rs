@@ -158,6 +158,8 @@ pub async fn run(
         rendered_root: rendered_root.clone(),
         now: now.to_string(),
         cadence: control.checkpoint_cadence.unwrap_or_default(),
+        // Each side is collected whole anyway, under its own cap.
+        page_size: datalib_etl_render::pages::PageSize::DEFAULT,
         // A diff group has no store of its own to measure.
         storage: None,
         raw_db: Some(datalib_etl::doltlite_raw::db_path_for(&raw_path)),

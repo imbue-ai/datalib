@@ -64,6 +64,8 @@ pub const MIGRATE_FLAG: &str = "--migrate";
 /// Seconds between a step's checkpoints, at most — see
 /// `config::CheckpointCadence`.
 pub const ENV_CHECKPOINT_CADENCE: &str = "DATALIB_DAG_CHECKPOINT_CADENCE";
+/// How much a render reads at once — see `config::RenderPages`.
+pub const ENV_RENDER_PAGES: &str = "DATALIB_DAG_RENDER_PAGES";
 
 /// The flag a step's params arrive on: the path of a JSON file holding
 /// the entry's `params` subtree. A file rather than an argument because

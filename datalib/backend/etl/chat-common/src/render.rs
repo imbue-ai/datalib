@@ -237,6 +237,12 @@ impl<'a> ChatRenderer<'a> {
         Ok(())
     }
 
+    /// The chats rendered since the last call, for a provider that
+    /// declares them a page at a time rather than holding every one.
+    pub fn take_buckets(&mut self) -> Buckets {
+        std::mem::take(&mut self.summary.buckets)
+    }
+
     pub fn finish(self) -> RenderSummary {
         self.summary
     }

@@ -1,14 +1,18 @@
-//! Doltlite-aware parse entry point. Two-phase:
+//! Doltlite-aware parse: the shared rows up front, then the threads a
+//! page at a time, their attachment bytes a batch at a time.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
+use std::future::Future;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{self, BlobBundle, CasEdgeRow};
+use datalib_etl::doltlite_raw::Reader;
 use datalib_etl_render::inputs::{Inputs, RawRange};
+use datalib_etl_render::pages::{BucketPages, KeyColumn};
 use datalib_etl_render::processor::Unparsed;
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
@@ -21,7 +25,7 @@ use datalib_etl_slack::ingest::shapes::{M_AUTH_TEST, M_CHANNELS, M_HISTORY, M_RE
 use super::{ts_to_iso, Channel, Message, User, Workspace};
 
 /// SQL projection that maps a Slack `file_id` to its CAS blake3.
-/// Used by [`BlobBundle::load_many`] from the per-thread load below.
+/// Used by [`BlobBundle::load_many`] for a batch of threads.
 const ATTACHMENTS_PROJECTION_SQL: &str = "
     SELECT file_id AS ref_id, MAX(blake3) AS blake3,
            NULL AS content_type, NULL AS upstream_name
@@ -29,9 +33,12 @@ const ATTACHMENTS_PROJECTION_SQL: &str = "
      WHERE file_id IN ({placeholders}) AND blake3 IS NOT NULL
      GROUP BY file_id";
 
-/// Result of the dolt_diff scan. Travels alongside the parsed bag so
-/// render can advance the cursor + log timing without a second round
-/// trip.
+const THREAD_KEY: KeyColumn = KeyColumn {
+    table: "messages",
+    column: "thread_root_uuid",
+};
+
+/// Result of the dolt_diff scan.
 #[derive(Debug, Clone, Default)]
 pub struct ScanResult {
     /// `Some(set)` → render only threads whose `thread_root_uuid` is
@@ -60,6 +67,19 @@ pub struct SlackThreadBucket {
     pub inputs: Inputs,
 }
 
+impl SlackThreadBucket {
+    /// The bytes its attachments take, as each message's `files[]` gives
+    /// them: what loading its blobs costs.
+    pub fn attachment_bytes(&self) -> u64 {
+        self.messages
+            .iter()
+            .flat_map(|m| m.raw_json.get("files").and_then(Value::as_array))
+            .flatten()
+            .filter_map(|f| f.get("size").and_then(Value::as_u64))
+            .sum()
+    }
+}
+
 /// How far the account has read, as the last download saw it: per
 /// conversation for its top-level messages, from `channel_read_states`,
 /// and per followed thread for its replies, from the root message's
@@ -74,26 +94,16 @@ pub struct ReadMarks {
     pub threads: BTreeMap<String, String>,
 }
 
-#[derive(Default)]
-pub struct ParsedSlack {
+/// What every thread looks up, read whole up front.
+#[derive(Debug, Clone, Default)]
+pub struct Shared {
     pub workspace: Option<Workspace>,
     pub users: BTreeMap<String, User>,
     pub channels: BTreeMap<String, Channel>,
-    pub threads: Vec<SlackThreadBucket>,
     pub read_marks: ReadMarks,
-    /// Count of threads `dolt_diff` reported as unchanged. Reported
-    /// into the render summary so the orchestrator's progress
-    /// accounting stays accurate.
-    pub docs_skipped: usize,
-    /// Scan diagnostics propagated up to render so it can write the
-    /// cursor + log elapsed_ms.
-    pub scan: ScanResult,
-    /// Rows whose stored payload would not read as JSON, dropped —
-    /// reported by the processor rather than skipped in silence.
-    pub unparsed: Vec<Unparsed>,
 }
 
-impl ParsedSlack {
+impl Shared {
     /// What the grid's Account column shows: the login `auth.test`
     /// named, resolved through its own `users` row — email, else real
     /// name, else handle, else the bare user id. `None` when the store
@@ -110,35 +120,172 @@ impl ParsedSlack {
     }
 }
 
-pub fn parse(path: &Path, source_id: &str, range: RawRange<'_>) -> Result<ParsedSlack> {
+/// A source read whole, from the legacy JSON tree: what every thread
+/// shares and every thread, attachments loaded.
+#[derive(Default)]
+pub struct ParsedSlack {
+    pub shared: Shared,
+    pub threads: Vec<SlackThreadBucket>,
+}
+
+/// The raw store and its blob CAS, open for one render: what every
+/// thread shares, what the diff said, and the threads themselves read a
+/// page at a time ([`SlackStore::next_page`]) with their attachment
+/// bytes read later still, a batch at a time ([`SlackStore::load_blobs`]).
+pub struct SlackStore {
+    reader: Reader,
+    cas: Option<SqlitePool>,
+    has_read_states: bool,
+    pub shared: Shared,
+    pub scan: ScanResult,
+    /// Threads this run will look at: every one on a full walk, the
+    /// narrowed set otherwise.
+    pub threads: usize,
+    /// `users` rows whose stored payload would not read as JSON.
+    pub unparsed: Vec<Unparsed>,
+}
+
+/// One page of threads, their messages loaded and no attachment bytes.
+pub struct Page {
+    pub threads: Vec<SlackThreadBucket>,
+    /// On a narrowed run, the stale thread keys this page looked at,
+    /// declared empty before the ones it renders. Empty on a full walk,
+    /// whose threads all come from rows.
+    pub looked_at: Vec<String>,
+    /// `messages` rows of the page that would not read as JSON.
+    pub unparsed: Vec<Unparsed>,
+}
+
+impl SlackStore {
+    /// The thread keys to render, a page of `page` at a time.
+    pub fn pages(&self, page: usize) -> BucketPages {
+        match &self.scan.render {
+            None => BucketPages::walk(THREAD_KEY, page),
+            Some(keys) => BucketPages::listed(keys.iter().cloned(), page),
+        }
+    }
+
+    /// The next page's threads, or `None` once every page is read.
+    pub fn next_page(&self, pages: &mut BucketPages) -> Result<Option<Page>> {
+        block_on(async {
+            let pool = self.reader.pool();
+            let Some(keys) = pages.next(pool).await? else {
+                return Ok(None);
+            };
+            let mut unparsed = Vec::new();
+            let messages = load_messages_for_threads(pool, &keys, &mut unparsed).await?;
+            let threads = self.group(messages);
+            let looked_at = match self.scan.render {
+                None => Vec::new(),
+                Some(_) => keys,
+            };
+            Ok(Some(Page {
+                threads,
+                looked_at,
+                unparsed,
+            }))
+        })
+    }
+
+    /// Messages, in thread order, grouped into their threads.
+    fn group(&self, messages: Vec<LoadedMessageWithThread>) -> Vec<SlackThreadBucket> {
+        let workspace = self.shared.workspace.as_ref();
+        let team_id = workspace.map_or("unknown", |w| w.team_id.as_str());
+        let mut by_thread: BTreeMap<String, (Vec<Message>, Inputs)> = BTreeMap::new();
+        for m in messages {
+            let (msgs, inputs) = by_thread.entry(m.thread_root_uuid.clone()).or_default();
+            let id = m.id.clone();
+            inputs.read("messages", &id);
+            let msg = loaded_to_message(m, team_id);
+            for file_id in attachment_ref_ids(&msg) {
+                inputs.read(
+                    "slack_attachments",
+                    &SlackAttachmentRow::pk_recipe(&id, &file_id),
+                );
+            }
+            msgs.push(msg);
+        }
+        by_thread
+            .into_iter()
+            .map(|(thread_key, (mut msgs, inputs))| {
+                msgs.sort_by(|a, b| {
+                    (a.ts_iso.as_deref(), a.ts.as_str()).cmp(&(b.ts_iso.as_deref(), b.ts.as_str()))
+                });
+                if self.has_read_states {
+                    if let Some((_, channel, _)) = split_key(&thread_key) {
+                        inputs.read("channel_read_states", channel);
+                    }
+                }
+                // The login and its workspace name every document's header.
+                if let Some(ws) = workspace {
+                    inputs.read("workspaces", &ws.row_id);
+                    if let Some(me) = &ws.self_user_id {
+                        inputs.read("users", me);
+                    }
+                }
+                SlackThreadBucket {
+                    thread_key,
+                    messages: msgs,
+                    blobs: BlobBundle::default(),
+                    inputs,
+                }
+            })
+            .collect()
+    }
+
+    /// Copies of `batch` with their attachment bytes loaded.
+    pub fn load_blobs(&self, batch: &[&SlackThreadBucket]) -> Result<Vec<SlackThreadBucket>> {
+        block_on(async {
+            let mut threads: Vec<SlackThreadBucket> = batch.iter().map(|b| (*b).clone()).collect();
+            let refs = threads
+                .iter()
+                .enumerate()
+                .map(|(i, bucket)| (i, collect_attachment_ref_ids(&bucket.messages)));
+            let mut blobs = BlobBundle::load_many(
+                self.reader.pool(),
+                self.cas.as_ref(),
+                ATTACHMENTS_PROJECTION_SQL,
+                refs,
+            )
+            .await?;
+            for (i, bucket) in threads.iter_mut().enumerate() {
+                if let Some(b) = blobs.remove(&i) {
+                    bucket.blobs = b;
+                }
+            }
+            Ok(threads)
+        })
+    }
+
+    pub fn close(self) {
+        block_on(async {
+            self.reader.close().await;
+            if let Some(cas) = self.cas {
+                cas.close().await;
+            }
+        })
+    }
+}
+
+fn block_on<F: Future>(f: F) -> F::Output {
+    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(f))
+}
+
+/// The store under `path`, open at the driver's commit. `None` when
+/// there is no store, or nothing committed in it, to read.
+pub fn open(path: &Path, source_id: &str, range: RawRange<'_>) -> Result<Option<SlackStore>> {
     let db_path = db_path_for(path);
-    if db_path.exists() {
-        return parse_doltlite(&db_path, source_id, range);
+    if !db_path.exists() {
+        return Ok(None);
     }
-    if path.is_dir() {
-        return parse_raw_json_dir(path);
-    }
-    // No store and no legacy tree: this source has never been
-    // downloaded. That is the normal state of every source in a
-    // freshly scaffolded config, not an error — render nothing and
-    // succeed. A store that exists but can't be read still fails
-    // above. See docs/dev/step_protocol.md, "Rendering a source with
-    // no data".
-    Ok(ParsedSlack::default())
+    block_on(open_async(&db_path, source_id, range))
 }
 
-fn parse_doltlite(db_path: &Path, source_id: &str, range: RawRange<'_>) -> Result<ParsedSlack> {
-    tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current()
-            .block_on(async move { parse_doltlite_async(db_path, source_id, range).await })
-    })
-}
-
-async fn parse_doltlite_async(
+async fn open_async(
     db_path: &Path,
     source_id: &str,
     range: RawRange<'_>,
-) -> Result<ParsedSlack> {
+) -> Result<Option<SlackStore>> {
     // Opened at the driver's commit, else HEAD. No commit means nothing
     // has been committed here to render: emptiness, not a reason to read
     // the working set.
@@ -146,19 +293,10 @@ async fn parse_doltlite_async(
         .await
         .with_context(|| format!("open slack doltlite for render {}", db_path.display()))?
     else {
-        return Ok(ParsedSlack::default());
+        return Ok(None);
     };
     let pool = reader.pool().clone();
     let pin = reader.pin().clone();
-
-    let cas_pool = blob_cas::open_cas_for_render(db_path)
-        .await
-        .with_context(|| format!("open the blob store beside {}", db_path.display()))?;
-
-    // Open at one commit before anything reads this store: the diff below
-    // and the rows behind it have to name that commit.
-    // No commit at all means nothing has been committed here to render, which
-    // is emptiness, not a reason to read the working set.
 
     // A store no download has opened since read states arrived lacks
     // the table, and this read-only pool never adds it.
@@ -167,97 +305,32 @@ async fn parse_doltlite_async(
     let scan = scan_diff(&pool, source_id, range, &pin, has_read_states).await?;
     let read_marks = load_read_marks(&pool, has_read_states).await?;
 
-    // Workspace + users + channels are cheap and shared across threads.
     let mut unparsed: Vec<Unparsed> = Vec::new();
     let workspace = load_workspace(&pool).await?;
     let users = load_users(&pool, &mut unparsed).await?;
     let channels = load_channels(&pool).await?;
-
-    // Load messages. When the scan narrowed the set, load only those
-    // threads' messages; otherwise load everything.
-    let total_threads = thread_count(&pool).await?;
-    let (messages, docs_skipped) = match &scan.render {
-        None => (load_all_messages(&pool, &mut unparsed).await?, 0usize),
-        Some(changed) => {
-            let kept = load_messages_for_threads(&pool, changed, &mut unparsed).await?;
-            let touched_threads: HashSet<&str> =
-                kept.iter().map(|m| m.thread_root_uuid.as_str()).collect();
-            let skipped = total_threads.saturating_sub(touched_threads.len());
-            (kept, skipped)
-        }
+    let threads = match &scan.render {
+        None => thread_count(&pool).await?,
+        Some(keys) => keys.len(),
     };
+    let cas = blob_cas::open_cas_for_render(db_path)
+        .await
+        .with_context(|| format!("open the blob store beside {}", db_path.display()))?;
 
-    // Group messages into thread buckets.
-    let team_id = workspace
-        .as_ref()
-        .map(|w| w.team_id.clone())
-        .unwrap_or_else(|| "unknown".into());
-    let mut by_thread: BTreeMap<String, (Vec<Message>, Inputs)> = BTreeMap::new();
-    for m in messages {
-        let msg = loaded_to_message(&m, &team_id);
-        let (msgs, inputs) = by_thread.entry(m.thread_root_uuid.clone()).or_default();
-        inputs.read("messages", &m.id);
-        for file_id in attachment_ref_ids(&msg) {
-            inputs.read(
-                "slack_attachments",
-                &SlackAttachmentRow::pk_recipe(&m.id, &file_id),
-            );
-        }
-        msgs.push(msg);
-    }
-    let mut threads: Vec<SlackThreadBucket> = Vec::with_capacity(by_thread.len());
-    for (thread_key, (mut msgs, inputs)) in by_thread {
-        msgs.sort_by(|a, b| {
-            (a.ts_iso.as_deref(), a.ts.as_str()).cmp(&(b.ts_iso.as_deref(), b.ts.as_str()))
-        });
-        if has_read_states {
-            if let Some((_, channel, _)) = split_key(&thread_key) {
-                inputs.read("channel_read_states", channel);
-            }
-        }
-        // The login and its workspace name every document's header.
-        if let Some(ws) = &workspace {
-            inputs.read("workspaces", &ws.row_id);
-            if let Some(me) = &ws.self_user_id {
-                inputs.read("users", me);
-            }
-        }
-        threads.push(SlackThreadBucket {
-            thread_key,
-            messages: msgs,
-            blobs: BlobBundle::default(),
-            inputs,
-        });
-    }
-
-    // Per-thread BlobBundle: walk each thread's messages for `files[]`
-    // and bulk-load the bytes from `slack_attachments` + `cas_objects`.
-    let refs = threads
-        .iter()
-        .enumerate()
-        .map(|(i, bucket)| (i, collect_attachment_ref_ids(&bucket.messages)));
-    let loaded =
-        BlobBundle::load_many(&pool, cas_pool.as_ref(), ATTACHMENTS_PROJECTION_SQL, refs).await;
-    if let Some(cas) = cas_pool {
-        cas.close().await;
-    }
-    let mut blobs = loaded?;
-    for (i, bucket) in threads.iter_mut().enumerate() {
-        if let Some(b) = blobs.remove(&i) {
-            bucket.blobs = b;
-        }
-    }
-
-    Ok(ParsedSlack {
-        workspace,
-        users,
-        channels,
-        threads,
-        read_marks,
-        docs_skipped,
+    Ok(Some(SlackStore {
+        reader,
+        cas,
+        has_read_states,
+        shared: Shared {
+            workspace,
+            users,
+            channels,
+            read_marks,
+        },
         scan,
+        threads,
         unparsed,
-    })
+    }))
 }
 
 /// Threads with a message or an attachment edge that changed.
@@ -330,14 +403,19 @@ async fn scan_diff(
     .await?;
     // The driver names stale buckets by the thread's entity id; the load
     // wants the raw thread key the id was minted from.
-    let by_uuid: HashMap<String, String> = load_thread_keys(pool)
-        .await?
-        .into_iter()
-        .filter_map(|key| {
-            let (team, channel, ts) = split_key(&key)?;
-            Some((super::ids::thread(source_id, team, channel, ts).uuid, key))
-        })
-        .collect();
+    // Only a run that narrows maps them.
+    let by_uuid: HashMap<String, String> = match (range.stale, &scan.render) {
+        (Some(stale), Some(_)) => load_thread_keys(pool)
+            .await?
+            .into_iter()
+            .filter_map(|key| {
+                let (team, channel, ts) = split_key(&key)?;
+                let uuid = super::ids::thread(source_id, team, channel, ts).uuid;
+                stale.contains(&uuid).then_some((uuid, key))
+            })
+            .collect(),
+        _ => HashMap::new(),
+    };
     Ok(ScanResult {
         render: range
             .narrow_by(scan.render.as_ref(), |key| by_uuid.get(key).cloned())
@@ -535,58 +613,28 @@ async fn thread_count(pool: &SqlitePool) -> Result<usize> {
     Ok(row as usize)
 }
 
-async fn load_all_messages(
+/// The messages of the threads under `keys`, in thread order.
+async fn load_messages_for_threads(
     pool: &SqlitePool,
+    keys: &[String],
     unparsed: &mut Vec<Unparsed>,
 ) -> Result<Vec<LoadedMessageWithThread>> {
+    if keys.is_empty() {
+        return Ok(Vec::new());
+    }
     let rows = sqlx::query(
         "SELECT id, team_id, channel_id, ts, thread_ts, is_thread_root, user_id,
                 json(payload) AS payload, thread_root_uuid
            FROM messages
           WHERE payload IS NOT NULL
+            AND thread_root_uuid IN (SELECT value FROM json_each(?))
           ORDER BY thread_root_uuid, ts",
     )
+    .bind(serde_json::to_string(keys)?)
     .fetch_all(pool)
     .await
-    .context("select all messages")?;
+    .context("select messages for threads")?;
     Ok(rows_to_loaded(rows, unparsed))
-}
-
-async fn load_messages_for_threads(
-    pool: &SqlitePool,
-    thread_uuids: &HashSet<String>,
-    unparsed: &mut Vec<Unparsed>,
-) -> Result<Vec<LoadedMessageWithThread>> {
-    if thread_uuids.is_empty() {
-        return Ok(Vec::new());
-    }
-    const CHUNK: usize = 500;
-    let uuids: Vec<&String> = thread_uuids.iter().collect();
-    let mut out: Vec<LoadedMessageWithThread> = Vec::new();
-    for chunk in uuids.chunks(CHUNK) {
-        let placeholders = std::iter::repeat_n("?", chunk.len())
-            .collect::<Vec<_>>()
-            .join(",");
-        let sql = format!(
-            "SELECT id, team_id, channel_id, ts, thread_ts, is_thread_root, user_id,
-                    json(payload) AS payload, thread_root_uuid
-               FROM messages
-              WHERE payload IS NOT NULL AND thread_root_uuid IN ({placeholders})
-              ORDER BY thread_root_uuid, ts"
-        );
-        // Audited: static template; the only interpolation is a `?,?,?` run sized
-        // from the chunk length. Every value is bound.
-        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
-        for u in chunk {
-            q = q.bind(u);
-        }
-        let rows = q
-            .fetch_all(pool)
-            .await
-            .context("select messages for threads")?;
-        out.extend(rows_to_loaded(rows, unparsed));
-    }
-    Ok(out)
 }
 
 fn rows_to_loaded(
@@ -623,23 +671,23 @@ fn rows_to_loaded(
     out
 }
 
-fn loaded_to_message(m: &LoadedMessageWithThread, default_team_id: &str) -> Message {
+fn loaded_to_message(m: LoadedMessageWithThread, default_team_id: &str) -> Message {
     let effective = m.thread_ts.clone().unwrap_or_else(|| m.ts.clone());
     Message {
         team_id: if m.team_id.is_empty() {
             default_team_id.to_string()
         } else {
-            m.team_id.clone()
+            m.team_id
         },
-        channel_id: m.channel_id.clone(),
-        ts: m.ts.clone(),
-        thread_ts: m.thread_ts.clone(),
-        effective_thread_ts: effective,
-        is_thread_root: m.is_thread_root,
-        user_id: m.user_id.clone(),
         text: opt_str(&m.payload, "text").unwrap_or_default(),
         ts_iso: ts_to_iso(&m.ts),
-        raw_json: m.payload.clone(),
+        channel_id: m.channel_id,
+        ts: m.ts,
+        thread_ts: m.thread_ts,
+        effective_thread_ts: effective,
+        is_thread_root: m.is_thread_root,
+        user_id: m.user_id,
+        raw_json: m.payload,
     }
 }
 
@@ -797,14 +845,13 @@ pub fn parse_raw_json_dir(out_dir: &Path) -> Result<ParsedSlack> {
     }
 
     Ok(ParsedSlack {
-        workspace,
-        users,
-        channels,
+        shared: Shared {
+            workspace,
+            users,
+            channels,
+            read_marks: ReadMarks::default(),
+        },
         threads,
-        read_marks: ReadMarks::default(),
-        docs_skipped: 0,
-        scan: ScanResult::default(),
-        unparsed: Vec::new(),
     })
 }
 
@@ -937,10 +984,8 @@ mod no_data_tests {
     /// "Rendering a source with no data".
     #[test]
     fn parse_missing_source_returns_empty_silently() {
-        let parsed = parse(Path::new("/this/does/not/exist"), "src", RawRange::cold()).unwrap();
-        assert!(parsed.threads.is_empty());
-        assert!(parsed.channels.is_empty());
-        assert!(parsed.workspace.is_none());
+        let store = open(Path::new("/this/does/not/exist"), "src", RawRange::cold()).unwrap();
+        assert!(store.is_none());
     }
 }
 

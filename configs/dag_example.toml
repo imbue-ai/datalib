@@ -89,6 +89,16 @@ process_log_lines = 200000
 # run still listed keeps its chart.
 disk_usage_days = 30
 
+# How much a render holds in memory at once. It reads the raw store a
+# page of `buckets` at a time (threads, conversations: whatever the
+# source renders as one unit), and loads at most `blob_mb` of their
+# attachments together. Smaller pages hold less and cost more queries;
+# changing them changes no document. Omit the table, or either key, for
+# the defaults, which are these. Email and Slack read them so far.
+[render_pages]
+buckets = 500
+blob_mb = 64
+
 # ── slack ──────────────────────────────────────────────────────────
 # A group has two names. Its `id` is the identity: unique, path-safe,
 # and the directory every step under it writes into — so changing it
