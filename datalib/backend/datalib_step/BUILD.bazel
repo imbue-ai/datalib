@@ -123,6 +123,7 @@ rust_binary(
         "//datalib/backend/unified_document_index:datalib_unified_document_index",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:blake3",
+        "//datalib/backend/cli_help:datalib_cli_help",
         "@datalib_crates//:clap",
         "@datalib_crates//:futures",
         "@datalib_crates//:libc",

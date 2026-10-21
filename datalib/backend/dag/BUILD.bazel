@@ -89,12 +89,22 @@ rust_binary(
         "//datalib/backend/runs:datalib_runs",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/store_meta:datalib_store_meta",
+        "//datalib/backend/cli_help:datalib_cli_help",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
-        "@datalib_crates//:strum",
+        "@datalib_crates//:clap",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing-subscriber",
     ],
+)
+
+# The command line's parse: its `--help` examples and the spellings
+# people already type.
+rust_test(
+    name = "datalib_dag_bin_unittests",
+    size = "small",
+    crate = ":datalib_dag_bin",
+    edition = "2021",
 )
 
 # Every hermetic runner test in one binary; the modules are listed in
