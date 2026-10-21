@@ -381,17 +381,30 @@ impl Captures<'_> {
             });
         }
 
-        let mut declined = Vec::new();
+        // An owner can turn off download for those who may not edit, and
+        // then Drive refuses every export (`cannotExportFile`).
+        let may_download = can("canDownload");
+        let (mut too_large, mut not_allowed) = (Vec::new(), Vec::new());
         for format in self.exports {
             let (mime, ext) = api::export_type(self.kind, *format);
-            let bytes = match api::get_bytes(&api::export_url(id, mime), lk).await {
+            let got = if may_download {
+                api::get_bytes(&api::export_url(id, mime), lk).await
+            } else {
+                Err(api::ApiError::ExportNotAllowed("canDownload is false".into()).into())
+            };
+            let bytes = match got {
                 Ok(bytes) => {
                     self.exports_done.fetch_add(1, Ordering::Relaxed);
                     Some(bytes)
                 }
                 Err(e) if api::is_export_too_large(&e) => {
                     self.exports_declined.fetch_add(1, Ordering::Relaxed);
-                    declined.push(ext);
+                    too_large.push(ext);
+                    None
+                }
+                Err(e) if api::is_export_not_allowed(&e) => {
+                    self.exports_declined.fetch_add(1, Ordering::Relaxed);
+                    not_allowed.push(ext);
                     None
                 }
                 Err(e) => return Err(e),
@@ -431,20 +444,35 @@ impl Captures<'_> {
             })?,
             parts,
         };
-        Ok(if declined.is_empty() {
-            Outcome::Got(capture)
-        } else {
-            Outcome::Unusable(
-                capture,
-                datalib_problems::Reason::FetchFailed,
-                format!(
-                    "Google declined to export this version as {} (over its 10 MB export \
-                     limit); the native JSON and the other parts are kept",
-                    declined.join(", ")
-                ),
-            )
+        Ok(match declined_exports(&too_large, &not_allowed) {
+            None => Outcome::Got(capture),
+            Some(why) => Outcome::Unusable(capture, datalib_problems::Reason::FetchFailed, why),
         })
     }
+}
+
+/// What a capture whose exports Google declined says about them.
+fn declined_exports(too_large: &[&str], not_allowed: &[&str]) -> Option<String> {
+    let mut why = Vec::new();
+    if !too_large.is_empty() {
+        why.push(format!(
+            "Google declined to export this version as {} (over its 10 MB export limit)",
+            too_large.join(", ")
+        ));
+    }
+    if !not_allowed.is_empty() {
+        why.push(format!(
+            "Google does not let this account export it as {} (its owner turned off \
+             download for viewers and commenters)",
+            not_allowed.join(", ")
+        ));
+    }
+    (!why.is_empty()).then(|| {
+        format!(
+            "{}; the native JSON and the other parts are kept",
+            why.join("; ")
+        )
+    })
 }
 
 /// Every item of a paged Drive list.
