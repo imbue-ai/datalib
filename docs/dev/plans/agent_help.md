@@ -110,7 +110,9 @@ build's commit on GitHub, so nothing a doc links to has to ship.
   params and prints one JSON line per step a sync would refuse.
   `datalib-dag --check` runs it (never a custom command) and reports
   each at the misspelled key's line, or the step's, and exits 2.
-  **Open:** `PUT /api/config` does not call it yet.
+  `PUT /api/config` and `POST /api/config/check` ask it too, and refuse
+  to write such a config; the Manage editor shows the refusal with its
+  line.
 
 ### 2.4 Later: adding a source from the shell (deferred)
 

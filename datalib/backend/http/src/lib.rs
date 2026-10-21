@@ -43,6 +43,7 @@ pub mod lock;
 pub mod logging;
 pub mod loop_guard;
 pub mod manage;
+pub mod params_check;
 pub mod plugins;
 pub mod probe;
 pub mod prometheus;
@@ -1001,7 +1002,8 @@ pub struct PutConfigRequest {
 #[derive(Debug, Serialize)]
 pub struct ConfigCheckResponse {
     /// Whether this text is acceptable — and, for the PUT, whether it
-    /// was written. True only when every entry loads; a warning (advice
+    /// was written. True only when every entry loads and every built-in
+    /// step's params are ones a sync would accept; a warning (advice
     /// about a config that runs exactly as written) does not make it
     /// false. See `put_config` for why this door is stricter than the
     /// loader.
@@ -1015,7 +1017,23 @@ pub struct ConfigCheckResponse {
 }
 
 async fn check_config(Json(req): Json<PutConfigRequest>) -> Json<ConfigCheckResponse> {
-    Json(config_verdict(&req.text))
+    Json(full_verdict(&req.text).await)
+}
+
+/// [`config_verdict`], with each built-in step's params held to what a
+/// sync would accept: a step a sync would refuse is reported against its
+/// line like any other problem, and the text is not written.
+async fn full_verdict(text: &str) -> ConfigCheckResponse {
+    let mut verdict = config_verdict(text);
+    let refused = params_check::refused(text).await;
+    if !refused.is_empty() {
+        verdict.ok = false;
+        if verdict.error.is_none() {
+            verdict.error = refused.first().map(|d| d.describe());
+        }
+        verdict.diagnostics.extend(refused);
+    }
+    verdict
 }
 
 fn config_verdict(text: &str) -> ConfigCheckResponse {
@@ -1037,7 +1055,8 @@ fn config_verdict(text: &str) -> ConfigCheckResponse {
 /// can fix it now — so nothing that drops an entry is written. A warning is
 /// returned and the file is written anyway: it changes nothing about what
 /// runs, and refusing it would make the editor unable to save a config the
-/// app is happily running on.
+/// app is happily running on. A built-in step whose params a sync would
+/// refuse is refused here too (`params_check`), for the same reason.
 ///
 /// Every diagnostic comes back, not just the first, so a caller fixing a
 /// config needs one round-trip rather than one per mistake. Writes via a
@@ -1051,7 +1070,7 @@ async fn put_config(
 
     // Validate the submitted text before it touches the filesystem, so
     // a rejected config never gets written even transiently.
-    let verdict = config_verdict(&req.text);
+    let verdict = full_verdict(&req.text).await;
     if !verdict.ok {
         return Ok(Json(verdict));
     }

@@ -1556,6 +1556,37 @@ pub fn step_span(text: &str, step_id: &str, key: Option<&str>) -> Option<std::op
     })
 }
 
+/// What `datalib-step check-params` printed for this config, as
+/// diagnostics against its text: one `Rejected` per built-in step whose
+/// params a sync would refuse, at the line of the key the message names
+/// when it names one. The runner links no provider, so the step program
+/// is what reads params; `datalib-dag --check` and `PUT /api/config` both
+/// show its answer through here.
+pub fn params_diagnostics(text: &str, check_params_stdout: &str) -> Vec<Diagnostic> {
+    check_params_stdout
+        .lines()
+        .filter_map(|line| {
+            let problem: serde_json::Value = serde_json::from_str(line).ok()?;
+            let step = problem.get("step")?.as_str()?;
+            let message = problem.get("message")?.as_str()?;
+            let key = message
+                .split_once("unknown field `")
+                .and_then(|(_, rest)| rest.split_once('`'))
+                .map(|(key, _)| key);
+            let mut d = Diagnostic::new(
+                Severity::Rejected,
+                format!("a sync would refuse its params: {message}"),
+            )
+            .with_help("`datalib-step help <type> <method>` lists every option a source takes");
+            d.entry = Some(EntryRef::step_id(step));
+            if let Some(span) = step_span(text, step, key) {
+                d.set_span(text, span);
+            }
+            Some(d)
+        })
+        .collect()
+}
+
 /// Where `key = …` sits in this entry's body, its `[steps.params…]`
 /// sub-tables included, for a key nested in `params` that
 /// [`key_span`] stops short of. The entry's header when it is not found.
@@ -2164,6 +2195,39 @@ mod cadence_tests {
                 "{bad:?} must not parse"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod params_diagnostics_tests {
+    use super::*;
+
+    const TEXT: &str = "[[groups]]\nid = \"slack\"\ntype = \"slack\"\n\n[[steps]]\n\
+                        group = \"slack\"\nfunction = \"ingest\"\n\n[steps.params.api]\n\
+                        chanels = [\"bridge\"]\n";
+
+    /// `check-params` names the step and serde names the key; the
+    /// diagnostic has to land on the key's own line, not the step's
+    /// header, or an editor highlights the wrong place.
+    #[test]
+    fn a_refused_param_lands_on_its_key() {
+        let out = r#"{"step":"slack/ingest","message":"unknown field `chanels`, expected one of `channels`"}"#;
+        let found = params_diagnostics(TEXT, out);
+        assert_eq!(found.len(), 1, "{found:?}");
+        let d = &found[0];
+        assert_eq!(d.severity, Severity::Rejected);
+        assert_eq!(d.entry, Some(EntryRef::step_id("slack/ingest")));
+        assert_eq!(d.line, Some(10), "{d:?}");
+        assert!(d.message.contains("chanels"), "{d:?}");
+    }
+
+    #[test]
+    fn a_problem_without_a_key_lands_on_the_step_and_noise_is_skipped() {
+        let out =
+            "not json\n{\"step\":\"slack/ingest\",\"message\":\"its group declares no type\"}\n";
+        let found = params_diagnostics(TEXT, out);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].line, Some(5), "the step's [[steps]] header");
     }
 }
 

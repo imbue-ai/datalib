@@ -446,31 +446,11 @@ fn check_params(
             return 0;
         }
     };
-    let mut refused = 0;
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
-        let Ok(problem) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
-        let step = problem["step"].as_str().unwrap_or("?");
-        let message = problem["message"].as_str().unwrap_or("");
-        let key = message
-            .split_once("unknown field `")
-            .and_then(|(_, rest)| rest.split_once('`'))
-            .map(|(key, _)| key);
-        let at = config::step_span(&checked.text, step, key)
-            .map(|span| {
-                let line = datalib_dag::diagnostics::line_of(&checked.text, span.start);
-                let column = datalib_dag::diagnostics::column_of(&checked.text, span.start);
-                format!("{}:{line}:{column}", config_path.display())
-            })
-            .unwrap_or_else(|| config_path.display().to_string());
-        eprintln!(
-            "{at}: error: step {step}: a sync would refuse its params: {message}\n  \
-             help: `datalib-step help <type> <method>` lists every option"
-        );
-        refused += 1;
+    let refused = config::params_diagnostics(&checked.text, &String::from_utf8_lossy(&out.stdout));
+    for d in &refused {
+        eprintln!("{}", d.render(config_path, &checked.text));
     }
-    refused
+    refused.len()
 }
 
 enum Taken {
