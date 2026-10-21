@@ -3,8 +3,8 @@
 **Status: proposal (2026-10-21), with phases 1 and 2 built.** The `google_drive`
 provider mirrors a Google account's Docs, Sheets and Slides into a raw
 store. The store keeps Google's own native representation of each file at
-every version a run saw, plus the comments, the revision list and an
-OpenDocument export.
+every version a run saw, plus the comments and the revision list, and
+OpenDocument exports when the config asks for them.
 [`providers/google_drive/INGEST.md`](../../../datalib/backend/etl/providers/google_drive/INGEST.md)
 is the reference for what is built. This page is why it is shaped that way,
 and what is still to come. The facts under "What Google offers" were
@@ -232,12 +232,12 @@ old revision is gone.
 page that inherits from a layout and a master, and the ODP drawing model
 differs in the details.
 
-**Until those exist**, Drive's export is the only copy LibreOffice can
-open, so `exports` defaults to `odf`. It can be set per kind. ODS is
-small (0.5 MB for a Sheet measured), while ODT and ODP carry embedded
-fonts (3–7 MB measured), so keeping the Sheets' exports and dropping the
-rest is a reasonable trade. Once a translator for a kind exists, that
-kind's export becomes a cross-check rather than the backup.
+**Exports are off by default.** The native JSON is the backup, and a
+renderer for it is coming, so Drive's exports are something a config
+asks for. They can be set per kind. ODS is small (0.5 MB for a Sheet
+measured), while ODT and ODP carry embedded fonts (3–7 MB measured).
+Once a translator for a kind exists, that kind's export becomes a
+cross-check at most.
 
 ## Phases
 
@@ -246,15 +246,15 @@ kind's export becomes a cross-check rather than the backup.
      some.
    - *Capture:* for each file whose `version` moved, its metadata, its
      revision list, its comments, its native JSON (gzipped, in the CAS),
-     each image the JSON points at, and the configured exports
-     (`odf` by default, settable per kind, `[]` for none).
+     each image the JSON points at, and any exports the config asks
+     for (none by default, settable per kind).
    - *Testing:* playback-tested against TNG fixtures, and against the
      live account by hand.
 2. **Built: old revisions.** latchkey signs `docs.google.com`'s export
    links from 3.19.2 (imbue-ai/latchkey#181). Every listed revision of
-   a Doc or a Sheet is owed an export of its own (`revision_exports`,
-   `odf` by default), so the history from before the first sync comes
-   back in export form. Native JSON for those versions does not exist
+   a Doc or a Sheet is owed an export of its own when
+   `revision_exports` names a format (none by default), so the history
+   from before the first sync comes back in export form. Native JSON for those versions does not exist
    anywhere, so the native history starts at the first capture, and a
    deck's links ignore the revision, so a deck's starts there too.
 3. **Delta listing.** Drive's `changes` API, with its `startPageToken`,

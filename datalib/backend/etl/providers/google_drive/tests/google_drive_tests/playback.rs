@@ -24,7 +24,7 @@ pub const TABLES: &[&str] = &[
 ];
 
 pub async fn run(playback: &Path, store: &Path) -> FetchSummary {
-    run_with(playback, store, GoogleDriveApi::default()).await
+    run_with(playback, store, tape::api_with_odf()).await
 }
 
 async fn run_with(playback: &Path, store: &Path, api: GoogleDriveApi) -> FetchSummary {
@@ -451,5 +451,42 @@ async fn exports_follow_each_kinds_list() {
         .map(|(p, _)| p)
         .collect();
     assert_eq!(names, vec!["native.json.gz".to_string()]);
+    db.close().await;
+}
+
+/// The default keeps Google's JSON, the images, comments and revisions,
+/// and asks Drive for no converted copy of anything.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_default_keeps_the_json_and_fetches_no_odf() {
+    let d = tempfile::tempdir().unwrap();
+    let t = tape::tape(d.path(), Edition::Before);
+    let store = d.path().join("store");
+    let s = run_with(&t, &store, GoogleDriveApi::default()).await;
+    assert_eq!(
+        (s.captured, s.failed, s.exports, s.revision_exports),
+        (3, 0, 0, 0),
+        "{s:?}"
+    );
+    let db = open(&store).await;
+    assert_eq!(
+        scalar(
+            &db,
+            "SELECT COUNT(*) FROM capture_parts WHERE part LIKE 'export.%'"
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        scalar(&db, "SELECT COUNT(*) FROM revision_exports").await,
+        0
+    );
+    assert_eq!(
+        scalar(
+            &db,
+            "SELECT COUNT(*) FROM capture_parts WHERE part = 'native.json.gz'"
+        )
+        .await,
+        3
+    );
     db.close().await;
 }

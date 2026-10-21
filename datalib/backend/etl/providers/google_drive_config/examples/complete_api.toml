@@ -26,11 +26,12 @@ account = "data@example.com"
 kinds = ["document", "spreadsheet", "presentation"]  # which kinds of file; default all three
 exports = ["odf", "pdf"]   # converted copies kept beside Google's own JSON: "odf"
                            # (.odt/.ods/.odp), "ooxml" (.docx/.xlsx/.pptx), "pdf".
-                           # Default ["odf"]; each is 1-4 MB a version, since Google embeds fonts
+                           # Default none: the JSON is the backup. Each is 1-4 MB a
+                           # version, since Google embeds fonts
 revision_exports = ["odf"] # the same, of every revision Drive lists for a Doc or a
                            # Sheet, fetched once each: the only copy of a version from
                            # before the first sync (a deck's links ignore the revision,
-                           # so decks get none). Default ["odf"]; [] for none
+                           # so decks get none). Default none
 owned_only = false         # true: only the files the account owns, not ones shared
                            # with it; default false
 file_ids = [               # only these files, as a bare id or a pasted docs.google.com

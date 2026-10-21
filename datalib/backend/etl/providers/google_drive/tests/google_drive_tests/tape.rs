@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use datalib_etl_google_drive::ingest::api;
-use datalib_etl_google_drive_config::{ExportFormat, FileKind};
+use datalib_etl_google_drive_config::{ExportFormat, Exports, FileKind, GoogleDriveApi};
 use datalib_etl_web::http::{HttpRequest, HttpResponse};
 use datalib_etl_web::synthesize::{json_response, write_fixture};
 use serde_json::{json, Value};
@@ -32,6 +32,16 @@ pub const KINDS: &[FileKind] = &[
     FileKind::Spreadsheet,
     FileKind::Presentation,
 ];
+
+/// The config the tape is answered under: ODF exports of each version
+/// and each old revision, which the default leaves off.
+pub fn api_with_odf() -> GoogleDriveApi {
+    GoogleDriveApi {
+        exports: Exports::Every(vec![ExportFormat::Odf]),
+        revision_exports: Exports::Every(vec![ExportFormat::Odf]),
+        ..Default::default()
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Edition {

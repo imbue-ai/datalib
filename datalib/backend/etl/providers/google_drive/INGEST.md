@@ -2,8 +2,9 @@
 
 A backup of a Google account's Docs, Sheets and Slides. The store keeps
 each file in Google's own native form at every version a run saw. Beside
-it are the file's comments, its revision list, the images it shows, and
-an export LibreOffice can open. There is no render step yet. Why it is
+it are the file's comments, its revision list and the images it shows,
+and, when the config asks, an export LibreOffice can open (`exports`,
+`revision_exports`, both off by default). There is no render step yet. Why it is
 shaped this way, what Google offers and what is still to come:
 [`docs/dev/plans/google_drive.md`](../../../../../docs/dev/plans/google_drive.md).
 
