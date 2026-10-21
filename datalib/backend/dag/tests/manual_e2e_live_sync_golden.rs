@@ -283,6 +283,8 @@ const ROW_COUNT_ONLY_STANZAS: &[&str] = &["apple_photos", "lightroom", "whatsapp
 /// - Slack's `channels` and `users` are the workspace-wide listings —
 ///   every channel and every member — that `SKIP_PATH_SEGMENTS` keeps
 ///   out of the golden as files; the tables must not let them back in.
+///   Linear's lists of people, teams, states, labels, statuses and
+///   initiatives are the same: read whole whatever projects are chosen.
 /// - A sensor series (`airvisual_samples`, `garmin_daily`) is thousands
 ///   of rows whose values the provider's own fixtures pin; here the
 ///   count says the step read the files, and the rendered plots say
@@ -295,6 +297,18 @@ const ROW_COUNT_ONLY_TABLES: &[(&str, &str)] = &[
     ("tiny-slack", "channels_bookkeeping"),
     ("tiny-slack", "users"),
     ("tiny-slack", "users_bookkeeping"),
+    ("linear", "users"),
+    ("linear", "users_bookkeeping"),
+    ("linear", "teams"),
+    ("linear", "teams_bookkeeping"),
+    ("linear", "workflow_states"),
+    ("linear", "workflow_states_bookkeeping"),
+    ("linear", "issue_labels"),
+    ("linear", "issue_labels_bookkeeping"),
+    ("linear", "project_statuses"),
+    ("linear", "project_statuses_bookkeeping"),
+    ("linear", "initiatives"),
+    ("linear", "initiatives_bookkeeping"),
     ("airvisual", "airvisual_samples"),
     ("garmin", "garmin_daily"),
     ("garmin", "garmin_daily_bookkeeping"),
