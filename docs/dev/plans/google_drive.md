@@ -44,8 +44,11 @@ the whole file as JSON:
 | Slides | `slides/v1/presentations/{id}` | 1.2 MB | 44 KB |
 | Sheet | `sheets/v4/spreadsheets/{id}?includeGridData=true` | 6.5 MB | 44 KB |
 
-- **Byte-identical across reads.** Two reads of an unedited file return
-  the same bytes, for all three kinds.
+- **Stable across reads, except the image links.** Two reads of an
+  unedited file minutes apart return the same bytes, for all three
+  kinds. Two hours apart, every image link had been signed afresh and
+  nothing else had changed (one Doc, one deck, 19 links); the images
+  themselves came back byte-identical.
 - **Big but highly compressible.** The Sheet above has 253 cells with a
   value, yet `effectiveFormat` (the formatting Google computed) is on
   6,158 of its 10,143 cells. Every kind compresses enormously.
@@ -114,9 +117,10 @@ So the native JSON needs all four sign-ins.
   - *What it would cost:* a Sheet edited all day and synced hourly would
     then cost 5 MB per sync in doltlite, against about 44 KB gzipped in
     the CAS.
-  - *Why the CAS can hold it:* the JSON is byte-stable, and gzip with a
-    zero mtime is deterministic, so an unchanged file maps to an
-    unchanged blob.
+  - *Why the CAS can hold it:* with its image links taken out (into the
+    capture's sidecar, as volatile fields go), the JSON of an unedited
+    file is the same on every read. gzip with a zero mtime is
+    deterministic, so an unchanged file maps to an unchanged blob.
 - **Each version a run captures is its own row** (`captures`), never just
   a new commit of one row. It does not lean on doltlite history to hold
   the versions, so the history survives whatever is done to the commit

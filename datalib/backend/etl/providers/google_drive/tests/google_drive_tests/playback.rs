@@ -11,7 +11,6 @@ use datalib_etl_google_drive_config::{
 use datalib_etl_web::http::LatchkeySettings;
 use datalib_etl_web::interrupt::dump_tables;
 use datalib_etl_web::playback;
-use datalib_etl_web::synthesize::json_response;
 
 use crate::tape::{self, Edition, DECK, DOC, SHEET};
 
@@ -153,11 +152,30 @@ async fn a_first_sync_captures_every_file_in_its_native_form() {
             "native.json.gz",
         ]
     );
-    let native = blob(&db, parts[2].1.as_deref().unwrap()).await;
+    let native: serde_json::Value =
+        serde_json::from_slice(&gunzip(&blob(&db, parts[2].1.as_deref().unwrap()).await)).unwrap();
+    let mut sent = tape::doc_native(Edition::Before);
+    let link = sent
+        .pointer_mut("/tabs/0/documentTab/inlineObjects/kix.enterprise/inlineObjectProperties/embeddedObject/imageProperties")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .remove("contentUri")
+        .unwrap();
     assert_eq!(
-        gunzip(&native),
-        json_response(&tape::doc_native(Edition::Before)).body,
-        "the native JSON is kept exactly as Google sent it"
+        native, sent,
+        "the native JSON is kept as Google sent it, less its image link"
+    );
+    let volatile: String =
+        sqlx::query_scalar("SELECT json(volatile_payload) FROM captures_bookkeeping WHERE id = ?")
+            .bind(format!("{DOC}#12"))
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+    let volatile: serde_json::Value = serde_json::from_str(&volatile).unwrap();
+    assert_eq!(
+        volatile["image_links"][parts[1].0.trim_start_matches("image:")],
+        link
     );
     assert_eq!(
         blob(&db, parts[1].1.as_deref().unwrap()).await,

@@ -81,6 +81,9 @@ pub const COMMENT_VOLATILE_PATHS: &[dr::VolatilePath] = &[
 ///   and Slides; Sheets have none).
 /// - `head_revision_id` is the newest Drive revision listed at capture,
 ///   the number old-revision exports are asked for by.
+///
+/// The sidecar's `volatile_payload` holds the image links taken out of
+/// the native JSON, `{"image_links": {"<JSON pointer>": "<url>"}}`.
 #[derive(Debug, Clone, RawTable)]
 #[raw_table(table = "captures", index = "captures_by_file:file_id")]
 pub struct CaptureRow {
@@ -101,8 +104,9 @@ impl CaptureRow {
 /// `capture_parts` — the bytes of one capture in the CAS, keyed
 /// `{capture_id}#{part}`. `part` is one of:
 ///
-/// - [`PART_NATIVE`]: the native API's JSON, exactly as received,
-///   gzipped;
+/// - [`PART_NATIVE`]: the native API's JSON, gzipped, with its image
+///   links taken out. Google signs each link afresh on every read, so
+///   left in they would make every read of an unedited file differ;
 /// - `export.<ext>` ([`export_part`]): Drive's export in that format;
 /// - `image:<JSON pointer>` ([`image_part`]): an image the native JSON
 ///   points at, by where it points from.

@@ -314,26 +314,27 @@ impl Captures<'_> {
         let comments = paged(|token| api::comments_url(id, token), "comments", lk).await?;
 
         let native_bytes = api::get_bytes(&api::native_url(self.kind, id), lk).await?;
-        let native: Value = serde_json::from_slice(&native_bytes)
+        let mut native: Value = serde_json::from_slice(&native_bytes)
             .with_context(|| format!("parse the native JSON of {id}"))?;
+        let links = shape::take_image_links(&mut native);
         let mut parts = vec![Part {
             name: PART_NATIVE.to_string(),
-            bytes: Some(shape::gzip(&native_bytes)?),
+            bytes: Some(shape::gzip(&serde_json::to_vec(&native)?)?),
             content_type: Some(NATIVE_CONTENT_TYPE.to_string()),
         }];
 
-        let mut by_url: HashMap<String, Vec<u8>> = HashMap::new();
-        for (pointer, url) in shape::image_links(&native) {
-            if !by_url.contains_key(&url) {
-                let bytes = api::get_image(&url)
+        let mut by_url: HashMap<&str, Vec<u8>> = HashMap::new();
+        for (pointer, url) in &links {
+            if !by_url.contains_key(url.as_str()) {
+                let bytes = api::get_image(url)
                     .await
                     .with_context(|| format!("image at {pointer}"))?;
                 self.images.fetch_add(1, Ordering::Relaxed);
-                by_url.insert(url.clone(), bytes);
+                by_url.insert(url, bytes);
             }
             parts.push(Part {
-                name: image_part(&pointer),
-                bytes: by_url.get(&url).cloned(),
+                name: image_part(pointer),
+                bytes: by_url.get(url.as_str()).cloned(),
                 content_type: None,
             });
         }
@@ -367,13 +368,16 @@ impl Captures<'_> {
                 FILE_VOLATILE_PATHS,
                 |p| FileRow { id_and_payload: p },
             )?,
-            row: CaptureRow {
-                id: CaptureRow::id_for(id, version),
-                file_id: id.to_string(),
-                version: version.to_string(),
-                modified_time: str_of(entry, "modifiedTime"),
-                native_revision_id: shape::native_revision_id(&native),
-                head_revision_id: revisions.last().and_then(|r| str_of(r, "id")),
+            row: Split {
+                row: CaptureRow {
+                    id: CaptureRow::id_for(id, version),
+                    file_id: id.to_string(),
+                    version: version.to_string(),
+                    modified_time: str_of(entry, "modifiedTime"),
+                    native_revision_id: shape::native_revision_id(&native),
+                    head_revision_id: revisions.last().and_then(|r| str_of(r, "id")),
+                },
+                volatile: shape::image_links_volatile(&links),
             },
             revisions: children(id, &revisions, REVISION_VOLATILE_PATHS, |p| RevisionRow {
                 id_and_payload: p,

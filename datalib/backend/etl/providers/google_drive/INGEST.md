@@ -21,7 +21,9 @@ signed in as the same account:
 
 Image links in the native JSON (`docs.google.com/*-images-rt/…`) are
 signed by Google for about 30 minutes and go out as plain `curl`
-(`api::req_image`).
+(`api::req_image`). Google signs them afresh on every read, so they are
+taken out of the JSON that is stored (`shape::take_image_links`). The
+image bytes, which do not change, are stored by where each link was.
 
 A refusal from one service (latchkey has no sign-in for it, the token
 lacks a scope, or the API is off for the OAuth project) ends that kind
@@ -43,7 +45,8 @@ its own.
    - the revision list, paged, unless the account may only comment
      (`capabilities.canReadRevisions = false`), when Drive lists none;
    - the comments, paged, with `includeDeleted=true`;
-   - the native JSON, kept byte for byte, gzipped;
+   - the native JSON, gzipped, as Google sent it less its image links,
+     which go in the capture's sidecar (`volatile_payload`);
    - every image link in it, once per distinct URL;
    - one export per format `exports` names for the file's kind: a list
      for every kind, `[]` for none, or a table per kind.
@@ -64,8 +67,8 @@ nothing.
 **Why nothing is re-fetched for a version already held.** An export is
 not byte-stable: two exports of one version differ in their zip
 timestamps. A second capture of an unchanged file would store a second
-3 MB copy of the same thing. The native JSON is byte-stable, but it is
-only fetched with the rest.
+3 MB copy of the same thing. The native JSON, less its image links,
+is the same on every read, but it is only fetched with the rest.
 
 ## The store
 
