@@ -129,8 +129,8 @@ What it listed before the stop is stored, and the next run fetches it.
 
 ## Single-PR mode
 
-`--pull-request owner/repo#NUM` (also `owner/repo/pull/NUM` or a
-github.com PR URL; repeatable) skips discovery entirely, fetching just
+`--pull-request owner/repo#NUM` (or a github.com PR URL;
+repeatable) skips discovery entirely, fetching just
 those PRs whatever the store holds: nothing is listed or covered, and
 a PR an earlier run could not fetch whole waits for the next discovery
 run. A give-up of the retry loop is a `phase:fetch` row. The config's

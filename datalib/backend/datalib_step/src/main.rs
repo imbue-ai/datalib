@@ -35,6 +35,8 @@ mod time_series;
 mod topo_sort_config;
 
 #[cfg(test)]
+mod all_sources_test;
+#[cfg(test)]
 mod config_examples_test;
 
 use std::path::{Path, PathBuf};

@@ -88,9 +88,8 @@ Reach for the simplest existing provider that's shaped like yours,
    into the per-type dispatch in
    [`datalib_step/src/dispatch.rs`](../../datalib/backend/datalib_step/src/dispatch.rs),
    which is what the running pipeline reads — and what
-   `config_examples_test.rs` beside it plans every documented example
-   through, so a source added to `all_sources.toml` is checked against
-   its real schema with no further registration.
+   `config_examples_test.rs` beside it plans every documented config
+   through.
    The same wiring asks the config crate which of its params tables
    are ways in, and whether each reaches a live service or reads files
    on disk: `impl IngestMethods for <Name>Config` in
@@ -108,7 +107,9 @@ Reach for the simplest existing provider that's shaped like yours,
    and plans each one and fails for an option of the method's table
    that no complete stanza sets. The field docs are what `datalib-step
    help <name> <method>` prints, so write them for a person filling in
-   a config.
+   a config. `docs/user/config_examples/all_sources.toml` is generated
+   from the complete stanzas: `bazel run
+   //datalib/backend/datalib_step:all_sources.update`.
 6. Write `providers/<name>/INGEST.md`, and
    `providers/<name>_render/TRANSLATE.md` too if the provider has a
    render side. See

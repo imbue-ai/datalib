@@ -98,14 +98,14 @@ build's commit on GitHub, so nothing a doc links to has to ship.
   files would mislead. A retired field a planner refuses leaves the
   schema with `#[schemars(skip)]`. A time-series source's stanzas
   declare `render_time_series`.
-- **Open:** `docs/user/config_examples/all_sources.toml` is not yet
-  checked against the examples, and the stanzas found it stale: no
-  `render_time_series` for garmin, yolink or airvisual; an `embed` on
-  airvisual, which the config upgrade removes; no render step for
-  apple_photos, lightroom or google_drive, whose storage report puts
-  them in the grid; a commented `databases = true` notion does not
-  accept; a GitHub ref form (`owner/repo/pull/NUM`) the parser refuses.
-  Generate it from the complete stanzas, or check it against them.
+- `docs/user/config_examples/all_sources.toml` is generated from the
+  complete stanzas, one group per way in, with the index groups'
+  inputs computed from them (`all_sources_test.rs`; `bazel run
+  //datalib/backend/datalib_step:all_sources.update`). The hand-kept
+  copy it replaced had drifted: no time-series steps or index, an
+  `embed` on airvisual the config upgrade removes, no render step for
+  the sources that render none, a notion option that does not exist,
+  a GitHub ref form the parser refuses.
 - `datalib-step check-params <config>` plans every built-in step's
   params and prints one JSON line per step a sync would refuse.
   `datalib-dag --check` runs it (never a custom command) and reports
