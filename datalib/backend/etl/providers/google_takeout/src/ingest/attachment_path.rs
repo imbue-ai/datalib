@@ -1,7 +1,7 @@
 //! Resolve a Takeout attachment's referenced filename to its on-disk
 //! path, tolerating Google's silent truncation of long names.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// Outcome of resolving a referenced attachment name against a directory.
 #[derive(Debug, PartialEq, Eq)]
@@ -22,7 +22,20 @@ fn split_ext(name: &str) -> (&str, &str) {
     }
 }
 
+/// A name that stays in the folder it is joined to. An export's JSON or
+/// HTML names its attachments, and `Path::join` would follow an absolute
+/// name or a `..` out of the export to any file on the machine.
+pub fn is_plain_file_name(name: &str) -> bool {
+    let mut parts = Path::new(name).components();
+    matches!(parts.next(), Some(Component::Normal(_)))
+        && parts.next().is_none()
+        && !name.contains(['/', '\\'])
+}
+
 pub fn resolve(dir: &Path, referenced: &str) -> Resolved {
+    if !is_plain_file_name(referenced) {
+        return Resolved::Missing;
+    }
     let exact = dir.join(referenced);
     if exact.is_file() {
         return Resolved::Exact(exact);
@@ -162,6 +175,27 @@ mod tests {
             resolve(d.path(), "File-abcde_148157.jpeg"),
             Resolved::Truncated(real),
         );
+    }
+
+    #[test]
+    fn a_name_that_leaves_the_folder_resolves_to_nothing() {
+        let top = tempdir().unwrap();
+        let export = top.path().join("export");
+        fs::create_dir(&export).unwrap();
+        let outside = touch(top.path(), "outside.txt");
+        for name in [
+            outside.to_str().unwrap(),
+            "../outside.txt",
+            "sub/../../outside.txt",
+            "..",
+            ".",
+            "",
+            "sub\\outside.txt",
+        ] {
+            assert_eq!(resolve(&export, name), Resolved::Missing, "{name:?}");
+        }
+        let inside = touch(&export, "Worf - Text.jpg");
+        assert_eq!(resolve(&export, "Worf - Text.jpg"), Resolved::Exact(inside));
     }
 
     #[test]
