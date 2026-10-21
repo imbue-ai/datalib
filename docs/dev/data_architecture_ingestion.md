@@ -410,6 +410,7 @@ therefore what it can see:
 | `apple_messages` | — | nothing: append-only, since `chat.db` evicts |
 | `google_drive` | — | nothing: a backup, so a file that leaves the listing keeps its rows and captures |
 | `yolink` | — | nothing; append-only telemetry |
+| `linear` | — | nothing: an archived record is listed with its `archivedAt`, and one Linear deletes outright stays as last fetched |
 | `notion`, `beeper` | — | not wired (rework; poorly supported) |
 
 **The hard part is not the deletion, it is establishing the
@@ -613,6 +614,7 @@ channel list, claude's orgs and project docs).
 | github, gitlab | `listed_change_requests`, from each scope's search | the PR / MR sidecar, at `updated_at` | each scope's `updated_at` |
 | email (JMAP, Gmail) | `listed_messages`, from the delta or an enumeration | `emails` sidecar, then the `.eml` edge | — |
 | notion | search results are the `pages` rows | `page_markdown`, `page_comments`, attachment edges | the search's `last_edited_time` |
+| linear | each walked connection's pages are the rows | each table's sidecar, at `updatedAt` | each connection's `updatedAt`, per selection |
 | garmin | days, activities, files | each table's sidecar | activity dates |
 | contacts, calendar (DAV) | `dav_resources`, at each href's etag | `dav_resources` sidecar | — |
 | calendar (Google) | the events page is the content | — | — |

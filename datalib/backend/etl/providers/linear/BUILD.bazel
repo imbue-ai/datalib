@@ -1,0 +1,49 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "datalib_etl_linear",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_linear",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    proc_macro_deps = ["@datalib_crates//:async-trait"],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/linear_config:datalib_etl_linear_config",
+        "//datalib/backend/etl/web:datalib_etl_web",
+        "//datalib/backend/probe:datalib_probe",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:blake3",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "linear_unittests",
+    size = "small",
+    crate = ":datalib_etl_linear",
+    edition = "2021",
+)
+
+# Every hermetic Linear test in one binary, against an in-memory Linear;
+# the modules are listed in its `main.rs`.
+rust_test(
+    name = "linear_tests",
+    srcs = glob(["tests/linear_tests/*.rs"]),
+    crate_root = "tests/linear_tests/main.rs",
+    edition = "2021",
+    proc_macro_deps = ["@datalib_crates//:async-trait"],
+    deps = [
+        ":datalib_etl_linear",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/linear_config:datalib_etl_linear_config",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)

@@ -485,6 +485,31 @@ group = "notion"
 function = "embed"
 inputs = ["notion/keyword_index"]
 
+# --- Linear -------------------------------------------------------------
+
+# A Linear workspace over its GraphQL API. Download-only: each kind of
+# Linear object is a raw table of the objects as Linear sent them, and
+# nothing is rendered. Credentials via latchkey:
+#
+#   latchkey auth browser linear
+#
+# The first sync copies everything newest first; every later one reads
+# only what changed (datalib/backend/etl/providers/linear/INGEST.md).
+[[groups]]
+id = "linear"
+type = "linear"
+
+[[steps]]
+group = "linear"
+function = "ingest"
+
+[steps.params.api]
+# Both empty (or omitted) copies the whole workspace. Otherwise an issue
+# is copied when its team or its project is named here; most issues
+# belong to no project, so name their teams.
+teams = ["ENG"]
+projects = ["Warp core refit"]
+
 # --- Email: two input modes ---------------------------------------------
 
 # Mode A — JMAP server (Fastmail or any RFC 8620/8621 server). The
@@ -1044,10 +1069,16 @@ function = "ingest"
 
 [steps.params.api]
 # kinds = ["document", "spreadsheet", "presentation"]  # which kinds to mirror
-# exports = ["odf"]          # beside the native JSON: "odf", "ooxml", "pdf";
-                             # 1-4 MB a version each, since Google embeds fonts
+# exports = ["odf"]          # Drive's converted copies, beside the native JSON:
+                             # "odf", "ooxml", "pdf"; [] for none. A Doc's or a
+                             # deck's is 1-4 MB a version, since Google embeds fonts
 # owned_only = false         # true: only the files the account owns
 # file_ids = ["https://docs.google.com/document/d/<id>/edit"]  # exactly these
+#
+# Or a list per kind; a kind left out keeps ["odf"]:
+# [steps.params.api.exports]
+# document = []
+# spreadsheet = ["odf", "ooxml"]
 # --- AirVisual (IQAir) monitors -----------------------------------------
 
 # AirVisual Pros' own history files, read off each unit's Samba share

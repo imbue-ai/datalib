@@ -11,8 +11,8 @@ use datalib_etl::doltlite_raw as dr;
 use datalib_time::IsoOffsetTimestamp;
 
 use super::schema_raw::{
-    full_ddl, CapturePartRow, CaptureRow, CommentRow, FileRow, RevisionRow, COMMENTS, FILES,
-    LADDER, REVISIONS,
+    full_ddl, CapturePartRow, CaptureRow, CommentRow, FileRow, RevisionRow, CAPTURES, COMMENTS,
+    FILES, LADDER, REVISIONS,
 };
 
 pub use datalib_etl::doltlite_raw::db_path_for;
@@ -41,7 +41,7 @@ pub struct Capture {
     pub file: Split<FileRow>,
     pub revisions: Vec<Split<RevisionRow>>,
     pub comments: Vec<Split<CommentRow>>,
-    pub row: CaptureRow,
+    pub row: Split<CaptureRow>,
     pub parts: Vec<Part>,
 }
 
@@ -62,7 +62,7 @@ pub async fn store_captures(
     cas: &BlobCas,
     captures: &[&Capture],
 ) -> Result<()> {
-    let edge_id = |c: &Capture, p: &Part| format!("{}#{}", c.row.id, p.name);
+    let edge_id = |c: &Capture, p: &Part| format!("{}#{}", c.row.row.id, p.name);
     let inserts: Vec<CasInsert<'_, String>> = captures
         .iter()
         .flat_map(|c| c.parts.iter().map(move |p| (c, p)))
@@ -83,7 +83,7 @@ pub async fn store_captures(
             CapturePartRow {
                 blake3: stored.get(&id).cloned(),
                 id,
-                capture_id: c.row.id.clone(),
+                capture_id: c.row.row.id.clone(),
                 part: p.name.clone(),
             }
         })
@@ -96,8 +96,8 @@ pub async fn store_captures(
     upsert_split(tx, REVISIONS, &revisions, &now).await?;
     let comments: Vec<&Split<CommentRow>> = captures.iter().flat_map(|c| &c.comments).collect();
     upsert_split(tx, COMMENTS, &comments, &now).await?;
-    let rows: Vec<CaptureRow> = captures.iter().map(|c| c.row.clone()).collect();
-    bulk_upsert_in_tx(tx, &rows, &now).await?;
+    let rows: Vec<&Split<CaptureRow>> = captures.iter().map(|c| &c.row).collect();
+    upsert_split(tx, CAPTURES, &rows, &now).await?;
     bulk_upsert_in_tx(tx, &edges, &now).await
 }
 

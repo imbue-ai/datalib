@@ -149,6 +149,12 @@
       "reach": "local"
     }
   ],
+  "linear": [
+    {
+      "path": "api",
+      "reach": "origin"
+    }
+  ],
   "linkedin": [
     {
       "path": "export",

@@ -44,8 +44,11 @@ the whole file as JSON:
 | Slides | `slides/v1/presentations/{id}` | 1.2 MB | 44 KB |
 | Sheet | `sheets/v4/spreadsheets/{id}?includeGridData=true` | 6.5 MB | 44 KB |
 
-- **Byte-identical across reads.** Two reads of an unedited file return
-  the same bytes, for all three kinds.
+- **Stable across reads, except the image links.** Two reads of an
+  unedited file minutes apart return the same bytes, for all three
+  kinds. Two hours apart, every image link had been signed afresh and
+  nothing else had changed (one Doc, one deck, 19 links); the images
+  themselves came back byte-identical.
 - **Big but highly compressible.** The Sheet above has 253 cells with a
   value, yet `effectiveFormat` (the formatting Google computed) is on
   6,158 of its 10,143 cells. Every kind compresses enormously.
@@ -114,9 +117,10 @@ So the native JSON needs all four sign-ins.
   - *What it would cost:* a Sheet edited all day and synced hourly would
     then cost 5 MB per sync in doltlite, against about 44 KB gzipped in
     the CAS.
-  - *Why the CAS can hold it:* the JSON is byte-stable, and gzip with a
-    zero mtime is deterministic, so an unchanged file maps to an
-    unchanged blob.
+  - *Why the CAS can hold it:* with its image links taken out (into the
+    capture's sidecar, as volatile fields go), the JSON of an unedited
+    file is the same on every read. gzip with a zero mtime is
+    deterministic, so an unchanged file maps to an unchanged blob.
 - **Each version a run captures is its own row** (`captures`), never just
   a new commit of one row. It does not lean on doltlite history to hold
   the versions, so the history survives whatever is done to the commit
@@ -161,6 +165,57 @@ So the native JSON needs all four sign-ins.
 - **Where it belongs.** That step reads the raw store and nothing else,
   so it is a render-side consumer, not a change to the download.
 
+## Making ODF from the native JSON ourselves
+
+**Nothing does it off the shelf** (searched 2026-10-21). The nearest
+tools stop short:
+
+- **Docs JSON to Markdown.** Converters exist (`gconv`,
+  `parse-google-docs-json`, `docs-markdown`), but they keep the text and
+  the structure, not the formatting, suggestions or comments.
+- **ODF packaging.** `odf-kit` (TypeScript, Apache-2.0) builds ODT from
+  HTML, Markdown or its own model, so it could do the packaging, but it
+  does not read Google's JSON.
+- **LibreOffice headless** converts between office formats, but it does
+  not read Google's JSON either.
+
+So a translator is ours to write, one per kind. It would read the raw
+store and nothing else, so it belongs on the render side. And it can make
+ODF for any version ever captured, which Drive's export cannot once an
+old revision is gone.
+
+**Sheets: closest to one-to-one.**
+- **What carries straight over.** A `CellData` has the value as entered
+  (`userEnteredValue`, its formula included), its format, and the value
+  Google computed. Merges, column widths and frozen panes are on the
+  sheet.
+- **A writer exists.** The Rust `spreadsheet-ods` crate (MIT or
+  Apache-2.0, 1.0.4) writes ODS.
+- **What does not.** Formulas need rewriting into OpenFormula
+  (`=SUM(A1:A3)` becomes `of:=SUM([.A1:.A3])`). Functions only Sheets
+  has (`GOOGLEFINANCE`, `IMPORTRANGE`, `QUERY`) have no equivalent, and
+  would keep Google's computed value as the cell's cached result.
+
+**Docs: medium.**
+- **The content.** Paragraphs, styled runs, lists, tables, inline
+  images, headers, footers and footnotes map onto ODF text, written as
+  XML directly; no Rust ODT writer worth depending on turned up.
+- **Suggestions** become `text:tracked-changes`.
+- **Comments** come from the `comments` table as `office:annotation`s.
+  Their anchors are opaque (`kix.…`), so they are placed by the comment's
+  `quotedFileContent` where that text is found, and at the end otherwise.
+
+**Slides: hardest, so last.** Every element is positioned in EMUs on a
+page that inherits from a layout and a master, and the ODP drawing model
+differs in the details.
+
+**Until those exist**, Drive's export is the only copy LibreOffice can
+open, so `exports` defaults to `odf`. It can be set per kind. ODS is
+small (0.5 MB for a Sheet measured), while ODT and ODP carry embedded
+fonts (3–7 MB measured), so keeping the Sheets' exports and dropping the
+rest is a reasonable trade. Once a translator for a kind exists, that
+kind's export becomes a cross-check rather than the backup.
+
 ## Phases
 
 1. **Built.** One sign-in per service.
@@ -169,12 +224,12 @@ So the native JSON needs all four sign-ins.
    - *Capture:* for each file whose `version` moved, its metadata, its
      revision list, its comments, its native JSON (gzipped, in the CAS),
      each image the JSON points at, and the configured exports
-     (`odf` by default).
+     (`odf` by default, settable per kind, `[]` for none).
    - *Testing:* playback-tested against TNG fixtures, and against the
      live account by hand.
 2. **Old revisions.** Teach latchkey's Google services to sign
    `docs.google.com`'s export URLs (`/feeds/download/`,
-   `/{document,spreadsheets,presentation}/export`), upstream in latchkey.
+   `/{document,spreadsheets,presentation}/export`), upstream in latchkey (imbue-ai/latchkey#181).
    Then every listed revision is owed an export of its own, and the
    history before the first sync comes back in export form. Native JSON
    for those versions does not exist anywhere, so the native history
@@ -182,9 +237,22 @@ So the native JSON needs all four sign-ins.
 3. **Delta listing.** Drive's `changes` API, with its `startPageToken`,
    in place of the full listing each run. The full listing is 1 request
    per 1,000 files, so this matters only for a large Drive.
-4. **The ODF-with-versions export step** above.
-5. **A republish command**, export upload first, Sheets replay second.
-6. **The wizard.** One catalog entry has one `credentialService`, and
+4. **A markdown render**, the first render, because it is what the rest
+   of datalib reads. A `google_drive_render` crate and a
+   `render_markdown` step would make each file one document, from its
+   newest capture's native JSON:
+   - *Docs:* headings, lists, tables and images as markdown;
+   - *Sheets:* each sheet as a table;
+   - *Slides:* each slide's text.
+
+   Its comment threads would be sections of their own, with the
+   `m-{uuid}` wrappers feedback anchors to. That puts the files in the
+   grid and in search like any other source. Deferred for now: phase 1 is
+   the backup.
+5. **ODF from the native JSON**, Sheets first (above), then the
+   ODF-with-versions export step built on it.
+6. **A republish command**, export upload first, Sheets replay second.
+7. **The wizard.** One catalog entry has one `credentialService`, and
    this source needs four. Either latchkey grows one service covering all
    four scopes, or the catalog learns several.
 
