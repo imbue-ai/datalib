@@ -148,14 +148,18 @@ pub fn export_url(file_id: &str, mime_type: &str) -> String {
     )
 }
 
-/// The whole file in its native API's form: every tab of a Doc with its
-/// suggestions inline, every cell of a Sheet, every page of a deck.
-pub fn native_url(kind: FileKind, file_id: &str) -> String {
+/// The whole file in its native API's form: every tab of a Doc, every
+/// cell of a Sheet, every page of a deck. A Doc's suggestions come inline
+/// when the account may comment on it. The Docs API refuses them (403)
+/// to an account that may only view, so that Doc is asked for in
+/// Google's default mode, which for a viewer leaves them out.
+pub fn native_url(kind: FileKind, file_id: &str, can_comment: bool) -> String {
     match kind {
-        FileKind::Document => format!(
+        FileKind::Document if can_comment => format!(
             "{DOCS}/documents/{file_id}?includeTabsContent=true\
              &suggestionsViewMode=SUGGESTIONS_INLINE"
         ),
+        FileKind::Document => format!("{DOCS}/documents/{file_id}?includeTabsContent=true"),
         FileKind::Spreadsheet => {
             format!("{SHEETS}/spreadsheets/{file_id}?includeGridData=true")
         }
@@ -358,11 +362,11 @@ mod tests {
         let e = transport_error(
             HttpError::Curl {
                 service: HTTP_SERVICE,
-                url: native_url(FileKind::Spreadsheet, "x"),
+                url: native_url(FileKind::Spreadsheet, "x", true),
                 exit: 1,
                 stderr: "Error: No credentials found for google-sheets.".into(),
             },
-            &native_url(FileKind::Spreadsheet, "x"),
+            &native_url(FileKind::Spreadsheet, "x", true),
         );
         assert!(matches!(e, ApiError::Service(_)), "{e}");
         assert!(e.to_string().contains("google-sheets"), "{e}");
@@ -384,7 +388,7 @@ mod tests {
 
     #[test]
     fn statuses_are_judged_by_what_they_say() {
-        let url = native_url(FileKind::Document, "x");
+        let url = native_url(FileKind::Document, "x", true);
         assert!(matches!(
             status_error(&url, &resp(401, "{}")),
             ApiError::Service(_)
