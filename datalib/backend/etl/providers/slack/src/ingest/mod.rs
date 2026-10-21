@@ -3,6 +3,7 @@
 pub mod api;
 pub mod db;
 pub mod files;
+mod frontier;
 mod reply_search;
 pub mod schema_raw;
 pub mod shapes;
@@ -34,6 +35,7 @@ pub use db::{
     MessageInput, OwedFile, RawDb, Thread, UserDirectoryEntry,
 };
 use files::{FileFetcher, FILE_BATCH};
+use frontier::{Frontier, Next, Walk};
 use reply_search::{ReplySearch, ReplySearchTotals, SEARCH_LAG};
 use schema_raw::{SlackAttachmentRow, THREADS};
 use shapes::{
@@ -711,8 +713,9 @@ fn cut_short(method: &str) -> anyhow::Error {
     anyhow::anyhow!("{method}: has_more with no cursor; the rest was not read")
 }
 
+/// What a run has fetched so far.
 #[derive(Default)]
-struct ChannelTotals {
+struct Totals {
     messages: usize,
     replies: usize,
     /// Messages and replies Slack has stopped serving inside a range we
@@ -721,13 +724,25 @@ struct ChannelTotals {
     media: BTreeMap<String, usize>,
 }
 
-/// What every channel's mirroring shares.
+impl Totals {
+    fn written(&self) -> usize {
+        self.messages + self.replies + self.pruned
+    }
+
+    fn line(&self) -> String {
+        format!(
+            "msgs={} replies={} media={}",
+            self.messages,
+            self.replies,
+            self.media.get("downloaded").copied().unwrap_or(0)
+        )
+    }
+}
+
+/// What the run's fetches share.
 struct Mirror<'a> {
     db: &'a RawDb,
     team_id: &'a str,
-    since: String,
-    refresh_from: Option<String>,
-    media: bool,
     blob_size_limit_bytes: Option<u64>,
     bar: &'a RunBar,
     latchkey: &'a LatchkeySettings,
@@ -737,15 +752,24 @@ struct Mirror<'a> {
     blake3_by_file: &'a Mutex<HashMap<String, String>>,
 }
 
-/// One channel's owed threads, for [`owed::drain`]: a thread is one
-/// record whose fetch is paged.
+/// One page of history, stored.
+struct Page {
+    rows: Vec<MessageInput>,
+    pruned: usize,
+    /// The walk is over: this page reached the bottom of its stretch.
+    last: bool,
+}
+
+/// Owed threads, for [`owed::drain`]: a thread is one record whose
+/// fetch is paged.
 struct Threads<'a> {
     mirror: &'a Mirror<'a>,
-    channel_id: &'a str,
-    /// Top-level messages the channel's walk stored, for the progress line.
+    /// Top-level messages stored so far, for the progress line.
     messages: usize,
     replies: AtomicUsize,
     pruned: AtomicUsize,
+    /// The stored replies that carry files, whose bytes are owed next.
+    with_files: Mutex<Vec<MessageInput>>,
 }
 
 #[async_trait]
@@ -756,10 +780,7 @@ impl Fetcher<Thread> for Threads<'_> {
     ) -> std::result::Result<Vec<Fetched<Thread>>, BatchError> {
         let mut out = Vec::with_capacity(batch.len());
         for listed in batch {
-            let fetched = self
-                .mirror
-                .fetch_thread(self.channel_id, &listed.key, &self.replies)
-                .await;
+            let fetched = self.mirror.fetch_thread(&listed.key, &self.replies).await;
             let outcome = match fetched {
                 Ok(thread) => Outcome::Got(thread),
                 // The loop reads a stop off its flag; every other error
@@ -784,134 +805,110 @@ impl Fetcher<Thread> for Threads<'_> {
     ) -> Result<()> {
         let gone = self.mirror.db.store_threads(tx, batch).await?;
         self.pruned.fetch_add(gone, Ordering::Relaxed);
+        let mut with_files = self.with_files.lock().expect("not poisoned");
+        for f in batch {
+            if let Outcome::Got(thread) = &f.outcome {
+                with_files.extend(
+                    thread
+                        .rows
+                        .iter()
+                        .filter(|m| m.payload.get("files").is_some())
+                        .cloned(),
+                );
+            }
+        }
         Ok(())
     }
 }
 
 impl Mirror<'_> {
-    /// A history walk that fails still leaves the channel's owed threads
-    /// and files to fetch: they are in the store whatever the walk did.
-    async fn channel(&self, channel_id: &str, totals: &mut ChannelTotals) -> Result<()> {
-        let walked = self.walk_history(channel_id, totals).await;
-        if walked.as_ref().is_err_and(interrupted) {
-            return walked;
-        }
-        self.fetch_owed_threads(channel_id, totals).await?;
-        if self.media {
-            self.fetch_owed_files(channel_id, totals).await?;
-        }
-        walked
-    }
-
-    async fn walk_history(&self, channel_id: &str, totals: &mut ChannelTotals) -> Result<()> {
-        let held = coverage::held(self.db.pool(), &db::history_scope(channel_id)).await?;
-        for stretch in stretches(&self.since, self.refresh_from.as_deref(), &held) {
-            self.walk_stretch(channel_id, &stretch, totals).await?;
-        }
-        Ok(())
-    }
-
-    async fn walk_stretch(
-        &self,
-        channel_id: &str,
-        stretch: &Stretch,
-        totals: &mut ChannelTotals,
-    ) -> Result<()> {
+    /// The next page of `walk`, in one transaction with the stretch it
+    /// settles. `walk` is left where the page after starts.
+    async fn page(&self, channel_id: &str, walk: &mut Walk) -> Result<Page> {
+        let stretch = &walk.stretch;
         let open_top = stretch.span.hi == END_OF_TIME;
-        let mut base = BTreeMap::new();
-        base.insert("channel".to_string(), channel_id.to_string());
-        base.insert("oldest".to_string(), key_ts(&stretch.span.lo));
-        base.insert("inclusive".to_string(), stretch.inclusive.to_string());
-        base.insert("include_all_metadata".to_string(), "true".to_string());
-        base.insert("limit".to_string(), "200".to_string());
+        let mut params = BTreeMap::new();
+        params.insert("channel".to_string(), channel_id.to_string());
+        params.insert("oldest".to_string(), key_ts(&stretch.span.lo));
+        params.insert("inclusive".to_string(), stretch.inclusive.to_string());
+        params.insert("include_all_metadata".to_string(), "true".to_string());
+        params.insert("limit".to_string(), "200".to_string());
         if !open_top {
-            base.insert("latest".to_string(), key_ts(&stretch.span.hi));
+            params.insert("latest".to_string(), key_ts(&stretch.span.hi));
         }
-
-        // Where the next page reaches up to, and whether a message there
-        // is that page's to return: the stretch's own top is, a page's
-        // oldest message was the page before's.
-        let mut top = (!open_top).then(|| stretch.span.hi.clone());
-        let mut top_included = true;
-        let mut cursor: Option<String> = None;
-        loop {
-            let mut params = base.clone();
-            if let Some(c) = &cursor {
-                params.insert("cursor".to_string(), c.clone());
-            }
-            let resp = call(M_HISTORY, &params, self.latchkey).await?;
-            let messages: Vec<Value> = resp
-                .get("messages")
-                .and_then(|v| v.as_array())
-                .map(|a| a.to_vec())
-                .unwrap_or_default();
-            info!(
-                event = "slack_history_page",
-                channel = %channel_id,
-                oldest = params.get("oldest").map(String::as_str).unwrap_or("-"),
-                latest = params.get("latest").map(String::as_str).unwrap_or("-"),
-                inclusive = stretch.inclusive,
-                reread = stretch.reread,
-                cursor = params.get("cursor").map(String::as_str).unwrap_or("-"),
-                returned = messages.len(),
-                "fetched one page of history"
-            );
-            // Announced before it is counted: Slack names no message
-            // count up front, so a page is the first this walk knows of
-            // the work in it.
-            self.bar.expect(messages.len() as u64);
-            let rows: Vec<MessageInput> = messages
-                .iter()
-                .filter_map(|m| history_message_input(self.team_id, channel_id, m))
-                .collect();
-
-            let has_more = resp.get("has_more").and_then(|v| v.as_bool());
-            cursor = next_cursor(&resp);
-            let last = cursor.is_none() || has_more == Some(false);
-            let short = cursor.is_none() && has_more == Some(true);
-            let in_stretch: Vec<String> = rows
-                .iter()
-                .map(|m| ts_key(&m.ts))
-                .filter(|key| *key >= stretch.span.lo)
-                .collect();
-            let covered =
-                settled(&stretch.span, top.as_deref(), &in_stretch, last).filter(|_| !short);
-            let enumerated = covered
-                .as_ref()
-                .filter(|_| stretch.reread)
-                .map(|span| Enumerated {
-                    oldest: key_ts(&span.lo),
-                    latest: key_ts(&span.hi),
-                    latest_included: top_included,
-                });
-            totals.pruned += self
-                .db
-                .store_history_page(channel_id, &rows, covered.as_ref(), enumerated.as_ref())
-                .await?;
-            totals.messages += messages.len();
-            self.bar.did(messages.len() as u64);
-            self.bar
-                .doing(&format!("listing  msgs={}", totals.messages));
-
-            if short {
-                return Err(cut_short(M_HISTORY));
-            }
-            if last {
-                return Ok(());
-            }
-            if let Some(oldest) = in_stretch.into_iter().min() {
-                top = Some(oldest);
-                top_included = false;
-            }
+        if let Some(c) = &walk.cursor {
+            params.insert("cursor".to_string(), c.clone());
         }
+        let resp = call(M_HISTORY, &params, self.latchkey).await?;
+        let messages: Vec<Value> = resp
+            .get("messages")
+            .and_then(|v| v.as_array())
+            .map(|a| a.to_vec())
+            .unwrap_or_default();
+        info!(
+            event = "slack_history_page",
+            channel = %channel_id,
+            oldest = params.get("oldest").map(String::as_str).unwrap_or("-"),
+            latest = params.get("latest").map(String::as_str).unwrap_or("-"),
+            inclusive = stretch.inclusive,
+            reread = stretch.reread,
+            cursor = params.get("cursor").map(String::as_str).unwrap_or("-"),
+            returned = messages.len(),
+            "fetched one page of history"
+        );
+        // Announced before it is counted: Slack names no message count
+        // up front, so a page is the first the run knows of the work in
+        // it.
+        self.bar.expect(messages.len() as u64);
+        let rows: Vec<MessageInput> = messages
+            .iter()
+            .filter_map(|m| history_message_input(self.team_id, channel_id, m))
+            .collect();
+
+        let has_more = resp.get("has_more").and_then(|v| v.as_bool());
+        let cursor = next_cursor(&resp);
+        let last = cursor.is_none() || has_more == Some(false);
+        let short = cursor.is_none() && has_more == Some(true);
+        let in_stretch: Vec<String> = rows
+            .iter()
+            .map(|m| ts_key(&m.ts))
+            .filter(|key| *key >= stretch.span.lo)
+            .collect();
+        let covered =
+            settled(&stretch.span, walk.top.as_deref(), &in_stretch, last).filter(|_| !short);
+        let enumerated = covered
+            .as_ref()
+            .filter(|_| stretch.reread)
+            .map(|span| Enumerated {
+                oldest: key_ts(&span.lo),
+                latest: key_ts(&span.hi),
+                latest_included: walk.top_included,
+            });
+        let pruned = self
+            .db
+            .store_history_page(channel_id, &rows, covered.as_ref(), enumerated.as_ref())
+            .await?;
+        self.bar.did(messages.len() as u64);
+
+        if short {
+            return Err(cut_short(M_HISTORY));
+        }
+        walk.cursor = cursor;
+        if let Some(oldest) = in_stretch.into_iter().min() {
+            walk.top = Some(oldest);
+            walk.top_included = false;
+        }
+        Ok(Page { rows, pruned, last })
     }
 
-    /// The threads of the channel owed by the store's own account, one
-    /// `conversations.replies` walk each. A thread that fails costs that
-    /// thread: an attempt on its own row, which is owed still.
-    async fn fetch_owed_threads(&self, channel_id: &str, totals: &mut ChannelTotals) -> Result<()> {
-        let listed = self.db.threads_listed(channel_id).await?;
-        let owed = owed::owed(self.db.pool(), THREADS, listed).await?;
+    /// `owed`, one `conversations.replies` walk each. A thread that fails
+    /// costs that thread: an attempt on its own row, which is owed still.
+    /// Returns the stored replies that carry files.
+    async fn fetch_threads(
+        &self,
+        owed: Vec<Listed>,
+        totals: &mut Totals,
+    ) -> Result<Vec<MessageInput>> {
         let l = owed::Loop {
             pool: self.db.pool(),
             table: THREADS,
@@ -927,26 +924,21 @@ impl Mirror<'_> {
         };
         let threads = Threads {
             mirror: self,
-            channel_id,
             messages: totals.messages,
             replies: AtomicUsize::new(0),
             pruned: AtomicUsize::new(0),
+            with_files: Mutex::new(Vec::new()),
         };
         owed::drain(&l, owed, &threads).await?;
         totals.replies += threads.replies.into_inner();
         totals.pruned += threads.pruned.into_inner();
-        Ok(())
+        Ok(threads.with_files.into_inner().expect("not poisoned"))
     }
 
-    /// Every page of `conversations.replies` for the thread rooted at
-    /// `key`: the thread whole, root copy included, or an error.
-    async fn fetch_thread(
-        &self,
-        channel_id: &str,
-        key: &str,
-        replies: &AtomicUsize,
-    ) -> Result<Thread> {
-        let (_, _, thread_ts) =
+    /// Every page of `conversations.replies` for the thread `key` names:
+    /// the thread whole, root copy included, or an error.
+    async fn fetch_thread(&self, key: &str, replies: &AtomicUsize) -> Result<Thread> {
+        let (_, channel_id, thread_ts) =
             schema_raw::split_key(key).ok_or_else(|| anyhow::anyhow!("{key}: not a thread key"))?;
         let mut base = BTreeMap::new();
         base.insert("channel".to_string(), channel_id.to_string());
@@ -988,12 +980,8 @@ impl Mirror<'_> {
         }
     }
 
-    /// The channel's edges without bytes, [`FILE_BATCH`] to a request.
-    /// Every one is owed, whatever its sidecar says: only a landed file
-    /// is held, and it lands with its hash. A store an older build wrote
-    /// stamps some failed fetches as fetched.
-    async fn fetch_owed_files(&self, channel_id: &str, totals: &mut ChannelTotals) -> Result<()> {
-        let owed = self.db.files_listed(self.team_id, channel_id).await?;
+    /// `owed` file edges, [`FILE_BATCH`] to a request.
+    async fn fetch_files(&self, owed: Vec<Listed>, totals: &mut Totals) -> Result<()> {
         self.bar.expect(owed.len() as u64);
         let l = owed::Loop {
             pool: self.db.pool(),
@@ -1028,14 +1016,61 @@ impl Mirror<'_> {
                 *totals.media.entry(outcome.to_string()).or_insert(0) += n;
             }
         }
-        self.bar.doing(&format!(
-            "msgs={} replies={} media={}",
-            totals.messages,
-            totals.replies,
-            totals.media.get("downloaded").copied().unwrap_or(0)
-        ));
         Ok(())
     }
+}
+
+/// A thread's place in the queue: its latest reply, or its root when the
+/// listing names none.
+fn thread_reach(listed: &Listed) -> String {
+    let root = schema_raw::split_key(&listed.key).map_or("", |(_, _, ts)| ts);
+    ts_key(listed.version.as_deref().unwrap_or(root))
+}
+
+/// A file edge's place in the queue: its message.
+fn file_reach(edge: &Listed) -> String {
+    let message = edge.key.rsplit_once('#').map_or("", |(message, _)| message);
+    ts_key(schema_raw::split_key(message).map_or("", |(_, _, ts)| ts))
+}
+
+/// The threads `rows` list, each at the latest reply its root names:
+/// what [`RawDb::threads_listed`] reads back once they are stored.
+fn threads_on(rows: &[MessageInput]) -> Vec<Listed> {
+    rows.iter()
+        .filter(|m| m.is_thread_root)
+        .filter(|m| {
+            m.payload
+                .get("reply_count")
+                .and_then(Value::as_i64)
+                .is_some_and(|n| n > 0)
+        })
+        .map(|m| {
+            let latest_reply = m.payload.get("latest_reply").and_then(Value::as_str);
+            Listed::new(
+                schema_raw::slack_thread_key(&m.team_id, &m.channel_id, &m.ts),
+                latest_reply,
+            )
+        })
+        .collect()
+}
+
+/// Queue what storing `rows` left owed: their threads, and with `media`
+/// their files.
+async fn queue_owed(
+    db: &RawDb,
+    frontier: &mut Frontier,
+    rows: &[MessageInput],
+    media: bool,
+) -> Result<()> {
+    for thread in owed::owed(db.pool(), THREADS, threads_on(rows)).await? {
+        frontier.threads.push(thread_reach(&thread), thread);
+    }
+    if media {
+        for (ts, file) in db.files_owed_by(rows).await? {
+            frontier.files.push(ts_key(&ts), file);
+        }
+    }
+    Ok(())
 }
 
 fn history_message_input(team_id: &str, channel_id: &str, m: &Value) -> Option<MessageInput> {
@@ -1345,9 +1380,6 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         let mirror = Mirror {
             db: &db,
             team_id: &team_id,
-            since,
-            refresh_from,
-            media: opts.media,
             blob_size_limit_bytes: opts.blob_size_limit_bytes,
             bar: &bar,
             latchkey: &opts.latchkey,
@@ -1356,44 +1388,106 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             sealer: opts.sealer.as_ref(),
             blake3_by_file: &blake3_by_file,
         };
-        let mut walked = 0usize;
-        for (cid, name) in &targets {
-            // Asked to stop: end here rather than start a channel whose
-            // first request the transport would refuse.
-            if opts.control.stop.requested() {
-                info!(event = "slack_interrupted", next_channel = %name, "told to stop; leaving the rest for the next run");
-                break;
-            }
-            bar.doing(&format!("{name}: listing"));
-            let span = info_span!("channel", channel_name = %name, channel_id = %cid);
-            let mut totals = ChannelTotals::default();
-            let result = mirror.channel(cid, &mut totals).instrument(span).await;
-            info!(
-                event = "slack_channel_done",
-                channel = %name,
-                messages = totals.messages,
-                replies = totals.replies,
-                media = totals.media.get("downloaded").copied().unwrap_or(0),
-                "finished one channel",
+        // What every channel owes, from the store: the stretches of
+        // history not covered (and the refresh window's), the threads
+        // not held at their latest reply, the files without bytes. A
+        // run that was cut off left exactly that, so nothing is carried
+        // over from it.
+        let mut frontier = Frontier::default();
+        for (target, (cid, _)) in targets.iter().enumerate() {
+            let held = coverage::held(db.pool(), &db::history_scope(cid)).await?;
+            frontier.walks.extend(
+                stretches(&since, refresh_from.as_deref(), &held)
+                    .into_iter()
+                    .map(|stretch| Walk::new(target, stretch)),
             );
-            bar.did(1);
-            // A channel that failed costs only itself: what it did not
-            // cover or fetch is still owed, by the store's own account.
-            match result {
-                Ok(()) => walked += 1,
-                Err(e) => found.push(listing_problem(&format!("{M_HISTORY} {name}"), &e)),
+            for thread in owed::owed(db.pool(), THREADS, db.threads_listed(cid).await?).await? {
+                frontier.threads.push(thread_reach(&thread), thread);
             }
-            let written = (totals.messages + totals.replies + totals.pruned) as u64;
-            grand.messages += totals.messages;
-            grand.replies += totals.replies;
-            grand.pruned += totals.pruned;
-            for (k, v) in totals.media {
-                *grand.media.entry(k).or_insert(0) += v;
-            }
-            if let Some(sealer) = opts.sealer.as_ref() {
-                sealer.wrote(written).await;
+            if opts.media {
+                for file in db.files_listed(&team_id, cid).await? {
+                    frontier.files.push(file_reach(&file), file);
+                }
             }
         }
+
+        let mut totals = Totals::default();
+        let mut messages_in = vec![0usize; targets.len()];
+        let mut failed = vec![false; targets.len()];
+        let mut walked = 0usize;
+        loop {
+            // Asked to stop: end here rather than make a request the
+            // transport would refuse.
+            if opts.control.stop.requested() {
+                info!(
+                    event = "slack_interrupted",
+                    "told to stop; leaving the rest for the next run"
+                );
+                break;
+            }
+            let before = totals.written();
+            match frontier.next() {
+                Next::Done => break,
+                Next::Threads(owed) => {
+                    let with_files = mirror.fetch_threads(owed, &mut totals).await?;
+                    if opts.media {
+                        for (ts, file) in db.files_owed_by(&with_files).await? {
+                            frontier.files.push(ts_key(&ts), file);
+                        }
+                    }
+                }
+                Next::Files(owed) => mirror.fetch_files(owed, &mut totals).await?,
+                Next::Page(i) => {
+                    let target = frontier.walks[i].target;
+                    let (cid, name) = &targets[target];
+                    bar.doing(&format!("{name}: listing"));
+                    let span = info_span!("channel", channel_name = %name, channel_id = %cid);
+                    match mirror
+                        .page(cid, &mut frontier.walks[i])
+                        .instrument(span)
+                        .await
+                    {
+                        Ok(page) => {
+                            totals.messages += page.rows.len();
+                            totals.pruned += page.pruned;
+                            messages_in[target] += page.rows.len();
+                            queue_owed(&db, &mut frontier, &page.rows, opts.media).await?;
+                            if page.last {
+                                frontier.walks.remove(i);
+                            }
+                        }
+                        Err(e) if interrupted(&e) => break,
+                        // A channel that failed costs only the rest of its
+                        // history: what it did not cover is still owed, by
+                        // the store's own account, and its threads and
+                        // files are queued with everyone's.
+                        Err(e) => {
+                            found.push(listing_problem(&format!("{M_HISTORY} {name}"), &e));
+                            frontier.walks.retain(|w| w.target != target);
+                            failed[target] = true;
+                        }
+                    }
+                    if !frontier.walking(target) {
+                        info!(
+                            event = "slack_channel_done",
+                            channel = %name,
+                            messages = messages_in[target],
+                            "walked one channel's history",
+                        );
+                        bar.did(1);
+                        walked += usize::from(!failed[target]);
+                    }
+                }
+            }
+            bar.doing(&totals.line());
+            if let Some(sealer) = opts.sealer.as_ref() {
+                sealer.wrote((totals.written() - before) as u64).await;
+            }
+        }
+        grand.messages = totals.messages;
+        grand.replies = totals.replies;
+        grand.pruned = totals.pruned;
+        grand.media = totals.media;
         bar.finish();
         // Every channel answering with nothing is a success to Slack, so
         // nothing else would say the mirror is empty.
