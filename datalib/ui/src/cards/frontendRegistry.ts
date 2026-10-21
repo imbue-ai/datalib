@@ -3,6 +3,7 @@
 import { ref, type Ref } from "vue";
 import { fetchFrontend, type FrontendView, type Meta } from "@/api";
 import { subscribeLive } from "@/live";
+import { formatCardCall, lookupFunction } from "./cardCall";
 
 // namespace → name → metadata, as last reported.
 export const frontendManifest: Ref<Map<string, Map<string, Meta>>> = ref(new Map());
@@ -137,37 +138,20 @@ async function resolveNamespace(ns: string): Promise<Record<string, unknown>> {
   return obj;
 }
 
-/// The `comp.<ns>.<name>` references a piece of card source makes.
-///
-/// Only the dotted form is recognized. `comp["user"]["x"]` is legal
-/// JavaScript and will not be pre-resolved — the gallery always writes
-/// the dotted form, and a hand-written card can too.
-export function referencedNamespaces(source: string): Set<string> {
-  const out = new Set<string>();
-  const re = /\bcomp\s*\.\s*([A-Za-z_$][A-Za-z0-9_$]*)/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(source)) !== null) out.add(m[1]);
-  return out;
-}
-
-/// Build the `comp` object a card's source should see: one property per
-/// namespace it references. Namespaces it does not mention are not
-/// loaded, so a card costs only the components it actually uses.
-export async function resolveCompScope(source: string): Promise<Record<string, unknown>> {
+/// The factory `comp.<ns>.<name>` names, or null when there is none.
+export async function resolveComponent(
+  ns: string,
+  name: string,
+): Promise<((...args: unknown[]) => unknown) | null> {
   await ensureFrontend();
-  const comp: Record<string, unknown> = {};
-  for (const ns of referencedNamespaces(source)) {
-    if (!frontendManifest.value.has(ns)) continue;
-    comp[ns] = await resolveNamespace(ns);
-  }
-  return comp;
+  if (!frontendManifest.value.has(ns)) return null;
+  return lookupFunction(await resolveNamespace(ns), name);
 }
 
 /// The card source a gallery entry expands to: the fully qualified name
 /// plus its stored arguments, serialized as JSON literals.
 export function gallerySource(ns: string, name: string, args: unknown[] = []): string {
-  const call = args.map((a) => JSON.stringify(a)).join(", ");
-  return `comp.${ns}.${name}(${call})`;
+  return formatCardCall(`comp.${ns}.${name}`, args);
 }
 
 /// Pick a name not currently taken in the `user` namespace. Valid as a

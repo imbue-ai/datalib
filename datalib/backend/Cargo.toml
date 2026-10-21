@@ -98,6 +98,10 @@ runfiles = "0.2"
 # compile-time path at run time, which a Bazel-built binary cannot.
 rust-embed = { version = "8", features = ["debug-embed", "interpolate-folder-path"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+# The config crates' params as JSON Schema: `datalib-step help <type>
+# <method>` prints each field from it, and a test holds every source's
+# complete example to it.
+schemars = "1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.11"

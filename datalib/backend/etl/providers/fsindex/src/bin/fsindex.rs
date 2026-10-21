@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use datalib_cli_help::Example;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::progress::Progress;
 use datalib_etl_files::fingerprint_cache::{self, FingerprintCache};
@@ -13,10 +14,26 @@ use datalib_obs::{init as init_obs, ObsArgs};
 use datalib_time::IsoOffsetTimestamp;
 use tracing::info;
 
+const EXAMPLES: &[Example] = &[
+    Example {
+        what: "scan a folder into a store of its own, on a branch named for the day",
+        command: "datalib-fsindex --root ~/Pictures --db ~/scans/pictures.doltlite_db --branch 2026-10-21",
+    },
+    Example {
+        what: "scan without writing anything into the tree being scanned",
+        command: "datalib-fsindex --root /Volumes/Backup --db ~/scans/backup.doltlite_db --no-stamp",
+    },
+];
+
 #[derive(Parser, Debug)]
 #[command(
-    name = "fsindex",
-    about = "Scan a directory tree and record (path, kind, size, blake3) per entry into a doltlite db."
+    name = "datalib-fsindex",
+    bin_name = "datalib-fsindex",
+    about = "Scan a directory tree and record (path, kind, size, blake3) per entry into a doltlite db.",
+    long_about = "Scan a directory tree and record (path, kind, size, blake3) per entry \
+                  into a doltlite db, one commit per scan. datalib-dirtree-diff compares \
+                  two scans. The same scanner runs as the `fsindex` source's ingest step.",
+    after_help = datalib_cli_help::render(EXAMPLES)
 )]
 struct Args {
     /// Output doltlite db path. The file is created if missing.
@@ -310,7 +327,14 @@ fn username() -> String {
 #[cfg(test)]
 mod tests {
     use super::default_source_id;
+    use clap::CommandFactory;
     use std::path::Path;
+
+    #[test]
+    fn the_help_examples_parse() {
+        super::Args::command().debug_assert();
+        datalib_cli_help::assert_examples_parse(super::Args::command(), super::EXAMPLES);
+    }
 
     #[test]
     fn takes_the_root_directory_name() {

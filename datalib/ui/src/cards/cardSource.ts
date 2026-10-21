@@ -1,27 +1,30 @@
-// Turns card source — the JS expression shown in a card's header, like
-// `gridView()` or `comp.user.tetris()` — into a runnable CardRender.
+// Turns card source (`gridView()`, `comp.user.tetris()`) into a runnable
+// CardRender: parse the call, look its name up, call it with the values.
+// There is no evaluator: card source cannot say anything else.
 import { viewLibs } from "./libs";
-import { resolveCompScope } from "./frontendRegistry";
+import { resolveComponent } from "./frontendRegistry";
+import { CardSourceError, componentName, lookupFunction, parseCardSource } from "./cardCall";
 import type { CardRender } from "./types";
 
 export type CompiledCard = {
   render: CardRender;
 };
 
+async function resolveFactory(name: string): Promise<(...args: unknown[]) => unknown> {
+  const builtin = lookupFunction(viewLibs, name);
+  if (builtin) return builtin;
+  const comp = componentName(name);
+  const factory = comp ? await resolveComponent(comp.ns, comp.name) : null;
+  if (!factory) throw new CardSourceError(`no view or component named ${name}`);
+  return factory;
+}
+
 export async function compileCardSource(source: string): Promise<CompiledCard> {
-  const scope = new Map<string, unknown>(Object.entries(viewLibs));
-  // One name for every custom component, whoever wrote it:
-  // `comp.<namespace>.<name>`. Namespacing is what lets two applet
-  // instances both export `channels`, and what lets a user component be
-  // called `gridView` without shadowing the builtin.
-  scope.set("comp", await resolveCompScope(source));
-  const names = [...scope.keys()];
-  // `new Function` (not eval) so the source only sees the names we pass
-  // in — the view libs and `comp` — plus globals.
-  const factory = new Function(...names, `"use strict"; return (${source});`);
-  const render = factory(...names.map((n) => scope.get(n)));
+  const call = parseCardSource(source);
+  const factory = await resolveFactory(call.name);
+  const render = factory(...call.args);
   if (typeof render !== "function") {
-    throw new Error(`card source must evaluate to a render function, got ${typeof render}`);
+    throw new Error(`${call.name} must return a render function, got ${typeof render}`);
   }
   return { render: render as CardRender };
 }

@@ -23,12 +23,17 @@ pub async fn run(
     emitter: &Emitter,
 ) -> Result<Vec<OutputClaim>> {
     let tree = data_root.join(&env.step);
-    match (env.function, part) {
-        (Function::Ingest, "store") => {
+    anyhow::ensure!(
+        part == "store" && env.function.resets(),
+        "`{}` has no {part:?} to reset",
+        env.function
+    );
+    match env.function {
+        Function::Ingest => {
             reset_store(&entities_db(&tree)).await?;
             report_problems(emitter, &entities_db(&tree)).await?;
         }
-        (Function::RenderMarkdown, "store") => {
+        Function::RenderMarkdown => {
             let store = datalib_etl_render::indexed_markdown::path_for(&tree);
             reset_store(&store).await?;
             report_problems(emitter, &store).await?;
@@ -42,8 +47,8 @@ pub async fn run(
                 }
             }
         }
-        (Function::EmbeddingMap, "store") => crate::embedding_map::reset(data_root)?,
-        (function, part) => anyhow::bail!("`{function}` has no {part:?} to reset"),
+        Function::EmbeddingMap => crate::embedding_map::reset(data_root)?,
+        other => unreachable!("`Function::resets` lets {other} through with no reset"),
     }
     tracing::info!(step = %env.step, part, "reset: emptied what the step wrote");
     Ok(Vec::new())

@@ -1,0 +1,64 @@
+# YoLink sensor history, one CSV download per device, with every option
+# set, and searchable by keyword. No sign-in: a device's two ids are what
+# let anyone fetch its history, so keep a config that holds real ones to
+# yourself. YoLink serves only about two months back, so sync often.
+[[groups]]
+id = "yolink"
+name = "YoLink"
+type = "yolink"
+
+[[steps]]
+group = "yolink"
+function = "ingest"
+
+# When to give up on failed requests. The download retries and backs off
+# on its own; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+[steps.params.api]
+window_days = 7       # days of history asked for in one request; default 7
+overlap_minutes = 5   # ask again for this many minutes before each window, for
+                      # readings a sensor reported late; default 5
+
+# One table per device. `name` keys its history, so renaming a device
+# later orphans what was fetched under the old name. Quote `start`: a bare
+# 2026-01-01 is a TOML date, not the string expected.
+[[steps.params.api.devices]]
+name = "ten_forward_freezer"
+kind = "temperature_humidity"                     # or "watermeter"
+start = "2026-01-01"                              # earliest day to fetch, YYYY-MM-DD
+family_device_id = "0123456789abcdef0123456789abcdef"  # 32 lowercase hex digits, from the
+                                                       # device's CSV download link
+device_udid = "fedcba9876543210fedcba9876543210"  # 32 lowercase hex digits, the device's
+                                                  # `deviceUDID` in YoLink's API
+
+[[steps.params.api.devices]]
+name = "sickbay_water_meter"
+kind = "watermeter"
+start = "2026-03-15"
+family_device_id = "00112233445566778899aabbccddeeff"
+device_udid = "ffeeddccbbaa99887766554433221100"
+
+# The whole store renders as one page: a summary per device and a chart per
+# quantity (temperature, humidity, water), every device a series.
+[[steps]]
+group = "yolink"
+function = "render_markdown"
+inputs = ["yolink/ingest"]
+
+# Its numbers as time series, for charts and the time-series index: add
+# `yolink/render_time_series` to `unified_time_series_index/time_series_index`'s inputs.
+[[steps]]
+group = "yolink"
+function = "render_time_series"
+inputs = ["yolink/ingest"]
+
+# Free-text search by keyword (BM25). Add it to
+# `unified_document_index/qmd_aggregator`'s inputs. A time-series source
+# takes no `embed` step: its pages are summaries of numbers.
+[[steps]]
+group = "yolink"
+function = "keyword_index"
+inputs = ["yolink/render_markdown"]

@@ -53,9 +53,10 @@ The child also gets four variables:
 | `DATALIB_APPLET_SECRET` | a secret the gateway minted for this process. **Every request the gateway forwards carries it in an `X-Datalib-Applet-Secret` header, and an applet must refuse a request without it**, and any request whose `Host` is not `127.0.0.1:<its own port>`. The port is loopback, but loopback is not private: any process of the same user can connect, and so can a web page whose hostname resolves to 127.0.0.1. The gateway keeps its routes behind the API token; this is what keeps the applet's port from being a second door to the same data. To run an applet by hand, set the variable to any value and send it. |
 
 `id` must be a valid JavaScript identifier. It is both the mount
-prefix (`/applet/<id>/`) and a name injected into card source, and card
-source is evaluated with `new Function`, so a dotted or digit-leading
-id would be a syntax error at render time rather than at config load.
+prefix (`/applet/<id>/`) and a namespace in card source
+(`comp.<id>.<name>`), whose grammar only reads identifiers, so a dotted
+or digit-leading id would fail to parse at render time rather than at
+config load.
 
 The config loader checks this, id uniqueness and the reserved `user`
 id (`accept_applets` in `datalib/backend/dag/src/config.rs`). A bad

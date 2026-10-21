@@ -1,0 +1,48 @@
+# The Messages app's own database (`chat.db`), mirrored table for table, with
+# every option set, and searchable. No sign-in. macOS protects
+# `~/Library/Messages`: the terminal running the sync needs Full Disk Access.
+[[groups]]
+id = "apple_messages"
+name = "Apple Messages"
+type = "apple_messages"
+
+[[steps]]
+group = "apple_messages"
+function = "ingest"
+
+# Which tables and columns to mirror. Globs: `*` and `?` only.
+[steps.params]
+include_tables = ["*"]                          # the default: every table
+exclude_tables = ["recoverable_message_part"]   # skip these, after include_tables;
+                                                # default none (this one is "recently deleted" text)
+exclude_columns = ["message.payload_data"]      # `Table.column` globs left out entirely; default none
+skip_churn = true    # leave out the app's counters, settings, Spotlight and CloudKit
+                     # queues and every `index_state` column, which the daemons rewrite
+                     # constantly; with it off every run commits; default true
+snapshot = true      # read a `VACUUM INTO` copy, not the live file Messages keeps
+                     # open; default true
+gc = false           # collect unreachable chunks each run: a smaller store,
+                     # history kept, but it rewrites the store; default false
+
+# The Messages folder, or a `chat.db` file directly (a copy, or an iPhone
+# backup's `3d0d7e5fb2ce288813306e4d4636395e047a3d28`, the same database).
+# Prefer the folder: the snapshot also reads the `chat.db-wal` beside it.
+[steps.params.messages]
+path = "~/Library/Messages"
+
+[[steps]]
+group = "apple_messages"
+function = "render_markdown"
+inputs = ["apple_messages/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "apple_messages"
+function = "keyword_index"
+inputs = ["apple_messages/render_markdown"]
+
+[[steps]]
+group = "apple_messages"
+function = "embed"
+inputs = ["apple_messages/keyword_index"]

@@ -1,0 +1,20 @@
+# A Google Takeout export on disk (takeout.google.com): the unpacked
+# `Takeout/` folder, or a folder holding the export's `.zip`/`.tgz` parts.
+# Every feed is off until you turn it on; this one reads Google Chat.
+[[groups]]
+id = "google_takeout"
+name = "Google Takeout"
+type = "google_takeout"
+
+[[steps]]
+group = "google_takeout"
+function = "ingest"
+
+[steps.params.export]
+path = "~/Downloads/takeout-export"
+google_chat = true
+
+[[steps]]
+group = "google_takeout"
+function = "render_markdown"
+inputs = ["google_takeout/ingest"]

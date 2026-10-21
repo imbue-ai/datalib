@@ -1,0 +1,19 @@
+# Android texts and call logs from the SMS Backup & Restore app's XML
+# export: the `sms-*.xml` and `calls-*.xml` files in `backup.path`, pulled
+# off the phone with `adb pull`. No credentials.
+[[groups]]
+id = "sms_backup_restore"
+name = "SMS Backup & Restore"
+type = "sms_backup_restore"
+
+[[steps]]
+group = "sms_backup_restore"
+function = "ingest"
+
+[steps.params.backup]
+path = "~/Downloads/sms-backup"
+
+[[steps]]
+group = "sms_backup_restore"
+function = "render_markdown"
+inputs = ["sms_backup_restore/ingest"]

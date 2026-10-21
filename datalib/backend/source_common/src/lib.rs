@@ -14,10 +14,11 @@ pub use glob::glob_match;
 /// Write-only mirror of the raw store, never read by the pipeline: a
 /// debugging aid, off unless a config asks for it. See
 /// `docs/dev/data_architecture_ingestion.md` § "Wire-event tape (JSONL)".
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EventTapeConfig {
-    /// Writing the table asks for the tape; `enabled = false` keeps it off.
+    /// Writing the `event_tape` table turns the tape on; `enabled = false`
+    /// keeps it off.
     #[serde(default = "default_true")]
     pub enabled: bool,
 }
@@ -35,7 +36,7 @@ impl Default for EventTapeConfig {
 /// is not here: that is the `path` of the method table that reads it
 /// (`[steps.params.export] path = …`), declared per provider. Strict: a
 /// misspelled knob is refused, not ignored.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SourceCommon {
     /// Where *we* keep this source's raw store (`entities.doltlite_db`,
@@ -46,15 +47,17 @@ pub struct SourceCommon {
     /// tree.
     #[serde(skip)]
     pub raw_path: Option<PathBuf>,
-    /// Skip downloading any blob attachment larger than this — an
-    /// integer of bytes or a string like `"5 MB"` (`byte_size`).
-    /// `None` = no limit. Consumed only by providers that download attachments.
+    /// Skip downloading an attachment larger than this: an integer of
+    /// bytes, or a string like `"5 MB"`. Unset is no limit. Only sources
+    /// that download attachments read it.
     #[serde(default, deserialize_with = "byte_size::deserialize_opt")]
+    #[schemars(with = "Option<byte_size::ByteSize>")]
     pub blob_size_limit_bytes: Option<u64>,
-    /// Rate-limit give-up bounds for this source's download step.
+    /// When this source's download gives up on rate limits and failures.
     #[serde(default, alias = "extract_params")]
     pub download_params: DownloadParams,
-    /// Wire-event tape config. `None` = off (the default).
+    /// A JSONL copy of every row the download writes, under
+    /// `ingest/events/`, for debugging. Off unless the table is written.
     #[serde(default)]
     pub event_tape: Option<EventTapeConfig>,
 }
@@ -64,10 +67,11 @@ pub struct SourceCommon {
 /// into every source's `common`, after which this block is spent and never read
 /// again. Note it carries no paths (those derive from `data_root`/`name`, not
 /// from a default).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Defaults {
     #[serde(default, deserialize_with = "byte_size::deserialize_opt")]
+    #[schemars(with = "Option<byte_size::ByteSize>")]
     pub blob_size_limit_bytes: Option<u64>,
     #[serde(default, alias = "extract_params")]
     pub download_params: DownloadParams,
@@ -105,11 +109,11 @@ impl SourceCommon {
 
 /// Per-source latchkey knobs, for a source whose downloader authenticates
 /// through the `latchkey` CLI.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LatchkeySettings {
-    /// Which stored latchkey account this source mirrors
-    /// (`latchkey --account <acct> curl …`).
+    /// Which stored latchkey account this source signs in as
+    /// (`latchkey auth list` shows them). Unset uses the only one.
     #[serde(default)]
     pub account: Option<String>,
 }
@@ -139,7 +143,7 @@ impl LatchkeySettings {
 /// here, so a render step's params can't smuggle them in. Strict
 /// (`deny_unknown_fields`): a download-shaped params blob on a render
 /// step fails loudly instead of being silently ignored.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RenderCommon {
     /// A tree staged by hand for a render that reads files rather than
@@ -249,12 +253,50 @@ pub trait IngestMethods {
     const METHODS: &'static [IngestMethod];
 }
 
+/// A config stanza a source shows in `datalib-step help <type>`: its
+/// `[[groups]]` entry and its steps, the group's id the source type's own
+/// name. Each provider's config crate exports its own as `EXAMPLES`, a
+/// minimal and a complete one per ingest method, and `datalib-step`'s
+/// tests load and plan every one, so an example cannot drift from the
+/// structs it configures.
+#[derive(Debug, Clone, Copy)]
+pub struct ConfigExample {
+    pub kind: ExampleKind,
+    /// The ingest method its `ingest` step holds.
+    pub method: &'static str,
+    pub toml: &'static str,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, strum::IntoStaticStr, strum::VariantArray,
+)]
+#[strum(serialize_all = "snake_case")]
+pub enum ExampleKind {
+    /// The fewest lines that sync: the method's table and what it cannot
+    /// do without.
+    Minimal,
+    /// Every option the params take, each with a comment.
+    Complete,
+}
+
+impl ExampleKind {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+
+    /// `None` for a spelling this build does not know.
+    pub fn parse(s: &str) -> Option<Self> {
+        s.parse().ok()
+    }
+}
+
 /// The one field every method that reads files on disk needs, for the
 /// providers whose method needs nothing else: `[steps.params.export]
 /// path = "~/Downloads/export"`. Tilde-expanded on read.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LocalPath {
+    /// The file or folder to read; `~` is your home directory.
     pub path: PathBuf,
 }
 
@@ -267,7 +309,7 @@ impl LocalPath {
 /// Render config for providers with no render-specific knobs — just the
 /// shared envelope. Provider config crates alias this as their
 /// `<P>RenderConfig` so every provider exposes the same per-phase pair.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BareRenderConfig {
     #[serde(default)]

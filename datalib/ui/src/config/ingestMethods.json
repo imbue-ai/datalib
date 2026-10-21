@@ -127,6 +127,12 @@
       "reach": "origin"
     }
   ],
+  "google_drive": [
+    {
+      "path": "api",
+      "reach": "origin"
+    }
+  ],
   "google_takeout": [
     {
       "path": "export",
@@ -141,6 +147,12 @@
     {
       "path": "backups",
       "reach": "local"
+    }
+  ],
+  "linear": [
+    {
+      "path": "api",
+      "reach": "origin"
     }
   ],
   "linkedin": [

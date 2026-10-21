@@ -135,7 +135,7 @@ its own `path`. There is no global vocabulary — each provider's
 
 | type | methods |
 |---|---|
-| chatgpt, garmin, github, gitlab, notion, slack, yolink | `api` |
+| chatgpt, garmin, github, gitlab, google_drive, linear, notion, slack, yolink | `api` |
 | claude | `api`, `export` |
 | contacts | `carddav`, `vcf` |
 | email | `jmap`, `gmail`, `mbox` |
@@ -161,6 +161,31 @@ Knobs that apply whatever the method (email's `only_extract_labels`,
 the `common.*` envelope) stay at the top level of `params`. Render
 knobs go on the render step, whose config is strict: download-shaped
 params on a `render_markdown` step are refused.
+
+## Examples and the field reference
+
+Each config crate carries its own stanzas, `EXAMPLES`: a minimal and a
+complete one per ingest method, each a `[[groups]]` entry and its steps
+under the type's own name as the group id. Its structs derive
+`schemars::JsonSchema`, so the params' JSON Schema, doc comments
+included, is the field reference. `datalib_step/src/source_docs.rs`
+maps every `SourceType` to the two, and `datalib-step help` prints them
+(`help <type>`, `help <type> <method>`, `--example minimal|complete
+--id <group>`). Its test loads and plans every stanza and holds each
+complete one to every option of its method's table; the shared
+`common` and `latchkey_settings` options are set only where a source
+reads them. A retired field a planner refuses stays readable by serde
+and leaves the schema with `#[schemars(skip)]`.
+
+`datalib-step check-params <config>` plans every built-in step's params
+the way a sync would and prints one JSON line per step it would refuse.
+The runner and the server link no provider, so both ask it:
+`datalib-dag --check`, and `PUT /api/config` and `POST
+/api/config/check` (`http/src/params_check.rs`), which refuse to write
+a config a sync would refuse a step of. `params_diagnostics` in
+`dag/src/config.rs` turns the answer into ordinary `rejected`
+diagnostics at the misspelled key's line, so every door shows it the
+same way. A custom command's params are never asked about.
 
 ## `Reach`: origin or local
 

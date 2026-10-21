@@ -209,7 +209,8 @@ datalib/
                    over etl/files/src/fswalk.rs); four mirror a SQLite
                    file through etl/sqlite_mirror/; three render time
                    series (airvisual, yolink, garmin). fsindex, media,
-                   lightroom and apple_photos have no <p>_render.
+                   lightroom, apple_photos and linear have no
+                   <p>_render.
     etl/sqlite_mirror/ the table-for-table SQLite→doltlite mirror engine.
     table/         `BulkUpsertable`, alone.
     probe/         what "Check connection" and a picker's "Load" ask
@@ -753,6 +754,17 @@ bound. **A set of values to match is one bound JSON array**,
 `IN (SELECT value FROM json_each(?))`, never a `?` per value: SQLite
 binds at most 32,766 values per statement, and only a real user's data
 gets there (`datalib/backend/etl/README.md` §"Binding a set of values").
+
+## Card source is data
+
+**Nothing that came from outside becomes code.** A card's source, in a
+URL, a saved layout or a card's header, is one call of a known view or
+component with JSON5 values. It is parsed, never evaluated, and the app
+page's CSP has no `'unsafe-eval'` (`docs/dev/cards.md` § "Card
+source"). Any site can send the browser to a card URL, so **opening a
+card never writes**: a card's arguments come from whoever wrote the
+link. `//:lint_repo` refuses an evaluator anywhere in `datalib/ui/src`,
+and HTML drawn from a string outside its short allowlist.
 
 ## Timestamp convention
 

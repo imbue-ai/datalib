@@ -5,12 +5,36 @@
 use datalib_source_common::{LatchkeySettings, LocalPath, SourceCommon};
 use serde::{Deserialize, Serialize};
 
+/// This source's config stanzas, for `datalib-step help`.
+pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "api",
+        toml: include_str!("../examples/minimal_api.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "api",
+        toml: include_str!("../examples/complete_api.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "export",
+        toml: include_str!("../examples/minimal_export.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "export",
+        toml: include_str!("../examples/complete_export.toml"),
+    },
+];
+
 /// The Claude-owned slice of a `claude` source. Two ways in, one raw
 /// store: `api` walks the live claude.ai API, `export` reads an unpacked
 /// bulk export off disk. Exactly one is set; an `ingest` step with
 /// neither is refused (`IngestMethods` below), and one with both is
 /// refused by [`ClaudeConfig::validate`].
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ClaudeConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by
@@ -47,7 +71,7 @@ impl ClaudeConfig {
 }
 
 /// JMAP-less Claude.ai sync knobs (conversation refresh + explicit UUIDs).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ClaudeApiSync {
     /// Only sync conversations whose `updated_at` is at or after this
@@ -97,7 +121,7 @@ impl Default for ClaudeApiSync {
 }
 
 /// Params for the render step.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ClaudeRenderConfig {
     #[serde(default)]

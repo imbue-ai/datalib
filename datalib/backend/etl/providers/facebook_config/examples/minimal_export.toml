@@ -1,0 +1,19 @@
+# Facebook's "Download your information" export, in JSON, unzipped into one
+# folder (several zips go into the same one). No sign-in: `path` is that
+# folder.
+[[groups]]
+id = "facebook"
+name = "Facebook"
+type = "facebook"
+
+[[steps]]
+group = "facebook"
+function = "ingest"
+
+[steps.params.export]
+path = "~/Downloads/facebook-export"
+
+[[steps]]
+group = "facebook"
+function = "render_markdown"
+inputs = ["facebook/ingest"]

@@ -33,6 +33,13 @@ pub async fn build_state(
 ) -> anyhow::Result<AppState> {
     datalib_core::layout::create_data_root(&root)
         .map_err(|e| anyhow::anyhow!("create data root {}: {e}", root.display()))?;
+    // A root this user cannot chmod (a share mounted for them) still opens.
+    if let Err(e) = datalib_core::layout::restrict_data_root(&root) {
+        tracing::warn!(
+            "could not make {} readable by its owner only: {e}",
+            root.display()
+        );
+    }
     let root = Arc::new(root);
 
     // Publish the token now that the root is on disk: anything running

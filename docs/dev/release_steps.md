@@ -32,7 +32,7 @@ workflow's `run:` blocks are one line each:
 | step | script | what it makes |
 |---|---|---|
 | `runtime` job, "Stage the runtime" | `scripts/release/stage_runtime_asset.sh <triple> <cuda>` | `runtime-<triple>.tar.gz` (+ `-cuda`) and `.sha256` sidecars, from `scripts/stage_runtime.sh` |
-| `build` job, "Stage tarball" | `scripts/release/stage_tarball.sh <ref> <triple>` | `datalib-<triple>.tar.gz` and its sidecar: the `//datalib/backend:bin` binaries, the `latchkey` launcher, `git-hash`, `runtime.manifest`, `licenses/` |
+| `build` job, "Stage tarball" | `scripts/release/stage_tarball.sh <ref> <triple>` | `datalib-<triple>.tar.gz` and its sidecar: the `//datalib/backend:bin` binaries, the `latchkey` launcher, `git-hash`, `runtime.manifest`, `docs/agent_user.md` (written by the staged `datalib-step help agent`), `licenses/` |
 
 Each script writes into the current directory, prints what it wrote,
 and takes what a test cannot supply through environment variables

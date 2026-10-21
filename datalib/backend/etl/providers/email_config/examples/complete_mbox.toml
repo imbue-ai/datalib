@@ -1,0 +1,48 @@
+# An `.mbox` file on disk, such as the Mail product of a Google Takeout
+# export, with every option set, and searchable. No sign-in. The .mbox is
+# a complete snapshot: a message a newer one no longer holds leaves the
+# mirror on the next sync.
+[[groups]]
+id = "email"
+name = "Gmail Takeout"
+type = "email"
+
+[[steps]]
+group = "email"
+function = "ingest"
+
+# Mirror only messages carrying these Gmail labels (the `X-Gmail-Labels`
+# header). Labels are full paths and match exactly: `Work` does not take
+# in `Work/Projects`. Several labels add up. The default, [], is all.
+[steps.params]
+only_extract_labels = ["Inbox", "Starfleet/Reports"]
+
+# Everything but `path` names the account row the mailbox is filed under.
+[steps.params.mbox]
+path = "~/Downloads/email-export/All mail Including Spam and Trash.mbox"  # the file, or a folder holding one
+account_id = "picard_gmail"           # the account's id; default made from the file's name
+display_name = "Picard's Gmail"       # the account's name; default its account_id
+email_address = "picard@example.com"  # the account's address; unset by default
+is_personal = true                    # a personal (not work) account; default true
+
+[[steps]]
+group = "email"
+function = "render_markdown"
+inputs = ["email/ingest"]
+
+[steps.params]
+outlink_format = "gmail"        # each message's `↗` link opens it in Gmail; omit for no link
+only_render_labels = ["Inbox"]  # render only threads with a message under these labels
+                                # (exact paths, like `only_extract_labels`); default [] is all
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "email"
+function = "keyword_index"
+inputs = ["email/render_markdown"]
+
+[[steps]]
+group = "email"
+function = "embed"
+inputs = ["email/keyword_index"]

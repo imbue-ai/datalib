@@ -1178,6 +1178,8 @@ const PROBE_KINDS: Record<ProbeNoun, ProbeItemKind[]> = {
   channels: ["channel"],
   calendars: ["calendar"],
   addressbooks: ["address_book"],
+  teams: ["team"],
+  projects: ["project"],
 };
 
 /// What a `probe:` field should offer, given what its list loaded.
@@ -1211,6 +1213,10 @@ function namesItem(value: string, item: ProbeItem): boolean {
     // The `calendars` filter matches a name without regard to case, and
     // an id as well; the id is what the probe puts in `title`.
     case "calendar":
+      return v.toLowerCase() === item.path.toLowerCase() || v === item.title;
+    // A Linear team is named by its key, without regard to case, or by
+    // its name, which the probe puts in `title`.
+    case "team":
       return v.toLowerCase() === item.path.toLowerCase() || v === item.title;
     default:
       return false;

@@ -1,0 +1,18 @@
+# Greek and Latin texts from the Perseus Digital Library, fetched from
+# PerseusDL's public GitHub repository. No credentials. An empty `github`
+# table pulls the default Thucydides editions.
+[[groups]]
+id = "perseus"
+name = "Perseus"
+type = "perseus"
+
+[[steps]]
+group = "perseus"
+function = "ingest"
+
+[steps.params.github]
+
+[[steps]]
+group = "perseus"
+function = "render_markdown"
+inputs = ["perseus/ingest"]
