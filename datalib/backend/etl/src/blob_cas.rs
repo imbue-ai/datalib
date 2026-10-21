@@ -807,15 +807,16 @@ impl BlobBundle {
             .fetch_all(refs_pool)
             .await
             .context("BlobBundle::sizes_many projection")?;
-        let hash_of: HashMap<String, String> = rows
-            .iter()
-            .filter_map(|r| {
-                Some((
-                    r.try_get::<String, _>("ref_id").ok()?,
-                    r.try_get::<String, _>("blake3").ok()?,
-                ))
-            })
-            .collect();
+        let mut hash_of: HashMap<String, String> = HashMap::with_capacity(rows.len());
+        for r in &rows {
+            let ref_id: String = r.try_get("ref_id").context("sizes_many ref_id")?;
+            if let Some(blake3) = r
+                .try_get::<Option<String>, _>("blake3")
+                .context("sizes_many blake3")?
+            {
+                hash_of.insert(ref_id, blake3);
+            }
+        }
         drop(rows);
         let hashes: Vec<&String> = hash_of
             .values()
