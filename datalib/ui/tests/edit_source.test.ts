@@ -188,6 +188,20 @@ describe("patchSource", () => {
     expect(listSteps(after)[0].params).toHaveProperty("api");
   });
 
+  /// A download-only source written before such sources got a render
+  /// step gains one on its next save, so its problems reach the index.
+  it("gives a download-only source its missing render step", () => {
+    const text = `[[groups]]\nid = "lin"\ntype = "linear"\n\n[[steps]]\ngroup = "lin"\nfunction = "ingest"\n[steps.params]\napi = {}\n`;
+    const linear = catalogFor("linear")!;
+    const after = patchSource(text, {
+      entry: linear,
+      group: "lin",
+      values: seedFieldValues(linear, sourceStepsOf("lin", listSteps(text))),
+      renders: false,
+    });
+    expect(listSteps(after).map((s) => s.id)).toEqual(["lin/ingest", "lin/render_markdown"]);
+  });
+
   /// Every form, written by the wizard and reopened, saves back to the
   /// same bytes: an edit that changes nothing writes nothing.
   it("round-trips every wizard's own output unchanged", () => {

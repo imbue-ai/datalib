@@ -143,7 +143,8 @@ CLAUDE_ATTACHMENT_WITHOUT_BYTES = (
     "|claude_attachments:c0000004-1701-4d00-8000-00000000c004"
     "#f0000001-1701-4d00-8000-0000000f0001"
     "|00000000-0000-89b3-8bed-0eecc97d45ce"  # conversation c0000004's row
-    "||fetch_failed|no recorded response: GET https://claude.ai/api/organizations/0aa00000-1701-4d00…"
+    "||fetch_failed|no recorded response: GET https://claude.ai/api/organizations"
+    "/0aa00000-1701-4d00-8000-0000000000aa/files/f0000001-1701-4d00-8000-0000000f0001/contents"
 )
 FACEBOOK_VIDEO_NOT_IN_EXPORT = (
     "1c9f7753-ba2d-5a9e-8fbb-b9b6a0d5ad13"
