@@ -33,6 +33,9 @@ describe("problemLabel", () => {
     expect(problemLabel({ field: "channel", reason: "forbidden", rule: null })).toBe(
       "`channel` cannot be read with this credential",
     );
+    expect(problemLabel({ field: "dropdown", reason: "unsupported_json", rule: null })).toBe(
+      "`dropdown` is a kind of content the renderer does not draw; it is shown as the source's JSON",
+    );
   });
   it("shows a word it does not know rather than hiding it", () => {
     // A store written by a newer build can carry a reason this one lacks.

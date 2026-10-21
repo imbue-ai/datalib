@@ -52,6 +52,7 @@ rust_binary(
         "//datalib/backend/etl/providers/calendar:datalib_etl_calendar",
         "//datalib/backend/etl/providers/google_drive:datalib_etl_google_drive",
         "//datalib/backend/etl/providers/google_drive_config:datalib_etl_google_drive_config",
+        "//datalib/backend/etl/providers/google_drive_render:datalib_etl_google_drive_render",
         "//datalib/backend/etl/providers/calendar_config:datalib_etl_calendar_config",
         "//datalib/backend/etl/providers/calendar_render:datalib_etl_calendar_render",
         "//datalib/backend/etl/providers/contacts_config:datalib_etl_contacts_config",

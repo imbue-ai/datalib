@@ -357,7 +357,7 @@ The measurement that checks it:
 bazelisk query 'kind(".*_test", rdeps(//..., //datalib/backend/schema:datalib_schema))'
 ```
 
-73 at the last count. If that number climbs, something took a dependency
+82 at the last count. If that number climbs, something took a dependency
 it should not have.
 
 ## The grid_rows union table

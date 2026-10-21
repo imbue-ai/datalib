@@ -198,6 +198,7 @@ export type ProblemReason =
   | "no_identity"
   | "coercion_failed"
   | "uncovered_type"
+  | "unsupported_json"
   | "deliberate_loss"
   | "render_failed"
   | "fetch_failed"

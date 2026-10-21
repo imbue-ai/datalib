@@ -374,7 +374,7 @@ small. It should grow deliberately: the test for admitting one is
 whether two providers disagreeing about it would produce a *wrong
 answer* rather than merely an inconsistent-looking one.
 
-The tree does not yet follow this rule for timestamps: seven of the 24
+The tree does not yet follow this rule for timestamps: seven of the 25
 render crates (`calendar`, `chatgpt`, `facebook`, `google_takeout`,
 `linkedin`, `perseus`, `sms_backup_restore`) call `chrono` directly
 rather than going through `datalib-time` alone. The retrofit is in

@@ -3,8 +3,9 @@
 A backup of a Google account's Docs, Sheets and Slides. The store keeps
 each file in Google's own native form at every version a run saw. Beside
 it are the file's comments, its revision list, the images it shows, and
-an export LibreOffice can open. There is no render step yet. Why it is
-shaped this way, what Google offers and what is still to come:
+an export LibreOffice can open. The Docs render to markdown
+([`../google_drive_render/TRANSLATE.md`](../google_drive_render/TRANSLATE.md)).
+Why it is shaped this way, what Google offers and what is still to come:
 [`docs/dev/plans/google_drive.md`](../../../../../docs/dev/plans/google_drive.md).
 
 ## Where it comes from
@@ -126,7 +127,7 @@ The exports are big because Google embeds the document's fonts in each.
   listing is read every run.
 - **Only native files.** Other Drive files (PDFs, images, uploaded
   Office files) are not listed.
-- **No render, and no index.** Nothing reaches the grid or search yet.
+- **Only Docs render.** Sheets and Slides stay in the raw store.
 - **No Add source form.** A config entry is written by hand
   (`docs/user/config_examples/all_sources.toml`).
 - **A capture can be newer than its version.** It is keyed by the
