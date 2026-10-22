@@ -1,7 +1,7 @@
 # Chips: a link the app resolves, drawn as what it names
 
 A **chip** is how datalib shows something inline: a person, a source
-group, a pipeline step. It has a name, a picture or a mark, and behind
+group, a pipeline step, a date. It has a name, a picture or a mark, and behind
 it a stable identifier the app looks up to learn what that thing is
 *now* — the contact a person linked, the name the config gives a
 group today, whether a step is running. The same chip is drawn in a
@@ -18,7 +18,7 @@ machinery every kind shares.
 
 | word | means |
 |---|---|
-| **entity** | what a chip names: a person (by a handle), a group, a step |
+| **entity** | what a chip names: a person (by a handle), a group, a step, a date |
 | **chip link** | how a chip is written down: a markdown link, `[text](href "title")` |
 | **entity URI** | the href, which names the entity (see [The link](#the-link)) |
 | **resolver** | the one place in the page that asks the server what an entity is now, for one kind of entity |
@@ -286,6 +286,37 @@ is the field's (Edit as text, Exclude) followed by `entityMenu`'s or
 right-click away; linking a handle stays the popover's
 (`ui/src/search/chipMenu.ts`).
 
+## A date
+
+**Every stamp in a document is a chip too.** A render writes one as
+`<time datetime="…" title="…">short form</time>`
+([`data_architecture_parse_and_render.md`](data_architecture_parse_and_render.md)
+§"A stamp on a page"), and `decorateDates` in `ui/src/cards/dates.ts`
+draws each `<time>` whose `datetime` it can read as a chip. Its value is
+the whole of what it names, so there is no URI and no resolver; the
+`<time>` element is the chip link. `dates.ts` is the one formatter, and
+the rules are pure functions over the parsed stamp:
+
+- **text**: the instant in the viewer's own zone, `Wed, Apr 15, 2026,
+  12:05`; a day, `Wed, Apr 15, 2026`, the same day wherever it is read.
+  The render's own text stays for any other viewer.
+- **hover**: the instant to the second in the viewer's zone, the same
+  in UTC, the clock the source wrote it in when that is neither, and how
+  long ago.
+- **copy**: the text with its zone, `Wed, Apr 15, 2026, 12:05 GMT+2`, and
+  a plain `<time datetime>` as HTML, so a paste names the same instant.
+- **right-click**: copy it as shown or as written (`datetime`);
+  everything on its day (`after:<day> before:<next day>`, days in the
+  viewer's zone, which is how the search reads a bare day); everything
+  before it or after it.
+- **double-click**: a search card for its day.
+
+**Any chip in a document drags as its search.** `chipDragQuery` gives
+what a chip stands for in a search bar — everything with a person or a
+contact, a group's documents, a date's day — and the document puts it on
+the drag as plain text, which the search field takes like anything
+typed. A step names no search and drags as a link.
+
 ## Clicks
 
 | | a person | a group | a step |
@@ -356,7 +387,7 @@ A new kind of *handle* is a person and goes through
   (the TypeScript mirror over the same cases, and the plugin's marking).
 - The resolver: `resolver.test.ts` (one request per pass, kept answers,
   forget and stale answers, revalidating, failures).
-- The rules: `contacts.test.ts`, `entities.test.ts`, and
+- The rules: `contacts.test.ts`, `entities.test.ts`, `dates.test.ts`, and
   `chipActions.test.ts` (one menu order for every kind, and where each
   entry lands).
 - The endpoint: `http_tests::entities_answer_a_chip_for_a_group_and_a_step`.
