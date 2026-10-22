@@ -22,7 +22,14 @@ import {
   searchQueryFor,
 } from "./contacts";
 import { entityFromUri } from "./chipLinks";
-import { browseQuery, entities, entityCardSource, entityCopyText, entityMenu } from "./entities";
+import {
+  browseQuery,
+  entities,
+  entityCardSource,
+  entityCopyText,
+  entityLogSource,
+  entityMenu,
+} from "./entities";
 import { CONTACT, type ChipRef } from "@/search/queryText";
 
 /** A chip as it was drawn: what it names, and the name its producer
@@ -32,10 +39,11 @@ export type { ChipRef };
 export type Chip = { ref: ChipRef; shownAs: string };
 
 /** Every menu entry any chip offers, in the one order every menu shows
- *  them: open what it names first (the double-click's card), then write
- *  to it, copy it, search for it, and link it. */
+ *  them: open what it names first (the double-click's card) and a step's
+ *  log, then write to it, copy it, search for it, and link it. */
 export const CHIP_ACTIONS = [
   "open",
+  "log",
   "compose",
   "copy-id",
   "copy-name",
@@ -144,6 +152,11 @@ export async function runChipAction(id: ChipAction, chip: Chip, host: ChipHost):
   switch (id) {
     case "open": {
       const source = chipCardSource(ref, host.seenIn ?? null);
+      if (source) host.openCard(source);
+      return;
+    }
+    case "log": {
+      const source = ref.kind === "entity" ? entityLogSource(ref.uri) : null;
       if (source) host.openCard(source);
       return;
     }

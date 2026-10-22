@@ -4,6 +4,7 @@
 import SourcesCard from "../SourcesCard.ce.vue";
 import sourcesCardCss from "../sourcesCard.css?inline";
 import tableGridCss from "../tableGrid.css?inline";
+import chipCss from "../chip.css?inline";
 import slickCss from "@slickgrid-universal/common/dist/styles/css/slickgrid-theme-default.css?inline";
 import { vueCard } from "../vueCard";
 import type { CardRender } from "../types";
@@ -12,6 +13,6 @@ export function sourcesView(opts?: { add?: boolean }): CardRender {
   return vueCard(
     SourcesCard,
     { add: opts?.add === true },
-    { styleSources: [slickCss, tableGridCss, sourcesCardCss] },
+    { styleSources: [slickCss, tableGridCss, chipCss, sourcesCardCss] },
   );
 }

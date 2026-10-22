@@ -6,6 +6,8 @@
 import SyncDashboardCard from "../SyncDashboardCard.ce.vue";
 import TimeChart from "../TimeChart.ce.vue";
 import RunLogPanel from "@/components/RunLogPanel.ce.vue";
+import ChipMenu from "../ChipMenu.ce.vue";
+import EntityChip from "../EntityChip.ce.vue";
 import tableGridCss from "../tableGrid.css?inline";
 import chipCss from "../chip.css?inline";
 // uPlot's own layout rules (the canvas, the cursor and the overlay),
@@ -23,6 +25,17 @@ export function syncDashboardView(opts: SyncDashboardOpts): CardRender {
   return vueCard(
     SyncDashboardCard,
     { opts },
-    { styleSources: [slickCss, tableGridCss, chipCss, uplotCss, TimeChart, RunLogPanel] },
+    {
+      styleSources: [
+        slickCss,
+        tableGridCss,
+        chipCss,
+        uplotCss,
+        TimeChart,
+        RunLogPanel,
+        EntityChip,
+        ChipMenu,
+      ],
+    },
   );
 }

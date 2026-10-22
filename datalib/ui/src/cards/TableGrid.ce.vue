@@ -35,6 +35,7 @@ import { hoverWholeRow } from "@/grid/rowHover";
 import { treeColumnField, typedColumns, type SlickColumnOptions } from "./typedColumns";
 import type { TableGridApi } from "./tableGridApi";
 import { fieldsOfType } from "./cellRenderers";
+import { chipCardSource, chipElAt, chipOf } from "./chipActions";
 
 const props = withDefaults(
   defineProps<{
@@ -72,6 +73,8 @@ const props = withDefaults(
     /// siblings only, and the host is told where (`move`); the grid
     /// keeps its order until new rows arrive. Read once.
     movable?: (row: T) => boolean;
+    /// Which rows an `editable` column edits. Absent, every row's does.
+    canEdit?: (row: T, field: string) => boolean;
   }>(),
   {
     rowKey: "key",
@@ -86,6 +89,8 @@ const props = withDefaults(
 const emit = defineEmits<{
   ready: [api: TableGridApi<T>];
   cellDoubleClick: [row: T, field: string];
+  /// A chip in a cell was double-clicked: the card it opens.
+  openCard: [source: string];
   /// An in-place edit of an `editable` cell was committed. The card
   /// decides what it means; the value never lands in the row.
   edit: [row: T, field: string, value: string];
@@ -483,6 +488,10 @@ let editing: { item: T; field: string; before: unknown } | null = null;
 
 function onBeforeEditCell(_e: SlickEventData, args: OnBeforeEditCellEventArgs) {
   const field = String(args.column?.field ?? "");
+  // The grid reads `false` back as "this cell does not open".
+  if (props.canEdit && !props.canEdit(args.item as T, String(args.column?.id ?? field))) {
+    return false;
+  }
   editing = { item: args.item as T, field, before: readPath(args.item, field) };
 }
 
@@ -530,6 +539,16 @@ function onDblClick(e: SlickEventData, args: OnDblClickEventArgs) {
   const column = bundle.slickGrid.getColumns()[args.cell];
   if (!row || !column) return;
   const target = e.getNativeEvent<MouseEvent>()?.target;
+  // A chip opens what it names, as it does everywhere, and the cell's
+  // in-place edit does not open under it.
+  const chipEl = chipElAt(target);
+  const chip = chipEl ? chipOf(chipEl) : null;
+  const source = chip ? chipCardSource(chip.ref, null) : null;
+  if (source) {
+    e.preventDefault();
+    emit("openCard", source);
+    return;
+  }
   const part = target instanceof Element ? target.closest<HTMLElement>("[data-field]") : null;
   if (part?.dataset.field) {
     e.preventDefault();

@@ -1143,12 +1143,24 @@ onMounted(async () => {
   // processes first, so a step opens on its attempt rather than on the
   // run and then jumps; the pickers' lists with them, so the header can
   // say what opened.
-  const opening: Scope = props.launchId
+  let opening: Scope = props.launchId
     ? { ...EVERYTHING, processId: props.launchId }
     : props.runId === ALL_RUNS
       ? EVERYTHING
       : { ...EVERYTHING, run: props.runId };
   await Promise.all([loadProcesses(opening.run), loadRuns()]);
+  // A step opened with no run — a step chip's "Show its log" — opens on
+  // the step's newest run, as its Sources row does; one that never ran,
+  // on the step alone. Never on everything, which loses the step.
+  if (props.step && !opening.run && !opening.processId) {
+    const newest = runs.value[0]?.run_id ?? null;
+    if (newest) {
+      opening = { ...EVERYTHING, run: newest };
+      await loadProcesses(newest);
+    } else {
+      opening = { ...EVERYTHING, step: props.step };
+    }
+  }
   rescope(opening.run && props.step ? onStep(opening.run, props.step) : opening);
   unsubscribe = subscribeLive(
     {

@@ -11,6 +11,9 @@ import DashboardLibrary from "../DashboardLibrary.ce.vue";
 import DashboardSources from "../DashboardSources.ce.vue";
 import DashboardActivity from "../DashboardActivity.ce.vue";
 import dashboardCss from "../dashboardCard.css?inline";
+import chipCss from "../chip.css?inline";
+import ChipMenu from "../ChipMenu.ce.vue";
+import EntityChip from "../EntityChip.ce.vue";
 import { BUILTIN_META } from "../catalog";
 import { vueCard } from "../vueCard";
 import type { CardRender } from "../types";
@@ -25,7 +28,7 @@ function section(
   return vueCard(
     DashboardSection,
     { section: component, title, ...opts },
-    { styleSources: [dashboardCss] },
+    { styleSources: [dashboardCss, chipCss, EntityChip, ChipMenu] },
   );
 }
 

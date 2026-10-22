@@ -63,12 +63,14 @@ import {
 import { FailureError } from "@/apiError";
 import {
   type AccountNaming,
+  type ConnectAttempt,
   type Failure,
   type ConnectPhase,
   type ProbeItem,
   type ProbeItemKind,
   type ProbeProgress,
   type ProbeReport,
+  type ServiceRegistration,
   type StoredAccount,
 } from "@/api";
 import { type SignInWhere } from "@/config/issues";
@@ -85,6 +87,7 @@ import {
 } from "@/config/credentialShape";
 import { ingestReach } from "@/config/ingestMethods";
 import { freshBrowser, loginAccount, nameLeftToService } from "@/config/accountNaming";
+import { listed, servicesToSignIn, signInLabel, targetAccount } from "@/config/multiSignIn";
 import { isDesktopApp, pickPath } from "@/desktop";
 import {
   BYTE_UNITS,
@@ -679,6 +682,23 @@ const service = computed(() => {
     : null;
 });
 
+/// Every service a sign-in reaches, the entry's own first, with the
+/// name a person knows each by. One for nearly every source.
+const signInServices = computed(() =>
+  service.value && chosen.value
+    ? [
+        { service: service.value, label: chosen.value.label },
+        ...(chosen.value.credentialAlso ?? []),
+      ]
+    : [],
+);
+const signsInToSeveral = computed(() => signInServices.value.length > 1);
+const labelOf = (name: string) =>
+  signInServices.value.find((s) => s.service === name)?.label ?? name;
+
+/// The accounts each of `signInServices` holds, by service.
+const heldBy = ref<Record<string, string[]>>({});
+
 /// The one field that holds a latchkey account. Every latchkey source
 /// has exactly one (`fieldsFor` adds it where the descriptor does not):
 /// a step mirrors one identity.
@@ -720,6 +740,24 @@ const signsInAgainAs = computed(() =>
     ? loginAccount("service", storedNames.value, accountValue.value)
     : "",
 );
+/// What the sign-in button says.
+const signInButtonLabel = computed(() => {
+  if (signsInToSeveral.value) {
+    const names = signInServices.value.map((s) => s.service);
+    return signInLabel(names, heldBy.value, targetAccount(heldBy.value, accountValue.value));
+  }
+  return signsInAgainAs.value ? `Sign in again as ${signsInAgainAs.value}` : "Sign in with browser";
+});
+/// "Signed in to Google Drive; not yet to Google Docs, …" while the
+/// box's account is held by some of several services and not all.
+const partlySignedIn = computed(() => {
+  const account = targetAccount(heldBy.value, accountValue.value);
+  if (!signsInToSeveral.value || !account) return "";
+  const holds = (s: { service: string }) => (heldBy.value[s.service] ?? []).includes(account);
+  const yes = signInServices.value.filter(holds).map((s) => s.label);
+  const no = signInServices.value.filter((s) => !holds(s)).map((s) => s.label);
+  return no.length ? `Signed in to ${listed(yes)}; not yet to ${listed(no)}.` : "";
+});
 const accountHelp = computed(() =>
   accountNaming.value === "service"
     ? `${chosen.value?.label ?? "The service"} names each account itself when you sign in. ` +
@@ -733,7 +771,15 @@ async function loadAccounts() {
   accounts.value = null;
   accountsFailure.value = null;
   try {
-    const info = await latchkeyService(name);
+    const others = signInServices.value.slice(1).map((s) => s.service);
+    const [info, ...rest] = await Promise.all([
+      latchkeyService(name),
+      ...others.map((s) => latchkeyService(s).catch(() => null)),
+    ]);
+    heldBy.value = Object.fromEntries([
+      [name, info.accounts.map((a) => a.account)],
+      ...others.map((s, i) => [s, (rest[i]?.accounts ?? []).map((a) => a.account)]),
+    ]);
     accounts.value = info.accounts;
     authOptions.value = info.auth_options;
     setExample.value = info.set_example ?? null;
@@ -790,8 +836,12 @@ const setCommand = computed(() => {
 // Pasting a credential
 
 /// Offered wherever latchkey takes a credential by hand — every service
-/// the wizard names — except under a gateway, which refuses `auth set`.
-const canPaste = computed(() => !gateway.value && authOptions.value.includes("set"));
+/// the wizard names — except under a gateway, which refuses `auth set`,
+/// and on a source that signs in to several services, where one pasted
+/// key would reach only the first.
+const canPaste = computed(
+  () => !gateway.value && !signsInToSeveral.value && authOptions.value.includes("set"),
+);
 const pasteShape = computed(() =>
   credentialShape(setExample.value, chosen.value?.credentialPaste?.headers),
 );
@@ -946,6 +996,10 @@ const CONNECT_PHASE_TEXT: Record<ConnectPhase, string> = {
   signing_in: "A browser window should open. Finish the login there.",
 };
 
+/// Which service the running or last sign-in was for, by the name a
+/// person knows it by: a failure is about that one.
+const connectLabel = ref("");
+
 async function connectViaLatchkey(createOAuthClient = false) {
   const name = service.value;
   if (!name || connect.value.state === "running") return;
@@ -953,82 +1007,147 @@ async function connectViaLatchkey(createOAuthClient = false) {
     showConversion.value = true;
     return;
   }
-  connect.value = {
-    state: "running",
-    message: "A browser window should open. Finish the login there.",
-  };
+  connect.value = { state: "running", message: CONNECT_PHASE_TEXT.signing_in };
+  connectLabel.value = chosen.value?.label ?? "";
   try {
-    const account = loginAccount(accountNaming.value, storedNames.value, accountValue.value);
-    const started = await startLatchkeyConnect(
-      name,
-      account,
-      wouldRegister.value,
-      freshBrowser(accountNaming.value, storedNames.value, account),
-      createOAuthClient,
-    );
-    for (;;) {
-      await new Promise((r) => setTimeout(r, 1500));
-      if (closed) return;
-      const status = await latchkeyConnectStatus(started.id);
-      if (status.status === "running") {
-        connect.value = {
-          state: "running",
-          message: CONNECT_PHASE_TEXT[status.phase],
-          phase: status.phase,
-        };
-        continue;
-      }
-      if (status.issue === "no_oauth_client") oauthClientMissing.value = true;
-      if (status.status === "ok") {
-        oauthClientMissing.value = false;
-        // The point of connecting was to add an account; showing the
-        // stale list would hide the one just added.
-        await loadAccounts();
-        // Follow the login rather than the box: a service that names
-        // its own accounts files the credential under whoever signed
-        // in, and the config has to name that one.
-        const landed = status.account;
-        const field = accountField.value;
-        if (landed && field) values.value[field.target] = landed;
-        // What was checked and loaded before the login was done with a
-        // credential that has just been replaced. The account watcher
-        // resets them too, so the check waits for it.
-        resetProbes();
-        await nextTick();
-        if (canProbe.value) void checkConnection();
-        connect.value = {
-          state: "ok",
-          message: landed
-            ? `Connected as ${landed}.`
-            : "Connected. The account list below is refreshed.",
-        };
-      } else {
-        connect.value = {
-          state: "failed",
-          message: "",
-          failure: {
-            issue: status.issue ?? "unknown",
-            detail: status.output || "The login did not complete.",
-          },
-        };
-      }
+    if (signsInToSeveral.value) {
+      await signInToEach();
       return;
     }
+    const account = loginAccount(accountNaming.value, storedNames.value, accountValue.value);
+    const status = await runLogin(name, account, {
+      register: wouldRegister.value,
+      fresh: freshBrowser(accountNaming.value, storedNames.value, account),
+      createOAuthClient,
+    });
+    if (!status) return;
+    if (status.status === "ok") await signedIn(status.account);
+    else loginFailed(name, status);
   } catch (e) {
     connect.value = { state: "failed", message: "", failure: toFailure(e) };
   }
+}
+
+/// One browser login, polled to its end; null when the dialog closed
+/// first. `step` goes before what it says it is waiting on.
+async function runLogin(
+  name: string,
+  account: string,
+  opts: {
+    register?: ServiceRegistration;
+    fresh?: boolean;
+    createOAuthClient?: boolean;
+    step?: string;
+  },
+): Promise<ConnectAttempt | null> {
+  const started = await startLatchkeyConnect(
+    name,
+    account,
+    opts.register,
+    opts.fresh ?? false,
+    opts.createOAuthClient ?? false,
+  );
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 1500));
+    if (closed) return null;
+    const status = await latchkeyConnectStatus(started.id);
+    if (status.status !== "running") return status;
+    connect.value = {
+      state: "running",
+      message: (opts.step ?? "") + CONNECT_PHASE_TEXT[status.phase],
+      phase: status.phase,
+    };
+  }
+}
+
+/// Every service of a source that reaches several, one login after
+/// another, as one account: the box's, or whoever the first login says.
+/// It stops at the first that fails or lands on someone else.
+async function signInToEach() {
+  let account = targetAccount(heldBy.value, accountValue.value);
+  const names = signInServices.value.map((s) => s.service);
+  const plan = servicesToSignIn(names, heldBy.value, account);
+  for (const [i, name] of plan.entries()) {
+    const label = labelOf(name);
+    const step = plan.length > 1 ? `${label}, ${i + 1} of ${plan.length}: ` : "";
+    connectLabel.value = label;
+    connect.value = { state: "running", message: step + CONNECT_PHASE_TEXT.signing_in };
+    const holds = account !== "" && (heldBy.value[name] ?? []).includes(account);
+    const status = await runLogin(name, holds ? account : "", { step });
+    if (!status) return;
+    if (status.status !== "ok") {
+      loginFailed(name, status);
+      return;
+    }
+    if (account && status.account && status.account !== account) {
+      await loadAccounts();
+      connect.value = {
+        state: "failed",
+        message: "",
+        failure: {
+          issue: "unknown",
+          detail:
+            `${label} signed in as ${status.account}, not ${account}. ` +
+            `Sign in again and choose ${account} in the browser.`,
+        },
+      };
+      return;
+    }
+    account ||= status.account ?? "";
+  }
+  await signedIn(account || null);
+}
+
+function loginFailed(name: string, status: ConnectAttempt) {
+  if (status.issue === "no_oauth_client") {
+    oauthClientMissing.value = true;
+    oauthClientFor.value = name;
+  }
+  connect.value = {
+    state: "failed",
+    message: "",
+    failure: {
+      issue: status.issue ?? "unknown",
+      detail: status.output || "The login did not complete.",
+    },
+  };
+}
+
+async function signedIn(landed: string | null) {
+  oauthClientMissing.value = false;
+  // The point of connecting was to add an account; showing the stale
+  // list would hide the one just added.
+  await loadAccounts();
+  // Follow the login rather than the box: a service that names its own
+  // accounts files the credential under whoever signed in, and the
+  // config has to name that one.
+  const field = accountField.value;
+  if (landed && field) values.value[field.target] = landed;
+  // What was checked and loaded before the login was done with a
+  // credential that has just been replaced. The account watcher resets
+  // them too, so the check waits for it.
+  resetProbes();
+  await nextTick();
+  if (canProbe.value) void checkConnection();
+  connect.value = {
+    state: "ok",
+    message: landed ? `Connected as ${landed}.` : "Connected. The account list below is refreshed.",
+  };
 }
 
 /// Set once a sign-in has said the service has no OAuth client to sign
 /// in with, until one is pasted or a sign-in goes through: a failed
 /// "Create one for me" leaves both ways on offer.
 const oauthClientMissing = ref(false);
+/// The service whose sign-in said so.
+const oauthClientFor = ref<string | null>(null);
 const oauthClientPasted = ref("");
 const oauthClientSave = ref<{ state: "idle" | "saving" | "failed"; failure?: Failure }>({
   state: "idle",
 });
 watch(service, () => {
   oauthClientMissing.value = false;
+  oauthClientFor.value = null;
   oauthClientPasted.value = "";
   oauthClientSave.value = { state: "idle" };
 });
@@ -1039,12 +1158,23 @@ const oauthClientProject = computed(
   () => `Latchkey-${(service.value ?? "").replace(/^google-/, "")}`,
 );
 
+/// "the Google Drive, Google Docs, … APIs": what the pasted client's
+/// project must have turned on.
+const oauthClientApis = computed(() => {
+  const labels = signInServices.value.map((s) => s.label);
+  return `${listed(labels)} API${labels.length > 1 ? "s" : ""}`;
+});
+
+/// One client serves every service, so a source that reaches several
+/// stores it on each: `browser-prepare` would make a Cloud project per
+/// service, which is why such a source is offered only the paste.
 async function saveOAuthClient() {
-  const name = service.value;
-  if (!name || !oauthClientPasted.value.trim() || oauthClientSave.value.state === "saving") return;
+  const names = signInServices.value.map((s) => s.service);
+  if (!names.length || !oauthClientPasted.value.trim() || oauthClientSave.value.state === "saving")
+    return;
   oauthClientSave.value = { state: "saving" };
   try {
-    await setLatchkeyOAuthClient(name, oauthClientPasted.value);
+    for (const name of names) await setLatchkeyOAuthClient(name, oauthClientPasted.value);
   } catch (e) {
     oauthClientSave.value = { state: "failed", failure: toFailure(e) };
     return;
@@ -1530,6 +1660,9 @@ function submit() {
                 <small v-if="accountHelp" class="wiz-help wiz-account-help">{{
                   accountHelp
                 }}</small>
+                <small v-if="partlySignedIn" class="wiz-help wiz-partly-signed-in">{{
+                  partlySignedIn
+                }}</small>
               </div>
 
               <!-- Under a gateway the login happens on the gateway's side,
@@ -1594,9 +1727,7 @@ function submit() {
                     >
                       {{
                         connect.state !== "running"
-                          ? signsInAgainAs
-                            ? `Sign in again as ${signsInAgainAs}`
-                            : "Sign in with browser"
+                          ? signInButtonLabel
                           : connect.phase === "downloading_browser"
                             ? "Getting a browser…"
                             : connect.phase === "creating_client"
@@ -1605,11 +1736,16 @@ function submit() {
                       }}
                     </button>
                   </div>
+                  <p v-if="signsInToSeveral" class="wiz-help">
+                    This signs in to {{ listed(signInServices.map((s) => s.label)) }} one after
+                    another, as one {{ accountField?.label ?? "account" }}: the copy needs all of
+                    them.
+                  </p>
                   <IssueNote
                     v-if="connect.state === 'failed' && connect.failure"
                     class="wiz-connect-failed"
                     :failure="connect.failure"
-                    :service="chosen.label"
+                    :service="connectLabel || chosen.label"
                     :where="signInWhere"
                   />
                   <p v-else-if="connect.state !== 'idle'" class="wiz-help wiz-connect-status">
@@ -1624,10 +1760,19 @@ function submit() {
                   >
                     <p class="wiz-help">
                       {{ chosen.label }} signs in through an OAuth client in a Google Cloud project
-                      of your own, and latchkey has none for <code>{{ service }}</code> yet. Either
-                      way below, the sign-in starts once the client is in place.
+                      of your own, and latchkey has none for
+                      <code>{{ oauthClientFor ?? service }}</code> yet.
+                      <template v-if="signsInToSeveral">
+                        One client serves {{ listed(signInServices.map((s) => s.label)) }}: paste it
+                        once below and it is kept for each, then the sign-in starts.
+                      </template>
+                      <template v-else>
+                        Either way below, the sign-in starts once the client is in place.
+                      </template>
                     </p>
-                    <div class="wiz-conn-actions">
+                    <!-- browser-prepare makes a Cloud project per service, and
+                         Google limits how many an account may have. -->
+                    <div v-if="!signsInToSeveral" class="wiz-conn-actions">
                       <button
                         type="button"
                         class="btn primary"
@@ -1639,7 +1784,7 @@ function submit() {
                         Create one for me
                       </button>
                     </div>
-                    <p class="wiz-help">
+                    <p v-if="!signsInToSeveral" class="wiz-help">
                       A browser opens on the Google Cloud console. latchkey makes a project there
                       named <code>{{ oauthClientProject }}</code
                       >, turns on the APIs and creates the client, which takes a few minutes. Google
@@ -1647,7 +1792,9 @@ function submit() {
                       the account.
                     </p>
                     <label class="wiz-item">
-                      <span class="wiz-sublabel">Or paste a client you made</span>
+                      <span class="wiz-sublabel">{{
+                        signsInToSeveral ? "Paste a client you made" : "Or paste a client you made"
+                      }}</span>
                       <textarea
                         v-model="oauthClientPasted"
                         class="wiz-input wiz-oauth-paste"
@@ -1658,7 +1805,7 @@ function submit() {
                       />
                       <small class="wiz-help">
                         A Desktop app client from the Google Cloud console: paste the JSON file it
-                        downloads. Its project needs the {{ chosen.label }} API turned on.
+                        downloads. Its project needs the {{ oauthClientApis }} turned on.
                       </small>
                     </label>
                     <div class="wiz-conn-actions">
@@ -1816,7 +1963,9 @@ function submit() {
               <details class="wiz-help wiz-conn-how">
                 <summary>How sign-ins are stored</summary>
                 <p>
-                  latchkey keeps them, under its <code>{{ service }}</code> service.
+                  latchkey keeps them, under its
+                  <code>{{ signInServices.map((s) => s.service).join(", ") }}</code>
+                  service{{ signsInToSeveral ? "s" : "" }}.
                   <template v-if="signInWays.includes('paste')">
                     To store one from a terminal instead: <code>{{ setCommand }}</code>
                   </template>

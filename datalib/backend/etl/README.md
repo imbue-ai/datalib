@@ -656,10 +656,15 @@ copies it.** The CAS's shape is a contract `datalib-http` reads
 `/data/<group>/<function>/blob/<hash>` (`BlobBundle::href_for`), and the
 server answers that from the file. So `load_many` reads each blob's hash,
 size and type and leaves its bytes where they are; a blob remembers which
-step's CAS holds it (`Blob::store`, from where the file sits). Email
+step's CAS holds it (`Blob::held`, from where the file sits). Email
 alone reads the bytes (`load_many_with_bytes`), to render each message
-from its `.eml`; the parts it cuts out are bytes render made itself, the
-only ones `materialize_to_dir` writes beside a page.
+from its `.eml`. An attachment or inline image is a MIME part of that
+`.eml`, and the page links it inside the stored message, at
+`/data/<group>/<function>/blob/<eml hash>/part/<part hash>`
+(`BlobBundle::add_part`), where the part hash is the blake3 of the part's
+decoded bytes. No render records bytes of its own in a bundle
+(`BlobBundle::add`) today, so `materialize_to_dir` writes nothing beside
+a page.
 
 **The CAS is plain SQLite, not doltlite**, created through the
 `doltlite_engine=sqlite` URI parameter like the run store. A

@@ -5,6 +5,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use mail_parser::{MessageParser, MimeHeaders, PartType};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 
@@ -29,6 +30,12 @@ const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// (`<group>/<function>`).
 pub fn address(step: &str, blake3: &str) -> String {
     format!("/data/{step}/blob/{blake3}")
+}
+
+/// Where a page finds the MIME part whose decoded bytes hash to `part`,
+/// inside the message stored under `message` in the blob store of `step`.
+pub fn part_address(step: &str, message: &str, part: &str) -> String {
+    format!("{}/part/{part}", address(step, message))
 }
 
 /// Whether `s` is a key the store could hold: a blake3 in lowercase hex.
@@ -88,6 +95,63 @@ pub async fn read(path: &Path, blake3: &str) -> Result<Option<Stored>> {
     got
 }
 
+/// [`read`], then the part of that row whose decoded bytes hash to
+/// `part`, when the row is a message. `None` when the store, the row or
+/// the part is not there, or the row is not a message.
+pub async fn read_part(path: &Path, message: &str, part: &str) -> Result<Option<Stored>> {
+    Ok(read(path, message)
+        .await?
+        .and_then(|stored| part_of(&stored, part)))
+}
+
+/// The part of the message `stored` whose decoded bytes hash to `part`,
+/// typed as the message says it is. Text comes out as UTF-8 whatever
+/// charset it was sent in, and is typed so.
+pub fn part_of(stored: &Stored, part: &str) -> Option<Stored> {
+    let msg = MessageParser::default().parse(&stored.bytes)?;
+    if !is_a_message(stored.content_type.as_deref(), !msg.headers().is_empty()) {
+        return None;
+    }
+    msg.parts.iter().find_map(|p| {
+        let declared = p.content_type().map(|ct| match ct.subtype() {
+            Some(sub) => format!("{}/{sub}", ct.ctype()),
+            None => ct.ctype().to_string(),
+        });
+        let (bytes, content_type) = match &p.body {
+            PartType::Binary(b) | PartType::InlineBinary(b) => (b.as_ref(), declared),
+            PartType::Text(t) => (t.as_bytes(), Some(utf8(declared, "text/plain"))),
+            PartType::Html(t) => (t.as_bytes(), Some(utf8(declared, "text/html"))),
+            PartType::Message(_) | PartType::Multipart(_) => return None,
+        };
+        (blake3::hash(bytes).to_hex().as_str() == part).then(|| Stored {
+            content_type,
+            bytes: bytes.to_vec(),
+        })
+    })
+}
+
+fn utf8(declared: Option<String>, otherwise: &str) -> String {
+    format!(
+        "{}; charset=utf-8",
+        declared.as_deref().unwrap_or(otherwise)
+    )
+}
+
+/// A row stored as `message/rfc822`, or stored with no type and reading
+/// as a message with headers. A row its writer typed as anything else is
+/// not one, however leniently the parser would read it.
+fn is_a_message(content_type: Option<&str>, has_headers: bool) -> bool {
+    match content_type {
+        Some(ct) => ct
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .eq_ignore_ascii_case("message/rfc822"),
+        None => has_headers,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,6 +208,69 @@ mod tests {
                 .await
                 .unwrap(),
             None
+        );
+    }
+
+    const EML: &[u8] = b"From: Geordi La Forge <geordi@enterprise.example>\r\n\
+To: Data <data@enterprise.example>\r\n\
+Subject: Warp core schematic\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/mixed; boundary=\"b\"\r\n\
+\r\n\
+--b\r\n\
+Content-Type: text/html; charset=iso-8859-1\r\n\
+Content-Transfer-Encoding: quoted-printable\r\n\
+\r\n\
+<p>Caf=E9</p>\r\n\
+--b\r\n\
+Content-Type: image/png\r\n\
+Content-Disposition: attachment; filename=\"core.png\"\r\n\
+Content-Transfer-Encoding: base64\r\n\
+\r\n\
+iVBORw0KGgo=\r\n\
+--b--\r\n";
+
+    fn message(content_type: Option<&str>, bytes: &[u8]) -> Stored {
+        Stored {
+            content_type: content_type.map(str::to_string),
+            bytes: bytes.to_vec(),
+        }
+    }
+
+    /// A part is found by the hash of its decoded bytes, not of the
+    /// base64 or quoted-printable the message carries, and text comes out
+    /// as UTF-8, typed so.
+    #[test]
+    fn a_part_comes_out_of_a_message_by_its_decoded_hash() {
+        let eml = message(Some("message/rfc822"), EML);
+        let png = b"\x89PNG\r\n\x1a\n";
+        let image = part_of(&eml, &blake3::hash(png).to_hex()).expect("the image part");
+        assert_eq!(image, message(Some("image/png"), png));
+
+        let html = "<p>Caf\u{e9}</p>".as_bytes();
+        let text = part_of(&eml, &blake3::hash(html).to_hex()).expect("the html part");
+        assert_eq!(text, message(Some("text/html; charset=utf-8"), html));
+
+        assert_eq!(part_of(&eml, &blake3::hash(b"never").to_hex()), None);
+    }
+
+    /// Only a row that is a message is taken apart: one stored as
+    /// `message/rfc822`, or with no type and headers. A row typed as
+    /// anything else is not, though it holds the same bytes.
+    #[test]
+    fn only_a_message_is_taken_apart() {
+        let png = blake3::hash(b"\x89PNG\r\n\x1a\n").to_hex().to_string();
+        assert!(part_of(&message(None, EML), &png).is_some());
+        assert!(part_of(&message(Some("Message/RFC822; x=y"), EML), &png).is_some());
+        assert_eq!(part_of(&message(Some("text/plain"), EML), &png), None);
+        assert_eq!(part_of(&message(Some("application/pdf"), EML), &png), None);
+    }
+
+    #[test]
+    fn a_part_address_follows_its_messages() {
+        assert_eq!(
+            part_address("gmail/ingest", "ab", "cd"),
+            "/data/gmail/ingest/blob/ab/part/cd"
         );
     }
 
