@@ -562,7 +562,8 @@ function readNode(v: unknown): TreeNode | null {
 }
 
 // The tree as the library keeps it: without what a link opened and the
-// person has not kept (`fromLink`).
+// person has not kept (`fromLink`). The tabs a link's tab opened are the
+// person's, so they stay, re-pointed at its own opener.
 export function kept(root: BoxNode): BoxNode {
   const linked: string[] = [];
   const walk = (n: TreeNode) => {
@@ -570,7 +571,19 @@ export function kept(root: BoxNode): BoxNode {
     else if (n.kind === "box") n.children.forEach(walk);
   };
   walk(root);
-  return linked.reduce<TreeNode>((tree, id) => remove(tree, id), root) as BoxNode;
+  return linked.reduce<TreeNode>((tree, id) => remove(release(tree, id), id), root) as BoxNode;
+}
+
+// `id`'s siblings that it opened, re-pointed at `id`'s own opener, so
+// closing `id` takes nothing else with it.
+function release(root: TreeNode, id: string): TreeNode {
+  const parent = parentOf(root, id);
+  const node = parent?.children.find((c) => c.id === id);
+  if (!parent || !node) return root;
+  return mapBox(root, parent.id, (b) => ({
+    ...b,
+    children: b.children.map((c) => (c.openedBy === id ? { ...c, openedBy: node.openedBy } : c)),
+  }));
 }
 
 // A stored container tree, or null for anything this build cannot read:

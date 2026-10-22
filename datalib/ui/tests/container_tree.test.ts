@@ -369,4 +369,18 @@ describe("what a link opened", () => {
     expect(ids(kept(rename(linkedFixture(), "link", "Mine") as BoxNode))).toContain("link");
     expect(ids(kept(setPinned(linkedFixture(), "link", true) as BoxNode))).toContain("link");
   });
+
+  /// Solidified, a link's tab opens a card as a tab of its own, opened by
+  /// it. Dropping the link's tab must not take the person's tabs with it.
+  it("does not take the tabs opened from it", () => {
+    const solid = setSolidified(linkedFixture(), "link", true);
+    const opened = openFrom(solid, "l1", [makeCard("doc", "documentView()")]);
+    const named = rename(opened, "doc", "My reading") as BoxNode;
+    expect(find(named, "doc")?.openedBy).toBe("link");
+
+    const root = kept(named);
+    expect(ids(root)).toEqual(["dash", "sandbox", "doc"]);
+    expect(find(root, "doc")?.openedBy).toBeNull();
+    expect(find(root, "doc")?.name).toBe("My reading");
+  });
 });
