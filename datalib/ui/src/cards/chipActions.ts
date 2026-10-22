@@ -20,6 +20,7 @@ import {
   NOBODY,
   people,
   searchQueryFor,
+  type NormalizedContact,
 } from "./contacts";
 import { entityFromUri } from "./chipLinks";
 import {
@@ -89,6 +90,12 @@ export function chipName(chip: Chip): string {
 /** The search for everything with one of your contacts. */
 function contactQuery(id: string): string {
   return filterToken("with", `${CONTACT}${id}`, false);
+}
+
+/** "Everything with" a person: the contact their handle is linked to,
+ *  which reaches every handle they used, else the handle alone. */
+export function everythingWith(handle: string, mine: NormalizedContact | null): string {
+  return mine ? contactQuery(mine.key) : searchQueryFor(handle);
 }
 
 /** A chip's right-click menu. `canLink` is whether this surface hosts
@@ -177,7 +184,9 @@ export async function runChipAction(id: ChipAction, chip: Chip, host: ChipHost):
       if (ref.kind === "entity") await copy(entityCopyText(ref.uri, name));
       return;
     case "search":
-      if (ref.kind === "person") search(searchQueryFor(ref.handle), "narrow");
+      if (ref.kind === "person") {
+        search(everythingWith(ref.handle, people.get(ref.handle)?.mine ?? null), "narrow");
+      }
       if (ref.kind === "contact") search(contactQuery(ref.id), "narrow");
       return;
     case "browse": {

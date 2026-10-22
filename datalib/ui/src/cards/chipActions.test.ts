@@ -6,10 +6,12 @@ import {
   chipElAt,
   chipMenuOf,
   chipOf,
+  everythingWith,
   runChipAction,
   type Chip,
   type ChipHost,
 } from "./chipActions";
+import { people, type NormalizedContact } from "./contacts";
 
 const SLACK: Chip = { ref: { kind: "entity", uri: "datalib:group/slack" }, shownAs: "slack" };
 const INGEST: Chip = {
@@ -93,6 +95,30 @@ describe("runChipAction", () => {
     const h = host();
     await runChipAction("browse", SLACK, h);
     expect(h.openCard).toHaveBeenCalledWith(searchSource("source_id:slack is:document"));
+  });
+
+  /** "Everything with" on a linked handle searched that one handle, so it
+   *  missed everything the contact's other handles were in. */
+  it("searches everything with the contact a handle is linked to", async () => {
+    const mine: NormalizedContact = {
+      source_id: "datalib_contacts",
+      key: "c1",
+      kind: "person",
+      names: ["Will Riker"],
+      handles: [],
+      org: null,
+      title: null,
+      seen: null,
+    };
+    const get = vi.spyOn(people, "get").mockReturnValue({ mine, sourceContacts: [] });
+    const search = vi.fn();
+    await runChipAction("search", RIKER, host({ search }));
+    get.mockRestore();
+    expect(search.mock.calls).toEqual([["with:contact:c1", "narrow"]]);
+    expect(everythingWith("email:riker@enterprise.org", mine)).toBe("with:contact:c1");
+    expect(everythingWith("email:riker@enterprise.org", null)).toBe(
+      "with:email:riker@enterprise.org",
+    );
   });
 
   it("links a handle only where the surface hosts the popover", async () => {

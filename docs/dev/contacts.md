@@ -525,8 +525,10 @@ spelling a source used, and anyone else whose name holds it. A name
 also reaches every handle a source ever showed under it, through the
 search terms' `names` table, filled from the rows' authors and from
 `source_contacts`. A chip's "Everything with <name>" writes
-`with:<handle>`, so it finds what they wrote, what they received and
-their own cards. Typing `@` at the start of a word offers people and
+`with:contact:<id>` when the handle is linked to one of your contacts,
+so it finds them under every handle linked there, and `with:<handle>`
+otherwise; either finds what they wrote, what they received and their
+own cards (`chipActions.ts::everythingWith`). Typing `@` at the start of a word offers people and
 writes the pick as `with:`.
 
 A conversation's own row answers `with:` for everyone who took part in
