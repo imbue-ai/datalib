@@ -386,10 +386,15 @@ wrote for good
 [disk space and `dolt_gc`](/docs/dev/doltlite.md#disk-space-and-dolt_gc)).
 What that means here:
 
-- **Batch writes in one transaction.** Every store already does — a
-  render store's transaction is one checkpoint interval, the grid
-  index's is the whole run, a SQLite mirror's is one table — so within
-  one run the order rows arrive in does not matter.
+- **Batch writes in one transaction.** A render store's transaction is
+  one checkpoint interval, the grid index's is the whole run, a SQLite
+  mirror's is one table, and Linear's download writes through a
+  `raw_store::Batch`, one transaction between two seals; within one of
+  those the order rows arrive in does not matter. The downloads that go
+  through `datalib_etl_web::owed::drain` still commit a transaction per
+  flush, and their stores keep each one's pages until something runs
+  gc. A `Batch` holds the store's one connection while it is open, so a
+  download that adopts one has to read through it too.
 - **Key for adjacency where the key is ours.** Rows a run writes
   together should sort together: `(device_id, ts_ms)`,
   `"{metric}#{date}"`, and the time-prefixed ids `datalib_id` mints (a

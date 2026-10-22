@@ -90,10 +90,9 @@ Two kinds of table, two ways of keeping up:
   row commits nothing.
 - **The big connections are walked newest first** (`ingest/walk.rs`).
   Each one is asked for `orderBy: updatedAt`, which Linear returns most
-  recent first. Every page is stored in one transaction, together with
-  a `coverage` span: the stretch of `updatedAt` stamps the walk has
-  read. What is left to walk is every stretch no span covers, newest
-  first:
+  recent first. Every page is stored together with a `coverage` span:
+  the stretch of `updatedAt` stamps the walk has read. What is left to
+  walk is every stretch no span covers, newest first:
   - A first run walks from now back to the oldest record.
   - Every later run walks from now down to the top of what earlier runs
     covered. On a quiet day that is one page per connection.
@@ -117,6 +116,28 @@ Measured on a workspace of 10,551 issues (including archived ones),
 Linear's budget is 2,500 requests and 3,000,000 complexity points an
 hour per user. No single query may cost more than 10,000 points. The
 largest page here (50 projects with their members) costs about 2,400.
+
+### One transaction between two seals
+
+The whole run writes through one SQL transaction at a time
+(`datalib_etl::raw_store::Batch`), committed only when a checkpoint is
+due and at the end. Linear's ids are random, so each page lands all over
+each table, and a doltlite `COMMIT` writes a fresh copy of every page of
+the tree it touched; the replaced copies stay in the file, since nothing
+runs `dolt_gc()` on a raw store. Measured on a first run over a real
+workspace (about 92 MB of records):
+
+| writes | checkpoints | store | after `dolt_gc()` |
+|---|---|---|---|
+| a transaction per page, a seal every 15 s to 40 s | 20 | 1.22 GB | 494 MB |
+| one transaction per seal, the interval doubling | 5 | 239 MB | 236 MB |
+
+Committing more often than the seals bought nothing: what no seal
+reached is discarded on the next open anyway. What is left is the
+checkpoints' own history; folded into one commit, the same store is
+122 MB.
+Because the open transaction holds the store's one connection, every
+read during the run goes through it too.
 
 ### Why the walk pages by stamp, not by cursor
 

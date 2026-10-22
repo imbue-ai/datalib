@@ -272,6 +272,47 @@ async fn a_walk_cut_short_finishes_on_the_next_run_after_what_is_new() {
     db.close().await;
 }
 
+/// Each page of a walk was its own SQL transaction, and a doltlite
+/// transaction leaves behind every page of the tree it rewrote, so a
+/// first run over randomly keyed records grew the store to several times
+/// what it keeps: 1.2 GB for about 92 MB of records on a real workspace,
+/// 494 MB after `dolt_gc()`. The pages between two seals now share one
+/// transaction, so there is little for gc to reclaim.
+#[tokio::test]
+async fn a_first_run_leaves_little_for_gc_to_reclaim() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = ingest::db_path_for(dir.path());
+    let db = RawDb::open(&path).await.unwrap();
+    let fake = workspace(0);
+    let log = "Sensor sweep of the Neutral Zone logged and filed. ".repeat(20);
+    let issues: Vec<Value> = (1..=1500u32)
+        .map(|n| {
+            let mut i = issue(n, n);
+            // Linear's ids are uuidv4s: in no order the walk could follow.
+            i["id"] = json!(format!("{:08x}", n.wrapping_mul(2_654_435_761)));
+            i["description"] = json!(log);
+            i
+        })
+        .collect();
+    fake.set("issues", issues);
+    run(&fake, &db, LinearSync::default()).await;
+    seal(&db, "first").await;
+    db.close().await;
+    let written = std::fs::metadata(&path).unwrap().len();
+
+    let db = RawDb::open(&path).await.unwrap();
+    sqlx::query("SELECT dolt_gc()")
+        .execute(db.pool())
+        .await
+        .unwrap();
+    db.close().await;
+    let kept = std::fs::metadata(&path).unwrap().len();
+    assert!(
+        kept * 10 >= written * 7,
+        "gc took the store from {written} to {kept} bytes"
+    );
+}
+
 /// History beyond the fifty entries that come with an issue is fetched
 /// for an issue that changed, and not again for one that did not.
 #[tokio::test]
