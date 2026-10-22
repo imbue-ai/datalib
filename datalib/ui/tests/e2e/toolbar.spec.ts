@@ -42,6 +42,32 @@ test.describe("toolbar", () => {
     });
   });
 
+  // A source's chip's menu is its Sources row's: what syncs it, stops
+  // it, turns it off and shows its history, beside the chip's own Open
+  // and copies; an entry runs as the row's does.
+  test("a source chip's menu is its Sources row's", async ({ page }) => {
+    await page.goto("/");
+    const chip = cardOf(page, "sourcesOverviewView()")
+      .locator('.grid-row a.chip[data-entity^="datalib:group/"]')
+      .first();
+    await expect(chip).toBeVisible({ timeout: 10_000 });
+    const group = (await chip.getAttribute("data-entity"))!.slice("datalib:group/".length);
+    await chip.click({ button: "right" });
+    const menu = page.locator(".chip-menu");
+    await expect(menu.getByRole("menuitem")).toContainText([
+      "Open its sync dashboard",
+      "Sync now",
+      /^Turn (off|on)$/,
+      "Show commit history",
+      "Reset…",
+      `Copy ${group}`,
+    ]);
+    await menu.getByRole("menuitem", { name: "Show commit history" }).click();
+    await expect(cardOf(page, `historyView({"trees":["${group}"]`)).toBeVisible({
+      timeout: 10_000,
+    });
+  });
+
   test("the search box opens a search card on what was typed", async ({ page }) => {
     await page.goto("/");
     await expect(tabLabels(page)).toHaveText(PINNED);

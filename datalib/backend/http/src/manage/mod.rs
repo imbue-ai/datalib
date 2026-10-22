@@ -401,13 +401,15 @@ pub struct EntitiesBody {
 }
 
 /// What a chip naming a group or a step shows: its name as the config
-/// gives it now, its mark, what the mark stands for, and its status.
+/// gives it now, its mark, what the mark stands for, and its status —
+/// and its row of the Sources table, whose actions are the chip's menu.
 #[derive(Debug, Clone, Serialize)]
 pub struct EntityView {
     pub label: String,
     pub icon: Option<String>,
     pub detail: Option<String>,
     pub status: StatusView,
+    pub row: ManageRow,
 }
 
 /// `POST /api/entities`: who each `datalib:group/…` or `datalib:step/…`
@@ -448,6 +450,7 @@ fn entity_view(rows: &[ManageRow], entity: datalib_columns::Entity) -> Option<En
                 icon: row.name.icon.clone(),
                 detail: row.name.detail.clone(),
                 status: row.status.clone(),
+                row: row.clone(),
             })
         }
         Entity::Step(id) => {
@@ -463,6 +466,7 @@ fn entity_view(rows: &[ManageRow], entity: datalib_columns::Entity) -> Option<En
                 icon: row.name.icon.clone(),
                 detail: row.name.detail.clone(),
                 status: row.status.clone(),
+                row: row.clone(),
             })
         }
     }

@@ -5,7 +5,7 @@
 // function that makes DOM, through the same `drawChip` a person's chip
 // uses.
 
-import type { StatusView } from "@/api";
+import type { ManageRow, StatusView } from "@/api";
 import { changed, subscribeLive, type RootEvent } from "@/live";
 import { pushToast } from "@/toasts";
 import { entityFromUri } from "./chipLinks";
@@ -14,12 +14,14 @@ import { logSource, syncDashboardSource } from "./cardSources";
 import { Resolver } from "./resolver";
 
 /** `datalib_http::manage::EntityView`, hand-kept: a group or a step as
- *  the config and the loop's record say it is now. */
+ *  the config and the loop's record say it is now, and its row of the
+ *  Sources table, whose actions are the chip's menu. */
 export type EntityView = {
   label: string;
   icon: string | null;
   detail: string | null;
   status: StatusView;
+  row?: ManageRow;
 };
 
 export const entities = new Resolver<EntityView>(

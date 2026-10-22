@@ -7,24 +7,10 @@ import tableGridCss from "../tableGrid.css?inline";
 import slickCss from "@slickgrid-universal/common/dist/styles/css/slickgrid-theme-default.css?inline";
 import { vueCard } from "../vueCard";
 import type { CardRender } from "../types";
+import type { HistoryViewOpts } from "../cardSources";
 
-export type HistoryViewOpts = {
-  /// Group or step ids; every store under each is listed.
-  trees: string[];
-  /// What the history is of, for the card's title.
-  title: string;
-  /// The source whose download's commits can be compared, when the
-  /// history is a comparable source's.
-  source?: string | null;
-  /// Open with a comparison of the newest two commits set up.
-  compare?: boolean;
-};
+export { historySource, type HistoryViewOpts } from "../cardSources";
 
 export function historyView(opts: HistoryViewOpts): CardRender {
   return vueCard(HistoryCard, { opts }, { styleSources: [slickCss, tableGridCss, historyCardCss] });
-}
-
-/// The source of a history card, for whoever opens one.
-export function historySource(opts: HistoryViewOpts): string {
-  return `historyView(${JSON.stringify(opts)})`;
 }

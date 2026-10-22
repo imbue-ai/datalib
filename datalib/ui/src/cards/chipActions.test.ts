@@ -1,13 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import { logSource, personSource, searchSource, syncDashboardSource } from "./cardSources";
+import type { ManageRow } from "@/api";
 import {
   CHIP_ACTIONS,
+  entityChipMenu,
   chipCardSource,
   chipElAt,
   chipMenuOf,
   chipOf,
   runChipAction,
   type Chip,
+  type ChipAction,
   type ChipHost,
 } from "./chipActions";
 
@@ -38,7 +41,7 @@ describe("chipMenuOf", () => {
       [CONTACT, false],
     ] as const) {
       const ids = chipMenuOf(chip, canLink).map((e) => e.id);
-      const order = ids.map((id) => CHIP_ACTIONS.indexOf(id));
+      const order = ids.map((id) => CHIP_ACTIONS.indexOf(id as ChipAction));
       expect(order).toEqual([...order].sort((a, b) => a - b));
       expect(new Set(ids).size).toBe(ids.length);
     }
@@ -100,5 +103,84 @@ describe("runChipAction", () => {
     await runChipAction("edit", RIKER, host({ editLink }));
     expect(editLink).toHaveBeenCalledOnce();
     await expect(runChipAction("edit", RIKER, host())).resolves.toBeUndefined();
+  });
+});
+
+/** A Sources row as the server sends it, for what a chip's menu reads. */
+function manageRow(over: Partial<ManageRow> & { id: string; kind: ManageRow["kind"] }): ManageRow {
+  return {
+    name: { id: over.id, label: over.id },
+    type: { id: "slack", label: "Slack" },
+    group: over.kind === "step" ? over.id.split("/")[0] : null,
+    function: over.kind === "step" ? over.id.split("/")[1] : null,
+    actions: [
+      { id: "browse", label: "Browse", enabled: true, hint: "", disabled_reason: null },
+      { id: "sync", label: "Sync now", enabled: true, hint: "", disabled_reason: null },
+    ],
+    stop_request_ids: [],
+    turned_off_by: null,
+    status_from: over.kind === "group" ? `${over.id}/ingest` : null,
+    reveal_blocked: null,
+    reveal_path: `/root/${over.id}`,
+    raw_store_path: null,
+    params: {},
+    ...over,
+  } as ManageRow;
+}
+
+describe("entityChipMenu", () => {
+  /** A group chip offered copy and open while its Sources row offered
+   *  Sync, Stop, history and Reset: the chip's menu is now the row's. */
+  it("is Open, then the group's Sources row, then the copies", () => {
+    const labels = entityChipMenu(
+      "datalib:group/slack",
+      "Work Slack",
+      manageRow({ id: "slack", kind: "group" }),
+    ).map((e) => e.label);
+    expect(labels[0]).toBe("Open its sync dashboard");
+    expect(labels).toContain("Sync now");
+    expect(labels).toContain("Turn off");
+    expect(labels).toContain("Show commit history");
+    expect(labels).toContain("Reset…");
+    // Its dashboard is the chip's Open, its id the chip's Copy; edits
+    // need the config's text, which the Sources card holds.
+    for (const gone of ["Show sync dashboard", "Copy id", "Edit settings…", "Rename…"]) {
+      expect(labels).not.toContain(gone);
+    }
+    expect(labels.slice(-3)).toEqual([
+      "Copy slack",
+      "Copy “Work Slack”",
+      "Copy “Work Slack (datalib:group/slack)”",
+    ]);
+  });
+
+  it("offers Stop while a sync has work in it, and marks what stops or empties", () => {
+    const entries = entityChipMenu(
+      "datalib:group/slack",
+      "Work Slack",
+      manageRow({ id: "slack", kind: "group", stop_request_ids: ["r1"] }),
+    );
+    const stop = entries.find((e) => e.id === "row:stop");
+    expect(stop?.danger).toBe(true);
+    expect(entries.some((e) => e.id === "row:sync")).toBe(false);
+    // A reset waits for the sync to stop, and says so.
+    expect(entries.find((e) => e.id === "row:reset")?.disabled).toBe("Busy — stop the sync first");
+  });
+
+  it("takes the row's Browse and step log over the chip's own", () => {
+    const ids = entityChipMenu(
+      "datalib:step/slack/ingest",
+      "Work Slack · Ingest",
+      manageRow({ id: "slack/ingest", kind: "step" }),
+    ).map((e) => e.id);
+    expect(ids).toContain("row:log");
+    expect(ids).not.toContain("log");
+    expect(ids).not.toContain("browse");
+  });
+
+  it("is the chip's own menu until the row is known", () => {
+    expect(entityChipMenu("datalib:group/slack", "Work Slack", undefined).map((e) => e.id)).toEqual(
+      ["open", "copy-id", "copy-name", "copy-both", "browse"],
+    );
   });
 });

@@ -163,7 +163,7 @@ The two instances:
 |---|---|---|
 | keyed by | handle (`email:…`) | entity URI (`datalib:group/…`) |
 | asks | the unified document index's `POST /people` and the contacts app's `POST /resolve` | datalib-http's `POST /api/entities` (`manage::post_entities`, from the rows the Manage table reads) |
-| answer | each source's record of the person, and the contact a person made | label, icon token, detail, status |
+| answer | each source's record of the person, and the contact a person made | label, icon token, detail, status, and its row of the Sources table (`row`), whose actions are its menu |
 | goes stale when | a person edits a contact (create, link, unlink, no longer works): in this page the call forgets the handles it changed; from anywhere else — another window, an agent — the contacts app's commit reaches every page as a `curated` frame, on which `people` and `contactsById` revalidate (`movesPeople`), as on a resync | a sync moves a status, or the config changes: `entities` follows the live connection and revalidates on every frame `movesEntities` names, and on a resync |
 
 Why the viewer joins this itself rather than the producer sending
@@ -267,9 +267,20 @@ right-click away; linking a handle stays the popover's
 |---|---|---|---|
 | **click** | the link popover, where a contacts app is configured | nothing; the href is never followed | nothing; the href is never followed |
 | **double-click** | the person card (`personView`): your contact and each source's record of them, the source the chip was seen in first | the group's sync dashboard | its group's sync dashboard, scrolled to the step's section |
-| **right-click** | `chipMenu`: open the person card; compose mail to an email address; copy the identifier, the name or both; everything with them (`with:`); link to a contact or edit the link | `entityMenu`: open its dashboard; copy the id, the name or both; browse its documents | `entityMenu`: show it in its dashboard; show its log; copy |
+| **right-click** | `chipMenu`: open the person card; compose mail to an email address; copy the identifier, the name or both; everything with them (`with:`); link to a contact or edit the link | `entityChipMenu`: open its dashboard; then its Sources row's entries — Browse, Sync now or Stop, Turn off or on, history, step log, reveal, copy path, Reset; then copy the id, the name or both | the same, for the step's row |
 | **hover** | the tooltip: who, the identifier, what each source calls them, their other handles | the tooltip: name and id, its type, its status | the same |
 | **copy** | `Will Riker <riker@enterprise.org>` as text, a working `mailto:` link as HTML | `Work Slack (datalib:group/slack)`, and the link | the same |
+
+**A group or step chip's menu is its row of the Sources table.**
+`/api/entities` answers each with its `row`, so the menu is built as the
+right-click lands, by the same `rowMenu` the Sources table uses
+(`chipActions.ts::entityChipMenu`). It leaves out what needs the
+config's text, which only the Sources card holds (Edit settings, Rename,
+Remove, Compare), and what the chip's own entries already are (its
+dashboard, its id). An entry runs through `rowActions` on the rows read
+fresh at that moment, so a group's steps are there and nothing acts on
+a stale state; what it says is a toast. Until the answer lands, the
+chip offers its own entries alone.
 
 **`ui/src/cards/chipActions.ts` is the one place a chip's clicks are
 decided**: which chip a press landed on (`chipElAt`, `chipOf`), what its
@@ -279,8 +290,11 @@ entry does (`runChipAction`). A surface only draws the menu — the
 floating `ChipMenu.ce.vue` over a document or a card, a grid's context
 menu, the search field's tooltip — and hands it a `ChipHost` saying
 what it can do there: open a card, search in place, link a handle. The
-search grid narrows its own query for "Everything with" and replaces
-it for Browse; everywhere else both open a search beside the card. A
+search grid narrows its own query for "Everything with", and replaces
+it for a chip's own Browse (the one a group chip offers before its row
+is known); everywhere else both open a search beside the card. The
+row's Browse opens its browse card, with the source's columns, from
+every surface. A
 contact chip (`data-contact`) has no card of its own yet, so it
 offers copy and "Everything with" only. A click with a modifier on a person chip is the browser's, as
 on any link; no click on a `datalib:` link ever leaves the app. The mail

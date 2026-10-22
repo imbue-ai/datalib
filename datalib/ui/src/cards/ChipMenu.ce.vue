@@ -5,10 +5,10 @@
 // else, a second right-click or Escape closes it.
 import { computed, onMounted, onUnmounted } from "vue";
 
-import type { ChipAction, ChipEntry } from "./chipActions";
+import type { ChipEntry, ChipEntryId } from "./chipActions";
 
 const props = defineProps<{ entries: ChipEntry[]; x: number; y: number }>();
-const emit = defineEmits<{ pick: [id: ChipAction]; close: [] }>();
+const emit = defineEmits<{ pick: [id: ChipEntryId]; close: [] }>();
 
 const style = computed(() => ({
   left: `${Math.min(props.x, window.innerWidth - 260)}px`,
@@ -27,7 +27,16 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
     <div class="chip-menu" role="menu" :style="style" @click.stop>
       <template v-for="e in entries" :key="e.id">
         <div v-if="e.separator" class="chip-menu-divider" />
-        <div class="chip-menu-item" role="menuitem" @click="emit('pick', e.id)">{{ e.label }}</div>
+        <div
+          class="chip-menu-item"
+          :class="{ 'chip-menu-disabled': !!e.disabled, 'chip-menu-danger': e.danger }"
+          role="menuitem"
+          :aria-disabled="e.disabled ? 'true' : undefined"
+          :title="e.disabled ?? undefined"
+          @click="e.disabled || emit('pick', e.id)"
+        >
+          {{ e.label }}
+        </div>
       </template>
     </div>
   </div>
@@ -62,6 +71,16 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 }
 .chip-menu-item:hover {
   background: var(--datalib-hover, #eee);
+}
+.chip-menu-danger {
+  color: var(--datalib-log-error);
+}
+.chip-menu-disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.chip-menu-disabled:hover {
+  background: transparent;
 }
 .chip-menu-divider {
   height: 1px;

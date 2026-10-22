@@ -4,10 +4,17 @@
 // floating menu over a document, a grid's context menu, the search
 // field's tooltip — and hands the pick back here (docs/dev/chips.md
 // § Clicks).
+import { ref } from "vue";
+import * as api from "@/api";
+import type { ManageRow } from "@/api";
 import { copyToClipboard } from "@/clipboard";
+import { rowMenu, type MenuAction } from "@/config/rowMenu";
+import { isDesktopApp, revealActionLabel } from "@/desktop";
 import { openExternal } from "@/externalLinks";
+import type { MenuEntry } from "@/grid/menu";
 import { filterToken } from "@/grid/query";
 import { pushToast } from "@/toasts";
+import { menuTarget, rowActions, withBrowse } from "./rowActions";
 import { personSource, searchSource } from "./cardSources";
 import {
   chipLook,
@@ -53,7 +60,73 @@ export const CHIP_ACTIONS = [
   "edit",
 ] as const;
 export type ChipAction = (typeof CHIP_ACTIONS)[number];
-export type ChipEntry = { id: ChipAction; label: string; separator?: boolean };
+/** An entry of a group's or step's Sources row, offered on its chip. */
+export type RowEntryId = `row:${MenuAction}`;
+export type ChipEntryId = ChipAction | RowEntryId;
+export type ChipEntry = {
+  id: ChipEntryId;
+  label: string;
+  separator?: boolean;
+  /** Why the entry cannot be taken now, shown on hover; null when it can. */
+  disabled?: string | null;
+  /** It stops or empties something. */
+  danger?: boolean;
+};
+
+/** The row's entries a chip leaves out: the ones that need the config's
+ *  text, which only the Sources card holds, and the ones the chip's own
+ *  entries already are (its dashboard is the chip's Open; its id is the
+ *  chip's Copy). */
+const NOT_ON_A_CHIP: MenuAction[] = ["edit", "rename", "remove", "compare", "dashboard", "copy_id"];
+const EDIT_IN_SOURCES = "Edit settings from the Sources card";
+
+/** A group's or step's Sources row as chip entries: what `rowMenu` offers
+ *  it, less `NOT_ON_A_CHIP`, a line where the row's menu draws one. */
+export function rowEntries(row: ManageRow): ChipEntry[] {
+  const canReveal = isDesktopApp();
+  const target = menuTarget(withBrowse(row, new Map(), canReveal), EDIT_IN_SOURCES);
+  const out: ChipEntry[] = [];
+  let line = true;
+  for (const e of rowMenu([target], { canReveal, revealLabel: revealActionLabel() })) {
+    if (e.separator) {
+      line = true;
+      continue;
+    }
+    if (NOT_ON_A_CHIP.includes(e.action)) continue;
+    out.push({
+      id: `row:${e.action}`,
+      label: e.name,
+      disabled: e.disabled,
+      danger: e.action === "reset" || e.action === "stop",
+      ...(line ? { separator: true } : {}),
+    });
+    line = false;
+  }
+  return out;
+}
+
+/** A group or step chip's menu: Open, then its Sources row's entries,
+ *  then the copies. The row's Browse and step log stand for the chip's
+ *  own, which open the same with less (a bare search, no run). Before
+ *  the row is known, the chip's own entries alone. */
+export function entityChipMenu(uri: string, name: string, row: ManageRow | undefined): ChipEntry[] {
+  const own = entityMenu(uri, name);
+  if (!row) return own;
+  const open = own.filter((e) => e.id === "open");
+  const copies = own
+    .filter((e) => e.id.startsWith("copy-"))
+    .map((e, i) => ({ ...e, separator: i === 0 }));
+  return [...open, ...rowEntries(row), ...copies];
+}
+
+/** Chip entries as a grid's menu entries (`grid/menu.ts`), each running
+ *  through `run`. */
+export function asMenuEntries(entries: ChipEntry[], run: (id: ChipEntryId) => void): MenuEntry[] {
+  return entries.flatMap((e, i): MenuEntry[] => [
+    ...(e.separator && i > 0 ? [{ name: "", separator: true }] : []),
+    { name: e.label, disabled: e.disabled ?? null, danger: e.danger, action: () => run(e.id) },
+  ]);
+}
 
 export const CHIP_SELECTOR = "a.chip[data-handle], a.chip[data-entity], a.chip[data-contact]";
 
@@ -97,7 +170,7 @@ export function chipMenuOf(chip: Chip, canLink: boolean): ChipEntry[] {
   const { ref, shownAs } = chip;
   switch (ref.kind) {
     case "entity":
-      return entityMenu(ref.uri, chipName(chip));
+      return entityChipMenu(ref.uri, chipName(chip), entities.get(ref.uri)?.row);
     case "person":
       return chipMenu(ref.handle, shownAs, people.get(ref.handle) ?? NOBODY, canLink);
     case "contact": {
@@ -143,9 +216,51 @@ async function copy(text: string) {
   else pushToast("The clipboard refused the copy");
 }
 
+/** Do one of a group's or step's Sources row entries from its chip, as
+ *  the Sources table would: on the rows read fresh, so a group's steps
+ *  and its status child are there and nothing acts on a stale state.
+ *  What it says goes to a toast, since a chip has no banner. */
+async function runRowAction(action: MenuAction, uri: string, host: ChipHost) {
+  const entity = entityFromUri(uri);
+  if (!entity) return;
+  try {
+    const manage = await api.fetchManageRows();
+    const canReveal = isDesktopApp();
+    const groups = new Map(manage.rows.filter((r) => r.kind === "group").map((g) => [g.id, g]));
+    const rows = manage.rows.map((r) => withBrowse(r, groups, canReveal));
+    const row = rows.find((r) => r.kind === entity.kind && r.id === entity.id);
+    if (!row) {
+      pushToast(`${entity.id} is no longer in the config.`);
+      return;
+    }
+    const actions = rowActions({
+      api,
+      host: {
+        openCards: (...sources) => {
+          for (const s of sources) host.openCard(s);
+          return [];
+        },
+      },
+      rows: () => rows,
+      run: () => manage.run,
+      say: (ok, text) => pushToast(text, ok ? "info" : "error"),
+      clear: () => {},
+      busy: ref(false),
+      reload: async () => entities.revalidate(),
+    });
+    await actions.runMenuAction(action, [row]);
+  } catch (e) {
+    pushToast((e as Error).message);
+  }
+}
+
 /** Do what a chip's menu entry says. */
-export async function runChipAction(id: ChipAction, chip: Chip, host: ChipHost): Promise<void> {
+export async function runChipAction(id: ChipEntryId, chip: Chip, host: ChipHost): Promise<void> {
   const { ref } = chip;
+  if (id.startsWith("row:")) {
+    if (ref.kind === "entity") await runRowAction(id.slice(4) as MenuAction, ref.uri, host);
+    return;
+  }
   const name = chipName(chip);
   const search = (q: string, how: "narrow" | "replace") =>
     host.search ? host.search(q, how) : host.openCard(searchSource(q));

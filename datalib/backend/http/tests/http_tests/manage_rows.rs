@@ -134,6 +134,18 @@ async fn entities_answer_a_chip_for_a_group_and_a_step() {
     let step = &entities["datalib:step/slack/ingest"];
     assert_eq!(step["label"], "Work Slack · Ingest");
     assert_eq!(step["icon"], "step:ingest");
+    // Each carries its row of the Sources table, whose actions are the
+    // chip's menu.
+    assert_eq!(group["row"]["id"], "slack");
+    assert_eq!(group["row"]["kind"], "group");
+    assert_eq!(step["row"]["id"], "slack/ingest");
+    let actions: Vec<&str> = step["row"]["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["id"].as_str().unwrap())
+        .collect();
+    assert!(actions.contains(&"sync"), "{actions:?}");
 }
 
 /// The tree: a row per group, its steps and applets under it by

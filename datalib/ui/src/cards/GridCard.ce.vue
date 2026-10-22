@@ -52,12 +52,12 @@ import {
   people,
 } from "./contacts";
 import {
-  CHIP_ACTIONS,
   CHIP_SELECTOR,
   chipCardSource,
   chipElAt,
   chipMenuOf,
   chipOf,
+  asMenuEntries,
   runChipAction,
   type Chip,
   type ChipEntry,
@@ -102,7 +102,7 @@ import {
   withToken,
   type FilterEntry,
 } from "@/grid/query";
-import { onAfterMenuShowFit, perOpening } from "@/grid/menu";
+import { menuSlots, onAfterMenuShowFit, perOpening } from "@/grid/menu";
 import { newlyPicked } from "@/grid/selection";
 import { copySelectedRowsOnKey } from "@/grid/copyRows";
 import { markdownsToAsk, widen } from "@/grid/qmdAsk";
@@ -1800,22 +1800,17 @@ function chipHost(m: MenuScope): ChipHost {
   };
 }
 
-/// The chip's entries, each in its slot of the one order every chip's
-/// menu follows, with a line wherever the chip's menu draws one.
-const chipItems = CHIP_ACTIONS.flatMap((id): MenuCommandItem[] => {
-  const at = (m: MenuScope) => m.chip?.entries.find((e) => e.id === id) ?? null;
-  return [
-    dividerAfter((m) => !!at(m)?.separator && m.chip?.entries[0]?.id !== id),
-    entry(
-      `chip-${id}`,
-      (m) => at(m)?.label ?? null,
-      (m) => void runChipAction(id, m.chip!.chip, chipHost(m)),
-    ),
-  ];
+/// The chip's entries in a bank of slots, since a group's or step's
+/// menu is its Sources row's and varies with it (`grid/menu.ts`).
+const chipSlots = menuSlots(24, (args) => {
+  const m = scopeOf(args);
+  return m.chip
+    ? asMenuEntries(m.chip.entries, (id) => void runChipAction(id, m.chip!.chip, chipHost(m)))
+    : [];
 });
 
 const menuItems: (MenuCommandItem | "divider")[] = [
-  ...chipItems,
+  ...chipSlots.commandItems,
   dividerAfter((m) => m.chip !== null),
   entry(
     "keep",
@@ -1977,7 +1972,11 @@ function gridOptions(): GridOption {
       // Ours copies the cell as its row's copy does; the grid's copies
       // the raw field, an object as "[object Object]".
       hideCopyCellValueCommand: true,
-      onBeforeMenuShow: scopes.onBeforeMenuShow,
+      // The scope first, which the chip's slots read.
+      onBeforeMenuShow: (e, args) => {
+        scopes.onBeforeMenuShow(e, args);
+        chipSlots.onBeforeMenuShow(e, args);
+      },
       onAfterMenuShow: onAfterMenuShowFit,
       // The grid scrolls itself — a page landing above the viewport holds
       // the top row in place, a selection is scrolled back to — and a menu
