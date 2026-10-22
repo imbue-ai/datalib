@@ -16,7 +16,9 @@ use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact, Phot
 use datalib_handle::Handle;
 use serde_json::Value;
 
-pub use parse::{parse, ParsedSlack, ScanResult, SlackThreadBucket};
+pub use parse::{
+    open, parse_raw_json_dir, ParsedSlack, ScanResult, Shared, SlackStore, SlackThreadBucket,
+};
 
 pub use datalib_etl_slack::ingest::schema_raw::{slack_message_key, slack_thread_key};
 pub use ids::{parse_slack_ts, ts_to_iso, ts_to_ms};

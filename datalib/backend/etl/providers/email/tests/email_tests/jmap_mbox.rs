@@ -11,8 +11,9 @@ use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_email::ingest::db::{db_path_for, RawDb};
 use datalib_etl_email::ingest::mbox;
 use datalib_etl_email_render::render::ids;
-use datalib_etl_email_render::render::parse::parse;
-use datalib_etl_email_render::render::render::{render_all, OutlinkFormat};
+use datalib_etl_email_render::render::parse::{open, EmailStore, EmailThreadBucket};
+use datalib_etl_email_render::render::render::{render_store, OutlinkFormat, PageEnd};
+use datalib_etl_render::pages::PageSize;
 
 /// `X-GM-THRID` of the fixture's three-message briefing thread: the Gmail
 /// id of its first message, as Gmail assigns it.
@@ -23,6 +24,46 @@ fn thread_uuid(account_id: &str, thread_id: &str) -> String {
 }
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
+
+/// Every thread `store` holds, read two to a page, as a render reads them.
+fn every_thread(store: &EmailStore) -> Vec<EmailThreadBucket> {
+    let mut pages = store.pages(2);
+    let mut out = Vec::new();
+    while let Some(page) = store.next_page(&mut pages).expect("next page") {
+        out.extend(page.docs);
+    }
+    out
+}
+
+/// Renders `store` with `size`, returning each document and each page's end.
+fn render_paged(
+    store: &EmailStore,
+    root: &std::path::Path,
+    only_labels: &[String],
+    size: PageSize,
+) -> (Vec<RenderedMarkdown>, Vec<PageEnd>) {
+    let mut docs = Vec::new();
+    let mut pages = Vec::new();
+    render_store(
+        store,
+        root,
+        "star-trek-mbox",
+        Some(OutlinkFormat::Gmail),
+        only_labels,
+        size,
+        &Progress::noop(),
+        &mut |doc| {
+            docs.push(doc);
+            Ok(())
+        },
+        &mut |page| {
+            pages.push(page);
+            Ok(())
+        },
+    )
+    .expect("render_store");
+    (docs, pages)
+}
 
 fn fixture_path() -> PathBuf {
     if let Ok(dir) = std::env::var("JMAP_FIXTURE_DIR") {
@@ -220,16 +261,19 @@ async fn mbox_only_labels_filters_extraction() {
 #[tokio::test(flavor = "multi_thread")]
 async fn render_only_labels_filters_to_thread_subset() {
     let (_tmp_extract, db_path) = fetch_into_tmp(fixture_path()).await;
-    let parsed = parse(
+    let store = open(
         &db_path_for(&db_path),
         "star-trek-mbox",
         RawRange::cold(),
         false,
     )
-    .expect("parse cold start");
+    .expect("open")
+    .expect("a committed store");
+    let threads = every_thread(&store);
 
     // "Sent" is a flat mbox label, so its full path equals its name.
-    let sent_id = parsed
+    let sent_id = store
+        .shared
         .mailboxes
         .iter()
         .find(|m| m["name"] == "Sent")
@@ -237,8 +281,7 @@ async fn render_only_labels_filters_to_thread_subset() {
         .as_str()
         .unwrap()
         .to_string();
-    let expected: HashSet<String> = parsed
-        .docs
+    let expected: HashSet<String> = threads
         .iter()
         .filter(|b| {
             b.emails.iter().any(|e| {
@@ -252,29 +295,33 @@ async fn render_only_labels_filters_to_thread_subset() {
         .collect();
     assert!(!expected.is_empty(), "fixture should have a Sent thread");
     assert!(
-        expected.len() < parsed.docs.len(),
+        expected.len() < threads.len(),
         "filter must be a strict subset to be a meaningful test"
     );
 
     let tmp = tempfile::tempdir().unwrap();
-    let progress = Progress::noop();
-    let mut docs: Vec<RenderedMarkdown> = Vec::new();
-    render_all(
-        &parsed,
-        tmp.path(),
-        "star-trek-mbox",
-        Some(OutlinkFormat::Gmail),
-        &["Sent".to_string()],
-        &progress,
-        &mut |doc| {
-            docs.push(doc);
-            Ok(())
-        },
-    )
-    .expect("render_all with render-label filter");
+    let one_a_page = PageSize {
+        buckets: 1,
+        bytes: 1,
+    };
+    let (docs, pages) = render_paged(&store, tmp.path(), &["Sent".to_string()], one_a_page);
+    store.close();
 
     let rendered: HashSet<String> = docs.iter().map(|d| d.markdown_uuid.clone()).collect();
     assert_eq!(rendered, expected, "rendered exactly the Sent threads");
+    let excluded: HashSet<String> = pages
+        .iter()
+        .flat_map(|p| p.rendered.excluded.iter().cloned())
+        .collect();
+    let every: HashSet<String> = threads
+        .iter()
+        .map(|b| thread_uuid(&b.account_id, &b.thread_id))
+        .collect();
+    assert_eq!(
+        excluded,
+        &every - &expected,
+        "every other thread is excluded, by the page that read it"
+    );
 }
 
 /// Parse hands render the threads' rows and none of their `.eml` bytes,
@@ -284,35 +331,38 @@ async fn render_only_labels_filters_to_thread_subset() {
 #[tokio::test(flavor = "multi_thread")]
 async fn star_trek_mbox_renders_through_render_all() {
     let (_tmp_extract, db_path) = fetch_into_tmp(fixture_path()).await;
-    let mut parsed = parse(
+    let store = open(
         &db_path_for(&db_path),
         "star-trek-mbox",
         RawRange::cold(),
         false,
     )
-    .expect("parse cold start");
+    .expect("open")
+    .expect("a committed store");
     assert!(
-        parsed.docs.iter().all(|b| b.blobs.is_empty()),
-        "parse loaded `.eml` bytes before the render asked for them"
+        every_thread(&store).iter().all(|b| b.blobs.is_empty()),
+        "a page loaded `.eml` bytes before the render asked for them"
     );
 
     let tmp = tempfile::tempdir().unwrap();
-    let progress = Progress::noop();
-    let mut docs: Vec<RenderedMarkdown> = Vec::new();
-    render_all(
-        &parsed,
-        tmp.path(),
-        "star-trek-mbox",
-        Some(OutlinkFormat::Gmail),
-        &[],
-        &progress,
-        &mut |doc| {
-            docs.push(doc);
-            Ok(())
-        },
-    )
-    .expect("render_all");
-    parsed.close();
+    // One thread a page and one a batch, so every page boundary is crossed.
+    let one_a_page = PageSize {
+        buckets: 1,
+        bytes: 1,
+    };
+    let (docs, pages) = render_paged(&store, tmp.path(), &[], one_a_page);
+    store.close();
+    let mut declared: Vec<String> = pages
+        .iter()
+        .flat_map(|p| p.rendered.buckets.iter().map(|b| b.key.clone()))
+        .collect();
+    declared.sort();
+    let mut emitted: Vec<String> = docs.iter().map(|d| d.markdown_uuid.clone()).collect();
+    emitted.sort();
+    assert_eq!(
+        declared, emitted,
+        "each page declares the threads it rendered"
+    );
 
     // One rendered document per thread.
     assert_eq!(docs.len(), 5);

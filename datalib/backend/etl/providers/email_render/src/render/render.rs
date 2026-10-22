@@ -5,7 +5,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use super::ids;
-use super::parse::{EmailThreadBucket, ParsedEmail, EML_BATCH};
+use super::parse::{EmailStore, EmailThreadBucket, Shared};
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{blake3_hex, BlobBundle};
 use datalib_etl::progress::Progress;
@@ -20,6 +20,7 @@ use datalib_etl_email::ingest::db::{LoadedAttachment, LoadedEmail};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{escape_md_block, escape_md_inline};
 use datalib_etl_render::inputs::Lookup;
+use datalib_etl_render::pages::{batches, PageSize};
 use datalib_handle::Handle;
 use datalib_schema::providers::Provider;
 use mail_parser::{Address, MessageParser, MimeHeaders, PartType};
@@ -152,75 +153,75 @@ pub struct Rendered {
     pub excluded: Vec<String>,
 }
 
-pub fn render_all(
-    parsed: &ParsedEmail,
-    root: &std::path::Path,
-    source_id: &str,
-    outlink: Option<OutlinkFormat>,
-    only_labels: &[String],
-    progress: &Progress,
-    on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-) -> Result<Rendered> {
-    let elapsed_ms = parsed.scan.scan_elapsed.map(|d| d.as_millis() as u64);
-    tracing::info!(
-        source = source_id,
-        scan_elapsed_ms = elapsed_ms,
-        threads_to_render = parsed
-            .scan
-            .render
-            .as_ref()
-            .map(|s| s.len() as i64)
-            .unwrap_or(-1),
-        cold_start = parsed.scan.render.is_none(),
-        "[render] email dolt_diff scan"
-    );
+/// How one page of a store's render ended, for the processor to declare
+/// before the next page is read.
+pub struct PageEnd {
+    /// The stale threads this page looked at, by bucket key: declared
+    /// with nothing first, so one that builds no chat goes once the diff
+    /// says its emails left.
+    pub looked_at: Vec<String>,
+    pub rendered: Rendered,
+}
 
-    // mailbox id → the name its label chip shows, empty for none.
-    let mailbox_name: HashMap<String, String> = parsed
-        .mailboxes
-        .iter()
-        .filter_map(|m| {
-            let id = m.get("id")?.as_str()?.to_string();
-            Some((id, chip_name(m)))
-        })
-        .collect();
+/// What every thread's render looks up: mailbox and account names, and
+/// the mailboxes the label filter lets through.
+struct Lookups {
+    mailbox_name: HashMap<String, String>,
+    account_label: HashMap<String, String>,
+    /// `None` renders every thread.
+    label_allow: Option<HashSet<String>>,
+}
 
-    let account_label: HashMap<String, String> = parsed
-        .accounts
-        .iter()
-        .filter_map(|(id, a)| Some((id.clone(), account_label_from_payload(id, a)?)))
-        .collect();
-
-    // Optional render-time label filter. Resolve the configured label
-    // paths to mailbox ids against the same tree (`parentId`) the chips
-    // use; `None` = render every thread. Resolution and exact-match
-    // semantics are shared with the download filter via
-    // [`datalib_etl_email::mailbox_labels`], so a given label means the same thing
-    // at both phases and across JMAP / mbox sources.
-    let label_allow: Option<HashSet<String>> = if only_labels.is_empty() {
-        None
-    } else {
-        let nodes: Vec<datalib_etl_email::mailbox_labels::MailboxNode> = parsed
+impl Lookups {
+    fn new(shared: &Shared, source_id: &str, only_labels: &[String]) -> Self {
+        // mailbox id → the name its label chip shows, empty for none.
+        let mailbox_name = shared
             .mailboxes
             .iter()
-            .filter_map(datalib_etl_email::mailbox_labels::MailboxNode::from_payload)
+            .filter_map(|m| {
+                let id = m.get("id")?.as_str()?.to_string();
+                Some((id, chip_name(m)))
+            })
             .collect();
-        let resolved = datalib_etl_email::mailbox_labels::resolve(&nodes, only_labels);
-        if !resolved.unmatched.is_empty() {
-            tracing::warn!(
-                source = source_id,
-                unmatched = %resolved.unmatched.join(", "),
-                "only_render_labels matched no mailbox; check spelling / parent path",
-            );
+        let account_label = shared
+            .accounts
+            .iter()
+            .filter_map(|(id, a)| Some((id.clone(), account_label_from_payload(id, a)?)))
+            .collect();
+        // Resolve the configured label paths to mailbox ids against the
+        // same tree (`parentId`) the chips use, before any thread is read.
+        // Resolution and exact-match semantics are shared with the
+        // download filter via [`datalib_etl_email::mailbox_labels`], so a
+        // given label means the same thing at both phases and across JMAP
+        // / mbox sources.
+        let label_allow = (!only_labels.is_empty()).then(|| {
+            let nodes: Vec<datalib_etl_email::mailbox_labels::MailboxNode> = shared
+                .mailboxes
+                .iter()
+                .filter_map(datalib_etl_email::mailbox_labels::MailboxNode::from_payload)
+                .collect();
+            let resolved = datalib_etl_email::mailbox_labels::resolve(&nodes, only_labels);
+            if !resolved.unmatched.is_empty() {
+                tracing::warn!(
+                    source = source_id,
+                    unmatched = %resolved.unmatched.join(", "),
+                    "only_render_labels matched no mailbox; check spelling / parent path",
+                );
+            }
+            resolved.ids
+        });
+        Lookups {
+            mailbox_name,
+            account_label,
+            label_allow,
         }
-        Some(resolved.ids)
-    };
+    }
 
-    // Thread-level inclusion: keep the whole thread if ANY of its
-    // emails is filed under an allowed mailbox, so conversations
-    // aren't fragmented across the filter boundary.
-    let allowed = |bucket: &&EmailThreadBucket| {
-        label_allow.as_ref().is_none_or(|allow| {
+    /// Thread-level inclusion: keep the whole thread if ANY of its
+    /// emails is filed under an allowed mailbox, so conversations
+    /// aren't fragmented across the filter boundary.
+    fn allows(&self, bucket: &EmailThreadBucket) -> bool {
+        self.label_allow.as_ref().is_none_or(|allow| {
             bucket.emails.iter().any(|em| {
                 bucket
                     .joins
@@ -229,50 +230,152 @@ pub fn render_all(
                     .is_some_and(|ids| ids.iter().any(|m| allow.contains(m)))
             })
         })
-    };
-    let (threads, filtered): (Vec<_>, Vec<_>) = parsed
-        .docs
-        .iter()
-        .filter(|bucket| !bucket.emails.is_empty())
-        .partition(allowed);
-    let excluded = filtered
-        .iter()
-        .map(|b| ids::thread(source_id, &b.account_id, &b.thread_id).uuid)
-        .collect();
-    // One document per thread. Each thread is built as it renders, its
-    // `.eml`s read a batch of threads ahead: reading, parsing and hashing
-    // them is most of the work, and up front a large mailbox spends it
-    // with no progress to show and every byte in memory at once.
+    }
+}
+
+/// Renders every thread `store` hands out, a page at a time; `on_page`
+/// hears how each page ended before the next is read.
+#[allow(clippy::too_many_arguments)]
+pub fn render_store(
+    store: &EmailStore,
+    root: &std::path::Path,
+    source_id: &str,
+    outlink: Option<OutlinkFormat>,
+    only_labels: &[String],
+    size: PageSize,
+    progress: &Progress,
+    on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+    on_page: &mut dyn FnMut(PageEnd) -> Result<()>,
+) -> Result<()> {
+    let elapsed_ms = store.scan.scan_elapsed.map(|d| d.as_millis() as u64);
+    tracing::info!(
+        source = source_id,
+        scan_elapsed_ms = elapsed_ms,
+        threads_to_render = store.threads,
+        cold_start = store.scan.render.is_none(),
+        "[render] email dolt_diff scan"
+    );
+    let lookups = Lookups::new(&store.shared, source_id, only_labels);
     let profile = profile();
     let mut renderer = ChatRenderer::new(
         &profile,
         root,
         source_id,
-        threads.len(),
+        store.threads,
         progress,
         on_doc_complete,
     );
-    for batch in threads.chunks(EML_BATCH) {
+    let mut pages = store.pages(size.buckets);
+    while let Some(page) = store.next_page(&mut pages)? {
+        let excluded = render_page(
+            &lookups,
+            &page.docs,
+            Some(store),
+            size.bytes,
+            source_id,
+            outlink,
+            &mut renderer,
+        )?;
+        progress.inc(excluded.len() as u64);
+        let looked_at = page
+            .looked_at
+            .iter()
+            .map(|(a, t)| ids::thread(source_id, a, t).uuid)
+            .collect();
+        on_page(PageEnd {
+            looked_at,
+            rendered: Rendered {
+                buckets: renderer.take_buckets(),
+                excluded,
+            },
+        })?;
+    }
+    Ok(())
+}
+
+/// Renders `docs` as one page, their `.eml`s already in their bundles.
+#[allow(clippy::too_many_arguments)]
+pub fn render_all(
+    shared: &Shared,
+    docs: &[EmailThreadBucket],
+    root: &std::path::Path,
+    source_id: &str,
+    outlink: Option<OutlinkFormat>,
+    only_labels: &[String],
+    progress: &Progress,
+    on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+) -> Result<Rendered> {
+    let lookups = Lookups::new(shared, source_id, only_labels);
+    let profile = profile();
+    let mut renderer = ChatRenderer::new(
+        &profile,
+        root,
+        source_id,
+        docs.len(),
+        progress,
+        on_doc_complete,
+    );
+    let excluded = render_page(
+        &lookups,
+        docs,
+        None,
+        u64::MAX,
+        source_id,
+        outlink,
+        &mut renderer,
+    )?;
+    Ok(Rendered {
+        buckets: renderer.finish().buckets,
+        excluded,
+    })
+}
+
+/// One document per thread the label filter lets through; the bucket
+/// keys of the ones it keeps out. Each thread's `.eml`s are read from
+/// `emls` a batch of at most `eml_bytes` ahead of its render: reading,
+/// parsing and hashing them is most of the work.
+fn render_page(
+    lookups: &Lookups,
+    docs: &[EmailThreadBucket],
+    emls: Option<&EmailStore>,
+    eml_bytes: u64,
+    source_id: &str,
+    outlink: Option<OutlinkFormat>,
+    renderer: &mut ChatRenderer<'_>,
+) -> Result<Vec<String>> {
+    let (threads, filtered): (Vec<&EmailThreadBucket>, Vec<_>) = docs
+        .iter()
+        .filter(|bucket| !bucket.emails.is_empty())
+        .partition(|bucket| lookups.allows(bucket));
+    let excluded = filtered
+        .iter()
+        .map(|b| ids::thread(source_id, &b.account_id, &b.thread_id).uuid)
+        .collect();
+    let weights: Vec<u64> = threads.iter().map(|b| b.eml_bytes()).collect();
+    for range in batches(&weights, eml_bytes) {
+        let batch = &threads[range];
         let loaded;
-        let batch: Vec<&EmailThreadBucket> = match &parsed.emls {
+        let batch: Vec<&EmailThreadBucket> = match emls {
             Some(emls) => {
-                loaded = emls.load(batch)?;
+                loaded = emls.load_emls(batch)?;
                 loaded.iter().collect()
             }
             None => batch.to_vec(),
         };
         for bucket in batch {
-            let (chat, bundle) =
-                build_chat(source_id, bucket, &mailbox_name, &account_label, outlink);
+            let (chat, bundle) = build_chat(
+                source_id,
+                bucket,
+                &lookups.mailbox_name,
+                &lookups.account_label,
+                outlink,
+            );
             renderer
                 .render_chat(&chat, &bundle)
                 .context("email chat-common render")?;
         }
     }
-    Ok(Rendered {
-        buckets: renderer.finish().buckets,
-        excluded,
-    })
+    Ok(excluded)
 }
 
 /// The `accounts` row is a JMAP `Account` object, a Gmail stand-in

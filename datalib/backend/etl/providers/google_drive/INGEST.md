@@ -60,14 +60,19 @@ its own.
      `PREVIEW_WITHOUT_SUGGESTIONS`);
    - every image link in it, once per distinct URL;
    - one export per format `exports` names for the file's kind: a list
-     for every kind, `[]` for none, or a table per kind.
+     for every kind, `[]` for none, or a table per kind. None is asked
+     for when the owner has turned off download for those who may not
+     edit (`capabilities.canDownload = false`): Drive refuses every
+     export of that file (`cannotExportFile`).
 
    A capture is written whole, in one transaction, or not at all. If any
    request fails, the file stays owed with the error on its sidecar and
-   a `files:<id>` problem. An export Google declines as too large
-   (`exportSizeLimitExceeded`, over 10 MB) is the one exception: the
-   capture is kept, its export part has no bytes, and a warning on the
-   file says which format was declined.
+   a `files:<id>` problem. An export Google declines is the one
+   exception, whether as too large (`exportSizeLimitExceeded`, over
+   10 MB) or as not allowed (`canDownload = false`, or a
+   `cannotExportFile` answer): the capture is kept, its export part has
+   no bytes, and a warning on the file says which format was declined
+   and why.
 4. **Old revisions.** For every Doc and Sheet in this run's listing,
    each stored revision with an export link for a format
    `revision_exports` names is owed that export, until it is held

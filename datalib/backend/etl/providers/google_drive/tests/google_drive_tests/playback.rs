@@ -255,7 +255,7 @@ async fn a_first_sync_captures_every_file_in_its_native_form() {
 async fn a_doc_the_account_may_only_view_is_read_without_suggestions() {
     let d = tempfile::tempdir().unwrap();
     let t = tape::tape(d.path(), Edition::Before);
-    tape::view_only_doc(&t);
+    tape::view_only_doc(&t, true);
     let store = d.path().join("store");
     let s = run(&t, &store).await;
     assert_eq!((s.listed, s.captured, s.failed), (4, 4, 0), "{s:?}");
@@ -268,6 +268,39 @@ async fn a_doc_the_account_may_only_view_is_read_without_suggestions() {
         serde_json::from_slice(&gunzip(&blob(&db, parts[1].1.as_deref().unwrap()).await)).unwrap();
     assert_eq!(native, tape::view_only_native());
     assert_eq!(native["suggestionsViewMode"], "PREVIEW_WITHOUT_SUGGESTIONS");
+    db.close().await;
+}
+
+/// Drive refuses to export a file whose owner turned off download
+/// (`cannotExportFile`), which failed the whole capture though its native
+/// JSON reads fine. Its listing entry says so, so no export is asked for:
+/// the capture is kept with an empty export part and a warning.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_doc_the_account_may_not_download_is_kept_without_its_export() {
+    let d = tempfile::tempdir().unwrap();
+    let t = tape::tape(d.path(), Edition::Before);
+    tape::view_only_doc(&t, false);
+    let store = d.path().join("store");
+    let s = run(&t, &store).await;
+    assert_eq!((s.listed, s.captured, s.failed), (4, 4, 0), "{s:?}");
+    assert_eq!((s.exports, s.exports_declined), (2, 2), "{s:?}");
+
+    let db = open(&store).await;
+    let parts = parts_of(&db, &format!("{VIEW_ONLY_DOC}#5")).await;
+    assert_eq!(parts[0], ("export.odt".to_string(), None));
+    assert_eq!(parts[1].0, "native.json.gz");
+    assert!(parts[1].1.is_some());
+    let (severity, detail): (String, String) =
+        sqlx::query_as("SELECT severity, sample FROM problems WHERE scope_key = ?")
+            .bind(format!("files:{VIEW_ONLY_DOC}"))
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+    assert_eq!(severity, "warning");
+    assert!(
+        detail.contains("odt") && detail.contains("download"),
+        "{detail}"
+    );
     db.close().await;
 }
 

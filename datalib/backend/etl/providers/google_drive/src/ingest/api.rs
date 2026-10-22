@@ -203,6 +203,10 @@ pub enum ApiError {
     /// Google declined to export a file this large (10 MB).
     #[error("{0}")]
     ExportTooLarge(String),
+    /// Google will not export this file to this account at all: its
+    /// owner turned off download for those who may not edit.
+    #[error("{0}")]
+    ExportNotAllowed(String),
     /// 404: no such file, or not one this account can see.
     #[error("{0}")]
     NotFound(String),
@@ -224,6 +228,13 @@ pub fn is_export_too_large(e: &anyhow::Error) -> bool {
     matches!(
         e.downcast_ref::<ApiError>(),
         Some(ApiError::ExportTooLarge(_))
+    )
+}
+
+pub fn is_export_not_allowed(e: &anyhow::Error) -> bool {
+    matches!(
+        e.downcast_ref::<ApiError>(),
+        Some(ApiError::ExportNotAllowed(_))
     )
 }
 
@@ -332,6 +343,8 @@ pub fn status_error(url: &str, resp: &HttpResponse) -> ApiError {
         ApiError::Service(format!("{said}{}", sign_in_hint(url)))
     } else if resp.status == 403 && body.contains("exportSizeLimitExceeded") {
         ApiError::ExportTooLarge(said)
+    } else if resp.status == 403 && body.contains("cannotExportFile") {
+        ApiError::ExportNotAllowed(said)
     } else if resp.status == 404 {
         ApiError::NotFound(said)
     } else {
@@ -435,6 +448,11 @@ mod tests {
         assert!(matches!(
             status_error(&url, &resp(403, big)),
             ApiError::ExportTooLarge(_)
+        ));
+        let refused = r#"{"error":{"code":403,"message":"This file cannot be exported by the user.","errors":[{"reason":"cannotExportFile"}]}}"#;
+        assert!(matches!(
+            status_error(&url, &resp(403, refused)),
+            ApiError::ExportNotAllowed(_)
         ));
         let denied = r#"{"error":{"code":403,"message":"The caller does not have permission"}}"#;
         assert!(matches!(
