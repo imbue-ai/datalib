@@ -268,7 +268,8 @@ A reference the browser would load from the app's own origin is a
 request with the person's cookie, so only a document's assets may load:
 the sanitizer resolves each one as the browser would and keeps it only
 under `/applet/unified_document_index/asset/`, or when it is exactly an
-attachment's blob-store address, `/data/<group>/<function>/blob/<hash>`. A relative one
+attachment's blob-store address, `/data/<group>/<function>/blob/<hash>`,
+or a part of an email stored there, `…/blob/<hash>/part/<hash>`. A relative one
 (`<audio src="blobs/a.mp3">`) is the document's own and is pointed at
 that document's asset route; one that climbs out of it is dropped.
 
