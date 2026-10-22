@@ -56,7 +56,7 @@ onMounted(() => void load());
 </script>
 
 <template>
-  <div class="ts-embed">
+  <div class="ts-embed" :class="{ 'is-note': error || (loaded && !picked.length) }">
     <div class="ts-embed-key">
       <span v-for="p in picked" :key="p.time_series_id">
         <span class="ts-embed-swatch" :style="{ background: colorOf(p.time_series_id) }"></span>

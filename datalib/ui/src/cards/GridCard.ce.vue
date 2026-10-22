@@ -2463,6 +2463,9 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: flex-end;
   gap: 0.75rem;
+  /* The answer tabs' height, held when they are not there, so the results
+     do not move when a search's tabs come or go. */
+  min-height: calc(var(--datalib-control-h) + 6px);
   border-bottom: 1px solid var(--datalib-border);
 }
 .source-chips {
@@ -2568,14 +2571,19 @@ onBeforeUnmount(() => {
 .view-tab.is-on svg {
   color: var(--datalib-accent);
 }
+/* One line that scrolls sideways: wrapped, a count that grew added a row
+   and moved every result under it. */
 .source-chips {
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
-  flex-wrap: wrap;
   gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 .source-chip {
+  flex: 0 0 auto;
+  white-space: nowrap;
   display: flex;
   align-items: center;
   gap: 6px;

@@ -14,7 +14,7 @@ import { filterToken } from "@/grid/query";
 import { uriFromHandle } from "./chipLinks";
 import { Resolver } from "./resolver";
 import { pushToast } from "@/toasts";
-import { UNIFIED_DOCUMENT_INDEX } from "@/api";
+import { UNIFIED_DOCUMENT_INDEX, appletAbsent } from "@/api";
 import { changed, subscribeLive, type RootEvent } from "@/live";
 
 export const CONTACTS_APPLET = "/applet/datalib_contacts";
@@ -320,12 +320,7 @@ export function chipAnchors(root: Element): HTMLElement[] {
 /** Whether a failed call means the app is simply not configured: the
  *  gateway's 502 names the applet it has no entry for. */
 export function isAbsent(status: number, body: string): boolean {
-  if (status !== 502) return false;
-  try {
-    return (JSON.parse(body) as { error?: string }).error === 'no applet "datalib_contacts"';
-  } catch {
-    return false;
-  }
+  return appletAbsent("datalib_contacts", status, body);
 }
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {

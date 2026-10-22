@@ -5,6 +5,7 @@
 import {
   acceptCompletion,
   autocompletion,
+  closeCompletion,
   completionStatus,
   selectedCompletionIndex,
   setSelectedCompletion,
@@ -593,7 +594,7 @@ export function fieldExtensions(hooks: FieldHooks): Extension[] {
     ),
     Prec.high(
       keymap.of([
-        { key: "Enter", run: () => (hooks.onSubmit(), true) },
+        { key: "Enter", run: (view) => (closeCompletion(view), hooks.onSubmit(), true) },
         // Told, and passed on: a dialog the field is in still closes.
         { key: "Escape", run: () => (hooks.onEscape(), false) },
       ]),
