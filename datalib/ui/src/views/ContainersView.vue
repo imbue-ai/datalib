@@ -420,11 +420,18 @@ function addBox(boxId: string, layout: Layout) {
 function newTab() {
   addCard(root.value.id);
 }
-// A card opened from the chrome gets a tab of its own.
+// A card opened from the chrome gets a tab of its own, unless the same
+// card (`sameCard`) is already open, which is shown instead.
 function showCard(source: string) {
-  const have = allCards.value.find((c) => c.source === source);
-  if (have) select(have.id);
-  else addCard(root.value.id, source);
+  const wanted = sameCard(source).key;
+  const have = allCards.value.find((c) => sameCard(c.source).key === wanted);
+  if (!have) {
+    addCard(root.value.id, source);
+    return;
+  }
+  select(have.id);
+  const reopened: CardReopenedPayload = { cardId: have.id, source };
+  bus.publish(TOPIC_CARD_REOPENED, reopened);
 }
 defineExpose({ addCard: newTab, showCard });
 

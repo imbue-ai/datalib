@@ -12,7 +12,7 @@ import {
   runChipAction,
   type Chip,
   type ChipEntryId,
-  type ChipEntry,
+  type MenuItem,
 } from "./chipActions";
 import { entities, entityCell } from "./entities";
 
@@ -26,6 +26,9 @@ const props = defineProps<{
   quiet?: boolean;
   /** Open a card, from the double-click or the menu. */
   openCard: (source: string) => void;
+  /** Entries this place adds ahead of the chip's own, as the log-line
+   *  card's Keep only and Exclude. */
+  extra?: { label: string; run: () => void }[];
 }>();
 
 const box = ref<HTMLElement | null>(null);
@@ -55,9 +58,11 @@ function chip(): Chip | null {
 
 const host = () => ({ openCard: (source: string) => props.openCard(source) });
 
-/// The href names something in this app, not a page: a click never follows it.
+/// A click does nothing: the href names something in this app, not a
+/// page, and a chip inside a clickable row is not a click on the row.
 function onClick(ev: MouseEvent) {
   ev.preventDefault();
+  ev.stopPropagation();
 }
 
 function onDblClick(ev: MouseEvent) {
@@ -68,20 +73,30 @@ function onDblClick(ev: MouseEvent) {
   void runChipAction("open", c, host());
 }
 
-const menu = ref<{ chip: Chip; entries: ChipEntry[]; x: number; y: number } | null>(null);
+const menu = ref<{ chip: Chip; entries: MenuItem[]; x: number; y: number } | null>(null);
+const EXTRA = "extra:";
 
 function onContextMenu(ev: MouseEvent) {
   const c = chip();
   if (!c) return;
   ev.preventDefault();
   ev.stopPropagation();
-  menu.value = { chip: c, entries: chipMenuOf(c, false), x: ev.clientX, y: ev.clientY };
+  const extra: MenuItem[] = (props.extra ?? []).map((e, i) => ({
+    id: `${EXTRA}${i}`,
+    label: e.label,
+  }));
+  const own = chipMenuOf(c, false).map((e, i) =>
+    i === 0 && extra.length ? { ...e, separator: true } : e,
+  );
+  menu.value = { chip: c, entries: [...extra, ...own], x: ev.clientX, y: ev.clientY };
 }
 
-async function onPick(id: ChipEntryId) {
+async function onPick(id: string) {
   const m = menu.value;
   menu.value = null;
-  if (m) await runChipAction(id, m.chip, host());
+  if (!m) return;
+  if (id.startsWith(EXTRA)) props.extra?.[Number(id.slice(EXTRA.length))]?.run();
+  else await runChipAction(id as ChipEntryId, m.chip, host());
 }
 </script>
 

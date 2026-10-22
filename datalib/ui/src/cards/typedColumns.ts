@@ -68,13 +68,23 @@ export type SlickColumnOptions<T> = {
 };
 
 /// A group row's title: the column, the value and how many rows share
-/// it. An element, not markup: the value is the rows' own text.
-export function groupTitle(name: string, show: (value: unknown) => string = String) {
+/// it. An element, not markup: the value is the rows' own text. `chip`
+/// draws the value as a chip instead, where it names one.
+export function groupTitle(
+  name: string,
+  show: (value: unknown) => string = String,
+  chip: (g: GroupingFormatterItem) => HTMLElement | null = () => null,
+) {
   return (g: GroupingFormatterItem) => {
     const el = document.createElement("span");
     el.className = "tg-group";
-    const value = g.value == null || g.value === "" ? "—" : show(g.value);
-    el.textContent = `${name}: ${value}`;
+    const drawn = chip(g);
+    if (drawn) {
+      el.append(`${name}: `, drawn);
+    } else {
+      const value = g.value == null || g.value === "" ? "—" : show(g.value);
+      el.textContent = `${name}: ${value}`;
+    }
     const count = document.createElement("span");
     count.className = "tg-group-count";
     count.textContent = ` (${g.count})`;
@@ -252,7 +262,7 @@ function identityChip<T>(
 /// Show `text` on a drawn chip in place of its full label, which its
 /// tooltip and menu keep.
 function setChipText(chip: HTMLElement, text: string) {
-  const label = [...chip.childNodes].reverse().find((n) => n.nodeType === Node.TEXT_NODE);
+  const label = chip.querySelector(".chip-text");
   if (label) label.textContent = text;
 }
 
@@ -409,7 +419,14 @@ export function typedColumns<T extends Record<string, unknown>>(
               ? {
                   grouping: {
                     getter: (row: T) => label(row[f]),
-                    formatter: groupTitle(spec.header),
+                    // The value as its chip, read off the group's first row,
+                    // where the rows are loaded and it names one. The grid's
+                    // group carries its rows; its declared type leaves them out.
+                    formatter: groupTitle(spec.header, String, (g) => {
+                      const rows = (g as GroupingFormatterItem & { rows?: T[] }).rows;
+                      const v = rows?.[0]?.[f] as Identity | null | undefined;
+                      return v ? identityChip(v, opts.chips) : null;
+                    }),
                     collapsed: false,
                   },
                 }

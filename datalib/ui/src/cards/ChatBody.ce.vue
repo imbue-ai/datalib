@@ -291,10 +291,10 @@ function onChipContextMenu(ev: MouseEvent): boolean {
   return true;
 }
 
-async function onChipMenuPick(id: ChipEntryId) {
+async function onChipMenuPick(id: string) {
   const menu = chipMenuAt.value;
   chipMenuAt.value = null;
-  if (menu) await runChipAction(id, menu.chip, chipHost(menu.el, menu.x, menu.y));
+  if (menu) await runChipAction(id as ChipEntryId, menu.chip, chipHost(menu.el, menu.x, menu.y));
 }
 
 function onRemoteChipClick(ev: MouseEvent) {
