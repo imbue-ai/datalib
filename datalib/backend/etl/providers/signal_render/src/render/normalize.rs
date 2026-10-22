@@ -9,7 +9,6 @@ use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact};
 use datalib_handle::Handle;
 use std::collections::HashMap;
 
-use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl_chat_common::types::{
     AuthorKind, ItemKind, NamedPerson, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
     NormalizedDoc, UpstreamRef,
@@ -28,12 +27,8 @@ use super::parse::{ParsedChat, ParsedChatItem, ParsedRecipient, ParsedSignal};
 /// bytes around. Nothing downstream notices: the rendered path is
 /// `<chat_uuid>/<period>.md` either way, and the chat-level grid row
 /// was already one per document.
-pub fn to_chats(
-    parsed: &ParsedSignal,
-    source_id: &str,
-) -> (Vec<NormalizedChat>, HashMap<String, BlobBundle>) {
+pub fn to_chats(parsed: &ParsedSignal, source_id: &str) -> Vec<NormalizedChat> {
     let mut chats = Vec::with_capacity(parsed.docs.len());
-    let mut blobs_by_chat = HashMap::new();
 
     for doc in &parsed.docs {
         let Some(chat) = parsed.chats.get(&doc.chat_id) else {
@@ -101,11 +96,8 @@ pub fn to_chats(
             contacts: contacts_of(recipients, &doc.items, source_id),
             inputs: inputs.declared(),
         });
-        if !doc.blobs.is_empty() {
-            blobs_by_chat.insert(bundle_key, doc.blobs.clone());
-        }
     }
-    (chats, blobs_by_chat)
+    chats
 }
 
 fn to_item(

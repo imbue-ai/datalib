@@ -70,6 +70,7 @@ impl SourceRender for ClaudeRender {
             },
             ctx.progress,
             &mut on_doc,
+            ctx.page_size.bytes,
         )
         .context("claude render_all")?;
         // A conversation that would not build keeps its page, and the

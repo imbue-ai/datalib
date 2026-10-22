@@ -644,12 +644,11 @@ arrive and drains the bundle at end of bucket; parse loads the documents'
 bundles with `BlobBundle::load_many`; render then consumes an
 already-loaded bag of bytes — no SQL, no `block_in_place`, no dyn blob reader.
 Parse reads the edge table in one query for every document it loads,
-not one per document. Most chat-shaped renders load bundles a batch of
-chats at a time, cut by bytes, just before the batch renders
-(`datalib_etl_chat_common::blobs`;
+not one per document. Every render that has attachments loads them a
+batch of documents at a time, cut by bytes, just before the batch
+renders (`datalib_etl_chat_common::blobs` for the chat-shaped ones;
 `docs/dev/data_architecture_parse_and_render.md` §"Memory: a page at a
-time"); ChatGPT, Claude, Notion, Facebook and Signal still load every
-rendered document's bundle at once.
+time").
 
 **The CAS is plain SQLite, not doltlite**, created through the
 `doltlite_engine=sqlite` URI parameter like the run store. A
