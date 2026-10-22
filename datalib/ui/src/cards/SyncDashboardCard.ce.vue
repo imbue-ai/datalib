@@ -216,12 +216,23 @@ function scrollToStep(id: string) {
     ?.scrollIntoView({ block: "start" });
 }
 
-/// Opened again while open, at a step: scroll there once the tab shows,
-/// a frame after the host reveals it.
+/// Scroll to a step once its section is laid out. A tab the host has
+/// just revealed can still be hidden for a frame or more, and scrolling
+/// a hidden section does nothing; give up after about a second.
+function scrollToStepWhenShown(id: string, frames = 60) {
+  const section = cardEl.value?.querySelector(`[data-step="${CSS.escape(id)}"]`);
+  if (section && section.getClientRects().length > 0) {
+    section.scrollIntoView({ block: "start" });
+    return;
+  }
+  if (frames > 0) requestAnimationFrame(() => scrollToStepWhenShown(id, frames - 1));
+}
+
+/// Opened again while open, at a step: scroll there once the tab shows.
 const stopReopened = props.ctx.bus.subscribe(TOPIC_CARD_REOPENED, (payload) => {
   const p = payload as CardReopenedPayload;
   const step = p.cardId === props.ctx.cardId ? syncDashboardStep(p.source) : null;
-  if (step) requestAnimationFrame(() => scrollToStep(step));
+  if (step) scrollToStepWhenShown(step);
 });
 
 /// A chip on this card asking for a card: this dashboard is already open,
