@@ -750,6 +750,16 @@ message. `dolt_hashof_db(<rev>)` answers the tree's hash, and
   between it and the fold. After the fold and gc it reads through
   `dolt_at_<t>('tree/<hash>')`, a detached open of `<file>@tree/<hash>`,
   and `dolt_diff_<t>('tree/<hash>', 'main')`.
+- **A fold must not drop a commit a reader is open on.** A detached
+  `<file>@<commit>` reader in another process, whose commit a fold and
+  gc dropped, gets "database disk image is malformed" on its next read
+  of history; a table scan may still answer from pages it already had.
+  A tag on the commit keeps the reader whole. Render and `grid_index`
+  read this way, so a fold tags what they are pinned to, or waits.
+- **Doltlite has no verb that drops history**: no `dolt_squash_history`
+  (Dolt has one: our fold as a single call), no orphan branch, no
+  shallow history, and `dolt_gc` takes no options. A fold, a tag and
+  gc are the whole kit.
 
 ### Full-text search (FTS5)
 

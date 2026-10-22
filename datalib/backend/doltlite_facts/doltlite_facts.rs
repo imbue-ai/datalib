@@ -1668,6 +1668,64 @@ mod trees {
             ["a:modified", "c:added"]
         );
     }
+
+    /// A detached reader holds its commit against nothing: a fold and gc
+    /// in another process that drop the commit leave the reader on a store
+    /// that no longer has it, and its next read of history is "malformed".
+    /// A tag on the commit keeps it whole. The fold runs in the `doltlite`
+    /// shell, a second process, as a real one would.
+    #[tokio::test]
+    async fn a_fold_elsewhere_breaks_a_reader_on_a_dropped_commit_unless_tagged() {
+        for tagged in [false, true] {
+            let (s, rows) = store_with_rows().await;
+            let mut w = s.rw().await;
+            if tagged {
+                ok(&mut w, &format!("SELECT dolt_tag('held', '{rows}')")).await;
+            }
+            ok(&mut w, "INSERT INTO t VALUES ('c', 3)").await;
+            commit(&mut w, "more").await;
+            let init = first_commit(&mut w).await;
+            w.close().await.expect("close");
+
+            let mut d = connect(&s.at(&rows), true, Duration::from_secs(5)).await;
+            assert_eq!(int(&mut d, "SELECT COUNT(*) FROM dolt_log").await, 2);
+            let (folded, out) = shell(&[
+                &s.path.display().to_string(),
+                &format!(
+                    "SELECT dolt_reset('--soft', '{init}'); \
+                     SELECT dolt_commit('-Am', 'fold'); SELECT dolt_gc();"
+                ),
+            ]);
+            assert!(folded, "{out}");
+            let read = exec(&mut d, "SELECT COUNT(*) FROM dolt_log").await;
+            if tagged {
+                assert_eq!(read, Ok(()), "tagged");
+            } else {
+                err_contains(read, "malformed");
+            }
+        }
+    }
+
+    /// Doltlite has no verb that drops history: no `dolt_squash_history`
+    /// (Dolt has one), no orphan branch, and `dolt_gc` takes no options.
+    /// A fold is the whole kit; this fails when that changes.
+    #[tokio::test]
+    async fn there_is_no_verb_that_drops_history() {
+        let (s, _) = store_with_rows().await;
+        let mut w = s.rw().await;
+        err_contains(
+            exec(&mut w, "SELECT dolt_squash_history('-m', 'x')").await,
+            "no such function",
+        );
+        err_contains(
+            exec(&mut w, "SELECT dolt_checkout('--orphan', 'x')").await,
+            "--orphan",
+        );
+        err_contains(
+            exec(&mut w, "SELECT dolt_gc('--full')").await,
+            "wrong number of arguments",
+        );
+    }
 }
 
 // ── Full-text search (FTS5) ─────────────────────────────────────────
