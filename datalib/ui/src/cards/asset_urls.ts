@@ -28,3 +28,30 @@ export function assetUrl(markdownUuid: string, src: string): string {
     .map(encodeURIComponent)
     .join("/")}`;
 }
+
+const ASSETS = `${UNIFIED_DOCUMENT_INDEX}/asset/`;
+const NOWHERE = "http://own.invalid";
+
+/**
+ * What a body's reference to our own origin may load, or null. A body is
+ * whatever its sender wrote, and anything it names on this origin is a
+ * GET with the person's cookie, so only a document's assets may load:
+ * the reference is resolved as the browser would (`..`, `%2e%2e`, `\`)
+ * and must land under the asset route. A relative one is the
+ * document's own (`blobs/a.mp3`) and must stay in its directory.
+ */
+export function ownAssetReference(value: string, markdownUuid: string | null): string | null {
+  const v = value.trim();
+  const relative = !v.startsWith("/");
+  if (relative && !markdownUuid) return null;
+  const candidate = relative ? assetUrl(markdownUuid!, v) : v;
+  const within = relative ? `${ASSETS}${encodeURIComponent(markdownUuid!)}/` : ASSETS;
+  let url: URL;
+  try {
+    url = new URL(candidate, `${NOWHERE}/`);
+  } catch {
+    return null;
+  }
+  if (url.origin !== NOWHERE || !url.pathname.startsWith(within)) return null;
+  return url.pathname + url.search;
+}

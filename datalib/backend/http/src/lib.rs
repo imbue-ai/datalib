@@ -222,6 +222,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/probe/{id}", get(probe::probe_status))
         .route("/api/dag", get(get_dag))
         .route("/api/manage/rows", get(manage::get_manage_rows))
+        .route(
+            "/api/manage/rows/refresh",
+            post(manage::refresh_manage_rows),
+        )
         .route("/api/entities", post(manage::post_entities))
         // Prometheus's own path, so a scrape config needs nothing but the
         // address and the token.
@@ -242,6 +246,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/sync/sources", get(sync_sources))
         .route("/api/pipeline/storage", get(pipeline_storage))
+        .route(
+            "/api/pipeline/storage/refresh",
+            post(pipeline_storage_refresh),
+        )
         .route("/api/pipeline/disk", get(pipeline_disk))
         .route("/api/pipeline/history", get(history::tree_history))
         .route("/api/requests", get(requests_list).post(request_open))
@@ -1604,29 +1612,43 @@ async fn sync_sources(State(s): State<AppState>) -> Json<Vec<SourceInfo>> {
     )
 }
 
-/// Query for [`pipeline_storage`].
+/// The query a reading route takes only to refuse it: `refresh` was a
+/// GET flag once, and is a POST now.
 #[derive(Debug, Deserialize)]
-struct StorageParams {
-    /// Held as text rather than as a `bool`, and read leniently below.
-    /// `serde_urlencoded` accepts only the literals `true` and `false`
-    /// for a bool, so `?refresh=1` — what a person, a curl, or an agent
-    /// actually writes — comes back as a 400 on the whole request
-    /// rather than as a flag that didn't take.
+pub struct RefreshParams {
     #[serde(default)]
     refresh: Option<String>,
 }
 
-pub(crate) fn flag_is_set(v: Option<&str>) -> bool {
-    matches!(v, Some("") | Some("1") | Some("true") | Some("yes"))
+/// A walk of the data root is a `POST {route}/refresh`, never a GET: a
+/// GET is what any link can make the browser send with the person's
+/// cookie — an `<img>` in an email, a card's argument, a page on
+/// another site. A GET still asking for one is refused by name rather
+/// than quietly answered from the last walk.
+pub(crate) fn refuse_refresh(route: &str, p: &RefreshParams) -> Result<(), (StatusCode, String)> {
+    match p.refresh {
+        None => Ok(()),
+        Some(_) => Err((
+            StatusCode::BAD_REQUEST,
+            format!("a GET never walks the data root; POST {route}/refresh does"),
+        )),
+    }
 }
 
 async fn pipeline_storage(
     State(s): State<AppState>,
-    Query(p): Query<StorageParams>,
-) -> Json<usage::PipelineStorage> {
-    if flag_is_set(p.refresh.as_deref()) {
-        usage::sample_on_demand(&s.usage, &s.app, s.root.clone(), &s.root_tx).await;
-    }
+    Query(p): Query<RefreshParams>,
+) -> Result<Json<usage::PipelineStorage>, (StatusCode, String)> {
+    refuse_refresh("/api/pipeline/storage", &p)?;
+    Ok(storage_snapshot(&s).await)
+}
+
+async fn pipeline_storage_refresh(State(s): State<AppState>) -> Json<usage::PipelineStorage> {
+    usage::sample_on_demand(&s.usage, &s.app, s.root.clone(), &s.root_tx).await;
+    storage_snapshot(&s).await
+}
+
+async fn storage_snapshot(s: &AppState) -> Json<usage::PipelineStorage> {
     let steps = usage::declared_trees(&s.config_path());
     Json(s.usage.snapshot(s.root.as_path(), &steps).await)
 }

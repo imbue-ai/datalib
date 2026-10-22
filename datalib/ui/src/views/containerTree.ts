@@ -55,6 +55,9 @@ type Common = {
   // sidebar. The pinned tabs are the first of its children, and none
   // has an opener. False everywhere else in the tree.
   pinned: boolean;
+  // Opened by a link, whose author wrote its source: shown, but left out
+  // of the layout the library keeps until the person names or pins it.
+  fromLink?: true;
 };
 
 export type CardNode = Common & {
@@ -371,7 +374,7 @@ export function setSolidified(root: TreeNode, id: string, solidified: boolean): 
 }
 
 export function rename(root: TreeNode, id: string, name: string | null): TreeNode {
-  return mapNode(root, id, (n) => ({ ...n, name }));
+  return mapNode(root, id, (n) => ({ ...n, name, fromLink: undefined }));
 }
 
 // Mark box `id` as made from the composite `template`, so it can be
@@ -448,7 +451,7 @@ export function setPinned(root: TreeNode, id: string, pinned: boolean): TreeNode
     .filter((c) => c.id !== id)
     .map((c) => (c.openedBy === id ? { ...c, openedBy: tab.openedBy } : c));
   const at = rest.filter((c) => c.pinned).length;
-  const moved = { ...tab, pinned, openedBy: null };
+  const moved = { ...tab, pinned, openedBy: null, fromLink: undefined };
   return { ...root, children: [...rest.slice(0, at), moved, ...rest.slice(at)] };
 }
 
@@ -556,6 +559,31 @@ function readNode(v: unknown): TreeNode | null {
     name: str(n.name),
     template: str(n.template),
   };
+}
+
+// The tree as the library keeps it: without what a link opened and the
+// person has not kept (`fromLink`). The tabs a link's tab opened are the
+// person's, so they stay, re-pointed at its own opener.
+export function kept(root: BoxNode): BoxNode {
+  const linked: string[] = [];
+  const walk = (n: TreeNode) => {
+    if (n.fromLink) linked.push(n.id);
+    else if (n.kind === "box") n.children.forEach(walk);
+  };
+  walk(root);
+  return linked.reduce<TreeNode>((tree, id) => remove(release(tree, id), id), root) as BoxNode;
+}
+
+// `id`'s siblings that it opened, re-pointed at `id`'s own opener, so
+// closing `id` takes nothing else with it.
+function release(root: TreeNode, id: string): TreeNode {
+  const parent = parentOf(root, id);
+  const node = parent?.children.find((c) => c.id === id);
+  if (!parent || !node) return root;
+  return mapBox(root, parent.id, (b) => ({
+    ...b,
+    children: b.children.map((c) => (c.openedBy === id ? { ...c, openedBy: node.openedBy } : c)),
+  }));
 }
 
 // A stored container tree, or null for anything this build cannot read:

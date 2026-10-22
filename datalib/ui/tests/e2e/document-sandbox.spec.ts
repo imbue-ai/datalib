@@ -120,8 +120,9 @@ test("the app's own controls still work inside the frame", async ({ page }) => {
 
 /** Quark's prize email in the TNG fixture carries every trick the audits found in a body:
  *  a link whose path is card source, a link to the API, a `javascript:` link, a malformed
- *  `datalib:` link and a frame on our own `blobs/` route. Clicking across it must run no
- *  code from the email and write nothing. */
+ *  `datalib:` link, a frame on our own `blobs/` route, and images on API routes that do
+ *  work when read (`?refresh=1` walks the data root). Opening it and clicking across it
+ *  must run no code from the email, write nothing, and load nothing from the API. */
 test("a hostile email's links run nothing and write nothing", async ({ page, context }) => {
   const resp = await page.request.get("/applet/unified_document_index/search?q=&limit=2000");
   expect(resp.ok()).toBeTruthy();
@@ -132,9 +133,15 @@ test("a hostile email's links run nothing and write nothing", async ({ page, con
   expect(prize, "the fixture must have Quark's prize email").toBeTruthy();
 
   const writes: string[] = [];
+  const apiLoads: string[] = [];
   context.on("request", (r) => {
     if (r.method() !== "GET" && /\/api\/(config|lib|requests)\b/.test(r.url())) {
       writes.push(`${r.method()} ${r.url()}`);
+    }
+    // The email's images name `from=holosuite`; the app's own reads of these routes do not.
+    const url = new URL(r.url());
+    if (url.pathname.startsWith("/api/") && url.searchParams.get("from") === "holosuite") {
+      apiLoads.push(url.pathname + url.search);
     }
   });
   const ranIn = (p: typeof page) =>
@@ -162,4 +169,5 @@ test("a hostile email's links run nothing and write nothing", async ({ page, con
     if (p.url().startsWith("http")) expect(await ranIn(p), p.url()).toBeUndefined();
   }
   expect(writes).toEqual([]);
+  expect(apiLoads).toEqual([]);
 });
