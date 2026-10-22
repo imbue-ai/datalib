@@ -20,11 +20,10 @@ use datalib_etl_email::ingest::db::{db_path_for, EmailJoins, LoadedEmail};
 use datalib_etl_email::ingest::schema_raw::EmlBlobRow;
 
 /// SQL projection from the `email_blobs` edge's `blake3` to `.eml`
-/// bytes. Consumed by [`BlobBundle::load_many`]. After the eml-as-canonical
-/// port we only load `.eml`s — attachment parts are mail-parsed out of
-/// the loaded `.eml` bytes and added to the same per-bucket
-/// `BlobBundle` under synthesized content-hash ref ids. `DISTINCT`
-/// because several emails can edge to the same `.eml` blob.
+/// bytes. Consumed by [`BlobBundle::load_many`]. We only load `.eml`s:
+/// attachment parts are mail-parsed out of their bytes, and a page links
+/// each part inside its stored `.eml`. `DISTINCT` because several emails
+/// can edge to the same `.eml` blob.
 const EML_PROJECTION_SQL: &str = "
     SELECT DISTINCT blob_id AS ref_id, blake3,
            'message/rfc822' AS content_type,
@@ -132,7 +131,8 @@ impl EmailStore {
         })
     }
 
-    /// Copies of `batch` with their `.eml`s and attachment parts loaded.
+    /// Copies of `batch` with their `.eml`s loaded and their attachment
+    /// parts listed.
     pub fn load_emls(&self, batch: &[&EmailThreadBucket]) -> Result<Vec<EmailThreadBucket>> {
         block_on(async {
             let mut docs: Vec<EmailThreadBucket> = batch.iter().map(|b| (*b).clone()).collect();
@@ -172,8 +172,8 @@ fn block_on<F: Future>(f: F) -> F::Output {
 }
 
 /// One rendered-markdown bucket: every email in a single JMAP Thread
-/// plus its joins. Its [`BlobBundle`] (the `.eml`s and each attachment
-/// part) is empty until [`EmailStore::load_emls`] fills a copy.
+/// plus its joins. Its [`BlobBundle`] (the `.eml`s) is empty until
+/// [`EmailStore::load_emls`] fills a copy.
 #[derive(Debug, Clone, Default)]
 pub struct EmailThreadBucket {
     pub account_id: String,
@@ -257,17 +257,13 @@ async fn open_async(
 }
 
 /// Mail-parse each `.eml` already loaded into the bucket's
-/// `BlobBundle` and pull out attachment-style parts. The bytes ARE
-/// already in the `.eml` envelope — we just walk the MIME tree to
-/// surface them as separate "blobs" for render's existing
-/// attachment-link machinery. Each part is added to the bundle
-/// under its content hash so render's `bucket.blobs.get(&blob_id)`
-/// resolves it identically to a JMAP-supplied attachment ref id.
+/// `BlobBundle` and list its attachment-style parts in the bucket's
+/// joins. Each is named by the hash of its decoded bytes, which is how a
+/// page's address finds it inside the stored `.eml`
+/// (`datalib_blob_store::part_of` hashes them the same way).
 fn extract_attachments_from_emls(bucket: &mut EmailThreadBucket) {
     use mail_parser::{MessageParser, MimeHeaders, PartType};
 
-    // Gathered, then added: the bundle is borrowed for the `.eml`s meanwhile.
-    let mut parts = BlobBundle::new();
     for em in &bucket.emails {
         let Some(eml_blob) = bucket.blobs.get(&em.blob_id) else {
             continue;
@@ -310,9 +306,9 @@ fn extract_attachments_from_emls(bucket: &mut EmailThreadBucket) {
             {
                 continue;
             }
-            let bytes: Vec<u8> = match &part.body {
-                PartType::Binary(b) | PartType::InlineBinary(b) => b.to_vec(),
-                PartType::Text(t) | PartType::Html(t) => t.as_bytes().to_vec(),
+            let bytes: &[u8] = match &part.body {
+                PartType::Binary(b) | PartType::InlineBinary(b) => b,
+                PartType::Text(t) | PartType::Html(t) => t.as_bytes(),
                 _ => continue,
             };
             let name = part.attachment_name().map(str::to_string);
@@ -322,24 +318,20 @@ fn extract_attachments_from_emls(bucket: &mut EmailThreadBucket) {
                 Some(sub) => format!("{}/{}", ct.ctype(), sub),
                 None => ct.ctype().to_string(),
             });
-            let size = bytes.len() as i64;
-            let blob_id = datalib_etl::blob_cas::blake3_hex(&bytes);
             atts.push(datalib_etl_email::ingest::db::LoadedAttachment {
                 part_id: format!("p{idx}"),
-                blob_id: blob_id.clone(),
-                name: name.clone(),
-                content_type: content_type.clone(),
-                size: Some(size),
+                blob_id: blob_cas::blake3_hex(bytes),
+                name,
+                content_type,
+                size: Some(bytes.len() as i64),
                 disposition,
                 cid,
             });
-            parts.add_hashed(blob_id.clone(), blob_id, bytes, content_type, name);
         }
         if !atts.is_empty() {
             bucket.joins.attachments.insert(em.id.clone(), atts);
         }
     }
-    bucket.blobs.extend(parts);
 }
 
 /// Per-bucket dolt_diff scan. Delegates to the shared
