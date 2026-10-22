@@ -257,6 +257,22 @@ done
 # The links into the dropped store dirs now dangle; sweep them.
 find "$qmd_modules" -type l ! -exec test -e {} \; -exec rm -f {} + 2>/dev/null || true
 
+# Drop trees whose version is no longer pinned (left behind by a bump),
+# so incremental build machines don't ship dead weight. Before the
+# symlink count below, which a stale pnpm tree would fail.
+prune_stale() { # kind, live version
+    local dir
+    for dir in "$runtime_dir/$1"/*/; do
+        [[ -d "$dir" ]] || continue
+        if [[ "$(basename "$dir")" != "$2" ]]; then
+            log "pruning stale $1 tree $(basename "$dir")"
+            rm -rf "$dir"
+        fi
+    done
+}
+prune_stale latchkey "$latchkey_version"
+prune_stale qmd "$qmd_version"
+
 # After every prune, so a dropped package is not carried into the flat
 # tree. The smoke test below then runs against the tree that ships.
 if [[ -n "$no_symlinks" ]]; then
@@ -311,20 +327,5 @@ smoke_ok=1
 "$runtime_dir/node/bin/node" "$smoke" || smoke_ok=""
 rm -f "$smoke"
 [[ -n "$smoke_ok" ]] || fail "the staged latchkey tree cannot import playwright; browser logins would fail"
-
-# Drop trees whose version is no longer pinned (left behind by a bump),
-# so incremental build machines don't ship dead weight.
-prune_stale() { # kind, live version
-    local dir
-    for dir in "$runtime_dir/$1"/*/; do
-        [[ -d "$dir" ]] || continue
-        if [[ "$(basename "$dir")" != "$2" ]]; then
-            log "pruning stale $1 tree $(basename "$dir")"
-            rm -rf "$dir"
-        fi
-    done
-}
-prune_stale latchkey "$latchkey_version"
-prune_stale qmd "$qmd_version"
 
 log "runtime staged at $runtime_dir"
