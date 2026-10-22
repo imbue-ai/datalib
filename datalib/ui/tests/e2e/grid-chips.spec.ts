@@ -99,7 +99,7 @@ test("a row's Source is a group chip that resolves, copies its id and opens its 
     .toBe("slack");
 
   await chip.dblclick();
-  await expect(cardOf(page, 'syncDashboardView({"group":"slack"})')).toBeVisible({
+  await expect(cardOf(page, 'sourceView({"group":"slack"})')).toBeVisible({
     timeout: 10_000,
   });
 });
@@ -144,12 +144,12 @@ test("a storage report's group and step are chips that open their cards", async 
     .toBe("slack");
 
   await group.dblclick();
-  await expect(cardOf(page, 'syncDashboardView({"group":"slack"})')).toBeVisible({
+  await expect(cardOf(page, 'sourceView({"group":"slack"})')).toBeVisible({
     timeout: 10_000,
   });
   // A step opens its group's dashboard, at the step's own section.
   await step.dblclick();
-  await expect(
-    cardOf(page, 'syncDashboardView({"group":"slack","step":"slack/ingest"})'),
-  ).toBeVisible({ timeout: 10_000 });
+  await expect(cardOf(page, 'sourceView({"group":"slack","step":"slack/ingest"})')).toBeVisible({
+    timeout: 10_000,
+  });
 });
