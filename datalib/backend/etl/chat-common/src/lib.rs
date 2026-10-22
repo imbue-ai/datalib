@@ -2,6 +2,7 @@
 //! for chat-style providers (Signal, WhatsApp, Beeper, …).
 
 pub mod account;
+pub mod blobs;
 pub mod branches;
 pub mod changed;
 pub mod findings;
@@ -13,6 +14,7 @@ pub mod samples;
 pub mod types;
 
 pub use account::account_label;
+pub use blobs::{render_batched, render_changed_batched, ChatBlobs};
 pub use changed::{changed_chats, render_changed, ChangedChats, RenderOutcome, RenderTarget};
 pub use render::{render_all, RenderProfile, RenderSummary, TextFormat, LAYOUT_VERSION};
 // Re-exported so a provider can name its `created_at` precision without

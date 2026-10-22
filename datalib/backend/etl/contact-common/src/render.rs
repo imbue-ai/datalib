@@ -79,7 +79,29 @@ pub fn render_all(
         ..Default::default()
     };
     progress.set_length(Some(summary.contacts_total as u64));
+    render_into(
+        &mut summary,
+        profile,
+        contacts,
+        out_dir,
+        source_id,
+        progress,
+        on_doc_complete,
+    )?;
+    Ok(summary)
+}
 
+/// [`render_all`]'s loop, for a provider that renders its contacts a
+/// batch at a time into one summary; it sets the progress length itself.
+pub fn render_into(
+    summary: &mut RenderSummary,
+    profile: &ContactRenderProfile,
+    contacts: &[ContactDoc],
+    out_dir: &Path,
+    source_id: &str,
+    progress: &Progress,
+    on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+) -> Result<()> {
     for doc in contacts {
         summary.documents.push(doc.doc_uuid.clone());
         summary.buckets.push(Bucket {
@@ -98,7 +120,7 @@ pub fn render_all(
         }
         progress.inc(1);
     }
-    Ok(summary)
+    Ok(())
 }
 
 fn render_one(

@@ -117,10 +117,25 @@ Folding the history to one commit and then `dolt_gc` brought both to
 - Doltlite's 64 MB per-table pending-edit threshold is a compile-time
   constant; a runtime setting upstream is the lever for the rest.
 
+## Measured after the follow-up
+
+A synthetic SMS Backup & Restore store: the TNG fixture plus 2,000
+conversations of 10 MMS messages, each with one distinct 100 KB
+attachment (20,000 attachments, 2.05 GB of blob bytes). One cold
+render each:
+
+| build | peak RSS | wall |
+|---|---|---|
+| every chat's attachments loaded up front (#1267) | 2.59 GB | 15.2 s |
+| a batch of chats' attachments at a time | 356 MB | 9.6 s |
+
 ## Still open
 
-- google_takeout, whatsapp, sms_backup_restore, linkedin, beeper:
-  every blob up front. Next on the list after email and slack.
 - The other renders read their stores whole; `pages` is the pattern.
+  google_takeout, whatsapp, sms_backup_restore, linkedin and beeper
+  load their blobs a batch at a time since the follow-up to #1267
+  (`chat_common::blobs`), but still read their rows whole.
+- ChatGPT, Claude, Notion, Facebook and Signal load every rendered
+  document's blobs at once.
 - The `embed` steps (3–5.5 GB in the issue's run log).
 - A test per large source that fails on a peak over budget.
