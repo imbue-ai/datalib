@@ -478,8 +478,10 @@ feed of. The Add source form ticks it; in a hand-written config, set
 ## Google Drive
 
 `type = "google_drive"` — your Google Docs, Sheets and Slides through
-the Drive API and latchkey (`api`). A backup, not yet a view: nothing is
-rendered or searched. Each sync keeps every file whose version moved,
+the Drive API and latchkey (`api`). Each Doc renders as one document
+with its comment threads folded in after the text they were made on;
+Sheets and Slides are kept but not rendered yet. Each sync keeps every
+file whose version moved,
 whole and in Google's own form, beside its comments, its revision list
 and the images it shows. It can also keep a copy LibreOffice opens
 (`exports`, below). Older versions stay, and a file you delete from

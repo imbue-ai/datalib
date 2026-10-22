@@ -198,7 +198,8 @@ impl Medium {
             HandleKind::Slack
             | HandleKind::SignalAci
             | HandleKind::Facebook
-            | HandleKind::Linkedin => Medium::Other,
+            | HandleKind::Linkedin
+            | HandleKind::Google => Medium::Other,
         }
     }
 }

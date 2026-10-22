@@ -1,6 +1,7 @@
 # Google Docs, Sheets and Slides as a source, with their history
 
-**Status: proposal (2026-10-21), with phases 1 and 2 built.** The `google_drive`
+**Status: proposal (2026-10-21), with phases 1 and 2 built, and phase 4
+built for Docs.** The `google_drive`
 provider mirrors a Google account's Docs, Sheets and Slides into a raw
 store. The store keeps Google's own native representation of each file at
 every version a run saw, plus the comments and the revision list, and
@@ -260,7 +261,9 @@ cross-check at most.
 3. **Delta listing.** Drive's `changes` API, with its `startPageToken`,
    in place of the full listing each run. The full listing is 1 request
    per 1,000 files, so this matters only for a large Drive.
-4. **A markdown render**, the first render, because it is what the rest
+4. **A markdown render.** Built for Docs
+   ([`google_drive_render/TRANSLATE.md`](../../../datalib/backend/etl/providers/google_drive_render/TRANSLATE.md));
+   Sheets and Slides are still to do. As first planned: the first render, because it is what the rest
    of datalib reads. A `google_drive_render` crate and a
    `render_markdown` step would make each file one document, from its
    newest capture's native JSON:

@@ -4,8 +4,9 @@ A backup of a Google account's Docs, Sheets and Slides. The store keeps
 each file in Google's own native form at every version a run saw. Beside
 it are the file's comments, its revision list and the images it shows,
 and, when the config asks, an export LibreOffice can open (`exports`,
-`revision_exports`, both off by default). There is no render step yet. Why it is
-shaped this way, what Google offers and what is still to come:
+`revision_exports`, both off by default). The Docs render to markdown
+([`../google_drive_render/TRANSLATE.md`](../google_drive_render/TRANSLATE.md)).
+Why it is shaped this way, what Google offers and what is still to come:
 [`docs/dev/plans/google_drive.md`](../../../../../docs/dev/plans/google_drive.md).
 
 ## Where it comes from
@@ -156,7 +157,7 @@ The exports are big because Google embeds the document's fonts in each.
   listing is read every run.
 - **Only native files.** Other Drive files (PDFs, images, uploaded
   Office files) are not listed.
-- **No render, and no index.** Nothing reaches the grid or search yet.
+- **Only Docs render.** Sheets and Slides stay in the raw store.
 - **No Add source form.** A config entry is written by hand
   (`docs/user/config_examples/all_sources.toml`).
 - **A capture can be newer than its version.** It is keyed by the
@@ -192,7 +193,11 @@ sqlite3 blobs.sqlite "SELECT writefile('native.json.gz', bytes) FROM cas_objects
 ```
 
 The hermetic tests are `//datalib/backend/etl/providers/google_drive:google_drive_tests`,
-on a TNG tape (`tests/google_drive_tests/tape.rs`). The live check runs
+on a TNG tape (`tests/google_drive_tests/tape.rs`). The TNG fixture
+pipeline (`//tests/fixtures:ingested_tng`) syncs the account in
+`tests/fixtures/google_drive_tng/tng.json`, which
+`datalib-step synthesize google_drive` (`src/synthesize.rs`) expands into
+playback tapes. The live check runs
 against the signed-in account:
 `GOOGLE_DRIVE_TEST_FILE_IDS=<id>,<id> DATALIB_RUNTIME_DIR=<staged runtime> bazel run //datalib/backend/etl/providers/google_drive:google_drive_live`
 (`scripts/stage_runtime.sh` stages one).

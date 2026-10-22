@@ -46,6 +46,10 @@ pub enum HandleKind {
     /// (`linkedin.com/in/<slug>`), which every connection and message
     /// sender in an export carries.
     Linkedin,
+    /// A Google account by the name it shows: `name/<the name shown>`. A
+    /// comment on a Drive file names its author and nothing else, so two
+    /// people of one name are one handle until a contact tells them apart.
+    Google,
 }
 
 impl HandleKind {
@@ -196,6 +200,14 @@ impl Handle {
             .then(|| Self::of(HandleKind::Facebook, &format!("deleted/{id}")))
     }
 
+    /// A Google account by the name a Drive comment shows for it, its
+    /// whitespace trimmed and collapsed.
+    pub fn google_name(name: &str) -> Option<Self> {
+        let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
+        (!name.is_empty() && !name.chars().any(char::is_control))
+            .then(|| Self::of(HandleKind::Google, &format!("name/{name}")))
+    }
+
     /// A LinkedIn member by their profile slug, already percent-decoded:
     /// lowercased, as LinkedIn matches it. A slug holding a `/`, `?`,
     /// `#`, `%` or whitespace is a URL not yet taken apart, and refused.
@@ -252,6 +264,10 @@ impl Handle {
                 _ => None,
             },
             HandleKind::Linkedin => Self::linkedin(value),
+            HandleKind::Google => match value.split_once('/')? {
+                ("name", name) => Self::google_name(name),
+                _ => None,
+            },
         }
     }
 
@@ -292,7 +308,7 @@ impl Handle {
             }
             // No app follows a link to a Signal account id, so it takes
             // the spelling for a kind with no scheme of its own.
-            HandleKind::SignalAci | HandleKind::Facebook => {
+            HandleKind::SignalAci | HandleKind::Facebook | HandleKind::Google => {
                 format!(
                     "datalib:handle/{}/{}",
                     self.kind().as_str(),
@@ -350,7 +366,8 @@ impl Handle {
             HandleKind::Slack
             | HandleKind::SignalAci
             | HandleKind::Facebook
-            | HandleKind::Linkedin => {
+            | HandleKind::Linkedin
+            | HandleKind::Google => {
                 format!("{shown} ({})", self.as_str())
             }
         }
@@ -704,6 +721,10 @@ mod tests {
                 "https://www.linkedin.com/in/jlpicard",
             ),
             (
+                Handle::google_name("Geordi La Forge").unwrap(),
+                "datalib:handle/google/name/Geordi%20La%20Forge",
+            ),
+            (
                 Handle::linkedin("jürgen-müller-1a2b").unwrap(),
                 "https://www.linkedin.com/in/j%C3%BCrgen-m%C3%BCller-1a2b",
             ),
@@ -787,6 +808,19 @@ mod tests {
         assert_eq!(Handle::facebook_deleted(""), None);
         assert_eq!(Handle::parse("facebook:Q"), None);
         assert_eq!(Handle::parse("facebook:other/Q"), None);
+    }
+
+    #[test]
+    fn a_google_name_is_its_words_and_nothing_else() {
+        let geordi = Handle::google_name("Geordi  La Forge ").unwrap();
+        assert_eq!(geordi.as_str(), "google:name/Geordi La Forge");
+        assert_eq!(Handle::parse("google:name/Geordi La Forge"), Some(geordi));
+        assert_eq!(Handle::parse("google:name/Geordi  La Forge"), None);
+        for bad in ["", "   ", "Q\u{0}"] {
+            assert_eq!(Handle::google_name(bad), None, "{bad:?}");
+        }
+        assert_eq!(Handle::parse("google:Q"), None);
+        assert_eq!(Handle::parse("google:other/Q"), None);
     }
 
     /// Every way an export or a browser writes one profile's address is

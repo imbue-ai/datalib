@@ -208,8 +208,7 @@ impl Exports {
     }
 }
 
-/// Params for the render step: there is no render step yet, but
-/// `ingest_only!` still parses one.
+/// Params for the render step, which has none of its own.
 pub type GoogleDriveRenderConfig = datalib_source_common::BareRenderConfig;
 
 impl datalib_source_common::IngestMethods for GoogleDriveConfig {

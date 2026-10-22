@@ -117,6 +117,7 @@ pub(crate) fn handle_mark(kind: HandleKind) -> &'static str {
         HandleKind::SignalAci => "signal",
         HandleKind::Facebook => "facebook",
         HandleKind::Linkedin => "linkedin",
+        HandleKind::Google => "google_drive",
     }
 }
 

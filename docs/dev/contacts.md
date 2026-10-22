@@ -119,6 +119,7 @@ number. What that costs:
 | `slack` | `<team_id>/<user_id>` | `Handle::slack` | `slack://user?team=<team>&id=<user>` |
 | `signal_aci` | a Signal account id, a lowercase dashed UUID | `Handle::signal_aci` | `datalib:handle/signal_aci/<uuid>` |
 | `facebook` | `name/<the name shown>`, its whitespace collapsed; or `deleted/<conversation id>` | `Handle::facebook_name`, `Handle::facebook_deleted` | `datalib:handle/facebook/<value>`, percent-encoded but for its `/`s |
+| `google` | `name/<the name shown>`, its whitespace collapsed | `Handle::google_name` | `datalib:handle/google/<value>`, percent-encoded but for its `/`s |
 | `linkedin` | the slug of a profile URL (`linkedin.com/in/<slug>`), percent-decoded and lowercased | `Handle::linkedin`, `Handle::linkedin_profile_url` (any `linkedin.com` host; a trailing `/`, query or fragment is dropped) | `https://www.linkedin.com/in/<slug>`, the profile itself |
 
 A Facebook export names people and never numbers them, so a
@@ -128,7 +129,8 @@ deleted since is written `Facebook user`, or with no name at all, and
 gets a handle only in a Messenger conversation that lists it as its one
 deleted account: `facebook:deleted/<that conversation's id>`. The same
 deleted person in two conversations is two handles; several in one
-group are none.
+group are none. A `google:name/` handle is a name for the same reason: a
+comment on a Drive file names its author and nothing else.
 
 `Handle::parse` reads back exactly what `as_str` wrote and refuses any
 other spelling, which is what every store and every wire format goes
@@ -212,6 +214,7 @@ What each source has today:
 | SMS backup | the number; a group MMS, which does not say which number sent it, has none; a call by the other side's number | the number or numbers a text the account sent went to, as recipients |
 | address books | | a card's numbers and addresses, in the source contact |
 | LinkedIn | a message's sender, by `SENDER PROFILE URL`; the account's owner, by their primary address, on every post and comment | a connection's profile and email address, in the source contact |
+| Google Drive | a comment's author, by name; the account's own comments by its address, where the file names the account | a person chip in a Doc, by address |
 | Facebook | a Messenger message's sender, by name; a deleted account by its conversation, where it is that conversation's only one; the account's owner, by name, on every post, album, comment, reaction and edit (a store with no profile knows them only as "Me", and gives none) | each Messenger reaction's; a friend's name, in the source contact |
 | Beeper | a Slack user by `slack:<team>/<user>`, read out of the bridge's Matrix id (the owner by the Slack user the room was bridged for); anyone else by a number or address the app lists for them (`participant_identifiers`); a Matrix id alone has no kind | each reaction's; the person's numbers, addresses and cached avatar, in the source contact |
 

@@ -61,6 +61,8 @@ pub enum Provider {
     Garmin,
     Github,
     Gitlab,
+    /// Docs, Sheets and Slides through Drive's and each editor's API.
+    GoogleDrive,
     GoogleTakeout,
     Linkedin,
     Notion,
