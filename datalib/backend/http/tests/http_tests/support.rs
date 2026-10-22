@@ -37,7 +37,7 @@ pub async fn state_with_applets(root: &Path, applets: AppletRegistry) -> AppStat
         newer_root: Vec::new(),
         shutting_down: Default::default(),
         api_token: ApiToken::from_value(TEST_TOKEN, root.as_path()),
-        trusted_proxy: None,
+        frame_ancestors: Default::default(),
         applets: Arc::new(applets),
     }
 }

@@ -9,7 +9,8 @@ use axum::http::{header, HeaderValue, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use rust_embed::RustEmbed;
 
-use crate::auth::TrustedProxy;
+use std::sync::Arc;
+
 use crate::AppState;
 
 #[derive(RustEmbed)]
@@ -62,23 +63,96 @@ macro_rules! app_csp_directives {
 ///   same-origin iframes — which is why every document this origin
 ///   serves as data gets a sandbox policy of its own
 ///   ([`DATA_DOCUMENT_CSP`]).
-/// - `frame-ancestors 'none'`: no page may frame the app, so no page can
-///   lay an invisible copy of it under its own buttons. A page on
-///   another port of the same host would otherwise carry the session,
-///   since `SameSite` ignores the port.
+/// - `frame-ancestors`, `'none'` unless [`FrameAncestors`] names who may
+///   frame the app: otherwise a page could lay an invisible copy of it
+///   under its own buttons. A page on another port of the same host
+///   would carry the session, since `SameSite` ignores the port.
 pub const APP_CSP: &str = concat!(app_csp_directives!(), "; frame-ancestors 'none'");
 
-/// [`APP_CSP`] without `frame-ancestors`, for a server behind a
-/// [`TrustedProxy`]: the proxy appends a `frame-ancestors` of its own,
-/// naming the host application that frames the app, and two policies
-/// intersect — `'none'` here would blank that frame.
-pub const APP_CSP_FRAMED: &str = app_csp_directives!();
+/// Env naming who may frame the app page, as the source list of a CSP
+/// `frame-ancestors` directive. Unset or empty, nobody may. Imbue
+/// Studio's launcher sets the origins its desktop app and its share
+/// chrome frame the app from. A proxy in front may append a
+/// `frame-ancestors` of its own; the browser enforces both.
+pub const FRAME_ANCESTORS_ENV: &str = "DATALIB_FRAME_ANCESTORS";
 
-pub fn app_csp(trusted_proxy: Option<TrustedProxy>) -> &'static str {
-    match trusted_proxy {
-        None => APP_CSP,
-        Some(_) => APP_CSP_FRAMED,
+/// Who may frame the app page, and the page's whole policy built from
+/// it. Cheap to clone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrameAncestors {
+    sources: String,
+    app_csp: Arc<str>,
+}
+
+impl Default for FrameAncestors {
+    fn default() -> Self {
+        Self {
+            sources: "'none'".to_string(),
+            app_csp: APP_CSP.into(),
+        }
     }
+}
+
+impl FrameAncestors {
+    /// A space-separated list of CSP sources: `'self'`, a scheme
+    /// (`https:`), or a host with an optional scheme and port, where the
+    /// host may start with `*.` and the port may be `*`
+    /// (`https://*.localhost:*`). `'none'` stands alone. Anything else,
+    /// a `;` that would end the directive above all, is refused.
+    pub fn parse(list: &str) -> Result<Self, String> {
+        let sources: Vec<&str> = list.split_whitespace().collect();
+        if sources.is_empty() || sources == ["'none'"] {
+            return Ok(Self::default());
+        }
+        if let Some(bad) = sources.iter().find(|s| !is_frame_source(s)) {
+            return Err(format!("{bad:?} is not a frame-ancestors source"));
+        }
+        let sources = sources.join(" ");
+        let app_csp = format!("{}; frame-ancestors {sources}", app_csp_directives!()).into();
+        Ok(Self { sources, app_csp })
+    }
+
+    pub fn from_env() -> anyhow::Result<Self> {
+        let raw = std::env::var(FRAME_ANCESTORS_ENV).unwrap_or_default();
+        Self::parse(&raw).map_err(|e| anyhow::anyhow!("{FRAME_ANCESTORS_ENV}: {e}"))
+    }
+
+    pub fn sources(&self) -> &str {
+        &self.sources
+    }
+
+    fn app_csp(&self) -> HeaderValue {
+        HeaderValue::from_str(&self.app_csp).expect("sources are checked ASCII")
+    }
+}
+
+fn is_frame_source(source: &str) -> bool {
+    if source == "'self'" {
+        return true;
+    }
+    let is_scheme = |s: &str| {
+        s.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    };
+    if let Some(scheme) = source.strip_suffix(':') {
+        return is_scheme(scheme);
+    }
+    let rest = match source.split_once("://") {
+        Some((scheme, rest)) if is_scheme(scheme) => rest,
+        Some(_) => return false,
+        None => source,
+    };
+    let (host, port) = match rest.rsplit_once(':') {
+        Some((host, port)) => (host, Some(port)),
+        None => (rest, None),
+    };
+    let port_ok =
+        port.is_none_or(|p| p == "*" || (!p.is_empty() && p.bytes().all(|b| b.is_ascii_digit())));
+    let host = host.strip_prefix("*.").unwrap_or(host);
+    let label_ok =
+        |l: &str| !l.is_empty() && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
+    port_ok && (host == "*" || host.split('.').all(label_ok))
 }
 
 /// What a document this origin serves as *data* — not the app — may do:
@@ -147,13 +221,13 @@ pub fn is_scriptable_document(content_type: &str) -> bool {
 pub const PUBLIC_PREFIX: &str = "dactal/";
 
 pub async fn serve_ui(State(state): State<AppState>, uri: Uri) -> Response {
-    let trusted_proxy = state.trusted_proxy;
+    let frame_ancestors = &state.frame_ancestors;
     let path = uri.path().trim_start_matches('/');
     if path.is_empty() {
-        return serve_index(trusted_proxy);
+        return serve_index(frame_ancestors);
     }
     match UiAssets::get(path) {
-        Some(content) => asset_response(path, content, trusted_proxy),
+        Some(content) => asset_response(path, content, frame_ancestors),
         // A public path names a file or nothing: the SPA fallback would
         // hand the app shell to a caller with no session.
         None if path.starts_with(PUBLIC_PREFIX) => StatusCode::NOT_FOUND.into_response(),
@@ -162,13 +236,13 @@ pub async fn serve_ui(State(state): State<AppState>, uri: Uri) -> Response {
             (StatusCode::NOT_FOUND, format!("no endpoint /{path}")).into_response()
         }
         // SPA fallback — let the client router handle unknown routes.
-        None => serve_index(trusted_proxy),
+        None => serve_index(frame_ancestors),
     }
 }
 
-fn serve_index(trusted_proxy: Option<TrustedProxy>) -> Response {
+fn serve_index(frame_ancestors: &FrameAncestors) -> Response {
     match UiAssets::get("index.html") {
-        Some(c) => asset_response("index.html", c, trusted_proxy),
+        Some(c) => asset_response("index.html", c, frame_ancestors),
         // Built without a UI bundle present. Surface a clear error
         // rather than a confusing 404 — the right fix is to populate
         // DATALIB_UI_DIST and rebuild.
@@ -183,7 +257,7 @@ fn serve_index(trusted_proxy: Option<TrustedProxy>) -> Response {
 fn asset_response(
     path: &str,
     content: rust_embed::EmbeddedFile,
-    trusted_proxy: Option<TrustedProxy>,
+    frame_ancestors: &FrameAncestors,
 ) -> Response {
     let mime = mime_guess::from_path(path).first_or_octet_stream();
     let mut resp = Response::new(Body::from(content.data));
@@ -211,10 +285,7 @@ fn asset_response(
         HeaderValue::from_static("nosniff"),
     );
     if path == "index.html" {
-        headers.insert(
-            header::CONTENT_SECURITY_POLICY,
-            HeaderValue::from_static(app_csp(trusted_proxy)),
-        );
+        headers.insert(header::CONTENT_SECURITY_POLICY, frame_ancestors.app_csp());
     }
     if path.starts_with(PUBLIC_PREFIX) {
         // The sandboxed page loads `main.js` as a module, and a module
@@ -236,6 +307,47 @@ fn asset_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frame_ancestors_takes_csp_sources_and_nothing_else() {
+        let studio = "http://localhost:* http://127.0.0.1:* https://*.localhost:* \
+                      https://*.personal-imbue.com https://studio.imbue.com";
+        let parsed = FrameAncestors::parse(studio).unwrap();
+        assert_eq!(
+            parsed.sources(),
+            studio.split_whitespace().collect::<Vec<_>>().join(" ")
+        );
+        assert!(parsed
+            .app_csp
+            .ends_with(&format!("; frame-ancestors {}", parsed.sources())));
+        assert!(!parsed.app_csp.contains("frame-ancestors 'none'"));
+        for ok in [
+            "'self'",
+            "https:",
+            "*",
+            "localhost:8421",
+            "https://a-b.example:443",
+        ] {
+            assert!(FrameAncestors::parse(ok).is_ok(), "{ok}");
+        }
+        for none in ["", "  ", "'none'"] {
+            assert_eq!(
+                FrameAncestors::parse(none).unwrap(),
+                FrameAncestors::default()
+            );
+        }
+        for bad in [
+            "https://a.example; script-src *",
+            "'none' https://a.example",
+            "'unsafe-inline'",
+            "https://a.example/path",
+            "https://a.example,https://b.example",
+            "https://a.example:80x",
+            "*.",
+        ] {
+            assert!(FrameAncestors::parse(bad).is_err(), "{bad}");
+        }
+    }
 
     #[test]
     fn scriptable_documents_are_the_ones_a_browser_would_run() {
