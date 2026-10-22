@@ -197,7 +197,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     // says the same.
     await expect(nameCell(page, "group:pdfs").locator("img.tg-brand")).toHaveAttribute(
       "title",
-      "PDFs",
+      "Local PDFs",
     );
     expect(await statusOf(page, "group:pdfs")).toBe("Never run");
     expect(await bytesOf(page, "group:pdfs")).toBeNull();

@@ -24,7 +24,7 @@ table that selects its mode. They are not one form with a mode dropdown
 — they authenticate against different latchkey services and want
 different words on screen — and `variantKey` is what tells two entries
 of one step type apart. The mbox mode, and a JMAP server other than
-Fastmail, have no form: the catch-all "Email (mbox or other server)"
+Fastmail, have no form: the catch-all "Email (mbox or JMAP)"
 entry sends you to the config editor.
 
 Both forms fill their label pickers from `datalib-step probe email`

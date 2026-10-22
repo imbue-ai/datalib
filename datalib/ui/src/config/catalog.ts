@@ -790,7 +790,7 @@ export const CATALOG: CatalogEntry[] = [
   // way of getting mail", which is not one form.
   {
     type: "email",
-    label: "Email (mbox or other server)",
+    label: "Email (mbox or JMAP)",
     blurb: "A Google Takeout .mbox, or a JMAP server other than Fastmail.",
     keywords: ["email", "mail", "jmap", "imap", "mbox", "takeout"],
     kind: "api",
@@ -874,7 +874,7 @@ export const CATALOG: CatalogEntry[] = [
     blurb: "Copy a Fastmail account's calendars over CalDAV.",
     keywords: ["fastmail", "calendar", "caldav", "events", "meetings", "schedule"],
     kind: "api",
-    icon: "fastmail",
+    icon: "fastmail_calendar",
     defaultName: "fastmail_calendar",
     nameHint: "Personal calendar",
     wizard: true,
@@ -944,7 +944,7 @@ export const CATALOG: CatalogEntry[] = [
   {
     type: "calendar",
     variantKey: "caldav",
-    label: "CalDAV",
+    label: "Calendar (CalDAV)",
     blurb: "Copy the calendars on any CalDAV server: iCloud, Nextcloud, Radicale, ….",
     keywords: ["calendar", "caldav", "icloud", "nextcloud", "radicale", "events", "schedule"],
     kind: "api",
@@ -1023,7 +1023,7 @@ export const CATALOG: CatalogEntry[] = [
   {
     type: "calendar",
     variantKey: "ics",
-    label: "Calendar files (.ics)",
+    label: "Calendar (.ics files)",
     blurb: "A folder of .ics exports, such as Google Takeout's Calendar folder.",
     keywords: ["calendar", "ics", "ical", "icalendar", "takeout", "export", "events"],
     kind: "export",
@@ -1059,7 +1059,7 @@ export const CATALOG: CatalogEntry[] = [
     blurb: "Copy a Fastmail account's address books over CardDAV.",
     keywords: ["fastmail", "contacts", "carddav", "vcard", "address book"],
     kind: "api",
-    icon: "fastmail",
+    icon: "fastmail_contacts",
     defaultName: "fastmail_contacts",
     nameHint: "Personal contacts",
     wizard: true,
@@ -1104,7 +1104,7 @@ export const CATALOG: CatalogEntry[] = [
   {
     type: "contacts",
     variantKey: "carddav",
-    label: "CardDAV contacts",
+    label: "Contacts (CardDAV)",
     blurb: "Copy the address books on any CardDAV server: iCloud, Nextcloud, Radicale, ….",
     keywords: ["contacts", "carddav", "icloud", "nextcloud", "vcard", "address book"],
     kind: "api",
@@ -1160,7 +1160,7 @@ export const CATALOG: CatalogEntry[] = [
   {
     type: "contacts",
     variantKey: "vcf",
-    label: "Contact files (.vcf)",
+    label: "Contacts (.vcf files)",
     blurb: "A folder of .vcf exports, from Google Contacts, iCloud or a phone.",
     keywords: ["contacts", "vcf", "vcard", "export", "address book"],
     kind: "export",
@@ -1268,7 +1268,7 @@ export const CATALOG: CatalogEntry[] = [
   {
     type: "claude",
     variantKey: "export",
-    label: "Claude export",
+    label: "Claude (export)",
     blurb: "Ingest an unpacked Claude data export already on disk.",
     keywords: ["claude", "anthropic", "export", "backup"],
     kind: "export",
@@ -1547,7 +1547,7 @@ export const CATALOG: CatalogEntry[] = [
   },
   {
     type: "signal",
-    label: "Signal",
+    label: "Signal backups",
     blurb: "Decrypt and copy an Android Signal backup.",
     keywords: ["signal", "backup", "messages", "sms", "chat"],
     kind: "export",
@@ -1601,7 +1601,7 @@ export const CATALOG: CatalogEntry[] = [
   },
   {
     type: "whatsapp",
-    label: "WhatsApp",
+    label: "WhatsApp backups",
     blurb: "Decrypt and copy an Android crypt15 backup.",
     keywords: ["whatsapp", "backup", "messages", "chat"],
     kind: "export",
@@ -1645,7 +1645,7 @@ export const CATALOG: CatalogEntry[] = [
   },
   {
     type: "sms_backup_restore",
-    label: "SMS & calls",
+    label: "SMS Backup & Restore",
     blurb: "Android SMS Backup & Restore XML exports.",
     keywords: ["sms", "mms", "calls", "android", "texts"],
     kind: "export",
@@ -1744,7 +1744,7 @@ export const CATALOG: CatalogEntry[] = [
 
   {
     type: "pdf",
-    label: "PDFs",
+    label: "Local PDFs",
     blurb: "Convert a directory tree of PDFs into searchable markdown.",
     keywords: ["pdf", "documents", "papers", "files"],
     kind: "local",
@@ -1783,7 +1783,7 @@ export const CATALOG: CatalogEntry[] = [
   },
   {
     type: "fsindex",
-    label: "File index",
+    label: "Local file index",
     blurb: "Index a directory tree — paths, sizes, content hashes.",
     keywords: ["files", "filesystem", "index", "directory", "disk"],
     kind: "local",
@@ -1822,7 +1822,7 @@ export const CATALOG: CatalogEntry[] = [
   },
   {
     type: "media",
-    label: "Music, photos & video",
+    label: "Local media",
     blurb: "Index a media tree — tags, EXIF, playlists, and a metadata-free content hash.",
     keywords: ["music", "photos", "video", "mp3", "jpeg", "raw", "dng", "playlists", "media"],
     kind: "local",
@@ -1872,7 +1872,7 @@ export const CATALOG: CatalogEntry[] = [
   {
     type: "airvisual",
     method: "export",
-    label: "AirVisual",
+    label: "IQAir AirVisual",
     blurb: "IQAir AirVisual Pros' own history, read off each unit's network share.",
     keywords: ["airvisual", "iqair", "air quality", "co2", "pm2.5", "sensor", "samba"],
     kind: "local",
@@ -2088,7 +2088,7 @@ export const CATALOG: CatalogEntry[] = [
   {
     type: "perseus",
     method: "github",
-    label: "Perseus library",
+    label: "Perseus Digital Library",
     blurb: "Classical texts from the Perseus Digital Library.",
     keywords: ["perseus", "greek", "latin", "classics", "sample"],
     kind: "local",
