@@ -19,12 +19,12 @@ import TimeChart from "./TimeChart.ce.vue";
 import { groupCharts, groupSpan, stepCharts, type Chart } from "./dashboardCharts";
 import { menuTarget, rowActions, withBrowse, type ActionRow } from "./rowActions";
 import { renderBadges, renderQuantity, renderStatus } from "./cellRenderers";
-import { syncDashboardSource } from "./cardSources";
+import { syncDashboardSource, syncDashboardStep } from "./cardSources";
 import { uriFromEntity } from "./chipLinks";
 import EntityChip from "./EntityChip.ce.vue";
 import { logLineSource } from "./libs/logLineView";
 import type { SyncDashboardOpts } from "./libs/syncDashboardView";
-import type { CardCtx } from "./types";
+import { TOPIC_CARD_REOPENED, type CardCtx, type CardReopenedPayload } from "./types";
 
 const props = defineProps<{ ctx: CardCtx; opts: SyncDashboardOpts }>();
 const api = useApi();
@@ -216,6 +216,25 @@ function scrollToStep(id: string) {
     ?.scrollIntoView({ block: "start" });
 }
 
+/// Scroll to a step once its section is laid out. A tab the host has
+/// just revealed can still be hidden for a frame or more, and scrolling
+/// a hidden section does nothing; give up after about a second.
+function scrollToStepWhenShown(id: string, frames = 60) {
+  const section = cardEl.value?.querySelector(`[data-step="${CSS.escape(id)}"]`);
+  if (section && section.getClientRects().length > 0) {
+    section.scrollIntoView({ block: "start" });
+    return;
+  }
+  if (frames > 0) requestAnimationFrame(() => scrollToStepWhenShown(id, frames - 1));
+}
+
+/// Opened again while open, at a step: scroll there once the tab shows.
+const stopReopened = props.ctx.bus.subscribe(TOPIC_CARD_REOPENED, (payload) => {
+  const p = payload as CardReopenedPayload;
+  const step = p.cardId === props.ctx.cardId ? syncDashboardStep(p.source) : null;
+  if (step) scrollToStepWhenShown(step);
+});
+
 /// A chip on this card asking for a card: this dashboard is already open,
 /// so the group's own chip does nothing and a step's scrolls to its section.
 function openFromChip(source: string) {
@@ -257,6 +276,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  stopReopened();
   unsubscribe?.();
   if (clock) clearInterval(clock);
   if (dashTimer) clearTimeout(dashTimer);
