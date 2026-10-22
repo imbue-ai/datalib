@@ -79,6 +79,16 @@ pub async fn held_versions<'k>(
     table: &str,
     keys: impl IntoIterator<Item = &'k str>,
 ) -> Result<HashMap<String, Held>> {
+    let mut conn = pool.acquire().await.context("reach the store")?;
+    held_versions_in(&mut conn, table, keys).await
+}
+
+/// [`held_versions`] on a connection, an open transaction's included.
+pub async fn held_versions_in<'k>(
+    conn: &mut sqlx::SqliteConnection,
+    table: &str,
+    keys: impl IntoIterator<Item = &'k str>,
+) -> Result<HashMap<String, Held>> {
     let keys: Vec<&str> = keys.into_iter().collect();
     let mut out = HashMap::with_capacity(keys.len());
     for chunk in keys.chunks(datalib_etl::bulk::SQL_CHUNK) {
@@ -94,7 +104,7 @@ pub async fn held_versions<'k>(
             q = q.bind(*key);
         }
         let rows = q
-            .fetch_all(pool)
+            .fetch_all(&mut *conn)
             .await
             .with_context(|| format!("read what {table} holds"))?;
         out.extend(

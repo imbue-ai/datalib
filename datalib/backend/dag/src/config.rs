@@ -148,8 +148,8 @@ impl RunHistory {
 }
 
 /// The latency/history tradeoff, in seconds, as a person writes it in
-/// `config.toml`: at most this long between a step's checkpoints early in
-/// a run. `datalib-step` lets it grow over a long one
+/// `config.toml`: how long a step waits before its first checkpoint.
+/// `datalib-step` doubles the wait after each one
 /// (`datalib_etl::checkpointer::Cadence`).
 ///
 /// Plain numbers rather than the `etl` type they become: the runner does not
