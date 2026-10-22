@@ -1,16 +1,14 @@
 <script setup lang="ts">
-// The right-click menu on a chip, drawn over the document frame. It
-// shows the entries `chipMenu` or `entityMenu` built and reports which
-// one was picked;
-// what each does is the document view's business. A click anywhere
+// The right-click menu on a chip, drawn over a document or a card. It
+// shows the entries `chipMenuOf` built and reports which one was
+// picked; `runChipAction` does it. A click anywhere
 // else, a second right-click or Escape closes it.
 import { computed, onMounted, onUnmounted } from "vue";
 
-import type { ChipMenuEntry, ChipMenuId } from "./contacts";
-import type { EntityMenuEntry, EntityMenuId } from "./entities";
+import type { ChipAction, ChipEntry } from "./chipActions";
 
-const props = defineProps<{ entries: (ChipMenuEntry | EntityMenuEntry)[]; x: number; y: number }>();
-const emit = defineEmits<{ pick: [id: ChipMenuId | EntityMenuId]; close: [] }>();
+const props = defineProps<{ entries: ChipEntry[]; x: number; y: number }>();
+const emit = defineEmits<{ pick: [id: ChipAction]; close: [] }>();
 
 const style = computed(() => ({
   left: `${Math.min(props.x, window.innerWidth - 260)}px`,
