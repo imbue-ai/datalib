@@ -11,7 +11,7 @@ use datalib_source_common::ExampleKind;
 
 use crate::function::Function;
 use crate::methods::ingest_methods;
-use crate::source_docs::{fields, source_docs, with_group_id, Field};
+use crate::source_docs::{fields, source_docs, Field};
 use crate::source_type::SourceType;
 
 const AGENT_GUIDE: &str = include_str!("../../../../docs/agent_user.md");
@@ -37,11 +37,18 @@ const SETUP: &[SetupStep] = &[
     },
     SetupStep {
         say: "Add a source: a [[groups]] entry with its `type`, and its steps. The source's \
-              page says what it mirrors, how it signs in and which ingest methods it has.",
-        commands: &[Example {
-            what: "what the Slack source needs",
-            command: "datalib-step help slack",
-        }],
+              page says what it mirrors, how it signs in and which ingest methods it has; \
+              its examples are stanzas to append, and how to wire one in.",
+        commands: &[
+            Example {
+                what: "what the Slack source needs",
+                command: "datalib-step help slack",
+            },
+            Example {
+                what: "config stanzas for Slack",
+                command: "datalib-step examples slack",
+            },
+        ],
     },
     SetupStep {
         say: "Sign it in. A web source signs in through latchkey, which ships beside these \
@@ -80,40 +87,14 @@ const SETUP: &[SetupStep] = &[
     },
 ];
 
-/// What `--example` and `--id` ask of a source's page.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct Ask<'a> {
-    pub example: Option<ExampleKind>,
-    pub id: Option<&'a str>,
-}
-
-pub fn page(
-    topic: &[String],
-    ask: Ask,
-    commands: &[String],
-    git_ref: &str,
-) -> Result<String, String> {
+pub fn page(topic: &[String], commands: &[String], git_ref: &str) -> Result<String, String> {
     let base = format!("{REPO}/blob/{git_ref}");
     let source = topic.first().and_then(|w| SourceType::parse(w));
-    if source.is_none() && (ask.example.is_some() || ask.id.is_some()) {
-        return Err("`--example` and `--id` go with a source type: \
-                    `datalib-step help slack --example minimal --id work-slack`"
-            .to_string());
-    }
     match (topic, source) {
         ([], _) => Ok(overview(commands)),
         ([word], _) if word == "agent" => Ok(absolute_links(AGENT_GUIDE, AGENT_GUIDE_PATH, &base)),
-        ([_], Some(t)) => match ask.example {
-            Some(kind) => example_text(t, None, kind, ask.id),
-            None => Ok(source_page(t, &base)),
-        },
-        ([_, method], Some(t)) => {
-            let method = known_method(t, method)?;
-            match ask.example {
-                Some(kind) => example_text(t, Some(method), kind, ask.id),
-                None => Ok(method_page(t, method)),
-            }
-        }
+        ([_], Some(t)) => Ok(source_page(t, &base)),
+        ([_, method], Some(t)) => Ok(method_page(t, known_method(t, method)?)),
         ([word], None) => match Function::parse(word) {
             Some(f) => Ok(function_page(f)),
             None => Err(format!(
@@ -143,36 +124,102 @@ fn known_method(t: SourceType, method: &str) -> Result<&'static str, String> {
         })
 }
 
-fn example_text(
-    t: SourceType,
-    method: Option<&'static str>,
-    kind: ExampleKind,
-    id: Option<&str>,
-) -> Result<String, String> {
-    let methods = ingest_methods(t);
-    let method = match (method, methods) {
-        (Some(m), _) => m,
-        (None, [only]) => only.path,
-        (None, _) => {
-            let names: Vec<&str> = methods.iter().map(|m| m.path).collect();
-            return Err(format!(
-                "{t} is reached {} ways ({}); name one: `datalib-step help {t} {} --example {}`",
-                names.len(),
-                names.join(", "),
-                names[0],
-                kind.as_str()
-            ));
-        }
-    };
-    let example = source_docs(t)
-        .example(kind, method)
-        .ok_or_else(|| format!("{t} has no {} example for `{method}`", kind.as_str()))?;
-    Ok(match id {
-        Some(id) => with_group_id(example.toml, t.as_str(), id),
-        None => example.toml.to_string(),
+pub fn examples_page(word: &str) -> Result<String, String> {
+    let t = SourceType::parse(word)
+        .ok_or_else(|| format!("no source type {word:?}. `datalib-step help` lists them."))?;
+    let docs = source_docs(t);
+    let mut out = format!("Config stanzas for {t}\n\n");
+    for paragraph in examples_intro(t) {
+        out.push_str(&wrap(&paragraph, 0, 0));
+        out.push('\n');
     }
-    .trim_end()
-    .to_string())
+    for m in ingest_methods(t) {
+        for &kind in ExampleKind::VARIANTS {
+            if let Some(example) = docs.example(kind, m.path) {
+                out.push_str(&format!(
+                    "## {t} by `{}`, {}\n\n{}\n\n",
+                    m.path,
+                    kind.as_str(),
+                    example.toml.trim_end()
+                ));
+            }
+        }
+    }
+    out.truncate(out.trim_end().len());
+    Ok(out)
+}
+
+fn examples_intro(t: SourceType) -> Vec<String> {
+    let methods: Vec<&str> = ingest_methods(t).iter().map(|m| m.path).collect();
+    let time_series = if t.renders_time_series() {
+        " `render_time_series` does the same for its numbers over time, for the charts \
+         and the time-series index."
+    } else {
+        ""
+    };
+    let which = match methods.as_slice() {
+        [only] => format!(
+            "{t} has one ingest method, `{only}`, so there are two stanzas below. They \
+             declare the same group: append one, not both."
+        ),
+        _ => format!(
+            "{t} is reached {} ways ({}), and a group holds exactly one of them, so there \
+             is a pair of stanzas for each. Append the stanza for the way that fits. To \
+             mirror it two ways, or from two accounts, append two stanzas and give them \
+             different ids (below).",
+            methods.len(),
+            methods.join(", ")
+        ),
+    };
+    vec![
+        format!(
+            "Each stanza below is one source, ready to append to \
+             `<data_root>/config.toml`: a `[[groups]]` entry naming the source's type, and \
+             the steps that sync it. `ingest` downloads the data, or reads it from disk, \
+             into the group's raw store; its params hold one ingest method's table, \
+             `[steps.params.<method>]`, beside the options every method shares. \
+             `render_markdown` turns what `ingest` stored into the documents the grid and \
+             search read.{time_series}"
+        ),
+        format!(
+            "There are two kinds. `minimal` is the fewest lines that sync: the method's \
+             table and only what it cannot do without, so everything else takes its \
+             default. `complete` sets every option the params take, each with a comment \
+             saying what it does and what leaving it out means; most also add the \
+             `keyword_index` and `embed` steps that put the source in free-text search. \
+             Start from either: trim the complete one, or add to the minimal one. \
+             `datalib-step help {t} <method>` lists every option with its type and default."
+        ),
+        which,
+        format!(
+            "Every stanza names its group after its type, `{t}`. The group's `id` is the \
+             folder under the data root its data goes in, and the first half of each of \
+             its step ids (`{t}/ingest`), so it must be unique in the config; choose it \
+             once. To use another id, change the group's `id`, each step's `group`, and the \
+             `{t}/` at the start of every step named in an `inputs` list. Leave `type` as \
+             it is. `name` is free text the app shows, and can be anything."
+        ),
+        format!(
+            "A source's documents reach the grid and search only through the index groups, \
+             which name the steps they read. After appending, add `<id>/render_markdown` to \
+             the `inputs` of `unified_document_index/grid_index`, and if the stanza has \
+             `keyword_index` and `embed` steps, add both to the `inputs` of \
+             `unified_document_index/qmd_aggregator`.{}",
+            if t.renders_time_series() {
+                " Add `<id>/render_time_series` to the `inputs` of \
+                 `unified_time_series_index/time_series_index`."
+            } else {
+                ""
+            }
+        ),
+        format!(
+            "Then `datalib-dag --check <config>` reports every problem with the config at \
+             once, each at its line; `datalib-step probe {t}` asks the service which \
+             account the credentials reach, if the method reaches one; and \
+             `datalib-dag <config> --sync <id>/ingest --by <you>` syncs the source and \
+             everything that reads it."
+        ),
+    ]
 }
 
 fn overview(commands: &[String]) -> String {
@@ -201,6 +248,10 @@ fn overview(commands: &[String]) -> String {
         (
             "datalib-step help <type>",
             "one source: what it mirrors, how it signs in, its ingest methods",
+        ),
+        (
+            "datalib-step examples <type>",
+            "one source's config stanzas, and how to add one to a config",
         ),
         (
             "datalib-step help <function>",
@@ -262,8 +313,7 @@ fn source_page(t: SourceType, base: &str) -> String {
             out.push_str(&wrap(
                 &format!(
                     "The least a config needs to sync it by `{m}` (`datalib-step help {t} \
-                     {m} --example complete` sets every option; `datalib-step help {t} {m}` \
-                     lists them):",
+                     {m}` lists every option):",
                     m = m.path
                 ),
                 0,
@@ -274,18 +324,10 @@ fn source_page(t: SourceType, base: &str) -> String {
     }
     out.push('\n');
     out.push_str(&wrap(
-        "Paste it into the config with `--id <group>` to name the group (the folder its \
-         data goes in; `--example minimal --id work-slack` prints just the TOML). Then \
-         put `<group>/render_markdown` in the inputs of \
-         `unified_document_index/grid_index`, so the grid and search read it.",
-        0,
-        0,
-    ));
-    out.push('\n');
-    out.push_str(&wrap(
         &format!(
-            "Then: `datalib-dag --check <config>`; `datalib-step probe {t}` if it reaches \
-             a service; `datalib-dag <config> --sync <group>/ingest --by <you>`."
+            "`datalib-step examples {t}` prints each stanza above beside one that sets \
+             every option, and says how to give the group an id of your own, how to put it in \
+             the grid and search, and how to check and sync it."
         ),
         0,
         0,
@@ -314,8 +356,8 @@ fn method_page(t: SourceType, method: &'static str) -> String {
     let mut out = wrap(
         &format!(
             "{t} by `{method}` ({reach}): every option of the `ingest` step's params, \
-             from the structs that read them. `datalib-step help {t} {method} --example \
-             complete` prints a stanza that sets them all."
+             from the structs that read them. `datalib-step examples {t}` prints a stanza \
+             that sets them all."
         ),
         0,
         0,
@@ -553,7 +595,7 @@ mod tests {
     /// terminal. A relative link there leads nowhere.
     #[test]
     fn the_agent_guide_has_no_relative_link_left() {
-        let page = page(&["agent".into()], Ask::default(), &commands(), "abc123").unwrap();
+        let page = page(&["agent".into()], &commands(), "abc123").unwrap();
         assert!(page.contains("# datalib — agent user guide"));
         assert_eq!(relative_links(&page), Vec::<String>::new());
     }
@@ -561,7 +603,7 @@ mod tests {
     #[test]
     fn every_source_type_has_a_page_with_its_own_sections() {
         for &t in SourceType::VARIANTS {
-            let page = page(&[t.as_str().into()], Ask::default(), &commands(), "abc123").unwrap();
+            let page = page(&[t.as_str().into()], &commands(), "abc123").unwrap();
             assert!(
                 page.contains(&format!("`type = \"{}\"`", t.as_str())),
                 "{t}: getting_your_data.md has no section for it:\n{page}"
@@ -576,7 +618,7 @@ mod tests {
 
     #[test]
     fn a_type_reached_several_ways_shows_every_way() {
-        let page = page(&["email".into()], Ask::default(), &commands(), "abc123").unwrap();
+        let page = page(&["email".into()], &commands(), "abc123").unwrap();
         for heading in ["## Email", "## Fastmail\n", "## Gmail"] {
             assert!(page.contains(heading), "{heading} missing:\n{page}");
         }
@@ -584,7 +626,7 @@ mod tests {
 
     #[test]
     fn the_overview_names_every_type_function_and_command() {
-        let page = page(&[], Ask::default(), &commands(), "abc123").unwrap();
+        let page = page(&[], &commands(), "abc123").unwrap();
         for &t in SourceType::VARIANTS {
             assert!(page.contains(t.as_str()), "{t}");
         }
@@ -597,75 +639,48 @@ mod tests {
     #[test]
     fn every_function_has_a_page() {
         for &f in Function::VARIANTS {
-            let page = page(&[f.as_str().into()], Ask::default(), &commands(), "abc123").unwrap();
+            let page = page(&[f.as_str().into()], &commands(), "abc123").unwrap();
             assert!(page.len() > f.as_str().len() + 40, "{f}: {page}");
         }
     }
 
-    fn ask(example: &str, id: Option<&'static str>) -> Ask<'static> {
-        Ask {
-            example: ExampleKind::parse(example),
-            id,
+    #[test]
+    fn the_examples_page_shows_every_stanza_of_every_method() {
+        for &t in SourceType::VARIANTS {
+            let page = examples_page(t.as_str()).unwrap();
+            for m in ingest_methods(t) {
+                for &kind in ExampleKind::VARIANTS {
+                    let example = source_docs(t).example(kind, m.path).unwrap();
+                    assert!(
+                        page.contains(&format!("## {t} by `{}`, {}", m.path, kind.as_str())),
+                        "{t}/{}: no heading:\n{page}",
+                        m.path
+                    );
+                    assert!(page.contains(example.toml.trim_end()), "{t}/{}", m.path);
+                }
+            }
         }
+        let email = examples_page("email").unwrap();
+        assert!(email.contains("jmap, gmail, mbox"), "{email}");
+        let garmin = examples_page("garmin").unwrap();
+        assert!(
+            garmin.contains("unified_time_series_index/time_series_index"),
+            "{garmin}"
+        );
+        let err = examples_page("slak").unwrap_err();
+        assert!(err.contains("\"slak\""), "{err}");
     }
 
     #[test]
-    fn an_example_is_bare_toml_under_the_id_asked_for() {
-        let minimal = page(
-            &["slack".into()],
-            ask("minimal", None),
-            &commands(),
-            "abc123",
-        )
-        .unwrap();
-        assert!(
-            minimal.starts_with('#') && minimal.contains("id = \"slack\""),
-            "{minimal}"
-        );
-        let renamed = page(
-            &["slack".into()],
-            ask("complete", Some("work-slack")),
-            &commands(),
-            "abc123",
-        )
-        .unwrap();
-        assert!(renamed.contains("id = \"work-slack\""), "{renamed}");
-        assert!(renamed.contains("type = \"slack\""), "{renamed}");
-        assert!(
-            renamed.contains("inputs = [\"work-slack/ingest\"]"),
-            "{renamed}"
-        );
-    }
-
-    #[test]
-    fn a_source_reached_several_ways_asks_which() {
-        let err = page(
-            &["email".into()],
-            ask("minimal", None),
-            &commands(),
-            "abc123",
-        )
-        .unwrap_err();
-        assert!(err.contains("jmap, gmail, mbox"), "{err}");
-        let err = page(
-            &["email".into(), "imap".into()],
-            Ask::default(),
-            &commands(),
-            "abc123",
-        )
-        .unwrap_err();
+    fn an_unknown_method_is_refused_with_the_known_ones() {
+        let err = page(&["email".into(), "imap".into()], &commands(), "abc123").unwrap_err();
         assert!(err.contains("no method \"imap\""), "{err}");
+        assert!(err.contains("jmap, gmail, mbox"), "{err}");
     }
 
     #[test]
     fn a_method_page_lists_its_own_options_and_the_shared_ones() {
-        let page = page(
-            &["slack".into(), "api".into()],
-            Ask::default(),
-            &commands(),
-            "abc123",
-        )
-        .unwrap();
+        let page = page(&["slack".into(), "api".into()], &commands(), "abc123").unwrap();
         assert!(
             page.contains("[steps.params.api]\n  all_channels  (boolean"),
             "{page}"
@@ -684,12 +699,12 @@ mod tests {
 
     fn page_of(words: &[&str]) -> String {
         let topic: Vec<String> = words.iter().map(|w| w.to_string()).collect();
-        page(&topic, Ask::default(), &commands(), "abc123").unwrap()
+        page(&topic, &commands(), "abc123").unwrap()
     }
 
     #[test]
     fn an_unknown_topic_is_refused_by_name() {
-        let err = page(&["slak".into()], Ask::default(), &commands(), "abc123").unwrap_err();
+        let err = page(&["slak".into()], &commands(), "abc123").unwrap_err();
         assert!(err.contains("\"slak\""), "{err}");
     }
 

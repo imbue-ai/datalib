@@ -98,8 +98,8 @@ header, and a step's `params` sub-tables come after its plain keys — a
   [`docs/user/config_examples/all_sources.toml`](user/config_examples/all_sources.toml)
   — one commented group per way into each source, with its steps and
   every option set, and the index groups reading them all. It is
-  generated from the stanzas `datalib-step help <type> --example
-  complete` prints, so it is always one that loads. A `config.toml` in the retired
+  generated from the complete stanzas `datalib-step examples <type>`
+  prints, so it is always one that loads. A `config.toml` in the retired
   shape (steps naming a `datalib-step download …` command) is refused;
   rewrite it once with `datalib-migrate-config <data_root> --force`.
 - **Credentials**: web-API sources authenticate through
@@ -132,11 +132,13 @@ loads and every step's params plan, 1 if the file is not a config at
 all (or the root was written by a newer datalib), 2 if some entries
 were dropped or some step's params would be refused.
 
-Each source's config stanza, ready to append, comes from `datalib-step
-help <type> --example minimal --id <group>` (or `--example complete`,
-every option set), and `datalib-step help <type> <method>` lists every
-option with its type, default and meaning. Both are read from the
-source's own config crate, and a test loads and plans every stanza.
+`datalib-step examples <type>` prints each source's config stanzas:
+for every way into the source, a minimal one (the least that syncs) and
+a complete one (every option set, each with a comment). Its page also
+says how to give the group an id of your own and which index inputs to
+add it to. `datalib-step help <type> <method>` lists every option with
+its type, default and meaning. Both are read from the source's own
+config crate, and a test loads and plans every stanza.
 
 Useful flags: `--sync <step-id>` (repeatable; runs the named steps and
 everything downstream of them, and nothing else — pending work in other

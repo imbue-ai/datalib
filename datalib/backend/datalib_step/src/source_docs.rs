@@ -280,6 +280,7 @@ fn kind_of(root: &Value, node: &Value) -> String {
 /// entry, the `group` of each step, and every step id naming the group,
 /// in an input or in a comment's backticks. The `type` stays, which is
 /// why this is not a plain replace.
+#[cfg(test)]
 pub fn with_group_id(toml: &str, from: &str, to: &str) -> String {
     let quoted = format!("\"{from}\"");
     let step_prefix = format!("\"{from}/");
