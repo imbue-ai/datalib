@@ -11,7 +11,6 @@ use datalib_etl::control::DownloadControl;
 use datalib_etl::stop::StopFlag;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_google_drive::ingest::{self, db_path_for, RawDb};
-use datalib_etl_google_drive_config::GoogleDriveApi;
 use datalib_etl_web::http::LatchkeySettings;
 use datalib_etl_web::interrupt::{dump_tables, every_cut_resumes, How, Rig};
 use datalib_etl_web::playback;
@@ -55,7 +54,7 @@ impl Rig for Drive {
         let download = ingest::fetch(ingest::FetchOptions {
             db: db.clone(),
             latchkey: LatchkeySettings::default(),
-            api: GoogleDriveApi::default(),
+            api: tape::api_with_odf(),
             progress: Default::default(),
             control: DownloadControl {
                 stop,
