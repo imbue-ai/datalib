@@ -23,7 +23,6 @@ import {
   nameOf,
   NOBODY,
   people,
-  searchQueryFor,
   suggestedName,
   type NormalizedContact,
 } from "./contacts";
@@ -31,6 +30,7 @@ import {
   chipElAt,
   chipMenuOf,
   chipOf,
+  everythingWith,
   runChipAction,
   type Chip,
   type ChipEntryId,
@@ -122,7 +122,7 @@ function sourceIcon(sourceId: string): string | null {
 }
 
 function everything() {
-  props.ctx.host.openCards(searchSource(searchQueryFor(props.handle)));
+  props.ctx.host.openCards(searchSource(everythingWith(props.handle, model.value.mine)));
 }
 
 // ── Chips ─────────────────────────────────────────────────────────────
