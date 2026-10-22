@@ -191,10 +191,11 @@ Content-Type: text/html; charset=utf-8
 <p>Congratulations, Captain! Claim your prize before the Nagus does.</p>
 <p><a href="/searchView(window.__hostileRan=1)" style="display:block;padding:12px;background:#fc0">Claim your holosuite upgrade</a></p>
 <p><a href="/api/config">Review your account</a></p>
-<p><a href="javascript:window.__hostileRan=1">Unsubscribe</a></p>
+<p><a href="javascript:window.__hostileRan='unsubscribe'">Unsubscribe</a></p>
 <p><a href="datalib:person/%%%">Ask Quark</a></p>
 <iframe src="blobs/prize.html" width="300" height="80"></iframe>
 <img src="/api/manage/rows?refresh=1&amp;from=holosuite" alt="" width="1" height="1">
 <img src="../api/pipeline/storage?refresh=1&amp;from=holosuite" alt="Your prize">
+<img src="data:," alt="" onerror="window.__hostileRan='onerror'">
 <p>— Quark, proprietor</p>
 </body></html>

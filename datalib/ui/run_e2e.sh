@@ -262,6 +262,11 @@ export DATALIB_TEST_E2E_SIGNAL_MAKE_FIXTURE="$SIGNAL_FIXTURE_BIN"
 SIGNAL_SPEC="$(need_runfile _main/datalib/backend/etl/providers/signal/tests/fixtures/signal_tng/tng.json -f)"
 export DATALIB_TEST_E2E_SIGNAL_SPEC="$SIGNAL_SPEC"
 
+# The TNG mailbox, whose Quark email the document-sandbox spec writes into
+# the app raw, with each guard in front of the frame turned off in turn.
+EMAIL_MBOX="$(need_runfile _main/datalib/backend/etl/providers/email/tests/fixtures/mbox/star_trek.mbox -f)"
+export DATALIB_TEST_E2E_EMAIL_MBOX="$EMAIL_MBOX"
+
 # Playback tapes for the streaming spec: one directory of replayable
 # responses per source, written by the same `datalib-step synthesize`
 # the fixture pipeline runs (`tests/fixtures/run_sync_pipeline.py`).
