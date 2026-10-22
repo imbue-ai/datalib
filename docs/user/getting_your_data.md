@@ -441,12 +441,43 @@ for, and latchkey keeps the OAuth token:
 latchkey auth browser google-gmail
 ```
 
+The first time, latchkey needs an OAuth client to sign in with:
+[your own Google OAuth client](#your-own-google-oauth-client).
+
 Use a `gmail` table on the ingest step. Incremental sync is driven by
 Gmail's own change history, so deletions and label changes show up as
 events. Throughput is capped by Google's quota at roughly 300 messages
 a minute, so a large mailbox backfills over several runs. A Takeout
 `.mbox` of the same mailbox is the no-credentials route — see
 [Email](#email-mbox-or-jmap).
+
+### Your own Google OAuth client
+
+Every Google source signs in through an OAuth client in a Google Cloud
+project of your own, and latchkey needs one for each Google service
+before its first sign-in. In the Add source form, **Sign in with
+browser** says when one is missing and offers to create it or to take
+one you made. From a terminal, latchkey can create one, which takes a
+few minutes and a Cloud project per service:
+
+```sh
+latchkey auth browser-prepare google-gmail
+```
+
+Or make one yourself and give it to every Google service at once: in
+the Google Cloud console, a project with the Gmail, Google Calendar,
+Google Drive, Google Docs, Google Sheets and Google Slides APIs turned
+on, and in it an OAuth client of type **Desktop app**. Then, with its
+id and secret:
+
+```sh
+for s in google-gmail google-calendar google-drive google-docs google-sheets google-slides; do
+  latchkey auth prepare "$s" '{"clientId":"<id>","clientSecret":"<secret>"}'
+done
+```
+
+Each service is still signed in to on its own, since latchkey asks for
+each one's permissions separately.
 
 ## Google Calendar
 
@@ -460,6 +491,9 @@ approve every scope it asks for:
 ```sh
 latchkey auth browser google-calendar
 ```
+
+The first time, latchkey needs an OAuth client to sign in with:
+[your own Google OAuth client](#your-own-google-oauth-client).
 
 The `google` table needs nothing else; `calendars` narrows it to the
 calendars you name.
@@ -498,8 +532,10 @@ latchkey auth browser google-sheets
 latchkey auth browser google-slides
 ```
 
-If Google answers that an API is not enabled, run
-`latchkey auth browser-prepare <service>` for that one first. There is
+Each needs an OAuth client first, and one client can serve all four:
+[your own Google OAuth client](#your-own-google-oauth-client). If
+Google answers that an API is not enabled, turn it on in that client's
+Cloud project. There is
 no Add source form for it yet; add it to the config by hand, as in
 [`all_sources.toml`](config_examples/all_sources.toml). `owned_only`
 keeps it to the files you own, and `file_ids` to the ones you name.

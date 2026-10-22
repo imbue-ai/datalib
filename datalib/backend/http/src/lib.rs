@@ -43,6 +43,7 @@ pub mod lock;
 pub mod logging;
 pub mod loop_guard;
 pub mod manage;
+pub mod oauth_client;
 pub mod params_check;
 pub mod plugins;
 pub mod probe;
@@ -213,6 +214,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/latchkey/{service}/credential",
             post(connect::set_credential),
+        )
+        .route(
+            "/api/latchkey/{service}/oauth_client",
+            post(connect::set_oauth_client),
         )
         .route(
             "/api/latchkey/connect/{id}/status",

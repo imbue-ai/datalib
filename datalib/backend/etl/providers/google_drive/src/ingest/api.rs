@@ -360,8 +360,9 @@ fn sign_in_hint(url: &str) -> String {
         .map_or("google-drive", |k| k.latchkey_service);
     format!(
         ". Sign in with `latchkey auth browser {service}` and approve every scope it \
-         asks for; if Google says the API is not enabled, run \
-         `latchkey auth browser-prepare {service}` first"
+         asks for; if latchkey says it requires preparation, give it an OAuth client \
+         first (`latchkey auth browser-prepare {service}`), and if Google says the API \
+         is not enabled, turn it on in that client's Cloud project"
     )
 }
 

@@ -1780,6 +1780,7 @@ export type ProbeReport = {
 /// one sentence per kind (`config/issues.ts`).
 export type IssueKind =
   | "no_credential"
+  | "no_oauth_client"
   | "expired"
   | "rejected"
   | "forbidden"
@@ -1803,7 +1804,7 @@ export type Failure = { issue: IssueKind; detail: string };
 export type ConnectState = "running" | "ok" | "failed";
 
 /// What a running login is doing. Mirrors `ConnectPhase` there.
-export type ConnectPhase = "preparing" | "downloading_browser" | "signing_in";
+export type ConnectPhase = "preparing" | "downloading_browser" | "creating_client" | "signing_in";
 
 export type ConnectAttempt = {
   id: string;
@@ -1857,11 +1858,14 @@ export function latchkeyService(service: string): Promise<LatchkeyService> {
 
 /// Start latchkey's browser login. Returns immediately with an id to
 /// poll — the flow waits for a person, so there is nothing to await.
+/// `createOAuthClient` has latchkey create the service's OAuth client
+/// first (`auth browser-prepare`).
 export function startLatchkeyConnect(
   service: string,
   account?: string,
   register?: ServiceRegistration,
   ephemeralBrowser = false,
+  createOAuthClient = false,
 ): Promise<ConnectAttempt> {
   return quietJson<ConnectAttempt>(`/api/latchkey/${encodeURIComponent(service)}/connect`, {
     method: "POST",
@@ -1870,7 +1874,19 @@ export function startLatchkeyConnect(
       account: account ?? "",
       register: register ?? null,
       ephemeral_browser: ephemeralBrowser,
+      create_oauth_client: createOAuthClient,
     }),
+  });
+}
+
+/// Store a pasted OAuth client — Google Cloud's `client_secret.json`, or
+/// latchkey's `{clientId, clientSecret}` — as the one the service signs
+/// in with (`latchkey auth prepare`).
+export function setLatchkeyOAuthClient(service: string, client: string): Promise<{ ok: true }> {
+  return quietJson<{ ok: true }>(`/api/latchkey/${encodeURIComponent(service)}/oauth_client`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ client }),
   });
 }
 

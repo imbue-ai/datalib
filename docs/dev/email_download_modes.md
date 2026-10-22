@@ -154,8 +154,8 @@ provider uses — injects and refreshes the token. Setup is one command:
 latchkey auth browser google-gmail
 ```
 
-(If it reports no OAuth client, `latchkey auth browser-prepare
-google-gmail` creates one via the Cloud Console and takes a few minutes.)
+(If it says the service requires preparation, it has no OAuth client
+yet: [`latchkey.md`](latchkey.md#an-oauth-client-of-your-own).)
 
 The config is an empty table:
 

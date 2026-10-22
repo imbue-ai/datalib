@@ -259,9 +259,10 @@ registration at all, because latchkey has a built-in `google-gmail`
 service and routes to it by URL host:
 
   1. {LK} auth browser google-gmail
-     (If it reports no OAuth client, run
-      `{LK} auth browser-prepare google-gmail` first and wait a few
-      minutes for Google to finish creating it.)
+     (If it says google-gmail requires preparation, latchkey has no
+      OAuth client for it yet: `{LK} auth browser-prepare google-gmail`
+      creates one in a few minutes, or `{LK} auth prepare google-gmail
+      '{\"clientId\":\"…\",\"clientSecret\":\"…\"}'` stores one you made.)
   2. Smoke-test:
        {LK} curl -s https://gmail.googleapis.com/gmail/v1/users/me/profile
   3. Point the source at it — an empty table is a complete config:

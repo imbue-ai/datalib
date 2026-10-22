@@ -4,6 +4,7 @@ import { firstLine, issueText } from "@/config/issues";
 
 const KINDS: IssueKind[] = [
   "no_credential",
+  "no_oauth_client",
   "expired",
   "rejected",
   "forbidden",
