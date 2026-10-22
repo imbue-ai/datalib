@@ -154,7 +154,8 @@ test("Rename edits the group's name in the cell and writes it to the config", as
   await expect(
     page.getByText("Renamed unified_document_index to Everything, indexed."),
   ).toBeVisible();
-  await expect(nameCell(page, "group:unified_document_index").locator(".tg-parent")).toHaveText(
+  // The group's Name is its chip, which shows the new name.
+  await expect(nameCell(page, "group:unified_document_index").locator("a.chip")).toHaveText(
     "Everything, indexed",
   );
   await expect(editor).toHaveValue(/name = "Everything, indexed"/);

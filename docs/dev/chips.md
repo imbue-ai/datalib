@@ -230,10 +230,12 @@ value as the chip of the group's first row, where the rows are loaded
 theirs too ("Source: Work Slack (12)"). `tableGrid.css` keeps the grid theme's link
 colour off a chip in a cell.
 
-In the Sources table a step's Name cell is its chip, under the row's
-short name (`sourcesCardModel.ts::decorate`). A group's is not yet: its
-double-click renames it, and its row menu offers more than a group
-chip's does.
+In the Sources table a group's and a step's Name cell is its chip, a
+step under the row's short name (`sourcesCardModel.ts::decorate`), with
+no status dot (the Status column says it) and the row's problem counts
+beside it. A double-click on it opens what it names; a group is renamed
+from the row's menu (Rename…), the one way a Name cell's editor opens
+(`canEditCell`).
 
 ## In a card's own template
 
