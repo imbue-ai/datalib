@@ -505,7 +505,7 @@ async fn proxy_impl(
 }
 
 /// An applet's answer, as the browser gets it. What an applet serves is
-/// data — an attachment out of a render tree — and a document among it
+/// data, written by whoever wrote the applet, and a document among it
 /// must not run in the app's origin, where it would hold the session: it
 /// gets the sandbox policy that runs nothing. A script or wasm file
 /// goes out as bytes, so the app page's `script-src 'self'` cannot run

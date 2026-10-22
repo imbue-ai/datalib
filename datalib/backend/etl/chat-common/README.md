@@ -265,13 +265,12 @@ attribute has to add it there**, or the page will silently strip it;
 `ui/tests/sanitize.test.ts` is where the vocabulary is pinned.
 
 A reference the browser would load from the app's own origin is a
-request with the person's cookie, so only a document's assets may load:
-the sanitizer resolves each one as the browser would and keeps it only
-under `/applet/unified_document_index/asset/`, or when it is exactly an
-attachment's blob-store address, `/data/<group>/<function>/blob/<hash>`,
-or a part of an email stored there, `…/blob/<hash>/part/<hash>`. A relative one
-(`<audio src="blobs/a.mp3">`) is the document's own and is pointed at
-that document's asset route; one that climbs out of it is dropped.
+request with the person's cookie, so only a document's attachments may
+load: the sanitizer resolves each one as the browser would and keeps it
+only when it is exactly an attachment's blob-store address,
+`/data/<group>/<function>/blob/<hash>`, or a part of an email stored
+there, `…/blob/<hash>/part/<hash>`. Anything else on this origin,
+relative references included, is dropped.
 
 The sanitizer is not the boundary, though. The page draws the body in a
 frame whose policy is `script-src 'none'` (`ui/src/cards/docFrame.ts`),
@@ -282,7 +281,7 @@ the frame, so the `data-section-uuid` wrappers work as before.
 
 No `<iframe>` survives the sanitizer, and the frame's policy frames
 nothing. An attachment that is a document, such as an `.html` file at
-its `/data/…` address or in `blobs/`, is served under a policy that
+its `/data/…` address, is served under a policy that
 runs no script at all
 (`DATA_DOCUMENT_CSP` in `http/src/embed.rs`). A chart in a document is
 a `<div data-time-series="…">`, which the UI's own code draws into the

@@ -378,7 +378,8 @@ Pick the surface that fits the question:
   lines, oldest first, with `before_seq=` paging back and `after_seq=`
   tailing),
   `GET /applet/unified_document_index/docs`, `GET /applet/unified_document_index/chat/{uuid}`,
-  `GET /applet/unified_document_index/asset/{uuid}/{path}`, `GET /api/dag` (the derived step
+  `GET /data/<group>/<function>/blob/<hash>` (an attachment or photo a
+  page links), `GET /api/dag` (the derived step
   graph), and the config/sync endpoints above.
 
   Every route needs the server's per-process API token — loopback does

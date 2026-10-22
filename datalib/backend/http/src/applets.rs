@@ -1222,10 +1222,7 @@ mod tests {
     /// and a literal `%` must not reach the request line as themselves.
     #[test]
     fn encode_path_makes_a_decoded_path_safe_for_a_request_line() {
-        assert_eq!(
-            encode_path("/asset/u/blobs/a b.png"),
-            "/asset/u/blobs/a%20b.png"
-        );
+        assert_eq!(encode_path("/chat/u/a b.md"), "/chat/u/a%20b.md");
         assert_eq!(encode_path("/x\r\nEvil: 1"), "/x%0D%0AEvil:%201");
         assert_eq!(encode_path("/100%"), "/100%25");
         assert_eq!(encode_path("/search"), "/search");

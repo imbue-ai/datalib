@@ -208,7 +208,7 @@ const remoteContext = computed<RemoteContext>(() =>
 /// Every remote URL a body references, as written, each once.
 function remoteUrlsOf(doc: ChatResponse): string[] {
   const seen = new Set<string>();
-  return renderDocument(doc.body, doc.markdown_uuid)
+  return renderDocument(doc.body)
     .remote.map((r) => r.url)
     .filter((u) => !seen.has(u) && (seen.add(u), true));
 }

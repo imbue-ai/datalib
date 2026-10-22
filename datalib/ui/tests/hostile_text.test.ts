@@ -31,7 +31,7 @@ const asParsed = (s: string) => s.replace(/\r\n?/g, "\n");
 /// it stands in the text as one.
 function page(md: string): HTMLElement {
   const div = document.createElement("div");
-  div.innerHTML = renderDocument(md, null).html;
+  div.innerHTML = renderDocument(md).html;
   for (const br of div.querySelectorAll("br")) br.replaceWith("\n");
   return div;
 }

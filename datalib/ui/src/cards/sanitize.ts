@@ -24,12 +24,11 @@
 // that still does.
 //
 // A reference to our own origin is a request too, sent with the
-// person's cookie, so it loads only if it is one of a document's assets
-// or an attachment's blob-store address (`ownAssetReference`); a
-// relative one is pointed at the document's own asset route. Anything
-// else on this origin is dropped.
+// person's cookie, so it loads only if it is an attachment's blob-store
+// address (`blobAddress`). Anything else on this origin, a relative
+// reference included, is dropped.
 import DOMPurify from "dompurify";
-import { ownAssetReference } from "./asset_urls";
+import { blobAddress } from "./blob_address";
 import {
   blockAttribute,
   hostOf,
@@ -51,9 +50,6 @@ export type SanitizeOptions = {
   /** What the body is, sent along with each load so the server can
    *  judge a `document` or `source` row. */
   context?: RemoteContext;
-  /** The document the body is, whose assets a relative reference
-   *  names. Absent: a relative reference is dropped. */
-  markdownUuid?: string | null;
 };
 
 export type Sanitized = {
@@ -67,7 +63,6 @@ export type Sanitized = {
 // findings of the call in progress live here for its duration.
 let accept: (url: string) => boolean = () => false;
 let context: RemoteContext = NO_CONTEXT;
-let markdownUuid: string | null = null;
 let found: RemoteRef[] = [];
 
 /** Neither remote nor another scheme (`data:`, `blob:`, which the CSP
@@ -77,7 +72,7 @@ function isOwn(url: string): boolean {
 }
 
 function toOwn(url: string): string | null {
-  return ownAssetReference(url, markdownUuid);
+  return blobAddress(url);
 }
 
 function toProxy(url: string): string {
@@ -142,7 +137,6 @@ function ownPass(el: Element, attr: string, value: string): string | null {
 export function sanitizeRenderedHtml(html: string, options: SanitizeOptions = {}): Sanitized {
   accept = options.accept ?? (() => false);
   context = options.context ?? NO_CONTEXT;
-  markdownUuid = options.markdownUuid ?? null;
   found = [];
   const clean = DOMPurify.sanitize(html, {
     // DOMPurify's own list plus the two schemes a chip link can carry:
