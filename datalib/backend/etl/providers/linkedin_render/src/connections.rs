@@ -2,18 +2,19 @@
 //! shared [`datalib_etl_contact_common`] renderer.
 
 use anyhow::{Context, Result};
-use datalib_contact_schema::{ContactHandle, ContactKind, Detail, NormalizedContact, Photo};
+use datalib_contact_schema::{ContactHandle, ContactKind, Detail, NormalizedContact};
 use datalib_etl::progress::Progress;
-use datalib_etl_contact_common::{render_into, ContactDoc, ContactRenderProfile, RenderSummary};
+use datalib_etl_contact_common::{render_all, ContactDoc, ContactRenderProfile};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{changed_rows, Input, Inputs};
-use datalib_etl_render::pages::batches;
+use datalib_etl_render::photo;
 use datalib_handle::Handle;
+use datalib_schema::problems::{Problem, Reason};
 use serde_json::Value;
 use std::collections::HashMap;
 
 use crate::ids;
-use datalib_etl_linkedin::ingest::photos::{load_photo_bytes, load_photo_edges, photo_sizes};
+use datalib_etl_linkedin::ingest::photos::load_photo_edges;
 use datalib_etl_linkedin::ingest::{db_path_for, RawDb};
 
 use crate::processor::{FeedOutcome, Source};
@@ -57,7 +58,6 @@ fn render_open(
         account,
         account_inputs,
         range,
-        blob_bytes,
         ..
     } = *source;
     let pin = db.pin().expect("a reader is pinned at open").clone();
@@ -66,8 +66,7 @@ fn render_open(
             datalib_etl::doltlite_raw::load_payloads_with_id_if_present(db.pool(), "connections")
                 .await
                 .context("load connections")?;
-        // Photos, if any were fetched, keyed by the connection's URL; their
-        // bytes are read a batch at a time as the contacts render.
+        // Photos, if any were fetched, keyed by the connection's URL.
         let edges = load_photo_edges(db).await?;
         let changed =
             changed_rows(db.pool(), range, &pin, &["connections", "contact_photos"]).await?;
@@ -113,61 +112,33 @@ fn render_open(
         account: account.map(str::to_string),
         render_version: RENDER_VERSION,
     };
-    let mut summary = RenderSummary {
-        contacts_total: contacts.len(),
-        ..Default::default()
-    };
-    progress.set_length(Some(contacts.len() as u64));
-    let photo_hashes: Vec<&str> = contacts
+    let hashes: Vec<&str> = contacts
         .iter()
         .filter_map(|c| photo_of.get(&c.doc_uuid).map(String::as_str))
         .collect();
-    let sizes = block_on(photo_sizes(db, &photo_hashes))?;
-    let weights: Vec<u64> = contacts
-        .iter()
-        .map(|c| {
-            photo_of
-                .get(&c.doc_uuid)
-                .and_then(|h| sizes.get(h))
-                .copied()
-                .unwrap_or(0)
-        })
-        .collect();
-    for range in batches(&weights, blob_bytes) {
-        let batch = &mut contacts[range];
-        let hashes: Vec<&str> = batch
-            .iter()
-            .filter_map(|c| photo_of.get(&c.doc_uuid).map(String::as_str))
-            .collect();
-        let mut photos = block_on(load_photo_bytes(db, &hashes))?;
-        for c in batch.iter_mut() {
-            let Some(hash) = photo_of.get(&c.doc_uuid) else {
-                continue;
-            };
-            let Some((bytes, content_type)) = photos.get(hash) else {
-                continue;
-            };
-            c.contact.photo = Some(Photo::Inline {
-                bytes: bytes.clone(),
-                content_type: content_type
-                    .clone()
-                    .unwrap_or_else(|| "application/octet-stream".to_string()),
-            });
-        }
-        photos.clear();
-        render_into(
-            &mut summary,
-            &profile,
-            batch,
-            out_dir,
-            source_id,
-            progress,
-            on_doc_complete,
-        )?;
-        for c in batch.iter_mut() {
-            c.contact.photo = None;
+    let held = match db.cas() {
+        Some(cas) => block_on(cas.describe_many(&hashes))?,
+        None => HashMap::new(),
+    };
+    for c in &mut contacts {
+        let Some(hash) = photo_of.get(&c.doc_uuid) else {
+            continue;
+        };
+        match (db.cas(), held.get(hash)) {
+            (Some(cas), Some(held)) => c.contact.photo = Some(photo::stored(cas.step(), held)),
+            _ => c
+                .problems
+                .push(Problem::field("photo", Reason::BlobMissing, hash)),
         }
     }
+    let summary = render_all(
+        &profile,
+        &contacts,
+        out_dir,
+        source_id,
+        progress,
+        on_doc_complete,
+    )?;
     outcome.buckets.extend(summary.buckets);
     Ok(outcome)
 }
@@ -218,6 +189,7 @@ fn to_contact(source_id: &str, p: &Value) -> ContactDoc {
         member_handles: Vec::new(),
         upstream_account: None,
         inputs: Vec::new(),
+        problems: Vec::new(),
     }
 }
 
@@ -271,7 +243,6 @@ mod tests {
                 pin: None,
                 stale: None,
             },
-            blob_bytes: 1,
         };
         render_connections(&source, &Progress::noop(), &mut |_| Ok(()))
     }

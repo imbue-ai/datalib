@@ -463,6 +463,7 @@ fn contacts(scratch: &Path) -> Result<Vec<Document>> {
         member_handles: Vec::new(),
         upstream_account: None,
         inputs: Vec::new(),
+        problems: Vec::new(),
     };
     let profile = ContactRenderProfile {
         provider: Provider::Contacts,

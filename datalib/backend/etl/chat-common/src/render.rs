@@ -45,7 +45,8 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// v19: an item with attachments draws its labels too.
 /// v20: an attachment its source's blob store holds is linked at its
 /// `/data/…` address rather than copied beside the page.
-pub const LAYOUT_VERSION: u32 = 20;
+/// v21: so is a person's photo.
+pub const LAYOUT_VERSION: u32 = 21;
 
 /// What every chat-common provider declares through
 /// `RenderProcessor::render_params`, merged with its own knobs: the
@@ -318,16 +319,15 @@ fn render_one(
         rows,
         sections,
         edges: Vec::new(),
-        contacts: datalib_etl_render::photo::place_photos(
-            crate::people::document_contacts(
-                source_id,
-                &doc.items,
-                &doc.orphan_reactions,
-                &chat.contacts,
-            ),
-            &page_dir,
-            &doc.markdown_uuid,
-        ),
+        contacts: crate::people::document_contacts(
+            source_id,
+            &doc.items,
+            &doc.orphan_reactions,
+            &chat.contacts,
+        )
+        .iter()
+        .map(datalib_etl_render::photo::with_photo_url)
+        .collect(),
         problems,
     })
     .with_context(|| format!("on_doc_complete {}", doc.markdown_uuid))?;

@@ -22,8 +22,8 @@ use super::ids;
 use super::parse::{Blob, DocBucket, Event, ParsedBeeper, Person, Room};
 use super::RENDER_VERSION;
 
-/// Avatar bytes by blake3, with the image type they sniffed as.
-pub type Avatars = HashMap<String, (String, Vec<u8>)>;
+/// Each avatar the blob store holds as an image, by blake3.
+pub type Avatars = HashMap<String, Photo>;
 
 /// Everything one network's chats need to render: the profile that
 /// names its grid-row taxonomy, and the chats themselves.
@@ -282,14 +282,7 @@ fn contact(source_id: &str, p: &Person, avatars: &Avatars) -> Option<NormalizedC
     let mut c = NormalizedContact::new(source_id, handle.as_str(), ContactKind::Person);
     c.names = p.names.clone();
     c.handles = p.handles.clone();
-    c.photo = p
-        .avatar
-        .as_ref()
-        .and_then(|h| avatars.get(h))
-        .map(|(content_type, bytes)| Photo::Inline {
-            content_type: content_type.clone(),
-            bytes: bytes.clone(),
-        });
+    c.photo = p.avatar.as_ref().and_then(|h| avatars.get(h)).cloned();
     Some(c)
 }
 

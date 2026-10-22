@@ -1,7 +1,7 @@
 # The blob store
 
-A step that keeps attachment bytes keeps them in one file in its own
-tree, its **blob store**. The server hands those bytes to a page when
+A step that keeps attachment bytes, or people's photos, keeps them in
+one file in its own tree, its **blob store**. The server hands those bytes to a page when
 someone opens it, without knowing anything else about the step that
 wrote them: not its other tables, not which kind of source it is. What
 it does know is this file's shape, and this crate is the one place
@@ -18,8 +18,8 @@ that shape is written down. The download side writes through it
   the blake3 hash of its bytes, in lowercase hex, and never changes
   once written. The same bytes arriving twice are kept once.
 - **The address:** `/data/<group>/<function>/blob/<blake3>`
-  ([`address`](src/lib.rs)). A page links an attachment by it, and
-  `datalib-http` answers it with the row's bytes and type.
+  ([`address`](src/lib.rs)). A page links an attachment or a photo by
+  it, and `datalib-http` answers it with the row's bytes and type.
 - **A part of a stored email:**
   `/data/<group>/<function>/blob/<blake3>/part/<part blake3>`
   ([`part_address`](src/lib.rs)) names one MIME part of the email

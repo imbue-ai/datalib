@@ -182,6 +182,7 @@ fn card(uuid: &str, kind: ContactKind, name: &str, addresses: &[&str]) -> Contac
         member_handles: Vec::new(),
         upstream_account: None,
         inputs: Vec::new(),
+        problems: Vec::new(),
     }
 }
 

@@ -1125,6 +1125,34 @@ impl BlobCas {
         })
         .transpose()
     }
+
+    /// [`Self::describe`] for every hash in `hashes` at once, keyed by
+    /// hash; one the CAS lacks has no entry.
+    pub async fn describe_many(&self, hashes: &[&str]) -> Result<HashMap<String, Described>> {
+        let mut out = HashMap::new();
+        for chunk in hashes.chunks(crate::bulk::SQL_CHUNK) {
+            let rows = sqlx::query(
+                "SELECT blake3, byte_len, content_type FROM cas_objects
+                  WHERE blake3 IN (SELECT value FROM json_each(?))",
+            )
+            .bind(serde_json::to_string(chunk)?)
+            .fetch_all(&self.pool)
+            .await
+            .context("cas describe_many")?;
+            for r in rows {
+                let blake3: String = r.try_get("blake3")?;
+                out.insert(
+                    blake3.clone(),
+                    Described {
+                        blake3,
+                        byte_len: r.try_get::<i64, _>("byte_len")? as u64,
+                        content_type: r.try_get("content_type")?,
+                    },
+                );
+            }
+        }
+        Ok(out)
+    }
 }
 
 // Per-provider CAS-edge tables — shared shape
@@ -1829,6 +1857,26 @@ mod tests {
             step_of(Path::new("/root/gmail/ingest/blobs.sqlite")),
             "gmail/ingest"
         );
+    }
+
+    /// Every hash the CAS holds comes back with its stored type, and a
+    /// hash it lacks is simply absent.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn describe_many_answers_only_what_is_held() {
+        let d = tempdir().unwrap();
+        let cas = BlobCas::open(&d.path().join("blobs.sqlite")).await.unwrap();
+        let png = cas
+            .put(b"\x89PNG\r\n\x1a\n", Some("application/octet-stream"))
+            .await
+            .unwrap();
+        let text = cas.put(b"tea", None).await.unwrap();
+        let absent = blake3_hex(b"earl grey");
+        let got = cas.describe_many(&[&png, &text, &absent]).await.unwrap();
+        cas.close().await;
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[&png].content_type.as_deref(), Some("image/png"));
+        assert_eq!(got[&text].byte_len, 3);
+        assert!(!got.contains_key(&absent));
     }
 
     /// Bytes a CAS holds are linked at their address and never written

@@ -324,8 +324,8 @@ Pick the surface that fits the question:
   markdown per conversation/document. Read files directly, or serve
   them via `GET /applet/unified_document_index/chat/{markdown_uuid}`. The raw per-source
   doltlite stores under `<group>/ingest/` keep full wire fidelity when the
-  rendered form isn't enough. An attachment a page links as
-  `/data/<group>/<function>/blob/<hash>` is a row of that step's
+  rendered form isn't enough. An attachment or a person's photo a page
+  links as `/data/<group>/<function>/blob/<hash>` is a row of that step's
   `blobs.sqlite`: fetch the path from `datalib-http` with the token, or
   read the row (`SELECT bytes FROM cas_objects WHERE blake3 = '<hash>'`).
 - **Semantic search** — the qmd index:

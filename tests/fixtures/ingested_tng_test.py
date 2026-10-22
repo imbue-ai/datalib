@@ -1212,14 +1212,14 @@ class IngestedTngPipelineTest(unittest.TestCase):
             ],
             "every source that knows people put them in the index",
         )
-        # Beeper knows a bridged Slack user by their Slack id, and serves
-        # the avatar the app had cached.
+        # Beeper knows a bridged Slack user by their Slack id, and links
+        # the avatar the app had cached where its blob store holds it.
         self.assertEqual(
             self._query(
                 self._index_db,
                 "SELECT DISTINCT c.contact_key || '|' || "
                 "(coalesce(json_extract(c.contact_json, '$.photo_url'), '') LIKE "
-                "'/applet/unified_document_index/asset/%') "
+                "'/data/beeper/ingest/blob/%') "
                 "FROM source_contacts c WHERE c.source_id = 'beeper' "
                 "AND c.contact_key LIKE 'slack:%' ORDER BY 1;",
             ),
@@ -1306,23 +1306,33 @@ class IngestedTngPipelineTest(unittest.TestCase):
             ["U_TROI|0"],
             "a Slack reactor who writes nothing",
         )
-        # A card's photo is written beside its page and the index holds
-        # where the app serves it from, so a chip can draw it; a card
-        # without one carries no URL. The Borg cards, from a Google export, have
-        # none.
-        self.assertEqual(
-            self._query(
+        # A card's photo is in its source's blob store, where the download
+        # put it, and the index holds its address there, so a chip can
+        # draw it; a card without one carries no URL. The Borg cards, from
+        # a Google export, have none.
+        photos = dict(
+            row.split("|", 1)
+            for row in self._query(
                 self._index_db,
-                "SELECT c.name || '|' || coalesce(json_extract(c.contact_json, '$.photo_url') "
-                "  = '/applet/unified_document_index/asset/' || c.markdown_uuid || '/blobs/' "
-                "    || c.markdown_uuid || '.jpg', 'none') "
+                "SELECT c.name || '|' || coalesce(json_extract(c.contact_json, '$.photo_url'), "
+                "'none') "
                 "FROM source_contacts c JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
                 "WHERE m.source_id = 'tng_contacts' "
                 "AND c.name IN ('William T. Riker', 'Jean-Luc Picard', 'Hugh') ORDER BY 1;",
-            ),
-            ["Hugh|none", "Jean-Luc Picard|1", "William T. Riker|1"],
-            "a card's photo, as the URL the index serves it at",
+            )
         )
+        self.assertEqual(photos.pop("Hugh"), "none")
+        self.assertEqual(sorted(photos), ["Jean-Luc Picard", "William T. Riker"])
+        for name, url in photos.items():
+            address = re.fullmatch(
+                r"/data/(tng_contacts/ingest)/blob/([0-9a-f]{64})", url
+            )
+            if address is None:
+                self.fail(f"{name}'s photo URL: {url}")
+            self.assertTrue(
+                self._blob_held(*address.groups()),
+                f"{name}'s photo is in the blob store",
+            )
         # Signal ties a number to an ACI: Riker's account carries both,
         # so a link made through either finds the other; Q, whom the
         # backup knows by ACI alone, has the ACI as his handle; Guinan,

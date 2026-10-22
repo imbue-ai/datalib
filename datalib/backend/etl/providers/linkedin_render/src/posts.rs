@@ -58,7 +58,6 @@ pub fn render_posts(
         owner,
         account_inputs,
         range,
-        blob_bytes: _,
     } = *source;
     let db_path = db_path_for(raw_dir);
     if !db_path.exists() {

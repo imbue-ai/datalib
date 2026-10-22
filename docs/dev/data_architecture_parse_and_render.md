@@ -106,9 +106,10 @@ attachment its source's blob store holds is linked there, at
 ([`blob_store/README.md`](../../datalib/backend/blob_store/README.md)).
 An email's attachments and inline images are MIME parts of the `.eml`
 its blob store holds, linked inside it at
-`/data/<group>/<function>/blob/<eml hash>/part/<part hash>`. Only a
-contact's photo is still written to a `blobs/` directory beside its
-page.
+`/data/<group>/<function>/blob/<eml hash>/part/<part hash>`. A
+person's photo is linked in its source's blob store too
+([`contacts.md`](contacts.md) §"Photos"), so nothing a page shows is
+written beside it.
 
 Every table's schema is a hand-written struct in `datalib_schema` with
 `#[derive(PortableTable)]` deriving the DDL, so the same struct defines
@@ -918,8 +919,8 @@ store's `byte_len`, no bytes read), and `render_batched` loads and
 renders one batch at a time; `render_batched_at` reopens the raw store
 at the commit a parse read (`BlobsAt`) for a render whose parse has
 closed it. Beeper weighs its documents from what its parse recorded,
-LinkedIn attaches its connections' photos a batch at a time, and Notion
-loads its pages' bundles through `PageBlobs`. A chat's bundle is never
+and Notion loads its pages' bundles through `PageBlobs`. A person's
+photo is only ever a link, so no render loads one. A chat's bundle is never
 split, so one very large chat is still one batch. Only email's bundles
 hold bytes, its `.eml`s, which it renders from; everyone else's name the
 blob store that holds them.
