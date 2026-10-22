@@ -506,9 +506,9 @@ feed of. The Add source form ticks it; in a hand-written config, set
 `type = "google_drive"` — your Google Docs, Sheets and Slides through
 the Drive API and latchkey (`api`). A backup, not yet a view: nothing is
 rendered or searched. Each sync keeps every file whose version moved,
-whole and in Google's own form, beside its comments, its revision list,
-the images it shows and an OpenDocument copy (`.odt`, `.ods`, `.odp`)
-that LibreOffice opens. Older versions stay, and a file you delete from
+whole and in Google's own form, beside its comments, its revision list
+and the images it shows. It can also keep a copy LibreOffice opens
+(`exports`, below). Older versions stay, and a file you delete from
 Drive stays in the backup.
 
 The download reaches four Google APIs, and latchkey signs each with its
@@ -527,14 +527,21 @@ If Google answers that an API is not enabled, run
 no Add source form for it yet; add it to the config by hand, as in
 [`all_sources.toml`](config_examples/all_sources.toml). `owned_only`
 keeps it to the files you own, and `file_ids` to the ones you name.
-`exports` says which copies Drive converts each version to: `["odf"]`
-by default, `[]` for none (the native JSON is still kept), or a list per
-kind.
+`exports` says which copies Drive converts each version to, beside its
+native JSON: `["odf"]` for `.odt`, `.ods` and `.odp`, `"ooxml"`,
+`"pdf"`, or a list per kind. By default there are none.
+`revision_exports` takes the same values for the revisions Drive lists,
+and is the only way to keep versions from before your first sync: each
+Doc and Sheet revision is fetched once, as an export. It is off by
+default too. A deck's revisions are never fetched, since Google exports
+a deck as it is now whatever revision is asked for.
 
 The first sync fetches every file. A later one costs one listing
 request per thousand files, plus a few requests per file that changed.
-Each version kept costs its native JSON (tens of KB gzipped) plus
-1–4 MB per export, since Google embeds the fonts in each.
+Each version kept costs its native JSON, tens of KB gzipped. An export,
+if you turn them on, costs 1–4 MB a version, since Google embeds the
+fonts in each, and so does each old revision's; the first sync of a
+file with a long history then fetches every revision.
 
 ## Google Takeout
 
