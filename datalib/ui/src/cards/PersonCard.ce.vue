@@ -1,6 +1,7 @@
 <script setup lang="ts">
-// A person: your contact, when the handle is linked to one, and what each
-// source says about them, each source in a section of its own. Opened by
+// A person: your contact, when the handle is linked to one (edited in
+// `ContactEditor`), and what each source says about them, each source in
+// a section of its own. Opened by
 // double-clicking a person chip. What it shows is `person.ts`; who a
 // handle is comes from `people`, the resolver every chip shares. Every
 // handle on the card is a chip, pale blue where it is linked to a
@@ -12,6 +13,7 @@ import { personSource, searchSource } from "./cardSources";
 import { isBrowserClick } from "./chatLink";
 import { uriFromEntity } from "./chipLinks";
 import ChipMenu from "./ChipMenu.ce.vue";
+import ContactEditor from "./ContactEditor.ce.vue";
 import EntityChip from "./EntityChip.ce.vue";
 import {
   canLinkHandles,
@@ -101,6 +103,12 @@ which). Sources are never merged: one phone number can carry a WhatsApp
 account, a name in a text-message backup and a Signal profile, and they
 need not agree. The source of the chip you opened this from comes
 first.</p>
+<p>Under <em>Your contact</em>, <em>Edit</em> changes its name, note and
+fields. What you type is kept as a draft that only you see, even after a
+reload, until <em>Save</em> publishes it or <em>Discard</em> drops it. If
+the contact was changed somewhere else meanwhile, Save says so and marks
+what changed rather than overwriting it. A photo is set or removed at
+once.</p>
 <p>Every handle is a chip: pale blue when it is linked to a contact,
 grey when not. Click one to link it, right-click for its menu, or use a
 section's <em>Link</em> button to link all of that source's unlinked
@@ -360,15 +368,7 @@ const headPhoto = computed(() => {
           </span>
         </li>
       </ul>
-      <dl v-if="sectionLines(model.mine, formatStamp).length" class="person-lines">
-        <template
-          v-for="line in sectionLines(model.mine, formatStamp)"
-          :key="line.label + line.value"
-        >
-          <dt>{{ line.label }}</dt>
-          <dd>{{ line.value }}</dd>
-        </template>
-      </dl>
+      <ContactEditor :contact-id="model.mine.key" :photo-url="model.mine.photo_url ?? null" />
     </section>
 
     <section
@@ -391,7 +391,13 @@ const headPhoto = computed(() => {
         </span>
       </h2>
       <div class="person-record">
-        <img v-if="photoOf(s.contact)" class="person-photo" :src="photoOf(s.contact)!" alt="" />
+        <img
+          v-if="photoOf(s.contact)"
+          class="person-photo"
+          :src="photoOf(s.contact)!"
+          alt=""
+          :title="model.mine ? 'Drag onto your contact’s photo to use it' : undefined"
+        />
         <div>
           <p class="person-record-name">{{ nameOf(s.contact) }}</p>
           <ul class="person-handles">

@@ -49,9 +49,13 @@ use schema::photos::PhotoRow;
 use schema::DDL;
 
 /// Where the applet serves a contact's photo, relative to the app's
-/// origin; what [`Store::contact`] answers as `photo_url`.
-pub fn photo_url(contact_id: &str) -> String {
-    format!("/applet/datalib_contacts/photo/{contact_id}")
+/// origin; what [`Store::contact`] answers as `photo_url`. `set_at`, the
+/// photo's `set_at_utc`, makes a new photo a new URL: a page draws an
+/// image it has already loaded under the same URL again from memory, so
+/// a changed photo would not show until a reload. The route ignores it.
+pub fn photo_url(contact_id: &str, set_at: &str) -> String {
+    let version: String = set_at.chars().filter(char::is_ascii_digit).collect();
+    format!("/applet/datalib_contacts/photo/{contact_id}?v={version}")
 }
 
 /// The URI a chip names one of your contacts by, whether or not it holds
@@ -286,11 +290,11 @@ pub struct ContactSummary {
 }
 
 /// A contact as the store answers it, from its `contacts` row, its links
-/// (working first) and whether it has a photo.
+/// (working first) and when its photo was set, if it has one.
 fn assemble(
     r: &sqlx::sqlite::SqliteRow,
     links: Vec<ContactHandle>,
-    has_photo: bool,
+    photo_set_at: Option<&str>,
 ) -> NormalizedContact {
     let contact_id: String = r.get("contact_id");
     let kind: String = r.get("kind");
@@ -303,7 +307,7 @@ fn assemble(
     contact.note = r.get("note");
     contact.created_at = r.get("created_at_utc");
     contact.modified_at = r.get("updated_at_utc");
-    contact.photo_url = has_photo.then(|| photo_url(&contact_id));
+    contact.photo_url = photo_set_at.map(|at| photo_url(&contact_id, at));
     contact.handles = links;
     contact
 }
@@ -449,8 +453,8 @@ impl Store {
         else {
             return Ok(None);
         };
-        let has_photo: Option<i64> =
-            sqlx::query_scalar("SELECT 1 FROM photos WHERE contact_id = ?")
+        let photo_set_at: Option<String> =
+            sqlx::query_scalar("SELECT set_at_utc FROM photos WHERE contact_id = ?")
                 .bind(contact_id)
                 .fetch_optional(&self.pool)
                 .await
@@ -466,7 +470,7 @@ impl Store {
         .iter()
         .map(|h| stored_link(h.get("handle"), h.get("stopped_working_by")))
         .collect();
-        Ok(Some(assemble(&r, links, has_photo.is_some())))
+        Ok(Some(assemble(&r, links, photo_set_at.as_deref())))
     }
 
     /// Every contact, by name, as [`Store::contact`] answers each: what the
@@ -494,8 +498,8 @@ impl Store {
                 .or_default()
                 .push(stored_link(h.get("handle"), h.get("stopped_working_by")));
         }
-        let with_photo: std::collections::HashSet<String> =
-            sqlx::query_scalar("SELECT contact_id FROM photos")
+        let photo_set_at: HashMap<String, String> =
+            sqlx::query_as("SELECT contact_id, set_at_utc FROM photos")
                 .fetch_all(&self.pool)
                 .await
                 .context("list the contacts with a photo")?
@@ -505,8 +509,8 @@ impl Store {
             .iter()
             .map(|r| {
                 let id: String = r.get("contact_id");
-                let has_photo = with_photo.contains(&id);
-                assemble(r, links.remove(&id).unwrap_or_default(), has_photo)
+                let set_at = photo_set_at.get(&id).map(String::as_str);
+                assemble(r, links.remove(&id).unwrap_or_default(), set_at)
             })
             .collect())
     }
@@ -687,15 +691,15 @@ impl Store {
         Ok(row.map(|r| (r.get("content_type"), r.get("bytes"))))
     }
 
-    /// Put a photo on a contact, replacing any it had. Refused for a
-    /// contact that does not exist, or for bytes [`check_photo`] will
-    /// not take.
+    /// Put a photo on a contact, replacing any it had, and answer the URL
+    /// it is served at. Refused for a contact that does not exist, or for
+    /// bytes [`check_photo`] will not take.
     pub async fn set_photo(
         &self,
         contact_id: &str,
         content_type: &str,
         bytes: &[u8],
-    ) -> Result<()> {
+    ) -> Result<String> {
         check_photo(content_type, bytes.len())?;
         let ct = content_type
             .split(';')
@@ -706,6 +710,7 @@ impl Store {
         let (now, tz) = IsoOffsetTimestamp::now_local().to_utc_and_offset();
         let mut tx = self.pool.begin().await?;
         let name = name_of_existing(&mut tx, contact_id).await?;
+        let url = photo_url(contact_id, &now);
         let row = PhotoRow {
             contact_id: contact_id.to_string(),
             content_type: ct,
@@ -717,7 +722,8 @@ impl Store {
             .await
             .context("store a contact's photo")?;
         tx.commit().await?;
-        self.seal(&format!("contacts: photo for {name:?}")).await
+        self.seal(&format!("contacts: photo for {name:?}")).await?;
+        Ok(url)
     }
 
     /// Returns whether the contact had a photo to take off.
@@ -1223,7 +1229,7 @@ mod tests {
             .create("data", ContactKind::Person, &[])
             .await
             .unwrap();
-        store
+        let data_photo = store
             .set_photo(&data, "image/png", b"\x89PNG\r\n\x1a\n")
             .await
             .unwrap();
@@ -1237,10 +1243,7 @@ mod tests {
         assert_eq!(names, ["Bridge crew", "data", "Will Riker"]);
         assert_eq!(listed[0].key, crew);
         assert_eq!(listed[0].kind, ContactKind::Group);
-        assert_eq!(
-            listed[1].photo_url.as_deref(),
-            Some(photo_url(&data).as_str())
-        );
+        assert_eq!(listed[1].photo_url, Some(data_photo));
         let handles: Vec<Option<&str>> = listed[2]
             .handles
             .iter()
@@ -1361,13 +1364,17 @@ mod tests {
         assert_eq!(store.contact(&id).await.unwrap().unwrap().photo_url, None);
         assert!(store.photo(&id).await.unwrap().is_none());
         let png = b"\x89PNG\r\n\x1a\n not really".to_vec();
-        store.set_photo(&id, "image/png", &png).await.unwrap();
+        let first = store.set_photo(&id, "image/png", &png).await.unwrap();
+        assert!(
+            first.starts_with(&format!("/applet/datalib_contacts/photo/{id}?v=")),
+            "{first}"
+        );
         assert_eq!(
             store.photo(&id).await.unwrap(),
             Some(("image/png".to_string(), png.clone()))
         );
         let c = store.contact(&id).await.unwrap().unwrap();
-        assert_eq!(c.photo_url.as_deref(), Some(photo_url(&id).as_str()));
+        assert_eq!(c.photo_url.as_deref(), Some(first.as_str()));
         let riker = email("riker@enterprise.org");
         store.link(&riker, &id).await.unwrap();
         let got = store.resolve(std::slice::from_ref(&riker)).await.unwrap();
@@ -1377,11 +1384,19 @@ mod tests {
             "resolve answers it too"
         );
 
-        store
+        let replaced = store
             .set_photo(&id, "image/jpeg", b"\xff\xd8 replaced")
             .await
             .unwrap();
         assert_eq!(store.photo(&id).await.unwrap().unwrap().0, "image/jpeg");
+        assert_ne!(
+            replaced, first,
+            "a new photo is a new URL, or a page keeps drawing the old one"
+        );
+        assert_eq!(
+            store.contact(&id).await.unwrap().unwrap().photo_url,
+            Some(replaced)
+        );
         let err = store
             .set_photo(&id, "text/plain", b"hi")
             .await
@@ -1445,7 +1460,7 @@ mod tests {
             .await
             .unwrap();
         store.merge(&older, &dup).await.unwrap();
-        store
+        let dup_photo = store
             .set_photo(&dup, "image/png", b"\x89PNG\r\n\x1a\n")
             .await
             .unwrap();
@@ -1467,7 +1482,11 @@ mod tests {
         let survivor = store.contact(&keep).await.unwrap().unwrap();
         assert_eq!(survivor.handles.len(), 2);
         assert_eq!(survivor.note.as_deref(), Some("trombone"));
-        assert_eq!(survivor.photo_url, Some(photo_url(&keep)));
+        assert_eq!(
+            survivor.photo_url,
+            Some(dup_photo.replace(&dup, &keep)),
+            "the photo moved, set when it was"
+        );
         for old in [&dup, &older] {
             assert_eq!(
                 store.contact(old).await.unwrap().unwrap().key,

@@ -404,13 +404,11 @@ async fn put_photo(
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    store
+    let photo_url = store
         .set_photo(&contact_id, content_type, &body)
         .await
         .map_err(refused)?;
-    Ok(Json(
-        json!({ "photo_url": datalib_contacts::photo_url(&contact_id) }),
-    ))
+    Ok(Json(json!({ "photo_url": photo_url })))
 }
 
 async fn delete_photo(

@@ -16,6 +16,7 @@ import { Resolver } from "./resolver";
 import { pushToast } from "@/toasts";
 import { UNIFIED_DOCUMENT_INDEX } from "@/api";
 import { changed, subscribeLive, type RootEvent } from "@/live";
+import type { ContactEdit, DraftView, Saved } from "./contactEdit";
 
 export const CONTACTS_APPLET = "/applet/datalib_contacts";
 
@@ -331,7 +332,7 @@ export function isAbsent(status: number, body: string): boolean {
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(`${CONTACTS_APPLET}${path}`, {
     ...init,
-    headers: init?.body ? { "content-type": "application/json" } : undefined,
+    headers: init?.headers ?? (init?.body ? { "content-type": "application/json" } : undefined),
   });
   const text = await r.text();
   if (!r.ok) {
@@ -419,6 +420,70 @@ export async function mergeContacts(from: string, into: string): Promise<void> {
 /** The contact and everything of it; its handles are nobody's after. */
 export async function deleteContact(contactId: string): Promise<void> {
   await call(`/contact/${encodeURIComponent(contactId)}`, { method: "DELETE" });
+  people.revalidate();
+  contactsById.revalidate();
+}
+
+// ── Editing a contact on its card ─────────────────────────────────────
+// The name, note and fields go through the contact's draft, which no
+// reader sees until a save publishes it; a photo changes at once.
+
+const contactPath = (id: string) => `/contact/${encodeURIComponent(id)}`;
+
+/** The contact as published: what every reader sees. */
+export function publishedEdit(contactId: string): Promise<ContactEdit> {
+  return call<ContactEdit>(`${contactPath(contactId)}/edit`);
+}
+
+/** The contact's draft, or null when it has none. */
+export async function draftOf(contactId: string): Promise<DraftView | null> {
+  const r = await fetch(`${CONTACTS_APPLET}${contactPath(contactId)}/draft`);
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error(`draft → ${r.status}: ${await r.text()}`);
+  return (await r.json()) as DraftView;
+}
+
+/** The contact's draft, cut now if it has none. */
+export function openDraft(contactId: string): Promise<DraftView> {
+  return call<DraftView>(`${contactPath(contactId)}/draft`, { method: "POST" });
+}
+
+export async function autosaveDraft(contactId: string, edit: ContactEdit): Promise<void> {
+  await call(`${contactPath(contactId)}/draft`, { method: "PUT", body: JSON.stringify(edit) });
+}
+
+/** Publish the draft, unless the contact moved since `seen`, the
+ *  published commit the card last showed: then nothing is saved and the
+ *  answer is the new view. A save renames every chip of the contact. */
+export async function saveDraft(contactId: string, seen: string): Promise<Saved> {
+  const saved = await post<Saved>(`${contactPath(contactId)}/draft/save`, { seen });
+  if (saved.outcome === "saved") {
+    people.revalidate();
+    contactsById.revalidate();
+  }
+  return saved;
+}
+
+export async function discardDraft(contactId: string): Promise<void> {
+  await call(`${contactPath(contactId)}/draft`, { method: "DELETE" });
+}
+
+/** The image types the contacts app takes for a photo
+ *  (`contact_schema::DRAWABLE_PHOTO_TYPES`, hand-kept). */
+export const PHOTO_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+
+export async function setContactPhoto(contactId: string, photo: Blob): Promise<void> {
+  await call(`/photo/${encodeURIComponent(contactId)}`, {
+    method: "PUT",
+    headers: { "content-type": photo.type },
+    body: photo,
+  });
+  people.revalidate();
+  contactsById.revalidate();
+}
+
+export async function dropContactPhoto(contactId: string): Promise<void> {
+  await call(`/photo/${encodeURIComponent(contactId)}`, { method: "DELETE" });
   people.revalidate();
   contactsById.revalidate();
 }
