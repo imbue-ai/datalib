@@ -47,7 +47,7 @@ export function issueText(failure: Failure, service: string, where: SignInWhere)
         headline: `${service} needs an OAuth client of your own before anyone can sign in.`,
         advice:
           where === "here"
-            ? "Create one or paste one below."
+            ? "Give it one below."
             : where === "gateway"
               ? "Set one up where the latchkey gateway is managed, then check again."
               : "Create one with latchkey auth browser-prepare in a terminal, then check again.",

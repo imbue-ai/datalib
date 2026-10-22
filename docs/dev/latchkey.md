@@ -87,6 +87,24 @@ Cloud's downloaded `client_secret.json` into latchkey's shape
 signs in. latchkey cannot say whether a service has a client short of
 trying, which is why the offer comes after the refusal.
 
+### A source that signs in to several services
+
+Google Drive's download reaches `google-drive`, `google-docs`,
+`google-sheets` and `google-slides`, and needs the same account on
+each. Its catalog entry names the first as `credentialService` and the
+rest as `credentialAlso`, and the wizard's one "Sign in with browser"
+runs `auth browser` for each in turn. Every one of them names its own
+accounts, so the first login says who, and each later one is passed
+`--account` only where that service already holds the account; a login
+that lands on someone else stops the run. A service that already holds
+the account is skipped, so a run cut short is finished by the logins
+left ("Finish signing in as …"), and when all of them hold it every one
+is run again. The decision is `datalib/ui/src/config/multiSignIn.ts`.
+Such a source is offered only the pasted client, stored on every
+service with one `POST …/oauth_client` each: `browser-prepare` would
+make a Cloud project per service. It has no "Paste a key" tab, since a
+pasted key would reach only the first service.
+
 ## Accounts: who names them
 
 latchkey can hold several credentials for one service, one per

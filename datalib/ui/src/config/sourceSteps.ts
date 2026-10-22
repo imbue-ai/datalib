@@ -505,7 +505,7 @@ export function seedFieldValues(entry: CatalogEntry, steps?: SourceSteps): Field
 function formValue(field: Field, existing: unknown): unknown {
   switch (field.kind) {
     case "string_list":
-      return (existing as string[]) ?? [];
+      return Array.isArray(existing) ? existing : [];
     case "select":
       return matchOption(field.options, existing);
     case "bytes":
@@ -1409,6 +1409,7 @@ function patchStep(
     ...fieldsFor(entry, phase).map((f) => f.target),
     ...INERT,
   ]);
+  const fields = new Map(fieldsFor(entry, phase).map((f) => [f.target, f]));
   for (const target of owned) {
     const path = ["params", ...target.split(".")];
     const want = wanted.get(target);
@@ -1416,7 +1417,7 @@ function patchStep(
     if (want) {
       if (alreadySays(want.field, had, want.value)) continue;
       text = setIn(text, ref, path, tomlValue(want.field, want.value));
-    } else if (had !== undefined) {
+    } else if (had !== undefined && readsBack(fields.get(target), had)) {
       text = deleteIn(text, ref, path);
     }
   }
@@ -1426,6 +1427,14 @@ function patchStep(
     text = setIn(text, ref, ["params", entry.method], "{}");
   }
   return text;
+}
+
+/// Whether a field can show the value the config holds. One it cannot
+/// (Google Drive's `exports` written as a table per kind, where the
+/// field takes a list) shows empty, and an empty box must not delete
+/// it; `untouchedSettings` names it instead.
+function readsBack(field: Field | undefined, had: unknown): boolean {
+  return field?.kind !== "string_list" || Array.isArray(had);
 }
 
 /// Does the config's value `had` already say what the form's `want`
