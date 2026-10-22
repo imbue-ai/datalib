@@ -4,6 +4,7 @@
 mod branched_chat;
 mod chatgpt_render;
 mod chatgpt_translate;
+mod export_then_api;
 mod incremental_skip;
 mod interrupt;
 mod live;

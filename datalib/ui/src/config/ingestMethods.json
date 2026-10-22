@@ -45,6 +45,10 @@
     {
       "path": "api",
       "reach": "origin"
+    },
+    {
+      "path": "export",
+      "reach": "local"
     }
   ],
   "claude": [

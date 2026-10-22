@@ -9,6 +9,7 @@
 
 pub mod api;
 pub mod db;
+pub mod export;
 mod fetchers;
 pub mod schema_raw;
 

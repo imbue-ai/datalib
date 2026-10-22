@@ -1,7 +1,7 @@
 //! Provider-owned config schema for the `chatgpt` source (Program A goal
 //! #1). Schema-only (serde + anyhow).
 
-use datalib_source_common::{not_negative, LatchkeySettings, SourceCommon};
+use datalib_source_common::{not_negative, LatchkeySettings, LocalPath, SourceCommon};
 use serde::{Deserialize, Serialize};
 
 /// This source's config stanzas, for `datalib-step help`.
@@ -16,8 +16,22 @@ pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
         method: "api",
         toml: include_str!("../examples/complete_api.toml"),
     },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "export",
+        toml: include_str!("../examples/minimal_export.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "export",
+        toml: include_str!("../examples/complete_export.toml"),
+    },
 ];
 
+/// Two ways in, one raw store: `api` walks chatgpt.com, `export` reads
+/// an unpacked data export off disk. Exactly one is set; an `ingest` step
+/// with neither is refused (`IngestMethods` below), and one with both by
+/// [`ChatgptConfig::validate`].
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ChatgptConfig {
@@ -28,9 +42,14 @@ pub struct ChatgptConfig {
     /// Which stored latchkey account this source signs in as.
     #[serde(default)]
     pub latchkey_settings: LatchkeySettings,
-    /// The live ChatGPT API — the one way in.
+    /// The live ChatGPT API.
     #[serde(default)]
     pub api: Option<ChatgptApiSync>,
+    /// The directory a ChatGPT data export was unpacked into — the one
+    /// holding `conversations.json`. Ingested as a whole snapshot: what
+    /// the export no longer has is pruned from the store.
+    #[serde(default)]
+    pub export: Option<LocalPath>,
 }
 
 impl ChatgptConfig {
@@ -38,6 +57,12 @@ impl ChatgptConfig {
         self.latchkey_settings
             .validate()
             .map_err(anyhow::Error::msg)?;
+        if self.api.is_some() && self.export.is_some() {
+            anyhow::bail!(
+                "chatgpt sets both `api` and `export` — pick one. To seed a store from an \
+                 export and then keep it fresh from the API, see the provider's INGEST.md."
+            );
+        }
         if let Some(api) = &self.api {
             not_negative("api.max_pages", api.max_pages).map_err(anyhow::Error::msg)?;
             not_negative("api.limit", api.limit).map_err(anyhow::Error::msg)?;
@@ -96,8 +121,10 @@ impl ChatgptApiSync {
 pub type ChatgptRenderConfig = datalib_source_common::BareRenderConfig;
 
 impl datalib_source_common::IngestMethods for ChatgptConfig {
-    const METHODS: &'static [datalib_source_common::IngestMethod] =
-        &[datalib_source_common::IngestMethod::origin("api")];
+    const METHODS: &'static [datalib_source_common::IngestMethod] = &[
+        datalib_source_common::IngestMethod::origin("api"),
+        datalib_source_common::IngestMethod::local("export"),
+    ];
 }
 
 #[cfg(test)]
@@ -125,6 +152,25 @@ mod tests {
             let err = cfg.validate().unwrap_err().to_string();
             assert!(err.contains("api.sleep_between"), "{err}");
         }
+    }
+
+    /// One store, two ways to fill it, and a config that names both
+    /// would run a live download and then prune it to the export's
+    /// snapshot. Refused at validate, with the alternative named.
+    #[test]
+    fn api_and_export_together_are_refused() {
+        let c: ChatgptConfig =
+            toml::from_str("api = {}\n[export]\npath = \"~/chatgpt-export\"\n").unwrap();
+        let err = c.validate().unwrap_err().to_string();
+        assert!(err.contains("both"), "{err}");
+        let export_only: ChatgptConfig =
+            toml::from_str("[export]\npath = \"~/chatgpt-export\"\n").unwrap();
+        export_only.validate().unwrap();
+        assert!(export_only
+            .export
+            .unwrap()
+            .path()
+            .ends_with("chatgpt-export"));
     }
 
     #[test]

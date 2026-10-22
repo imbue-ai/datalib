@@ -1,8 +1,15 @@
 # ChatGPT: download
 
 The `chatgpt` source mirrors a chatgpt.com account's conversations into
-a raw doltlite store. It has one ingest method, the live web API, so
-its ingest step's params are one table:
+a raw doltlite store. It has two ingest methods, and an ingest step names
+exactly one:
+
+| table                     | reads                                         | signs in |
+|---------------------------|-----------------------------------------------|----------|
+| `[steps.params.api]`      | chatgpt.com's web API, one request per conversation | yes |
+| `[steps.params.export]`   | an unpacked data export off its `path` (below) | no      |
+
+The API method:
 
 ```toml
 [[groups]]
@@ -188,6 +195,63 @@ exactly what upstream changed. The CAS bytes survive, but with the
 edge rows gone every attachment is fetched over the wire again and
 lands on the hash it already had.
 
+## The `export` method: ingesting a data export
+
+ChatGPT's Settings → Data controls → Export data emails a link to a zip
+of the whole account. `[steps.params.export] path = …` names the
+folder it was unpacked into:
+
+```
+<path>/
+  conversations.json   # every conversation, each whole, mapping tree included
+  user.json            # the account (optional)
+  file-…, file_…       # attached files, named for the file id, some in folders
+```
+
+The ingest ([`src/ingest/export.rs`](src/ingest/export.rs)) writes the
+rows the API walk writes and holds them at the versions the API would
+list them at, and makes no request, so no rate limit applies:
+
+- **Conversations.** Each entry of `conversations.json` is stored as a
+  detail fetch would be (`parse_conversation`, volatile fields and all)
+  and held at its `update_time` in whole seconds. One the store already
+  holds at that version is not written again, so reading an unchanged
+  export commits nothing.
+- **The account.** `user.json` becomes the `me` row when the store has
+  none. An export of an account other than the one the store holds is
+  refused before anything is written, since its prune would empty the
+  mirror.
+- **Attachments.** The edges are the files each conversation names, as
+  for the API. Their bytes come from the export's own copy, found by the
+  file id that starts its name (`file-AbC123-notes.pdf`,
+  `file_00ab…-<uuid>.png`) anywhere under `path`. A file the export
+  does not have stays owed, counted in one `phase:attachments` row: an
+  `api` run fetches it.
+- **Deletions.** The export is a complete snapshot, so a stored
+  conversation it does not list is deleted with its edges, in the
+  transaction that writes the rest. Entries none of which has an id are
+  a shape this reader does not know, not an empty account: they delete
+  nothing and are a `phase:conversations.json` row.
+
+Every run reads the whole export again; only what changed is written.
+
+### Seeding from an export, then keeping it fresh with the API
+
+The way past the API's rate limit on a large account: ingest an export
+first, then swap the ingest step's `export` table for `api`. Both write
+the same rows at the same versions, so the first API run owes only the
+conversations that moved since the export was taken, and no attachment
+the export held (`tests/chatgpt_tests/export_then_api.rs`). Identity
+survives the swap: render mints a conversation's uuid from its
+ChatGPT id under the group id, and neither changes.
+
+The swap is one-way. Read an export into a store the API has since
+filled, and its prune deletes every conversation made after the
+export was taken; the step refuses a config naming both tables for
+that reason. A source that only ever reads exports takes a newer one
+by pointing `path` at it; to read one into a store the API has been
+filling, start a new source from it.
+
 ## Auth + Cloudflare
 
 The downloader never handles ChatGPT cookies. It shells out to
@@ -330,10 +394,13 @@ filegroup. Every hermetic test is a module of
 `incremental_skip`, `playback_roundtrip`, `run_problems` (what a
 partial failure records, and when it clears), `interrupt` (a run cut
 off anywhere resumes to the same store), `token_renewal` (an expired
-token is signed in again once, and kept only for the account held) and `upgrade` (an older store
-opens holding what it had) replay small snapshots of the same shape
+token is signed in again once, and kept only for the account held), `upgrade` (an older store
+opens holding what it had) and `export_then_api` (an API run over an
+export-seeded store fetches only what moved) replay small snapshots of the same shape
 through a playback tape (`docs/dev/testing.md` § "Watching a sync stream" explains the
-tapes). The shared `tests/fixtures` root ingests it too.
+tapes). The shared `tests/fixtures` root ingests it too. The export reader's own cases (a
+shrinking export, a file it lacks, another account's export, an
+unchanged one read again) are unit tests in `src/ingest/export.rs`.
 
 The `live` module downloads one real conversation and snapshots it.
 `:chatgpt_tests` skips it (`--skip live::`); run it with
