@@ -250,13 +250,7 @@ async fn load(db: &RawDb, cursor: Option<&str>, pin: &datalib_etl::pin::Pin) -> 
             .extend(chat::attachment_ids(m));
     }
     blobs.extend(
-        BlobBundle::load_many(
-            db.pool(),
-            Some(db.cas().pool()),
-            CHAT_BLOB_PROJECTION,
-            chat_refs,
-        )
-        .await?,
+        BlobBundle::load_many(db.pool(), Some(db.cas()), CHAT_BLOB_PROJECTION, chat_refs).await?,
     );
     for (chat_id, projection, refs) in [
         (feeds::GEMINI, GEMINI_BLOB_PROJECTION, gemini_refs),
@@ -265,7 +259,7 @@ async fn load(db: &RawDb, cursor: Option<&str>, pin: &datalib_etl::pin::Pin) -> 
         blobs.extend(
             BlobBundle::load_many(
                 db.pool(),
-                Some(db.cas().pool()),
+                Some(db.cas()),
                 projection,
                 [(chat_id.to_string(), refs)],
             )
@@ -479,7 +473,7 @@ async fn load_voice_blobs(
     }
     BlobBundle::load_many(
         db.pool(),
-        Some(db.cas().pool()),
+        Some(db.cas()),
         VOICE_BLOB_PROJECTION,
         refs_by_chat,
     )
@@ -603,7 +597,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
         .map(|ref_name| NormalizedAttachment {
             mime_type: mime_of(&ref_name),
             file_name: Some(ref_name.clone()),
-            rel_path: None,
+            href: None,
             byte_len: None,
             source_url: None,
             ref_id: Some(ref_name),

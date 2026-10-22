@@ -492,7 +492,7 @@ expression: snapshot
       "md_path": "notion/render_markdown/pages/b1d6e000-1701-4d00-8000-000000000001/threads/d0000001-1701-4d00-8000-000000000001.md",
       "modified_at": "2369-04-15T01:05:00.000Z",
       "provider": "notion",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "notion",
       "title": "Bridge Operations Handbook"
     },
@@ -768,7 +768,7 @@ expression: snapshot
       "md_path": "notion/render_markdown/pages/b1d6e000-1701-4d00-8000-000000000001/threads/d0000001-1701-4d00-8000-000000000002.md",
       "modified_at": "2369-04-15T01:10:00.000Z",
       "provider": "notion",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "notion",
       "title": "Bridge Operations Handbook"
     },
@@ -1992,7 +1992,7 @@ expression: snapshot
       "md_path": "notion/render_markdown/pages/b1d6e000-1701-4d00-8000-000000000003/index.md",
       "modified_at": "2369-04-15T00:02:00.000Z",
       "provider": "notion",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "notion",
       "title": "Incident Log: Stardate 47988.1"
     },
@@ -2004,7 +2004,7 @@ expression: snapshot
       "md_path": "notion/render_markdown/pages/b1d6e000-1701-4d00-8000-000000000001/index.md",
       "modified_at": "2369-04-15T00:02:00.000Z",
       "provider": "notion",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "notion",
       "title": "Bridge Operations Handbook"
     },
@@ -2016,7 +2016,7 @@ expression: snapshot
       "md_path": "notion/render_markdown/pages/b1d6e000-1701-4d00-8000-000000000002/index.md",
       "modified_at": "2369-04-15T00:02:00.000Z",
       "provider": "notion",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "notion",
       "title": "Shift Roster"
     },

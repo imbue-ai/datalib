@@ -272,8 +272,9 @@ straight into a document's frame. The UI's own code still reaches into
 the frame, so the `data-section-uuid` wrappers work as before.
 
 No `<iframe>` survives the sanitizer, and the frame's policy frames
-nothing. A document beside a markdown, such as an `.html` attachment in
-`blobs/`, is served under a policy that runs no script at all
+nothing. An attachment that is a document, such as an `.html` file at
+its `/data/…` address or in `blobs/`, is served under a policy that
+runs no script at all
 (`DATA_DOCUMENT_CSP` in `http/src/embed.rs`). A chart in a document is
 a `<div data-time-series="…">`, which the UI's own code draws into the
 frame (`docs/dev/time_series.md` §"Charts in documents").

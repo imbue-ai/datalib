@@ -41,9 +41,8 @@ pub struct ParsedNotion {
     pub anchor_text: HashMap<String, String>,
     /// `notion_attachments` row ids per page, bytes fetched or not.
     pub attachment_ids_by_page: HashMap<String, Vec<String>>,
-    /// Attachment bytes per page, pre-loaded from the sibling CAS.
-    /// Render calls `bundle.materialize_to_dir(<page_dir>/blobs)` once
-    /// per page and resolves each slot with `bundle.filename_for`.
+    /// What the sibling CAS holds of each page's attachments; render
+    /// resolves each slot with `bundle.href_for`.
     pub blobs_by_page: HashMap<String, BlobBundle>,
     /// The commit everything was read at.
     pub head: Option<String>,
@@ -123,7 +122,7 @@ async fn load(db: &RawDb, range: RawRange<'_>) -> Result<ParsedNotion> {
     }
     let mut blobs_by_page = BlobBundle::load_many(
         db.pool(),
-        Some(db.cas().pool()),
+        Some(db.cas()),
         ATTACHMENTS_PROJECTION_SQL,
         refs_by_page,
     )

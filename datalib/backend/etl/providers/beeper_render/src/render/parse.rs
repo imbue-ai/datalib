@@ -590,7 +590,7 @@ impl MediaIndex {
             let rows = sqlx::query_as::<_, (String, Option<String>, Option<i64>)>(
                 "SELECT blake3, content_type, byte_len FROM cas_objects",
             )
-            .fetch_all(&cas)
+            .fetch_all(cas.pool())
             .await
             .context("read cas_objects");
             cas.close().await;

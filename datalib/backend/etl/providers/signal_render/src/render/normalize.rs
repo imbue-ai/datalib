@@ -121,7 +121,7 @@ fn to_item(
         .map(|a| NormalizedAttachment {
             // chat-common fills this in once it has materialized the
             // bytes for the `ref_id` below.
-            rel_path: None,
+            href: None,
             file_name: a.file_name.clone(),
             // The bundle's own `is_image` flag has no place in the
             // normalized shape, which reads image-ness off the MIME

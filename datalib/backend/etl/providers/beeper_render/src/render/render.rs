@@ -109,16 +109,13 @@ fn load_blobs(
                             let Some(hash) = b.blake3.as_deref() else {
                                 continue;
                             };
-                            let Some(obj) = cas.get(hash).await? else {
+                            let Some(mut described) = cas.describe(hash).await? else {
                                 bundle.mark_missing(hash);
                                 continue;
                             };
-                            bundle.add(
-                                hash,
-                                obj.bytes,
-                                obj.content_type.or_else(|| b.content_type.clone()),
-                                Some(b.slot.clone()),
-                            );
+                            described.content_type =
+                                described.content_type.or_else(|| b.content_type.clone());
+                            bundle.add_stored(hash, cas.step(), described, Some(b.slot.clone()));
                         }
                     }
                     if !bundle.is_empty() || bundle.has_missing() {

@@ -169,24 +169,22 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
         assert!(check_in.rows.iter().any(|r| r.kind == "Facebook Post"));
         assert!(check_in.rows.iter().any(|r| r.kind == "Facebook Post Message"));
 
-        // The photo post: its two images were CAS'd at ingest and are now
-        // materialized beside the page, so the markdown embeds them.
+        // The photo post: its two images were CAS'd at ingest, and the
+        // markdown embeds them at their addresses in the blob store
+        // rather than copying them beside the page.
         let photo_post = docs
             .iter()
             .find(|d| d.rows.iter().any(|r| r.preview.contains("Two views of the bridge")))
             .expect("photo post rendered");
         let md = fs::read_to_string(&photo_post.md_path)?;
         assert_eq!(
-            md.matches("blobs/").count(),
+            md.matches("](/data/").count(),
             2,
-            "two materialized images: {md}"
+            "two images linked in the blob store: {md}"
         );
-        let blobs_dir = photo_post.md_path.parent().unwrap().join("blobs");
-        assert_eq!(
-            fs::read_dir(&blobs_dir)?.count(),
-            2,
-            "two files under {}",
-            blobs_dir.display()
+        assert!(
+            !photo_post.md_path.parent().unwrap().join("blobs").exists(),
+            "nothing copied beside the page"
         );
         assert!(md.contains("The bridge at dawn."), "photo caption: {md}");
         assert!(md.contains("— with Data"), "tag: {md}");
@@ -273,7 +271,7 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
         assert!(md.contains("Tea, Earl Grey, hot? ☕"), "{md}");
         assert!(md.contains("🔗 [The Picard Maneuver"), "the share: {md}");
         assert!(md.contains("Unsent"), "the unsent message: {md}");
-        assert_eq!(md.matches("blobs/").count(), 2, "the photo and the sticker: {md}");
+        assert_eq!(md.matches("](/data/").count(), 2, "the photo and the sticker: {md}");
         assert!(md.find("Engage.") < md.find("Now."), "the older first: {md}");
         assert!(riker.rows.iter().any(|r| r.kind == "Facebook Reaction"));
         assert_eq!(riker.md_path.file_name().unwrap(), "2369.md");

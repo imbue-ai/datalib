@@ -924,10 +924,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
     def _whatsapp_attachments(self) -> tuple[list[str], list[str], list[str]]:
         """WhatsApp's rendered attachments, as (linked, missing, placeholders).
 
-        `linked` is every `blobs/…` target the markdown points at,
-        `missing` the subset with no file behind it, and `placeholders`
-        every attachment that rendered as "(not yet fetched)" instead of
-        a link.
+        `linked` is every `/data/<step>/blob/<hash>` address the markdown
+        points at, `missing` the subset whose step's blob store does not
+        hold that hash, and `placeholders` every attachment that rendered
+        as "(not yet fetched)" instead of a link.
 
         WhatsApp is the source where a broken attachment is invisible
         from the outside: ingest registers the bytes in the CAS whether
@@ -945,11 +945,27 @@ class IngestedTngPipelineTest(unittest.TestCase):
             placeholders += [
                 line.strip() for line in body.splitlines() if "not yet fetched" in line
             ]
-            for target in re.findall(r"\(blobs/([^)]+)\)", body):
-                linked.append(target)
-                if not (md.parent / "blobs" / target).is_file():
-                    missing.append(f"{md.name} -> blobs/{target}")
+            for step, digest in re.findall(
+                r"\(/data/([^/)]+/[^/)]+)/blob/([0-9a-f]{64})\)", body
+            ):
+                linked.append(digest)
+                if not self._blob_held(step, digest):
+                    missing.append(f"{md.name} -> /data/{step}/blob/{digest}")
         return linked, missing, placeholders
+
+    def _blob_held(self, step: str, digest: str) -> bool:
+        """Whether `step`'s blob store holds the bytes `digest` names."""
+        store = self.workspace / step / "blobs.sqlite"
+        if not store.is_file():
+            return False
+        con = sqlite3.connect(f"file:{store}?mode=ro", uri=True)
+        try:
+            row = con.execute(
+                "SELECT 1 FROM cas_objects WHERE blake3 = ?", (digest,)
+            ).fetchone()
+        finally:
+            con.close()
+        return row is not None
 
     def _problems(self) -> dict[str, list[str]]:
         """Per-source `problems` rows, as `source -> [summary…]`.
@@ -1598,7 +1614,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             len(linked),
             3,
             "each WhatsApp media file whose bytes are on disk must render "
-            f"as a link into blobs/; got {linked}",
+            f"as a link into its blob store; got {linked}",
         )
         self.assertEqual(missing, [], "a rendered attachment link points at no file")
         # The fourth media message names a file the phone deleted. It

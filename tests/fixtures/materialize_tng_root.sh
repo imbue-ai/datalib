@@ -7,6 +7,8 @@
 #
 # Produces, under <out-root>:
 #   <stanza>/render_markdown/...       Conversation markdown trees (from qmd.tar).
+#   <stanza>/ingest/blobs.sqlite       the blob store its pages link attachments in
+#                                      (from qmd.tar; no raw store beside it).
 #   unified_document_index/grid_index/db.doltlite_db  doltlite (SQLite-compatible) file the backend reads.
 #   unified_document_index/qmd_aggregator/qmd/index.sqlite QMD index (from qmd-index.tar).
 #   unified_document_index/qmd_models/          the qmd GGUFs this target carries,

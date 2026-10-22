@@ -2,13 +2,12 @@
  * Rewriting relative asset references inside a rendered markdown body to
  * the backend's asset route.
  *
- * Renderers write asset references **relative** to the markdown file
- * (`blobs/foo.png`) so a rendered tree stays
- * usable on its own — opened off disk, served by a static file server,
- * or built by Quarto. The app serves those same files through
- * the `unified_document_index` applet's `/asset/{markdown_uuid}/{rel}`, so the
- * body has to be rewritten on
- * the way into the DOM.
+ * An attachment its source's blob store holds is linked at its address,
+ * `/data/<group>/<function>/blob/<hash>`, which the server answers and
+ * which needs no rewriting. What is left relative is a file a renderer
+ * wrote beside the page (`blobs/foo.png`), served through the
+ * `unified_document_index` applet's `/asset/{markdown_uuid}/{rel}`, so
+ * the body has to be rewritten on the way into the DOM.
  *
  * Lives in its own module (rather than inline in `ChatBody.ce.vue`) so
  * the rules are unit-testable without mounting a component.

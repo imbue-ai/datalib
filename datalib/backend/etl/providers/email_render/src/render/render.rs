@@ -314,7 +314,7 @@ fn build_chat(
         let parsed_eml = bucket
             .blobs
             .get(&em.blob_id)
-            .map(|b| ParsedEml::from_eml_bytes(&b.bytes))
+            .map(|b| ParsedEml::from_eml_bytes(b.bytes.as_deref().unwrap_or_default()))
             .unwrap_or_default();
 
         // Real downloadable attachments → bundle. Filled BEFORE the
@@ -342,7 +342,7 @@ fn build_chat(
                 render_bundle.add_hashed(
                     a.blob_id.clone(),
                     blob.blake3.clone(),
-                    blob.bytes.clone(),
+                    blob.bytes.clone().unwrap_or_default(),
                     blob.content_type.clone(),
                     blob.upstream_name.clone(),
                 );

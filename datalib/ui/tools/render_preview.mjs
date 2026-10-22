@@ -186,7 +186,9 @@ md.use(chipLinks);
 
 // A photo or attachment beside a page (`blobs/x.svg`) is inlined, so the
 // page shows it wherever the preview is opened. The fixture's markdown
-// tar carries no blobs, so one that is not there draws as a grey disc.
+// tar carries no blobs, so one that is not there draws as a grey disc,
+// and so does one linked in its source's blob store (`/data/…`), which
+// no server answers here.
 const MISSING = `data:image/svg+xml;base64,${Buffer.from(
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><rect width="8" height="8" fill="#94a3b8"/></svg>',
 ).toString("base64")}`;
@@ -196,7 +198,9 @@ const renderImage = md.renderer.rules.image;
 md.renderer.rules.image = (tokens, idx, options, env, self) => {
   const token = tokens[idx];
   const src = token.attrGet("src") ?? "";
-  if (env?.dir && src && !/^[a-z][a-z0-9+.-]*:|^\//i.test(src)) {
+  if (src.startsWith("/data/")) {
+    token.attrSet("src", MISSING);
+  } else if (env?.dir && src && !/^[a-z][a-z0-9+.-]*:|^\//i.test(src)) {
     const file = join(env.dir, src);
     const type = IMAGE_TYPES[extname(file).toLowerCase()];
     token.attrSet(

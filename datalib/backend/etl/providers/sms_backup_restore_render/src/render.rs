@@ -173,13 +173,7 @@ async fn load_blobs(
             bag.push(r);
         }
     }
-    BlobBundle::load_many(
-        db.pool(),
-        Some(db.cas().pool()),
-        SMS_BLOB_PROJECTION,
-        refs_by_chat,
-    )
-    .await
+    BlobBundle::load_many(db.pool(), Some(db.cas()), SMS_BLOB_PROJECTION, refs_by_chat).await
 }
 
 fn chat_id(v: &Value) -> String {
@@ -373,7 +367,7 @@ fn item(source_id: &str, v: &Value) -> NormalizedChatItem {
                     NormalizedAttachment {
                         mime_type: mime_for(base),
                         file_name: Some(base.to_string()),
-                        rel_path: None,
+                        href: None,
                         byte_len: None,
                         source_url: None,
                         ref_id: Some(ref_name),

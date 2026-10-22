@@ -3,7 +3,7 @@
 //! The page body is **not** rendered here. Notion returns it already
 //! rendered as enhanced markdown, and the download step stores it whole;
 //! this writes it out with frontmatter, resolving each attachment slot
-//! to the file the CAS materialized beside it. What used to be a
+//! to its address in the source's blob store. What used to be a
 //! block-type matrix maintained against Notion's evolving block set is
 //! now Notion's problem.
 
@@ -30,7 +30,9 @@ use super::parse::ParsedNotion;
 ///     comment's id carries its `created_time` in its leading bits
 ///     (`datalib_id`'s v8 layout). Every uuid moved; `notion_page_uuid`
 ///     now holds the page's datalib id.
-pub const RENDER_VERSION: u32 = 7;
+/// v8: an attachment links to its address in the blob store rather than
+///     a copy beside the page.
+pub const RENDER_VERSION: u32 = 8;
 pub const SLUG_MAX_LEN: usize = 60;
 
 static SLUG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[^a-z0-9]+").unwrap());
@@ -128,13 +130,13 @@ pub fn thread_qmd_path_rel(stanza: &str, page_id: &str, discussion_id: &str) -> 
         .to_string_lossy()
         .into_owned()
 }
-/// Rewrite attachment slots to the filenames the bundle materialized.
+/// Rewrite attachment slots to where the bundle says the bytes are.
 ///
 /// The stored markdown references each attachment by slot — the
 /// unsigned upstream URL — because that is the only identifier that
 /// survives Notion re-signing the link on every fetch. A slot with no
 /// bytes in the CAS is left as-is: an upstream link still beats a
-/// broken relative path.
+/// broken one.
 fn localize_attachments(markdown: &str, bundle: &BlobBundle) -> String {
     let mut out = markdown.to_string();
     let slots: Vec<String> = bundle
@@ -142,8 +144,8 @@ fn localize_attachments(markdown: &str, bundle: &BlobBundle) -> String {
         .map(|(ref_id, _)| ref_id.to_string())
         .collect();
     for slot in slots {
-        if let Some(name) = bundle.filename_for(&slot) {
-            out = out.replace(&slot, &format!("blobs/{name}"));
+        if let Some(href) = bundle.href_for(&slot) {
+            out = out.replace(&slot, &href);
         }
     }
     out
@@ -400,8 +402,12 @@ pub fn render_notion(
             inputs.read_all("notion_attachments", ids.iter().map(String::as_str));
         }
         let bundle = parsed.blobs_by_page.get(page_uuid).unwrap_or(&empty_bundle);
-        if !bundle.is_empty() {
-            bundle.materialize_to_dir(&page_dir.join("blobs"))?;
+        // An older build copied the bytes here; the page links its CAS now.
+        match fs::remove_dir_all(page_dir.join("blobs")) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                return Err(e).with_context(|| format!("remove {}/blobs", page_dir.display()));
+            }
+            _ => {}
         }
         let body = inputs
             .lookup("page_markdown", &parsed.markdown_by_page)

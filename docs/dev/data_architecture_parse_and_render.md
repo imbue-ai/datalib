@@ -100,8 +100,12 @@ database per source, at
   - `source_measurements` — the storage report's samples
     ([`grid_rows.md`](grid_rows.md)).
 
-The human artifact stays a file: a `.md` with YAML frontmatter, beside
-a `blobs/` directory for its attachments.
+The human artifact stays a file: a `.md` with YAML frontmatter. An
+attachment its source's blob store holds is linked there, at
+`/data/<group>/<function>/blob/<hash>`, which `datalib-http` answers
+([`blob_store/README.md`](../../datalib/backend/blob_store/README.md)).
+Only bytes render makes itself, an email's attachments today, are
+written to a `blobs/` directory beside the page.
 
 Every table's schema is a hand-written struct in `datalib_schema` with
 `#[derive(PortableTable)]` deriving the DDL, so the same struct defines
@@ -167,8 +171,8 @@ for the indexer, or qmd's role taken over by something that reads from
 the database (a direction
 [`multimodal_retrieval.md`](plans/multimodal_retrieval.md) already
 proposes for other reasons). Two smaller things point the same way:
-attachment blobs are materialized into each page's `blobs/` directory,
-and the markdown is deliberately human-readable and greppable on disk.
+an email's attachments are still written into each page's `blobs/`
+directory, and the markdown is deliberately human-readable and greppable on disk.
 Moving the markdown into the store saves space only if the file tree
 then goes away; `plans/multimodal_retrieval.md` §4 measured the same
 text already stored five times on a real data root.

@@ -242,7 +242,7 @@ fn chat_common(scratch: &Path) -> Result<Vec<Document>> {
         source_ref: None,
     };
     let attachment = |rel: Option<&str>, name: String, url: Option<String>| NormalizedAttachment {
-        rel_path: rel.map(str::to_string),
+        href: rel.map(str::to_string),
         file_name: Some(name),
         mime_type: Some("application/octet-stream".into()),
         byte_len: Some(1701),

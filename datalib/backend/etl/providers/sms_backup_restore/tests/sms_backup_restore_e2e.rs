@@ -184,11 +184,12 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
             "gif MMS caption"
         );
 
-        // Attachments materialized + linked (image, audio, gif).
+        // Attachments linked in the blob store (image, audio, gif).
         assert!(
-            all_md.contains("blobs/"),
-            "attachments materialized into blobs/"
+            all_md.contains("/blob/"),
+            "attachments linked at their blob-store addresses"
         );
+        assert!(!all_md.contains("blobs/"), "nothing copied beside a page");
         assert!(
             all_md.contains("<audio"),
             "audio recording renders an inline player"

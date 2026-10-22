@@ -902,7 +902,7 @@ fn files(
             .filter(|n| !n.is_empty())
             .unwrap_or(export);
         out.push(NormalizedAttachment {
-            rel_path: None,
+            href: None,
             file_name: Some(shown.to_string()),
             mime_type: mime_of(export),
             byte_len: None,

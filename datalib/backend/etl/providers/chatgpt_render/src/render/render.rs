@@ -398,7 +398,7 @@ fn uncovered_parts(parts: &[&OAContentPartRow]) -> Vec<Problem> {
 
 fn att_to_norm(a: &OAAttachmentRef) -> NormalizedAttachment {
     NormalizedAttachment {
-        rel_path: None,
+        href: None,
         file_name: a.name.clone(),
         // chat-common only checks the `image/` prefix to pick inline
         // rendering; the exact subtype is immaterial.
