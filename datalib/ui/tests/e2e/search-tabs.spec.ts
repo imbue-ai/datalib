@@ -3,7 +3,7 @@
 // screen moves until the reader picks one.
 
 import { test, expect, type Page, type Route } from "@playwright/test";
-import { EVERY_ROW, SEARCH_ROWS, searchAndSettle, type GridApi } from "./grid-helpers";
+import { EVERY_ROW, GRID, SEARCH_ROWS, searchAndSettle, type GridApi } from "./grid-helpers";
 
 type Tab = "fields" | "words" | "meaning";
 
@@ -66,4 +66,20 @@ test("when the fields find nothing, the first qmd tab with rows opens", async ({
   await searchAndSettle(page, "enterprise");
   await expect(page.locator(".grid-wrap")).toHaveAttribute("data-shown-tab", /words|meaning/);
   await expect(tabButton(page, "fields")).not.toHaveClass(/is-on/);
+});
+
+/// The source chips wrapped, so a count that grew, or a tab that came in,
+/// added a row and moved every result under it, often just as it was
+/// about to be clicked.
+test("the chips row keeps its height whatever the counts", async ({ page }) => {
+  await page.setViewportSize({ width: 760, height: 800 });
+  await page.goto(GRID);
+  const row = page.locator(".view-row");
+  await searchAndSettle(page, "is:document");
+  const height = (await row.boundingBox())!.height;
+  await searchAndSettle(page, "picard");
+  await expect(tabButton(page, "words")).toBeVisible();
+  expect((await row.boundingBox())!.height).toBe(height);
+  await searchAndSettle(page, "");
+  expect((await row.boundingBox())!.height).toBe(height);
 });

@@ -239,7 +239,10 @@ hold, and draws them with `TimeSeriesChart`, the chart the Time series
 card uses. The document's frame runs no script of its own, so the chart
 is the app's code reaching into it, the same way chips and the copy
 buttons are; its styles are in the frame's own stylesheet. A time series
-the index does not hold is left out, and a chart with none says so.
+the index does not hold is left out, and a chart with none says so. On a
+root that runs no time-series applet, the chart says that in a sentence
+(the gateway's 502 "no applet" is what `api.ts::appletAbsent` reads), and
+either note takes only its own line, not the chart's height.
 
 What draws where:
 

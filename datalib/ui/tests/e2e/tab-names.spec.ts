@@ -73,3 +73,15 @@ test("Escape leaves the tab as it was, and a blank name is refused", async ({ pa
   await nameBox(page).press("Escape");
   await expect(gridTab(page)).toHaveText(before);
 });
+
+/// A tab named after a long unbroken query widened the whole sidebar to
+/// fit it; the name is cut short instead.
+test("a long tab name leaves the sidebar its width", async ({ page }) => {
+  await page.goto(GRID);
+  const sidebar = page.locator("nav.ct-sidebar");
+  const width = (await sidebar.boundingBox())!.width;
+  const q = `with:email:${"a".repeat(80)}@enterprise.starfleet`;
+  await search(page, q);
+  await expect(gridTab(page)).toHaveText(`Search: ${q}`);
+  expect((await sidebar.boundingBox())!.width).toBe(width);
+});

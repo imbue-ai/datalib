@@ -3,17 +3,28 @@
 // shows the entries `chipMenuOf` built, with any the surface adds, and
 // reports which one was picked; `runChipAction` does a chip's own. A click anywhere
 // else, a second right-click or Escape closes it.
-import { computed, onMounted, onUnmounted } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 
-import type { MenuItem } from "./chipActions";
+import { menuPlacement, type MenuItem } from "./chipActions";
 
 const props = defineProps<{ entries: MenuItem[]; x: number; y: number }>();
 const emit = defineEmits<{ pick: [id: string]; close: [] }>();
 
-const style = computed(() => ({
-  left: `${Math.min(props.x, window.innerWidth - 260)}px`,
-  top: `${Math.min(props.y, window.innerHeight - 40 * (props.entries.length + 1))}px`,
-}));
+const menu = ref<HTMLElement | null>(null);
+const size = ref({ width: 0, height: 0 });
+
+const style = computed(() => {
+  const { left, top } = menuPlacement({ x: props.x, y: props.y }, size.value, {
+    width: window.innerWidth,
+    height: window.innerHeight,
+  });
+  return { left: `${left}px`, top: `${top}px` };
+});
+
+onMounted(() => {
+  const r = menu.value?.getBoundingClientRect();
+  if (r) size.value = { width: r.width, height: r.height };
+});
 
 function onKey(ev: KeyboardEvent) {
   if (ev.key === "Escape") emit("close");
@@ -23,8 +34,8 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 </script>
 
 <template>
-  <div class="chip-menu-overlay" @click="emit('close')" @contextmenu.prevent="emit('close')">
-    <div class="chip-menu" role="menu" :style="style" @click.stop>
+  <div class="chip-menu-overlay" @click="emit('close')" @contextmenu.prevent.stop="emit('close')">
+    <div ref="menu" class="chip-menu" role="menu" :style="style" @click.stop>
       <template v-for="e in entries" :key="e.id">
         <div v-if="e.separator" class="chip-menu-divider" />
         <div
