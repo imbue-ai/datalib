@@ -15,6 +15,10 @@ file there opens with a banner saying what it is and how current:
 
 - [`docs/dev/plans/`](docs/dev/plans/) — intended work, some of it
   partly built. `head -n 8 docs/dev/plans/*.md` reads every banner.
+  A plan under review may live in a Claude Doc that people comment
+  on. The doc is then the source of truth, and its file here is a
+  mirror whose banner links the doc: change the doc, then export the
+  tab over the file, never the file alone.
 - [`docs/dev/plans/completed/`](docs/dev/plans/completed/) — landed
   plans, kept as the record of what was decided. A landed plan moves
   here, or is rewritten as reference under `docs/dev/` if someone would
