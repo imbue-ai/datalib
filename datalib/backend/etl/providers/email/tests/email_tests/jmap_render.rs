@@ -8,7 +8,7 @@
 #[allow(unused_imports)]
 use std::path::PathBuf;
 
-use datalib_etl::blob_cas::BlobBundle;
+use datalib_etl::blob_cas::{blake3_hex, BlobBundle};
 use datalib_etl::progress::Progress;
 use datalib_etl_email::ingest::db::{EmailJoins, LoadedAttachment, LoadedEmail};
 use datalib_etl_email_render::render::ids;
@@ -32,8 +32,11 @@ const EML_E2: &str = "From: Bob <b@x.test>\r\n\
                       \r\n\
                       reply body\r\n";
 
+/// The step whose blob store holds every `.eml` here.
+const STEP: &str = "fastmail/ingest";
+
 fn insert_eml(bundle: &mut BlobBundle, ref_id: &str, body: &[u8]) {
-    bundle.add(ref_id, body.to_vec(), Some("message/rfc822".into()), None);
+    bundle.add_stored_with_bytes(ref_id, STEP, body.to_vec(), Some("message/rfc822".into()));
 }
 
 /// Account `A1` (thad@example.com) with one Inbox, holding one thread.
@@ -94,6 +97,18 @@ fn render(
     (tmp, docs)
 }
 
+/// The decoded bytes of the attachment `make_loaded` lists.
+const PDF: &[u8] = b"hello-pdf-12";
+
+/// Where a page finds the part of `eml` whose decoded bytes are `part`.
+fn part_address(eml: &str, part: &[u8]) -> String {
+    format!(
+        "/data/{STEP}/blob/{}/part/{}",
+        blake3_hex(eml.as_bytes()),
+        blake3_hex(part)
+    )
+}
+
 fn make_loaded() -> ParsedEmail {
     let emails = vec![
         LoadedEmail {
@@ -143,7 +158,7 @@ fn make_loaded() -> ParsedEmail {
         "E2".into(),
         vec![LoadedAttachment {
             part_id: "2".into(),
-            blob_id: "B-att-1".into(),
+            blob_id: blake3_hex(PDF),
             name: Some("doc.pdf".into()),
             content_type: Some("application/pdf".into()),
             size: Some(12),
@@ -155,12 +170,6 @@ fn make_loaded() -> ParsedEmail {
     let mut bundle = BlobBundle::new();
     insert_eml(&mut bundle, "B-eml-1", EML_E1.as_bytes());
     insert_eml(&mut bundle, "B-eml-2", EML_E2.as_bytes());
-    bundle.add(
-        "B-att-1",
-        b"hello-pdf-12".to_vec(),
-        Some("application/pdf".into()),
-        Some("hello.pdf".into()),
-    );
 
     one_thread("T1", emails, joins, bundle)
 }
@@ -177,14 +186,9 @@ fn render_smoke_produces_thread_dir_with_md_and_rows() {
     let md_path = find_one(tmp.path(), ".md");
     let page_dir = md_path.parent().unwrap();
 
-    let blobs_dir = page_dir.join("blobs");
-    assert!(blobs_dir.is_dir(), "blobs/ dir missing");
-    let blobs: Vec<_> = std::fs::read_dir(&blobs_dir)
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().is_file())
-        .collect();
-    assert_eq!(blobs.len(), 1, "expected exactly one materialized blob");
+    // An attachment is linked inside its stored `.eml`, never copied
+    // beside the page.
+    assert!(!page_dir.join("blobs").exists(), "a blobs/ was written");
 
     let tuid = ids::thread("fastmail", "A1", "T1").uuid;
     let md = std::fs::read_to_string(&md_path).unwrap();
@@ -197,7 +201,10 @@ fn render_smoke_produces_thread_dir_with_md_and_rows() {
         "thread_id as external_id"
     );
     assert!(md.contains("Alice"), "sender in a message header");
-    assert!(md.contains("doc.pdf"), "attachment listed");
+    assert!(
+        md.contains(&format!("[doc.pdf]({})", part_address(EML_E2, PDF))),
+        "the attachment is listed at its part's address: {md}"
+    );
     assert!(
         md.contains("🏷 Inbox\n"),
         "mailbox label chip rendered: {md}"
@@ -355,7 +362,7 @@ fn make_two_copy(eml: String, att_type: &str, att_name: &str, payload: &str) -> 
         "E9".into(),
         vec![LoadedAttachment {
             part_id: "3".into(),
-            blob_id: "B-ics".into(),
+            blob_id: blake3_hex(payload.as_bytes()),
             name: Some(att_name.into()),
             content_type: Some(att_type.into()),
             size: Some(payload.len() as i64),
@@ -366,62 +373,36 @@ fn make_two_copy(eml: String, att_type: &str, att_name: &str, payload: &str) -> 
 
     let mut bundle = BlobBundle::new();
     insert_eml(&mut bundle, "B-eml-9", eml.as_bytes());
-    // The attachment part's bytes as the downloader stored them —
-    // identical to what the inline MIME part decodes to.
-    bundle.add(
-        "B-ics",
-        payload.as_bytes().to_vec(),
-        Some(att_type.into()),
-        Some(att_name.into()),
-    );
 
     one_thread("T9", emails, joins, bundle)
 }
 
 /// A calendar invite carries one iCalendar payload that arrives twice —
 /// as an inline `text/calendar; method=REQUEST` MIME part (no upstream
-/// filename) and as an `invite.ics` attachment part. Both used to be
-/// materialized: `blobs/<stem>` beside `blobs/<stem>.ics`,
-/// byte-identical, with the extensionless copy spliced into the body as
-/// a broken `![](…)` image and only the `.ics` copy linked from the
-/// "### Attachments" list.
+/// filename) and as an `invite.ics` attachment part. It is linked once,
+/// from the "### Attachments" list: the inline copy used to be spliced
+/// into the body as well, as a broken `![](…)` image.
 #[test]
-fn calendar_invite_materializes_one_blob_linked_once() {
+fn calendar_invite_is_linked_once() {
+    let eml = invite_eml();
     let parsed = make_invite();
     let (tmp, _) = render(&parsed, "gmail", OutlinkFormat::Gmail);
 
     let md_path = find_one(tmp.path(), ".md");
-    let blobs_dir = md_path.parent().unwrap().join("blobs");
-    let mut names: Vec<String> = std::fs::read_dir(&blobs_dir)
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .collect();
-    names.sort();
-    assert_eq!(
-        names.len(),
-        1,
-        "one payload → one file; got byte-identical duplicates: {names:?}"
-    );
-    assert!(
-        names[0].ends_with(".ics"),
-        "keeps the openable name, not the bare hex stem: {}",
-        names[0]
-    );
-
+    assert!(!md_path.parent().unwrap().join("blobs").exists());
     let md = std::fs::read_to_string(&md_path).unwrap();
-    let links: Vec<&str> = md.match_indices("blobs/").map(|(i, _)| &md[i..]).collect();
+    let address = part_address(&eml, ICS.as_bytes());
     assert_eq!(
-        links.len(),
+        md.matches("/part/").count(),
         1,
-        "linked exactly once, from the attachment list"
+        "linked exactly once, from the attachment list: {md}"
     );
     assert!(
-        md.contains(&format!("[invite.ics](blobs/{})", names[0])),
+        md.contains(&format!("[invite.ics]({address})")),
         "the one link is the attachment-list entry: {md}"
     );
     assert!(
-        !md.contains("![](blobs/"),
+        !md.contains("![]("),
         "a calendar part is not an image: {md}"
     );
 }
@@ -433,30 +414,20 @@ fn calendar_invite_materializes_one_blob_linked_once() {
 #[test]
 fn inline_image_that_is_also_an_attachment_keeps_its_preview() {
     const PNG: &str = "not-really-png-but-bytes-are-bytes";
-    let parsed = make_two_copy(
-        two_copy_eml("image/png", "image/png", "shot.png", PNG),
-        "image/png",
-        "shot.png",
-        PNG,
-    );
+    let eml = two_copy_eml("image/png", "image/png", "shot.png", PNG);
+    let parsed = make_two_copy(eml.clone(), "image/png", "shot.png", PNG);
     let (tmp, _) = render(&parsed, "fastmail", OutlinkFormat::Fastmail);
 
     let md_path = find_one(tmp.path(), ".md");
-    let blobs_dir = md_path.parent().unwrap().join("blobs");
-    let names: Vec<String> = std::fs::read_dir(&blobs_dir)
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .collect();
-    assert_eq!(names.len(), 1, "still one payload, one file: {names:?}");
-
+    assert!(!md_path.parent().unwrap().join("blobs").exists());
     let md = std::fs::read_to_string(&md_path).unwrap();
+    let address = part_address(&eml, PNG.as_bytes());
     assert!(
-        md.contains(&format!("![](blobs/{})", names[0])),
+        md.contains(&format!("![]({address})")),
         "inline image preview survives: {md}"
     );
     assert!(
-        md.contains(&format!("[shot.png](blobs/{})", names[0])),
+        md.contains(&format!("[shot.png]({address})")),
         "and it is still listed as an attachment: {md}"
     );
 }

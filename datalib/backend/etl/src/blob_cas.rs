@@ -542,6 +542,18 @@ fn name_rank(name: &str) -> (bool, std::cmp::Reverse<&str>) {
 
 // BlobBundle — per-doc unit of attachment data, read + write
 
+/// Where a page finds a [`Blob`]'s bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Held {
+    /// Made by render, which writes them beside the page.
+    ByRender,
+    /// A row of the CAS of `step` (`<group>/<function>`).
+    InStore { step: String },
+    /// A MIME part of the message the CAS of `step` holds under the hash
+    /// `message`; the blob's own hash is that of the part's decoded bytes.
+    InMessage { step: String, message: String },
+}
+
 /// One attachment inside a [`BlobBundle`]: its hash, what is known about
 /// it, and where a page finds it.
 #[derive(Debug, Clone)]
@@ -550,10 +562,7 @@ pub struct Blob {
     pub byte_len: u64,
     pub content_type: Option<String>,
     pub upstream_name: Option<String>,
-    /// The step whose CAS holds these bytes, so a page links them there.
-    /// `None` for bytes render made itself, which it writes beside the
-    /// page instead.
-    pub store: Option<String>,
+    pub held: Held,
     /// Present for bytes render made, and where a loader asked for them
     /// ([`BlobBundle::load_many_with_bytes`]).
     pub bytes: Option<Vec<u8>>,
@@ -573,9 +582,9 @@ impl Blob {
 
     /// Bytes render made, which only it can write out.
     fn loose_bytes(&self) -> Option<&[u8]> {
-        match self.store {
-            None => self.bytes.as_deref(),
-            Some(_) => None,
+        match self.held {
+            Held::ByRender => self.bytes.as_deref(),
+            Held::InStore { .. } | Held::InMessage { .. } => None,
         }
     }
 }
@@ -652,7 +661,7 @@ impl BlobBundle {
                 byte_len: bytes.len() as u64,
                 content_type,
                 upstream_name,
-                store: None,
+                held: Held::ByRender,
                 bytes: Some(bytes),
             },
         );
@@ -673,10 +682,63 @@ impl BlobBundle {
                 byte_len: described.byte_len,
                 content_type: described.content_type,
                 upstream_name,
-                store: Some(step.into()),
+                held: Held::InStore { step: step.into() },
                 bytes: None,
             },
         );
+    }
+
+    /// [`Self::add_stored`] with the bytes in hand, as
+    /// [`Self::load_many_with_bytes`] leaves them.
+    pub fn add_stored_with_bytes(
+        &mut self,
+        ref_id: impl Into<String>,
+        step: impl Into<String>,
+        bytes: Vec<u8>,
+        content_type: Option<String>,
+    ) {
+        self.by_ref.insert(
+            ref_id.into(),
+            Blob {
+                blake3: blake3_hex(&bytes),
+                byte_len: bytes.len() as u64,
+                content_type,
+                upstream_name: None,
+                held: Held::InStore { step: step.into() },
+                bytes: Some(bytes),
+            },
+        );
+    }
+
+    /// Record a MIME part of the message `message` holds, by the hash of
+    /// the part's decoded bytes. A page links the part inside the stored
+    /// message, so nothing is written for it. `false`, and nothing
+    /// recorded, when `message` is not in a CAS.
+    pub fn add_part(
+        &mut self,
+        ref_id: impl Into<String>,
+        message: &Blob,
+        part: Described,
+        upstream_name: Option<String>,
+    ) -> bool {
+        let Held::InStore { step } = &message.held else {
+            return false;
+        };
+        self.by_ref.insert(
+            ref_id.into(),
+            Blob {
+                blake3: part.blake3,
+                byte_len: part.byte_len,
+                content_type: part.content_type,
+                upstream_name,
+                held: Held::InMessage {
+                    step: step.clone(),
+                    message: message.blake3.clone(),
+                },
+                bytes: None,
+            },
+        );
+        true
     }
 
     /// Whether `ref_id`'s edge says its bytes were stored, though the
@@ -842,7 +904,9 @@ impl BlobBundle {
                                 byte_len: byte_len as u64,
                                 content_type: entry.content_type.clone().or_else(|| cas_ct.clone()),
                                 upstream_name: entry.upstream_name.clone(),
-                                store: Some(cas.step.clone()),
+                                held: Held::InStore {
+                                    step: cas.step.clone(),
+                                },
                                 bytes: bytes.clone(),
                             },
                         );
@@ -947,13 +1011,19 @@ impl BlobBundle {
     }
 
     /// Where a page finds `ref_id`'s bytes: their address in the CAS that
-    /// holds them, or the file [`Self::materialize_to_dir`] writes beside
-    /// the page for bytes render made.
+    /// holds them or the message they are a part of, or the file
+    /// [`Self::materialize_to_dir`] writes beside the page for bytes
+    /// render made.
     pub fn href_for(&self, ref_id: &str) -> Option<String> {
         let blob = self.by_ref.get(ref_id)?;
-        match &blob.store {
-            Some(step) => Some(datalib_blob_store::address(step, &blob.blake3)),
-            None => Some(format!("blobs/{}", self.filename_for(ref_id)?)),
+        match &blob.held {
+            Held::InStore { step } => Some(datalib_blob_store::address(step, &blob.blake3)),
+            Held::InMessage { step, message } => Some(datalib_blob_store::part_address(
+                step,
+                message,
+                &blob.blake3,
+            )),
+            Held::ByRender => Some(format!("blobs/{}", self.filename_for(ref_id)?)),
         }
     }
 
@@ -1747,7 +1817,7 @@ mod tests {
         assert_eq!(got.blake3.len(), 64);
         assert_eq!(got.bytes.as_deref(), Some(&b"hello"[..]));
         assert_eq!(got.byte_len, 5);
-        assert_eq!(got.store, None, "bytes render made live in no CAS");
+        assert_eq!(got.held, Held::ByRender, "bytes render made live in no CAS");
         assert_eq!(got.content_type.as_deref(), Some("text/plain"));
     }
 
@@ -1798,6 +1868,41 @@ mod tests {
         assert_eq!(b.href_for("absent"), None);
     }
 
+    /// A part of a stored message is linked inside it and never written
+    /// beside the page; a message render made itself has no address to
+    /// link a part in, so the part is not recorded.
+    #[test]
+    fn a_part_is_linked_inside_its_stored_message() {
+        let message = blake3_hex(b"From: data@enterprise.example");
+        let part = Described {
+            blake3: blake3_hex(b"\x89PNG\r\n\x1a\n"),
+            byte_len: 8,
+            content_type: Some("image/png".into()),
+        };
+        let mut emls = BlobBundle::new();
+        emls.add_stored(
+            "eml",
+            "gmail/ingest",
+            Described {
+                blake3: message.clone(),
+                byte_len: 29,
+                content_type: Some("message/rfc822".into()),
+            },
+            None,
+        );
+        emls.add("made", b"From: data".to_vec(), None, None);
+
+        let mut b = BlobBundle::new();
+        assert!(b.add_part("p", emls.get("eml").unwrap(), part.clone(), None));
+        assert!(!b.add_part("q", emls.get("made").unwrap(), part.clone(), None));
+        assert_eq!(
+            b.href_for("p").as_deref(),
+            Some(format!("/data/gmail/ingest/blob/{message}/part/{}", part.blake3).as_str())
+        );
+        assert_eq!(b.href_for("q"), None);
+        assert!(!b.has_loose());
+    }
+
     /// A generated ChatGPT image arrives as `image/*` with no name; its
     /// file had no extension.
     #[test]
@@ -1807,7 +1912,7 @@ mod tests {
             byte_len: bytes.len() as u64,
             content_type: Some("image/*".into()),
             upstream_name: None,
-            store: None,
+            held: Held::ByRender,
             bytes: Some(bytes.to_vec()),
         };
         assert!(blob(b"\x89PNG\r\n\x1a\n")
@@ -2017,7 +2122,12 @@ mod tests {
         let a = one.get("a").expect("a present");
         assert_eq!(a.bytes, None, "the bytes stay in the CAS");
         assert_eq!(a.byte_len, 5);
-        assert_eq!(a.store.as_deref(), Some(cas.step()));
+        assert_eq!(
+            a.held,
+            Held::InStore {
+                step: cas.step().to_string()
+            }
+        );
         // content_type comes from CAS when projection doesn't supply it
         assert_eq!(a.content_type.as_deref(), Some("image/png"));
         assert_eq!(a.upstream_name.as_deref(), Some("alpha.png"));
