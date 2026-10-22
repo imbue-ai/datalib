@@ -66,17 +66,25 @@ const LOUD = new Set(["running", "waiting", "queued", "failed", "blocked", "inte
 
 /** How a group or step chip looks: the name the config gives it now (or,
  *  until the answer lands, the one the producer sent), the mark of its
- *  type or its phase, and a status worth noticing. */
+ *  type or its phase, and a status worth noticing. `keepShown` keeps the
+ *  producer's text where its context already names the rest — a step
+ *  drawn under its group reads "Download", not "Work Slack · Download" —
+ *  and leaves the whole name to the hover. */
 export function entityLook(
   uri: string,
   shown: string,
   view: EntityView | undefined,
   fallbackIcon: string | null,
+  keepShown = false,
 ): ChipLook {
   const entity = entityFromUri(uri);
-  const text = view?.label || shown || entity?.id || uri;
+  const name = view?.label || shown || entity?.id || uri;
+  const text = (keepShown && shown) || name;
   const status = view?.status;
-  const what = entity?.kind === "step" ? "step" : "source";
+  // What the mark stands for — a source's type, a step's phase — so a
+  // screen reader hears what the eye reads off the mark.
+  const kind = entity?.kind === "step" ? "step" : "source";
+  const what = view?.detail ? `${view.detail} ${kind}` : kind;
   const look = {
     text,
     ariaLabel: status ? `${text}, ${what}, ${status.label}` : `${text}, ${what}`,
@@ -90,7 +98,7 @@ export function entityLook(
     photo: null,
     title: "",
   };
-  return { ...look, title: entityTitle(uri, look, view) };
+  return { ...look, title: entityTitle(uri, { text: name }, view) };
 }
 
 /** The hover: what it is, and where it stands. */
@@ -115,30 +123,49 @@ export function entityCopyText(uri: string, name: string): string {
   return `${name} (${uri})`;
 }
 
-/** What double-clicking a chip opens: a group's sync dashboard, a step's
- *  log. Null for a URI naming neither. */
+/** The group a step id is filed under: its first segment. */
+function groupOf(stepId: string): string {
+  return stepId.split("/")[0];
+}
+
+/** What double-clicking a chip opens: a group's sync dashboard, or for a
+ *  step, its group's dashboard at the step's own section. Null for a URI
+ *  naming neither. */
 export function entityCardSource(uri: string): string | null {
   const e = entityFromUri(uri);
   if (!e) return null;
   if (e.kind === "group") return syncDashboardSource({ group: e.id });
-  return logSource({ step: e.id, jumpToEnd: true });
+  return syncDashboardSource({ group: groupOf(e.id), step: e.id });
+}
+
+/** A step's log, at its end: a step chip's "Show its log". */
+export function entityLogSource(uri: string): string | null {
+  const e = entityFromUri(uri);
+  return e?.kind === "step" ? logSource({ step: e.id, jumpToEnd: true }) : null;
 }
 
 /** The right-click menu for a group or step chip, as ids `chipActions`
- *  binds: open it, copy the id, the name or both, and browse a group's
- *  documents — in the order `CHIP_ACTIONS` gives every chip's menu. */
-export type EntityMenuId = "open" | "copy-id" | "copy-name" | "copy-both" | "browse";
+ *  binds: open it, a step's log, copy the id, the name or both, and
+ *  browse a group's documents — in the order `CHIP_ACTIONS` gives every
+ *  chip's menu. */
+export type EntityMenuId = "open" | "log" | "copy-id" | "copy-name" | "copy-both" | "browse";
 export type EntityMenuEntry = { id: EntityMenuId; label: string; separator?: boolean };
 
 export function entityMenu(uri: string, name: string): EntityMenuEntry[] {
   const e = entityFromUri(uri);
   if (!e) return [];
   const out: EntityMenuEntry[] = [
-    { id: "open", label: e.kind === "group" ? "Open its sync dashboard" : "Show its log" },
+    {
+      id: "open",
+      label: e.kind === "group" ? "Open its sync dashboard" : "Show it in its sync dashboard",
+    },
+  ];
+  if (e.kind === "step") out.push({ id: "log", label: "Show its log" });
+  out.push(
     { id: "copy-id", label: `Copy ${e.id}`, separator: true },
     { id: "copy-name", label: `Copy “${name}”` },
     { id: "copy-both", label: `Copy “${entityCopyText(uri, name)}”` },
-  ];
+  );
   if (e.kind === "group") out.push({ id: "browse", label: `Browse ${name}`, separator: true });
   return out;
 }
@@ -149,12 +176,14 @@ export function browseQuery(uri: string): string | null {
   return e?.kind === "group" ? `source_id:${e.id} is:document` : null;
 }
 
-/** A group or step chip for a grid cell, drawn from what is known now. */
+/** A group or step chip for a grid cell, drawn from what is known now.
+ *  `keepShown`: the cell's own text stays the chip's (`entityLook`). */
 export function entityCell(
   uri: string,
   shown: string,
   view: EntityView | undefined,
   fallbackIcon: string | null,
+  keepShown = false,
 ): HTMLAnchorElement {
   const a = document.createElement("a");
   a.className = "chip";
@@ -162,7 +191,7 @@ export function entityCell(
   a.dataset.entity = uri;
   a.dataset.shownAs = shown;
   if (fallbackIcon) a.dataset.icon = fallbackIcon;
-  drawChip(a, entityLook(uri, shown, view, fallbackIcon));
+  drawChip(a, entityLook(uri, shown, view, fallbackIcon, keepShown));
   return a;
 }
 

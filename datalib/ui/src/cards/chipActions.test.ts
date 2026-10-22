@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { personSource, searchSource, syncDashboardSource } from "./cardSources";
+import { logSource, personSource, searchSource, syncDashboardSource } from "./cardSources";
 import {
   CHIP_ACTIONS,
   chipCardSource,
@@ -66,13 +66,17 @@ describe("chipOf", () => {
 });
 
 describe("runChipAction", () => {
-  it("opens the double-click's card", async () => {
+  it("opens the double-click's card, and a step's log", async () => {
     const h = host({ seenIn: "work_slack" });
     await runChipAction("open", SLACK, h);
     await runChipAction("open", RIKER, h);
+    await runChipAction("open", INGEST, h);
+    await runChipAction("log", INGEST, h);
     expect(h.openCard.mock.calls).toEqual([
       [syncDashboardSource({ group: "slack" })],
       [personSource("email:riker@enterprise.org", { seenIn: "work_slack" })],
+      [syncDashboardSource({ group: "slack", step: "slack/ingest" })],
+      [logSource({ step: "slack/ingest", jumpToEnd: true })],
     ]);
     expect(chipCardSource(CONTACT.ref, null)).toBeNull();
   });

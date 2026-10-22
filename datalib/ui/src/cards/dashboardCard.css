@@ -220,9 +220,7 @@
 }
 .grid {
   display: grid;
-  grid-template-columns:
-    calc(var(--datalib-icon-size) + 4px) minmax(0, 1.4fr) minmax(0, 1.6fr)
-    110px 80px 90px;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1.6fr) 110px 80px 90px;
   column-gap: 12px;
   align-items: center;
   padding: 0 10px;

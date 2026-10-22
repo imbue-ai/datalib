@@ -7,6 +7,7 @@ import {
   browseQuery,
   entityCardSource,
   entityCopyText,
+  entityLogSource,
   entityLook,
   entityMenu,
   entityTitle,
@@ -43,7 +44,7 @@ describe("entityLook", () => {
     expect(before.classes).toEqual(["handle-chip", "entity-chip"]);
     const after = entityLook(SLACK, "Slack", view("Work Slack", "slack", "succeeded"), "slack");
     expect(after.text).toBe("Work Slack");
-    expect(after.ariaLabel).toBe("Work Slack, source, Succeeded");
+    expect(after.ariaLabel).toBe("Work Slack, Slack source, Succeeded");
   });
 
   it("marks a status worth noticing, and only that", () => {
@@ -54,6 +55,16 @@ describe("entityLook", () => {
       entityLook(INGEST, "", view("Work Slack · Ingest", "step:ingest", "succeeded"), null).classes,
     ).not.toContain("entity-succeeded");
     expect(entityLook(INGEST, "", undefined, null).text).toBe("slack/ingest");
+  });
+
+  /** A step under its group in the Sources table or its group's
+   *  dashboard: the row's short name stays, the whole name is the hover. */
+  it("keeps a short name its context gives it, and hovers the whole one", () => {
+    const v = view("Work Slack · Download", "step:ingest", "succeeded");
+    const look = entityLook(INGEST, "Download", v, null, true);
+    expect(look.text).toBe("Download");
+    expect(look.title.split("\n")[0]).toBe("Work Slack · Download (slack/ingest)");
+    expect(entityLook(INGEST, "Download", v, null).text).toBe("Work Slack · Download");
   });
 });
 
@@ -70,9 +81,13 @@ describe("a group or step chip's hover, copy, menu and card", () => {
     expect(entityCopyText(SLACK, "Work Slack")).toBe("Work Slack (datalib:group/slack)");
   });
 
-  it("opens a group's dashboard and a step's log", () => {
+  it("opens a group's dashboard, and a step's group's dashboard at its section", () => {
     expect(entityCardSource(SLACK)).toBe('syncDashboardView({"group":"slack"})');
-    expect(entityCardSource(INGEST)).toBe('logView({"step":"slack/ingest","jumpToEnd":true})');
+    expect(entityCardSource(INGEST)).toBe(
+      'syncDashboardView({"group":"slack","step":"slack/ingest"})',
+    );
+    expect(entityLogSource(INGEST)).toBe('logView({"step":"slack/ingest","jumpToEnd":true})');
+    expect(entityLogSource(SLACK)).toBeNull();
     expect(entityCardSource("mailto:riker@enterprise.org")).toBeNull();
   });
 
@@ -85,6 +100,7 @@ describe("a group or step chip's hover, copy, menu and card", () => {
       "browse",
     ]);
     expect(entityMenu(INGEST, "Work Slack · Ingest").map((e) => e.label)).toEqual([
+      "Show it in its sync dashboard",
       "Show its log",
       "Copy slack/ingest",
       "Copy “Work Slack · Ingest”",

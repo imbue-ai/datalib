@@ -27,6 +27,21 @@ test.describe("toolbar", () => {
     await expect(shownCards(page)).toHaveCount(5);
   });
 
+  // Every source the Dashboard names is its chip: the Sources section's
+  // rows double-click open that source's sync dashboard.
+  test("a source on the Dashboard is its chip", async ({ page }) => {
+    await page.goto("/");
+    const chip = cardOf(page, "sourcesOverviewView()")
+      .locator('.grid-row a.chip[data-entity^="datalib:group/"]')
+      .first();
+    await expect(chip).toBeVisible({ timeout: 10_000 });
+    const group = (await chip.getAttribute("data-entity"))!.slice("datalib:group/".length);
+    await chip.dblclick();
+    await expect(cardOf(page, `syncDashboardView({"group":"${group}"})`)).toBeVisible({
+      timeout: 10_000,
+    });
+  });
+
   test("the search box opens a search card on what was typed", async ({ page }) => {
     await page.goto("/");
     await expect(tabLabels(page)).toHaveText(PINNED);

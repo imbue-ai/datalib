@@ -59,6 +59,9 @@ export type SlickColumnOptions<T> = {
     canLink: () => boolean;
     /// A group or step identity (`Identity.entity`): what is known of it.
     entity?: (uri: string) => EntityView | undefined;
+    /// A group or step chip keeps the cell's own label, where the grid
+    /// already says the rest: a step nested under its group.
+    keepLabels?: boolean;
     /// One of your contacts, whose id is a `datalib:contact/` URI.
     contact?: (contactId: string) => NormalizedContact | undefined;
   };
@@ -234,7 +237,13 @@ function identityChip<T>(
   chips: SlickColumnOptions<T>["chips"],
 ): HTMLAnchorElement | null {
   if (chips?.entity && v.entity && entityFromUri(v.entity)) {
-    return entityCell(v.entity, v.label, chips.entity(v.entity), v.icon ?? null);
+    return entityCell(
+      v.entity,
+      v.label,
+      chips.entity(v.entity),
+      v.icon ?? null,
+      chips.keepLabels === true,
+    );
   }
   const contactId = chips?.contact ? contactFromUri(v.id) : null;
   if (contactId && chips?.contact) {

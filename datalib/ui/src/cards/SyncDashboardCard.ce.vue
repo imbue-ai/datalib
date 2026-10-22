@@ -18,7 +18,10 @@ import RunLogPanel from "@/components/RunLogPanel.ce.vue";
 import TimeChart from "./TimeChart.ce.vue";
 import { groupCharts, groupSpan, stepCharts, type Chart } from "./dashboardCharts";
 import { menuTarget, rowActions, withBrowse, type ActionRow } from "./rowActions";
-import { renderIdentity, renderQuantity, renderStatus } from "./cellRenderers";
+import { renderBadges, renderQuantity, renderStatus } from "./cellRenderers";
+import { syncDashboardSource } from "./cardSources";
+import { uriFromEntity } from "./chipLinks";
+import EntityChip from "./EntityChip.ce.vue";
 import { logLineSource } from "./libs/logLineView";
 import type { SyncDashboardOpts } from "./libs/syncDashboardView";
 import type { CardCtx } from "./types";
@@ -206,6 +209,21 @@ const vCell: Directive<HTMLElement, HTMLElement> = {
 };
 
 const cardEl = ref<HTMLElement | null>(null);
+
+function scrollToStep(id: string) {
+  cardEl.value
+    ?.querySelector(`[data-step="${CSS.escape(id)}"]`)
+    ?.scrollIntoView({ block: "start" });
+}
+
+/// A chip on this card asking for a card: this dashboard is already open,
+/// so the group's own chip does nothing and a step's scrolls to its section.
+function openFromChip(source: string) {
+  if (source === syncDashboardSource({ group })) return;
+  const step = stepRows.value.find((r) => source === syncDashboardSource({ group, step: r.id }));
+  if (step) scrollToStep(step.id);
+  else props.ctx.host.openCards(source);
+}
 let unsubscribe: (() => void) | null = null;
 let clock: ReturnType<typeof setInterval> | null = null;
 
@@ -215,11 +233,7 @@ onMounted(async () => {
   // would stand blank for all of them.
   await Promise.all([loadRows(), loadDashboard()]);
   void loadRows(true);
-  if (props.opts.step) {
-    cardEl.value
-      ?.querySelector(`[data-step="${CSS.escape(props.opts.step)}"]`)
-      ?.scrollIntoView({ block: "start" });
-  }
+  if (props.opts.step) scrollToStep(props.opts.step);
   clock = setInterval(() => {
     if (dash.value?.live) now.value = Date.now();
   }, 1000);
@@ -264,14 +278,19 @@ onUnmounted(() => {
     <!-- The group: its row, read across its steps. -->
     <article v-if="groupRow" class="sd-section sd-group" :data-step="group">
       <header class="sd-head">
-        <span
-          v-cell="
-            renderIdentity(groupRow.name, true, { field: 'problems', chips: groupRow.problems })
-          "
-          class="sd-name"
-          title="Double-click the counts for the problems"
-          @dblclick="actions.openProblems(groupRow, `${UNIFIED_DOCUMENT_INDEX}/problems`)"
-        />
+        <span class="sd-name">
+          <EntityChip
+            :uri="uriFromEntity('group', group)"
+            :shown="groupRow.name.label"
+            :open-card="openFromChip"
+          />
+          <span
+            v-if="groupRow.problems.length"
+            v-cell="renderBadges('problems', groupRow.problems)"
+            title="Double-click the counts for the problems"
+            @dblclick="actions.openProblems(groupRow, `${UNIFIED_DOCUMENT_INDEX}/problems`)"
+          />
+        </span>
         <span v-cell="renderStatus(groupRow.status)" class="sd-status" />
       </header>
       <dl class="sd-stats">
@@ -342,7 +361,14 @@ onUnmounted(() => {
       :data-step="row.id"
     >
       <header class="sd-head">
-        <span v-cell="renderIdentity(row.name, false)" class="sd-name" />
+        <span class="sd-name">
+          <EntityChip
+            :uri="uriFromEntity('step', row.id)"
+            :shown="row.name.label"
+            short
+            :open-card="openFromChip"
+          />
+        </span>
         <span v-cell="renderStatus(row.status)" class="sd-status" />
         <span class="sd-inline">
           <span class="sd-inline-key">Queue</span>
@@ -482,6 +508,10 @@ onUnmounted(() => {
   gap: 6px 14px;
 }
 .sd-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
   font-weight: 600;
   font-size: var(--datalib-title-size);
 }
