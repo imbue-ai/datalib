@@ -652,12 +652,12 @@ mod tests {
     use serde_json::json;
     use tempfile::tempdir;
 
-    /// A page's attachment bytes are read from the store its parse read,
-    /// a batch at a time, so the page links the local file. Every other
-    /// render test hands in bundles already in memory; this is the one
-    /// that reads them from a store.
+    /// A page's attachments are read from the store its parse read, a
+    /// batch at a time, and the page links each where the blob store
+    /// holds it, writing no copy. Every other render test hands in
+    /// bundles already in memory; this is the one that reads a store.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_stored_attachment_is_read_from_the_store_and_linked_locally() {
+    async fn a_stored_attachment_is_read_from_the_store_and_linked_there() {
         use datalib_etl_notion::ingest::db::{PageMarkdownUpsert, PageUpsert};
         const SLOT: &str =
             "https://prod-files-secure.s3.us-west-2.amazonaws.com/ws/9c/viewscreen.png";
@@ -728,14 +728,15 @@ mod tests {
             .find(|p| p.ends_with("index.md"))
             .expect("the page rendered");
         let md = fs::read_to_string(page).unwrap();
-        assert!(md.contains("](blobs/"), "linked locally: {md}");
+        assert!(
+            md.contains("](/data/") && md.contains(&format!("/blob/{blake3})")),
+            "linked in the blob store: {md}"
+        );
         assert!(!md.contains(SLOT), "not at the upstream slot: {md}");
-        let blobs = page.parent().unwrap().join("blobs");
-        let written: Vec<Vec<u8>> = fs::read_dir(&blobs)
-            .unwrap()
-            .map(|e| fs::read(e.unwrap().path()).unwrap())
-            .collect();
-        assert_eq!(written, vec![b"\x89PNG\r\n\x1a\nviewscreen".to_vec()]);
+        assert!(
+            !page.parent().unwrap().join("blobs").exists(),
+            "no copy beside the page"
+        );
     }
 
     /// A database row's properties are its content. Rendering nothing

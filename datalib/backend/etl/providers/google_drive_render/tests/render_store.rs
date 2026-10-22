@@ -169,13 +169,14 @@ async fn a_doc_in_the_store_renders_with_its_image_and_its_thread() {
         .nth(1)
         .and_then(|rest| rest.split(')').next())
         .unwrap_or_else(|| panic!("no image link in {text}"));
+    let hash = datalib_etl::blob_cas::blake3_hex(PNG);
     assert!(
-        image.starts_with("blobs/") && image.ends_with(".png"),
-        "{image}"
+        image.starts_with("/data/") && image.ends_with(&format!("/ingest/blob/{hash}")),
+        "the image is linked in the blob store: {image}"
     );
     assert!(
-        md.md_path.parent().unwrap().join(image).exists(),
-        "{image} was not written beside the document"
+        !md.md_path.parent().unwrap().join("blobs").exists(),
+        "no copy beside the document"
     );
     let heading = text.find("# Captain's log\n").expect(&text);
     let thread = text

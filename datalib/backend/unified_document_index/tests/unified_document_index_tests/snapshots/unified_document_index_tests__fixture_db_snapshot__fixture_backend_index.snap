@@ -672,7 +672,7 @@ expression: snapshot
       "md_path": "google-drive/render_markdown/docs/1PicardLog41153/index.md",
       "modified_at": "2369-04-12T08:00:00.000Z",
       "provider": "google_drive",
-      "renderer_version": "rust-v1.1",
+      "renderer_version": "rust-v1.2",
       "source_id": "google-drive",
       "title": "Captain's log, stardate 41153.7"
     },
@@ -732,7 +732,7 @@ expression: snapshot
       "md_path": "google-drive/render_markdown/docs/1LaForgeEngRoster/index.md",
       "modified_at": "2369-04-13T08:00:00.000Z",
       "provider": "google_drive",
-      "renderer_version": "rust-v1.1",
+      "renderer_version": "rust-v1.2",
       "source_id": "google-drive",
       "title": "Engineering notes"
     },
