@@ -3,7 +3,8 @@
  * the backend's asset route.
  *
  * An attachment its source's blob store holds is linked at its address,
- * `/data/<group>/<function>/blob/<hash>`, which the server answers and
+ * `/data/<group>/<function>/blob/<hash>` (or, for a part of a stored
+ * email, `…/blob/<hash>/part/<hash>`), which the server answers and
  * which needs no rewriting. What is left relative is a file a renderer
  * wrote beside the page (`blobs/foo.png`), served through the
  * `unified_document_index` applet's `/asset/{markdown_uuid}/{rel}`, so
@@ -30,9 +31,10 @@ export function assetUrl(markdownUuid: string, src: string): string {
 
 const ASSETS = `${UNIFIED_DOCUMENT_INDEX}/asset/`;
 const NOWHERE = "http://own.invalid";
-/** An attachment in its source's blob store, which the server answers
+/** An attachment in its source's blob store, or a part of an email
+ *  stored there, which the server answers
  *  (`datalib/backend/blob_store/README.md`). */
-const BLOB_ADDRESS = /^\/data\/[^/]+\/[^/]+\/blob\/[0-9a-f]{64}$/;
+const BLOB_ADDRESS = /^\/data\/[^/]+\/[^/]+\/blob\/[0-9a-f]{64}(\/part\/[0-9a-f]{64})?$/;
 
 /**
  * What a body's reference to our own origin may load, or null. A body is

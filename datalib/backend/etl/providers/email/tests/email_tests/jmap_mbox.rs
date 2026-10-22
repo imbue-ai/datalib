@@ -25,6 +25,22 @@ fn thread_uuid(account_id: &str, thread_id: &str) -> String {
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
 
+/// The part behind each part address `md` links, as the server answers
+/// it from the `.eml`s in the blob store at `cas`. Panics on an address
+/// the server would answer "not found".
+async fn parts_linked(md: &str, cas: &std::path::Path) -> Vec<datalib_blob_store::Stored> {
+    let mut out = Vec::new();
+    for (i, _) in md.match_indices("/part/") {
+        let eml = &md[i.saturating_sub(64)..i];
+        let part = md.get(i + 6..i + 6 + 64).unwrap_or_default();
+        let found = datalib_blob_store::read_part(cas, eml, part)
+            .await
+            .expect("read the blob store");
+        out.push(found.unwrap_or_else(|| panic!("no part {part} in {eml}")));
+    }
+    out
+}
+
 /// Every thread `store` holds, read two to a page, as a render reads them.
 fn every_thread(store: &EmailStore) -> Vec<EmailThreadBucket> {
     let mut pages = store.pages(2);
@@ -379,31 +395,24 @@ async fn star_trek_mbox_renders_through_render_all() {
             .to_path_buf()
     };
 
-    // Briefing thread has the attachment materialized.
+    // The briefing thread links its attachment inside the stored `.eml`,
+    // at an address the server finds it by, and writes nothing beside
+    // the page.
+    let cas = datalib_etl::blob_cas::cas_path_for(&db_path);
     let briefing_tuid = thread_uuid("enterprise", BRIEFING_THREAD);
     let briefing_dir = dir_for(&briefing_tuid);
-    let blobs_dir = briefing_dir.join("blobs");
-    assert!(blobs_dir.is_dir(), "blobs/ dir missing");
-    let mut found = false;
-    for entry in std::fs::read_dir(&blobs_dir).unwrap().flatten() {
-        if entry.path().is_file() {
-            if let Ok(body) = std::fs::read_to_string(entry.path()) {
-                if body.contains("Plasma flow") {
-                    found = true;
-                    break;
-                }
-            }
-        }
-    }
+    assert!(!briefing_dir.join("blobs").exists(), "a blobs/ was written");
+    let md = std::fs::read_to_string(briefing_dir.join("all.md")).unwrap();
+    let parts = parts_linked(&md, &cas).await;
     assert!(
-        found,
-        "no attachment in {} contained Plasma flow",
-        blobs_dir.display()
+        parts
+            .iter()
+            .any(|p| String::from_utf8_lossy(&p.bytes).contains("Plasma flow")),
+        "no linked part contained Plasma flow:\n{md}"
     );
 
     // Briefing md mentions every sender — names come from mail-parsing the
     // .eml in CAS, not from a server-pre-decoded payload.
-    let md = std::fs::read_to_string(briefing_dir.join("all.md")).unwrap();
     for needle in ["Admiral Hayes", "Picard", "Geordi"] {
         assert!(md.contains(needle), "expected `{}` in briefing md", needle);
     }
@@ -423,39 +432,31 @@ async fn star_trek_mbox_renders_through_render_all() {
     );
 
     // A `multipart/related` with an inline PNG referenced as
-    // `<img src="cid:…">`: the renderer must materialize it and rewrite the
-    // cid to a `blobs/<hash>.png` link. Regression test for the Fastmail
-    // case where the inline image is absent from `attachments` but present
-    // in the .eml MIME tree.
+    // `<img src="cid:…">`: the renderer must rewrite the cid to the part's
+    // address. Regression test for the Fastmail case where the inline
+    // image is absent from `attachments` but present in the .eml MIME tree.
     let bridge_tuid = thread_uuid("enterprise", "1853647906406507188");
     let bridge_dir = dir_for(&bridge_tuid);
     let bridge_md = std::fs::read_to_string(bridge_dir.join("all.md")).unwrap();
-    let bridge_blobs = bridge_dir.join("blobs");
-    assert!(bridge_blobs.is_dir(), "bridge thread blobs/ dir missing");
-    let png_files: Vec<_> = std::fs::read_dir(&bridge_blobs)
-        .unwrap()
-        .flatten()
-        .filter(|e| {
-            e.path()
-                .extension()
-                .and_then(|s| s.to_str())
-                .map(|x| x == "png")
-                .unwrap_or(false)
-        })
+    assert!(!bridge_dir.join("blobs").exists(), "a blobs/ was written");
+    let images: Vec<_> = parts_linked(&bridge_md, &cas)
+        .await
+        .into_iter()
+        .filter(|p| p.content_type.as_deref() == Some("image/png"))
         .collect();
     assert_eq!(
-        png_files.len(),
+        images.len(),
         1,
-        "expected exactly one .png in {}",
-        bridge_blobs.display()
+        "expected one linked PNG part in the bridge thread:\n{bridge_md}"
     );
-    let png_name = png_files[0].file_name().to_string_lossy().into_owned();
     assert!(
-        bridge_md.contains(&format!("(blobs/{png_name})")),
-        "expected `blobs/{png_name}` markdown link in bridge thread, got:\n{bridge_md}"
+        bridge_md
+            .lines()
+            .any(|l| l.contains("![") && l.contains("/part/")),
+        "expected an image linked at a part address, got:\n{bridge_md}"
     );
     // The raw cid URL should be gone — htmd should see the rewritten
-    // `src="blobs/…"` and emit `![…](blobs/…)`, not `cid:…`.
+    // `src` and emit `![…](/data/…/part/…)`, not `cid:…`.
     assert!(
         !bridge_md.contains("cid:lcars-glyph"),
         "raw cid: reference leaked into bridge thread md:\n{bridge_md}"

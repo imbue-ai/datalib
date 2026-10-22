@@ -169,9 +169,9 @@ complete one per ingest method, each a `[[groups]]` entry and its steps
 under the type's own name as the group id. Its structs derive
 `schemars::JsonSchema`, so the params' JSON Schema, doc comments
 included, is the field reference. `datalib_step/src/source_docs.rs`
-maps every `SourceType` to the two, and `datalib-step help` prints them
-(`help <type>`, `help <type> <method>`, `--example minimal|complete
---id <group>`). Its test loads and plans every stanza and holds each
+maps every `SourceType` to the two; `datalib-step examples <type>`
+prints the stanzas and `datalib-step help <type> <method>` the
+reference. Its test loads and plans every stanza and holds each
 complete one to every option of its method's table; the shared
 `common` and `latchkey_settings` options are set only where a source
 reads them. A retired field a planner refuses stays readable by serde

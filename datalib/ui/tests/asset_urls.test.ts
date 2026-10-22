@@ -64,4 +64,22 @@ describe("ownAssetReference and a blob-store address", () => {
       expect(ownAssetReference(s, null), s).toBeNull();
     }
   });
+
+  it("keeps exactly a part of a stored email, and nothing longer or shorter", () => {
+    const part = "cd".repeat(32);
+    const address = `/data/mail/ingest/blob/${hash}/part/${part}`;
+    expect(ownAssetReference(address, null)).toBe(address);
+    for (const s of [
+      `/data/mail/ingest/blob/${hash}/part`,
+      `/data/mail/ingest/blob/${hash}/part/`,
+      `/data/mail/ingest/blob/${hash}/parts/${part}`,
+      `/data/mail/ingest/blob/${hash}/part/${part}/`,
+      `/data/mail/ingest/blob/${hash}/part/${part}/part/${part}`,
+      `/data/mail/ingest/blob/${hash}/part/${part.toUpperCase()}`,
+      `/data/mail/ingest/blob/${hash}/part/${part.slice(1)}`,
+      `/data/mail/ingest/blob/${hash}/part/%2e%2e/%2e%2e/%2e%2e/%2e%2e/api/config`,
+    ]) {
+      expect(ownAssetReference(s, null), s).toBeNull();
+    }
+  });
 });

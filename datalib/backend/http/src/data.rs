@@ -17,7 +17,8 @@ use crate::AppState;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString)]
 #[strum(serialize_all = "snake_case")]
 enum DataKind {
-    /// A row of the step's blob store, by its hash.
+    /// A row of the step's blob store, by its hash; or a MIME part of a
+    /// message stored there, `<hash>/part/<hash of the part's bytes>`.
     Blob,
 }
 
@@ -46,8 +47,13 @@ fn is_a_groups_tree(s: &AppState, group: &str, function: &str) -> bool {
             .is_ok_and(|c| c.cfg.groups.iter().any(|g| g.id == group))
 }
 
-async fn blob(s: &AppState, group: &str, function: &str, hash: &str) -> Response<Body> {
-    if !datalib_blob_store::is_hash(hash) {
+async fn blob(s: &AppState, group: &str, function: &str, rest: &str) -> Response<Body> {
+    let (hash, part) = match rest.split('/').collect::<Vec<_>>()[..] {
+        [hash] => (hash, None),
+        [hash, "part", part] => (hash, Some(part)),
+        _ => return not_found(),
+    };
+    if !datalib_blob_store::is_hash(hash) || part.is_some_and(|p| !datalib_blob_store::is_hash(p)) {
         return not_found();
     }
     let path = s
@@ -55,7 +61,11 @@ async fn blob(s: &AppState, group: &str, function: &str, hash: &str) -> Response
         .join(group)
         .join(function)
         .join(datalib_blob_store::BLOBS_DB);
-    match datalib_blob_store::read(&path, hash).await {
+    let read = match part {
+        None => datalib_blob_store::read(&path, hash).await,
+        Some(part) => datalib_blob_store::read_part(&path, hash, part).await,
+    };
+    match read {
         Ok(Some(stored)) => {
             let content_type = stored
                 .content_type

@@ -13,6 +13,8 @@ rust_library(
     deps = [
         "//datalib/backend/runtime:datalib_runtime",
         "@datalib_crates//:anyhow",
+        "@datalib_crates//:blake3",
+        "@datalib_crates//:mail-parser",
         "@datalib_crates//:sqlx",
     ],
 )
@@ -23,7 +25,6 @@ rust_test(
     crate = ":datalib_blob_store",
     edition = "2021",
     deps = [
-        "@datalib_crates//:blake3",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
     ],

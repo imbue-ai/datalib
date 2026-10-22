@@ -1,6 +1,7 @@
 // The card sources other cards open, as strings, with nothing else
 // attached: a chip or a menu that only needs `logView(…)` to hand to
 // `openCards` should not pull the card's components in with it.
+import { parseCardSource } from "./cardCall";
 
 export type LogViewOpts = {
   run?: string | null;
@@ -40,6 +41,35 @@ export type HistoryViewOpts = {
 /// The source of a history card, for whoever opens one.
 export function historySource(opts: HistoryViewOpts): string {
   return `historyView(${JSON.stringify(opts)})`;
+}
+
+/// What makes two card sources the same card, for an open that would add
+/// a tab (`containerTree.ts::tabShowing`). A group's sync dashboard is one
+/// per window, wherever it was opened, and its `step` only says where to
+/// scroll. Every other card is the same card only by the same source, and
+/// only in a tab near its opener (docs/dev/cards.md § "An open that shows
+/// a tab already there").
+export function sameCard(source: string): { key: string; anywhere: boolean } {
+  try {
+    const call = parseCardSource(source);
+    const opts = call.args[0] as Partial<SyncDashboardOpts> | undefined;
+    if (call.name === "syncDashboardView" && typeof opts?.group === "string") {
+      return { key: `syncDashboardView:${opts.group}`, anywhere: true };
+    }
+  } catch {
+    // A source that does not parse is only ever itself.
+  }
+  return { key: source, anywhere: false };
+}
+
+/// The step a sync dashboard's source names, or null.
+export function syncDashboardStep(source: string): string | null {
+  try {
+    const opts = parseCardSource(source).args[0] as Partial<SyncDashboardOpts> | undefined;
+    return typeof opts?.step === "string" ? opts.step : null;
+  } catch {
+    return null;
+  }
 }
 
 export type PersonViewOpts = {

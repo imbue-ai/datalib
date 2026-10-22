@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import {
   cardOf,
+  expandGroup,
   shownCards,
   shownTabName,
   stubClipboard,
@@ -66,6 +67,46 @@ test.describe("toolbar", () => {
     await expect(cardOf(page, `historyView({"trees":["${group}"]`)).toBeVisible({
       timeout: 10_000,
     });
+  });
+
+  // A source's sync dashboard is one tab, however it is opened again: from
+  // the Dashboard a second time, or from a step's chip in the Sources
+  // table, which shows that step's section of the tab already open.
+  test("a source's sync dashboard opens once, and a step's chip goes to its section", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    const chip = cardOf(page, "sourcesOverviewView()")
+      .locator('.grid-row a.chip[data-entity^="datalib:group/"]')
+      .first();
+    await expect(chip).toBeVisible({ timeout: 10_000 });
+    const group = (await chip.getAttribute("data-entity"))!.slice("datalib:group/".length);
+    const dash = cardOf(page, `syncDashboardView({"group":"${group}"})`);
+
+    await chip.dblclick();
+    await expect(dash).toBeVisible({ timeout: 10_000 });
+    const tabs = await tabLabels(page).count();
+
+    await tabLabels(page)
+      .filter({ hasText: /^Dashboard$/ })
+      .click();
+    await chip.dblclick();
+    await expect(dash).toBeVisible();
+    await expect(tabLabels(page)).toHaveCount(tabs);
+
+    await tabLabels(page)
+      .filter({ hasText: /^Sources$/ })
+      .click();
+    await expandGroup(page, group);
+    const stepChip = page
+      .locator(`.tg-grid .slick-row[data-key^="${group}/"] [col-id="name"] a.chip`)
+      .last();
+    await expect(stepChip).toBeVisible();
+    const step = (await stepChip.getAttribute("data-entity"))!.slice("datalib:step/".length);
+    await stepChip.dblclick();
+    await expect(dash).toBeVisible();
+    await expect(tabLabels(page)).toHaveCount(tabs);
+    await expect(dash.locator(`.sd-section[data-step="${step}"]`)).toBeInViewport();
   });
 
   test("the search box opens a search card on what was typed", async ({ page }) => {

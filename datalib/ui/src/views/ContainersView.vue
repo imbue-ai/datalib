@@ -22,6 +22,7 @@ import { chainHref } from "@/cards/chainHref";
 import { setCardHelp } from "@/cards/help";
 import { cardType, newCardId } from "@/cards/cardId";
 import { displayTitle } from "@/cards/title";
+import { sameCard } from "@/cards/cardSources";
 import { editMode } from "@/editMode";
 import { decodeColumns } from "@/router/columns";
 import { pushToast } from "@/toasts";
@@ -84,7 +85,12 @@ import {
   type PanelSection,
 } from "@/views/containersApi";
 import { PANEL_ICONS } from "@/views/panelIcons";
-import type { CardCtx, HostCommands } from "@/cards/types";
+import {
+  TOPIC_CARD_REOPENED,
+  type CardCtx,
+  type CardReopenedPayload,
+  type HostCommands,
+} from "@/cards/types";
 
 const route = useRoute();
 const router = useRouter();
@@ -299,9 +305,12 @@ function ctxFor(card: CardNode): CardCtx {
     const cardId = card.id;
     const host: HostCommands = {
       openCards: (...sources) => {
-        const shown = sources.length === 1 ? tabShowing(root.value, cardId, sources[0]) : null;
+        const shown =
+          sources.length === 1 ? tabShowing(root.value, cardId, sources[0], sameCard) : null;
         if (shown !== null) {
           select(shown);
+          const reopened: CardReopenedPayload = { cardId: shown, source: sources[0] };
+          bus.publish(TOPIC_CARD_REOPENED, reopened);
           return [shown];
         }
         const nodes = sources.map((s) => makeCard(newCardId(), s));
