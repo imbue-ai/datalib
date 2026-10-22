@@ -457,7 +457,8 @@ Every Google source signs in through an OAuth client in a Google Cloud
 project of your own, and latchkey needs one for each Google service
 before its first sign-in. In the Add source form, **Sign in with
 browser** says when one is missing and offers to create it or to take
-one you made. From a terminal, latchkey can create one, which takes a
+one you made; for Google Drive it takes only one you made, and keeps it
+for all four of Drive's services. From a terminal, latchkey can create one, which takes a
 few minutes and a Cloud project per service:
 
 ```sh
@@ -522,8 +523,11 @@ and the images it shows. It can also keep a copy LibreOffice opens
 Drive stays in the backup.
 
 The download reaches four Google APIs, and latchkey signs each with its
-own service, so sign in to all four as the same account. Approve every
-scope each one asks for:
+own service, so it needs all four signed in as the same account. In the
+Add source form, **Sign in with browser** signs in to Drive, Docs,
+Sheets and Slides one after another; approve every scope each one asks
+for. If one is turned down, the button then reads **Finish signing in
+as …** and does only the ones left. From a terminal:
 
 ```sh
 latchkey auth browser google-drive
@@ -533,15 +537,19 @@ latchkey auth browser google-slides
 ```
 
 Each needs an OAuth client first, and one client can serve all four:
-[your own Google OAuth client](#your-own-google-oauth-client). If
-Google answers that an API is not enabled, turn it on in that client's
-Cloud project. There is
-no Add source form for it yet; add it to the config by hand, as in
-[`all_sources.toml`](config_examples/all_sources.toml). `owned_only`
-keeps it to the files you own, and `file_ids` to the ones you name.
-`exports` says which copies Drive converts each version to, beside its
+[your own Google OAuth client](#your-own-google-oauth-client). The form
+asks for one you made and keeps it for all four, rather than creating
+one, since latchkey would make a Cloud project for each. If Google
+answers that an API is not enabled, turn it on in that client's Cloud
+project.
+
+The form asks which files: every file the account can open, only the
+ones it owns (`owned_only`), or only the ones you list (`file_ids`, a
+link or an id each). `kinds`, `exports` and `revision_exports` are under
+Advanced options. `exports` says which copies Drive converts each version to, beside its
 native JSON: `["odf"]` for `.odt`, `.ods` and `.odp`, `"ooxml"`,
-`"pdf"`, or a list per kind. By default there are none.
+`"pdf"`, or, written into the config by hand, a list per kind. By
+default there are none.
 `revision_exports` takes the same values for the revisions Drive lists,
 and is the only way to keep versions from before your first sync: each
 Doc and Sheet revision is fetched once, as an export. It is off by

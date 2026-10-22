@@ -183,6 +183,12 @@ export type CatalogEntry = {
   /// would write reach an origin (`ingestReach`): an import has nothing
   /// to log in to.
   credentialService?: string;
+  /// More latchkey services the download reaches, each needing the same
+  /// account as `credentialService`: Google Drive's Docs, Sheets and
+  /// Slides. One "Sign in with browser" signs in to every one in turn,
+  /// and a missing OAuth client is pasted once for all of them
+  /// (`multiSignIn.ts`). `label` is the name a person knows it by.
+  credentialAlso?: { service: string; label: string }[];
   /// How to register `credentialService` with latchkey when latchkey
   /// has never heard of it, so that a browser login exists at all. The
   /// login flow belongs to the *service* and is fixed when it is
@@ -1044,6 +1050,88 @@ export const CATALOG: CatalogEntry[] = [
           "A folder of .ics files, one per calendar: the Calendar folder from a Google Takeout," +
           " say. Each file is the whole of its calendar: an event a re-read file no longer " +
           "holds is dropped from the copy.",
+      },
+    ],
+  },
+  {
+    type: "google_drive",
+    method: "api",
+    label: "Google Drive",
+    blurb: "Copy the Docs, Sheets and Slides on a Google account.",
+    keywords: ["google", "drive", "docs", "sheets", "slides", "documents", "spreadsheets"],
+    kind: "api",
+    icon: "google_drive",
+    defaultName: "google_drive",
+    nameHint: "Work Drive",
+    wizard: true,
+    intro:
+      "Each Doc becomes a document you can read and search, its comments beside the text. " +
+      "Sheets and Slides are kept, but not shown yet.",
+    credentialService: "google-drive",
+    credentialAlso: [
+      { service: "google-docs", label: "Google Docs" },
+      { service: "google-sheets", label: "Google Sheets" },
+      { service: "google-slides", label: "Google Slides" },
+    ],
+    sections: [
+      {
+        heading: "Which files?",
+        answers: [
+          {
+            label: "Every file the account can open",
+            help: "Files shared with it included.",
+            sets: { "api.owned_only": false },
+          },
+          { label: "Only the files it owns", sets: { "api.owned_only": true } },
+          // No `sets`: a list of files wins over `owned_only` and
+          // `kinds` in the downloader, so a config holding both is
+          // this answer.
+          { label: "Only the files I choose", fields: ["api.file_ids"] },
+        ],
+      },
+    ],
+    fields: [
+      {
+        kind: "text",
+        latchkey: true,
+        target: "latchkey_settings.account",
+        label: "Google account",
+        help:
+          "Which stored Google login to copy. Leave it empty if only one is stored. " +
+          "It has to be signed in to Drive, Docs, Sheets and Slides alike.",
+      },
+      { kind: "bool", target: "api.owned_only", label: "Only files the account owns" },
+      {
+        kind: "string_list",
+        target: "api.file_ids",
+        label: "Files",
+        help: "A link to each, as the address bar shows it, or its id.",
+      },
+      {
+        kind: "string_list",
+        target: "api.kinds",
+        label: "Kinds of file",
+        help:
+          "Any of document, spreadsheet and presentation. Empty means all three. Ignored when " +
+          "files are chosen by name.",
+      },
+      {
+        kind: "string_list",
+        target: "api.exports",
+        label: "Converted copies",
+        help:
+          "Any of odf (.odt, .ods, .odp, which LibreOffice opens), ooxml (.docx, .xlsx, " +
+          ".pptx) and pdf, kept beside Google's own JSON of each version. Each is a request, " +
+          "and 1 to 4 MB a version for a Doc or a deck. Empty means none.",
+      },
+      {
+        kind: "string_list",
+        target: "api.revision_exports",
+        label: "Converted copies of old versions",
+        help:
+          "The same formats, of every revision Drive lists for a Doc or a Sheet, fetched once " +
+          "each: the only copy of a version from before the first sync. Decks get none. Empty " +
+          "means none.",
       },
     ],
   },

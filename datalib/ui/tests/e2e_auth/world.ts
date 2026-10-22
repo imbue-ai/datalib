@@ -78,6 +78,7 @@ export const TILE = {
   chatgpt: "Copy your ChatGPT conversations.",
   garmin: "Weight, sleep, heart rate, activities and FIT files from Garmin Connect.",
   gmail: "Copy a Gmail account through Google's API.",
+  drive: "Copy the Docs, Sheets and Slides on a Google account.",
 };
 
 /// The latchkey subcommand of one logged run: `services info`,
