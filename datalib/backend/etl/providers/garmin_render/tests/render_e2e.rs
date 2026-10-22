@@ -148,7 +148,7 @@ async fn renders_every_document_then_renders_an_unchanged_store_the_same() {
         "charts are drawn from the time-series store, not written as pages"
     );
     assert!(
-        md.contains("| 2369-04-14"),
+        md.contains("| <time datetime=\"2369-04-14T"),
         "table row for the latest weigh-in:\n{md}"
     );
     assert!(md.contains("INDEX_SCALE"), "{md}");
@@ -162,7 +162,7 @@ async fn renders_every_document_then_renders_an_unchanged_store_the_same() {
 
     let sleep = std::fs::read_to_string(page_dir.join("sleep.md")).unwrap();
     assert!(
-        sleep.contains("**2369-04-14:** Sleep score 84 · Asleep 7 h 20 min"),
+        sleep.contains("**<time datetime=\"2369-04-14\">Mon Apr 14th, 2369</time>:** Sleep score 84 · Asleep 7 h 20 min"),
         "{sleep}"
     );
     for name in ["sleep_score", "sleep_total"] {
@@ -174,7 +174,10 @@ async fn renders_every_document_then_renders_an_unchanged_store_the_same() {
             "a chart of its own for {name}:\n{sleep}"
         );
     }
-    assert!(sleep.contains("| 2369-04-14 | 84 | 7:20 |"), "{sleep}");
+    assert!(
+        sleep.contains("| <time datetime=\"2369-04-14\">Mon Apr 14th, 2369</time> | 84 | 7:20 |"),
+        "{sleep}"
+    );
 
     let activity_pages: Vec<String> = std::fs::read_dir(page_dir.join("activities"))
         .unwrap()

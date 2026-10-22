@@ -19,6 +19,7 @@ use datalib_etl_render::front_matter::yaml_scalar;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{escape_md_block, escape_md_inline};
 use datalib_etl_render::inputs::{Bucket, Buckets};
+use datalib_etl_render::message::stamp_text_html;
 use regex::Regex;
 use serde_json::Value;
 
@@ -34,7 +35,8 @@ use datalib_etl_render::pages::batches;
 ///     now holds the page's datalib id.
 /// v8: an attachment links to its address in the blob store rather than
 ///     a copy beside the page.
-pub const RENDER_VERSION: u32 = 8;
+/// v9: a comment's time is a `<time>` stamp.
+pub const RENDER_VERSION: u32 = 9;
 pub const SLUG_MAX_LEN: usize = 60;
 
 static SLUG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[^a-z0-9]+").unwrap());
@@ -354,7 +356,7 @@ fn render_thread(
         out.push_str(&format!(
             "**{}** · {}\n\n",
             escape_md_inline(author),
-            escape_md_inline(when)
+            stamp_text_html(when)
         ));
         out.push_str(&escape_md_block(&plain(c.get("rich_text"))));
         out.push_str("\n\n</div>\n\n");

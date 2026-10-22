@@ -11,6 +11,7 @@ use datalib_etl_render::front_matter::yaml_scalar;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{escape_md_block, escape_md_inline, md_code_span, md_link_dest};
 use datalib_etl_render::inputs::{Bucket, Buckets};
+use datalib_etl_render::message::stamp_text_html;
 use datalib_etl_render::section::{join, Section};
 use datalib_etl_render::title::Title;
 use datalib_schema::edges::EdgeRow;
@@ -260,12 +261,14 @@ fn render_markdown(
         .render(),
     );
 
+    // Each value is markdown already: a stamp is a `<time>`, the rest
+    // is text escaped where it is pushed.
     let mut facts: Vec<(&str, String)> = Vec::new();
     if let Some(w) = when_line(event) {
-        facts.push(("When", w));
+        facts.push(("When", escape_md_inline(&w)));
     }
     for r in repeats_lines(event) {
-        facts.push(("Repeats", r));
+        facts.push(("Repeats", escape_md_inline(&r)));
     }
     if let EventShape::Occurrence {
         series,
@@ -278,33 +281,33 @@ fn render_markdown(
         };
         facts.push((
             "Occurrence of",
-            format!("{of}, originally {}", original_start.display()),
+            escape_md_inline(&format!("{of}, originally {}", original_start.display())),
         ));
     }
     if let Some(l) = &event.location {
-        facts.push(("Where", l.clone()));
+        facts.push(("Where", escape_md_inline(l)));
     }
-    facts.push(("Calendar", event.calendar_label.clone()));
+    facts.push(("Calendar", escape_md_inline(&event.calendar_label)));
     if let Some(s) = event.status.as_deref().filter(|s| *s != "confirmed") {
-        facts.push(("Status", capitalize(s)));
+        facts.push(("Status", escape_md_inline(&capitalize(s))));
     }
     if event.busy == Some(false) {
         facts.push(("Shows as", "Free".into()));
     }
     if let Some(o) = &event.organizer {
         if let Some(who) = person_line(o.name.as_deref(), o.email.as_deref()) {
-            facts.push(("Organizer", who));
+            facts.push(("Organizer", escape_md_inline(&who)));
         }
     }
     if let Some(c) = &event.created {
-        facts.push(("Added", c.clone()));
+        facts.push(("Added", stamp_text_html(c)));
     }
     if let Some(m) = &event.modified_at {
-        facts.push(("Last changed", m.clone()));
+        facts.push(("Last changed", stamp_text_html(m)));
     }
     out.push_str("| | |\n| --- | --- |\n");
     for (k, v) in &facts {
-        out.push_str(&format!("| {k} | {} |\n", escape_md_inline(v)));
+        out.push_str(&format!("| {k} | {v} |\n"));
     }
     out.push('\n');
 
@@ -690,6 +693,13 @@ mod tests {
         assert!(md.contains("\\# not a heading"));
         assert!(md.contains("&lt;b&gt;not bold&lt;/b&gt;"));
         assert!(!md.contains("| Status |"), "confirmed is not worth a line");
+        assert!(
+            md.contains(
+                "| Last changed | <time datetime=\"2026-09-02T16:00:00+00:00\" \
+                 title=\"2026-09-02 16:00:00 UTC\">Wed Sep 2nd, 2026 at 16:00</time> |"
+            ),
+            "the stamp every document writes: {md}"
+        );
     }
 
     #[test]

@@ -984,6 +984,30 @@ The crate that enforces all of this —
 documented in
 [the ingestion doc](data_architecture_ingestion.md#single-source-of-truth-datalib-time).
 
+### A stamp on a page
+
+**Every time a document shows is a `<time>` element written by
+`datalib_etl_render::message`**, so a reader sees one form whatever the
+source:
+
+```html
+<time datetime="2026-01-06T08:00:00+01:00" title="2026-01-06 08:00:00 +01:00">Tue Jan 6th, 2026 at 08:00</time>
+<time datetime="2369-03-18">Tue Mar 18th, 2369</time>
+```
+
+The text is the short form any markdown viewer shows; `datetime` is the
+machine-readable value, which the viewer reads to draw the stamp; the
+`title` is the whole instant. A message header writes it with
+`timestamp_html` (class `msg-ts`); anywhere else, `stamp_html` for an
+instant, or `stamp_text_html` for a stamp a record keeps as text: an
+RFC 3339 instant, a `YYYY-MM-DD` day, or else the text as written. A
+stamp keeps the offset the source gave it. A grid row's text is not
+markdown and keeps plain words (`datalib_time::short_ts`). Not
+`<time>`s yet: a calendar event's "When", which is a range in the
+event's own zone; a contact's details ("Friends since"); and Garmin's
+record lines and a device's last sync, which Garmin writes without an
+offset.
+
 ### No fabricated timestamps
 A corollary of "[don't make up data](data_architecture_ingestion.md#wire-fidelity-of-the-raw-store)", called out because timestamps are the easiest place to violate it:
 

@@ -9,6 +9,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use datalib_etl_render::front_matter::yaml_scalar;
 use datalib_etl_render::html::{escape_md_inline, md_code_span, md_link_dest};
+use datalib_etl_render::message::stamp_text_html;
 use datalib_etl_render::title::Title;
 
 use crate::{ordered, ChangeRequest, Comment, ForgeProfile};
@@ -134,7 +135,7 @@ fn push_comment(out: &mut String, c: &Comment) {
 
 fn header(c: &Comment) -> String {
     let who = escape_md_inline(c.author.as_deref().unwrap_or("unknown"));
-    let when = escape_md_inline(&c.created_at);
+    let when = stamp_text_html(&c.created_at);
     let link = c
         .url
         .as_deref()
@@ -151,7 +152,7 @@ fn header(c: &Comment) -> String {
     } else {
         ""
     };
-    format!("**@{who}**{state}{reply} @ {when}{link}")
+    format!("**@{who}**{state}{reply} · {when}{link}")
 }
 
 /// Each line prefixed `> `, so the comment renders as a blockquote.
@@ -262,7 +263,8 @@ mod tests {
         assert!(body.contains("### `` src/`a`.rs:3 ``"), "{body}");
         assert!(
             body.contains(&format!(
-                "**@{escaped}** *({escaped})* @ 2364-04-11 — [link](<https://e.invalid/c (1)>)"
+                "**@{escaped}** *({escaped})* · <time datetime=\"2364-04-11\">Sat Apr 11th, 2364</time> \
+                 — [link](<https://e.invalid/c (1)>)"
             )),
             "{body}"
         );

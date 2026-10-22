@@ -9,7 +9,7 @@ use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{escape_md_inline, md_code_span};
 use datalib_etl_timeseries_render::page::{Device, Page, PageProfile};
-use datalib_etl_timeseries_render::text::{iso, thousands};
+use datalib_etl_timeseries_render::text::{stamp, thousands};
 use datalib_id::IdNamespace;
 use datalib_schema::providers::Provider;
 
@@ -91,7 +91,7 @@ fn device(dev: &super::parse::DeviceRow) -> Device {
     if let Some(tz) = &dev.timezone {
         facts.push(format!("clock in {}", escape_md_inline(tz)));
     }
-    facts.push(match dev.last_ts_ms.and_then(iso) {
+    facts.push(match dev.last_ts_ms.map(stamp) {
         Some(t) => format!("last sample {t}"),
         None => "no samples yet".to_string(),
     });

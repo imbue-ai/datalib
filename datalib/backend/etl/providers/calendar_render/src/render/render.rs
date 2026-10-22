@@ -20,8 +20,9 @@ use super::{google, ics, ids};
 /// Bump when the rendered layout changes enough that every event needs
 /// re-rendering: 2 when a Google time started showing in its own zone;
 /// 6 so a full walk sweeps the occurrences earlier versions kept after a
-/// "this and following" edit moved them to a new UID.
-pub const RENDER_VERSION: u32 = 6;
+/// "this and following" edit moved them to a new UID; 7 when "Added" and
+/// "Last changed" became `<time>` stamps.
+pub const RENDER_VERSION: u32 = 7;
 
 /// A calendar as its events need it.
 #[derive(Debug, Clone)]

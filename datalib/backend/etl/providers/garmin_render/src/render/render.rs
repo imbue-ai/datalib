@@ -14,8 +14,9 @@ use datalib_etl::progress::Progress;
 use datalib_etl_render::front_matter::yaml_scalar;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::escape_md_inline;
+use datalib_etl_render::message::stamp_text_html;
 use datalib_etl_render::title::Title;
-use datalib_etl_timeseries_render::text::{iso, short_ts};
+use datalib_etl_timeseries_render::text::{iso, short_ts, stamp};
 use datalib_id::{entity_id_str, IdNamespace};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
@@ -328,7 +329,7 @@ fn render_family(
 
     let charts = time_series::family_charts(source_id, family, days);
     let mut body = head(&m_uuid, source_id, &title, created_at.as_deref());
-    let _ = writeln!(body, "**{last}:** {latest}\n");
+    let _ = writeln!(body, "**{}:** {latest}\n", stamp_text_html(last));
     for ids in &charts {
         let _ = writeln!(body, "{}\n", time_series_chart(ids));
     }
@@ -399,7 +400,7 @@ fn render_daily_log(out: &mut Out<'_>, parsed: &ParsedGarmin, who: &str) -> Resu
             .filter_map(|f| daily::family_line(f, day).map(|l| (f, l)))
             .collect();
         section_open(&mut body, &day_uuid(source_id, date));
-        let _ = writeln!(body, "### {date}\n");
+        let _ = writeln!(body, "### {}\n", stamp_text_html(date));
         for (family, line) in &by_family {
             let _ = writeln!(body, "- **{}:** {line}", family.title());
         }
@@ -613,9 +614,9 @@ fn render_weight_section(out: &mut String, parsed: &ParsedGarmin, source_id: &st
         out,
         "**{:.1} kg** on {} · {} weigh-ins since {}{}.\n",
         latest.weight_kg,
-        short_ts(latest.timestamp_gmt_ms),
+        stamp(latest.timestamp_gmt_ms),
         parsed.weigh_ins.len(),
-        short_ts(first.timestamp_gmt_ms),
+        stamp(first.timestamp_gmt_ms),
         match latest.body_fat_pct {
             Some(f) => format!(" · {f:.1} % body fat"),
             None => String::new(),
@@ -631,13 +632,13 @@ fn render_weight_section(out: &mut String, parsed: &ParsedGarmin, source_id: &st
         "### Latest {} weigh-ins\n",
         TABLE_ROWS.min(parsed.weigh_ins.len())
     );
-    out.push_str("| When (UTC) | kg | BMI | Body fat | Source |\n");
+    out.push_str("| When | kg | BMI | Body fat | Source |\n");
     out.push_str("| --- | ---: | ---: | ---: | --- |\n");
     for w in parsed.weigh_ins.iter().rev().take(TABLE_ROWS) {
         let _ = writeln!(
             out,
             "| {} | {:.1} | {} | {} | {} |",
-            short_ts(w.timestamp_gmt_ms),
+            stamp(w.timestamp_gmt_ms),
             w.weight_kg,
             w.bmi.map(|b| format!("{b:.1}")).unwrap_or_default(),
             w.body_fat_pct

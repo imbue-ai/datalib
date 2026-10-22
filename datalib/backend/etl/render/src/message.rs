@@ -115,17 +115,41 @@ impl MessageHeader<'_> {
 /// re-rendering anything.
 pub fn timestamp_html(date_ms: Option<i64>) -> String {
     match date_ms.and_then(IsoOffsetTimestamp::from_unix_millis) {
-        Some(t) => format!(
-            "<time class=\"msg-ts\" datetime=\"{iso}\" title=\"{full}\">{short}</time>",
-            iso = t.to_rfc3339_secs(),
-            full = display_ts(date_ms),
-            short = datalib_time::short_ts(&t),
-        ),
+        Some(t) => time_element(" class=\"msg-ts\"", &t),
         // Either no stamp at all or a number that is not an instant.
         // `display_ts` spells those two apart, and neither has an ISO
         // form to hang a `<time>` on.
         None => format!("<span class=\"msg-ts\">{}</span>", display_ts(date_ms)),
     }
+}
+
+/// A stamp anywhere else in a document — "Added", "Edited", a review's
+/// time — in the message header's form, so every stamp on a page reads
+/// alike and the viewer finds each one by its `datetime`.
+pub fn stamp_html(t: &IsoOffsetTimestamp) -> String {
+    time_element("", t)
+}
+
+/// A stamp a record keeps as text: an RFC 3339 instant, or a
+/// `YYYY-MM-DD` day. Text that is neither is shown as written, since
+/// it is the only lead a reader has.
+pub fn stamp_text_html(s: &str) -> String {
+    if let Ok(t) = datalib_time::parse_strict(s) {
+        return stamp_html(&t);
+    }
+    match datalib_time::short_day(s) {
+        Some(short) => format!("<time datetime=\"{s}\">{short}</time>"),
+        None => escape_md_inline(s),
+    }
+}
+
+fn time_element(class: &str, t: &IsoOffsetTimestamp) -> String {
+    format!(
+        "<time{class} datetime=\"{iso}\" title=\"{full}\">{short}</time>",
+        iso = t.to_rfc3339_secs(),
+        full = datalib_time::full_ts(t),
+        short = datalib_time::short_ts(t),
+    )
 }
 
 /// The long form, shown on hover.
@@ -151,6 +175,25 @@ mod tests {
              <time class=\"msg-ts\" datetime=\"2364-04-11T00:00:00+00:00\" \
              title=\"2364-04-11 00:00:00 UTC\">Sat Apr 11th, 2364 at 00:00</time>",
         );
+    }
+
+    #[test]
+    fn a_stamp_kept_as_text_is_an_instant_a_day_or_itself() {
+        assert_eq!(
+            stamp_text_html("2026-01-06T08:00:00+01:00"),
+            "<time datetime=\"2026-01-06T08:00:00+01:00\" \
+             title=\"2026-01-06 08:00:00 +01:00\">Tue Jan 6th, 2026 at 08:00</time>",
+        );
+        assert_eq!(
+            stamp_text_html("2369-04-15T10:05:00.000Z"),
+            "<time datetime=\"2369-04-15T10:05:00+00:00\" \
+             title=\"2369-04-15 10:05:00 UTC\">Tue Apr 15th, 2369 at 10:05</time>",
+        );
+        assert_eq!(
+            stamp_text_html("2369-03-18"),
+            "<time datetime=\"2369-03-18\">Tue Mar 18th, 2369</time>",
+        );
+        assert_eq!(stamp_text_html("<b>soon</b>"), "&lt;b&gt;soon&lt;/b&gt;");
     }
 
     #[test]

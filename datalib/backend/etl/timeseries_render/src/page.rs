@@ -21,7 +21,7 @@ use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
 
 use crate::series::{by_device, earliest_ts_ms, latest_ts_ms, Series};
-use crate::text::{human_gap, iso, median_gap, short, short_ts, thousands};
+use crate::text::{human_gap, iso, median_gap, stamp, thousands};
 use crate::time_series::time_series_chart;
 use crate::units::{series_label, spec_in, Axis, MetricSpec, Quantity};
 
@@ -391,7 +391,7 @@ fn render_markdown(
         profile.noun,
         page.series.len(),
         match (earliest, latest) {
-            (Some(a), Some(b)) => format!(", {} — {}", short_ts(a), short_ts(b)),
+            (Some(a), Some(b)) => format!(", {} — {}", stamp(a), stamp(b)),
             _ => String::new(),
         }
     );
@@ -423,7 +423,7 @@ fn render_plot_sections(out: &mut String, profile: &PageProfile, plots: &[(&Quan
             thousands(facts.points as i64),
             facts
                 .span
-                .map(|(a, b)| format!(" · {} — {}", short_ts(a), short_ts(b)))
+                .map(|(a, b)| format!(" · {} — {}", stamp(a), stamp(b)))
                 .unwrap_or_default()
         );
         // The document view draws each from the time-series store
@@ -525,8 +525,8 @@ fn render_metric_table(out: &mut String, profile: &PageProfile, series: &[&Serie
             max,
             mean,
             vals.last().copied().unwrap_or(f64::NAN),
-            s.ts_ms.first().copied().and_then(short).unwrap_or_default(),
-            s.ts_ms.last().copied().and_then(short).unwrap_or_default(),
+            s.ts_ms.first().copied().map(stamp).unwrap_or_default(),
+            s.ts_ms.last().copied().map(stamp).unwrap_or_default(),
             median_gap(&s.ts_ms)
                 .map(human_gap)
                 .unwrap_or_else(|| "—".into()),
