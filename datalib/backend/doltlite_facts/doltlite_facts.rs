@@ -1525,6 +1525,151 @@ mod gc {
     }
 }
 
+// ── Trees, and keeping one through a fold ───────────────────────────
+
+mod trees {
+    use super::*;
+
+    async fn tree(c: &mut SqliteConnection, rev: &str) -> String {
+        text(c, &format!("SELECT dolt_hashof_db('{rev}')"))
+            .await
+            .expect("a tree hash")
+    }
+
+    async fn first_commit(c: &mut SqliteConnection) -> String {
+        text(
+            c,
+            "SELECT commit_hash FROM dolt_log WHERE message = 'Initialize data repository'",
+        )
+        .await
+        .expect("the store's first commit")
+    }
+
+    /// Folds `main`'s history into one commit on the store's first one,
+    /// then collects what only the folded commits reached.
+    async fn fold(c: &mut SqliteConnection) {
+        let init = first_commit(c).await;
+        ok(c, &format!("SELECT dolt_reset('--soft', '{init}')")).await;
+        commit(c, "fold").await;
+        ok(c, "SELECT dolt_gc()").await;
+    }
+
+    /// Re-commits `rev`'s tree as a child of the first commit and tags it
+    /// `tree/<hash>`: a pin that holds the tree and none of the history
+    /// that led to it.
+    async fn pin(c: &mut SqliteConnection, rev: &str) -> String {
+        let hash = tree(c, rev).await;
+        let init = first_commit(c).await;
+        ok(c, &format!("SELECT dolt_branch('pin_work', '{rev}')")).await;
+        ok(c, "SELECT dolt_checkout('pin_work')").await;
+        ok(c, &format!("SELECT dolt_reset('--soft', '{init}')")).await;
+        let snapshot = commit(c, "pin").await;
+        ok(c, "SELECT dolt_checkout('main')").await;
+        ok(c, "SELECT dolt_branch('-D', 'pin_work')").await;
+        let tag = format!("tree/{hash}");
+        ok(c, &format!("SELECT dolt_tag('{tag}', '{snapshot}')")).await;
+        tag
+    }
+
+    /// A tree hash names content, schema included: two commits that hold
+    /// the same rows share one, and a fold leaves `main`'s unchanged.
+    #[tokio::test]
+    async fn a_tree_hash_is_the_content_not_the_commit() {
+        let (s, rows) = store_with_rows().await;
+        let mut w = s.rw().await;
+        ok(&mut w, "INSERT INTO t VALUES ('c', 3)").await;
+        commit(&mut w, "add c").await;
+        ok(&mut w, "DELETE FROM t WHERE id = 'c'").await;
+        let back = commit(&mut w, "drop c").await;
+        assert_ne!(rows, back);
+        assert_eq!(tree(&mut w, &rows).await, tree(&mut w, &back).await);
+
+        ok(&mut w, "ALTER TABLE t ADD COLUMN note TEXT").await;
+        let widened = commit(&mut w, "widen").await;
+        assert_ne!(tree(&mut w, &back).await, tree(&mut w, &widened).await);
+
+        let before = tree(&mut w, "HEAD").await;
+        fold(&mut w).await;
+        assert_ne!(head(&mut w).await, widened);
+        assert_eq!(tree(&mut w, "HEAD").await, before);
+    }
+
+    /// A tree hash is not a ref: no read takes one. So is a commit a fold
+    /// dropped, once gc has run.
+    #[tokio::test]
+    async fn a_read_names_a_ref_never_a_tree_or_a_folded_commit() {
+        let (s, rows) = store_with_rows().await;
+        let mut w = s.rw().await;
+        let hash = tree(&mut w, &rows).await;
+        err_contains(
+            exec(&mut w, &format!("SELECT COUNT(*) FROM dolt_at_t('{hash}')")).await,
+            "ref not found",
+        );
+        ok(&mut w, "INSERT INTO t VALUES ('c', 3)").await;
+        commit(&mut w, "more").await;
+        fold(&mut w).await;
+        err_contains(
+            exec(&mut w, &format!("SELECT COUNT(*) FROM dolt_at_t('{rows}')")).await,
+            "ref not found",
+        );
+    }
+
+    /// A tree re-committed on the first commit and tagged by its hash
+    /// outlives a fold and gc of `main`, reads every way a commit does,
+    /// and holds none of the history between it and the fold.
+    #[tokio::test]
+    async fn a_tagged_tree_survives_a_fold_and_holds_only_itself() {
+        let (s, rows) = store_with_rows().await;
+        let mut w = s.rw().await;
+        let tag = pin(&mut w, &rows).await;
+        assert_eq!(tag, format!("tree/{}", tree(&mut w, &rows).await));
+        assert_eq!(tree(&mut w, &tag).await, tree(&mut w, &rows).await);
+
+        ok(&mut w, "UPDATE t SET v = 10 WHERE id = 'a'").await;
+        ok(&mut w, "INSERT INTO t VALUES ('c', 3)").await;
+        ok(
+            &mut w,
+            "CREATE TABLE big (id INTEGER PRIMARY KEY, body TEXT)",
+        )
+        .await;
+        ok(
+            &mut w,
+            "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 3000) \
+             INSERT INTO big SELECT i, hex(randomblob(150)) FROM n",
+        )
+        .await;
+        commit(&mut w, "fill").await;
+        ok(&mut w, "DROP TABLE big").await;
+        commit(&mut w, "empty").await;
+        ok(&mut w, "SELECT dolt_gc()").await;
+        let unfolded = s.size();
+        fold(&mut w).await;
+        assert!(
+            s.size() * 5 < unfolded,
+            "the pin kept the history: {} of {unfolded} bytes",
+            s.size()
+        );
+
+        assert_eq!(
+            texts(&mut w, &format!("SELECT id FROM dolt_at_t('{tag}')")).await,
+            ["a", "b"]
+        );
+        let mut d = connect(&s.at(&tag), true, Duration::from_secs(5)).await;
+        assert_eq!(int(&mut d, "SELECT SUM(v) FROM t").await, 3);
+        assert_eq!(
+            texts(
+                &mut w,
+                &format!(
+                    "SELECT coalesce(to_id, from_id) || ':' || diff_type \
+                     FROM dolt_diff_t('{tag}', 'main')"
+                )
+            )
+            .await,
+            ["a:modified", "c:added"]
+        );
+    }
+}
+
 // ── Full-text search (FTS5) ─────────────────────────────────────────
 
 mod fts5 {
