@@ -59,7 +59,18 @@ its own.
      Google's default mode, which leaves them out. The stored JSON's
      `suggestionsViewMode` says which it got (`SUGGESTIONS_INLINE` or
      `PREVIEW_WITHOUT_SUGGESTIONS`);
-   - every image link in it, once per distinct URL;
+   - every image link in it, once per distinct URL, stored with the
+     type its response names. An image a stored capture of the same
+     file already holds at the same place, under a native JSON naming
+     the same `revisionId`, is not fetched again: the new capture's
+     part names the held blob, and the run counts it in `images_held`.
+     Google signs each link afresh on every read, so only the revision
+     can say the image is unchanged. Drive moves a file's `version`
+     with nothing in it edited: in one sync of a real account, 5 of the
+     6 files owed were shared with it and came back byte-identical,
+     and fetching the 152 images of the three decks among them took
+     most of the run's minute. Sheets have no `revisionId`, so a
+     Sheet's images are always fetched;
    - one export per format `exports` names for the file's kind: a list
      for every kind, `[]` for none, or a table per kind. None is asked
      for when the owner has turned off download for those who may not
@@ -105,7 +116,9 @@ nothing.
 not byte-stable: two exports of one version differ in their zip
 timestamps. A second capture of an unchanged file would store a second
 3 MB copy of the same thing. The native JSON, less its image links,
-is the same on every read, but it is only fetched with the rest.
+is the same on every read, but it is only fetched with the rest. A
+`version` Drive moved without an edit is still captured again, every
+request but the held images included.
 
 ## The store
 
