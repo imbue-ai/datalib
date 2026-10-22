@@ -40,6 +40,7 @@ import { catalogForStep, type CatalogEntry } from "@/config/catalog";
 import { ingestLabel } from "@/config/ingestMethods";
 import { rowMenu, type MenuAction } from "@/config/rowMenu";
 import { menuTarget, rowActions, withBrowse, type ActionRow } from "./rowActions";
+import { uriFromEntity } from "./chipLinks";
 import { changed, subscribeLive } from "@/live";
 import { confirmAction, isDesktopApp, revealActionLabel } from "@/desktop";
 
@@ -342,9 +343,12 @@ export function useSourcesCard(ctx: CardCtx) {
     // provider declares; the server's "Ingest" only when they name no method.
     const ingestLabelled =
       r.group && r.phase === "ingest" ? ingestLabel(r.type?.id ?? null, r.params) : null;
+    // A step is drawn as its chip, under its own short name: the row it
+    // sits under already names its group.
+    const entity = r.kind === "step" ? uriFromEntity("step", r.id) : null;
     return {
       ...browsing,
-      name: ingestLabelled ? { ...r.name, label: ingestLabelled } : r.name,
+      name: { ...r.name, label: ingestLabelled ?? r.name.label, entity },
       editBlocked,
       editGroup: editBlocked ? null : r.group,
     };

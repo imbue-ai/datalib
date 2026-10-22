@@ -112,12 +112,19 @@ What goes into the look is each kind's own rule, pure and unit-tested:
   under its group: "Work Slack · Ingest"), or the producer's until the
   answer lands; its type's mark or its phase's glyph; and a dot after
   the name for a status worth noticing — running, waiting, queued,
-  failed, blocked or interrupted. The words are in the tooltip.
+  failed, blocked or interrupted. The words are in the tooltip. Where
+  the context already names the group — a step's row under it in the
+  Sources table, its section of the group's dashboard — the chip keeps
+  the producer's short name ("Download") and the tooltip carries the
+  whole one (`keepShown`, the grid's `chips.keepLabels`). Where a
+  status is drawn right beside the chip, as in the Dashboard's rows, the
+  chip drops its dot (`quiet`).
 
 `chip.css` is the one look. The document frame, the search and
-problems grids, the log card, the sync dashboard and the render
-preview each include it in their own root, since a card's shadow root
-and the document frame see no page styles.
+problems grids, the log card, the Sources card, the sync dashboard,
+the Dashboard's sections and the render preview each include it in
+their own root, since a card's shadow root and the document frame see
+no page styles.
 
 ## Trust
 
@@ -210,13 +217,28 @@ answer changed. A right-click acts on the chip it landed on, so each
 chip in a cell of several has its own menu. The
 run log draws its Group and Step columns as chips the same way
 (`RunLogPanel.ce.vue`), with the chip's menu ahead of the cell's, and
-`TableGrid` takes the option too, as the contacts app's table does
-(`ContactsCard.ce.vue`); its right-click is still the row's menu. `tableGrid.css` keeps
-the grid theme's link colour off a chip in a cell.
+`TableGrid` takes the option too, as the contacts app's table and the
+Sources table do: a double-click on a chip there opens its card
+(`openCard`) instead of the cell's in-place edit, and its right-click
+is still the row's menu. `tableGrid.css` keeps the grid theme's link
+colour off a chip in a cell.
 
-The Manage table's Name cell is not a chip, on purpose: the row *is*
-the group or step, its double-click renames it, and its own menu
-already offers everything a chip's would.
+In the Sources table a step's Name cell is its chip, under the row's
+short name (`sourcesCardModel.ts::decorate`). A group's is not yet: its
+double-click renames it, and its row menu offers more than a group
+chip's does.
+
+## In a card's own template
+
+`EntityChip.ce.vue` draws a group or step chip where no grid or
+document does: the Dashboard's Sources, Needs you and Library sections,
+and the header of a group's sync dashboard (the group, and each step
+under its short name). It looks the entity up in `entities`, redraws
+when the answer moves, and takes its double-click and right-click from
+`chipActions`. The card hands it `openCard`; the sync dashboard's own
+chips scroll to their section instead of opening the card again. A
+card that uses it lists it, `ChipMenu` and `chip.css` in its
+`styleSources`.
 
 ## In the search field
 
@@ -244,8 +266,8 @@ right-click away; linking a handle stays the popover's
 | | a person | a group | a step |
 |---|---|---|---|
 | **click** | the link popover, where a contacts app is configured | nothing; the href is never followed | nothing; the href is never followed |
-| **double-click** | the person card (`personView`): your contact and each source's record of them, the source the chip was seen in first | the group's sync dashboard | the step's log |
-| **right-click** | `chipMenu`: open the person card; compose mail to an email address; copy the identifier, the name or both; everything with them (`with:`); link to a contact or edit the link | `entityMenu`: open its dashboard; copy the id, the name or both; browse its documents | `entityMenu`: show its log; copy |
+| **double-click** | the person card (`personView`): your contact and each source's record of them, the source the chip was seen in first | the group's sync dashboard | its group's sync dashboard, scrolled to the step's section |
+| **right-click** | `chipMenu`: open the person card; compose mail to an email address; copy the identifier, the name or both; everything with them (`with:`); link to a contact or edit the link | `entityMenu`: open its dashboard; copy the id, the name or both; browse its documents | `entityMenu`: show it in its dashboard; show its log; copy |
 | **hover** | the tooltip: who, the identifier, what each source calls them, their other handles | the tooltip: name and id, its type, its status | the same |
 | **copy** | `Will Riker <riker@enterprise.org>` as text, a working `mailto:` link as HTML | `Work Slack (datalib:group/slack)`, and the link | the same |
 

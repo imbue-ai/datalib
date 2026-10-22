@@ -131,7 +131,7 @@ test("a storage report's group and step are chips that open their cards", async 
   // The report names the step its store sits under, `slack/ingest`. This
   // fixture root declares its sources render-only, so no such step is in
   // its config and the chip stays as written: the step's name and id,
-  // nothing resolved. It still opens the step's log.
+  // nothing resolved. It still opens.
   const step = (await inDocFrame(page, 'a.chip[data-entity="datalib:step/slack/ingest"]')).first();
   await expect(step).toHaveAttribute("title", "ingest (slack/ingest)");
 
@@ -147,6 +147,9 @@ test("a storage report's group and step are chips that open their cards", async 
   await expect(cardOf(page, 'syncDashboardView({"group":"slack"})')).toBeVisible({
     timeout: 10_000,
   });
+  // A step opens its group's dashboard, at the step's own section.
   await step.dblclick();
-  await expect(cardOf(page, 'logView({"step":"slack/ingest"')).toBeVisible({ timeout: 10_000 });
+  await expect(
+    cardOf(page, 'syncDashboardView({"group":"slack","step":"slack/ingest"})'),
+  ).toBeVisible({ timeout: 10_000 });
 });
