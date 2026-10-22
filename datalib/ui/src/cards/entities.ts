@@ -124,25 +124,22 @@ export function entityCardSource(uri: string): string | null {
   return logSource({ step: e.id, jumpToEnd: true });
 }
 
-/** The right-click menu for a group or step chip, as ids a surface binds:
- *  copy the name, the id or both, and open it. */
-export type EntityMenuId = "copy-name" | "copy-id" | "copy-both" | "open" | "browse";
+/** The right-click menu for a group or step chip, as ids `chipActions`
+ *  binds: open it, copy the id, the name or both, and browse a group's
+ *  documents — in the order `CHIP_ACTIONS` gives every chip's menu. */
+export type EntityMenuId = "open" | "copy-id" | "copy-name" | "copy-both" | "browse";
 export type EntityMenuEntry = { id: EntityMenuId; label: string; separator?: boolean };
 
 export function entityMenu(uri: string, name: string): EntityMenuEntry[] {
   const e = entityFromUri(uri);
   if (!e) return [];
   const out: EntityMenuEntry[] = [
+    { id: "open", label: e.kind === "group" ? "Open its sync dashboard" : "Show its log" },
+    { id: "copy-id", label: `Copy ${e.id}`, separator: true },
     { id: "copy-name", label: `Copy “${name}”` },
-    { id: "copy-id", label: `Copy ${e.id}` },
     { id: "copy-both", label: `Copy “${entityCopyText(uri, name)}”` },
-    {
-      id: "open",
-      label: e.kind === "group" ? "Open its sync dashboard" : "Show its log",
-      separator: true,
-    },
   ];
-  if (e.kind === "group") out.push({ id: "browse", label: `Browse ${name}` });
+  if (e.kind === "group") out.push({ id: "browse", label: `Browse ${name}`, separator: true });
   return out;
 }
 

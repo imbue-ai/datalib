@@ -169,9 +169,8 @@ export function chipLook(handle: string, shownAs: string, who: Who, canLink: boo
   };
 }
 
-/** What a right-click on a chip offers. An entry is an *id* the surface
- *  binds a handler to — the document view and a grid cell draw the same
- *  menu and act on it their own way (docs/dev/chips.md § Clicks). */
+/** What a right-click on a person's chip offers, as ids `chipActions`
+ *  acts on, in its `CHIP_ACTIONS` order (docs/dev/chips.md § Clicks). */
 export type ChipMenuId =
   "open" | "compose" | "copy-id" | "copy-name" | "copy-both" | "search" | "edit";
 export type ChipMenuEntry = { id: ChipMenuId; label: string; separator?: boolean };
