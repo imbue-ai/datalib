@@ -29,32 +29,6 @@ has. Anything that can run commands as you can use them to act as you
 on that service — see the warning in the first-time guide before
 storing any.
 
-## AirVisual
-
-`type = "airvisual"` — reads each monitor's own history files
-(`export`). Mirrors particulates, AQI, CO₂, temperature, humidity and
-VOC as time series, rendered as one page of charts.
-
-An AirVisual Pro (IQAir's indoor air-quality monitor) keeps its history
-on the unit — no cloud account is involved — and serves it over a Samba
-share: `smb://<ip>/airvisual`,
-user `airvisual`, with the password shown on the device under
-**Settings › Network › Access Pro data**. Mount the share (in the
-Finder, **Go › Connect to Server…**) and point one `devices` entry at
-the mount, or at a copy of that folder:
-
-```toml
-[[steps.params.export.devices]]
-path = "/Volumes/airvisual"
-```
-
-Every `YYYYMM_AirVisual_values.txt` under the path is read, the
-`archive*/` folders the device starts on each clock change too; a
-later run re-reads only the month being written. Each device's
-identity is its serial and its name is what it calls itself, both read
-from the folder's `latest_config_measurements.json`; set `serial` for a
-copy without it, and `name` to override what the device says.
-
 ## Apple Messages
 
 `type = "apple_messages"` — reads the Messages app's own `chat.db` on a
@@ -92,7 +66,7 @@ permitted", grant Datalib Full Disk Access in System Settings → Privacy
 What gets mirrored is `database/Photos.sqlite`, about ninety tables of
 Photos' own schema, table for table, with only changed rows stored on
 each run. The originals sit beside it at
-`<library>/originals/<X>/<UUID>.<ext>`; a [media](#media) source pointed
+`<library>/originals/<X>/<UUID>.<ext>`; a [local media](#local-media) source pointed
 at that folder gives you their EXIF and content hashes.
 
 ## Beeper
@@ -107,7 +81,7 @@ no credentials. Lightly used — expect rough edges. It keeps what the
 app's cache lets go, so it never notices a deletion (the provider's
 `INGEST.md` says why).
 
-## CalDAV
+## Calendar (CalDAV)
 
 `type = "calendar"` — any CalDAV server, such as iCloud or Nextcloud
 (`caldav`), **or** a folder of `.ics` files (`ics`). Mirrors your
@@ -262,7 +236,7 @@ the standard home, `~/.codex`. Give it a `path` for a copy of that
 folder from another machine. A thread Codex later deletes stays in the
 mirror.
 
-## Contacts
+## Contacts (CardDAV)
 
 `type = "contacts"` — any CardDAV server, such as iCloud or Nextcloud,
 through latchkey (`carddav`), **or** local `.vcf` files (`vcf`).
@@ -283,7 +257,7 @@ An `addressbooks` list of names narrows a server to those address books,
 matched exactly; leave it out for all of them. The wizard's **Test
 connection** lists them to pick from.
 
-## Email
+## Email (mbox or JMAP)
 
 `type = "email"` — a Google Takeout `.mbox` on disk (`mbox`), **or** a
 JMAP server other than Fastmail through latchkey (`jmap`). Mirrors mail
@@ -361,7 +335,7 @@ Contacts](#fastmail-contacts) and [Fastmail Calendar](#fastmail-calendar).
 ## Fastmail Calendar
 
 `type = "calendar"` — Fastmail's calendars over CalDAV, through latchkey
-(`fastmail`). Rendered the way [CalDAV](#caldav) says.
+(`fastmail`). Rendered the way [Calendar (CalDAV)](#calendar-caldav) says.
 
 Fastmail's CalDAV login is built into latchkey as `fastmail-dav`, and
 takes an app password (Settings → Privacy & Security → Integrations →
@@ -385,7 +359,7 @@ nothing else; `calendars` narrows it to the calendars you name.
 ## Fastmail Contacts
 
 `type = "contacts"` — Fastmail's address books over CardDAV, through
-latchkey (`fastmail`). Rendered the way [Contacts](#contacts) says.
+latchkey (`fastmail`). Rendered the way [Contacts (CardDAV)](#contacts-carddav) says.
 
 The same `fastmail-dav` login as [Fastmail Calendar](#fastmail-calendar):
 an app password (Settings → Privacy & Security → Integrations → App
@@ -472,13 +446,13 @@ Gmail's own change history, so deletions and label changes show up as
 events. Throughput is capped by Google's quota at roughly 300 messages
 a minute, so a large mailbox backfills over several runs. A Takeout
 `.mbox` of the same mailbox is the no-credentials route — see
-[Email](#email).
+[Email](#email-mbox-or-jmap).
 
 ## Google Calendar
 
 `type = "calendar"` — the Google Calendar API through latchkey
 (`google`). Mirrors every calendar on the account's list, subscribed
-ones included. Rendered the way [CalDAV](#caldav) says.
+ones included. Rendered the way [Calendar (CalDAV)](#calendar-caldav) says.
 
 Built into latchkey; one command opens a browser, you sign in and
 approve every scope it asks for:
@@ -490,7 +464,7 @@ latchkey auth browser google-calendar
 The `google` table needs nothing else; `calendars` narrows it to the
 calendars you name.
 
-## Google Chat
+## Google Chat (Takeout)
 
 `type = "google_takeout"` — the **Chat** product of a Google Takeout
 export (`export`, with `google_chat = true`). Mirrors your Google Chat
@@ -557,12 +531,12 @@ source at its `Takeout` folder.
 
 Useful products: **Chat**, **Voice**, **Maps**, **YouTube history** and
 **Gemini** (read by this source), and **Mail**
-(a single `.mbox`, read by the [email](#email) source instead). The
+(a single `.mbox`, read by the [email](#email-mbox-or-jmap) source instead). The
 Add source form ticks every product; untick what you want left out. In
 a hand-written config every feed is off until its flag beside
 `export.path` turns it on (`google_chat = true`, `google_voice = true`,
-…); [Google Chat](#google-chat) and
-[Google Voice](#google-voice) have sections of their own. A Takeout is
+…); [Google Chat](#google-chat-takeout) and
+[Google Voice](#google-voice-takeout) have sections of their own. A Takeout is
 a complete snapshot, so it is also the way to notice what Google has
 deleted since the last one: put a newer export in its place, and
 what it no longer holds leaves the mirror on the next sync. A product
@@ -572,7 +546,7 @@ cannot tell apart: a large Takeout comes as several zips, and a product
 missing some of them looks smaller, not missing, so keep every part in
 the folder (or, unpacking by hand, unpack every part).
 
-## Google Voice
+## Google Voice (Takeout)
 
 `type = "google_takeout"` — the **Voice** product of a Google Takeout
 export (`export`, with `google_voice = true`). Mirrors your texts,
@@ -582,6 +556,32 @@ Request a Takeout with **Voice** ticked and unpack it — see
 [Google Takeout](#google-takeout), which is the source this is one
 feed of. Set `google_voice = true` beside `export.path`; the spam
 folder stays out unless `google_voice_include_spam = true`.
+
+## IQAir AirVisual
+
+`type = "airvisual"` — reads each monitor's own history files
+(`export`). Mirrors particulates, AQI, CO₂, temperature, humidity and
+VOC as time series, rendered as one page of charts.
+
+An AirVisual Pro (IQAir's indoor air-quality monitor) keeps its history
+on the unit — no cloud account is involved — and serves it over a Samba
+share: `smb://<ip>/airvisual`,
+user `airvisual`, with the password shown on the device under
+**Settings › Network › Access Pro data**. Mount the share (in the
+Finder, **Go › Connect to Server…**) and point one `devices` entry at
+the mount, or at a copy of that folder:
+
+```toml
+[[steps.params.export.devices]]
+path = "/Volumes/airvisual"
+```
+
+Every `YYYYMM_AirVisual_values.txt` under the path is read, the
+`archive*/` folders the device starts on each clock change too; a
+later run re-reads only the month being written. Each device's
+identity is its serial and its name is what it calls itself, both read
+from the folder's `latest_config_measurements.json`; set `serial` for a
+copy without it, and `name` to override what the device says.
 
 ## Lightroom
 
@@ -657,7 +657,7 @@ Connections come without photos: the export has none, and linkedin.com
 shows a profile only to someone signed in. Photos an earlier version
 fetched are kept.
 
-## Local files
+## Local file index
 
 `type = "fsindex"` — any directory tree on disk (`fswalk.path`).
 Mirrors an index of every entry — path, kind, size, blake3 hash;
@@ -668,7 +668,7 @@ inode, so a rescan of a big tree is fast, and it stays read-only
 against its input unless you turn `stamp` on. Query the index in the
 source's raw store.
 
-## Media
+## Local media
 
 `type = "media"` — a directory tree of music, photos and video
 (`fswalk.path`). Mirrors every audio, image and video file with its
@@ -681,6 +681,17 @@ same song synced to three folders is one row with three locations, and
 a second hash over just the signal (`payload_blake3`) survives
 retagging. Query the raw store directly; the provider's `INGEST.md`
 has the recipes.
+
+## Local PDFs
+
+`type = "pdf"` — a directory tree on disk (`fswalk.path`). Mirrors
+every PDF under it, converted to markdown and keyed on content hash, so
+PDFs show up in the grid and in search.
+
+Nothing but a path. Two copies of the same paper convert once and share
+one row; renaming or moving a PDF preserves its identity. No OCR yet: a
+scanned, image-only PDF is recorded (`needs_ocr = 1` in the source's
+`pdf_documents` table) and produces no text.
 
 ## Notion
 
@@ -727,18 +738,7 @@ To mirror only part of the workspace, list the pages in `api.roots`
 along. A database embedded in one of those pages does not: its rows
 are mirrored only by the whole-workspace default.
 
-## PDFs
-
-`type = "pdf"` — a directory tree on disk (`fswalk.path`). Mirrors
-every PDF under it, converted to markdown and keyed on content hash, so
-PDFs show up in the grid and in search.
-
-Nothing but a path. Two copies of the same paper convert once and share
-one row; renaming or moving a PDF preserves its identity. No OCR yet: a
-scanned, image-only PDF is recorded (`needs_ocr = 1` in the source's
-`pdf_documents` table) and produces no text.
-
-## Perseus
+## Perseus Digital Library
 
 `type = "perseus"` — a public download (`github`). Mirrors TEI
 editions of Greek and Latin texts from the Perseus Digital Library.
@@ -753,7 +753,7 @@ Ancient-Greek-BERT model, about 450 MB, fetched once on first use into
 `~/.cache/datalib/models` (or `$XDG_CACHE_HOME/datalib/models`) and
 checked against its pinned sha256 on every load.
 
-## Signal
+## Signal backups
 
 `type = "signal"` — a folder of Android backups (`backup.path`). Mirrors
 messages and media. Every backup in the folder is kept as a version of
@@ -813,7 +813,7 @@ the source's `backup.path` at that directory — it walks every `*.xml`
 inside, so keeping multiple dated backups there is fine; re-ingesting a
 newer export deduplicates against what's already there.
 
-## WhatsApp
+## WhatsApp backups
 
 `type = "whatsapp"` — an Android `crypt15` backup (`backup.path`).
 Mirrors messages and media.
