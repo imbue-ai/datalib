@@ -51,6 +51,7 @@ rust_library(
         "src/manage/problems.rs",
         "src/manage/status.rs",
         "src/manage/summary.rs",
+        "src/oauth_client.rs",
         "src/params_check.rs",
         "src/plugins.rs",
         "src/probe.rs",

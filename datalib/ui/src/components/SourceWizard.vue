@@ -103,6 +103,7 @@ const {
   latchkeyService,
   runProbe,
   setLatchkeyCredential,
+  setLatchkeyOAuthClient,
   startLatchkeyConnect,
   latchkeyConnectStatus,
 } = useApi();
@@ -940,10 +941,12 @@ const CONNECT_PHASE_TEXT: Record<ConnectPhase, string> = {
   preparing: "Getting the sign-in ready…",
   downloading_browser:
     "Getting a browser for the sign-in — a one-time download that can take a few minutes…",
+  creating_client:
+    "Creating the OAuth client in the browser window, on the Google Cloud console. This takes a few minutes; the sign-in follows.",
   signing_in: "A browser window should open. Finish the login there.",
 };
 
-async function connectViaLatchkey() {
+async function connectViaLatchkey(createOAuthClient = false) {
   const name = service.value;
   if (!name || connect.value.state === "running") return;
   if (setOnlyService.value) {
@@ -961,6 +964,7 @@ async function connectViaLatchkey() {
       account,
       wouldRegister.value,
       freshBrowser(accountNaming.value, storedNames.value, account),
+      createOAuthClient,
     );
     for (;;) {
       await new Promise((r) => setTimeout(r, 1500));
@@ -974,7 +978,9 @@ async function connectViaLatchkey() {
         };
         continue;
       }
+      if (status.issue === "no_oauth_client") oauthClientMissing.value = true;
       if (status.status === "ok") {
+        oauthClientMissing.value = false;
         // The point of connecting was to add an account; showing the
         // stale list would hide the one just added.
         await loadAccounts();
@@ -1011,6 +1017,42 @@ async function connectViaLatchkey() {
   } catch (e) {
     connect.value = { state: "failed", message: "", failure: toFailure(e) };
   }
+}
+
+/// Set once a sign-in has said the service has no OAuth client to sign
+/// in with, until one is pasted or a sign-in goes through: a failed
+/// "Create one for me" leaves both ways on offer.
+const oauthClientMissing = ref(false);
+const oauthClientPasted = ref("");
+const oauthClientSave = ref<{ state: "idle" | "saving" | "failed"; failure?: Failure }>({
+  state: "idle",
+});
+watch(service, () => {
+  oauthClientMissing.value = false;
+  oauthClientPasted.value = "";
+  oauthClientSave.value = { state: "idle" };
+});
+
+/// The project `auth browser-prepare` makes, named the way latchkey
+/// names it, so the person knows what will appear in their console.
+const oauthClientProject = computed(
+  () => `Latchkey-${(service.value ?? "").replace(/^google-/, "")}`,
+);
+
+async function saveOAuthClient() {
+  const name = service.value;
+  if (!name || !oauthClientPasted.value.trim() || oauthClientSave.value.state === "saving") return;
+  oauthClientSave.value = { state: "saving" };
+  try {
+    await setLatchkeyOAuthClient(name, oauthClientPasted.value);
+  } catch (e) {
+    oauthClientSave.value = { state: "failed", failure: toFailure(e) };
+    return;
+  }
+  oauthClientPasted.value = "";
+  oauthClientSave.value = { state: "idle" };
+  oauthClientMissing.value = false;
+  await connectViaLatchkey();
 }
 
 /// The names latchkey holds for this service, with what it says of each.
@@ -1548,7 +1590,7 @@ function submit() {
                       type="button"
                       class="btn primary"
                       :disabled="connect.state === 'running'"
-                      @click="connectViaLatchkey"
+                      @click="connectViaLatchkey()"
                     >
                       {{
                         connect.state !== "running"
@@ -1557,7 +1599,9 @@ function submit() {
                             : "Sign in with browser"
                           : connect.phase === "downloading_browser"
                             ? "Getting a browser…"
-                            : "Waiting for the browser…"
+                            : connect.phase === "creating_client"
+                              ? "Creating the client…"
+                              : "Waiting for the browser…"
                       }}
                     </button>
                   </div>
@@ -1571,6 +1615,75 @@ function submit() {
                   <p v-else-if="connect.state !== 'idle'" class="wiz-help wiz-connect-status">
                     {{ connect.message }}
                   </p>
+                  <!-- Google's services sign in through an OAuth client of the
+                       person's own; latchkey makes one (`auth browser-prepare`)
+                       or takes one made by hand (`auth prepare`). -->
+                  <div
+                    v-if="oauthClientMissing && signInWhere === 'here'"
+                    class="wiz-conn-note wiz-oauth-client"
+                  >
+                    <p class="wiz-help">
+                      {{ chosen.label }} signs in through an OAuth client in a Google Cloud project
+                      of your own, and latchkey has none for <code>{{ service }}</code> yet. Either
+                      way below, the sign-in starts once the client is in place.
+                    </p>
+                    <div class="wiz-conn-actions">
+                      <button
+                        type="button"
+                        class="btn primary"
+                        :disabled="
+                          connect.state === 'running' || oauthClientSave.state === 'saving'
+                        "
+                        @click="connectViaLatchkey(true)"
+                      >
+                        Create one for me
+                      </button>
+                    </div>
+                    <p class="wiz-help">
+                      A browser opens on the Google Cloud console. latchkey makes a project there
+                      named <code>{{ oauthClientProject }}</code
+                      >, turns on the APIs and creates the client, which takes a few minutes. Google
+                      asks you to accept its terms the first time, and wants 2-Step Verification on
+                      the account.
+                    </p>
+                    <label class="wiz-item">
+                      <span class="wiz-sublabel">Or paste a client you made</span>
+                      <textarea
+                        v-model="oauthClientPasted"
+                        class="wiz-input wiz-oauth-paste"
+                        rows="3"
+                        placeholder='{"installed":{"client_id":"…","client_secret":"…"}}'
+                        autocomplete="off"
+                        spellcheck="false"
+                      />
+                      <small class="wiz-help">
+                        A Desktop app client from the Google Cloud console: paste the JSON file it
+                        downloads. Its project needs the {{ chosen.label }} API turned on.
+                      </small>
+                    </label>
+                    <div class="wiz-conn-actions">
+                      <button
+                        type="button"
+                        class="btn"
+                        :disabled="
+                          connect.state === 'running' ||
+                          !oauthClientPasted.trim() ||
+                          oauthClientSave.state === 'saving'
+                        "
+                        @click="saveOAuthClient"
+                      >
+                        {{
+                          oauthClientSave.state === "saving" ? "Saving…" : "Save client and sign in"
+                        }}
+                      </button>
+                    </div>
+                    <IssueNote
+                      v-if="oauthClientSave.state === 'failed' && oauthClientSave.failure"
+                      :failure="oauthClientSave.failure"
+                      :service="chosen.label"
+                      :where="signInWhere"
+                    />
+                  </div>
                   <!-- What the button says on a service that has no browser
                        login. Shown rather than done: latchkey refuses to
                        re-register a name it holds, so the only way to add one
@@ -2400,6 +2513,20 @@ function submit() {
 }
 .wiz-convert-head {
   margin: 0;
+}
+.wiz-oauth-client {
+  border-left: 3px solid var(--datalib-border);
+  padding-left: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.wiz-oauth-client p {
+  margin: 0;
+}
+.wiz-oauth-paste {
+  font-family: var(--datalib-mono);
+  resize: vertical;
 }
 .wiz-signin {
   border: 1px solid var(--datalib-border);
