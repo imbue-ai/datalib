@@ -9,9 +9,11 @@ use std::collections::HashMap;
 use std::future::Future;
 
 use anyhow::Result;
-use datalib_etl::blob_cas::BlobBundle;
+use datalib_etl::blob_cas::{self, BlobBundle};
+use datalib_etl::doltlite_raw;
 use datalib_etl_render::pages::batches;
 use sqlx::SqlitePool;
+use std::path::PathBuf;
 
 use crate::changed::{changed_chats, RenderOutcome, RenderTarget};
 use crate::render::{ChatRenderer, RenderProfile};
@@ -128,6 +130,45 @@ pub fn render_batched(
         }
     }
     Ok(())
+}
+
+/// The raw store a pass's chats were built from, and the commit they were
+/// built at: where [`render_batched_at`] reads their bytes.
+#[derive(Debug, Clone)]
+pub struct BlobsAt {
+    pub db_path: PathBuf,
+    pub commit: String,
+}
+
+/// [`render_batched`] reading `chats`' bytes at `at`, through the raw
+/// store and the blob store beside it, both open for the call only.
+pub fn render_batched_at(
+    at: &BlobsAt,
+    projection: &(dyn Fn(&NormalizedChat) -> &'static str + Sync),
+    renderer: &mut ChatRenderer<'_>,
+    chats: &[NormalizedChat],
+    blob_bytes: u64,
+) -> Result<()> {
+    let BlobsAt { db_path, commit } = at;
+    let Some(reader) = block_on(doltlite_raw::open_reader(db_path, Some(commit)))? else {
+        return Ok(());
+    };
+    let cas = match block_on(blob_cas::open_cas_for_render(db_path)) {
+        Ok(cas) => cas,
+        Err(e) => {
+            block_on(reader.close());
+            return Err(e.context(format!("open the blob store beside {}", db_path.display())));
+        }
+    };
+    let blobs = ChatBlobs::new(reader.pool(), cas.as_ref(), projection);
+    let rendered = render_batched(renderer, chats, &blobs, blob_bytes);
+    block_on(async {
+        reader.close().await;
+        if let Some(cas) = cas {
+            cas.close().await;
+        }
+    });
+    rendered
 }
 
 /// [`crate::render_changed`], with each chat's bytes loaded a batch at a

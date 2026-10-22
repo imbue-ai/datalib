@@ -576,6 +576,12 @@ impl BlobBundle {
         self.by_ref.len()
     }
 
+    /// The bytes the bundle holds, a blob shared by two refs counted
+    /// twice.
+    pub fn total_bytes(&self) -> u64 {
+        self.by_ref.values().map(|b| b.bytes.len() as u64).sum()
+    }
+
     pub fn get(&self, ref_id: &str) -> Option<&Blob> {
         self.by_ref.get(ref_id)
     }

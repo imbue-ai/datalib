@@ -902,17 +902,20 @@ lists them).
 
 Blob bytes are the larger part of most stores, and a render that still
 reads its rows whole can at least leave them where they are until they
-are needed. WhatsApp, SMS Backup & Restore, Google Takeout and Beeper
-build their chats from the rows, narrow to the ones this run renders,
-and then load a batch of chats' attachments at a time, cut by
-`blob_mb`, just before the batch renders. For a chat-shaped source that
-is `datalib_etl_chat_common::blobs`: `ChatBlobs` reads a chat's refs off
+are needed. Every other render with attachments builds its documents
+from the rows, narrows to the ones this run renders, and then loads a
+batch of documents' attachments at a time, cut by `blob_mb`, just
+before the batch renders. For a chat-shaped source that is
+`datalib_etl_chat_common::blobs`: `ChatBlobs` reads a chat's refs off
 its attachments, weighs them with `BlobBundle::sizes_many` (the blob
 store's `byte_len`, no bytes read), and `render_batched` loads and
-renders one batch at a time. LinkedIn does the same for its
-connections' photos. A chat's bundle is never split, because its period
-pages share one `blobs/` folder and the filenames the bundle picks, so
-one very large chat is still one batch.
+renders one batch at a time; `render_batched_at` reopens the raw store
+at the commit a parse read (`BlobsAt`) for a render whose parse has
+closed it. Beeper weighs its documents from what its parse recorded,
+LinkedIn attaches its connections' photos a batch at a time, and Notion
+loads its pages' bundles through `PageBlobs`. A chat's bundle is never
+split, because its period pages share one `blobs/` folder and the
+filenames the bundle picks, so one very large chat is still one batch.
 
 **The size is the person's to choose.** A config's `[render_pages]`
 table sets `buckets` (per page) and `blob_mb` (per blob batch); the

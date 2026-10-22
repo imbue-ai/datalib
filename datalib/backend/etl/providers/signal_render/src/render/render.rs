@@ -8,16 +8,18 @@
 use std::path::Path;
 
 use anyhow::Result;
+use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::periodize::Period;
 use datalib_etl::progress::Progress;
-use datalib_etl_chat_common::render::Buckets;
+use datalib_etl_chat_common::render::{Buckets, ChatRenderer};
 use datalib_etl_chat_common::TextFormat;
+use datalib_etl_chat_common::{render_batched_at, NormalizedChat};
 use datalib_etl_chat_common::{RenderProfile, RenderSummary as ChatSummary};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_schema::providers::Provider;
 
 use super::normalize::to_chats;
-use super::parse::ParsedSignal;
+use super::parse::{ParsedSignal, ATTACHMENTS_PROJECTION_SQL};
 
 /// Bump when Signal's own contribution to the rendered output changes.
 /// The shared layout has its own number — see
@@ -78,6 +80,7 @@ pub fn render_all(
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+    blob_bytes: u64,
 ) -> Result<RenderSummary> {
     // Log how long the dolt_diff scan took. Logged on every render
     // (including cold start with `None`) so the timing shows up in
@@ -101,22 +104,36 @@ pub fn render_all(
     progress.set_length(Some((parsed.docs.len() + parsed.docs_skipped) as u64));
     progress.inc(parsed.docs_skipped as u64);
 
-    let (chats, blobs_by_chat) = to_chats(parsed, source_id);
-
+    let chats = to_chats(parsed, source_id);
+    let profile = profile();
+    let mut renderer = ChatRenderer::new(
+        &profile,
+        out_dir,
+        source_id,
+        chats.len(),
+        progress,
+        on_doc_complete,
+    );
+    match &parsed.blobs_at {
+        Some(at) => render_batched_at(
+            at,
+            &|_: &NormalizedChat| ATTACHMENTS_PROJECTION_SQL,
+            &mut renderer,
+            &chats,
+            blob_bytes,
+        )?,
+        None => {
+            for chat in &chats {
+                renderer.render_chat(chat, &BlobBundle::default())?;
+            }
+        }
+    }
     let ChatSummary {
         docs_rendered,
         items_rendered,
         buckets,
         ..
-    } = datalib_etl_chat_common::render_all(
-        &profile(),
-        &chats,
-        out_dir,
-        source_id,
-        &blobs_by_chat,
-        progress,
-        on_doc_complete,
-    )?;
+    } = renderer.finish();
 
     Ok(RenderSummary {
         docs_total: parsed.docs.len() + parsed.docs_skipped,

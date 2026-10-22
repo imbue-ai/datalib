@@ -5,14 +5,13 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use datalib_etl::blob_cas;
 
 use datalib_etl::doltlite_raw;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::TextFormat;
 use datalib_etl_chat_common::{
     render::{Bucket, Buckets, ChatRenderer, RenderProfile},
-    render_batched, ChatBlobs, NormalizedChat,
+    render_batched_at, BlobsAt, NormalizedChat,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
@@ -132,7 +131,17 @@ pub fn render_all(
         progress,
         on_doc_complete,
     );
-    render_with_blobs(&db_path, commit, &mut renderer, to_render, blob_bytes)?;
+    let at = BlobsAt {
+        db_path: db_path.clone(),
+        commit: commit.to_string(),
+    };
+    render_batched_at(
+        &at,
+        &|_: &NormalizedChat| ATTACHMENTS_PROJECTION_SQL,
+        &mut renderer,
+        to_render,
+        blob_bytes,
+    )?;
     let summary = renderer.finish();
     // Named chats first, with no documents: one the diff named whose
     // messages all went builds no chat, and chat-common never sees it.
@@ -158,41 +167,6 @@ const ATTACHMENTS_PROJECTION_SQL: &str = "
            relative_path AS upstream_name
       FROM wa_media_files
      WHERE blake3 IN ({placeholders})";
-
-/// Renders `chats` with their attachment bytes read at `commit`, a batch
-/// of at most `blob_bytes` at a time.
-fn render_with_blobs(
-    db_path: &Path,
-    commit: &str,
-    renderer: &mut ChatRenderer<'_>,
-    chats: &[NormalizedChat],
-    blob_bytes: u64,
-) -> Result<()> {
-    let Some(reader) = block_on(doltlite_raw::open_reader(db_path, Some(commit)))? else {
-        return Ok(());
-    };
-    let cas = match block_on(blob_cas::open_cas_for_render(db_path)) {
-        Ok(cas) => cas,
-        Err(e) => {
-            block_on(reader.close());
-            return Err(e.context(format!("open the blob store beside {}", db_path.display())));
-        }
-    };
-    let projection = |_: &NormalizedChat| ATTACHMENTS_PROJECTION_SQL;
-    let blobs = ChatBlobs::new(reader.pool(), cas.as_ref(), &projection);
-    let rendered = render_batched(renderer, chats, &blobs, blob_bytes);
-    block_on(async {
-        reader.close().await;
-        if let Some(cas) = cas {
-            cas.close().await;
-        }
-    });
-    rendered
-}
-
-fn block_on<F: std::future::Future>(f: F) -> F::Output {
-    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(f))
-}
 
 /// What changed between two commits, as chat JIDs: the ones HEAD still
 /// carries (re-render) and the ones it does not (gone upstream).

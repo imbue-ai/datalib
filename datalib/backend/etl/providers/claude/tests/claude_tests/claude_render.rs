@@ -87,6 +87,8 @@ async fn renders_tng_fixture() {
             docs.push(doc);
             Ok(())
         },
+        // One conversation's attachments a batch.
+        1,
     )
     .expect("render");
 
