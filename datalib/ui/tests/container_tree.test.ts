@@ -308,6 +308,25 @@ describe("pinned tabs", () => {
     root = openFrom(root, "a", [makeCard("b", "y()")]) as BoxNode;
     expect(tabShowing(root, "s1", "y()")).toBeNull();
     expect(tabShowing(root, "a", "y()")).toBe("b");
+  });
+
+  /** A sync dashboard double-clicked from a log tab opened a second
+   *  "Sync · slack" beside the one already open: a card that is one per
+   *  window is found in any tab, under its own notion of "the same". */
+  it("a card that is one per window is found in any tab, by its own key", () => {
+    const identify = (s: string) =>
+      s.startsWith("dash(")
+        ? { key: s.replace(/, *step.*\)$/, ")"), anywhere: true }
+        : { key: s, anywhere: false };
+    const root = openFrom(setSolidified(fixture(), "sandbox", true), "s1", [
+      makeCard("a", "dash(slack)"),
+    ]) as BoxNode;
+    // Opened from another tab altogether ("dash"), naming a step inside it.
+    expect(tabShowing(root, "d1", "dash(slack, step)", identify)).toBe("a");
+    expect(tabShowing(root, "d1", "dash(github)", identify)).toBeNull();
+    // Without the view's own key: the exact source, and the near tabs only.
+    expect(tabShowing(root, "d1", "dash(slack)")).toBeNull();
+    expect(tabShowing(root, "s1", "dash(slack)")).toBe("a");
     // A pinned tab that shows the card comes first.
     const src = makeCard("src", "x()");
     const pinned = setPinned({ ...root, children: [...root.children, src] }, "src", true);

@@ -106,6 +106,13 @@ export const TOPIC_CONFIG_WRITTEN = "config.written";
 // transient highlight on the `sectionUuid` span.
 export const TOPIC_EDGE_HOVER = "edge.hover";
 
+// Bus topic: an open went to a card already showing instead of adding
+// one (`sameCard`), asked for by this source, which may say more than the
+// card's own — a sync dashboard's `step`. The card it names shows that.
+export const TOPIC_CARD_REOPENED = "card.reopened";
+
+export type CardReopenedPayload = { cardId: string; source: string };
+
 export type EdgeHoverPayload = {
   markdownUuid: string;
   // Anchor inside the destination doc; null when the edge points at

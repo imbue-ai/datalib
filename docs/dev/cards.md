@@ -382,6 +382,19 @@ opening the same document twice from a search shows the one tab. A tab
 opened from a pinned tab has no opener, so opening the same card from a
 pinned tab twice makes two tabs.
 
+A view can say more about what is "the same card"
+(`cardSources.ts::sameCard`, which `tabShowing` is handed): a key that
+two of its sources share, and whether a tab of it anywhere in the
+window counts. A group's sync dashboard is one per window: its key is
+the group, and its `step` only says where to scroll. So a step chip
+double-clicked anywhere, or "Show sync dashboard" on any row of that
+group, shows the dashboard already open. The host then publishes
+`card.reopened` on the bus (`TOPIC_CARD_REOPENED`) with the source that
+asked, and the dashboard scrolls to the step it names. The tab keeps
+its own source: the step is where to look this time, not what the card
+is. Every other view is the same card only by its exact source, near
+its opener, as above.
+
 A main window with no kept tree starts with three pinned tabs
 (`defaultPins` in `ContainersView.vue`): the Dashboard, Search
 (`searchView()`) and Sources (`sourcesView()`). A kept tree written
