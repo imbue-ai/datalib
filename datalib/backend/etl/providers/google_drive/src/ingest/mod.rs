@@ -42,7 +42,7 @@ use datalib_etl_web::http::LatchkeySettings;
 use datalib_etl_web::owed::{self, BatchError, Fetcher, Listed, Loop, Outcome};
 
 pub use db::{db_path_for, RawDb};
-use db::{Capture, Part, RevisionExport, Split};
+use db::{Body, Capture, HeldImages, Part, RevisionExport, Split};
 use schema_raw::*;
 
 pub struct FetchOptions {
@@ -66,6 +66,9 @@ pub struct FetchSummary {
     pub exports: usize,
     pub exports_declined: usize,
     pub images: usize,
+    /// Images a capture took from a stored capture of the same revision
+    /// instead of fetching them again.
+    pub images_held: usize,
     /// Captured files whose two revision listings named different
     /// revisions.
     pub revision_listings_disagreed: usize,
@@ -79,8 +82,8 @@ impl FetchSummary {
     pub fn line(&self) -> String {
         format!(
             "listed={} owed={} captured={} failed={} left={} exports={} \
-             exports_declined={} images={} revision_listings_disagreed={} \
-             revision_exports={} revision_exports_gone={}",
+             exports_declined={} images={} images_held={} \
+             revision_listings_disagreed={} revision_exports={} revision_exports_gone={}",
             self.listed,
             self.owed,
             self.captured,
@@ -89,6 +92,7 @@ impl FetchSummary {
             self.exports,
             self.exports_declined,
             self.images,
+            self.images_held,
             self.revision_listings_disagreed,
             self.revision_exports,
             self.revision_exports_gone,
@@ -156,6 +160,8 @@ async fn walk_files(
         }
         let info = api::kind_info(kind);
         opts.progress.set_length(Some(owed.len() as u64));
+        let owed_ids: Vec<&str> = owed.iter().map(|l| l.key.as_str()).collect();
+        let held = opts.db.held_images(&owed_ids).await?;
         let captures = Captures {
             kind,
             exports: opts.api.exports.for_kind(kind),
@@ -169,7 +175,9 @@ async fn walk_files(
                 .collect(),
             exports_done: AtomicUsize::new(0),
             exports_declined: AtomicUsize::new(0),
+            held,
             images: AtomicUsize::new(0),
+            images_held: AtomicUsize::new(0),
             revision_listings_disagreed: AtomicUsize::new(0),
         };
         let drained = owed::drain(
@@ -196,6 +204,7 @@ async fn walk_files(
         summary.exports += captures.exports_done.load(Ordering::Relaxed);
         summary.exports_declined += captures.exports_declined.load(Ordering::Relaxed);
         summary.images += captures.images.load(Ordering::Relaxed);
+        summary.images_held += captures.images_held.load(Ordering::Relaxed);
         summary.revision_listings_disagreed +=
             captures.revision_listings_disagreed.load(Ordering::Relaxed);
     }
@@ -460,9 +469,13 @@ struct Captures<'a> {
     progress: &'a Progress,
     stop: &'a datalib_etl::stop::StopFlag,
     entries: HashMap<String, Value>,
+    /// Read before the drain: a fetch must not wait on the store's one
+    /// connection, which a flush can hold while this fetch is not polled.
+    held: HeldImages,
     exports_done: AtomicUsize,
     exports_declined: AtomicUsize,
     images: AtomicUsize,
+    images_held: AtomicUsize,
     revision_listings_disagreed: AtomicUsize,
 }
 
@@ -553,25 +566,42 @@ impl Captures<'_> {
         let mut native: Value = serde_json::from_slice(&native_bytes)
             .with_context(|| format!("parse the native JSON of {id}"))?;
         let links = shape::take_image_links(&mut native);
+        let native_revision_id = shape::native_revision_id(&native);
         let mut parts = vec![Part {
             name: PART_NATIVE.to_string(),
-            bytes: Some(shape::gzip(&serde_json::to_vec(&native)?)?),
+            body: Body::Fetched(shape::gzip(&serde_json::to_vec(&native)?)?),
             content_type: Some(NATIVE_CONTENT_TYPE.to_string()),
         }];
 
-        let mut by_url: HashMap<&str, Vec<u8>> = HashMap::new();
+        // Google signs an image link afresh on every read, so the link
+        // cannot say whether we hold the image; the revision can.
+        let mut by_url: HashMap<&str, (Vec<u8>, Option<String>)> = HashMap::new();
         for (pointer, url) in &links {
+            let name = image_part(pointer);
+            let held = native_revision_id
+                .as_deref()
+                .and_then(|revision| self.held.get(id, revision, &name));
+            if let Some(blake3) = held {
+                self.images_held.fetch_add(1, Ordering::Relaxed);
+                parts.push(Part {
+                    name,
+                    body: Body::Held(blake3.to_string()),
+                    content_type: None,
+                });
+                continue;
+            }
             if !by_url.contains_key(url.as_str()) {
-                let bytes = api::get_image(url)
+                let image = api::get_image(url)
                     .await
                     .with_context(|| format!("image at {pointer}"))?;
                 self.images.fetch_add(1, Ordering::Relaxed);
-                by_url.insert(url, bytes);
+                by_url.insert(url, image);
             }
+            let (bytes, content_type) = by_url[url.as_str()].clone();
             parts.push(Part {
-                name: image_part(pointer),
-                bytes: by_url.get(url.as_str()).cloned(),
-                content_type: None,
+                name,
+                body: Body::Fetched(bytes),
+                content_type,
             });
         }
 
@@ -586,26 +616,26 @@ impl Captures<'_> {
             } else {
                 Err(api::ApiError::ExportNotAllowed("canDownload is false".into()).into())
             };
-            let bytes = match got {
+            let body = match got {
                 Ok(bytes) => {
                     self.exports_done.fetch_add(1, Ordering::Relaxed);
-                    Some(bytes)
+                    Body::Fetched(bytes)
                 }
                 Err(e) if api::is_export_too_large(&e) => {
                     self.exports_declined.fetch_add(1, Ordering::Relaxed);
                     too_large.push(ext);
-                    None
+                    Body::Declined
                 }
                 Err(e) if api::is_export_not_allowed(&e) => {
                     self.exports_declined.fetch_add(1, Ordering::Relaxed);
                     not_allowed.push(ext);
-                    None
+                    Body::Declined
                 }
                 Err(e) => return Err(e),
             };
             parts.push(Part {
                 name: export_part(ext),
-                bytes,
+                body,
                 content_type: Some(mime.to_string()),
             });
         }
@@ -623,7 +653,7 @@ impl Captures<'_> {
                     file_id: id.to_string(),
                     version: version.to_string(),
                     modified_time: str_of(entry, "modifiedTime"),
-                    native_revision_id: shape::native_revision_id(&native),
+                    native_revision_id,
                     head_revision_id: revisions.last().and_then(|r| str_of(r, "id")),
                 },
                 volatile: shape::image_links_volatile(&links),
