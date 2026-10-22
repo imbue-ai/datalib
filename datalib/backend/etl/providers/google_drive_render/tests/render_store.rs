@@ -4,7 +4,7 @@
 //! tests cannot reach.
 
 use datalib_etl::doltlite_raw::{commit_run, WirePayload};
-use datalib_etl_google_drive::ingest::db::{store_captures, Capture, Part, Split};
+use datalib_etl_google_drive::ingest::db::{store_captures, Body, Capture, Part, Split};
 use datalib_etl_google_drive::ingest::schema_raw::{
     image_part, CaptureRow, CommentRow, FileRow, PART_NATIVE,
 };
@@ -102,12 +102,12 @@ async fn a_doc_in_the_store_renders_with_its_image_and_its_thread() {
         vec![
             Part {
                 name: PART_NATIVE.to_string(),
-                bytes: Some(gzip(native().to_string().as_bytes()).unwrap()),
+                body: Body::Fetched(gzip(native().to_string().as_bytes()).unwrap()),
                 content_type: Some("application/gzip".to_string()),
             },
             Part {
                 name: image_part(IMAGE_POINTER),
-                bytes: Some(PNG.to_vec()),
+                body: Body::Fetched(PNG.to_vec()),
                 content_type: Some("image/png".to_string()),
             },
         ],

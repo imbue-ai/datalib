@@ -376,6 +376,8 @@ async fn a_new_version_is_captured_beside_the_old_one() {
     run(&tape::tape(d.path(), Edition::Before), &store).await;
     let s = run(&tape::tape(d.path(), Edition::After), &store).await;
     assert_eq!((s.owed, s.captured, s.failed), (1, 1, 0), "{s:?}");
+    // A new revision may have new images, so its image is fetched again.
+    assert_eq!((s.images, s.images_held), (1, 0), "{s:?}");
     // Only the new revision's export is fetched: revision 1's is held,
     // and the second tape could not answer for it.
     assert_eq!(
@@ -427,6 +429,68 @@ async fn a_new_version_is_captured_beside_the_old_one() {
     .await
     .unwrap();
     assert_eq!(blob(&db, &rev41).await, tape::DOC_ODT_REV41);
+    db.close().await;
+}
+
+/// Drive moves a shared file's `version` with nothing in it edited, and
+/// each such bump fetched every image of a deck again: 152 images, most
+/// of a minute, in one sync of a real account. A capture whose native
+/// JSON names a revision already captured takes its images from there.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_version_bump_with_the_same_revision_fetches_no_image_again() {
+    let d = tempfile::tempdir().unwrap();
+    let store = d.path().join("store");
+    run(&tape::tape(d.path(), Edition::Before), &store).await;
+    let s = run(&tape::bumped_deck(d.path()), &store).await;
+    assert_eq!((s.owed, s.captured, s.failed), (1, 1, 0), "{s:?}");
+    assert_eq!((s.images, s.images_held), (0, 1), "{s:?}");
+
+    let db = open(&store).await;
+    let old = parts_of(&db, &format!("{DECK}#30")).await;
+    let new = parts_of(&db, &format!("{DECK}#31")).await;
+    let image = |parts: &[(String, Option<String>)]| {
+        parts
+            .iter()
+            .find(|(p, _)| p.starts_with("image:"))
+            .cloned()
+            .expect("an image part")
+    };
+    assert_eq!(image(&new), image(&old));
+    assert_eq!(
+        blob(&db, image(&new).1.as_deref().unwrap()).await,
+        tape::RIGEL_PNG
+    );
+    db.close().await;
+}
+
+/// An image's type is the one its response names, so a format the bytes
+/// alone do not identify (SVG) keeps its type.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_image_is_stored_with_the_type_its_response_names() {
+    let d = tempfile::tempdir().unwrap();
+    let t = tape::tape(d.path(), Edition::Before);
+    let svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>";
+    let mut resp = tape::bytes(200, svg);
+    resp.headers
+        .insert("content-type".into(), "image/svg+xml".into());
+    tape::put(
+        &t,
+        api::req_signed("https://docs.google.com/slides-images-rt/rigel-vii"),
+        resp,
+    );
+    let store = d.path().join("store");
+    run(&t, &store).await;
+
+    let db = open(&store).await;
+    let blake3: String = sqlx::query_scalar(
+        "SELECT blake3 FROM capture_parts WHERE capture_id = ? AND part LIKE 'image:%'",
+    )
+    .bind(format!("{DECK}#30"))
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+    let stored = db.cas().get(&blake3).await.unwrap().expect("blob");
+    assert_eq!(stored.content_type.as_deref(), Some("image/svg+xml"));
     db.close().await;
 }
 
