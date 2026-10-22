@@ -307,7 +307,7 @@ fn build_chat(
             } else if let Some(id) = id {
                 // Downloadable file → chat-common materializes via ref_id.
                 norm_atts.push(NormalizedAttachment {
-                    rel_path: None,
+                    href: None,
                     file_name: name.map(str::to_string),
                     mime_type: is_image.then(|| "image/png".to_string()),
                     byte_len: None,

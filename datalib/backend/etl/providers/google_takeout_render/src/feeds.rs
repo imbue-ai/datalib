@@ -166,7 +166,7 @@ pub fn with_attachments(
 /// shown as `name`; its type is read off `file`, the name in the export.
 pub fn attachment(ref_id: String, name: &str, file: &str) -> NormalizedAttachment {
     NormalizedAttachment {
-        rel_path: None,
+        href: None,
         file_name: Some(name.to_string()),
         mime_type: crate::render::mime_of(file),
         byte_len: None,

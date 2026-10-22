@@ -296,7 +296,7 @@ fn contact(source_id: &str, p: &Person, avatars: &Avatars) -> Option<NormalizedC
 fn to_attachment(m: &Event, b: &Blob) -> NormalizedAttachment {
     NormalizedAttachment {
         // chat-common fills this in once it has materialized the bytes.
-        rel_path: None,
+        href: None,
         file_name: Some(b.slot.clone()),
         // The event type is what beeper knows an attachment *is*; fall
         // back to it so an untyped image still renders inline.

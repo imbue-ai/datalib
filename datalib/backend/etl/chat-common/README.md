@@ -267,7 +267,8 @@ attribute has to add it there**, or the page will silently strip it;
 A reference the browser would load from the app's own origin is a
 request with the person's cookie, so only a document's assets may load:
 the sanitizer resolves each one as the browser would and keeps it only
-under `/applet/unified_document_index/asset/`. A relative one
+under `/applet/unified_document_index/asset/`, or when it is exactly an
+attachment's blob-store address, `/data/<group>/<function>/blob/<hash>`. A relative one
 (`<audio src="blobs/a.mp3">`) is the document's own and is pointed at
 that document's asset route; one that climbs out of it is dropped.
 
@@ -279,8 +280,9 @@ straight into a document's frame. The UI's own code still reaches into
 the frame, so the `data-section-uuid` wrappers work as before.
 
 No `<iframe>` survives the sanitizer, and the frame's policy frames
-nothing. A document beside a markdown, such as an `.html` attachment in
-`blobs/`, is served under a policy that runs no script at all
+nothing. An attachment that is a document, such as an `.html` file at
+its `/data/…` address or in `blobs/`, is served under a policy that
+runs no script at all
 (`DATA_DOCUMENT_CSP` in `http/src/embed.rs`). A chart in a document is
 a `<div data-time-series="…">`, which the UI's own code draws into the
 frame (`docs/dev/time_series.md` §"Charts in documents").

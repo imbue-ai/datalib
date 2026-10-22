@@ -2,13 +2,12 @@
  * Rewriting relative asset references inside a rendered markdown body to
  * the backend's asset route.
  *
- * Renderers write asset references **relative** to the markdown file
- * (`blobs/foo.png`) so a rendered tree stays
- * usable on its own — opened off disk, served by a static file server,
- * or built by Quarto. The app serves those same files through
- * the `unified_document_index` applet's `/asset/{markdown_uuid}/{rel}`, so the
- * body has to be rewritten on
- * the way into the DOM.
+ * An attachment its source's blob store holds is linked at its address,
+ * `/data/<group>/<function>/blob/<hash>`, which the server answers and
+ * which needs no rewriting. What is left relative is a file a renderer
+ * wrote beside the page (`blobs/foo.png`), served through the
+ * `unified_document_index` applet's `/asset/{markdown_uuid}/{rel}`, so
+ * the body has to be rewritten on the way into the DOM.
  *
  * Lives in its own module (rather than inline in `ChatBody.ce.vue`) so
  * the rules are unit-testable without mounting a component.
@@ -31,14 +30,18 @@ export function assetUrl(markdownUuid: string, src: string): string {
 
 const ASSETS = `${UNIFIED_DOCUMENT_INDEX}/asset/`;
 const NOWHERE = "http://own.invalid";
+/** An attachment in its source's blob store, which the server answers
+ *  (`datalib/backend/blob_store/README.md`). */
+const BLOB_ADDRESS = /^\/data\/[^/]+\/[^/]+\/blob\/[0-9a-f]{64}$/;
 
 /**
  * What a body's reference to our own origin may load, or null. A body is
  * whatever its sender wrote, and anything it names on this origin is a
  * GET with the person's cookie, so only a document's assets may load:
  * the reference is resolved as the browser would (`..`, `%2e%2e`, `\`)
- * and must land under the asset route. A relative one is the
- * document's own (`blobs/a.mp3`) and must stay in its directory.
+ * and must land on an attachment's blob-store address or under the asset
+ * route. A relative one is the document's own (`blobs/a.mp3`) and must
+ * stay in its directory.
  */
 export function ownAssetReference(value: string, markdownUuid: string | null): string | null {
   const v = value.trim();
@@ -52,6 +55,8 @@ export function ownAssetReference(value: string, markdownUuid: string | null): s
   } catch {
     return null;
   }
-  if (url.origin !== NOWHERE || !url.pathname.startsWith(within)) return null;
+  if (url.origin !== NOWHERE) return null;
+  if (!relative && BLOB_ADDRESS.test(url.pathname)) return url.pathname;
+  if (!url.pathname.startsWith(within)) return null;
   return url.pathname + url.search;
 }

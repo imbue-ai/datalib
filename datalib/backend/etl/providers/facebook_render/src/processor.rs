@@ -271,7 +271,7 @@ fn render_loaded(
         new_head: Some(loaded.head),
     };
     let projection = |_: &NormalizedChat| MEDIA_PROJECTION;
-    let blobs = ChatBlobs::new(db.pool(), db.cas().map(|c| c.pool()), &projection);
+    let blobs = ChatBlobs::new(db.pool(), db.cas(), &projection);
     for (profile, chats) in [
         (posts_profile(), &loaded.posts),
         (albums_profile(), &loaded.albums),

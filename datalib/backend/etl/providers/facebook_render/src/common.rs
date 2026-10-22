@@ -142,7 +142,7 @@ pub fn media_attachment(
     let uri = str_field(media, "uri")?;
     inputs.read(MediaBlobRow::TABLE, &MediaBlobRow::pk_recipe(owner_id, uri));
     Some(NormalizedAttachment {
-        rel_path: None,
+        href: None,
         file_name: uri.rsplit('/').next().map(str::to_string),
         mime_type: mime_for(uri),
         byte_len: None,

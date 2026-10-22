@@ -75,7 +75,7 @@ pub struct Shared {
 /// later still, a batch at a time ([`EmailStore::load_emls`]).
 pub struct EmailStore {
     reader: Reader,
-    cas: Option<SqlitePool>,
+    cas: Option<blob_cas::BlobCas>,
     pub shared: Shared,
     pub scan: ScanResult,
     /// Threads this run will look at: every one on a full walk, the
@@ -140,7 +140,7 @@ impl EmailStore {
                 .iter()
                 .enumerate()
                 .map(|(i, bucket)| (i, bucket.emails.iter().map(|em| em.blob_id.as_str())));
-            let mut blobs = BlobBundle::load_many(
+            let mut blobs = BlobBundle::load_many_with_bytes(
                 self.reader.pool(),
                 self.cas.as_ref(),
                 EML_PROJECTION_SQL,
@@ -272,7 +272,9 @@ fn extract_attachments_from_emls(bucket: &mut EmailThreadBucket) {
         let Some(eml_blob) = bucket.blobs.get(&em.blob_id) else {
             continue;
         };
-        let Some(msg) = MessageParser::default().parse(&eml_blob.bytes) else {
+        let Some(msg) =
+            MessageParser::default().parse(eml_blob.bytes.as_deref().unwrap_or_default())
+        else {
             continue;
         };
         // Walk both `msg.attachments` and `msg.html_body` (the latter

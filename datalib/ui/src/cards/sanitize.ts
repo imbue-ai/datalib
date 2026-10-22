@@ -25,8 +25,9 @@
 //
 // A reference to our own origin is a request too, sent with the
 // person's cookie, so it loads only if it is one of a document's assets
-// (`ownAssetReference`); a relative one is pointed at the document's own
-// asset route. Anything else on this origin is dropped.
+// or an attachment's blob-store address (`ownAssetReference`); a
+// relative one is pointed at the document's own asset route. Anything
+// else on this origin is dropped.
 import DOMPurify from "dompurify";
 import { ownAssetReference } from "./asset_urls";
 import {

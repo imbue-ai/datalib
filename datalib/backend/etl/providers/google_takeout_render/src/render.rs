@@ -204,7 +204,7 @@ fn render_open(
     let (voice_chats, chats): (Vec<NormalizedChat>, Vec<NormalizedChat>) =
         chats.into_iter().partition(|c| is_voice(&c.id));
 
-    let blobs = ChatBlobs::new(db.pool(), Some(db.cas().pool()), &blob_projection);
+    let blobs = ChatBlobs::new(db.pool(), Some(db.cas()), &blob_projection);
     let mut render_as = |profile: &RenderProfile, chats: &[NormalizedChat]| -> Result<()> {
         if chats.is_empty() {
             return Ok(());
@@ -554,7 +554,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
         .map(|ref_name| NormalizedAttachment {
             mime_type: mime_of(&ref_name),
             file_name: Some(ref_name.clone()),
-            rel_path: None,
+            href: None,
             byte_len: None,
             source_url: None,
             ref_id: Some(ref_name),

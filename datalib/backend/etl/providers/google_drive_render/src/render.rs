@@ -26,7 +26,8 @@ use crate::store::Capture;
 use crate::unsupported;
 
 /// v1: Docs only, with their comment threads.
-pub const RENDER_VERSION: u32 = 1;
+/// v2: a Doc's images link the blob store rather than a copy beside it.
+pub const RENDER_VERSION: u32 = 2;
 
 const SOURCE_LABEL: &str = "Google Drive";
 const KIND_DOC: &str = "Google Doc";
@@ -76,16 +77,19 @@ pub fn render_doc(
 
     let dir = doc_dir(root, source_id, file_id);
     fs::create_dir_all(&dir).with_context(|| format!("mkdir -p {}", dir.display()))?;
-    if !images.is_empty() {
-        images.materialize_to_dir(&dir.join("blobs"))?;
+    // An older build copied the images here; the page links its CAS now.
+    match fs::remove_dir_all(dir.join("blobs")) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            return Err(e).with_context(|| format!("remove {}/blobs", dir.display()));
+        }
+        _ => {}
     }
     let image_paths: HashMap<String, String> = capture
         .parts
         .iter()
         .filter_map(|(id, part, _)| {
             let pointer = part.strip_prefix("image:")?;
-            let name = images.filename_for(id)?;
-            Some((pointer.to_string(), format!("blobs/{name}")))
+            Some((pointer.to_string(), images.href_for(id)?))
         })
         .collect();
 

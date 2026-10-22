@@ -488,7 +488,7 @@ fn build_attachments(raw: &Value) -> Vec<NormalizedAttachment> {
                         f.get("id").and_then(|v| v.as_str()).map(str::to_string)
                     };
                     NormalizedAttachment {
-                        rel_path: None,
+                        href: None,
                         file_name,
                         mime_type,
                         byte_len: f.get("size").and_then(|v| v.as_i64()),

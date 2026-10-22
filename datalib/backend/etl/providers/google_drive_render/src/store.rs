@@ -185,10 +185,9 @@ pub async fn images(db: &RawDb, capture: &Capture) -> Result<BlobBundle> {
         .filter(|(_, part, _)| part.starts_with("image:"))
         .map(|(id, _, _)| id.clone())
         .collect();
-    let mut bundles =
-        BlobBundle::load_many(db.pool(), Some(db.cas().pool()), IMAGES_SQL, [((), refs)])
-            .await
-            .context("load images")?;
+    let mut bundles = BlobBundle::load_many(db.pool(), Some(db.cas()), IMAGES_SQL, [((), refs)])
+        .await
+        .context("load images")?;
     Ok(bundles.remove(&()).unwrap_or_default())
 }
 

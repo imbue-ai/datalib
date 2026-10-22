@@ -264,7 +264,7 @@ async fn parse_async(
             .entry(key.clone())
             .or_default()
             .push(NormalizedAttachment {
-                rel_path: None,
+                href: None,
                 file_name: media_name.or_else(|| {
                     file_path
                         .as_deref()

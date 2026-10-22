@@ -35,6 +35,7 @@ pub mod binaries;
 pub mod boot;
 pub mod config_upgrade;
 pub mod connect;
+mod data;
 pub mod disk_free;
 mod embed;
 pub mod frontend;
@@ -295,6 +296,12 @@ pub fn router(state: AppState) -> Router {
         // namespace, so byte-identical components resolve to one URL
         // and the browser evaluates them once. See frontend.rs.
         .route("/modules/{hash}", get(get_module))
+        // What a step keeps, by the address a page links it with
+        // (data.rs): its blob store's rows, and nothing else of the step.
+        .route(
+            "/data/{group}/{function}/{kind}/{*rest}",
+            get(data::get_data),
+        )
         // The applet proxy. `{*rest}` keeps the whole remaining path,
         // which the applet sees verbatim.
         .route("/applet/{id}/{*rest}", any(proxy_applet))

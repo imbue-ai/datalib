@@ -231,7 +231,7 @@ fn group_chat() -> NormalizedChat {
         kind: ItemKind::Attachment,
         text: Some("The readout, as promised.".to_string()),
         attachments: vec![NormalizedAttachment {
-            rel_path: None,
+            href: None,
             file_name: Some("tricorder-readout.png".to_string()),
             mime_type: Some("image/png".to_string()),
             byte_len: Some(184_320),

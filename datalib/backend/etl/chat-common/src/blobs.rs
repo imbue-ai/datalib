@@ -1,9 +1,8 @@
-//! A chat-shaped render's attachment bytes, loaded a batch of chats at a
-//! time just before the batch renders, rather than every chat's up front:
+//! A chat-shaped render's attachments, loaded a batch of chats at a time
+//! just before the batch renders, rather than every chat's up front:
 //! `docs/dev/data_architecture_parse_and_render.md` §"Memory: a page at a
-//! time". A chat's bundle stays whole — its period pages share one
-//! `blobs/` folder and the filenames its bundle picks — so one very large
-//! chat is still one batch.
+//! time". A chat's bundle stays whole, so one very large chat is still
+//! one batch.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -26,7 +25,7 @@ use datalib_etl_render::inputs::RawRange;
 /// open for the pass. A chat's refs are its attachments' `ref_id`s.
 pub struct ChatBlobs<'a> {
     refs_pool: &'a SqlitePool,
-    cas_pool: Option<&'a SqlitePool>,
+    cas: Option<&'a blob_cas::BlobCas>,
     /// The `BlobBundle::load_many` projection for a chat: most sources
     /// have one edge table; Google Takeout has one per kind of chat.
     projection: &'a (dyn Fn(&NormalizedChat) -> &'static str + Sync),
@@ -35,12 +34,12 @@ pub struct ChatBlobs<'a> {
 impl<'a> ChatBlobs<'a> {
     pub fn new(
         refs_pool: &'a SqlitePool,
-        cas_pool: Option<&'a SqlitePool>,
+        cas: Option<&'a blob_cas::BlobCas>,
         projection: &'a (dyn Fn(&NormalizedChat) -> &'static str + Sync),
     ) -> Self {
         Self {
             refs_pool,
-            cas_pool,
+            cas,
             projection,
         }
     }
@@ -53,7 +52,7 @@ impl<'a> ChatBlobs<'a> {
             let refs = members.iter().map(|&i| (i, refs_of(chats[i])));
             let sizes = block_on(BlobBundle::sizes_many(
                 self.refs_pool,
-                self.cas_pool,
+                self.cas,
                 projection,
                 refs,
             ))?;
@@ -73,7 +72,7 @@ impl<'a> ChatBlobs<'a> {
                 .map(|&i| (chats[i].id.clone(), refs_of(chats[i])));
             out.extend(block_on(BlobBundle::load_many(
                 self.refs_pool,
-                self.cas_pool,
+                self.cas,
                 projection,
                 refs,
             ))?);

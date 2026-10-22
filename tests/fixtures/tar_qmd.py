@@ -15,8 +15,10 @@ so callers can extract with `--strip-components=1` to land
 TWO archives come out, and the split is a build-cache decision:
 
   * `qmd.tar` — the whole rendered tree. Markdown, each source's
-    `indexed_markdown.doltlite_db` (which carries its render cursor), and
-    the attachment blobs (images, audio, PDFs). This is what
+    `indexed_markdown.doltlite_db` (which carries its render cursor), the
+    attachment files render wrote beside a page, and each source's blob
+    store (`<stanza>/ingest/blobs.sqlite`), which a page links its
+    attachments in as `/data/<stanza>/ingest/blob/<hash>`. This is what
     `materialize_tng_root.sh` extracts to build a data root you can
     actually browse.
 
@@ -97,6 +99,9 @@ def main() -> int:
     for rendered in rendered_dirs:
         children = sorted(p for p in rendered.rglob("*") if p.is_file() or p.is_dir())
         all_entries.extend([rendered] + children)
+        blob_store = rendered.parent / "ingest" / "blobs.sqlite"
+        if blob_store.is_file():
+            all_entries.extend([blob_store.parent, blob_store])
         for p in children:
             if p.is_file() and p.suffix == ".md":
                 md_entries.add(p)

@@ -3,7 +3,7 @@
 //! The page body is **not** rendered here. Notion returns it already
 //! rendered as enhanced markdown, and the download step stores it whole;
 //! this writes it out with frontmatter, resolving each attachment slot
-//! to the file the CAS materialized beside it. What used to be a
+//! to its address in the source's blob store. What used to be a
 //! block-type matrix maintained against Notion's evolving block set is
 //! now Notion's problem.
 
@@ -32,7 +32,9 @@ use datalib_etl_render::pages::batches;
 ///     comment's id carries its `created_time` in its leading bits
 ///     (`datalib_id`'s v8 layout). Every uuid moved; `notion_page_uuid`
 ///     now holds the page's datalib id.
-pub const RENDER_VERSION: u32 = 7;
+/// v8: an attachment links to its address in the blob store rather than
+///     a copy beside the page.
+pub const RENDER_VERSION: u32 = 8;
 pub const SLUG_MAX_LEN: usize = 60;
 
 static SLUG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[^a-z0-9]+").unwrap());
@@ -130,13 +132,13 @@ pub fn thread_qmd_path_rel(stanza: &str, page_id: &str, discussion_id: &str) -> 
         .to_string_lossy()
         .into_owned()
 }
-/// Rewrite attachment slots to the filenames the bundle materialized.
+/// Rewrite attachment slots to where the bundle says the bytes are.
 ///
 /// The stored markdown references each attachment by slot — the
 /// unsigned upstream URL — because that is the only identifier that
 /// survives Notion re-signing the link on every fetch. A slot with no
 /// bytes in the CAS is left as-is: an upstream link still beats a
-/// broken relative path.
+/// broken one.
 fn localize_attachments(markdown: &str, bundle: &BlobBundle) -> String {
     let mut out = markdown.to_string();
     let slots: Vec<String> = bundle
@@ -144,8 +146,8 @@ fn localize_attachments(markdown: &str, bundle: &BlobBundle) -> String {
         .map(|(ref_id, _)| ref_id.to_string())
         .collect();
     for slot in slots {
-        if let Some(name) = bundle.filename_for(&slot) {
-            out = out.replace(&slot, &format!("blobs/{name}"));
+        if let Some(href) = bundle.href_for(&slot) {
+            out = out.replace(&slot, &href);
         }
     }
     out
@@ -427,7 +429,7 @@ impl PageBlobs for StorePageBlobs<'_> {
     fn weights(&self, pages: &[&str]) -> Result<Vec<u64>> {
         let sizes = block_on(BlobBundle::sizes_many(
             self.db.pool(),
-            Some(self.db.cas().pool()),
+            Some(self.db.cas()),
             ATTACHMENTS_PROJECTION_SQL,
             self.refs(pages),
         ))?;
@@ -440,7 +442,7 @@ impl PageBlobs for StorePageBlobs<'_> {
     fn load(&self, pages: &[&str]) -> Result<HashMap<String, BlobBundle>> {
         let bundles = block_on(BlobBundle::load_many(
             self.db.pool(),
-            Some(self.db.cas().pool()),
+            Some(self.db.cas()),
             ATTACHMENTS_PROJECTION_SQL,
             self.refs(pages),
         ))
@@ -539,8 +541,12 @@ pub fn render_notion(
                 inputs.read_all("notion_attachments", ids.iter().map(String::as_str));
             }
             let bundle = bundles.get(page_uuid).unwrap_or(&empty_bundle);
-            if !bundle.is_empty() {
-                bundle.materialize_to_dir(&page_dir.join("blobs"))?;
+            // An older build copied the bytes here; the page links its CAS now.
+            match fs::remove_dir_all(page_dir.join("blobs")) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                    return Err(e).with_context(|| format!("remove {}/blobs", page_dir.display()));
+                }
+                _ => {}
             }
             let body = inputs
                 .lookup("page_markdown", &parsed.markdown_by_page)
@@ -646,12 +652,12 @@ mod tests {
     use serde_json::json;
     use tempfile::tempdir;
 
-    /// A page's attachment bytes are read from the store its parse read,
-    /// a batch at a time, so the page links the local file. Every other
-    /// render test hands in bundles already in memory; this is the one
-    /// that reads them from a store.
+    /// A page's attachments are read from the store its parse read, a
+    /// batch at a time, and the page links each where the blob store
+    /// holds it, writing no copy. Every other render test hands in
+    /// bundles already in memory; this is the one that reads a store.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_stored_attachment_is_read_from_the_store_and_linked_locally() {
+    async fn a_stored_attachment_is_read_from_the_store_and_linked_there() {
         use datalib_etl_notion::ingest::db::{PageMarkdownUpsert, PageUpsert};
         const SLOT: &str =
             "https://prod-files-secure.s3.us-west-2.amazonaws.com/ws/9c/viewscreen.png";
@@ -722,14 +728,15 @@ mod tests {
             .find(|p| p.ends_with("index.md"))
             .expect("the page rendered");
         let md = fs::read_to_string(page).unwrap();
-        assert!(md.contains("](blobs/"), "linked locally: {md}");
+        assert!(
+            md.contains("](/data/") && md.contains(&format!("/blob/{blake3})")),
+            "linked in the blob store: {md}"
+        );
         assert!(!md.contains(SLOT), "not at the upstream slot: {md}");
-        let blobs = page.parent().unwrap().join("blobs");
-        let written: Vec<Vec<u8>> = fs::read_dir(&blobs)
-            .unwrap()
-            .map(|e| fs::read(e.unwrap().path()).unwrap())
-            .collect();
-        assert_eq!(written, vec![b"\x89PNG\r\n\x1a\nviewscreen".to_vec()]);
+        assert!(
+            !page.parent().unwrap().join("blobs").exists(),
+            "no copy beside the page"
+        );
     }
 
     /// A database row's properties are its content. Rendering nothing

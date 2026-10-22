@@ -92,7 +92,7 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
     // Stash one encrypted PNG under `<snapshot_root>/files/<XX>/<name>`
     // — the layout download walks. Picard's "Make it so." message will
     // reference this attachment so the rendered .md should contain an
-    // `![…](blobs/…png)` image link.
+    // `![…](/data/…/blob/<hash>)` image link.
     let files_root = snapshot_root.join("files");
     let (png_media_name, png_plaintext_hash) = write_test_attachment(&files_root)?;
 
@@ -217,31 +217,35 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
         "Riker's name resolved from recipient, his number as the handle, in:\n{md}"
     );
 
-    // PNG attachment surfaces as an inline image link under the
-    // "Make it so." bullet, with the upstream filename as the alt
-    // text and the hash-based filename as the target.
+    // PNG attachment surfaces as an inline image under the "Make it
+    // so." message, with the upstream filename as the alt text, linked
+    // at its address in the source's blob store. Nothing is copied
+    // beside the page.
+    let png_hash = datalib_etl::blob_cas::blake3_hex(TINY_PNG);
     assert!(
-        md.contains("![delta-shield.png](blobs/"),
-        "expected the image attachment to render as an inline link in:\n{md}"
+        md.contains(&format!(
+            "![delta-shield.png](/data/raw/signal/blob/{png_hash})"
+        )),
+        "expected the image attachment to link the blob store in:\n{md}"
     );
-    let png_dir = doc
-        .md_path
-        .parent()
-        .expect("md has a parent dir")
-        .join("blobs");
-    let written_pngs: Vec<_> = std::fs::read_dir(&png_dir)?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("png"))
-        .collect();
-    assert_eq!(
-        written_pngs.len(),
-        1,
-        "exactly one PNG materialized on disk"
+    assert!(
+        !doc.md_path
+            .parent()
+            .expect("md has a parent dir")
+            .join("blobs")
+            .exists(),
+        "nothing copied beside the page"
     );
-    let bytes = std::fs::read(written_pngs[0].path())?;
+    let cas = datalib_etl::blob_cas::BlobCas::open_reader(&datalib_etl::blob_cas::cas_path_for(
+        &datalib_etl::doltlite_raw::db_path_for(&raw_db_path),
+    ))
+    .await?;
+    let stored = cas.get(&png_hash).await?;
+    cas.close().await;
     assert_eq!(
-        bytes, TINY_PNG,
-        "materialized PNG matches the plaintext we encrypted in"
+        stored.map(|o| o.bytes).as_deref(),
+        Some(TINY_PNG),
+        "the store holds the plaintext we encrypted in"
     );
 
     // 1 chat-level row + 4 message-level rows = 5 grid rows.
