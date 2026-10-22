@@ -3,7 +3,7 @@
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use datalib_core::app_store::AppStore;
-use datalib_http::{router, ApiToken, AppState, TrustedProxy};
+use datalib_http::{router, ApiToken, AppState};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tower::ServiceExt;
@@ -18,10 +18,6 @@ fn unique_db_path() -> PathBuf {
 }
 
 async fn app() -> (axum::Router, ApiToken) {
-    app_behind(None).await
-}
-
-async fn app_behind(trusted_proxy: Option<TrustedProxy>) -> (axum::Router, ApiToken) {
     let db_path = unique_db_path();
     let root = Arc::new(db_path.parent().unwrap().to_path_buf());
     let app = AppStore::open(root.as_path())
@@ -45,7 +41,7 @@ async fn app_behind(trusted_proxy: Option<TrustedProxy>) -> (axum::Router, ApiTo
             None,
         )),
         api_token: api_token.clone(),
-        trusted_proxy,
+        frame_ancestors: Default::default(),
     };
     (router(state), api_token)
 }
@@ -60,6 +56,14 @@ fn session_cookie(set_cookie: &str) -> String {
         .next()
         .expect("Set-Cookie always has a name=value pair")
         .to_string()
+}
+
+fn set_cookies(resp: &axum::response::Response) -> Vec<String> {
+    resp.headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .map(|v| v.to_str().unwrap().to_string())
+        .collect()
 }
 
 #[tokio::test]
@@ -284,8 +288,12 @@ async fn every_accepted_carrier_works() {
     }
 }
 
+/// A document load mints the session twice: a `Lax` cookie for the app
+/// opened as the page, and a partitioned one for the app inside a frame
+/// on another site (Studio), where a `Lax` cookie is not even stored.
+/// Either one alone gets the browser in.
 #[tokio::test]
-async fn a_document_load_mints_a_session_cookie_and_it_authenticates() {
+async fn a_document_load_mints_two_session_cookies_and_either_authenticates() {
     let (app, _) = app().await;
 
     let req = Request::get("/")
@@ -294,31 +302,35 @@ async fn a_document_load_mints_a_session_cookie_and_it_authenticates() {
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let set_cookie = resp
-        .headers()
-        .get(header::SET_COOKIE)
-        .expect("document load must mint a session")
-        .to_str()
-        .unwrap()
-        .to_string();
+    let cookies = set_cookies(&resp);
+    let [lax, framed] = cookies.as_slice() else {
+        panic!("document load must mint two cookies, got {cookies:?}");
+    };
 
-    // The two attributes doing the security work: unreadable from JS,
-    // and never attached to a cross-site subresource request — which is
-    // the whole of the #138 attack.
-    assert!(set_cookie.contains("HttpOnly"), "{set_cookie}");
-    assert!(set_cookie.contains("SameSite=Lax"), "{set_cookie}");
-    assert!(set_cookie.contains("Path=/"), "{set_cookie}");
-    // No `Secure`: we serve plain http on loopback, and the browser
-    // would drop a `Secure` cookie outright.
-    assert!(!set_cookie.contains("Secure"), "{set_cookie}");
+    // Unreadable from JS, and sent to this host alone: no `Domain`.
+    for cookie in [lax, framed] {
+        assert!(cookie.contains("HttpOnly"), "{cookie}");
+        assert!(cookie.contains("Path=/"), "{cookie}");
+        assert!(!cookie.contains("Domain"), "{cookie}");
+    }
+    // No `Secure` on the `Lax` copy: we serve plain http on loopback,
+    // and the browser would drop a `Secure` cookie outright.
+    assert!(lax.contains("SameSite=Lax"), "{lax}");
+    assert!(!lax.contains("Secure"), "{lax}");
+    // The framed copy lives in the framing site's jar and nowhere else.
+    for attr in ["SameSite=None", "Secure", "Partitioned"] {
+        assert!(framed.contains(attr), "{framed} lacks {attr}");
+    }
+    assert_ne!(session_cookie(lax), session_cookie(framed));
 
-    // And the cookie alone gets the browser through the gate for the
-    // subresources the page will ask for next.
-    let req = Request::get("/api/health")
-        .header(header::COOKIE, session_cookie(&set_cookie))
-        .body(Body::empty())
-        .unwrap();
-    assert_eq!(status(&app, req).await, StatusCode::OK);
+    for cookie in [lax, framed] {
+        let req = Request::get("/api/health")
+            .header(header::COOKIE, session_cookie(cookie))
+            .header("sec-fetch-site", "same-origin")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(status(&app, req).await, StatusCode::OK, "{cookie}");
+    }
 }
 
 #[tokio::test]
@@ -384,137 +396,84 @@ async fn the_agent_guides_stay_public() {
     }
 }
 
-const OWNER: &str = r#"{"owner":true,"user_id":"u-owner","email":"owner@example.test"}"#;
-const VISITOR: &str = r#"{"owner":false,"user_id":"u-guest","email":"guest@example.test"}"#;
-
-/// Behind the proxy, the proxy's word is the credential: the owner gets
-/// the page and the API with no token, and no session cookie is minted,
-/// since the proxy's page is another site and the browser would not
-/// send one anyway.
+/// The cookie is attached by the browser whoever made the request, and a
+/// page on another port of 127.0.0.1, or another app of a Studio
+/// workspace, is the same *site*. `Sec-Fetch-Site` tells those from the
+/// app's own requests, whatever credential they carry; a navigation from
+/// anywhere still opens the app.
 #[tokio::test]
-async fn behind_a_trusted_proxy_the_owner_needs_no_token() {
-    let (app, _) = app_behind(Some(TrustedProxy::Imbue)).await;
-    for path in ["/", "/some/card/route", "/api/health"] {
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::get(path)
-                    .header("x-imbue-identity", OWNER)
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK, "{path}");
-        assert!(
-            resp.headers().get(header::SET_COOKIE).is_none(),
-            "{path}: the proxy's header authenticates every request; no cookie to mint"
+async fn a_request_another_page_made_is_refused_whatever_it_carries() {
+    let (app, _) = app().await;
+    let launch = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/?token={TOKEN}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let cookie = session_cookie(&set_cookies(&launch)[0]);
+    let req = |method: &str, path: &str, site: &str, mode: &str| {
+        Request::builder()
+            .method(method)
+            .uri(path)
+            .header(header::COOKIE, &cookie)
+            .header("sec-fetch-site", site)
+            .header("sec-fetch-mode", mode)
+            .body(Body::empty())
+            .unwrap()
+    };
+    for (method, path, site, mode) in [
+        ("POST", "/api/requests", "same-site", "navigate"),
+        ("POST", "/api/requests", "cross-site", "no-cors"),
+        ("GET", "/api/config", "same-site", "cors"),
+        (
+            "GET",
+            "/applet/unified_document_index/search?q=",
+            "cross-site",
+            "no-cors",
+        ),
+    ] {
+        assert_eq!(
+            status(&app, req(method, path, site, mode)).await,
+            StatusCode::FORBIDDEN,
+            "{method} {path} from {site} ({mode})"
         );
     }
-}
-
-/// A shared workspace's visitor reaches the same server through the same
-/// proxy, marked `owner:false`. The mirror is the owner's alone.
-#[tokio::test]
-async fn behind_a_trusted_proxy_a_visitor_is_refused() {
-    let (app, _) = app_behind(Some(TrustedProxy::Imbue)).await;
-    for path in [
-        "/",
-        "/api/health",
-        "/applet/unified_document_index/search?q=&limit=1",
-    ] {
-        let req = Request::get(path)
-            .header("x-imbue-identity", VISITOR)
-            .body(Body::empty())
-            .unwrap();
-        assert_eq!(status(&app, req).await, StatusCode::FORBIDDEN, "{path}");
-    }
-}
-
-/// The token still works behind the proxy (an agent's curl on the same
-/// host sends no identity header), and a request with neither is
-/// refused as it always was — a malformed header included.
-#[tokio::test]
-async fn behind_a_trusted_proxy_the_token_still_works_and_nothing_else_does() {
-    let (app, _) = app_behind(Some(TrustedProxy::Imbue)).await;
-    let with_token = Request::get("/api/health")
+    // The token proves no more here: a page that had it is still another page.
+    let with_token = Request::get("/api/config")
         .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+        .header("sec-fetch-site", "same-site")
+        .header("sec-fetch-mode", "cors")
         .body(Body::empty())
         .unwrap();
-    assert_eq!(status(&app, with_token).await, StatusCode::OK);
+    assert_eq!(status(&app, with_token).await, StatusCode::FORBIDDEN);
 
-    let bare = Request::get("/api/health").body(Body::empty()).unwrap();
-    assert_eq!(status(&app, bare).await, StatusCode::UNAUTHORIZED);
-    for bad in ["", "owner", r#"{"owner":"yes"}"#, "{}"] {
-        let req = Request::get("/api/health")
-            .header("x-imbue-identity", bad)
-            .body(Body::empty())
-            .unwrap();
+    for (method, path, site, mode) in [
+        ("GET", "/api/health", "same-origin", "cors"),
+        ("GET", "/", "cross-site", "navigate"),
+        ("GET", "/some/card", "same-site", "navigate"),
+        ("GET", "/api/health", "none", "navigate"),
+    ] {
         assert_eq!(
-            status(&app, req).await,
-            StatusCode::UNAUTHORIZED,
-            "identity {bad:?} must not authenticate"
+            status(&app, req(method, path, site, mode)).await,
+            StatusCode::OK,
+            "{method} {path} from {site} ({mode})"
         );
     }
 }
 
-/// Without the switch, the header is just bytes a client sent: a page
-/// that forges it on a laptop deployment gets nowhere.
+/// Proxy mode is gone: a header claiming the owner sent the request
+/// stands in for nothing, behind a proxy or not.
 #[tokio::test]
-async fn without_a_trusted_proxy_the_identity_header_is_ignored() {
+async fn an_identity_header_is_no_credential() {
     let (app, _) = app().await;
     for path in ["/", "/api/health"] {
         let req = Request::get(path)
-            .header("x-imbue-identity", OWNER)
+            .header("x-imbue-identity", r#"{"owner":true}"#)
             .body(Body::empty())
             .unwrap();
         assert_eq!(status(&app, req).await, StatusCode::UNAUTHORIZED, "{path}");
     }
-}
-
-/// The proxy stamps the owner on everything it forwards, so a sibling
-/// app's page could make the browser send an authenticated `POST`. The
-/// browser's `Sec-Fetch-Site` says where a request came from; a write
-/// from anywhere but the app's own origin is refused, a read is not.
-#[tokio::test]
-async fn behind_a_trusted_proxy_a_write_from_another_origin_is_refused() {
-    let (app, _) = app_behind(Some(TrustedProxy::Imbue)).await;
-    let check = |site: Option<&str>| {
-        let mut req = Request::post("/api/config/check")
-            .header("x-imbue-identity", OWNER)
-            .header("content-type", "application/json");
-        if let Some(site) = site {
-            req = req.header("sec-fetch-site", site);
-        }
-        req.body(Body::from(
-            serde_json::to_vec(&serde_json::json!({"text": ""})).unwrap(),
-        ))
-        .unwrap()
-    };
-    for site in ["same-site", "cross-site"] {
-        assert_eq!(
-            status(&app, check(Some(site))).await,
-            StatusCode::FORBIDDEN,
-            "a write with Sec-Fetch-Site: {site}"
-        );
-    }
-    // The app's own request, and a non-browser client the proxy let
-    // through: past the gate, whatever the endpoint then says.
-    for site in [Some("same-origin"), Some("none"), None] {
-        let got = status(&app, check(site)).await;
-        assert!(
-            got != StatusCode::FORBIDDEN && got != StatusCode::UNAUTHORIZED,
-            "Sec-Fetch-Site: {site:?} must pass the gate, got {got}"
-        );
-    }
-    let read = Request::get("/api/health")
-        .header("x-imbue-identity", OWNER)
-        .header("sec-fetch-site", "cross-site")
-        .body(Body::empty())
-        .unwrap();
-    assert_eq!(
-        status(&app, read).await,
-        StatusCode::OK,
-        "a read is not a write"
-    );
 }
