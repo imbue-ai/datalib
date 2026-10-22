@@ -9,6 +9,10 @@
 //! unshared, deleted) keeps every row and capture it had, since this is a
 //! backup.
 //!
+//! After the captures, every stored revision of a listed Doc or Sheet is
+//! owed its export in each `revision_exports` format, fetched once
+//! through the revision's export link (`revision_exports`).
+//!
 //! Each kind drains on its own, because each kind's native API is signed
 //! by its own latchkey service: a missing `google-sheets` sign-in ends
 //! the Sheets and leaves the Docs and Slides to finish.
@@ -18,7 +22,7 @@ pub mod db;
 pub mod schema_raw;
 pub mod shape;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result};
@@ -38,7 +42,7 @@ use datalib_etl_web::http::LatchkeySettings;
 use datalib_etl_web::owed::{self, BatchError, Fetcher, Listed, Loop, Outcome};
 
 pub use db::{db_path_for, RawDb};
-use db::{Capture, Part, Split};
+use db::{Capture, Part, RevisionExport, Split};
 use schema_raw::*;
 
 pub struct FetchOptions {
@@ -65,13 +69,18 @@ pub struct FetchSummary {
     /// Captured files whose two revision listings named different
     /// revisions.
     pub revision_listings_disagreed: usize,
+    /// Old revisions' exports fetched this run.
+    pub revision_exports: usize,
+    /// Revisions Drive no longer has the content of.
+    pub revision_exports_gone: usize,
 }
 
 impl FetchSummary {
     pub fn line(&self) -> String {
         format!(
             "listed={} owed={} captured={} failed={} left={} exports={} \
-             exports_declined={} images={} revision_listings_disagreed={}",
+             exports_declined={} images={} revision_listings_disagreed={} \
+             revision_exports={} revision_exports_gone={}",
             self.listed,
             self.owed,
             self.captured,
@@ -81,6 +90,8 @@ impl FetchSummary {
             self.exports_declined,
             self.images,
             self.revision_listings_disagreed,
+            self.revision_exports,
+            self.revision_exports_gone,
         )
     }
 }
@@ -123,6 +134,14 @@ async fn walk_files(
             _ => {}
         }
     }
+
+    let listed_ids: HashMap<FileKind, HashSet<String>> = by_kind
+        .iter()
+        .map(|(kind, entries)| {
+            let ids = entries.iter().filter_map(|e| str_of(e, "id")).collect();
+            (*kind, ids)
+        })
+        .collect();
 
     for kind in opts.api.kinds.iter().copied() {
         if opts.control.stop.requested() {
@@ -180,7 +199,182 @@ async fn walk_files(
         summary.revision_listings_disagreed +=
             captures.revision_listings_disagreed.load(Ordering::Relaxed);
     }
+
+    for kind in opts.api.kinds.iter().copied() {
+        if opts.control.stop.requested() {
+            break;
+        }
+        let empty = HashSet::new();
+        let files = listed_ids.get(&kind).unwrap_or(&empty);
+        export_revisions(opts, found, summary, kind, files).await?;
+    }
     Ok(())
+}
+
+/// Fetch the configured exports of every stored revision of `kind`'s
+/// listed files that the store does not hold yet. A file no longer
+/// listed is left alone: its links would only answer that it is gone.
+async fn export_revisions(
+    opts: &FetchOptions,
+    found: &RunProblems,
+    summary: &mut FetchSummary,
+    kind: FileKind,
+    files: &HashSet<String>,
+) -> Result<()> {
+    // A deck's export link ignores `revision=` and always exports the
+    // deck as it is now (measured in every format), so a deck's old
+    // revisions have no copy to fetch.
+    if kind == FileKind::Presentation {
+        return Ok(());
+    }
+    let formats = opts.api.revision_exports.for_kind(kind);
+    if formats.is_empty() || files.is_empty() {
+        return Ok(());
+    }
+    let info = api::kind_info(kind);
+    let mut wanted: HashMap<String, Wanted> = HashMap::new();
+    let mut listed = Vec::new();
+    for revision in opts.db.revisions_of_kind(info.mime_type).await? {
+        if !files.contains(&revision.file_id) {
+            continue;
+        }
+        for format in formats {
+            let Some(url) = api::export_link(kind, *format, &revision.export_links) else {
+                continue;
+            };
+            let (mime, ext) = api::export_type(kind, *format);
+            let part = export_part(ext);
+            let id = format!("{}#{part}", revision.id);
+            listed.push(Listed::new(id.clone(), None::<String>));
+            wanted.insert(
+                id,
+                Wanted {
+                    revision_id: revision.id.clone(),
+                    part,
+                    url,
+                    content_type: mime.to_string(),
+                },
+            );
+        }
+    }
+    let owed = owed::owed(opts.db.pool(), REVISION_EXPORTS, listed).await?;
+    if owed.is_empty() {
+        return Ok(());
+    }
+    opts.progress
+        .set_message(&format!("google_drive: {} old revisions", owed.len()));
+    opts.progress.set_length(Some(owed.len() as u64));
+    let fetcher = RevisionExports {
+        latchkey: &opts.latchkey,
+        db: &opts.db,
+        progress: &opts.progress,
+        stop: &opts.control.stop,
+        wanted,
+        gone: AtomicUsize::new(0),
+    };
+    let drained = owed::drain(
+        &Loop {
+            pool: opts.db.pool(),
+            table: REVISION_EXPORTS,
+            phase: "revision exports",
+            stop: &opts.control.stop,
+            found,
+            sealer: opts.sealer.as_ref(),
+            batch: 1,
+            concurrency: 4,
+            flush: 8,
+            flush_bytes: 64 << 20,
+            failures_in_a_row: 10,
+        },
+        owed,
+        &fetcher,
+    )
+    .await?;
+    let gone = fetcher.gone.load(Ordering::Relaxed);
+    summary.revision_exports += drained.got - gone;
+    summary.revision_exports_gone += gone;
+    summary.failed += drained.failed;
+    summary.left += drained.left;
+    Ok(())
+}
+
+/// What an owed revision export is fetched from and stored as.
+struct Wanted {
+    revision_id: String,
+    part: String,
+    url: String,
+    content_type: String,
+}
+
+struct RevisionExports<'a> {
+    latchkey: &'a LatchkeySettings,
+    db: &'a RawDb,
+    progress: &'a Progress,
+    stop: &'a datalib_etl::stop::StopFlag,
+    wanted: HashMap<String, Wanted>,
+    gone: AtomicUsize,
+}
+
+#[async_trait]
+impl Fetcher<RevisionExport> for RevisionExports<'_> {
+    async fn fetch(
+        &self,
+        batch: Vec<Listed>,
+    ) -> std::result::Result<Vec<owed::Fetched<RevisionExport>>, BatchError> {
+        let mut out = Vec::with_capacity(batch.len());
+        for listed in batch {
+            let Some(w) = self.wanted.get(&listed.key) else {
+                out.push(owed::Fetched {
+                    listed,
+                    outcome: Outcome::Failed("owed but not wanted".to_string()),
+                });
+                continue;
+            };
+            let export = |bytes| RevisionExport {
+                id: listed.key.clone(),
+                revision_id: w.revision_id.clone(),
+                part: w.part.clone(),
+                content_type: w.content_type.clone(),
+                bytes,
+            };
+            let outcome = match api::get_revision_export(&w.url, self.latchkey).await {
+                Ok(bytes) => Outcome::Got(export(Some(bytes))),
+                Err(e) if api::is_not_found(&e) => {
+                    self.gone.fetch_add(1, Ordering::Relaxed);
+                    Outcome::Unusable(
+                        export(None),
+                        datalib_problems::Reason::NotFound,
+                        "Drive no longer has this revision's content".to_string(),
+                    )
+                }
+                Err(e) if api::is_service(&e) => return Err(BatchError::Terminal(e)),
+                Err(e) if self.stop.requested() => return Err(BatchError::Batch(e)),
+                Err(e) => Outcome::Failed(format!("{e:#}")),
+            };
+            self.progress.inc(1);
+            out.push(owed::Fetched { listed, outcome });
+        }
+        Ok(out)
+    }
+
+    async fn store(
+        &self,
+        tx: &mut Transaction<'static, Sqlite>,
+        batch: &[owed::Fetched<RevisionExport>],
+    ) -> Result<()> {
+        let exports: Vec<&RevisionExport> = batch
+            .iter()
+            .filter_map(|f| match &f.outcome {
+                Outcome::Got(e) | Outcome::Unusable(e, ..) => Some(e),
+                _ => None,
+            })
+            .collect();
+        db::store_revision_exports(tx, self.db.cas(), &exports).await
+    }
+
+    fn weight(&self, content: &RevisionExport) -> usize {
+        content.bytes.as_ref().map_or(0, Vec::len)
+    }
 }
 
 /// Every file the config asks for, as Drive's listing entry. A listing
