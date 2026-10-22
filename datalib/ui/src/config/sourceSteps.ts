@@ -842,9 +842,8 @@ function = ${quote(functionOf(opts.phase))}${inputsLine}${params ? `\n${params}`
 
 /// Everything the wizard writes for one source, in the order it goes
 /// into the file: the group (when creating), the ingest step, and the
-/// render step for a provider that renders. A provider that renders
-/// nothing (`renderStep: false`) gets no render step and no
-/// `renderId`.
+/// render step unless the source turned rendering off. A download-only
+/// provider (`rendersDocuments: false`) always gets its render step.
 export function buildSource(opts: {
   entry: CatalogEntry;
   group: string;
@@ -854,15 +853,15 @@ export function buildSource(opts: {
   /// Write the `[[groups]]` block too. Off when editing: the group
   /// already exists and is renamed in place.
   withGroup: boolean;
-  /// Whether this source wants its render step. Defaults to whatever
-  /// the provider can do; the wizard passes the answer the person gave,
-  /// which is the one that decides.
+  /// Whether this source wants its render step: yes by default, and
+  /// the wizard passes the answer the person gave. Ignored for a
+  /// download-only provider.
   renders?: boolean;
 }): { groupBody: string | null; stepsBody: string; renderId: string | null } {
   const { entry, group, values } = opts;
   const ingestId = stepIdFor(group, "download");
   const ingest = buildStep({ entry, group, phase: "download", values });
-  const renders = entry.renderStep !== false && opts.renders !== false;
+  const renders = entry.rendersDocuments === false || opts.renders !== false;
   const render = renders
     ? buildStep({ entry, group, phase: "render", inputs: [ingestId], values })
     : null;
@@ -1357,7 +1356,7 @@ export function patchSource(
   opts: { entry: CatalogEntry; group: string; values: FieldValues; renders?: boolean },
 ): string {
   const { entry, group, values } = opts;
-  const renders = entry.renderStep !== false && opts.renders !== false;
+  const renders = entry.rendersDocuments === false || opts.renders !== false;
   let next = text;
   for (const phase of ["download", "render"] as const) {
     if (phase === "render" && !renders) continue;

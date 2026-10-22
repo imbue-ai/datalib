@@ -618,7 +618,7 @@ channel list, claude's orgs and project docs).
 | garmin | days, activities, files | each table's sidecar | activity dates |
 | contacts, calendar (DAV) | `dav_resources`, at each href's etag | `dav_resources` sidecar | — |
 | calendar (Google) | the events page is the content | — | — |
-| google_drive | the file listing, at each file's Drive `version` | `files` sidecar, written with the whole capture | — |
+| google_drive | the file listing, at each file's Drive `version`; each stored revision's export links | `files` sidecar, written with the whole capture; `revision_exports` sidecar, at no version | — |
 | chatgpt, claude | the conversation enumeration, at `update_time` / `updated_at` | `conversations` sidecar, its attachment edges, claude's `projects` and `project_docs_listings` | — |
 | yolink | — | — | each device's readings |
 
@@ -694,7 +694,7 @@ leaves an on-disk superset, and nothing deletes it.
 | yolink | An earlier `devices[].start` is a gap below the spans the device holds |
 | contacts, calendar | A newly selected collection has no token and is listed whole |
 | chatgpt, claude | The enumeration is re-read every run, so a moved `since` admits what it now covers |
-| google_drive | A new kind, a wider `file_ids` or `owned_only` turned off is a listing that names more, and what it names that is not held is owed. A new export format does not reach the versions already held: an export is only of the current version |
+| google_drive | A new kind, a wider `file_ids` or `owned_only` turned off is a listing that names more, and what it names that is not held is owed. A new `revision_exports` format makes every stored revision's export in it owed. A new `exports` format does not reach the versions already captured: that export is only of the current version |
 
 No source records the config it ran under: a local source reads its
 whole input every run under the config it has now (email's mbox

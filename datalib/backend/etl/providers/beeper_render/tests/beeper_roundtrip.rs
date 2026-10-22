@@ -77,6 +77,7 @@ impl Fixture {
                 Ok(())
             },
             &dr::db_path_for(&self.raw),
+            1,
         )?;
         Ok((summary, docs))
     }

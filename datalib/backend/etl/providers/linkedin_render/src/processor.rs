@@ -37,6 +37,8 @@ pub struct Source<'a> {
     /// The raw store as this run reads it — the driver's cursor, pin and
     /// stale set.
     pub range: RawRange<'a>,
+    /// How many bytes of photos a render loads at once.
+    pub blob_bytes: u64,
 }
 
 /// What one feed's render pass did: every bucket it looked at, named
@@ -77,6 +79,7 @@ impl SourceRender for LinkedinRender {
             owner: account.handle.as_ref(),
             account_inputs: &account.inputs,
             range: ctx.raw_range(),
+            blob_bytes: ctx.page_size.bytes,
         };
 
         // Every message-shaped feed (DMs + AI-coach transcripts) renders.

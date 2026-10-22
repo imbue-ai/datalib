@@ -78,6 +78,7 @@ pub fn render(
         owner: _,
         account_inputs,
         range,
+        blob_bytes: _,
     } = *source;
     let db_path = db_path_for(raw_dir);
     if !db_path.exists() {

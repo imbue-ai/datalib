@@ -57,14 +57,24 @@ pub struct GoogleDriveApi {
     #[serde(default = "all_kinds")]
     pub kinds: Vec<FileKind>,
     /// Which converted copies Drive makes of each version captured, kept
-    /// beside the native JSON. Default: `odf` (`.odt`, `.ods`, `.odp`),
-    /// which LibreOffice opens. Each costs a request, and a Doc's or a
+    /// beside the native JSON: `odf` (`.odt`, `.ods`, `.odp`, which
+    /// LibreOffice opens), `ooxml` or `pdf`. Default: none, since the
+    /// native JSON is the backup. Each costs a request, and a Doc's or a
     /// deck's roughly 1–4 MB per version, since Google embeds the fonts.
-    /// A list applies to every kind (`[]` for none); a table names a list
-    /// per kind (`document`, `spreadsheet`, `presentation`), and a kind
-    /// left out keeps `["odf"]`.
+    /// A list applies to every kind; a table names a list per kind
+    /// (`document`, `spreadsheet`, `presentation`), and a kind left out
+    /// gets none.
     #[serde(default)]
     pub exports: Exports,
+    /// Which exports to fetch of every revision Drive lists for a Doc or
+    /// a Sheet, once each: a revision does not change. The only copy
+    /// there is of a version from before the first sync, since Google
+    /// keeps no native JSON for old versions. A deck's revisions are
+    /// never fetched: its export links ignore the revision and export
+    /// the deck as it is now. Default: none, the same shape as
+    /// `exports`.
+    #[serde(default)]
+    pub revision_exports: Exports,
     /// Only the files the account owns, not the ones shared with it.
     #[serde(default)]
     pub owned_only: bool,
@@ -79,6 +89,7 @@ impl Default for GoogleDriveApi {
         Self {
             kinds: all_kinds(),
             exports: Exports::default(),
+            revision_exports: Exports::default(),
             owned_only: false,
             file_ids: Vec::new(),
         }
@@ -153,13 +164,13 @@ fn all_kinds() -> Vec<FileKind> {
 }
 
 fn default_formats() -> Vec<ExportFormat> {
-    vec![ExportFormat::Odf]
+    Vec::new()
 }
 
 /// Which exports to make: the same formats for every kind
-/// (`exports = ["odf", "pdf"]`, or `exports = []` for none), or a list per
-/// kind (`[…api.exports]` with `spreadsheet = ["odf"]`,
-/// `document = []`), where a kind left out keeps the default, `["odf"]`.
+/// (`exports = ["odf", "pdf"]`), or a list per kind (`[…api.exports]`
+/// with `spreadsheet = ["odf"]`), where a kind left out gets the default,
+/// none.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum Exports {
@@ -219,8 +230,10 @@ mod tests {
         assert_eq!(from_toml.kinds, built.kinds);
         assert_eq!(from_toml.exports, built.exports);
         for kind in all_kinds() {
-            assert_eq!(from_toml.exports.for_kind(kind), [ExportFormat::Odf]);
+            assert!(from_toml.exports.for_kind(kind).is_empty());
+            assert!(from_toml.revision_exports.for_kind(kind).is_empty());
         }
+        assert_eq!(from_toml.revision_exports, built.revision_exports);
         assert_eq!(from_toml.kinds.len(), 3);
         assert!(!from_toml.owned_only);
     }
@@ -239,15 +252,17 @@ mod tests {
     }
 
     #[test]
-    fn exports_can_be_turned_off() {
-        let c: GoogleDriveApi = toml::from_str("exports = []").unwrap();
+    fn exports_can_be_turned_on_for_every_kind() {
+        let c: GoogleDriveApi =
+            toml::from_str("exports = [\"odf\"]\nrevision_exports = [\"odf\"]").unwrap();
         for kind in all_kinds() {
-            assert!(c.exports.for_kind(kind).is_empty());
+            assert_eq!(c.exports.for_kind(kind), [ExportFormat::Odf]);
+            assert_eq!(c.revision_exports.for_kind(kind), [ExportFormat::Odf]);
         }
     }
 
-    /// A kind the table leaves out keeps the default, so turning one
-    /// kind's exports off does not turn the others' off with it.
+    /// A kind the table leaves out keeps the default, none, so turning
+    /// one kind's exports on does not turn the others' on with it.
     #[test]
     fn exports_can_be_set_per_kind() {
         let c: GoogleDriveApi =
@@ -258,10 +273,7 @@ mod tests {
             c.exports.for_kind(FileKind::Spreadsheet),
             [ExportFormat::Odf, ExportFormat::Ooxml]
         );
-        assert_eq!(
-            c.exports.for_kind(FileKind::Presentation),
-            [ExportFormat::Odf]
-        );
+        assert!(c.exports.for_kind(FileKind::Presentation).is_empty());
     }
 
     #[test]
