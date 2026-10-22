@@ -1324,10 +1324,14 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self.assertEqual(photos.pop("Hugh"), "none")
         self.assertEqual(sorted(photos), ["Jean-Luc Picard", "William T. Riker"])
         for name, url in photos.items():
-            address = re.fullmatch(r"/data/(tng_contacts/ingest)/blob/([0-9a-f]{64})", url)
-            self.assertIsNotNone(address, f"{name}'s photo URL: {url}")
+            address = re.fullmatch(
+                r"/data/(tng_contacts/ingest)/blob/([0-9a-f]{64})", url
+            )
+            if address is None:
+                self.fail(f"{name}'s photo URL: {url}")
             self.assertTrue(
-                self._blob_held(*address.groups()), f"{name}'s photo is in the blob store"
+                self._blob_held(*address.groups()),
+                f"{name}'s photo is in the blob store",
             )
         # Signal ties a number to an ACI: Riker's account carries both,
         # so a link made through either finds the other; Q, whom the
