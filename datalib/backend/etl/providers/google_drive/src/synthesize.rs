@@ -100,7 +100,7 @@ impl Synthesizer for GoogleDriveSynth {
                 let path = beside.join(name);
                 let body = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
                 put(
-                    api::req_image(url),
+                    api::req_signed(url),
                     HttpResponse {
                         status: 200,
                         headers: BTreeMap::from([(
