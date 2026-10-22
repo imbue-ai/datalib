@@ -78,17 +78,17 @@ describe("a group or step chip's hover, copy, menu and card", () => {
 
   it("offers browse for a group, not for a step", () => {
     expect(entityMenu(SLACK, "Work Slack").map((e) => e.id)).toEqual([
-      "copy-name",
-      "copy-id",
-      "copy-both",
       "open",
+      "copy-id",
+      "copy-name",
+      "copy-both",
       "browse",
     ]);
     expect(entityMenu(INGEST, "Work Slack · Ingest").map((e) => e.label)).toEqual([
-      "Copy “Work Slack · Ingest”",
-      "Copy slack/ingest",
-      "Copy “Work Slack · Ingest (datalib:step/slack/ingest)”",
       "Show its log",
+      "Copy slack/ingest",
+      "Copy “Work Slack · Ingest”",
+      "Copy “Work Slack · Ingest (datalib:step/slack/ingest)”",
     ]);
     expect(browseQuery(SLACK)).toBe("source_id:slack is:document");
     expect(browseQuery(INGEST)).toBeNull();

@@ -209,8 +209,9 @@ Contact, Subject and Source columns when `people` or `entities` says an
 answer changed. A right-click acts on the chip it landed on, so each
 chip in a cell of several has its own menu. The
 run log draws its Group and Step columns as chips the same way
-(`RunLogPanel.ce.vue`), and `TableGrid` takes the option too, as the
-contacts app's table does (`ContactsCard.ce.vue`). `tableGrid.css` keeps
+(`RunLogPanel.ce.vue`), with the chip's menu ahead of the cell's, and
+`TableGrid` takes the option too, as the contacts app's table does
+(`ContactsCard.ce.vue`); its right-click is still the row's menu. `tableGrid.css` keeps
 the grid theme's link colour off a chip in a cell.
 
 The Manage table's Name cell is not a chip, on purpose: the row *is*
@@ -244,13 +245,22 @@ right-click away; linking a handle stays the popover's
 |---|---|---|---|
 | **click** | the link popover, where a contacts app is configured | nothing; the href is never followed | nothing; the href is never followed |
 | **double-click** | the person card (`personView`): your contact and each source's record of them, the source the chip was seen in first | the group's sync dashboard | the step's log |
-| **right-click** | `chipMenu`: open the person card; compose mail to an email address; copy the identifier, the name or both; everything with them (`with:`); link to a contact or edit the link | `entityMenu`: copy the name, the id or both; open its dashboard; browse its documents | `entityMenu`: copy; show its log |
+| **right-click** | `chipMenu`: open the person card; compose mail to an email address; copy the identifier, the name or both; everything with them (`with:`); link to a contact or edit the link | `entityMenu`: open its dashboard; copy the id, the name or both; browse its documents | `entityMenu`: show its log; copy |
 | **hover** | the tooltip: who, the identifier, what each source calls them, their other handles | the tooltip: name and id, its type, its status | the same |
 | **copy** | `Will Riker <riker@enterprise.org>` as text, a working `mailto:` link as HTML | `Work Slack (datalib:group/slack)`, and the link | the same |
 
-A menu entry is an *id* the surface binds, never a handler, so a
-document and a grid cell draw the same entries and act on them their
-own way. A click with a modifier on a person chip is the browser's, as
+**`ui/src/cards/chipActions.ts` is the one place a chip's clicks are
+decided**: which chip a press landed on (`chipElAt`, `chipOf`), what its
+double-click opens (`chipCardSource`), its menu (`chipMenuOf`, every
+kind's entries in the one order `CHIP_ACTIONS` gives), and what each
+entry does (`runChipAction`). A surface only draws the menu — the
+floating `ChipMenu.ce.vue` over a document or a card, a grid's context
+menu, the search field's tooltip — and hands it a `ChipHost` saying
+what it can do there: open a card, search in place, link a handle. The
+search grid narrows its own query for "Everything with" and replaces
+it for Browse; everywhere else both open a search beside the card. A
+contact chip (`data-contact`) has no card of its own yet, so it
+offers copy and "Everything with" only. A click with a modifier on a person chip is the browser's, as
 on any link; no click on a `datalib:` link ever leaves the app. The mail
 app opens only from the menu's Compose entry, through `openExternal`. A
 double-click opens a card by its card source (`cardSources.ts`, which
@@ -285,7 +295,9 @@ A new kind of *handle* is a person and goes through
   (the TypeScript mirror over the same cases, and the plugin's marking).
 - The resolver: `resolver.test.ts` (one request per pass, kept answers,
   forget and stale answers, revalidating, failures).
-- The rules: `contacts.test.ts`, `entities.test.ts`.
+- The rules: `contacts.test.ts`, `entities.test.ts`, and
+  `chipActions.test.ts` (one menu order for every kind, and where each
+  entry lands).
 - The endpoint: `http_tests::entities_answer_a_chip_for_a_group_and_a_step`.
 - The writers: `etl_render_unittests` (`chip_link`), the storage
   report's test in `introspect.rs`, chat-common's header and reactor

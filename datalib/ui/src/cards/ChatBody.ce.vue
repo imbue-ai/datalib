@@ -26,34 +26,23 @@ import {
   decorateHandles,
   type NormalizedContact,
   type Who,
-  chipMenu,
-  composeUri,
-  copyText,
-  handleValue,
-  searchQueryFor,
   people,
   canLinkHandles,
   NOBODY,
-  type ChipMenuEntry,
-  type ChipMenuId,
 } from "./contacts";
 import ChipMenu from "./ChipMenu.ce.vue";
-import { entityFromUri } from "./chipLinks";
 import {
-  browseQuery,
-  decorateEntities,
-  entities,
-  entityCardSource,
-  entityCopyText,
-  entityMenu,
-  type EntityMenuEntry,
-  type EntityMenuId,
-} from "./entities";
-import { personSource } from "./cardSources";
+  chipElAt,
+  chipMenuOf,
+  chipOf,
+  runChipAction,
+  type Chip,
+  type ChipAction,
+  type ChipEntry,
+  type ChipHost,
+} from "./chipActions";
+import { decorateEntities, entities } from "./entities";
 import HandlePopover from "./HandlePopover.ce.vue";
-import { copyToClipboard } from "@/clipboard";
-import { openExternal } from "@/externalLinks";
-import { pushToast } from "@/toasts";
 import { renderDocument } from "./renderDocument";
 import { mountTimeSeries } from "./timeSeriesEmbed";
 import {
@@ -240,11 +229,6 @@ function onEntityChipClick(ev: MouseEvent) {
   ev.stopPropagation();
 }
 
-function openEntityCard(uri: string) {
-  const source = entityCardSource(uri);
-  if (source) emit("open-card", source);
-}
-
 function onHandleChipClick(ev: MouseEvent) {
   const chip = chipAt(ev);
   // A chip is a link; a plain click on it is for the chip, not for the
@@ -265,126 +249,52 @@ function onHandleChipClick(ev: MouseEvent) {
 /// Double-click opens the chip's card: a person's, led by this
 /// document's source, or a group's or a step's (docs/dev/chips.md § Clicks).
 function onChipDblClick(ev: MouseEvent) {
-  const entity = entityChipAt(ev);
-  if (entity) {
-    ev.preventDefault();
-    ev.stopPropagation();
-    openEntityCard(entity.dataset.entity ?? "");
-    return;
-  }
-  const chip = chipAt(ev);
-  if (!chip || isBrowserClick(ev)) return;
+  const el = chipElAt(asElement(ev.target));
+  const chip = el ? chipOf(el) : null;
+  if (!el || !chip || (chip.ref.kind === "person" && isBrowserClick(ev))) return;
   ev.preventDefault();
   ev.stopPropagation();
-  openPersonCard(chip.dataset.handle ?? "");
+  void runChipAction("open", chip, chipHost(el, 0, 0));
 }
 
-function openPersonCard(handle: string) {
-  chipTarget.value = null;
-  emit("open-card", personSource(handle, { seenIn: props.sourceId ?? null }));
+/// What a chip's entries do in a document: open a card or a search
+/// beside it, and link a handle in the popover where the chip was pressed.
+function chipHost(el: HTMLElement, x: number, y: number): ChipHost {
+  return {
+    openCard: (source) => {
+      chipTarget.value = null;
+      emit("open-card", source);
+    },
+    search: (q) => emit("open-search", q),
+    editLink: () => openPopover(el, x, y),
+    seenIn: props.sourceId ?? null,
+  };
 }
 
-type ChipMenuAt = {
-  chip: HTMLElement;
-  entries: (ChipMenuEntry | EntityMenuEntry)[];
-  x: number;
-  y: number;
-};
+type ChipMenuAt = { el: HTMLElement; chip: Chip; entries: ChipEntry[]; x: number; y: number };
 const chipMenuAt = ref<ChipMenuAt | null>(null);
 
 /// Right-click on a chip is the chip's menu, not the document's.
 function onChipContextMenu(ev: MouseEvent): boolean {
-  const entity = entityChipAt(ev);
-  if (entity) {
-    ev.preventDefault();
-    const at = frameOrigin();
-    const uri = entity.dataset.entity ?? "";
-    chipMenuAt.value = {
-      chip: entity,
-      entries: entityMenu(uri, entity.dataset.label ?? entity.dataset.shownAs ?? uri),
-      x: at.x + ev.clientX,
-      y: at.y + ev.clientY,
-    };
-    return true;
-  }
-  const chip = chipAt(ev);
-  if (!chip) return false;
+  const el = chipElAt(asElement(ev.target));
+  const chip = el ? chipOf(el) : null;
+  if (!el || !chip) return false;
   ev.preventDefault();
   const at = frameOrigin();
   chipMenuAt.value = {
+    el,
     chip,
-    entries: chipMenu(
-      chip.dataset.handle ?? "",
-      chip.dataset.shownAs ?? "",
-      whoIs(chip),
-      canLinkHandles(),
-    ),
+    entries: chipMenuOf(chip, canLinkHandles()),
     x: at.x + ev.clientX,
     y: at.y + ev.clientY,
   };
   return true;
 }
 
-async function onChipMenuPick(id: ChipMenuId | EntityMenuId) {
+async function onChipMenuPick(id: ChipAction) {
   const menu = chipMenuAt.value;
   chipMenuAt.value = null;
-  if (!menu) return;
-  const { chip } = menu;
-  const handle = chip.dataset.handle ?? "";
-  const shownAs = chip.dataset.shownAs ?? "";
-  const name = chip.dataset.label ?? shownAs;
-  const copy = async (text: string) => {
-    if (await copyToClipboard(text)) pushToast(`Copied ${text}`, "info");
-    else pushToast("The clipboard refused the copy");
-  };
-  const uri = chip.dataset.entity;
-  if (uri) {
-    switch (id as EntityMenuId) {
-      case "copy-name":
-        await copy(name);
-        break;
-      case "copy-id":
-        await copy(entityFromUri(uri)?.id ?? uri);
-        break;
-      case "copy-both":
-        await copy(entityCopyText(uri, name));
-        break;
-      case "open":
-        openEntityCard(uri);
-        break;
-      case "browse": {
-        const q = browseQuery(uri);
-        if (q) emit("open-search", q);
-        break;
-      }
-    }
-    return;
-  }
-  switch (id as ChipMenuId) {
-    case "open":
-      openPersonCard(handle);
-      break;
-    case "compose": {
-      const mailto = composeUri(handle);
-      if (mailto) void openExternal(mailto);
-      break;
-    }
-    case "copy-name":
-      await copy(name);
-      break;
-    case "copy-id":
-      await copy(handleValue(handle));
-      break;
-    case "copy-both":
-      await copy(copyText(handle, name));
-      break;
-    case "search":
-      emit("open-search", searchQueryFor(handle));
-      break;
-    case "edit":
-      openPopover(chip, menu.x, menu.y);
-      break;
-  }
+  if (menu) await runChipAction(id, menu.chip, chipHost(menu.el, menu.x, menu.y));
 }
 
 function onRemoteChipClick(ev: MouseEvent) {

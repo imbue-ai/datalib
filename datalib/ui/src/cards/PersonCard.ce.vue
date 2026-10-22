@@ -7,11 +7,8 @@
 // contact and grey where not, with the same click, double-click and
 // right-click as a chip in a document (docs/dev/chips.md § Clicks).
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import { copyToClipboard } from "@/clipboard";
 import { iconUrl } from "@/config/icons";
 import { formatStamp } from "@/config/timeFormat";
-import { openExternal } from "@/externalLinks";
-import { pushToast } from "@/toasts";
 import { personSource, searchSource } from "./cardSources";
 import { isBrowserClick } from "./chatLink";
 import { uriFromEntity } from "./chipLinks";
@@ -19,9 +16,6 @@ import ChipMenu from "./ChipMenu.ce.vue";
 import {
   canLinkHandles,
   chipCell,
-  chipMenu,
-  composeUri,
-  copyText,
   createContact,
   handleValue,
   identifierCell,
@@ -31,10 +25,18 @@ import {
   people,
   searchQueryFor,
   suggestedName,
-  type ChipMenuEntry,
-  type ChipMenuId,
   type NormalizedContact,
 } from "./contacts";
+import {
+  chipElAt,
+  chipMenuOf,
+  chipOf,
+  runChipAction,
+  type Chip,
+  type ChipAction,
+  type ChipEntry,
+  type ChipHost,
+} from "./chipActions";
 import { entities } from "./entities";
 import HandlePopover from "./HandlePopover.ce.vue";
 import {
@@ -163,9 +165,13 @@ type Popover = {
   y: number;
 };
 const popover = ref<Popover | null>(null);
-const menu = ref<{ chip: HTMLElement; entries: ChipMenuEntry[]; x: number; y: number } | null>(
-  null,
-);
+const menu = ref<{
+  el: HTMLElement;
+  chip: Chip;
+  entries: ChipEntry[];
+  x: number;
+  y: number;
+} | null>(null);
 
 function openPopover(chip: HTMLElement, x: number, y: number) {
   const handle = chip.dataset.handle ?? "";
@@ -187,69 +193,43 @@ function onClick(ev: MouseEvent) {
   if (canLinkHandles()) openPopover(chip, ev.clientX, ev.clientY);
 }
 
+/// What a chip's entries do on this card: open a card beside it, but not
+/// this person's own again, and link a handle where the chip was pressed.
+function chipHost(el: HTMLElement, x: number, y: number): ChipHost {
+  return {
+    openCard: (source) => {
+      if (source !== personSource(props.handle, { seenIn: null })) props.ctx.host.openCards(source);
+    },
+    editLink: () => openPopover(el, x, y),
+  };
+}
+
 function onDblClick(ev: MouseEvent) {
-  const chip = chipAt(ev);
-  if (!chip) return;
+  const el = chipElAt(ev.target);
+  const chip = el ? chipOf(el) : null;
+  if (!el || !chip) return;
   ev.preventDefault();
-  const handle = chip.dataset.handle ?? "";
-  if (handle !== props.handle) props.ctx.host.openCards(personSource(handle, { seenIn: null }));
+  void runChipAction("open", chip, chipHost(el, ev.clientX, ev.clientY));
 }
 
 function onContextMenu(ev: MouseEvent) {
-  const chip = chipAt(ev);
-  if (!chip) return;
+  const el = chipElAt(ev.target);
+  const chip = el ? chipOf(el) : null;
+  if (!el || !chip) return;
   ev.preventDefault();
-  const handle = chip.dataset.handle ?? "";
   menu.value = {
+    el,
     chip,
-    entries: chipMenu(
-      handle,
-      chip.dataset.shownAs ?? "",
-      people.get(handle) ?? NOBODY,
-      canLinkHandles(),
-    ),
+    entries: chipMenuOf(chip, canLinkHandles()),
     x: ev.clientX,
     y: ev.clientY,
   };
 }
 
-async function onMenuPick(id: ChipMenuId) {
+async function onMenuPick(id: ChipAction) {
   const m = menu.value;
   menu.value = null;
-  if (!m) return;
-  const handle = m.chip.dataset.handle ?? "";
-  const name = people.get(handle)?.mine
-    ? nameOf(people.get(handle)!.mine!)
-    : (m.chip.dataset.label ?? "");
-  const copy = async (text: string) => {
-    if (await copyToClipboard(text)) pushToast(`Copied ${text}`, "info");
-    else pushToast("The clipboard refused the copy");
-  };
-  switch (id) {
-    case "open":
-      if (handle !== props.handle) props.ctx.host.openCards(personSource(handle, { seenIn: null }));
-      break;
-    case "compose": {
-      const mailto = composeUri(handle);
-      if (mailto) void openExternal(mailto);
-      break;
-    }
-    case "copy-name":
-      await copy(name);
-      break;
-    case "copy-id":
-      await copy(handleValue(handle));
-      break;
-    case "copy-both":
-      await copy(copyText(handle, name));
-      break;
-    case "search":
-      props.ctx.host.openCards(searchSource(searchQueryFor(handle)));
-      break;
-    case "edit":
-      openPopover(m.chip, m.x, m.y);
-      break;
-  }
+  if (m) await runChipAction(id, m.chip, chipHost(m.el, m.x, m.y));
 }
 
 // ── Linking a source's handles to your contact ────────────────────────
@@ -464,7 +444,7 @@ const headPhoto = computed(() => {
       :entries="menu.entries"
       :x="menu.x"
       :y="menu.y"
-      @pick="(id) => onMenuPick(id as ChipMenuId)"
+      @pick="onMenuPick"
       @close="menu = null"
     />
     <HandlePopover

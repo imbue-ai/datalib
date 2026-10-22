@@ -54,7 +54,15 @@ import { EVERYTHING, scopeOf, withScope, type LogScope as Scope } from "@/grid/l
 import "@/cards/tableGrid.css";
 import "@/cards/chip.css";
 import { uriFromEntity } from "@/cards/chipLinks";
-import { entities, entityCardSource, entityCell } from "@/cards/entities";
+import { entities, entityCell } from "@/cards/entities";
+import {
+  CHIP_SELECTOR,
+  chipCardSource,
+  chipMenuOf,
+  chipOf,
+  runChipAction,
+  type Chip,
+} from "@/cards/chipActions";
 import { type ProcessInfo, type RunInfo, type RunLogLine } from "@/api";
 import { useApi } from "@/cards/cardApi";
 import {
@@ -105,7 +113,7 @@ const emit = defineEmits<{
   /// A line was selected — by a click, or the arrow keys moving on —
   /// for the caller to open in full.
   (e: "line-selected", seq: number): void;
-  /// A group or step chip was double-clicked: the card source to open.
+  /// A chip asked for a card: its double-click, or an entry of its menu.
   (e: "open-card", source: string): void;
 }>();
 
@@ -932,12 +940,32 @@ function cellUnderMenu(args: MenuFromCellCallbackArgs): {
   return { header: String(column.name ?? key), key, value, shown };
 }
 
-/// The menu for the cell under the right-click. Read on each opening,
-/// since the entries name the cell's value.
+/// The chip in the cell under the right-click, the Group's or the Step's.
+function chipUnderMenu(args: MenuFromCellCallbackArgs): Chip | null {
+  const node =
+    args.row != null && args.cell != null ? args.grid.getCellNode(args.row, args.cell) : null;
+  const el = node?.querySelector<HTMLElement>(CHIP_SELECTOR);
+  return el ? chipOf(el) : null;
+}
+
+/// The chip's own menu, as it is everywhere: a line where it draws one.
+function chipEntries(chip: Chip): MenuEntry[] {
+  const host = { openCard: (source: string) => emit("open-card", source) };
+  return chipMenuOf(chip, false).flatMap((e, i): MenuEntry[] => [
+    ...(e.separator && i > 0 ? [{ name: "", separator: true }] : []),
+    { name: e.label, action: () => void runChipAction(e.id, chip, host) },
+  ]);
+}
+
+/// The menu for the cell under the right-click: its chip's entries, then
+/// the cell's. Read on each opening, since the entries name the cell's
+/// value.
 function menuEntries(args: MenuFromCellCallbackArgs): MenuEntry[] {
   const cell = cellUnderMenu(args);
-  const entries: MenuEntry[] = [];
+  const chip = chipUnderMenu(args);
+  const entries: MenuEntry[] = chip ? chipEntries(chip) : [];
   if (cell) {
+    if (entries.length) entries.push({ name: "", separator: true });
     entries.push(
       {
         name: `Keep only ${cell.header}=${cell.shown}`,
@@ -1038,7 +1066,7 @@ function gridOptions(): GridOption {
       // Ours copies the cell as a copied line has it; the grid's copies
       // the raw field, the whole of `fields` for Source.
       hideCopyCellValueCommand: true,
-      ...menuSlots(6, menuEntries),
+      ...menuSlots(16, menuEntries),
     },
   };
 }
@@ -1072,8 +1100,9 @@ function createGrid(first: RunLogLine[]) {
     if (entityAt(e)) e.getNativeEvent<MouseEvent>()?.preventDefault();
   });
   b.slickGrid.onDblClick.subscribe((e) => {
-    const chip = entityAt(e);
-    const source = chip ? entityCardSource(chip.dataset.entity ?? "") : null;
+    const el = entityAt(e);
+    const chip = el ? chipOf(el) : null;
+    const source = chip ? chipCardSource(chip.ref, null) : null;
     if (source) emit("open-card", source);
   });
   // A new line keeps the selection on its line, and the grid reports
