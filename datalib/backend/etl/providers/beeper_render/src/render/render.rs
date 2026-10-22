@@ -12,12 +12,14 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
+use datalib_contact_schema::is_drawable_photo;
 use datalib_etl::blob_cas::{self, BlobBundle};
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::{Buckets, ChatRenderer};
 use datalib_etl_chat_common::NormalizedChat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::pages::batches;
+use datalib_etl_render::photo;
 
 use super::normalize::{bundle_key, to_networks, Avatars};
 use super::parse::{DocBucket, ParsedBeeper};
@@ -35,7 +37,8 @@ use super::parse::{DocBucket, ParsedBeeper};
 ///     to its channel.
 /// v6: people are written by their handles and are source contacts,
 ///     with their avatars; a chat with no name is called by its people.
-pub const RENDER_VERSION: u32 = 6;
+/// v7: an avatar is linked where the blob store holds it.
+pub const RENDER_VERSION: u32 = 7;
 
 #[derive(Debug, Default, Clone)]
 pub struct RenderSummary {
@@ -176,56 +179,27 @@ async fn load_bundles<'d>(
     Ok(out)
 }
 
-/// Every loaded person's avatar that is an image.
+/// Every loaded person's avatar the blob store holds as an image: the
+/// type is the store's, which the download took from the bytes, since
+/// the app caches avatars under names with no extension.
 async fn load_avatars(parsed: &ParsedBeeper, cas: &blob_cas::BlobCas) -> Result<Avatars> {
-    let mut avatars = Avatars::new();
-    let wanted = parsed
+    let mut wanted: Vec<&str> = parsed
         .people
         .values()
         .flatten()
-        .filter_map(|p| p.avatar.as_deref());
-    for hash in wanted {
-        if avatars.contains_key(hash) {
-            continue;
-        }
-        let Some(obj) = cas.get(hash).await? else {
-            continue;
-        };
-        if let Some(content_type) = image_type(&obj.bytes) {
-            avatars.insert(hash.to_string(), (content_type.to_string(), obj.bytes));
-        }
-    }
-    Ok(avatars)
+        .filter_map(|p| p.avatar.as_deref())
+        .collect();
+    wanted.sort_unstable();
+    wanted.dedup();
+    Ok(cas
+        .describe_many(&wanted)
+        .await?
+        .into_iter()
+        .filter(|(_, held)| held.content_type.as_deref().is_some_and(is_drawable_photo))
+        .map(|(hash, held)| (hash, photo::stored(cas.step(), &held)))
+        .collect())
 }
 
 fn block_on<F: std::future::Future>(f: F) -> F::Output {
     tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(f))
-}
-
-/// The image type of `bytes` by their opening, for the files the app
-/// caches under names with no extension.
-fn image_type(bytes: &[u8]) -> Option<&'static str> {
-    match bytes {
-        [0x89, b'P', b'N', b'G', ..] => Some("image/png"),
-        [0xFF, 0xD8, 0xFF, ..] => Some("image/jpeg"),
-        [b'G', b'I', b'F', b'8', ..] => Some("image/gif"),
-        [b'R', b'I', b'F', b'F', _, _, _, _, b'W', b'E', b'B', b'P', ..] => Some("image/webp"),
-        _ => None,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn an_avatar_is_known_by_its_opening_bytes() {
-        assert_eq!(image_type(b"\x89PNG\r\n\x1a\n"), Some("image/png"));
-        assert_eq!(image_type(&[0xFF, 0xD8, 0xFF, 0xE0]), Some("image/jpeg"));
-        assert_eq!(
-            image_type(b"RIFF\x00\x00\x00\x00WEBPVP8 "),
-            Some("image/webp")
-        );
-        assert_eq!(image_type(b"%PDF-1.7"), None);
-    }
 }

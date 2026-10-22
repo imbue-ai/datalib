@@ -916,8 +916,8 @@ store's `byte_len`, no bytes read), and `render_batched` loads and
 renders one batch at a time; `render_batched_at` reopens the raw store
 at the commit a parse read (`BlobsAt`) for a render whose parse has
 closed it. Beeper weighs its documents from what its parse recorded,
-LinkedIn attaches its connections' photos a batch at a time, and Notion
-loads its pages' bundles through `PageBlobs`. A chat's bundle is never
+and Notion loads its pages' bundles through `PageBlobs`. A person's
+photo is only ever a link, so no render loads one. A chat's bundle is never
 split, so one very large chat is still one batch. Only email's bundles
 hold bytes; everyone else's name the blob store that holds them.
 

@@ -18,9 +18,21 @@ use datalib_etl_contacts_config::{ContactsConfig, ContactsMethod};
 
 use crate::ingest;
 
+/// The ladder, then the photos of the cards already stored into the blob
+/// store: a store an older build filled holds cards whose photos it
+/// never kept, and an address book's sync-token says nothing changed, so
+/// no download would bring them.
 pub async fn migrate(raw_dir: &std::path::Path) -> anyhow::Result<()> {
     let db = ingest::RawDb::open(&datalib_etl::raw_layout::entities_db(raw_dir)).await?;
+    let kept = db.put_photos_of_held_cards().await;
     db.close().await;
+    let kept = kept?;
+    if kept > 0 {
+        tracing::info!(
+            photos = kept,
+            "every stored card's photo is in the blob store"
+        );
+    }
     Ok(())
 }
 

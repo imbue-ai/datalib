@@ -264,8 +264,8 @@ is only the shape: `source_id` and `key` say who describes the person;
 then `kind` (`person` or `group`), `names` (the preferred one first),
 `handles` (each a `ContactHandle`: its `medium`, the value as written,
 its `Handle` if one could be made, a label, and `stopped_working_by`),
-`photo` (the image, or a URL only a fetch could follow), `photo_url`
-(where the app serves it; see below), `org`, `title`, `note`,
+`photo` (the image in a blob store, or a URL only a fetch could
+follow), `photo_url` (where the app serves it; see below), `org`, `title`, `note`,
 `details`, `groups`, `members`, `source_url`, the record's own stamps,
 and `seen` (how much of a chat the person wrote).
 
@@ -307,20 +307,36 @@ absent. This works with no contacts app at all.
 
 ### Photos
 
-`photo` is what the source gave: the image itself (`Photo::Inline`,
-written beside the rendered page under `blobs/` and never stored as a
-row) or a URL nothing fetched (`Photo::Url`, a Slack
-avatar). `photo_url` is what a chip draws: a path on the app's own
-origin, never another host's, since the app fetches nothing remote
-unasked, and only for an image a browser draws: png, jpeg, gif or
-webp (`contact_schema::DRAWABLE_PHOTO_TYPES`, the one list, which the
-contacts app's photo rule shares). contact-common and chat-common fill
-it with
-`/applet/unified_document_index/asset/<markdown_uuid>/blobs/<file>`, which the
-index's asset route serves (`datalib_etl_render::photo`): contact-common
-for the one person its page is about, chat-common for each of a chat's
-source contacts, a file per photo named by its bytes. A photo of another
-type keeps its file beside the page and gets no URL. The contacts app fills it with
+`photo` is what the source gave: an image its blob store holds
+(`Photo::Stored`: the step whose store it is, the blake3 of the bytes
+and the type the store holds them as) or a URL nothing fetched
+(`Photo::Url`, a Slack avatar). Nothing writes a photo beside a page.
+`photo_url` is what a chip draws: a path on the app's own origin, never
+another host's, since the app fetches nothing remote unasked, and only
+for an image a browser draws: png, jpeg, gif or webp
+(`contact_schema::DRAWABLE_PHOTO_TYPES`, the one list, which the
+contacts app's photo rule shares). For a stored photo it is the photo's
+blob-store address, `/data/<group>/<function>/blob/<blake3>`, which
+`datalib-http` serves (`datalib/backend/blob_store/README.md`);
+`datalib_etl_render::photo` makes it, for contact-common's one person a
+page is about and for each of a chat's source contacts. A stored photo
+of another type is still shown on its contact's page, at the same
+address, and gets no URL.
+
+Where the bytes come from: LinkedIn's photos an earlier build fetched
+and Beeper's cached avatars are in the source's blob store already (an
+avatar counts only when the store holds it as an image). A vCard
+carries its photo inside the card, in the raw store: the contacts
+download decodes each inline `PHOTO` and puts it in the source's blob
+store before the card is stored (`contacts/src/ingest/photo.rs`), and
+the source's `--migrate` puts in the photos of every card a store
+already holds, for a store an older build filled. Render hashes the
+card's decoded photo and links it. A photo the blob store lacks leaves
+the contact with no photo and a `blob_missing` problem on its page.
+
+A render store written before photos were linked holds the retired
+`Inline` spelling in `contact_json`; it reads as no photo until the
+page renders again. The contacts app fills it with
 `/applet/datalib_contacts/photo/<contact_id>` for a photo a person put
 on their contact. With no photo, or one the browser fails to load, a
 chip linked to a contact draws the person's initial, and any other
@@ -613,8 +629,8 @@ chip in the UI is separate and always uses the latest answer.
   TNG fixture through the index: Picard known by one address from
   three sources, one number written two ways by three sources as one
   handle, WhatsApp's address book, Signal's number and ACI together, a
-  Slack mention as a chip link, two cards' photos as the URLs the index
-  serves.
+  Slack mention as a chip link, two cards' photos at their blob-store
+  addresses.
 - UI: `contacts.test.ts`, `resolver.test.ts` and
   `tests/chip_links.test.ts`; the render preview golden shows
   unresolved chips. `tests/e2e/contacts.spec.ts` runs on a root with the

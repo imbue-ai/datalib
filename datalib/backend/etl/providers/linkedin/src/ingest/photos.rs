@@ -1,5 +1,6 @@
 //! The connection photos earlier builds fetched from linkedin.com: bytes
-//! in the per-source CAS, mapped by `contact_photos` edge rows. Nothing
+//! in the per-source CAS, mapped by `contact_photos` edge rows; a page
+//! links each at its blob-store address. Nothing
 //! adds to them now, because linkedin.com shows a profile only to a
 //! signed-in visitor; they are kept, rendered, and pruned with their
 //! connections.
@@ -113,29 +114,6 @@ pub async fn load_photo_edges(db: &RawDb) -> Result<std::collections::HashMap<St
         .into_iter()
         .map(|(row_id, owner_id, blake3)| (owner_id, PhotoEdge { row_id, blake3 }))
         .collect())
-}
-
-/// What each photo weighs, by hash, from the blob store's `byte_len`.
-pub async fn photo_sizes(
-    db: &RawDb,
-    hashes: &[&str],
-) -> Result<std::collections::HashMap<String, u64>> {
-    let Some(cas) = db.cas() else {
-        return Ok(Default::default());
-    };
-    let mut out = std::collections::HashMap::new();
-    for chunk in hashes.chunks(datalib_etl::bulk::SQL_CHUNK) {
-        let rows: Vec<(String, i64)> = sqlx::query_as(
-            "SELECT blake3, byte_len FROM cas_objects
-              WHERE blake3 IN (SELECT value FROM json_each(?))",
-        )
-        .bind(serde_json::to_string(chunk)?)
-        .fetch_all(cas.pool())
-        .await
-        .context("load photo sizes")?;
-        out.extend(rows.into_iter().map(|(h, n)| (h, n.max(0) as u64)));
-    }
-    Ok(out)
 }
 
 /// Each photo's bytes and type, by hash. A store whose photos were never
