@@ -7,12 +7,12 @@
 // contact and grey where not, with the same click, double-click and
 // right-click as a chip in a document (docs/dev/chips.md § Clicks).
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import { iconUrl } from "@/config/icons";
 import { formatStamp } from "@/config/timeFormat";
 import { personSource, searchSource } from "./cardSources";
 import { isBrowserClick } from "./chatLink";
 import { uriFromEntity } from "./chipLinks";
 import ChipMenu from "./ChipMenu.ce.vue";
+import EntityChip from "./EntityChip.ce.vue";
 import {
   canLinkHandles,
   chipCell,
@@ -114,11 +114,6 @@ function sourceUri(sourceId: string): string {
 function sourceLabel(sourceId: string): string {
   void version.value;
   return entities.get(sourceUri(sourceId))?.label || sourceId;
-}
-
-function sourceIcon(sourceId: string): string | null {
-  void version.value;
-  return iconUrl(entities.get(sourceUri(sourceId))?.icon ?? null);
 }
 
 function everything() {
@@ -226,10 +221,10 @@ function onContextMenu(ev: MouseEvent) {
   };
 }
 
-async function onMenuPick(id: ChipEntryId) {
+async function onMenuPick(id: string) {
   const m = menu.value;
   menu.value = null;
-  if (m) await runChipAction(id, m.chip, chipHost(m.el, m.x, m.y));
+  if (m) await runChipAction(id as ChipEntryId, m.chip, chipHost(m.el, m.x, m.y));
 }
 
 // ── Linking a source's handles to your contact ────────────────────────
@@ -384,13 +379,12 @@ const headPhoto = computed(() => {
       :aria-label="sourceLabel(s.sourceId)"
     >
       <h2 class="person-source">
-        <img
-          v-if="sourceIcon(s.sourceId)"
-          class="person-mark"
-          :src="sourceIcon(s.sourceId)!"
-          alt=""
+        <EntityChip
+          :uri="sourceUri(s.sourceId)"
+          :shown="s.sourceId"
+          quiet
+          :open-card="(source) => props.ctx.host.openCards(source)"
         />
-        {{ sourceLabel(s.sourceId) }}
         <span v-if="s.seenHere" class="person-badge">seen here</span>
         <span v-if="s.via.length" class="person-via">
           via {{ s.via.map(handleValue).join(", ") }}
@@ -559,10 +553,6 @@ const headPhoto = computed(() => {
   font-weight: normal;
   font-size: var(--datalib-font-size-small);
   color: var(--datalib-accent);
-}
-.person-mark {
-  width: 14px;
-  height: 14px;
 }
 .person-record {
   display: flex;

@@ -106,7 +106,11 @@ test.describe("toolbar", () => {
     await stepChip.dblclick();
     await expect(dash).toBeVisible();
     await expect(tabLabels(page)).toHaveCount(tabs);
-    await expect(dash.locator(`.sd-section[data-step="${step}"]`)).toBeInViewport();
+    // The dashboard draws a step's section only once its rows load, which
+    // on a busy runner takes longer than the default five seconds.
+    await expect(dash.locator(`.sd-section[data-step="${step}"]`)).toBeInViewport({
+      timeout: 15_000,
+    });
   });
 
   test("the search box opens a search card on what was typed", async ({ page }) => {

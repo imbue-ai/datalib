@@ -10,6 +10,8 @@ import { formatRelative, formatStamp } from "@/config/timeFormat";
 import { filterToken, quoteValue } from "@/grid/query";
 import { sourceLabel, sourceOf, sourceUrl, SOURCE_REPO } from "@/components/runLogSource";
 import JsonTree from "./JsonTree.ce.vue";
+import EntityChip from "./EntityChip.ce.vue";
+import { uriFromEntity } from "./chipLinks";
 import type { CardCtx } from "./types";
 
 const { fetchLogLine } = useApi();
@@ -118,6 +120,15 @@ function narrowByField(key: string, value: unknown, exclude: boolean) {
   );
 }
 
+/// A group or step chip's menu here leads with narrowing the log to it,
+/// or leaving it out.
+function narrowing(key: "group" | "step", value: string) {
+  return [
+    { label: `Keep only this ${key}`, run: () => narrowBy(key, value, false) },
+    { label: `Exclude this ${key}`, run: () => narrowBy(key, value, true) },
+  ];
+}
+
 async function copyLine() {
   if (!line.value) return;
   copied.value = await copyToClipboard(
@@ -158,27 +169,23 @@ async function copyLine() {
         <template v-if="line.group_id">
           <dt>group</dt>
           <dd>
-            <button
-              class="ll-chip"
-              type="button"
-              title="Keep only this group"
-              @click="narrowBy('group', line.group_id!, false)"
-            >
-              {{ line.group_id }}
-            </button>
+            <EntityChip
+              :uri="uriFromEntity('group', line.group_id)"
+              :shown="line.group_id"
+              :extra="narrowing('group', line.group_id)"
+              :open-card="(source) => props.ctx.host.openCards(source)"
+            />
           </dd>
         </template>
         <template v-if="line.step">
           <dt>step</dt>
           <dd>
-            <button
-              class="ll-chip"
-              type="button"
-              title="Keep only this step"
-              @click="narrowBy('step', line.step!, false)"
-            >
-              {{ line.step }}
-            </button>
+            <EntityChip
+              :uri="uriFromEntity('step', line.step)"
+              :shown="line.step"
+              :extra="narrowing('step', line.step)"
+              :open-card="(source) => props.ctx.host.openCards(source)"
+            />
             <span v-if="line.attempt" class="ll-dim"> · attempt {{ line.attempt }}</span>
           </dd>
         </template>

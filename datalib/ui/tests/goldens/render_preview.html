@@ -905,6 +905,15 @@ code.hljs {
      line rather than shrinking until the name breaks. */
   white-space: nowrap;
   flex-shrink: 0;
+  /* Never wider than what holds it: there its name ends in "…", and the
+     tooltip has it whole. */
+  max-width: 100%;
+  min-width: 0;
+}
+.chip-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .handle-resolved,
 .handle-linkable {

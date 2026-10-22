@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Upgrade } from "@/api";
-import { upgradePill } from "@/upgrade";
+import { keepsItsName, rerenderSources, sourceRows, upgradePill } from "@/upgrade";
 
 const step = (
   step: string,
@@ -58,5 +58,41 @@ describe("upgradePill", () => {
     expect(
       upgradePill({ migrating: false, settled: true, steps: [], rerender: [] }, false),
     ).toBeNull();
+  });
+});
+
+describe("the upgrade's sources", () => {
+  /// The list named each source by its raw id; each row now carries the
+  /// group, so it is drawn as the source's chip under its configured name.
+  it("carry their group, and the search index its plain name", () => {
+    const upgrade: Upgrade = {
+      migrating: false,
+      settled: true,
+      steps: [
+        step("enterprise-mail/ingest", "done"),
+        step("enterprise-mail/render_markdown", "failed", "no datalib-step"),
+        step("unified_document_index/grid_index", "done"),
+      ],
+      rerender: [
+        "ten-forward/render_markdown",
+        "ten-forward/keyword_index",
+        "unified_document_index/grid_index",
+      ],
+    };
+    expect(sourceRows(upgrade)).toEqual([
+      {
+        group: "enterprise-mail",
+        source: "enterprise-mail",
+        state: "failed",
+        error: "no datalib-step",
+      },
+      { group: "unified_document_index", source: "Search index", state: "done", error: null },
+    ]);
+    expect(rerenderSources(upgrade)).toEqual([
+      { group: "ten-forward", source: "ten-forward" },
+      { group: "unified_document_index", source: "Search index" },
+    ]);
+    expect(keepsItsName("unified_document_index")).toBe(true);
+    expect(keepsItsName("enterprise-mail")).toBe(false);
   });
 });

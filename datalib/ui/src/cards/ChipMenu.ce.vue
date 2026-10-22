@@ -1,14 +1,14 @@
 <script setup lang="ts">
 // The right-click menu on a chip, drawn over a document or a card. It
-// shows the entries `chipMenuOf` built and reports which one was
-// picked; `runChipAction` does it. A click anywhere
+// shows the entries `chipMenuOf` built, with any the surface adds, and
+// reports which one was picked; `runChipAction` does a chip's own. A click anywhere
 // else, a second right-click or Escape closes it.
 import { computed, onMounted, onUnmounted } from "vue";
 
-import type { ChipEntry, ChipEntryId } from "./chipActions";
+import type { MenuItem } from "./chipActions";
 
-const props = defineProps<{ entries: ChipEntry[]; x: number; y: number }>();
-const emit = defineEmits<{ pick: [id: ChipEntryId]; close: [] }>();
+const props = defineProps<{ entries: MenuItem[]; x: number; y: number }>();
+const emit = defineEmits<{ pick: [id: string]; close: [] }>();
 
 const style = computed(() => ({
   left: `${Math.min(props.x, window.innerWidth - 260)}px`,

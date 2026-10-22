@@ -578,7 +578,11 @@ export function drawChip(el: HTMLElement, look: ChipLook): void {
     // gone since the render) gives way to what the chip draws without one.
     lead.addEventListener("error", () => drawChip(el, { ...look, photo: null }), { once: true });
   }
-  const text = el.ownerDocument.createTextNode(look.text);
+  // The name in an element of its own, so a chip with less room than it
+  // needs can end it in "…"; the tooltip has it whole.
+  const text = el.ownerDocument.createElement("span");
+  text.className = "chip-text";
+  text.textContent = look.text;
   if (lead) el.replaceChildren(lead, text);
   else el.replaceChildren(text);
 }

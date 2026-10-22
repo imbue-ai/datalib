@@ -74,6 +74,10 @@ export type ChipEntry = {
   danger?: boolean;
 };
 
+/** An entry of a chip's menu as `ChipMenu` draws it: a chip's own, or one
+ *  the surface adds, as the search field and the log-line card do. */
+export type MenuItem = Omit<ChipEntry, "id"> & { id: string };
+
 /** The row's entries a chip leaves out: the ones that need the config's
  *  text, which only the Sources card holds, and the ones the chip's own
  *  entries already are (its dashboard is the chip's Open; its id is the

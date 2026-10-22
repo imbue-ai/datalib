@@ -96,7 +96,11 @@ each store's step in a column.
    (`email`, `slack`), else a pipeline glyph (`step:ingest`). The lead
    is decoration: hidden from screen readers and not copied. A photo
    the browser cannot draw falls back to what the chip draws without
-   one.
+   one. The name is its own element (`.chip-text`), and a chip is
+   never wider than what holds it: with less room than it needs, its
+   name ends in "…", and the tooltip has it whole. In a wrapping row,
+   such as a message header, it still moves to a line of its own
+   before it shrinks.
 
 What goes into the look is each kind's own rule, pure and unit-tested:
 
@@ -220,7 +224,10 @@ run log draws its Group and Step columns as chips the same way
 `TableGrid` takes the option too, as the contacts app's table and the
 Sources table do: a double-click on a chip there opens its card
 (`openCard`) instead of the cell's in-place edit, and its right-click
-is still the row's menu. `tableGrid.css` keeps the grid theme's link
+is still the row's menu. A group row of an identity column draws its
+value as the chip of the group's first row, where the rows are loaded
+(`typedColumns.ts`), and the run log's Group and Step group rows draw
+theirs too ("Source: Work Slack (12)"). `tableGrid.css` keeps the grid theme's link
 colour off a chip in a cell.
 
 In the Sources table a step's Name cell is its chip, under the row's
@@ -231,14 +238,32 @@ chip's does.
 ## In a card's own template
 
 `EntityChip.ce.vue` draws a group or step chip where no grid or
-document does: the Dashboard's Sources, Needs you and Library sections,
-and the header of a group's sync dashboard (the group, and each step
-under its short name). It looks the entity up in `entities`, redraws
-when the answer moves, and takes its double-click and right-click from
-`chipActions`. The card hands it `openCard`; the sync dashboard's own
-chips scroll to their section instead of opening the card again. A
-card that uses it lists it, `ChipMenu` and `chip.css` in its
-`styleSources`.
+document does:
+
+- **Cards:** the Dashboard's Sources, Needs you, Library and Latest
+  activity sections; the header of a group's sync dashboard (the group,
+  and each step under its short name); the person card's heading for
+  each source's record; the time-series card's heading for each
+  source; the log-line card's group and step.
+- **The app's chrome:** each row of the toolbar's "what is syncing"
+  menu, the upgrade indicator's list and the re-render dialog's list.
+  The search index keeps its plain name there ("Search index").
+
+It looks the entity up in `entities`, redraws when the answer moves,
+and takes its double-click and right-click from `chipActions`. A single
+click does nothing and goes no further, so a chip inside a clickable
+row (Latest activity) is not a click on the row. The place hands it
+`openCard`; the sync dashboard's own chips scroll to their section
+instead of opening the card again, and the chrome's go through
+`surface.ts::showCard`, which shows the same card (`sameCard`) where
+one is already open. A place may add entries ahead of the chip's own
+(`extra`): the log-line card's "Keep only this group" and "Exclude
+this group" narrow the log beside it.
+
+A card that uses it lists it, `ChipMenu` and `chip.css` in its
+`styleSources`. The chrome is outside every card, so a chrome component
+puts their styles in the document (`documentStyles.ts::adoptStyles`)
+and imports `chip.css`.
 
 ## In the search field
 

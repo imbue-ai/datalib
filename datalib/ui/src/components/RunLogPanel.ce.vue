@@ -722,11 +722,17 @@ function copyCell(column: Column<RunLogLine>, line: RunLogLine): string {
 /// What a group row says: the column, its value and how many lines
 /// share it. An element rather than a string for the reason `plain`
 /// gives.
-function groupTitle(name: string) {
+function groupTitle(name: string, kind: "group" | "step" | null = null) {
   return (g: GroupingFormatterItem) => {
     const el = document.createElement("span");
     el.className = "rl-group";
-    el.textContent = `${name}: ${g.value === "" || g.value == null ? "—" : String(g.value)}`;
+    const value = g.value === "" || g.value == null ? null : String(g.value);
+    if (kind && value) {
+      const uri = uriFromEntity(kind, value);
+      el.append(`${name}: `, entityCell(uri, value, entities.lookup(uri), null));
+    } else {
+      el.textContent = `${name}: ${value ?? "—"}`;
+    }
     const count = document.createElement("span");
     count.className = "rl-group-count";
     count.textContent = ` (${g.count})`;
@@ -738,8 +744,8 @@ function groupTitle(name: string) {
 /// A column the drag-to-group bar accepts. Only a column carrying
 /// `grouping` can be dropped there, which is how Time and Fields (one of
 /// a kind per line: a group per row) stay out of it.
-function groupable(name: string, field: keyof RunLogLine) {
-  return { grouping: { getter: field, formatter: groupTitle(name), collapsed: false } };
+function groupable(name: string, field: keyof RunLogLine, kind: "group" | "step" | null = null) {
+  return { grouping: { getter: field, formatter: groupTitle(name, kind), collapsed: false } };
 }
 
 function buildColumns(): Column<RunLogLine>[] {
@@ -813,7 +819,7 @@ function columnSet(): Column<RunLogLine>[] {
       hidden: true,
       formatter: groupChip,
       sortable: true,
-      ...groupable("Group", "group_id"),
+      ...groupable("Group", "group_id", "group"),
     },
     {
       id: "step",
@@ -822,7 +828,7 @@ function columnSet(): Column<RunLogLine>[] {
       width: 140,
       formatter: stepChip,
       sortable: true,
-      ...groupable("Step", "step"),
+      ...groupable("Step", "step", "step"),
     },
     {
       id: "level",
