@@ -132,7 +132,9 @@ commit as `datalib_runtime::build_id::git_hash` finds it at run time
 
 **Disk stats** is plain SQLite, because nothing ever committed it: it
 is a timeseries — `datalib-http` walks the root every five seconds
-*while a run holds it* and appends a row per tree whose size moved, one
+*while a run holds it*, or once when asked (`POST
+/api/pipeline/storage/refresh` or `/api/manage/rows/refresh`; a GET
+never walks), and appends a row per tree whose size moved, one
 transaction per walk — so the rows *are* the history. Between runs nothing writes the root, so the series
 deliberately has no samples there, and a change made from outside
 datalib carries the instant it was next *measured*. Reading it is

@@ -7,11 +7,11 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::processor::PlanContext;
 use datalib_etl::progress::Progress;
-use datalib_etl_chat_common::render::render_all as chat_render_all;
+use datalib_etl_chat_common::render::ChatRenderer;
 use datalib_etl_chat_common::types::{AuthorKind, NormalizedChat};
+use datalib_etl_chat_common::{render_batched, ChatBlobs};
 use datalib_etl_contact_common::{render_all as contact_render_all, ContactDoc};
 use datalib_etl_facebook::ingest::schema_raw::{
     ALBUMS_TABLE, COMMENTS_TABLE, COMMENT_EDITS_TABLE, FRIENDS_TABLE, GROUPS_JOINED_TABLE,
@@ -107,6 +107,8 @@ pub struct Source<'a> {
     pub out_dir: &'a Path,
     pub name: &'a str,
     pub range: RawRange<'a>,
+    /// How many bytes of media a render loads at once.
+    pub blob_bytes: u64,
 }
 
 /// What one render pass did: every bucket it looked at, and the commit
@@ -117,7 +119,7 @@ pub struct Outcome {
     pub new_head: Option<String>,
 }
 
-/// The bundle key `render_all` looks a chat's blobs up under.
+/// The bundle key a chat's media is looked up under.
 const MEDIA_PROJECTION: &str = "SELECT DISTINCT uri AS ref_id, blake3, \
             NULL AS content_type, uri AS upstream_name \
      FROM media_blobs \
@@ -140,7 +142,8 @@ const ALL_TABLES: &[&str] = &[
     GROUPS_JOINED_TABLE,
 ];
 
-/// Everything one pass reads off the store, built while it is open.
+/// Everything one pass reads off the store, built and narrowed. Media
+/// bytes are not among it: render reads those a batch at a time.
 struct Loaded {
     owner: Owner,
     posts: Vec<NormalizedChat>,
@@ -149,8 +152,6 @@ struct Loaded {
     reactions: Vec<NormalizedChat>,
     conversations: Vec<NormalizedChat>,
     friends: Vec<ContactDoc>,
-    /// Per chat id, the media bytes its attachments reference.
-    blobs: HashMap<String, BlobBundle>,
     buckets: Buckets,
     head: String,
 }
@@ -164,140 +165,131 @@ pub fn render_source(
     if !db_path.exists() {
         return Ok(Outcome::default());
     }
-    let range = source.range;
     // One open for every table and every blob: reopening a doltlite store
     // while the last connection is still closing is what makes a later
-    // `dolt_commit` fail.
-    let loaded = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async {
-            // Read at a commit: this store belongs to the download step, and
-            // nothing committed means nothing to render from.
-            let Some(db) = RawDb::open_reader(&db_path, range.pin).await? else {
-                return Ok(None);
-            };
-            let pin = db.pin().expect("a reader is pinned at open").clone();
-            let mut tables: HashMap<&str, Vec<(String, Value)>> = HashMap::new();
-            for table in ALL_TABLES {
-                let rows =
-                    datalib_etl::doltlite_raw::load_payloads_with_id_if_present(db.pool(), table)
-                        .await
-                        .with_context(|| format!("load {table}"))?;
-                tables.insert(table, rows);
-            }
-            let changed = changed_rows(db.pool(), range, &pin, ALL_TABLES).await?;
-            let rows = |t: &str| tables.get(t).map(Vec::as_slice).unwrap_or(&[]);
-
-            let owner = Owner::from_profile(source.name, rows(PROFILE_TABLE));
-            let mut posts = build_posts(
-                &PostRows {
-                    posts: rows(POSTS_TABLE),
-                    other_posts: rows(OTHER_POSTS_TABLE),
-                    group_posts: rows(GROUP_POSTS_TABLE),
-                    edits: rows(POST_EDITS_TABLE),
-                    groups_joined: rows(GROUPS_JOINED_TABLE),
-                },
-                &owner,
-            );
-            let mut albums = build_albums(rows(ALBUMS_TABLE), &owner);
-            let mut comments = build_comments(
-                rows(COMMENTS_TABLE),
-                rows(GROUP_COMMENTS_TABLE),
-                rows(COMMENT_EDITS_TABLE),
-                &owner,
-            );
-            let mut reactions = build_reactions(rows(REACTIONS_TABLE), &owner);
-            let mut conversations = build_conversations(
-                rows(MESSENGER_THREADS_TABLE),
-                rows(MESSENGER_MESSAGES_TABLE),
-                &owner,
-            );
-            let mut friends = build_friends(rows(FRIENDS_TABLE), &owner);
-
-            let mut buckets = Buckets::new();
-            // Which post an edit is of is decided over every post and every
-            // edit, so where there are edits, a change to any of them can
-            // move a version — to another post, or to a document of its
-            // own no row of which changed — and every post renders again.
-            let edited = !rows(POST_EDITS_TABLE).is_empty()
-                || changed
-                    .as_ref()
-                    .is_some_and(|c| c.contains_key(POST_EDITS_TABLE));
-            let as_one: &[&str] = if edited {
-                &[
-                    POSTS_TABLE,
-                    OTHER_POSTS_TABLE,
-                    GROUP_POSTS_TABLE,
-                    POST_EDITS_TABLE,
-                ]
-            } else {
-                &[]
-            };
-            buckets.extend(narrow_chats(&mut posts, changed.as_ref(), range, as_one));
-            for chats in [
-                &mut albums,
-                &mut comments,
-                &mut reactions,
-                &mut conversations,
-            ] {
-                buckets.extend(narrow_chats(chats, changed.as_ref(), range, &[]));
-            }
-            buckets.extend(narrow_contacts(&mut friends, changed.as_ref(), range));
-
-            let mut blobs = HashMap::new();
-            if let Some(cas) = db.cas() {
-                let refs = posts
-                    .iter()
-                    .chain(&albums)
-                    .chain(&comments)
-                    .chain(&conversations)
-                    .map(|chat| (chat.id.clone(), attachment_refs(chat)));
-                blobs = BlobBundle::load_many(db.pool(), Some(cas), MEDIA_PROJECTION, refs)
-                    .await
-                    .context("load media")?;
-            }
-            let head = pin.commit().to_string();
-            db.close().await;
-            Ok::<_, anyhow::Error>(Some(Loaded {
-                owner,
-                posts,
-                albums,
-                comments,
-                reactions,
-                conversations,
-                friends,
-                blobs,
-                buckets,
-                head,
-            }))
-        })
-    })?;
-    let Some(loaded) = loaded else {
+    // `dolt_commit` fail. Read at a commit: this store belongs to the
+    // download step, and nothing committed means nothing to render from.
+    let Some(db) = block_on(RawDb::open_reader(&db_path, source.range.pin))? else {
         return Ok(Outcome::default());
     };
+    let rendered = block_on(load(&db, source))
+        .and_then(|loaded| render_loaded(&db, loaded, source, progress, on_doc));
+    block_on(db.close());
+    rendered
+}
 
+async fn load(db: &RawDb, source: &Source<'_>) -> Result<Loaded> {
+    let range = source.range;
+    let pin = db.pin().expect("a reader is pinned at open").clone();
+    let mut tables: HashMap<&str, Vec<(String, Value)>> = HashMap::new();
+    for table in ALL_TABLES {
+        let rows = datalib_etl::doltlite_raw::load_payloads_with_id_if_present(db.pool(), table)
+            .await
+            .with_context(|| format!("load {table}"))?;
+        tables.insert(table, rows);
+    }
+    let changed = changed_rows(db.pool(), range, &pin, ALL_TABLES).await?;
+    let rows = |t: &str| tables.get(t).map(Vec::as_slice).unwrap_or(&[]);
+
+    let owner = Owner::from_profile(source.name, rows(PROFILE_TABLE));
+    let mut posts = build_posts(
+        &PostRows {
+            posts: rows(POSTS_TABLE),
+            other_posts: rows(OTHER_POSTS_TABLE),
+            group_posts: rows(GROUP_POSTS_TABLE),
+            edits: rows(POST_EDITS_TABLE),
+            groups_joined: rows(GROUPS_JOINED_TABLE),
+        },
+        &owner,
+    );
+    let mut albums = build_albums(rows(ALBUMS_TABLE), &owner);
+    let mut comments = build_comments(
+        rows(COMMENTS_TABLE),
+        rows(GROUP_COMMENTS_TABLE),
+        rows(COMMENT_EDITS_TABLE),
+        &owner,
+    );
+    let mut reactions = build_reactions(rows(REACTIONS_TABLE), &owner);
+    let mut conversations = build_conversations(
+        rows(MESSENGER_THREADS_TABLE),
+        rows(MESSENGER_MESSAGES_TABLE),
+        &owner,
+    );
+    let mut friends = build_friends(rows(FRIENDS_TABLE), &owner);
+
+    let mut buckets = Buckets::new();
+    // Which post an edit is of is decided over every post and every
+    // edit, so where there are edits, a change to any of them can
+    // move a version — to another post, or to a document of its
+    // own no row of which changed — and every post renders again.
+    let edited = !rows(POST_EDITS_TABLE).is_empty()
+        || changed
+            .as_ref()
+            .is_some_and(|c| c.contains_key(POST_EDITS_TABLE));
+    let as_one: &[&str] = if edited {
+        &[
+            POSTS_TABLE,
+            OTHER_POSTS_TABLE,
+            GROUP_POSTS_TABLE,
+            POST_EDITS_TABLE,
+        ]
+    } else {
+        &[]
+    };
+    buckets.extend(narrow_chats(&mut posts, changed.as_ref(), range, as_one));
+    for chats in [
+        &mut albums,
+        &mut comments,
+        &mut reactions,
+        &mut conversations,
+    ] {
+        buckets.extend(narrow_chats(chats, changed.as_ref(), range, &[]));
+    }
+    buckets.extend(narrow_contacts(&mut friends, changed.as_ref(), range));
+    Ok(Loaded {
+        owner,
+        posts,
+        albums,
+        comments,
+        reactions,
+        conversations,
+        friends,
+        buckets,
+        head: pin.commit().to_string(),
+    })
+}
+
+fn render_loaded(
+    db: &RawDb,
+    loaded: Loaded,
+    source: &Source<'_>,
+    progress: &Progress,
+    on_doc: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+) -> Result<Outcome> {
     let mut outcome = Outcome {
         buckets: loaded.buckets,
         new_head: Some(loaded.head),
     };
-    let no_blobs = HashMap::new();
-    for (profile, chats, blobs) in [
-        (posts_profile(), &loaded.posts, &loaded.blobs),
-        (albums_profile(), &loaded.albums, &loaded.blobs),
-        (comments_profile(), &loaded.comments, &loaded.blobs),
-        (reactions_profile(), &loaded.reactions, &no_blobs),
-        (messenger_profile(), &loaded.conversations, &loaded.blobs),
+    let projection = |_: &NormalizedChat| MEDIA_PROJECTION;
+    let blobs = ChatBlobs::new(db.pool(), db.cas(), &projection);
+    for (profile, chats) in [
+        (posts_profile(), &loaded.posts),
+        (albums_profile(), &loaded.albums),
+        (comments_profile(), &loaded.comments),
+        (reactions_profile(), &loaded.reactions),
+        (messenger_profile(), &loaded.conversations),
     ] {
-        let s = chat_render_all(
+        let mut renderer = ChatRenderer::new(
             &profile,
-            chats,
             source.out_dir,
             source.name,
-            blobs,
+            chats.iter().map(|c| c.buckets.len()).sum(),
             progress,
-            on_doc,
-        )
-        .with_context(|| format!("render {}", profile.chat_kind))?;
-        outcome.buckets.extend(s.buckets);
+            &mut *on_doc,
+        );
+        render_batched(&mut renderer, chats, &blobs, source.blob_bytes)
+            .with_context(|| format!("render {}", profile.chat_kind))?;
+        outcome.buckets.extend(renderer.finish().buckets);
     }
     let s = contact_render_all(
         &friends_profile(&loaded.owner),
@@ -310,6 +302,10 @@ pub fn render_source(
     .context("render friends")?;
     outcome.buckets.extend(s.buckets);
     Ok(outcome)
+}
+
+fn block_on<F: std::future::Future>(f: F) -> F::Output {
+    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(f))
 }
 
 /// Keep the chats this run has to render — the driver's stale set plus
@@ -377,19 +373,6 @@ fn empty_buckets(render: Option<HashSet<String>>) -> Buckets {
         .collect()
 }
 
-fn attachment_refs(chat: &NormalizedChat) -> Vec<String> {
-    let mut refs: Vec<String> = chat
-        .buckets
-        .iter()
-        .flat_map(|b| &b.items)
-        .flat_map(|i| &i.attachments)
-        .filter_map(|a| a.ref_id.clone())
-        .collect();
-    refs.sort();
-    refs.dedup();
-    refs
-}
-
 struct FacebookRender;
 
 #[async_trait]
@@ -411,6 +394,7 @@ impl SourceRender for FacebookRender {
             out_dir: ctx.root,
             name: ctx.name,
             range: ctx.raw_range(),
+            blob_bytes: ctx.page_size.bytes,
         };
         let outcome =
             render_source(&source, ctx.progress, &mut on_doc).context("facebook render")?;
@@ -438,6 +422,7 @@ mod tests {
                 pin: None,
                 stale: None,
             },
+            blob_bytes: 1,
         };
         render_source(&source, &Progress::noop(), &mut |_| Ok(()))
     }

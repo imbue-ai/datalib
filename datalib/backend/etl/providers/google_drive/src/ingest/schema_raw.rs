@@ -19,8 +19,16 @@ pub const REVISIONS: &str = "revisions";
 pub const COMMENTS: &str = "comments";
 pub const CAPTURES: &str = "captures";
 pub const CAPTURE_PARTS: &str = "capture_parts";
+pub const REVISION_EXPORTS: &str = "revision_exports";
 
-pub const DATA_TABLES: &[&str] = &[FILES, REVISIONS, COMMENTS, CAPTURES, CAPTURE_PARTS];
+pub const DATA_TABLES: &[&str] = &[
+    FILES,
+    REVISIONS,
+    COMMENTS,
+    CAPTURES,
+    CAPTURE_PARTS,
+    REVISION_EXPORTS,
+];
 
 /// `files` — one row per file, keyed by Drive's file id: the file's
 /// listing entry (`files(*)`) as of the newest version captured.
@@ -122,6 +130,22 @@ pub struct CapturePartRow {
     pub blake3: Option<String>,
 }
 
+/// `revision_exports` — Drive's export of one listed revision in the CAS,
+/// keyed `{revision_id}#export.<ext>`, `revision_id` being the
+/// `revisions` row's id. Fetched through the revision's `exportLinks`
+/// once: a revision's content does not change, so an edge is held at no
+/// version and never asked for again. `blake3` is NULL for a revision
+/// Drive no longer has the content of (a 404); a warning on the edge
+/// says so.
+#[derive(Debug, Clone, CasEdgeRow)]
+#[cas_edge_row(table = "revision_exports")]
+pub struct RevisionExportRow {
+    pub id: String,
+    pub revision_id: String,
+    pub part: String,
+    pub blake3: Option<String>,
+}
+
 pub const PART_NATIVE: &str = "native.json.gz";
 pub const NATIVE_CONTENT_TYPE: &str = "application/gzip";
 
@@ -143,6 +167,7 @@ pub fn full_ddl() -> Vec<String> {
     out.extend(CommentRow::all_ddl());
     out.extend(CaptureRow::all_ddl());
     out.extend(CapturePartRow::all_ddl());
+    out.extend(RevisionExportRow::all_ddl());
     for table in DATA_TABLES {
         out.push(dr::bookkeeping_ddl_for(table));
     }

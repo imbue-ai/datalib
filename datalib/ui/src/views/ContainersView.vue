@@ -46,6 +46,7 @@ import {
   find,
   instantiate,
   isSolidified,
+  kept,
   makeBox,
   makeCard,
   move,
@@ -151,7 +152,7 @@ async function save(keepalive = false) {
     return;
   }
   try {
-    await putUiState(STATE_NAME, root.value, { keepalive });
+    await putUiState(STATE_NAME, kept(root.value), { keepalive });
     saveFailed = false;
   } catch (e) {
     console.warn("could not keep the layout", e);
@@ -180,6 +181,8 @@ onBeforeUnmount(() => {
 // container of their own, so what they open lands beside them as it
 // did when the URL was the whole layout. The tree, not the URL, is
 // what this layout keeps, so once opened the address goes back to "/".
+// Whoever wrote the link wrote their source, so the library does not
+// keep them until the person does (`kept`; docs/dev/cards.md).
 function routeNode(): TreeNode | null {
   const specs = decodeColumns(route.path);
   if (specs.length === 0) return null;
@@ -187,7 +190,7 @@ function routeNode(): TreeNode | null {
     ...makeCard(newCardId(), s.code, s.state),
     basis: s.size != null ? s.size * DEFAULT_COLUMN : null,
   }));
-  return makeBox(newCardId(), "columns", nodes);
+  return { ...makeBox(newCardId(), "columns", nodes), fromLink: true };
 }
 
 function openRoute() {

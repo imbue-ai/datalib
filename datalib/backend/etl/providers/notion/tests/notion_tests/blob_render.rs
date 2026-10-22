@@ -23,14 +23,28 @@ fn page(id: &str, title: &str) -> serde_json::Value {
     })
 }
 
-fn render(parsed: &ParsedNotion, root: &std::path::Path) -> Vec<String> {
+/// Renders `parsed` with `blobs` as the pages' bytes, one page a batch.
+fn render(
+    parsed: &ParsedNotion,
+    blobs: &HashMap<String, BlobBundle>,
+    root: &std::path::Path,
+) -> Vec<String> {
     let mut emitted = Vec::new();
     {
         let mut on_doc = |md: datalib_etl_render::grid_index::RenderedMarkdown| {
             emitted.push(md.markdown_uuid.clone());
             Ok(())
         };
-        render_notion(parsed, root, "notion", &Progress::noop(), &mut on_doc).unwrap();
+        render_notion(
+            parsed,
+            root,
+            "notion",
+            &Progress::noop(),
+            &mut on_doc,
+            blobs,
+            1,
+        )
+        .unwrap();
     }
     emitted
 }
@@ -63,10 +77,9 @@ fn an_archived_attachment_is_linked_in_the_blob_store() {
             .into_iter()
             .collect(),
         comments: vec![],
-        blobs_by_page: blobs,
         ..Default::default()
     };
-    render(&parsed, d.path());
+    render(&parsed, &blobs, d.path());
 
     let dir = fs::read_dir(d.path().join("notion/render_markdown/pages"))
         .unwrap()
@@ -95,10 +108,9 @@ fn an_unarchived_attachment_keeps_its_upstream_url() {
             .into_iter()
             .collect(),
         comments: vec![],
-        blobs_by_page: HashMap::new(),
         ..Default::default()
     };
-    render(&parsed, d.path());
+    render(&parsed, &HashMap::new(), d.path());
     let dir = fs::read_dir(d.path().join("notion/render_markdown/pages"))
         .unwrap()
         .next()
@@ -122,10 +134,9 @@ fn a_body_less_page_still_renders() {
         pages: vec![p],
         markdown_by_page: HashMap::new(),
         comments: vec![],
-        blobs_by_page: HashMap::new(),
         ..Default::default()
     };
-    render(&parsed, d.path());
+    render(&parsed, &HashMap::new(), d.path());
     let dir = fs::read_dir(d.path().join("notion/render_markdown/pages"))
         .unwrap()
         .next()

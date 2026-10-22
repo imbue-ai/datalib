@@ -178,6 +178,8 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
             "signal-tng",
             &progress,
             &mut on_doc_complete,
+            // One bucket's attachments a batch.
+            1,
         )?;
         assert_eq!(render_summary.docs_rendered, 1);
         assert_eq!(render_summary.messages_rendered, 4);
@@ -316,6 +318,7 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
             rendered_docs_second_pass.push(doc);
             Ok(())
         },
+        1,
     )?;
     assert_eq!(
         render_summary_2.docs_rendered, 0,

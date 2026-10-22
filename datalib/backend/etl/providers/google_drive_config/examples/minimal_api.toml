@@ -12,8 +12,8 @@ function = "ingest"
 
 [steps.params.api]
 
-# Renders no documents yet, only the storage report every source gets,
-# which is what puts the source in the grid.
+# Each Doc as one document, its comment threads folded in; Sheets and
+# Slides are kept but not rendered yet.
 [[steps]]
 group = "google_drive"
 function = "render_markdown"

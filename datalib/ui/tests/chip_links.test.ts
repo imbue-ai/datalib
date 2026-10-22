@@ -28,6 +28,7 @@ describe("handleFromUri / uriFromHandle", () => {
       ],
       ["facebook:deleted/1000000002", "datalib:handle/facebook/deleted/1000000002"],
       ["linkedin:jlpicard", "https://www.linkedin.com/in/jlpicard"],
+      ["google:name/Geordi La Forge", "datalib:handle/google/name/Geordi%20La%20Forge"],
       ["linkedin:jürgen-müller-1a2b", "https://www.linkedin.com/in/j%C3%BCrgen-m%C3%BCller-1a2b"],
     ]) {
       expect(uriFromHandle(handle)).toBe(uri);
@@ -50,6 +51,8 @@ describe("handleFromUri / uriFromHandle", () => {
     expect(handleFromUri("datalib:handle/facebook/name/%20%20")).toBeNull();
     expect(handleFromUri("datalib:handle/facebook/deleted/12a")).toBeNull();
     expect(handleFromUri("datalib:handle/facebook/other/Q")).toBeNull();
+    expect(handleFromUri("datalib:handle/google/name/%20")).toBeNull();
+    expect(handleFromUri("datalib:handle/google/other/Q")).toBeNull();
     expect(handleFromUri("http://fr.linkedin.com/in/JLPicard/?trk=x")).toBe("linkedin:jlpicard");
     expect(handleFromUri("https://www.linkedin.com/in/j%c3%bcrgen-m%c3%bcller-1a2b")).toBe(
       "linkedin:jürgen-müller-1a2b",

@@ -55,6 +55,7 @@ fn renders_tng_fixture() {
             docs.push(doc);
             Ok(())
         },
+        1,
     )
     .expect("render");
 

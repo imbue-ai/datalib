@@ -50,12 +50,13 @@ impl SourceRender for WhatsappRender {
         let mut on_doc = |md| ctx.emit_doc(md);
         let (consumed, buckets) = render_all(
             &parsed.chats,
-            &parsed.blobs_by_chat,
+            &parsed.commit,
             raw_path,
             ctx.root,
             ctx.name,
             ctx.progress,
             ctx.raw_range(),
+            ctx.page_size.bytes,
             &mut on_doc,
         )
         .context("whatsapp render_all")?;

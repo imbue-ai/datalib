@@ -26,7 +26,12 @@ account = "data@example.com"
 kinds = ["document", "spreadsheet", "presentation"]  # which kinds of file; default all three
 exports = ["odf", "pdf"]   # converted copies kept beside Google's own JSON: "odf"
                            # (.odt/.ods/.odp), "ooxml" (.docx/.xlsx/.pptx), "pdf".
-                           # Default ["odf"]; each is 1-4 MB a version, since Google embeds fonts
+                           # Default none: the JSON is the backup. Each is 1-4 MB a
+                           # version, since Google embeds fonts
+revision_exports = ["odf"] # the same, of every revision Drive lists for a Doc or a
+                           # Sheet, fetched once each: the only copy of a version from
+                           # before the first sync (a deck's links ignore the revision,
+                           # so decks get none). Default none
 owned_only = false         # true: only the files the account owns, not ones shared
                            # with it; default false
 file_ids = [               # only these files, as a bare id or a pasted docs.google.com
@@ -34,9 +39,21 @@ file_ids = [               # only these files, as a bare id or a pasted docs.goo
   "https://docs.google.com/document/d/1PicardCaptainsLogStardate41153/edit",
 ]
 
-# Renders no documents yet, only the storage report every source gets,
-# which is what puts the source in the grid. No options.
+# Each Doc as one document, its comment threads folded in; Sheets and
+# Slides are kept but not rendered yet. No options.
 [[steps]]
 group = "google_drive"
 function = "render_markdown"
 inputs = ["google_drive/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "google_drive"
+function = "keyword_index"
+inputs = ["google_drive/render_markdown"]
+
+[[steps]]
+group = "google_drive"
+function = "embed"
+inputs = ["google_drive/keyword_index"]

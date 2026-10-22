@@ -13,13 +13,13 @@ use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::branches::{reading_order, TreeNode};
 use datalib_etl_chat_common::normalize::{capitalize, iso_to_ms, json_pretty_sorted};
 use datalib_etl_chat_common::render::{
-    render_all as cc_render_all, Buckets, RenderProfile, ENTITY_KIND_CONVERSATION,
+    render_all as cc_render_all, Buckets, ChatRenderer, RenderProfile, ENTITY_KIND_CONVERSATION,
 };
 use datalib_etl_chat_common::types::{
     own_stamp_ms, AuthorKind, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
     NormalizedDoc, UpstreamRef,
 };
-use datalib_etl_chat_common::TextFormat;
+use datalib_etl_chat_common::{render_batched_at, TextFormat};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{
     escape_md_block, escape_md_inline, escape_text, md_code_block, md_code_span, md_link_dest,
@@ -30,7 +30,7 @@ use datalib_etl_render::sources::Source;
 use super::ids;
 use super::parse::{
     shred, AttachmentRow, ContentBlockRow, MessageRow, ParsedExport, ProjectRow,
-    ShreddedConversation,
+    ShreddedConversation, ATTACHMENTS_PROJECTION_SQL,
 };
 use datalib_id::Identity;
 use datalib_schema::providers::Provider;
@@ -123,6 +123,7 @@ pub fn render_all(
     options: RenderOptions,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+    blob_bytes: u64,
 ) -> Result<Buckets> {
     let elapsed_ms = parsed.scan.scan_elapsed.map(|d| d.as_millis() as u64);
     tracing::info!(
@@ -140,31 +141,42 @@ pub fn render_all(
         "[render] claude dolt_diff scan"
     );
 
-    let mut chats: Vec<NormalizedChat> = Vec::with_capacity(parsed.conversations.len());
-    let mut blobs_by_chat: HashMap<String, BlobBundle> = HashMap::new();
-    for c in &parsed.conversations {
-        let shredded = shred(c);
-        let chat = build_chat(
-            source_id,
-            &shredded,
-            &c.inputs,
-            &parsed.project_name_by_uuid,
-            parsed,
-        );
-        blobs_by_chat.insert(chat.id.clone(), c.blobs.clone());
-        chats.push(chat);
-    }
-    let mut buckets = cc_render_all(
-        &profile(),
-        &chats,
+    let chats: Vec<NormalizedChat> = parsed
+        .conversations
+        .iter()
+        .map(|c| {
+            build_chat(
+                source_id,
+                &shred(c),
+                &c.inputs,
+                &parsed.project_name_by_uuid,
+                parsed,
+            )
+        })
+        .collect();
+    let profile = profile();
+    let mut renderer = ChatRenderer::new(
+        &profile,
         root,
         source_id,
-        &blobs_by_chat,
+        chats.iter().map(|c| c.buckets.len()).sum(),
         progress,
-        on_doc_complete,
-    )
-    .context("claude chat-common render")?
-    .buckets;
+        &mut *on_doc_complete,
+    );
+    match &parsed.blobs_at {
+        Some(at) => render_batched_at(
+            at,
+            &|_: &NormalizedChat| ATTACHMENTS_PROJECTION_SQL,
+            &mut renderer,
+            &chats,
+            blob_bytes,
+        ),
+        None => chats
+            .iter()
+            .try_for_each(|chat| renderer.render_chat(chat, &BlobBundle::default())),
+    }
+    .context("claude chat-common render")?;
+    let mut buckets = renderer.finish().buckets;
 
     // Projects are a second pass with their own profile. They share the
     // page-path namespace with conversations (`render_markdown/<source>/

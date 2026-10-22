@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assetUrl, isAbsoluteOrUrl } from "../src/cards/asset_urls";
+import { assetUrl, isAbsoluteOrUrl, ownAssetReference } from "../src/cards/asset_urls";
 import { renderDocument } from "../src/cards/renderDocument";
 
 describe("isAbsoluteOrUrl", () => {
@@ -44,5 +44,24 @@ describe("an attachment's address", () => {
     expect(div.querySelector("img")?.getAttribute("src")).toBe(address);
     expect(div.querySelector("a")?.getAttribute("href")).toBe(address);
     expect(div.querySelector("audio")?.getAttribute("src")).toBe(address);
+  });
+});
+
+describe("ownAssetReference and a blob-store address", () => {
+  const hash = "ab".repeat(32);
+  it("keeps exactly an attachment's address, and nothing else under /data/", () => {
+    expect(ownAssetReference(`/data/mail/ingest/blob/${hash}`, null)).toBe(
+      `/data/mail/ingest/blob/${hash}`,
+    );
+    for (const s of [
+      `/data/mail/ingest/blob/${hash}/extra`,
+      `/data/mail/blob/${hash}`,
+      `/data/mail/ingest/blob/${hash.toUpperCase()}`,
+      "/data/../api/config",
+      `/data/%2e%2e/%2e%2e/api/blob/${hash}`,
+      "/data/mail/ingest/other/x",
+    ]) {
+      expect(ownAssetReference(s, null), s).toBeNull();
+    }
   });
 });

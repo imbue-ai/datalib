@@ -7,6 +7,10 @@
 //! - a Sheet shared with it read-only, so Drive lists no revisions;
 //! - a deck whose ODP export Google declines as too large.
 //!
+//! The Doc's revision 1 has an export link, which redirects to a signed
+//! download; its revision 29's link answers that Drive no longer has it.
+//! [`view_only_doc`] adds a fourth file, a Doc the account may only view.
+//!
 //! The listing spans two pages. [`Edition::After`] moves the Doc to a new
 //! version with a new comment, and lists the other two unchanged except
 //! for the fields Drive changes on every read.
@@ -15,7 +19,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use datalib_etl_google_drive::ingest::api;
-use datalib_etl_google_drive_config::{ExportFormat, FileKind};
+use datalib_etl_google_drive_config::{ExportFormat, Exports, FileKind, GoogleDriveApi};
 use datalib_etl_web::http::{HttpRequest, HttpResponse};
 use datalib_etl_web::synthesize::{json_response, write_fixture};
 use serde_json::{json, Value};
@@ -23,12 +27,23 @@ use serde_json::{json, Value};
 pub const DOC: &str = "1PicardLogSupplemental";
 pub const SHEET: &str = "1LaForgeDutyRoster";
 pub const DECK: &str = "1RikerBriefingDeck";
+pub const VIEW_ONLY_DOC: &str = "1TroiCounselingNotes";
 
 pub const KINDS: &[FileKind] = &[
     FileKind::Document,
     FileKind::Spreadsheet,
     FileKind::Presentation,
 ];
+
+/// The config the tape is answered under: ODF exports of each version
+/// and each old revision, which the default leaves off.
+pub fn api_with_odf() -> GoogleDriveApi {
+    GoogleDriveApi {
+        exports: Exports::Every(vec![ExportFormat::Odf]),
+        revision_exports: Exports::Every(vec![ExportFormat::Odf]),
+        ..Default::default()
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Edition {
@@ -145,6 +160,26 @@ pub const RIGEL_PNG: &[u8] = b"\x89PNG\r\n\x1a\n rigel vii";
 pub const DOC_ODT_BEFORE: &[u8] = b"PK\x03\x04 odt of the log at version 12";
 pub const DOC_ODT_AFTER: &[u8] = b"PK\x03\x04 odt of the log at version 13";
 pub const SHEET_ODS: &[u8] = b"PK\x03\x04 ods of the roster";
+pub const DECK_REV88_LINK: &str =
+    "https://docs.google.com/feeds/download/presentations/Export?id=1RikerBriefingDeck&revision=88&exportFormat=odp";
+pub const DOC_ODT_REV1: &[u8] = b"PK\x03\x04 odt of the log at revision 1";
+pub const DOC_ODT_REV41: &[u8] = b"PK\x03\x04 odt of the log at revision 41";
+
+/// A revision's export link, in the shape Drive gives it.
+pub fn doc_revision_link(revision: &str) -> String {
+    format!(
+        "https://docs.google.com/feeds/download/documents/export/Export?id={DOC}&revision={revision}&exportFormat=odt"
+    )
+}
+
+/// The link answers with a redirect to a signed download, which answers
+/// with the bytes.
+pub fn revision_export(root: &Path, link: &str, signed: &str, body: &[u8]) {
+    let mut moved = bytes(307, b"");
+    moved.headers.insert("location".into(), signed.into());
+    put(root, api::req_bytes(link), moved);
+    put(root, api::req_signed(signed), bytes(200, body));
+}
 
 pub fn doc_version(edition: Edition) -> u32 {
     match edition {
@@ -218,15 +253,37 @@ pub fn tape(dir: &Path, edition: Edition) -> PathBuf {
     let mut revisions = vec![
         json!({"kind": "drive#revision", "id": "1", "mimeType": api::kind_info(FileKind::Document).mime_type,
                "modifiedTime": "2026-09-01T08:00:00.000Z", "lastModifyingUser": picard(),
-               "exportLinks": {"application/vnd.oasis.opendocument.text":
-                   format!("https://docs.google.com/feeds/download/documents/export/Export?id={DOC}&revision=1&exportFormat=odt")}}),
+               "exportLinks": {"application/vnd.oasis.opendocument.text": doc_revision_link("1")}}),
         json!({"kind": "drive#revision", "id": "29", "mimeType": api::kind_info(FileKind::Document).mime_type,
-               "modifiedTime": "2026-10-02T09:00:00.000Z", "lastModifyingUser": picard()}),
+               "modifiedTime": "2026-10-02T09:00:00.000Z", "lastModifyingUser": picard(),
+               "exportLinks": {"application/vnd.oasis.opendocument.text": doc_revision_link("29")}}),
     ];
     if edition == Edition::After {
         revisions.push(json!({"kind": "drive#revision", "id": "41",
             "mimeType": api::kind_info(FileKind::Document).mime_type,
-            "modifiedTime": "2026-10-04T09:00:00.000Z", "lastModifyingUser": picard()}));
+            "modifiedTime": "2026-10-04T09:00:00.000Z", "lastModifyingUser": picard(),
+            "exportLinks": {"application/vnd.oasis.opendocument.text": doc_revision_link("41")}}));
+        revision_export(
+            &t,
+            &doc_revision_link("41"),
+            "https://doc-0c-docstext.googleusercontent.test/export/log-rev41",
+            DOC_ODT_REV41,
+        );
+    } else {
+        // Drive lists revision 29 but no longer has its content.
+        put(
+            &t,
+            api::req_bytes(&doc_revision_link("29")),
+            bytes(404, br#"{"error": {"code": 404, "message": "Not Found"}}"#),
+        );
+        // Revision 1's export is on the first tape only: once held it is
+        // never asked for again, so a later sync that did would miss.
+        revision_export(
+            &t,
+            &doc_revision_link("1"),
+            "https://doc-0c-docstext.googleusercontent.test/export/log-rev1",
+            DOC_ODT_REV1,
+        );
     }
     // The revision list comes over two pages, to walk the page token.
     let (first, rest) = revisions.split_at(1);
@@ -243,12 +300,12 @@ pub fn tape(dir: &Path, edition: Edition) -> PathBuf {
     );
     put(
         &t,
-        api::req_bytes(&api::native_url(FileKind::Document, DOC)),
+        api::req_bytes(&api::native_url(FileKind::Document, DOC, true)),
         json_response(&doc_native(edition)),
     );
     put(
         &t,
-        api::req_image("https://docs.google.com/docs-images-rt/enterprise-d"),
+        api::req_signed("https://docs.google.com/docs-images-rt/enterprise-d"),
         bytes(200, ENTERPRISE_PNG),
     );
     let (odt, _) = api::export_type(FileKind::Document, ExportFormat::Odf);
@@ -274,7 +331,7 @@ pub fn tape(dir: &Path, edition: Edition) -> PathBuf {
         );
         put(
             &t,
-            api::req_bytes(&api::native_url(FileKind::Spreadsheet, SHEET)),
+            api::req_bytes(&api::native_url(FileKind::Spreadsheet, SHEET, true)),
             json_response(&sheet_native()),
         );
         let (ods, _) = api::export_type(FileKind::Spreadsheet, ExportFormat::Odf);
@@ -289,8 +346,11 @@ pub fn tape(dir: &Path, edition: Edition) -> PathBuf {
             api::req_json(&api::revisions_url(DECK, None)),
             json_response(&json!({"kind": "drive#revisionList", "revisions": [
                 {"kind": "drive#revision", "id": "88", "modifiedTime": "2026-10-11T09:00:00.000Z",
-                 "lastModifyingUser": picard()}]})),
+                 "lastModifyingUser": picard(),
+                 "exportLinks": {"application/vnd.oasis.opendocument.presentation": DECK_REV88_LINK}}]})),
         );
+        // The deck's revision has a link, but nothing answers it: a
+        // deck's links ignore the revision, so none is ever asked for.
         put(
             &t,
             api::req_json(&api::comments_url(DECK, None)),
@@ -298,12 +358,12 @@ pub fn tape(dir: &Path, edition: Edition) -> PathBuf {
         );
         put(
             &t,
-            api::req_bytes(&api::native_url(FileKind::Presentation, DECK)),
+            api::req_bytes(&api::native_url(FileKind::Presentation, DECK, true)),
             json_response(&deck_native()),
         );
         put(
             &t,
-            api::req_image("https://docs.google.com/slides-images-rt/rigel-vii"),
+            api::req_signed("https://docs.google.com/slides-images-rt/rigel-vii"),
             bytes(200, RIGEL_PNG),
         );
         let (odp, _) = api::export_type(FileKind::Presentation, ExportFormat::Odf);
@@ -335,4 +395,92 @@ pub fn listing(t: &Path, first: Vec<Value>, second: Vec<Value>) {
         json_response(&json!({"kind": "drive#fileList", "incompleteSearch": false,
                               "files": second})),
     );
+}
+
+pub const VIEW_ONLY_ODT: &[u8] = b"PK\x03\x04 odt of the counseling notes";
+
+/// A Doc shared with the account to view only: Drive lists it no
+/// revisions, and the Docs API refuses its suggestions with a 403, so
+/// its native JSON answers only without `suggestionsViewMode`, in the
+/// mode Google picks for a viewer. Adds it to `t`'s first listing page.
+/// Without `may_download` its owner has turned off download, and the
+/// tape answers no export for it.
+pub fn view_only_doc(t: &Path, may_download: bool) {
+    let mut viewer = entry(VIEW_ONLY_DOC, FileKind::Document, 5, "Counseling notes", 1);
+    viewer["capabilities"] = json!({"canEdit": false, "canComment": false,
+                                    "canReadRevisions": false, "canDownload": may_download});
+    viewer["ownedByMe"] = json!(false);
+    listing(
+        t,
+        vec![
+            entry(
+                DOC,
+                FileKind::Document,
+                doc_version(Edition::Before),
+                "Captain's log, supplemental",
+                1,
+            ),
+            entry(
+                SHEET,
+                FileKind::Spreadsheet,
+                7,
+                "Engineering duty roster",
+                1,
+            ),
+            viewer,
+        ],
+        vec![entry(
+            DECK,
+            FileKind::Presentation,
+            30,
+            "Away team briefing",
+            1,
+        )],
+    );
+    put(
+        t,
+        api::req_json(&api::comments_url(VIEW_ONLY_DOC, None)),
+        json_response(&json!({"kind": "drive#commentList", "comments": []})),
+    );
+    put(
+        t,
+        api::req_bytes(&format!(
+            "{}/documents/{VIEW_ONLY_DOC}?includeTabsContent=true&suggestionsViewMode=SUGGESTIONS_INLINE",
+            api::DOCS
+        )),
+        bytes(
+            403,
+            br#"{"error": {"code": 403, "message": "You do not have permission to access the document suggestions.",
+                "status": "PERMISSION_DENIED"}}"#,
+        ),
+    );
+    put(
+        t,
+        api::req_bytes(&format!(
+            "{}/documents/{VIEW_ONLY_DOC}?includeTabsContent=true",
+            api::DOCS
+        )),
+        json_response(&view_only_native()),
+    );
+    if may_download {
+        let (odt, _) = api::export_type(FileKind::Document, ExportFormat::Odf);
+        put(
+            t,
+            api::req_bytes(&api::export_url(VIEW_ONLY_DOC, odt)),
+            bytes(200, VIEW_ONLY_ODT),
+        );
+    }
+}
+
+pub fn view_only_native() -> Value {
+    json!({
+        "documentId": VIEW_ONLY_DOC,
+        "title": "Counseling notes",
+        "revisionId": "ALm37BW-troi5",
+        "suggestionsViewMode": "PREVIEW_WITHOUT_SUGGESTIONS",
+        "tabs": [{"tabProperties": {"tabId": "t.0", "title": "Tab 1", "index": 0},
+                  "documentTab": {"body": {"content": [{"startIndex": 1, "endIndex": 22, "paragraph": {
+                      "elements": [{"startIndex": 1, "endIndex": 22, "textRun": {
+                          "content": "The crew is anxious.\n"}}]}}]}}}]
+    })
 }

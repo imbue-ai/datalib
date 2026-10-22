@@ -1,6 +1,7 @@
-//! Parse the email raw store, driven by **`dolt_diff_<table>`**.
+//! Parse the email raw store, driven by **`dolt_diff_<table>`**, a page
+//! of threads at a time.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
 use std::path::Path;
 use std::time::Duration;
@@ -9,6 +10,7 @@ use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{self, BlobBundle, CasEdgeRow};
 use datalib_etl::doltlite_raw::Reader;
 use datalib_etl_render::inputs::{Inputs, RawRange};
+use datalib_etl_render::pages::{BucketPages, KeyColumn};
 use datalib_etl_render::processor::Unparsed;
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
@@ -30,9 +32,14 @@ const EML_PROJECTION_SQL: &str = "
       FROM email_blobs
      WHERE blob_id IN ({placeholders}) AND blake3 IS NOT NULL";
 
-/// Result of the dolt_diff scan. Travels alongside the parsed bag so
-/// render can advance the cursor + log timing without a second
-/// round-trip.
+/// A page is the threads of a run of `thread_id`s: every account's
+/// emails under one id land in the same page.
+const THREAD_KEY: KeyColumn = KeyColumn {
+    table: "emails",
+    column: "thread_id",
+};
+
+/// Result of the dolt_diff scan.
 #[derive(Debug, Clone, Default)]
 pub struct ScanResult {
     /// `Some(set)` → load only threads whose `(account_id, thread_id)`
@@ -51,75 +58,103 @@ pub struct ScanResult {
     pub scan_elapsed: Option<Duration>,
 }
 
-/// How many threads' `.eml`s are read and mail-parsed together. A full
-/// render holds this many threads' bytes at once, not the mailbox's.
-pub const EML_BATCH: usize = 200;
-
-#[derive(Default)]
-pub struct ParsedEmail {
+/// The rows every thread shares, read whole up front: small next to the
+/// threads.
+#[derive(Debug, Clone, Default)]
+pub struct Shared {
     /// `(account id, payload)`. The id rides beside the payload rather
     /// than inside it: a JMAP `Account` object has no `id` field — the
     /// id is the key it sits under in the session's `accounts` map.
     pub accounts: Vec<(String, Value)>,
     pub mailboxes: Vec<Value>,
-    pub threads: Vec<Value>,
-    /// One bucket per `(account_id, thread_id)` whose thread changed
-    /// since the last render cursor. Threads whose dolt_diff entries
-    /// were empty are entirely absent.
-    pub docs: Vec<EmailThreadBucket>,
-    /// Count of threads `dolt_diff` reported as unchanged, reported
-    /// into the render summary.
-    pub docs_skipped: usize,
+}
+
+/// The raw store and its blob CAS, open for one render: what every
+/// thread shares, what the diff said, and the threads themselves read a
+/// page at a time ([`EmailStore::next_page`]) with their `.eml`s read
+/// later still, a batch at a time ([`EmailStore::load_emls`]).
+pub struct EmailStore {
+    reader: Reader,
+    cas: Option<blob_cas::BlobCas>,
+    pub shared: Shared,
     pub scan: ScanResult,
+    /// Threads this run will look at: every one on a full walk, the
+    /// narrowed set otherwise.
+    pub threads: usize,
     /// Rows whose stored payload would not read as JSON, dropped —
     /// reported by the processor rather than skipped in silence.
     pub unparsed: Vec<Unparsed>,
-    /// Where `docs`' `.eml`s are read from as they render. `None` when
-    /// the buckets already carry their bytes, as a test's do.
-    pub emls: Option<EmlStore>,
 }
 
-impl ParsedEmail {
-    pub fn close(&mut self) {
-        if let Some(emls) = self.emls.take() {
-            emls.close();
+/// One page of threads, with every email row and join they read and no
+/// `.eml` bytes yet.
+pub struct Page {
+    pub docs: Vec<EmailThreadBucket>,
+    /// On a narrowed run, the stale threads this page looked at, which
+    /// it declares empty before the ones it renders: a thread no email
+    /// belongs to any more builds nothing. Empty on a full walk, whose
+    /// threads all come from rows.
+    pub looked_at: Vec<(String, String)>,
+}
+
+impl EmailStore {
+    /// The `thread_id`s to render, a page of `page` at a time.
+    pub fn pages(&self, page: usize) -> BucketPages {
+        match &self.scan.render {
+            None => BucketPages::walk(THREAD_KEY, page),
+            Some(pairs) => BucketPages::listed(pairs.iter().map(|(_, t)| t.clone()), page),
         }
     }
-}
 
-/// The raw store and its blob CAS, held open through the render so each
-/// thread's `.eml`s are read just before it renders, a batch at a time.
-pub struct EmlStore {
-    reader: Reader,
-    cas: Option<blob_cas::BlobCas>,
-}
+    /// The next page's threads, or `None` once every page is read.
+    pub fn next_page(&self, pages: &mut BucketPages) -> Result<Option<Page>> {
+        block_on(async {
+            let pool = self.reader.pool();
+            let Some(thread_ids) = pages.next(pool).await? else {
+                return Ok(None);
+            };
+            let looked_at: Vec<(String, String)> = match &self.scan.render {
+                None => Vec::new(),
+                Some(pairs) => {
+                    let ids: HashSet<&str> = thread_ids.iter().map(String::as_str).collect();
+                    let mut v: Vec<_> = pairs
+                        .iter()
+                        .filter(|(_, t)| ids.contains(t.as_str()))
+                        .cloned()
+                        .collect();
+                    v.sort();
+                    v
+                }
+            };
+            let wanted = self.scan.render.as_ref().map(|_| &looked_at[..]);
+            let docs = load_buckets(pool, &thread_ids, wanted).await?;
+            Ok(Some(Page { docs, looked_at }))
+        })
+    }
 
-impl EmlStore {
     /// Copies of `batch` with their `.eml`s and attachment parts loaded.
-    pub fn load(&self, batch: &[&EmailThreadBucket]) -> Result<Vec<EmailThreadBucket>> {
-        block_on(self.load_async(batch))
-    }
-
-    async fn load_async(&self, batch: &[&EmailThreadBucket]) -> Result<Vec<EmailThreadBucket>> {
-        let mut docs: Vec<EmailThreadBucket> = batch.iter().map(|b| (*b).clone()).collect();
-        let refs = docs
-            .iter()
-            .enumerate()
-            .map(|(i, bucket)| (i, bucket.emails.iter().map(|em| em.blob_id.as_str())));
-        let mut blobs = BlobBundle::load_many_with_bytes(
-            self.reader.pool(),
-            self.cas.as_ref(),
-            EML_PROJECTION_SQL,
-            refs,
-        )
-        .await?;
-        for (i, bucket) in docs.iter_mut().enumerate() {
-            if let Some(b) = blobs.remove(&i) {
-                bucket.blobs = b;
-                extract_attachments_from_emls(bucket);
+    pub fn load_emls(&self, batch: &[&EmailThreadBucket]) -> Result<Vec<EmailThreadBucket>> {
+        block_on(async {
+            let mut docs: Vec<EmailThreadBucket> = batch.iter().map(|b| (*b).clone()).collect();
+            let refs = docs
+                .iter()
+                .enumerate()
+                .map(|(i, bucket)| (i, bucket.emails.iter().map(|em| em.blob_id.as_str())));
+            let mut blobs = BlobBundle::load_many_with_bytes(
+                self.reader.pool(),
+                self.cas.as_ref(),
+                EML_PROJECTION_SQL,
+                refs,
+            )
+            .await?;
+            for (i, bucket) in docs.iter_mut().enumerate() {
+                if let Some(b) = blobs.remove(&i) {
+                    bucket.blobs = b;
+                    extract_attachments_from_emls(bucket);
+                }
             }
-        }
-        Ok(docs)
+            Ok(docs)
+        })
     }
 
     pub fn close(self) {
@@ -138,7 +173,7 @@ fn block_on<F: Future>(f: F) -> F::Output {
 
 /// One rendered-markdown bucket: every email in a single JMAP Thread
 /// plus its joins. Its [`BlobBundle`] (the `.eml`s and each attachment
-/// part) is empty until [`EmlStore::load`] fills a copy.
+/// part) is empty until [`EmailStore::load_emls`] fills a copy.
 #[derive(Debug, Clone, Default)]
 pub struct EmailThreadBucket {
     pub account_id: String,
@@ -152,32 +187,39 @@ pub struct EmailThreadBucket {
     pub inputs: Inputs,
 }
 
-pub fn parse_export(input: &Path, source_id: &str) -> Result<ParsedEmail> {
-    parse(input, source_id, RawRange::cold(), false)
+impl EmailThreadBucket {
+    /// How many bytes of `.eml` loading it costs.
+    pub fn eml_bytes(&self) -> u64 {
+        self.emails
+            .iter()
+            .map(|em| em.size.unwrap_or(0).max(0) as u64)
+            .sum()
+    }
 }
 
 /// `label_filter` says whether the render step filters threads by
 /// mailbox label: then which threads render depends on the whole
-/// mailbox tree, and a mailbox change renders everything.
-pub fn parse(
+/// mailbox tree, and a mailbox change renders everything. `None` when
+/// there is no store, or nothing committed in it, to read.
+pub fn open(
     input: &Path,
     source_id: &str,
     range: RawRange<'_>,
     label_filter: bool,
-) -> Result<ParsedEmail> {
+) -> Result<Option<EmailStore>> {
     let db_path = db_path_for(input);
     if !db_path.is_file() {
-        return Ok(ParsedEmail::default());
+        return Ok(None);
     }
-    block_on(parse_async(&db_path, source_id, range, label_filter))
+    block_on(open_async(&db_path, source_id, range, label_filter))
 }
 
-async fn parse_async(
+async fn open_async(
     db_path: &Path,
     source_id: &str,
     range: RawRange<'_>,
     label_filter: bool,
-) -> Result<ParsedEmail> {
+) -> Result<Option<EmailStore>> {
     // Opened at the driver's commit, else HEAD. No commit means nothing
     // has been committed here to render: emptiness, not a reason to read
     // the working set.
@@ -185,7 +227,7 @@ async fn parse_async(
         .await
         .with_context(|| format!("open raw doltlite for render at {}", db_path.display()))?
     else {
-        return Ok(ParsedEmail::default());
+        return Ok(None);
     };
     let pool = reader.pool().clone();
     let pin = reader.pin().clone();
@@ -193,46 +235,25 @@ async fn parse_async(
     let mut unparsed: Vec<Unparsed> = Vec::new();
     let accounts = load_accounts(&pool, &mut unparsed).await?;
     let mailboxes = load_payloads(&pool, "mailboxes", &mut unparsed).await?;
-    let threads = load_payloads(&pool, "threads", &mut unparsed).await?;
-    // Every thread with at least one email — the load set on a cold
-    // start, the denominator of the skipped count otherwise, and the
-    // map from the driver's bucket keys back to thread keys.
-    let all = load_all_thread_keys(&pool).await?;
-
-    // ── Phase 1: which threads changed since the cursor? ──────────
-    let scan = scan_diff(&pool, source_id, range, &pin, label_filter, &all).await?;
-
-    let (to_load, docs_skipped) = match &scan.render {
-        None => (all, 0usize),
-        Some(changed) => {
-            let skipped = all.difference(changed).count();
-            let load: HashSet<(String, String)> = all.intersection(changed).cloned().collect();
-            (load, skipped)
-        }
-    };
-
-    // ── Phase 2: targeted load for to-render buckets ──────────────
-    // Rows only: the `.eml` bytes wait for the render, which reads them
-    // a batch at a time through the `EmlStore`.
-    let docs = if to_load.is_empty() {
-        Vec::new()
-    } else {
-        load_buckets(&pool, &to_load).await?
+    let scan = scan_diff(&pool, source_id, range, &pin, label_filter).await?;
+    let threads = match &scan.render {
+        None => thread_count(&pool).await?,
+        Some(set) => set.len(),
     };
     let cas = blob_cas::open_cas_for_render(db_path)
         .await
         .with_context(|| format!("open the blob store beside {}", db_path.display()))?;
-
-    Ok(ParsedEmail {
-        accounts,
-        mailboxes,
-        threads,
-        docs,
-        docs_skipped,
+    Ok(Some(EmailStore {
+        reader,
+        cas,
+        shared: Shared {
+            accounts,
+            mailboxes,
+        },
         scan,
+        threads,
         unparsed,
-        emls: Some(EmlStore { reader, cas }),
-    })
+    }))
 }
 
 /// Mail-parse each `.eml` already loaded into the bucket's
@@ -337,7 +358,6 @@ async fn scan_diff(
     range: RawRange<'_>,
     pin: &datalib_etl::pin::Pin,
     label_filter: bool,
-    all: &HashSet<(String, String)>,
 ) -> Result<ScanResult> {
     let scan = datalib_etl::doltlite_raw::scan_buckets(
         pool,
@@ -377,11 +397,11 @@ async fn scan_diff(
     )
     .await?;
     // The driver names buckets by the thread uuid; the load wants the
-    // `(account, thread)` pair.
-    let by_uuid: HashMap<String, String> = all
-        .iter()
-        .map(|(a, t)| (super::ids::thread(source_id, a, t).uuid, format!("{a}|{t}")))
-        .collect();
+    // `(account, thread)` pair. Only a run that narrows maps them.
+    let by_uuid: HashMap<String, String> = match (range.stale, &scan.render) {
+        (Some(stale), Some(_)) => pairs_named(pool, source_id, stale).await?,
+        _ => HashMap::new(),
+    };
     let narrowed = range.narrow_by(scan.render.as_ref(), |key| by_uuid.get(key).cloned());
     let split = |set: HashSet<String>| {
         set.into_iter()
@@ -399,20 +419,36 @@ async fn scan_diff(
     })
 }
 
-async fn load_all_thread_keys(pool: &SqlitePool) -> Result<HashSet<(String, String)>> {
-    let rows = sqlx::query("SELECT DISTINCT account_id, thread_id FROM emails")
-        .fetch_all(pool)
-        .await
-        .context("load all (account_id, thread_id) pairs")?;
-    let mut out: HashSet<(String, String)> = HashSet::with_capacity(rows.len());
-    for r in &rows {
-        let a: String = r.try_get("account_id").unwrap_or_default();
-        let t: String = r.try_get("thread_id").unwrap_or_default();
-        if !a.is_empty() && !t.is_empty() {
-            out.insert((a, t));
-        }
-    }
-    Ok(out)
+/// The `account|thread` key of each thread whose uuid is in `uuids`.
+async fn pairs_named(
+    pool: &SqlitePool,
+    source_id: &str,
+    uuids: &HashSet<String>,
+) -> Result<HashMap<String, String>> {
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT DISTINCT account_id, thread_id FROM emails")
+            .fetch_all(pool)
+            .await
+            .context("load all (account_id, thread_id) pairs")?;
+    Ok(rows
+        .into_iter()
+        .filter(|(a, t)| !a.is_empty() && !t.is_empty())
+        .filter_map(|(a, t)| {
+            let uuid = super::ids::thread(source_id, &a, &t).uuid;
+            uuids.contains(&uuid).then(|| (uuid, format!("{a}|{t}")))
+        })
+        .collect())
+}
+
+async fn thread_count(pool: &SqlitePool) -> Result<usize> {
+    let n: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM (SELECT DISTINCT account_id, thread_id FROM emails
+                                WHERE account_id != '' AND thread_id != '')",
+    )
+    .fetch_one(pool)
+    .await
+    .context("count threads")?;
+    Ok(n as usize)
 }
 
 async fn load_accounts(
@@ -446,7 +482,7 @@ async fn load_payloads(
     let pinned = table;
     let sql =
         format!("SELECT id, json(payload) AS payload FROM {pinned} WHERE payload IS NOT NULL");
-    // Audited: `table` is a literal at both callsites.
+    // Audited: `table` is a literal at every callsite.
     let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .fetch_all(pool)
         .await
@@ -463,29 +499,25 @@ async fn load_payloads(
     Ok(out)
 }
 
+/// The threads under `thread_ids`, with their emails and joins: every
+/// `(account, thread)` the rows hold, or on a narrowed run only the
+/// `wanted` ones — each of which comes back, emails or none.
 async fn load_buckets(
     pool: &SqlitePool,
-    to_load: &HashSet<(String, String)>,
+    thread_ids: &[String],
+    wanted: Option<&[(String, String)]>,
 ) -> Result<Vec<EmailThreadBucket>> {
-    if to_load.is_empty() {
-        return Ok(Vec::new());
+    let mut by_key: BTreeMap<(String, String), EmailThreadBucket> = BTreeMap::new();
+    let new_bucket = |account_id: &str, thread_id: &str| EmailThreadBucket {
+        account_id: account_id.to_string(),
+        thread_id: thread_id.to_string(),
+        ..Default::default()
+    };
+    for (a, t) in wanted.into_iter().flatten() {
+        by_key.insert((a.clone(), t.clone()), new_bucket(a, t));
     }
-    let mut bucket_idx: HashMap<(String, String), usize> = HashMap::new();
-    let mut docs: Vec<EmailThreadBucket> = Vec::with_capacity(to_load.len());
-    let mut wanted_thread_ids: HashSet<String> = HashSet::with_capacity(to_load.len());
-    let mut sorted: Vec<&(String, String)> = to_load.iter().collect();
-    sorted.sort();
-    for (account_id, thread_id) in sorted {
-        bucket_idx.insert((account_id.clone(), thread_id.clone()), docs.len());
-        wanted_thread_ids.insert(thread_id.clone());
-        docs.push(EmailThreadBucket {
-            account_id: account_id.clone(),
-            thread_id: thread_id.clone(),
-            emails: Vec::new(),
-            joins: EmailJoins::default(),
-            blobs: BlobBundle::default(),
-            inputs: Inputs::default(),
-        });
+    if thread_ids.is_empty() {
+        return Ok(by_key.into_values().collect());
     }
 
     let erows = sqlx::query(
@@ -495,25 +527,34 @@ async fn load_buckets(
           WHERE thread_id IN (SELECT value FROM json_each(?))
           ORDER BY thread_id, received_at, id",
     )
-    .bind(serde_json::to_string(&wanted_thread_ids)?)
+    .bind(serde_json::to_string(thread_ids)?)
     .fetch_all(pool)
     .await
     .context("phase 2 emails select")?;
-    let mut email_ids_in_buckets: HashSet<String> = HashSet::with_capacity(erows.len());
+    let mut email_to_bucket: HashMap<String, (String, String)> =
+        HashMap::with_capacity(erows.len());
     for r in &erows {
         let id: String = r.try_get("id").unwrap_or_default();
         let account_id: String = r.try_get("account_id").unwrap_or_default();
         let thread_id: String = r.try_get("thread_id").unwrap_or_default();
-        let Some(&idx) = bucket_idx.get(&(account_id.clone(), thread_id.clone())) else {
+        if account_id.is_empty() || thread_id.is_empty() {
             continue;
+        }
+        let key = (account_id.clone(), thread_id.clone());
+        let bucket = match by_key.get_mut(&key) {
+            Some(bucket) => bucket,
+            None if wanted.is_none() => by_key
+                .entry(key.clone())
+                .or_insert_with(|| new_bucket(&account_id, &thread_id)),
+            None => continue,
         };
-        email_ids_in_buckets.insert(id.clone());
+        email_to_bucket.insert(id.clone(), key);
         let blob_id: String = r.try_get("blob_id").unwrap_or_default();
-        docs[idx].inputs.read("emails", &id);
-        docs[idx]
+        bucket.inputs.read("emails", &id);
+        bucket
             .inputs
             .read("email_blobs", &EmlBlobRow::pk_recipe(&id, &blob_id));
-        docs[idx].emails.push(LoadedEmail {
+        bucket.emails.push(LoadedEmail {
             id,
             account_id,
             thread_id,
@@ -541,19 +582,12 @@ async fn load_buckets(
                 != 0,
         });
     }
+    drop(erows);
 
-    if email_ids_in_buckets.is_empty() {
-        return Ok(docs);
+    if email_to_bucket.is_empty() {
+        return Ok(by_key.into_values().collect());
     }
-
-    let mut email_to_bucket: HashMap<String, usize> = HashMap::new();
-    for (idx, bucket) in docs.iter().enumerate() {
-        for em in &bucket.emails {
-            email_to_bucket.insert(em.id.clone(), idx);
-        }
-    }
-
-    let email_ids = serde_json::to_string(&email_ids_in_buckets)?;
+    let email_ids = serde_json::to_string(&email_to_bucket.keys().collect::<Vec<_>>())?;
 
     let mailbox_rows = sqlx::query(
         "SELECT id, email_id, mailbox_id FROM email_mailboxes
@@ -566,14 +600,14 @@ async fn load_buckets(
     for r in mailbox_rows {
         let e: String = r.try_get("email_id").unwrap_or_default();
         let m: String = r.try_get("mailbox_id").unwrap_or_default();
-        let Some(&idx) = email_to_bucket.get(&e) else {
+        let Some(bucket) = email_to_bucket.get(&e).and_then(|k| by_key.get_mut(k)) else {
             continue;
         };
-        docs[idx].inputs.read(
+        bucket.inputs.read(
             "email_mailboxes",
             &r.try_get::<String, _>("id").unwrap_or_default(),
         );
-        docs[idx].joins.mailboxes.entry(e).or_default().push(m);
+        bucket.joins.mailboxes.entry(e).or_default().push(m);
     }
 
     let keyword_rows = sqlx::query(
@@ -587,14 +621,14 @@ async fn load_buckets(
     for r in keyword_rows {
         let e: String = r.try_get("email_id").unwrap_or_default();
         let k: String = r.try_get("keyword").unwrap_or_default();
-        let Some(&idx) = email_to_bucket.get(&e) else {
+        let Some(bucket) = email_to_bucket.get(&e).and_then(|k| by_key.get_mut(k)) else {
             continue;
         };
-        docs[idx].inputs.read(
+        bucket.inputs.read(
             "email_keywords",
             &r.try_get::<String, _>("id").unwrap_or_default(),
         );
-        docs[idx].joins.keywords.entry(e).or_default().push(k);
+        bucket.joins.keywords.entry(e).or_default().push(k);
     }
 
     // Attachments are extracted later by mail-parsing each loaded
@@ -602,7 +636,7 @@ async fn load_buckets(
     // `email_attachments` table to query after the eml-as-canonical
     // port.
 
-    Ok(docs)
+    Ok(by_key.into_values().collect())
 }
 
 #[cfg(test)]
@@ -653,11 +687,9 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let to_load: HashSet<(String, String)> = (1..=n)
-            .map(|i| ("acct".to_string(), format!("t{i}")))
-            .collect();
+        let thread_ids: Vec<String> = (1..=n).map(|i| format!("t{i}")).collect();
 
-        let docs = load_buckets(&pool, &to_load).await.unwrap();
+        let docs = load_buckets(&pool, &thread_ids, None).await.unwrap();
 
         assert_eq!(docs.len(), n);
         let last = docs
@@ -672,5 +704,49 @@ mod tests {
         );
         assert_eq!(last.joins.mailboxes[&email[0].id], vec!["inbox"]);
         assert_eq!(last.joins.keywords[&email[0].id], vec!["$seen"]);
+    }
+
+    /// A narrowed page returns each wanted thread, one with no email
+    /// left included, and nothing else under the same ids.
+    #[tokio::test]
+    async fn a_narrowed_page_returns_exactly_the_wanted_threads() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
+            .connect_with(SqliteConnectOptions::from_str("sqlite::memory:").unwrap())
+            .await
+            .unwrap();
+        for sql in [
+            EmailRow::all_ddl(),
+            EmailMailboxRow::all_ddl(),
+            EmailKeywordRow::all_ddl(),
+        ]
+        .concat()
+        {
+            sqlx::query(sqlx::AssertSqlSafe(sql))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query(
+            "INSERT INTO emails (id, account_id, thread_id, blob_id)
+             VALUES ('e1', 'a1', 't1', 'b1'), ('e2', 'a2', 't1', 'b2')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let wanted = [
+            ("a1".to_string(), "t1".to_string()),
+            ("a1".to_string(), "t2".to_string()),
+        ];
+        let docs = load_buckets(&pool, &["t1".into(), "t2".into()], Some(&wanted))
+            .await
+            .unwrap();
+        let got: Vec<(&str, &str, usize)> = docs
+            .iter()
+            .map(|d| (d.account_id.as_str(), d.thread_id.as_str(), d.emails.len()))
+            .collect();
+        assert_eq!(got, vec![("a1", "t1", 1), ("a1", "t2", 0)]);
     }
 }

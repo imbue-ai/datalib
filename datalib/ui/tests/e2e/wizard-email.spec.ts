@@ -397,7 +397,7 @@ test("an existing source reopens on the form that wrote it", async ({ page }) =>
   await wizard(page).getByRole("button", { name: "Add source" }).click();
   await expect(page.getByText("Added Personal mail.")).toBeVisible();
 
-  // Not "Email (mbox or other server)": the ingest step's own params say
+  // Not "Email (mbox or JMAP)": the ingest step's own params say
   // which variant it is, and a preset with no field — on either step —
   // must still count as modeled, or Edit would be disabled on the
   // wizard's own output.

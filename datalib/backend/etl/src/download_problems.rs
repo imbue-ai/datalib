@@ -347,7 +347,7 @@ pub(crate) fn record_rows(problems: &[RecordProblem]) -> Vec<Row> {
             (
                 p.key(),
                 Outcome::Dropped,
-                Problem::record(Reason::FetchFailed, &p.detail).severity(Severity::Error),
+                Problem::explained(Reason::FetchFailed, None, &p.detail).severity(Severity::Error),
             )
         })
         .collect()

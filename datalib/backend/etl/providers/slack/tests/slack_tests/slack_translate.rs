@@ -5,8 +5,7 @@
 
 use std::path::PathBuf;
 
-use datalib_etl_render::inputs::RawRange;
-use datalib_etl_slack_render::render::{parse, ts_to_iso, ts_to_ms};
+use datalib_etl_slack_render::render::{parse_raw_json_dir, ts_to_iso, ts_to_ms};
 
 fn fixture_root() -> PathBuf {
     if let Ok(d) = std::env::var("SLACK_FIXTURE_DIR") {
@@ -43,15 +42,18 @@ fn unparseable_ts_yields_none_not_the_epoch() {
 
 #[test]
 fn translate_tng_fixture_produces_expected_lookups() {
-    let t = parse(&fixture_root(), "slack_api", RawRange::cold()).expect("parse");
-    let ws = t.workspace.as_ref().expect("workspace");
+    let t = parse_raw_json_dir(&fixture_root()).expect("parse");
+    let ws = t.shared.workspace.as_ref().expect("workspace");
     assert_eq!(ws.team_id, "T_NCC1701D");
     assert_eq!(ws.self_user_id.as_deref(), Some("U_PICARD"));
 
-    assert!(t.users.contains_key("U_PICARD"));
-    assert!(t.users.contains_key("U_DATA"));
+    assert!(t.shared.users.contains_key("U_PICARD"));
+    assert!(t.shared.users.contains_key("U_DATA"));
     assert_eq!(
-        t.channels.get("C_BRIDGE").and_then(|c| c.name.as_deref()),
+        t.shared
+            .channels
+            .get("C_BRIDGE")
+            .and_then(|c| c.name.as_deref()),
         Some("bridge")
     );
 

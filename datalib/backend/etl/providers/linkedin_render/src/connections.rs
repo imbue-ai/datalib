@@ -4,14 +4,16 @@
 use anyhow::{Context, Result};
 use datalib_contact_schema::{ContactHandle, ContactKind, Detail, NormalizedContact, Photo};
 use datalib_etl::progress::Progress;
-use datalib_etl_contact_common::{render_all as cc_render_all, ContactDoc, ContactRenderProfile};
+use datalib_etl_contact_common::{render_into, ContactDoc, ContactRenderProfile, RenderSummary};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{changed_rows, Input, Inputs};
+use datalib_etl_render::pages::batches;
 use datalib_handle::Handle;
 use serde_json::Value;
+use std::collections::HashMap;
 
 use crate::ids;
-use datalib_etl_linkedin::ingest::photos::load_photo_blobs;
+use datalib_etl_linkedin::ingest::photos::{load_photo_bytes, load_photo_edges, photo_sizes};
 use datalib_etl_linkedin::ingest::{db_path_for, RawDb};
 
 use crate::processor::{FeedOutcome, Source};
@@ -27,72 +29,82 @@ pub fn render_connections(
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<FeedOutcome> {
-    let Source {
-        raw_dir,
-        out_dir,
-        name: source_id,
-        account,
-        owner: _,
-        account_inputs,
-        range,
-    } = *source;
-    let db_path = db_path_for(raw_dir);
+    let db_path = db_path_for(source.raw_dir);
     if !db_path.exists() {
         return Ok(FeedOutcome::default());
     }
-    let Some((rows, photos, changed, new_head)) = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async {
-            // Read at a commit: this store belongs to the download step, and
-            // nothing committed means nothing to render from.
-            let Some(db) = RawDb::open_reader(&db_path, range.pin).await? else {
-                return Ok(None);
-            };
-            let pin = db.pin().expect("a reader is pinned at open").clone();
-            let rows = datalib_etl::doltlite_raw::load_payloads_with_id_if_present(
-                db.pool(),
-                "connections",
-            )
-            .await
-            .context("load connections")?;
-            // Photos, if any were fetched, keyed by the connection's URL.
-            let photos = load_photo_blobs(&db).await?;
-            let changed =
-                changed_rows(db.pool(), range, &pin, &["connections", "contact_photos"]).await?;
-            // Closed, not dropped: the next open of this store is a
-            // second connection until this one is actually gone.
-            db.close().await;
-            Ok::<_, anyhow::Error>(Some((rows, photos, changed, pin.commit().to_string())))
-        })
-    })?
-    else {
+    // Read at a commit: this store belongs to the download step, and
+    // nothing committed means nothing to render from.
+    let Some(db) = block_on(RawDb::open_reader(&db_path, source.range.pin))? else {
         return Ok(FeedOutcome::default());
     };
+    let rendered = render_open(&db, source, progress, on_doc_complete);
+    // Closed, not dropped: the next open of this store is a second
+    // connection until this one is actually gone.
+    block_on(db.close());
+    rendered
+}
 
-    let mut contacts: Vec<ContactDoc> = rows
-        .iter()
-        .map(|(row_id, p)| {
-            let mut c = to_contact(source_id, p);
-            let inputs = Inputs::default();
-            inputs.read("connections", row_id);
-            for input in account_inputs {
-                inputs.read(&input.table, &input.id);
-            }
-            if let Some(photo) = photos.get(row_id) {
-                inputs.read("contact_photos", &photo.row_id);
-                c.contact.photo = Some(Photo::Inline {
-                    bytes: photo.bytes.clone(),
-                    content_type: photo
-                        .content_type
-                        .clone()
-                        .unwrap_or_else(|| "application/octet-stream".to_string()),
-                });
-            }
-            c.inputs = inputs.declared();
-            c
-        })
-        .collect();
+fn render_open(
+    db: &RawDb,
+    source: &Source<'_>,
+    progress: &Progress,
+    on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+) -> Result<FeedOutcome> {
+    let Source {
+        out_dir,
+        name: source_id,
+        account,
+        account_inputs,
+        range,
+        blob_bytes,
+        ..
+    } = *source;
+    let pin = db.pin().expect("a reader is pinned at open").clone();
+    let (rows, edges, changed) = block_on(async {
+        let rows =
+            datalib_etl::doltlite_raw::load_payloads_with_id_if_present(db.pool(), "connections")
+                .await
+                .context("load connections")?;
+        // Photos, if any were fetched, keyed by the connection's URL; their
+        // bytes are read a batch at a time as the contacts render.
+        let edges = load_photo_edges(db).await?;
+        let changed =
+            changed_rows(db.pool(), range, &pin, &["connections", "contact_photos"]).await?;
+        anyhow::Ok((rows, edges, changed))
+    })?;
 
-    let mut outcome = narrow_docs(&mut contacts, contact_key, changed, range, new_head);
+    // Each contact, and the hash of its photo's bytes when it has one.
+    let (mut contacts, photo_of): (Vec<ContactDoc>, HashMap<String, String>) = {
+        let mut photo_of = HashMap::new();
+        let contacts = rows
+            .iter()
+            .map(|(row_id, p)| {
+                let mut c = to_contact(source_id, p);
+                let inputs = Inputs::default();
+                inputs.read("connections", row_id);
+                for input in account_inputs {
+                    inputs.read(&input.table, &input.id);
+                }
+                if let Some(edge) = edges.get(row_id) {
+                    inputs.read("contact_photos", &edge.row_id);
+                    photo_of.insert(c.doc_uuid.clone(), edge.blake3.clone());
+                }
+                c.inputs = inputs.declared();
+                c
+            })
+            .collect();
+        (contacts, photo_of)
+    };
+    drop(rows);
+
+    let mut outcome = narrow_docs(
+        &mut contacts,
+        contact_key,
+        changed,
+        range,
+        pin.commit().to_string(),
+    );
     let profile = ContactRenderProfile {
         provider: Provider::Linkedin,
         source_label: "LinkedIn".to_string(),
@@ -101,16 +113,67 @@ pub fn render_connections(
         account: account.map(str::to_string),
         render_version: RENDER_VERSION,
     };
-    let s = cc_render_all(
-        &profile,
-        &contacts,
-        out_dir,
-        source_id,
-        progress,
-        on_doc_complete,
-    )?;
-    outcome.buckets.extend(s.buckets);
+    let mut summary = RenderSummary {
+        contacts_total: contacts.len(),
+        ..Default::default()
+    };
+    progress.set_length(Some(contacts.len() as u64));
+    let photo_hashes: Vec<&str> = contacts
+        .iter()
+        .filter_map(|c| photo_of.get(&c.doc_uuid).map(String::as_str))
+        .collect();
+    let sizes = block_on(photo_sizes(db, &photo_hashes))?;
+    let weights: Vec<u64> = contacts
+        .iter()
+        .map(|c| {
+            photo_of
+                .get(&c.doc_uuid)
+                .and_then(|h| sizes.get(h))
+                .copied()
+                .unwrap_or(0)
+        })
+        .collect();
+    for range in batches(&weights, blob_bytes) {
+        let batch = &mut contacts[range];
+        let hashes: Vec<&str> = batch
+            .iter()
+            .filter_map(|c| photo_of.get(&c.doc_uuid).map(String::as_str))
+            .collect();
+        let mut photos = block_on(load_photo_bytes(db, &hashes))?;
+        for c in batch.iter_mut() {
+            let Some(hash) = photo_of.get(&c.doc_uuid) else {
+                continue;
+            };
+            let Some((bytes, content_type)) = photos.get(hash) else {
+                continue;
+            };
+            c.contact.photo = Some(Photo::Inline {
+                bytes: bytes.clone(),
+                content_type: content_type
+                    .clone()
+                    .unwrap_or_else(|| "application/octet-stream".to_string()),
+            });
+        }
+        photos.clear();
+        render_into(
+            &mut summary,
+            &profile,
+            batch,
+            out_dir,
+            source_id,
+            progress,
+            on_doc_complete,
+        )?;
+        for c in batch.iter_mut() {
+            c.contact.photo = None;
+        }
+    }
+    outcome.buckets.extend(summary.buckets);
     Ok(outcome)
+}
+
+fn block_on<F: std::future::Future>(f: F) -> F::Output {
+    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(f))
 }
 
 fn contact_key(c: &ContactDoc) -> (&str, &[Input]) {
@@ -208,6 +271,7 @@ mod tests {
                 pin: None,
                 stale: None,
             },
+            blob_bytes: 1,
         };
         render_connections(&source, &Progress::noop(), &mut |_| Ok(()))
     }

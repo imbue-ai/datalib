@@ -12,7 +12,7 @@ use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
 use datalib_etl_email::ingest::db::{EmailJoins, LoadedAttachment, LoadedEmail};
 use datalib_etl_email_render::render::ids;
-use datalib_etl_email_render::render::parse::{EmailThreadBucket, ParsedEmail, ScanResult};
+use datalib_etl_email_render::render::parse::{EmailThreadBucket, Shared};
 use datalib_etl_email_render::render::render::{render_all, OutlinkFormat};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use serde_json::json;
@@ -37,20 +37,26 @@ fn insert_eml(bundle: &mut BlobBundle, ref_id: &str, body: &[u8]) {
 }
 
 /// Account `A1` (thad@example.com) with one Inbox, holding one thread.
+/// What a render is handed: the shared rows and one page of threads.
+struct ParsedEmail {
+    shared: Shared,
+    docs: Vec<EmailThreadBucket>,
+}
+
 fn one_thread(
     thread_id: &str,
     emails: Vec<LoadedEmail>,
     joins: EmailJoins,
     blobs: BlobBundle,
 ) -> ParsedEmail {
-    let email_ids: Vec<&str> = emails.iter().map(|e| e.id.as_str()).collect();
     ParsedEmail {
-        accounts: vec![(
-            "A1".into(),
-            json!({"name": "thad@example.com", "isPersonal": true}),
-        )],
-        mailboxes: vec![json!({"id": "M-inbox", "name": "Inbox", "role": "inbox"})],
-        threads: vec![json!({"id": thread_id, "emailIds": email_ids})],
+        shared: Shared {
+            accounts: vec![(
+                "A1".into(),
+                json!({"name": "thad@example.com", "isPersonal": true}),
+            )],
+            mailboxes: vec![json!({"id": "M-inbox", "name": "Inbox", "role": "inbox"})],
+        },
         docs: vec![EmailThreadBucket {
             account_id: "A1".into(),
             thread_id: thread_id.into(),
@@ -59,15 +65,6 @@ fn one_thread(
             blobs,
             inputs: Default::default(),
         }],
-        docs_skipped: 0,
-        scan: ScanResult {
-            render: None,
-            gone: Vec::new(),
-            new_head: None,
-            scan_elapsed: None,
-        },
-        unparsed: Vec::new(),
-        emls: None,
     }
 }
 
@@ -81,7 +78,8 @@ fn render(
     let tmp = tempfile::tempdir().unwrap();
     let mut docs = Vec::new();
     render_all(
-        parsed,
+        &parsed.shared,
+        &parsed.docs,
         tmp.path(),
         source,
         Some(outlink),

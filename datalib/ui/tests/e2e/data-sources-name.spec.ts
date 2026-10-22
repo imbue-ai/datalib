@@ -60,7 +60,7 @@ const stepMark = (page: Page, id: string) => nameCell(page, id).locator('.tg-mar
 
 async function pickClaude(page: Page) {
   await page.getByRole("button", { name: "Add source" }).click();
-  // By blurb: "Claude" alone also matches the "Claude export" tile.
+  // By blurb: "Claude" alone also matches the "Claude (export)" tile.
   await wizard(page).locator(".wiz-tile", { hasText: "Copy your claude.ai conversations" }).click();
 }
 
@@ -414,14 +414,11 @@ test("a provider with render options writes them on the render step, from the on
   expect(text.match(/id = "signal-work"/g)).toHaveLength(1);
 });
 
-test("a hand-written render step under a download-only type is called out, then removed", async ({
-  page,
-}) => {
-  // Lightroom renders nothing, so the form writes one step. A render
-  // step someone wrote by hand under it cannot be kept — the provider
-  // has no render side — and the dialog says so before Save, the way
-  // it does for a missing step. (Unwiring it from the fan-ins is
-  // covered by the unit tests; this root's config declares none.)
+test("a download-only source gets its render step, and no Rendering section", async ({ page }) => {
+  // Lightroom renders no documents, but its render step is what carries
+  // the storage report and the download's problems into the index, so
+  // the form writes it without asking — and offers none of the render
+  // or search choices.
   const editor = page.locator(".m2-editor");
   await page.getByRole("button", { name: "Add source" }).click();
   await wizard(page).locator(".wiz-tile", { hasText: "Copy a Lightroom Classic catalog" }).click();
@@ -432,27 +429,12 @@ test("a hand-written render step under a download-only type is called out, then 
   await wizard(page).getByRole("button", { name: "Add source" }).click();
   await expect(page.getByText("Added Photos.")).toBeVisible();
 
-  await expect(editor).toHaveValue(/group = "photos"/);
+  await expect(editor).toHaveValue(/group = "photos"\nfunction = "render_markdown"/);
   const text = await editor.inputValue();
   expect(text).toContain('group = "photos"\nfunction = "ingest"');
-  expect(text).not.toContain('group = "photos"\nfunction = "render_markdown"');
-  await editor.fill(
-    `${text.trimEnd()}\n\n[[steps]]\ngroup = "photos"\nfunction = "render_markdown"\ninputs = ["photos/ingest"]\n`,
-  );
-  await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.getByText("Saved the config.")).toBeVisible();
+  expect(text).not.toContain('group = "photos"\nfunction = "keyword_index"');
   await expandGroup(page, "photos");
   await expect(row(page, "photos/render_markdown")).toBeVisible();
-
-  await pickRowMenu(page, groupRow(page, "photos"), "Edit settings…", wizard(page));
-  await expect(wizard(page)).toContainText("Lightroom renders nothing. Saving removes it");
-  await wizard(page).getByRole("button", { name: "Save changes" }).click();
-  await expect(page.getByText("Saved Photos.")).toBeVisible();
-  await expect(
-    page.locator('.tg-grid .slick-row:not([data-pinned])[data-key="photos/render_markdown"]'),
-  ).toHaveCount(0);
-  await expect(editor).not.toHaveValue(/group = "photos"\nfunction = "render_markdown"/);
-  await expect(editor).toHaveValue(/group = "photos"\nfunction = "ingest"/);
 });
 
 test("deleting a fetch step takes its render step with it", async ({ page }) => {

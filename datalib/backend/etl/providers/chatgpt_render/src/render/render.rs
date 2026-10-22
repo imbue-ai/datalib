@@ -10,13 +10,13 @@ use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::branches::{reading_order, TreeNode};
 use datalib_etl_chat_common::normalize::{capitalize, iso_to_ms};
 use datalib_etl_chat_common::render::{
-    render_all as cc_render_all, Buckets, RenderProfile, ENTITY_KIND_CONVERSATION,
+    Buckets, ChatRenderer, RenderProfile, ENTITY_KIND_CONVERSATION,
 };
 use datalib_etl_chat_common::types::{
     own_stamp_ms, AuthorKind, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
     NormalizedDoc, UpstreamRef,
 };
-use datalib_etl_chat_common::TextFormat;
+use datalib_etl_chat_common::{render_batched_at, TextFormat};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{escape_md_block, escape_md_inline, md_code_block};
 use datalib_etl_render::sources::{sources_list, Source};
@@ -24,6 +24,7 @@ use datalib_etl_render::sources::{sources_list, Source};
 use super::ids;
 use super::parse::{
     shred, OAAttachmentRef, OAContentPartRow, OAMessageRow, ParsedChatGPTApi, ShreddedConversation,
+    ATTACHMENTS_PROJECTION_SQL,
 };
 use datalib_schema::problems::{Problem, Reason};
 use datalib_schema::providers::Provider;
@@ -70,12 +71,15 @@ fn profile() -> RenderProfile {
     }
 }
 
+/// Every conversation in `parsed`, its attachment bytes read a batch of
+/// at most `blob_bytes` at a time.
 pub fn render_all(
     parsed: &ParsedChatGPTApi,
     root: &std::path::Path,
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+    blob_bytes: u64,
 ) -> Result<Buckets> {
     let elapsed_ms = parsed.scan.scan_elapsed.map(|d| d.as_millis() as u64);
     tracing::info!(
@@ -91,27 +95,38 @@ pub fn render_all(
         "[render] chatgpt dolt_diff scan"
     );
 
-    let mut chats: Vec<NormalizedChat> = Vec::with_capacity(parsed.conversations.len());
-    let mut blobs_by_chat: HashMap<String, BlobBundle> = HashMap::new();
-    for c in &parsed.conversations {
-        let shredded = shred(c);
-        let mut chat = build_chat(&shredded, parsed, source_id);
-        chat.inputs = c.inputs.declared();
-        blobs_by_chat.insert(chat.id.clone(), c.blobs.clone());
-        chats.push(chat);
-    }
-
-    let summary = cc_render_all(
-        &profile(),
-        &chats,
+    let chats: Vec<NormalizedChat> = parsed
+        .conversations
+        .iter()
+        .map(|c| {
+            let mut chat = build_chat(&shred(c), parsed, source_id);
+            chat.inputs = c.inputs.declared();
+            chat
+        })
+        .collect();
+    let profile = profile();
+    let mut renderer = ChatRenderer::new(
+        &profile,
         root,
         source_id,
-        &blobs_by_chat,
+        chats.iter().map(|c| c.buckets.len()).sum(),
         progress,
         on_doc_complete,
-    )
+    );
+    match &parsed.blobs_at {
+        Some(at) => render_batched_at(
+            at,
+            &|_: &NormalizedChat| ATTACHMENTS_PROJECTION_SQL,
+            &mut renderer,
+            &chats,
+            blob_bytes,
+        ),
+        None => chats
+            .iter()
+            .try_for_each(|chat| renderer.render_chat(chat, &BlobBundle::default())),
+    }
     .context("chatgpt chat-common render")?;
-    Ok(summary.buckets)
+    Ok(renderer.finish().buckets)
 }
 
 /// One [`NormalizedChat`] per conversation. Messages are ordered by the

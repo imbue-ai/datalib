@@ -130,6 +130,8 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
             out_dir: &out_dir,
             name: "facebook",
             range: RawRange::cold(),
+            // One chat's media a batch, so each loads apart.
+            blob_bytes: 1,
         };
         let mut docs: Vec<RenderedMarkdown> = Vec::new();
         {

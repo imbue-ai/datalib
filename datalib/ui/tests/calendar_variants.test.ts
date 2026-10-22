@@ -114,8 +114,8 @@ path = "~/Takeout/Calendar"
     for (const [id, label] of [
       ["g/ingest", "Google Calendar"],
       ["f/ingest", "Fastmail Calendar"],
-      ["c/ingest", "CalDAV"],
-      ["i/ingest", "Calendar files (.ics)"],
+      ["c/ingest", "Calendar (CalDAV)"],
+      ["i/ingest", "Calendar (.ics files)"],
     ]) {
       expect(catalogForStep("calendar", byId(id).params)!.label, id).toBe(label);
     }

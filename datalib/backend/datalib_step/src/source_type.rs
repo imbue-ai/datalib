@@ -149,7 +149,6 @@ impl SourceType {
             SourceType::Media => Some("media_files"),
             SourceType::Lightroom => Some("Adobe_images"),
             SourceType::ApplePhotos => Some("ZASSET"),
-            SourceType::GoogleDrive => Some("files"),
             SourceType::Linear => Some("issues"),
             _ => None,
         }
@@ -246,7 +245,6 @@ mod tests {
                 t,
                 SourceType::ApplePhotos
                     | SourceType::Fsindex
-                    | SourceType::GoogleDrive
                     | SourceType::Lightroom
                     | SourceType::Linear
                     | SourceType::Media

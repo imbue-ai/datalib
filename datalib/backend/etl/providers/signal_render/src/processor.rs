@@ -71,8 +71,15 @@ impl SourceRender for SignalRender {
             .collect();
         ctx.report_entity_problems(&ReadScope::Whole(vec!["recipients"]), &aci_rows)?;
         let mut on_doc = |md| ctx.emit_doc(md);
-        let summary = render_all(&parsed, ctx.root, ctx.name, ctx.progress, &mut on_doc)
-            .context("signal render_all")?;
+        let summary = render_all(
+            &parsed,
+            ctx.root,
+            ctx.name,
+            ctx.progress,
+            &mut on_doc,
+            ctx.page_size.bytes,
+        )
+        .context("signal render_all")?;
         // A chat this run looked at that came back with no items builds
         // no chat at all, so chat-common never sees it: declared with
         // nothing, its documents go. The rendered ones follow and

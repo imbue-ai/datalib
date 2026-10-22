@@ -85,6 +85,8 @@ pub enum IdNamespace {
     Garmin,
     Github,
     Gitlab,
+    /// Drive's file ids, and the comment ids each file mints.
+    GoogleDrive,
     GoogleTakeout,
     Linkedin,
     Notion,

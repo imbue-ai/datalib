@@ -148,14 +148,18 @@ pub fn export_url(file_id: &str, mime_type: &str) -> String {
     )
 }
 
-/// The whole file in its native API's form: every tab of a Doc with its
-/// suggestions inline, every cell of a Sheet, every page of a deck.
-pub fn native_url(kind: FileKind, file_id: &str) -> String {
+/// The whole file in its native API's form: every tab of a Doc, every
+/// cell of a Sheet, every page of a deck. A Doc's suggestions come inline
+/// when the account may comment on it. The Docs API refuses them (403)
+/// to an account that may only view, so that Doc is asked for in
+/// Google's default mode, which for a viewer leaves them out.
+pub fn native_url(kind: FileKind, file_id: &str, can_comment: bool) -> String {
     match kind {
-        FileKind::Document => format!(
+        FileKind::Document if can_comment => format!(
             "{DOCS}/documents/{file_id}?includeTabsContent=true\
              &suggestionsViewMode=SUGGESTIONS_INLINE"
         ),
+        FileKind::Document => format!("{DOCS}/documents/{file_id}?includeTabsContent=true"),
         FileKind::Spreadsheet => {
             format!("{SHEETS}/spreadsheets/{file_id}?includeGridData=true")
         }
@@ -182,8 +186,9 @@ pub fn req_bytes(url: &str) -> HttpRequest {
     HttpRequest::get(HTTP_SERVICE, url).timeout(TIMEOUT)
 }
 
-/// An image link from the native JSON: signed already, so no latchkey.
-pub fn req_image(url: &str) -> HttpRequest {
+/// A URL that carries its own authority (an image link from the native
+/// JSON, a revision export's redirect): signed already, so no latchkey.
+pub fn req_signed(url: &str) -> HttpRequest {
     req_bytes(url).plain()
 }
 
@@ -198,6 +203,10 @@ pub enum ApiError {
     /// Google declined to export a file this large (10 MB).
     #[error("{0}")]
     ExportTooLarge(String),
+    /// Google will not export this file to this account at all: its
+    /// owner turned off download for those who may not edit.
+    #[error("{0}")]
+    ExportNotAllowed(String),
     /// 404: no such file, or not one this account can see.
     #[error("{0}")]
     NotFound(String),
@@ -222,6 +231,13 @@ pub fn is_export_too_large(e: &anyhow::Error) -> bool {
     )
 }
 
+pub fn is_export_not_allowed(e: &anyhow::Error) -> bool {
+    matches!(
+        e.downcast_ref::<ApiError>(),
+        Some(ApiError::ExportNotAllowed(_))
+    )
+}
+
 pub async fn get_json(url: &str, lk: &LatchkeySettings) -> Result<Value> {
     let body = get(req_json(url).latchkey(lk.clone())).await?;
     serde_json::from_slice(&body).with_context(|| format!("parse JSON from {url}"))
@@ -233,7 +249,40 @@ pub async fn get_bytes(url: &str, lk: &LatchkeySettings) -> Result<Vec<u8>> {
 }
 
 pub async fn get_image(url: &str) -> Result<Vec<u8>> {
-    get(req_image(url)).await
+    get(req_signed(url)).await
+}
+
+/// A revision's export. Its link answers with a redirect to a signed
+/// download, which goes out plain, so the credential never follows it
+/// to another host.
+pub async fn get_revision_export(url: &str, lk: &LatchkeySettings) -> Result<Vec<u8>> {
+    let req = req_bytes(url).latchkey(lk.clone());
+    let resp = latchkey_curl_classified(&req, retryability)
+        .await
+        .map_err(|e| transport_error(e, url))?;
+    match resp.status {
+        200 => Ok(resp.body),
+        301 | 302 | 303 | 307 | 308 => {
+            let to = resp
+                .header("location")
+                .ok_or_else(|| anyhow!("GET {url}: {} with no Location", resp.status))?;
+            get(req_signed(to)).await
+        }
+        _ => Err(status_error(url, &resp).into()),
+    }
+}
+
+/// The link a revision's `exportLinks` gives for `format`. A revision
+/// names ODS `application/x-vnd.oasis.opendocument.spreadsheet`, where
+/// `files.export` takes it without the `x-`.
+pub fn export_link(kind: FileKind, format: ExportFormat, links: &Value) -> Option<String> {
+    let (mime, _) = export_type(kind, format);
+    let x_mime = mime.replacen("application/", "application/x-", 1);
+    links
+        .get(mime)
+        .or_else(|| links.get(x_mime.as_str()))
+        .and_then(Value::as_str)
+        .map(str::to_string)
 }
 
 async fn get(req: HttpRequest) -> Result<Vec<u8>> {
@@ -294,6 +343,8 @@ pub fn status_error(url: &str, resp: &HttpResponse) -> ApiError {
         ApiError::Service(format!("{said}{}", sign_in_hint(url)))
     } else if resp.status == 403 && body.contains("exportSizeLimitExceeded") {
         ApiError::ExportTooLarge(said)
+    } else if resp.status == 403 && body.contains("cannotExportFile") {
+        ApiError::ExportNotAllowed(said)
     } else if resp.status == 404 {
         ApiError::NotFound(said)
     } else {
@@ -309,8 +360,9 @@ fn sign_in_hint(url: &str) -> String {
         .map_or("google-drive", |k| k.latchkey_service);
     format!(
         ". Sign in with `latchkey auth browser {service}` and approve every scope it \
-         asks for; if Google says the API is not enabled, run \
-         `latchkey auth browser-prepare {service}` first"
+         asks for; if latchkey says it requires preparation, give it an OAuth client \
+         first (`latchkey auth browser-prepare {service}`), and if Google says the API \
+         is not enabled, turn it on in that client's Cloud project"
     )
 }
 
@@ -358,11 +410,11 @@ mod tests {
         let e = transport_error(
             HttpError::Curl {
                 service: HTTP_SERVICE,
-                url: native_url(FileKind::Spreadsheet, "x"),
+                url: native_url(FileKind::Spreadsheet, "x", true),
                 exit: 1,
                 stderr: "Error: No credentials found for google-sheets.".into(),
             },
-            &native_url(FileKind::Spreadsheet, "x"),
+            &native_url(FileKind::Spreadsheet, "x", true),
         );
         assert!(matches!(e, ApiError::Service(_)), "{e}");
         assert!(e.to_string().contains("google-sheets"), "{e}");
@@ -384,7 +436,7 @@ mod tests {
 
     #[test]
     fn statuses_are_judged_by_what_they_say() {
-        let url = native_url(FileKind::Document, "x");
+        let url = native_url(FileKind::Document, "x", true);
         assert!(matches!(
             status_error(&url, &resp(401, "{}")),
             ApiError::Service(_)
@@ -397,6 +449,11 @@ mod tests {
         assert!(matches!(
             status_error(&url, &resp(403, big)),
             ApiError::ExportTooLarge(_)
+        ));
+        let refused = r#"{"error":{"code":403,"message":"This file cannot be exported by the user.","errors":[{"reason":"cannotExportFile"}]}}"#;
+        assert!(matches!(
+            status_error(&url, &resp(403, refused)),
+            ApiError::ExportNotAllowed(_)
         ));
         let denied = r#"{"error":{"code":403,"message":"The caller does not have permission"}}"#;
         assert!(matches!(
@@ -419,6 +476,21 @@ mod tests {
         assert!(!url.contains("spreadsheet"), "{url}");
         assert!(url.contains("%27me%27%20in%20owners"), "{url}");
         assert!(url.ends_with("&pageToken=tok"), "{url}");
+    }
+
+    #[test]
+    fn a_revision_s_link_is_found_under_either_spelling() {
+        let links = serde_json::json!({
+            "application/x-vnd.oasis.opendocument.spreadsheet": "https://docs.google.com/spreadsheets/export?id=x&revision=2&exportFormat=ods",
+            "application/pdf": "https://docs.google.com/spreadsheets/export?id=x&revision=2&exportFormat=pdf",
+        });
+        let ods = export_link(FileKind::Spreadsheet, ExportFormat::Odf, &links).unwrap();
+        assert!(ods.ends_with("exportFormat=ods"), "{ods}");
+        assert!(export_link(FileKind::Spreadsheet, ExportFormat::Pdf, &links).is_some());
+        assert_eq!(
+            export_link(FileKind::Spreadsheet, ExportFormat::Ooxml, &links),
+            None
+        );
     }
 
     #[test]

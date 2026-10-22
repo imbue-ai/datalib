@@ -2,18 +2,17 @@
 //! renderer.
 
 use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Result;
-use datalib_etl::blob_cas::{BlobBundle, CasEdgeRow};
+use datalib_etl::blob_cas::CasEdgeRow;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
 use datalib_etl_chat_common::types::{
     AuthorKind, ItemKind, NamedPerson, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
     NormalizedDoc, Recipient, RecipientRole, UpstreamRef,
 };
-use datalib_etl_chat_common::{render_changed, RenderTarget};
+use datalib_etl_chat_common::{render_changed_batched, ChatBlobs, RenderTarget};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{Inputs, RawRange};
 use serde_json::Value;
@@ -38,7 +37,7 @@ use datalib_schema::providers::Provider;
 ///     account sent names whom it went to, so both reach `with:`.
 pub const RENDER_VERSION: u32 = 7;
 
-/// Projection for [`BlobBundle::load_many`] over the SMS CAS edge: the
+/// Projection for `BlobBundle::load_many` over the SMS CAS edge: the
 /// `ref_name` ({message_id}/{partname}) is the bundle key; `content_type`
 /// falls back to `cas_objects`.
 const SMS_BLOB_PROJECTION: &str = "SELECT ref_name AS ref_id, blake3, \
@@ -64,6 +63,8 @@ fn profile() -> RenderProfile {
 
 pub use datalib_etl_chat_common::RenderOutcome;
 
+/// Renders the store under `raw_dir`, its attachment bytes read a batch
+/// of at most `blob_bytes` at a time.
 pub fn render(
     raw_dir: &Path,
     out_root: &Path,
@@ -71,56 +72,70 @@ pub fn render(
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
     range: RawRange<'_>,
+    blob_bytes: u64,
 ) -> Result<RenderOutcome> {
     let db_path = db_path_for(raw_dir);
     if !db_path.exists() {
         return Ok(RenderOutcome::default());
     }
-    let (messages, calls, blobs, scan) = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async {
-            // Pinned at open. No commit means nothing has been committed
-            // here to render, which is emptiness rather than a reason to
-            // read the working set.
-            let Some(db) = RawDb::open_reader(&db_path, range.pin).await? else {
-                return Ok(Default::default());
-            };
-            let pin = db.pin().expect("a reader is pinned at open").clone();
-            let loaded = async {
-                let messages =
-                    datalib_etl::doltlite_raw::load_payloads_with_id(db.pool(), "sms_messages")
-                        .await?;
-                let calls =
-                    datalib_etl::doltlite_raw::load_payloads_with_id(db.pool(), "sms_calls")
-                        .await?;
-                let blobs = load_blobs(&db, &messages).await?;
-                let scan = scan_diff(db.pool(), range.cursor, &pin).await?;
-                anyhow::Ok((messages, calls, blobs, scan))
-            }
-            .await;
-            // Closed, not dropped: the next open of this store is a
-            // second connection until this one is actually gone.
-            db.close().await;
-            loaded
-        })
-    })?;
-
-    // No early return on an empty store: a reset one still has to
-    // name the conversations it lost, so their documents go.
-    let all_chats = build_chats(source_id, &messages, &calls);
-    render_changed(
-        &profile(),
-        all_chats,
-        scan,
+    // Pinned at open. No commit means nothing has been committed here to
+    // render, which is emptiness rather than a reason to read the working
+    // set.
+    let Some(db) = block_on(RawDb::open_reader(&db_path, range.pin))? else {
+        return Ok(RenderOutcome::default());
+    };
+    let rendered = render_open(
+        &db,
+        source_id,
         range,
-        |id| ids::conversation(source_id, id).uuid,
-        &blobs,
+        blob_bytes,
         RenderTarget {
             out_root,
             source_id,
             progress,
             on_doc_complete,
         },
+    );
+    // Closed, not dropped: the next open of this store is a second
+    // connection until this one is actually gone.
+    block_on(db.close());
+    rendered
+}
+
+fn render_open(
+    db: &RawDb,
+    source_id: &str,
+    range: RawRange<'_>,
+    blob_bytes: u64,
+    target: RenderTarget<'_>,
+) -> Result<RenderOutcome> {
+    let pin = db.pin().expect("a reader is pinned at open").clone();
+    let (all_chats, scan) = block_on(async {
+        let messages =
+            datalib_etl::doltlite_raw::load_payloads_with_id(db.pool(), "sms_messages").await?;
+        let calls =
+            datalib_etl::doltlite_raw::load_payloads_with_id(db.pool(), "sms_calls").await?;
+        let scan = scan_diff(db.pool(), range.cursor, &pin).await?;
+        // No early return on an empty store: a reset one still has to
+        // name the conversations it lost, so their documents go.
+        anyhow::Ok((build_chats(source_id, &messages, &calls), scan))
+    })?;
+    let projection = |_: &NormalizedChat| SMS_BLOB_PROJECTION;
+    let blobs = ChatBlobs::new(db.pool(), Some(db.cas()), &projection);
+    render_changed_batched(
+        &profile(),
+        all_chats,
+        scan,
+        range,
+        |id| ids::conversation(source_id, id).uuid,
+        &blobs,
+        blob_bytes,
+        target,
     )
+}
+
+fn block_on<F: std::future::Future>(f: F) -> F::Output {
+    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(f))
 }
 
 /// Which conversations moved since `last_render_hash`.
@@ -159,21 +174,6 @@ async fn scan_diff(
         },
     )
     .await
-}
-
-async fn load_blobs(
-    db: &RawDb,
-    messages: &[(String, Value)],
-) -> Result<HashMap<String, BlobBundle>> {
-    let mut refs_by_chat: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for (_, m) in messages {
-        let key = chat_id(m);
-        let bag = refs_by_chat.entry(key).or_default();
-        for r in attachment_refs(m) {
-            bag.push(r);
-        }
-    }
-    BlobBundle::load_many(db.pool(), Some(db.cas()), SMS_BLOB_PROJECTION, refs_by_chat).await
 }
 
 fn chat_id(v: &Value) -> String {

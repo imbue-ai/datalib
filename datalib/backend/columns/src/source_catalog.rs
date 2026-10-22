@@ -17,12 +17,13 @@ struct Entry {
     icon: Option<&'static str>,
 }
 
-// Every icon is a file's name in `datalib/ui/src/assets/`, and matches
-// the browser's catalog for the same type (`scripts/lint_repo.py`, check 13).
+// Every icon is a file's name in `datalib/ui/src/assets/`, and each label
+// and icon matches the browser's catalog for the same type
+// (`scripts/lint_repo.py`, check 13).
 const CATALOG: &[Entry] = &[
     e("slack", None, "Slack", Some("slack")),
     e("claude", Some("api"), "Claude", Some("claude")),
-    e("claude", Some("export"), "Claude export", Some("claude")),
+    e("claude", Some("export"), "Claude (export)", Some("claude")),
     e("claude_code", None, "Claude Code", Some("claude_code")),
     e("chatgpt", None, "ChatGPT", Some("chatgpt")),
     e("codex", None, "Codex", Some("codex")),
@@ -31,7 +32,7 @@ const CATALOG: &[Entry] = &[
     e("notion", None, "Notion", Some("notion")),
     e("email", Some("gmail"), "Gmail", Some("gmail")),
     e("email", Some("jmap"), "Fastmail", Some("fastmail")),
-    e("email", None, "Email", Some("email")),
+    e("email", None, "Email (mbox or JMAP)", Some("email")),
     e(
         "calendar",
         Some("google"),
@@ -42,24 +43,39 @@ const CATALOG: &[Entry] = &[
         "calendar",
         Some("fastmail"),
         "Fastmail Calendar",
-        Some("fastmail"),
+        Some("fastmail_calendar"),
     ),
-    e("calendar", Some("caldav"), "CalDAV", Some("calendar")),
-    e("calendar", Some("ics"), "Calendar files", Some("calendar")),
+    e(
+        "calendar",
+        Some("caldav"),
+        "Calendar (CalDAV)",
+        Some("calendar"),
+    ),
+    e(
+        "calendar",
+        Some("ics"),
+        "Calendar (.ics files)",
+        Some("calendar"),
+    ),
     e("calendar", None, "Calendar", Some("calendar")),
     e(
         "contacts",
         Some("fastmail"),
         "Fastmail Contacts",
-        Some("fastmail"),
+        Some("fastmail_contacts"),
     ),
     e(
         "contacts",
         Some("carddav"),
-        "CardDAV contacts",
+        "Contacts (CardDAV)",
         Some("contacts"),
     ),
-    e("contacts", Some("vcf"), "Contact files", Some("contacts")),
+    e(
+        "contacts",
+        Some("vcf"),
+        "Contacts (.vcf files)",
+        Some("contacts"),
+    ),
     e("contacts", None, "Contacts", Some("contacts")),
     e("garmin", None, "Garmin", Some("garmin")),
     e("yolink", None, "YoLink", Some("yolink")),
@@ -72,14 +88,19 @@ const CATALOG: &[Entry] = &[
     ),
     e("linkedin", None, "LinkedIn", Some("linkedin")),
     e("facebook", None, "Facebook", Some("facebook")),
-    e("signal", None, "Signal", Some("signal")),
-    e("whatsapp", None, "WhatsApp", Some("whatsapp")),
-    e("sms_backup_restore", None, "SMS & calls", Some("sms")),
+    e("signal", None, "Signal backups", Some("signal")),
+    e("whatsapp", None, "WhatsApp backups", Some("whatsapp")),
+    e(
+        "sms_backup_restore",
+        None,
+        "SMS Backup & Restore",
+        Some("sms"),
+    ),
     e("beeper", None, "Beeper", Some("beeper")),
-    e("pdf", None, "PDFs", Some("pdf")),
-    e("fsindex", None, "File index", Some("fsindex")),
-    e("media", None, "Music, photos & video", Some("media")),
-    e("airvisual", None, "AirVisual", Some("airvisual")),
+    e("pdf", None, "Local PDFs", Some("pdf")),
+    e("fsindex", None, "Local file index", Some("fsindex")),
+    e("media", None, "Local media", Some("media")),
+    e("airvisual", None, "IQAir AirVisual", Some("airvisual")),
     e("lightroom", None, "Lightroom", Some("lightroom")),
     e("linear", None, "Linear", Some("linear")),
     e("apple_photos", None, "Apple Photos", Some("apple_photos")),
@@ -89,7 +110,7 @@ const CATALOG: &[Entry] = &[
         "Apple Messages",
         Some("apple_messages"),
     ),
-    e("perseus", None, "Perseus library", Some("perseus")),
+    e("perseus", None, "Perseus Digital Library", Some("perseus")),
     // Not a provider: a group that renders what changed in another
     // group's raw store between two commits (docs/dev/plans/completed/diff_renderer.md).
     e("diff", None, "Diff", Some("diff")),
@@ -149,11 +170,14 @@ mod tests {
     fn a_variant_is_picked_by_the_method_table_the_params_carry() {
         assert_eq!(source_type("email", &json!({"gmail": {}})).label, "Gmail");
         assert_eq!(source_type("email", &json!({"jmap": {}})).label, "Fastmail");
-        assert_eq!(source_type("email", &json!({"mbox": {}})).label, "Email");
+        assert_eq!(
+            source_type("email", &json!({"mbox": {}})).label,
+            "Email (mbox or JMAP)"
+        );
         assert_eq!(source_type("claude", &json!({})).label, "Claude");
         assert_eq!(
             source_type("claude", &json!({"export": {"path": "x"}})).label,
-            "Claude export"
+            "Claude (export)"
         );
         assert_eq!(
             source_type("contacts", &json!({"fastmail": {}})).label,
@@ -161,11 +185,11 @@ mod tests {
         );
         assert_eq!(
             source_type("contacts", &json!({"carddav": {"server_url": "x"}})).label,
-            "CardDAV contacts"
+            "Contacts (CardDAV)"
         );
         assert_eq!(
             source_type("contacts", &json!({"vcf": {"path": "x"}})).label,
-            "Contact files"
+            "Contacts (.vcf files)"
         );
         assert_eq!(source_type("contacts", &json!({})).label, "Contacts");
     }

@@ -19,7 +19,8 @@ sign-in, the wizard's account row, or a provider's HTTP client.
   hosts get the Chrome-impersonating curl
   ([`curl_impersonate.md`](curl_impersonate.md)).
 - **The wizard** runs the other commands (`services info`,
-  `auth browser`, `auth set`, `ensure-browser`) from
+  `auth browser`, `auth set`, `ensure-browser`, and for Google
+  `auth browser-prepare` and `auth prepare`) from
   `datalib/backend/http/src/connect.rs`, and checks a connection by
   running `datalib-step probe`, which makes one real request.
 - **`--account` is a global option**, so it goes *before* the
@@ -50,6 +51,41 @@ plus the URLs its credential is good for and how to get one.
 registered service as `user-registered`. When two services cover the
 same URL, `latchkey curl` uses the first one that holds a credential,
 so a stale sibling can shadow the service you just signed in to.
+
+## An OAuth client of your own
+
+Google's services (`google-gmail`, `google-calendar`, `google-drive`,
+`google-docs`, `google-sheets`, `google-slides`) sign in through an
+OAuth client in a Google Cloud project, and latchkey ships none. Until
+a service has one, `auth browser` refuses at once with "requires
+preparation first", which the wizard reads as
+`IssueKind::NoOauthClient`. latchkey keeps one client per service,
+apart from its accounts; every account of the service shares it. Two
+commands store one:
+
+- **`auth browser-prepare <service>`** drives the Cloud console in the
+  browser: it makes or reuses a project named `Latchkey-<service>`
+  (`Latchkey-gmail`), turns on that service's APIs, sets up the consent
+  screen and creates a Desktop app client. It takes minutes, and needs
+  2-Step Verification on the Google account. So each service gets a
+  project of its own, and Google limits how many an account may have.
+- **`auth prepare <service> '{"clientId":…,"clientSecret":…}'`**
+  stores a client made some other way, with no browser. Nothing ties a
+  client to one service, so a single client whose project has every
+  API turned on can be given to all six.
+
+Each service is still its own sign-in, because latchkey asks for each
+one's scopes separately; only the client is shared.
+
+Once a sign-in has reported the refusal, the wizard offers both:
+"Create one for me" sends `create_oauth_client` with the next
+`POST /api/latchkey/<service>/connect`, which runs `browser-prepare`
+before the login; a pasted client goes to
+`POST /api/latchkey/<service>/oauth_client`, which turns Google
+Cloud's downloaded `client_secret.json` into latchkey's shape
+(`http/src/oauth_client.rs`), runs `auth prepare`, and the wizard then
+signs in. latchkey cannot say whether a service has a client short of
+trying, which is why the offer comes after the refusal.
 
 ## Accounts: who names them
 

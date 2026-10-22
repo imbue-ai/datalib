@@ -378,7 +378,7 @@ small. It should grow deliberately: the test for admitting one is
 whether two providers disagreeing about it would produce a *wrong
 answer* rather than merely an inconsistent-looking one.
 
-The tree does not yet follow this rule for timestamps: seven of the 24
+The tree does not yet follow this rule for timestamps: seven of the 25
 render crates (`calendar`, `chatgpt`, `facebook`, `google_takeout`,
 `linkedin`, `perseus`, `sms_backup_restore`) call `chrono` directly
 rather than going through `datalib-time` alone. The retrofit is in
@@ -870,6 +870,73 @@ removes.
 7. **No doltlite extension.** A build without `dolt_hashof` reads the
    same as a store with no commit to pin (case 3): nothing to read,
    cursor untouched.
+
+### Memory: a page at a time
+
+A render's memory should follow how much it reads at once, not how big
+the source is. A render that loads every row first, parses every
+payload and then renders needs several GB for a large mailbox or
+workspace. One that loads a single bucket per query pays the fixed
+cost of a query for each one (a lookup from the tree's root, a round
+trip), and that cost dominates a source with 200k threads. Between
+the two is a **page**: a run of a few hundred buckets read and
+rendered together, then dropped before the next.
+
+`datalib_etl_render::pages` holds the two pieces a render pages with:
+
+- **`BucketPages`** hands out bucket keys a page at a time. On a full
+  walk it reads the primary table's key column in order, starting
+  after the last key it handed out (keyset pagination): one ordered
+  range scan per page, nothing kept between pages but that key, and
+  the pool's one connection free between them. On a narrowed run it
+  hands out the stale set, sorted, in pages of the same size. A key's
+  rows never straddle two pages.
+- **`batches`** cuts a page's blob loads by bytes, so one bucket with
+  large attachments cannot pull a whole page's worth into memory.
+
+The provider loads what hangs off a page's keys (rows, then join rows)
+with one bound JSON array each (`etl/README.md` §"Binding a set of
+values"), renders it, and declares the page's buckets before reading
+the next, so nothing about a bucket outlives its page. Only the small
+tables every bucket looks up (users, channels, accounts, mailboxes)
+are read whole, up front. Email and Slack render this way; the other
+renders still read their rows whole
+([`audits/2026-10-20_render_memory.md`](audits/2026-10-20_render_memory.md)
+lists them).
+
+Blob bytes are the larger part of most stores, and a render that still
+reads its rows whole can at least leave them where they are until they
+are needed. Every other render with attachments builds its documents
+from the rows, narrows to the ones this run renders, and then loads a
+batch of documents' attachments at a time, cut by `blob_mb`, just
+before the batch renders. For a chat-shaped source that is
+`datalib_etl_chat_common::blobs`: `ChatBlobs` reads a chat's refs off
+its attachments, weighs them with `BlobBundle::sizes_many` (the blob
+store's `byte_len`, no bytes read), and `render_batched` loads and
+renders one batch at a time; `render_batched_at` reopens the raw store
+at the commit a parse read (`BlobsAt`) for a render whose parse has
+closed it. Beeper weighs its documents from what its parse recorded,
+LinkedIn attaches its connections' photos a batch at a time, and Notion
+loads its pages' bundles through `PageBlobs`. A chat's bundle is never
+split, so one very large chat is still one batch. Only email's bundles
+hold bytes; everyone else's name the blob store that holds them.
+
+**The size is the person's to choose.** A config's `[render_pages]`
+table sets `buckets` (per page) and `blob_mb` (per blob batch); the
+runner hands it to every step as `DATALIB_DAG_RENDER_PAGES`, and a
+processor reads it as `RenderCtx::page_size`. Changing it changes no
+document, so it is not a render param and re-renders nothing. The
+defaults, 500 buckets and 64 MB, sit where a page's queries already
+cost little next to rendering it.
+
+What a page bounds is the reading side. On a synthetic Slack store of
+240k threads a cold render peaked at 0.7–1.3 GB paged, against
+2.6–3.5 GB reading everything first, in the same time. What is left is
+mostly the writer: doltlite holds each table's pending edits in memory
+until they reach 64 MB or the SQL transaction commits, and each
+connection keeps a 64 MiB page cache. Committing the SQL transaction
+more often trims the peak but leaves more pages that later checkpoints
+pin on disk; the audit has the numbers.
 
 ### Rendering the delta itself
 

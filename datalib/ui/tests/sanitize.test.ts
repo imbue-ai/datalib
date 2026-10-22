@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { renderDocument } from "../src/cards/renderDocument";
 import { sanitizeRenderedHtml as sanitize } from "../src/cards/sanitize";
 
 const sanitizeRenderedHtml = (html: string) => sanitize(html).html;
@@ -97,5 +98,72 @@ describe("sanitizeRenderedHtml", () => {
   it("keeps a chart's ids for the document view to draw", () => {
     const chart = `<div class="time-series-chart" data-time-series="a-1 b-2"></div>`;
     expect(sanitizeRenderedHtml(chart)).toBe(chart);
+  });
+});
+
+/// Every URL in the rendered body the browser would fetch on its own,
+/// as it would resolve it against the app's page: path and query.
+function fetchedOnOpen(html: string): string[] {
+  const root = document.createElement("div");
+  root.innerHTML = html;
+  const out: string[] = [];
+  const add = (raw: string) => {
+    const url = new URL(raw.trim(), location.href);
+    if (url.protocol === "data:" || url.protocol === "blob:") return;
+    out.push(url.origin === location.origin ? url.pathname + url.search : url.href);
+  };
+  for (const el of Array.from(root.querySelectorAll("*"))) {
+    for (const attr of ["src", "poster", "background"]) {
+      const v = el.getAttribute(attr);
+      if (v) add(v);
+    }
+    for (const c of (el.getAttribute("srcset") ?? "").split(",")) {
+      const u = c.trim().split(/\s+/)[0];
+      if (u) add(u);
+    }
+    for (const m of (el.getAttribute("style") ?? "").matchAll(/url\(\s*['"]?([^'")]*)/gi))
+      add(m[1]);
+  }
+  return out;
+}
+
+const ASSETS = "/applet/unified_document_index/asset/";
+
+/// A body is whatever the sender wrote, and the frame it is drawn in
+/// may load from our own origin with the person's cookie. Only the
+/// document's own assets may load from there: anything else is a GET
+/// the sender chose, sent the moment the document opens.
+describe("a body's references to our own origin", () => {
+  it("load nothing but the document's assets", () => {
+    for (const url of [
+      "/api/manage/rows?refresh=1",
+      "api/manage/rows?refresh=1",
+      "../api/config",
+      `${ASSETS}md-1/../../../api/manage/rows?refresh=1`,
+      `${ASSETS}md-1/%2e%2e/%2e%2e/%2e%2e/api/config`,
+      "/api/remote_media?url=https%3A%2F%2Fpixel.example%2Fa.gif&source=other",
+      "/applet/unified_document_index/problems",
+    ]) {
+      const body =
+        `<img src="${url}"><video poster="${url}"></video><audio src="${url}"></audio>` +
+        `<img srcset="${url} 2x"><div style="background:url('${url}')"></div>`;
+      for (const fetched of fetchedOnOpen(renderDocument(body, "md-1").html)) {
+        expect(fetched, url).toMatch(new RegExp(`^${ASSETS}md-1/`));
+      }
+    }
+  });
+
+  it("keep the document's own assets, and point a relative one at them", () => {
+    const own = `${ASSETS}md-1/blobs/photo.png`;
+    const html = renderDocument(
+      `<img src="${own}"><audio controls src="blobs/a.mp3"></audio>` +
+        `<video controls src="blobs/v.mp4"></video>`,
+      "md-1",
+    ).html;
+    expect(fetchedOnOpen(html)).toEqual([
+      own,
+      `${ASSETS}md-1/blobs/a.mp3`,
+      `${ASSETS}md-1/blobs/v.mp4`,
+    ]);
   });
 });

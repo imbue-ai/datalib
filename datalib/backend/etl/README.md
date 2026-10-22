@@ -640,13 +640,15 @@ until it is rendered again, and at render a type the provider's edge
 projection names still comes before the CAS's (`BlobBundle::load_many`).
 
 The bundle is the common vocabulary at both ends. Download adds bytes as they
-arrive and drains the bundle at end of bucket; parse loads every document's
-bundle at once with `BlobBundle::load_many`; render then consumes an
+arrive and drains the bundle at end of bucket; parse loads the documents'
+bundles with `BlobBundle::load_many`; render then consumes an
 already-loaded bundle — no SQL, no `block_in_place`, no dyn blob reader.
 Parse reads the edge table in one query for every document it loads,
-not one per document. Email is the exception: a mailbox's `.eml`s are
-too many to hold at once, so its parse hands render an `EmlStore` that
-runs `load_many_with_bytes` for a batch of threads just before they render.
+not one per document. Every render that has attachments loads them a
+batch of documents at a time, cut by bytes, just before the batch
+renders (`datalib_etl_chat_common::blobs` for the chat-shaped ones;
+`docs/dev/data_architecture_parse_and_render.md` §"Memory: a page at a
+time").
 
 **A page links an attachment where the CAS holds it, and render never
 copies it.** The CAS's shape is a contract `datalib-http` reads
@@ -654,9 +656,10 @@ copies it.** The CAS's shape is a contract `datalib-http` reads
 `/data/<group>/<function>/blob/<hash>` (`BlobBundle::href_for`), and the
 server answers that from the file. So `load_many` reads each blob's hash,
 size and type and leaves its bytes where they are; a blob remembers which
-step's CAS holds it (`Blob::store`, from where the file sits). Only bytes
-render makes itself, such as the parts it cuts out of an email, are
-written beside the page by `materialize_to_dir`.
+step's CAS holds it (`Blob::store`, from where the file sits). Email
+alone reads the bytes (`load_many_with_bytes`), to render each message
+from its `.eml`; the parts it cuts out are bytes render made itself, the
+only ones `materialize_to_dir` writes beside a page.
 
 **The CAS is plain SQLite, not doltlite**, created through the
 `doltlite_engine=sqlite` URI parameter like the run store. A

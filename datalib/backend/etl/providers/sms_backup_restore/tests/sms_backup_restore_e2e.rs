@@ -112,6 +112,9 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
                 &Progress::noop(),
                 &mut on_doc,
                 RawRange::cold(),
+                // One conversation's attachments a batch, so the MMS
+                // conversations load apart.
+                1,
             )
             .context("render")?;
         }
