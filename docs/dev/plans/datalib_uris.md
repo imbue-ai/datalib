@@ -1,6 +1,6 @@
 # datalib links: a name for what something is, an address for its bytes
 
-*Mirror of the "Names and addresses" tab of the [datalib links](https://claude.ai/code/artifact/dd31c9e3-8ef9-4185-a85f-0c29a1318117) Claude Doc, which is the source of truth while this plan is under review. Edit the doc and re-mirror this file; don't edit it here. Proposal (2026-10-20); step 1 of §6 is in PR #1305.*
+*Mirror of the "Names and addresses" tab of the [datalib links](https://claude.ai/code/artifact/dd31c9e3-8ef9-4185-a85f-0c29a1318117) Claude Doc, which is the source of truth while this plan is under review. Edit the doc and re-mirror this file; don't edit it here. Proposal (2026-10-20); step 1 of §6 landed in PR #1305.*
 
 Copy a message's 🆔 today and paste it into your notes: you get a link like `datalib://chat/1f3a…?msg=9c2e…`, and it opens nothing anywhere. That link is one of ten ways datalib writes a link to something it holds, and the attachments work is about to add more. This doc proposes two forms to replace all of them but card links (§1), before the new ones ship: a `datalib:` **name**, which says what something is, and a `/data/…` **address**, where the server hands out its bytes.
 
@@ -14,7 +14,7 @@ Words used throughout:
 
 Already decided: kinds are written in `snake_case`, and attachment addresses are built first, to try the design out.
 
-**Status:** step 1 of §6 (the blob-store contract crate, the `/data/` route, and `blob` addresses for chat sources, Notion and Google Drive Docs) is in PR #1305, open. Nothing else here is built.
+**Status:** step 1 of §6 (the blob-store contract crate, the `/data/` route, and `blob` addresses for chat sources, Notion and Google Drive Docs) landed in PR #1305. Nothing else here is built.
 
 ## 1. What exists today
 
@@ -83,7 +83,7 @@ Addresses, for bytes the server hands out. Both reach the same place, a step's b
 
 | Address | Returns | Used for | Status |
 | --- | --- | --- | --- |
-| `/data/<group>/<function>/blob/<hash>` | the stored bytes with that hash | attachments of chat sources, Notion and Google Drive Docs | built, PR #1305 (open) |
+| `/data/<group>/<function>/blob/<hash>` | the stored bytes with that hash | attachments of chat sources, Notion and Google Drive Docs | built, PR #1305 |
 | `/data/<group>/<function>/blob/<email hash>/part/<part hash>` | one attachment from inside a stored email | email attachments | planned |
 | `/data/<group>/<function>/blob/<hash>`, once the contacts download keeps each photo in its blob store | a contact's photo | contact photos | planned |
 

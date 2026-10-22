@@ -1,10 +1,10 @@
 # Attachments by address, not by copy
 
-*Mirror of the "Attachments" tab of the [datalib links](https://claude.ai/code/artifact/dd31c9e3-8ef9-4185-a85f-0c29a1318117) Claude Doc, which is the source of truth while this plan is under review. Edit the doc and re-mirror this file; don't edit it here. Proposal (2026-10-20); step 1 is in PR #1305.*
+*Mirror of the "Attachments" tab of the [datalib links](https://claude.ai/code/artifact/dd31c9e3-8ef9-4185-a85f-0c29a1318117) Claude Doc, which is the source of truth while this plan is under review. Edit the doc and re-mirror this file; don't edit it here. Proposal (2026-10-20); step 1 landed in PR #1305.*
 
 When datalib renders a page, it writes every attachment the page shows into a `blobs/` folder beside it, though the source's store already holds the same bytes. So every attachment is on disk twice, and most of the copies belong to old mail and chats nobody opens. The proposal: a page points at the bytes where they already are, at a `/data/…` address (first tab), and the server hands them out when someone opens the page.
 
-**Status:** step 1 below (chat sources, Notion and Google Drive Docs as `blob` addresses, with the contract crate and the `/data/` route) is in PR #1305, open. Email and contacts are not started.
+**Status:** step 1 below (chat sources, Notion and Google Drive Docs as `blob` addresses, with the contract crate and the `/data/` route) landed in PR #1305. Email and contacts are not started.
 
 ## What happens today
 
