@@ -6,7 +6,7 @@
 // at the bottom. The rows and their actions are the Sources table's
 // (`GET /api/manage/rows`, `rowActions.ts`); the series are
 // `GET /api/manage/groups/{id}/dashboard`.
-import { computed, onMounted, onUnmounted, ref, watch, type Directive } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch, type Directive } from "vue";
 import { UNIFIED_DOCUMENT_INDEX, type Dashboard, type ManageResponse, type ManageRow } from "@/api";
 import { useApi } from "./cardApi";
 import { rowMenu, type MenuAction } from "@/config/rowMenu";
@@ -216,23 +216,59 @@ function scrollToStep(id: string) {
     ?.scrollIntoView({ block: "start" });
 }
 
-/// Scroll to a step once its section is laid out. A tab the host has
-/// just revealed can still be hidden for a frame or more, and scrolling
-/// a hidden section does nothing; give up after about a second.
-function scrollToStepWhenShown(id: string, frames = 60) {
-  const section = cardEl.value?.querySelector(`[data-step="${CSS.escape(id)}"]`);
-  if (section && section.getClientRects().length > 0) {
-    section.scrollIntoView({ block: "start" });
-    return;
-  }
-  if (frames > 0) requestAnimationFrame(() => scrollToStepWhenShown(id, frames - 1));
+/// Bring a step's section into view and keep it there while the card
+/// settles: a tab the host has just revealed can be hidden or unsized for
+/// a few frames, and charts loading above the section push it down. It
+/// scrolls again whenever the section moves, until it has stayed put for
+/// ten frames, about two seconds have passed, or the person scrolls,
+/// clicks or types in the card.
+function keepStepInView(id: string) {
+  const root = cardEl.value;
+  if (!root) return;
+  let framesLeft = 120;
+  let stillFor = 0;
+  let lastTop: number | null = null;
+  const stop = () => (framesLeft = 0);
+  const inputs = ["wheel", "pointerdown", "keydown"] as const;
+  for (const ev of inputs) root.addEventListener(ev, stop, { once: true });
+  const tick = () => {
+    const section = root.querySelector(`[data-step="${CSS.escape(id)}"]`);
+    if (section && section.getClientRects().length > 0) {
+      const top = section.getBoundingClientRect().top;
+      if (lastTop === null || Math.abs(top - lastTop) > 1) {
+        section.scrollIntoView({ block: "start" });
+        lastTop = section.getBoundingClientRect().top;
+        stillFor = 0;
+      } else {
+        stillFor++;
+      }
+    }
+    if (stillFor < 10 && --framesLeft > 0) requestAnimationFrame(tick);
+    else for (const ev of inputs) root.removeEventListener(ev, stop);
+  };
+  tick();
 }
 
-/// Opened again while open, at a step: scroll there once the tab shows.
+/// The step a reopen asked for, until its section is drawn: a card still
+/// loading its rows has none yet.
+const wantedStep = ref<string | null>(null);
+watch([wantedStep, panels], async ([id]) => {
+  if (!id) return;
+  if (!panels.value.some((p) => p.row.id === id)) {
+    // Loaded, and this group has no such step: nothing to show.
+    if (manage.value) wantedStep.value = null;
+    return;
+  }
+  wantedStep.value = null;
+  await nextTick();
+  keepStepInView(id);
+});
+
+/// Opened again while open, at a step: show that step's section.
 const stopReopened = props.ctx.bus.subscribe(TOPIC_CARD_REOPENED, (payload) => {
   const p = payload as CardReopenedPayload;
   const step = p.cardId === props.ctx.cardId ? syncDashboardStep(p.source) : null;
-  if (step) scrollToStepWhenShown(step);
+  if (step) wantedStep.value = step;
 });
 
 /// A chip on this card asking for a card: this dashboard is already open,
