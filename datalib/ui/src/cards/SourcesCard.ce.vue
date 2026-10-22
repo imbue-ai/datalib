@@ -230,6 +230,7 @@ const rowHeight = computed(() => Math.round(28 + 8 * density.value));
         :rowHeight="rowHeight"
         :movable="isMovable"
         :chips="chips"
+        :canEdit="(row, field) => field !== 'name' || row.kind === 'group'"
         @ready="onReady"
         @cellDoubleClick="onCellDoubleClicked"
         @openCard="(source) => props.ctx.host.openCards(source)"

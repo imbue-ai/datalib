@@ -73,6 +73,8 @@ const props = withDefaults(
     /// siblings only, and the host is told where (`move`); the grid
     /// keeps its order until new rows arrive. Read once.
     movable?: (row: T) => boolean;
+    /// Which rows an `editable` column edits. Absent, every row's does.
+    canEdit?: (row: T, field: string) => boolean;
   }>(),
   {
     rowKey: "key",
@@ -486,6 +488,10 @@ let editing: { item: T; field: string; before: unknown } | null = null;
 
 function onBeforeEditCell(_e: SlickEventData, args: OnBeforeEditCellEventArgs) {
   const field = String(args.column?.field ?? "");
+  // The grid reads `false` back as "this cell does not open".
+  if (props.canEdit && !props.canEdit(args.item as T, String(args.column?.id ?? field))) {
+    return false;
+  }
   editing = { item: args.item as T, field, before: readPath(args.item, field) };
 }
 
