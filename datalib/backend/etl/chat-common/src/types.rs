@@ -20,8 +20,8 @@ pub enum ItemKind {
 pub struct NormalizedAttachment {
     /// Where the markdown link / `<img src=…>` points: the bytes'
     /// address in their source's blob store
-    /// (`/data/<group>/<function>/blob/<hash>`), or a file written beside
-    /// the page (`blobs/abc123.jpg`) for bytes render made itself.
+    /// (`/data/<group>/<function>/blob/<hash>`, or `…/part/<hash>` for a
+    /// part of a stored email).
     pub href: Option<String>,
     /// User-visible label (file name, image alt text). Falls back to
     /// the last segment of `href` when missing.

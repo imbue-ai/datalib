@@ -8,7 +8,6 @@
 //! One payload can reach a bundle under two refs with different metadata, so
 //! filenames dedupe on the content hash rather than on the derived name.
 
-use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
@@ -465,12 +464,6 @@ pub fn blake3_hex(bytes: &[u8]) -> String {
     blake3::hash(bytes).to_hex().to_string()
 }
 
-// Read side — every provider now uses [`BlobBundle`] (below). The
-// retired `BlobView` / `BlobReader` / `SqliteBlobReader` /
-// `InMemoryBlobReader` / `materialize_to_disk` / `materialize_refs` /
-// `attachment_md` surface was deleted with the notion port (the last
-// consumer); see git history if you need its old shape.
-
 // content-type → extension
 
 /// Pick a file extension from a `content_type` like `image/png` or
@@ -531,7 +524,7 @@ pub fn extension_from_upstream_name(name: Option<&str>) -> Option<String> {
 }
 
 /// Total order over the candidate names refs sharing one content hash
-/// derive, used by [`BlobBundle::names_by_blake3`] to pick a winner.
+/// derive, used by [`BlobBundle::filename_for`] to pick a winner.
 /// Higher wins: a name carrying an extension beats a bare stem, and
 /// among equals the lexicographically smallest name wins (`Reverse`).
 /// Deliberately total — ties broken by `HashMap` order would make the
@@ -545,8 +538,6 @@ fn name_rank(name: &str) -> (bool, std::cmp::Reverse<&str>) {
 /// Where a page finds a [`Blob`]'s bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Held {
-    /// Made by render, which writes them beside the page.
-    ByRender,
     /// A row of the CAS of `step` (`<group>/<function>`).
     InStore { step: String },
     /// A MIME part of the message the CAS of `step` holds under the hash
@@ -563,7 +554,7 @@ pub struct Blob {
     pub content_type: Option<String>,
     pub upstream_name: Option<String>,
     pub held: Held,
-    /// Present for bytes render made, and where a loader asked for them
+    /// Present where a loader asked for them
     /// ([`BlobBundle::load_many_with_bytes`]).
     pub bytes: Option<Vec<u8>>,
 }
@@ -577,14 +568,6 @@ impl Blob {
         match ext {
             Some(e) => format!("{short}.{e}"),
             None => short.to_string(),
-        }
-    }
-
-    /// Bytes render made, which only it can write out.
-    fn loose_bytes(&self) -> Option<&[u8]> {
-        match self.held {
-            Held::ByRender => self.bytes.as_deref(),
-            Held::InStore { .. } | Held::InMessage { .. } => None,
         }
     }
 }
@@ -626,45 +609,10 @@ impl BlobBundle {
         self.by_ref.iter().map(|(k, v)| (k.as_str(), v))
     }
 
-    /// Record bytes render made, named by their hash.
-    pub fn add(
-        &mut self,
-        ref_id: impl Into<String>,
-        bytes: Vec<u8>,
-        content_type: Option<String>,
-        upstream_name: Option<String>,
-    ) {
-        let blake3 = blake3_hex(&bytes);
-        self.add_hashed(ref_id, blake3, bytes, content_type, upstream_name);
-    }
-
     /// Every ref `other` holds or misses; `other`'s wins a shared ref.
     pub fn extend(&mut self, other: BlobBundle) {
         self.by_ref.extend(other.by_ref);
         self.missing.extend(other.missing);
-    }
-
-    /// [`add`](Self::add) for bytes the caller has already hashed, so a
-    /// large attachment is not hashed twice. `blake3` is trusted.
-    pub fn add_hashed(
-        &mut self,
-        ref_id: impl Into<String>,
-        blake3: String,
-        bytes: Vec<u8>,
-        content_type: Option<String>,
-        upstream_name: Option<String>,
-    ) {
-        self.by_ref.insert(
-            ref_id.into(),
-            Blob {
-                blake3,
-                byte_len: bytes.len() as u64,
-                content_type,
-                upstream_name,
-                held: Held::ByRender,
-                bytes: Some(bytes),
-            },
-        );
     }
 
     /// Record bytes the CAS of `step` holds, for a loader of its own.
@@ -1005,15 +953,8 @@ impl BlobBundle {
 
     // ── render side (sync) ───────────────────────────────────────────
 
-    /// Whether any blob here is one render made and must write out.
-    pub fn has_loose(&self) -> bool {
-        self.by_ref.values().any(|b| b.loose_bytes().is_some())
-    }
-
     /// Where a page finds `ref_id`'s bytes: their address in the CAS that
-    /// holds them or the message they are a part of, or the file
-    /// [`Self::materialize_to_dir`] writes beside the page for bytes
-    /// render made.
+    /// holds them or the message they are a part of.
     pub fn href_for(&self, ref_id: &str) -> Option<String> {
         let blob = self.by_ref.get(ref_id)?;
         match &blob.held {
@@ -1023,36 +964,13 @@ impl BlobBundle {
                 message,
                 &blob.blake3,
             )),
-            Held::ByRender => Some(format!("blobs/{}", self.filename_for(ref_id)?)),
         }
     }
 
-    fn names_by_blake3(&self) -> BTreeMap<&str, String> {
-        let mut out: BTreeMap<&str, String> = BTreeMap::new();
-        for blob in self.by_ref.values() {
-            let cand = blob.rendered_filename();
-            match out.entry(blob.blake3.as_str()) {
-                Entry::Vacant(v) => {
-                    v.insert(cand);
-                }
-                Entry::Occupied(mut o) => {
-                    if name_rank(&cand) > name_rank(o.get()) {
-                        o.insert(cand);
-                    }
-                }
-            }
-        }
-        out
-    }
-
-    /// The name `ref_id`'s bytes are materialized under, deduped across
-    /// every ref in the bundle sharing those bytes. A `blobs/<file>` link
-    /// MUST use this rather than [`Blob::rendered_filename`], or the link
-    /// can name a file [`Self::materialize_to_dir`] chose not to write.
+    /// The name a page shows for `ref_id`'s bytes, the same for every ref
+    /// in the bundle sharing those bytes.
     pub fn filename_for(&self, ref_id: &str) -> Option<String> {
         let blob = self.by_ref.get(ref_id)?;
-        // Only this ref's hash-mates matter, so scan for the winner
-        // directly instead of building the whole map for one lookup.
         let mut best = blob.rendered_filename();
         for other in self.by_ref.values() {
             if other.blake3 != blob.blake3 {
@@ -1064,38 +982,6 @@ impl BlobBundle {
             }
         }
         Some(best)
-    }
-
-    /// Write the bytes render made into `blobs_dir/<filename_for(ref)>`,
-    /// once per distinct payload — refs sharing a content hash share the
-    /// one file. Bytes a CAS holds are linked there and not written.
-    /// Skips a write when the target already exists with the expected
-    /// size, so re-running render against the same bundle is idempotent.
-    pub fn materialize_to_dir(&self, blobs_dir: &Path) -> std::io::Result<()> {
-        if !self.has_loose() {
-            return Ok(());
-        }
-        std::fs::create_dir_all(blobs_dir)?;
-        let names = self.names_by_blake3();
-        let mut by_hash: HashMap<&str, &[u8]> = HashMap::new();
-        for blob in self.by_ref.values() {
-            if let Some(bytes) = blob.loose_bytes() {
-                by_hash.entry(blob.blake3.as_str()).or_insert(bytes);
-            }
-        }
-        for (hash, fname) in &names {
-            let Some(bytes) = by_hash.get(hash) else {
-                continue;
-            };
-            let abs = blobs_dir.join(fname);
-            if let Ok(meta) = std::fs::metadata(&abs) {
-                if meta.len() == bytes.len() as u64 {
-                    continue;
-                }
-            }
-            std::fs::write(&abs, bytes)?;
-        }
-        Ok(())
     }
 }
 
@@ -1832,21 +1718,27 @@ mod tests {
 
     // ── BlobBundle ──────────────────────────────────────────────────
 
-    #[test]
-    fn bundle_add_then_get() {
-        let mut b = BlobBundle::new();
-        b.add(
-            "ref-1",
-            b"hello".to_vec(),
-            Some("text/plain".into()),
-            Some("greeting.txt".into()),
+    /// `bytes` as a step's CAS holds them, recorded under `ref_id`.
+    fn held(
+        b: &mut BlobBundle,
+        ref_id: &str,
+        bytes: &[u8],
+        content_type: Option<String>,
+        upstream_name: Option<String>,
+    ) {
+        b.by_ref.insert(
+            ref_id.to_string(),
+            Blob {
+                blake3: blake3_hex(bytes),
+                byte_len: bytes.len() as u64,
+                content_type,
+                upstream_name,
+                held: Held::InStore {
+                    step: "gmail/ingest".into(),
+                },
+                bytes: Some(bytes.to_vec()),
+            },
         );
-        let got = b.get("ref-1").expect("present");
-        assert_eq!(got.blake3.len(), 64);
-        assert_eq!(got.bytes.as_deref(), Some(&b"hello"[..]));
-        assert_eq!(got.byte_len, 5);
-        assert_eq!(got.held, Held::ByRender, "bytes render made live in no CAS");
-        assert_eq!(got.content_type.as_deref(), Some("text/plain"));
     }
 
     /// A step writes `<data root>/<group>/<function>/`, so the two
@@ -1879,11 +1771,9 @@ mod tests {
         assert!(!got.contains_key(&absent));
     }
 
-    /// Bytes a CAS holds are linked at their address and never written
-    /// beside the page; bytes render made are written there and linked
-    /// relative to it.
+    /// Bytes a CAS holds are linked at their address.
     #[tokio::test(flavor = "multi_thread")]
-    async fn stored_bytes_are_linked_and_made_bytes_are_written() {
+    async fn stored_bytes_are_linked_at_their_address() {
         let d = tempdir().unwrap();
         let tree = d.path().join("gmail").join("ingest");
         std::fs::create_dir_all(&tree).unwrap();
@@ -1900,25 +1790,15 @@ mod tests {
             Some("kitten.png".into()),
         );
         cas.close().await;
-        let blobs_dir = d.path().join("page").join("blobs");
-        b.materialize_to_dir(&blobs_dir).unwrap();
-        assert!(!blobs_dir.exists(), "nothing written for stored bytes");
         assert_eq!(
             b.href_for("kept").as_deref(),
             Some(format!("/data/gmail/ingest/blob/{hash}").as_str())
         );
-
-        b.add("made", b"alpha".to_vec(), Some("image/png".into()), None);
-        b.materialize_to_dir(&blobs_dir).unwrap();
-        let written: Vec<_> = std::fs::read_dir(&blobs_dir).unwrap().collect();
-        assert_eq!(written.len(), 1, "only the made bytes are written");
-        assert!(b.href_for("made").unwrap().starts_with("blobs/"));
         assert_eq!(b.href_for("absent"), None);
     }
 
-    /// A part of a stored message is linked inside it and never written
-    /// beside the page; a message render made itself has no address to
-    /// link a part in, so the part is not recorded.
+    /// A part of a stored message is linked inside it; a part of a part
+    /// has no message to be linked in, so it is not recorded.
     #[test]
     fn a_part_is_linked_inside_its_stored_message() {
         let message = blake3_hex(b"From: data@enterprise.example");
@@ -1938,17 +1818,15 @@ mod tests {
             },
             None,
         );
-        emls.add("made", b"From: data".to_vec(), None, None);
-
         let mut b = BlobBundle::new();
         assert!(b.add_part("p", emls.get("eml").unwrap(), part.clone(), None));
-        assert!(!b.add_part("q", emls.get("made").unwrap(), part.clone(), None));
+        let inner = b.get("p").unwrap().clone();
+        assert!(!b.add_part("q", &inner, part.clone(), None));
         assert_eq!(
             b.href_for("p").as_deref(),
             Some(format!("/data/gmail/ingest/blob/{message}/part/{}", part.blake3).as_str())
         );
         assert_eq!(b.href_for("q"), None);
-        assert!(!b.has_loose());
     }
 
     /// A generated ChatGPT image arrives as `image/*` with no name; its
@@ -1960,7 +1838,9 @@ mod tests {
             byte_len: bytes.len() as u64,
             content_type: Some("image/*".into()),
             upstream_name: None,
-            held: Held::ByRender,
+            held: Held::InStore {
+                step: "chatgpt/ingest".into(),
+            },
             bytes: Some(bytes.to_vec()),
         };
         assert!(blob(b"\x89PNG\r\n\x1a\n")
@@ -1991,19 +1871,19 @@ mod tests {
         let mut b = BlobBundle::new();
         // An inline MIME part whose type maps to no extension, with no
         // upstream filename to fall back to: a bare hex stem.
-        b.add(
+        held(
+            &mut b,
             "inline:x",
-            BYTES.to_vec(),
+            BYTES,
             Some("application/x-thing".into()),
             None,
         );
         // The same bytes again as a named attachment part.
-        b.add("att:x", BYTES.to_vec(), None, Some("report.pdf".into()));
+        held(&mut b, "att:x", BYTES, None, Some("report.pdf".into()));
         let inline = b.filename_for("inline:x").unwrap();
         let att = b.filename_for("att:x").unwrap();
         assert_eq!(inline, att, "one payload, one name");
         assert!(att.ends_with(".pdf"), "keeps the usable extension: {att}");
-        assert_eq!(b.names_by_blake3().len(), 1, "one file per content hash");
     }
 
     /// The winner must not come from `HashMap` iteration order, or the
@@ -2021,7 +1901,7 @@ mod tests {
             let order: Vec<usize> = if flip { vec![2, 1, 0] } else { vec![0, 1, 2] };
             for i in order {
                 let (r, ct, name) = &refs[i];
-                b.add(*r, BYTES.to_vec(), ct.clone(), name.clone());
+                held(&mut b, r, BYTES, ct.clone(), name.clone());
             }
             b
         };
@@ -2034,60 +1914,6 @@ mod tests {
         // `.pdf` < `.zip` lexicographically, and both beat the bare stem
         // `application/octet-stream` alone would give.
         assert!(fwd.filename_for("a").unwrap().ends_with(".pdf"));
-    }
-
-    /// Every ref sharing a payload writes one file, and `href_for`
-    /// points at it from both sides.
-    #[test]
-    fn materialize_writes_shared_payload_once() {
-        let d = tempdir().unwrap();
-        const BYTES: &[u8] = b"one payload, two refs";
-        let mut b = BlobBundle::new();
-        b.add(
-            "inline:x",
-            BYTES.to_vec(),
-            Some("application/x-thing".into()),
-            None,
-        );
-        b.add("att:x", BYTES.to_vec(), None, Some("report.pdf".into()));
-        let blobs_dir = d.path().join("blobs");
-        b.materialize_to_dir(&blobs_dir).unwrap();
-        let mut names: Vec<String> = std::fs::read_dir(&blobs_dir)
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .collect();
-        names.sort();
-        assert_eq!(names.len(), 1, "one file, not two: {names:?}");
-        let written = format!("blobs/{}", names[0]);
-        for r in ["inline:x", "att:x"] {
-            assert_eq!(
-                b.href_for(r).as_deref(),
-                Some(written.as_str()),
-                "link for {r} must name the written file"
-            );
-        }
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn bundle_materialize_writes_files() {
-        let d = tempdir().unwrap();
-        let mut b = BlobBundle::new();
-        b.add("r1", b"alpha".to_vec(), Some("image/png".into()), None);
-        b.add("r2", b"beta".to_vec(), Some("text/plain".into()), None);
-        let blobs_dir = d.path().join("blobs");
-        b.materialize_to_dir(&blobs_dir).unwrap();
-        let entries: Vec<_> = std::fs::read_dir(&blobs_dir)
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .collect();
-        assert_eq!(entries.len(), 2);
-        // names are <short blake3>.<ext>
-        for p in &entries {
-            let name = p.file_name().unwrap().to_string_lossy();
-            assert!(name.contains('.'), "expected ext in {name}");
-        }
     }
 
     /// One read serves every key: each gets the refs it named and nothing

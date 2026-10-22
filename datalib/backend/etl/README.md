@@ -667,9 +667,9 @@ from its `.eml`. An attachment or inline image is a MIME part of that
 `.eml`, and the page links it inside the stored message, at
 `/data/<group>/<function>/blob/<eml hash>/part/<part hash>`
 (`BlobBundle::add_part`), where the part hash is the blake3 of the part's
-decoded bytes. No render records bytes of its own in a bundle
-(`BlobBundle::add`) today, so `materialize_to_dir` writes nothing beside
-a page.
+decoded bytes. A bundle holds only what a CAS holds, so render writes no
+file beside a page; a `blobs/` an older build left there goes when the
+page is next written.
 
 **The CAS is plain SQLite, not doltlite**, created through the
 `doltlite_engine=sqlite` URI parameter like the run store. A

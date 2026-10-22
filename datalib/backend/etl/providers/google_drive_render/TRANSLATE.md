@@ -28,8 +28,8 @@ suggestions inline:
 - **Tables** are markdown tables, the first row as the header. A cell
   with several paragraphs joins them with `<br>`, a bullet in a cell is
   `•`, and a table inside a cell is its text on one line.
-- **Images** are `![title](blobs/<file>)`, the bytes the download stored
-  for that image written beside the document. The alt text is the
+- **Images** are `![title](/data/<group>/<function>/blob/<hash>)`,
+  linked where the download stored the image's bytes. The alt text is the
   image's title, else its description. An image whose bytes the store
   does not hold reads `(image not downloaded)` and is a `blob_missing`
   problem on the document.

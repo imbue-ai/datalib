@@ -335,24 +335,14 @@ fn render_one(
     Ok((items_rendered, reactions_rendered))
 }
 
-/// Set each attachment's `href` from the bundle: an address in the
-/// source's blob store, or a file under `<page_dir>/blobs/` for bytes
-/// render made, which are written there. A page whose bundle made no
-/// bytes loses any `blobs/` an older build left beside it.
+/// Set each attachment's `href` from the bundle: its address in the
+/// source's blob store. A page loses any `blobs/` an older build wrote
+/// copies into beside it.
 fn link_attachments(doc: &NormalizedDoc, page_dir: &Path, blobs: &BlobBundle) -> NormalizedDoc {
     let mut out = doc.clone();
     report_missing_bytes(&mut out, blobs);
     let blobs_dir = page_dir.join("blobs");
-    if blobs.has_loose() {
-        if let Err(e) = blobs.materialize_to_dir(&blobs_dir) {
-            tracing::warn!(
-                page_dir = %page_dir.display(),
-                error = %e,
-                "chat_common: writing attachment bytes failed; leaving hrefs unset"
-            );
-            return out;
-        }
-    } else if let Err(e) = std::fs::remove_dir_all(&blobs_dir) {
+    if let Err(e) = std::fs::remove_dir_all(&blobs_dir) {
         if e.kind() != std::io::ErrorKind::NotFound {
             tracing::warn!(dir = %blobs_dir.display(), error = %e, "chat_common: removing an old blobs/ failed");
         }
@@ -2148,11 +2138,11 @@ mod tests {
             ref_id: Some("schematic".to_string()),
         }];
         let mut blobs = BlobBundle::default();
-        blobs.add(
+        blobs.add_stored_with_bytes(
             "schematic",
+            "enterprise/ingest",
             vec![0; 2048],
             Some("application/pdf".into()),
-            None,
         );
         let dir = tempfile::tempdir().unwrap();
 

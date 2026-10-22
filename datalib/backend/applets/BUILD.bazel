@@ -41,7 +41,6 @@ rust_binary(
         "@datalib_crates//:chrono",
         "//datalib/backend/cli_help:datalib_cli_help",
         "@datalib_crates//:clap",
-        "@datalib_crates//:mime_guess",
         "@datalib_crates//:serde",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:serde_json",

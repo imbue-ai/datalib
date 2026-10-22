@@ -84,13 +84,8 @@ const props = defineProps<{
    * source and destination is visually obvious across columns.
    */
   hoverAnchorUuid?: string | null;
-  /**
-   * The markdown_uuid of the body we're rendering. Used to rewrite
-   * relative image references (`![](blobs/foo.png)`) to backend asset
-   * URLs (`/applet/unified_document_index/asset/{markdownUuid}/blobs/foo.png`) so the browser
-   * actually fetches them. Optional: when absent, relative refs pass
-   * through unchanged.
-   */
+  /** The markdown_uuid of the body we're rendering: what a copied 🆔
+   *  link names. */
   markdownUuid?: string | null;
   /**
    * Which of the body's remote references may load, through the
@@ -133,7 +128,7 @@ const emit = defineEmits<{
 }>();
 
 const sanitized = computed(() =>
-  renderDocument(props.body || "", props.markdownUuid ?? null, {
+  renderDocument(props.body || "", {
     accept: props.remoteAccept,
     context: props.remoteContext,
   }),

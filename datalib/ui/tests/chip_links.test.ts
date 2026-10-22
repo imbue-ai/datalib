@@ -94,7 +94,7 @@ describe("contactFromUri", () => {
 describe("the chipLinks markdown plugin", () => {
   const page = (md: string) => {
     const div = document.createElement("div");
-    div.innerHTML = renderDocument(md, null).html;
+    div.innerHTML = renderDocument(md).html;
     return div;
   };
 
