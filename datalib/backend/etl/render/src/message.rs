@@ -41,12 +41,14 @@ fn link_with_title(text: &str, href: &str, title: &str) -> String {
 }
 
 /// Text inside a link's double-quoted title: the quote and the
-/// backslash escaped, a line break a space. markdown-it HTML-escapes the
-/// attribute it makes of it.
+/// backslash escaped, a line break a space, and a pipe escaped, since a
+/// chip may sit in a table cell. markdown-it HTML-escapes the attribute
+/// it makes of it.
 fn md_link_title(s: &str) -> String {
     s.replace(['\r', '\n'], " ")
         .replace('\\', "\\\\")
         .replace('"', "\\\"")
+        .replace('|', "\\|")
 }
 
 /// One message header, rendered as a `## ` line whose parts are tagged
