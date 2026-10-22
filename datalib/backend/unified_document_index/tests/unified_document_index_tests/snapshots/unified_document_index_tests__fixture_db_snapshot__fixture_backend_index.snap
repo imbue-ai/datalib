@@ -2450,9 +2450,9 @@ expression: snapshot
     {
       "account": "picard@enterprise.starfleet",
       "author": null,
-      "byte_size": 388,
+      "byte_size": 412,
       "channel": null,
-      "content_hash": "c3d17e7475f4ca66",
+      "content_hash": "b431f964bde79844",
       "conversation_name": "You've won a holosuite upgrade!",
       "conversation_uuid": "00000000-0000-8148-a613-8c1397015ea8",
       "created_at": "2026-01-08T09:00:00+00:00",
@@ -8360,9 +8360,9 @@ expression: snapshot
     {
       "account": "picard@enterprise.starfleet",
       "author": "Quark's Bar <prizes@quarks.example>",
-      "byte_size": 388,
+      "byte_size": 412,
       "channel": null,
-      "content_hash": "c3d17e7475f4ca66",
+      "content_hash": "b431f964bde79844",
       "conversation_name": "You've won a holosuite upgrade!",
       "conversation_uuid": "00000000-0000-8148-a613-8c1397015ea8",
       "created_at": "2026-01-08T09:00:00+00:00",
