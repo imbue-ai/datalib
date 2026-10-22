@@ -46,6 +46,7 @@ defineProps<{ d: Dashboard }>();
             v-if="s.id !== 'rest'"
             :uri="uriFromEntity('group', s.id)"
             :shown="s.label"
+            quiet
             :open-card="(source) => d.open(source)"
           /><template v-else>{{ s.label }}</template> {{ formatBytes(s.bytes) }}</span
         >

@@ -54,6 +54,12 @@ describe("entityLook", () => {
     expect(
       entityLook(INGEST, "", view("Work Slack · Ingest", "step:ingest", "succeeded"), null).classes,
     ).not.toContain("entity-succeeded");
+    // Beside a status of its own, the chip leaves the status to it.
+    expect(
+      entityLook(INGEST, "", view("Work Slack · Ingest", "step:ingest", "failed"), null, {
+        quiet: true,
+      }).classes,
+    ).not.toContain("entity-failed");
     expect(entityLook(INGEST, "", undefined, null).text).toBe("slack/ingest");
   });
 
@@ -61,7 +67,7 @@ describe("entityLook", () => {
    *  dashboard: the row's short name stays, the whole name is the hover. */
   it("keeps a short name its context gives it, and hovers the whole one", () => {
     const v = view("Work Slack · Download", "step:ingest", "succeeded");
-    const look = entityLook(INGEST, "Download", v, null, true);
+    const look = entityLook(INGEST, "Download", v, null, { keepShown: true });
     expect(look.text).toBe("Download");
     expect(look.title.split("\n")[0]).toBe("Work Slack · Download (slack/ingest)");
     expect(entityLook(INGEST, "Download", v, null).text).toBe("Work Slack · Download");
@@ -106,6 +112,8 @@ describe("a group or step chip's hover, copy, menu and card", () => {
       "Copy “Work Slack · Ingest”",
       "Copy “Work Slack · Ingest (datalib:step/slack/ingest)”",
     ]);
+    // Named only by its id, it offers that once.
+    expect(entityMenu(SLACK, "slack").map((e) => e.id)).toEqual(["open", "copy-id", "browse"]);
     expect(browseQuery(SLACK)).toBe("source_id:slack is:document");
     expect(browseQuery(INGEST)).toBeNull();
   });

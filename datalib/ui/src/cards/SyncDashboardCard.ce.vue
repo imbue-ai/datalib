@@ -282,6 +282,7 @@ onUnmounted(() => {
           <EntityChip
             :uri="uriFromEntity('group', group)"
             :shown="groupRow.name.label"
+            quiet
             :open-card="openFromChip"
           />
           <span
@@ -366,6 +367,7 @@ onUnmounted(() => {
             :uri="uriFromEntity('step', row.id)"
             :shown="row.name.label"
             short
+            quiet
             :open-card="openFromChip"
           />
         </span>

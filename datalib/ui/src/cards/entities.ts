@@ -64,18 +64,22 @@ function followLive() {
 /// The status words worth a mark on the chip itself; the rest are on hover.
 const LOUD = new Set(["running", "waiting", "queued", "failed", "blocked", "interrupted"]);
 
+/** Where a chip is drawn changes what it needs to say. `keepShown`
+ *  keeps the producer's text where the context already names the rest —
+ *  a step drawn under its group reads "Download", not "Work Slack ·
+ *  Download" — and leaves the whole name to the hover. `quiet` drops the
+ *  status dot where a status sits right beside the chip. */
+export type EntityContext = { keepShown?: boolean; quiet?: boolean };
+
 /** How a group or step chip looks: the name the config gives it now (or,
  *  until the answer lands, the one the producer sent), the mark of its
- *  type or its phase, and a status worth noticing. `keepShown` keeps the
- *  producer's text where its context already names the rest — a step
- *  drawn under its group reads "Download", not "Work Slack · Download" —
- *  and leaves the whole name to the hover. */
+ *  type or its phase, and a status worth noticing. */
 export function entityLook(
   uri: string,
   shown: string,
   view: EntityView | undefined,
   fallbackIcon: string | null,
-  keepShown = false,
+  { keepShown = false, quiet = false }: EntityContext = {},
 ): ChipLook {
   const entity = entityFromUri(uri);
   const name = view?.label || shown || entity?.id || uri;
@@ -91,7 +95,7 @@ export function entityLook(
     classes: [
       "handle-chip",
       "entity-chip",
-      ...(status && LOUD.has(status.key) ? [`entity-${status.key}`] : []),
+      ...(status && !quiet && LOUD.has(status.key) ? [`entity-${status.key}`] : []),
     ],
     initial: null,
     icon: view?.icon ?? fallbackIcon,
@@ -161,11 +165,14 @@ export function entityMenu(uri: string, name: string): EntityMenuEntry[] {
     },
   ];
   if (e.kind === "step") out.push({ id: "log", label: "Show its log" });
-  out.push(
-    { id: "copy-id", label: `Copy ${e.id}`, separator: true },
-    { id: "copy-name", label: `Copy “${name}”` },
-    { id: "copy-both", label: `Copy “${entityCopyText(uri, name)}”` },
-  );
+  out.push({ id: "copy-id", label: `Copy ${e.id}`, separator: true });
+  // A source never named in the wizard is called by its id: one Copy.
+  if (name !== e.id) {
+    out.push(
+      { id: "copy-name", label: `Copy “${name}”` },
+      { id: "copy-both", label: `Copy “${entityCopyText(uri, name)}”` },
+    );
+  }
   if (e.kind === "group") out.push({ id: "browse", label: `Browse ${name}`, separator: true });
   return out;
 }
@@ -176,14 +183,13 @@ export function browseQuery(uri: string): string | null {
   return e?.kind === "group" ? `source_id:${e.id} is:document` : null;
 }
 
-/** A group or step chip for a grid cell, drawn from what is known now.
- *  `keepShown`: the cell's own text stays the chip's (`entityLook`). */
+/** A group or step chip for a grid cell, drawn from what is known now. */
 export function entityCell(
   uri: string,
   shown: string,
   view: EntityView | undefined,
   fallbackIcon: string | null,
-  keepShown = false,
+  context: EntityContext = {},
 ): HTMLAnchorElement {
   const a = document.createElement("a");
   a.className = "chip";
@@ -191,7 +197,7 @@ export function entityCell(
   a.dataset.entity = uri;
   a.dataset.shownAs = shown;
   if (fallbackIcon) a.dataset.icon = fallbackIcon;
-  drawChip(a, entityLook(uri, shown, view, fallbackIcon, keepShown));
+  drawChip(a, entityLook(uri, shown, view, fallbackIcon, context));
   return a;
 }
 

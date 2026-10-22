@@ -237,13 +237,9 @@ function identityChip<T>(
   chips: SlickColumnOptions<T>["chips"],
 ): HTMLAnchorElement | null {
   if (chips?.entity && v.entity && entityFromUri(v.entity)) {
-    return entityCell(
-      v.entity,
-      v.label,
-      chips.entity(v.entity),
-      v.icon ?? null,
-      chips.keepLabels === true,
-    );
+    return entityCell(v.entity, v.label, chips.entity(v.entity), v.icon ?? null, {
+      keepShown: chips.keepLabels === true,
+    });
   }
   const contactId = chips?.contact ? contactFromUri(v.id) : null;
   if (contactId && chips?.contact) {

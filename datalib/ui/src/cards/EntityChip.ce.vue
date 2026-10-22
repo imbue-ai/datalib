@@ -22,6 +22,8 @@ const props = defineProps<{
   shown: string;
   /** Keep `shown` as the chip's text: the context names the rest. */
   short?: boolean;
+  /** No status dot: a status is drawn right beside the chip. */
+  quiet?: boolean;
   /** Open a card, from the double-click or the menu. */
   openCard: (source: string) => void;
 }>();
@@ -34,7 +36,10 @@ watchEffect(() => {
   const el = box.value;
   if (!el) return;
   el.replaceChildren(
-    entityCell(props.uri, props.shown, entities.lookup(props.uri), null, props.short === true),
+    entityCell(props.uri, props.shown, entities.lookup(props.uri), null, {
+      keepShown: props.short === true,
+      quiet: props.quiet === true,
+    }),
   );
 });
 

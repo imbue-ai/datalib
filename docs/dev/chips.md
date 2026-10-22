@@ -116,7 +116,9 @@ What goes into the look is each kind's own rule, pure and unit-tested:
   the context already names the group — a step's row under it in the
   Sources table, its section of the group's dashboard — the chip keeps
   the producer's short name ("Download") and the tooltip carries the
-  whole one (`keepShown`, the grid's `chips.keepLabels`).
+  whole one (`keepShown`, the grid's `chips.keepLabels`). Where a
+  status is drawn right beside the chip, as in the Dashboard's rows, the
+  chip drops its dot (`quiet`).
 
 `chip.css` is the one look. The document frame, the search and
 problems grids, the log card, the Sources card, the sync dashboard,

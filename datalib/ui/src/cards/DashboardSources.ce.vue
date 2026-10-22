@@ -29,6 +29,7 @@ defineProps<{ d: Dashboard }>();
         <EntityChip
           :uri="uriFromEntity('group', r.id)"
           :shown="r.name.label"
+          quiet
           :open-card="(source) => d.open(source)"
         />
       </span>
