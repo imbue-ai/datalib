@@ -23,10 +23,7 @@ import {
 import { confirmAction, openRawStore, pickPath, revealInFileManager } from "@/desktop";
 import { pushToast } from "@/toasts";
 import type { Api } from "./cardApi";
-import { appletBrowseSource } from "./cardSources";
-import { historySource } from "./libs/historyView";
-import { logSource } from "./libs/logView";
-import { syncDashboardSource } from "./libs/syncDashboardView";
+import { appletBrowseSource, historySource, logSource, syncDashboardSource } from "./cardSources";
 import type { HostCommands } from "./types";
 
 /// A Manage row with what its Browse opens: a card, or a raw store in
@@ -131,7 +128,7 @@ export function menuTarget(row: ActionRow, editBlocked: string | null): MenuTarg
 
 export type RowActionHost<R extends ActionRow> = {
   api: Api;
-  host: HostCommands;
+  host: Pick<HostCommands, "openCards">;
   /// Every row the card holds, for a group's steps and its status child.
   rows: () => R[];
   /// The run in flight, or the one that finished last.

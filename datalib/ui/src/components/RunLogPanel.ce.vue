@@ -57,6 +57,7 @@ import { uriFromEntity } from "@/cards/chipLinks";
 import { entities, entityCell } from "@/cards/entities";
 import {
   CHIP_SELECTOR,
+  asMenuEntries,
   chipCardSource,
   chipMenuOf,
   chipOf,
@@ -948,13 +949,10 @@ function chipUnderMenu(args: MenuFromCellCallbackArgs): Chip | null {
   return el ? chipOf(el) : null;
 }
 
-/// The chip's own menu, as it is everywhere: a line where it draws one.
+/// The chip's own menu, as it is everywhere.
 function chipEntries(chip: Chip): MenuEntry[] {
   const host = { openCard: (source: string) => emit("open-card", source) };
-  return chipMenuOf(chip, false).flatMap((e, i): MenuEntry[] => [
-    ...(e.separator && i > 0 ? [{ name: "", separator: true }] : []),
-    { name: e.label, action: () => void runChipAction(e.id, chip, host) },
-  ]);
+  return asMenuEntries(chipMenuOf(chip, false), (id) => void runChipAction(id, chip, host));
 }
 
 /// The menu for the cell under the right-click: its chip's entries, then
@@ -1066,7 +1064,7 @@ function gridOptions(): GridOption {
       // Ours copies the cell as a copied line has it; the grid's copies
       // the raw field, the whole of `fields` for Source.
       hideCopyCellValueCommand: true,
-      ...menuSlots(16, menuEntries),
+      ...menuSlots(28, menuEntries),
     },
   };
 }

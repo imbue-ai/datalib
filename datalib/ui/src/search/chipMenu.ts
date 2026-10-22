@@ -1,11 +1,17 @@
 // What a chip in the search field does beyond what it does everywhere:
 // its right-click menu is the field's entries followed by the chip's own
 // (`chipMenuOf`), and the edits the field's entries make to the query.
-import type { ChipAction } from "@/cards/chipActions";
+import type { ChipEntryId } from "@/cards/chipActions";
 import type { Word } from "./queryText";
 
-export type FieldMenuId = "edit-text" | "toggle-negate" | ChipAction;
-export type FieldMenuEntry = { id: FieldMenuId; label: string; separator?: boolean };
+export type FieldMenuId = "edit-text" | "toggle-negate" | ChipEntryId;
+export type FieldMenuEntry = {
+  id: FieldMenuId;
+  label: string;
+  separator?: boolean;
+  disabled?: string | null;
+  danger?: boolean;
+};
 
 /** The menu on a chip in the field: edit it as text, exclude or include
  *  what it names, then `own`, everything the chip offers anywhere. */

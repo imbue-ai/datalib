@@ -11,7 +11,7 @@ import {
   chipOf,
   runChipAction,
   type Chip,
-  type ChipAction,
+  type ChipEntryId,
   type ChipEntry,
 } from "./chipActions";
 import { entities, entityCell } from "./entities";
@@ -78,7 +78,7 @@ function onContextMenu(ev: MouseEvent) {
   menu.value = { chip: c, entries: chipMenuOf(c, false), x: ev.clientX, y: ev.clientY };
 }
 
-async function onPick(id: ChipAction) {
+async function onPick(id: ChipEntryId) {
   const m = menu.value;
   menu.value = null;
   if (m) await runChipAction(id, m.chip, host());

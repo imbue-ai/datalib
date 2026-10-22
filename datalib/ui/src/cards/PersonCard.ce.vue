@@ -33,7 +33,7 @@ import {
   chipOf,
   runChipAction,
   type Chip,
-  type ChipAction,
+  type ChipEntryId,
   type ChipEntry,
   type ChipHost,
 } from "./chipActions";
@@ -226,7 +226,7 @@ function onContextMenu(ev: MouseEvent) {
   };
 }
 
-async function onMenuPick(id: ChipAction) {
+async function onMenuPick(id: ChipEntryId) {
   const m = menu.value;
   menu.value = null;
   if (m) await runChipAction(id, m.chip, chipHost(m.el, m.x, m.y));

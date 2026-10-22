@@ -310,11 +310,18 @@ function menuDom(view: EditorView, at: number): HTMLElement {
       );
     const item = document.createElement("div");
     item.className = "cm-chip-menu-item";
+    if (entry.danger) item.classList.add("cm-chip-menu-danger");
     item.setAttribute("role", "menuitem");
     item.textContent = entry.label;
+    if (entry.disabled) {
+      item.classList.add("cm-chip-menu-disabled");
+      item.setAttribute("aria-disabled", "true");
+      item.title = entry.disabled;
+    }
     // On mousedown, so the field keeps its focus.
     item.addEventListener("mousedown", (e) => {
       e.preventDefault();
+      if (entry.disabled) return;
       view.dispatch({ effects: showMenu.of(null) });
       void runMenu(view, entry.id, w, pressed);
     });
@@ -518,6 +525,9 @@ const theme = EditorView.theme({
     textOverflow: "ellipsis",
   },
   ".cm-chip-menu-item:hover": { background: "var(--datalib-hover, rgb(127 127 127 / 15%))" },
+  ".cm-chip-menu-danger": { color: "var(--datalib-log-error)" },
+  ".cm-chip-menu-disabled": { opacity: "0.45", cursor: "default" },
+  ".cm-chip-menu-disabled:hover": { background: "transparent" },
   ".cm-chip-menu-divider": {
     height: "1px",
     background: "var(--datalib-border)",
