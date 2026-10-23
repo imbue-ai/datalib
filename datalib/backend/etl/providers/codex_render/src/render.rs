@@ -31,7 +31,9 @@ use datalib_etl_agent_sessions_render::{
 
 use crate::ids;
 
-pub const RENDER_VERSION: u32 = 2;
+/// v3: the account's own messages are "Me", as every chat source writes
+///     them.
+pub const RENDER_VERSION: u32 = 3;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -327,7 +329,7 @@ fn response_item(
             };
             let (author, author_kind, label, aside) = match str_of(p, "role") {
                 Some("assistant") => (model, AuthorKind::Named, "LLM Response", false),
-                Some("user") if typed_here() => ("User", AuthorKind::Account, "User Input", false),
+                Some("user") if typed_here() => ("Me", AuthorKind::Account, "User Input", false),
                 _ => ("Codex", AuthorKind::Named, "Harness Message", true),
             };
             // An injected blob — a permissions primer, a whole AGENTS.md —

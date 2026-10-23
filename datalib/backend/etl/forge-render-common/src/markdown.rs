@@ -9,8 +9,9 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use datalib_etl_render::front_matter::yaml_scalar;
 use datalib_etl_render::html::{escape_md_inline, md_code_span, md_link_dest};
-use datalib_etl_render::message::stamp_text_html;
+use datalib_etl_render::message::{chip_link, stamp_text_html};
 use datalib_etl_render::title::Title;
+use datalib_handle::Handle;
 
 use crate::{ordered, ChangeRequest, Comment, ForgeProfile};
 
@@ -61,10 +62,10 @@ fn render(profile: &ForgeProfile, cr: &ChangeRequest, comments: &[&Comment]) -> 
         .render(),
     );
     let state = escape_md_inline(cr.state.as_deref().unwrap_or("unknown"));
-    let author = escape_md_inline(cr.author.as_deref().unwrap_or("unknown"));
+    let author = person(cr.author.as_deref(), cr.author_handle.as_ref());
     let from = md_code_span(cr.from_ref.as_deref().unwrap_or("?"));
     let to = md_code_span(cr.to_ref.as_deref().unwrap_or("?"));
-    out.push_str(&format!("*{state}* — @{author} — {from} → {to}\n\n"));
+    out.push_str(&format!("*{state}* — {author} — {from} → {to}\n\n"));
 
     out.push_str("## Description\n\n");
     if cr.body.trim().is_empty() {
@@ -133,8 +134,22 @@ fn push_comment(out: &mut String, c: &Comment) {
     out.push_str("\n\n");
 }
 
+/// Who wrote something: a chip where the forge gave an account, else
+/// `@login` as text.
+fn person(author: Option<&str>, handle: Option<&Handle>) -> String {
+    let shown = author.unwrap_or("unknown");
+    match handle {
+        Some(h) => chip_link(shown, h),
+        None => format!("@{}", escape_md_inline(shown)),
+    }
+}
+
 fn header(c: &Comment) -> String {
-    let who = escape_md_inline(c.author.as_deref().unwrap_or("unknown"));
+    // A chip stands out on its own; a login as text is bolded instead.
+    let who = match &c.author_handle {
+        Some(_) => person(c.author.as_deref(), c.author_handle.as_ref()),
+        None => format!("**{}**", person(c.author.as_deref(), None)),
+    };
     let when = stamp_text_html(&c.created_at);
     let link = c
         .url
@@ -152,7 +167,7 @@ fn header(c: &Comment) -> String {
     } else {
         ""
     };
-    format!("**@{who}**{state}{reply} · {when}{link}")
+    format!("{who}{state}{reply} · {when}{link}")
 }
 
 /// Each line prefixed `> `, so the comment renders as a blockquote.
@@ -207,8 +222,8 @@ mod tests {
     /// A login, a state, a branch and a file path are names, not markup;
     /// the description and the comments are markdown their authors wrote
     /// and stay so.
-    #[test]
-    fn a_change_request_in_markup_renders_escaped() {
+    /// A change request and one comment on it, every text field markup.
+    fn sample() -> (ChangeRequest, Comment) {
         let cr = ChangeRequest {
             uuid: "u".into(),
             row_id: "r".into(),
@@ -223,6 +238,7 @@ mod tests {
             from_ref: Some("feat/`x`".into()),
             to_ref: Some("main".into()),
             author: Some(MARKUP.into()),
+            author_handle: None,
             created_at: None,
             updated_at: None,
             merged_at: None,
@@ -238,6 +254,7 @@ mod tests {
             external_id: 1,
             in_reply_to_id: None,
             author: Some(MARKUP.into()),
+            author_handle: None,
             body: "*looks good*".into(),
             url: Some("https://e.invalid/c (1)".into()),
             path: Some("src/`a`.rs".into()),
@@ -247,6 +264,30 @@ mod tests {
             updated_at: None,
             state: Some(MARKUP.into()),
         };
+        (cr, comment)
+    }
+
+    /// An author the forge gave an account for is a chip, in the change
+    /// request's line and in a comment's header; the row carries it.
+    #[test]
+    fn an_author_with_an_account_is_a_chip() {
+        let (mut cr, mut comment) = sample();
+        cr.author = Some("Data".into());
+        cr.author_handle = Handle::github("data-soong");
+        comment.author = Some("Data".into());
+        comment.author_handle = Handle::github("data-soong");
+        let md = render(&profile(), &cr, &[&comment]);
+        let chip = "[Data](datalib:handle/github/data-soong \"Data (github:data-soong)\")";
+        assert!(md.contains(&format!(" — {chip} — ")), "{md}");
+        assert!(
+            md.contains(&format!("\n{chip} *(")),
+            "a header, not bold: {md}"
+        );
+    }
+
+    #[test]
+    fn a_change_request_in_markup_renders_escaped() {
+        let (cr, comment) = sample();
         let md = render(&profile(), &cr, &[&comment]);
         let (_, body) = md
             .split_once("---\n\n")

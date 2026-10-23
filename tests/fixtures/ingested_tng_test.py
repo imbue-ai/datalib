@@ -1428,6 +1428,35 @@ class IngestedTngPipelineTest(unittest.TestCase):
             ],
             "a Drive comment's author by name, the account by its address",
         )
+        # A forge author is their account (a GitLab one on its host), and
+        # a Notion author their address where Notion gave one: the grid's
+        # Author chip and `from:` reach them.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT DISTINCT provider || '|' || author_handle FROM grid_rows "
+                "WHERE provider IN ('github', 'gitlab', 'notion') "
+                "AND author_handle IS NOT NULL ORDER BY 1;",
+            ),
+            [
+                "github|github:data-soong",
+                "github|github:geordi-laforge",
+                "github|github:jlpicard",
+                "github|github:worf-rozhenko",
+                "github|github:wtriker",
+                "gitlab|gitlab:gitlab.com/bcrusher",
+                "gitlab|gitlab:gitlab.com/data-soong",
+                "gitlab|gitlab:gitlab.com/geordi-laforge",
+                "gitlab|gitlab:gitlab.com/jlpicard",
+                "gitlab|gitlab:gitlab.com/worf-rozhenko",
+                "gitlab|gitlab:gitlab.com/wtriker",
+                "notion|email:beverly.crusher@enterprise.starfleet.invalid",
+                "notion|email:data@enterprise.starfleet.invalid",
+                "notion|email:geordi.laforge@enterprise.starfleet.invalid",
+                "notion|email:jean-luc.picard@enterprise.starfleet.invalid",
+            ],
+            "forge and Notion authors by their handles",
+        )
         # A Slack mention is a chip link: the viewer resolves the href to
         # the person, and any other markdown viewer shows a link whose
         # title says who it names (docs/dev/plans/chips.md).

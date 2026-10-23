@@ -30,6 +30,13 @@ describe("handleFromUri / uriFromHandle", () => {
       ["linkedin:jlpicard", "https://www.linkedin.com/in/jlpicard"],
       ["google:name/Geordi La Forge", "datalib:handle/google/name/Geordi%20La%20Forge"],
       ["linkedin:jürgen-müller-1a2b", "https://www.linkedin.com/in/j%C3%BCrgen-m%C3%BCller-1a2b"],
+      ["github:data-soong", "datalib:handle/github/data-soong"],
+      ["github:dependabot[bot]", "datalib:handle/github/dependabot%5Bbot%5D"],
+      ["gitlab:gitlab.com/jlpicard", "datalib:handle/gitlab/gitlab.com/jlpicard"],
+      [
+        "notion:00000001-1701-4d00-8000-000000000001",
+        "datalib:handle/notion/00000001-1701-4d00-8000-000000000001",
+      ],
     ]) {
       expect(uriFromHandle(handle)).toBe(uri);
       expect(handleFromUri(uri)).toBe(handle);
@@ -47,6 +54,10 @@ describe("handleFromUri / uriFromHandle", () => {
       "signal_aci:0195683a-d140-87f9-bdf6-234da6d6880c",
     );
     expect(handleFromUri("datalib:handle/signal_aci/0195683a")).toBeNull();
+    expect(handleFromUri("datalib:handle/github/Data-Soong")).toBe("github:data-soong");
+    expect(handleFromUri("datalib:handle/github/data%20soong")).toBeNull();
+    expect(handleFromUri("datalib:handle/gitlab/jlpicard")).toBeNull();
+    expect(handleFromUri("datalib:handle/notion/not-a-uuid")).toBeNull();
     expect(handleFromUri("datalib:handle/facebook/name/Q%2")).toBeNull();
     expect(handleFromUri("datalib:handle/facebook/name/%20%20")).toBeNull();
     expect(handleFromUri("datalib:handle/facebook/deleted/12a")).toBeNull();

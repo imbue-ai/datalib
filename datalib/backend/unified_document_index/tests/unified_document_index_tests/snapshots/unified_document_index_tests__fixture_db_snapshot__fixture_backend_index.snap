@@ -492,7 +492,7 @@ expression: snapshot
       "md_path": "notion/render_markdown/pages/b1d6e000-1701-4d00-8000-000000000001/threads/d0000001-1701-4d00-8000-000000000001.md",
       "modified_at": "2369-04-15T01:05:00.000Z",
       "provider": "notion",
-      "renderer_version": "rust-v1.9",
+      "renderer_version": "rust-v1.10",
       "source_id": "notion",
       "title": "Bridge Operations Handbook"
     },
@@ -516,7 +516,7 @@ expression: snapshot
       "md_path": "claude-code/render_markdown/00000000-0000-83df-8efb-7b99abfef902/all.md",
       "modified_at": "2364-04-11T10:00:58+00:00",
       "provider": "claude_code",
-      "renderer_version": "rust-v1.3",
+      "renderer_version": "rust-v1.4",
       "source_id": "claude-code",
       "title": "Scan the emitter logs since stardate 41153.7 for phase drift events. — subagent of Deflector dish drift"
     },
@@ -744,7 +744,7 @@ expression: snapshot
       "md_path": "codex/render_markdown/00000000-0000-86ab-b7b0-53153bf8d22e/all.md",
       "modified_at": "2364-04-11T10:03:56+00:00",
       "provider": "codex",
-      "renderer_version": "rust-v1.2",
+      "renderer_version": "rust-v1.3",
       "source_id": "codex",
       "title": "Data — sub-agent of The deflector dish drifts 0.3 degrees every hour. Find out why and fix it."
     },
@@ -792,7 +792,7 @@ expression: snapshot
       "md_path": "notion/render_markdown/pages/b1d6e000-1701-4d00-8000-000000000001/threads/d0000001-1701-4d00-8000-000000000002.md",
       "modified_at": "2369-04-15T01:10:00.000Z",
       "provider": "notion",
-      "renderer_version": "rust-v1.9",
+      "renderer_version": "rust-v1.10",
       "source_id": "notion",
       "title": "Bridge Operations Handbook"
     },
@@ -912,7 +912,7 @@ expression: snapshot
       "md_path": "codex/render_markdown/00000000-0000-8791-bfaa-35b2f6b12135/all.md",
       "modified_at": "2364-04-11T10:03:51+00:00",
       "provider": "codex",
-      "renderer_version": "rust-v1.2",
+      "renderer_version": "rust-v1.3",
       "source_id": "codex",
       "title": "The deflector dish drifts 0.3 degrees every hour. Find out why and fix it."
     },
@@ -1260,7 +1260,7 @@ expression: snapshot
       "md_path": "claude-code/render_markdown/00000000-0000-8a77-bcf1-64f2ad0583fa/all.md",
       "modified_at": "2364-04-11T14:30:35+00:00",
       "provider": "claude_code",
-      "renderer_version": "rust-v1.3",
+      "renderer_version": "rust-v1.4",
       "source_id": "claude-code",
       "title": "Why does the replicator return cold Earl Grey? Screenshot attached."
     },
@@ -1272,7 +1272,7 @@ expression: snapshot
       "md_path": "codex/render_markdown/00000000-0000-8a78-90c5-dbad27c044ff/all.md",
       "modified_at": "2364-04-12T14:31:17+00:00",
       "provider": "codex",
-      "renderer_version": "rust-v1.2",
+      "renderer_version": "rust-v1.3",
       "source_id": "codex",
       "title": "Why does the replicator return cold Earl Grey? Screenshot attached."
     },
@@ -1368,7 +1368,7 @@ expression: snapshot
       "md_path": "claude-code/render_markdown/00000000-0000-8b27-94b8-759d35b8fe6b/all.md",
       "modified_at": "2364-04-11T10:01:59+00:00",
       "provider": "claude_code",
-      "renderer_version": "rust-v1.3",
+      "renderer_version": "rust-v1.4",
       "source_id": "claude-code",
       "title": "Deflector dish drift"
     },
@@ -1476,7 +1476,7 @@ expression: snapshot
       "md_path": "codex/render_markdown/00000000-0000-8bef-8ff5-58a96f311ccd/all.md",
       "modified_at": "2364-04-13T09:18:02+00:00",
       "provider": "codex",
-      "renderer_version": "rust-v1.2",
+      "renderer_version": "rust-v1.3",
       "source_id": "codex",
       "title": "Audit the warp core containment logs and tell me what you find."
     },
@@ -2028,7 +2028,7 @@ expression: snapshot
       "md_path": "notion/render_markdown/pages/b1d6e000-1701-4d00-8000-000000000003/index.md",
       "modified_at": "2369-04-15T00:02:00.000Z",
       "provider": "notion",
-      "renderer_version": "rust-v1.9",
+      "renderer_version": "rust-v1.10",
       "source_id": "notion",
       "title": "Incident Log: Stardate 47988.1"
     },
@@ -2040,7 +2040,7 @@ expression: snapshot
       "md_path": "notion/render_markdown/pages/b1d6e000-1701-4d00-8000-000000000001/index.md",
       "modified_at": "2369-04-15T00:02:00.000Z",
       "provider": "notion",
-      "renderer_version": "rust-v1.9",
+      "renderer_version": "rust-v1.10",
       "source_id": "notion",
       "title": "Bridge Operations Handbook"
     },
@@ -2052,7 +2052,7 @@ expression: snapshot
       "md_path": "notion/render_markdown/pages/b1d6e000-1701-4d00-8000-000000000002/index.md",
       "modified_at": "2369-04-15T00:02:00.000Z",
       "provider": "notion",
-      "renderer_version": "rust-v1.9",
+      "renderer_version": "rust-v1.10",
       "source_id": "notion",
       "title": "Shift Roster"
     },
@@ -2064,7 +2064,7 @@ expression: snapshot
       "md_path": "github/render_markdown/enterprise-d/replicator-firmware/pr-42/index.md",
       "modified_at": "2369-04-15T11:30:00Z",
       "provider": "github",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "github",
       "title": "Recalibrate replicator templates for Earl Grey, hot"
     },
@@ -2076,7 +2076,7 @@ expression: snapshot
       "md_path": "gitlab/render_markdown/enterprise-d/holodeck/mr-17/index.md",
       "modified_at": "2369-04-15T11:30:00.000Z",
       "provider": "gitlab",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "gitlab",
       "title": "Add Earl Grey, hot to replicator menu"
     },
@@ -2088,7 +2088,7 @@ expression: snapshot
       "md_path": "gitlab/render_markdown/enterprise-d/holodeck/mr-18/index.md",
       "modified_at": "2369-04-15T14:30:00.000Z",
       "provider": "gitlab",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "gitlab",
       "title": "Holodeck safety interlock regression test"
     },
@@ -2100,7 +2100,7 @@ expression: snapshot
       "md_path": "github/render_markdown/enterprise-d/replicator-firmware/pr-43/index.md",
       "modified_at": "2369-04-15T14:30:00Z",
       "provider": "github",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "github",
       "title": "Add holodeck safety interlock for live phaser fire"
     }
@@ -10609,7 +10609,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "User",
+      "author": "Me",
       "byte_size": 82,
       "channel": null,
       "content_hash": "378d70453dee3d98",
@@ -10849,7 +10849,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "User",
+      "author": "Me",
       "byte_size": 68,
       "channel": null,
       "content_hash": "2e114afc4d888af6",
@@ -10969,7 +10969,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "User",
+      "author": "Me",
       "byte_size": 74,
       "channel": null,
       "content_hash": "d7faddef6b9a5ee7",
@@ -11299,7 +11299,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "User",
+      "author": "Me",
       "byte_size": 8,
       "channel": null,
       "content_hash": "dad875b8e74368b4",
@@ -11599,7 +11599,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "User",
+      "author": "Me",
       "byte_size": 40,
       "channel": null,
       "content_hash": "995c99110a05ab2f",
@@ -11629,7 +11629,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "User",
+      "author": "Me",
       "byte_size": 61,
       "channel": null,
       "content_hash": "02696e08eb771907",
@@ -11839,7 +11839,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "User",
+      "author": "Me",
       "byte_size": 93,
       "channel": null,
       "content_hash": "569dd087ac12ca2b",
@@ -11959,7 +11959,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "User",
+      "author": "Me",
       "byte_size": 93,
       "channel": null,
       "content_hash": "569dd087ac12ca2b",
@@ -12139,7 +12139,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "User",
+      "author": "Me",
       "byte_size": 63,
       "channel": null,
       "content_hash": "bd3f9601616ff02f",
@@ -12379,7 +12379,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "User",
+      "author": "Me",
       "byte_size": 70,
       "channel": null,
       "content_hash": "63beb46b843f5bfd",
@@ -14959,7 +14959,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "jlpicard",
+      "author": "Jean-Luc Picard",
       "byte_size": null,
       "channel": null,
       "content_hash": "a9c8c3e5dc5647f8",
@@ -15229,7 +15229,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "wtriker",
+      "author": "William T. Riker",
       "byte_size": null,
       "channel": null,
       "content_hash": "f207bea44dab0cdd",
@@ -15379,7 +15379,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "jlpicard",
+      "author": "Jean-Luc Picard",
       "byte_size": null,
       "channel": null,
       "content_hash": "b1c2a46c795f0e5d",
@@ -15409,7 +15409,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "worf-rozhenko",
+      "author": "Worf",
       "byte_size": null,
       "channel": null,
       "content_hash": "bfdae1b7c3277e29",
@@ -15469,7 +15469,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "jlpicard",
+      "author": "Jean-Luc Picard",
       "byte_size": null,
       "channel": null,
       "content_hash": "ec8b5f74490072d7",
@@ -15559,7 +15559,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "data-soong",
+      "author": "Lt. Cmdr. Data",
       "byte_size": null,
       "channel": null,
       "content_hash": "feaea1d96a72c87c",
@@ -15679,7 +15679,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "geordi-laforge",
+      "author": "Geordi La Forge",
       "byte_size": null,
       "channel": null,
       "content_hash": "0b8e5000cc161205",
@@ -15709,7 +15709,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "jlpicard",
+      "author": "Jean-Luc Picard",
       "byte_size": null,
       "channel": null,
       "content_hash": "56b76375daa3f840",
@@ -15739,7 +15739,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "bcrusher",
+      "author": "Beverly Crusher",
       "byte_size": null,
       "channel": null,
       "content_hash": "b53330815f8d718a",
@@ -19023,7 +19023,7 @@ expression: snapshot
     },
     {
       "kind": "Table",
-      "members_sha": "sha256:19a77a0aeb2d0368ab17b91d21de8cca3ac8aa2dae8ea1ad11fbd37976b2e7c4",
+      "members_sha": "sha256:f588d9a2c7860e02c588638605eaaff070c0e13651e1378339d3934e47f3df39",
       "rows": 184,
       "source": ""
     }

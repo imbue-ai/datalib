@@ -34,6 +34,9 @@ pub struct ParsedNotion {
     /// the comment itself, so this is for the places it does not: a
     /// page's `created_by` / `last_edited_by`, and people properties.
     pub user_names: HashMap<String, String>,
+    /// `user_id -> email address`, for the users Notion gave one for:
+    /// what makes a comment's author a chip.
+    pub user_emails: HashMap<String, String>,
     /// `block_id -> the text a comment on that block is anchored to`.
     /// A comment names its block and carries no quote, so without this
     /// a thread's anchor is an opaque uuid.
@@ -82,6 +85,7 @@ async fn load(db: &RawDb, range: RawRange<'_>) -> Result<ParsedNotion> {
     let changed = changed_rows(db.pool(), range, pin, &TABLES).await?;
 
     let user_names = db.load_user_names().await?;
+    let user_emails = db.load_user_emails().await?;
     let anchor_text = db.load_comment_anchors().await?;
     let mut pages = db.load_pages().await?;
     let mut page_markdown = db.load_page_markdown().await?;
@@ -128,6 +132,7 @@ async fn load(db: &RawDb, range: RawRange<'_>) -> Result<ParsedNotion> {
         markdown_by_page: page_markdown.into_iter().collect(),
         comments,
         user_names,
+        user_emails,
         anchor_text,
         attachment_ids_by_page,
         refs_by_page,
