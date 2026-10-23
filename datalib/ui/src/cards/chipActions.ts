@@ -39,12 +39,16 @@ import {
   entityMenu,
 } from "./entities";
 import { CONTACT, type ChipRef } from "@/search/queryText";
+import { dateCopyText, dateMenu, dateText, dayQuery, parseStamp, sideQuery } from "./dates";
+
+/** What a chip names: what the search field can name, or a date, which
+ *  only a document draws. */
+export type AnyChipRef = ChipRef | { kind: "date"; datetime: string };
+export type { ChipRef };
 
 /** A chip as it was drawn: what it names, and the name its producer
  *  showed before the resolver answered. */
-export type { ChipRef };
-
-export type Chip = { ref: ChipRef; shownAs: string };
+export type Chip = { ref: AnyChipRef; shownAs: string };
 
 /** Every menu entry any chip offers, in the one order every menu shows
  *  them: open what it names first (the double-click's card) and a step's
@@ -57,6 +61,8 @@ export const CHIP_ACTIONS = [
   "copy-name",
   "copy-both",
   "search",
+  "before",
+  "after",
   "browse",
   "edit",
 ] as const;
@@ -149,7 +155,8 @@ export function asMenuEntries(entries: ChipEntry[], run: (id: ChipEntryId) => vo
   ]);
 }
 
-export const CHIP_SELECTOR = "a.chip[data-handle], a.chip[data-entity], a.chip[data-contact]";
+export const CHIP_SELECTOR =
+  "a.chip[data-handle], a.chip[data-entity], a.chip[data-contact], time.chip[datetime]";
 
 /** The chip element `target` is in, of any kind; null off a chip. */
 export function chipElAt(target: EventTarget | null | undefined): HTMLElement | null {
@@ -163,6 +170,8 @@ export function chipOf(el: HTMLElement): Chip | null {
   if (el.dataset.entity) return { ref: { kind: "entity", uri: el.dataset.entity }, shownAs };
   if (el.dataset.handle) return { ref: { kind: "person", handle: el.dataset.handle }, shownAs };
   if (el.dataset.contact) return { ref: { kind: "contact", id: el.dataset.contact }, shownAs };
+  const datetime = el.tagName === "TIME" ? el.getAttribute("datetime") : null;
+  if (datetime) return { ref: { kind: "date", datetime }, shownAs };
   return null;
 }
 
@@ -177,6 +186,10 @@ export function chipName(chip: Chip): string {
       return chipLook(ref.handle, shownAs, people.get(ref.handle) ?? NOBODY, false).text;
     case "contact":
       return contactLook(shownAs || "a contact", contactsById.get(ref.id)).text;
+    case "date": {
+      const s = parseStamp(ref.datetime);
+      return s ? dateText(s) : ref.datetime;
+    }
   }
 }
 
@@ -207,13 +220,35 @@ export function chipMenuOf(chip: Chip, canLink: boolean): ChipEntry[] {
         { id: "search", label: `Everything with ${name}`, separator: true },
       ];
     }
+    case "date": {
+      const s = parseStamp(ref.datetime);
+      return s ? dateMenu(ref.datetime, s) : [];
+    }
+  }
+}
+
+/** The search a chip stands for when it is dragged into a search bar:
+ *  everything with a person or a contact, a group's documents, a date's
+ *  day. Null for a step, which no search names. */
+export function chipDragQuery(ref: AnyChipRef): string | null {
+  switch (ref.kind) {
+    case "entity":
+      return browseQuery(ref.uri);
+    case "person":
+      return everythingWith(ref.handle, people.get(ref.handle)?.mine ?? null);
+    case "contact":
+      return contactQuery(ref.id);
+    case "date": {
+      const s = parseStamp(ref.datetime);
+      return s ? dayQuery(s) : null;
+    }
   }
 }
 
 /** What double-clicking a chip opens: a person's card, led by the
  *  source the chip was seen in; a group's sync dashboard; a step's log.
  *  Null for a contact, which has no card of its own yet. */
-export function chipCardSource(ref: ChipRef, seenIn: string | null): string | null {
+export function chipCardSource(ref: AnyChipRef, seenIn: string | null): string | null {
   switch (ref.kind) {
     case "entity":
       return entityCardSource(ref.uri);
@@ -221,6 +256,10 @@ export function chipCardSource(ref: ChipRef, seenIn: string | null): string | nu
       return personSource(ref.handle, { seenIn });
     case "contact":
       return null;
+    case "date": {
+      const q = chipDragQuery(ref);
+      return q ? searchSource(q) : null;
+    }
   }
 }
 
@@ -310,10 +349,13 @@ export async function runChipAction(id: ChipEntryId, chip: Chip, host: ChipHost)
     case "copy-id":
       if (ref.kind === "person") await copy(handleValue(ref.handle));
       if (ref.kind === "entity") await copy(entityFromUri(ref.uri)?.id ?? ref.uri);
+      if (ref.kind === "date") await copy(ref.datetime.trim());
       return;
-    case "copy-name":
-      await copy(name);
+    case "copy-name": {
+      const s = ref.kind === "date" ? parseStamp(ref.datetime) : null;
+      await copy(s ? dateCopyText(s) : name);
       return;
+    }
     case "copy-both":
       if (ref.kind === "person") await copy(copyText(ref.handle, name));
       if (ref.kind === "entity") await copy(entityCopyText(ref.uri, name));
@@ -323,7 +365,17 @@ export async function runChipAction(id: ChipEntryId, chip: Chip, host: ChipHost)
         search(everythingWith(ref.handle, people.get(ref.handle)?.mine ?? null), "narrow");
       }
       if (ref.kind === "contact") search(contactQuery(ref.id), "narrow");
+      if (ref.kind === "date") {
+        const q = chipDragQuery(ref);
+        if (q) search(q, "narrow");
+      }
       return;
+    case "before":
+    case "after": {
+      const s = ref.kind === "date" ? parseStamp(ref.datetime) : null;
+      if (ref.kind === "date" && s) search(sideQuery(ref.datetime, s, id), "narrow");
+      return;
+    }
     case "browse": {
       const q = ref.kind === "entity" ? browseQuery(ref.uri) : null;
       if (q) search(q, "replace");
