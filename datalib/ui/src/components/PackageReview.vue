@@ -7,6 +7,8 @@
 import { computed, nextTick, onMounted, ref } from "vue";
 import { lookupPackage, type PackageLookup } from "@/api";
 import { formatBytes } from "@/config/bytes";
+import { GALLERY, type GalleryEntry } from "@/config/packageGallery";
+import { packagesState } from "@/config/packages";
 
 const props = defineProps<{
   /// Does the add (or the update) once the person agrees. Throws with
@@ -85,6 +87,17 @@ const host = computed(() => {
   return m ? `github.com/${m[1]}` : url.replace(/^https:\/\//, "").replace(/\/[^/]*$/, "");
 });
 
+/// Gallery entries, each marked when this library already has it.
+const gallery = computed(() => {
+  const have = new Set((packagesState.value?.packages ?? []).map((p) => p.source));
+  return GALLERY.map((g) => ({ ...g, added: have.has(g.source) }));
+});
+
+function review(g: GalleryEntry) {
+  source.value = g.source;
+  void look();
+}
+
 async function look() {
   if (!source.value.trim()) return;
   looking.value = true;
@@ -134,6 +147,22 @@ onMounted(() => {
 <template>
   <section class="pkr">
     <template v-if="!found && !props.current">
+      <div v-if="gallery.length" class="pkr-gallery">
+        <span class="pkr-label">From the datalib gallery</span>
+        <ul class="pkr-list">
+          <li v-for="g in gallery" :key="g.source" class="pkr-item">
+            <span class="pkr-item-text">
+              <b>{{ g.name }}</b>
+              <small>{{ g.description }}</small>
+              <small
+                ><code>{{ g.source }}</code></small
+              >
+            </span>
+            <span v-if="g.added" class="pkr-help">In this library</span>
+            <button v-else class="btn" :disabled="looking" @click="review(g)">Review</button>
+          </li>
+        </ul>
+      </div>
       <label class="pkr-label" for="pkr-link">{{
         props.label ?? "Add a package from a link"
       }}</label>
@@ -245,6 +274,38 @@ onMounted(() => {
 .pkr-label {
   font-weight: 600;
 }
+.pkr-gallery {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.pkr-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--datalib-border-soft);
+  border-radius: calc(var(--datalib-radius) + 2px);
+}
+.pkr-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+}
+.pkr-item + .pkr-item {
+  border-top: 1px solid var(--datalib-border-soft);
+}
+.pkr-item-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.pkr-item-text small {
+  color: var(--datalib-muted);
+  font-size: var(--datalib-font-size-small);
+}
 .pkr-row {
   display: flex;
   gap: 8px;
@@ -291,7 +352,8 @@ onMounted(() => {
   overflow-wrap: anywhere;
 }
 .pkr-facts code,
-.pkr-details code {
+.pkr-details code,
+.pkr-item-text code {
   background: var(--datalib-code-bg);
   padding: 1px 4px;
   border-radius: 4px;

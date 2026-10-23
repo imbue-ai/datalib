@@ -4,8 +4,8 @@ A **package** is a set of programs from outside datalib that a library
 runs as steps and applets: a source type datalib doesn't ship, or a
 card. A package is published as one manifest file at a URL, usually an
 asset of a GitHub release. There is no server of ours in between: anyone
-who knows the link can add the package, and a curated store would be one
-more file listing links (§"A curated store").
+who knows the link can add the package, and the gallery of packages datalib
+suggests is one more file listing links (§"The gallery").
 
 Which packages a library uses is part of the library, not of the app. The
 library's `config.toml` lists them, pinned by hash, and their programs are
@@ -89,7 +89,8 @@ anything else is refused.
 scripts/pack_datalib_package.py <package dir> <out dir>
 ```
 
-The package dir holds `datalib-package.toml` without `[artifacts]`, and
+The script needs Python 3.11 or newer. The package dir holds
+`datalib-package.toml` without `[artifacts]`, and
 `build/<key>/` for each build. The script packs each build, then writes
 the manifest with `[artifacts]` naming each archive by its sha256. Upload
 everything in the out dir as the assets of one GitHub release. People add
@@ -176,6 +177,7 @@ library is cleaned up by hand.
 - **Packages** on the Sources card lists the library's packages, offers
   "Check for update" and "Remove", and has the same box for adding one.
   This is the way in for a package that adds only applets.
+- Both show the gallery (§"The gallery") above the link box.
 
 ## Trust
 
@@ -185,9 +187,15 @@ before anything is fetched. The pin is what makes that confirmation
 mean something: the bytes that run are the bytes the person agreed to,
 until they review and accept an update.
 
-## A curated store
+## The gallery
 
-A curated store needs no server either. It would be a file listing
-`source` strings with a short description each, kept in a repo. The app
-would read a configured list of such files and show their entries above
-the link box. Nothing in the format above has to change for it.
+The gallery is the list of packages datalib suggests:
+`datalib/ui/src/config/packageGallery.ts`, one entry per package with its
+`source`, a name and a one-line description. It ships in the app, so a
+change to it reaches people with the next release. Both places that add
+a package show it above the link box. Choosing one looks its `source` up
+and shows the same review as a pasted link: the gallery vouches for
+nothing, and the person still decides. A package already in the library
+is marked as such.
+
+To list a package, publish it as above and add an entry.
