@@ -296,7 +296,13 @@ async fn main() -> Result<()> {
     let host::StepEnv {
         vars: child_env,
         log_filter,
-    } = host::step_env(&cfg, binary_dir.as_deref(), &[], &now, &run_id)?;
+    } = host::step_env(
+        &cfg,
+        binary_dir.as_deref(),
+        &[data_root.join(datalib_runtime::layout::BIN_DIR_REL)],
+        &now,
+        &run_id,
+    )?;
 
     // stderr stays the stream; the store is the record. Both, not
     // either: the stream is what a terminal or a tee sees as it happens,

@@ -40,6 +40,7 @@ pub mod disk_free;
 mod embed;
 pub mod frontend;
 pub mod history;
+pub mod library_bin;
 pub mod lock;
 pub mod logging;
 pub mod loop_guard;
@@ -180,14 +181,6 @@ pub struct FeedbackResponse {
     pub feedback_uuid: String,
     pub created_at_utc: String,
     pub git_hash: String,
-}
-
-pub fn user_bin_dir() -> Option<PathBuf> {
-    #[cfg(windows)]
-    let home = std::env::var_os("USERPROFILE")?;
-    #[cfg(not(windows))]
-    let home = std::env::var_os("HOME")?;
-    Some(PathBuf::from(home).join(".datalib").join("bin"))
 }
 
 pub fn router(state: AppState) -> Router {

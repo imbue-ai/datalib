@@ -181,18 +181,18 @@ after writing one. The same goes for an index group still named
 A step may name a `command`: an ordinary command line, for a step that
 is not one of the built-in functions. If the user's request needs a
 new program (a custom fetcher, a converter, …), write it and install
-it into **`~/.datalib/bin`** — either the binary itself or a symlink
-to wherever it lives:
+it into the library's **`system/bin/`** — either the binary itself or a
+symlink to wherever it lives:
 
 ```sh
-mkdir -p ~/.datalib/bin
-ln -sf /path/to/my-fetcher ~/.datalib/bin/my-fetcher
+mkdir -p <data_root>/system/bin
+ln -sf /path/to/my-fetcher <data_root>/system/bin/my-fetcher
 ```
 
-`~/.datalib/bin` is prepended to `PATH` whenever the UI runs the
-pipeline, so a bare `command = "my-fetcher --out ."` resolves. The same
-applies to an `[[applets]]` command, so one install location covers both
-kinds of entry. Keep step commands non-interactive; they run headless
+`<data_root>/system/bin` is on `PATH` whenever the pipeline runs, after
+datalib's own binaries, so a bare `command = "my-fetcher --out ."`
+resolves. The same applies to an `[[applets]]` command, so one install
+location covers both kinds of entry. Keep step commands non-interactive; they run headless
 with their output captured into the run's log (the Manage tab shows it).
 
 Steps run with the data root as their working directory and write the

@@ -40,6 +40,7 @@ rust_library(
         "src/embed.rs",
         "src/history.rs",
         "src/lib.rs",
+        "src/library_bin.rs",
         "src/lock.rs",
         "src/logging.rs",
         "src/loop_guard.rs",

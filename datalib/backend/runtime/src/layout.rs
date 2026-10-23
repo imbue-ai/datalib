@@ -92,6 +92,11 @@ pub const LOCK_FILE: &str = "lock";
 /// hash (`docs/dev/packages.md`).
 pub const PACKAGES_DIR_REL: &str = "system/packages";
 
+/// The library's own programs, relative to the data root. A step's or an
+/// applet's bare `command` is looked up here after `binary_dir` and
+/// before `PATH`, so a program a library runs travels with it.
+pub const BIN_DIR_REL: &str = "system/bin";
+
 /// Where a package pinned at `manifest_sha256` is unpacked, relative to
 /// the data root. A step's `command` resolves its program in here; the
 /// hash is in the path, so an update changes the step's argv and with

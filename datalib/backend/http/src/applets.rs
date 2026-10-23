@@ -95,7 +95,8 @@ fn base_command(
     let mut cmd = Command::new(program);
     cmd.args(&argv[1..]);
     cmd.current_dir(data_root);
-    if let Some(path) = child_path(binary_dir, crate::user_bin_dir())
+    let library_bin = data_root.join(datalib_runtime::layout::BIN_DIR_REL);
+    if let Some(path) = child_path(binary_dir, Some(library_bin))
         .map_err(|e| anyhow::anyhow!("applet {:?}: build child PATH: {e}", entry.id))?
     {
         cmd.env("PATH", path);
@@ -148,13 +149,13 @@ fn prune_namespaces(root: &Path, keep: &BTreeSet<String>) {
 
 fn child_path(
     binary_dir: Option<&Path>,
-    user_bin: Option<PathBuf>,
+    library_bin: Option<PathBuf>,
 ) -> Result<Option<std::ffi::OsString>, std::env::JoinPathsError> {
     let mut paths: Vec<PathBuf> = Vec::new();
     if let Some(dir) = binary_dir {
         paths.push(dir.to_path_buf());
     }
-    if let Some(dir) = user_bin {
+    if let Some(dir) = library_bin {
         // Prepended even when the dir does not exist yet: an agent may
         // create it between runs, and a missing PATH entry is harmless.
         if Some(dir.as_path()) != binary_dir {
@@ -1186,9 +1187,9 @@ mod tests {
     /// the same way a step does, or the documented install location
     /// only works for half the config file.
     #[test]
-    fn child_path_prepends_binary_dir_then_the_user_bin_dir() {
+    fn child_path_prepends_binary_dir_then_the_library_bin_dir() {
         let bin = PathBuf::from("/opt/datalib/bin");
-        let user = PathBuf::from("/home/u/.datalib/bin");
+        let user = PathBuf::from("/lib/system/bin");
         let joined = child_path(Some(&bin), Some(user.clone()))
             .unwrap()
             .expect("some path");
@@ -1202,7 +1203,7 @@ mod tests {
 
     #[test]
     fn child_path_does_not_repeat_a_dir() {
-        let dir = PathBuf::from("/home/u/.datalib/bin");
+        let dir = PathBuf::from("/lib/system/bin");
         let joined = child_path(Some(&dir), Some(dir.clone()))
             .unwrap()
             .expect("some path");
@@ -1210,11 +1211,11 @@ mod tests {
         assert_eq!(parts.iter().filter(|p| **p == dir).count(), 1, "{parts:?}");
     }
 
-    /// With no config `binary_dir`, `~/.datalib/bin` still comes first —
-    /// this is the case the user's own config hits.
+    /// With no config `binary_dir`, the library's `system/bin` still
+    /// comes first.
     #[test]
     fn child_path_works_without_a_binary_dir() {
-        let user = PathBuf::from("/home/u/.datalib/bin");
+        let user = PathBuf::from("/lib/system/bin");
         let joined = child_path(None, Some(user.clone()))
             .unwrap()
             .expect("some path");
