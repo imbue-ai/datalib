@@ -28,6 +28,7 @@ import {
   linkHandle,
   unlinkHandle,
   peopleTitle,
+  contactLook,
 } from "./contacts";
 
 function dom(html: string): HTMLElement {
@@ -503,5 +504,27 @@ describe("a conversation titled by its people", () => {
     ]);
     expect(names.every((a) => !a.querySelector(".handle-photo, .handle-initial"))).toBe(true);
     expect(crew.textContent).toContain("William Riker, Data, Geordi La Forge");
+  });
+});
+
+describe("a contact's chip", () => {
+  /** A contact you made has no photo of its own yet, so its chip showed
+   *  an initial where every one of its handles' chips showed a face. */
+  it("takes a photo from its handles' records until it has its own", () => {
+    const picard = contact("datalib_contacts", "Jean-Luc Picard", [
+      ["email:jlpicard@enterprise.starfleet", null],
+      ["email:picard@enterprise.starfleet", null],
+    ]);
+    const lookup = vi.spyOn(people, "lookup").mockImplementation((handle) =>
+      handle === "email:picard@enterprise.starfleet"
+        ? {
+            mine: null,
+            sourceContacts: [{ ...picard, source_id: "tng_contacts", photo_url: "/p/picard.jpg" }],
+          }
+        : undefined,
+    );
+    expect(contactLook("", picard).photo).toBe("/p/picard.jpg");
+    expect(contactLook("", { ...picard, photo_url: "/p/own.jpg" }).photo).toBe("/p/own.jpg");
+    lookup.mockRestore();
   });
 });

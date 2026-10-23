@@ -580,12 +580,30 @@ export function contactLook(shown: string, contact: NormalizedContact | undefine
     classes: ["handle-chip", "handle-resolved", "contact-chip"],
     initial: [...name.trim()][0]?.toUpperCase() ?? "?",
     icon: null,
-    photo: contact?.photo_url ?? null,
+    photo: contact ? contactPhoto(contact) : null,
     title: [
       group ? `${name} (a group)` : name,
       ...(handles.length > 0 ? [`Linked: ${handles.join(", ")}`] : []),
     ].join("\n"),
   };
+}
+
+/** A contact's photo: its own, else the first its handles' records
+ *  have, which is the face their chips show. */
+function contactPhoto(contact: NormalizedContact): string | null {
+  if (contact.photo_url) return contact.photo_url;
+  for (const h of contact.handles) {
+    const who = h.handle ? people.lookup(h.handle) : undefined;
+    const photo = who ? photoOf(who) : null;
+    if (photo) return photo;
+  }
+  return null;
+}
+
+/** The handles a contact's chip draws from beside the contact itself:
+ *  an answer for any of them can change its photo. */
+export function contactHandles(id: string): string[] {
+  return (contactsById.get(id)?.handles ?? []).flatMap((h) => (h.handle ? [h.handle] : []));
 }
 
 /** A chip for one of your contacts, by its id. */
@@ -766,7 +784,12 @@ export function peopleTitle(named: { handle: string; shownAs: string }[]): HTMLE
   drawn.forEach(({ handle, shownAs, who }, i) => {
     const look = chipLook(handle, shownAs, who, canLink);
     faces.append(chipLead(document, look) ?? chipLead(document, { ...look, initial: "?" })!);
-    if (i > 0) group.append(", ");
+    if (i > 0) {
+      const sep = document.createElement("span");
+      sep.className = "chip-group-sep";
+      sep.textContent = ", ";
+      group.append(sep);
+    }
     const name = chipCell(handle, shownAs, who, canLink);
     drawChip(name, { ...look, photo: null, initial: null, icon: null });
     name.classList.add("chip-bare");

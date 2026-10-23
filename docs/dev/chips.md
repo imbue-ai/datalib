@@ -99,7 +99,8 @@ each store's step in a column.
    (`email`, `slack`), else a pipeline glyph (`step:ingest`). The lead
    is decoration: hidden from screen readers and not copied. A photo
    the browser cannot draw falls back to what the chip draws without
-   one. The name is its own element (`.chip-text`), and a chip is
+   one. A contact you made with no photo of its own shows the first
+   one its handles' records have, the face their chips show. The name is its own element (`.chip-text`), and a chip is
    never wider than what holds it: with less room than it needs, its
    name ends in "…", and the tooltip has it whole. In a wrapping row,
    such as a message header, it still moves to a line of its own

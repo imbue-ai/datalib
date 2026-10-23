@@ -40,6 +40,8 @@ import {
   canLinkHandles,
   chipCell,
   contactCell,
+  contactHandles,
+  contactLook,
   contactsById,
   handleValue,
   people,
@@ -169,8 +171,13 @@ function answerOf(chip: ChipRef): unknown {
       return entities.lookup(chip.uri);
     case "person":
       return people.lookup(chip.handle);
-    case "contact":
-      return contactsById.lookup(chip.id);
+    case "contact": {
+      // Its name and photo: the photo can come from a handle's answer.
+      const contact = contactsById.lookup(chip.id);
+      if (!contact) return undefined;
+      const look = contactLook("", contact);
+      return `${look.text}\n${look.photo ?? ""}`;
+    }
   }
 }
 
@@ -273,7 +280,11 @@ const chips = ViewPlugin.fromClass(
       this.decorations = chipDecorations(view.state);
       const answered = (keys: ReadonlySet<string>) => {
         const shown = chipWords(view.state.doc.toString(), view.state.field(keysField));
-        if (shown.some(({ chip }) => keys.has(chipKey(chip)))) {
+        const drawsFrom = (chip: ChipRef) => [
+          chipKey(chip),
+          ...(chip.kind === "contact" ? contactHandles(chip.id) : []),
+        ];
+        if (shown.some(({ chip }) => drawsFrom(chip).some((k) => keys.has(k)))) {
           view.dispatch({ effects: redraw.of(null) });
         }
       };

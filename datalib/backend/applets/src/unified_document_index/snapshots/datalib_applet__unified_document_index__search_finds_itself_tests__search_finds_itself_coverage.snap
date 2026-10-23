@@ -60,7 +60,7 @@ fields: participant
   checked: beeper 13, chatgpt-api 7, claude-api 6, claude-code 3, codex 4, facebook 26, google-takeout 12, linkedin 4, signal 8, slack 20, slack-diff 7, sms-backup-restore 3, tng_email 14, whatsapp 9
   never: datalib, garmin, github, gitlab, google-drive, notion, ship-air, tng_calendar, tng_contacts, tng_contacts-diff, tng_pdfs, yolink
 fields: subject
-  checked: beeper 3, facebook 6, google-takeout 4, linkedin 2, signal 1, slack 7, sms-backup-restore 4, whatsapp 4
+  checked: beeper 3, facebook 6, google-takeout 10, linkedin 2, signal 1, slack 7, sms-backup-restore 4, whatsapp 4
   never: chatgpt-api, claude-api, claude-code, codex, datalib, garmin, github, gitlab, google-drive, notion, ship-air, slack-diff, tng_calendar, tng_contacts, tng_contacts-diff, tng_email, tng_pdfs, yolink
 fields: title
   checked: beeper 25, chatgpt-api 33, claude-api 70, claude-code 29, codex 40, datalib 245, facebook 71, garmin 16, github 10, gitlab 9, google-drive 7, google-takeout 75, linkedin 14, notion 8, ship-air 3, signal 13, slack 35, slack-diff 13, sms-backup-restore 14, tng_calendar 9, tng_contacts 9, tng_contacts-diff 5, tng_email 12, tng_pdfs 9, whatsapp 29, yolink 5
