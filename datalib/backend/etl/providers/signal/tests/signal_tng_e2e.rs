@@ -201,7 +201,7 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
     // markdown `# …` line) so the Vue side can hook a copy-id button
     // off `data-page-title-uuid`.
     assert!(
-        md.contains("class=\"page-title\"") && md.contains("Signal · Will Riker"),
+        md.contains("class=\"page-title\"") && md.contains(">Will Riker (2364-04)"),
         "page-title H1 with markdown_uuid hook present in:\n{md}"
     );
     assert!(md.contains("Make it so."), "Picard's order rendered");

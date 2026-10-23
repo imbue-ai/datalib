@@ -395,9 +395,6 @@ async fn people_are_contacts_with_their_avatars() -> Result<()> {
     assert_eq!(riker.photo_url, None, "Riker has no avatar");
 
     let data_march = md_of(&docs, "/signal/", "2024-03.md");
-    assert!(
-        data_march.contains("Beeper:Signal · Mr. Data"),
-        "{data_march}"
-    );
+    assert!(data_march.contains(">Mr. Data (2024-03)"), "{data_march}");
     Ok(())
 }

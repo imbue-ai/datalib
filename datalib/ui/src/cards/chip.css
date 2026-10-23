@@ -136,7 +136,6 @@ time.date-chip {
 .chip-group {
   display: inline-flex;
   align-items: center;
-  gap: 0.25em;
   max-width: 100%;
   min-width: 0;
   padding: 0 0.5em 0 0.2em;
@@ -149,7 +148,10 @@ time.date-chip {
 .chip-group-faces {
   display: inline-flex;
   flex-shrink: 0;
-  margin-right: 0.15em;
+  margin-right: 0.4em;
+}
+.chip-group-sep {
+  white-space: pre;
 }
 .chip-group-faces > * {
   width: 1.3em;

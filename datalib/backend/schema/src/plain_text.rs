@@ -292,8 +292,8 @@ fn target_end(target: &str) -> Option<usize> {
 /// keeps its address.
 fn without_tags(line: &str) -> String {
     const BREAKS: &[&str] = &[
-        "br", "p", "div", "li", "tr", "td", "th", "h1", "h2", "h3", "h4", "h5", "h6", "summary",
-        "details",
+        "br", "p", "div", "li", "tr", "td", "th", "dt", "dd", "h1", "h2", "h3", "h4", "h5", "h6",
+        "summary", "details",
     ];
     let mut out = String::with_capacity(line.len());
     let mut rest = line;

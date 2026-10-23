@@ -14,7 +14,7 @@ pub fn display_snippet(raw: &str) -> String {
         let rest = first.trim_start_matches(|c: char| c.is_ascii_digit());
         rest.len() < first.len() && rest.starts_with(": @@ ")
     });
-    let lines: Vec<String> = raw
+    let lines: Vec<&str> = raw
         .lines()
         .map(|line| {
             if numbered {
@@ -24,13 +24,70 @@ pub fn display_snippet(raw: &str) -> String {
             }
         })
         .filter(|line| !line.starts_with("@@ "))
-        .filter_map(readable)
+        .map(str::trim)
         .collect();
-    let mut out = datalib_schema::grid_rows::preview(&lines.join("\n"));
-    if raw.trim_end().ends_with("...") && !out.is_empty() && !out.ends_with('…') {
+    let mut cut_short = false;
+    let mut kept: Vec<String> = Vec::with_capacity(lines.len());
+    for (i, line) in lines.iter().enumerate() {
+        let before = i.checked_sub(1).map(|j| lines[j]);
+        let after = lines.get(i + 1).copied();
+        let text = if i == 0 && line.starts_with('…') {
+            starting_mid_line(line, after)
+        } else if i + 1 == lines.len() && line.ends_with('…') {
+            let text = ending_mid_line(line, before);
+            cut_short = text.is_some();
+            text
+        } else {
+            readable(line)
+        };
+        kept.extend(text);
+    }
+    let mut out = datalib_schema::grid_rows::preview(&kept.join("\n"));
+    let cut = cut_short || raw.trim_end().ends_with("...");
+    if cut && !out.is_empty() && !out.ends_with('…') {
         out.push('…');
     }
     out
+}
+
+/// The first line of a word window that starts mid-line (`…`). Ahead of
+/// front matter it is the end of a field whose key was cut off: a value
+/// of words is shown without its closing quote, an id is not. Elsewhere
+/// a tag cut before its `<` goes, up to its `>`.
+fn starting_mid_line(line: &str, after: Option<&str>) -> Option<String> {
+    let in_front_matter = after.is_some_and(|a| a == "---" || front_matter_field(a).is_some());
+    if in_front_matter {
+        let value = line.trim_start_matches('…').trim_end_matches('"');
+        return value.contains(' ').then(|| format!("…{value}"));
+    }
+    let rest = &line['…'.len_utf8()..];
+    match (rest.find('>'), rest.find('<')) {
+        (Some(close), open) if open.is_none_or(|o| o > close) => {
+            readable(&format!("…{}", &rest[close + 1..]))
+        }
+        _ => readable(line),
+    }
+}
+
+/// The last line of a word window that ends mid-line (`…`): its text up
+/// to a tag cut before its `>`, and nothing if what is left is a
+/// front-matter key cut off (`source_label…`). `None` when no words are
+/// left, so the snippet does not end on a mark for what it dropped.
+fn ending_mid_line(line: &str, before: Option<&str>) -> Option<String> {
+    let body = line.trim_end_matches('…');
+    let body = match body.rfind('<') {
+        Some(open) if !body[open..].contains('>') => &body[..open],
+        _ => body,
+    };
+    let key_like = !body.is_empty()
+        && body
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+    let after_front_matter = before.is_some_and(|b| front_matter_field(b).is_some());
+    if key_like && (body.contains('_') || after_front_matter) {
+        return None;
+    }
+    readable(body).filter(|t| !datalib_schema::grid_rows::preview(t).is_empty())
 }
 
 fn without_line_number(line: &str) -> &str {
@@ -150,6 +207,45 @@ mod tests {
             display_snippet(raw),
             "If you no longer wish to receive duty rosters, you can update your \
              preferences here. Links"
+        );
+    }
+
+    /// The Words tab's snippets are SQLite's `snippet()`: a window of
+    /// words that starts and ends wherever it likes. Its ends cut a
+    /// front-matter value (`…unarmed."`), a key (`source_label…`) or a
+    /// tag (`Edited <time…`), and each showed as written. These are the
+    /// exact strings the fixture's index answers.
+    #[test]
+    fn a_word_window_cut_mid_line_keeps_only_words() {
+        let mention = "…Riker, Worf: @Jean-Luc Picard, I must object to beaming down unarmed.\"\n\
+                       provider: slack\nsource_label…";
+        assert_eq!(
+            display_snippet(mention),
+            "…Riker, Worf: @Jean-Luc Picard, I must object to beaming down unarmed."
+        );
+        let cut_tag = "…https://youtu.be/tngJazz01\n\n*Sent via Trombone Bot*\n\n</div>\n\n\
+                       <div id=\"m-01957dfe-b780-8745-b772…";
+        assert_eq!(
+            display_snippet(cut_tag),
+            "…https://youtu.be/tngJazz01 Sent via Trombone Bot"
+        );
+        let edited = "…Number One, set a course for Risa.\n\nEdited <time datetime=\"2025-02…";
+        assert_eq!(
+            display_snippet(edited),
+            "…Number One, set a course for Risa. Edited…"
+        );
+        let id_tail = "…00-8db7-990a\"\nprovider: chatgpt\ntitle: \"Risa Survey Briefing\"";
+        assert_eq!(display_snippet(id_tail), "Risa Survey Briefing");
+    }
+
+    /// A contact's fields are a `<dl>`: a label and its value were one
+    /// word ("NotePlays the trombone").
+    #[test]
+    fn a_definition_list_reads_as_separate_words() {
+        let raw = "…555-NUMBER-1</dd>\n<dt>Note</dt><dd>Plays the trombone. Owns a beard.</dd>\n</dl>\n\n";
+        assert_eq!(
+            display_snippet(raw),
+            "…555-NUMBER-1 Note Plays the trombone. Owns a beard."
         );
     }
 

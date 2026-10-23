@@ -251,6 +251,14 @@ impl<'a> ChatRenderer<'a> {
     }
 }
 
+/// A chat's `<h1>`: a provider-supplied `title`, else the chat's name.
+/// The source is the icon every surface draws beside a title; a prefix
+/// of its name read twice where the name holds it already ("WhatsApp ·
+/// WhatsApp user …0108").
+fn chat_heading(chat: &NormalizedChat) -> String {
+    chat.title.clone().unwrap_or_else(|| chat.display.clone())
+}
+
 /// Render one document; `(items, reactions)` rendered. Always: the
 /// store writes what it is handed, and doltlite's content-addressed
 /// tables carry no diff for a document that came out the same.
@@ -271,16 +279,7 @@ fn render_one(
     let resolved_doc = link_attachments(doc, &page_dir, blobs);
     let doc = &resolved_doc;
 
-    // A provider-supplied `title` takes the `<h1>`; otherwise derive the
-    // familiar "{source_label} · {display}" heading.
-    let chat_title = match &chat.title {
-        Some(t) => t.clone(),
-        None => format!(
-            "{label} · {disp}",
-            label = profile.source_label,
-            disp = chat.display
-        ),
-    };
+    let chat_title = chat_heading(chat);
     let sections = render_markdown(profile, chat, doc, &chat_title);
     fs::write(&md_path, join(&sections)).with_context(|| format!("write {}", md_path.display()))?;
 
@@ -2225,30 +2224,15 @@ mod tests {
         );
     }
 
+    /// A chat with no title of its own is headed by its name alone, not
+    /// "WhatsApp · WhatsApp user …0108"; a provider's title wins.
     #[test]
-    fn title_override_replaces_derived_heading() {
-        let profile = RenderProfile {
-            provider: Provider::Test,
-            source_label: "Test".to_string(),
-            chat_kind: "Test Chat".to_string(),
-            message_kind: "Test Message".to_string(),
-            reaction_kind: "Test Reaction".to_string(),
-            chat_entity_kind: ENTITY_KIND_CONVERSATION,
-            stamp_precision: RecordStampPrecision::Seconds,
-            render_version: 1,
-            text_format: TextFormat::Markdown,
-        };
+    fn a_chat_is_headed_by_its_title_else_its_name() {
         let mut chat = mk_chat();
+        chat.display = "WhatsApp user …0108".to_string();
+        assert_eq!(chat_heading(&chat), "WhatsApp user …0108");
         chat.title = Some("#bridge: Make it so.".to_string());
-
-        // render_one builds the title; render_markdown takes it as a param,
-        // so exercise the heading logic via render_one's formatting here by
-        // re-deriving the same way render_one does.
-        let chat_title = match &chat.title {
-            Some(t) => t.clone(),
-            None => format!("{} · {}", profile.source_label, chat.display),
-        };
-        assert_eq!(chat_title, "#bridge: Make it so.");
+        assert_eq!(chat_heading(&chat), "#bridge: Make it so.");
     }
 
     /// An unbucketed chat's title read "Bridge Crew (all)" (#902); a
