@@ -33,6 +33,7 @@ pub(crate) fn rows_for(
             .created_at(cr.created_at.clone())
             .modified_at(cr.updated_at.clone())
             .author(cr.author.clone())
+            .author_handle(cr.author_handle.as_ref().map(|h| h.as_str().to_string()))
             .project(Some(cr.container.clone()))
             .conversation_name(Some(cr.title.clone()))
             .conversation_uuid(cr.uuid.clone())
@@ -68,6 +69,7 @@ pub(crate) fn rows_for(
                 // change.
                 .modified_at(c.updated_at.clone().filter(|u| *u != c.created_at))
                 .author(c.author.clone())
+                .author_handle(c.author_handle.as_ref().map(|h| h.as_str().to_string()))
                 .project(Some(cr.container.clone()))
                 .conversation_name(Some(cr.title.clone()))
                 .conversation_uuid(cr.uuid.clone())

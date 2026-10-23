@@ -15,6 +15,7 @@ use anyhow::Result;
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{Bucket, Buckets, Input, RawRange};
+use datalib_handle::Handle;
 use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
 
@@ -82,7 +83,10 @@ pub struct ChangeRequest {
     pub base_sha: Option<String>,
     pub from_ref: Option<String>,
     pub to_ref: Option<String>,
+    /// Who opened it, as the forge shows them.
     pub author: Option<String>,
+    /// Who opened it, as an identifier: the author is then a chip.
+    pub author_handle: Option<Handle>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
     pub merged_at: Option<String>,
@@ -117,6 +121,7 @@ pub struct Comment {
     /// thread.
     pub in_reply_to_id: Option<i64>,
     pub author: Option<String>,
+    pub author_handle: Option<Handle>,
     pub body: String,
     pub url: Option<String>,
     pub path: Option<String>,
@@ -341,6 +346,7 @@ mod tests {
             external_id: id,
             in_reply_to_id: reply_to,
             author: None,
+            author_handle: None,
             body: String::new(),
             url: None,
             path: Some(format!("f{id}.rs")),

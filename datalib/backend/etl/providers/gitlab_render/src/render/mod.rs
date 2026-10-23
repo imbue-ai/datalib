@@ -21,7 +21,9 @@ pub use parse::parse_api_dir;
 ///     record's `created_at` in its leading bits (`datalib_id`'s v8
 ///     layout). Every uuid moved.
 /// v6: a comment's time is a `<time>` stamp.
-pub const RENDER_VERSION: u32 = 6;
+/// v7: an author with an account is a chip, and the row carries their
+///     handle.
+pub const RENDER_VERSION: u32 = 7;
 
 pub const PROFILE: ForgeProfile = ForgeProfile {
     provider: Provider::Gitlab,

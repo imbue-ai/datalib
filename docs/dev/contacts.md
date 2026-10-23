@@ -121,6 +121,9 @@ number. What that costs:
 | `facebook` | `name/<the name shown>`, its whitespace collapsed; or `deleted/<conversation id>` | `Handle::facebook_name`, `Handle::facebook_deleted` | `datalib:handle/facebook/<value>`, percent-encoded but for its `/`s |
 | `google` | `name/<the name shown>`, its whitespace collapsed | `Handle::google_name` | `datalib:handle/google/<value>`, percent-encoded but for its `/`s |
 | `linkedin` | the slug of a profile URL (`linkedin.com/in/<slug>`), percent-decoded and lowercased | `Handle::linkedin`, `Handle::linkedin_profile_url` (any `linkedin.com` host; a trailing `/`, query or fragment is dropped) | `https://www.linkedin.com/in/<slug>`, the profile itself |
+| `github` | a login, lowercased (an app's ends in `[bot]`) | `Handle::github` | `datalib:handle/github/<login>` |
+| `gitlab` | `<host>/<username>`, both lowercased: a self-hosted GitLab is a namespace of its own | `Handle::gitlab` | `datalib:handle/gitlab/<host>/<username>` |
+| `notion` | a Notion user id, a lowercase dashed UUID, for a user Notion gives no address for | `Handle::notion_user` | `datalib:handle/notion/<id>` |
 
 A Facebook export names people and never numbers them, so a
 `facebook:name/` handle is a name: two people of one name are one
@@ -218,10 +221,13 @@ What each source has today:
 | Facebook | a Messenger message's sender, by name; a deleted account by its conversation, where it is that conversation's only one; the account's owner, by name, on every post, album, comment, reaction and edit (a store with no profile knows them only as "Me", and gives none) | each Messenger reaction's; a friend's name, in the source contact |
 | Beeper | a Slack user by `slack:<team>/<user>`, read out of the bridge's Matrix id (the owner by the Slack user the room was bridged for); anyone else by a number or address the app lists for them (`participant_identifiers`); a Matrix id alone has no kind | each reaction's; the person's numbers, addresses and cached avatar, in the source contact |
 | calendar | an event's organizer, by address | each guest with an address, as a chip on the event's page |
+| GitHub, GitLab | a change request's or a comment's author, by login (GitLab's on the host the merge request's address is on) | |
+| Notion | a comment's author, and a page's last editor, by the address the users table gives, else by user id | |
 
-The AI chats, GitHub, GitLab and Notion write no handles.
+The AI chats write no handles.
 Where a source renders the owner's side as "Me" (WhatsApp, Signal,
-Messages, SMS backup, Google Voice), "Me" has no handle. Where it does
+Messages, SMS backup, Google Voice, Claude Code, Codex), "Me" has no
+handle. Where it does
 not (email, Slack, Google Chat), the owner's own messages carry their
 address or user id like anyone else's.
 

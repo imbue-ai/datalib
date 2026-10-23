@@ -200,7 +200,10 @@ impl Medium {
             | HandleKind::SignalAci
             | HandleKind::Facebook
             | HandleKind::Linkedin
-            | HandleKind::Google => Medium::Other,
+            | HandleKind::Google
+            | HandleKind::Github
+            | HandleKind::Gitlab
+            | HandleKind::Notion => Medium::Other,
         }
     }
 }
