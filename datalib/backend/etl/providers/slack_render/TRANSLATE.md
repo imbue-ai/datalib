@@ -46,7 +46,12 @@ no workspace URL. `render::slack_link` is the one place either is built.
 - a `!` typed straight before any of these, or before a labelled link,
   is escaped, so markdown does not read the link after it as an image;
 - `<https://…|label>` → `[label](url)`;
-- `:shortcode:` → unicode, through the `emojis` crate;
+- `:shortcode:` → unicode by Slack's own names (`:thinking_face:`,
+  `:flag-ca:`), from the table in `third-party/emoji-data`, and so is a
+  reaction's name; a skin tone, `:+1::skin-tone-2:`, joins its emoji.
+  Code keeps its shortcodes as typed. A workspace's custom emoji are
+  images Slack hosts, which nothing downloads yet, so they stay
+  `:name:`;
 - the three entities Slack escapes (`&amp;`, `&lt;`, `&gt;`) stay
   entities in running text, so a `<b>` someone typed shows as typed;
   they are decoded inside code, which markdown shows literally, and in

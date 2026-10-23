@@ -48,7 +48,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-8087-98c3-35796eae6f68/all.md",
       "modified_at": "2369-05-28T15:18:20+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.13",
+      "renderer_version": "rust-v1.14",
       "source_id": "slack",
       "title": "#ten-forward"
     },
@@ -96,7 +96,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-80d6-b5a5-2617d0679dab/all.md",
       "modified_at": "2369-05-28T15:21:44+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.13",
+      "renderer_version": "rust-v1.14",
       "source_id": "slack",
       "title": "@William T. Riker, Worf"
     },
@@ -120,7 +120,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-8119-8c96-61dfdcca24d4/all.md",
       "modified_at": "2369-05-28T15:26:40+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.13",
+      "renderer_version": "rust-v1.14",
       "source_id": "slack",
       "title": "#bridge"
     },
@@ -132,7 +132,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-811d-904c-516d04a43f68/all.md",
       "modified_at": "2369-05-28T15:20:00+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.13",
+      "renderer_version": "rust-v1.14",
       "source_id": "slack",
       "title": "#bridge"
     },
@@ -252,7 +252,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-81d7-a9c9-0ee77752a4e6/all.md",
       "modified_at": "2369-05-28T15:15:00+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.13",
+      "renderer_version": "rust-v1.14",
       "source_id": "slack",
       "title": "#engineering"
     },
@@ -324,7 +324,7 @@ expression: snapshot
       "md_path": "slack-diff/render_markdown/00000000-0000-8209-b9a9-5e8e8a2f0239/all.md",
       "modified_at": "2369-05-28T15:25:00+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.13",
+      "renderer_version": "rust-v1.14",
       "source_id": "slack-diff",
       "title": "#bridge"
     },
@@ -624,7 +624,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-84d6-b1f0-0b22f0528e5c/all.md",
       "modified_at": "2369-05-28T15:25:00+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.13",
+      "renderer_version": "rust-v1.14",
       "source_id": "slack",
       "title": "#bridge"
     },
@@ -708,7 +708,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-8630-8d5e-f4aae259bc1c/all.md",
       "modified_at": "2369-05-28T15:21:40+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.13",
+      "renderer_version": "rust-v1.14",
       "source_id": "slack",
       "title": "@William T. Riker"
     },
@@ -960,7 +960,7 @@ expression: snapshot
       "md_path": "slack-diff/render_markdown/00000000-0000-8827-877d-5fdc4dc4394b/all.md",
       "modified_at": "2369-05-28T15:13:20+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.13",
+      "renderer_version": "rust-v1.14",
       "source_id": "slack-diff",
       "title": "#bridge"
     },
@@ -1164,7 +1164,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-89a0-9bd6-7e928c9b2396/all.md",
       "modified_at": "2369-05-28T15:21:42+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.13",
+      "renderer_version": "rust-v1.14",
       "source_id": "slack",
       "title": "@Lt. Cmdr. Data"
     },
@@ -1320,7 +1320,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-8ac1-a181-7b8e737cbd85/all.md",
       "modified_at": "2369-05-28T15:21:41+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.13",
+      "renderer_version": "rust-v1.14",
       "source_id": "slack",
       "title": "@William T. Riker"
     },
@@ -1356,7 +1356,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-8b0f-9140-61eaa37493ff/all.md",
       "modified_at": "2369-05-28T15:18:20+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.13",
+      "renderer_version": "rust-v1.14",
       "source_id": "slack",
       "title": "#bridge"
     },
@@ -1500,7 +1500,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-8bff-b36c-0096661fd9fa/all.md",
       "modified_at": "2369-05-28T15:13:20+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.13",
+      "renderer_version": "rust-v1.14",
       "source_id": "slack",
       "title": "#bridge"
     },
@@ -1512,7 +1512,7 @@ expression: snapshot
       "md_path": "slack-diff/render_markdown/00000000-0000-8c02-a5c8-c13c049e1e6d/all.md",
       "modified_at": "2369-05-28T15:26:40+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.13",
+      "renderer_version": "rust-v1.14",
       "source_id": "slack-diff",
       "title": "#bridge"
     },
@@ -1788,7 +1788,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-8d9c-9316-43944fcd9e60/all.md",
       "modified_at": "2369-05-28T15:21:43+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.13",
+      "renderer_version": "rust-v1.14",
       "source_id": "slack",
       "title": "@William T. Riker, Worf"
     },
@@ -17272,7 +17272,7 @@ expression: snapshot
       "author": "Lt. Cmdr. Data",
       "byte_size": null,
       "channel": null,
-      "content_hash": "7ada4c27e7784645",
+      "content_hash": "c7e3661711cc25c7",
       "conversation_name": "#bridge",
       "conversation_uuid": "00000000-0000-84d6-b1f0-0b22f0528e5c",
       "created_at": "2369-05-28T15:10:00+00:00",
@@ -17286,7 +17286,7 @@ expression: snapshot
       "notion_page_uuid": null,
       "org_name": "USS Enterprise NCC-1701-D",
       "org_uuid": "T_NCC1701D",
-      "preview_len": 12,
+      "preview_len": 1,
       "project": null,
       "provider": "slack",
       "qmd_path": "slack/render_markdown/00000000-0000-84d6-b1f0-0b22f0528e5c/all.md",
@@ -17332,7 +17332,7 @@ expression: snapshot
       "author": "Lt. Cmdr. Data",
       "byte_size": null,
       "channel": null,
-      "content_hash": "7ada4c27e7784645",
+      "content_hash": "c7e3661711cc25c7",
       "conversation_name": "#bridge",
       "conversation_uuid": "00000000-0000-8209-b9a9-5e8e8a2f0239",
       "created_at": "2369-05-28T15:10:00+00:00",
@@ -17346,7 +17346,7 @@ expression: snapshot
       "notion_page_uuid": null,
       "org_name": "USS Enterprise NCC-1701-D",
       "org_uuid": "T_NCC1701D",
-      "preview_len": 12,
+      "preview_len": 1,
       "project": null,
       "provider": "slack",
       "qmd_path": "slack-diff/render_markdown/00000000-0000-8209-b9a9-5e8e8a2f0239/all.md",
