@@ -756,10 +756,12 @@ message. `dolt_hashof_db(<rev>)` answers the tree's hash, and
   of history; a table scan may still answer from pages it already had.
   A tag on the commit keeps the reader whole. Render and `grid_index`
   read this way, so a fold tags what they are pinned to, or waits.
-- **Doltlite has no verb that drops history**: no `dolt_squash_history`
-  (Dolt has one: our fold as a single call), no orphan branch, no
-  shallow history, and `dolt_gc` takes no options. A fold, a tag and
-  gc are the whole kit.
+- **Doltlite has no verb that drops history**: no `dolt_squash_history`,
+  no orphan branch, no shallow history, and `dolt_gc` takes no options.
+  A fold, a tag and gc are the whole kit. Dolt, the separate DoltHub
+  database whose SQL doltlite follows, added `dolt_squash_history` in
+  July 2026; it is our fold as one call. Doltlite has not, through
+  0.51.1.
 
 ### Full-text search (FTS5)
 

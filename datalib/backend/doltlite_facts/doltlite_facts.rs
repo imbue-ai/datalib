@@ -1707,7 +1707,8 @@ mod trees {
     }
 
     /// Doltlite has no verb that drops history: no `dolt_squash_history`
-    /// (Dolt has one), no orphan branch, and `dolt_gc` takes no options.
+    /// (Dolt, a separate project, has one), no orphan branch, and
+    /// `dolt_gc` takes no options.
     /// A fold is the whole kit; this fails when that changes.
     #[tokio::test]
     async fn there_is_no_verb_that_drops_history() {
