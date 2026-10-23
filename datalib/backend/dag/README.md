@@ -389,9 +389,16 @@ doltlite store, a directory of files, or anything else.
 **A version should be a function of the output's content**, so that two
 runs over the same data report the same string and "unchanged" is
 something the loop *derives* rather than something a step asserts. A
-doltlite commit hash is one: the store's head moves only when a commit
-changed something ([`doltlite.md`](../../../docs/dev/doltlite.md#diffs)). The built-in steps report exactly that, and spell it the
-same way on a seal and in the outcome, so finishing on the commit last
+doltlite store has two: its head commit, which moves only when a commit
+changed something ([`doltlite.md`](../../../docs/dev/doltlite.md#diffs)),
+and the hash of that commit's tree, which also stays put when the
+store's history is folded into fewer commits
+([Trees](../../../docs/dev/doltlite.md#trees-and-keeping-one-through-a-fold)).
+`render_markdown` and `grid_index` report the tree, since nothing reads
+their history; an ingest and the time-series steps report the commit,
+since a diff group names a raw commit and the time-series index reads
+each store at the commit it recorded. Each spells its version the same
+way on a seal and in the outcome, so finishing on the commit last
 sealed moves nothing downstream.
 
 **A step that reports no version gets a new one on every success**
