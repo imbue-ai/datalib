@@ -108,12 +108,10 @@ pub async fn run(
         );
     }
 
-    // HEAD, whether or not this pass sealed anything: the builder seals
-    // once per source that moved, and a pass that moved none reporting no
-    // version would drop us to the tree hash — a digest from a different
-    // hash space than the dolt hash reported last time — so every no-op
-    // run after a real change would read as changed.
-    let version = datalib_etl::doltlite_raw::head_commit(&pool)
+    // HEAD's tree, whether or not this pass sealed anything: the builder
+    // seals once per source that moved, and a pass that moved none must
+    // still report the version it left, or the runner takes it as new.
+    let version = datalib_etl::doltlite_raw::content_version(&pool)
         .await
         .context("grid_index head")?;
     pool.close().await;
