@@ -53,6 +53,7 @@ import {
   stepIdFor,
   suggestId,
   untouchedSettings,
+  writesRenderStep,
   type ConfiguredGroup,
   type FieldValues,
   type Layout,
@@ -101,6 +102,9 @@ import IssueNote from "@/components/IssueNote.vue";
 import ProbeItemPicker from "@/components/ProbeItemPicker.vue";
 import { PATH_GLYPHS, STATUS_GLYPHS } from "@/config/glyphs";
 import { copyToClipboard } from "@/clipboard";
+import PackageReview from "@/components/PackageReview.vue";
+import { refreshPackages } from "@/config/packages";
+import type { PackageLookup } from "@/api";
 
 const {
   latchkeyService,
@@ -128,6 +132,9 @@ const props = defineProps<{
     /// The whole config as it was when the form opened.
     text: string;
   } | null;
+  /// Adds a package to the library's config, once its build is here.
+  /// Absent: the picker offers no link box.
+  addPackage?: (source: string, lookup: PackageLookup) => Promise<void>;
 }>();
 
 const emit = defineEmits<{
@@ -200,7 +207,9 @@ const renderWanted = ref(props.editing ? !!props.editing.steps.render : true);
 
 /// Does this source write a render step: always for a download-only
 /// provider, otherwise when this source asked for it.
-const renders = computed(() => !!chosen.value && (!providerRenders.value || renderWanted.value));
+const renders = computed(
+  () => !!chosen.value && writesRenderStep(chosen.value, renderWanted.value),
+);
 
 /// Whether this source's markdown gets a keyword index, and embeddings
 /// on top of it. Both on by default, for the same reason rendering is: a
@@ -346,7 +355,7 @@ const orphanRender = computed<string | null>(() =>
 
 const groups = computed(() => {
   const matches = filterCatalog(query.value);
-  return (["api", "export", "local"] as const)
+  return (["package", "api", "export", "local"] as const)
     .map((kind) => ({
       kind,
       label: KIND_LABELS[kind],
@@ -410,6 +419,19 @@ function setByteUnit(f: Field, unit: ByteUnit) {
 }
 
 if (props.editing) seed(props.editing.entry, props.editing.steps);
+
+/// A package just added: open its form when it adds one source, else
+/// stay on the picker, where its sources now head the list.
+async function afterPackage(lookup: PackageLookup) {
+  await refreshPackages();
+  const added = filterCatalog("").filter(
+    (e) =>
+      e.package?.name === lookup.manifest.name && e.package.version === lookup.manifest.version,
+  );
+  if (added.length === 1) choose(added[0]);
+}
+
+if (!props.editing) void refreshPackages();
 
 function choose(entry: CatalogEntry) {
   if (!entry.wizard) return;
@@ -1509,6 +1531,9 @@ function submit() {
           }}
         </h2>
         <span v-if="isEdit && chosen" class="wiz-kind">{{ chosen.label }}</span>
+        <span v-if="stage === 'configure' && chosen?.package" class="wiz-kind">
+          from the {{ chosen.package.name }} {{ chosen.package.version }} package
+        </span>
         <button class="wiz-x dialog-x" aria-label="Close" @click="emit('close')">×</button>
       </header>
 
@@ -1542,10 +1567,18 @@ function submit() {
               <span class="wiz-tile-text">
                 <b>{{ e.label }}</b>
                 <small>{{ e.blurb }}</small>
+                <small v-if="e.package">{{ e.package.name }} {{ e.package.version }}</small>
               </span>
               <span v-if="!e.wizard" class="wiz-soon">config editor</span>
             </button>
           </div>
+        </div>
+        <div v-if="props.addPackage" class="wiz-pkg">
+          <PackageReview
+            :commit="props.addPackage"
+            label="Not listed? Add a package from a link"
+            @done="afterPackage"
+          />
         </div>
       </div>
 
@@ -2523,6 +2556,13 @@ function submit() {
   cursor: pointer;
 }
 
+.wiz-pkg {
+  margin-top: 20px;
+  padding: 12px 14px;
+  border: 1px dashed var(--datalib-border);
+  border-radius: calc(var(--datalib-radius) + 2px);
+  background: var(--datalib-surface-2);
+}
 .wiz-group h3 {
   font-size: var(--datalib-font-size-small);
   letter-spacing: 0.08em;

@@ -27,7 +27,7 @@ import { parseTOML, getStaticTOMLValue } from "toml-eslint-parser";
 import { NAME_IT_HELP } from "./accountNaming";
 import { formatBytes, parseByteSize } from "./byteSize";
 import { catalogForStep } from "./catalog";
-import type { Answer, CatalogEntry, Field, FieldPhase, Preset } from "./catalog";
+import type { Answer, CatalogEntry, Field, FieldPhase, PackageOrigin, Preset } from "./catalog";
 import { editStringArray, quote } from "./tomlText";
 import { deleteIn, setIn } from "./tomlPatch";
 
@@ -59,6 +59,10 @@ export type ConfiguredStep = {
   /// `datalib-applet` for an applet; null for anything else, which is a
   /// legitimate config with no catalog entry.
   type: string | null;
+  /// The `[[packages]]` entry whose program it runs, if any.
+  package: string | null;
+  /// The `command` it declares; null for a built-in step.
+  command: string | null;
   /// The ids this step declares as inputs.
   inputs: string[];
   params: Record<string, unknown>;
@@ -140,7 +144,7 @@ export function defaultName(id: string): string {
 
 type ParsedConfig = {
   ast: ReturnType<typeof parseTOML>;
-  root: { groups?: unknown; steps?: unknown; applets?: unknown };
+  root: { groups?: unknown; steps?: unknown; applets?: unknown; packages?: unknown };
 };
 
 /// Parse the config text, throwing with the parser's message (and line,
@@ -198,6 +202,37 @@ function nonBlank(v: unknown): string | null {
   return typeof v === "string" && v.trim() !== "" ? v.trim() : null;
 }
 
+/// A `[[packages]]` entry and where it is in the text.
+export type ConfiguredPackage = {
+  id: string;
+  source: string | null;
+  url: string;
+  sha256: string;
+  start: number;
+  end: number;
+};
+
+/// The `[[packages]]` entries a config declares, in file order.
+export function listPackages(text: string): ConfiguredPackage[] {
+  const { ast, root } = parseConfig(text);
+  const raw = root.packages;
+  if (!Array.isArray(raw)) return [];
+  const at = ranges(ast, "packages");
+  return raw.map((p, i) => {
+    const e = (p ?? {}) as Record<string, unknown>;
+    const str = (v: unknown) => (typeof v === "string" ? v : "");
+    const [start, end] = at.get(i) ?? [0, 0];
+    return {
+      id: str(e.id),
+      source: typeof e.source === "string" ? e.source : null,
+      url: str(e.url),
+      sha256: str(e.sha256),
+      start,
+      end,
+    };
+  });
+}
+
 /// The `[[groups]]` entries a config declares, in file order.
 export function listGroups(text: string): ConfiguredGroup[] {
   return groupsOf(parseConfig(text));
@@ -222,6 +257,7 @@ export function listSteps(text: string): ConfiguredStep[] {
         function?: unknown;
         name?: unknown;
         command?: unknown;
+        package?: unknown;
         inputs?: unknown;
         params?: unknown;
       } | null;
@@ -259,6 +295,8 @@ export function listSteps(text: string): ConfiguredStep[] {
         // The group's type is the only place a step's provider is
         // written; a step outside any group has none.
         type: groupEntry?.type ?? null,
+        package: typeof step?.package === "string" ? step.package : null,
+        command: typeof step?.command === "string" ? step.command : null,
         inputs: (Array.isArray(step?.inputs) ? (step!.inputs as unknown[]) : []).filter(
           (v): v is string => typeof v === "string",
         ),
@@ -280,6 +318,7 @@ export function listSteps(text: string): ConfiguredStep[] {
         id?: unknown;
         group?: unknown;
         command?: unknown;
+        package?: unknown;
       } | null;
       const id = typeof applet?.id === "string" ? applet.id : `applet ${i + 1}`;
       const [start, end] = appletRanges.get(i) ?? [0, 0];
@@ -297,6 +336,8 @@ export function listSteps(text: string): ConfiguredStep[] {
         // The word after `datalib-applet`, when it is one — the same
         // shape as a step's provider word, and what names the applet.
         type: appletType(typeof applet?.command === "string" ? applet.command : ""),
+        package: typeof applet?.package === "string" ? applet.package : null,
+        command: typeof applet?.command === "string" ? applet.command : null,
         inputs: [],
         params: {},
         start,
@@ -813,10 +854,12 @@ export function buildStep(opts: {
   values: FieldValues;
 }): string {
   const { entry, group, phase, values } = opts;
+  const command = entry.package?.commands[functionOf(phase)];
   return stepToml({
     group,
     phase,
     inputs: opts.inputs,
+    package: entry.package && command ? { id: entry.package.id, command } : undefined,
     params: paramsToml(entry, values, phase),
   });
 }
@@ -829,15 +872,28 @@ export function stepToml(opts: {
   group: string;
   phase: FieldPhase;
   inputs?: string[];
+  /// A package source's step: the package and the command it runs.
+  package?: { id: string; command: string };
   params?: string;
 }): string {
   const inputs = opts.inputs ?? [];
   const inputsLine = inputs.length ? `\ninputs = [${inputs.map(quote).join(", ")}]` : "";
+  const packageLines = opts.package
+    ? `\npackage = ${quote(opts.package.id)}\ncommand = ${quote(opts.package.command)}`
+    : "";
   const params = opts.params ?? "";
   const block = `[[steps]]
 group = ${quote(opts.group)}
-function = ${quote(functionOf(opts.phase))}${inputsLine}${params ? `\n${params}` : ""}`;
+function = ${quote(functionOf(opts.phase))}${packageLines}${inputsLine}${params ? `\n${params}` : ""}`;
   return block.trimEnd();
+}
+
+/// Whether a source of `entry` gets its render step, given what the
+/// person answered (`wanted`). A download-only provider always does; a
+/// package source whose package has no `render_markdown` program cannot.
+export function writesRenderStep(entry: CatalogEntry, wanted?: boolean): boolean {
+  if (entry.package && !entry.package.commands.render_markdown) return false;
+  return entry.rendersDocuments === false || wanted !== false;
 }
 
 /// Everything the wizard writes for one source, in the order it goes
@@ -861,7 +917,7 @@ export function buildSource(opts: {
   const { entry, group, values } = opts;
   const ingestId = stepIdFor(group, "download");
   const ingest = buildStep({ entry, group, phase: "download", values });
-  const renders = entry.rendersDocuments === false || opts.renders !== false;
+  const renders = writesRenderStep(entry, opts.renders);
   const render = renders
     ? buildStep({ entry, group, phase: "render", inputs: [ingestId], values })
     : null;
@@ -1059,15 +1115,25 @@ export function embedAllowed(type: string | null | undefined): boolean {
 
 /// Give a source of a time-series type its `render_time_series` step and
 /// a place in the time-series index's inputs, adding the index and the
-/// applet that serves it when the config has none. A source of any other type is left as it is.
-export function setTimeSeriesStep(text: string, group: string, type: string): string {
-  if (!TIME_SERIES_TYPES.includes(type)) return text;
+/// applet that serves it when the config has none. A package source is
+/// one when its package has a `render_time_series` program, which its
+/// step then runs. A source of any other type is left as it is.
+export function setTimeSeriesStep(
+  text: string,
+  group: string,
+  type: string,
+  pkg?: PackageOrigin,
+): string {
+  const command = pkg?.commands.render_time_series;
+  if (pkg ? !command : !TIME_SERIES_TYPES.includes(type)) return text;
   const id = `${group}/render_time_series`;
   let next = text;
   if (!listSteps(next).some((s) => s.id === id)) {
+    const packageLines =
+      pkg && command ? `\npackage = ${quote(pkg.id)}\ncommand = ${quote(command)}` : "";
     next = insertEntries(
       next,
-      `[[steps]]\ngroup = ${quote(group)}\nfunction = "render_time_series"\ninputs = [${quote(stepIdFor(group, "download"))}]`,
+      `[[steps]]\ngroup = ${quote(group)}\nfunction = "render_time_series"${packageLines}\ninputs = [${quote(stepIdFor(group, "download"))}]`,
     );
   }
   if (!listSteps(next).some((s) => fanInFunctionOf(s) === "time_series_index")) {
@@ -1356,7 +1422,7 @@ export function patchSource(
   opts: { entry: CatalogEntry; group: string; values: FieldValues; renders?: boolean },
 ): string {
   const { entry, group, values } = opts;
-  const renders = entry.rendersDocuments === false || opts.renders !== false;
+  const renders = writesRenderStep(entry, opts.renders);
   let next = text;
   for (const phase of ["download", "render"] as const) {
     if (phase === "render" && !renders) continue;

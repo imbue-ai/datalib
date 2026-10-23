@@ -87,6 +87,24 @@ pub const SUPERVISOR_DB: &str = "supervisor.sqlite";
 /// advisory, naming the holder so a refused server can say where the
 /// running one is.
 pub const LOCK_FILE: &str = "lock";
+/// The packages this root's config lists, unpacked, relative to the
+/// data root: one directory per package, named by its pinned manifest
+/// hash (`docs/dev/packages.md`).
+pub const PACKAGES_DIR_REL: &str = "system/packages";
+
+/// The library's own programs, relative to the data root. A step's or an
+/// applet's bare `command` is looked up here after `binary_dir` and
+/// before `PATH`, so a program a library runs travels with it.
+pub const BIN_DIR_REL: &str = "system/bin";
+
+/// Where a package pinned at `manifest_sha256` is unpacked, relative to
+/// the data root. A step's `command` resolves its program in here; the
+/// hash is in the path, so an update changes the step's argv and with
+/// it the step's fingerprint.
+pub fn package_dir_rel(manifest_sha256: &str) -> String {
+    let short = manifest_sha256.get(..16).unwrap_or(manifest_sha256);
+    format!("{PACKAGES_DIR_REL}/{short}")
+}
 
 // Stanza names a source may not take live with the code that enforces
 // them: `datalib_dag::config::RESERVED_STANZA_NAMES`, checked by

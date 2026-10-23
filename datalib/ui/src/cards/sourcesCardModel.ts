@@ -3,7 +3,23 @@
 // owns only the template and the styles.
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { TOPIC_CONFIG_WRITTEN, type CardCtx } from "./types";
-import { UNIFIED_DOCUMENT_INDEX, type ManageResponse, type ManageRow } from "@/api";
+import {
+  UNIFIED_DOCUMENT_INDEX,
+  installPackage,
+  type ManageResponse,
+  type ManageRow,
+  type PackageLookup,
+  type PackageView,
+} from "@/api";
+import {
+  addPackage,
+  addSourceApplets,
+  packageIdFor,
+  packagesState,
+  refreshPackages,
+  removePackage,
+  updatePackage,
+} from "@/config/packages";
 import { useApi } from "@/cards/cardApi";
 import {
   listGroups,
@@ -764,7 +780,10 @@ export function useSourcesCard(ctx: CardCtx) {
     } else {
       next = setQmdSteps(next, payload.id, "none");
     }
-    next = setTimeSeriesStep(next, payload.id, payload.entry.type);
+    next = setTimeSeriesStep(next, payload.id, payload.entry.type, payload.entry.package);
+    // A package source's applets come with it, and leave with its group.
+    const pkg = payload.entry.package;
+    if (!current && pkg) next = addSourceApplets(next, payload.id, pkg.id, pkg.applets);
 
     // Banners are for a person, so they say the name; the id is what the
     // config and the disk use.
@@ -773,6 +792,53 @@ export function useSourcesCard(ctx: CardCtx) {
     if (!ok) return;
     closeWizard();
   }
+
+  // ── Packages (docs/dev/packages.md). The build is fetched before the
+  // config names it, so the steps that run it can start at once.
+  const packagesOpen = ref(false);
+
+  async function writeOrThrow(text: string, what: string) {
+    if (!(await writeConfig(text, what))) {
+      throw new Error(banner.value?.text ?? "The config was rejected.");
+    }
+  }
+
+  async function addPackageEntry(source: string, lookup: PackageLookup) {
+    await installPackage(lookup.url, lookup.sha256);
+    await loadConfig();
+    const id = packageIdFor(configText.value, lookup.manifest);
+    await writeOrThrow(
+      addPackage(configText.value, { id, source, lookup }),
+      `Added the ${lookup.manifest.name} package.`,
+    );
+    await refreshPackages();
+  }
+
+  async function updatePackageEntry(id: string, lookup: PackageLookup) {
+    await installPackage(lookup.url, lookup.sha256);
+    await loadConfig();
+    await writeOrThrow(
+      updatePackage(configText.value, id, lookup),
+      `Updated ${lookup.manifest.name} to ${lookup.manifest.version}.`,
+    );
+    await refreshPackages();
+  }
+
+  async function removePackageEntry(id: string) {
+    await loadConfig();
+    await writeOrThrow(removePackage(configText.value, id), `Removed the ${id} package.`);
+  }
+
+  async function retryPackage(p: PackageView) {
+    await installPackage(p.url, p.sha256);
+    await refreshPackages();
+  }
+
+  /// Packages the config lists that could not be fetched here: the
+  /// sources that run them wait until they are.
+  const failedPackages = computed(() =>
+    (packagesState.value?.packages ?? []).filter((p) => p.state === "failed"),
+  );
 
   // ── Removing. A comparison's tree is computed from two commits its
   // source keeps, so unlike a download it is worth nothing kept: the
@@ -1011,6 +1077,7 @@ export function useSourcesCard(ctx: CardCtx) {
     // while a run is in flight, so on an idle root — the usual state —
     // this is the walk that produces the numbers on screen.
     await reloadAll(true);
+    void refreshPackages();
   });
 
   onUnmounted(() => {
@@ -1056,5 +1123,11 @@ export function useSourcesCard(ctx: CardCtx) {
     closeWizard,
     onWizardSubmit,
     asking,
+    packagesOpen,
+    addPackageEntry,
+    updatePackageEntry,
+    removePackageEntry,
+    retryPackage,
+    failedPackages,
   };
 }

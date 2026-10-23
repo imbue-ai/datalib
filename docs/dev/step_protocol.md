@@ -52,8 +52,15 @@ backslash escapes work; there is **no** variable expansion, globbing,
 or piping — wrap in `sh -c '…'` if you need real shell). The first
 word resolves via `PATH`, with the runner's `--binary-dir` (default:
 the directory `datalib-dag` itself lives in; also settable as
-`binary_dir` in the config, above the first `[[steps]]`) prepended —
-which is how `datalib-step` is found without an absolute path.
+`binary_dir` in the config, above the first `[[steps]]`) first and the
+library's own `<data_root>/system/bin/` second, both ahead of the
+inherited `PATH`. The first is how `datalib-step` is found without an
+absolute path; the second is where a library's own programs go, so
+they travel with it. (They used to go in `~/.datalib/bin`, shared by
+every library; a launch copies any program the config still runs from
+there into `system/bin/`, `http/src/library_bin.rs`.) A step
+with `package = "<id>"` instead runs the first word as a path inside that
+package's unpacked directory (`packages.md`).
 
 ## What your command receives
 

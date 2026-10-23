@@ -33,9 +33,11 @@ never reads. An applet that wants a configurable label takes it
 through `params`, the way the slack applet takes `workspace`.
 
 `command` is split shell-style (the same `shlex` call the runner uses)
-and resolved through `binary_dir`, then `~/.datalib/bin`, then the
-inherited `PATH` — the same order a step's command resolves in, so a
-program installed in `~/.datalib/bin` works for either kind of entry.
+and resolved through `binary_dir`, then the library's own `system/bin/`,
+then the inherited `PATH` — the same order a step's command resolves in,
+so a program put in `system/bin/` works for either kind of entry.
+With `package = "<id>"`, the first word is a path inside that package's
+unpacked directory instead, as for a step (`packages.md`).
 `params` is forwarded as
 `--params-file <path>` (a JSON file only the owner can read, deleted
 when the applet stops — params can hold tokens, and `ps` shows every

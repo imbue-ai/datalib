@@ -94,7 +94,14 @@ pub async fn build_state(
 
     // Before the loop, so its first read is of the current shape.
     let data_root = (*root).clone();
-    tokio::task::spawn_blocking(move || crate::config_upgrade::upgrade(&data_root)).await?;
+    let bin_override = binary_dir.clone();
+    tokio::task::spawn_blocking(move || {
+        crate::config_upgrade::upgrade(&data_root);
+        if let Ok(checked) = supervisor::load_config(&data_root) {
+            crate::library_bin::bring_forward(&data_root, &checked, bin_override.as_deref());
+        }
+    })
+    .await?;
     crate::config_upgrade::move_index_dir(&root).await;
     crate::config_upgrade::watch((*root).clone(), root_tx.subscribe());
 

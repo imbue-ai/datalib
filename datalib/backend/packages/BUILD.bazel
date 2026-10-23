@@ -1,0 +1,31 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# Packages: programs from outside datalib that a data root runs as steps
+# and applets, published as a manifest at a URL. The manifest's shape,
+# what a person types to name one, and the fetch that unpacks one under
+# `system/packages/`. docs/dev/packages.md. Linked by datalib-http.
+rust_library(
+    name = "datalib_packages",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_packages",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/fetch:datalib_fetch",
+        "//datalib/backend/runtime:datalib_runtime",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:toml",
+    ],
+)
+
+rust_test(
+    name = "packages_unittests",
+    size = "small",
+    crate = ":datalib_packages",
+    deps = [
+        "@datalib_crates//:flate2",
+        "@datalib_crates//:tar",
+    ],
+)
