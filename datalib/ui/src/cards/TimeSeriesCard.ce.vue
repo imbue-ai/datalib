@@ -8,6 +8,7 @@ import { subscribeLive } from "@/live";
 import {
   RANGES,
   decodeState,
+  emptyListNote,
   encodeState,
   grouped,
   newestMs,
@@ -43,7 +44,8 @@ every point. Hover the chart to read each line's value at that time.</p>
 const COLORS = ["#2f6fd0", "#d9661a", "#7c4dcc", "#1f9a6b", "#c2387a", "#8a6d00"];
 
 const restored = decodeState(props.ctx.initialState);
-const all = ref<Listed[]>([]);
+const listed = ref<Listed[] | null>([]);
+const all = computed(() => listed.value ?? []);
 const ids = ref<string[]>(restored.ids);
 const range = ref<RangeKey>(restored.range);
 const filter = ref("");
@@ -95,9 +97,9 @@ let listAsked = 0;
 async function loadList() {
   const mine = ++listAsked;
   try {
-    const listed = await fetchTimeSeries();
+    const got = await fetchTimeSeries();
     if (mine !== listAsked) return;
-    all.value = listed;
+    listed.value = got;
     error.value = null;
   } catch (e) {
     if (mine === listAsked) error.value = (e as Error).message;
@@ -187,8 +189,8 @@ onBeforeUnmount(() => {
         />
       </div>
       <div class="ts-groups">
-        <div v-if="loaded && !all.length" class="ts-empty">
-          No time series yet. A Garmin source writes them on its next sync.
+        <div v-if="loaded && emptyListNote(listed)" class="ts-empty">
+          {{ emptyListNote(listed) }}
         </div>
         <div v-else-if="loaded && !groups.length" class="ts-empty">
           Nothing matches “{{ filter }}”.

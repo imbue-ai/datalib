@@ -264,7 +264,7 @@ async fn free_text_without_a_qmd_index_says_it_is_not_built() {
 
 /// Each tab answers the same words its own way, and keeps its answer apart
 /// from the others': Fields from the search terms file, each row saying which of
-/// its terms matched; Words by BM25 from qmd's keyword index, best first;
+/// its terms matched unless its title did; Words by BM25 from qmd's keyword index, best first;
 /// Meaning from qmd's vectors alone.
 #[tokio::test]
 async fn each_tab_answers_free_text_its_own_way() {
@@ -278,15 +278,19 @@ async fn each_tab_answers_free_text_its_own_way() {
         "no row's terms start with the word"
     );
     for row in &fields.rows {
-        let (kind, value) = row
-            .snippet
-            .split_once(": ")
-            .expect("a fields hit names its term");
-        assert!(
-            datalib_schema::search_terms::SearchTermKind::parse(kind).is_some(),
-            "{kind}"
-        );
-        assert!(value.to_lowercase().contains("enterprise"), "{value}");
+        // A row its title matched is already called by it, and keeps its
+        // own opening words.
+        let by_term = row.snippet.split_once(": ").filter(|(kind, _)| {
+            datalib_schema::search_terms::SearchTermKind::parse(kind).is_some()
+        });
+        match by_term {
+            Some((_, value)) => assert!(value.to_lowercase().contains("enterprise"), "{value}"),
+            None => assert!(
+                row.conversation_name.to_lowercase().contains("enterprise"),
+                "{:?} names no term and its title does not match",
+                row.snippet
+            ),
+        }
     }
 
     let words = search_tab(&s, QUERY, Some(SearchTab::Words), None, 1_000, None).await;

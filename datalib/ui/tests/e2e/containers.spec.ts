@@ -76,6 +76,19 @@ test("a card opened from the Dashboard gets a tab of its own, below the pinned o
   await expect(mainCards(page)).toHaveCount(5);
 });
 
+/// A latest-activity row was its panel's width plus its own padding, so
+/// the panel cut off the date at its end ("in 344 yea").
+test("a latest-activity row keeps its whole date", async ({ page }) => {
+  await page.goto("/");
+  const row = recentDocument(page);
+  await expect(row).toBeVisible();
+  const panel = (await mainCards(page)
+    .locator('section.panel[aria-label="Latest activity"]')
+    .boundingBox())!;
+  const date = (await row.locator(":scope > .muted").boundingBox())!;
+  expect(date.x + date.width).toBeLessThanOrEqual(panel.x + panel.width + 1);
+});
+
 test("an open of a pinned tab's card shows that tab", async ({ page }) => {
   await page.goto("/");
   await expect(mainCards(page)).toHaveCount(5);

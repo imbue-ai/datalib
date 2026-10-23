@@ -166,6 +166,18 @@ export function lineLabels(picked: Listed[]): Map<string, string> {
 /// The time series about one document (an activity), listed together.
 export type About = { uuid: string; name: string; items: Listed[] };
 
+/// Why the list is empty, or null when it is not: `listed` is null on a
+/// root that keeps no time-series index.
+export function emptyListNote(listed: Listed[] | null): string | null {
+  if (listed === null) {
+    return "This data root keeps no time-series index, so there is nothing to chart.";
+  }
+  if (listed.length === 0) {
+    return "No time series yet. A Garmin, YoLink or AirVisual source writes them on its next sync.";
+  }
+  return null;
+}
+
 /// The time series that answer every word of `filter` in their human
 /// name, name, source or what they are about, grouped by source in
 /// source order. Within a source, the ones about the source as a whole
