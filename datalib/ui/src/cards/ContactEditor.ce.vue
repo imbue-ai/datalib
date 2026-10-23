@@ -5,8 +5,10 @@
 // sees, until Save publishes it or Discard drops it. A save that would
 // overwrite a change made elsewhere is refused and the card marks what
 // moved (`contactEdit.ts`). The photo changes at once, not through the
-// draft. docs/dev/contacts.md § "Fields, and editing a contact through
-// a draft".
+// draft. Each address or number field says whether it is linked, and a
+// copied field whether its source still says it (`contactFields.ts`);
+// the card's source sections copy into the draft through `copy`.
+// docs/dev/contacts.md § "Fields, and editing a contact through a draft".
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import {
   conflictText,
@@ -23,23 +25,47 @@ import {
   type Conflict,
   type ContactEdit,
   type DraftView,
+  type Field,
   type FieldKind,
 } from "./contactEdit";
 import {
+  copyAll,
+  copyInto,
+  drift,
+  linkedNotFields,
+  standing,
+  type CopiedFrom,
+  type SourceValue,
+} from "./contactFields";
+import {
   autosaveDraft,
+  canLinkHandles,
+  chipCell,
   discardDraft,
   draftOf,
   dropContactPhoto,
+  linkHandle,
   movesPeople,
+  NOBODY,
   openDraft,
+  people,
   PHOTO_TYPES,
   publishedEdit,
   saveDraft,
   setContactPhoto,
+  type NormalizedContact,
 } from "./contacts";
 import { subscribeLive } from "@/live";
 
-const props = defineProps<{ contactId: string; photoUrl: string | null }>();
+const props = defineProps<{
+  contactId: string;
+  photoUrl: string | null;
+  /** The contact's linked handles, which a field may or may not name. */
+  linked: NormalizedContact["handles"];
+  /** Each source's record on the card, which a copied field may be from. */
+  sources: NormalizedContact[];
+  sourceName: (sourceId: string) => string;
+}>();
 
 const AUTOSAVE_PAUSE_MS = 700;
 
@@ -67,6 +93,7 @@ const conflictKey = (c: Conflict) =>
 
 async function loadPublished() {
   published.value = await publishedEdit(props.contactId);
+  learnHandles(published.value.fields);
 }
 
 /** Show `view`, with `mine` (the form, when editing already) as what the
@@ -74,6 +101,7 @@ async function loadPublished() {
 function show(view: DraftView, mine: ContactEdit | null) {
   const draft = mine ?? view.mine ?? view.published;
   if (!draft) return;
+  learnHandles([...(view.published?.fields ?? []), ...(view.mine?.fields ?? [])]);
   base.value = view.base ?? draft;
   const merged = merge3(base.value, draft, view.published ?? draft);
   form.value = merged.edit;
@@ -126,8 +154,13 @@ function flush(): Promise<void> {
       return;
     }
     try {
-      await autosaveDraft(props.contactId, edit);
+      const handles = await autosaveDraft(props.contactId, edit);
       lastSent = body;
+      for (const f of edit.fields) {
+        const handle = handles[f.field_id];
+        if (handle) fieldHandles.value[f.field_id] = { value: f.value.trim(), handle };
+        else delete fieldHandles.value[f.field_id];
+      }
     } catch (e) {
       const msg = (e as Error).message;
       if (msg.includes("has no draft")) {
@@ -243,11 +276,123 @@ async function addField() {
   values?.[values.length - 1]?.focus();
 }
 
+/// A value typed over a copied one is the person's own: it no longer
+/// came from the source, so the card stops comparing it with the source.
+function typed(f: Field, value: string) {
+  f.value = value;
+  f.copied_from = null;
+}
+
 function removeField(id: string) {
   form.value.fields = form.value.fields.filter((f) => f.field_id !== id);
 }
 
 const lines = computed(() => (published.value ? editLines(published.value) : []));
+const viewFields = computed(() => published.value?.fields ?? []);
+
+// ── Fields against the links and the sources ─────────────────────────
+
+/// Each field's value as a handle, as the store last worked it out, with
+/// the value it was for: a field typed since has none until the next
+/// autosave answers.
+const fieldHandles = ref<Record<string, { value: string; handle: string }>>({});
+function learnHandles(fields: Field[]) {
+  for (const f of fields) {
+    if (f.handle) fieldHandles.value[f.field_id] = { value: f.value.trim(), handle: f.handle };
+  }
+}
+function handleOf(f: Field): string | null {
+  const known = fieldHandles.value[f.field_id];
+  return known && known.value === f.value.trim() ? known.handle : null;
+}
+
+const whoVersion = ref(0);
+const stopPeople = people.subscribe(() => whoVersion.value++);
+function whoOf(handle: string) {
+  void whoVersion.value;
+  return people.get(handle);
+}
+
+const shownFields = computed(() => (editing.value ? form.value.fields : viewFields.value));
+watch(
+  () => JSON.stringify(shownFields.value.map(handleOf).filter(Boolean)),
+  async (hs) => {
+    await people.ask(JSON.parse(hs) as string[]);
+    whoVersion.value++;
+  },
+  { immediate: true },
+);
+
+/** What to say beside a field: a handle nobody holds, to link; one
+ *  someone else holds; what its source says now. */
+function marksOf(f: Field) {
+  const s = standing(handleOf(f), props.contactId, whoOf);
+  const from = f.copied_from;
+  const record = from
+    ? props.sources.find((c) => c.source_id === from.source_id && c.key === from.key)
+    : undefined;
+  return {
+    unlinked: s?.state === "none" ? s.handle : null,
+    owner: s?.state === "other" ? s.handle : null,
+    drift: record ? drift(f, record) : null,
+    source: from ? props.sourceName(from.source_id) : "",
+  };
+}
+
+async function linkIt(handle: string) {
+  error.value = null;
+  try {
+    await linkHandle(handle, props.contactId);
+  } catch (e) {
+    error.value = (e as Error).message;
+  }
+}
+
+/// The chip of whoever holds a field's handle, drawn from `people` on
+/// every render.
+function drawOwner(el: unknown, handle: string, shown: string, _version: number) {
+  if (!(el instanceof HTMLElement)) return;
+  el.replaceChildren(chipCell(handle, shown, people.get(handle) ?? NOBODY, canLinkHandles()));
+}
+
+const missingFields = computed(() =>
+  linkedNotFields(props.linked, shownFields.value.map(handleOf)),
+);
+
+async function ensureEditing(): Promise<boolean> {
+  if (!editing.value) await startEditing();
+  return editing.value;
+}
+
+async function addLinked(m: { kind: FieldKind; value: string; label: string | null }) {
+  if (!(await ensureEditing())) return;
+  form.value.fields.push({
+    field_id: crypto.randomUUID(),
+    kind: m.kind,
+    label: m.label,
+    value: m.value,
+    copied_from: null,
+  });
+}
+
+async function takeNow(fieldId: string, now: string) {
+  if (!(await ensureEditing())) return;
+  const f = form.value.fields.find((x) => x.field_id === fieldId);
+  if (f) f.value = now;
+}
+
+/** Copy what a source says into the draft, opening it if need be. */
+async function copy(values: SourceValue[], from: CopiedFrom, all = false) {
+  if (!(await ensureEditing())) return;
+  const id = () => crypto.randomUUID();
+  form.value = all
+    ? copyAll(form.value, values, from, id)
+    : values.reduce((e, v) => copyInto(e, v, from, id), form.value);
+}
+
+/** What the contact says as the card shows it: the form while editing. */
+const current = computed(() => (editing.value ? form.value : published.value));
+defineExpose({ copy, current });
 
 // ── Photo ─────────────────────────────────────────────────────────────
 
@@ -352,6 +497,7 @@ onMounted(load);
 watch(() => props.contactId, load);
 onUnmounted(() => {
   stopLive();
+  stopPeople();
   if (timer) void flush();
 });
 </script>
@@ -401,7 +547,36 @@ onUnmounted(() => {
       <dl v-if="lines.length" class="person-lines">
         <template v-for="(line, i) in lines" :key="i">
           <dt>{{ line.label }}</dt>
-          <dd class="contact-edit-shown">{{ line.value }}</dd>
+          <dd class="contact-edit-shown">
+            {{ line.value }}
+            <template v-if="viewFields[i]">
+              <template v-for="m in [marksOf(viewFields[i]!)]" :key="0">
+                <span v-if="m.unlinked" class="contact-edit-mark">
+                  not linked
+                  <button type="button" class="person-button" @click.stop="linkIt(m.unlinked)">
+                    Link it
+                  </button>
+                </span>
+                <span v-else-if="m.owner" class="contact-edit-mark">
+                  linked to
+                  <span :ref="(el) => drawOwner(el, m.owner!, line.value, whoVersion)"></span>
+                </span>
+                <span v-if="m.drift" class="contact-edit-mark contact-edit-drift">
+                  <template v-if="m.drift.now">
+                    {{ m.source }} now says “{{ m.drift.now }}”
+                    <button
+                      type="button"
+                      class="person-button"
+                      @click.stop="takeNow(viewFields[i]!.field_id, m.drift.now)"
+                    >
+                      Take it
+                    </button>
+                  </template>
+                  <template v-else>{{ m.source }} no longer says this</template>
+                </span>
+              </template>
+            </template>
+          </dd>
         </template>
       </dl>
       <div class="person-actions">
@@ -442,10 +617,11 @@ onUnmounted(() => {
               <option v-for="k in FIELD_KINDS" :key="k.kind" :value="k.kind">{{ k.label }}</option>
             </select>
             <input
-              v-model="f.value"
+              :value="f.value"
               class="person-input contact-edit-value"
               :aria-label="kindLabel(f.kind)"
               :placeholder="kindLabel(f.kind)"
+              @input="typed(f, ($event.target as HTMLInputElement).value)"
             />
             <input
               :value="f.label ?? ''"
@@ -464,6 +640,33 @@ onUnmounted(() => {
               ×
             </button>
           </div>
+          <template v-for="m in [marksOf(f)]" :key="0">
+            <p v-if="m.unlinked || m.owner || m.drift" class="contact-edit-marks">
+              <span v-if="m.unlinked" class="contact-edit-mark">
+                not linked
+                <button type="button" class="person-button" @click.stop="linkIt(m.unlinked)">
+                  Link it
+                </button>
+              </span>
+              <span v-else-if="m.owner" class="contact-edit-mark">
+                linked to
+                <span :ref="(el) => drawOwner(el, m.owner!, f.value, whoVersion)"></span>
+              </span>
+              <span v-if="m.drift" class="contact-edit-mark contact-edit-drift">
+                <template v-if="m.drift.now">
+                  {{ m.source }} now says “{{ m.drift.now }}”
+                  <button
+                    type="button"
+                    class="person-button"
+                    @click.stop="takeNow(f.field_id, m.drift.now)"
+                  >
+                    Take it
+                  </button>
+                </template>
+                <template v-else>{{ m.source }} no longer says this</template>
+              </span>
+            </p>
+          </template>
           <p v-if="fieldConflict(f.field_id)" class="contact-edit-conflict">
             {{ conflictText(fieldConflict(f.field_id)!) }}
             <button
@@ -523,6 +726,10 @@ onUnmounted(() => {
         </span>
       </div>
     </form>
+    <p v-for="m in missingFields" :key="m.handle" class="contact-edit-marks">
+      <span class="contact-edit-mark">Linked, not a field: {{ m.value }}</span>
+      <button type="button" class="person-button" @click.stop="addLinked(m)">Add as a field</button>
+    </p>
     <p v-if="error" class="person-error">{{ error }}</p>
   </div>
 </template>
@@ -606,6 +813,27 @@ onUnmounted(() => {
   flex: 1;
   min-width: 0;
   resize: vertical;
+}
+.contact-edit-marks {
+  margin: 0.15rem 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+.contact-edit-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-left: 0.4rem;
+  font-size: var(--datalib-font-size-small);
+  color: var(--datalib-muted);
+}
+.contact-edit-marks .contact-edit-mark:first-child {
+  margin-left: 0;
+}
+.contact-edit-drift {
+  color: var(--datalib-warn-fg);
 }
 .contact-edit-stale,
 .contact-edit-conflict {
