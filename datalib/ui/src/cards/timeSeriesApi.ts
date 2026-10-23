@@ -9,12 +9,11 @@ import {
   type TimeKind,
 } from "./timeSeries";
 
-export async function fetchTimeSeries(): Promise<Listed[]> {
+/// Every time series the index holds; null on a root that keeps no index.
+export async function fetchTimeSeries(): Promise<Listed[] | null> {
   const r = await fetch(`${TIME_SERIES_APPLET}/time_series`);
   const text = await r.text();
-  if (appletAbsent("unified_time_series_index", r.status, text)) {
-    throw new Error("This data root does not keep a time-series index, so no chart.");
-  }
+  if (appletAbsent("unified_time_series_index", r.status, text)) return null;
   if (!r.ok) throw new Error(`time series → ${r.status}: ${text}`);
   return (JSON.parse(text) as { time_series: Listed[] }).time_series;
 }

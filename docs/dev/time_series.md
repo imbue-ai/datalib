@@ -244,9 +244,11 @@ document's frame runs no script of its own, so the chart is the app's
 code reaching into it, the same way chips and the copy buttons are; its
 styles, uPlot's among them, are in the frame's own stylesheet. A time series
 the index does not hold is left out, and a chart with none says so. On a
-root that runs no time-series applet, the chart says that in a sentence
-(the gateway's 502 "no applet" is what `api.ts::appletAbsent` reads), and
-either note takes only its own line, not the chart's height.
+root that runs no time-series applet, `fetchTimeSeries` answers null
+(the gateway's 502 "no applet" is what `api.ts::appletAbsent` reads): the
+chart says so in a sentence, and either note takes only its own line,
+not the chart's height. The Time series card says the same in place of
+its list (`timeSeries.ts::emptyListNote`).
 
 What draws where:
 

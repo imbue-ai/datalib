@@ -7,6 +7,7 @@ import {
   decodeState,
   displayUnit,
   encodeState,
+  emptyListNote,
   extent,
   formatTick,
   formatTime,
@@ -116,6 +117,18 @@ describe("display units", () => {
 });
 
 describe("the list", () => {
+  /** With no index the card said, beside each other, that a Garmin sync
+   *  would fill the list and, in red, that there was no index to fill. */
+  it("says why it is empty, once", () => {
+    expect(emptyListNote(null)).toBe(
+      "This data root keeps no time-series index, so there is nothing to chart.",
+    );
+    expect(emptyListNote([])).toBe(
+      "No time series yet. A Garmin, YoLink or AirVisual source writes them on its next sync.",
+    );
+    expect(emptyListNote([listed({})])).toBeNull();
+  });
+
   it("keeps what answers every word, grouped by source", () => {
     const all = [
       listed({ human_name: "Resting HR", name: "resting_hr" }),

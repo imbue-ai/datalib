@@ -32,6 +32,10 @@ const span = computed(() => {
 async function load() {
   try {
     const all = await fetchTimeSeries();
+    if (all === null) {
+      error.value = "This data root keeps no time-series index, so no chart.";
+      return;
+    }
     const byId = new Map(all.map((s) => [s.time_series_id, s]));
     picked.value = props.ids.flatMap((id) => {
       const s = byId.get(id);

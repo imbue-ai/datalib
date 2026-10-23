@@ -83,3 +83,15 @@ test("the chips row keeps its height whatever the counts", async ({ page }) => {
   await searchAndSettle(page, "");
   expect((await row.boundingBox())!.height).toBe(height);
 });
+
+/// The chips are one line that scrolls, so a typed `source_id:` lit a chip
+/// out of sight and the row seemed to say "All".
+test("a source picked by typing is scrolled into view", async ({ page }) => {
+  await page.setViewportSize({ width: 760, height: 800 });
+  await page.goto(GRID);
+  const chips = page.locator(".source-chips .source-chip");
+  await expect(chips.nth(2)).toBeVisible();
+  const id = await chips.last().getAttribute("data-source");
+  await searchAndSettle(page, `source_id:${id}`);
+  await expect(page.locator(".source-chips .source-chip.is-on")).toBeInViewport();
+});

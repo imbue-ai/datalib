@@ -24,6 +24,9 @@ import {
   draftOf,
   saveDraft,
   setContactPhoto,
+  people,
+  linkHandle,
+  unlinkHandle,
 } from "./contacts";
 
 function dom(html: string): HTMLElement {
@@ -423,5 +426,52 @@ describe("the card's edit calls", () => {
     expect(sent[0]).toMatchObject({ url: "/applet/datalib_contacts/photo/c1", method: "PUT" });
     expect(sent[0]!.type).toBe("image/png");
     expect(sent[0]!.body).toBe(photo);
+  });
+});
+
+describe("an edit to a link", () => {
+  /// What the live updates need to exist; nothing here reads them.
+  class QuietEventSource {
+    static CLOSED = 2;
+    readyState = 0;
+    addEventListener() {}
+    close() {}
+  }
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** Linking riker@ forgot only riker@, so a card drawn from wriker@ kept
+   *  the contact's old list of handles until a live update came, seconds
+   *  later. */
+  it("forgets every handle of the contact it joins or leaves", async () => {
+    const riker = contact("datalib_contacts", "Will Riker", [
+      ["email:wriker@enterprise.test", null],
+      ["email:will@alaska.test", null],
+    ]);
+    vi.stubGlobal("EventSource", QuietEventSource);
+    vi.stubGlobal("fetch", async (url: string) => {
+      const body = url.endsWith("/resolve")
+        ? {
+            resolved: {
+              "email:wriker@enterprise.test": riker,
+              "email:will@alaska.test": riker,
+            },
+          }
+        : url.endsWith("/people")
+          ? { people: {} }
+          : {};
+      return new Response(JSON.stringify(body), { status: 200 });
+    });
+    const shown = ["email:wriker@enterprise.test", "email:will@alaska.test", "email:worf@k.test"];
+    await people.ask(shown);
+    expect(people.get("email:wriker@enterprise.test")?.mine?.key).toBe(riker.key);
+
+    await linkHandle("email:riker@enterprise.test", riker.key);
+    expect(people.get("email:wriker@enterprise.test")).toBeUndefined();
+    expect(people.get("email:worf@k.test")).toBeDefined();
+
+    await people.ask(shown);
+    await unlinkHandle("email:will@alaska.test");
+    expect(people.get("email:wriker@enterprise.test")).toBeUndefined();
+    expect(people.get("email:worf@k.test")).toBeDefined();
   });
 });
