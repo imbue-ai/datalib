@@ -40,6 +40,8 @@ async fn store_with_history(path: &Path, commits: usize) {
 async fn commits(path: &Path) -> i64 {
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
         .connect(&format!("sqlite://{}?mode=ro", path.display()))
         .await
         .unwrap();
