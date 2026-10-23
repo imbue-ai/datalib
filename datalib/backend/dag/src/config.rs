@@ -1789,6 +1789,7 @@ fn spec_of(
     let mut spec = StepSpec::new(&e.id, StepRun::Subprocess { argv, env, params });
     spec.code_version = e.code_version.clone();
     spec.migrates = e.command.is_none();
+    spec.compacts = e.command.is_none();
     spec.group = e.group.clone();
     spec.group_type = group_type.map(str::to_string);
     spec.function = e.function.clone();
@@ -2382,10 +2383,11 @@ mod tests {
         assert_ne!(none.fingerprint_material(), v1.fingerprint_material());
     }
 
-    /// Only `datalib-step`'s own steps take the `--migrate` verb: a custom
-    /// command that has never heard of it would run as if synced.
+    /// Only `datalib-step`'s own steps take the `--migrate` and
+    /// `--compact` verbs: a custom command that has never heard of one
+    /// would run as if synced.
     #[test]
-    fn only_builtin_steps_are_asked_to_migrate() {
+    fn only_builtin_steps_are_asked_to_migrate_or_compact() {
         let cfg: DagConfig = toml::from_str(
             r#"
             [[groups]]
@@ -2407,6 +2409,8 @@ mod tests {
         let spec = |id: &str| specs.iter().find(|s| s.id == id).unwrap().clone();
         assert!(spec("mail/ingest").migrates);
         assert!(!spec("custom/render").migrates);
+        assert!(spec("mail/ingest").compacts);
+        assert!(!spec("custom/render").compacts);
     }
 
     /// Editing `params` changes the argv the runner executes, which is
