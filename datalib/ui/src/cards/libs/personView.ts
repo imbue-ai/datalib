@@ -3,6 +3,7 @@
 // opens it through `personSource` in cardSources.ts.
 import PersonCard from "../PersonCard.ce.vue";
 import ChipMenu from "../ChipMenu.ce.vue";
+import ContactEditor from "../ContactEditor.ce.vue";
 import HandlePopover from "../HandlePopover.ce.vue";
 import EntityChip from "../EntityChip.ce.vue";
 import chipCss from "../chip.css?inline";
@@ -13,6 +14,6 @@ export function personView(handle: string, opts: { seenIn?: string | null } = {}
   return vueCard(
     PersonCard,
     { handle, seenIn: opts.seenIn ?? null },
-    { styleSources: [ChipMenu, HandlePopover, EntityChip, chipCss] },
+    { styleSources: [ChipMenu, ContactEditor, HandlePopover, EntityChip, chipCss] },
   );
 }

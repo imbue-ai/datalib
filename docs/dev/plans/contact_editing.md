@@ -1,6 +1,14 @@
 # Contact editing: what is still to build
 
-*Proposal (2026-10-08). Nothing here is built. The contacts app's
+*Proposal (2026-10-08), partly built. Built: the `fields` table,
+drafts, the save with its stale check, their routes (autosave is
+`PUT …/draft`, not `PATCH`), the card as a viewer, and the card as an
+editor of the name, note, fields and photo, with the three-way marks
+(see [`../contacts.md`](../contacts.md) §"Fields, and editing a contact
+through a draft"). The live push is the existing `curated` frame, not
+a `LiveTable` variant. Not built: copying from sources, how an email or
+phone field stands against the links, history and undo, the export, and
+publishing to CardDAV. The contacts app's
 store, its routes and how chips read it are in
 [`../contacts.md`](../contacts.md); which handles are one person, and
 how a person says so, is the other plan,

@@ -851,6 +851,8 @@ provide(CONTAINERS_API, api);
 }
 .ct-sidebar {
   flex: 0 0 240px;
+  /* Without it, one long unbroken card title widens the whole sidebar. */
+  min-width: 0;
   display: flex;
   flex-direction: column;
   min-height: 0;

@@ -338,8 +338,10 @@ the contact with no photo and a `blob_missing` problem on its page.
 A render store written before photos were linked holds the retired
 `Inline` spelling in `contact_json`; it reads as no photo until the
 page renders again. The contacts app fills it with
-`/applet/datalib_contacts/photo/<contact_id>` for a photo a person put
-on their contact. With no photo, or one the browser fails to load, a
+`/applet/datalib_contacts/photo/<contact_id>?v=<when it was set>` for a
+photo a person put on their contact: a page draws an image it has
+already loaded under one URL again from memory, so a changed photo has
+to be a new URL to show without a reload. With no photo, or one the browser fails to load, a
 chip linked to a contact draws the person's initial, and any other
 chip draws the mark for its handle's kind.
 
@@ -408,8 +410,8 @@ is a 409 with the store's words; a handle that does not parse is a
 | `POST /merge` | `{from, into}`: `into` survives and takes `from`'s links, fields and memberships, its photo and note where it has none (two notes are kept one after the other); `from` stays as a row whose `merged_into` names `into`, so a `contact:<id>` saved anywhere still reaches the person, and anything merged into `from` now points at `into`. Two people or two groups, never one of each |
 | `POST /link`, `POST /unlink` | one handle to or from a contact |
 | `POST /stopped_working` | `{handle, by}`; `by: null` means it works again |
-| `POST /rename` | |
-| `GET`, `PUT`, `DELETE /photo/{id}` | the photo as bytes; put one (the body, with its `Content-Type`: png, jpeg, gif or webp, at most 4 MB; the route reads up to the gateway's 8 MB so the store's rule is the one that answers); drop it |
+| `POST /rename` | `{contact_id, name}`, at once, without a draft |
+| `GET`, `PUT`, `DELETE /photo/{id}` | the photo as bytes; put one (the body, with its `Content-Type`: png, jpeg, gif or webp, at most 4 MB; the route reads up to the gateway's 8 MB so the store's rule is the one that answers), answering its new `photo_url`; drop it |
 | `GET /contact/{id}/edit` | what the card edits, as published: name, note, fields |
 | `POST`, `GET /contact/{id}/draft` | open the contact's draft (cut it if there is none) / read it: `{base, mine, published, published_commit}` |
 | `PUT`, `DELETE /contact/{id}/draft` | autosave the whole edit onto the draft, uncommitted / discard the draft |
@@ -439,6 +441,29 @@ survives. The save names the published commit the card last showed; if
 this contact's name, note or fields have moved since, nothing is saved
 and the card gets the new state to show. Links and photos change at
 once, never through a draft.
+
+On the person card, `ContactEditor.ce.vue` is the part under *Your
+contact*: the contact's fields and note as published, *Edit*, and the
+photo, which changes at once: *Set photo…*, *Remove photo*, or a drop
+on it of an image file or of an image dragged from the app itself, such
+as a source's photo on the same card (`photoDrop` in `contactEdit.ts`).
+An image dragged from another site is refused rather than fetched. *Edit*
+opens the draft (`POST …/draft`) and shows the name, the fields (a kind,
+a value and a free-text label each) and the note as a form. Each pause
+in typing, and each time a field loses focus, autosaves the whole edit
+(`PUT …/draft`), less any field still empty; *Save* and *Discard* end
+it. A card opened on a contact that has a draft resumes it, in any
+window, after a reload or a restart. When it opens the draft, on each
+`curated` frame, and on a save refused as stale, the card compares what
+the draft was cut from, the form and what is published (`merge3` in
+`contactEdit.ts`, the same three-way merge the save makes): a change
+published elsewhere to something the draft left alone is taken into the
+form, and a part both changed differently is marked "changed elsewhere"
+with *Use theirs* and *Keep mine*. After a stale save, saving again
+keeps what the form says. Not built yet:
+copying a field from a source's record, saying how an email or phone
+field stands against the links, and undo
+([`plans/contact_editing.md`](plans/contact_editing.md)).
 
 ## In the UI
 
@@ -477,8 +502,9 @@ Everything is in `datalib/ui/src/cards/`:
   (`ChipMenu.ce.vue`). `chip.css` is the one look.
 - `PersonCard.ce.vue` is the card a person chip's double-click opens
   (`personView`; its rules are `person.ts`). Its heading is the
-  person's chip; then your contact when the handle is linked to one;
-  then each source's record that holds one of the card's handles, a
+  person's chip; then your contact when the handle is linked to one,
+  which the card edits (§"Fields, and editing a contact through a
+  draft"); then each source's record that holds one of the card's handles, a
   section per source and never merged, the source the chip was seen in
   first, each saying which handle it was found *via*. Every handle on
   it is a chip showing the identifier (`identifierCell`), pale blue
