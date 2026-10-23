@@ -43,7 +43,10 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// v18: participants are who wrote a message, never a tool call or a
 /// stand-in label ("Me", "Unknown"; `AuthorKind`).
 /// v19: an item with attachments draws its labels too.
-pub const LAYOUT_VERSION: u32 = 19;
+/// v20: an attachment its source's blob store holds is linked at its
+/// `/data/…` address rather than copied beside the page.
+/// v21: so is a person's photo.
+pub const LAYOUT_VERSION: u32 = 21;
 
 /// What every chat-common provider declares through
 /// `RenderProcessor::render_params`, merged with its own knobs: the
@@ -248,6 +251,14 @@ impl<'a> ChatRenderer<'a> {
     }
 }
 
+/// A chat's `<h1>`: a provider-supplied `title`, else the chat's name.
+/// The source is the icon every surface draws beside a title; a prefix
+/// of its name read twice where the name holds it already ("WhatsApp ·
+/// WhatsApp user …0108").
+fn chat_heading(chat: &NormalizedChat) -> String {
+    chat.title.clone().unwrap_or_else(|| chat.display.clone())
+}
+
 /// Render one document; `(items, reactions)` rendered. Always: the
 /// store writes what it is handed, and doltlite's content-addressed
 /// tables carry no diff for a document that came out the same.
@@ -263,24 +274,12 @@ fn render_one(
     let (md_path, page_dir) = output_paths(out_dir, source_id, chat, &doc.period_key);
     fs::create_dir_all(&page_dir).with_context(|| format!("mkdir -p {}", page_dir.display()))?;
 
-    // Materialize attachment bytes from blob_cas into <page_dir>/blobs/
-    // and rewrite each attachment's `rel_path` to point at the file we
-    // just wrote. Mutates a local copy of `doc` — the same chat may be
-    // re-rendered into another bucket later, and each bucket needs its
-    // own per-page materialization pass.
-    let resolved_doc = materialize_attachment_bytes(doc, &page_dir, blobs);
+    // Point each attachment at its bytes. Mutates a local copy of `doc` —
+    // the same chat may be re-rendered into another bucket later.
+    let resolved_doc = link_attachments(doc, &page_dir, blobs);
     let doc = &resolved_doc;
 
-    // A provider-supplied `title` takes the `<h1>`; otherwise derive the
-    // familiar "{source_label} · {display}" heading.
-    let chat_title = match &chat.title {
-        Some(t) => t.clone(),
-        None => format!(
-            "{label} · {disp}",
-            label = profile.source_label,
-            disp = chat.display
-        ),
-    };
+    let chat_title = chat_heading(chat);
     let sections = render_markdown(profile, chat, doc, &chat_title);
     fs::write(&md_path, join(&sections)).with_context(|| format!("write {}", md_path.display()))?;
 
@@ -319,16 +318,15 @@ fn render_one(
         rows,
         sections,
         edges: Vec::new(),
-        contacts: datalib_etl_render::photo::place_photos(
-            crate::people::document_contacts(
-                source_id,
-                &doc.items,
-                &doc.orphan_reactions,
-                &chat.contacts,
-            ),
-            &page_dir,
-            &doc.markdown_uuid,
-        ),
+        contacts: crate::people::document_contacts(
+            source_id,
+            &doc.items,
+            &doc.orphan_reactions,
+            &chat.contacts,
+        )
+        .iter()
+        .map(datalib_etl_render::photo::with_photo_url)
+        .collect(),
         problems,
     })
     .with_context(|| format!("on_doc_complete {}", doc.markdown_uuid))?;
@@ -336,39 +334,27 @@ fn render_one(
     Ok((items_rendered, reactions_rendered))
 }
 
-/// Write every blob in the per-chat bundle into
-/// `<page_dir>/blobs/<short-blake3>.<ext>`, then walk `doc.items` and
-/// — for every attachment whose `ref_id` resolves in the bundle — set
-/// `rel_path = "blobs/<filename_for(ref)>"` so the markdown emitter
-/// picks up the materialized blob instead of the "(not yet fetched)"
-/// placeholder. Same shape slack's bucket-side render uses.
-fn materialize_attachment_bytes(
-    doc: &NormalizedDoc,
-    page_dir: &Path,
-    blobs: &BlobBundle,
-) -> NormalizedDoc {
+/// Set each attachment's `href` from the bundle: its address in the
+/// source's blob store. A page loses any `blobs/` an older build wrote
+/// copies into beside it.
+fn link_attachments(doc: &NormalizedDoc, page_dir: &Path, blobs: &BlobBundle) -> NormalizedDoc {
     let mut out = doc.clone();
     report_missing_bytes(&mut out, blobs);
-    if blobs.is_empty() {
-        return out;
-    }
-    if let Err(e) = blobs.materialize_to_dir(&page_dir.join("blobs")) {
-        tracing::warn!(
-            page_dir = %page_dir.display(),
-            error = %e,
-            "chat_common::materialize: BlobBundle::materialize_to_dir failed; leaving rel_paths unset"
-        );
-        return out;
+    let blobs_dir = page_dir.join("blobs");
+    if let Err(e) = std::fs::remove_dir_all(&blobs_dir) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(dir = %blobs_dir.display(), error = %e, "chat_common: removing an old blobs/ failed");
+        }
     }
     for item in &mut out.items {
         for att in &mut item.attachments {
             let Some(ref_id) = att.ref_id.as_deref() else {
                 continue;
             };
-            if let Some(fname) = blobs.filename_for(ref_id) {
-                att.rel_path = Some(format!("blobs/{fname}"));
+            if let Some(href) = blobs.href_for(ref_id) {
+                att.href = Some(href);
                 if att.byte_len.is_none() {
-                    att.byte_len = blobs.get(ref_id).map(|b| b.bytes.len() as i64);
+                    att.byte_len = blobs.get(ref_id).map(|b| b.byte_len as i64);
                 }
             }
         }
@@ -755,7 +741,7 @@ fn render_attachment(s: &mut String, att: &crate::types::NormalizedAttachment) {
         .file_name
         .clone()
         .or_else(|| {
-            att.rel_path
+            att.href
                 .as_deref()
                 .and_then(|p| p.rsplit('/').next())
                 .map(str::to_string)
@@ -794,7 +780,7 @@ fn render_attachment(s: &mut String, att: &crate::types::NormalizedAttachment) {
         .is_some_and(|m| m.starts_with("video/"));
 
     s.push('\n');
-    match &att.rel_path {
+    match &att.href {
         Some(rel) if att.is_image() => {
             s.push_str(&format!("![{label}]({})\n", md_link_dest(rel)));
         }
@@ -1334,7 +1320,7 @@ mod tests {
         item.labels = vec!["Starred".to_string()];
         item.text = Some("Spot's portrait".to_string());
         item.attachments = vec![NormalizedAttachment {
-            rel_path: None,
+            href: None,
             file_name: Some("spot.png".to_string()),
             mime_type: Some("image/png".to_string()),
             byte_len: None,
@@ -1756,7 +1742,7 @@ mod tests {
         attachment.text = Some(MARKUP.to_string());
         attachment.reactions = Vec::new();
         attachment.attachments = vec![NormalizedAttachment {
-            rel_path: None,
+            href: None,
             file_name: Some(format!("{MARKUP}].png")),
             mime_type: Some("image/png".to_string()),
             byte_len: None,
@@ -2030,13 +2016,13 @@ mod tests {
     }
 
     #[test]
-    fn attachment_without_rel_path_falls_back_to_placeholder() {
+    fn attachment_without_href_falls_back_to_placeholder() {
         let mut chat = mk_chat();
         chat.buckets[0].items[0] = NormalizedChatItem {
             kind: ItemKind::Attachment,
             text: Some("Viewscreen capture".to_string()),
             attachments: vec![NormalizedAttachment {
-                rel_path: None,
+                href: None,
                 file_name: Some("bridge-viewscreen.jpg".to_string()),
                 mime_type: Some("image/jpeg".to_string()),
                 byte_len: Some(384),
@@ -2067,7 +2053,7 @@ mod tests {
     fn an_attachment_the_blob_store_lost_is_reported() {
         let mut chat = mk_chat();
         chat.buckets[0].items[0].attachments = vec![NormalizedAttachment {
-            rel_path: None,
+            href: None,
             file_name: Some("away-team-scan.png".to_string()),
             mime_type: Some("image/png".to_string()),
             byte_len: None,
@@ -2077,7 +2063,7 @@ mod tests {
         let mut blobs = BlobBundle::default();
         blobs.mark_missing("scan-1");
         // No bytes to write, so nothing touches the page directory.
-        let doc = materialize_attachment_bytes(&chat.buckets[0], Path::new("/nonexistent"), &blobs);
+        let doc = link_attachments(&chat.buckets[0], Path::new("/nonexistent"), &blobs);
 
         let problems = &doc.items[0].problems;
         assert_eq!(problems.len(), 1, "{problems:?}");
@@ -2143,7 +2129,7 @@ mod tests {
     fn a_held_attachment_takes_its_size_from_its_bytes() {
         let mut chat = mk_chat();
         chat.buckets[0].items[0].attachments = vec![NormalizedAttachment {
-            rel_path: None,
+            href: None,
             file_name: Some("warp-core-schematic.pdf".to_string()),
             mime_type: None,
             byte_len: None,
@@ -2151,18 +2137,59 @@ mod tests {
             ref_id: Some("schematic".to_string()),
         }];
         let mut blobs = BlobBundle::default();
-        blobs.add(
+        blobs.add_stored_with_bytes(
             "schematic",
+            "enterprise/ingest",
             vec![0; 2048],
             Some("application/pdf".into()),
-            None,
         );
         let dir = tempfile::tempdir().unwrap();
 
-        let doc = materialize_attachment_bytes(&chat.buckets[0], dir.path(), &blobs);
+        let doc = link_attachments(&chat.buckets[0], dir.path(), &blobs);
 
         assert_eq!(doc.items[0].attachments[0].byte_len, Some(2048));
-        assert!(doc.items[0].attachments[0].rel_path.is_some());
+        assert!(doc.items[0].attachments[0].href.is_some());
+    }
+
+    /// An attachment its source's blob store holds is linked at its
+    /// address there, and no copy is written beside the page; a
+    /// `blobs/` an older build wrote there goes.
+    #[test]
+    fn a_stored_attachment_is_linked_not_copied() {
+        let mut chat = mk_chat();
+        chat.buckets[0].items[0].attachments = vec![NormalizedAttachment {
+            href: None,
+            file_name: Some("warp-core-schematic.pdf".to_string()),
+            mime_type: None,
+            byte_len: None,
+            source_url: None,
+            ref_id: Some("schematic".to_string()),
+        }];
+        let hash = "ab".repeat(32);
+        let mut blobs = BlobBundle::default();
+        blobs.add_stored(
+            "schematic",
+            "enterprise/ingest",
+            datalib_etl::blob_cas::Described {
+                blake3: hash.clone(),
+                byte_len: 2048,
+                content_type: Some("application/pdf".into()),
+            },
+            None,
+        );
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("blobs")).unwrap();
+        std::fs::write(dir.path().join("blobs").join("old.pdf"), b"old copy").unwrap();
+
+        let doc = link_attachments(&chat.buckets[0], dir.path(), &blobs);
+
+        let att = &doc.items[0].attachments[0];
+        assert_eq!(
+            att.href.as_deref(),
+            Some(format!("/data/enterprise/ingest/blob/{hash}").as_str())
+        );
+        assert_eq!(att.byte_len, Some(2048));
+        assert!(!dir.path().join("blobs").exists(), "the old copy went");
     }
 
     #[test]
@@ -2197,30 +2224,15 @@ mod tests {
         );
     }
 
+    /// A chat with no title of its own is headed by its name alone, not
+    /// "WhatsApp · WhatsApp user …0108"; a provider's title wins.
     #[test]
-    fn title_override_replaces_derived_heading() {
-        let profile = RenderProfile {
-            provider: Provider::Test,
-            source_label: "Test".to_string(),
-            chat_kind: "Test Chat".to_string(),
-            message_kind: "Test Message".to_string(),
-            reaction_kind: "Test Reaction".to_string(),
-            chat_entity_kind: ENTITY_KIND_CONVERSATION,
-            stamp_precision: RecordStampPrecision::Seconds,
-            render_version: 1,
-            text_format: TextFormat::Markdown,
-        };
+    fn a_chat_is_headed_by_its_title_else_its_name() {
         let mut chat = mk_chat();
+        chat.display = "WhatsApp user …0108".to_string();
+        assert_eq!(chat_heading(&chat), "WhatsApp user …0108");
         chat.title = Some("#bridge: Make it so.".to_string());
-
-        // render_one builds the title; render_markdown takes it as a param,
-        // so exercise the heading logic via render_one's formatting here by
-        // re-deriving the same way render_one does.
-        let chat_title = match &chat.title {
-            Some(t) => t.clone(),
-            None => format!("{} · {}", profile.source_label, chat.display),
-        };
-        assert_eq!(chat_title, "#bridge: Make it so.");
+        assert_eq!(chat_heading(&chat), "#bridge: Make it so.");
     }
 
     /// An unbucketed chat's title read "Bridge Crew (all)" (#902); a

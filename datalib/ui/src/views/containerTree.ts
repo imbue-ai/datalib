@@ -210,17 +210,34 @@ export function tabRows(box: BoxNode): { node: TreeNode; depth: number }[] {
   return out;
 }
 
-// The tab that already shows `source`, when a card opened from `fromId`
-// would get a tab of its own: a pinned tab, else a tab opened from the
-// opener's own tab. The open shows that tab instead of making a second
+/// What makes two card sources the same card (`key`), and whether a tab
+/// of it anywhere in the window counts or only one nearby (`anywhere`).
+/// The views decide (`sameCard` in cards/cardSources.ts); this file
+/// knows none of them.
+export type CardIdentity = { key: string; anywhere: boolean };
+export type Identify = (source: string) => CardIdentity;
+
+const exactly: Identify = (source) => ({ key: source, anywhere: false });
+
+// The tab that already shows the card `source` names, when a card opened
+// from `fromId` would get a tab of its own: a pinned tab, else a tab
+// opened from the opener's own tab, else — for a card that is one per
+// window — any tab. The open shows that tab instead of making a second
 // one.
-export function tabShowing(root: TreeNode, fromId: string, source: string): string | null {
+export function tabShowing(
+  root: TreeNode,
+  fromId: string,
+  source: string,
+  identify: Identify = exactly,
+): string | null {
   const land = landing(root, fromId);
   if (root.kind !== "box" || land?.boxId !== root.id) return null;
-  const shows = (c: TreeNode) => c.kind === "card" && c.source === source;
+  const wanted = identify(source);
+  const shows = (c: TreeNode) => c.kind === "card" && identify(c.source).key === wanted.key;
   const tab =
     root.children.find((c) => c.pinned && shows(c)) ??
-    root.children.find((c) => c.openedBy === land.branchId && shows(c));
+    root.children.find((c) => c.openedBy === land.branchId && shows(c)) ??
+    (wanted.anywhere ? root.children.find(shows) : undefined);
   return tab?.id ?? null;
 }
 

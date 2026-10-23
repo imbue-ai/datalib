@@ -101,6 +101,10 @@ closed_vocabulary! {
         /// A value whose type the contract does not cover. → null that
         /// field; never pass it through untyped.
         UncoveredType,
+        /// A piece of a document the renderer does not know how to draw.
+        /// → shown in place as the JSON upstream sent, so nothing is
+        /// lost but its look.
+        UnsupportedJson,
         /// A deliberate lossy rule fired (truncation, chrome-stripping).
         /// These are the rows R3's judgment-call table is generated
         /// from, which is why `Problem::rule` exists.

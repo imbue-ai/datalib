@@ -21,8 +21,8 @@ const HEAD: &str = r#"# Every source datalib can mirror, one group per way in, r
 #
 #   bazel run //datalib/backend/datalib_step:all_sources.update
 #
-# `datalib-step help <type>` prints the same stanzas and the minimal ones,
-# and `datalib-step help <type> <method>` lists every option.
+# `datalib-step examples <type>` prints the same stanzas and the minimal
+# ones, and `datalib-step help <type> <method>` lists every option.
 #
 # This is a reference, not a turn-key config: running it would sync every
 # source at once, and most need credentials (through latchkey), a backup

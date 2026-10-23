@@ -7,11 +7,24 @@ import { computed, onBeforeUnmount, onMounted, onUnmounted, ref, watch } from "v
 import { type SyncRequest } from "@/api";
 import { useApi } from "@/cards/cardApi";
 import { changed, subscribeLive } from "@/live";
-import { showDataSources } from "@/surface";
+import { showCard, showDataSources } from "@/surface";
+import { uriFromEntity } from "@/cards/chipLinks";
+import ChipMenu from "@/cards/ChipMenu.ce.vue";
+import EntityChip from "@/cards/EntityChip.ce.vue";
+import { adoptStyles } from "@/cards/documentStyles";
+import "@/cards/chip.css";
 import { pushToast } from "@/toasts";
 import { pillLabel, syncingGroups, type SyncingGroup } from "./syncPill";
 
 const { fetchRequests, fetchManageRows, stopRequest } = useApi();
+adoptStyles(EntityChip, ChipMenu);
+
+/// A source's chip, double-clicked or picked from its menu: the card it
+/// asks for, and the menu of what is syncing closed behind it.
+function openFromChip(source: string) {
+  open.value = false;
+  showCard(source);
+}
 
 const requests = ref<SyncRequest[]>([]);
 const groups = ref<SyncingGroup[]>([]);
@@ -103,7 +116,14 @@ onUnmounted(() => {
     <div v-if="open" class="sync-menu" role="menu">
       <ul v-if="groups.length" class="sync-list">
         <li v-for="g in groups" :key="g.id" class="sync-row">
-          <span class="sync-name" :title="g.name">{{ g.name }}</span>
+          <span class="sync-name">
+            <EntityChip
+              :uri="uriFromEntity('group', g.id)"
+              :shown="g.name"
+              quiet
+              :open-card="openFromChip"
+            />
+          </span>
           <span v-if="g.progress" class="sync-progress">{{ g.progress }}</span>
           <button class="sync-link" role="menuitem" @click="stop(g)">Stop</button>
         </li>

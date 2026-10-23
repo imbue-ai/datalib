@@ -7,8 +7,8 @@
 #
 #   bazel run //datalib/backend/datalib_step:all_sources.update
 #
-# `datalib-step help <type>` prints the same stanzas and the minimal ones,
-# and `datalib-step help <type> <method>` lists every option.
+# `datalib-step examples <type>` prints the same stanzas and the minimal
+# ones, and `datalib-step help <type> <method>` lists every option.
 #
 # This is a reference, not a turn-key config: running it would sync every
 # source at once, and most need credentials (through latchkey), a backup
@@ -140,6 +140,8 @@ inputs = [
   "github/embed",
   "gitlab/keyword_index",
   "gitlab/embed",
+  "google_drive/keyword_index",
+  "google_drive/embed",
   "google_takeout/keyword_index",
   "google_takeout/embed",
   "linkedin/keyword_index",
@@ -1075,6 +1077,14 @@ quota_units_per_minute = 5000         # ceiling on Gmail quota spent a minute (G
 message_budget = 20000                # stop after this many messages and finish the rest next
                                       # run; unset (the default) has no limit
 
+# Start from a Google Takeout of this same account: the `.mbox`, or the
+# Takeout's Mail folder. Its messages are not downloaded again; Gmail
+# sends their labels and the mail newer than the Takeout. Only `path`
+# is read here; the account is the one Gmail signs in as. Omit the
+# table to download every message.
+[steps.params.mbox]
+path = "~/Takeout/Mail"
+
 [[steps]]
 group = "email-gmail"
 function = "render_markdown"
@@ -1420,12 +1430,24 @@ file_ids = [               # only these files, as a bare id or a pasted docs.goo
   "https://docs.google.com/document/d/1PicardCaptainsLogStardate41153/edit",
 ]
 
-# Renders no documents yet, only the storage report every source gets,
-# which is what puts the source in the grid. No options.
+# Each Doc as one document, its comment threads folded in; Sheets and
+# Slides are kept but not rendered yet. No options.
 [[steps]]
 group = "google_drive"
 function = "render_markdown"
 inputs = ["google_drive/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "google_drive"
+function = "keyword_index"
+inputs = ["google_drive/render_markdown"]
+
+[[steps]]
+group = "google_drive"
+function = "embed"
+inputs = ["google_drive/keyword_index"]
 
 # --- google_takeout by `export` -----------------------------------------
 

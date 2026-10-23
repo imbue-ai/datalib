@@ -1,0 +1,74 @@
+/* Every chart's look on top of uPlot's own rules (plotCss.ts carries
+   both): the crosshair, the zoom's selection, and the legend
+   (PlotLegend.vue). */
+
+/* The crosshair: recessive, dashed, the theme's muted ink. */
+.uplot .u-cursor-x {
+  border-right: 1px dashed var(--datalib-muted);
+}
+.uplot .u-cursor-y {
+  display: none;
+}
+.uplot .u-select {
+  background: color-mix(in srgb, var(--datalib-accent) 14%, transparent);
+}
+
+.plot-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--datalib-font-size-small);
+  color: var(--datalib-fg);
+}
+.plot-legend li {
+  display: inline-flex;
+  align-items: center;
+}
+.plot-legend-entry {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 2px;
+  border: 0;
+  border-radius: var(--datalib-radius);
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  user-select: none;
+}
+.plot-legend-entry:hover {
+  background: var(--datalib-hover);
+}
+/* A line turned off keeps its place, struck through and faint. */
+.plot-legend-entry[aria-pressed="false"] {
+  opacity: 0.45;
+}
+.plot-legend-entry[aria-pressed="false"] .plot-legend-label {
+  text-decoration: line-through;
+}
+.plot-swatch {
+  display: inline-block;
+  flex: none;
+  width: 10px;
+  height: 3px;
+  border-radius: 2px;
+}
+.plot-legend-label,
+.plot-legend-note {
+  color: var(--datalib-muted);
+}
+.plot-legend-value {
+  font-variant-numeric: tabular-nums;
+}
+.plot-legend-x {
+  font: inherit;
+  border: 0;
+  background: none;
+  color: var(--datalib-muted);
+  cursor: pointer;
+  padding: 0 0.3rem;
+}

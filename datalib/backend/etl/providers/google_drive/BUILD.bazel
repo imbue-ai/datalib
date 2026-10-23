@@ -1,6 +1,16 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 load("//tools:live.bzl", "live_run")
 
+# The TNG account's Docs, as a spec `datalib-step synthesize google_drive`
+# expands into playback tapes for the fixture pipeline
+# (//tests/fixtures:ingested_tng). The image beside it is a file the spec
+# names.
+filegroup(
+    name = "tng_fixture",
+    srcs = glob(["tests/fixtures/google_drive_tng/*"]),
+    visibility = ["//visibility:public"],
+)
+
 rust_library(
     name = "datalib_etl_google_drive",
     srcs = glob(["src/**/*.rs"]),

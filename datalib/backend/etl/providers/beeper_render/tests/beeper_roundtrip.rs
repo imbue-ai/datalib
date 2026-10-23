@@ -360,8 +360,9 @@ async fn people_are_written_by_their_handles() -> Result<()> {
 }
 
 /// Each person with a handle is a source contact, with their avatar
-/// written beside the page where the app had cached it; a chat with no
-/// name of its own is called by its other person.
+/// linked where the blob store holds it when the app had cached it and
+/// nothing written beside the page; a chat with no name of its own is
+/// called by its other person.
 #[tokio::test(flavor = "multi_thread")]
 async fn people_are_contacts_with_their_avatars() -> Result<()> {
     let fx = Fixture::new();
@@ -377,13 +378,13 @@ async fn people_are_contacts_with_their_avatars() -> Result<()> {
     let (doc, worf) = contact("/slack/", "slack:T1701D/U0WORF");
     assert_eq!(worf.names, ["Worf"]);
     let url = worf.photo_url.as_deref().expect("Worf's avatar is served");
-    let rel = url
-        .strip_prefix(&format!(
-            "/applet/unified_document_index/asset/{}/",
-            doc.markdown_uuid
-        ))
-        .expect("served beside the page");
-    assert!(doc.md_path.parent().unwrap().join(rel).is_file(), "{rel}");
+    let hash = url
+        .strip_prefix("/data/")
+        .and_then(|rest| rest.rsplit_once("/blob/"))
+        .map(|(_, hash)| hash)
+        .expect("linked at its blob-store address");
+    assert_eq!(hash.len(), 64, "{url}");
+    assert!(!doc.md_path.parent().unwrap().join("blobs").exists());
 
     let (_, data) = contact("/signal/", "tel:+15551234001");
     assert!(
@@ -394,9 +395,6 @@ async fn people_are_contacts_with_their_avatars() -> Result<()> {
     assert_eq!(riker.photo_url, None, "Riker has no avatar");
 
     let data_march = md_of(&docs, "/signal/", "2024-03.md");
-    assert!(
-        data_march.contains("Beeper:Signal · Mr. Data"),
-        "{data_march}"
-    );
+    assert!(data_march.contains(">Mr. Data (2024-03)"), "{data_march}");
     Ok(())
 }

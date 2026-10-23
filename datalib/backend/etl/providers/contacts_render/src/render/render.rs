@@ -13,6 +13,7 @@ use datalib_etl_contact_common::{
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{keys_reading, Bucket, Buckets, RawRange};
+use datalib_schema::problems::{Problem, Reason};
 
 use datalib_etl_contacts::ingest::schema_raw::member_uid;
 
@@ -36,7 +37,9 @@ use datalib_schema::providers::Provider;
 /// 14: a card is its own conversation, filed under its address book as
 /// the channel alone, with its first address and number in columns and
 /// a group's members drawn as chips.
-pub const RENDER_VERSION: u32 = 15;
+/// 16: a card's photo is linked where the blob store holds it, and one
+/// the store lacks is a `blob_missing` problem.
+pub const RENDER_VERSION: u32 = 16;
 
 /// Every card by `(addressbook, UID)`, for a group to name its members.
 type Cards<'a> = HashMap<(&'a str, &'a str), &'a ParsedContact>;
@@ -90,7 +93,12 @@ pub fn render_all(
     let mut contacts: Vec<(bool, ContactDoc)> = parsed
         .contacts
         .iter()
-        .map(|c| (c.is_group, normalize(c, source_id, &cards, &groups)))
+        .map(|c| {
+            (
+                c.is_group,
+                normalize(c, source_id, &cards, &groups, &parsed.held_photos),
+            )
+        })
         .collect();
 
     // What to render: the contacts the driver found stale, plus every
@@ -138,6 +146,7 @@ fn normalize(
     source_id: &str,
     cards: &Cards,
     groups: &Groups,
+    held_photos: &HashMap<String, Photo>,
 ) -> ContactDoc {
     let id = ids::contact(source_id, &contact.addressbook, &contact.uid);
     let kind = if contact.is_group {
@@ -229,11 +238,15 @@ fn normalize(
         .and_then(datalib_time::coerce_record_stamp);
     // CardDAV carries no per-contact public web URL (see the prior
     // note in this file's history re: Fastmail's internal short ids).
+    let mut problems = Vec::new();
     person.photo = match (&contact.photo, &contact.photo_url) {
-        (Some(p), _) => Some(Photo::Inline {
-            content_type: p.content_type.clone(),
-            bytes: p.bytes.clone(),
-        }),
+        (Some(hash), _) => {
+            let held = held_photos.get(hash).cloned();
+            if held.is_none() {
+                problems.push(Problem::field("photo", Reason::BlobMissing, hash));
+            }
+            held
+        }
         (None, Some(url)) => Some(Photo::Url(url.clone())),
         (None, None) => None,
     };
@@ -244,6 +257,7 @@ fn normalize(
         member_handles,
         upstream_account: None,
         inputs,
+        problems,
     }
 }
 
@@ -342,9 +356,45 @@ mod tests {
         }
     }
 
+    /// A card's photo the blob store holds is that stored photo; one it
+    /// lacks leaves the card without a photo and with a `blob_missing`
+    /// problem, so its absence is never silent.
+    #[test]
+    fn a_cards_photo_is_the_stored_one_or_a_problem() {
+        let hash = "ab".repeat(32);
+        let mut card = sample();
+        card.photo = Some(hash.clone());
+        let stored = Photo::Stored {
+            step: "tng_contacts/ingest".into(),
+            blake3: hash.clone(),
+            content_type: "image/png".into(),
+        };
+        let held = HashMap::from([(hash.clone(), stored.clone())]);
+        let n = normalize(&card, "tng_contacts", &Cards::new(), &Groups::new(), &held);
+        assert_eq!(n.contact.photo, Some(stored));
+        assert!(n.problems.is_empty());
+
+        let n = normalize(
+            &card,
+            "tng_contacts",
+            &Cards::new(),
+            &Groups::new(),
+            &HashMap::new(),
+        );
+        assert_eq!(n.contact.photo, None);
+        let reasons: Vec<Reason> = n.problems.iter().map(|p| p.reason).collect();
+        assert_eq!(reasons, [Reason::BlobMissing]);
+    }
+
     #[test]
     fn normalize_maps_fields_uuids_and_stamps() {
-        let n = normalize(&sample(), "tng_contacts", &Cards::new(), &Groups::new());
+        let n = normalize(
+            &sample(),
+            "tng_contacts",
+            &Cards::new(),
+            &Groups::new(),
+            &HashMap::new(),
+        );
         assert_eq!(
             n.doc_uuid,
             ids::contact("tng_contacts", "Bridge", "tng-picard").uuid
@@ -386,7 +436,13 @@ mod tests {
     fn a_tel_uri_is_its_number() {
         let mut c = sample();
         c.phones = vec![prop("tel:+1-202-555-0101", Some("cell"))];
-        let n = normalize(&c, "tng_contacts", &Cards::new(), &Groups::new());
+        let n = normalize(
+            &c,
+            "tng_contacts",
+            &Cards::new(),
+            &Groups::new(),
+            &HashMap::new(),
+        );
         assert_eq!(n.contact.handles[1].value, "+1-202-555-0101");
         assert_eq!(
             n.contact.handles[1].handle.as_ref().map(|h| h.as_str()),
@@ -401,7 +457,13 @@ mod tests {
     fn a_note_in_markup_is_handed_on_as_typed() {
         let mut c = sample();
         c.note = Some("<script>x</script> & co\nsecond line".to_string());
-        let n = normalize(&c, "tng_contacts", &Cards::new(), &Groups::new());
+        let n = normalize(
+            &c,
+            "tng_contacts",
+            &Cards::new(),
+            &Groups::new(),
+            &HashMap::new(),
+        );
         assert_eq!(
             n.contact.note.as_deref(),
             Some("<script>x</script> & co\nsecond line")
@@ -417,7 +479,13 @@ mod tests {
     fn normalize_canonicalizes_basic_iso_rev() {
         let mut c = sample();
         c.revision = Some("20260605T191839Z".to_string());
-        let n = normalize(&c, "fastmail_contacts", &Cards::new(), &Groups::new());
+        let n = normalize(
+            &c,
+            "fastmail_contacts",
+            &Cards::new(),
+            &Groups::new(),
+            &HashMap::new(),
+        );
         assert_eq!(
             n.contact.modified_at.as_deref(),
             Some("2026-06-05T19:18:39+00:00")
@@ -456,7 +524,13 @@ mod tests {
             ..sample()
         };
         let cards: Cards = [(("Bridge", "tng-picard"), &picard)].into_iter().collect();
-        let n = normalize(&group, "tng_contacts", &cards, &Groups::new());
+        let n = normalize(
+            &group,
+            "tng_contacts",
+            &cards,
+            &Groups::new(),
+            &HashMap::new(),
+        );
         assert_eq!(n.contact.members, ["Jean-Luc Picard", "urn:uuid:tng-q"]);
         let handles: Vec<Option<&str>> = n
             .member_handles
@@ -495,7 +569,13 @@ mod tests {
             group("g1", "Away Team"),
         ];
         let groups = groups_by_member(&contacts);
-        let n = normalize(&contacts[0], "tng_contacts", &Cards::new(), &groups);
+        let n = normalize(
+            &contacts[0],
+            "tng_contacts",
+            &Cards::new(),
+            &groups,
+            &HashMap::new(),
+        );
         assert_eq!(n.contact.groups, vec!["Away Team", "Senior Staff"]);
         let rows: Vec<&str> = n.inputs.iter().map(|i| i.id.as_str()).collect();
         assert_eq!(rows, vec!["row-picard", "row-g1", "row-g2"]);
@@ -523,7 +603,13 @@ mod tests {
         };
         let contacts = vec![c, away];
         let groups = groups_by_member(&contacts);
-        let n = normalize(&contacts[0], "tng_contacts", &Cards::new(), &groups);
+        let n = normalize(
+            &contacts[0],
+            "tng_contacts",
+            &Cards::new(),
+            &groups,
+            &HashMap::new(),
+        );
         let listed: Vec<&str> = n.contact.groups.iter().map(String::as_str).collect();
         assert_eq!(listed, vec!["Away Team", "Starred", "Bridge crew"]);
     }

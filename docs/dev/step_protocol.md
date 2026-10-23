@@ -69,8 +69,9 @@ declared fields to your argv, each only when present/non-empty:
 | `--inputs <json>` | the entry's `inputs`, as a JSON string array |
 | `--reset <part>` | only on a reset, and then this invocation is a reset, not a run: see § Reset |
 | `--migrate` | only on the first launch of a build, to a step that takes it, and then this invocation fetches nothing: see § Migrate |
+| `--compact` | only from `datalib-dag --compact`, to a step that takes it, and then this invocation runs nothing else: see § Compact |
 
-A verb (`--reset`, `--migrate`) rides on the command line rather than in
+A verb (`--reset`, `--migrate`, `--compact`) rides on the command line rather than in
 the environment so that a command which has never heard of it refuses it
 instead of running a sync, and so that nothing the step starts inherits
 it.
@@ -103,7 +104,7 @@ its id, which arrives in the environment.
 | `DATALIB_DAG_CHANGED_INPUTS` | the subset of the above whose version moved since this step's last success; empty when there is no last success to compare against (never completed, or the step's own config changed) — do all your work |
 | `DATALIB_READS` | a JSON object, input path → the version the runner started this invocation against; an input with no version yet is absent. A version for what you *read*, where the output's own would say less (the qmd index reports a hash of this) |
 | `DATALIB_DAG_NOW` | the run's pinned timestamp (RFC 3339). Stamp times with this instead of sampling your own clock, so one run's outputs agree |
-| `DATALIB_DAG_CHECKPOINT_CADENCE` | set when the config has `checkpoint_cadence`: the most seconds you should let pass between checkpoints early in a run. `datalib-step` lets the interval grow to a tenth of the run so far, since every commit keeps the pages it touched; `0` means every consistent point and never grows |
+| `DATALIB_DAG_CHECKPOINT_CADENCE` | set when the config has `checkpoint_cadence`: how many seconds to let pass before a run's first checkpoint. `datalib-step` doubles the wait after each one (the next comes once the run is twice as old as at the last), since every commit keeps the pages it touched; `0` means every consistent point and never grows |
 | `DATALIB_DAG_RENDER_PAGES` | set when the config has `render_pages`: `<buckets>,<blob_mb>`, either side empty when the config leaves it out — how many buckets a render reads together and how many MB of their blobs it loads at once |
 | `RUST_LOG` | the run's log filter, in `tracing-subscriber`'s grammar, built from the config's `log_level` ([`logging.md`](logging.md) § "Where a line comes from"). A `RUST_LOG` already set where the runner was started is passed through instead. A step in another language may honor it or ignore it; what it prints is kept regardless |
 
@@ -551,6 +552,35 @@ store's `_datalib_meta.schema_hash` with this build's and answer
 `needs_rerun` when it differs; a derived store is rebuilt, never
 migrated. The qmd steps have nothing to answer.
 
+## Compact
+
+`datalib-dag --compact`, or the app's `POST /api/compact` (a right-click
+on the data root's size in the status bar), asks every step that takes
+the verb to give back the disk its history holds, once each, with
+`--compact` appended. Nothing that reads a store may be reading it while
+its history goes: the command line needs the root to itself, as
+`--reset` does, and the app's loop holds the steps it asks and every
+step that reads them until it is done (`dag/README.md` §"Resets and
+purges"). The search applet, which the loop does not schedule, reads on
+through a compaction of the grid index (`doltlite.md` § Trees). The step decides what that means for
+what it wrote, runs nothing else, and reports its version as a run
+would; the runner records it, so a step that kept its content and
+reports a content version moves nothing downstream. Report nothing when
+there is nothing to compact. As with Migrate, only `datalib-step`'s own
+steps take the verb (`StepSpec::compacts`).
+
+`datalib-step` folds the history of the stores nothing reads the
+history of into one commit and runs `dolt_gc`
+(`doltlite_raw::fold_history`): a render store and the grid index.
+Their version is their tree, which the fold keeps, so nothing runs
+again for it, and the grid index finds its cursor again by the tree it
+recorded (`grid_rows.md`). It refuses a store whose size is more than
+the disk has free, since gc writes the compacted store before it drops
+the old one. A raw store's history is the record of what upstream once
+held, and a time-series store's commits are what its index points at,
+so an ingest and the time-series steps answer with nothing. The
+History card of a compacted store shows one commit.
+
 ## Signals: graceful cancellation (optional)
 
 On cancellation (Ctrl-C, the UI's Stop, or the step turned off) the runner sends your
@@ -642,8 +672,9 @@ step carries the provider's download config (`common` envelope, the method table
 block, …), the render step only the render knobs (nothing for most
 providers; beeper/signal `period`, perseus `alignment_pairs`, email
 `outlink_format`/`only_render_labels`) — honors `DATALIB_DAG_NOW`,
-`--reset` and `--migrate`, stops at its next consistent point on SIGINT and
-commits there, and emits versions where it has them (the grid index claims its dolt commit hash). Use it as the
+`--reset`, `--migrate` and `--compact`, stops at its next consistent point
+on SIGINT and commits there, and emits versions where it has them (the grid
+index claims the hash of its store's tree). Use it as the
 reference implementation.
 
 The index functions' ids are fixed at `unified_document_index/<function>`, and

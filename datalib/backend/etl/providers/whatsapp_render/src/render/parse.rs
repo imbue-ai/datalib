@@ -144,7 +144,7 @@ async fn parse_async(
             Some(_) => Vec::new(),
             None => vec![NamedPerson {
                 shown: display.clone(),
-                handle: Handle::whatsapp_jid(&chat_jid),
+                handle: names.handle(&chat_jid),
             }],
         };
         chat_idx_by_rowid.insert(rowid, chats.len());
@@ -264,7 +264,7 @@ async fn parse_async(
             .entry(key.clone())
             .or_default()
             .push(NormalizedAttachment {
-                rel_path: None,
+                href: None,
                 file_name: media_name.or_else(|| {
                     file_path
                         .as_deref()
@@ -669,9 +669,11 @@ impl JidNames {
         Ok(out)
     }
 
-    /// A linked id's handle is its phone number's, where `jid_map` knows it.
+    /// A linked id's handle is its phone number's, where `jid_map` knows
+    /// it, else the linked id's own.
     fn handle(&self, jid: &str) -> Option<Handle> {
         Handle::whatsapp_jid(self.phone_jid.get(jid).map_or(jid, String::as_str))
+            .or_else(|| Handle::whatsapp_lid(jid))
     }
 
     /// The person as the phone's address book has them: every name an
@@ -767,13 +769,18 @@ impl JidNames {
     }
 }
 
+/// A person no name was found for: their number, or for a linked id
+/// with none, its last digits, which tell two strangers apart; the
+/// chip's tooltip has the whole id.
 fn label_from_jid(jid: &str) -> String {
     if let Some((user, server)) = jid.split_once('@') {
-        if (server.starts_with("s.whatsapp.net") || server.starts_with("c.us"))
-            && !user.is_empty()
-            && user.chars().all(|c| c.is_ascii_digit())
-        {
+        let digits = !user.is_empty() && user.chars().all(|c| c.is_ascii_digit());
+        if (server.starts_with("s.whatsapp.net") || server.starts_with("c.us")) && digits {
             return format!("+{user}");
+        }
+        if server == "lid" && digits {
+            let tail = &user[user.len().saturating_sub(4)..];
+            return format!("WhatsApp user …{tail}");
         }
     }
     jid.to_string()
@@ -850,13 +857,13 @@ mod jid_names_tests {
         let phone = Handle::tel("+17015550101");
         assert_eq!(names.handle("1@lid"), phone);
         assert_eq!(names.handle("17015550101@s.whatsapp.net"), phone);
-        assert_eq!(names.handle("3@lid"), None);
+        assert_eq!(names.handle("3@lid"), Handle::whatsapp_lid("3@lid"));
         assert_eq!(names.handle("bridge-crew@g.us"), None);
     }
 
     /// The precedence the issue asked for: a learned name, else the
-    /// phone number behind the linked id, else the raw JID — and a
-    /// mapping that is missing must not turn into a blank.
+    /// phone number behind the linked id, else the linked id's last
+    /// digits — and a mapping that is missing must not turn into a blank.
     #[test]
     fn name_then_mapped_phone_then_raw_jid() {
         let mut names = JidNames::default();
@@ -874,7 +881,11 @@ mod jid_names_tests {
         let inputs = Inputs::default();
         assert_eq!(names.label("1@lid", &inputs), "+17015550102");
         assert_eq!(names.label("2@lid", &inputs), "Will Riker");
-        assert_eq!(names.label("3@lid", &inputs), "3@lid");
+        assert_eq!(
+            names.label("100000000000108@lid", &inputs),
+            "WhatsApp user …0108",
+            "a stranger's chat was titled by the raw id"
+        );
         assert_eq!(
             names.label("17015550104@s.whatsapp.net", &inputs),
             "+17015550104"

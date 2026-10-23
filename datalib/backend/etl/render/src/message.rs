@@ -41,12 +41,14 @@ fn link_with_title(text: &str, href: &str, title: &str) -> String {
 }
 
 /// Text inside a link's double-quoted title: the quote and the
-/// backslash escaped, a line break a space. markdown-it HTML-escapes the
-/// attribute it makes of it.
+/// backslash escaped, a line break a space, and a pipe escaped, since a
+/// chip may sit in a table cell. markdown-it HTML-escapes the attribute
+/// it makes of it.
 fn md_link_title(s: &str) -> String {
     s.replace(['\r', '\n'], " ")
         .replace('\\', "\\\\")
         .replace('"', "\\\"")
+        .replace('|', "\\|")
 }
 
 /// One message header, rendered as a `## ` line whose parts are tagged
@@ -96,13 +98,19 @@ impl MessageHeader<'_> {
         }
         s.push_str(&timestamp_html(self.date_ms));
         if let Some(url) = self.source_url {
-            s.push_str(&format!(
-                " <a class=\"source-link\" href=\"{url}\" target=\"_blank\" rel=\"noopener noreferrer\">↗</a>",
-                url = escape_attr(url),
-            ));
+            s.push(' ');
+            s.push_str(&source_link(url));
         }
         s
     }
+}
+
+/// The `↗` that opens a message, comment or page at its source.
+pub fn source_link(url: &str) -> String {
+    format!(
+        "<a class=\"source-link\" href=\"{}\" target=\"_blank\" rel=\"noopener noreferrer\">↗</a>",
+        escape_attr(url)
+    )
 }
 
 /// A timestamp a reader can hover for the full instant, or a plain span
@@ -115,17 +123,41 @@ impl MessageHeader<'_> {
 /// re-rendering anything.
 pub fn timestamp_html(date_ms: Option<i64>) -> String {
     match date_ms.and_then(IsoOffsetTimestamp::from_unix_millis) {
-        Some(t) => format!(
-            "<time class=\"msg-ts\" datetime=\"{iso}\" title=\"{full}\">{short}</time>",
-            iso = t.to_rfc3339_secs(),
-            full = display_ts(date_ms),
-            short = datalib_time::short_ts(&t),
-        ),
+        Some(t) => time_element(" class=\"msg-ts\"", &t),
         // Either no stamp at all or a number that is not an instant.
         // `display_ts` spells those two apart, and neither has an ISO
         // form to hang a `<time>` on.
         None => format!("<span class=\"msg-ts\">{}</span>", display_ts(date_ms)),
     }
+}
+
+/// A stamp anywhere else in a document — "Added", "Edited", a review's
+/// time — in the message header's form, so every stamp on a page reads
+/// alike and the viewer finds each one by its `datetime`.
+pub fn stamp_html(t: &IsoOffsetTimestamp) -> String {
+    time_element("", t)
+}
+
+/// A stamp a record keeps as text: an RFC 3339 instant, or a
+/// `YYYY-MM-DD` day. Text that is neither is shown as written, since
+/// it is the only lead a reader has.
+pub fn stamp_text_html(s: &str) -> String {
+    if let Ok(t) = datalib_time::parse_strict(s) {
+        return stamp_html(&t);
+    }
+    match datalib_time::short_day(s) {
+        Some(short) => format!("<time datetime=\"{s}\">{short}</time>"),
+        None => escape_md_inline(s),
+    }
+}
+
+fn time_element(class: &str, t: &IsoOffsetTimestamp) -> String {
+    format!(
+        "<time{class} datetime=\"{iso}\" title=\"{full}\">{short}</time>",
+        iso = t.to_rfc3339_secs(),
+        full = datalib_time::full_ts(t),
+        short = datalib_time::short_ts(t),
+    )
 }
 
 /// The long form, shown on hover.
@@ -151,6 +183,25 @@ mod tests {
              <time class=\"msg-ts\" datetime=\"2364-04-11T00:00:00+00:00\" \
              title=\"2364-04-11 00:00:00 UTC\">Sat Apr 11th, 2364 at 00:00</time>",
         );
+    }
+
+    #[test]
+    fn a_stamp_kept_as_text_is_an_instant_a_day_or_itself() {
+        assert_eq!(
+            stamp_text_html("2026-01-06T08:00:00+01:00"),
+            "<time datetime=\"2026-01-06T08:00:00+01:00\" \
+             title=\"2026-01-06 08:00:00 +01:00\">Tue Jan 6th, 2026 at 08:00</time>",
+        );
+        assert_eq!(
+            stamp_text_html("2369-04-15T10:05:00.000Z"),
+            "<time datetime=\"2369-04-15T10:05:00+00:00\" \
+             title=\"2369-04-15 10:05:00 UTC\">Tue Apr 15th, 2369 at 10:05</time>",
+        );
+        assert_eq!(
+            stamp_text_html("2369-03-18"),
+            "<time datetime=\"2369-03-18\">Tue Mar 18th, 2369</time>",
+        );
+        assert_eq!(stamp_text_html("<b>soon</b>"), "&lt;b&gt;soon&lt;/b&gt;");
     }
 
     #[test]

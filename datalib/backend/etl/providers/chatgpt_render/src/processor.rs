@@ -61,8 +61,15 @@ impl SourceRender for ChatgptRender {
             Some(self.render_version()),
         )?;
         let mut on_doc = |md| ctx.emit_doc(md);
-        let buckets = render_all(&parsed, ctx.root, ctx.name, ctx.progress, &mut on_doc)
-            .context("chatgpt render_all")?;
+        let buckets = render_all(
+            &parsed,
+            ctx.root,
+            ctx.name,
+            ctx.progress,
+            &mut on_doc,
+            ctx.page_size.bytes,
+        )
+        .context("chatgpt render_all")?;
         // A conversation this run looked at that builds no page is
         // declared with nothing, so its page goes; the rendered ones
         // follow and replace that.

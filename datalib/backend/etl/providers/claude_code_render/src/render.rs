@@ -30,7 +30,9 @@ use crate::ids;
 
 /// v2: every id carries its row's `created_at` in its leading bits
 ///     (`datalib_id`'s v8 layout).
-pub const RENDER_VERSION: u32 = 3;
+/// v4: the account's own messages are "Me", as every chat source writes
+///     them.
+pub const RENDER_VERSION: u32 = 4;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -328,7 +330,7 @@ fn user_items(
     let (label, author, author_kind, aside) = if is_meta {
         ("Harness Message", "Claude Code", AuthorKind::Named, true)
     } else {
-        ("User Input", "User", AuthorKind::Account, false)
+        ("User Input", "Me", AuthorKind::Account, false)
     };
     out.push(NormalizedChatItem {
         author_kind,

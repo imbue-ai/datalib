@@ -1,0 +1,31 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# The blob store's shape — the one part of a step's data datalib-http
+# reads — and its reader. A leaf crate so that the download side can
+# write the store and the server can read it without either linking
+# the other. See README.md.
+rust_library(
+    name = "datalib_blob_store",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_blob_store",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/runtime:datalib_runtime",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:blake3",
+        "@datalib_crates//:mail-parser",
+        "@datalib_crates//:sqlx",
+    ],
+)
+
+rust_test(
+    name = "blob_store_unittests",
+    size = "small",
+    crate = ":datalib_blob_store",
+    edition = "2021",
+    deps = [
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)

@@ -1,6 +1,7 @@
 //! Every hermetic ChatGPT test, one binary: each module is one
 //! behaviour.
 
+mod archived;
 mod branched_chat;
 mod chatgpt_render;
 mod chatgpt_translate;

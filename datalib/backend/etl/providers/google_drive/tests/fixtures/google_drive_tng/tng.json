@@ -1,0 +1,771 @@
+{
+ "files": [
+  {
+   "entry": {
+    "kind": "drive#file",
+    "id": "1PicardLog41153",
+    "name": "Captain's log, stardate 41153.7",
+    "mimeType": "application/vnd.google-apps.document",
+    "version": "12",
+    "createdTime": "2369-04-09T08:00:00.000Z",
+    "modifiedTime": "2369-04-12T08:00:00.000Z",
+    "ownedByMe": true,
+    "owners": [
+     {
+      "kind": "drive#user",
+      "displayName": "Jean-Luc Picard",
+      "me": true,
+      "permissionId": "picard",
+      "emailAddress": "picard@enterprise.starfleet"
+     }
+    ],
+    "lastModifyingUser": {
+     "kind": "drive#user",
+     "displayName": "Jean-Luc Picard",
+     "me": true,
+     "permissionId": "picard",
+     "emailAddress": "picard@enterprise.starfleet"
+    },
+    "capabilities": {
+     "canEdit": true,
+     "canComment": true,
+     "canReadRevisions": true
+    },
+    "webViewLink": "https://docs.google.com/document/d/1PicardLog41153/edit",
+    "trashed": false
+   },
+   "native": {
+    "documentId": "1PicardLog41153",
+    "title": "Captain's log, stardate 41153.7",
+    "revisionId": "ALm37-log-1",
+    "suggestionsViewMode": "SUGGESTIONS_INLINE",
+    "tabs": [
+     {
+      "tabProperties": {
+       "tabId": "t.0",
+       "title": "Tab 1",
+       "index": 0
+      },
+      "documentTab": {
+       "body": {
+        "content": [
+         {
+          "sectionBreak": {
+           "sectionStyle": {}
+          }
+         },
+         {
+          "paragraph": {
+           "elements": [
+            {
+             "textRun": {
+              "content": "Captain's log, stardate 41153.7\n",
+              "textStyle": {}
+             }
+            }
+           ],
+           "paragraphStyle": {
+            "namedStyleType": "TITLE"
+           }
+          }
+         },
+         {
+          "paragraph": {
+           "elements": [
+            {
+             "textRun": {
+              "content": "Our destination is planet Deneb IV, beyond which lies the great unexplored mass of the galaxy. ",
+              "textStyle": {}
+             }
+            },
+            {
+             "textRun": {
+              "content": "Commander Riker",
+              "textStyle": {
+               "bold": true
+              }
+             }
+            },
+            {
+             "textRun": {
+              "content": " will join us at ",
+              "textStyle": {}
+             }
+            },
+            {
+             "textRun": {
+              "content": "Farpoint Station",
+              "textStyle": {
+               "link": {
+                "url": "https://memory-alpha.fandom.com/wiki/Farpoint_Station"
+               }
+              }
+             }
+            },
+            {
+             "textRun": {
+              "content": ".\n",
+              "textStyle": {}
+             }
+            }
+           ],
+           "paragraphStyle": {
+            "namedStyleType": "NORMAL_TEXT"
+           }
+          }
+         },
+         {
+          "paragraph": {
+           "elements": [
+            {
+             "textRun": {
+              "content": "Away team\n",
+              "textStyle": {}
+             }
+            }
+           ],
+           "paragraphStyle": {
+            "namedStyleType": "HEADING_2"
+           }
+          }
+         },
+         {
+          "paragraph": {
+           "elements": [
+            {
+             "textRun": {
+              "content": "Led by ",
+              "textStyle": {}
+             }
+            },
+            {
+             "person": {
+              "personId": "kix.p1",
+              "personProperties": {
+               "name": "William Riker",
+               "email": "riker@enterprise.starfleet"
+              }
+             }
+            },
+            {
+             "textRun": {
+              "content": ", per the ",
+              "textStyle": {}
+             }
+            },
+            {
+             "richLink": {
+              "richLinkId": "kix.r1",
+              "richLinkProperties": {
+               "title": "Away team protocols",
+               "uri": "https://docs.google.com/document/d/1AwayTeamProtocols/edit",
+               "mimeType": "application/vnd.google-apps.document"
+              }
+             }
+            },
+            {
+             "textRun": {
+              "content": ".\n",
+              "textStyle": {}
+             }
+            }
+           ],
+           "paragraphStyle": {
+            "namedStyleType": "NORMAL_TEXT"
+           }
+          }
+         },
+         {
+          "paragraph": {
+           "elements": [
+            {
+             "textRun": {
+              "content": "Lieutenant Worf, security\n",
+              "textStyle": {}
+             }
+            }
+           ],
+           "paragraphStyle": {
+            "namedStyleType": "NORMAL_TEXT"
+           },
+           "bullet": {
+            "listId": "kix.bullets"
+           }
+          }
+         },
+         {
+          "paragraph": {
+           "elements": [
+            {
+             "textRun": {
+              "content": "Phaser on stun\n",
+              "textStyle": {}
+             }
+            }
+           ],
+           "paragraphStyle": {
+            "namedStyleType": "NORMAL_TEXT"
+           },
+           "bullet": {
+            "listId": "kix.bullets",
+            "nestingLevel": 1
+           }
+          }
+         },
+         {
+          "paragraph": {
+           "elements": [
+            {
+             "textRun": {
+              "content": "Data, operations\n",
+              "textStyle": {}
+             }
+            }
+           ],
+           "paragraphStyle": {
+            "namedStyleType": "NORMAL_TEXT"
+           },
+           "bullet": {
+            "listId": "kix.bullets"
+           }
+          }
+         },
+         {
+          "paragraph": {
+           "elements": [
+            {
+             "textRun": {
+              "content": "Beam down\n",
+              "textStyle": {}
+             }
+            }
+           ],
+           "paragraphStyle": {
+            "namedStyleType": "NORMAL_TEXT"
+           },
+           "bullet": {
+            "listId": "kix.steps"
+           }
+          }
+         },
+         {
+          "paragraph": {
+           "elements": [
+            {
+             "textRun": {
+              "content": "Report to the bridge\n",
+              "textStyle": {}
+             }
+            }
+           ],
+           "paragraphStyle": {
+            "namedStyleType": "NORMAL_TEXT"
+           },
+           "bullet": {
+            "listId": "kix.steps"
+           }
+          }
+         },
+         {
+          "table": {
+           "rows": 2,
+           "columns": 2,
+           "tableRows": [
+            {
+             "tableCells": [
+              {
+               "content": [
+                {
+                 "paragraph": {
+                  "elements": [
+                   {
+                    "textRun": {
+                     "content": "Station\n",
+                     "textStyle": {}
+                    }
+                   }
+                  ],
+                  "paragraphStyle": {
+                   "namedStyleType": "NORMAL_TEXT"
+                  }
+                 }
+                }
+               ]
+              },
+              {
+               "content": [
+                {
+                 "paragraph": {
+                  "elements": [
+                   {
+                    "textRun": {
+                     "content": "Officer\n",
+                     "textStyle": {}
+                    }
+                   }
+                  ],
+                  "paragraphStyle": {
+                   "namedStyleType": "NORMAL_TEXT"
+                  }
+                 }
+                }
+               ]
+              }
+             ]
+            },
+            {
+             "tableCells": [
+              {
+               "content": [
+                {
+                 "paragraph": {
+                  "elements": [
+                   {
+                    "textRun": {
+                     "content": "Conn\n",
+                     "textStyle": {}
+                    }
+                   }
+                  ],
+                  "paragraphStyle": {
+                   "namedStyleType": "NORMAL_TEXT"
+                  }
+                 }
+                }
+               ]
+              },
+              {
+               "content": [
+                {
+                 "paragraph": {
+                  "elements": [
+                   {
+                    "textRun": {
+                     "content": "Wesley Crusher\n",
+                     "textStyle": {}
+                    }
+                   }
+                  ],
+                  "paragraphStyle": {
+                   "namedStyleType": "NORMAL_TEXT"
+                  }
+                 }
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         },
+         {
+          "paragraph": {
+           "elements": [
+            {
+             "textRun": {
+              "content": "The ship as she left drydock: ",
+              "textStyle": {}
+             }
+            },
+            {
+             "inlineObjectElement": {
+              "inlineObjectId": "kix.enterprise"
+             }
+            },
+            {
+             "textRun": {
+              "content": "\n",
+              "textStyle": {}
+             }
+            }
+           ],
+           "paragraphStyle": {
+            "namedStyleType": "NORMAL_TEXT"
+           }
+          }
+         },
+         {
+          "paragraph": {
+           "elements": [
+            {
+             "textRun": {
+              "content": "",
+              "textStyle": {}
+             }
+            },
+            {
+             "textRun": {
+              "content": "def engage(warp):\n",
+              "textStyle": {
+               "weightedFontFamily": {
+                "fontFamily": "Roboto Mono",
+                "weight": 400
+               }
+              }
+             }
+            }
+           ],
+           "paragraphStyle": {
+            "namedStyleType": "NORMAL_TEXT"
+           }
+          }
+         },
+         {
+          "paragraph": {
+           "elements": [
+            {
+             "textRun": {
+              "content": "    return warp * 9\n",
+              "textStyle": {
+               "weightedFontFamily": {
+                "fontFamily": "Roboto Mono",
+                "weight": 400
+               }
+              }
+             }
+            }
+           ],
+           "paragraphStyle": {
+            "namedStyleType": "NORMAL_TEXT"
+           }
+          }
+         },
+         {
+          "paragraph": {
+           "elements": [
+            {
+             "textRun": {
+              "content": "\n",
+              "textStyle": {}
+             }
+            }
+           ],
+           "paragraphStyle": {
+            "namedStyleType": "NORMAL_TEXT"
+           }
+          }
+         },
+         {
+          "paragraph": {
+           "elements": [
+            {
+             "textRun": {
+              "content": "The Q entity",
+              "textStyle": {}
+             }
+            },
+            {
+             "footnoteReference": {
+              "footnoteId": "kix.fn1",
+              "footnoteNumber": "1"
+             }
+            },
+            {
+             "textRun": {
+              "content": " put us on trial for the crimes of humanity. ",
+              "textStyle": {}
+             }
+            },
+            {
+             "textRun": {
+              "content": "We are not amused.",
+              "textStyle": {},
+              "suggestedInsertionIds": [
+               "suggest.worf"
+              ]
+             }
+            },
+            {
+             "textRun": {
+              "content": "\n",
+              "textStyle": {}
+             }
+            }
+           ],
+           "paragraphStyle": {
+            "namedStyleType": "NORMAL_TEXT"
+           }
+          }
+         }
+        ]
+       },
+       "footnotes": {
+        "kix.fn1": {
+         "footnoteId": "kix.fn1",
+         "content": [
+          {
+           "paragraph": {
+            "elements": [
+             {
+              "textRun": {
+               "content": "Self-described.\n",
+               "textStyle": {}
+              }
+             }
+            ],
+            "paragraphStyle": {
+             "namedStyleType": "NORMAL_TEXT"
+            }
+           }
+          }
+         ]
+        }
+       },
+       "lists": {
+        "kix.bullets": {
+         "listProperties": {
+          "nestingLevels": [
+           {
+            "glyphSymbol": "●"
+           },
+           {
+            "glyphSymbol": "○"
+           }
+          ]
+         }
+        },
+        "kix.steps": {
+         "listProperties": {
+          "nestingLevels": [
+           {
+            "glyphType": "DECIMAL"
+           }
+          ]
+         }
+        }
+       },
+       "inlineObjects": {
+        "kix.enterprise": {
+         "objectId": "kix.enterprise",
+         "inlineObjectProperties": {
+          "embeddedObject": {
+           "title": "USS Enterprise NCC-1701-D",
+           "imageProperties": {
+            "contentUri": "https://docs.google.com/docs-images-rt/tng-enterprise-d"
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    ]
+   },
+   "comments": [
+    {
+     "kind": "drive#comment",
+     "id": "AAAAdeneb",
+     "content": "Deneb IV's orbit is stable; I've checked twice.",
+     "author": {
+      "kind": "drive#user",
+      "displayName": "Geordi La Forge",
+      "me": false
+     },
+     "createdTime": "2369-04-10T09:00:00.000Z",
+     "modifiedTime": "2369-04-10T09:30:00.000Z",
+     "resolved": true,
+     "deleted": false,
+     "anchor": "kix.anchor1",
+     "quotedFileContent": {
+      "mimeType": "text/html",
+      "value": "beyond which lies the great unexplored mass"
+     },
+     "replies": [
+      {
+       "kind": "drive#reply",
+       "id": "AAAAdeneb-r1",
+       "content": "Make it so.",
+       "author": {
+        "kind": "drive#user",
+        "displayName": "Jean-Luc Picard",
+        "me": true
+       },
+       "createdTime": "2369-04-10T09:10:00.000Z",
+       "modifiedTime": "2369-04-10T09:10:00.000Z",
+       "deleted": false
+      },
+      {
+       "kind": "drive#reply",
+       "id": "AAAAdeneb-r2",
+       "content": "",
+       "action": "resolve",
+       "author": {
+        "kind": "drive#user",
+        "displayName": "Jean-Luc Picard",
+        "me": true
+       },
+       "createdTime": "2369-04-10T09:30:00.000Z",
+       "modifiedTime": "2369-04-10T09:30:00.000Z",
+       "deleted": false
+      }
+     ]
+    },
+    {
+     "kind": "drive#comment",
+     "id": "AAAAphaser",
+     "content": "Stun only. Q is watching.",
+     "author": {
+      "kind": "drive#user",
+      "displayName": "Data",
+      "me": false
+     },
+     "createdTime": "2369-04-11T10:00:00.000Z",
+     "modifiedTime": "2369-04-11T10:00:00.000Z",
+     "resolved": false,
+     "deleted": false,
+     "anchor": "kix.anchor2",
+     "quotedFileContent": {
+      "mimeType": "text/html",
+      "value": "Phaser on stun"
+     },
+     "replies": []
+    },
+    {
+     "kind": "drive#comment",
+     "id": "AAAAwhole",
+     "content": "Send this to Starfleet Command when done.",
+     "author": {
+      "kind": "drive#user",
+      "displayName": "Deanna Troi",
+      "me": false
+     },
+     "createdTime": "2369-04-12T11:00:00.000Z",
+     "modifiedTime": "2369-04-12T11:00:00.000Z",
+     "resolved": false,
+     "deleted": false,
+     "replies": []
+    }
+   ],
+   "revisions": [
+    {
+     "kind": "drive#revision",
+     "id": "1",
+     "modifiedTime": "2369-04-09T08:00:00.000Z",
+     "lastModifyingUser": {
+      "kind": "drive#user",
+      "displayName": "Jean-Luc Picard",
+      "me": true,
+      "permissionId": "picard",
+      "emailAddress": "picard@enterprise.starfleet"
+     }
+    }
+   ],
+   "images": {
+    "https://docs.google.com/docs-images-rt/tng-enterprise-d": "enterprise.png"
+   }
+  },
+  {
+   "entry": {
+    "kind": "drive#file",
+    "id": "1LaForgeEngRoster",
+    "name": "Engineering notes",
+    "mimeType": "application/vnd.google-apps.document",
+    "version": "4",
+    "createdTime": "2369-04-08T08:00:00.000Z",
+    "modifiedTime": "2369-04-13T08:00:00.000Z",
+    "ownedByMe": false,
+    "owners": [
+     {
+      "kind": "drive#user",
+      "displayName": "Geordi La Forge",
+      "me": false,
+      "permissionId": "laforge",
+      "emailAddress": "laforge@enterprise.starfleet"
+     }
+    ],
+    "lastModifyingUser": {
+     "kind": "drive#user",
+     "displayName": "Geordi La Forge",
+     "me": false,
+     "permissionId": "laforge",
+     "emailAddress": "laforge@enterprise.starfleet"
+    },
+    "capabilities": {
+     "canEdit": false,
+     "canComment": true,
+     "canReadRevisions": false
+    },
+    "webViewLink": "https://docs.google.com/document/d/1LaForgeEngRoster/edit",
+    "trashed": false
+   },
+   "native": {
+    "documentId": "1LaForgeEngRoster",
+    "title": "Engineering notes",
+    "revisionId": "ALm37-eng-1",
+    "suggestionsViewMode": "SUGGESTIONS_INLINE",
+    "tabs": [
+     {
+      "tabProperties": {
+       "tabId": "t.0",
+       "title": "Warp core",
+       "index": 0
+      },
+      "documentTab": {
+       "body": {
+        "content": [
+         {
+          "paragraph": {
+           "elements": [
+            {
+             "textRun": {
+              "content": "Dilithium matrix realigned. ",
+              "textStyle": {}
+             }
+            },
+            {
+             "textRun": {
+              "content": "Do not",
+              "textStyle": {
+               "italic": true
+              }
+             }
+            },
+            {
+             "textRun": {
+              "content": " vent the plasma.\n",
+              "textStyle": {}
+             }
+            }
+           ],
+           "paragraphStyle": {
+            "namedStyleType": "NORMAL_TEXT"
+           }
+          }
+         }
+        ]
+       }
+      }
+     },
+     {
+      "tabProperties": {
+       "tabId": "t.1",
+       "title": "Holodeck",
+       "index": 1
+      },
+      "documentTab": {
+       "body": {
+        "content": [
+         {
+          "paragraph": {
+           "elements": [
+            {
+             "textRun": {
+              "content": "Program 3 needs a safety interlock.\n",
+              "textStyle": {}
+             }
+            }
+           ],
+           "paragraphStyle": {
+            "namedStyleType": "NORMAL_TEXT"
+           }
+          }
+         }
+        ]
+       }
+      }
+     }
+    ]
+   }
+  }
+ ]
+}

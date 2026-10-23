@@ -6,8 +6,15 @@
 // syncing waits, and the Sources card's Sync buttons say so.
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import type { MigrateState, Upgrade } from "@/api";
-import { showDataSources } from "@/surface";
-import { sourceRows, upgradePill } from "@/upgrade";
+import { showCard, showDataSources } from "@/surface";
+import { keepsItsName, sourceRows, upgradePill } from "@/upgrade";
+import { uriFromEntity } from "@/cards/chipLinks";
+import ChipMenu from "@/cards/ChipMenu.ce.vue";
+import EntityChip from "@/cards/EntityChip.ce.vue";
+import { adoptStyles } from "@/cards/documentStyles";
+import "@/cards/chip.css";
+
+adoptStyles(EntityChip, ChipMenu);
 
 const props = defineProps<{ upgrade: Upgrade }>();
 
@@ -92,8 +99,16 @@ onBeforeUnmount(() => (open.value = false));
         </p>
       </template>
       <ul class="upgrade-list" role="status" aria-live="polite">
-        <li v-for="r in rows" :key="r.source" :data-state="r.state">
-          <span class="upgrade-source">{{ r.source }}</span>
+        <li v-for="r in rows" :key="r.group" :data-state="r.state">
+          <span class="upgrade-source">
+            <EntityChip
+              :uri="uriFromEntity('group', r.group)"
+              :shown="r.source"
+              :short="keepsItsName(r.group)"
+              quiet
+              :open-card="showCard"
+            />
+          </span>
           <span class="upgrade-state">{{ said[r.state] }}</span>
           <span v-if="r.error" class="upgrade-error">{{ r.error }}</span>
         </li>

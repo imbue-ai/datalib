@@ -12,8 +12,8 @@ use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::changed_chats;
 use datalib_etl_chat_common::render::{Buckets, ChatRenderer, RenderProfile};
 use datalib_etl_chat_common::types::{
-    own_stamp_ms, AuthorKind, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
-    NormalizedDoc, UpstreamRef,
+    own_stamp_ms, AuthorKind, ItemKind, NamedPerson, NormalizedAttachment, NormalizedChat,
+    NormalizedChatItem, NormalizedDoc, UpstreamRef,
 };
 use datalib_etl_chat_common::TextFormat;
 use datalib_etl_chat_common::{render_batched, ChatBlobs};
@@ -47,7 +47,8 @@ use datalib_schema::providers::Provider;
 /// v8: a Chat message draws its attachments, earlier versions, quote,
 ///     thread, previews, reactions and labels, and a space its name; a
 ///     problem row for every field render leaves unread.
-pub const RENDER_VERSION: u32 = 9;
+/// v10: a Chat message's "Edited" is a `<time>` stamp.
+pub const RENDER_VERSION: u32 = 10;
 
 /// Projection for `BlobBundle::load_many` over the Voice CAS edge: the
 /// `ref_name` (attachment filename) is the bundle key; `content_type`
@@ -204,7 +205,7 @@ fn render_open(
     let (voice_chats, chats): (Vec<NormalizedChat>, Vec<NormalizedChat>) =
         chats.into_iter().partition(|c| is_voice(&c.id));
 
-    let blobs = ChatBlobs::new(db.pool(), Some(db.cas().pool()), &blob_projection);
+    let blobs = ChatBlobs::new(db.pool(), Some(db.cas()), &blob_projection);
     let mut render_as = |profile: &RenderProfile, chats: &[NormalizedChat]| -> Result<()> {
         if chats.is_empty() {
             return Ok(());
@@ -513,9 +514,10 @@ fn build_voice_chats(source_id: &str, messages: &[(String, Value)]) -> Vec<Norma
             })
             .collect();
 
+        let named_after = voice_named_after(&chat_id, &display, &msgs);
         let conversation = ids::voice_conversation(source_id, &chat_id);
         chats.push(NormalizedChat {
-            named_after: Vec::new(),
+            named_after,
             contacts: Vec::new(),
             inputs: inputs.declared(),
             path_prefix: None,
@@ -554,7 +556,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
         .map(|ref_name| NormalizedAttachment {
             mime_type: mime_of(&ref_name),
             file_name: Some(ref_name.clone()),
-            rel_path: None,
+            href: None,
             byte_len: None,
             source_url: None,
             ref_id: Some(ref_name),
@@ -678,6 +680,42 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
             }
         }
     }
+}
+
+/// Who a Voice conversation is named after: the one number it is with,
+/// or for a group with no title of its own (`Group (N people)`, as
+/// `google_voice::derive_channel` writes it) everyone who wrote or called
+/// in it, in the order they first did. A titled group is named by its
+/// title, after nobody.
+fn voice_named_after(chat_id: &str, display: &str, msgs: &[&Value]) -> Vec<NamedPerson> {
+    let key = chat_id.strip_prefix("voice:").unwrap_or(chat_id);
+    if let Some(handle) = Handle::tel(key) {
+        return vec![NamedPerson {
+            shown: display.to_string(),
+            handle: Some(handle),
+        }];
+    }
+    if !(key.starts_with("group:") && display.starts_with("Group (")) {
+        return Vec::new();
+    }
+    let mut out: Vec<NamedPerson> = Vec::new();
+    for m in msgs {
+        if m.get("is_me").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
+        let who = m.get("sender").or_else(|| m.get("party"));
+        let Some(handle) = party_handle(who) else {
+            continue;
+        };
+        if out.iter().any(|p| p.handle.as_ref() == Some(&handle)) {
+            continue;
+        }
+        out.push(NamedPerson {
+            shown: shown(who).0,
+            handle: Some(handle),
+        });
+    }
+    out
 }
 
 /// A Voice sender or call party as an item shows them: their name, else
@@ -911,6 +949,73 @@ mod tests {
             chats[0].buckets[1].items[0].author_kind,
             AuthorKind::Account
         );
+        // Named after the person it is with, by their number: the search
+        // list titled it by a bare number before.
+        assert_eq!(
+            chats[0].named_after,
+            vec![NamedPerson {
+                shown: "William Riker".into(),
+                handle: Handle::tel("+12025550102"),
+            }]
+        );
+    }
+
+    /// An untitled group is named after the people in it, a titled one
+    /// after nobody: its title is its name.
+    #[test]
+    fn a_voice_group_is_named_after_its_members_until_it_has_a_title() {
+        let msg = |id: &str, key: &str, display: &str, tel: &str, name: &str| {
+            json!({"id":id,"kind":"text","conversation_key":key,"conversation_display":display,
+                   "when":"2364-03-01T09:00:00.000-08:00","sender":{"tel":tel,"name":name},
+                   "is_me":false,"body":"Hi","attachments":[]})
+        };
+        let messages = vec![
+            msg(
+                "g1",
+                "group:aaaa",
+                "Group (2 people)",
+                "+12025550102",
+                "William Riker",
+            ),
+            msg(
+                "g2",
+                "group:aaaa",
+                "Group (2 people)",
+                "+12025550103",
+                "Data",
+            ),
+            msg(
+                "g3",
+                "group:aaaa",
+                "Group (2 people)",
+                "+12025550102",
+                "William Riker",
+            ),
+            msg(
+                "t1",
+                "group:bbbb",
+                "Poker night",
+                "+12025550102",
+                "William Riker",
+            ),
+        ];
+        let chats = build_voice_chats("gt", &with_ids(&messages, "id"));
+        let untitled = chats.iter().find(|c| c.id == "voice:group:aaaa").unwrap();
+        assert_eq!(
+            untitled.named_after,
+            vec![
+                NamedPerson {
+                    shown: "William Riker".into(),
+                    handle: Handle::tel("+12025550102"),
+                },
+                NamedPerson {
+                    shown: "Data".into(),
+                    handle: Handle::tel("+12025550103"),
+                },
+            ]
+        );
+        let titled = chats.iter().find(|c| c.id == "voice:group:bbbb").unwrap();
+        assert!(titled.named_after.is_empty());
     }
 
     /// A text and a transcript are what was said; the bold label around

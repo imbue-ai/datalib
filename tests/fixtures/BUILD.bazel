@@ -133,6 +133,7 @@ filegroup(
         "//datalib/backend/etl/providers/claude_code:tng_fixture",
         "//datalib/backend/etl/providers/codex:tng_fixture",
         "//datalib/backend/etl/providers/calendar:tng_fixture",
+        "//datalib/backend/etl/providers/google_drive:tng_fixture",
     ],
     visibility = ["//visibility:public"],
 )
@@ -263,7 +264,10 @@ genrule(
             "datalib/backend/etl/providers/codex/tests/fixtures/codex_tng",
             # Calendar: two `.ics` calendars (arg 29, appended likewise).
             "datalib/backend/etl/providers/calendar/tests/fixtures/calendar_tng",
-            # The server every sync goes through (arg 30).
+            # Google Drive: the JSON spec the synthesizer expands (arg 30,
+            # appended likewise).
+            "datalib/backend/etl/providers/google_drive/tests/fixtures/google_drive_tng/tng.json",
+            # The server every sync goes through (arg 31).
             "$(execpath //datalib/backend/http:datalib_http_bin)",
         ]),
         # Copy the grid index store out of the workspace.
@@ -296,7 +300,7 @@ genrule(
     visibility = ["//visibility:public"],
 )
 
-# `run_sync_pipeline.py`'s arguments 7–29, as a test passes them: the
+# `run_sync_pipeline.py`'s arguments 7–30, as a test passes them: the
 # fixture trees, and the YoLink maker among them (see its docstring for
 # why the numbering runs as it does).
 _TNG_FIXTURE_ARGS = [
@@ -331,6 +335,8 @@ _TNG_FIXTURE_ARGS = [
     "datalib/backend/etl/providers/codex/tests/fixtures/codex_tng",
     # Calendar (arg 29, appended likewise).
     "datalib/backend/etl/providers/calendar/tests/fixtures/calendar_tng",
+    # Google Drive: the JSON spec the synthesizer expands (arg 30).
+    "datalib/backend/etl/providers/google_drive/tests/fixtures/google_drive_tng/tng.json",
 ]
 
 # The check `:ingested_tng` makes before it succeeds, against the fixture

@@ -56,7 +56,8 @@ const idField = (page: Page) => field(page, "ID");
 /// sits — there is no Step column any more — and `aria-label` is the
 /// only place the word survives, which is also what a person gets by
 /// hovering it.
-const stepMark = (page: Page, id: string) => nameCell(page, id).locator('.tg-mark [role="img"]');
+/// A step's Name is its chip, whose accessible name carries its phase.
+const stepChip = (page: Page, id: string) => nameCell(page, id).locator("a.chip");
 
 async function pickClaude(page: Page) {
   await page.getByRole("button", { name: "Add source" }).click();
@@ -123,7 +124,7 @@ test("one dialog writes a group and two steps: one row, with two under it", asyn
   const group = groupRow(page, "personal-claude");
   const groupName = nameCell(page, "group:personal-claude");
   await expect(groupName).toHaveText("Personal Claude");
-  await expect(groupName.locator(".tg-label")).toHaveAttribute("title", /^personal-claude/);
+  await expect(groupName.locator("a.chip")).toHaveAttribute("title", /\(personal-claude\)/);
   await expect(row(page, "personal-claude/ingest")).toHaveCount(0);
 
   // Opened, the two steps are labelled by what they do; the group owns
@@ -131,21 +132,24 @@ test("one dialog writes a group and two steps: one row, with two under it", asyn
   // reaches claude.ai. The phase is a glyph suffixed onto the label, so
   // it is asserted through the accessible name rather than cell text.
   await expandGroup(page, "personal-claude");
-  // A step's id is not drawn: the label and the glyph say it, and the
-  // hover on the label names it.
+  // A step's id is not drawn: its chip keeps the row's short name, its
+  // glyph and accessible name say the phase, and its hover names it whole.
   await expect(nameCell(page, "personal-claude/ingest")).toContainText("Download");
   await expect(nameCell(page, "personal-claude/ingest")).not.toContainText(
     "personal-claude/ingest",
   );
-  await expect(nameCell(page, "personal-claude/ingest").locator(".tg-label")).toHaveAttribute(
+  await expect(stepChip(page, "personal-claude/ingest")).toHaveAttribute(
     "title",
-    /^personal-claude\/ingest/,
+    /^Personal Claude · .+ \(personal-claude\/ingest\)/,
   );
-  await expect(stepMark(page, "personal-claude/ingest")).toHaveAttribute("aria-label", "Ingest");
-  await expect(nameCell(page, "personal-claude/render_markdown")).toContainText("Render markdown");
-  await expect(stepMark(page, "personal-claude/render_markdown")).toHaveAttribute(
+  await expect(stepChip(page, "personal-claude/ingest")).toHaveAttribute(
     "aria-label",
-    "Render",
+    /^Download, Ingest step/,
+  );
+  await expect(nameCell(page, "personal-claude/render_markdown")).toContainText("Render markdown");
+  await expect(stepChip(page, "personal-claude/render_markdown")).toHaveAttribute(
+    "aria-label",
+    /, Render step/,
   );
 
   // The render step is written once, as its own entry. The fixture
@@ -400,9 +404,9 @@ test("a provider with render options writes them on the render step, from the on
 
   await expandGroup(page, "signal-work");
   await expect(row(page, "signal-work/render_markdown")).toBeVisible();
-  await expect(stepMark(page, "signal-work/render_markdown")).toHaveAttribute(
+  await expect(stepChip(page, "signal-work/render_markdown")).toHaveAttribute(
     "aria-label",
-    "Render",
+    /, Render step/,
   );
 
   await expect(editor).toHaveValue(/group = "signal-work"/);

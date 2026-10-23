@@ -5,7 +5,15 @@
 // be migrated is the toolbar's upgrade pill's to report, not this.
 import { computed, onMounted, ref } from "vue";
 import type { Upgrade } from "@/api";
-import { rerenderSources } from "@/upgrade";
+import { keepsItsName, rerenderSources } from "@/upgrade";
+import { showCard } from "@/surface";
+import { uriFromEntity } from "@/cards/chipLinks";
+import ChipMenu from "@/cards/ChipMenu.ce.vue";
+import EntityChip from "@/cards/EntityChip.ce.vue";
+import { adoptStyles } from "@/cards/documentStyles";
+import "@/cards/chip.css";
+
+adoptStyles(EntityChip, ChipMenu);
 
 const props = defineProps<{ upgrade: Upgrade }>();
 
@@ -41,7 +49,15 @@ function onKeydown(e: KeyboardEvent) {
           source it syncs:
         </p>
         <ul class="sources">
-          <li v-for="s in sources" :key="s">{{ s }}</li>
+          <li v-for="s in sources" :key="s.group">
+            <EntityChip
+              :uri="uriFromEntity('group', s.group)"
+              :shown="s.source"
+              :short="keepsItsName(s.group)"
+              quiet
+              :open-card="showCard"
+            />
+          </li>
         </ul>
         <p>Re-rendering reads what is already downloaded. Nothing is downloaded.</p>
       </div>

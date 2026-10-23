@@ -67,6 +67,10 @@ pub fn run(
         Some(SourceType::Garmin) => Box::new(datalib_etl_garmin::synthesize::GarminSynth::new(
             input.clone(),
         )),
+        // Like Garmin's, one spec file whose images sit beside it.
+        Some(SourceType::GoogleDrive) => Box::new(
+            datalib_etl_google_drive::synthesize::GoogleDriveSynth::new(input.clone()),
+        ),
         // Everything else is file-backed or otherwise synth-less: no
         // download HTTP to play back. Skip quietly like sync did.
         _ => {

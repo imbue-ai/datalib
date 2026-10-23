@@ -219,6 +219,9 @@ const SANDBOX_ENV: Record<string, Record<string, string>> = {
         DATALIB_HTTP_PLAYBACK_HOLD: playbackHold("DATALIB_TEST_E2E_SYNC_PLAYBACK_HOLD"),
       }
     : {},
+  // Compacting runs `datalib-step --compact` on every step, so this
+  // root's server has to find it.
+  "compact-history": { DATALIB_BINARY_DIR: binDir },
 };
 
 // Where a spec holds and releases its tapes, one file per spec, named

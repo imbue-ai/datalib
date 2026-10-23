@@ -40,7 +40,8 @@ import { catalogForStep, type CatalogEntry } from "@/config/catalog";
 import { ingestLabel } from "@/config/ingestMethods";
 import { rowMenu, type MenuAction } from "@/config/rowMenu";
 import { menuTarget, rowActions, withBrowse, type ActionRow } from "./rowActions";
-import { changed, subscribeLive } from "@/live";
+import { uriFromEntity } from "./chipLinks";
+import { changed, oneAtATime, subscribeLive } from "@/live";
 import { confirmAction, isDesktopApp, revealActionLabel } from "@/desktop";
 
 export const SOURCES_HELP = `
@@ -85,7 +86,9 @@ order, and never above a group they read from.</p>
 with an icon for what the row is doing or did last, then says when it got there. That
 icon, and the mark before a name — the service a source mirrors, or what a step
 does — give their word on hover. Hovering a name shows its id: for a group, the
-folder its data is in.
+folder its data is in. A name is a <b>chip</b>: <b>double-click</b> it to open that
+source's sync dashboard, or a step's section of it; rename a source from its
+row's menu.
 <b>Right-click a header</b> to show or hide columns: <b>Last synced</b> and
 <b>Last success</b> start hidden. <b>Double-click a Status</b> to read that
 step's log — from the run in flight while it runs, else from the run it last took
@@ -319,7 +322,13 @@ export function useSourcesCard(ctx: CardCtx) {
     }
     if (r.kind === "group") {
       const editBlocked = groupEditBlocked(r.id);
-      return { ...browsing, editBlocked, editGroup: editBlocked ? null : r.id };
+      return {
+        ...browsing,
+        // Its chip: a double-click opens the source; Rename is the menu's.
+        name: { ...r.name, entity: uriFromEntity("group", r.id) },
+        editBlocked,
+        editGroup: editBlocked ? null : r.id,
+      };
     }
     // Edit: the wizard's one form describes a source — a group and its two
     // steps — so a step under a group edits through its group. Everything
@@ -342,9 +351,12 @@ export function useSourcesCard(ctx: CardCtx) {
     // provider declares; the server's "Ingest" only when they name no method.
     const ingestLabelled =
       r.group && r.phase === "ingest" ? ingestLabel(r.type?.id ?? null, r.params) : null;
+    // A step is drawn as its chip, under its own short name: the row it
+    // sits under already names its group.
+    const entity = r.kind === "step" ? uriFromEntity("step", r.id) : null;
     return {
       ...browsing,
-      name: ingestLabelled ? { ...r.name, label: ingestLabelled } : r.name,
+      name: { ...r.name, label: ingestLabelled ?? r.name.label, entity },
       editBlocked,
       editGroup: editBlocked ? null : r.group,
     };
@@ -431,6 +443,16 @@ export function useSourcesCard(ctx: CardCtx) {
     else if (field === "status") void actions.openStepLog(data);
   }
 
+  /// The row whose name the menu's Rename is opening, the one edit a
+  /// Name cell takes: a double-click on a name opens what it names.
+  let renaming: string | null = null;
+  function canEditCell(row: Row, field: string): boolean {
+    if (field !== "name") return true;
+    const ok = row.kind === "group" && renaming === row.key;
+    renaming = null;
+    return ok;
+  }
+
   /// An in-place edit of the Name cell: a group's rename.
   function onCellEdit(row: Row, field: string, value: string) {
     if (field === "name" && row.kind === "group") void renameRow(row, value);
@@ -469,6 +491,7 @@ export function useSourcesCard(ctx: CardCtx) {
         actions.openHistory([first], true);
         return;
       case "rename":
+        renaming = anchor.key;
         gridApi?.startEditing(anchor, "name");
         return;
       case "remove":
@@ -625,6 +648,10 @@ export function useSourcesCard(ctx: CardCtx) {
       if (manage.value === null) rowsError.value = (e as Error).message;
     }
   }
+
+  /// A reload a frame asks for: the loop sends them in bursts as a run's
+  /// steps move, and each one read the whole table again.
+  const refreshRows = oneAtATime(() => loadRows());
 
   /// Write new config text and adopt whatever the backend then reports.
   /// The backend validates with the real loader — including the duplicate
@@ -954,11 +981,8 @@ export function useSourcesCard(ctx: CardCtx) {
   }
 
   onMounted(async () => {
-    // Fresh sizes on the first paint. The backend only walks the disk
-    // while a run is in flight, so on an idle root — the usual state —
-    // this is the walk that produces the numbers on screen.
-    await reloadAll(true);
-
+    // Listen before the first load: a card closed while that load is out
+    // has already run its unmount, and would never stop listening.
     unsubscribe = subscribeLive(
       {
         root: (e) => {
@@ -966,7 +990,7 @@ export function useSourcesCard(ctx: CardCtx) {
             // Deliberately *not* a fresh walk: this fires once a second while
             // a run is going. The sampler is already walking on its own
             // cadence; this just reads what it found.
-            void loadRows();
+            refreshRows();
           }
           // The loop's record moving is the nearest thing to "a step
           // committed" — nothing watches the stores themselves — and its
@@ -983,6 +1007,10 @@ export function useSourcesCard(ctx: CardCtx) {
       },
       { onScreen: cardEl.value ?? undefined },
     );
+    // Fresh sizes on the first paint. The backend only walks the disk
+    // while a run is in flight, so on an idle root — the usual state —
+    // this is the walk that produces the numbers on screen.
+    await reloadAll(true);
   });
 
   onUnmounted(() => {
@@ -1015,6 +1043,7 @@ export function useSourcesCard(ctx: CardCtx) {
     contextMenuItems,
     isGroupOpenByDefault,
     onGridReady,
+    canEditCell,
     onCellDoubleClicked,
     onCellEdit,
     onRowGroupOpened,

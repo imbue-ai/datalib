@@ -58,7 +58,6 @@ pub fn render_posts(
         owner,
         account_inputs,
         range,
-        blob_bytes: _,
     } = *source;
     let db_path = db_path_for(raw_dir);
     if !db_path.exists() {
@@ -354,7 +353,7 @@ fn post_placeholder(
 fn linkout(url: &str) -> Vec<NormalizedAttachment> {
     match nonempty(url) {
         Some(u) => vec![NormalizedAttachment {
-            rel_path: None,
+            href: None,
             file_name: None,
             mime_type: None,
             byte_len: None,

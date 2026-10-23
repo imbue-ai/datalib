@@ -382,6 +382,20 @@ opening the same document twice from a search shows the one tab. A tab
 opened from a pinned tab has no opener, so opening the same card from a
 pinned tab twice makes two tabs.
 
+A view can say more about what is "the same card"
+(`cardSources.ts::sameCard`, which `tabShowing` is handed): a key that
+two of its sources share, and whether a tab of it anywhere in the
+window counts. A source's card is one per window: its key is the group,
+under either of its names (`sourceView`, or the older
+`syncDashboardView`), and its `step` and `tab` only say where to look.
+So a source's or a step's chip double-clicked anywhere, or "Show sync
+dashboard" on any row of that group, shows the card already open. The
+host then publishes `card.reopened` on the bus (`TOPIC_CARD_REOPENED`)
+with the source that asked, and the card shows its Sync tab at the step
+it names, or the tab it names. The tab keeps its own source: the step is
+where to look this time, not what the card is. Every other view is the same card only by its exact source, near
+its opener, as above.
+
 A main window with no kept tree starts with three pinned tabs
 (`defaultPins` in `ContainersView.vue`): the Dashboard, Search
 (`searchView()`) and Sources (`sourcesView()`). A kept tree written
@@ -582,27 +596,38 @@ besides components:
   the wizard make of it"). Through `host.openCards` it opens beside
   itself a `searchView(...)` for Browse, a `gridView(...)` for a problems count, a
   `logView(...)` for a step's log or the server's, a `historyView(...)`
-  for a row's commit history, a `syncDashboardView(...)` for a group's
-  sync, and `configView()`. What a row's actions do is
+  for a row's commit history, a `syncDashboardView(...)` (its source's
+  card, on its Sync tab) for a group's sync, and `configView()`. What a row's actions do is
   `cards/rowActions.ts`, shared with the dashboard; the card keeps only
   what needs the config's text — edit, rename, remove, compare. The
   `/data_sources` route is this card alone at 1.6× width (`MANAGE_STACK`
   in `router/index.ts`). The card's logic is `cards/sourcesCardModel.ts`
   (`useSourcesCard`); the component holds only the template and styles.
-- `syncDashboardView({ group, step })` — one group's sync
-  (`cards/SyncDashboardCard.ce.vue`): the group's Manage row at the top
-  and each step's row under it, laid out vertically, each with a
-  toolbar of its row-menu actions and small charts over one run
-  (`cards/TimeChart.ce.vue`, drawn by [uPlot](https://github.com/leeoniya/uPlot),
-  whose stylesheet the card's `styleSources` carry into its shadow root;
+- `sourceView({ group, step, tab })` — one source as one card
+  (`cards/SourceCard.ce.vue`), what a source's chip opens. The group's
+  Manage row is at the top: its chip, status, ETA, items, size and a
+  toolbar of its row-menu actions. Under it are two tabs. **Documents**
+  is the group's Browse, a `GridCard` drawn inside this card with the
+  query and columns that suit its type (`rowActions.ts::groupBrowseOpts`);
+  it gets a context of its own that opens cards beside this one and keeps
+  its state inside this card's. A group that has no documents has no
+  tabs, only its sync. **Sync** is each step's row under the group's,
+  laid out vertically, each with a toolbar of its row-menu actions and
+  small charts over one run
+  (`cards/TimeChart.ce.vue`, on the shared chart setup in §"Charts";
   which charts, and their arithmetic, are `cards/dashboardCharts.ts`). The series are
   `GET /api/manage/groups/{id}/dashboard`: every metric the step
   reported, its warning and error lines counted up, and its tree's
   size, for the newest run the group took part in or the one picked.
-  Every chart shares the group's time axis and one crosshair (uPlot's
-  cursor sync, keyed per card). The group's
+  Every chart shares the group's time axis, one crosshair and one zoom
+  (uPlot's cursor sync, keyed per card): a drag across any chart zooms
+  them all, and a double-click on any goes back. A chart of several
+  lines has a legend that turns each on and off. The group's
   log for that run is a collapsible `RunLogPanel` at the bottom.
-  `step` scrolls to that step's section.
+  `step` opens Sync at that step's section; without it the card opens on
+  Documents, where there are any. `syncDashboardView({ group, step })`
+  is the card's older name and opens it on Sync, so a saved layout or a
+  link written before still opens.
 - `logView({ run, step, launch, q, jumpToEnd })` — the run log
   (`components/RunLogPanel.ce.vue` in `cards/LogCard.ce.vue`): one
   process's lines — a step's newest attempt, the runner, a launch of the
@@ -662,7 +687,14 @@ besides components:
   points are asked for at about one per pixel: past that the applet
   answers buckets, drawn as each bucket's mean with a band from its
   minimum to its maximum. Hovering reads every line at that time. The
-  picks and the range are the card's state; it reads again on the root's
+  chart's legend names each line, and the axis it is on when there are
+  two; a click turns a line off or on, a double-click shows it alone
+  and another shows them all, and its × takes the line off the chart.
+  Dragging across the chart zooms in and asks the applet for that
+  stretch again at one point per pixel of the plot, so a zoom shows
+  finer data rather than stretched buckets; a double-click goes back to
+  the range. The picks and the range are the card's state, the zoom
+  and the lines turned off are not; it reads again on the root's
   `time_series_index_changed` frame. The time-series applet's row on the
   Manage screen opens it with Browse, and the card gallery lists it. Its
   chart (`TimeSeriesChart.vue`) also draws the charts inside documents
@@ -671,6 +703,54 @@ besides components:
   the backend's loader. Reloads on the root's `config_changed` frame
   and, a beat sooner, on the `config.written` bus topic a card publishes
   after writing the file.
+
+## Charts
+
+Every chart in the UI is drawn by [uPlot](https://github.com/leeoniya/uPlot)
+on one setup, in `datalib/ui/src/cards/plot/`: the sync dashboard's
+small charts (`TimeChart.ce.vue`), and the time-series chart
+(`TimeSeriesChart.vue`) in the Time series card and inside documents.
+A new chart starts there.
+
+- **`usePlot(box, spec)`** (`usePlot.ts`) is a plot's whole life in a
+  Vue component. It builds the plot on mount and again whenever
+  `spec.shape()` changes, and otherwise hands it `spec.data()` as new
+  data; sizes it to its box (a fixed `height`, or the box's); rebuilds
+  it in the new colours when the colour scheme changes; and destroys
+  it with the component. `syncKey` shares a crosshair, and a zoom, with
+  every plot of that key. `zoom` turns on dragging along x to zoom and a
+  double-click to go back to `zoom.base()`, and tells `zoom.changed`
+  about each. `shown` says which series are drawn, and the box says
+  which are as `data-shown` ("1" or "0" a series), which is what an e2e
+  spec reads off a canvas.
+- **`PlotLegend.vue`** is the legend: every line with its colour and,
+  optionally, a value and a note. A click turns a line on or off; a
+  double-click shows it alone, and another shows them all again (the
+  rules are `plot.ts::toggled` and `isolated`). Its `after` slot holds
+  anything per line, such as the Time series card's ×.
+- **`plot.ts`** holds the rest: `seriesColor(i)`, the categorical
+  palette as the theme's `--viz-series-1`…`6` tokens (in `theme.css`);
+  `themeOf(el)`, which reads the colours a canvas needs off those
+  tokens, since a canvas cannot take `var()`; `axis()`, the app's axis
+  look; and `withAlpha()` for a fill.
+- **`PLOT_CSS`** (`plotCss.ts`) is uPlot's own stylesheet and `plot.css`
+  (the crosshair, the zoom's selection, the legend). Neither a card's
+  shadow root nor a document's frame sees the page's styles, so every
+  card that draws a chart lists it in its `styleSources`, and
+  `docFrame.ts` puts it in the frame's stylesheet.
+
+A plot in a document's frame needs one thing more. uPlot listens on the
+window and document it was loaded in — the app's — for the end of a
+drag and for scrolling, while a chart in a frame gets the frame's.
+`usePlot` passes a drag's mouseup and the frame's scroll on to uPlot
+(`inFrame`), so zoom and the hover readout work there as they do in a
+card.
+
+Two drawings are not uPlot and are not meant to be: a grid cell's
+sparkline (`cellRenderers.ts::sparkTrack`, over `config/sparkline.ts`),
+a 120×18 glyph with no axes or interaction, drawn as SVG so a grid
+repaint costs no canvas; and the embedding map (`UmapCard.ce.vue`), a
+two-dimensional map with its own spatial index, pan and zoom.
 
 ## Typed tables
 

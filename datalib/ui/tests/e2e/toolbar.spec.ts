@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import {
   cardOf,
+  expandGroup,
   shownCards,
   shownTabName,
   stubClipboard,
@@ -25,6 +26,129 @@ test.describe("toolbar", () => {
     await expect(tabLabels(page)).toHaveText(PINNED);
     await expect(shownTabName(page)).toHaveText("Dashboard");
     await expect(shownCards(page)).toHaveCount(5);
+  });
+
+  // Every source the Dashboard names is its chip: the Sources section's
+  // rows double-click open that source's sync dashboard.
+  test("a source on the Dashboard is its chip", async ({ page }) => {
+    await page.goto("/");
+    const chip = cardOf(page, "sourcesOverviewView()")
+      .locator('.grid-row a.chip[data-entity^="datalib:group/"]')
+      .first();
+    await expect(chip).toBeVisible({ timeout: 10_000 });
+    const group = (await chip.getAttribute("data-entity"))!.slice("datalib:group/".length);
+    await chip.dblclick();
+    await expect(cardOf(page, `sourceView({"group":"${group}"})`)).toBeVisible({
+      timeout: 10_000,
+    });
+  });
+
+  // A source's card leads with what it holds: its documents, filtered to
+  // it with the columns that suit its type, and its sync a tab away.
+  test("a source's card shows its documents, and its sync a tab away", async ({ page }) => {
+    await page.goto("/");
+    // A source whose Browse is on: one with a render step, so its
+    // documents reach the search.
+    type Row = {
+      id: string;
+      kind: string;
+      type: unknown;
+      actions: { id: string; enabled: boolean }[];
+    };
+    const group = await page.evaluate(async () => {
+      const rows = ((await (await fetch("/api/manage/rows")).json()) as { rows: Row[] }).rows;
+      return rows.find(
+        (r) =>
+          r.kind === "group" && r.type && r.actions.some((a) => a.id === "browse" && a.enabled),
+      )?.id;
+    });
+    expect(group, "a source the fixture lets browse").toBeTruthy();
+    const chip = cardOf(page, "sourcesOverviewView()").locator(
+      `.grid-row a.chip[data-entity="datalib:group/${group}"]`,
+    );
+    await expect(chip).toBeVisible({ timeout: 10_000 });
+    await chip.dblclick();
+    const card = cardOf(page, `sourceView({"group":"${group}"})`);
+    await expect(card.getByRole("tab", { name: "Documents" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await expect(card.getByTestId("search-input")).toHaveAttribute(
+      "data-query",
+      new RegExp(`source_id:${group}`),
+    );
+    await card.getByRole("tab", { name: "Sync" }).click();
+    await expect(card.locator(`.sd-section[data-step^="${group}/"]`).first()).toBeVisible();
+  });
+
+  // A source's chip's menu is its Sources row's: what syncs it, stops
+  // it, turns it off and shows its history, beside the chip's own Open
+  // and copies; an entry runs as the row's does.
+  test("a source chip's menu is its Sources row's", async ({ page }) => {
+    await page.goto("/");
+    const chip = cardOf(page, "sourcesOverviewView()")
+      .locator('.grid-row a.chip[data-entity^="datalib:group/"]')
+      .first();
+    await expect(chip).toBeVisible({ timeout: 10_000 });
+    const group = (await chip.getAttribute("data-entity"))!.slice("datalib:group/".length);
+    await chip.click({ button: "right" });
+    const menu = page.locator(".chip-menu");
+    await expect(menu.getByRole("menuitem")).toContainText([
+      "Open this source",
+      "Sync now",
+      /^Turn (off|on)$/,
+      "Show commit history",
+      "Reset…",
+      `Copy ${group}`,
+    ]);
+    await menu.getByRole("menuitem", { name: "Show commit history" }).click();
+    await expect(cardOf(page, `historyView({"trees":["${group}"]`)).toBeVisible({
+      timeout: 10_000,
+    });
+  });
+
+  // A source's sync dashboard is one tab, however it is opened again: from
+  // the Dashboard a second time, or from a step's chip in the Sources
+  // table, which shows that step's section of the tab already open.
+  test("a source's sync dashboard opens once, and a step's chip goes to its section", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    const chip = cardOf(page, "sourcesOverviewView()")
+      .locator('.grid-row a.chip[data-entity^="datalib:group/"]')
+      .first();
+    await expect(chip).toBeVisible({ timeout: 10_000 });
+    const group = (await chip.getAttribute("data-entity"))!.slice("datalib:group/".length);
+    const dash = cardOf(page, `sourceView({"group":"${group}"})`);
+
+    await chip.dblclick();
+    await expect(dash).toBeVisible({ timeout: 10_000 });
+    const tabs = await tabLabels(page).count();
+
+    await tabLabels(page)
+      .filter({ hasText: /^Dashboard$/ })
+      .click();
+    await chip.dblclick();
+    await expect(dash).toBeVisible();
+    await expect(tabLabels(page)).toHaveCount(tabs);
+
+    await tabLabels(page)
+      .filter({ hasText: /^Sources$/ })
+      .click();
+    await expandGroup(page, group);
+    const stepChip = page
+      .locator(`.tg-grid .slick-row[data-key^="${group}/"] [col-id="name"] a.chip`)
+      .last();
+    await expect(stepChip).toBeVisible();
+    const step = (await stepChip.getAttribute("data-entity"))!.slice("datalib:step/".length);
+    await stepChip.dblclick();
+    await expect(dash).toBeVisible();
+    await expect(tabLabels(page)).toHaveCount(tabs);
+    // The dashboard draws a step's section only once its rows load, which
+    // on a busy runner takes longer than the default five seconds.
+    await expect(dash.locator(`.sd-section[data-step="${step}"]`)).toBeInViewport({
+      timeout: 15_000,
+    });
   });
 
   test("the search box opens a search card on what was typed", async ({ page }) => {

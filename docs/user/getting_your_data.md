@@ -441,12 +441,52 @@ for, and latchkey keeps the OAuth token:
 latchkey auth browser google-gmail
 ```
 
+The first time, latchkey needs an OAuth client to sign in with:
+[your own Google OAuth client](#your-own-google-oauth-client).
+
 Use a `gmail` table on the ingest step. Incremental sync is driven by
 Gmail's own change history, so deletions and label changes show up as
-events. Throughput is capped by Google's quota at roughly 300 messages
-a minute, so a large mailbox backfills over several runs. A Takeout
-`.mbox` of the same mailbox is the no-credentials route — see
-[Email](#email-mbox-or-jmap).
+events. Throughput is capped by Google's quota at roughly 100 messages
+a minute, so a large mailbox backfills over several runs. With a Takeout
+of the same account, the first sync downloads only what is newer than
+it: put the Takeout's `Mail` folder beside the `gmail` table,
+
+```toml
+[steps.params.mbox]
+path = "~/Takeout/Mail"
+```
+
+or answer "Start from a Takeout?" in the Gmail form. The Takeout alone
+is the no-credentials route — see [Email](#email-mbox-or-jmap).
+
+### Your own Google OAuth client
+
+Every Google source signs in through an OAuth client in a Google Cloud
+project of your own, and latchkey needs one for each Google service
+before its first sign-in. In the Add source form, **Sign in with
+browser** says when one is missing and offers to create it or to take
+one you made; for Google Drive it takes only one you made, and keeps it
+for all four of Drive's services. From a terminal, latchkey can create one, which takes a
+few minutes and a Cloud project per service:
+
+```sh
+latchkey auth browser-prepare google-gmail
+```
+
+Or make one yourself and give it to every Google service at once: in
+the Google Cloud console, a project with the Gmail, Google Calendar,
+Google Drive, Google Docs, Google Sheets and Google Slides APIs turned
+on, and in it an OAuth client of type **Desktop app**. Then, with its
+id and secret:
+
+```sh
+for s in google-gmail google-calendar google-drive google-docs google-sheets google-slides; do
+  latchkey auth prepare "$s" '{"clientId":"<id>","clientSecret":"<secret>"}'
+done
+```
+
+Each service is still signed in to on its own, since latchkey asks for
+each one's permissions separately.
 
 ## Google Calendar
 
@@ -460,6 +500,9 @@ approve every scope it asks for:
 ```sh
 latchkey auth browser google-calendar
 ```
+
+The first time, latchkey needs an OAuth client to sign in with:
+[your own Google OAuth client](#your-own-google-oauth-client).
 
 The `google` table needs nothing else; `calendars` narrows it to the
 calendars you name.
@@ -478,16 +521,21 @@ feed of. The Add source form ticks it; in a hand-written config, set
 ## Google Drive
 
 `type = "google_drive"` — your Google Docs, Sheets and Slides through
-the Drive API and latchkey (`api`). A backup, not yet a view: nothing is
-rendered or searched. Each sync keeps every file whose version moved,
+the Drive API and latchkey (`api`). Each Doc renders as one document
+with its comment threads folded in after the text they were made on;
+Sheets and Slides are kept but not rendered yet. Each sync keeps every
+file whose version moved,
 whole and in Google's own form, beside its comments, its revision list
 and the images it shows. It can also keep a copy LibreOffice opens
 (`exports`, below). Older versions stay, and a file you delete from
 Drive stays in the backup.
 
 The download reaches four Google APIs, and latchkey signs each with its
-own service, so sign in to all four as the same account. Approve every
-scope each one asks for:
+own service, so it needs all four signed in as the same account. In the
+Add source form, **Sign in with browser** signs in to Drive, Docs,
+Sheets and Slides one after another; approve every scope each one asks
+for. If one is turned down, the button then reads **Finish signing in
+as …** and does only the ones left. From a terminal:
 
 ```sh
 latchkey auth browser google-drive
@@ -496,14 +544,20 @@ latchkey auth browser google-sheets
 latchkey auth browser google-slides
 ```
 
-If Google answers that an API is not enabled, run
-`latchkey auth browser-prepare <service>` for that one first. There is
-no Add source form for it yet; add it to the config by hand, as in
-[`all_sources.toml`](config_examples/all_sources.toml). `owned_only`
-keeps it to the files you own, and `file_ids` to the ones you name.
-`exports` says which copies Drive converts each version to, beside its
+Each needs an OAuth client first, and one client can serve all four:
+[your own Google OAuth client](#your-own-google-oauth-client). The form
+asks for one you made and keeps it for all four, rather than creating
+one, since latchkey would make a Cloud project for each. If Google
+answers that an API is not enabled, turn it on in that client's Cloud
+project.
+
+The form asks which files: every file the account can open, only the
+ones it owns (`owned_only`), or only the ones you list (`file_ids`, a
+link or an id each). `kinds`, `exports` and `revision_exports` are under
+Advanced options. `exports` says which copies Drive converts each version to, beside its
 native JSON: `["odf"]` for `.odt`, `.ods` and `.odp`, `"ooxml"`,
-`"pdf"`, or a list per kind. By default there are none.
+`"pdf"`, or, written into the config by hand, a list per kind. By
+default there are none.
 `revision_exports` takes the same values for the revisions Drive lists,
 and is the only way to keep versions from before your first sync: each
 Doc and Sheet revision is fetched once, as an export. It is off by

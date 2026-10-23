@@ -1,0 +1,12 @@
+# Slack's emoji shortcodes, from iamcal/emoji-data. README.md says where
+# they come from.
+
+exports_files(
+    ["slack_shortcodes.tsv"],
+    visibility = ["//datalib/backend/etl/providers/slack_render:__pkg__"],
+)
+
+exports_files(
+    ["LICENSE"],
+    visibility = ["//third-party:__pkg__"],
+)

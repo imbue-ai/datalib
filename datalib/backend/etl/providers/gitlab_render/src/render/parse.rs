@@ -10,6 +10,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl_render::inputs::{changed_rows, RawRange};
+use datalib_handle::Handle;
 use serde_json::Value;
 
 use datalib_etl_gitlab::ingest::db::{db_path_for, LoadedRaw, RawDb};
@@ -97,7 +98,8 @@ pub fn parse_loaded(source_id: &str, raw: LoadedRaw) -> Parsed {
             base_sha: diff_refs.and_then(|d| opt_str(d, "base_sha")),
             from_ref: opt_str(p, "source_branch"),
             to_ref: opt_str(p, "target_branch"),
-            author: username(p),
+            author: shown_name(p),
+            author_handle: author_handle(p, opt_str(p, "web_url").as_deref()),
             created_at,
             updated_at: opt_str(p, "updated_at"),
             merged_at: opt_str(p, "merged_at"),
@@ -164,7 +166,8 @@ pub fn parse_loaded(source_id: &str, raw: LoadedRaw) -> Parsed {
                 section,
                 external_id: id,
                 in_reply_to_id: parent_id.filter(|p| *p != id),
-                author: username(n),
+                author: shown_name(n),
+                author_handle: author_handle(n, mr_web_url.as_deref()),
                 body: str_field(n, "body"),
                 url: mr_web_url.as_ref().map(|u| format!("{u}#note_{id}")),
                 path,
@@ -182,6 +185,20 @@ pub fn parse_loaded(source_id: &str, raw: LoadedRaw) -> Parsed {
 
 fn username(p: &Value) -> Option<String> {
     p.get("author").and_then(|a| opt_str(a, "username"))
+}
+
+/// The author as GitLab shows them: their name, else their username.
+fn shown_name(p: &Value) -> Option<String> {
+    p.get("author")
+        .and_then(|a| opt_str(a, "name"))
+        .or_else(|| username(p))
+}
+
+/// The author's account on the instance a merge request's address is
+/// on: a username is only unique within one GitLab.
+fn author_handle(p: &Value, web_url: Option<&str>) -> Option<Handle> {
+    let host = web_url?.split_once("://")?.1.split('/').next()?;
+    Handle::gitlab(host, &username(p)?)
 }
 
 #[cfg(test)]

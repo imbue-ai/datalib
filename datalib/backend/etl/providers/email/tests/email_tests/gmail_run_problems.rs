@@ -51,8 +51,8 @@ async fn a_message_that_would_not_store_stays_owed() {
     );
     let second = run(&m, |_| {}).await.expect("second run");
     assert_eq!(
-        second.quota_units_spent, 24,
-        "profile, labels, history and the one message: {second:?}"
+        second.quota_units_spent, 64,
+        "profile, labels, history and the one message, whole: {second:?}"
     );
     assert_eq!(problems(&m).await, [format!("listed_messages:{RIKER}")]);
 

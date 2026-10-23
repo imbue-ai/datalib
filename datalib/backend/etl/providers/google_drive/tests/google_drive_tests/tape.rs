@@ -381,6 +381,64 @@ pub fn tape(dir: &Path, edition: Edition) -> PathBuf {
     t
 }
 
+/// The deck listed at a `version` past the first tape's, its native JSON
+/// naming the same revision: Drive moves a shared file's `version` with
+/// nothing in it edited. Everything a capture asks for answers except
+/// the deck's image, so fetching it again would fail the capture.
+pub fn bumped_deck(dir: &Path) -> PathBuf {
+    let t = dir.join("bumped");
+    listing(
+        &t,
+        vec![
+            entry(
+                DOC,
+                FileKind::Document,
+                doc_version(Edition::Before),
+                "Captain's log, supplemental",
+                2,
+            ),
+            entry(
+                SHEET,
+                FileKind::Spreadsheet,
+                7,
+                "Engineering duty roster",
+                2,
+            ),
+        ],
+        vec![entry(
+            DECK,
+            FileKind::Presentation,
+            31,
+            "Away team briefing",
+            2,
+        )],
+    );
+    put(
+        &t,
+        api::req_json(&api::revisions_url(DECK, None)),
+        json_response(&json!({"kind": "drive#revisionList", "revisions": [
+            {"kind": "drive#revision", "id": "88", "modifiedTime": "2026-10-11T09:00:00.000Z",
+             "lastModifyingUser": picard()}]})),
+    );
+    put(
+        &t,
+        api::req_json(&api::comments_url(DECK, None)),
+        json_response(&json!({"kind": "drive#commentList", "comments": []})),
+    );
+    put(
+        &t,
+        api::req_bytes(&api::native_url(FileKind::Presentation, DECK, true)),
+        json_response(&deck_native()),
+    );
+    let (odp, _) = api::export_type(FileKind::Presentation, ExportFormat::Odf);
+    put(
+        &t,
+        api::req_bytes(&api::export_url(DECK, odp)),
+        bytes(200, b"PK\x03\x04 odp of the briefing"),
+    );
+    t
+}
+
 /// The listing as two pages.
 pub fn listing(t: &Path, first: Vec<Value>, second: Vec<Value>) {
     put(

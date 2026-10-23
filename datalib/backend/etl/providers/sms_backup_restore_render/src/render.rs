@@ -121,7 +121,7 @@ fn render_open(
         anyhow::Ok((build_chats(source_id, &messages, &calls), scan))
     })?;
     let projection = |_: &NormalizedChat| SMS_BLOB_PROJECTION;
-    let blobs = ChatBlobs::new(db.pool(), Some(db.cas().pool()), &projection);
+    let blobs = ChatBlobs::new(db.pool(), Some(db.cas()), &projection);
     render_changed_batched(
         &profile(),
         all_chats,
@@ -367,7 +367,7 @@ fn item(source_id: &str, v: &Value) -> NormalizedChatItem {
                     NormalizedAttachment {
                         mime_type: mime_for(base),
                         file_name: Some(base.to_string()),
-                        rel_path: None,
+                        href: None,
                         byte_len: None,
                         source_url: None,
                         ref_id: Some(ref_name),

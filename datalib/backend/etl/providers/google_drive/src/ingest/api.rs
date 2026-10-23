@@ -248,8 +248,11 @@ pub async fn get_bytes(url: &str, lk: &LatchkeySettings) -> Result<Vec<u8>> {
     get(req_bytes(url).latchkey(lk.clone())).await
 }
 
-pub async fn get_image(url: &str) -> Result<Vec<u8>> {
-    get(req_signed(url)).await
+/// An image's bytes and the type its response names.
+pub async fn get_image(url: &str) -> Result<(Vec<u8>, Option<String>)> {
+    let resp = get_ok(req_signed(url)).await?;
+    let content_type = resp.header("content-type").map(str::to_string);
+    Ok((resp.body, content_type))
 }
 
 /// A revision's export. Its link answers with a redirect to a signed
@@ -286,11 +289,15 @@ pub fn export_link(kind: FileKind, format: ExportFormat, links: &Value) -> Optio
 }
 
 async fn get(req: HttpRequest) -> Result<Vec<u8>> {
+    Ok(get_ok(req).await?.body)
+}
+
+async fn get_ok(req: HttpRequest) -> Result<HttpResponse> {
     let resp = latchkey_curl_classified(&req, retryability)
         .await
         .map_err(|e| transport_error(e, &req.url))?;
     if resp.status == 200 {
-        return Ok(resp.body);
+        return Ok(resp);
     }
     Err(status_error(&req.url, &resp).into())
 }
@@ -360,8 +367,9 @@ fn sign_in_hint(url: &str) -> String {
         .map_or("google-drive", |k| k.latchkey_service);
     format!(
         ". Sign in with `latchkey auth browser {service}` and approve every scope it \
-         asks for; if Google says the API is not enabled, run \
-         `latchkey auth browser-prepare {service}` first"
+         asks for; if latchkey says it requires preparation, give it an OAuth client \
+         first (`latchkey auth browser-prepare {service}`), and if Google says the API \
+         is not enabled, turn it on in that client's Cloud project"
     )
 }
 

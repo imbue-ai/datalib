@@ -491,15 +491,14 @@ A fresh token is minted every time the server starts, so re-read that
 file rather than saving a copy. `DATALIB_TOKEN=<value>` pins one if you
 need it stable across restarts.
 
-The token is for a server a browser reaches directly. Behind a reverse
-proxy that signs every requester in itself, strips and stamps an identity
-header, and frames the app in a page of its own (Imbue Studio's
-workspace forwarder), set `DATALIB_TRUSTED_PROXY=imbue`: a request the
-proxy marks as the owner's then needs no token, one it marks as a
-visitor's is refused, and the page's `frame-ancestors` is left to the
-proxy. The token keeps working for scripts on the same host. Never set
-it for a server a browser can reach without such a proxy — that header
-is then just text any page can send.
+The token is needed behind a reverse proxy too. Nothing a proxy adds to
+a request stands in for it.
+
+The app page refuses to be framed, so no other page can lay it under its
+own buttons. To show it inside another page (Imbue Studio does), set
+`DATALIB_FRAME_ANCESTORS` to the origins allowed to frame it, as a CSP
+`frame-ancestors` list: for example
+`http://localhost:* https://*.localhost:* https://studio.imbue.com`.
 
 ## 6. Re-syncing
 
@@ -568,14 +567,19 @@ are already in open formats you can read with no datalib at all:
 just explore in place — `datalib-doltlite -readonly <file>` drops you
 in a REPL. Pass `-readonly` whenever you are only looking: anything a
 writable session commits is overwritten by your next sync, and a
-transaction it leaves open stalls that sync. If you prefer a
-GUI, a build of DB Browser for SQLite patched to open doltlite files is
-at <https://github.com/thadd3us/sqlitebrowser/releases> (macOS). In the
-desktop app, **Browse** on a source's download row opens its raw store
+transaction it leaves open stalls that sync. 
+
+If you prefer a GUI, you have two options:
+
+1. The Dolt team makes [the Dolt Workbench](https://github.com/dolthub/dolt-workbench),
+   an open source database workbench with version control features.
+2. A build of DB Browser for SQLite patched to open doltlite files is
+   at <https://github.com/thadd3us/sqlitebrowser/releases> (macOS).
+
+In the desktop app, **Browse** on a source's download row opens its raw store
 read-only for you — in that DB Browser when it is installed, otherwise
-in `datalib-doltlite` in Terminal. More
-recipes, including the commit history and per-sync diffs, are in
-[`docs/dev/doltlite.md`](../dev/doltlite.md).
+in `datalib-doltlite` in Terminal. More recipes, including the commit history 
+and per-sync diffs, are in [`docs/dev/doltlite.md`](../dev/doltlite.md).
 
 ## 9. Feedback
 

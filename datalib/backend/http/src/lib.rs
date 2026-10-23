@@ -35,6 +35,7 @@ pub mod binaries;
 pub mod boot;
 pub mod config_upgrade;
 pub mod connect;
+mod data;
 pub mod disk_free;
 mod embed;
 pub mod frontend;
@@ -43,6 +44,7 @@ pub mod lock;
 pub mod logging;
 pub mod loop_guard;
 pub mod manage;
+pub mod oauth_client;
 pub mod params_check;
 pub mod plugins;
 pub mod probe;
@@ -55,8 +57,9 @@ pub mod ui_state;
 pub mod usage;
 pub mod watch;
 
-pub use auth::{ApiToken, TrustedProxy};
+pub use auth::ApiToken;
 pub use boot::build_state;
+pub use embed::FrameAncestors;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -83,11 +86,9 @@ pub struct AppState {
     /// startup and published to `<root>/system/api-token`; see
     /// [`crate::auth`] for the scheme and why it exists.
     pub api_token: ApiToken,
-    /// The reverse proxy whose identity header stands in for the token,
-    /// and whose page frames the app. `None` for a server reached
-    /// directly, which is every desktop and `datalib-http` from a
-    /// terminal.
-    pub trusted_proxy: Option<TrustedProxy>,
+    /// Who may frame the app page (`$DATALIB_FRAME_ANCESTORS`); nobody,
+    /// unless Imbue Studio's launcher names its frames.
+    pub frame_ancestors: FrameAncestors,
     /// Bytes on disk, over time. A background task folds what it finds in
     /// here so `GET /api/pipeline/storage` reads a snapshot rather than
     /// walking the disk per open tab. See [`crate::usage`].
@@ -190,10 +191,7 @@ pub fn user_bin_dir() -> Option<PathBuf> {
 
 pub fn router(state: AppState) -> Router {
     // Cloned out before `state` is moved into `with_state` below.
-    let gate = auth::Gate {
-        token: state.api_token.clone(),
-        trusted_proxy: state.trusted_proxy,
-    };
+    let gate = state.api_token.clone();
     Router::new()
         .route("/api/health", get(health))
         .route("/api/accounts", get(accounts))
@@ -213,6 +211,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/latchkey/{service}/credential",
             post(connect::set_credential),
+        )
+        .route(
+            "/api/latchkey/{service}/oauth_client",
+            post(connect::set_oauth_client),
         )
         .route(
             "/api/latchkey/connect/{id}/status",
@@ -258,6 +260,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/steps/{id}/turn_on", post(step_turn_on))
         .route("/api/reset", post(reset_steps))
         .route("/api/purge", post(purge_groups))
+        .route("/api/compact", post(compact_steps))
         .route("/api/runs", get(runs_list))
         .route("/api/processes", get(processes_list))
         .route("/api/log/{seq}", get(log_line))
@@ -290,6 +293,12 @@ pub fn router(state: AppState) -> Router {
         // namespace, so byte-identical components resolve to one URL
         // and the browser evaluates them once. See frontend.rs.
         .route("/modules/{hash}", get(get_module))
+        // What a step keeps, by the address a page links it with
+        // (data.rs): its blob store's rows, and nothing else of the step.
+        .route(
+            "/data/{group}/{function}/{kind}/{*rest}",
+            get(data::get_data),
+        )
         // The applet proxy. `{*rest}` keeps the whole remaining path,
         // which the applet sees verbatim.
         .route("/applet/{id}/{*rest}", any(proxy_applet))
@@ -497,7 +506,7 @@ async fn proxy_impl(
 }
 
 /// An applet's answer, as the browser gets it. What an applet serves is
-/// data — an attachment out of a render tree — and a document among it
+/// data, written by whoever wrote the applet, and a document among it
 /// must not run in the app's origin, where it would hold the session: it
 /// gets the sandbox policy that runs nothing. A script or wasm file
 /// goes out as bytes, so the app page's `script-src 'self'` cannot run
@@ -1727,6 +1736,15 @@ struct ResetRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct CompactRequest {
+    /// Step ids; none for every step that takes the verb.
+    #[serde(default)]
+    targets: Vec<String>,
+    #[serde(default)]
+    by: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct PurgeRequest {
     /// Group ids the config no longer names.
     groups: Vec<String>,
@@ -1916,6 +1934,19 @@ async fn purge_groups(
 ) -> Result<StatusCode, Refusal> {
     let by = req.by.unwrap_or_else(|| "ui".to_string());
     wiped(s.sync.purge(&req.groups, &by).await)
+}
+
+/// `POST /api/compact` — fold away the history nothing reads, and give
+/// back the disk it held (`step_protocol.md` § Compact). No targets is
+/// every step that takes the verb. 204 once done; 202 while it runs,
+/// once the steps it holds have stopped; 409, with the reason, for a
+/// step it cannot compact.
+async fn compact_steps(
+    State(s): State<AppState>,
+    Json(req): Json<CompactRequest>,
+) -> Result<StatusCode, Refusal> {
+    let by = req.by.unwrap_or_else(|| "ui".to_string());
+    wiped(s.sync.compact(&req.targets, &by).await)
 }
 
 fn wiped(answer: Result<supervisor::WipeAnswer, String>) -> Result<StatusCode, Refusal> {

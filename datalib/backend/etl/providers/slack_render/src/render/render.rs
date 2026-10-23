@@ -18,7 +18,8 @@ use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_handle::Handle;
 
-use super::mrkdwn::{emojize_shortcodes, mentioned_users, resolve_mentions, to_commonmark, Labels};
+use super::emoji;
+use super::mrkdwn::{mentioned_users, resolve_mentions, to_commonmark, Labels};
 use super::parse::{ParsedSlack, Shared, SlackStore, SlackThreadBucket};
 use super::{ids, slack_link, ts_to_ms, Message};
 use datalib_etl_render::inputs::Lookup;
@@ -53,7 +54,9 @@ use datalib_schema::providers::Provider;
 ///     typed before a mention or link no longer makes it an image.
 /// v13: a permalink is on the workspace's own host (`auth.test`'s `url`),
 ///     so it opens in that workspace, not the browser's current one.
-pub const RENDER_VERSION: u32 = 13;
+/// v14: emoji shortcodes are Slack's own names, skin tones included, and
+///     code keeps its shortcodes as typed.
+pub const RENDER_VERSION: u32 = 14;
 
 #[derive(Debug, Default)]
 pub struct RenderSummary {
@@ -488,7 +491,7 @@ fn build_attachments(raw: &Value) -> Vec<NormalizedAttachment> {
                         f.get("id").and_then(|v| v.as_str()).map(str::to_string)
                     };
                     NormalizedAttachment {
-                        rel_path: None,
+                        href: None,
                         file_name,
                         mime_type,
                         byte_len: f.get("size").and_then(|v| v.as_i64()),
@@ -532,7 +535,7 @@ fn build_reactions(
         let Some(name) = r.get("name").and_then(|v| v.as_str()) else {
             continue;
         };
-        let emoji = emojize_shortcodes(&format!(":{name}:"));
+        let emoji = emoji::lookup(name).unwrap_or_else(|| format!(":{name}:"));
         let users: Vec<&str> = r
             .get("users")
             .and_then(|v| v.as_array())
@@ -569,4 +572,45 @@ fn build_reactions(
         }
     }
     out
+}
+
+#[cfg(test)]
+mod reaction_tests {
+    use super::*;
+    use datalib_etl_render::inputs::Inputs;
+    use serde_json::json;
+
+    fn reacted(reactions: Value) -> Message {
+        Message {
+            team_id: "T1".into(),
+            channel_id: "C1".into(),
+            ts: "12604000100.000100".into(),
+            thread_ts: None,
+            effective_thread_ts: "12604000100.000100".into(),
+            is_thread_root: true,
+            user_id: Some("U1".into()),
+            text: "Engage.".into(),
+            ts_iso: None,
+            raw_json: json!({ "reactions": reactions }),
+        }
+    }
+
+    /// The regression: a toned reaction (Slack names it `+1::skin-tone-2`)
+    /// showed as `👍:skin-tone-2:`. A workspace's own emoji keeps its name.
+    #[test]
+    fn a_reaction_shows_its_tone_and_a_custom_one_its_name() {
+        let m = reacted(json!([
+            { "name": "+1::skin-tone-2", "users": ["U2"], "count": 1 },
+            { "name": "thinking_face", "count": 3 },
+            { "name": "ferengi-dance", "users": ["U3"], "count": 1 },
+        ]));
+        let inputs = Inputs::default();
+        let users = BTreeMap::new();
+        let shown: Vec<String> =
+            build_reactions("src", &m.raw_json, &m, inputs.lookup("users", &users))
+                .into_iter()
+                .map(|r| r.emoji)
+                .collect();
+        assert_eq!(shown, ["👍🏻", "🤔", ":ferengi-dance:"]);
+    }
 }

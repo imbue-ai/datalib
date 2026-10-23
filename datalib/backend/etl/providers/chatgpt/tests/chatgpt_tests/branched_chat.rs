@@ -116,6 +116,7 @@ fn a_conversation_branched_into_a_new_chat_mints_its_own_row_ids() {
             docs.push(doc);
             Ok(())
         },
+        1,
     )
     .expect("render");
     assert_eq!(docs.len(), 2);

@@ -42,6 +42,16 @@ export function issueText(failure: Failure, service: string, where: SignInWhere)
         advice:
           where === "here" ? "Sign in or paste a key above, then check again." : signInAgain(where),
       };
+    case "no_oauth_client":
+      return {
+        headline: `${service} needs an OAuth client of your own before anyone can sign in.`,
+        advice:
+          where === "here"
+            ? "Give it one below."
+            : where === "gateway"
+              ? "Set one up where the latchkey gateway is managed, then check again."
+              : "Create one with latchkey auth browser-prepare in a terminal, then check again.",
+      };
     case "expired":
       return { headline: `The stored ${service} sign-in has expired.`, advice: signInAgain(where) };
     case "rejected":

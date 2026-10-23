@@ -27,6 +27,7 @@ import {
   LAST_UPDATE_AT,
   lastSuccessOf,
   MANAGE_WITH_CONFIG,
+  nameCell,
   pickRowMenu,
   pipelineRow as row,
   recordStatuses,
@@ -684,6 +685,81 @@ command = "/bin/sh -c 'echo walking page 1 >&2; echo listing failed: 429 too man
     await expect(stepChip).toHaveAttribute("data-entity", "datalib:step/flaky/ingest");
     await expect(stepChip).toHaveClass(/entity-failed/, { timeout: 10_000 });
     await expect(line.locator('[col-id="group_id"]')).toHaveCount(0);
+  });
+
+  // A step's Name is its chip, under the short name its row gives it:
+  // the group it sits under says the rest, and the hover says it all.
+  // Double-clicking it opens the group's dashboard at the step's own
+  // section, not the cell's (ignored) rename.
+  test("a step's name is its chip, and opens its section of the dashboard", async ({ page }) => {
+    await writeConfig(
+      page,
+      `${config()}
+
+[[groups]]
+id = "chipped"
+type = "pdf"
+
+[[steps]]
+group = "chipped"
+function = "ingest"
+command = "/bin/true"
+`,
+    );
+    await expandGroup(page, "chipped");
+    const chip = nameCell(page, "chipped/ingest").locator(
+      'a.chip[data-entity="datalib:step/chipped/ingest"]',
+    );
+    await expect(chip).toBeVisible();
+    await expect(chip).not.toContainText(" · ");
+    await expect(chip).toHaveAttribute("title", /^.+ · .+ \(chipped\/ingest\)/, {
+      timeout: 10_000,
+    });
+
+    await chip.dblclick();
+    const dash = shownCards(page).filter({ has: page.locator(".sd") });
+    await expect(dash).toBeVisible();
+    await expect(dash.locator('.sd-section[data-step="chipped/ingest"] a.chip')).toBeVisible();
+  });
+
+  // A group's Name is its chip too: a double-click opens its dashboard
+  // rather than renaming it, which the row's menu still does.
+  test("a group's name is its chip, and a double-click opens it rather than renaming it", async ({
+    page,
+  }) => {
+    await writeConfig(
+      page,
+      `${config()}
+
+[[groups]]
+id = "named"
+name = "Named PDFs"
+type = "pdf"
+
+[[steps]]
+group = "named"
+function = "ingest"
+command = "/bin/true"
+`,
+    );
+    const chip = nameCell(page, "group:named").locator('a.chip[data-entity="datalib:group/named"]');
+    await expect(chip).toHaveText("Named PDFs");
+    // Each click of the double-click is cancelled, so the chip's href is
+    // never followed: in the desktop app, following it cancelled the
+    // loads of the card the double-click opened.
+    await page.evaluate(() => {
+      const w = window as Window & { chipClicks?: boolean[] };
+      w.chipClicks = [];
+      window.addEventListener("click", (e) => w.chipClicks!.push(e.defaultPrevented));
+    });
+    await chip.dblclick();
+    const dash = shownCards(page).filter({ has: page.locator(".sd") });
+    await expect(dash.locator('.sd-group a.chip[data-entity="datalib:group/named"]')).toBeVisible();
+    await expect(page.locator(".tg-grid input.editor-text")).toHaveCount(0);
+    const clicks = await page.evaluate(
+      () => (window as Window & { chipClicks?: boolean[] }).chipClicks,
+    );
+    expect(clicks).toEqual([true, true]);
   });
 
   // A source that syncs once and fails from then on: Last synced

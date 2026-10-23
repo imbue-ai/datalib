@@ -17,6 +17,9 @@ export const TNG = {
   garminOauthToken: "tng-garmin-oauth1",
   garminOauthSecret: "tng-garmin-secret",
   garminBearer: "tng-garmin-bearer",
+  /// A Desktop app OAuth client, as Google Cloud's "Download JSON" has it.
+  googleClientId: "1701-enterprise.apps.googleusercontent.com",
+  googleClientSecret: "GOCSPX-tng-picard",
 };
 
 /// Who can sign in to claude.ai and chatgpt.com, each with their own
@@ -209,7 +212,38 @@ function garmin(req) {
   }
 }
 
+/// Google's consent screen, turning the sign-in down: the pasted
+/// client's token exchange would go to the real oauth2.googleapis.com
+/// (latchkey's own fetch, not the browser), so no sign-in here gets a code.
+function googleAccounts(req) {
+  if (req.path !== "/o/oauth2/v2/auth") return { status: 404, text: "" };
+  const back = new URL(new URLSearchParams(req.query).get("redirect_uri"));
+  back.searchParams.set("error", "access_denied");
+  return { status: 302, headers: { location: back.toString() } };
+}
+
+/// The Cloud console `auth browser-prepare` drives, as it treats an
+/// account without 2-Step Verification: every page sends it to
+/// `/enable-mfa`. The console's own pages are not faked, so this is as far
+/// as a fake creation gets, and latchkey has a sentence for it. The page
+/// keeps calling home as the real one does: latchkey decides the person
+/// is signed in from a response with a body that arrives after the page
+/// has loaded.
+function googleCloudConsole(req) {
+  if (req.path === "/enable-mfa/ping") return { json: { signedIn: true } };
+  if (req.path === "/enable-mfa") {
+    return {
+      html:
+        "<h1>Turn on 2-Step Verification (fake)</h1>" +
+        '<script>setInterval(() => fetch("/enable-mfa/ping"), 500)</script>',
+    };
+  }
+  return { status: 302, headers: { location: "/enable-mfa" } };
+}
+
 export const FAKE_SITES = {
+  "accounts.google.com": googleAccounts,
+  "console.cloud.google.com": googleCloudConsole,
   "slack.com": slack,
   "claude.ai": claude,
   "chatgpt.com": chatgpt,

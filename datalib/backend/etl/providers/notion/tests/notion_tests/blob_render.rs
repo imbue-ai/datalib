@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::fs;
 
-use datalib_etl::blob_cas::BlobBundle;
+use datalib_etl::blob_cas::{BlobBundle, Described};
 use datalib_etl::progress::Progress;
 use datalib_etl_notion_render::render::parse::ParsedNotion;
 use datalib_etl_notion_render::render::render::render_notion;
@@ -23,29 +23,49 @@ fn page(id: &str, title: &str) -> serde_json::Value {
     })
 }
 
-fn render(parsed: &ParsedNotion, root: &std::path::Path) -> Vec<String> {
+/// Renders `parsed` with `blobs` as the pages' bytes, one page a batch.
+fn render(
+    parsed: &ParsedNotion,
+    blobs: &HashMap<String, BlobBundle>,
+    root: &std::path::Path,
+) -> Vec<String> {
     let mut emitted = Vec::new();
     {
         let mut on_doc = |md: datalib_etl_render::grid_index::RenderedMarkdown| {
             emitted.push(md.markdown_uuid.clone());
             Ok(())
         };
-        render_notion(parsed, root, "notion", &Progress::noop(), &mut on_doc).unwrap();
+        render_notion(
+            parsed,
+            root,
+            "notion",
+            &Progress::noop(),
+            &mut on_doc,
+            blobs,
+            1,
+        )
+        .unwrap();
     }
     emitted
 }
 
-/// An attachment whose bytes are in the CAS is written beside the page
-/// and the body points at the local file, not at the upstream slot.
+/// An attachment whose bytes are in the CAS is linked at its address
+/// there, not at the upstream slot, and no copy is written beside the
+/// page.
 #[test]
-fn an_archived_attachment_is_linked_locally() {
+fn an_archived_attachment_is_linked_in_the_blob_store() {
     let d = tempdir().unwrap();
     let pid = "11111111-2222-3333-4444-555555555555";
+    let hash = "ab".repeat(32);
     let mut bundle = BlobBundle::new();
-    bundle.add(
+    bundle.add_stored(
         SLOT,
-        b"\x89PNG\r\n\x1a\nfake".to_vec(),
-        Some("image/png".into()),
+        "notion/ingest",
+        Described {
+            blake3: hash.clone(),
+            byte_len: 12,
+            content_type: Some("image/png".into()),
+        },
         None,
     );
     let mut blobs = HashMap::new();
@@ -57,10 +77,9 @@ fn an_archived_attachment_is_linked_locally() {
             .into_iter()
             .collect(),
         comments: vec![],
-        blobs_by_page: blobs,
         ..Default::default()
     };
-    render(&parsed, d.path());
+    render(&parsed, &blobs, d.path());
 
     let dir = fs::read_dir(d.path().join("notion/render_markdown/pages"))
         .unwrap()
@@ -70,11 +89,11 @@ fn an_archived_attachment_is_linked_locally() {
         .path();
     let md = fs::read_to_string(dir.join("index.md")).unwrap();
     assert!(
-        md.contains("![shot](blobs/"),
-        "body should link the local copy: {md}"
+        md.contains(&format!("![shot](/data/notion/ingest/blob/{hash})")),
+        "body should link the blob store: {md}"
     );
     assert!(!md.contains(SLOT), "upstream slot should be gone: {md}");
-    assert!(dir.join("blobs").is_dir(), "bytes should be materialized");
+    assert!(!dir.join("blobs").exists(), "no copy beside the page");
 }
 
 /// A slot with no bytes in the CAS keeps its upstream URL. A broken
@@ -89,10 +108,9 @@ fn an_unarchived_attachment_keeps_its_upstream_url() {
             .into_iter()
             .collect(),
         comments: vec![],
-        blobs_by_page: HashMap::new(),
         ..Default::default()
     };
-    render(&parsed, d.path());
+    render(&parsed, &HashMap::new(), d.path());
     let dir = fs::read_dir(d.path().join("notion/render_markdown/pages"))
         .unwrap()
         .next()
@@ -116,10 +134,9 @@ fn a_body_less_page_still_renders() {
         pages: vec![p],
         markdown_by_page: HashMap::new(),
         comments: vec![],
-        blobs_by_page: HashMap::new(),
         ..Default::default()
     };
-    render(&parsed, d.path());
+    render(&parsed, &HashMap::new(), d.path());
     let dir = fs::read_dir(d.path().join("notion/render_markdown/pages"))
         .unwrap()
         .next()

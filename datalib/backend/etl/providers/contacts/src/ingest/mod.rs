@@ -4,6 +4,7 @@
 
 pub mod api;
 pub mod db;
+pub mod photo;
 pub mod schema_raw;
 pub mod vcf_dir;
 
@@ -187,6 +188,7 @@ impl ObjectStore for RawDb {
     }
 
     async fn put(&self, tx: &mut Transaction<'_, Sqlite>, rows: &[&ContactRow]) -> Result<()> {
+        self.put_photos(rows).await?;
         RawDb::upsert_contacts_in_tx(tx, rows).await
     }
 
@@ -369,6 +371,57 @@ fn host_for_account(server_url: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQMAAAAl21bKAAAAA1BMVEX/AAAZ4gk3AAAAAXRSTlMAQObYZgAAAApJREFUCNdjYAAAAAIAAeIhvDMAAAAASUVORK5CYII=";
+
+    fn card_with_photo(uid: &str, b64: &str) -> ContactRow {
+        ContactRow::new(
+            "ab".into(),
+            uid.into(),
+            format!("/cards/{uid}.vcf"),
+            None,
+            Some(uid.into()),
+            None,
+            &format!(
+                "BEGIN:VCARD\nVERSION:3.0\nUID:{uid}\nFN:{uid}\n\
+                 PHOTO;ENCODING=b;TYPE=PNG:{b64}\nEND:VCARD\n"
+            ),
+        )
+    }
+
+    async fn held(db: &RawDb, b64: &str) -> Option<Option<String>> {
+        use base64::Engine;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .unwrap();
+        let hash = datalib_etl::blob_cas::blake3_hex(&bytes);
+        let described = db.cas().unwrap().describe(&hash).await.unwrap();
+        described.map(|d| d.content_type)
+    }
+
+    /// A card stored either way — a `.vcf` file's upsert or a CardDAV
+    /// page — has its photo in the blob store, under the hash of the
+    /// decoded bytes and the type they are, for its page to link.
+    #[tokio::test]
+    async fn a_stored_cards_photo_is_in_the_blob_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&dir.path().join("contacts.doltlite_db"))
+            .await
+            .unwrap();
+        db.upsert_contact(&card_with_photo("picard", PNG_B64))
+            .await
+            .unwrap();
+        assert_eq!(held(&db, PNG_B64).await, Some(Some("image/png".into())));
+
+        // base64 of "riker's photo".
+        let other = "cmlrZXIncyBwaG90bw==";
+        let row = card_with_photo("riker", other);
+        let mut tx = db.pool().begin().await.unwrap();
+        ObjectStore::put(&db, &mut tx, &[&row]).await.unwrap();
+        tx.commit().await.unwrap();
+        assert!(held(&db, other).await.is_some());
+        db.close().await;
+    }
 
     #[test]
     fn host_for_account_strips_path() {

@@ -2,7 +2,7 @@
 
 use clap::Parser;
 use datalib_cli_help::Example;
-use datalib_http::{router, ApiToken, TrustedProxy};
+use datalib_http::{router, ApiToken, FrameAncestors};
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
@@ -136,12 +136,12 @@ async fn main() -> anyhow::Result<()> {
     // carries it: the browser (and the Tauri webview) authenticate by
     // loading `<url>?token=…` once, then ride the session cookie.
     let api_token = ApiToken::mint(&root)?;
-    let trusted_proxy = TrustedProxy::from_env()?;
-    if let Some(proxy) = trusted_proxy {
+    datalib_http::auth::refuse_retired_env()?;
+    let frame_ancestors = FrameAncestors::from_env()?;
+    if frame_ancestors != FrameAncestors::default() {
         tracing::info!(
-            "behind the {} proxy: its identity header stands in for the token, \
-             and the app page may be framed",
-            proxy.as_str()
+            "the app page may be framed by {}",
+            frame_ancestors.sources()
         );
     }
 
@@ -194,7 +194,7 @@ async fn main() -> anyhow::Result<()> {
         datalib_http::binaries::resolve_binary_dir(),
         args.now.clone(),
         api_token,
-        trusted_proxy,
+        frame_ancestors,
     )
     .await?;
 

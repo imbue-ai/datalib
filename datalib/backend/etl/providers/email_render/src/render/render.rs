@@ -7,7 +7,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use super::ids;
 use super::parse::{EmailStore, EmailThreadBucket, Shared};
 use anyhow::{Context, Result};
-use datalib_etl::blob_cas::{blake3_hex, BlobBundle};
+use datalib_etl::blob_cas::{blake3_hex, BlobBundle, Described};
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::normalize::iso_to_ms;
 use datalib_etl_chat_common::render::{Buckets, ChatRenderer, RenderProfile};
@@ -45,7 +45,9 @@ use mail_parser::{Address, MessageParser, MimeHeaders, PartType};
 /// v11: the author span carries the author's handle as `data-handle`.
 /// v12: a recipients line (To, Cc) under the header, each with its handle.
 /// v13: Bcc on the recipients line, and an `@` mention drawn as a chip.
-pub const RENDER_VERSION: u32 = 13;
+/// v14: attachments and inline images are linked inside the stored
+///     `.eml`, and no `blobs/` is written beside the page.
+pub const RENDER_VERSION: u32 = 14;
 
 /// Which webmail to build each email's `↗` outlink for. Mirrors
 /// `datalib_core::config::EmailOutlink`; the orchestrator maps the
@@ -408,16 +410,14 @@ fn build_chat(
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "(no subject)".to_string());
 
-    // Render-only bundle: attachment + inline bytes, NOT the raw `.eml`
-    // source blobs (those would otherwise be written to blobs/ too).
+    // The parts each page links, inside the `.eml` that holds them.
     let mut render_bundle = BlobBundle::new();
     let mut items: Vec<NormalizedChatItem> = Vec::with_capacity(bucket.emails.len());
 
     for em in &bucket.emails {
-        let parsed_eml = bucket
-            .blobs
-            .get(&em.blob_id)
-            .map(|b| ParsedEml::from_eml_bytes(&b.bytes))
+        let eml = bucket.blobs.get(&em.blob_id);
+        let parsed_eml = eml
+            .map(|b| ParsedEml::from_eml_bytes(b.bytes.as_deref().unwrap_or_default()))
             .unwrap_or_default();
 
         // Real downloadable attachments → bundle. Filled BEFORE the
@@ -438,36 +438,40 @@ fn build_chat(
         // reference or nothing would link them at all.
         let mut listed_hashes: HashSet<String> = HashSet::new();
         for a in atts {
-            if let Some(blob) = bucket.blobs.get(&a.blob_id) {
-                if !is_inline_attachment(a) {
-                    listed_hashes.insert(blob.blake3.clone());
-                }
-                render_bundle.add_hashed(
-                    a.blob_id.clone(),
-                    blob.blake3.clone(),
-                    blob.bytes.clone(),
-                    blob.content_type.clone(),
-                    blob.upstream_name.clone(),
-                );
+            if !is_inline_attachment(a) {
+                listed_hashes.insert(a.blob_id.clone());
+            }
+            if let Some(eml) = eml {
+                let part = Described {
+                    blake3: a.blob_id.clone(),
+                    byte_len: a.size.unwrap_or(0).max(0) as u64,
+                    content_type: a.content_type.clone(),
+                };
+                render_bundle.add_part(a.blob_id.clone(), eml, part, a.name.clone());
             }
         }
 
-        // Inline `.eml` body parts → bundle (content-addressed ref so
-        // the same image across replies collapses to one file).
-        let mut inline_cid_refs: Vec<(String, String)> = Vec::new();
+        // Inline `.eml` body parts → bundle, linked inside this email's
+        // own `.eml`: a reply that repeats an image links its own copy.
+        let mut inline_cid_to_href: HashMap<String, String> = HashMap::new();
         let mut loose_inline: Vec<String> = Vec::new();
         for inline in &parsed_eml.inline_parts {
             let b3 = blake3_hex(&inline.bytes);
             let ref_id = format!("inline:{b3}");
-            render_bundle.add_hashed(
-                ref_id.clone(),
-                b3.clone(),
-                inline.bytes.clone(),
-                inline.content_type.clone(),
-                None,
-            );
+            let part = Described {
+                blake3: b3.clone(),
+                byte_len: inline.bytes.len() as u64,
+                content_type: inline.content_type.clone(),
+            };
+            if !eml.is_some_and(|eml| render_bundle.add_part(ref_id.clone(), eml, part, None)) {
+                continue;
+            }
             match &inline.cid {
-                Some(cid) => inline_cid_refs.push((cid.clone(), ref_id)),
+                Some(cid) => {
+                    if let Some(href) = render_bundle.href_for(&ref_id) {
+                        inline_cid_to_href.entry(cid.clone()).or_insert(href);
+                    }
+                }
                 None => {
                     // A non-image part that the attachment list already
                     // links adds nothing as a second body link — and
@@ -487,24 +491,14 @@ fn build_chat(
             }
         }
 
-        // Names resolve only once every ref is in the bundle:
-        // `filename_for` collapses refs sharing a content hash onto a
-        // single name, so a mid-fill lookup can hand back a name the
-        // finished bundle won't materialize.
-        let mut inline_cid_to_fname: HashMap<String, String> = HashMap::new();
-        for (cid, ref_id) in inline_cid_refs {
-            if let Some(fname) = render_bundle.filename_for(&ref_id) {
-                inline_cid_to_fname.entry(cid).or_insert(fname);
-            }
-        }
-        let materialized: HashMap<String, String> = atts
+        let linked: HashMap<String, String> = atts
             .iter()
-            .filter_map(|a| Some((a.blob_id.clone(), render_bundle.filename_for(&a.blob_id)?)))
+            .filter_map(|a| Some((a.blob_id.clone(), render_bundle.href_for(&a.blob_id)?)))
             .collect();
 
-        // Body markdown (HTML → md, cid → blobs/<fname>), then fold the
-        // quoted reply history.
-        let body = email_body_markdown(&parsed_eml, atts, &materialized, &inline_cid_to_fname)
+        // Body markdown (HTML → md, cid → the part's address), then fold
+        // the quoted reply history.
+        let body = email_body_markdown(&parsed_eml, atts, &linked, &inline_cid_to_href)
             .unwrap_or_default();
         let (fresh, quoted) = split_quoted(&body);
         // Only the fresh part: a quoted reply repeats the mentions of the
@@ -525,10 +519,12 @@ fn build_chat(
         }
         // Loose inline parts the body never referenced.
         for ref_id in &loose_inline {
-            let Some(fname) = render_bundle.filename_for(ref_id) else {
+            let (Some(link), Some(fname)) = (
+                render_bundle.href_for(ref_id),
+                render_bundle.filename_for(ref_id),
+            ) else {
                 continue;
             };
-            let link = format!("blobs/{fname}");
             if text.contains(&link) {
                 continue;
             }
@@ -552,8 +548,8 @@ fn build_chat(
             text.push_str("\n\n### Attachments\n");
             for a in trailing {
                 let label = escape_md_inline(a.name.as_deref().unwrap_or(&a.part_id));
-                match materialized.get(&a.blob_id) {
-                    Some(fname) => text.push_str(&format!("\n- [{label}](blobs/{fname})")),
+                match linked.get(&a.blob_id) {
+                    Some(href) => text.push_str(&format!("\n- [{label}]({href})")),
                     None => text.push_str(&format!("\n- {label} _(blob not materialized)_")),
                 }
             }
@@ -890,23 +886,20 @@ fn is_inline_attachment(a: &LoadedAttachment) -> bool {
 }
 
 /// Render one email's body to markdown. Prefers the HTML part (htmd
-/// after rewriting `cid:` srcs to materialized blobs); falls back to
+/// after rewriting `cid:` srcs to the parts' addresses); falls back to
 /// the plain-text part, escaped.
 fn email_body_markdown(
     parsed: &ParsedEml,
     attachments: &[LoadedAttachment],
-    materialized: &HashMap<String, String>,
-    inline_cid_to_fname: &HashMap<String, String>,
+    linked: &HashMap<String, String>,
+    inline_cid_to_href: &HashMap<String, String>,
 ) -> Option<String> {
-    let mut cid_to_blob: HashMap<String, String> = HashMap::new();
-    for (cid, fname) in inline_cid_to_fname {
-        cid_to_blob.insert(cid.clone(), format!("blobs/{fname}"));
-    }
+    let mut cid_to_blob = inline_cid_to_href.clone();
     for a in attachments {
-        let (Some(cid), Some(fname)) = (a.cid.as_deref(), materialized.get(&a.blob_id)) else {
+        let (Some(cid), Some(href)) = (a.cid.as_deref(), linked.get(&a.blob_id)) else {
             continue;
         };
-        cid_to_blob.insert(cid.to_string(), format!("blobs/{fname}"));
+        cid_to_blob.insert(cid.to_string(), href.clone());
     }
 
     if !parsed.html_body.trim().is_empty() {

@@ -254,15 +254,34 @@ fn link_end(s: &str) -> Option<usize> {
             ']' => {
                 depth = depth.checked_sub(1)?;
                 if depth == 0 {
-                    if !s[i + 1..].starts_with('(') {
-                        return None;
-                    }
-                    let close = s[i + 1..].find(')')?;
-                    return Some(i + 1 + close + 1);
+                    let target = s[i + 1..].strip_prefix('(')?;
+                    return Some(i + 2 + target_end(target)?);
                 }
             }
             _ => {}
         }
+    }
+    None
+}
+
+/// The byte length of a link's `target)`, the `(` already read: the `)`
+/// that closes it is the first outside a quoted title and outside the
+/// balanced parentheses a URL may hold (`log_(1)`).
+fn target_end(target: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut quote: Option<char> = None;
+    let mut after_space = false;
+    for (i, c) in target.char_indices() {
+        match (quote, c) {
+            (Some(q), _) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') if after_space => quote = Some(c),
+            (None, '(') => depth += 1,
+            (None, ')') if depth == 0 => return Some(i + 1),
+            (None, ')') => depth -= 1,
+            _ => {}
+        }
+        after_space = c.is_whitespace();
     }
     None
 }
@@ -273,8 +292,8 @@ fn link_end(s: &str) -> Option<usize> {
 /// keeps its address.
 fn without_tags(line: &str) -> String {
     const BREAKS: &[&str] = &[
-        "br", "p", "div", "li", "tr", "td", "th", "h1", "h2", "h3", "h4", "h5", "h6", "summary",
-        "details",
+        "br", "p", "div", "li", "tr", "td", "th", "dt", "dd", "h1", "h2", "h3", "h4", "h5", "h6",
+        "summary", "details",
     ];
     let mut out = String::with_capacity(line.len());
     let mut rest = line;
@@ -382,6 +401,20 @@ mod tests {
                  Report to [Transporter Room 3](https://sf.test/tr3?a=1&amp;b=2) at **0900**."
             ),
             "Your shore leave is approved Report to Transporter Room 3 at 0900."
+        );
+    }
+
+    /// A mention's link carries a title with parentheses in it; reading
+    /// to the first `)` left `"),` behind in the Contents column.
+    #[test]
+    fn a_link_title_with_parentheses_goes_whole() {
+        assert_eq!(
+            text(
+                "[@Jean-Luc Picard](slack://user?team=T1&id=U2 \"@Jean-Luc Picard (slack:T1/U2)\"), \
+                 I must object. See [the (old) log](https://sf.test/log_(1)) and \
+                 [Guinan's](https://sf.test/guinan's-bar \"Ten Forward\")."
+            ),
+            "@Jean-Luc Picard, I must object. See the (old) log and Guinan's."
         );
     }
 

@@ -14,6 +14,7 @@ use datalib_etl_render::html::{escape_md_block, escape_md_inline, md_link_dest};
 
 use crate::ids;
 use datalib_etl_render::inputs::Inputs;
+use datalib_etl_render::message::stamp_html;
 use serde_json::Value;
 
 use crate::common::{
@@ -433,9 +434,7 @@ fn other_page_post(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
         .filter(|s| *s > 0 && Some(*s * 1000) != date_ms)
         .and_then(|s| datalib_time::IsoOffsetTimestamp::from_unix_millis(s * 1000))
     {
-        let stamp = edited.to_rfc3339_secs();
-        let day = stamp.split('T').next().unwrap_or(&stamp);
-        body.markup(format!("*Edited {day}*"));
+        body.markup(format!("*Edited {}*", stamp_html(&edited)));
     }
     let text = body.markdown();
     let display = display_for(None, body.opening_words(), "Facebook post on another page");

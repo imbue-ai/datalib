@@ -101,7 +101,9 @@ pub struct Hit {
 }
 
 /// Each row [`lookup`] found, best first, scored by the affinity of its
-/// best match; the words shown are the kind and the value matched.
+/// best match; the words shown are the kind and the value matched. A
+/// title match shows nothing, so the row keeps its own opening words: the
+/// title is already what the result is called.
 pub fn rank(found: &Found) -> Vec<(String, (f64, String))> {
     found
         .hits
@@ -109,11 +111,12 @@ pub fn rank(found: &Found) -> Vec<(String, (f64, String))> {
         .map(|h| {
             let kind = SearchTermKind::from_code(h.kind);
             let affinity = kind.map_or(0, SearchTermKind::affinity);
-            let kind = kind.map_or("term", SearchTermKind::as_str);
-            (
-                h.uuid.clone(),
-                (f64::from(affinity), format!("{kind}: {}", h.value)),
-            )
+            let words = match kind {
+                Some(SearchTermKind::Title) => String::new(),
+                Some(k) => format!("{}: {}", k.as_str(), h.value),
+                None => format!("term: {}", h.value),
+            };
+            (h.uuid.clone(), (f64::from(affinity), words))
         })
         .collect()
 }
@@ -337,6 +340,25 @@ mod tests {
         let ranked = ranked(tmp.path(), "warp", 10).await;
         assert_eq!(order(&ranked), ["r-id", "r-new", "r-old", "r-name"]);
         assert_eq!(ranked[0].1, (5.0, "id: warp".to_string()));
+    }
+
+    /// Five threads of one channel each showed "title: #bridge", the name
+    /// the result already wears; their own opening words tell them apart.
+    #[tokio::test]
+    async fn a_title_match_shows_the_rows_own_words() {
+        let tmp = tempfile::tempdir().unwrap();
+        terms_file(
+            tmp.path(),
+            &[("a", "title", "#bridge", "2"), ("b", "from", "bridge", "1")],
+        )
+        .await;
+        let shown: std::collections::HashMap<String, String> = ranked(tmp.path(), "bridge", 10)
+            .await
+            .into_iter()
+            .map(|(uuid, (_, words))| (uuid, words))
+            .collect();
+        assert_eq!(shown["a"], "");
+        assert_eq!(shown["b"], "from: bridge");
     }
 
     #[tokio::test]

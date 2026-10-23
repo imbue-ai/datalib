@@ -1,15 +1,20 @@
 //! Raw doltlite store → in-memory [`ParsedContacts`].
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+
+use datalib_contact_schema::Photo;
 
 use datalib_etl_contacts::ingest::api::{
     split_vcards, vcard_all, vcard_categories, vcard_created, vcard_is_group, vcard_members,
     vcard_n_family_given, vcard_rev, vcard_uid, VcardProp,
 };
 use datalib_etl_contacts::ingest::db::{LoadedRawContact, RawDb};
+use datalib_etl_contacts::ingest::photo::card_photo;
 use datalib_etl_render::inputs::{changed_rows, Input, RawRange};
+use datalib_etl_render::photo;
 
 /// One parsed vCard, with everything render cares about pulled
 /// out so render doesn't have to re-walk the text.
@@ -46,24 +51,14 @@ pub struct ParsedContact {
     pub org: Vec<String>,
     pub title: Option<String>,
     pub note: Option<String>,
-    /// Inline `PHOTO` payload. We decode the base64 once at parse
-    /// time so render doesn't have to think about encoding rules.
-    /// `None` for URL-only photos (those go in `photo_url`).
-    pub photo: Option<ContactPhoto>,
+    /// The blake3 of the inline `PHOTO`'s decoded bytes, which the
+    /// download keeps in the blob store. `None` for a URL-only photo,
+    /// which is `photo_url`.
+    pub photo: Option<String>,
     pub photo_url: Option<String>,
     /// The raw rows this card came from: its `contacts` row and the
     /// `addressbooks` row its label is read off.
     pub inputs: Vec<Input>,
-}
-
-/// Decoded photo bytes plus a content-type guess. Render writes
-/// these into a sibling `blobs/` directory at render time.
-#[derive(Debug, Clone)]
-pub struct ContactPhoto {
-    pub bytes: Vec<u8>,
-    /// `image/jpeg`, `image/png`, …. Derived from the `TYPE=` param;
-    /// defaults to `application/octet-stream` when absent.
-    pub content_type: String,
 }
 
 #[derive(Debug, Default)]
@@ -76,6 +71,9 @@ pub struct ParsedContacts {
     pub changed: Option<std::collections::HashMap<String, std::collections::HashSet<String>>>,
     /// The commit this parse read.
     pub head: Option<String>,
+    /// Each card photo the blob store holds, by hash. A card's photo
+    /// missing here is one the store lacks.
+    pub held_photos: HashMap<String, Photo>,
 }
 
 /// Load every contact from the raw doltlite store at `db_path` and parse each
@@ -87,7 +85,7 @@ pub fn parse(db_path: &Path, range: RawRange<'_>) -> Result<Option<ParsedContact
         return Ok(None);
     }
     let path = db_path.to_path_buf();
-    let loaded = tokio::task::block_in_place(|| {
+    tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
             let Some(db) = RawDb::open_reader(&path, range.pin).await? else {
                 return Ok(None);
@@ -97,7 +95,23 @@ pub fn parse(db_path: &Path, range: RawRange<'_>) -> Result<Option<ParsedContact
                 let pin = db.pin().expect("open_reader returns a pinned handle");
                 let changed =
                     changed_rows(db.pool(), range, pin, &["contacts", "addressbooks"]).await?;
-                Ok::<_, anyhow::Error>((rows, changed, pin.commit().to_string()))
+                let mut parsed = parse_loaded(rows);
+                parsed.changed = changed;
+                parsed.head = Some(pin.commit().to_string());
+                if let Some(cas) = db.cas() {
+                    let hashes: Vec<&str> = parsed
+                        .contacts
+                        .iter()
+                        .filter_map(|c| c.photo.as_deref())
+                        .collect();
+                    parsed.held_photos = cas
+                        .describe_many(&hashes)
+                        .await?
+                        .into_iter()
+                        .map(|(hash, held)| (hash, photo::stored(cas.step(), &held)))
+                        .collect();
+                }
+                Ok::<_, anyhow::Error>(parsed)
             }
             .await;
             // Closed, not dropped: the next open of this store is a
@@ -105,14 +119,7 @@ pub fn parse(db_path: &Path, range: RawRange<'_>) -> Result<Option<ParsedContact
             db.close().await;
             loaded.map(Some)
         })
-    })?;
-    let Some((rows, changed, head)) = loaded else {
-        return Ok(None);
-    };
-    let mut parsed = parse_loaded(rows);
-    parsed.changed = changed;
-    parsed.head = Some(head);
-    Ok(Some(parsed))
+    })
 }
 
 pub fn parse_loaded(rows: Vec<LoadedRawContact>) -> ParsedContacts {
@@ -178,8 +185,8 @@ fn parse_block(block: &str, addressbook: &str) -> ParsedContact {
     let emails = vcard_all(block, "EMAIL");
     let phones = vcard_all(block, "TEL");
     let addresses = vcard_all(block, "ADR");
-    let photo = vcard_all(block, "PHOTO");
-    let (photo, photo_url) = pick_photo(photo);
+    let (photo, photo_url) = card_photo(block);
+    let photo = photo.map(|p| datalib_etl::blob_cas::blake3_hex(&p.bytes));
     ParsedContact {
         inputs: Vec::new(),
         uid,
@@ -210,68 +217,6 @@ fn org(vcard: &str) -> Vec<String> {
         .first()
         .map(|p| p.text_list(';'))
         .unwrap_or_default()
-}
-
-/// First base64-encoded photo wins; fall back to the first URL-only
-/// photo if no inline binary is present.
-fn pick_photo(props: Vec<VcardProp>) -> (Option<ContactPhoto>, Option<String>) {
-    let mut url: Option<String> = None;
-    for p in props {
-        // base64-encoded inline body. RFC 6350 §6.7.1 ENCODING=b
-        // (vCard 3.0) or vCard 4.0's bare `data:` URL.
-        let is_b64 = p
-            .param("ENCODING")
-            .map(|v| v.eq_ignore_ascii_case("b") || v.eq_ignore_ascii_case("base64"))
-            .unwrap_or(false);
-        if is_b64 {
-            // Strip whitespace base64 may have picked up from line
-            // folding.
-            let cleaned: String = p.value.chars().filter(|c| !c.is_whitespace()).collect();
-            use base64::Engine;
-            let engine = base64::engine::general_purpose::STANDARD;
-            if let Ok(bytes) = engine.decode(cleaned.as_bytes()) {
-                let content_type = p
-                    .param("TYPE")
-                    .map(|t| format!("image/{}", t.to_ascii_lowercase()))
-                    .unwrap_or_else(|| "application/octet-stream".to_string());
-                return (
-                    Some(ContactPhoto {
-                        bytes,
-                        content_type,
-                    }),
-                    None,
-                );
-            }
-        }
-        // vCard 4.0 inline `data:` URL.
-        if p.value.starts_with("data:") {
-            if let Some((meta, b64)) = p.value.trim_start_matches("data:").split_once(",") {
-                let content_type = meta
-                    .split(';')
-                    .next()
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or("application/octet-stream")
-                    .to_string();
-                use base64::Engine;
-                let engine = base64::engine::general_purpose::STANDARD;
-                let cleaned: String = b64.chars().filter(|c| !c.is_whitespace()).collect();
-                if let Ok(bytes) = engine.decode(cleaned.as_bytes()) {
-                    return (
-                        Some(ContactPhoto {
-                            bytes,
-                            content_type,
-                        }),
-                        None,
-                    );
-                }
-            }
-        }
-        // URL-only PHOTO.
-        if p.value.starts_with("http://") || p.value.starts_with("https://") {
-            url = Some(p.value.clone());
-        }
-    }
-    (None, url)
 }
 
 fn derive_uid_from_path(addressbook: &str, path: &Path, block_index: usize) -> String {
@@ -489,10 +434,15 @@ mod tests {
         let rows = vec![make_row("contacts", "picard", &vcard)];
         let parsed = parse_loaded(rows);
         let c = &parsed.contacts[0];
-        assert!(c.photo.is_some(), "expected decoded photo");
-        let ph = c.photo.as_ref().unwrap();
-        assert_eq!(ph.content_type, "image/png");
-        assert_eq!(&ph.bytes[1..4], b"PNG");
+        use base64::Engine;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(png_b64)
+            .unwrap();
+        assert_eq!(
+            c.photo.as_deref(),
+            Some(datalib_etl::blob_cas::blake3_hex(&bytes).as_str()),
+            "the photo is named by its decoded bytes"
+        );
     }
 
     #[test]

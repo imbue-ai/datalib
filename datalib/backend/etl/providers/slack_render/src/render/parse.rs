@@ -134,7 +134,7 @@ pub struct ParsedSlack {
 /// bytes read later still, a batch at a time ([`SlackStore::load_blobs`]).
 pub struct SlackStore {
     reader: Reader,
-    cas: Option<SqlitePool>,
+    cas: Option<blob_cas::BlobCas>,
     has_read_states: bool,
     pub shared: Shared,
     pub scan: ScanResult,

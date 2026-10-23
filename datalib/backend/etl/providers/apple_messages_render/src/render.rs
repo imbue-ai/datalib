@@ -256,7 +256,7 @@ async fn load(
             .entry(message_id)
             .or_default()
             .push(NormalizedAttachment {
-                rel_path: None,
+                href: None,
                 file_name: r.get::<Option<String>, _>("transfer_name").or_else(|| {
                     filename
                         .as_deref()

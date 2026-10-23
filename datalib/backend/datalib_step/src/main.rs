@@ -7,6 +7,7 @@
 //! utilities that are not steps.
 
 mod check_params;
+mod compact;
 mod dispatch;
 mod embedding_map;
 mod events;
@@ -77,8 +78,8 @@ const EXAMPLES: &[Example] = &[
         command: "datalib-step help email gmail",
     },
     Example {
-        what: "a stanza with every option set, under a group id of your own, to append to a config",
-        command: "datalib-step help slack --example complete --id work-slack",
+        what: "config stanzas for one source, the least it needs and every option, and how to add one",
+        command: "datalib-step examples slack",
     },
     Example {
         what: "ask which Slack account the credentials reach (writes nothing)",
@@ -149,13 +150,18 @@ struct Cli {
     models_dir: Option<PathBuf>,
     /// Appended by `datalib-dag --reset`: empty this part of what the step
     /// wrote (`store`) and do nothing else (`step_protocol.md` § Reset).
-    #[arg(long, value_name = "PART", conflicts_with = "migrate")]
+    #[arg(long, value_name = "PART", conflicts_with_all = ["migrate", "compact"])]
     reset: Option<String>,
     /// Appended by a launch after an upgrade: bring what the step wrote to
     /// this build's shape where that can be done in place, fetch nothing,
     /// and say when it cannot (`step_protocol.md` § Migrate).
-    #[arg(long)]
+    #[arg(long, conflicts_with = "compact")]
     migrate: bool,
+    /// Appended by `datalib-dag --compact`: fold the history of a store
+    /// nothing reads the history of into one commit, and give back the
+    /// disk it held (`step_protocol.md` § Compact).
+    #[arg(long)]
+    compact: bool,
     #[command(flatten)]
     obs: datalib_obs::ObsArgs,
 }
@@ -169,14 +175,13 @@ enum Cmd {
         /// methods (`slack api`), a function (`embed`) or one of these
         /// commands (`probe`). None: the overview.
         topic: Vec<String>,
-        /// Print a source's `minimal` or `complete` config stanza, bare
-        /// TOML to append to a config.
-        #[arg(long, value_name = "minimal|complete", value_parser = parse_example_kind)]
-        example: Option<datalib_source_common::ExampleKind>,
-        /// The group id the stanza uses: the folder the source's data goes
-        /// in, and the stem of its step ids. Default: the source type.
-        #[arg(long)]
-        id: Option<String>,
+    },
+    /// One source's config stanzas: for each of its ingest methods, the
+    /// least a config needs and one that sets every option, with how to
+    /// add one to a config, rename its group and wire it into the index.
+    Examples {
+        /// Source type (`slack`, `email`, …).
+        source_type: String,
     },
     /// Utility (not a pipeline step): ask a provider which account
     /// these credentials reach — and, with `--list`, one list a picker
@@ -283,12 +288,12 @@ const INTERRUPT_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
-    if let Some(Cmd::Help { topic, example, id }) = &cli.cmd {
-        let ask = help::Ask {
-            example: *example,
-            id: id.as_deref(),
-        };
-        std::process::exit(print_help(topic, ask));
+    match &cli.cmd {
+        Some(Cmd::Help { topic }) => std::process::exit(print_help(topic)),
+        Some(Cmd::Examples { source_type }) => {
+            std::process::exit(print_page(help::examples_page(source_type)))
+        }
+        _ => {}
     }
     let _obs_guard = datalib_obs::init(&cli.obs, "datalib-step").ok();
     // Before the first `qmd` or `latchkey` spawn, wherever it comes
@@ -506,6 +511,7 @@ async fn run(
         // there for why it cannot come through the outcome path.
         Some(Cmd::Probe { .. }) => unreachable!("probe is answered in main"),
         Some(Cmd::Help { .. }) => unreachable!("help is answered in main"),
+        Some(Cmd::Examples { .. }) => unreachable!("examples is answered in main"),
         Some(Cmd::CheckParams { .. }) => unreachable!("check-params is answered in main"),
         Some(Cmd::PullModels { .. }) => unreachable!("pull-models is answered in main"),
         Some(Cmd::PullRuntime) => unreachable!("pull-runtime is answered in main"),
@@ -519,6 +525,9 @@ async fn run(
             }
             if cli.migrate {
                 return migrate::run(&env, data_root, emitter).await;
+            }
+            if cli.compact {
+                return compact::run(&env, data_root).await;
             }
             run_function(
                 env,
@@ -657,15 +666,9 @@ fn version_through_runtime(mut cmd: std::process::Command) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-fn parse_example_kind(s: &str) -> Result<datalib_source_common::ExampleKind, String> {
-    datalib_source_common::ExampleKind::parse(s)
-        .ok_or_else(|| format!("{s:?} is not an example; `minimal` or `complete`"))
-}
-
 // Links in the docs it prints point at the commit this binary was built
 // from, so they show the docs that describe it.
-#[allow(clippy::disallowed_macros)]
-fn print_help(topic: &[String], ask: help::Ask) -> i32 {
+fn print_help(topic: &[String]) -> i32 {
     let mut cmd = Cli::command();
     cmd.build();
     if let [name] = topic {
@@ -680,7 +683,12 @@ fn print_help(topic: &[String], ask: help::Ask) -> i32 {
         .filter(|name| name != "help")
         .collect();
     let git_ref = datalib_runtime::build_id::git_hash().unwrap_or_else(|| "main".to_string());
-    match help::page(topic, ask, &commands, &git_ref) {
+    print_page(help::page(topic, &commands, &git_ref))
+}
+
+#[allow(clippy::disallowed_macros)]
+fn print_page(page: Result<String, String>) -> i32 {
+    match page {
         Ok(text) => {
             println!("{text}");
             0

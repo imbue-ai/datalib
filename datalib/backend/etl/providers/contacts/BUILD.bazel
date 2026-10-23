@@ -29,6 +29,8 @@ rust_library(
         "//datalib/backend/probe:datalib_probe",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
+        "@datalib_crates//:base64",
+        "@datalib_crates//:futures",
         "@datalib_crates//:quick-xml",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",

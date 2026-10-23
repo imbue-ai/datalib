@@ -1,5 +1,6 @@
 //! Slack render stage: raw → typed buckets ready for render.
 
+pub mod emoji;
 pub mod ids;
 pub mod mrkdwn;
 pub mod parse;

@@ -365,10 +365,11 @@ pub fn plan(
             datalib_etl_apple_photos_config::ApplePhotosRenderConfig,
             datalib_etl_apple_photos
         ),
-        SourceType::GoogleDrive => ingest_only!(
+        SourceType::GoogleDrive => arm!(
             datalib_etl_google_drive_config::GoogleDriveConfig,
             datalib_etl_google_drive_config::GoogleDriveRenderConfig,
-            datalib_etl_google_drive
+            datalib_etl_google_drive,
+            datalib_etl_google_drive_render
         ),
         SourceType::Fsindex => ingest_only!(
             datalib_etl_fsindex_config::FsindexConfig,

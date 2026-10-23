@@ -17,19 +17,19 @@ function dom(html: string): HTMLElement {
 
 const PIXEL = "https://pixel.example/open.gif?m=1";
 const HERO = "https://cdn.example/hero.jpg";
-/** A document's own assets, the one thing on this origin a body loads. */
-const OWN = "/applet/unified_document_index/asset/md-1/blobs";
+/** An attachment at its blob-store address, the one thing on this origin a body loads. */
+const own = (pair: string) => `/data/mail/ingest/blob/${pair.repeat(32)}`;
 
 describe("sanitizeRenderedHtml and remote references", () => {
   it("holds an image's remote src and reports it", () => {
     const { html, remote } = sanitizeRenderedHtml(
-      `<p><img src="${HERO}" alt="Hero"><img src="${OWN}/own.png" alt="own"></p>`,
+      `<p><img src="${HERO}" alt="Hero"><img src="${own("a1")}" alt="own"></p>`,
     );
     const imgs = dom(html).querySelectorAll("img");
     expect(imgs[0].getAttribute("src")).toBeNull();
     expect(imgs[0].getAttribute("data-remote-src")).toBe(HERO);
     expect(imgs[0].classList.contains("remote-blocked")).toBe(true);
-    expect(imgs[1].getAttribute("src")).toBe(`${OWN}/own.png`);
+    expect(imgs[1].getAttribute("src")).toBe(`${own("a1")}`);
     expect(imgs[1].classList.contains("remote-blocked")).toBe(false);
     expect(remote).toEqual([{ url: HERO, host: "cdn.example", kind: "image", loaded: false }]);
   });
@@ -52,7 +52,7 @@ describe("sanitizeRenderedHtml and remote references", () => {
     const body = [
       `<video src="https://v.example/a.mp4" poster="https://v.example/a.jpg" controls></video>`,
       `<audio src="//a.example/x.mp3"></audio>`,
-      `<picture><source srcset="https://s.example/a.jpg 1x, ${OWN}/b.jpg 2x"><img src="${OWN}/c.jpg"></picture>`,
+      `<picture><source srcset="https://s.example/a.jpg 1x, ${own("b2")} 2x"><img src="${own("c3")}"></picture>`,
       `<table><tr><td background="https://t.example/bg.png">x</td></tr></table>`,
       `<p style="color: red; background-image: url('https://c.example/bg.png')">y</p>`,
       `<svg><image href="https://i.example/a.svg"></image></svg>`,
@@ -86,7 +86,7 @@ describe("sanitizeRenderedHtml and remote references", () => {
     const loaded = sanitizeRenderedHtml(body, { accept: () => true }).html;
     expect(loaded).not.toMatch(/(?<![\w-])(src|poster|background|href|srcset)="(https?:|\/\/)/);
     expect(loaded).toContain(
-      `srcset="/api/remote_media?url=${encodeURIComponent("https://s.example/a.jpg")} 1x, ${OWN}/b.jpg 2x"`,
+      `srcset="/api/remote_media?url=${encodeURIComponent("https://s.example/a.jpg")} 1x, ${own("b2")} 2x"`,
     );
     expect(loaded).toContain(
       `background-image: url(&quot;/api/remote_media?url=${encodeURIComponent("https://c.example/bg.png")}&quot;)`,
@@ -112,12 +112,12 @@ describe("sanitizeRenderedHtml and remote references", () => {
   });
 
   it("leaves links, own paths and data URIs alone", () => {
-    const body = `<a href="https://x.example/">x</a><img src="data:image/png;base64,AAAA"><img src="${OWN}/a.png">`;
+    const body = `<a href="https://x.example/">x</a><img src="data:image/png;base64,AAAA"><img src="${own("d4")}">`;
     const { html, remote } = sanitizeRenderedHtml(body);
     expect(remote).toEqual([]);
     expect(html).toContain('href="https://x.example/"');
     expect(html).toContain('src="data:image/png;base64,AAAA"');
-    expect(html).toContain(`src="${OWN}/a.png"`);
+    expect(html).toContain(`src="${own("d4")}"`);
   });
 });
 

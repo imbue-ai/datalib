@@ -83,3 +83,83 @@ describe("an identity cell that names a person", () => {
     expect(cell.querySelector("a.chip")).toBeNull();
   });
 });
+
+describe("a group row of an identity column", () => {
+  const spec: ColumnSpec = {
+    field: "source_ref",
+    header: "Source",
+    type: "identity",
+    default_visible: true,
+    editable: false,
+  };
+  const slack: Identity = {
+    id: "slack",
+    label: "Work Slack",
+    icon: "slack",
+    entity: "datalib:group/slack",
+  };
+  const title = (rows: Record<string, unknown>[] | undefined) => {
+    const [col] = typedColumns<Record<string, unknown>>([spec], {
+      groupable: true,
+      chips: { who: () => undefined, canLink: () => false, entity: () => undefined },
+    });
+    const format = col.grouping!.formatter as (g: unknown) => unknown;
+    return format({
+      value: "Work Slack",
+      count: 12,
+      level: 0,
+      groupingKey: "k",
+      rows,
+    }) as HTMLElement;
+  };
+
+  /** "Source: Work Slack (12)" was text: it names the source as its chip,
+   *  read off the group's first row. */
+  it("draws its value as the source's chip", () => {
+    const el = title([{ source_ref: slack }]);
+    expect(el.querySelector('a.chip[data-entity="datalib:group/slack"]')).not.toBeNull();
+    expect(el.textContent).toContain("Source: ");
+    expect(el.querySelector(".tg-group-count")?.textContent).toBe(" (12)");
+  });
+
+  it("stays text while the group's rows are not loaded", () => {
+    const el = title(undefined);
+    expect(el.querySelector("a.chip")).toBeNull();
+    expect(el.textContent).toBe("Source: Work Slack (12)");
+  });
+});
+
+describe("a Name cell that is a chip", () => {
+  const spec: ColumnSpec = {
+    field: "name",
+    header: "Name",
+    type: "identity",
+    default_visible: true,
+    editable: false,
+    badges: "problems",
+  };
+  /** A step's Name became its chip and its problem counts went with the
+   *  plain label: the chip keeps them beside it. */
+  it("keeps the problem counts beside the chip", () => {
+    const [col] = typedColumns<Record<string, unknown>>([spec], {
+      chips: { who: () => undefined, canLink: () => false, entity: () => undefined },
+    });
+    const name: Identity = {
+      id: "slack/ingest",
+      label: "Download",
+      entity: "datalib:step/slack/ingest",
+    };
+    const problems = [{ kind: "error", text: "2" }];
+    const cell = (col.formatter as Formatter)(
+      0,
+      0,
+      "Download",
+      col,
+      { name, problems },
+      {} as never,
+    );
+    const el = cell as HTMLElement;
+    expect(el.querySelector('a.chip[data-entity="datalib:step/slack/ingest"]')).not.toBeNull();
+    expect(el.querySelector('[data-field="problems"]')?.textContent).toContain("2");
+  });
+});

@@ -18,4 +18,5 @@ pub mod units;
 /// fast path too.
 /// v2: ids moved to `datalib_id`'s v8 layout (none carries a stamp
 ///     here, but the layout changed under them).
-pub const RENDER_VERSION: u32 = 6;
+/// v7: every stamp on a page is a `<time>`.
+pub const RENDER_VERSION: u32 = 7;

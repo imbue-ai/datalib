@@ -98,7 +98,7 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
     // Stash one encrypted PNG under `<snapshot_root>/files/<XX>/<name>`
     // — the layout download walks. Picard's "Make it so." message will
     // reference this attachment so the rendered .md should contain an
-    // `![…](blobs/…png)` image link.
+    // `![…](/data/…/blob/<hash>)` image link.
     let files_root = snapshot_root.join("files");
     let (png_media_name, png_plaintext_hash) = write_test_attachment(&files_root)?;
 
@@ -184,6 +184,8 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
             "signal-tng",
             &progress,
             &mut on_doc_complete,
+            // One bucket's attachments a batch.
+            1,
         )?;
         assert_eq!(render_summary.docs_rendered, 1);
         assert_eq!(render_summary.messages_rendered, 4);
@@ -205,7 +207,7 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
     // markdown `# …` line) so the Vue side can hook a copy-id button
     // off `data-page-title-uuid`.
     assert!(
-        md.contains("class=\"page-title\"") && md.contains("Signal · Will Riker"),
+        md.contains("class=\"page-title\"") && md.contains(">Will Riker (2364-04)"),
         "page-title H1 with markdown_uuid hook present in:\n{md}"
     );
     assert!(md.contains("Make it so."), "Picard's order rendered");
@@ -221,31 +223,35 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
         "Riker's name resolved from recipient, his number as the handle, in:\n{md}"
     );
 
-    // PNG attachment surfaces as an inline image link under the
-    // "Make it so." bullet, with the upstream filename as the alt
-    // text and the hash-based filename as the target.
+    // PNG attachment surfaces as an inline image under the "Make it
+    // so." message, with the upstream filename as the alt text, linked
+    // at its address in the source's blob store. Nothing is copied
+    // beside the page.
+    let png_hash = datalib_etl::blob_cas::blake3_hex(TINY_PNG);
     assert!(
-        md.contains("![delta-shield.png](blobs/"),
-        "expected the image attachment to render as an inline link in:\n{md}"
+        md.contains(&format!(
+            "![delta-shield.png](/data/raw/signal/blob/{png_hash})"
+        )),
+        "expected the image attachment to link the blob store in:\n{md}"
     );
-    let png_dir = doc
-        .md_path
-        .parent()
-        .expect("md has a parent dir")
-        .join("blobs");
-    let written_pngs: Vec<_> = std::fs::read_dir(&png_dir)?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("png"))
-        .collect();
-    assert_eq!(
-        written_pngs.len(),
-        1,
-        "exactly one PNG materialized on disk"
+    assert!(
+        !doc.md_path
+            .parent()
+            .expect("md has a parent dir")
+            .join("blobs")
+            .exists(),
+        "nothing copied beside the page"
     );
-    let bytes = std::fs::read(written_pngs[0].path())?;
+    let cas = datalib_etl::blob_cas::BlobCas::open_reader(&datalib_etl::blob_cas::cas_path_for(
+        &datalib_etl::doltlite_raw::db_path_for(&raw_db_path),
+    ))
+    .await?;
+    let stored = cas.get(&png_hash).await?;
+    cas.close().await;
     assert_eq!(
-        bytes, TINY_PNG,
-        "materialized PNG matches the plaintext we encrypted in"
+        stored.map(|o| o.bytes).as_deref(),
+        Some(TINY_PNG),
+        "the store holds the plaintext we encrypted in"
     );
 
     // 1 chat-level row + 4 message-level rows = 5 grid rows.
@@ -318,6 +324,7 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
             rendered_docs_second_pass.push(doc);
             Ok(())
         },
+        1,
     )?;
     assert_eq!(
         render_summary_2.docs_rendered, 0,
@@ -707,14 +714,22 @@ async fn a_phone_switch_keeps_every_message_and_its_bytes() -> Result<()> {
     .await??;
     let out = tmp.path().join("data");
     let mut mds = Vec::new();
-    render_all(&parsed, &out, "signal-tng", &Progress::noop(), &mut |doc| {
-        mds.push(std::fs::read_to_string(&doc.md_path)?);
-        Ok(())
-    })?;
+    render_all(
+        &parsed,
+        &out,
+        "signal-tng",
+        &Progress::noop(),
+        &mut |doc| {
+            mds.push(std::fs::read_to_string(&doc.md_path)?);
+            Ok(())
+        },
+        1,
+    )?;
     assert_eq!(mds.len(), 1);
+    let png_hash = datalib_etl::blob_cas::blake3_hex(TINY_PNG);
     assert!(
-        mds[0].contains("![delta-shield.png](blobs/"),
-        "the attachment renders from the old phone's bytes in:\n{}",
+        mds[0].contains("![delta-shield.png](") && mds[0].contains(&format!("/blob/{png_hash})")),
+        "the attachment links the old phone's bytes in:\n{}",
         mds[0]
     );
     Ok(())
