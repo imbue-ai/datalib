@@ -18,7 +18,7 @@
 // ctx.host.openCards — structural changes never go through the bus.
 // Double-clicking a row opens that document as a standalone
 // single-column page in a new tab.
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 // The grid is the framework-agnostic bundle, not the Vue wrapper: a
 // card is a custom element, and the wrapper finds its container by a
 // selector on `document`, which cannot see into a shadow root. The
@@ -1216,6 +1216,16 @@ onMounted(loadSources);
 const allCount = computed(() => sources.value.reduce((n, g) => n + g.count, 0));
 const source = computed(() => pickedSource(query.value));
 
+// The chips are one line that scrolls sideways; the picked one is kept
+// in sight, however it was picked.
+const sourceChips = ref<HTMLElement | null>(null);
+watch([source, sources], async () => {
+  await nextTick();
+  sourceChips.value
+    ?.querySelector(".source-chip.is-on")
+    ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+});
+
 function pickSource(id: string | null) {
   query.value = setSource(query.value, id);
 }
@@ -2320,7 +2330,13 @@ onBeforeUnmount(() => {
           {{ t.label }} <span class="answer-count">{{ tabCount(t.id) }}</span>
         </button>
       </div>
-      <div v-if="sources.length > 0" class="source-chips" role="group" aria-label="Sources">
+      <div
+        v-if="sources.length > 0"
+        ref="sourceChips"
+        class="source-chips"
+        role="group"
+        aria-label="Sources"
+      >
         <button
           type="button"
           class="source-chip"
@@ -2337,6 +2353,7 @@ onBeforeUnmount(() => {
           class="source-chip"
           :class="{ 'is-on': source === g.sample.source_id }"
           :aria-pressed="source === g.sample.source_id"
+          :data-source="g.sample.source_id"
           @click="pickSource(g.sample.source_id ?? null)"
         >
           <img

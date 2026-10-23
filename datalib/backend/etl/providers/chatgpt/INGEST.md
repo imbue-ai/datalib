@@ -93,9 +93,19 @@ request and requires the store an uninterrupted run leaves.
 2. **List** `/backend-api/conversations?offset=&limit=100&order=updated`,
    newest-updated first, until the pages run out, `max_pages` is hit,
    a page fails, or — with `since` set — a page ends past the cutoff.
-   The walk is *complete* only in the first case.
+   Then the same walk again with `&is_archived=true`: the plain listing
+   leaves an archived conversation out, so without it archiving a chat
+   deleted it from the mirror. (Measured: an archived chat left the
+   plain listing, was the archived listing's one item, and still
+   answered its detail; unarchived, it came back.) The two are one
+   listing, and it is *complete* only when both walks ran out of pages.
+   A complete listing can still be short: for about fifteen minutes
+   after that unarchive, the plain listing named 104 of 582
+   conversations, every one of which still answered. A sync then would
+   have deleted the rest, and doltlite history is what brings them
+   back; the next sync after the listing recovers fetches them again.
 3. **Prune**, only after a complete walk: a conversation the store
-   holds that the listing did not name was deleted on chatgpt.com, so
+   holds that neither listing named was deleted on chatgpt.com, so
    it is deleted here with its edges (its rows stay in doltlite
    history). An incomplete walk says nothing about the pages it never
    asked for, so it prunes nothing; with `since` configured, most runs
@@ -315,6 +325,7 @@ latchkey auth set chatgpt -H "Cookie: cf_clearance=$(pbpaste)"
 |------------------------------------------------------------|---------------------------------------|
 | `/backend-api/me`                                          | Identify the calling user             |
 | `/backend-api/conversations?offset=&limit=&order=updated`  | Paginated listing, newest first       |
+| the same, `&is_archived=true`                              | The archived conversations, which the plain listing leaves out |
 | `/backend-api/conversation/{id}`                           | Full message tree for one conversation |
 | `/backend-api/files/{id}/download`                         | Signed URL for one attachment         |
 

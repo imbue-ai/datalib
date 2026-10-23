@@ -280,7 +280,9 @@ impl Fifo {
             .custom_flags(libc::O_NONBLOCK)
             .open(&making)
             .with_context(|| format!("open {} to listen", making.display()))?;
-        let rx = AsyncFd::with_interest(read, Interest::READABLE)
+        // SAFETY: the `File` owns its descriptor, so it stays open and the
+        // same until the `AsyncFd` that owns the `File` drops it.
+        let rx = unsafe { AsyncFd::register_with_interest(read, Interest::READABLE) }
             .with_context(|| format!("watch {}", making.display()))?;
         let hold = std::fs::OpenOptions::new()
             .write(true)

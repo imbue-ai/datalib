@@ -242,13 +242,17 @@ impl ChatGPTClient {
         Ok(me)
     }
 
+    /// One page of the conversations, or of the archived ones: the
+    /// plain listing leaves an archived conversation out.
     pub async fn list_conversations_page(
         &self,
         offset: usize,
         limit: usize,
+        archived: bool,
     ) -> Result<Value, ChatGPTError> {
+        let archived = if archived { "&is_archived=true" } else { "" };
         self.get(&format!(
-            "/backend-api/conversations?offset={offset}&limit={limit}&order=updated"
+            "/backend-api/conversations?offset={offset}&limit={limit}&order=updated{archived}"
         ))
         .await
     }

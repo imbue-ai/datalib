@@ -92,7 +92,7 @@ regex = "1.11"
 # root store, hence `rustls-no-provider` and `datalib_fetch::tls_config()`
 # on every client.
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls-no-provider"] }
-runfiles = "0.2"
+runfiles = "0.3"
 # `debug-embed`: without it a debug build reads the UI from the
 # compile-time path at run time, which a Bazel-built binary cannot.
 rust-embed = { version = "8", features = ["debug-embed", "interpolate-folder-path"] }

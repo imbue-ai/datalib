@@ -63,6 +63,11 @@ export class Resolver<V> {
     if (dropped.size > 0) this.notify(dropped);
   }
 
+  /** Every key whose answer so far passes `test`. */
+  keysWhere(test: (value: V) => boolean): string[] {
+    return [...this.known].filter(([, v]) => test(v)).map(([k]) => k);
+  }
+
   /** Ask again about every key that has an answer, keeping each answer
    *  until its new one lands; subscribers hear only of keys whose answer
    *  changed, or vanished. */

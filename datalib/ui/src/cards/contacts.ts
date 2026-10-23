@@ -392,8 +392,9 @@ export async function searchContacts(q: string): Promise<ContactSummary[]> {
   return r.contacts;
 }
 
-// Every edit forgets the handles it touched, so every document and grid
-// showing them draws them again from the next answer.
+// Every edit forgets the handles it touched, and the other handles of a
+// contact it changed, so every document, grid and card showing them draws
+// them again from the next answer.
 
 export async function createContact(name: string, handles: string[]): Promise<string> {
   const id = (await post<{ contact_id: string }>("/contacts", { name, handles })).contact_id;
@@ -401,19 +402,28 @@ export async function createContact(name: string, handles: string[]): Promise<st
   return id;
 }
 
+/** `handle` and every handle of `contactId` held so far: each one's
+ *  answer carries the contact, and with it the list of its handles. */
+function withItsContact(handle: string, contactId: string | undefined): string[] {
+  if (!contactId) return [handle];
+  return [handle, ...people.keysWhere((who) => who.mine?.key === contactId)];
+}
+
 export async function linkHandle(handle: string, contactId: string): Promise<void> {
+  const before = people.get(handle)?.mine?.key;
   await post("/link", { handle, contact_id: contactId });
-  people.forget([handle]);
+  people.forget([...withItsContact(handle, contactId), ...withItsContact(handle, before)]);
 }
 
 export async function unlinkHandle(handle: string): Promise<void> {
+  const owner = people.get(handle)?.mine?.key;
   await post("/unlink", { handle });
-  people.forget([handle]);
+  people.forget(withItsContact(handle, owner));
 }
 
 export async function setStoppedWorking(handle: string, by: string | null): Promise<void> {
   await post("/stopped_working", { handle, by });
-  people.forget([handle]);
+  people.forget(withItsContact(handle, people.get(handle)?.mine?.key));
 }
 
 // A merge or a delete moves every handle of a contact, which this page
