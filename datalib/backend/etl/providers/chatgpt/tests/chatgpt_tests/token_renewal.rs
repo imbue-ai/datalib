@@ -63,7 +63,7 @@ async fn an_expired_token_is_renewed_once_and_each_request_retried() {
         .renew_with(sign_in_as(tape.path(), "u-1", &count));
 
     let (me, page) = playback::scope(tape.path(), async {
-        tokio::join!(client.me(), client.list_conversations_page(0, 100))
+        tokio::join!(client.me(), client.list_conversations_page(0, 100, false))
     })
     .await;
     assert_eq!(me.unwrap()["id"], "u-1");
@@ -82,7 +82,7 @@ async fn a_sign_in_as_another_account_is_not_used() {
         .holding_account(Some("u-1".into()))
         .renew_with(sign_in_as(tape.path(), "u-2", &count));
 
-    let err = playback::scope(tape.path(), client.list_conversations_page(0, 100))
+    let err = playback::scope(tape.path(), client.list_conversations_page(0, 100, false))
         .await
         .unwrap_err()
         .to_string();

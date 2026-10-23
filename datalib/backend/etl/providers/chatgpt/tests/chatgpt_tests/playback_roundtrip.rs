@@ -45,8 +45,9 @@ async fn chatgpt_synth_playback_extract_roundtrip() {
     );
 
     let report = ChatgptSynth::new(&api).synthesize(&playback).unwrap();
-    // me + 1 listing page + 1 terminator + 2 conv = 5
-    assert_eq!(report.fixtures_written, 5);
+    // me + 1 listing page + 1 terminator + the empty archived listing
+    // + 2 conv = 6
+    assert_eq!(report.fixtures_written, 6);
 
     // Open here and close before the store is read back: the file
     // takes one writer at a time.
