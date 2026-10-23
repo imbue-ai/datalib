@@ -209,7 +209,10 @@ A grid draws a chip from an `identity` typed cell
   (`NormalizedChat::named_after`: a DM's other party, an untitled
   group's members); chat-common writes them as `subject` terms on the
   document's row, and the applet reads them beside the row with the name
-  this conversation knows each by, most active first.
+  this conversation knows each by, most active first. The search list
+  titles a result and its preview by the same people
+  (`contacts.ts::peopleTitle`): one person's chip, or for several one
+  pill with their photos overlapping and each name a chip of its own.
 - **A group or a step**: the cell's `entity` is the URI, *beside* a
   bare `id`. The id stays bare because other code keys on it: the
   document view stores a source's "always load images" setting under
@@ -315,6 +318,19 @@ the rules are pure functions over the parsed stamp:
   viewer's zone, which is how the search reads a bare day); everything
   before it or after it.
 - **double-click**: a search card for its day.
+
+**A span is two dates read as one.** A render writes an event's start
+and end as two `<time>`s in a `<span class="time-range">`; where the end
+falls on the start's day in the viewer's zone it shows its clock alone
+(`Fri, Sep 18, 2026, 19:00 – 22:00`), and otherwise its own day
+(`rangeEndText`). The calendar's "When", its occurrences and its
+cancelled dates are written this way, so no date on its page is text.
+
+**A date in the search field is one too.** A value of a key that takes
+dates (`after:`, `before:`) that reads as a day or an instant is drawn
+as the same chip in the text where it was typed (`queryText.ts::dateWords`).
+Its clicks are a field chip's — one selects it, two open it as text — and
+it has no menu there.
 
 **Any chip in a document drags as its search.** `chipDragQuery` gives
 what a chip stands for in a search bar — everything with a person or a

@@ -12,7 +12,7 @@ import { iconUrl } from "@/config/icons";
 import { formatRelative } from "@/config/timeFormat";
 import { documentView } from "./libs/documentView";
 import { markWords } from "./search";
-import { chipCell, people } from "./contacts";
+import { people, peopleTitle } from "./contacts";
 import { handleFromUri } from "./chipLinks";
 
 const props = defineProps<{
@@ -156,18 +156,26 @@ function title(row: SearchRow): string {
 const peopleAnswered = ref(0);
 const stopPeople = people.subscribe(() => peopleAnswered.value++);
 
-function contactHandle(row: SearchRow): string | null {
-  return row.contact_ref ? handleFromUri(row.contact_ref.id) : null;
+/// Who a row is titled by: a contact's own row by the contact, a
+/// conversation named after its people by them; empty for a row titled
+/// by its name.
+function titlePeople(row: SearchRow): { handle: string; shownAs: string }[] {
+  const contact = row.contact_ref ? handleFromUri(row.contact_ref.id) : null;
+  if (contact) return [{ handle: contact, shownAs: row.contact_ref!.label }];
+  return (row.subject_ref ?? []).flatMap((p) => {
+    const handle = handleFromUri(p.id);
+    return handle ? [{ handle, shownAs: p.label }] : [];
+  });
 }
 
-function drawContact(el: unknown, row: SearchRow) {
-  const handle = contactHandle(row);
-  if (!(el instanceof HTMLElement) || !handle) return;
-  const chip = chipCell(handle, row.contact_ref!.label, people.lookup(handle), false);
-  // The row is picked by a click anywhere on it, the chip included; the
+function drawTitle(el: unknown, row: SearchRow) {
+  const named = titlePeople(row);
+  if (!(el instanceof HTMLElement) || named.length === 0) return;
+  const title = peopleTitle(named);
+  // The row is picked by a click anywhere on it, the chips included; a
   // chip's href is for a copy, never to be followed from here.
-  chip.addEventListener("click", (e) => e.preventDefault());
-  el.replaceChildren(chip);
+  title.addEventListener("click", (e) => e.preventDefault());
+  el.replaceChildren(title);
 }
 
 function when(iso: string | null): string {
@@ -229,8 +237,8 @@ onBeforeUnmount(() => {
             <span class="sc-text">
               <span class="sc-line">
                 <strong
-                  v-if="contactHandle(r)"
-                  :ref="(el) => drawContact(el, r)"
+                  v-if="titlePeople(r).length"
+                  :ref="(el) => drawTitle(el, r)"
                   class="sc-title"
                   :data-answered="peopleAnswered"
                 />
@@ -266,8 +274,8 @@ onBeforeUnmount(() => {
             alt=""
           />
           <strong
-            v-if="contactHandle(picked)"
-            :ref="(el) => drawContact(el, picked!)"
+            v-if="titlePeople(picked).length"
+            :ref="(el) => drawTitle(el, picked!)"
             class="sc-title"
             :data-answered="peopleAnswered"
           />

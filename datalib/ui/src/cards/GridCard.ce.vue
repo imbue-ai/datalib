@@ -47,10 +47,14 @@ import { entities, entityCopyText } from "./entities";
 import {
   canLinkHandles,
   chipCell,
+  contactsById,
   handleKind,
   copyText as copyHandleText,
+  nameOf,
   people,
 } from "./contacts";
+import { CONTACT } from "@/search/queryText";
+import { dateText, parseStamp } from "./dates";
 import {
   CHIP_SELECTOR,
   chipCardSource,
@@ -135,7 +139,7 @@ import {
 import { searchFailure, type SearchFailure } from "./searchFailure";
 import { DEFAULT_QUERY, PLAIN_HINT, searchPlaceholder } from "./searchDefaults";
 import SearchList from "./SearchList.ce.vue";
-import { freeText, pickedSource, setSource } from "./search";
+import { freeText, pickedSource, searchTitle, setSource } from "./search";
 import SearchField from "@/search/SearchField.vue";
 import { iconUrl } from "@/config/icons";
 import { lastSearchView, rememberSearchView, type SearchViewId } from "./searchViewPref";
@@ -227,10 +231,33 @@ the one you picked last.</p>
 );
 
 // An unnamed card's name tracks the live query, not just the factory
-// argument — searching from inside the card renames it.
+// argument — searching from inside the card renames it — and calls a
+// person in it by their name once it is known, and a date as its chip.
+function shownValue(value: string): string | null {
+  const stamp = parseStamp(value);
+  if (stamp) return dateText(stamp);
+  if (value.startsWith(CONTACT)) {
+    const contact = contactsById.lookup(value.slice(CONTACT.length));
+    return contact ? nameOf(contact) : null;
+  }
+  if (!handleKind(value)) return null;
+  const who = people.lookup(value);
+  const record = who?.mine ?? who?.sourceContacts[0];
+  return record ? nameOf(record) : null;
+}
+const namesAnswered = ref(0);
+const stopTitlePeople = people.subscribe(() => namesAnswered.value++);
+const stopTitleContacts = contactsById.subscribe(() => namesAnswered.value++);
+onBeforeUnmount(() => {
+  stopTitlePeople();
+  stopTitleContacts();
+});
 watch(
-  query,
-  (q) => props.ctx.setTitle(props.name ?? (q && q !== DEFAULT_QUERY ? `Search: ${q}` : "Search")),
+  [query, namesAnswered],
+  ([q]) =>
+    props.ctx.setTitle(
+      props.name ?? (q && q !== DEFAULT_QUERY ? searchTitle(q, shownValue) : "Search"),
+    ),
   { immediate: true },
 );
 const rows = shallowRef<Row[]>([]);

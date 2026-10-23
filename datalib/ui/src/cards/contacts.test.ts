@@ -27,6 +27,7 @@ import {
   people,
   linkHandle,
   unlinkHandle,
+  peopleTitle,
 } from "./contacts";
 
 function dom(html: string): HTMLElement {
@@ -473,5 +474,34 @@ describe("an edit to a link", () => {
     await unlinkHandle("email:will@alaska.test");
     expect(people.get("email:wriker@enterprise.test")).toBeUndefined();
     expect(people.get("email:worf@k.test")).toBeDefined();
+  });
+});
+
+describe("a conversation titled by its people", () => {
+  /** A chat named after its people was titled with the text the source
+   *  showed, so a WhatsApp stranger read as a raw id and a group as a
+   *  comma list nobody could click. */
+  it("is one person's chip, or for several their photos together and each name a chip", () => {
+    const one = peopleTitle([
+      { handle: "whatsapp:100000000000108", shownAs: "WhatsApp user …0108" },
+    ]);
+    expect(one.matches("a.chip[data-handle='whatsapp:100000000000108']")).toBe(true);
+    expect(one.textContent).toBe("WhatsApp user …0108");
+
+    const crew = peopleTitle([
+      { handle: "tel:+17015550101", shownAs: "William Riker" },
+      { handle: "tel:+17015550102", shownAs: "Data" },
+      { handle: "tel:+17015550103", shownAs: "Geordi La Forge" },
+    ]);
+    expect(crew.classList.contains("chip-group")).toBe(true);
+    expect(crew.querySelectorAll(".chip-group-faces > *")).toHaveLength(3);
+    const names = [...crew.querySelectorAll<HTMLElement>("a.chip[data-handle]")];
+    expect(names.map((a) => a.dataset.handle)).toEqual([
+      "tel:+17015550101",
+      "tel:+17015550102",
+      "tel:+17015550103",
+    ]);
+    expect(names.every((a) => !a.querySelector(".handle-photo, .handle-initial"))).toBe(true);
+    expect(crew.textContent).toContain("William Riker, Data, Geordi La Forge");
   });
 });

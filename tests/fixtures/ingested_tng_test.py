@@ -1283,6 +1283,18 @@ class IngestedTngPipelineTest(unittest.TestCase):
             ['tel:+17015550105|["Deanna Troi"]|Starfleet|Counselor|0'],
             "a WhatsApp reactor who writes nothing, under her address-book entry",
         )
+        # A stranger WhatsApp knows by a linked id alone, mapped to no
+        # number and named nowhere: still a handle, so their message is a
+        # chip and their chat is titled as a person, not by the raw id.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT DISTINCT author_handle || '|' || conversation_name FROM grid_rows "
+                "WHERE provider = 'whatsapp' AND author_handle LIKE 'whatsapp:%';",
+            ),
+            ["whatsapp:100000000000108|WhatsApp user …0108"],
+            "a linked id with no number or name",
+        )
         # A 1:1 chat leaves an incoming reaction's sender empty, as it does
         # a message's: the chat's person reacted. The account's own
         # reaction names nobody.

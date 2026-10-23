@@ -22,7 +22,7 @@ use datalib_schema::providers::Provider;
 
 use crate::rrule;
 use crate::types::{EventShape, NormalizedEvent};
-use crate::when::{display_range, EventTime, Unresolved};
+use crate::when::{EventTime, Unresolved};
 
 /// What a provider parameterizes.
 #[derive(Debug, Clone)]
@@ -200,10 +200,48 @@ fn kind_of(event: &NormalizedEvent) -> &'static str {
 }
 
 fn when_line(event: &NormalizedEvent) -> Option<String> {
+    let zone = event.calendar_time_zone.as_deref();
     event
         .start
         .as_ref()
-        .map(|s| display_range(s, event.end.as_ref()))
+        .map(|s| range_html(s, event.end.as_ref(), zone))
+}
+
+/// A time as the page writes it: a `<time>` the viewer draws as a date
+/// chip in its reader's zone, a day for an all-day date and the instant
+/// for a time that resolves to one; else the wall clock as written.
+/// `zone` is the calendar's, for a floating time.
+fn time_html(t: &EventTime, zone: Option<&str>) -> String {
+    match t {
+        EventTime::Date(d) => stamp_text_html(&d.format("%Y-%m-%d").to_string()),
+        EventTime::At { .. } => match t.instant(zone) {
+            Ok(i) => stamp_text_html(&i.at.to_rfc3339()),
+            Err(_) => escape_md_inline(&t.display()),
+        },
+    }
+}
+
+/// An event's span: its start and end as two dates in a `time-range`
+/// the viewer reads as one (the end shows its clock alone on the start's
+/// day), and an all-day event's days, its exclusive end (RFC 5545
+/// §3.6.1) taken back to the last day it covers.
+fn range_html(start: &EventTime, end: Option<&EventTime>, zone: Option<&str>) -> String {
+    let span = |a: &str, b: &str| format!("<span class=\"time-range\">{a} – {b}</span>");
+    match (start, end) {
+        (EventTime::Date(s), Some(EventTime::Date(e))) => {
+            let last = *e - chrono::Duration::days(1);
+            let from = time_html(start, zone);
+            if last <= *s {
+                format!("{from} (all day)")
+            } else {
+                let to = time_html(&EventTime::Date(last), zone);
+                format!("{} (all day)", span(&from, &to))
+            }
+        }
+        (EventTime::Date(_), _) => format!("{} (all day)", time_html(start, zone)),
+        (s, Some(e)) => span(&time_html(s, zone), &time_html(e, zone)),
+        (s, None) => time_html(s, zone),
+    }
 }
 
 fn repeats_lines(event: &NormalizedEvent) -> Vec<String> {
@@ -266,7 +304,7 @@ fn render_markdown(
     // is text escaped where it is pushed.
     let mut facts: Vec<(&str, String)> = Vec::new();
     if let Some(w) = when_line(event) {
-        facts.push(("When", escape_md_inline(&w)));
+        facts.push(("When", w));
     }
     for r in repeats_lines(event) {
         facts.push(("Repeats", escape_md_inline(&r)));
@@ -282,7 +320,11 @@ fn render_markdown(
         };
         facts.push((
             "Occurrence of",
-            escape_md_inline(&format!("{of}, originally {}", original_start.display())),
+            format!(
+                "{}, originally {}",
+                escape_md_inline(&of),
+                time_html(original_start, event.calendar_time_zone.as_deref())
+            ),
         ));
     }
     if let Some(l) = &event.location {
@@ -348,13 +390,14 @@ fn render_markdown(
                 md_code_span(&format!("RRULE:{r}"))
             ));
         }
+        let zone = event.calendar_time_zone.as_deref();
         if !changed.is_empty() {
             out.push_str("Changed:\n\n");
             for c in changed {
                 let now = c
                     .start
                     .as_ref()
-                    .map(EventTime::display)
+                    .map(|t| time_html(t, zone))
                     .unwrap_or_else(|| "no start".into());
                 let title = c
                     .title
@@ -363,9 +406,8 @@ fn render_markdown(
                     .map(|t| format!(" — {}", escape_md_inline(t)))
                     .unwrap_or_default();
                 out.push_str(&format!(
-                    "- {} → {}{title}\n",
-                    escape_md_inline(&c.original_start.display()),
-                    escape_md_inline(&now),
+                    "- {} → {now}{title}\n",
+                    time_html(&c.original_start, zone),
                 ));
             }
             out.push('\n');
@@ -373,14 +415,14 @@ fn render_markdown(
         if !cancelled.is_empty() {
             out.push_str("Cancelled:\n\n");
             for c in cancelled {
-                out.push_str(&format!("- {}\n", escape_md_inline(&c.display())));
+                out.push_str(&format!("- {}\n", time_html(c, zone)));
             }
             out.push('\n');
         }
         if !rdates.is_empty() {
             out.push_str("Added dates:\n\n");
             for d in rdates {
-                out.push_str(&format!("- {}\n", escape_md_inline(&d.display())));
+                out.push_str(&format!("- {}\n", time_html(d, zone)));
             }
             out.push('\n');
         }
@@ -567,6 +609,48 @@ fn text_block(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// "When" was its own text in the event's zone, beside every other
+    /// date on the page drawn as a chip in the reader's. Each end is a
+    /// `<time>` now, the two a span the viewer reads as one, and an
+    /// all-day end is still taken back to the last day it covers.
+    #[test]
+    fn an_events_span_is_two_date_chips() {
+        let d = |v| EventTime::from_ical(v, None).unwrap();
+        let la = Some("America/Los_Angeles");
+        let at = |v| EventTime::from_ical(v, la).unwrap();
+        let week = range_html(&d("20260713"), Some(&d("20260718")), None);
+        assert!(
+            week.starts_with("<span class=\"time-range\"><time datetime=\"2026-07-13\">"),
+            "{week}"
+        );
+        assert!(week.contains("<time datetime=\"2026-07-17\">"), "{week}");
+        assert!(week.ends_with("</span> (all day)"), "{week}");
+        let day = range_html(&d("20260202"), Some(&d("20260203")), None);
+        assert!(
+            !day.contains("time-range") && day.ends_with(" (all day)"),
+            "{day}"
+        );
+        assert!(day.contains("datetime=\"2026-02-02\""), "{day}");
+        let evening = range_html(&at("20260918T190000"), Some(&at("20260918T220000")), None);
+        assert!(
+            evening.contains("datetime=\"2026-09-18T19:00:00-07:00\""),
+            "{evening}"
+        );
+        assert!(
+            evening.contains("datetime=\"2026-09-18T22:00:00-07:00\""),
+            "{evening}"
+        );
+        let floating = range_html(
+            &EventTime::from_ical("20260922T143000", None).unwrap(),
+            None,
+            la,
+        );
+        assert!(
+            floating.contains("datetime=\"2026-09-22T14:30:00-07:00\""),
+            "{floating}"
+        );
+    }
+
     use super::*;
     use crate::types::{Attendee, EventLink, OccurrenceRef, Person, SeriesRef};
 
@@ -695,7 +779,13 @@ mod tests {
             None,
         ));
         assert!(
-            md.contains("| When | Mon 5 Jan 2026, 09:00–10:00 (America/Los_Angeles) |"),
+            md.contains(
+                "| When | <span class=\"time-range\"><time datetime=\"2026-01-05T09:00:00-08:00\""
+            ),
+            "{md}"
+        );
+        assert!(
+            md.contains("<time datetime=\"2026-01-05T10:00:00-08:00\""),
             "{md}"
         );
         assert!(
@@ -703,8 +793,19 @@ mod tests {
             "{md}"
         );
         assert!(md.contains("Rule: `RRULE:FREQ=WEEKLY;BYDAY=MO,TH;UNTIL=20261231T170000Z`"));
-        assert!(md.contains("- Thu 12 Mar 2026, 09:00 (America/Los_Angeles) → Thu 12 Mar 2026, 11:00 (America/Los_Angeles) — Senior staff briefing — Borg incursion"), "{md}");
-        assert!(md.contains("Cancelled:\n\n- Mon 9 Feb 2026, 09:00 (America/Los_Angeles)"));
+        let changed = md
+            .lines()
+            .find(|l| l.ends_with("— Senior staff briefing — Borg incursion"))
+            .unwrap_or_else(|| panic!("the changed occurrence: {md}"));
+        assert!(
+            changed.starts_with("- <time datetime=\"2026-03-12T09:00:00-07:00\"")
+                && changed.contains(" → <time datetime=\"2026-03-12T11:00:00-07:00\""),
+            "{changed}"
+        );
+        assert!(
+            md.contains("Cancelled:\n\n- <time datetime=\"2026-02-09T09:00:00-08:00\""),
+            "{md}"
+        );
         assert!(
             md.contains(
                 "| [Deanna Troi](mailto:troi@enterprise.test \"Deanna Troi <troi@enterprise.test>\") | Maybe |"
@@ -786,7 +887,12 @@ mod tests {
             Some("Series: Senior staff briefing")
         );
         let md = join(&render_markdown(&profile(), &moved, "tng_calendar", None));
-        assert!(md.contains("| Occurrence of | Senior staff briefing, originally Thu 12 Mar 2026, 09:00 (America/Los_Angeles) |"), "{md}");
+        assert!(
+            md.contains(
+                "| Occurrence of | Senior staff briefing, originally <time datetime=\"2026-03-12T09:00:00-07:00\""
+            ),
+            "{md}"
+        );
     }
 
     #[test]
