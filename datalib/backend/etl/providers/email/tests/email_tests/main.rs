@@ -7,6 +7,7 @@ mod gmail_interrupt;
 mod gmail_label_lifecycle;
 mod gmail_label_union;
 mod gmail_run_problems;
+mod gmail_takeout_seed;
 mod gmail_widened_labels_backfill;
 mod jmap_full_resync_prunes;
 mod jmap_interrupt;

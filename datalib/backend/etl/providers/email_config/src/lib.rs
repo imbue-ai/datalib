@@ -58,11 +58,14 @@ pub struct EmailConfig {
     #[serde(default)]
     pub jmap: Option<EmailSync>,
     /// Gmail REST API knobs. `Some` selects the Gmail download path.
-    /// Mutually exclusive with the other two.
+    /// Excludes `jmap`; beside `mbox`, the mbox is a Google Takeout of
+    /// the same account that the API starts from.
     #[serde(default)]
     pub gmail: Option<EmailGmailApi>,
     /// The mbox path: where the `.mbox` is, plus the account row to
     /// synthesize for it (JMAP and Gmail learn that from the server).
+    /// Beside `gmail`, only `path` is read: the account is the one Gmail
+    /// signs in as.
     #[serde(default)]
     pub mbox: Option<MboxSync>,
     /// Retired here: `outlink_format` belongs on the render step's
@@ -144,22 +147,32 @@ impl EmailConfig {
     }
 
     /// Provider-local validation, run by the step planner at config load:
-    /// at most one download mode is selected and each one's own fields
-    /// hang together.
+    /// at most one live mode is selected, an mbox sits only beside Gmail,
+    /// and each mode's own fields hang together.
     pub fn validate(&self) -> anyhow::Result<()> {
         self.latchkey_settings
             .validate()
             .map_err(anyhow::Error::msg)?;
         let live = self.live_mode()?;
-        if live.is_some() && self.mbox.is_some() {
-            anyhow::bail!(
-                "email source sets a live download mode and `mbox` — pick one. To mirror \
-                 the same account two ways, declare two sources."
-            );
+        match (&live, &self.mbox) {
+            (Some(EmailLiveMode::Jmap(_)), Some(_)) => anyhow::bail!(
+                "email source sets `jmap` and `mbox` — pick one. Only a Gmail account can \
+                 start from an mbox, a Google Takeout: its messages carry Gmail's ids."
+            ),
+            (Some(EmailLiveMode::GmailApi(_)), Some(mbox)) => mbox.validate_beside_gmail()?,
+            _ => {}
         }
         match live {
             Some(EmailLiveMode::GmailApi(gmail)) => gmail.validate(),
             _ => Ok(()),
+        }
+    }
+
+    /// The Google Takeout a Gmail source starts from, when it names one.
+    pub fn takeout(&self) -> Option<PathBuf> {
+        match (&self.gmail, &self.mbox) {
+            (Some(_), Some(mbox)) => Some(mbox.path()),
+            _ => None,
         }
     }
 }
@@ -217,6 +230,29 @@ pub struct MboxSync {
 impl MboxSync {
     pub fn path(&self) -> PathBuf {
         expand_tilde(&self.path)
+    }
+
+    /// Beside `gmail` the account row is Gmail's, so a field that would
+    /// describe a second one is a mistake, not a setting.
+    fn validate_beside_gmail(&self) -> anyhow::Result<()> {
+        let set: Vec<&str> = [
+            ("account_id", self.account_id.is_some()),
+            ("display_name", self.display_name.is_some()),
+            ("email_address", self.email_address.is_some()),
+            ("is_personal", self.is_personal.is_some()),
+        ]
+        .into_iter()
+        .filter_map(|(key, is_set)| is_set.then_some(key))
+        .collect();
+        if set.is_empty() {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "email `mbox` beside `gmail` is the account's Takeout, filed under the account \
+             Gmail signs in as, so `mbox.{}` does nothing there. Remove it; `gmail` has \
+             its own `account_id`, `display_name` and `email_address`.",
+            set.join("`, `mbox.")
+        )
     }
 }
 
@@ -283,9 +319,6 @@ pub struct EmailGmailApi {
 /// Gmail's per-user quota is 6000 units/minute. Default below it so
 /// retries and a little clock skew don't push us into rate limits.
 pub const DEFAULT_QUOTA_UNITS_PER_MINUTE: u32 = 5_000;
-/// Quota cost of one `users.messages.get`, per Google's quota table.
-/// The dominant cost of any backfill.
-pub const GMAIL_UNITS_MESSAGES_GET: u32 = 20;
 /// Enough in flight to hide per-request latency; the quota throttle, not
 /// this, is what actually bounds throughput.
 pub const DEFAULT_GMAIL_CONCURRENCY: usize = 8;
@@ -364,17 +397,50 @@ mod tests {
         assert!(err.contains("gmail"), "{err}");
     }
 
-    /// A live mode beside an mbox table is the same mistake in a
-    /// different shape.
+    /// A JMAP server's ids are its own, so a Takeout beside it would
+    /// double every message rather than seed it.
     #[test]
-    fn rejects_a_live_mode_beside_an_mbox() {
+    fn rejects_jmap_beside_an_mbox() {
         let cfg: EmailConfig = serde_json::from_value(serde_json::json!({
-            "gmail": {},
+            "jmap": { "hostname": "api.fastmail.com" },
             "mbox": { "path": "/mail.mbox" },
         }))
         .unwrap();
         let err = cfg.validate().unwrap_err().to_string();
         assert!(err.contains("mbox"), "{err}");
+        assert!(cfg.takeout().is_none());
+    }
+
+    /// Gmail beside an mbox is a Takeout the API starts from: the one
+    /// pairing of methods the email source accepts.
+    #[test]
+    fn accepts_gmail_beside_a_takeout() {
+        let cfg: EmailConfig = serde_json::from_value(serde_json::json!({
+            "gmail": {},
+            "mbox": { "path": "~/Takeout/Mail" },
+        }))
+        .unwrap();
+        cfg.validate().unwrap();
+        assert!(cfg.takeout().unwrap().ends_with("Takeout/Mail"));
+        assert!(matches!(
+            cfg.live_mode().unwrap(),
+            Some(EmailLiveMode::GmailApi(_))
+        ));
+    }
+
+    /// The account a Takeout is filed under is the one Gmail signs in
+    /// as; a second account named on the mbox would be ignored, so it is
+    /// refused by name.
+    #[test]
+    fn refuses_an_mbox_account_beside_gmail() {
+        let cfg: EmailConfig = serde_json::from_value(serde_json::json!({
+            "gmail": {},
+            "mbox": { "path": "/mail.mbox", "account_id": "old", "display_name": "Old" },
+        }))
+        .unwrap();
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("mbox.account_id"), "{err}");
+        assert!(err.contains("mbox.display_name"), "{err}");
     }
 
     #[test]

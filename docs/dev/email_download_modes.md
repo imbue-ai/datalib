@@ -9,6 +9,7 @@ relative to it), `email_render/` and `email_config/`.
 | JMAP | `[steps.params.jmap]` | Fastmail, Stalwart, any RFC 8620+8621 server |
 | Gmail API | `[steps.params.gmail]` | a Gmail / Google Workspace account |
 | mbox | `[steps.params.mbox] path = …` | a Google Takeout export |
+| Gmail API from a Takeout | both tables, in one step | a Gmail account with a Takeout of it to start from (§3, "Starting from a Takeout") |
 
 Render reads only the raw store, so it is mode-agnostic and needs no
 changes when a mode is added. See
@@ -20,7 +21,8 @@ the JMAP mode can use — is in [`fastmail.md`](fastmail.md).
 
 Two of the three have a wizard form: **Gmail** and **Fastmail** are
 separate entries in `datalib/ui/src/config/catalog.ts`, each writing the
-table that selects its mode. They are not one form with a mode dropdown
+table that selects its mode; the Gmail form also asks whether to start
+from a Takeout, and writes `mbox.path` beside `gmail` when it does. They are not one form with a mode dropdown
 — they authenticate against different latchkey services and want
 different words on screen — and `variantKey` is what tells two entries
 of one step type apart. The mbox mode, and a JMAP server other than
@@ -214,7 +216,7 @@ same namespacing discipline as the JMAP path's `jmap:` keys. A run:
    error: with no cursor to replay from — that, a first run, or
    `full_resync` — the run stores the `historyId` the profile reported
    before any walk, and forgets which labels were listed whole. What is
-   already held is not fetched again, at 20 units a message; so a label
+   already held is not fetched again, at 60 units a message; so a label
    change made while no cursor was replaying is not seen.
 2. **Walks `messages.list`** over each configured label (or the whole
    account) that has no `listed_whole` row, listing each page's ids. A
@@ -228,7 +230,9 @@ same namespacing discipline as the JMAP path's `jmap:` keys. A run:
 3. **Fetches what is owed** with `messages.get?format=RAW`, newest id
    first: a listed message not held at its listed `historyId`, and one
    held with no `.eml` stored that now fits under
-   `blob_size_limit_bytes`. The loop is the shared `owed::drain`: one
+   `blob_size_limit_bytes`. A message whose `.eml` the store already
+   holds — a relabel, or a Takeout's — is owed only its labels, and
+   costs a third as much: below. The loop is the shared `owed::drain`: one
    `messages.get` per request, and a flush of 200 messages, or 32 MB of
    their raw bytes if that comes first, written as the `.eml` bytes
    into the CAS and then the email rows, thread rows, `.eml` edges and
@@ -250,14 +254,21 @@ no email is ever without its thread row.
 
 Quota-limited rather than byte-limited:
 
-- 6000 quota units per user per minute; `messages.get` costs 20 ⇒ **~300
-  messages/minute**, regardless of message size.
+- 6000 quota units per user per minute. `messages.get` costs 60 with
+  `format=RAW`, which carries the message, ⇒ **~100 messages/minute**,
+  regardless of message size; 20 with `format=MINIMAL`, which carries
+  the labels and thread and nothing else ([Google's table](https://developers.google.com/workspace/gmail/api/reference/quota)).
 - The daily project ceiling (80M units) is not the binding constraint —
   the per-minute cap holds one account to ~8.6M units/day. Google bills
   for usage past the daily threshold from 2026-05-01.
 
 `QuotaThrottle` is a leaky bucket priced in **units**, not requests, so a
-mixed workload meters accurately. It is the first line, not the last:
+mixed workload meters accurately. It holds ten seconds of its rate, so
+no minute spends more than the ceiling and a sixth: at the default
+5000, under Google's 6000. (A bucket holding a whole minute let a
+run's first minute spend nearly twice the ceiling; measured, the rate
+limit that followed cut the ceiling to half for the rest of the run.)
+It is the first line, not the last:
 Google is the authority on the limit, and the code is built to bump
 into it and keep going, the way the Slack provider does.
 
@@ -286,8 +297,9 @@ into it and keep going, the way the Slack provider does.
   run fetches what is still owed. Only with nothing mirrored at all does
   the run fail outright.
 
-A 100k-message mailbox is still ~6 hours of backfill; the run is
-expected to take that long. `message_budget` stops a run early with a
+A 100k-message mailbox is ~17 hours of backfill; the run is expected
+to take that long, or to start from a Takeout (below), which takes the
+time down to that of the mail newer than the Takeout. `message_budget` stops a run early with a
 partial result and is kept for experiments and the live test, which uses
 it to prove a partial run walks forward; the wizard does not offer it.
 
@@ -295,9 +307,84 @@ it to prove a partial run walks forward; the wizard does not offer it.
 round trips, not quota units, and quota is what binds — so it would add
 multipart encoding for no throughput.
 
+**A message whose bytes are held is asked for its labels alone.** A
+Gmail message's bytes never change; only its labels do. So a listed
+message the store holds an `.eml` for is written again from those
+bytes and its labels, which come from one of two places
+(`MessagesGet::relabel`):
+
+- **A walk of every label**, when that is cheaper: one `messages.list`
+  per label, 5 units a page of 500 ids, and a message no walk names
+  carries no label. `label_walk_pays` prices the walk at one page per
+  label plus the account's size times ten labels a message over 500,
+  against 20 units a message. A walk that fails part-way is not used,
+  since a label it missed would read as one the message lacks.
+- **`messages.get?format=MINIMAL`** otherwise: a relabel or two in an
+  ordinary sync.
+
+Measured on a 27.5k-message account with 32 labels: walking every
+label took 197 pages (985 units, under a minute), and for 150 messages
+sampled at random the walks' labels matched `labelIds` from
+`messages.get` exactly, system labels (`UNREAD`, `CATEGORY_*`, `SPAM`,
+`TRASH`) included.
+
 **Threads are grouped, not fetched.** `threads.get` costs 40 units
 against `messages.get`'s 20, and grouping by `threadId` gives the same
 membership for free.
+
+### Starting from a Takeout
+
+A Gmail source may name a Takeout of the same account beside its
+`gmail` table — the `.mbox`, or the Takeout's `Mail` folder — the way a
+Lightroom source names its backups beside its catalog
+([`config_model.md`](config_model.md) §"Where the data comes from"):
+
+```toml
+[steps.params.gmail]
+
+[steps.params.mbox]
+path = "~/Takeout/Mail"
+```
+
+The Takeout supplies the messages; Gmail says which exist and how
+they are labelled. Each run, after `labels.list` and before anything
+is listed, `mbox::seed` reads the Takeout and adds a message only when
+the store holds no row for it and, once a walk has listed everything
+the source admits, Gmail still lists it. It updates and deletes
+nothing. The API part then runs as above: the first walk of the
+account lists every message, deletes the seeded rows it did not name
+(a whole-account walk deletes every email row of the account it did
+not name, listed or not), and each seeded message is owed only its
+labels.
+
+What makes it work is that the two meet on the same rows (§2): a
+Takeout message's id is Gmail's, from its `From ` line, and its
+`X-GM-THRID` is the API's `threadId` in decimal. Checked against the
+live API on one account: Takeout's bytes are what `format=RAW` returns,
+plus the two headers Takeout adds (`X-GM-THRID`, `X-Gmail-Labels`) and
+the mbox's blank separator line; the mbox reader also turns CRLF line
+ends into LF. So a seeded `.eml` hashes differently from the API's, and
+the store keeps the Takeout's.
+
+Measured on that account (27.5k messages, a Takeout of 25,020 four
+months old): the first sync read the Takeout in 42 seconds, gave 24,983
+messages their labels from the walks, deleted the 37 Gmail no longer
+has, and downloaded only the 2,570 newer ones, for 155k units in all;
+downloading every message would have cost 1.65M. The next sync read
+the Takeout again, added nothing, and took 7 seconds.
+
+Beside `gmail`, the mbox's account fields (`account_id`, …) are
+refused: the mail is filed under the account Gmail signs in as, since
+an mbox run under another account would retire the API's rows. A
+message with no Gmail id on its `From ` line is not this account's
+Takeout and is left out, with a `skipped:takeout` row naming the file.
+JMAP beside an mbox is refused: its ids are its own, so a Takeout
+would double the mailbox rather than seed it.
+
+Every run reads the whole Takeout again (an unchanged one writes
+nothing); local files are cheap to read, and nothing is stored about
+what was read. Deleting the Takeout or dropping `mbox` from the step
+deletes nothing.
 
 ## 4. Traps in the Gmail API
 
@@ -305,7 +392,7 @@ Each of these fails silently: a single run passes.
 
 - **Filter server-side.** `only_extract_labels` narrows
   `messages.list?labelIds=`; checking it after `messages.get` would pay
-  20 units for every message in the account to keep a handful. A
+  60 units for every message in the account to keep a handful. A
   configured name that matches no label is a download problem; when
   *none* match, the run fails, because an empty `labelIds` means
   "everything".
