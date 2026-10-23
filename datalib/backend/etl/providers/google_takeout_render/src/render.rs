@@ -47,7 +47,8 @@ use datalib_schema::providers::Provider;
 /// v8: a Chat message draws its attachments, earlier versions, quote,
 ///     thread, previews, reactions and labels, and a space its name; a
 ///     problem row for every field render leaves unread.
-pub const RENDER_VERSION: u32 = 9;
+/// v10: a Chat message's "Edited" is a `<time>` stamp.
+pub const RENDER_VERSION: u32 = 10;
 
 /// Projection for `BlobBundle::load_many` over the Voice CAS edge: the
 /// `ref_name` (attachment filename) is the bundle key; `content_type`

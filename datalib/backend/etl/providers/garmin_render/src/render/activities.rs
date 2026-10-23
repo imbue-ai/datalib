@@ -4,6 +4,7 @@
 use std::fmt::Write as _;
 
 use datalib_etl_render::html::escape_md_inline;
+use datalib_etl_render::message::stamp_text_html;
 use datalib_etl_timeseries_render::text::thousands;
 use serde_json::Value;
 
@@ -179,7 +180,11 @@ fn pace(type_key: Option<&str>, distance_m: Option<f64>, secs: Option<f64>) -> O
 pub fn body(out: &mut String, a: &Activity, device: Option<&str>) {
     out.push_str("| | |\n| --- | --- |\n");
     for (label, value) in a.facts() {
-        let _ = writeln!(out, "| {label} | {} |", escape_md_inline(&value));
+        let value = match (label, a.start_iso()) {
+            ("Start", Some(start)) => stamp_text_html(&start),
+            _ => escape_md_inline(&value),
+        };
+        let _ = writeln!(out, "| {label} | {value} |");
     }
     if let Some(d) = device {
         let _ = writeln!(out, "| Device | {} |", escape_md_inline(d));

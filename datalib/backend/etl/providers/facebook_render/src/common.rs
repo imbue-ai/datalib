@@ -33,7 +33,8 @@ use serde_json::Value;
 /// v10: a life event's edits are its versions; a friend's Contents
 ///     leaves out their `name/` handle; a post on another page repeating
 ///     its own stamp is no problem.
-pub const RENDER_VERSION: u32 = 10;
+/// v11: a post's "Edited" is a `<time>` stamp.
+pub const RENDER_VERSION: u32 = 11;
 
 pub const SOURCE_LABEL: &str = "Facebook";
 

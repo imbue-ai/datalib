@@ -11,8 +11,10 @@ use datalib_etl_render::front_matter::yaml_scalar;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{escape_md_block, escape_md_inline, md_code_span, md_link_dest};
 use datalib_etl_render::inputs::{Bucket, Buckets};
+use datalib_etl_render::message::{chip_link, stamp_text_html};
 use datalib_etl_render::section::{join, Section};
 use datalib_etl_render::title::Title;
+use datalib_handle::Handle;
 use datalib_schema::edges::EdgeRow;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
@@ -260,12 +262,14 @@ fn render_markdown(
         .render(),
     );
 
+    // Each value is markdown already: a stamp is a `<time>`, the rest
+    // is text escaped where it is pushed.
     let mut facts: Vec<(&str, String)> = Vec::new();
     if let Some(w) = when_line(event) {
-        facts.push(("When", w));
+        facts.push(("When", escape_md_inline(&w)));
     }
     for r in repeats_lines(event) {
-        facts.push(("Repeats", r));
+        facts.push(("Repeats", escape_md_inline(&r)));
     }
     if let EventShape::Occurrence {
         series,
@@ -278,40 +282,40 @@ fn render_markdown(
         };
         facts.push((
             "Occurrence of",
-            format!("{of}, originally {}", original_start.display()),
+            escape_md_inline(&format!("{of}, originally {}", original_start.display())),
         ));
     }
     if let Some(l) = &event.location {
-        facts.push(("Where", l.clone()));
+        facts.push(("Where", escape_md_inline(l)));
     }
-    facts.push(("Calendar", event.calendar_label.clone()));
+    facts.push(("Calendar", escape_md_inline(&event.calendar_label)));
     if let Some(s) = event.status.as_deref().filter(|s| *s != "confirmed") {
-        facts.push(("Status", capitalize(s)));
+        facts.push(("Status", escape_md_inline(&capitalize(s))));
     }
     if event.busy == Some(false) {
         facts.push(("Shows as", "Free".into()));
     }
     if let Some(o) = &event.organizer {
-        if let Some(who) = person_line(o.name.as_deref(), o.email.as_deref()) {
+        if let Some(who) = person_md(o.name.as_deref(), o.email.as_deref()) {
             facts.push(("Organizer", who));
         }
     }
     if let Some(c) = &event.created {
-        facts.push(("Added", c.clone()));
+        facts.push(("Added", stamp_text_html(c)));
     }
     if let Some(m) = &event.modified_at {
-        facts.push(("Last changed", m.clone()));
+        facts.push(("Last changed", stamp_text_html(m)));
     }
     out.push_str("| | |\n| --- | --- |\n");
     for (k, v) in &facts {
-        out.push_str(&format!("| {k} | {} |\n", escape_md_inline(v)));
+        out.push_str(&format!("| {k} | {v} |\n"));
     }
     out.push('\n');
 
     if !event.attendees.is_empty() {
         out.push_str("## Attendees\n\n| Who | Response |\n| --- | --- |\n");
         for a in &event.attendees {
-            let mut who = person_line(a.person.name.as_deref(), a.person.email.as_deref())
+            let mut who = person_md(a.person.name.as_deref(), a.person.email.as_deref())
                 .unwrap_or_else(|| "(unnamed)".into());
             if a.resource {
                 who.push_str(" (room)");
@@ -319,7 +323,7 @@ fn render_markdown(
                 who.push_str(" (optional)");
             }
             let response = a.response.as_deref().map(response_word).unwrap_or("—");
-            out.push_str(&format!("| {} | {response} |\n", escape_md_inline(&who)));
+            out.push_str(&format!("| {who} | {response} |\n"));
         }
         out.push('\n');
     }
@@ -447,6 +451,14 @@ fn build_grid_row(
                 .and_then(|o| o.label())
                 .map(str::to_string),
         )
+        .author_handle(
+            event
+                .organizer
+                .as_ref()
+                .and_then(|o| o.email.as_deref())
+                .and_then(Handle::email)
+                .map(|h| h.as_str().to_string()),
+        )
         .account(profile.account.clone())
         .channel(Some(event.calendar_label.clone()))
         .conversation_name(Some(title))
@@ -504,6 +516,15 @@ fn edges(event: &NormalizedEvent) -> Vec<EdgeRow> {
                 )
             })
             .collect(),
+    }
+}
+
+/// A person on the page: a chip where the invite gives an address
+/// (docs/dev/chips.md), the name as text where it does not.
+fn person_md(name: Option<&str>, email: Option<&str>) -> Option<String> {
+    match email.and_then(Handle::email) {
+        Some(h) => Some(chip_link(name.unwrap_or(""), &h)),
+        None => person_line(name, email).map(|s| escape_md_inline(&s)),
     }
 }
 
@@ -641,7 +662,9 @@ mod tests {
         let (_, body) = md
             .split_once("---\n\n")
             .expect("front matter, then the body");
-        assert!(!body.contains("<script>"), "{body}");
+        // The one raw copy is the guest chip's title, which markdown-it
+        // escapes as the attribute it makes of it (`chip_link`).
+        assert_eq!(body.matches("<script>").count(), 1, "{body}");
         let escaped = "&lt;script&gt;x&lt;/script&gt; &amp; co";
         assert!(body.contains(&format!("| Where | {escaped} |")), "{body}");
         assert!(
@@ -650,7 +673,7 @@ mod tests {
         );
         assert!(
             body.contains(&format!(
-                "| {escaped} &lt;troi@enterprise.test&gt; | Maybe |"
+                "| [{escaped}](mailto:troi@enterprise.test \"{MARKUP} <troi@enterprise.test>\") | Maybe |"
             )),
             "{body}"
         );
@@ -683,13 +706,28 @@ mod tests {
         assert!(md.contains("- Thu 12 Mar 2026, 09:00 (America/Los_Angeles) → Thu 12 Mar 2026, 11:00 (America/Los_Angeles) — Senior staff briefing — Borg incursion"), "{md}");
         assert!(md.contains("Cancelled:\n\n- Mon 9 Feb 2026, 09:00 (America/Los_Angeles)"));
         assert!(
-            md.contains("| Deanna Troi &lt;troi@enterprise.test&gt; | Maybe |"),
+            md.contains(
+                "| [Deanna Troi](mailto:troi@enterprise.test \"Deanna Troi <troi@enterprise.test>\") | Maybe |"
+            ),
+            "a guest with an address is a chip: {md}"
+        );
+        assert!(
+            md.contains(
+                "| Organizer | [Jean-Luc Picard](mailto:picard@enterprise.test \"Jean-Luc Picard <picard@enterprise.test>\") |"
+            ),
             "{md}"
         );
         // Plain text stays plain.
         assert!(md.contains("\\# not a heading"));
         assert!(md.contains("&lt;b&gt;not bold&lt;/b&gt;"));
         assert!(!md.contains("| Status |"), "confirmed is not worth a line");
+        assert!(
+            md.contains(
+                "| Last changed | <time datetime=\"2026-09-02T16:00:00+00:00\" \
+                 title=\"2026-09-02 16:00:00 UTC\">Wed Sep 2nd, 2026 at 16:00</time> |"
+            ),
+            "the stamp every document writes: {md}"
+        );
     }
 
     #[test]

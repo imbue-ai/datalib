@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use datalib_etl_render::html::escape_md_inline;
+use datalib_etl_render::message::stamp_text_html;
 use datalib_etl_timeseries_render::text::thousands;
 use serde_json::Value;
 
@@ -302,7 +303,7 @@ pub fn family_table(out: &mut String, family: Family, days: &Days) {
         .filter(|(_, d)| fields.iter().any(|f| d.values.contains_key(f.key)))
         .take(TABLE_DAYS);
     for (date, d) in rows {
-        let _ = write!(out, "| {date} |");
+        let _ = write!(out, "| {} |", stamp_text_html(date));
         for f in &fields {
             let c = d.values.get(f.key).map(|v| cell(f, v)).unwrap_or_default();
             let _ = write!(out, " {c} |");
@@ -409,7 +410,10 @@ mod tests {
             out.starts_with("| Day | Sleep score | Asleep (h:mm) |\n"),
             "{out}"
         );
-        assert!(out.contains("| 2369-04-13 | 84 | 7:20 |"), "{out}");
+        assert!(
+            out.contains("| <time datetime=\"2369-04-13\">Sun Apr 13th, 2369</time> | 84 | 7:20 |"),
+            "{out}"
+        );
         assert!(!out.contains("Steps"), "{out}");
     }
 }

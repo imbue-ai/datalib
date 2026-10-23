@@ -10,7 +10,7 @@ the parts of that markdown you have to know about before changing it.
 Every message starts with a line like:
 
 ```markdown
-## <span class="msg-author">Picard</span> <time class="msg-ts" datetime="2364-04-11T00:00:00+00:00" title="2364-04-11 00:00:00 UTC">Apr 11th, 2364 at 00:00</time>
+## <span class="msg-author">Picard</span> <time class="msg-ts" datetime="2364-04-11T00:00:00+00:00" title="2364-04-11 00:00:00 UTC">Sat Apr 11th, 2364 at 00:00</time>
 ```
 
 **Keep the `##`.** It is not there to be a heading on screen — the UI
@@ -25,7 +25,9 @@ The visible time is short; the full instant is in the `title`
 attribute, one hover away. It is deliberately absolute rather than
 Slack's "Today at 11:02": this file is written once and read for years,
 so a word meaning "the day this was rendered" would be wrong by the
-next morning.
+next morning. Every other stamp a render writes takes the same form
+([`data_architecture_parse_and_render.md`](../../../../docs/dev/data_architecture_parse_and_render.md)
+§"A stamp on a page").
 
 **An author with a handle is a chip link**, where the provider has
 one (`NormalizedChatItem::author_handle`, `datalib_handle`):

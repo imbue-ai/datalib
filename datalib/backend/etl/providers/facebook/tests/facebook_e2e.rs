@@ -378,7 +378,7 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
         // A post on another page edited after it was posted says so.
         let other_page = docs
             .iter()
-            .find(|d| fs::read_to_string(&d.md_path).is_ok_and(|md| md.contains("Edited 2369-")))
+            .find(|d| fs::read_to_string(&d.md_path).is_ok_and(|md| md.contains("*Edited <time datetime=\"2369-")))
             .map(|d| d.md_path.clone());
         assert!(other_page.is_some(), "the edited post carries its note");
 
