@@ -95,8 +95,10 @@ request and requires the store an uninterrupted run leaves.
    a page fails, or — with `since` set — a page ends past the cutoff.
    Then the same walk again with `&is_archived=true`: the plain listing
    leaves an archived conversation out, so without it archiving a chat
-   deleted it from the mirror. The two are one listing, and it is
-   *complete* only when both walks ran out of pages.
+   deleted it from the mirror. (Measured: an archived chat left the
+   plain listing, was the archived listing's one item, and still
+   answered its detail; unarchived, it came back.) The two are one
+   listing, and it is *complete* only when both walks ran out of pages.
 3. **Prune**, only after a complete walk: a conversation the store
    holds that neither listing named was deleted on chatgpt.com, so
    it is deleted here with its edges (its rows stay in doltlite
