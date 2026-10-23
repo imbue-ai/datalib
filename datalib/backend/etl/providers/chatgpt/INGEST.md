@@ -99,6 +99,11 @@ request and requires the store an uninterrupted run leaves.
    plain listing, was the archived listing's one item, and still
    answered its detail; unarchived, it came back.) The two are one
    listing, and it is *complete* only when both walks ran out of pages.
+   A complete listing can still be short: for about fifteen minutes
+   after that unarchive, the plain listing named 104 of 582
+   conversations, every one of which still answered. A sync then would
+   have deleted the rest, and doltlite history is what brings them
+   back; the next sync after the listing recovers fetches them again.
 3. **Prune**, only after a complete walk: a conversation the store
    holds that neither listing named was deleted on chatgpt.com, so
    it is deleted here with its edges (its rows stay in doltlite
