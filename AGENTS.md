@@ -533,6 +533,12 @@ then add `requirement("newpkg")` to the relevant `BUILD.bazel`. Python is
 only used for fixture / test tooling and scripts; everything shipping is
 Rust.
 
+A version bump also changes the wheel hashes `MODULE.bazel.lock` keeps
+under `facts`, and a local build can keep the old ones: Bazel's hidden
+copy of the lockfile, `$(bazel info output_base)/MODULE.bazel.lock`,
+holds the pip extension's last run. CI then refuses the lock ("has
+changed its facts"). Delete that file, then `bazelisk build --nobuild //...`.
+
 ## Running tests
 
 **"Build green" means `bazelisk test //...` passes — nothing less.** A
