@@ -11,7 +11,7 @@ pub mod runtime;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -20,6 +20,7 @@ use sha2::{Digest, Sha256};
 
 const CHUNK: usize = 1 << 20;
 const ATTEMPTS: u32 = 6;
+const MAX_REDIRECTS: usize = 10;
 
 pub use runtime::{enable_runtime_fetch, ensure_runtime, ReleaseRuntimeFetcher};
 
@@ -58,7 +59,12 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 fn client() -> Result<reqwest::blocking::Client> {
+    client_with(reqwest::redirect::Policy::default())
+}
+
+fn client_with(redirects: reqwest::redirect::Policy) -> Result<reqwest::blocking::Client> {
     reqwest::blocking::Client::builder()
+        .redirect(redirects)
         .tls_backend_preconfigured(tls_config())
         .connect_timeout(Duration::from_secs(30))
         // The whole-request timeout would cap a multi-GB download; a
@@ -74,8 +80,9 @@ fn client() -> Result<reqwest::blocking::Client> {
 pub struct Unpinned {
     pub bytes: Vec<u8>,
     pub sha256: String,
-    /// Where the bytes came from after redirects: GitHub's
-    /// `releases/latest/download/…` answers from the tagged release's URL.
+    /// Where the bytes came from after the redirects that stay on the
+    /// requested host: GitHub's `releases/latest/download/…` gives the
+    /// tagged release's URL, not the expiring CDN link it then sends to.
     pub final_url: String,
 }
 
@@ -83,15 +90,25 @@ pub struct Unpinned {
 /// being looked up — refusing one over `limit` bytes. A caller that goes
 /// on to trust the bytes pins the hash this returns.
 pub fn get_unpinned(url: &str, limit: u64) -> Result<Unpinned> {
-    let resp = client()?
-        .get(url)
+    let hops = Arc::new(Mutex::new(Vec::new()));
+    let seen = hops.clone();
+    let policy = reqwest::redirect::Policy::custom(move |attempt| {
+        if attempt.previous().len() > MAX_REDIRECTS {
+            return attempt.error("too many redirects");
+        }
+        seen.lock().unwrap().push(attempt.url().clone());
+        attempt.follow()
+    });
+    let requested = reqwest::Url::parse(url).with_context(|| format!("parse {url}"))?;
+    let resp = client_with(policy)?
+        .get(requested.clone())
         .send()
         .with_context(|| format!("GET {url}"))?;
     let status = resp.status();
     if !status.is_success() {
         bail!("{url}: HTTP {status}");
     }
-    let final_url = resp.url().to_string();
+    let final_url = last_on_host(&requested, &hops.lock().unwrap()).to_string();
     let mut body = Vec::new();
     resp.take(limit + 1)
         .read_to_end(&mut body)
@@ -104,6 +121,13 @@ pub fn get_unpinned(url: &str, limit: u64) -> Result<Unpinned> {
         bytes: body,
         final_url,
     })
+}
+
+fn last_on_host<'a>(requested: &'a reqwest::Url, hops: &'a [reqwest::Url]) -> &'a reqwest::Url {
+    hops.iter()
+        .take_while(|u| u.host_str() == requested.host_str())
+        .last()
+        .unwrap_or(requested)
 }
 
 pub fn sha256_bytes(bytes: &[u8]) -> String {
@@ -233,6 +257,21 @@ mod tests {
         let path = dir.path().join("f");
         fs::write(&path, b"hello").unwrap();
         assert_eq!(sha256_file(&path).unwrap(), HELLO_SHA);
+    }
+
+    /// GitHub's `latest` link redirects to the tagged release on
+    /// github.com and then to an expiring CDN URL; a package pins the
+    /// tagged one.
+    #[test]
+    fn final_url_stops_where_the_redirects_leave_the_host() {
+        let url = |s: &str| reqwest::Url::parse(s).unwrap();
+        let requested = url("https://github.com/a/b/releases/latest/download/m.toml");
+        let hops = [
+            url("https://github.com/a/b/releases/download/v1/m.toml"),
+            url("https://release-assets.githubusercontent.com/x?sig=1"),
+        ];
+        assert_eq!(last_on_host(&requested, &hops), &hops[0]);
+        assert_eq!(last_on_host(&requested, &[]), &requested);
     }
 
     #[test]

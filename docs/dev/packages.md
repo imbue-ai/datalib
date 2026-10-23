@@ -119,8 +119,9 @@ command = "bin/fetch-weather"
 ```
 
 - `source` is what the person typed, and what "Check for update" looks
-  up again. `url` is where the manifest was found after redirects, so it
-  names a release, not `latest`. `sha256` is the manifest's hash. The
+  up again. `url` is where the manifest was found after the redirects
+  that stay on the host asked, so it names a release, not `latest`, and
+  not the expiring download link GitHub then redirects to. `sha256` is the manifest's hash. The
   manifest names each archive's hash, so the manifest's hash pins every
   byte the package unpacks.
 - A step or applet with `package` runs `<data root>/system/packages/<the
