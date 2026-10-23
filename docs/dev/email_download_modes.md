@@ -366,10 +366,12 @@ the mbox's blank separator line; the mbox reader also turns CRLF line
 ends into LF. So a seeded `.eml` hashes differently from the API's, and
 the store keeps the Takeout's.
 
-On that account (27.5k messages, a Takeout of 25k four months old), the
-first sync spent quota on the 2.5k newer messages and about a thousand
-units on labels, where downloading every message would have cost 1.65M
-units, about five hours.
+Measured on that account (27.5k messages, a Takeout of 25,020 four
+months old): the first sync read the Takeout in 42 seconds, gave 24,983
+messages their labels from the walks, deleted the 37 Gmail no longer
+has, and downloaded only the 2,570 newer ones, for 155k units in all;
+downloading every message would have cost 1.65M. The next sync read
+the Takeout again, added nothing, and took 7 seconds.
 
 Beside `gmail`, the mbox's account fields (`account_id`, …) are
 refused: the mail is filed under the account Gmail signs in as, since
