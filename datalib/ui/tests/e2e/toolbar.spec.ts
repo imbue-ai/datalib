@@ -38,9 +38,47 @@ test.describe("toolbar", () => {
     await expect(chip).toBeVisible({ timeout: 10_000 });
     const group = (await chip.getAttribute("data-entity"))!.slice("datalib:group/".length);
     await chip.dblclick();
-    await expect(cardOf(page, `syncDashboardView({"group":"${group}"})`)).toBeVisible({
+    await expect(cardOf(page, `sourceView({"group":"${group}"})`)).toBeVisible({
       timeout: 10_000,
     });
+  });
+
+  // A source's card leads with what it holds: its documents, filtered to
+  // it with the columns that suit its type, and its sync a tab away.
+  test("a source's card shows its documents, and its sync a tab away", async ({ page }) => {
+    await page.goto("/");
+    // A source whose Browse is on: one with a render step, so its
+    // documents reach the search.
+    type Row = {
+      id: string;
+      kind: string;
+      type: unknown;
+      actions: { id: string; enabled: boolean }[];
+    };
+    const group = await page.evaluate(async () => {
+      const rows = ((await (await fetch("/api/manage/rows")).json()) as { rows: Row[] }).rows;
+      return rows.find(
+        (r) =>
+          r.kind === "group" && r.type && r.actions.some((a) => a.id === "browse" && a.enabled),
+      )?.id;
+    });
+    expect(group, "a source the fixture lets browse").toBeTruthy();
+    const chip = cardOf(page, "sourcesOverviewView()").locator(
+      `.grid-row a.chip[data-entity="datalib:group/${group}"]`,
+    );
+    await expect(chip).toBeVisible({ timeout: 10_000 });
+    await chip.dblclick();
+    const card = cardOf(page, `sourceView({"group":"${group}"})`);
+    await expect(card.getByRole("tab", { name: "Documents" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await expect(card.getByTestId("search-input")).toHaveAttribute(
+      "data-query",
+      new RegExp(`source_id:${group}`),
+    );
+    await card.getByRole("tab", { name: "Sync" }).click();
+    await expect(card.locator(`.sd-section[data-step^="${group}/"]`).first()).toBeVisible();
   });
 
   // A source's chip's menu is its Sources row's: what syncs it, stops
@@ -56,7 +94,7 @@ test.describe("toolbar", () => {
     await chip.click({ button: "right" });
     const menu = page.locator(".chip-menu");
     await expect(menu.getByRole("menuitem")).toContainText([
-      "Open its sync dashboard",
+      "Open this source",
       "Sync now",
       /^Turn (off|on)$/,
       "Show commit history",
@@ -81,7 +119,7 @@ test.describe("toolbar", () => {
       .first();
     await expect(chip).toBeVisible({ timeout: 10_000 });
     const group = (await chip.getAttribute("data-entity"))!.slice("datalib:group/".length);
-    const dash = cardOf(page, `syncDashboardView({"group":"${group}"})`);
+    const dash = cardOf(page, `sourceView({"group":"${group}"})`);
 
     await chip.dblclick();
     await expect(dash).toBeVisible({ timeout: 10_000 });

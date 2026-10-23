@@ -10,7 +10,7 @@ import { changed, subscribeLive, type RootEvent } from "@/live";
 import { pushToast } from "@/toasts";
 import { entityFromUri } from "./chipLinks";
 import { drawChip, type ChipLook } from "./contacts";
-import { logSource, syncDashboardSource } from "./cardSources";
+import { logSource, sourceSource } from "./cardSources";
 import { Resolver } from "./resolver";
 
 /** `datalib_http::manage::EntityView`, hand-kept: a group or a step as
@@ -134,14 +134,14 @@ function groupOf(stepId: string): string {
   return stepId.split("/")[0];
 }
 
-/** What double-clicking a chip opens: a group's sync dashboard, or for a
- *  step, its group's dashboard at the step's own section. Null for a URI
+/** What double-clicking a chip opens: a group's card, or for a step, its
+ *  group's card on its Sync tab at the step's own section. Null for a URI
  *  naming neither. */
 export function entityCardSource(uri: string): string | null {
   const e = entityFromUri(uri);
   if (!e) return null;
-  if (e.kind === "group") return syncDashboardSource({ group: e.id });
-  return syncDashboardSource({ group: groupOf(e.id), step: e.id });
+  if (e.kind === "group") return sourceSource({ group: e.id });
+  return sourceSource({ group: groupOf(e.id), step: e.id });
 }
 
 /** A step's log, at its end: a step chip's "Show its log". */
@@ -163,7 +163,7 @@ export function entityMenu(uri: string, name: string): EntityMenuEntry[] {
   const out: EntityMenuEntry[] = [
     {
       id: "open",
-      label: e.kind === "group" ? "Open its sync dashboard" : "Show it in its sync dashboard",
+      label: e.kind === "group" ? "Open this source" : "Show it in its sync dashboard",
     },
   ];
   if (e.kind === "step") out.push({ id: "log", label: "Show its log" });

@@ -125,7 +125,7 @@ What goes into the look is each kind's own rule, pure and unit-tested:
   chip drops its dot (`quiet`).
 
 `chip.css` is the one look. The document frame, the search and
-problems grids, the log card, the Sources card, the sync dashboard,
+problems grids, the log card, the Sources card, a source's card,
 the Dashboard's sections and the render preview each include it in
 their own root, since a card's shadow root and the document frame see
 no page styles.
@@ -241,7 +241,7 @@ chip's does.
 document does:
 
 - **Cards:** the Dashboard's Sources, Needs you, Library and Latest
-  activity sections; the header of a group's sync dashboard (the group,
+  activity sections; the header of a source's card (the group,
   and each step under its short name); the person card's heading for
   each source's record; the time-series card's heading for each
   source; the log-line card's group and step.
@@ -253,8 +253,8 @@ It looks the entity up in `entities`, redraws when the answer moves,
 and takes its double-click and right-click from `chipActions`. A single
 click does nothing and goes no further, so a chip inside a clickable
 row (Latest activity) is not a click on the row. The place hands it
-`openCard`; the sync dashboard's own chips scroll to their section
-instead of opening the card again, and the chrome's go through
+`openCard`; a source's card's own chips show their part of it (a step's
+section of Sync) instead of opening the card again, and the chrome's go through
 `surface.ts::showCard`, which shows the same card (`sameCard`) where
 one is already open. A place may add entries ahead of the chip's own
 (`extra`): the log-line card's "Keep only this group" and "Exclude
@@ -291,7 +291,7 @@ right-click away; linking a handle stays the popover's
 | | a person | a group | a step |
 |---|---|---|---|
 | **click** | the link popover, where a contacts app is configured | nothing; the href is never followed | nothing; the href is never followed |
-| **double-click** | the person card (`personView`): your contact and each source's record of them, the source the chip was seen in first | the group's sync dashboard | its group's sync dashboard, scrolled to the step's section |
+| **double-click** | the person card (`personView`): your contact and each source's record of them, the source the chip was seen in first | the source's card (`sourceView`), on its documents | its group's card on Sync, scrolled to the step's section |
 | **right-click** | `chipMenu`: open the person card; compose mail to an email address; copy the identifier, the name or both; everything with them (`with:`); link to a contact or edit the link | `entityChipMenu`: open its dashboard; then its Sources row's entries — Browse, Sync now or Stop, Turn off or on, history, step log, reveal, copy path, Reset; then copy the id, the name or both | the same, for the step's row |
 | **hover** | the tooltip: who, the identifier, what each source calls them, their other handles | the tooltip: name and id, its type, its status | the same |
 | **copy** | `Will Riker <riker@enterprise.org>` as text, a working `mailto:` link as HTML | `Work Slack (datalib:group/slack)`, and the link | the same |

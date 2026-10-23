@@ -1,11 +1,12 @@
 <script setup lang="ts">
-// One group's sync, laid out vertically: the group's row of the Sources
-// table at the top, then each step's row under it, each with its own
-// toolbar and charts over the run — what it has queued and done, the
-// warnings and errors it logged, what it weighs — and the group's log
-// at the bottom. The rows and their actions are the Sources table's
-// (`GET /api/manage/rows`, `rowActions.ts`); the series are
-// `GET /api/manage/groups/{id}/dashboard`.
+// One source as one card: its row of the Sources table at the top — its
+// chip, status, size and actions — then two tabs. Documents is its browse
+// grid (the search, with the columns that suit its type). Sync is each
+// step's row under the group's, each with its own toolbar and charts over
+// the run — what it has queued and done, the warnings and errors it
+// logged, what it weighs — and the group's log at the bottom. The rows
+// and their actions are the Sources table's (`GET /api/manage/rows`,
+// `rowActions.ts`); the series are `GET /api/manage/groups/{id}/dashboard`.
 import { computed, nextTick, onMounted, onUnmounted, ref, watch, type Directive } from "vue";
 import { UNIFIED_DOCUMENT_INDEX, type Dashboard, type ManageResponse, type ManageRow } from "@/api";
 import { useApi } from "./cardApi";
@@ -17,27 +18,29 @@ import { formatBytes } from "@/config/bytes";
 import RunLogPanel from "@/components/RunLogPanel.ce.vue";
 import TimeChart from "./TimeChart.ce.vue";
 import { groupCharts, groupSpan, stepCharts, type Chart } from "./dashboardCharts";
-import { menuTarget, rowActions, withBrowse, type ActionRow } from "./rowActions";
+import { groupBrowseOpts, menuTarget, rowActions, withBrowse, type ActionRow } from "./rowActions";
 import { renderBadges, renderQuantity, renderStatus } from "./cellRenderers";
-import { syncDashboardSource, syncDashboardStep } from "./cardSources";
+import { sourceCardOpts, type SourceTab, type SourceViewOpts } from "./cardSources";
 import { uriFromEntity } from "./chipLinks";
 import EntityChip from "./EntityChip.ce.vue";
+import GridCard from "./GridCard.ce.vue";
 import { logLineSource } from "./libs/logLineView";
-import type { SyncDashboardOpts } from "./libs/syncDashboardView";
 import { TOPIC_CARD_REOPENED, type CardCtx, type CardReopenedPayload } from "./types";
 
-const props = defineProps<{ ctx: CardCtx; opts: SyncDashboardOpts }>();
+const props = defineProps<{ ctx: CardCtx; opts: SourceViewOpts }>();
 const api = useApi();
 const group = props.opts.group;
 
-props.ctx.setTitle(`Sync · ${group}`);
+props.ctx.setTitle(group);
 props.ctx.setHelp(`
-<p>One source's sync — or the index's — laid out as a dashboard. The top
-section is the whole group, as its row in the Sources table reads: its
-status, how much is <b>queued</b> across its steps and when that is done
-(<b>ETA</b>, at the pace work has come off the queues lately), and its
-size. Under it, one section per step, each with its
-own toolbar — the same actions as its row — and its charts.</p>
+<p>One source — or the index — as one card. The top is the whole group, as
+its row in the Sources table reads: its status, how much is <b>queued</b>
+across its steps and when that is done (<b>ETA</b>, at the pace work has
+come off the queues lately), its size, and the same actions as its row.</p>
+<p><b>Documents</b> is what the source holds, as the search shows it, with
+the columns that suit its type: search, sort and open them here.</p>
+<p><b>Sync</b> has one section per step, each with its own toolbar — the
+same actions as its row — and its charts.</p>
 <p>The charts cover one run: the newest the group took part in, or the one
 picked above. Each metric a step reports is a running total over the run
 (API requests, rows written, checkpoints sealed); <b>queued</b> is how
@@ -62,21 +65,36 @@ const revealLabel = revealActionLabel();
 
 // ── State ────────────────────────────────────────────────────────────
 
-function readState(): { run: string | null; logOpen: boolean } {
+type State = { run: string | null; logOpen: boolean; tab: SourceTab | null; docs: string };
+
+function readState(): State {
   try {
     const s = JSON.parse(props.ctx.initialState || "{}");
-    return { run: typeof s.run === "string" ? s.run : null, logOpen: !!s.logOpen };
+    return {
+      run: typeof s.run === "string" ? s.run : null,
+      logOpen: !!s.logOpen,
+      tab: s.tab === "documents" || s.tab === "sync" ? s.tab : null,
+      docs: typeof s.docs === "string" ? s.docs : "",
+    };
   } catch {
-    return { run: null, logOpen: false };
+    return { run: null, logOpen: false, tab: null, docs: "" };
   }
 }
 const initial = readState();
 /// The run picked, or null to follow the newest.
 const pickedRun = ref<string | null>(initial.run);
 const logOpen = ref(initial.logOpen);
-watch([pickedRun, logOpen], ([run, open]) =>
-  props.ctx.host.setState(run || open ? JSON.stringify({ run, logOpen: open }) : ""),
+/// The tab asked for: kept from last time, else what the card source
+/// says — a step asks for its section of Sync — else the documents.
+const tab = ref<SourceTab>(
+  initial.tab ?? props.opts.tab ?? (props.opts.step ? "sync" : "documents"),
 );
+/// The documents grid's own state (its query, columns, selection), kept
+/// inside this card's.
+const docsState = ref(initial.docs);
+watch([pickedRun, logOpen, tab, docsState], ([run, open, t, docsKept]) => {
+  props.ctx.host.setState(JSON.stringify({ run, logOpen: open, tab: t, docs: docsKept }));
+});
 
 const manage = ref<ManageResponse | null>(null);
 const dash = ref<Dashboard | null>(null);
@@ -99,8 +117,43 @@ const groupRow = computed(() => rows.value.find((r) => r.kind === "group" && r.i
 const stepRows = computed(() => rows.value.filter((r) => r.kind === "step" && r.group === group));
 
 watch(groupRow, (g) => {
-  if (g) props.ctx.setTitle(`Sync · ${g.name.label}`);
+  if (g) props.ctx.setTitle(g.name.label);
 });
+
+/// What the Documents tab shows: the source's Browse, with the columns
+/// that suit its type; null for a group that has no documents, whose card
+/// is its sync alone.
+const docs = computed(() => (groupRow.value ? groupBrowseOpts(groupRow.value) : null));
+const shownTab = computed<SourceTab>(() => (docs.value ? tab.value : "sync"));
+/// Whether the Documents tab has shown yet: its grid mounts then.
+const docsSeen = ref(false);
+watch(
+  shownTab,
+  (t) => {
+    if (t === "documents") docsSeen.value = true;
+  },
+  { immediate: true },
+);
+
+/// The documents grid is a card of its own drawn inside this one: it opens
+/// what it opens beside this card, keeps its state inside this card's, and
+/// leaves the title and help to this card.
+const docsCtx: CardCtx = {
+  cardId: `${props.ctx.cardId}:documents`,
+  cardType: "searchView",
+  initialState: initial.docs,
+  setTitle: () => {},
+  setHelp: () => {},
+  bus: props.ctx.bus,
+  host: {
+    openCards: (...sources) => props.ctx.host.openCards(...sources),
+    hrefFor: (...sources) => props.ctx.host.hrefFor(...sources),
+    setState: (state) => (docsState.value = state),
+    setSource: () => {},
+    becomeComposite: () => {},
+    close: () => {},
+  },
+};
 
 const actions = rowActions<ActionRow>({
   api,
@@ -210,12 +263,6 @@ const vCell: Directive<HTMLElement, HTMLElement> = {
 
 const cardEl = ref<HTMLElement | null>(null);
 
-function scrollToStep(id: string) {
-  cardEl.value
-    ?.querySelector(`[data-step="${CSS.escape(id)}"]`)
-    ?.scrollIntoView({ block: "start" });
-}
-
 /// Bring a step's section into view and keep it there while the card
 /// settles: a tab the host has just revealed can be hidden or unsized for
 /// a few frames, and charts loading above the section push it down. It
@@ -264,19 +311,29 @@ watch([wantedStep, panels], async ([id]) => {
   keepStepInView(id);
 });
 
-/// Opened again while open, at a step: show that step's section.
+/// Show what a source's card source asks of this card: a step's section
+/// of Sync, or a tab.
+function show(asked: SourceViewOpts) {
+  if (asked.step) {
+    tab.value = "sync";
+    wantedStep.value = asked.step;
+  } else if (asked.tab) {
+    tab.value = asked.tab;
+  }
+}
+
+/// Opened again while open: show what the new open asks for.
 const stopReopened = props.ctx.bus.subscribe(TOPIC_CARD_REOPENED, (payload) => {
   const p = payload as CardReopenedPayload;
-  const step = p.cardId === props.ctx.cardId ? syncDashboardStep(p.source) : null;
-  if (step) wantedStep.value = step;
+  const asked = p.cardId === props.ctx.cardId ? sourceCardOpts(p.source) : null;
+  if (asked) show(asked);
 });
 
-/// A chip on this card asking for a card: this dashboard is already open,
-/// so the group's own chip does nothing and a step's scrolls to its section.
+/// A chip on this card asking for a card: this source's card is this one,
+/// so its own chips show their part of it here; anything else opens beside.
 function openFromChip(source: string) {
-  if (source === syncDashboardSource({ group })) return;
-  const step = stepRows.value.find((r) => source === syncDashboardSource({ group, step: r.id }));
-  if (step) scrollToStep(step.id);
+  const asked = sourceCardOpts(source);
+  if (asked?.group === group) show(asked);
   else props.ctx.host.openCards(source);
 }
 let unsubscribe: (() => void) | null = null;
@@ -288,7 +345,7 @@ onMounted(async () => {
   // would stand blank for all of them.
   await Promise.all([loadRows(), loadDashboard()]);
   void loadRows(true);
-  if (props.opts.step) scrollToStep(props.opts.step);
+  if (props.opts.step) wantedStep.value = props.opts.step;
   clock = setInterval(() => {
     if (dash.value?.live) now.value = Date.now();
   }, 1000);
@@ -363,24 +420,6 @@ onUnmounted(() => {
           <dt>Size</dt>
           <dd>{{ formatBytes(groupRow.disk.value) }}</dd>
         </div>
-        <div v-if="dash">
-          <dt>Run</dt>
-          <dd>
-            <select
-              class="sd-run"
-              :value="pickedRun ?? ''"
-              aria-label="Which run the charts show"
-              @change="pickedRun = ($event.target as HTMLSelectElement).value || null"
-            >
-              <option value="">
-                Newest{{ dash.run && !pickedRun ? ` — ${runLabel(dash.run)}` : "" }}
-              </option>
-              <option v-for="r in dash.runs" :key="r.run_id" :value="r.run_id">
-                {{ runLabel(r) }}
-              </option>
-            </select>
-          </dd>
-        </div>
       </dl>
       <nav class="sd-tools" aria-label="Group actions">
         <template v-for="(e, i) in toolbar(groupRow)" :key="i">
@@ -397,116 +436,171 @@ onUnmounted(() => {
           </button>
         </template>
       </nav>
-      <p v-if="dash && !dash.run" class="sd-empty">No step of this group has run yet.</p>
-      <div v-else class="sd-charts">
-        <TimeChart
-          v-for="c in topCharts"
-          :key="c.key"
-          :chart="c"
-          :domain="domain"
-          :end="domain[1]"
-          :sync-key="syncKey"
-        />
-      </div>
     </article>
 
-    <!-- Each step, as its row. -->
-    <article
-      v-for="{ row, step, charts } in panels"
-      :key="row.id"
-      class="sd-section"
-      :data-step="row.id"
-    >
-      <header class="sd-head">
-        <span class="sd-name">
-          <EntityChip
-            :uri="uriFromEntity('step', row.id)"
-            :shown="row.name.label"
-            short
-            quiet
-            :open-card="openFromChip"
-          />
-        </span>
-        <span v-cell="renderStatus(row.status)" class="sd-status" />
-        <span class="sd-inline">
-          <span class="sd-inline-key">Queue</span>
-          <span v-cell="renderQuantity(row.queue)" />
-          <span class="sd-inline-key">ETA</span>
-          <span v-cell="renderQuantity(row.eta)" />
-          <template v-if="row.disk.value !== null">
-            <span class="sd-inline-key">Size</span>
-            <span :title="row.disk.detail ?? ''">{{ formatBytes(row.disk.value) }}</span>
-          </template>
-        </span>
-      </header>
-      <nav class="sd-tools" :aria-label="`${row.name.label} actions`">
-        <template v-for="(e, i) in toolbar(row)" :key="i">
-          <span v-if="e.separator" class="sd-tools-gap" />
-          <button
-            v-else
-            class="sd-btn"
-            :class="{ danger: e.action === 'reset' || e.action === 'stop' }"
-            :disabled="busy || !!e.disabled"
-            :title="e.disabled ?? e.name"
-            @click="runEntry(e.action, row)"
-          >
-            {{ e.name }}
-          </button>
-        </template>
-      </nav>
-      <p v-if="step?.msg && step.state === 'running'" class="sd-note">{{ step.msg }}</p>
-      <p v-if="step?.error" class="sd-note bad">{{ step.error }}</p>
-      <p v-if="!step || !step.in_run" class="sd-empty">Not in this run.</p>
-      <template v-else>
-        <p class="sd-note">
-          {{ step.state }}
-          <template v-if="step.started_at_utc">
-            · started {{ formatStamp(step.started_at_utc) }}</template
-          >
-          <template v-if="step.finished_at_utc">
-            · ended {{ formatStamp(step.finished_at_utc) }}</template
-          >
-          <template v-if="(step.attempt ?? 1) > 1"> · attempt {{ step.attempt }}</template>
-          <template v-if="logCount(step)?.warnings === 0 && logCount(step)?.errors === 0">
-            · no warnings or errors logged</template
-          >
-        </p>
-        <div class="sd-charts">
+    <!-- What the source holds, and how it syncs: one tab each. A group
+         with no documents is its sync alone, with no tabs. -->
+    <nav v-if="groupRow && docs" class="sd-tabs" role="tablist" aria-label="Source">
+      <button
+        role="tab"
+        class="sd-tab"
+        :aria-selected="shownTab === 'documents'"
+        @click="tab = 'documents'"
+      >
+        Documents
+      </button>
+      <button role="tab" class="sd-tab" :aria-selected="shownTab === 'sync'" @click="tab = 'sync'">
+        Sync
+      </button>
+    </nav>
+
+    <!-- Mounted the first time it shows, then kept: the grid sizes itself
+         to a box it can measure, and keeps its query when hidden. -->
+    <div v-if="docs && docsSeen" v-show="shownTab === 'documents'" class="sd-docs">
+      <GridCard
+        :ctx="docsCtx"
+        :q="docs.q"
+        :columns="docs.columns"
+        :name="docs.name"
+        :view="docs.view"
+        one-source
+      />
+    </div>
+
+    <div v-show="shownTab === 'sync'" class="sd-sync">
+      <!-- The run the charts cover, and the whole group's charts over it. -->
+      <section v-if="groupRow" class="sd-section sd-run-charts">
+        <dl v-if="dash" class="sd-stats">
+          <div v-if="dash">
+            <dt>Run</dt>
+            <dd>
+              <select
+                class="sd-run"
+                :value="pickedRun ?? ''"
+                aria-label="Which run the charts show"
+                @change="pickedRun = ($event.target as HTMLSelectElement).value || null"
+              >
+                <option value="">
+                  Newest{{ dash.run && !pickedRun ? ` — ${runLabel(dash.run)}` : "" }}
+                </option>
+                <option v-for="r in dash.runs" :key="r.run_id" :value="r.run_id">
+                  {{ runLabel(r) }}
+                </option>
+              </select>
+            </dd>
+          </div>
+        </dl>
+        <p v-if="dash && !dash.run" class="sd-empty">No step of this group has run yet.</p>
+        <div v-else class="sd-charts">
           <TimeChart
-            v-for="c in charts"
+            v-for="c in topCharts"
             :key="c.key"
             :chart="c"
             :domain="domain"
-            :end="endOf(row.id)"
+            :end="domain[1]"
             :sync-key="syncKey"
           />
         </div>
-        <p v-if="charts.length === 0" class="sd-empty">
-          This step reported no numbers in this run.
-        </p>
-      </template>
-    </article>
+      </section>
 
-    <!-- The group's lines from the run shown. Mounted only while open:
+      <!-- Each step, as its row. -->
+      <article
+        v-for="{ row, step, charts } in panels"
+        :key="row.id"
+        class="sd-section"
+        :data-step="row.id"
+      >
+        <header class="sd-head">
+          <span class="sd-name">
+            <EntityChip
+              :uri="uriFromEntity('step', row.id)"
+              :shown="row.name.label"
+              short
+              quiet
+              :open-card="openFromChip"
+            />
+          </span>
+          <span v-cell="renderStatus(row.status)" class="sd-status" />
+          <span class="sd-inline">
+            <span class="sd-inline-key">Queue</span>
+            <span v-cell="renderQuantity(row.queue)" />
+            <span class="sd-inline-key">ETA</span>
+            <span v-cell="renderQuantity(row.eta)" />
+            <template v-if="row.disk.value !== null">
+              <span class="sd-inline-key">Size</span>
+              <span :title="row.disk.detail ?? ''">{{ formatBytes(row.disk.value) }}</span>
+            </template>
+          </span>
+        </header>
+        <nav class="sd-tools" :aria-label="`${row.name.label} actions`">
+          <template v-for="(e, i) in toolbar(row)" :key="i">
+            <span v-if="e.separator" class="sd-tools-gap" />
+            <button
+              v-else
+              class="sd-btn"
+              :class="{ danger: e.action === 'reset' || e.action === 'stop' }"
+              :disabled="busy || !!e.disabled"
+              :title="e.disabled ?? e.name"
+              @click="runEntry(e.action, row)"
+            >
+              {{ e.name }}
+            </button>
+          </template>
+        </nav>
+        <p v-if="step?.msg && step.state === 'running'" class="sd-note">{{ step.msg }}</p>
+        <p v-if="step?.error" class="sd-note bad">{{ step.error }}</p>
+        <p v-if="!step || !step.in_run" class="sd-empty">Not in this run.</p>
+        <template v-else>
+          <p class="sd-note">
+            {{ step.state }}
+            <template v-if="step.started_at_utc">
+              · started {{ formatStamp(step.started_at_utc) }}</template
+            >
+            <template v-if="step.finished_at_utc">
+              · ended {{ formatStamp(step.finished_at_utc) }}</template
+            >
+            <template v-if="(step.attempt ?? 1) > 1"> · attempt {{ step.attempt }}</template>
+            <template v-if="logCount(step)?.warnings === 0 && logCount(step)?.errors === 0">
+              · no warnings or errors logged</template
+            >
+          </p>
+          <div class="sd-charts">
+            <TimeChart
+              v-for="c in charts"
+              :key="c.key"
+              :chart="c"
+              :domain="domain"
+              :end="endOf(row.id)"
+              :sync-key="syncKey"
+            />
+          </div>
+          <p v-if="charts.length === 0" class="sd-empty">
+            This step reported no numbers in this run.
+          </p>
+        </template>
+      </article>
+
+      <!-- The group's lines from the run shown. Mounted only while open:
          it tails the store for as long as it is. -->
-    <details
-      v-if="run"
-      class="sd-section sd-log"
-      :open="logOpen"
-      @toggle="logOpen = ($event.target as HTMLDetailsElement).open"
-    >
-      <summary>Log · this group, this run</summary>
-      <div v-if="logOpen" class="sd-log-body">
-        <RunLogPanel
-          :key="run.run_id"
-          :run-id="run.run_id"
-          :step="null"
-          :initial-query="`group:${group}`"
-          @line-selected="(seq: number) => ctx.host.openCards(logLineSource(seq))"
-          @open-card="(source: string) => ctx.host.openCards(source)"
-        />
-      </div>
-    </details>
+      <details
+        v-if="run"
+        class="sd-section sd-log"
+        :open="logOpen"
+        @toggle="logOpen = ($event.target as HTMLDetailsElement).open"
+      >
+        <summary>Log · this group, this run</summary>
+        <div v-if="logOpen" class="sd-log-body">
+          <RunLogPanel
+            :key="run.run_id"
+            :run-id="run.run_id"
+            :step="null"
+            :initial-query="`group:${group}`"
+            @line-selected="(seq: number) => ctx.host.openCards(logLineSource(seq))"
+            @open-card="(source: string) => ctx.host.openCards(source)"
+          />
+        </div>
+      </details>
+    </div>
   </section>
 </template>
 
@@ -536,16 +630,54 @@ onUnmounted(() => {
     --viz-series-6: #008300;
   }
 }
+/* The card fills its box: the group's strip and the tabs stay put, the
+   documents grid takes the rest, and the sync scrolls on its own. */
 .sd {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 10px 12px 16px;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px 0;
   display: flex;
   flex-direction: column;
   gap: 10px;
   color: var(--datalib-fg);
   font-size: var(--datalib-font-size);
+}
+.sd > * {
+  flex: none;
+}
+.sd-docs {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin: 0 -12px;
+}
+.sd-sync {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-bottom: 16px;
+}
+.sd-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--datalib-border);
+}
+.sd-tab {
+  font: inherit;
+  color: var(--datalib-muted);
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.sd-tab[aria-selected="true"] {
+  color: var(--datalib-fg);
+  border-bottom-color: var(--datalib-accent);
 }
 .sd-section {
   border: 1px solid var(--datalib-border);

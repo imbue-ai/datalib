@@ -87,11 +87,9 @@ describe("a group or step chip's hover, copy, menu and card", () => {
     expect(entityCopyText(SLACK, "Work Slack")).toBe("Work Slack (datalib:group/slack)");
   });
 
-  it("opens a group's dashboard, and a step's group's dashboard at its section", () => {
-    expect(entityCardSource(SLACK)).toBe('syncDashboardView({"group":"slack"})');
-    expect(entityCardSource(INGEST)).toBe(
-      'syncDashboardView({"group":"slack","step":"slack/ingest"})',
-    );
+  it("opens a group's card, and a step's group's card at its section", () => {
+    expect(entityCardSource(SLACK)).toBe('sourceView({"group":"slack"})');
+    expect(entityCardSource(INGEST)).toBe('sourceView({"group":"slack","step":"slack/ingest"})');
     expect(entityLogSource(INGEST)).toBe('logView({"step":"slack/ingest","jumpToEnd":true})');
     expect(entityLogSource(SLACK)).toBeNull();
     expect(entityCardSource("mailto:riker@enterprise.org")).toBeNull();

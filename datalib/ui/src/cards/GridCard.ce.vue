@@ -173,6 +173,9 @@ const props = defineProps<{
   // search opens on the view picked last; the persisted state's wins
   // over both.
   view?: SearchViewId;
+  // The search is one source's, drawn in that source's card: no row of
+  // every source's chips to narrow it by.
+  oneSource?: boolean;
 }>();
 
 const url = props.url ?? SEARCH;
@@ -1192,7 +1195,7 @@ const sources = ref<RowGroup<Row>[]>([]);
 const sourcesQuery = computed(() => setSource(settledQuery.value, null));
 let sourcesAsked = 0;
 async function loadSources() {
-  if (!isSearch) return;
+  if (!isSearch || props.oneSource) return;
   const asked = ++sourcesAsked;
   try {
     const r = await fetchGroups<Row>(
