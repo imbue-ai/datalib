@@ -214,7 +214,10 @@ held for it. A source no longer in `inputs` is dropped, rows and record.
 function over the chunks that overlap the range.
 
 The Time series card (`docs/dev/cards.md`, `timeSeriesView()`) draws
-what the applet answers. It converts every value to SI units with
+what the applet answers. It asks for points with a `budget` of the
+chart's width in pixels, and asks again at the plot's width for the
+range a zoom picks, so the applet's buckets are never wider than a
+pixel. It converts every value to SI units with
 `unit_factor` and `unit_offset`, gives each quantity its own axis (two
 at most), and prints each axis in a unit that suits it.
 
@@ -236,9 +239,10 @@ The document view draws it. After each paint of a document's body,
 `TimeSeriesEmbed` into every such element that has none. The embed asks
 the applet for those time series and their points over everything they
 hold, and draws them with `TimeSeriesChart`, the chart the Time series
-card uses. The document's frame runs no script of its own, so the chart
-is the app's code reaching into it, the same way chips and the copy
-buttons are; its styles are in the frame's own stylesheet. A time series
+card uses (`docs/dev/cards.md` §"Charts"), with its legend and zoom. The
+document's frame runs no script of its own, so the chart is the app's
+code reaching into it, the same way chips and the copy buttons are; its
+styles, uPlot's among them, are in the frame's own stylesheet. A time series
 the index does not hold is left out, and a chart with none says so. On a
 root that runs no time-series applet, the chart says that in a sentence
 (the gateway's 502 "no applet" is what `api.ts::appletAbsent` reads), and

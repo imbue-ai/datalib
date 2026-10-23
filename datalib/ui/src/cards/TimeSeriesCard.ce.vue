@@ -11,7 +11,6 @@ import {
   encodeState,
   grouped,
   newestMs,
-  quantitiesOf,
   rangeBounds,
   refusal,
   toMs,
@@ -21,6 +20,7 @@ import {
   type RangeKey,
 } from "./timeSeries";
 import { fetchPoints, fetchTimeSeries } from "./timeSeriesApi";
+import { seriesColor } from "./plot/plot";
 import TimeSeriesChart from "./TimeSeriesChart.vue";
 import EntityChip from "./EntityChip.ce.vue";
 import { uriFromEntity } from "./chipLinks";
@@ -38,9 +38,11 @@ most. A time series of text is listed but not drawn yet.</p>
 <p>Past a few hundred points a line shows each stretch's mean, with the
 shaded band from its lowest to its highest value; a shorter range shows
 every point. Hover the chart to read each line's value at that time.</p>
+<p>Click a line in the legend to turn it off or on; double-click it to
+show it alone, and again to show them all. Drag across the chart to zoom
+in, which reads that stretch again in finer detail; double-click the
+chart to go back.</p>
 `);
-
-const COLORS = ["#2f6fd0", "#d9661a", "#7c4dcc", "#1f9a6b", "#c2387a", "#8a6d00"];
 
 const restored = decodeState(props.ctx.initialState);
 const all = ref<Listed[]>([]);
@@ -63,7 +65,7 @@ const picked = computed(() =>
   }),
 );
 const groups = computed(() => grouped(all.value, filter.value));
-const colorOf = (id: string) => COLORS[Math.max(0, ids.value.indexOf(id)) % COLORS.length]!;
+const colorOf = (id: string) => seriesColor(Math.max(0, ids.value.indexOf(id)));
 
 function persist() {
   props.ctx.host.setState(encodeState(ids.value, range.value));
@@ -150,8 +152,6 @@ function schedulePoints() {
   pointsTimer = setTimeout(() => void loadPoints(), 120);
 }
 watch([ids, range, () => Math.round(chartWidth.value / 50), all], schedulePoints);
-
-const quantities = computed(() => quantitiesOf(picked.value));
 
 // ── Lifecycle ──────────────────────────────────────────────────────
 
@@ -256,29 +256,11 @@ onBeforeUnmount(() => {
     </div>
     <div class="ts-main">
       <div class="ts-bar">
-        <div class="ts-legend">
-          <span v-if="!picked.length" class="ts-hint">Tick a time series to draw it.</span>
-          <span
-            v-for="p in picked"
-            :key="p.time_series_id"
-            class="ts-chip"
-            :style="{ borderColor: colorOf(p.time_series_id) }"
-          >
-            <span class="ts-swatch" :style="{ background: colorOf(p.time_series_id) }"></span>
-            {{ p.human_name }} · {{ p.about_name ?? p.source_id }}
-            <span class="ts-axis-name">{{
-              quantities.length > 1 ? (quantities.indexOf(p.quantity) === 0 ? "left" : "right") : ""
-            }}</span>
-            <button
-              type="button"
-              class="ts-x"
-              :aria-label="`Take ${p.human_name} off the chart`"
-              @click="toggle(p)"
-            >
-              ×
-            </button>
-          </span>
-        </div>
+        <span class="ts-hint">{{
+          picked.length
+            ? "Drag across the chart to zoom; double-click to go back."
+            : "Tick a time series to draw it."
+        }}</span>
         <div role="group" aria-label="Range" class="ts-ranges">
           <button
             v-for="r in RANGES"
@@ -299,6 +281,7 @@ onBeforeUnmount(() => {
         :answered="answered"
         :span="span"
         :color-of="colorOf"
+        :remove="(id) => toggle(byId.get(id)!)"
         @resize="(w) => (chartWidth = w)"
       />
     </div>
@@ -389,8 +372,7 @@ onBeforeUnmount(() => {
 }
 .ts-meta,
 .ts-hint,
-.ts-empty,
-.ts-axis-name {
+.ts-empty {
   color: var(--datalib-muted);
   font-size: var(--datalib-font-size-small);
 }
@@ -419,28 +401,8 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 0.4rem 0.75rem;
 }
-.ts-legend {
+.ts-hint {
   flex: 1 1 auto;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem;
-}
-.ts-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  padding: 0.1rem 0.25rem 0.1rem 0.55rem;
-  border: 1px solid;
-  border-radius: 9999px;
-  font-size: var(--datalib-font-size-small);
-}
-.ts-x {
-  font: inherit;
-  border: 0;
-  background: none;
-  color: var(--datalib-muted);
-  cursor: pointer;
-  padding: 0 0.3rem;
 }
 .ts-ranges {
   display: flex;

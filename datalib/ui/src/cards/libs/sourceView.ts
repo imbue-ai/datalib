@@ -12,9 +12,7 @@ import ChipMenu from "../ChipMenu.ce.vue";
 import EntityChip from "../EntityChip.ce.vue";
 import tableGridCss from "../tableGrid.css?inline";
 import chipCss from "../chip.css?inline";
-// uPlot's own layout rules (the canvas, the cursor and the overlay),
-// which have to be inside the card's shadow root to reach them.
-import uplotCss from "uplot/dist/uPlot.min.css?inline";
+import { PLOT_CSS } from "../plot/plotCss";
 // The grids' theme has to be in the same root as the grids.
 import slickCss from "@slickgrid-universal/common/dist/styles/css/slickgrid-theme-default.css?inline";
 import { vueCard } from "../vueCard";
@@ -32,7 +30,7 @@ export function sourceView(opts: SourceViewOpts): CardRender {
         slickCss,
         tableGridCss,
         chipCss,
-        uplotCss,
+        PLOT_CSS,
         TimeChart,
         RunLogPanel,
         EntityChip,

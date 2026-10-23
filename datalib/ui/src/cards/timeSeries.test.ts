@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   bandOf,
   axisTicks,
+  columnsOf,
   decodeState,
   displayUnit,
   encodeState,
@@ -214,6 +215,37 @@ describe("lines", () => {
     };
     expect(lineOf(bucketed)).toEqual([{ x: 0, y: 120 }]);
     expect(bandOf(bucketed)).toEqual([{ x: 0, lo: 60, hi: 180 }]);
+  });
+
+  /// uPlot draws every line over one shared x column: a line must be null
+  /// where only another line has a point, and a raw answer has no band.
+  it("share one time column, null where a line has no point", () => {
+    const at = (t: number, value: number) => ({ t, value, text: null });
+    const raw: Answered = {
+      ...listed({ ...celsius, time_kind: "instant" }),
+      kind: "raw",
+      points: [at(0, 1), at(20, 2)],
+    };
+    const bucketed: Answered = {
+      ...listed({ ...minutes, time_kind: "instant" }),
+      kind: "buckets",
+      width: 10,
+      buckets: [
+        { t: 10, min: 1, max: 3, mean: 2, count: 4 },
+        { t: 20, min: null, max: null, mean: null, count: 0 },
+      ],
+    };
+    const c = columnsOf([raw, bucketed]);
+    expect(c.xs).toEqual([0, 10, 20]);
+    expect(c.lines).toEqual([
+      [274.15, null, 275.15],
+      [null, 120, null],
+    ]);
+    expect(c.bands).toEqual([
+      { lo: [null, null, null], hi: [null, null, null] },
+      { lo: [null, 60, null], hi: [null, 180, null] },
+    ]);
+    expect(columnsOf([])).toEqual({ xs: [], lines: [], bands: [] });
   });
 });
 
