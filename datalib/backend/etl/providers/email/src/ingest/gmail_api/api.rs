@@ -48,6 +48,18 @@ pub struct Client {
 const RATE_LIMIT_CUT: f64 = 0.8;
 const RATE_LIMIT_FLOOR: f64 = 0.25;
 
+/// What the bucket holds, in seconds of its rate. Google counts a
+/// minute at a time, and any minute may spend what the bucket holds at
+/// its start plus a minute's refill: a bucket holding the whole minute
+/// lets a run's first minute spend twice the ceiling, and the rate limit
+/// that follows cuts the ceiling for the rest of the run.
+const BURST_SECONDS: f64 = 10.0;
+
+/// The most a bucket refilling at `units_per_minute` holds.
+fn bucket_capacity(units_per_minute: u32) -> f64 {
+    f64::from(units_per_minute) * BURST_SECONDS / 60.0
+}
+
 /// Client-side quota throttle: a leaky bucket over Gmail's per-user
 /// "quota units per minute" limit. Google's own answer is the authority:
 /// a request it rate-limits lowers the ceiling for the rest of the run,
@@ -77,7 +89,7 @@ impl QuotaThrottle {
             units_per_minute: units,
             // Start full: a fresh run should not wait before its first
             // request.
-            available: f64::from(units),
+            available: bucket_capacity(units),
             last_refill: Instant::now(),
             spent_total: 0,
             rate_limited: Arc::new(AtomicU64::new(0)),
@@ -102,9 +114,9 @@ impl QuotaThrottle {
 
     pub async fn acquire(&mut self, cost: u32) {
         self.absorb_rate_limits();
-        // A single request costing more than the whole per-minute budget
-        // would never be satisfiable; let it through rather than hang.
-        let cost = f64::from(cost).min(f64::from(self.units_per_minute));
+        // A single request costing more than the bucket holds would never
+        // be satisfiable; let it through rather than hang.
+        let cost = f64::from(cost).min(bucket_capacity(self.units_per_minute));
         loop {
             self.refill();
             if self.available >= cost {
@@ -158,7 +170,7 @@ impl QuotaThrottle {
         }
         self.last_refill = now;
         self.available = (self.available + elapsed * f64::from(self.units_per_minute) / 60.0)
-            .min(f64::from(self.units_per_minute));
+            .min(bucket_capacity(self.units_per_minute));
     }
 }
 
@@ -762,11 +774,38 @@ mod tests {
         assert!(wait_seconds(10.0, 20.0, 6_000) < wait_seconds(0.0, 20.0, 6_000));
     }
 
-    /// Spending the whole budget must actually block the next request, or
+    /// A run's first minute once spent the full bucket and a minute's
+    /// refill, nearly twice the ceiling; Google rate-limited it, and the
+    /// lowered ceiling halved the rest of the backfill. With the default
+    /// ceiling, no minute may spend more than Google's 6000.
+    #[test]
+    fn no_minute_spends_more_than_google_allows() {
+        let most_in_a_minute =
+            bucket_capacity(datalib_etl_email_config::DEFAULT_QUOTA_UNITS_PER_MINUTE)
+                + f64::from(datalib_etl_email_config::DEFAULT_QUOTA_UNITS_PER_MINUTE);
+        assert!(most_in_a_minute <= 6_000.0, "{most_in_a_minute}");
+    }
+
+    /// A fresh throttle lets through what the bucket holds, and no more.
+    #[tokio::test]
+    async fn starts_with_a_bucket_of_ten_seconds() {
+        let mut t = QuotaThrottle::new(6_000);
+        let start = std::time::Instant::now();
+        t.acquire(1_000).await;
+        assert!(start.elapsed() < Duration::from_millis(50));
+        t.acquire(20).await;
+        assert!(
+            start.elapsed() >= Duration::from_millis(150),
+            "did not throttle: waited {:?}",
+            start.elapsed()
+        );
+    }
+
+    /// Spending the whole bucket must actually block the next request, or
     /// the throttle is decorative. Sized so the wait is real but short:
     /// 20 units at 6000/min is 0.2s.
     #[tokio::test]
-    async fn blocks_once_the_minute_budget_is_spent() {
+    async fn blocks_once_the_bucket_is_spent() {
         let mut t = QuotaThrottle::new(6_000);
         t.acquire(6_000).await;
         let start = std::time::Instant::now();

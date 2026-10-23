@@ -263,7 +263,12 @@ Quota-limited rather than byte-limited:
   for usage past the daily threshold from 2026-05-01.
 
 `QuotaThrottle` is a leaky bucket priced in **units**, not requests, so a
-mixed workload meters accurately. It is the first line, not the last:
+mixed workload meters accurately. It holds ten seconds of its rate, so
+no minute spends more than the ceiling and a sixth: at the default
+5000, under Google's 6000. (A bucket holding a whole minute let a
+run's first minute spend nearly twice the ceiling; measured, the rate
+limit that followed cut the ceiling to half for the rest of the run.)
+It is the first line, not the last:
 Google is the authority on the limit, and the code is built to bump
 into it and keep going, the way the Slack provider does.
 
