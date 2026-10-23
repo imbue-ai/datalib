@@ -16,6 +16,7 @@ import { logLineView } from "./logLineView";
 import { historyView } from "./historyView";
 import { umapView } from "./umapView";
 import { syncDashboardView } from "./syncDashboardView";
+import { sourceView } from "./sourceView";
 import {
   latestActivityView,
   libraryView,
@@ -52,6 +53,7 @@ export const viewLibs: ViewLibs = {
   historyView,
   umapView,
   syncDashboardView,
+  sourceView,
   personView,
   contactsView,
   timeSeriesView,

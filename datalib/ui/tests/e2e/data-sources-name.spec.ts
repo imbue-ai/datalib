@@ -124,7 +124,7 @@ test("one dialog writes a group and two steps: one row, with two under it", asyn
   const group = groupRow(page, "personal-claude");
   const groupName = nameCell(page, "group:personal-claude");
   await expect(groupName).toHaveText("Personal Claude");
-  await expect(groupName.locator(".tg-label")).toHaveAttribute("title", /^personal-claude/);
+  await expect(groupName.locator("a.chip")).toHaveAttribute("title", /\(personal-claude\)/);
   await expect(row(page, "personal-claude/ingest")).toHaveCount(0);
 
   // Opened, the two steps are labelled by what they do; the group owns

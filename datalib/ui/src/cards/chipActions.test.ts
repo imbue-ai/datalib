@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { logSource, personSource, searchSource, syncDashboardSource } from "./cardSources";
+import { logSource, personSource, searchSource, sourceSource } from "./cardSources";
 import type { ManageRow } from "@/api";
 import {
   CHIP_ACTIONS,
@@ -78,9 +78,9 @@ describe("runChipAction", () => {
     await runChipAction("open", INGEST, h);
     await runChipAction("log", INGEST, h);
     expect(h.openCard.mock.calls).toEqual([
-      [syncDashboardSource({ group: "slack" })],
+      [sourceSource({ group: "slack" })],
       [personSource("email:riker@enterprise.org", { seenIn: "work_slack" })],
-      [syncDashboardSource({ group: "slack", step: "slack/ingest" })],
+      [sourceSource({ group: "slack", step: "slack/ingest" })],
       [logSource({ step: "slack/ingest", jumpToEnd: true })],
     ]);
     expect(chipCardSource(CONTACT.ref, null)).toBeNull();
@@ -163,7 +163,7 @@ describe("entityChipMenu", () => {
       "Work Slack",
       manageRow({ id: "slack", kind: "group" }),
     ).map((e) => e.label);
-    expect(labels[0]).toBe("Open its sync dashboard");
+    expect(labels[0]).toBe("Open this source");
     expect(labels).toContain("Sync now");
     expect(labels).toContain("Turn off");
     expect(labels).toContain("Show commit history");

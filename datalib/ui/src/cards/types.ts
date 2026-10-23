@@ -212,10 +212,13 @@ export type ViewLibs = {
   // step so like sits near like; filter with the grid's grammar, colour
   // by a field, hover to preview, click to open. See cards/UmapCard.ce.vue.
   umapView: (opts?: { q?: string; by?: string }) => CardRender;
-  // One group's sync as a dashboard: its row and each step's, laid out
-  // vertically with their actions, charts over the run and the group's
-  // log. See cards/SyncDashboardCard.ce.vue.
+  // A source's card on its Sync tab: the older name of `sourceView`,
+  // kept so a saved layout or a link still opens.
   syncDashboardView: (opts: { group: string; step?: string }) => CardRender;
+  // One source: its row's status and actions, then its documents and its
+  // sync (each step's section, charts over the run, the group's log); a
+  // step opens Sync at its section. See cards/SourceCard.ce.vue.
+  sourceView: (opts: { group: string; step?: string; tab?: "documents" | "sync" }) => CardRender;
   // A person: your contact when the handle is linked to one, and each
   // source's record of them, the one the chip was seen in first.
   // Opened by double-clicking a person chip. See cards/PersonCard.ce.vue.

@@ -46,6 +46,7 @@ const {
   contextMenuItems,
   isGroupOpenByDefault,
   onGridReady,
+  canEditCell,
   onCellDoubleClicked,
   onCellEdit,
   onRowGroupOpened,
@@ -136,13 +137,15 @@ onMounted(() => {
   if (props.add) openAdd();
 });
 
-// A step's Name is its chip (sourcesCardModel's `decorate`), under the
-// short name the row gives it; its status dot follows `entities`.
+// A group's or step's Name is its chip (sourcesCardModel's `decorate`),
+// a step under the short name the row gives it; the Status column beside
+// it says what its dot would.
 const chips = {
   who: () => undefined,
   canLink: () => false,
   entity: (uri: string) => entities.lookup(uri),
   keepLabels: true,
+  quiet: true,
 };
 let grid: TableGridApi<Row> | null = null;
 function onReady(api: TableGridApi<Row>) {
@@ -230,7 +233,7 @@ const rowHeight = computed(() => Math.round(28 + 8 * density.value));
         :rowHeight="rowHeight"
         :movable="isMovable"
         :chips="chips"
-        :canEdit="(row, field) => field !== 'name' || row.kind === 'group'"
+        :canEdit="canEditCell"
         @ready="onReady"
         @cellDoubleClick="onCellDoubleClicked"
         @openCard="(source) => props.ctx.host.openCards(source)"

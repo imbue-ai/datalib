@@ -24,6 +24,7 @@ import type {
 } from "@/api";
 import {
   WIDTH,
+  renderBadges,
   renderChips,
   quantityText,
   renderIdentity,
@@ -62,6 +63,9 @@ export type SlickColumnOptions<T> = {
     /// A group or step chip keeps the cell's own label, where the grid
     /// already says the rest: a step nested under its group.
     keepLabels?: boolean;
+    /// A group or step chip draws no status dot, where a Status column
+    /// beside it says the same.
+    quiet?: boolean;
     /// One of your contacts, whose id is a `datalib:contact/` URI.
     contact?: (contactId: string) => NormalizedContact | undefined;
   };
@@ -249,6 +253,7 @@ function identityChip<T>(
   if (chips?.entity && v.entity && entityFromUri(v.entity)) {
     return entityCell(v.entity, v.label, chips.entity(v.entity), v.icon ?? null, {
       keepShown: chips.keepLabels === true,
+      quiet: chips.quiet === true,
     });
   }
   const contactId = chips?.contact ? contactFromUri(v.id) : null;
@@ -393,12 +398,20 @@ export function typedColumns<T extends Record<string, unknown>>(
           const badges = spec.badges;
           const inner: Formatter<T> = (_r, _c, _v, _col, row) => {
             const v = row?.[f] as Identity | null;
+            const counts = badges ? ((row?.[badges] as Chip[] | null) ?? []) : [];
             const chip = v ? identityChip(v, opts.chips) : null;
+            // A chip keeps the counts the plain label would carry beside it.
+            if (chip && badges && counts.length) {
+              const wrap = document.createElement("span");
+              wrap.className = "tg-identity";
+              wrap.append(chip, renderBadges(badges, counts));
+              return wrap;
+            }
             if (chip) return chip;
             return renderIdentity(
               v,
               !!row?.__hasChildren,
-              badges ? { field: badges, chips: (row?.[badges] as Chip[] | null) ?? [] } : null,
+              badges ? { field: badges, chips: counts } : null,
             );
           };
           return {
