@@ -166,6 +166,18 @@ export function lineLabels(picked: Listed[]): Map<string, string> {
 /// The time series about one document (an activity), listed together.
 export type About = { uuid: string; name: string; items: Listed[] };
 
+/// Why the list is empty, or null when it is not: `listed` is null on a
+/// root that keeps no time-series index.
+export function emptyListNote(listed: Listed[] | null): string | null {
+  if (listed === null) {
+    return "This data root keeps no time-series index, so there is nothing to chart.";
+  }
+  if (listed.length === 0) {
+    return "No time series yet. A Garmin, YoLink or AirVisual source writes them on its next sync.";
+  }
+  return null;
+}
+
 /// The time series that answer every word of `filter` in their human
 /// name, name, source or what they are about, grouped by source in
 /// source order. Within a source, the ones about the source as a whole
@@ -233,6 +245,44 @@ export function bandOf(a: Answered): Band[] | null {
       ? []
       : [{ x: toMs(a.time_kind, b.t), lo: si(a, b.min), hi: si(a, b.max) }],
   );
+}
+
+/// What a chart draws, as columns over one time axis: every instant, in
+/// milliseconds, at which any of `answers` has a point or a bucket; a
+/// column per answer's line, in SI units; and per answer its band's low
+/// and high columns, all null where the answer had every point. A column
+/// is null at an instant its answer has nothing at.
+export type Columns = {
+  xs: number[];
+  lines: (number | null)[][];
+  bands: { lo: (number | null)[]; hi: (number | null)[] }[];
+};
+
+export function columnsOf(answers: Answered[]): Columns {
+  const lines = answers.map(lineOf);
+  const bands = answers.map(bandOf);
+  const xs = [
+    ...new Set([...lines.flat().map((p) => p.x), ...bands.flatMap((b) => b ?? []).map((b) => b.x)]),
+  ].sort((a, b) => a - b);
+  const at = new Map(xs.map((x, i) => [x, i]));
+  const empty = () => xs.map((): number | null => null);
+  return {
+    xs,
+    lines: lines.map((line) => {
+      const col = empty();
+      for (const p of line) col[at.get(p.x)!] = p.y;
+      return col;
+    }),
+    bands: bands.map((band) => {
+      const lo = empty();
+      const hi = empty();
+      for (const b of band ?? []) {
+        lo[at.get(b.x)!] = b.lo;
+        hi[at.get(b.x)!] = b.hi;
+      }
+      return { lo, hi };
+    }),
+  };
 }
 
 /// About `count` round values covering `[lo, hi]`, ascending.

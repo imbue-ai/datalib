@@ -1,0 +1,57 @@
+# Claude.ai conversations and projects over its web API, signed in through
+# latchkey's `claude-ai` service with your browser's `sessionKey` cookie,
+# with every option set, and searchable.
+[[groups]]
+id = "claude"
+name = "Claude"
+type = "claude"
+
+[[steps]]
+group = "claude"
+function = "ingest"
+
+# When to give up on rate limits. The download always backs off and
+# retries; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "enterprise"
+
+[steps.params.api]
+since = "2025-01-01"                  # only conversations updated on or after this (YYYY-MM-DD
+                                      # or RFC 3339); move it back to backfill; unset is all
+refresh_most_recent_n_chat_count = 3  # fetch the 3 most recently updated conversations
+                                      # again every run; unset fetches only what changed
+conv_uuids = [                        # only these conversations, by id or pasted link;
+  "https://claude.ai/chat/550e8400-e29b-41d4-a716-446655440000",  # default [] is all
+]
+projects = true                       # also mirror Claude Projects: description, instructions
+                                      # and knowledge documents; default true
+project_uuids = [                     # only these projects, by id or pasted link;
+  "6ba7b810-9dad-11d1-80b4-00c04fd430c8",                         # default [] is all
+]
+
+[[steps]]
+group = "claude"
+function = "render_markdown"
+inputs = ["claude/ingest"]
+
+[steps.params]
+max_project_doc_bytes = 131072  # cut a project knowledge document's text at this many
+                                # bytes on the project's page; default 131072 (128 KiB)
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "claude"
+function = "keyword_index"
+inputs = ["claude/render_markdown"]
+
+[[steps]]
+group = "claude"
+function = "embed"
+inputs = ["claude/keyword_index"]

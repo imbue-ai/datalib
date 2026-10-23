@@ -1525,6 +1525,287 @@ mod gc {
     }
 }
 
+// ── Trees, and keeping one through a fold ───────────────────────────
+
+mod trees {
+    use super::*;
+
+    async fn tree(c: &mut SqliteConnection, rev: &str) -> String {
+        text(c, &format!("SELECT dolt_hashof_db('{rev}')"))
+            .await
+            .expect("a tree hash")
+    }
+
+    async fn first_commit(c: &mut SqliteConnection) -> String {
+        text(
+            c,
+            "SELECT commit_hash FROM dolt_log WHERE message = 'Initialize data repository'",
+        )
+        .await
+        .expect("the store's first commit")
+    }
+
+    /// Folds `main`'s history into one commit on the store's first one,
+    /// then collects what only the folded commits reached.
+    async fn fold(c: &mut SqliteConnection) {
+        let init = first_commit(c).await;
+        ok(c, &format!("SELECT dolt_reset('--soft', '{init}')")).await;
+        commit(c, "fold").await;
+        ok(c, "SELECT dolt_gc()").await;
+    }
+
+    /// Re-commits `rev`'s tree as a child of the first commit and tags it
+    /// `tree/<hash>`: a pin that holds the tree and none of the history
+    /// that led to it.
+    async fn pin(c: &mut SqliteConnection, rev: &str) -> String {
+        let hash = tree(c, rev).await;
+        let init = first_commit(c).await;
+        ok(c, &format!("SELECT dolt_branch('pin_work', '{rev}')")).await;
+        ok(c, "SELECT dolt_checkout('pin_work')").await;
+        ok(c, &format!("SELECT dolt_reset('--soft', '{init}')")).await;
+        let snapshot = commit(c, "pin").await;
+        ok(c, "SELECT dolt_checkout('main')").await;
+        ok(c, "SELECT dolt_branch('-D', 'pin_work')").await;
+        let tag = format!("tree/{hash}");
+        ok(c, &format!("SELECT dolt_tag('{tag}', '{snapshot}')")).await;
+        tag
+    }
+
+    /// A tree hash names content, schema included: two commits that hold
+    /// the same rows share one, and a fold leaves `main`'s unchanged.
+    #[tokio::test]
+    async fn a_tree_hash_is_the_content_not_the_commit() {
+        let (s, rows) = store_with_rows().await;
+        let mut w = s.rw().await;
+        ok(&mut w, "INSERT INTO t VALUES ('c', 3)").await;
+        commit(&mut w, "add c").await;
+        ok(&mut w, "DELETE FROM t WHERE id = 'c'").await;
+        let back = commit(&mut w, "drop c").await;
+        assert_ne!(rows, back);
+        assert_eq!(tree(&mut w, &rows).await, tree(&mut w, &back).await);
+
+        ok(&mut w, "ALTER TABLE t ADD COLUMN note TEXT").await;
+        let widened = commit(&mut w, "widen").await;
+        assert_ne!(tree(&mut w, &back).await, tree(&mut w, &widened).await);
+
+        let before = tree(&mut w, "HEAD").await;
+        fold(&mut w).await;
+        assert_ne!(head(&mut w).await, widened);
+        assert_eq!(tree(&mut w, "HEAD").await, before);
+    }
+
+    /// A tree hash is not a ref: no read takes one. Nor is a commit a fold
+    /// dropped, once gc has run; `dolt_hashof` calls it an invalid ref
+    /// spec. A tree is found by filtering the log on its hash.
+    #[tokio::test]
+    async fn a_read_names_a_ref_never_a_tree_or_a_folded_commit() {
+        let (s, rows) = store_with_rows().await;
+        let mut w = s.rw().await;
+        let hash = tree(&mut w, &rows).await;
+        err_contains(
+            exec(&mut w, &format!("SELECT COUNT(*) FROM dolt_at_t('{hash}')")).await,
+            "ref not found",
+        );
+        ok(&mut w, "INSERT INTO t VALUES ('c', 3)").await;
+        commit(&mut w, "more").await;
+        fold(&mut w).await;
+        err_contains(
+            exec(&mut w, &format!("SELECT COUNT(*) FROM dolt_at_t('{rows}')")).await,
+            "ref not found",
+        );
+        err_contains(
+            exec(&mut w, &format!("SELECT dolt_hashof('{rows}')")).await,
+            "invalid ref spec",
+        );
+        let holding = |tree: &str| {
+            format!("SELECT commit_hash FROM dolt_log WHERE dolt_hashof_db(commit_hash) = '{tree}'")
+        };
+        assert!(
+            texts(&mut w, &holding(&hash)).await.is_empty(),
+            "the fold kept no commit with that tree"
+        );
+        let head_tree = tree(&mut w, "HEAD").await;
+        assert_eq!(
+            texts(&mut w, &holding(&head_tree)).await,
+            [head(&mut w).await],
+            "a tree is found by the commit that holds it"
+        );
+    }
+
+    /// A tree re-committed on the first commit and tagged by its hash
+    /// outlives a fold and gc of `main`, reads every way a commit does,
+    /// and holds none of the history between it and the fold.
+    #[tokio::test]
+    async fn a_tagged_tree_survives_a_fold_and_holds_only_itself() {
+        let (s, rows) = store_with_rows().await;
+        let mut w = s.rw().await;
+        let tag = pin(&mut w, &rows).await;
+        assert_eq!(tag, format!("tree/{}", tree(&mut w, &rows).await));
+        assert_eq!(tree(&mut w, &tag).await, tree(&mut w, &rows).await);
+
+        ok(&mut w, "UPDATE t SET v = 10 WHERE id = 'a'").await;
+        ok(&mut w, "INSERT INTO t VALUES ('c', 3)").await;
+        ok(
+            &mut w,
+            "CREATE TABLE big (id INTEGER PRIMARY KEY, body TEXT)",
+        )
+        .await;
+        ok(
+            &mut w,
+            "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 3000) \
+             INSERT INTO big SELECT i, hex(randomblob(150)) FROM n",
+        )
+        .await;
+        commit(&mut w, "fill").await;
+        ok(&mut w, "DROP TABLE big").await;
+        commit(&mut w, "empty").await;
+        ok(&mut w, "SELECT dolt_gc()").await;
+        let unfolded = s.size();
+        fold(&mut w).await;
+        assert!(
+            s.size() * 5 < unfolded,
+            "the pin kept the history: {} of {unfolded} bytes",
+            s.size()
+        );
+
+        assert_eq!(
+            texts(&mut w, &format!("SELECT id FROM dolt_at_t('{tag}')")).await,
+            ["a", "b"]
+        );
+        let mut d = connect(&s.at(&tag), true, Duration::from_secs(5)).await;
+        assert_eq!(int(&mut d, "SELECT SUM(v) FROM t").await, 3);
+        assert_eq!(
+            texts(
+                &mut w,
+                &format!(
+                    "SELECT coalesce(to_id, from_id) || ':' || diff_type \
+                     FROM dolt_diff_t('{tag}', 'main')"
+                )
+            )
+            .await,
+            ["a:modified", "c:added"]
+        );
+    }
+
+    /// A detached reader holds its commit against nothing: a fold and gc
+    /// in another process that drop the commit leave the reader on a store
+    /// that no longer has it, and its next read of history is "malformed".
+    /// A tag on the commit keeps it whole. The fold runs in the `doltlite`
+    /// shell, a second process, as a real one would.
+    #[tokio::test]
+    async fn a_fold_elsewhere_breaks_a_reader_on_a_dropped_commit_unless_tagged() {
+        for tagged in [false, true] {
+            let (s, rows) = store_with_rows().await;
+            let mut w = s.rw().await;
+            if tagged {
+                ok(&mut w, &format!("SELECT dolt_tag('held', '{rows}')")).await;
+            }
+            ok(&mut w, "INSERT INTO t VALUES ('c', 3)").await;
+            commit(&mut w, "more").await;
+            let init = first_commit(&mut w).await;
+            w.close().await.expect("close");
+
+            let mut d = connect(&s.at(&rows), true, Duration::from_secs(5)).await;
+            assert_eq!(int(&mut d, "SELECT COUNT(*) FROM dolt_log").await, 2);
+            let (folded, out) = shell(&[
+                &s.path.display().to_string(),
+                &format!(
+                    "SELECT dolt_reset('--soft', '{init}'); \
+                     SELECT dolt_commit('-Am', 'fold'); SELECT dolt_gc();"
+                ),
+            ]);
+            assert!(folded, "{out}");
+            let read = exec(&mut d, "SELECT COUNT(*) FROM dolt_log").await;
+            if tagged {
+                assert_eq!(read, Ok(()), "tagged");
+            } else {
+                err_contains(read, "malformed");
+            }
+        }
+    }
+
+    /// The search applet keeps one read-only connection for the app's life
+    /// and reads each request in a transaction of its own. A fold and gc in
+    /// another process leave it whole: the request in flight finishes on
+    /// the tree it began on, and the next one reads the folded `main`.
+    #[tokio::test]
+    async fn a_read_only_connection_reads_on_across_a_fold_elsewhere() {
+        let s = Store::new();
+        let mut w = s.rw().await;
+        ok(
+            &mut w,
+            "CREATE TABLE big (id INTEGER PRIMARY KEY, body TEXT)",
+        )
+        .await;
+        // Several times SQLite's default page cache, so a scan reads the file.
+        ok(
+            &mut w,
+            "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 30000) \
+             INSERT INTO big SELECT i, hex(randomblob(150)) FROM n",
+        )
+        .await;
+        commit(&mut w, "fill").await;
+        ok(
+            &mut w,
+            "UPDATE big SET body = hex(randomblob(150)) WHERE id <= 15000",
+        )
+        .await;
+        let before = commit(&mut w, "more").await;
+        let init = first_commit(&mut w).await;
+        let scan = "SELECT count(*) || ':' || sum(length(body)) || ':' || max(body) FROM big";
+        let expected = text(&mut w, scan).await;
+        w.close().await.expect("close");
+
+        let mut r = s.ro().await;
+        ok(&mut r, "BEGIN").await;
+        assert_eq!(
+            int(&mut r, "SELECT length(body) FROM big WHERE id = 1").await,
+            300
+        );
+        let (folded, out) = shell(&[
+            &s.path.display().to_string(),
+            &format!(
+                "SELECT dolt_reset('--soft', '{init}'); \
+                 SELECT dolt_commit('-Am', 'fold'); SELECT dolt_gc();"
+            ),
+        ]);
+        assert!(folded, "{out}");
+        assert_eq!(text(&mut r, scan).await, expected, "the request in flight");
+        ok(&mut r, "COMMIT").await;
+
+        ok(&mut r, "BEGIN").await;
+        assert_eq!(text(&mut r, scan).await, expected, "the next request");
+        assert_ne!(
+            text(&mut r, "SELECT dolt_hashof('HEAD')").await.as_deref(),
+            Some(before.as_str())
+        );
+        assert_eq!(int(&mut r, "SELECT count(*) FROM dolt_log").await, 2);
+        ok(&mut r, "COMMIT").await;
+    }
+
+    /// Doltlite has no verb that drops history: no `dolt_squash_history`
+    /// (Dolt, a separate project, has one), no orphan branch, and
+    /// `dolt_gc` takes no options.
+    /// A fold is the whole kit; this fails when that changes.
+    #[tokio::test]
+    async fn there_is_no_verb_that_drops_history() {
+        let (s, _) = store_with_rows().await;
+        let mut w = s.rw().await;
+        err_contains(
+            exec(&mut w, "SELECT dolt_squash_history('-m', 'x')").await,
+            "no such function",
+        );
+        err_contains(
+            exec(&mut w, "SELECT dolt_checkout('--orphan', 'x')").await,
+            "--orphan",
+        );
+        err_contains(
+            exec(&mut w, "SELECT dolt_gc('--full')").await,
+            "wrong number of arguments",
+        );
+    }
+}
+
 // ── Full-text search (FTS5) ─────────────────────────────────────────
 
 mod fts5 {

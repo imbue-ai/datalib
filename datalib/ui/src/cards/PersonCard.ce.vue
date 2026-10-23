@@ -1,27 +1,24 @@
 <script setup lang="ts">
-// A person: your contact, when the handle is linked to one, and what each
-// source says about them, each source in a section of its own. Opened by
+// A person: your contact, when the handle is linked to one (edited in
+// `ContactEditor`), and what each source says about them, each source in
+// a section of its own. Opened by
 // double-clicking a person chip. What it shows is `person.ts`; who a
 // handle is comes from `people`, the resolver every chip shares. Every
 // handle on the card is a chip, pale blue where it is linked to a
 // contact and grey where not, with the same click, double-click and
 // right-click as a chip in a document (docs/dev/chips.md § Clicks).
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import { copyToClipboard } from "@/clipboard";
-import { iconUrl } from "@/config/icons";
 import { formatStamp } from "@/config/timeFormat";
-import { openExternal } from "@/externalLinks";
-import { pushToast } from "@/toasts";
 import { personSource, searchSource } from "./cardSources";
 import { isBrowserClick } from "./chatLink";
 import { uriFromEntity } from "./chipLinks";
 import ChipMenu from "./ChipMenu.ce.vue";
+import ContactEditor from "./ContactEditor.ce.vue";
+import { holds, sourceValues, valueText, type SourceValue } from "./contactFields";
+import EntityChip from "./EntityChip.ce.vue";
 import {
   canLinkHandles,
   chipCell,
-  chipMenu,
-  composeUri,
-  copyText,
   createContact,
   handleValue,
   identifierCell,
@@ -29,12 +26,20 @@ import {
   nameOf,
   NOBODY,
   people,
-  searchQueryFor,
   suggestedName,
-  type ChipMenuEntry,
-  type ChipMenuId,
   type NormalizedContact,
 } from "./contacts";
+import {
+  chipElAt,
+  chipMenuOf,
+  chipOf,
+  everythingWith,
+  runChipAction,
+  type Chip,
+  type ChipEntryId,
+  type ChipEntry,
+  type ChipHost,
+} from "./chipActions";
 import { entities } from "./entities";
 import HandlePopover from "./HandlePopover.ce.vue";
 import {
@@ -99,6 +104,19 @@ which). Sources are never merged: one phone number can carry a WhatsApp
 account, a name in a text-message backup and a Signal profile, and they
 need not agree. The source of the chip you opened this from comes
 first.</p>
+<p>Under <em>Your contact</em>, <em>Edit</em> changes its name, note and
+fields. What you type is kept as a draft that only you see, even after a
+reload, until <em>Save</em> publishes it or <em>Discard</em> drops it. If
+the contact was changed somewhere else meanwhile, Save says so and marks
+what changed rather than overwriting it. A photo is set or removed at
+once.</p>
+<p>Each source's <em>Copy to …</em> copies what that source says (a number, a
+title, an address) into your contact's draft, one value at a time or all at
+once; you pick where sources disagree. A copied value does not follow its
+source afterwards: the card says when the source now says something else.
+An address or number field says whether it is linked: <em>Link it</em>
+links it to this contact, and one linked to someone else shows whose it
+is.</p>
 <p>Every handle is a chip: pale blue when it is linked to a contact,
 grey when not. Click one to link it, right-click for its menu, or use a
 section's <em>Link</em> button to link all of that source's unlinked
@@ -114,13 +132,8 @@ function sourceLabel(sourceId: string): string {
   return entities.get(sourceUri(sourceId))?.label || sourceId;
 }
 
-function sourceIcon(sourceId: string): string | null {
-  void version.value;
-  return iconUrl(entities.get(sourceUri(sourceId))?.icon ?? null);
-}
-
 function everything() {
-  props.ctx.host.openCards(searchSource(searchQueryFor(props.handle)));
+  props.ctx.host.openCards(searchSource(everythingWith(props.handle, model.value.mine)));
 }
 
 // ── Chips ─────────────────────────────────────────────────────────────
@@ -163,9 +176,13 @@ type Popover = {
   y: number;
 };
 const popover = ref<Popover | null>(null);
-const menu = ref<{ chip: HTMLElement; entries: ChipMenuEntry[]; x: number; y: number } | null>(
-  null,
-);
+const menu = ref<{
+  el: HTMLElement;
+  chip: Chip;
+  entries: ChipEntry[];
+  x: number;
+  y: number;
+} | null>(null);
 
 function openPopover(chip: HTMLElement, x: number, y: number) {
   const handle = chip.dataset.handle ?? "";
@@ -187,69 +204,43 @@ function onClick(ev: MouseEvent) {
   if (canLinkHandles()) openPopover(chip, ev.clientX, ev.clientY);
 }
 
+/// What a chip's entries do on this card: open a card beside it, but not
+/// this person's own again, and link a handle where the chip was pressed.
+function chipHost(el: HTMLElement, x: number, y: number): ChipHost {
+  return {
+    openCard: (source) => {
+      if (source !== personSource(props.handle, { seenIn: null })) props.ctx.host.openCards(source);
+    },
+    editLink: () => openPopover(el, x, y),
+  };
+}
+
 function onDblClick(ev: MouseEvent) {
-  const chip = chipAt(ev);
-  if (!chip) return;
+  const el = chipElAt(ev.target);
+  const chip = el ? chipOf(el) : null;
+  if (!el || !chip) return;
   ev.preventDefault();
-  const handle = chip.dataset.handle ?? "";
-  if (handle !== props.handle) props.ctx.host.openCards(personSource(handle, { seenIn: null }));
+  void runChipAction("open", chip, chipHost(el, ev.clientX, ev.clientY));
 }
 
 function onContextMenu(ev: MouseEvent) {
-  const chip = chipAt(ev);
-  if (!chip) return;
+  const el = chipElAt(ev.target);
+  const chip = el ? chipOf(el) : null;
+  if (!el || !chip) return;
   ev.preventDefault();
-  const handle = chip.dataset.handle ?? "";
   menu.value = {
+    el,
     chip,
-    entries: chipMenu(
-      handle,
-      chip.dataset.shownAs ?? "",
-      people.get(handle) ?? NOBODY,
-      canLinkHandles(),
-    ),
+    entries: chipMenuOf(chip, canLinkHandles()),
     x: ev.clientX,
     y: ev.clientY,
   };
 }
 
-async function onMenuPick(id: ChipMenuId) {
+async function onMenuPick(id: string) {
   const m = menu.value;
   menu.value = null;
-  if (!m) return;
-  const handle = m.chip.dataset.handle ?? "";
-  const name = people.get(handle)?.mine
-    ? nameOf(people.get(handle)!.mine!)
-    : (m.chip.dataset.label ?? "");
-  const copy = async (text: string) => {
-    if (await copyToClipboard(text)) pushToast(`Copied ${text}`, "info");
-    else pushToast("The clipboard refused the copy");
-  };
-  switch (id) {
-    case "open":
-      if (handle !== props.handle) props.ctx.host.openCards(personSource(handle, { seenIn: null }));
-      break;
-    case "compose": {
-      const mailto = composeUri(handle);
-      if (mailto) void openExternal(mailto);
-      break;
-    }
-    case "copy-name":
-      await copy(name);
-      break;
-    case "copy-id":
-      await copy(handleValue(handle));
-      break;
-    case "copy-both":
-      await copy(copyText(handle, name));
-      break;
-    case "search":
-      props.ctx.host.openCards(searchSource(searchQueryFor(handle)));
-      break;
-    case "edit":
-      openPopover(m.chip, m.x, m.y);
-      break;
-  }
+  if (m) await runChipAction(id as ChipEntryId, m.chip, chipHost(m.el, m.x, m.y));
 }
 
 // ── Linking a source's handles to your contact ────────────────────────
@@ -322,6 +313,19 @@ async function create() {
   }
 }
 
+// ── Copying what a source says into your contact ─────────────────────
+
+const editor = ref<InstanceType<typeof ContactEditor> | null>(null);
+
+function held(v: SourceValue): boolean {
+  const current = editor.value?.current;
+  return !!current && holds(current, v);
+}
+
+async function copyFrom(s: PersonSection, values: SourceValue[], all = false) {
+  await editor.value?.copy(values, { source_id: s.sourceId, key: s.contact.key }, all);
+}
+
 function photoOf(c: NormalizedContact): string | null {
   return c.photo_url ?? null;
 }
@@ -385,15 +389,14 @@ const headPhoto = computed(() => {
           </span>
         </li>
       </ul>
-      <dl v-if="sectionLines(model.mine, formatStamp).length" class="person-lines">
-        <template
-          v-for="line in sectionLines(model.mine, formatStamp)"
-          :key="line.label + line.value"
-        >
-          <dt>{{ line.label }}</dt>
-          <dd>{{ line.value }}</dd>
-        </template>
-      </dl>
+      <ContactEditor
+        ref="editor"
+        :contact-id="model.mine.key"
+        :photo-url="model.mine.photo_url ?? null"
+        :linked="model.mine.handles"
+        :sources="model.sections.map((s) => s.contact)"
+        :source-name="sourceLabel"
+      />
     </section>
 
     <section
@@ -404,20 +407,25 @@ const headPhoto = computed(() => {
       :aria-label="sourceLabel(s.sourceId)"
     >
       <h2 class="person-source">
-        <img
-          v-if="sourceIcon(s.sourceId)"
-          class="person-mark"
-          :src="sourceIcon(s.sourceId)!"
-          alt=""
+        <EntityChip
+          :uri="sourceUri(s.sourceId)"
+          :shown="s.sourceId"
+          quiet
+          :open-card="(source) => props.ctx.host.openCards(source)"
         />
-        {{ sourceLabel(s.sourceId) }}
         <span v-if="s.seenHere" class="person-badge">seen here</span>
         <span v-if="s.via.length" class="person-via">
           via {{ s.via.map(handleValue).join(", ") }}
         </span>
       </h2>
       <div class="person-record">
-        <img v-if="photoOf(s.contact)" class="person-photo" :src="photoOf(s.contact)!" alt="" />
+        <img
+          v-if="photoOf(s.contact)"
+          class="person-photo"
+          :src="photoOf(s.contact)!"
+          alt=""
+          :title="model.mine ? 'Drag onto your contact’s photo to use it' : undefined"
+        />
         <div>
           <p class="person-record-name">{{ nameOf(s.contact) }}</p>
           <ul class="person-handles">
@@ -454,6 +462,32 @@ const headPhoto = computed(() => {
           <dd>{{ line.value }}</dd>
         </template>
       </dl>
+      <details v-if="model.mine && sourceValues(s.contact).length" class="person-copy">
+        <summary>Copy to {{ model.title }}</summary>
+        <ul class="person-copy-values">
+          <li v-for="(v, i) in sourceValues(s.contact)" :key="i">
+            <span>{{ valueText(v) }}</span>
+            <span v-if="held(v)" class="person-muted">in your contact</span>
+            <button
+              v-else
+              type="button"
+              class="person-button"
+              :aria-label="`${v.part === 'name' ? 'Use' : 'Copy'} ${valueText(v)}`"
+              @click.stop="copyFrom(s, [v])"
+            >
+              {{ v.part === "name" ? "Use" : "Copy" }}
+            </button>
+          </li>
+        </ul>
+        <button
+          type="button"
+          class="person-button"
+          :disabled="sourceValues(s.contact).every((v) => v.part === 'name' || held(v))"
+          @click.stop="copyFrom(s, sourceValues(s.contact), true)"
+        >
+          Copy all
+        </button>
+      </details>
     </section>
 
     <p v-if="!model.mine && model.sections.length === 0" class="person-muted person-empty">
@@ -464,7 +498,7 @@ const headPhoto = computed(() => {
       :entries="menu.entries"
       :x="menu.x"
       :y="menu.y"
-      @pick="(id) => onMenuPick(id as ChipMenuId)"
+      @pick="onMenuPick"
       @close="menu = null"
     />
     <HandlePopover
@@ -580,10 +614,6 @@ const headPhoto = computed(() => {
   font-size: var(--datalib-font-size-small);
   color: var(--datalib-accent);
 }
-.person-mark {
-  width: 14px;
-  height: 14px;
-}
 .person-record {
   display: flex;
   gap: 0.6rem;
@@ -622,6 +652,26 @@ const headPhoto = computed(() => {
 }
 .person-lines dd {
   margin: 0;
+}
+.person-copy {
+  margin-top: 0.4rem;
+}
+.person-copy summary {
+  cursor: pointer;
+  color: var(--datalib-muted);
+}
+.person-copy-values {
+  list-style: none;
+  margin: 0.3rem 0;
+  padding: 0;
+}
+.person-copy-values li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.person-copy-values li + li {
+  margin-top: 0.15rem;
 }
 .person-empty {
   margin-top: 0.75rem;

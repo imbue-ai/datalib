@@ -20,10 +20,15 @@ async fn rows_of(state: AppState) -> serde_json::Value {
 }
 
 async fn rows_at(state: AppState, uri: &str) -> serde_json::Value {
+    rows_by(state, "GET", uri).await
+}
+
+async fn rows_by(state: AppState, method: &str, uri: &str) -> serde_json::Value {
     let app = router(state);
     let resp = app
         .oneshot(
             Request::builder()
+                .method(method)
                 .uri(uri)
                 .header("x-datalib-token", TEST_TOKEN)
                 .body(Body::empty())
@@ -129,6 +134,18 @@ async fn entities_answer_a_chip_for_a_group_and_a_step() {
     let step = &entities["datalib:step/slack/ingest"];
     assert_eq!(step["label"], "Work Slack · Ingest");
     assert_eq!(step["icon"], "step:ingest");
+    // Each carries its row of the Sources table, whose actions are the
+    // chip's menu.
+    assert_eq!(group["row"]["id"], "slack");
+    assert_eq!(group["row"]["kind"], "group");
+    assert_eq!(step["row"]["id"], "slack/ingest");
+    let actions: Vec<&str> = step["row"]["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["id"].as_str().unwrap())
+        .collect();
+    assert!(actions.contains(&"sync"), "{actions:?}");
 }
 
 /// The tree: a row per group, its steps and applets under it by
@@ -685,16 +702,16 @@ async fn a_download_step_names_its_raw_store_once_it_exists() {
         b"CTLD",
     )
     .unwrap();
-    let uri = "/api/manage/rows?refresh=1";
+    let uri = "/api/manage/rows/refresh";
 
-    let before = by_key(&rows_at(state(tmp.path()).await, uri).await);
+    let before = by_key(&rows_by(state(tmp.path()).await, "POST", uri).await);
     assert_eq!(
         before["slack/ingest"]["raw_store_path"],
         serde_json::Value::Null
     );
 
     std::fs::write(ingest.join("entities.doltlite_db"), b"CTLD").unwrap();
-    let rows = by_key(&rows_at(state(tmp.path()).await, uri).await);
+    let rows = by_key(&rows_by(state(tmp.path()).await, "POST", uri).await);
     let named: Vec<(&String, &serde_json::Value)> = rows
         .iter()
         .filter(|(_, r)| !r["raw_store_path"].is_null())

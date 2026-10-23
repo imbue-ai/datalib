@@ -35,6 +35,7 @@ pub mod binaries;
 pub mod boot;
 pub mod config_upgrade;
 pub mod connect;
+mod data;
 pub mod disk_free;
 mod embed;
 pub mod frontend;
@@ -43,6 +44,8 @@ pub mod lock;
 pub mod logging;
 pub mod loop_guard;
 pub mod manage;
+pub mod oauth_client;
+pub mod params_check;
 pub mod plugins;
 pub mod probe;
 pub mod prometheus;
@@ -54,8 +57,9 @@ pub mod ui_state;
 pub mod usage;
 pub mod watch;
 
-pub use auth::{ApiToken, TrustedProxy};
+pub use auth::ApiToken;
 pub use boot::build_state;
+pub use embed::FrameAncestors;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -82,11 +86,9 @@ pub struct AppState {
     /// startup and published to `<root>/system/api-token`; see
     /// [`crate::auth`] for the scheme and why it exists.
     pub api_token: ApiToken,
-    /// The reverse proxy whose identity header stands in for the token,
-    /// and whose page frames the app. `None` for a server reached
-    /// directly, which is every desktop and `datalib-http` from a
-    /// terminal.
-    pub trusted_proxy: Option<TrustedProxy>,
+    /// Who may frame the app page (`$DATALIB_FRAME_ANCESTORS`); nobody,
+    /// unless Imbue Studio's launcher names its frames.
+    pub frame_ancestors: FrameAncestors,
     /// Bytes on disk, over time. A background task folds what it finds in
     /// here so `GET /api/pipeline/storage` reads a snapshot rather than
     /// walking the disk per open tab. See [`crate::usage`].
@@ -189,10 +191,7 @@ pub fn user_bin_dir() -> Option<PathBuf> {
 
 pub fn router(state: AppState) -> Router {
     // Cloned out before `state` is moved into `with_state` below.
-    let gate = auth::Gate {
-        token: state.api_token.clone(),
-        trusted_proxy: state.trusted_proxy,
-    };
+    let gate = state.api_token.clone();
     Router::new()
         .route("/api/health", get(health))
         .route("/api/accounts", get(accounts))
@@ -214,6 +213,10 @@ pub fn router(state: AppState) -> Router {
             post(connect::set_credential),
         )
         .route(
+            "/api/latchkey/{service}/oauth_client",
+            post(connect::set_oauth_client),
+        )
+        .route(
             "/api/latchkey/connect/{id}/status",
             get(connect::connect_status),
         )
@@ -221,6 +224,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/probe/{id}", get(probe::probe_status))
         .route("/api/dag", get(get_dag))
         .route("/api/manage/rows", get(manage::get_manage_rows))
+        .route(
+            "/api/manage/rows/refresh",
+            post(manage::refresh_manage_rows),
+        )
         .route("/api/entities", post(manage::post_entities))
         // Prometheus's own path, so a scrape config needs nothing but the
         // address and the token.
@@ -241,6 +248,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/sync/sources", get(sync_sources))
         .route("/api/pipeline/storage", get(pipeline_storage))
+        .route(
+            "/api/pipeline/storage/refresh",
+            post(pipeline_storage_refresh),
+        )
         .route("/api/pipeline/disk", get(pipeline_disk))
         .route("/api/pipeline/history", get(history::tree_history))
         .route("/api/requests", get(requests_list).post(request_open))
@@ -249,6 +260,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/steps/{id}/turn_on", post(step_turn_on))
         .route("/api/reset", post(reset_steps))
         .route("/api/purge", post(purge_groups))
+        .route("/api/compact", post(compact_steps))
         .route("/api/runs", get(runs_list))
         .route("/api/processes", get(processes_list))
         .route("/api/log/{seq}", get(log_line))
@@ -281,6 +293,12 @@ pub fn router(state: AppState) -> Router {
         // namespace, so byte-identical components resolve to one URL
         // and the browser evaluates them once. See frontend.rs.
         .route("/modules/{hash}", get(get_module))
+        // What a step keeps, by the address a page links it with
+        // (data.rs): its blob store's rows, and nothing else of the step.
+        .route(
+            "/data/{group}/{function}/{kind}/{*rest}",
+            get(data::get_data),
+        )
         // The applet proxy. `{*rest}` keeps the whole remaining path,
         // which the applet sees verbatim.
         .route("/applet/{id}/{*rest}", any(proxy_applet))
@@ -488,7 +506,7 @@ async fn proxy_impl(
 }
 
 /// An applet's answer, as the browser gets it. What an applet serves is
-/// data — an attachment out of a render tree — and a document among it
+/// data, written by whoever wrote the applet, and a document among it
 /// must not run in the app's origin, where it would hold the session: it
 /// gets the sandbox policy that runs nothing. A script or wasm file
 /// goes out as bytes, so the app page's `script-src 'self'` cannot run
@@ -1001,7 +1019,8 @@ pub struct PutConfigRequest {
 #[derive(Debug, Serialize)]
 pub struct ConfigCheckResponse {
     /// Whether this text is acceptable — and, for the PUT, whether it
-    /// was written. True only when every entry loads; a warning (advice
+    /// was written. True only when every entry loads and every built-in
+    /// step's params are ones a sync would accept; a warning (advice
     /// about a config that runs exactly as written) does not make it
     /// false. See `put_config` for why this door is stricter than the
     /// loader.
@@ -1015,7 +1034,23 @@ pub struct ConfigCheckResponse {
 }
 
 async fn check_config(Json(req): Json<PutConfigRequest>) -> Json<ConfigCheckResponse> {
-    Json(config_verdict(&req.text))
+    Json(full_verdict(&req.text).await)
+}
+
+/// [`config_verdict`], with each built-in step's params held to what a
+/// sync would accept: a step a sync would refuse is reported against its
+/// line like any other problem, and the text is not written.
+async fn full_verdict(text: &str) -> ConfigCheckResponse {
+    let mut verdict = config_verdict(text);
+    let refused = params_check::refused(text).await;
+    if !refused.is_empty() {
+        verdict.ok = false;
+        if verdict.error.is_none() {
+            verdict.error = refused.first().map(|d| d.describe());
+        }
+        verdict.diagnostics.extend(refused);
+    }
+    verdict
 }
 
 fn config_verdict(text: &str) -> ConfigCheckResponse {
@@ -1037,7 +1072,8 @@ fn config_verdict(text: &str) -> ConfigCheckResponse {
 /// can fix it now — so nothing that drops an entry is written. A warning is
 /// returned and the file is written anyway: it changes nothing about what
 /// runs, and refusing it would make the editor unable to save a config the
-/// app is happily running on.
+/// app is happily running on. A built-in step whose params a sync would
+/// refuse is refused here too (`params_check`), for the same reason.
 ///
 /// Every diagnostic comes back, not just the first, so a caller fixing a
 /// config needs one round-trip rather than one per mistake. Writes via a
@@ -1051,7 +1087,7 @@ async fn put_config(
 
     // Validate the submitted text before it touches the filesystem, so
     // a rejected config never gets written even transiently.
-    let verdict = config_verdict(&req.text);
+    let verdict = full_verdict(&req.text).await;
     if !verdict.ok {
         return Ok(Json(verdict));
     }
@@ -1585,29 +1621,43 @@ async fn sync_sources(State(s): State<AppState>) -> Json<Vec<SourceInfo>> {
     )
 }
 
-/// Query for [`pipeline_storage`].
+/// The query a reading route takes only to refuse it: `refresh` was a
+/// GET flag once, and is a POST now.
 #[derive(Debug, Deserialize)]
-struct StorageParams {
-    /// Held as text rather than as a `bool`, and read leniently below.
-    /// `serde_urlencoded` accepts only the literals `true` and `false`
-    /// for a bool, so `?refresh=1` — what a person, a curl, or an agent
-    /// actually writes — comes back as a 400 on the whole request
-    /// rather than as a flag that didn't take.
+pub struct RefreshParams {
     #[serde(default)]
     refresh: Option<String>,
 }
 
-pub(crate) fn flag_is_set(v: Option<&str>) -> bool {
-    matches!(v, Some("") | Some("1") | Some("true") | Some("yes"))
+/// A walk of the data root is a `POST {route}/refresh`, never a GET: a
+/// GET is what any link can make the browser send with the person's
+/// cookie — an `<img>` in an email, a card's argument, a page on
+/// another site. A GET still asking for one is refused by name rather
+/// than quietly answered from the last walk.
+pub(crate) fn refuse_refresh(route: &str, p: &RefreshParams) -> Result<(), (StatusCode, String)> {
+    match p.refresh {
+        None => Ok(()),
+        Some(_) => Err((
+            StatusCode::BAD_REQUEST,
+            format!("a GET never walks the data root; POST {route}/refresh does"),
+        )),
+    }
 }
 
 async fn pipeline_storage(
     State(s): State<AppState>,
-    Query(p): Query<StorageParams>,
-) -> Json<usage::PipelineStorage> {
-    if flag_is_set(p.refresh.as_deref()) {
-        usage::sample_on_demand(&s.usage, &s.app, s.root.clone(), &s.root_tx).await;
-    }
+    Query(p): Query<RefreshParams>,
+) -> Result<Json<usage::PipelineStorage>, (StatusCode, String)> {
+    refuse_refresh("/api/pipeline/storage", &p)?;
+    Ok(storage_snapshot(&s).await)
+}
+
+async fn pipeline_storage_refresh(State(s): State<AppState>) -> Json<usage::PipelineStorage> {
+    usage::sample_on_demand(&s.usage, &s.app, s.root.clone(), &s.root_tx).await;
+    storage_snapshot(&s).await
+}
+
+async fn storage_snapshot(s: &AppState) -> Json<usage::PipelineStorage> {
     let steps = usage::declared_trees(&s.config_path());
     Json(s.usage.snapshot(s.root.as_path(), &steps).await)
 }
@@ -1680,6 +1730,15 @@ struct OpenRequest {
 #[derive(Debug, Deserialize)]
 struct ResetRequest {
     /// Step ids.
+    targets: Vec<String>,
+    #[serde(default)]
+    by: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CompactRequest {
+    /// Step ids; none for every step that takes the verb.
+    #[serde(default)]
     targets: Vec<String>,
     #[serde(default)]
     by: Option<String>,
@@ -1875,6 +1934,19 @@ async fn purge_groups(
 ) -> Result<StatusCode, Refusal> {
     let by = req.by.unwrap_or_else(|| "ui".to_string());
     wiped(s.sync.purge(&req.groups, &by).await)
+}
+
+/// `POST /api/compact` — fold away the history nothing reads, and give
+/// back the disk it held (`step_protocol.md` § Compact). No targets is
+/// every step that takes the verb. 204 once done; 202 while it runs,
+/// once the steps it holds have stopped; 409, with the reason, for a
+/// step it cannot compact.
+async fn compact_steps(
+    State(s): State<AppState>,
+    Json(req): Json<CompactRequest>,
+) -> Result<StatusCode, Refusal> {
+    let by = req.by.unwrap_or_else(|| "ui".to_string());
+    wiped(s.sync.compact(&req.targets, &by).await)
 }
 
 fn wiped(answer: Result<supervisor::WipeAnswer, String>) -> Result<StatusCode, Refusal> {

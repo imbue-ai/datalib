@@ -5,9 +5,23 @@
 use datalib_source_common::{byte_size, LocalPath, SourceCommon};
 use serde::{Deserialize, Serialize};
 
+/// This source's config stanzas, for `datalib-step help`.
+pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "fswalk",
+        toml: include_str!("../examples/minimal_fswalk.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "fswalk",
+        toml: include_str!("../examples/complete_fswalk.toml"),
+    },
+];
+
 /// The pdf-owned slice of a `pdf` source. The scan root is
 /// `fswalk.path`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PdfConfig {
     /// Shared per-source envelope (paths + cross-source tunables),
@@ -20,20 +34,21 @@ pub struct PdfConfig {
     pub fswalk: Option<LocalPath>,
 
     /// Gitignore-shaped patterns pruned from the scan, in addition to
-    /// any `.gitignore` files found in the tree. Matched by the
-    /// `ignore` crate (the one ripgrep uses), so `**`, anchored `/`,
-    /// and character classes all behave as expected.
+    /// any `.gitignore` files found in the tree. Matched the way ripgrep
+    /// matches them, so `**`, anchored `/`, and character classes all
+    /// behave as expected.
     #[serde(default)]
     pub ignore: Vec<String>,
 
-    /// Skip files larger than this — bytes, or a string like `"1 GB"`.
-    /// A multi-gigabyte PDF is nearly always a scanned book or a
-    /// corrupt file, and either way we do not want one document to
-    /// stall a whole scan. `None` means no ceiling.
+    /// Skip files larger than this — bytes, or a string like `"1 GB"`;
+    /// 512 MiB unless set. A multi-gigabyte PDF is nearly always a
+    /// scanned book or a corrupt file, and either way we do not want
+    /// one document to stall a whole scan.
     #[serde(
         default = "default_max_bytes",
         deserialize_with = "byte_size::deserialize_opt"
     )]
+    #[schemars(with = "Option<byte_size::ByteSize>")]
     pub max_bytes: Option<u64>,
 
     /// Run OCR over pages that carry no extractable text.
@@ -55,7 +70,10 @@ impl PdfConfig {
             );
         }
         if let Some(0) = self.max_bytes {
-            anyhow::bail!("pdf: `max_bytes = 0` would skip every file; omit it for no limit");
+            anyhow::bail!(
+                "pdf: `max_bytes = 0` would skip every file; omit it for the 512 MiB \
+                 default, or set a larger size"
+            );
         }
         Ok(())
     }
@@ -96,7 +114,9 @@ mod tests {
             max_bytes: Some(0),
             ..Default::default()
         };
-        assert!(c.validate().is_err());
+        let err = c.validate().unwrap_err().to_string();
+        // It once said "omit it for no limit"; omitting it gives 512 MiB.
+        assert!(err.contains("512 MiB"), "{err}");
     }
 
     #[test]

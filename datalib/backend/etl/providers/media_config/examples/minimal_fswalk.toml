@@ -1,0 +1,21 @@
+# A folder of music, photos and video on disk, every file indexed with its
+# metadata and content hash. No sign-in; nothing but a path.
+[[groups]]
+id = "media"
+name = "Media"
+type = "media"
+
+[[steps]]
+group = "media"
+function = "ingest"
+
+[steps.params.fswalk]
+path = "~/Music"
+
+# Media renders no documents: query the raw store with `datalib-doltlite`.
+# This step writes the storage report every source gets, which is what
+# puts Media in the grid.
+[[steps]]
+group = "media"
+function = "render_markdown"
+inputs = ["media/ingest"]

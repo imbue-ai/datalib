@@ -10,7 +10,7 @@ the parts of that markdown you have to know about before changing it.
 Every message starts with a line like:
 
 ```markdown
-## <span class="msg-author">Picard</span> <time class="msg-ts" datetime="2364-04-11T00:00:00+00:00" title="2364-04-11 00:00:00 UTC">Apr 11th, 2364 at 00:00</time>
+## <span class="msg-author">Picard</span> <time class="msg-ts" datetime="2364-04-11T00:00:00+00:00" title="2364-04-11 00:00:00 UTC">Sat Apr 11th, 2364 at 00:00</time>
 ```
 
 **Keep the `##`.** It is not there to be a heading on screen — the UI
@@ -25,7 +25,9 @@ The visible time is short; the full instant is in the `title`
 attribute, one hover away. It is deliberately absolute rather than
 Slack's "Today at 11:02": this file is written once and read for years,
 so a word meaning "the day this was rendered" would be wrong by the
-next morning.
+next morning. Every other stamp a render writes takes the same form
+([`data_architecture_parse_and_render.md`](../../../../docs/dev/data_architecture_parse_and_render.md)
+§"A stamp on a page").
 
 **An author with a handle is a chip link**, where the provider has
 one (`NormalizedChatItem::author_handle`, `datalib_handle`):
@@ -264,6 +266,14 @@ actually use survive. **A renderer that starts emitting a new tag or
 attribute has to add it there**, or the page will silently strip it;
 `ui/tests/sanitize.test.ts` is where the vocabulary is pinned.
 
+A reference the browser would load from the app's own origin is a
+request with the person's cookie, so only a document's attachments may
+load: the sanitizer resolves each one as the browser would and keeps it
+only when it is exactly an attachment's blob-store address,
+`/data/<group>/<function>/blob/<hash>`, or a part of an email stored
+there, `…/blob/<hash>/part/<hash>`. Anything else on this origin,
+relative references included, is dropped.
+
 The sanitizer is not the boundary, though. The page draws the body in a
 frame whose policy is `script-src 'none'` (`ui/src/cards/docFrame.ts`),
 so markup that gets past the sanitizer still cannot run.
@@ -272,8 +282,9 @@ straight into a document's frame. The UI's own code still reaches into
 the frame, so the `data-section-uuid` wrappers work as before.
 
 No `<iframe>` survives the sanitizer, and the frame's policy frames
-nothing. A document beside a markdown, such as an `.html` attachment in
-`blobs/`, is served under a policy that runs no script at all
+nothing. An attachment that is a document, such as an `.html` file at
+its `/data/…` address, is served under a policy that
+runs no script at all
 (`DATA_DOCUMENT_CSP` in `http/src/embed.rs`). A chart in a document is
 a `<div data-time-series="…">`, which the UI's own code draws into the
 frame (`docs/dev/time_series.md` §"Charts in documents").

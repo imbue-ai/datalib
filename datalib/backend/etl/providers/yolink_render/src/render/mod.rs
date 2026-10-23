@@ -20,4 +20,5 @@ pub mod units;
 /// `datalib_id` under the configured source, every row carries its
 /// backpointer, and a device's `upstream_id` is its name rather than
 /// its kind. Every uuid moved.
-pub const RENDER_VERSION: u32 = 8;
+/// v9: every stamp on a page is a `<time>`.
+pub const RENDER_VERSION: u32 = 9;

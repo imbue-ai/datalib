@@ -12,21 +12,26 @@
 //! the page authenticates with no per-callsite changes.
 //!
 //! The cookie is the right carrier here, and a token injected into the HTML
-//! is not: a page on `evil.com` can neither read ours (`HttpOnly`) nor make
-//! the browser send it (`SameSite=Lax`), and DNS rebinding fails closed,
-//! whereas a token in the served HTML is readable by anything that can read
-//! the page.
+//! is not: a page on `evil.com` can neither read ours (`HttpOnly`) nor
+//! receive it (it is host-only: no `Domain`, so the browser sends it to this
+//! host alone), and DNS rebinding fails closed, whereas a token in the
+//! served HTML is readable by anything that can read the page.
 //!
-//! Behind a reverse proxy that authenticates every request itself and frames
-//! the app in its own page, both measures get in the way: the proxy's page
-//! is another site, so the browser withholds the `SameSite=Lax` cookie from
-//! the frame, and `frame-ancestors 'none'` blanks it. `$DATALIB_TRUSTED_PROXY`
-//! names such a proxy ([`TrustedProxy`]). Behind it, a request whose identity
-//! header says the requester is the owner is let in without the token, a
-//! request it marks as a visitor is refused, and the page's policy leaves
-//! `frame-ancestors` to the proxy (`embed::app_csp`). The token keeps
-//! working for everything else — an agent's `curl` on the same host — and a
-//! request that carries neither is refused as before.
+//! It is set twice, under two names, because no one cookie works everywhere
+//! the app runs. The first is `SameSite=Lax`, for the app opened as the page
+//! itself. The second is `SameSite=None; Secure; Partitioned`, for the app
+//! framed by a page on another site (Imbue Studio): the browser keeps it in a
+//! jar keyed by that top-level site and sends it nowhere else. A `Lax` cookie
+//! is not even stored inside a cross-site frame, and Safari 18.5 through 26.1
+//! rejects any cookie marked `Partitioned`. Neither copy is ever a
+//! `SameSite=None` cookie in the shared jar.
+//!
+//! A cookie is a credential the browser attaches by itself, so a page on
+//! the same *site* — another port of `127.0.0.1`, another app of a Studio
+//! workspace — could make it send one. [`fetch_policy`] refuses those.
+//!
+//! Who may frame the app is `embed::FrameAncestors`; nothing here trusts a
+//! proxy's word in place of the token.
 
 use axum::body::Body;
 use axum::extract::{Request, State};
@@ -53,123 +58,51 @@ pub const TOKEN_QUERY_KEY: &str = "token";
 /// `Authorization` is already spoken for.
 pub const TOKEN_HEADER: &str = "x-datalib-token";
 
-/// Env naming the reverse proxy whose identity header stands in for the
-/// token ([`TrustedProxy::as_str`] spellings). Unset: every request needs
-/// the token.
-pub const TRUSTED_PROXY_ENV: &str = "DATALIB_TRUSTED_PROXY";
+/// The env var that used to name a proxy whose identity header stood in
+/// for the token. Setting it is now an error rather than ignored, so an
+/// operator who relied on it learns that requests need the token.
+pub const RETIRED_TRUSTED_PROXY_ENV: &str = "DATALIB_TRUSTED_PROXY";
 
-/// A reverse proxy this server may stand behind: it authenticates every
-/// request before forwarding it, strips any copy of its identity header a
-/// client sent, stamps its own, and frames the app in a page of its own.
-/// Only such a proxy can be named here — the header is taken at its word.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, strum::IntoStaticStr, strum::VariantArray,
-)]
-#[strum(serialize_all = "snake_case")]
-pub enum TrustedProxy {
-    /// Imbue Studio's forwarder. `X-Imbue-Identity` is compact JSON with an
-    /// `owner` boolean, plus the account's `user_id` and `email` when the
-    /// workspace is shared.
-    Imbue,
-}
-
-impl TrustedProxy {
-    pub fn as_str(self) -> &'static str {
-        self.into()
-    }
-
-    /// `None` for a spelling this build does not know.
-    pub fn parse(s: &str) -> Option<Self> {
-        s.parse().ok()
-    }
-
-    /// `$DATALIB_TRUSTED_PROXY`: unset or empty names no proxy; a spelling
-    /// this build does not know is refused rather than read as "none",
-    /// since the operator meant to trust something.
-    pub fn from_env() -> anyhow::Result<Option<Self>> {
-        let Ok(value) = std::env::var(TRUSTED_PROXY_ENV) else {
-            return Ok(None);
-        };
-        let value = value.trim();
-        if value.is_empty() {
-            return Ok(None);
-        }
-        match Self::parse(value) {
-            Some(proxy) => Ok(Some(proxy)),
-            None => anyhow::bail!(
-                "{TRUSTED_PROXY_ENV}={value:?} names no proxy this build knows; it knows {}",
-                <Self as strum::VariantArray>::VARIANTS
-                    .iter()
-                    .map(|p| p.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-        }
-    }
-
-    fn identity_header(self) -> &'static str {
-        match self {
-            TrustedProxy::Imbue => "x-imbue-identity",
-        }
-    }
-
-    fn requester(self, headers: &HeaderMap) -> Requester {
-        let Some(raw) = headers.get(self.identity_header()) else {
-            return Requester::Unvouched;
-        };
-        match self {
-            TrustedProxy::Imbue => parse_imbue_identity(raw.as_bytes()),
-        }
+pub fn refuse_retired_env() -> anyhow::Result<()> {
+    match std::env::var(RETIRED_TRUSTED_PROXY_ENV) {
+        Ok(v) if !v.trim().is_empty() => anyhow::bail!(
+            "{RETIRED_TRUSTED_PROXY_ENV} is no longer read: every request needs the API \
+             token, behind a proxy too. Unset it, and set {} to the origins that frame \
+             the app",
+            crate::embed::FRAME_ANCESTORS_ENV
+        ),
+        _ => Ok(()),
     }
 }
 
-/// What a trusted proxy's identity header says about the requester.
+/// What [`fetch_policy`] makes of a request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Requester {
-    /// No identity header: the request did not come through the proxy.
-    Unvouched,
-    /// The proxy vouches for the workspace's owner.
-    Owner,
-    /// Someone the owner shared the workspace with. The whole mirror is
-    /// the owner's, so a visitor gets none of it.
-    Visitor,
-    /// A header the proxy would not have written.
-    Malformed,
+pub(crate) enum FetchVerdict {
+    Allow,
+    FromAnotherSite,
 }
 
-fn parse_imbue_identity(raw: &[u8]) -> Requester {
-    #[derive(serde::Deserialize)]
-    struct Identity {
-        owner: bool,
+/// Where a request came from, judged by the `Sec-Fetch-*` headers a page
+/// cannot set. Every supported browser sends them; a client that sends
+/// none (`curl`, an agent) is not a page, and is let through to the
+/// credential check.
+///
+/// 1. A navigation — `GET` or `HEAD` with `Sec-Fetch-Mode: navigate`,
+///    top-level or into a frame — is allowed from anywhere, so a link, or
+///    Studio's frame, opens the app. That rests on no `GET` route having a
+///    side effect, and on every document served as data carrying its
+///    `sandbox` policy.
+/// 2. Anything else marked `cross-site` or `same-site` is refused.
+///    `same-origin` and `none` (typed in the address bar) are not.
+pub(crate) fn fetch_policy(method: &Method, headers: &HeaderMap) -> FetchVerdict {
+    let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+    let navigation = (*method == Method::GET || *method == Method::HEAD)
+        && header("sec-fetch-mode") == Some("navigate");
+    match header("sec-fetch-site") {
+        _ if navigation => FetchVerdict::Allow,
+        None | Some("same-origin") | Some("none") => FetchVerdict::Allow,
+        Some(_) => FetchVerdict::FromAnotherSite,
     }
-    match serde_json::from_slice::<Identity>(raw) {
-        Ok(Identity { owner: true }) => Requester::Owner,
-        Ok(Identity { owner: false }) => Requester::Visitor,
-        Err(_) => Requester::Malformed,
-    }
-}
-
-/// A state-changing request the proxy vouched for but a page on another
-/// origin made the browser send. The proxy stamps the owner's identity on
-/// everything it forwards, a sibling app's `POST` included; the browser's
-/// own `Sec-Fetch-Site` tells that from the app's own request. Absent on a
-/// non-browser client, which the proxy has already authenticated.
-fn is_cross_site_write(method: &Method, headers: &HeaderMap) -> bool {
-    if method.is_safe() {
-        return false;
-    }
-    match headers.get("sec-fetch-site").and_then(|v| v.to_str().ok()) {
-        None | Some("same-origin") | Some("none") => false,
-        Some(_) => true,
-    }
-}
-
-/// What [`require_token`] is configured with: the token, and the proxy
-/// whose word is taken in its place, if any.
-#[derive(Clone)]
-pub struct Gate {
-    pub token: ApiToken,
-    pub trusted_proxy: Option<TrustedProxy>,
 }
 
 fn is_url_safe(s: &str) -> bool {
@@ -178,8 +111,9 @@ fn is_url_safe(s: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~'))
 }
 
-/// The server's token plus the two paths derived from it: the cookie it
-/// mints and the file it's published in. Cheap to clone (one `Arc`).
+/// The server's token plus what is derived from it: the names of the two
+/// cookies it mints and the file it's published in. Cheap to clone (one
+/// `Arc`).
 #[derive(Clone)]
 pub struct ApiToken(Arc<Inner>);
 
@@ -260,16 +194,35 @@ impl ApiToken {
         Ok(())
     }
 
-    fn cookie_header(&self) -> HeaderValue {
-        // No `Secure`: we're on plain http over loopback, and `Secure`
-        // would make the browser drop the cookie entirely. No
-        // `Max-Age`/`Expires` either — a session cookie is right for a
-        // token that dies with the process anyway.
-        HeaderValue::from_str(&format!(
-            "{}={}; Path=/; HttpOnly; SameSite=Lax",
-            self.0.cookie_name, self.0.value
-        ))
-        .expect("token and cookie name are URL-safe ASCII")
+    fn partitioned_cookie_name(&self) -> String {
+        format!("{}_partitioned", self.0.cookie_name)
+    }
+
+    /// The two copies of the session (see the module header). The `Lax`
+    /// one has no `Secure`, since the app is also served over plain http
+    /// on loopback, where a browser drops a `Secure` cookie; the
+    /// partitioned one needs `Secure`, and is only stored where the page
+    /// is https. Neither has `Max-Age`/`Expires`: a session cookie is
+    /// right for a token that dies with the process anyway.
+    fn cookie_headers(&self) -> [HeaderValue; 2] {
+        let value = &self.0.value;
+        [
+            format!(
+                "{}={value}; Path=/; HttpOnly; SameSite=Lax",
+                self.0.cookie_name
+            ),
+            format!(
+                "{}={value}; Path=/; HttpOnly; Secure; SameSite=None; Partitioned",
+                self.partitioned_cookie_name()
+            ),
+        ]
+        .map(|v| HeaderValue::from_str(&v).expect("token and cookie name are URL-safe ASCII"))
+    }
+
+    fn append_cookies(&self, resp: &mut Response) {
+        for cookie in self.cookie_headers() {
+            resp.headers_mut().append(header::SET_COOKIE, cookie);
+        }
     }
 
     fn credential(&self, req: &Request<Body>) -> Option<Credential> {
@@ -300,7 +253,9 @@ impl ApiToken {
             }
         }
 
-        // Several cookies can share the header; scan for ours by name.
+        // Several cookies can share the header; scan for either of ours by
+        // name.
+        let partitioned = self.partitioned_cookie_name();
         for cookie in headers
             .get_all(header::COOKIE)
             .iter()
@@ -308,7 +263,9 @@ impl ApiToken {
             .flat_map(|v| v.split(';'))
         {
             if let Some((name, val)) = cookie.split_once('=') {
-                if name.trim() == self.0.cookie_name && self.matches(val.trim()) {
+                let name = name.trim();
+                let ours = name == self.0.cookie_name || name == partitioned;
+                if ours && self.matches(val.trim()) {
                     return Some(Credential::Cookie);
                 }
             }
@@ -398,37 +355,26 @@ fn is_api(path: &str) -> bool {
     path.starts_with("/api/")
 }
 
-pub async fn require_token(State(gate): State<Gate>, req: Request<Body>, next: Next) -> Response {
+pub async fn require_token(
+    State(auth): State<ApiToken>,
+    req: Request<Body>,
+    next: Next,
+) -> Response {
     let path = req.uri().path().to_string();
     if is_public(&path) {
         return next.run(req).await;
     }
-    let auth = &gate.token;
+    if fetch_policy(req.method(), req.headers()) == FetchVerdict::FromAnotherSite {
+        return forbidden(&path, "a page on another site or port made this request");
+    }
+    let auth = &auth;
 
     match auth.credential(&req) {
-        None => match gate.trusted_proxy.map(|p| p.requester(req.headers())) {
-            Some(Requester::Owner) if is_cross_site_write(req.method(), req.headers()) => {
-                forbidden(&path, "a page on another origin made this request")
-            }
-            Some(Requester::Owner) => next.run(req).await,
-            Some(Requester::Visitor) => forbidden(
-                &path,
-                "this Datalib is only available to the workspace's owner",
-            ),
-            Some(Requester::Malformed) => {
-                tracing::warn!(
-                    "{} identity header the proxy would not have written on {} {path}; refused",
-                    gate.trusted_proxy.map_or("", |p| p.as_str()),
-                    req.method()
-                );
-                unauthorized(auth, &path)
-            }
-            None | Some(Requester::Unvouched) => unauthorized(auth, &path),
-        },
+        None => unauthorized(auth, &path),
 
         Some(Credential::Cookie) => next.run(req).await,
 
-        // Token in the URL of a document request: hand back the cookie
+        // Token in the URL of a document request: hand back the cookies
         // and bounce to the same URL without it, so it doesn't survive
         // in history / bookmarks / `Referer`. `/api/*` is left alone —
         // a redirect would break the `fetch`/`EventSource` callers that
@@ -439,8 +385,7 @@ pub async fn require_token(State(gate): State<Gate>, req: Request<Body>, next: N
                 None => path,
             };
             let mut resp = Redirect::to(&target).into_response();
-            resp.headers_mut()
-                .append(header::SET_COOKIE, auth.cookie_header());
+            auth.append_cookies(&mut resp);
             resp
         }
 
@@ -451,8 +396,7 @@ pub async fn require_token(State(gate): State<Gate>, req: Request<Body>, next: N
             // that already sends the header has no use for a cookie,
             // and this keeps `Set-Cookie` off every JSON response.
             if !api {
-                resp.headers_mut()
-                    .append(header::SET_COOKIE, auth.cookie_header());
+                auth.append_cookies(&mut resp);
             }
             resp
         }
@@ -603,76 +547,93 @@ mod tests {
     }
 
     #[test]
-    fn trusted_proxy_spellings_round_trip() {
-        for proxy in <TrustedProxy as strum::VariantArray>::VARIANTS {
-            assert_eq!(TrustedProxy::parse(proxy.as_str()), Some(*proxy));
+    fn both_cookies_are_host_only_and_only_the_framed_one_is_partitioned() {
+        let t = token();
+        let [lax, framed] = t.cookie_headers().map(|v| v.to_str().unwrap().to_string());
+        assert!(
+            lax.starts_with(&format!("{}=t0ken;", t.0.cookie_name)),
+            "{lax}"
+        );
+        assert!(
+            lax.contains("SameSite=Lax") && !lax.contains("Partitioned"),
+            "{lax}"
+        );
+        assert!(framed.starts_with(&format!("{}=t0ken;", t.partitioned_cookie_name())));
+        for attr in ["Secure", "SameSite=None", "Partitioned", "HttpOnly"] {
+            assert!(framed.contains(attr), "{framed} lacks {attr}");
         }
-        assert_eq!(TrustedProxy::parse("imbue"), Some(TrustedProxy::Imbue));
-        assert_eq!(TrustedProxy::parse("Imbue"), None);
-        assert_eq!(TrustedProxy::parse(""), None);
-        assert_eq!(TrustedProxy::parse("nginx"), None);
+        for cookie in [&lax, &framed] {
+            assert!(
+                !cookie.contains("Domain"),
+                "a Domain would send it to other hosts: {cookie}"
+            );
+        }
     }
 
-    /// The header is read for what it says and nothing more: extra
-    /// fields (the shared workspace's `user_id` and `email`) are fine,
-    /// anything that is not a JSON object with a boolean `owner` is not.
+    /// The request policy as a table: method, `Sec-Fetch-Site`,
+    /// `Sec-Fetch-Mode`, verdict.
     #[test]
-    fn the_imbue_identity_header_names_the_owner_or_a_visitor() {
-        let requester = |raw: &str| {
-            let mut headers = HeaderMap::new();
-            headers.insert("x-imbue-identity", HeaderValue::from_str(raw).unwrap());
-            TrustedProxy::Imbue.requester(&headers)
-        };
-        assert_eq!(requester(r#"{"owner":true}"#), Requester::Owner);
-        assert_eq!(
-            requester(r#"{"owner":true,"user_id":"u1","email":"a@b.example"}"#),
-            Requester::Owner
-        );
-        assert_eq!(
-            requester(r#"{"owner":false,"user_id":"u2","email":"c@d.example"}"#),
-            Requester::Visitor
-        );
-        for bad in ["", "true", "{}", r#"{"owner":"true"}"#, "owner=true", "{"] {
-            assert_eq!(requester(bad), Requester::Malformed, "{bad:?}");
-        }
-        assert_eq!(
-            TrustedProxy::Imbue.requester(&HeaderMap::new()),
-            Requester::Unvouched
-        );
-    }
-
-    #[test]
-    fn a_write_from_another_origin_is_told_by_sec_fetch_site() {
-        let with = |site: Option<&str>| {
+    fn fetch_policy_cases() {
+        use FetchVerdict::{Allow, FromAnotherSite};
+        let cases: &[(Method, Option<&str>, Option<&str>, FetchVerdict)] = &[
+            // The app's own calls, and a URL typed in the address bar.
+            (Method::GET, Some("same-origin"), Some("cors"), Allow),
+            (Method::POST, Some("same-origin"), Some("cors"), Allow),
+            (Method::PUT, Some("none"), Some("navigate"), Allow),
+            // `curl`, an agent: no fetch metadata at all.
+            (Method::POST, None, None, Allow),
+            // A link from anywhere, and Studio's frame, open the app.
+            (Method::GET, Some("cross-site"), Some("navigate"), Allow),
+            (Method::GET, Some("same-site"), Some("navigate"), Allow),
+            (Method::HEAD, Some("cross-site"), Some("navigate"), Allow),
+            // A page on another port, or another app of the workspace,
+            // posting a form or fetching: refused.
+            (
+                Method::POST,
+                Some("same-site"),
+                Some("navigate"),
+                FromAnotherSite,
+            ),
+            (
+                Method::POST,
+                Some("same-site"),
+                Some("no-cors"),
+                FromAnotherSite,
+            ),
+            (
+                Method::POST,
+                Some("cross-site"),
+                Some("navigate"),
+                FromAnotherSite,
+            ),
+            // An embedded `<img>` or `fetch` reading from another site.
+            (
+                Method::GET,
+                Some("cross-site"),
+                Some("no-cors"),
+                FromAnotherSite,
+            ),
+            (
+                Method::GET,
+                Some("same-site"),
+                Some("cors"),
+                FromAnotherSite,
+            ),
+        ];
+        for (method, site, mode, want) in cases {
             let mut headers = HeaderMap::new();
             if let Some(site) = site {
                 headers.insert("sec-fetch-site", HeaderValue::from_str(site).unwrap());
             }
-            headers
-        };
-        // The browser's own request from the app page, and a non-browser
-        // client that sends no fetch metadata.
-        assert!(!is_cross_site_write(
-            &Method::POST,
-            &with(Some("same-origin"))
-        ));
-        assert!(!is_cross_site_write(&Method::PUT, &with(Some("none"))));
-        assert!(!is_cross_site_write(&Method::POST, &with(None)));
-        // A sibling app on the same site, and a foreign site.
-        assert!(is_cross_site_write(&Method::POST, &with(Some("same-site"))));
-        assert!(is_cross_site_write(
-            &Method::DELETE,
-            &with(Some("cross-site"))
-        ));
-        // Reads are never writes, wherever they come from.
-        assert!(!is_cross_site_write(
-            &Method::GET,
-            &with(Some("cross-site"))
-        ));
-        assert!(!is_cross_site_write(
-            &Method::HEAD,
-            &with(Some("same-site"))
-        ));
+            if let Some(mode) = mode {
+                headers.insert("sec-fetch-mode", HeaderValue::from_str(mode).unwrap());
+            }
+            assert_eq!(
+                fetch_policy(method, &headers),
+                *want,
+                "{method} site={site:?} mode={mode:?}"
+            );
+        }
     }
 
     #[test]

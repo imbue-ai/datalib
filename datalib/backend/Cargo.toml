@@ -16,7 +16,7 @@
 
 [package]
 name = "datalib-crates"
-version = "0.43.0"
+version = "0.44.0"
 edition = "2021"
 rust-version = "1.83"
 publish = false
@@ -46,7 +46,6 @@ cipher = { version = "0.5", features = ["block-padding"] }
 clap = { version = "4.5", features = ["derive", "env"] }
 csv = "1"
 ctr = "0.10"
-emojis = "0.9"
 flate2 = "1.0"
 futures = "0.3"
 # GHASH and AES-CTR, composed by whatsapp-backup into a hand-rolled GCM
@@ -93,11 +92,15 @@ regex = "1.11"
 # root store, hence `rustls-no-provider` and `datalib_fetch::tls_config()`
 # on every client.
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls-no-provider"] }
-runfiles = "0.2"
+runfiles = "0.3"
 # `debug-embed`: without it a debug build reads the UI from the
 # compile-time path at run time, which a Bazel-built binary cannot.
 rust-embed = { version = "8", features = ["debug-embed", "interpolate-folder-path"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+# The config crates' params as JSON Schema: `datalib-step help <type>
+# <method>` prints each field from it, and a test holds every source's
+# complete example to it.
+schemars = "1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.11"

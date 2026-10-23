@@ -19,7 +19,8 @@ chats.
 
 1. Install Beeper Texts, sign in, connect the networks you want, and let
    it run long enough to fill its cache.
-2. Add the source to `config.toml`:
+2. Add it from the "Add source" dialog (Beeper, under "On this
+   computer"), choosing the Beeper folder, or by hand in `config.toml`:
    ```toml
    [[groups]]
    id = "beeper"

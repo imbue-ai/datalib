@@ -1,890 +1,373 @@
-# Boilerplate config enumerating EVERY supported data source.
+# Every source datalib can mirror, one group per way in, ready to copy.
 #
-# This is a reference, not a turn-key config. It declares one group per
-# source `type` with realistic-looking defaults for paths, hostnames,
-# and identifiers so you can copy the entries you need and fill in your
-# own values. Running it as-is would try to sync everything at once —
-# most sources need credentials (via latchkey), a backup pulled off a
-# phone, or an export on disk. Delete (or comment out) the entries you
-# don't want; there is no per-source `enabled` flag in this format.
+# GENERATED: each group below is its source's complete example stanza,
+# `datalib/backend/etl/providers/<type>_config/examples/complete_<method>.toml`,
+# which a test loads and plans against the source's own config structs.
+# Edit those, then regenerate this file:
 #
-# Shape: this is the format `datalib-dag` runs (see
-# configs/dag_example.toml for a walkthrough and
-# docs/dev/step_protocol.md for the step contract). Each source is a
-# `[[groups]]` entry with a `type`, plus two steps under it, each
-# declared as `group` + `function`: `ingest` brings the data into
-# `<group>/ingest` (its `params` carry the provider's knobs — the shared
-# `common` envelope, the method table, …), and `render_markdown` turns
-# that raw store into markdown under `<group>/render_markdown` (its
-# `params` carry only render-phase knobs; most providers have none).
-# Neither writes a `command`: a step without one is the built-in
-# `datalib-step`, which reads the function and the group's `type` from
-# the environment. A step's id is composed as `<group>/<function>` and
-# never written; it is what another step's `inputs` name. Two shared
-# fan-in steps under the `unified_document_index` group index every source: one
-# reads its rendered markdown, the other its own qmd search steps.
+#   bazel run //datalib/backend/datalib_step:all_sources.update
 #
-# TOML shape: each entry is a `[[groups]]`, `[[steps]]` or `[[applets]]`
-# table, and a step's `params` are `[steps.params.…]` sub-tables. A
-# table header ends the table it sits in, so within a step the plain
-# keys (`group`, `function`, `inputs`) come first and the
-# params headers last — and `data_root` below has to precede the first
-# `[[…]]` header entirely.
+# `datalib-step examples <type>` prints the same stanzas and the minimal
+# ones, and `datalib-step help <type> <method>` lists every option.
 #
-# Sources that support more than one input mode include a group for
-# each: `email` (JMAP vs. Gmail API vs. Takeout .mbox), `contacts`
-# (Fastmail vs. another CardDAV server vs. local .vcf files) and
-# `calendar` (Google vs. Fastmail vs. another CalDAV server vs. .ics
-# files).
+# This is a reference, not a turn-key config: running it would sync every
+# source at once, and most need credentials (through latchkey), a backup
+# pulled off a phone, or an export on disk. Copy the groups you want, and
+# the index groups' inputs that name them.
 #
-# A group may also carry a `name = "…"` — free text the UI shows in
-# place of its `id`. It is the renameable half of the identity: the
-# `id` is the folder under `data_root` and the path the search index
-# already holds for every document in it, so it is chosen once, while
-# the `name` can change whenever the source stops being what you first
-# called it.
+# Shape: each source is a `[[groups]]` entry with a `type`, and steps under
+# it, each declared as `group` + `function`. `ingest` brings the data into
+# `<group>/ingest` (its `params` hold one method table, `[steps.params.api]`,
+# `[steps.params.export]`, …, and the options every method shares);
+# `render_markdown` turns that raw store into documents under
+# `<group>/render_markdown`; `keyword_index` and `embed` put them in the
+# search index; a source whose data is also numbers over time adds
+# `render_time_series`. Neither writes a `command`: a step without one is
+# the built-in `datalib-step`. A step's id is `<group>/<function>`, never
+# written; it is what another step's `inputs` name.
 #
-# There is no global `defaults` block in the steps format —
-# cross-source knobs (`blob_size_limit_bytes`, `download_params`, …)
-# are set per source under the download step's `params.common` (see
-# the slack steps below for an example).
+# TOML shape: a table header ends the table it sits in, so within a step
+# the plain keys (`group`, `function`, `inputs`) come first and the params
+# headers last, and `data_root` comes before the first `[[…]]` header.
 #
-# Any `*_bytes` knob takes an integer of bytes (`5_000_000` — TOML
-# allows the separators) or a string with a unit: "5 MB", "512 KiB".
-# KB/MB/GB are ×1000, KiB/MiB/GiB ×1024.
+# A group's `id` is the folder under `data_root` its data goes in, chosen
+# once; its `name` is free text the app shows and can change any time.
 #
-# REDACT: several stanzas below carry device-history secrets (yolink) or
-# would, if filled in, hold tokens/keys. Never commit a real one.
+# Any `*_bytes` option takes an integer of bytes or a string with a unit:
+# "5 MB", "512 KiB". KB/MB/GB are ×1000, KiB/MiB/GiB ×1024.
+#
+# Every value here is made up. Never commit a real token, key or address.
 
-data_root = "~/datalib"  # Base dir; everything is written under here. `~` is expanded.
+data_root = "~/datalib"
 
-# Where each source's raw store lives: a source's raw data
-# (entities.doltlite_db + blobs.sqlite + the events/ tape) is the
-# ingest step's tree, `<data_root>/<group>/ingest/`, and nothing else —
-# the runner versions that tree and the render step reads it by that
-# name. To keep a store on a bigger disk, put a symlink there. This is
-# purely about where WE store our copy; where a file-backed source's
-# data is read FROM is the `path` of its method table (`export`,
-# `backup`, `fswalk`, …) on the ingest step.
+# --- The indexes every source feeds -------------------------------------
 
-# --- Shared index steps -------------------------------------------------
-
-# The two fan-ins: the SQL index behind the grid UI, fed by every
-# source's rendered markdown, and the qmd aggregator, which runs after
-# every source's `keyword_index` and `embed` and keeps the search index
-# to the sources it names.
+# The SQL index behind the grid and search reads every source's documents;
+# the search index's aggregator reads every source's keyword index and
+# embeddings, and keeps the search index to the sources it names.
 [[groups]]
 id = "unified_document_index"
+name = "Document Index"
 
 [[steps]]
 group = "unified_document_index"
 function = "grid_index"
-inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "claude-code/render_markdown", "codex/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "fastmail-contacts/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "google-calendar/render_markdown", "fastmail-calendar/render_markdown", "icloud-calendar/render_markdown", "ics-calendar/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "garmin/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "facebook/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown", "ship-air/render_markdown", "apple-messages/render_markdown"]
+inputs = [
+  "airvisual/render_markdown",
+  "apple_messages/render_markdown",
+  "apple_photos/render_markdown",
+  "beeper/render_markdown",
+  "calendar-google/render_markdown",
+  "calendar-fastmail/render_markdown",
+  "calendar-caldav/render_markdown",
+  "calendar-ics/render_markdown",
+  "chatgpt/render_markdown",
+  "claude-api/render_markdown",
+  "claude-export/render_markdown",
+  "claude_code/render_markdown",
+  "codex/render_markdown",
+  "contacts-fastmail/render_markdown",
+  "contacts-carddav/render_markdown",
+  "contacts-vcf/render_markdown",
+  "email-jmap/render_markdown",
+  "email-gmail/render_markdown",
+  "email-mbox/render_markdown",
+  "facebook/render_markdown",
+  "fsindex/render_markdown",
+  "garmin/render_markdown",
+  "github/render_markdown",
+  "gitlab/render_markdown",
+  "google_drive/render_markdown",
+  "google_takeout/render_markdown",
+  "lightroom-catalog/render_markdown",
+  "lightroom-backups/render_markdown",
+  "linear/render_markdown",
+  "linkedin/render_markdown",
+  "media/render_markdown",
+  "notion/render_markdown",
+  "pdf/render_markdown",
+  "perseus/render_markdown",
+  "signal/render_markdown",
+  "slack/render_markdown",
+  "sms_backup_restore/render_markdown",
+  "whatsapp/render_markdown",
+  "yolink/render_markdown",
+]
 
 [[steps]]
 group = "unified_document_index"
 function = "qmd_aggregator"
-inputs = ["claude-api/keyword_index", "claude-api/embed", "claude-export/keyword_index", "claude-export/embed", "claude-code/keyword_index", "claude-code/embed", "codex/keyword_index", "codex/embed", "chatgpt/keyword_index", "chatgpt/embed", "slack/keyword_index", "slack/embed", "github/keyword_index", "github/embed", "gitlab/keyword_index", "gitlab/embed", "notion/keyword_index", "notion/embed", "fastmail/keyword_index", "fastmail/embed", "gmail/keyword_index", "gmail/embed", "gmail-takeout/keyword_index", "gmail-takeout/embed", "fastmail-contacts/keyword_index", "fastmail-contacts/embed", "icloud-contacts/keyword_index", "icloud-contacts/embed", "vcard-contacts/keyword_index", "vcard-contacts/embed", "google-calendar/keyword_index", "google-calendar/embed", "fastmail-calendar/keyword_index", "fastmail-calendar/embed", "icloud-calendar/keyword_index", "icloud-calendar/embed", "ics-calendar/keyword_index", "ics-calendar/embed", "beeper/keyword_index", "beeper/embed", "perseus/keyword_index", "perseus/embed", "yolink/keyword_index", "garmin/keyword_index", "ship-air/keyword_index", "ship-air/embed", "signal/keyword_index", "signal/embed", "whatsapp/keyword_index", "whatsapp/embed", "facebook/keyword_index", "facebook/embed", "linkedin/keyword_index", "linkedin/embed", "google-takeout/keyword_index", "google-takeout/embed", "sms-backup-restore/keyword_index", "sms-backup-restore/embed", "pdfs/keyword_index", "pdfs/embed", "apple-messages/keyword_index", "apple-messages/embed"]
-
-# --- Claude / Anthropic -------------------------------------------------
-
-# Claude.ai conversation mirror over the web API. Credentials come from
-# latchkey at runtime (see first_time_user.md). An empty `api` table
-# fetches every conversation across every org; the knobs bound the work.
-[[groups]]
-id = "claude-api"
-type = "claude"
-
-[[steps]]
-group = "claude-api"
-function = "ingest"
-
-[steps.params.api]
-since = "2025-01-01"                  # only sync conversations updated at/after this
-                                      # (RFC 3339 or YYYY-MM-DD; move it back to backfill)
-refresh_most_recent_n_chat_count = 3  # force-refetch top-N by updated_at
-# conv_uuids = [                      # or: fetch only these (UUIDs or paste-able URLs)
-#   "https://claude.ai/chat/550e8400-e29b-41d4-a716-446655440000",
-# ]
-# projects = false                    # skip Claude Projects (default: on). Each
-                                      # project renders as its own page — description,
-                                      # custom instructions, knowledge documents — and
-                                      # its name fills the `project` grid column on
-                                      # every conversation inside it.
-# project_uuids = [                   # or: mirror only these projects (UUIDs or URLs).
-#   "https://claude.ai/project/6ba7b810-9dad-11d1-80b4-00c04fd430c8",
-# ]
-
-[[steps]]
-group = "claude-api"
-function = "render_markdown"
-inputs = ["claude-api/ingest"]
-
-[[steps]]
-group = "claude-api"
-function = "keyword_index"
-inputs = ["claude-api/render_markdown"]
-
-[[steps]]
-group = "claude-api"
-function = "embed"
-inputs = ["claude-api/keyword_index"]
-
-# An unpacked Claude data export already on disk: the same `claude`
-# type, with `export` as the method instead of `api`. No network and no
-# credentials — the ingest step just reads the export's JSON and writes
-# it into the same raw store the API download fills, so one renderer
-# serves both. Note the split every file-backed source uses: `path` is
-# where the export is read FROM; our copy lives in the ingest step's
-# tree, `<data_root>/claude-export/ingest`.
-#
-# The export is a complete snapshot, so a re-exported tree that no
-# longer mentions a conversation drops it from the store — the one
-# thing reading the tree in place could never notice.
-[[groups]]
-id = "claude-export"
-type = "claude"
-
-[[steps]]
-group = "claude-export"
-function = "ingest"
-[steps.params.export]
-path = "~/backups/claude-export"
-
-[[steps]]
-group = "claude-export"
-function = "render_markdown"
-inputs = ["claude-export/ingest"]
-
-[[steps]]
-group = "claude-export"
-function = "keyword_index"
-inputs = ["claude-export/render_markdown"]
-
-[[steps]]
-group = "claude-export"
-function = "embed"
-inputs = ["claude-export/keyword_index"]
-
-# --- Claude Code --------------------------------------------------------
-
-# Claude Code sessions — terminal, desktop app and IDE extension — read
-# off the store Claude Code itself keeps on this machine. No API, no
-# credentials. An empty `sessions` table reads the standard location,
-# `~/.claude/projects`; give it a `path` for a copy of that folder from
-# another machine. Every content record of every transcript becomes a
-# raw row; render emits one document per session, and one per subagent
-# transcript, with tool calls and results folded away. A session Claude
-# Code later deletes stays in the mirror.
-[[groups]]
-id = "claude-code"
-type = "claude_code"
-
-[[steps]]
-group = "claude-code"
-function = "ingest"
-[steps.params.sessions]
-
-[[steps]]
-group = "claude-code"
-function = "render_markdown"
-inputs = ["claude-code/ingest"]
-# How much of one tool result reaches the page. The raw store keeps all
-# of it; a tool result that echoes a whole file is cut here, with a
-# marker saying so.
-[steps.params]
-max_tool_result_bytes = 16384
-
-[[steps]]
-group = "claude-code"
-function = "keyword_index"
-inputs = ["claude-code/render_markdown"]
-
-[[steps]]
-group = "claude-code"
-function = "embed"
-inputs = ["claude-code/keyword_index"]
-
-# --- Codex --------------------------------------------------------------
-
-# Codex CLI threads, read off the store Codex itself keeps on this
-# machine. No API, no credentials. An empty `sessions` table reads the
-# standard home, `~/.codex`; give it a `path` for a copy of that folder
-# from another machine. Every line of every rollout becomes a raw row;
-# render emits one document per thread, and one per sub-agent thread,
-# with tool calls and outputs folded away. A thread Codex later deletes
-# stays in the mirror.
-[[groups]]
-id = "codex"
-type = "codex"
-
-[[steps]]
-group = "codex"
-function = "ingest"
-[steps.params.sessions]
-
-[[steps]]
-group = "codex"
-function = "render_markdown"
-inputs = ["codex/ingest"]
-# How much of one tool output reaches the page. The raw store keeps all
-# of it; an output that echoes a whole file is cut here, with a marker
-# saying so.
-[steps.params]
-max_tool_result_bytes = 16384
-
-[[steps]]
-group = "codex"
-function = "keyword_index"
-inputs = ["codex/render_markdown"]
-
-[[steps]]
-group = "codex"
-function = "embed"
-inputs = ["codex/keyword_index"]
-
-# --- ChatGPT ------------------------------------------------------------
-
-# ChatGPT conversation mirror. Credentials via latchkey.
-[[groups]]
-id = "chatgpt"
-type = "chatgpt"
-
-[[steps]]
-group = "chatgpt"
-function = "ingest"
-[steps.params.api]
-since = "2025-01-01"   # only sync conversations updated at/after this
-                       # (RFC 3339 or YYYY-MM-DD; move it back to backfill)
-max_pages = 20         # pagination cap on listing
-limit = 100            # cap on detail fetches per run
-sleep_between = 0.5    # seconds between requests (be polite)
-# conv_uuids = ["https://chatgpt.com/c/abc123de-f456-7890-abcd-ef0123456789"]
-
-[[steps]]
-group = "chatgpt"
-function = "render_markdown"
-inputs = ["chatgpt/ingest"]
-
-[[steps]]
-group = "chatgpt"
-function = "keyword_index"
-inputs = ["chatgpt/render_markdown"]
-
-[[steps]]
-group = "chatgpt"
-function = "embed"
-inputs = ["chatgpt/keyword_index"]
-
-# --- Slack --------------------------------------------------------------
-
-# Slack workspace mirror. Credentials via latchkey. Omit `channels`
-# (or set `all_channels = true`) to mirror every channel the account sees.
-[[groups]]
-id = "slack"
-type = "slack"
-
-[[steps]]
-group = "slack"
-function = "ingest"
-
-[steps.params.common]
-blob_size_limit_bytes = "1 MB"  # skip file/media uploads larger than this
-# Bound how hard the download retries upstream rate limits before
-# giving up. The shared HTTP layer always respects a `Retry-After`
-# on a 429 (and otherwise backs off exponentially); these two knobs
-# only decide *when to stop*. Slack rate-limits aggressively, so
-# tolerate more failures in a row; the unset time budget takes the
-# built-in default (30 minutes without progress, 50 failures).
-[steps.params.common.download_params]
-maximum_sequential_failed_requests = 100
-# A plain-text JSONL copy of every row the download writes, under
-# `ingest/events/`, for debugging. Nothing reads it and it grows with
-# every run, so it is off unless you ask for it:
-# [steps.params.common.event_tape]
-# enabled = true
-
-[steps.params.api]
-since = "2025-01-01"     # oldest message to mirror (YYYY-MM-DD or RFC 3339;
-                         # default 2024-01-01). This is the knob that decides
-                         # how far back to go — for just the last week, set it
-                         # to seven days ago. Moving it earlier backfills on
-                         # the next run; moving it later is a no-op.
-media = true             # pull file attachments into blobs
-all_channels = false
-channels = ["project-data-liberation", "general"]
-dms = true               # also mirror direct messages, 1:1 and group.
-                         # OFF unless you set it — DMs are the most
-                         # private thing in a workspace, so mirroring
-                         # them is opt-in.
-dm_conversations = ["D024BE7LH", "https://enterprise.slack.com/archives/G0ABC12DE"]
-                         # optional: restrict DMs to just these, by
-                         # Slack's id for each (`D…` for a 1:1, `G…` or
-                         # `C…` for a group DM) or a pasted link to it —
-                         # right-click the DM in Slack's sidebar and
-                         # "Copy link". The Add/Edit dialog offers a
-                         # picker, filled from the live workspace, so
-                         # nothing has to be typed. Omit to mirror every
-                         # DM. Requires `dms = true`; setting it with
-                         # `dms = false` is an error rather than a
-                         # silent no-op.
-                         #
-                         # This is a separate list from `channels` on
-                         # purpose: `channels` names channels by name,
-                         # this names DMs by id. A DM has no channel
-                         # name, so one shared list would drop them all.
-# refresh_window_days = 30  # re-fetch the trailing 30 days of channels that
-                            # already have history, to pick up edits and
-                            # reactions. NOT a range bound — it only adds
-                            # work on top of the walk from `since`. Unset
-                            # is 30; 0 turns the pass off.
-                            #
-                            # It is also the only way we notice a DELETED
-                            # message: Slack has no tombstones, so a
-                            # deletion is only visible by re-walking a
-                            # range and finding it gone. Unset, we never
-                            # notice one. See the provider's INGEST.md,
-                            # "Noticing a deleted message".
-
-[[steps]]
-group = "slack"
-function = "render_markdown"
-inputs = ["slack/ingest"]
-
-[[steps]]
-group = "slack"
-function = "keyword_index"
-inputs = ["slack/render_markdown"]
-
-[[steps]]
-group = "slack"
-function = "embed"
-inputs = ["slack/keyword_index"]
-
-# --- GitHub -------------------------------------------------------------
-
-# GitHub PR mirror. Credentials via latchkey. With `pull_requests` set,
-# discovery is skipped and only those PRs are fetched; entries are
-# paste-able refs (`owner/repo#NUM`, `owner/repo/pull/NUM`, or a URL).
-[[groups]]
-id = "github"
-type = "github"
-
-[[steps]]
-group = "github"
-function = "ingest"
-[steps.params.api]
-refresh_window_days = 30
-max_prs = 50
-pull_requests = [
-  "imbue-ai/datalib#40",
-  "https://github.com/imbue-ai/datalib/pull/41",
+inputs = [
+  "airvisual/keyword_index",
+  "apple_messages/keyword_index",
+  "apple_messages/embed",
+  "beeper/keyword_index",
+  "beeper/embed",
+  "calendar-google/keyword_index",
+  "calendar-google/embed",
+  "calendar-fastmail/keyword_index",
+  "calendar-fastmail/embed",
+  "calendar-caldav/keyword_index",
+  "calendar-caldav/embed",
+  "calendar-ics/keyword_index",
+  "calendar-ics/embed",
+  "chatgpt/keyword_index",
+  "chatgpt/embed",
+  "claude-api/keyword_index",
+  "claude-api/embed",
+  "claude-export/keyword_index",
+  "claude-export/embed",
+  "claude_code/keyword_index",
+  "claude_code/embed",
+  "codex/keyword_index",
+  "codex/embed",
+  "contacts-fastmail/keyword_index",
+  "contacts-fastmail/embed",
+  "contacts-carddav/keyword_index",
+  "contacts-carddav/embed",
+  "contacts-vcf/keyword_index",
+  "contacts-vcf/embed",
+  "email-jmap/keyword_index",
+  "email-jmap/embed",
+  "email-gmail/keyword_index",
+  "email-gmail/embed",
+  "email-mbox/keyword_index",
+  "email-mbox/embed",
+  "facebook/keyword_index",
+  "facebook/embed",
+  "garmin/keyword_index",
+  "github/keyword_index",
+  "github/embed",
+  "gitlab/keyword_index",
+  "gitlab/embed",
+  "google_drive/keyword_index",
+  "google_drive/embed",
+  "google_takeout/keyword_index",
+  "google_takeout/embed",
+  "linkedin/keyword_index",
+  "linkedin/embed",
+  "notion/keyword_index",
+  "notion/embed",
+  "pdf/keyword_index",
+  "pdf/embed",
+  "perseus/keyword_index",
+  "perseus/embed",
+  "signal/keyword_index",
+  "signal/embed",
+  "slack/keyword_index",
+  "slack/embed",
+  "sms_backup_restore/keyword_index",
+  "sms_backup_restore/embed",
+  "whatsapp/keyword_index",
+  "whatsapp/embed",
+  "yolink/keyword_index",
 ]
 
-[[steps]]
-group = "github"
-function = "render_markdown"
-inputs = ["github/ingest"]
+# The app's search, grid and document view.
+[[applets]]
+group = "unified_document_index"
+id = "unified_document_index"
+command = "datalib-applet unified_document_index"
 
-[[steps]]
-group = "github"
-function = "keyword_index"
-inputs = ["github/render_markdown"]
-
-[[steps]]
-group = "github"
-function = "embed"
-inputs = ["github/keyword_index"]
-
-# --- GitLab -------------------------------------------------------------
-
-# GitLab MR mirror. Credentials via latchkey. `merge_requests` entries
-# are `namespace/project!IID` or a gitlab.com MR URL.
+# The time-series index reads every source's time series, without copying
+# the points, for the charts.
 [[groups]]
-id = "gitlab"
-type = "gitlab"
+id = "unified_time_series_index"
+name = "Time Series Index"
 
 [[steps]]
-group = "gitlab"
-function = "ingest"
-[steps.params.api]
-refresh_window_days = 30
-max_mrs = 50
-merge_requests = [
-  "mygroup/myproject!100",
-  "https://gitlab.com/mygroup/myproject/-/merge_requests/101",
+group = "unified_time_series_index"
+function = "time_series_index"
+inputs = [
+  "airvisual/render_time_series",
+  "garmin/render_time_series",
+  "yolink/render_time_series",
 ]
 
-[[steps]]
-group = "gitlab"
-function = "render_markdown"
-inputs = ["gitlab/ingest"]
+[[applets]]
+group = "unified_time_series_index"
+id = "unified_time_series_index"
+command = "datalib-applet unified_time_series_index"
 
-[[steps]]
-group = "gitlab"
-function = "keyword_index"
-inputs = ["gitlab/render_markdown"]
+# --- airvisual by `export` ----------------------------------------------
 
-[[steps]]
-group = "gitlab"
-function = "embed"
-inputs = ["gitlab/keyword_index"]
-
-# --- Notion -------------------------------------------------------------
-
-# Notion mirror. Credentials via latchkey — the stored credential must
-# carry BOTH the bearer token and the `Notion-Version` header, because a
-# second `Notion-Version` on the wire concatenates with the stored one
-# and Notion rejects the pair:
-#
-#   latchkey auth set notion \
-#     -H "Authorization: Bearer ntn_..." \
-#     -H "Notion-Version: 2026-03-11"
-#
-# A personal access token sees whatever its creator can see, so an empty
-# `api` table mirrors the whole workspace and needs no starting point.
+# AirVisual Pros' own history files, read off each unit's Samba share
+# (`smb://<ip>/airvisual`, mounted in the Finder) or a copy of that folder,
+# with every option set, and searchable. No sign-in.
 [[groups]]
-id = "notion"
-type = "notion"
+id = "airvisual"
+name = "AirVisual"
+type = "airvisual"
 
 [[steps]]
-group = "notion"
+group = "airvisual"
 function = "ingest"
 
-[steps.params.api]
-refresh_window_days = 7
+# One entry per monitor. Every `YYYYMM_AirVisual_values.txt` under `path`
+# is read, the `archive*/` folders too.
+[[steps.params.export.devices]]
+path = "/Volumes/airvisual"  # the mounted share, or a copy of it
+serial = "NCC1701D"          # the device's serial, which keys every sample; default:
+                             # read from the folder's latest_config_measurements.json
+                             # (set it for a copy without that file)
+name = "Bridge"              # what to call it; default: the name the device gives
+                             # itself, then the serial
 
-# Optional allowlist: mirror only these pages and everything under them
-# (child pages, and the rows of databases embedded in them). Accepts a
-# bare page id or a paste-able browser URL. Omit for the whole
-# workspace.
-roots = [
-  "https://www.notion.so/myworkspace/Project-Wiki-0123456789abcdef0123456789abcdef",
-]
+[[steps.params.export.devices]]
+path = "~/Downloads/airvisual-export/ten-forward"
 
-# Guard against a mis-scoped run. Omit for no limit.
-# max_pages = 200
-
-# All default to true.
-# comments = true
-# attachments = true
-# databases = true
-
+# One page with a chart per quantity (particulates, AQI, CO2, temperature,
+# humidity, VOC), every device a series. No options.
 [[steps]]
-group = "notion"
+group = "airvisual"
 function = "render_markdown"
-inputs = ["notion/ingest"]
+inputs = ["airvisual/ingest"]
 
+# The readings as time series, for the charts. Add this step to
+# `unified_time_series_index/time_series_index`'s inputs.
 [[steps]]
-group = "notion"
+group = "airvisual"
+function = "render_time_series"
+inputs = ["airvisual/ingest"]
+
+# Keyword (BM25) search over the page. Add it to
+# `unified_document_index/qmd_aggregator`'s inputs. A time-series source
+# takes no `embed` step: its pages are summaries of numbers.
+[[steps]]
+group = "airvisual"
 function = "keyword_index"
-inputs = ["notion/render_markdown"]
+inputs = ["airvisual/render_markdown"]
 
-[[steps]]
-group = "notion"
-function = "embed"
-inputs = ["notion/keyword_index"]
+# --- apple_messages by `messages` ---------------------------------------
 
-# --- Email: two input modes ---------------------------------------------
-
-# Mode A — JMAP server (Fastmail or any RFC 8620/8621 server). The
-# `jmap` table selects it; `hostname` is required.
-# Credentials via latchkey.
+# The Messages app's own database (`chat.db`), mirrored table for table, with
+# every option set, and searchable. No sign-in. macOS protects
+# `~/Library/Messages`: the terminal running the sync needs Full Disk Access.
 [[groups]]
-id = "fastmail"
-type = "email"
+id = "apple_messages"
+name = "Apple Messages"
+type = "apple_messages"
 
 [[steps]]
-group = "fastmail"
+group = "apple_messages"
 function = "ingest"
 
+# Which tables and columns to mirror. Globs: `*` and `?` only.
 [steps.params]
-# Mailbox label filter. Labels are POSIX-like paths into the folder
-# tree (Fastmail forbids `/` in a label, so a `/` is always a
-# parent/child separator); matching is EXACT — `Work` does NOT pull
-# in `Work/Projects`, list nested labels explicitly. Several labels
-# UNION — a message under any one of them is mirrored. Omit or leave
-# empty for "everything". The render-side counterpart
-# (`only_render_labels`) lives on the render step below.
-only_extract_labels = []          # extract only these mailboxes; empty = all
+include_tables = ["*"]                          # the default: every table
+exclude_tables = ["recoverable_message_part"]   # skip these, after include_tables;
+                                                # default none (this one is "recently deleted" text)
+exclude_columns = ["message.payload_data"]      # `Table.column` globs left out entirely; default none
+skip_churn = true    # leave out the app's counters, settings, Spotlight and CloudKit
+                     # queues and every `index_state` column, which the daemons rewrite
+                     # constantly; with it off every run commits; default true
+snapshot = true      # read a `VACUUM INTO` copy, not the live file Messages keeps
+                     # open; default true
+gc = false           # collect unreachable chunks each run: a smaller store,
+                     # history kept, but it rewrites the store; default false
 
-[steps.params.jmap]
-hostname = "api.fastmail.com"
-# account_id = "u12345678"        # defaults to the session's primary mail account
-full_resync = false
+# The Messages folder, or a `chat.db` file directly (a copy, or an iPhone
+# backup's `3d0d7e5fb2ce288813306e4d4636395e047a3d28`, the same database).
+# Prefer the folder: the snapshot also reads the `chat.db-wal` beside it.
+[steps.params.messages]
+path = "~/Library/Messages"
 
 [[steps]]
-group = "fastmail"
+group = "apple_messages"
 function = "render_markdown"
-inputs = ["fastmail/ingest"]
+inputs = ["apple_messages/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "apple_messages"
+function = "keyword_index"
+inputs = ["apple_messages/render_markdown"]
+
+[[steps]]
+group = "apple_messages"
+function = "embed"
+inputs = ["apple_messages/keyword_index"]
+
+# --- apple_photos by `library` ------------------------------------------
+
+# An Apple Photos library's database (`database/Photos.sqlite`) mirrored table
+# for table, with every option set. No sign-in. macOS protects the library:
+# the terminal running the sync needs Full Disk Access.
+[[groups]]
+id = "apple_photos"
+name = "Apple Photos"
+type = "apple_photos"
+
+[[steps]]
+group = "apple_photos"
+function = "ingest"
+
+# Which tables and columns to mirror. Globs: `*` and `?` only.
 [steps.params]
-# Webmail each message's `↗` outlink points at: `fastmail` for a
-# Fastmail JMAP account, `gmail` for a Google Takeout mbox. Omit for
-# any other server (no outlink rendered).
-outlink_format = "fastmail"
-# Render only threads touching these labels (same exact-match label
-# paths as `only_extract_labels`); empty = all. E.g. extract the
-# whole account but only render two branches:
-#   only_render_labels = ["Inbox", "Work/Projects"]
-only_render_labels = []
+include_tables = ["*"]                          # the default: every table
+exclude_tables = ["ZCLOUD*"]                    # skip these, after include_tables; default none
+exclude_columns = ["ZASSET.*HIGHLIGHTBEING*"]   # `Table.column` globs left out entirely; default none
+skip_history = true  # leave out Core Data's change log, the daemons' work queue and
+                     # counters, and every row's `Z_OPT`, which Photos rewrites
+                     # constantly; with it off every run commits; default true
+# Photos keys its tables on `Z_PK`, a rowid it renumbers on a library repair;
+# `ZUUID` is the stable id beside it. A table with one of these columns is
+# keyed on it when it is unique on every row; [] keys every table on what it
+# declares. Default ["ZUUID"].
+stable_key_columns = ["ZUUID"]
+# Pin a table's key yourself, `table = [columns]`; an empty list mirrors the
+# table with no key. Default none.
+primary_keys = { ZDETECTEDFACE = ["Z_PK"] }
+snapshot = true      # read a `VACUUM INTO` copy, not the live file Photos keeps
+                     # open; default true
+gc = false           # collect unreachable chunks each run: a smaller store,
+                     # history kept, but it rewrites the store; default false
 
+# The `.photoslibrary` bundle, or its `database/Photos.sqlite` directly.
+[steps.params.library]
+path = "~/Pictures/Photos Library.photoslibrary"
+
+# Apple Photos renders no documents: query the raw store with
+# `datalib-doltlite`. This step writes the storage report every source
+# gets, which is what puts Apple Photos in the grid.
 [[steps]]
-group = "fastmail"
-function = "keyword_index"
-inputs = ["fastmail/render_markdown"]
-
-[[steps]]
-group = "fastmail"
-function = "embed"
-inputs = ["fastmail/keyword_index"]
-
-# Mode B — Gmail REST API, for a Gmail account. The mode that needs the
-# least setup of any source in this file: latchkey has a built-in
-# `google-gmail` service and routes to it by URL host, so there is no
-# service name to configure and no credential in this file.
-#
-#   latchkey auth browser google-gmail    # one-time; opens a browser
-#
-# Incremental sync is driven by Gmail's historyId, which reports adds,
-# deletions, and label changes as explicit events. Throughput is capped by
-# quota rather than bytes: ~300 messages/minute regardless of size.
-[[groups]]
-id = "gmail"
-type = "email"
-
-[[steps]]
-group = "gmail"
-function = "ingest"
-
-[steps.params]
-# Same exact-match, union-across-labels filter as every other mode.
-# System labels are normalized to Takeout's spelling ("Inbox", not
-# "INBOX") so one Gmail account ingested via Takeout and via the API
-# shares its mailbox rows instead of doubling them. Listing several
-# labels here costs one `messages.list` walk each, because Gmail's own
-# `labelIds` parameter intersects rather than unions.
-only_extract_labels = []
-
-# Which stored latchkey identity this source mirrors. Every source whose
-# downloader authenticates through latchkey takes this block, and only
-# those do -- it is a latchkey namespace, not a provider one, so the name
-# is whatever `latchkey auth list` shows for the service.
-#
-# Omit it entirely when the service holds one account. Name it once it
-# holds two (work + personal Gmail is the usual case): latchkey keys
-# credentials by (service, account) and refuses an ambiguous request
-# rather than picking one.
-#
-# [steps.params.latchkey_settings]
-# account = "you@gmail.com"
-
-[steps.params.gmail]
-# Everything here is optional; an empty `[steps.params.gmail]` table
-# is a complete, working configuration.
-#
-# full_resync = false
-# request_concurrency = 8
-# Google's per-user ceiling is 6000 quota units/minute and messages.get
-# costs 20, so ~300 messages/minute. The default stays under 6000, and
-# the download lowers it further on its own whenever Google rate-limits
-# a request, so a long backfill just runs until it is done.
-# quota_units_per_minute = 5000
-# Stop after this many messages and exit with a partial result. Not
-# needed for a large mailbox — the run paces itself — but handy for a
-# quick first look.
-# message_budget = 20000
-
-[[steps]]
-group = "gmail"
+group = "apple_photos"
 function = "render_markdown"
-inputs = ["gmail/ingest"]
-[steps.params]
-outlink_format = "gmail"
-only_render_labels = []
+inputs = ["apple_photos/ingest"]
 
-[[steps]]
-group = "gmail"
-function = "keyword_index"
-inputs = ["gmail/render_markdown"]
+# --- beeper by `texts` --------------------------------------------------
 
-[[steps]]
-group = "gmail"
-function = "embed"
-inputs = ["gmail/keyword_index"]
-
-# Mode C — Google Takeout .mbox on disk. The `mbox` table selects it:
-# `path` is the file, and the rest labels the synthesized account row.
-[[groups]]
-id = "gmail-takeout"
-type = "email"
-
-[[steps]]
-group = "gmail-takeout"
-function = "ingest"
-
-[steps.params]
-# Same label filter as JMAP mode — here it matches the Gmail labels
-# in each message's `X-Gmail-Labels` header (already `Parent/Child`
-# paths for nested labels). Exact match, union across labels;
-# empty = everything.
-only_extract_labels = []          # ingest only messages carrying these labels
-# The .mbox is a complete snapshot: a message a newer export no longer
-# carries, or one only a deleted .mbox held, leaves the mirror on the next
-# sync. The old rows stay in doltlite history.
-
-[steps.params.mbox]
-path = "~/backups/Takeout/Mail/All mail Including Spam and Trash.mbox"
-account_id = "gmail_alice"
-display_name = "Alice's Gmail"
-email_address = "alice@gmail.com"
-is_personal = true
-
-[[steps]]
-group = "gmail-takeout"
-function = "render_markdown"
-inputs = ["gmail-takeout/ingest"]
-[steps.params]
-outlink_format = "gmail"   # render each message's `↗` outlink to Gmail
-only_render_labels = []    # render only threads touching these labels; empty = all
-
-[[steps]]
-group = "gmail-takeout"
-function = "keyword_index"
-inputs = ["gmail-takeout/render_markdown"]
-
-[[steps]]
-group = "gmail-takeout"
-function = "embed"
-inputs = ["gmail-takeout/keyword_index"]
-
-# --- Contacts: three input modes ----------------------------------------
-
-# Mode A — Fastmail. The `fastmail` table selects it: CardDAV at
-# Fastmail's own address, with the app password latchkey holds as
-# `fastmail-dav`. Omit `addressbooks` to sync every address book.
-[[groups]]
-id = "fastmail-contacts"
-type = "contacts"
-
-[[steps]]
-group = "fastmail-contacts"
-function = "ingest"
-[steps.params.fastmail]
-
-[[steps]]
-group = "fastmail-contacts"
-function = "render_markdown"
-inputs = ["fastmail-contacts/ingest"]
-
-[[steps]]
-group = "fastmail-contacts"
-function = "keyword_index"
-inputs = ["fastmail-contacts/render_markdown"]
-
-[[steps]]
-group = "fastmail-contacts"
-function = "embed"
-inputs = ["fastmail-contacts/keyword_index"]
-
-# Mode B — any other CardDAV server. The `carddav` table selects it;
-# `server_url` is required. Credentials via latchkey.
-[[groups]]
-id = "icloud-contacts"
-type = "contacts"
-
-[[steps]]
-group = "icloud-contacts"
-function = "ingest"
-[steps.params.carddav]
-server_url = "https://contacts.icloud.com/"
-addressbooks = ["Contacts"]
-
-[[steps]]
-group = "icloud-contacts"
-function = "render_markdown"
-inputs = ["icloud-contacts/ingest"]
-
-[[steps]]
-group = "icloud-contacts"
-function = "keyword_index"
-inputs = ["icloud-contacts/render_markdown"]
-
-[[steps]]
-group = "icloud-contacts"
-function = "embed"
-inputs = ["icloud-contacts/keyword_index"]
-
-# Mode C — local vCard files. The `vcf` table selects it: `.vcf` files
-# are read from the directory at its `path`.
-[[groups]]
-id = "vcard-contacts"
-type = "contacts"
-
-[[steps]]
-group = "vcard-contacts"
-function = "ingest"
-[steps.params.vcf]
-path = "~/backups/contacts_vcf"
-# Each `.vcf` is an address book: a card a file no longer carries, or every
-# card of a file that is gone, leaves the mirror on the next sync.
-
-[[steps]]
-group = "vcard-contacts"
-function = "render_markdown"
-inputs = ["vcard-contacts/ingest"]
-
-[[steps]]
-group = "vcard-contacts"
-function = "keyword_index"
-inputs = ["vcard-contacts/render_markdown"]
-
-[[steps]]
-group = "vcard-contacts"
-function = "embed"
-inputs = ["vcard-contacts/keyword_index"]
-
-# --- Calendar: four input modes -----------------------------------------
-
-# Every mode renders the same way: one page per event, one per recurring
-# series, and one per occurrence of a series that was moved or edited.
-# Each takes an optional `calendars` list (names or ids); omit it to
-# mirror every calendar the account can see.
-
-# Mode A — Google Calendar, through Google's API. Credentials via
-# latchkey's built-in `google-calendar` service.
-[[groups]]
-id = "google-calendar"
-type = "calendar"
-
-[[steps]]
-group = "google-calendar"
-function = "ingest"
-[steps.params.google]
-calendars = []
-
-[[steps]]
-group = "google-calendar"
-function = "render_markdown"
-inputs = ["google-calendar/ingest"]
-
-[[steps]]
-group = "google-calendar"
-function = "keyword_index"
-inputs = ["google-calendar/render_markdown"]
-
-[[steps]]
-group = "google-calendar"
-function = "embed"
-inputs = ["google-calendar/keyword_index"]
-
-# Mode B — Fastmail, over CalDAV. Credentials via latchkey's built-in
-# `fastmail-dav` service, which holds an app password.
-[[groups]]
-id = "fastmail-calendar"
-type = "calendar"
-
-[[steps]]
-group = "fastmail-calendar"
-function = "ingest"
-[steps.params.fastmail]
-calendars = ["Work", "Home"]
-
-[[steps]]
-group = "fastmail-calendar"
-function = "render_markdown"
-inputs = ["fastmail-calendar/ingest"]
-
-[[steps]]
-group = "fastmail-calendar"
-function = "keyword_index"
-inputs = ["fastmail-calendar/render_markdown"]
-
-[[steps]]
-group = "fastmail-calendar"
-function = "embed"
-inputs = ["fastmail-calendar/keyword_index"]
-
-# Mode C — any other CalDAV server. `server_url` is where discovery
-# starts; the host's `/.well-known/caldav` is tried when it does not
-# answer. latchkey needs a service registered for the host.
-[[groups]]
-id = "icloud-calendar"
-type = "calendar"
-
-[[steps]]
-group = "icloud-calendar"
-function = "ingest"
-[steps.params.caldav]
-server_url = "https://caldav.icloud.com/"
-
-[[steps]]
-group = "icloud-calendar"
-function = "render_markdown"
-inputs = ["icloud-calendar/ingest"]
-
-[[steps]]
-group = "icloud-calendar"
-function = "keyword_index"
-inputs = ["icloud-calendar/render_markdown"]
-
-[[steps]]
-group = "icloud-calendar"
-function = "embed"
-inputs = ["icloud-calendar/keyword_index"]
-
-# Mode D — a folder of `.ics` files: Google Takeout's `Calendar/`, an
-# Apple Calendar export. Each file is one calendar.
-[[groups]]
-id = "ics-calendar"
-type = "calendar"
-
-[[steps]]
-group = "ics-calendar"
-function = "ingest"
-[steps.params.ics]
-path = "~/Downloads/Takeout/Calendar"
-
-[[steps]]
-group = "ics-calendar"
-function = "render_markdown"
-inputs = ["ics-calendar/ingest"]
-
-[[steps]]
-group = "ics-calendar"
-function = "keyword_index"
-inputs = ["ics-calendar/render_markdown"]
-
-[[steps]]
-group = "ics-calendar"
-function = "embed"
-inputs = ["ics-calendar/keyword_index"]
-
-# --- Beeper -------------------------------------------------------------
-
-# Beeper Texts mirror. The `texts` table mirrors the desktop app's own
-# data dir, every network in it; the render step picks which networks to
-# show (all of them when `networks` is unset). Poorly supported, so expect
-# rough edges. It keeps what the app's cache evicts (see the provider's
-# INGEST.md).
+# The Beeper Texts desktop app's local data, with every option set, and
+# searchable. No sign-in; it reads the app's data directory.
 [[groups]]
 id = "beeper"
+name = "Beeper"
 type = "beeper"
 
 [[steps]]
 group = "beeper"
 function = "ingest"
+
 [steps.params.texts]
-media = true
-# path = "~/Library/Application Support/BeeperTexts"  # macOS default
+path = "~/Library/Application Support/BeeperTexts"  # the app's data directory; this is
+                                                    # the default on macOS
+media = true         # copy the app's cached media into blobs; false keeps the
+                     # attachments' names without their bytes; default true
 
 [[steps]]
 group = "beeper"
 function = "render_markdown"
 inputs = ["beeper/ingest"]
-[steps.params]
-period = "month"   # month (default) | day | year | all — span of each rendered doc
-networks = ["signal", "googlechat"]
 
+[steps.params]
+period = "month"                     # span of each page: month (default), day, year,
+                                     # or all (one page per chat)
+networks = ["signal", "googlechat"]  # which networks to render; omit for every one
+                                     # (the ingest mirrors them all either way)
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "beeper"
 function = "keyword_index"
@@ -895,260 +378,786 @@ group = "beeper"
 function = "embed"
 inputs = ["beeper/keyword_index"]
 
-# --- Perseus Digital Library --------------------------------------------
+# --- calendar by `google` -----------------------------------------------
 
-# TEI editions from PerseusDL/canonical-greekLit. The `github` table
-# fetches them into the ingest tree; empty, it pulls the default
-# Thucydides Histories pair, and `files` picks others. Perseus renders
-# straight from that tree. (A tree staged by hand instead has no ingest
-# step: its render step names the tree as `common.input_path`.)
+# Google Calendar through Google's API, signed in through latchkey
+# (`latchkey auth browser google-calendar`), with every option set, and
+# searchable.
 [[groups]]
-id = "perseus"
-type = "perseus"
+id = "calendar-google"
+name = "Google Calendar"
+type = "calendar"
 
 [[steps]]
-group = "perseus"
+group = "calendar-google"
 function = "ingest"
-[steps.params.github]
-files = []
+
+# When to give up on a failing server. The download always backs off and
+# retries; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "picard@example.com"
+
+[steps.params.google]
+calendars = ["Bridge Duty", "Away Missions"]  # names as the service shows them, or ids;
+                                               # omit for every calendar. One added later
+                                               # downloads whole on the next run
+since = "2024-01-01"  # first day mirrored, YYYY-MM-DD; omit for all of history
+until = "2026-12-31"  # last day mirrored, included; omit for no end. With either set,
+                      # the calendar is listed whole every run rather than resumed
 
 [[steps]]
-group = "perseus"
+group = "calendar-google"
 function = "render_markdown"
-inputs = ["perseus/ingest"]
-[steps.params]
+inputs = ["calendar-google/ingest"]
 
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "perseus"
+group = "calendar-google"
 function = "keyword_index"
-inputs = ["perseus/render_markdown"]
+inputs = ["calendar-google/render_markdown"]
 
 [[steps]]
-group = "perseus"
+group = "calendar-google"
 function = "embed"
-inputs = ["perseus/keyword_index"]
-# alignment_pairs = [   # edition pairs to sentence-align, e.g.
-#   ["perseus-grc2", "perseus-eng2"],
-# ]
+inputs = ["calendar-google/keyword_index"]
 
-# --- YoLink sensors -----------------------------------------------------
+# --- calendar by `fastmail` ---------------------------------------------
 
-# Per-device CSV history. `devices` is required and validated: `kind`
-# must be `temperature_humidity` or `watermeter`, `start` is YYYY-MM-DD,
-# and both IDs are exactly 32 lowercase-hex chars.
-# REDACT: family_device_id + device_udid are non-rotatable read secrets.
+# Fastmail's calendars over CalDAV, signed in through latchkey's
+# `fastmail-dav` service with a read-only app password, with every option
+# set, and searchable.
 [[groups]]
-id = "yolink"
-type = "yolink"
+id = "calendar-fastmail"
+name = "Fastmail Calendar"
+type = "calendar"
 
 [[steps]]
-group = "yolink"
+group = "calendar-fastmail"
 function = "ingest"
+
+# When to give up on a failing server. The download always backs off and
+# retries; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+# Fastmail's calendar and contacts app passwords share `fastmail-dav`, so
+# each is stored under its own name.
+[steps.params.latchkey_settings]
+account = "picard@example.com calendar"
+
+[steps.params.fastmail]
+calendars = ["Bridge Duty", "Away Missions"]  # names as the service shows them, or ids;
+                                               # omit for every calendar. One added later
+                                               # downloads whole on the next run
+since = "2024-01-01"  # first day mirrored, YYYY-MM-DD; omit for all of history
+until = "2026-12-31"  # last day mirrored, included; omit for no end. With either set,
+                      # the calendar is listed whole every run rather than resumed
+
+[[steps]]
+group = "calendar-fastmail"
+function = "render_markdown"
+inputs = ["calendar-fastmail/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "calendar-fastmail"
+function = "keyword_index"
+inputs = ["calendar-fastmail/render_markdown"]
+
+[[steps]]
+group = "calendar-fastmail"
+function = "embed"
+inputs = ["calendar-fastmail/keyword_index"]
+
+# --- calendar by `caldav` -----------------------------------------------
+
+# Any other CalDAV server, signed in through a latchkey service
+# registered for its host, with every option set, and searchable.
+[[groups]]
+id = "calendar-caldav"
+name = "CalDAV Calendar"
+type = "calendar"
+
+[[steps]]
+group = "calendar-caldav"
+function = "ingest"
+
+# When to give up on a failing server. The download always backs off and
+# retries; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "picard@example.com"
+
+[steps.params.caldav]
+# Where discovery starts. The host alone is usually enough: discovery tries
+# `/.well-known/caldav` when it does not answer.
+server_url = "https://cloud.example.com/remote.php/dav/"
+calendars = ["Bridge Duty", "Away Missions"]  # names as the service shows them, or ids;
+                                               # omit for every calendar. One added later
+                                               # downloads whole on the next run
+since = "2024-01-01"  # first day mirrored, YYYY-MM-DD; omit for all of history
+until = "2026-12-31"  # last day mirrored, included; omit for no end. With either set,
+                      # the calendar is listed whole every run rather than resumed
+
+[[steps]]
+group = "calendar-caldav"
+function = "render_markdown"
+inputs = ["calendar-caldav/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "calendar-caldav"
+function = "keyword_index"
+inputs = ["calendar-caldav/render_markdown"]
+
+[[steps]]
+group = "calendar-caldav"
+function = "embed"
+inputs = ["calendar-caldav/keyword_index"]
+
+# --- calendar by `ics` --------------------------------------------------
+
+# A folder of `.ics` files on disk (Google Takeout's `Calendar/`, an
+# Apple Calendar export), with every option set, and searchable. No sign-in.
+[[groups]]
+id = "calendar-ics"
+name = "Calendar export"
+type = "calendar"
+
+[[steps]]
+group = "calendar-ics"
+function = "ingest"
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+[steps.params.ics]
+path = "~/Downloads/calendar-export"  # the folder; each `.ics` file in it is one calendar
+
+[[steps]]
+group = "calendar-ics"
+function = "render_markdown"
+inputs = ["calendar-ics/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "calendar-ics"
+function = "keyword_index"
+inputs = ["calendar-ics/render_markdown"]
+
+[[steps]]
+group = "calendar-ics"
+function = "embed"
+inputs = ["calendar-ics/keyword_index"]
+
+# --- chatgpt by `api` ---------------------------------------------------
+
+# ChatGPT conversations over chatgpt.com's web API, signed in through
+# latchkey (`latchkey auth browser chatgpt`), with every option set, and
+# searchable.
+[[groups]]
+id = "chatgpt"
+name = "ChatGPT"
+type = "chatgpt"
+
+[[steps]]
+group = "chatgpt"
+function = "ingest"
+
+# When to give up on rate limits. The download always honours a 429's
+# Retry-After and backs off; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "picard"
 
 [steps.params.api]
-window_days = 7
-overlap_minutes = 5
+since = "2025-01-01"   # only conversations updated at or after this (YYYY-MM-DD or
+                       # RFC 3339, UTC); move it back later to backfill; default: all
+max_pages = 20         # stop listing after this many pages (100 conversations each);
+                       # default: no cap
+limit = 100            # fetch at most this many conversations per run; default: no cap
+sleep_between = 0.5    # seconds to wait between requests (0 to 3600); default: none
+conv_uuids = ["https://chatgpt.com/c/abc123de-f456-7890-abcd-ef0123456789"]
+                       # only these conversations, by id or pasted link; omit for all
 
-# One table per device. Quote `start`: a bare 2026-01-01 is a TOML date
-# rather than the string the provider validates.
-[[steps.params.api.devices]]
-name = "basement_freezer"
-kind = "temperature_humidity"
-start = "2026-01-01"
-family_device_id = "0123456789abcdef0123456789abcdef"
-device_udid = "fedcba9876543210fedcba9876543210"
-
-# The whole store renders as ONE page — `yolink/render_markdown/index.md` —
-# carrying a per-device summary plus a chart per physical quantity
-# (temperature, humidity, liquid volume), every device a series. The
-# charts draw from the time-series index, which `render_time_series`
-# fills.
-#
-# The page names the raw tables it reads as a whole; if none of them
-# changed since the last render, the render is a no-op. No knobs.
 [[steps]]
-group = "yolink"
+group = "chatgpt"
 function = "render_markdown"
-inputs = ["yolink/ingest"]
+inputs = ["chatgpt/ingest"]
 
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "yolink"
+group = "chatgpt"
 function = "keyword_index"
-inputs = ["yolink/render_markdown"]
-
-# --- Garmin Connect -----------------------------------------------------
-
-# Everything a Garmin watch uploads to Garmin Connect, over the API the
-# Connect phone app uses: the per-day metrics (sleep, heart rate, stress,
-# body battery, HRV, SpO2, respiration, training readiness/status,
-# steps, floors, hydration, fitness age, VO2max, endurance and hill
-# scores), weigh-ins, activities with their original FIT files, devices,
-# personal records, gear, badges, workouts and goals.
-#
-# Through latchkey's Garmin plugin, which the Add a source dialog installs
-# on the first sign-in. From a terminal, with the plugin in place:
-# `latchkey auth browser garmin`, or `latchkey auth set-nocurl garmin
-# ~/.garth` to import a token garth wrote. The sign-in lasts about a year.
-[[groups]]
-id = "garmin"
-type = "garmin"
+inputs = ["chatgpt/render_markdown"]
 
 [[steps]]
-group = "garmin"
+group = "chatgpt"
+function = "embed"
+inputs = ["chatgpt/keyword_index"]
+
+# --- claude by `api` ----------------------------------------------------
+
+# Claude.ai conversations and projects over its web API, signed in through
+# latchkey's `claude-ai` service with your browser's `sessionKey` cookie,
+# with every option set, and searchable.
+[[groups]]
+id = "claude-api"
+name = "Claude"
+type = "claude"
+
+[[steps]]
+group = "claude-api"
 function = "ingest"
+
+# When to give up on rate limits. The download always backs off and
+# retries; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "enterprise"
 
 [steps.params.api]
-since = "2024-01-01"       # earliest day to mirror; default a year back. Quote it:
-                           # a bare date is a TOML date, not the string validated here
-# refresh_days = 7         # trailing days re-fetched every run (late syncs, recomputed sleep)
-# metrics = ["daily_summary", "sleep", "hrv"]  # a subset of the per-day metrics
-# activity_files = true    # each activity's original FIT file, into the blob store
-# wellness_files = false   # each day's wellness FIT bundle (one zip per day)
+since = "2025-01-01"                  # only conversations updated on or after this (YYYY-MM-DD
+                                      # or RFC 3339); move it back to backfill; unset is all
+refresh_most_recent_n_chat_count = 3  # fetch the 3 most recently updated conversations
+                                      # again every run; unset fetches only what changed
+conv_uuids = [                        # only these conversations, by id or pasted link;
+  "https://claude.ai/chat/550e8400-e29b-41d4-a716-446655440000",  # default [] is all
+]
+projects = true                       # also mirror Claude Projects: description, instructions
+                                      # and knowledge documents; default true
+project_uuids = [                     # only these projects, by id or pasted link;
+  "6ba7b810-9dad-11d1-80b4-00c04fd430c8",                         # default [] is all
+]
 
-# The weigh-ins and devices, a page per family of daily metrics, a
-# daily log with a row per day, a page per activity, and the personal
-# records, badges, gear, workouts and goals. The FIT files and the
-# minute-by-minute series are mirrored but not drawn.
 [[steps]]
-group = "garmin"
+group = "claude-api"
 function = "render_markdown"
-inputs = ["garmin/ingest"]
+inputs = ["claude-api/ingest"]
 
-[[steps]]
-group = "garmin"
-function = "keyword_index"
-inputs = ["garmin/render_markdown"]
-# --- AirVisual (IQAir) monitors -----------------------------------------
-
-# AirVisual Pros' own history files, read off each unit's Samba share
-# (`smb://<ip>/airvisual`, user `airvisual`, password on the device under
-# Settings › Network › Access Pro data) mounted at its `path`, or from a
-# copy of that folder. Every `YYYYMM_AirVisual_values.txt` under a path
-# is read, the `archive*/` folders the device starts on each clock
-# change too; a later run re-reads only the month being written. One
-# `devices` entry per Pro. Each device's identity is its serial and its
-# name is what it calls itself, both read from the folder's
-# latest_config_measurements.json; set `serial` for a copy without it,
-# and `name` to override what the device says.
-[[groups]]
-id = "ship-air"
-type = "airvisual"
-name = "Air quality"
-
-[[steps]]
-group = "ship-air"
-function = "ingest"
-
-[[steps.params.export.devices]]
-path = "/Volumes/airvisual"
-# serial = "4133WV2JB9Z"
-# name = "Kitchen"
-
-[[steps.params.export.devices]]
-path = "/Volumes/airvisual-1"
-
-# One page — `ship-air/render_markdown/index.md` — with a chart per
-# quantity (particulates, AQI, CO2, temperature, humidity, VOC),
-# every device a series, same shape as yolink's. The page declares its
-# tables whole, so it re-renders only when a row of one of them moved.
-[[steps]]
-group = "ship-air"
-function = "render_markdown"
-inputs = ["ship-air/ingest"]
-
-[[steps]]
-group = "ship-air"
-function = "keyword_index"
-inputs = ["ship-air/render_markdown"]
-
-[[steps]]
-group = "ship-air"
-function = "embed"
-inputs = ["ship-air/keyword_index"]
-
-# --- Signal (Android backup) --------------------------------------------
-
-# Decrypts every `signal-backup-*` snapshot under `backup.path`, one
-# commit each, using the AEP read from the named env var at download time. See
-# docs/user/getting_your_data.md for pulling the backup off the phone.
-[[groups]]
-id = "signal"
-type = "signal"
-
-[[steps]]
-group = "signal"
-function = "ingest"
-[steps.params.backup]
-path = "~/backups/SignalBackups"
-aep_env_var = "SIGNAL_BACKUP_PASSPHRASE"   # default if omitted
-
-[[steps]]
-group = "signal"
-function = "render_markdown"
-inputs = ["signal/ingest"]
 [steps.params]
-period = "month"   # month (default) | day | year | all — span of each rendered doc
+max_project_doc_bytes = 131072  # cut a project knowledge document's text at this many
+                                # bytes on the project's page; default 131072 (128 KiB)
 
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "signal"
+group = "claude-api"
 function = "keyword_index"
-inputs = ["signal/render_markdown"]
+inputs = ["claude-api/render_markdown"]
 
 [[steps]]
-group = "signal"
+group = "claude-api"
 function = "embed"
-inputs = ["signal/keyword_index"]
+inputs = ["claude-api/keyword_index"]
 
-# --- WhatsApp (Android crypt15 backup) ----------------------------------
+# --- claude by `export` -------------------------------------------------
 
-# Points at the `WhatsApp/` dir pulled off the phone (containing
-# `Databases/msgstore.db.crypt15` and a `Media/` tree). The 32-byte root
-# key is hex-encoded in the named env var. The decrypted database is
-# mirrored table for table (the same engine as lightroom / apple_photos),
-# so the knobs are theirs; see providers/whatsapp/INGEST.md.
+# An unpacked Claude data export on disk, with every option set, and
+# searchable. No sign-in. The export is a complete snapshot: a
+# conversation a newer export no longer holds leaves the mirror.
 [[groups]]
-id = "whatsapp"
-type = "whatsapp"
+id = "claude-export"
+name = "Claude export"
+type = "claude"
 
 [[steps]]
-group = "whatsapp"
+group = "claude-export"
 function = "ingest"
-[steps.params]
-# skip_churn = true        # default; drops props / backup_changes / frequent
-# exclude_tables = []      # table-name globs, on top of skip_churn
-# exclude_columns = []     # `Table.column` globs
-# gc = false               # dolt_gc() at the start of each run
-[steps.params.backup]
-path = "~/backups/WhatsApp"
-key_env_var = "WHATSAPP_BACKUP_DECRYPTION_KEY"   # default if omitted
+
+[steps.params.export]
+path = "~/Downloads/claude-export"  # the folder holding `conversations.json`
 
 [[steps]]
-group = "whatsapp"
+group = "claude-export"
 function = "render_markdown"
-inputs = ["whatsapp/ingest"]
+inputs = ["claude-export/ingest"]
 
+[steps.params]
+max_project_doc_bytes = 131072  # cut a project knowledge document's text at this many
+                                # bytes on the project's page; default 131072 (128 KiB)
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "whatsapp"
+group = "claude-export"
 function = "keyword_index"
-inputs = ["whatsapp/render_markdown"]
+inputs = ["claude-export/render_markdown"]
 
 [[steps]]
-group = "whatsapp"
+group = "claude-export"
 function = "embed"
-inputs = ["whatsapp/keyword_index"]
+inputs = ["claude-export/keyword_index"]
 
-# --- Facebook (data export) ---------------------------------------------
+# --- claude_code by `sessions` ------------------------------------------
 
-# File-backed: point `export.path` at an unzipped "Download your
-# information" export in its JSON format (the HTML one is not read).
-# Ingest mirrors every JSON file to its own table (Messenger's
-# conversations into two) and every photo or video a record references
-# into the blob store; render emits your posts, albums, comments,
-# reactions and Messenger conversations, and your friends as contacts.
-# Each export is a complete snapshot, and the ingest prunes what a newer
-# one no longer holds.
+# Claude Code sessions read off a copy of another machine's transcripts,
+# with every option set, and searchable. No sign-in: the files are read
+# off disk.
+[[groups]]
+id = "claude_code"
+name = "Claude Code"
+type = "claude_code"
+
+[[steps]]
+group = "claude_code"
+function = "ingest"
+
+[steps.params.sessions]
+path = "~/Downloads/claude-code-backup/projects"  # a copy of another machine's
+                                                  # ~/.claude/projects; default
+                                                  # ~/.claude/projects
+
+[[steps]]
+group = "claude_code"
+function = "render_markdown"
+inputs = ["claude_code/ingest"]
+
+# How much of one tool result reaches the page. The raw store keeps all of
+# it; a result that echoes a whole file is cut here, with a marker saying
+# so. Raising it and re-rendering fills the pages back in.
+[steps.params]
+max_tool_result_bytes = 16384  # the default
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "claude_code"
+function = "keyword_index"
+inputs = ["claude_code/render_markdown"]
+
+[[steps]]
+group = "claude_code"
+function = "embed"
+inputs = ["claude_code/keyword_index"]
+
+# --- codex by `sessions` ------------------------------------------------
+
+# Codex CLI threads read off a copy of another machine's Codex home, with
+# every option set, and searchable. No sign-in: the files are read off
+# disk.
+[[groups]]
+id = "codex"
+name = "Codex"
+type = "codex"
+
+[[steps]]
+group = "codex"
+function = "ingest"
+
+[steps.params.sessions]
+path = "~/Downloads/codex-backup"  # a copy of another machine's Codex home, the folder
+                                   # holding sessions/ and archived_sessions/;
+                                   # default ~/.codex
+
+[[steps]]
+group = "codex"
+function = "render_markdown"
+inputs = ["codex/ingest"]
+
+# How much of one tool output reaches the page. The raw store keeps all of
+# it; an output that echoes a whole file is cut here, with a marker saying
+# so. Raising it and re-rendering fills the pages back in.
+[steps.params]
+max_tool_result_bytes = 16384  # the default
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "codex"
+function = "keyword_index"
+inputs = ["codex/render_markdown"]
+
+[[steps]]
+group = "codex"
+function = "embed"
+inputs = ["codex/keyword_index"]
+
+# --- contacts by `fastmail` ---------------------------------------------
+
+# Fastmail's address books over CardDAV, signed in through latchkey's
+# `fastmail-dav` service with a read-only app password, with every option
+# set, and searchable.
+[[groups]]
+id = "contacts-fastmail"
+name = "Fastmail Contacts"
+type = "contacts"
+
+[[steps]]
+group = "contacts-fastmail"
+function = "ingest"
+
+# When to give up on a failing server. The download always backs off and
+# retries; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+# Fastmail's contacts and calendar app passwords share `fastmail-dav`, so
+# each is stored under its own name.
+[steps.params.latchkey_settings]
+account = "picard@example.com contacts"
+
+[steps.params.fastmail]
+addressbooks = ["Enterprise Crew"]  # names as the server shows them, matched exactly;
+                                    # omit for every address book
+
+[[steps]]
+group = "contacts-fastmail"
+function = "render_markdown"
+inputs = ["contacts-fastmail/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "contacts-fastmail"
+function = "keyword_index"
+inputs = ["contacts-fastmail/render_markdown"]
+
+[[steps]]
+group = "contacts-fastmail"
+function = "embed"
+inputs = ["contacts-fastmail/keyword_index"]
+
+# --- contacts by `carddav` ----------------------------------------------
+
+# Any other CardDAV server, signed in through a latchkey service
+# registered for its host, with every option set, and searchable.
+[[groups]]
+id = "contacts-carddav"
+name = "CardDAV Contacts"
+type = "contacts"
+
+[[steps]]
+group = "contacts-carddav"
+function = "ingest"
+
+# When to give up on a failing server. The download always backs off and
+# retries; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "picard@example.com"
+
+[steps.params.carddav]
+# Where discovery starts. The host alone is usually enough: discovery tries
+# `/.well-known/carddav` when it does not answer.
+server_url = "https://cloud.example.com/remote.php/dav/"
+addressbooks = ["Enterprise Crew"]  # names as the server shows them, matched exactly;
+                                    # omit for every address book
+
+[[steps]]
+group = "contacts-carddav"
+function = "render_markdown"
+inputs = ["contacts-carddav/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "contacts-carddav"
+function = "keyword_index"
+inputs = ["contacts-carddav/render_markdown"]
+
+[[steps]]
+group = "contacts-carddav"
+function = "embed"
+inputs = ["contacts-carddav/keyword_index"]
+
+# --- contacts by `vcf` --------------------------------------------------
+
+# A folder of `.vcf` (vCard) files on disk, with every option set, and
+# searchable. No sign-in.
+[[groups]]
+id = "contacts-vcf"
+name = "Contacts export"
+type = "contacts"
+
+[[steps]]
+group = "contacts-vcf"
+function = "ingest"
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+[steps.params.vcf]
+# The folder. Each `.vcf` in it is an address book: a card a file no longer
+# carries, or every card of a file that is gone, leaves the mirror on the
+# next sync.
+path = "~/Downloads/contacts-export"
+
+[[steps]]
+group = "contacts-vcf"
+function = "render_markdown"
+inputs = ["contacts-vcf/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "contacts-vcf"
+function = "keyword_index"
+inputs = ["contacts-vcf/render_markdown"]
+
+[[steps]]
+group = "contacts-vcf"
+function = "embed"
+inputs = ["contacts-vcf/keyword_index"]
+
+# --- email by `jmap` ----------------------------------------------------
+
+# Fastmail mail over JMAP, signed in through latchkey (`latchkey auth
+# browser fastmail`), with every option set, and searchable.
+[[groups]]
+id = "email-jmap"
+name = "Fastmail"
+type = "email"
+
+[[steps]]
+group = "email-jmap"
+function = "ingest"
+
+# Mirror only mail under these mailboxes. Labels are full paths and match
+# exactly: `Work` does not take in `Work/Projects`, so list nested ones.
+# Several labels add up. The default, [], mirrors everything.
+[steps.params]
+only_extract_labels = ["Inbox", "Starfleet/Reports"]
+
+[steps.params.common]
+blob_size_limit_bytes = "25 MB"  # skip a message (its .eml, attachments and all) larger
+                                 # than this; unset is no limit
+
+# When to give up on a failing server. The download always backs off and
+# retries; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "picard@example.com"
+
+[steps.params.jmap]
+hostname = "api.fastmail.com"  # the JMAP server; its session is at https://<hostname>/.well-known/jmap
+account_id = "u1701d"          # which JMAP account; default the session's primary mail account
+full_resync = false            # list and fetch every email again, ignoring the saved
+                               # change state; default false
+blob_download_concurrency = 8  # .eml files downloaded at once; default 8, 1 is one at a time
+
+[[steps]]
+group = "email-jmap"
+function = "render_markdown"
+inputs = ["email-jmap/ingest"]
+
+[steps.params]
+outlink_format = "fastmail"     # each message's `↗` link opens it in Fastmail; omit for no link
+only_render_labels = ["Inbox"]  # render only threads with a message under these labels
+                                # (exact paths, like `only_extract_labels`); default [] is all
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "email-jmap"
+function = "keyword_index"
+inputs = ["email-jmap/render_markdown"]
+
+[[steps]]
+group = "email-jmap"
+function = "embed"
+inputs = ["email-jmap/keyword_index"]
+
+# --- email by `gmail` ---------------------------------------------------
+
+# Gmail over the Gmail API, signed in through latchkey (`latchkey auth
+# browser google-gmail`), with every option set, and searchable.
+[[groups]]
+id = "email-gmail"
+name = "Gmail"
+type = "email"
+
+[[steps]]
+group = "email-gmail"
+function = "ingest"
+
+# Mirror only mail under these labels. Labels are full paths and match
+# exactly: `Work` does not take in `Work/Projects`, so list nested ones.
+# Several labels add up, each costing one more walk of the mailbox. The
+# default, [], mirrors everything.
+[steps.params]
+only_extract_labels = ["Inbox", "Starfleet/Reports"]
+
+[steps.params.common]
+blob_size_limit_bytes = "25 MB"  # skip a message (its .eml, attachments and all) larger
+                                 # than this; unset is no limit
+
+# When to give up on a failing server. The download always backs off and
+# retries; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one; name it once `google-gmail` holds two.
+[steps.params.latchkey_settings]
+account = "picard@example.com"
+
+[steps.params.gmail]
+user_id = "me"                        # Gmail's userId; the default `me` is the signed-in account
+account_id = "picard@example.com"     # id of the account row; default the address Gmail reports
+display_name = "Jean-Luc Picard"      # the account row's name; default its account_id
+email_address = "picard@example.com"  # the account row's address; default the one Gmail reports
+full_resync = false                   # walk every label again this run (messages already held
+                                      # are not fetched again); default false
+request_concurrency = 8               # message fetches in flight; default 8
+quota_units_per_minute = 5000         # ceiling on Gmail quota spent a minute (Google allows
+                                      # 6000); default 5000, lowered on its own when rate-limited
+message_budget = 20000                # stop after this many messages and finish the rest next
+                                      # run; unset (the default) has no limit
+
+[[steps]]
+group = "email-gmail"
+function = "render_markdown"
+inputs = ["email-gmail/ingest"]
+
+[steps.params]
+outlink_format = "gmail"        # each message's `↗` link opens it in Gmail; omit for no link
+only_render_labels = ["Inbox"]  # render only threads with a message under these labels
+                                # (exact paths, like `only_extract_labels`); default [] is all
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "email-gmail"
+function = "keyword_index"
+inputs = ["email-gmail/render_markdown"]
+
+[[steps]]
+group = "email-gmail"
+function = "embed"
+inputs = ["email-gmail/keyword_index"]
+
+# --- email by `mbox` ----------------------------------------------------
+
+# An `.mbox` file on disk, such as the Mail product of a Google Takeout
+# export, with every option set, and searchable. No sign-in. The .mbox is
+# a complete snapshot: a message a newer one no longer holds leaves the
+# mirror on the next sync.
+[[groups]]
+id = "email-mbox"
+name = "Gmail Takeout"
+type = "email"
+
+[[steps]]
+group = "email-mbox"
+function = "ingest"
+
+# Mirror only messages carrying these Gmail labels (the `X-Gmail-Labels`
+# header). Labels are full paths and match exactly: `Work` does not take
+# in `Work/Projects`. Several labels add up. The default, [], is all.
+[steps.params]
+only_extract_labels = ["Inbox", "Starfleet/Reports"]
+
+# Everything but `path` names the account row the mailbox is filed under.
+[steps.params.mbox]
+path = "~/Downloads/email-export/All mail Including Spam and Trash.mbox"  # the file, or a folder holding one
+account_id = "picard_gmail"           # the account's id; default made from the file's name
+display_name = "Picard's Gmail"       # the account's name; default its account_id
+email_address = "picard@example.com"  # the account's address; unset by default
+is_personal = true                    # a personal (not work) account; default true
+
+[[steps]]
+group = "email-mbox"
+function = "render_markdown"
+inputs = ["email-mbox/ingest"]
+
+[steps.params]
+outlink_format = "gmail"        # each message's `↗` link opens it in Gmail; omit for no link
+only_render_labels = ["Inbox"]  # render only threads with a message under these labels
+                                # (exact paths, like `only_extract_labels`); default [] is all
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "email-mbox"
+function = "keyword_index"
+inputs = ["email-mbox/render_markdown"]
+
+[[steps]]
+group = "email-mbox"
+function = "embed"
+inputs = ["email-mbox/keyword_index"]
+
+# --- facebook by `export` -----------------------------------------------
+
+# Facebook's "Download your information" export, in JSON, unzipped into one
+# folder, with every option set, and searchable. No sign-in. Each export is
+# a complete snapshot: what a newer one no longer holds leaves the mirror.
 [[groups]]
 id = "facebook"
+name = "Facebook"
 type = "facebook"
 
 [[steps]]
@@ -1156,13 +1165,15 @@ group = "facebook"
 function = "ingest"
 
 [steps.params.export]
-path = "~/backups/Facebook"
+path = "~/Downloads/facebook-export"  # the folder the export's zips were unzipped into
 
 [[steps]]
 group = "facebook"
 function = "render_markdown"
 inputs = ["facebook/ingest"]
 
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "facebook"
 function = "keyword_index"
@@ -1173,13 +1184,451 @@ group = "facebook"
 function = "embed"
 inputs = ["facebook/keyword_index"]
 
-# --- LinkedIn (data export) ---------------------------------------------
+# --- fsindex by `fswalk` ------------------------------------------------
 
-# File-backed: point `export.path` at an unzipped LinkedIn "Get a copy
-# of your data" export. Download ingests every CSV; render emits the
-# message feeds and your connections (as first-class contacts).
+# An index of a local directory tree, with every option set. Nothing to
+# sign in to; with `stamp` off the scan only reads the folder `path` names.
+[[groups]]
+id = "fsindex"
+name = "Local files"
+type = "fsindex"
+
+[[steps]]
+group = "fsindex"
+function = "ingest"
+
+[steps.params]
+stamp = false  # true writes `.fsindex.toml` UUID breadcrumbs into each directory
+               # that opts in with `stamp_me_with_uuid`; default false
+
+[steps.params.fswalk]
+path = "~/Documents/starfleet"  # the tree to scan; `~` is your home folder
+
+# Renders no documents, only the storage report every source gets, which
+# is what puts the source in the grid. No options.
+[[steps]]
+group = "fsindex"
+function = "render_markdown"
+inputs = ["fsindex/ingest"]
+
+# --- garmin by `api` ----------------------------------------------------
+
+# Garmin Connect over the API the Connect phone app uses, signed in through
+# latchkey's Garmin plugin (`latchkey auth browser garmin`), with every
+# option set, and keyword-searchable.
+[[groups]]
+id = "garmin"
+name = "Garmin Connect"
+type = "garmin"
+
+[[steps]]
+group = "garmin"
+function = "ingest"
+
+# When to give up on rate limits. The download always backs off and
+# retries; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "picard@example.com"
+
+# Quote the dates: a bare 2024-01-01 is a TOML date, not the string
+# this source checks.
+[steps.params.api]
+since = "2024-01-01"       # earliest day to mirror; default a year before the first run.
+                           # Move it earlier to backfill
+until = "2025-12-31"       # last day to mirror; default today. A past day fixes the
+                           # window, so the mirror stops growing: omit it to keep up
+refresh_days = 7           # days after a day ends that every run fetches it again
+                           # (late watch syncs, recomputed sleep); default 7
+metrics = ["daily_summary", "heart_rate", "sleep", "stress", "body_battery", "hrv"]
+                           # which per-day metrics to mirror; default all twenty.
+                           # An unknown name is refused with the full list
+activity_files = true      # each activity's original FIT file, into the blob store; default true
+wellness_files = false     # each day's wellness FIT bundle (one zip a day, sensor
+                           # resolution); default false
+
+# The weigh-ins and devices, a page per family of daily metrics, a daily
+# log with a row per day, a page per activity, and the personal records,
+# badges, gear, workouts and goals. No options.
+[[steps]]
+group = "garmin"
+function = "render_markdown"
+inputs = ["garmin/ingest"]
+
+# Its numbers as time series, for charts and the time-series index: add
+# `garmin/render_time_series` to `unified_time_series_index/time_series_index`'s inputs.
+[[steps]]
+group = "garmin"
+function = "render_time_series"
+inputs = ["garmin/ingest"]
+
+# Free-text search by keyword (BM25). Add it to
+# `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "garmin"
+function = "keyword_index"
+inputs = ["garmin/render_markdown"]
+
+# --- github by `api` ----------------------------------------------------
+
+# GitHub pull requests and their review threads, over GitHub's API, signed
+# in through latchkey (`latchkey auth browser github`), with every option
+# set, and searchable.
+[[groups]]
+id = "github"
+name = "GitHub"
+type = "github"
+
+[[steps]]
+group = "github"
+function = "ingest"
+
+# When to give up on rate limits. The download always backs off and
+# retries; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "picard"
+
+[steps.params.api]
+refresh_window_days = 30  # how many trailing days each run's search must have covered;
+                          # default 0, which sets no limit
+max_prs = 50              # fetch at most this many PRs a run; the rest wait for the
+                          # next run. Default: no cap
+pull_requests = [         # only these PRs, as `owner/repo#NUM` or a github.com PR URL;
+  "enterprise/warp-core#42",  # set, it skips finding your PRs. Default: empty, find them
+  "https://github.com/enterprise/warp-core/pull/43",
+]
+
+[[steps]]
+group = "github"
+function = "render_markdown"
+inputs = ["github/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "github"
+function = "keyword_index"
+inputs = ["github/render_markdown"]
+
+[[steps]]
+group = "github"
+function = "embed"
+inputs = ["github/keyword_index"]
+
+# --- gitlab by `api` ----------------------------------------------------
+
+# GitLab merge requests and their discussions, over GitLab's API, signed
+# in through latchkey with a personal access token you create
+# (`latchkey auth set gitlab -H "PRIVATE-TOKEN: <token>"`), with every
+# option set, and searchable.
+[[groups]]
+id = "gitlab"
+name = "GitLab"
+type = "gitlab"
+
+[[steps]]
+group = "gitlab"
+function = "ingest"
+
+# When to give up on rate limits. The download always backs off and
+# retries; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "riker"
+
+[steps.params.api]
+refresh_window_days = 30  # how many trailing days each run's listing must have covered;
+                          # default 0, which sets no limit
+max_mrs = 50              # fetch at most this many MRs a run; the rest wait for the
+                          # next run. Default: no cap
+merge_requests = [        # only these MRs, as `namespace/project!IID` or a gitlab.com
+  "enterprise/warp-core!7",   # MR URL; set, it skips finding your MRs. Default: empty, find them
+  "https://gitlab.com/enterprise/warp-core/-/merge_requests/8",
+]
+
+[[steps]]
+group = "gitlab"
+function = "render_markdown"
+inputs = ["gitlab/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "gitlab"
+function = "keyword_index"
+inputs = ["gitlab/render_markdown"]
+
+[[steps]]
+group = "gitlab"
+function = "embed"
+inputs = ["gitlab/keyword_index"]
+
+# --- google_drive by `api` ----------------------------------------------
+
+# A backup of a Google account's Docs, Sheets and Slides, signed in through
+# four latchkey services as the same account (`latchkey auth browser
+# google-drive`, then google-docs, google-sheets and google-slides), with
+# every option set.
+[[groups]]
+id = "google_drive"
+name = "Google Drive"
+type = "google_drive"
+
+[[steps]]
+group = "google_drive"
+function = "ingest"
+
+# When to give up on rate limits. The download always backs off and
+# retries; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one. All four services need an account by this name.
+[steps.params.latchkey_settings]
+account = "data@example.com"
+
+[steps.params.api]
+kinds = ["document", "spreadsheet", "presentation"]  # which kinds of file; default all three
+exports = ["odf", "pdf"]   # converted copies kept beside Google's own JSON: "odf"
+                           # (.odt/.ods/.odp), "ooxml" (.docx/.xlsx/.pptx), "pdf".
+                           # Default none: the JSON is the backup. Each is 1-4 MB a
+                           # version, since Google embeds fonts
+revision_exports = ["odf"] # the same, of every revision Drive lists for a Doc or a
+                           # Sheet, fetched once each: the only copy of a version from
+                           # before the first sync (a deck's links ignore the revision,
+                           # so decks get none). Default none
+owned_only = false         # true: only the files the account owns, not ones shared
+                           # with it; default false
+file_ids = [               # only these files, as a bare id or a pasted docs.google.com
+  "1EnterpriseNCC1701DWarpCoreLog",  # link. Default: empty, every file
+  "https://docs.google.com/document/d/1PicardCaptainsLogStardate41153/edit",
+]
+
+# Each Doc as one document, its comment threads folded in; Sheets and
+# Slides are kept but not rendered yet. No options.
+[[steps]]
+group = "google_drive"
+function = "render_markdown"
+inputs = ["google_drive/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "google_drive"
+function = "keyword_index"
+inputs = ["google_drive/render_markdown"]
+
+[[steps]]
+group = "google_drive"
+function = "embed"
+inputs = ["google_drive/keyword_index"]
+
+# --- google_takeout by `export` -----------------------------------------
+
+# A Google Takeout export on disk (takeout.google.com), with every option
+# set, and searchable. No sign-in: the export is a file you downloaded.
+[[groups]]
+id = "google_takeout"
+name = "Google Takeout"
+type = "google_takeout"
+
+[[steps]]
+group = "google_takeout"
+function = "ingest"
+
+# Each Takeout is a complete snapshot of the products you ticked: a record a
+# newer export no longer holds leaves the mirror on the next sync. A product
+# missing from the export altogether deletes nothing. Every feed defaults to
+# false, so you turn on each one you want.
+[steps.params.export]
+path = "~/Downloads/takeout-export"  # the `Takeout/` folder, or a folder of one export's .zip/.tgz parts
+google_chat = true                 # Chat DMs, spaces and bots, with attachments
+google_voice = true                # Voice texts, voicemails, calls and bills
+google_voice_include_spam = false  # also read Voice/Spam/ (needs google_voice)
+gemini_apps = true                 # Gemini prompts and responses
+maps_reviews = true                # your Maps reviews
+maps_saved_places = true           # places you starred in Maps
+maps_saved_lists = true            # Maps lists under Saved/, with the notes on their places
+maps_photos = false                # photos you added to Maps
+my_maps = true                     # My Maps maps: pins, lines, shapes and their text
+play_books = true                  # Play Books highlights, notes, bookmarks, listening positions
+youtube_watch_history = true       # every video you watched
+youtube_subscriptions = true       # the channels you subscribe to
+
+[[steps]]
+group = "google_takeout"
+function = "render_markdown"
+inputs = ["google_takeout/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "google_takeout"
+function = "keyword_index"
+inputs = ["google_takeout/render_markdown"]
+
+[[steps]]
+group = "google_takeout"
+function = "embed"
+inputs = ["google_takeout/keyword_index"]
+
+# --- lightroom by `catalog` ---------------------------------------------
+
+# An Adobe Lightroom Classic catalog (the `.lrcat` file) mirrored table for
+# table, with every option set. No sign-in.
+[[groups]]
+id = "lightroom-catalog"
+name = "Lightroom"
+type = "lightroom"
+
+[[steps]]
+group = "lightroom-catalog"
+function = "ingest"
+
+# Which tables and columns to mirror. Globs: `*` and `?` only.
+[steps.params]
+include_tables = ["*"]                              # the default: every table
+exclude_tables = ["Ag*Oz*"]                         # skip these, after include_tables; default none
+exclude_columns = ["Adobe_AdditionalMetadata.xmp"]  # `Table.column` globs left out entirely; default none
+skip_xmp = false     # true also leaves out the per-image XMP packet and the
+                     # flattened search indexes, the bulkiest derived columns; default false
+# Lightroom keys its tables on `id_local`, which it may renumber on a catalog
+# upgrade; `id_global` is the stable id beside it. A table with one of these
+# columns as a single-column UNIQUE index is keyed on it (first match wins);
+# [] keys every table on what it declares. Default ["id_global"].
+stable_key_columns = ["id_global"]
+# Pin a table's key yourself, `table = [columns]`; an empty list mirrors the
+# table with no key. The key is applied as a real PRIMARY KEY, so a column
+# that turns out not to be unique fails the whole run. Default none.
+primary_keys = { AgOzSpaceIds = [] }
+snapshot = true      # read a `VACUUM INTO` copy, not the live file; default true
+gc = false           # collect unreachable chunks each run: a smaller store,
+                     # history kept, but it rewrites the store; default false
+
+# The `.lrcat` to mirror, or one of Lightroom's backup `.zip` files.
+[steps.params.catalog]
+path = "~/Pictures/Lightroom/Enterprise.lrcat"
+
+# Lightroom renders no documents yet: query the raw store with
+# `datalib-doltlite`. This step writes the storage report every source
+# gets, which is what puts Lightroom in the grid.
+[[steps]]
+group = "lightroom-catalog"
+function = "render_markdown"
+inputs = ["lightroom-catalog/ingest"]
+
+# --- lightroom by `backups` ---------------------------------------------
+
+# The folder of backups Adobe Lightroom Classic writes, replayed as the
+# catalog's history, with every option set. No sign-in.
+[[groups]]
+id = "lightroom-backups"
+name = "Lightroom"
+type = "lightroom"
+
+[[steps]]
+group = "lightroom-backups"
+function = "ingest"
+
+# Which tables and columns to mirror. Globs: `*` and `?` only.
+[steps.params]
+include_tables = ["*"]                              # the default: every table
+exclude_tables = ["Ag*Oz*"]                         # skip these, after include_tables; default none
+exclude_columns = ["Adobe_AdditionalMetadata.xmp"]  # `Table.column` globs left out entirely; default none
+skip_xmp = false     # true also leaves out the per-image XMP packet and the
+                     # flattened search indexes, the bulkiest derived columns; default false
+# Lightroom keys its tables on `id_local`, which it may renumber on a catalog
+# upgrade; `id_global` is the stable id beside it. A table with one of these
+# columns as a single-column UNIQUE index is keyed on it (first match wins);
+# [] keys every table on what it declares. Default ["id_global"].
+stable_key_columns = ["id_global"]
+# Pin a table's key yourself, `table = [columns]`; an empty list mirrors the
+# table with no key. The key is applied as a real PRIMARY KEY, so a column
+# that turns out not to be unique fails the whole run. Default none.
+primary_keys = { AgOzSpaceIds = [] }
+snapshot = true      # read a `VACUUM INTO` copy, not the live file; default true
+gc = false           # collect unreachable chunks each run: a smaller store,
+                     # history kept, but it rewrites the store; default false
+
+# The folder Lightroom writes its backups into, one subfolder per backup
+# (named like `2026-09-27 1650`). Each backup not yet in the store becomes a
+# commit of its own, oldest first, dated when it was taken. A source may set
+# `catalog` beside it: the backups are replayed first, the catalog on top.
+[steps.params.backups]
+path = "~/Pictures/Lightroom/Backups"
+
+# Lightroom renders no documents yet: query the raw store with
+# `datalib-doltlite`. This step writes the storage report every source
+# gets, which is what puts Lightroom in the grid.
+[[steps]]
+group = "lightroom-backups"
+function = "render_markdown"
+inputs = ["lightroom-backups/ingest"]
+
+# --- linear by `api` ----------------------------------------------------
+
+# A Linear workspace over its GraphQL API, signed in through latchkey
+# (`latchkey auth browser linear`), with every option set.
+[[groups]]
+id = "linear"
+name = "Linear"
+type = "linear"
+
+[[steps]]
+group = "linear"
+function = "ingest"
+
+# When to give up on failed requests. The download retries and backs off
+# on its own; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "enterprise"
+
+# Both lists empty (or omitted) copies the whole workspace. Otherwise an
+# issue is copied when its team or its project is named; most issues
+# belong to no project, so name their teams.
+[steps.params.api]
+teams = ["ENG"]                 # by key (any case) or by name
+projects = ["Warp core refit"]  # by name, as Linear shows it
+
+# Nothing renders as documents; this step writes the storage report that
+# puts the source in the grid and counts its issues.
+[[steps]]
+group = "linear"
+function = "render_markdown"
+inputs = ["linear/ingest"]
+
+# --- linkedin by `export` -----------------------------------------------
+
+# LinkedIn's "Get a copy of your data" export, unzipped, with every option
+# set, and searchable. Render emits the message threads and your
+# connections as contacts. Unzip each newer export over the folder.
 [[groups]]
 id = "linkedin"
+name = "LinkedIn"
 type = "linkedin"
 
 [[steps]]
@@ -1187,13 +1636,15 @@ group = "linkedin"
 function = "ingest"
 
 [steps.params.export]
-path = "~/backups/LinkedInDataExport"
+path = "~/Downloads/linkedin-export"  # the unzipped export: the folder of CSVs
 
 [[steps]]
 group = "linkedin"
 function = "render_markdown"
 inputs = ["linkedin/ingest"]
 
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "linkedin"
 function = "keyword_index"
@@ -1204,441 +1655,454 @@ group = "linkedin"
 function = "embed"
 inputs = ["linkedin/keyword_index"]
 
-# --- Google Takeout (data export) ---------------------------------------
+# --- media by `fswalk` --------------------------------------------------
 
-# File-backed: point `export.path` at the unzipped Google Takeout root
-# (the directory that contains `Maps/`, `YouTube and YouTube Music/`,
-# `Google Chat/`, etc.). No credentials — Takeout is your own export.
-#
-# One provider, many feeds: every feed is OFF by default, so opt into the
-# slices you want beside the path. Chat and Voice render as conversations,
-# a page per month; Maps, YouTube and Gemini as activity feeds, a page per
-# year; each Saved list, My Maps map and Play Books book as a page. A sync also says, as problem rows, which files of the export no
-# feed reads.
-#
-# NOTE: Gmail is a separate `email` source (it reads the Takeout `.mbox`);
-# it is NOT one of the feeds here.
-[[groups]]
-id = "google-takeout"
-type = "google_takeout"
-
-[[steps]]
-group = "google-takeout"
-function = "ingest"
-
-[steps.params.export]
-# Each Takeout is a complete snapshot of the products you ticked: a record
-# a newer export no longer holds leaves the mirror on the next sync, and
-# the old rows stay in doltlite history. A product missing from the export
-# altogether deletes nothing — it reads as "not requested this time".
-path = "~/backups/Takeout"
-google_chat = true                # DMs + bots + attachments → Markdown
-google_voice = true               # texts, voicemails, calls → Markdown
-google_voice_include_spam = false # also walk Voice/Spam/ when google_voice is on
-maps_reviews = false
-maps_saved_places = false
-maps_photos = false
-youtube_watch_history = false
-youtube_subscriptions = false
-gemini_apps = false
-maps_saved_lists = false
-my_maps = false
-play_books = false
-
-[[steps]]
-group = "google-takeout"
-function = "render_markdown"
-inputs = ["google-takeout/ingest"]
-
-[[steps]]
-group = "google-takeout"
-function = "keyword_index"
-inputs = ["google-takeout/render_markdown"]
-
-[[steps]]
-group = "google-takeout"
-function = "embed"
-inputs = ["google-takeout/keyword_index"]
-
-# --- SMS Backup & Restore (Android export) ------------------------------
-
-# File-backed: point `backup.path` at the directory holding the Android
-# "SMS Backup & Restore" app's `sms-*.xml` / `calls-*.xml` files. No API,
-# no credentials. Download ingests each SMS / MMS / call as its own raw row
-# (MMS attachment bytes go to the CAS); render emits one chat per
-# phone number.
-[[groups]]
-id = "sms-backup-restore"
-type = "sms_backup_restore"
-
-[[steps]]
-group = "sms-backup-restore"
-function = "ingest"
-[steps.params.backup]
-path = "~/backups/SMSBackupRestore"
-# The directory is the whole archive: a message no backup file still holds
-# leaves the mirror on the next sync.
-
-[[steps]]
-group = "sms-backup-restore"
-function = "render_markdown"
-inputs = ["sms-backup-restore/ingest"]
-
-[[steps]]
-group = "sms-backup-restore"
-function = "keyword_index"
-inputs = ["sms-backup-restore/render_markdown"]
-
-[[steps]]
-group = "sms-backup-restore"
-function = "embed"
-inputs = ["sms-backup-restore/keyword_index"]
-
-# --- fsindex (directory-tree scanner) -----------------------------------
-
-# File-backed: point `fswalk.path` at any local directory tree. fsindex
-# walks it Unison-style (fast incremental rescans keyed on mtime/size/inode)
-# and records `(path, kind, size, blake3, optional identity uuid)` for every
-# entry in a raw store. It renders no documents of its own (filesystem entries
-# aren't chat-shaped) — the index is queryable in the per-source raw store —
-# but the render step is still worth declaring: it emits the storage report
-# every source gets, which is what puts fsindex in the grid at all.
-#
-# `stamp` is off by default so the scan stays read-only against its input.
-# Set it to true to let the scanner write `.fsindex.toml` UUID breadcrumbs
-# into directories that opt in via `stamp_me_with_uuid`.
-[[groups]]
-id = "fsindex-home"
-type = "fsindex"
-
-[[steps]]
-group = "fsindex-home"
-function = "ingest"
-[steps.params]
-# stamp = false   # default; true → write UUID breadcrumbs into the tree
-[steps.params.fswalk]
-path = "~/Documents"
-
-# Renders no documents, only the storage report — see above.
-[[steps]]
-group = "fsindex-home"
-function = "render_markdown"
-inputs = ["fsindex-home/ingest"]
-
-# --- pdf (local PDF corpus → markdown) ----------------------------------
-
-# File-backed: point `fswalk.path` at a directory tree. Every `*.pdf`
-# under it is hashed, classified (text-based vs scanned), and — when it
-# carries real text — converted to markdown and indexed like any other
-# source, so PDFs show up in the grid and in qmd search.
-#
-# Documents are keyed on **content hash**, not path. Two copies of the same
-# paper convert once and share one row; renaming or moving a PDF costs
-# nothing and preserves its identity (and its feedback history).
-#
-# NO OCR YET. A scanned, image-only PDF is recorded with `needs_ocr = 1` in
-# the source's `pdf_documents` table and produces no markdown. Find them
-# with:
-#   doltlite <root>/pdfs/ingest/entities.doltlite_db \
-#     "SELECT COUNT(*) FROM pdf_documents WHERE needs_ocr = 1;"
-[[groups]]
-id = "pdfs"
-type = "pdf"
-
-[[steps]]
-group = "pdfs"
-function = "ingest"
-[steps.params]
-# Gitignore-shaped patterns, on top of any .gitignore files in the tree.
-# ignore = ["node_modules/**", "**/.Trash/**"]
-# Skip anything larger than this (default 512 MiB).
-# max_bytes = "512 MiB"
-[steps.params.fswalk]
-path = "~/Documents"
-
-# The render step needs no params: it reads the scan root back out of
-# the raw store (`pdf_scan_meta`), so it always converts exactly the
-# tree the download step walked.
-[[steps]]
-group = "pdfs"
-function = "render_markdown"
-inputs = ["pdfs/ingest"]
-
-[[steps]]
-group = "pdfs"
-function = "keyword_index"
-inputs = ["pdfs/render_markdown"]
-
-[[steps]]
-group = "pdfs"
-function = "embed"
-inputs = ["pdfs/keyword_index"]
-
-# --- media (local music / photos / video / playlists) --------------------
-
-# File-backed: point `fswalk.path` at a directory tree. Every audio,
-# image and video file under it is hashed, sniffed for what it really is
-# (the bytes decide, not the extension), and recorded with its metadata
-# hoisted into typed columns — artist/album/track for music, camera/lens/
-# exposure/GPS/capture-time for photos and video.
-#
-# Items are keyed on **content hash**, not path, so the same song synced to
-# three folders is one row with three locations.
-#
-# The column to know about is `media_items.payload_blake3`: a second hash
-# over just the signal — the MPEG frames, the JPEG scan, the DNG's sensor
-# strips — with tags, EXIF, ICC profiles and embedded previews excluded. So
-# retagging an MP3 or re-rendering a DNG preview in Lightroom moves the file
-# hash and leaves this one alone. "Every file that is the same recording" is:
-#   doltlite <root>/media/ingest/entities.doltlite_db \
-#     "SELECT payload_blake3, COUNT(*) c FROM media_items
-#       WHERE payload_blake3 IS NOT NULL
-#       GROUP BY payload_blake3 HAVING c > 1;"
-# It is a hint, not a key: a re-encode splits it. NULL means "no recipe for
-# this container", never a fallback to the file hash.
-#
-# `.m3u` / `.m3u8` playlists get their own two tables, with every entry kept
-# in order and verbatim — including the ones pointing at tracks you deleted
-# years ago, which is the interesting half of the data.
-#
-# It renders no documents (media has no text, and this data wants a UI of its
-# own) — query the raw store directly. The render step below still earns its
-# place: it emits the storage report every source gets, which is what puts
-# media in the grid at all.
-# See datalib/backend/etl/providers/media/INGEST.md.
+# A folder of music, photos and video on disk, with every option set. Files
+# are keyed on content hash, so one song in three folders is one row with
+# three locations. See the provider's INGEST.md for queries.
 [[groups]]
 id = "media"
+name = "Media"
 type = "media"
 
 [[steps]]
 group = "media"
 function = "ingest"
-[steps.params]
-# Gitignore-shaped patterns, on top of any .gitignore files in the tree.
-# ignore = ["**/.Trash/**", "**/Thumbnails/**"]
-# No indexing ceiling by default — a multi-gigabyte video is normal.
-# max_bytes = 0                       # (0 is rejected; omit for no limit)
-# Give up on the payload hash above this and leave it NULL (default 8 GiB).
-# payload_max_bytes = "8 GiB"
-# playlists = true                    # default; false skips .m3u/.m3u8
-# Skip cloud placeholders (Dropbox online-only, macOS dataless files) rather
-# than triggering a multi-gigabyte materialization. Default true; turn it off
-# only on a filesystem that reports no block counts at all.
-# skip_dataless = true
-[steps.params.fswalk]
-path = "~/Music"
 
-# Renders no documents, only the storage report — see above.
+[steps.params]
+ignore = ["**/.Trash/**", "**/Thumbnails/**"]  # gitignore-style patterns left out of the
+                                               # scan, on top of any .gitignore; default none
+max_bytes = "64 GB"            # skip a larger file entirely (no row); unset is no limit
+payload_max_bytes = "8 GiB"    # above this, skip the tag-independent payload hash
+                               # (`payload_blake3` stays NULL); default 8 GiB
+playlists = true               # index .m3u / .m3u8 playlists; default true
+skip_dataless = true           # skip cloud placeholders (Dropbox online-only, iCloud
+                               # evicted files) rather than download them; default true
+
+[steps.params.fswalk]
+path = "~/Music"  # the folder to scan
+
+# Media renders no documents: query the raw store with `datalib-doltlite`.
+# This step writes the storage report every source gets, which is what
+# puts Media in the grid.
 [[steps]]
 group = "media"
 function = "render_markdown"
 inputs = ["media/ingest"]
 
-# --- lightroom (Adobe Lightroom Classic catalog backup) -----------------
+# --- notion by `api` ----------------------------------------------------
 
-# File-backed: point `catalog.path` at a `.lrcat`, which is an ordinary
-# SQLite database, or at one of Lightroom's backup `.zip` files. Every table is mirrored into the source's doltlite raw
-# store, and doltlite's content-addressed storage does the deduplication —
-# so re-running after a day of editing stores only the rows that changed,
-# while every prior state stays queryable via `dolt_log`,
-# `dolt_history_<table>` and `dolt_diff_<table>`. A run over an unchanged
-# catalog produces no commit at all.
-#
-# DOWNLOAD-ONLY: it renders nothing yet (a photo isn't chat-shaped), so
-# there is no render step — query the raw store directly. See
-# datalib/backend/etl/providers/lightroom/INGEST.md.
-#
-# The engine is not Lightroom-specific: any app whose data format is a
-# SQLite file (Quicken for Mac, Apple Photos, …) works with the same step,
-# minus the `id_global` default below.
+# Notion over its API, signed in through latchkey (`latchkey auth set notion
+# -H "Authorization: Bearer ntn_…" -H "Notion-Version: 2026-03-11"`), with
+# every option set, and searchable.
 [[groups]]
-id = "lightroom"
-type = "lightroom"
+id = "notion"
+name = "Notion"
+type = "notion"
 
 [[steps]]
-group = "lightroom"
+group = "notion"
 function = "ingest"
-[steps.params]
-# Drop the per-image XMP packet and the flattened search indexes. They are
-# the bulkiest columns in a catalog and are wholly derived from columns
-# that stay. Off by default — a backup should be a faithful mirror unless
-# you say otherwise.
-# skip_xmp = false
-#
-# Lightroom keys its tables on `id_local`, a rowid alias it may renumber on
-# a catalog upgrade. `id_global` is the stable UUID beside it, so the mirror
-# keys on that instead: a renumbering then reads as one modified column per
-# row rather than as every row deleted and re-added. Set to [] to mirror
-# each table's declared key verbatim.
-# stable_key_columns = ["id_global"]
-#
-# A table with no `id_global` keeps its own declared key (`id_local` for
-# most of them). A table the source gave no `PRIMARY KEY` (mostly the
-# cloud-sync bookkeeping) is keyed on its only UNIQUE index when no row
-# has a NULL in it; otherwise it stays keyless and doltlite
-# diffs it by position, which shows as added/removed/modified runs
-# rather than as edits.
-#
-# Pin a key yourself when you know one the source didn't declare. An empty
-# list forces a table keyless. Be sure before you use this: the key is
-# applied as a real PRIMARY KEY, so a value that turns out not to be unique
-# fails the whole run, not just that table.
-# primary_keys = { AgOzSpaceIds = ["ozCatalogId", "ozSpaceId"] }
-#
-# Table / column filters. Globs, `*` and `?` only.
-# include_tables = ["*"]
-# exclude_tables = ["Ag*Oz*"]     # e.g. skip the cloud-sync bookkeeping
-# exclude_columns = ["Adobe_AdditionalMetadata.xmp"]
-#
-# Take a `VACUUM INTO` snapshot before reading, so a catalog that Lightroom
-# has open can't be read half-written. On by default.
-# snapshot = true
-#
-# Collect unreachable chunks each run. Much smaller store (5.2 MB -> 1.3 MB
-# on a 3.3 MB catalog with two versions of history), history unaffected,
-# but it rewrites the whole chunk store every time.
-# gc = false
-[steps.params.catalog]
-path = "~/Pictures/Lightroom/Lightroom Catalog-v14.lrcat"
-#
-# Replay a folder of Lightroom's backups as the catalog's history, beside
-# `catalog` or instead of it: each backup (a folder named like
-# `2026-09-27 1650` holding a .zip) becomes one commit, oldest first, dated
-# when it was taken; each sync adds the backups taken since, then mirrors
-# the catalog on top. A backup that turns up late, older than what is
-# already committed, is replayed too, and the newest state goes back on
-# top after it. See INGEST.md §"A folder of backups".
-# [steps.params.backups]
-# path = "~/Pictures/Lightroom/Backups"
 
-# --- apple_photos (Apple Photos library backup) --------------------------
+# When to give up on rate limits. The download always honours a 429's
+# Retry-After and backs off; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
 
-# File-backed: point `library.path` at a `.photoslibrary` bundle. What gets
-# mirrored is its `database/Photos.sqlite`, an ordinary SQLite database
-# with Photos' Core Data schema (about 90 tables; every asset, album,
-# person, face, keyword and edit is a row in one of them). The engine is
-# the one lightroom uses, so the same properties hold: only changed rows
-# are stored, every prior state stays queryable, and an unchanged library
-# produces no commit.
-#
-# DOWNLOAD-ONLY, like lightroom: nothing is rendered. The originals sit
-# beside the database at `<library>/originals/<X>/<UUID>.<ext>`; a `media`
-# source pointed at that folder gives you their EXIF and content hashes.
-# See datalib/backend/etl/providers/apple_photos/INGEST.md.
-#
-# macOS protects `~/Pictures/Photos Library.photoslibrary`. In the app,
-# choose the library with the picker: that is what grants Datalib access.
-# From a terminal, the terminal needs Full Disk Access (System Settings →
-# Privacy & Security); an ingest that reports "Operation not permitted"
-# is missing that, not the file.
-[[groups]]
-id = "apple_photos"
-type = "apple_photos"
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "enterprise"
+
+[steps.params.api]
+# Mirror only these pages and every page their bodies link, by page id or
+# pasted link. A database embedded in one is not walked; its rows come only
+# with the whole-workspace mirror. Omit for the whole workspace.
+roots = [
+  "https://www.notion.so/enterprise/Bridge-Crew-Rota-0123456789abcdef0123456789abcdef",
+  "fedcba9876543210fedcba9876543210",
+]
+refresh_window_days = 7  # whole-workspace mirror: re-list this many days of edits before
+                         # the newest seen, so a page shared late is caught; default 0
+max_pages = 5000         # stop after this many pages, a guard against a mis-scoped
+                         # run; unset is no limit (0 is refused)
+comments = true          # comment threads; default true
+attachments = true       # files attached to pages; default true
 
 [[steps]]
-group = "apple_photos"
-function = "ingest"
-[steps.params]
-# Leave out Core Data's persistent history (`ACHANGE`, `ATRANSACTION`, …),
-# the daemons' work queue and per-entity counters, and the `Z_OPT` version
-# counter on every row. ON by default, unlike lightroom's `skip_xmp`:
-# Photos' background daemons write those tables continuously, so with this
-# off every run commits whether or not a photo changed. Nothing about a
-# photo lives in them — the mirror's own `dolt_log` is the history.
-# skip_history = true
-#
-# Photos keys every table on `Z_PK`, a rowid it renumbers on a library
-# repair or an iCloud re-sync. `ZUUID` is the stable id beside it, so the
-# mirror keys on that instead — checking each run that it is unique and
-# set on every row of a table, and keeping `Z_PK` (with a warning) where it
-# is not. Set to [] to mirror the declared keys verbatim.
-# stable_key_columns = ["ZUUID"]
-#
-# Pin a key yourself when you know one; an empty list forces keyless.
-# primary_keys = { ZDETECTEDFACE = ["Z_PK"] }
-#
-# Table / column filters. Globs, `*` and `?` only. The `Z_RT_*` R-tree's
-# shadow tables are never mirrored — the R-tree itself is, as rows.
-# include_tables = ["*"]
-# exclude_tables = ["ZCLOUD*"]      # e.g. skip the iCloud sync bookkeeping
-# exclude_columns = ["ZASSET.*HIGHLIGHTBEING*"]   # the auto-curation links
-#
-# Take a `VACUUM INTO` snapshot before reading. Photos' daemons keep the
-# library open (and its WAL un-checkpointed) at all times, so this is the
-# only way to read a consistent state. On by default.
-# snapshot = true
-#
-# Collect unreachable chunks each run; see lightroom above.
-# gc = false
-[steps.params.library]
-path = "~/Pictures/Photos Library.photoslibrary"
-
-# --- apple_messages (the Messages app's own database) --------------------
-
-# File-backed: point `messages.path` at the Messages folder, where the app
-# keeps its SQLite database `chat.db` — or at a `chat.db` file directly (a
-# copy of it; an iPhone backup's `3d0d7e5fb2ce288813306e4d4636395e047a3d28`
-# is the same database). The engine is the one apple_photos uses, so the
-# same properties hold, and unlike Photos this one renders: every chat
-# becomes a page a month, with tapbacks on their messages and attachments
-# listed by name. Attachment bytes are not copied.
-# See datalib/backend/etl/providers/apple_messages/INGEST.md.
-#
-# macOS protects `~/Library/Messages`. In the app, choose the folder with
-# the picker: that is what grants Datalib access (Cmd-Shift-G in the
-# dialog reaches it). Choosing `chat.db` alone is not enough — the
-# snapshot also reads the `chat.db-wal` beside it. From a terminal, the terminal needs Full
-# Disk Access (System Settings → Privacy & Security); an ingest that
-# reports "Operation not permitted" is missing that, not the file.
-[[groups]]
-id = "apple-messages"
-type = "apple_messages"
-
-[[steps]]
-group = "apple-messages"
-function = "ingest"
-[steps.params]
-# Leave out the app's counters and settings, the Spotlight and CloudKit
-# work queues, the cloud-sync tombstones, and every `index_state` column.
-# ON by default: the daemons write those continuously, so with this off
-# every run commits whether or not anyone messaged. Nothing about a
-# message lives in them — the mirror's own `dolt_log` is the history.
-# skip_churn = true
-#
-# Table / column filters. Globs, `*` and `?` only.
-# include_tables = ["*"]
-# exclude_tables = ["recoverable_message_part"]   # e.g. drop the "recently deleted" text
-# exclude_columns = ["message.payload_data"]      # e.g. drop app-extension blobs
-#
-# Take a `VACUUM INTO` snapshot before reading. Messages keeps the
-# database open in WAL mode whenever it is running. On by default.
-# snapshot = true
-#
-# Collect unreachable chunks each run; see lightroom above.
-# gc = false
-[steps.params.messages]
-path = "~/Library/Messages"
-
-[[steps]]
-group = "apple-messages"
+group = "notion"
 function = "render_markdown"
-inputs = ["apple-messages/ingest"]
+inputs = ["notion/ingest"]
 
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "apple-messages"
+group = "notion"
 function = "keyword_index"
-inputs = ["apple-messages/render_markdown"]
+inputs = ["notion/render_markdown"]
 
 [[steps]]
-group = "apple-messages"
+group = "notion"
 function = "embed"
-inputs = ["apple-messages/keyword_index"]
+inputs = ["notion/keyword_index"]
 
-# The app's own surface: `unified_document_index` serves the grid, the document
-# view and the document picker. Without it the UI has no search — it is
-# an applet rather than a built-in so the backend does not have to know
-# what a grid row is.
-[[applets]]
-group = "unified_document_index"
-id = "unified_document_index"
-command = "datalib-applet unified_document_index"
+# --- pdf by `fswalk` ----------------------------------------------------
+
+# Every PDF under a folder on this machine, with every option set, and
+# searchable. No account and no credentials. A scanned, image-only PDF is
+# recorded but gives no text: there is no OCR yet.
+[[groups]]
+id = "pdf"
+name = "PDFs"
+type = "pdf"
+
+[[steps]]
+group = "pdf"
+function = "ingest"
+
+[steps.params]
+ignore = ["drafts/**", "**/.Trash/**"]  # gitignore-style patterns to skip, on top of any
+                                        # .gitignore in the tree; default none
+max_bytes = "512 MiB"  # skip a file larger than this; the default
+ocr = false            # OCR for pages with no text: not supported yet, so it must stay false
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+[steps.params.fswalk]
+path = "~/Documents/papers"  # the folder to scan, and everything under it
+
+# Render needs no params: it reads the scan root back out of the raw
+# store, so it converts exactly the tree the ingest step walked.
+[[steps]]
+group = "pdf"
+function = "render_markdown"
+inputs = ["pdf/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "pdf"
+function = "keyword_index"
+inputs = ["pdf/render_markdown"]
+
+[[steps]]
+group = "pdf"
+function = "embed"
+inputs = ["pdf/keyword_index"]
+
+# --- perseus by `github` ------------------------------------------------
+
+# Greek and Latin texts from the Perseus Digital Library, fetched from
+# PerseusDL's public GitHub repository, with every option set, and
+# searchable. No credentials.
+[[groups]]
+id = "perseus"
+name = "Perseus"
+type = "perseus"
+
+[[steps]]
+group = "perseus"
+function = "ingest"
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+[steps.params.github]
+# TEI files to fetch, as paths inside PerseusDL/canonical-greekLit's
+# `data/` tree. Default: the Thucydides Histories in every edition there.
+files = [
+  "tlg0003/tlg001/__cts__.xml",
+  "tlg0003/tlg001/tlg0003.tlg001.perseus-grc2.xml",
+  "tlg0003/tlg001/tlg0003.tlg001.perseus-eng4.xml",
+]
+
+[[steps]]
+group = "perseus"
+function = "render_markdown"
+inputs = ["perseus/ingest"]
+
+[steps.params]
+# Edition pairs to align sentence by sentence; default none. Aligning
+# fetches a ~450 MB model once, into ~/.cache/datalib/models.
+alignment_pairs = [["perseus-grc2", "perseus-eng4"]]
+
+# A tree of TEI files staged by hand, read instead of what the ingest step
+# fetched. Only for a source with no ingest step, so it stays off here.
+# [steps.params.common]
+# input_path = "~/Downloads/perseus-tei"
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "perseus"
+function = "keyword_index"
+inputs = ["perseus/render_markdown"]
+
+[[steps]]
+group = "perseus"
+function = "embed"
+inputs = ["perseus/keyword_index"]
+
+# --- signal by `backup` -------------------------------------------------
+
+# Signal messages from the Android app's local backups, with every option
+# set, and searchable. Each snapshot in `backup.path` is decrypted with
+# the passphrase held in the environment variable `aep_env_var` names:
+#   export SIGNAL_BACKUP_PASSPHRASE_PICARD='<your 30-digit passphrase>'
+[[groups]]
+id = "signal"
+name = "Signal"
+type = "signal"
+
+[[steps]]
+group = "signal"
+function = "ingest"
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+[steps.params.backup]
+path = "~/Downloads/signal-backup"  # the folder holding the signal-backup-* snapshots
+aep_env_var = "SIGNAL_BACKUP_PASSPHRASE_PICARD"  # env var holding the passphrase;
+                                                 # default SIGNAL_BACKUP_PASSPHRASE
+
+[[steps]]
+group = "signal"
+function = "render_markdown"
+inputs = ["signal/ingest"]
+
+[steps.params]
+period = "month"  # span of each rendered doc: month (default), day, year or all
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "signal"
+function = "keyword_index"
+inputs = ["signal/render_markdown"]
+
+[[steps]]
+group = "signal"
+function = "embed"
+inputs = ["signal/keyword_index"]
+
+# --- slack by `api` -----------------------------------------------------
+
+# Slack over its API, signed in through latchkey (`latchkey auth browser
+# slack`), with every option set, and searchable.
+[[groups]]
+id = "slack"
+name = "Slack"
+type = "slack"
+
+[[steps]]
+group = "slack"
+function = "ingest"
+
+[steps.params.common]
+blob_size_limit_bytes = "1 MB"  # skip an attachment larger than this; unset is no limit
+
+# When to give up on rate limits. The download always honours a 429's
+# Retry-After and backs off; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 100       # Slack rate-limits hard; the default is 50
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "enterprise"
+
+[steps.params.api]
+since = "2025-01-01"           # oldest message (YYYY-MM-DD or RFC 3339); default 2024-01-01
+channels = ["bridge", "engineering"]  # by name, without `#`; omit for every channel you are in
+all_channels = false           # also channels you can see but are not in (ignored with `channels`)
+media = true                   # download attachments into blobs
+dms = true                     # direct messages, 1:1 and group: off unless set
+dm_conversations = ["D024BE7LH", "https://enterprise.slack.com/archives/G0ABC12DE"]
+                               # only these DMs, by id or pasted link; needs `dms = true`
+refresh_window_days = 30       # re-walk this many trailing days for edits, reactions
+                               # and deletions; default 30, 0 turns it off
+
+[[steps]]
+group = "slack"
+function = "render_markdown"
+inputs = ["slack/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "slack"
+function = "keyword_index"
+inputs = ["slack/render_markdown"]
+
+[[steps]]
+group = "slack"
+function = "embed"
+inputs = ["slack/keyword_index"]
+
+# --- sms_backup_restore by `backup` -------------------------------------
+
+# Android texts and call logs from the SMS Backup & Restore app's XML
+# export, with every option set, and searchable. No credentials.
+[[groups]]
+id = "sms_backup_restore"
+name = "SMS Backup & Restore"
+type = "sms_backup_restore"
+
+[[steps]]
+group = "sms_backup_restore"
+function = "ingest"
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+# The directory is the whole archive: every *.xml in it is read, and a
+# message no backup file still holds leaves the mirror on the next sync.
+[steps.params.backup]
+path = "~/Downloads/sms-backup"
+
+[[steps]]
+group = "sms_backup_restore"
+function = "render_markdown"
+inputs = ["sms_backup_restore/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "sms_backup_restore"
+function = "keyword_index"
+inputs = ["sms_backup_restore/render_markdown"]
+
+[[steps]]
+group = "sms_backup_restore"
+function = "embed"
+inputs = ["sms_backup_restore/keyword_index"]
+
+# --- whatsapp by `backup` -----------------------------------------------
+
+# WhatsApp from an Android end-to-end-encrypted backup, with every option
+# set, and searchable. The 64-digit key is read from the environment
+# variable `key_env_var` names, never from this file.
+[[groups]]
+id = "whatsapp"
+name = "WhatsApp"
+type = "whatsapp"
+
+[[steps]]
+group = "whatsapp"
+function = "ingest"
+
+# The decrypted database is mirrored table for table; these pick the tables.
+[steps.params]
+include_tables = ["*"]                  # table-name globs to mirror (`*` and `?`); default ["*"], every table
+exclude_tables = ["ai_thread_*"]        # table-name globs to skip, after include_tables; default none
+exclude_columns = ["message_media.media_key"]  # `table.column` globs to drop; default none
+skip_churn = true                       # leave out props, backup_changes and frequent, which change
+                                        # on every backup; default true
+gc = false                              # reclaim unused space in the store at the start of each run;
+                                        # default false
+
+[steps.params.backup]
+path = "~/Downloads/whatsapp-backup"         # holds Databases/msgstore.db.crypt15 and Media/
+key_env_var = "WHATSAPP_ENTERPRISE_PHONE_KEY"  # the variable holding the key as 64 hex digits;
+                                               # default WHATSAPP_BACKUP_DECRYPTION_KEY
+
+[[steps]]
+group = "whatsapp"
+function = "render_markdown"
+inputs = ["whatsapp/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "whatsapp"
+function = "keyword_index"
+inputs = ["whatsapp/render_markdown"]
+
+[[steps]]
+group = "whatsapp"
+function = "embed"
+inputs = ["whatsapp/keyword_index"]
+
+# --- yolink by `api` ----------------------------------------------------
+
+# YoLink sensor history, one CSV download per device, with every option
+# set, and searchable by keyword. No sign-in: a device's two ids are what
+# let anyone fetch its history, so keep a config that holds real ones to
+# yourself. YoLink serves only about two months back, so sync often.
+[[groups]]
+id = "yolink"
+name = "YoLink"
+type = "yolink"
+
+[[steps]]
+group = "yolink"
+function = "ingest"
+
+# When to give up on failed requests. The download retries and backs off
+# on its own; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+[steps.params.api]
+window_days = 7       # days of history asked for in one request; default 7
+overlap_minutes = 5   # ask again for this many minutes before each window, for
+                      # readings a sensor reported late; default 5
+
+# One table per device. `name` keys its history, so renaming a device
+# later orphans what was fetched under the old name. Quote `start`: a bare
+# 2026-01-01 is a TOML date, not the string expected.
+[[steps.params.api.devices]]
+name = "ten_forward_freezer"
+kind = "temperature_humidity"                     # or "watermeter"
+start = "2026-01-01"                              # earliest day to fetch, YYYY-MM-DD
+family_device_id = "0123456789abcdef0123456789abcdef"  # 32 lowercase hex digits, from the
+                                                       # device's CSV download link
+device_udid = "fedcba9876543210fedcba9876543210"  # 32 lowercase hex digits, the device's
+                                                  # `deviceUDID` in YoLink's API
+
+[[steps.params.api.devices]]
+name = "sickbay_water_meter"
+kind = "watermeter"
+start = "2026-03-15"
+family_device_id = "00112233445566778899aabbccddeeff"
+device_udid = "ffeeddccbbaa99887766554433221100"
+
+# The whole store renders as one page: a summary per device and a chart per
+# quantity (temperature, humidity, water), every device a series.
+[[steps]]
+group = "yolink"
+function = "render_markdown"
+inputs = ["yolink/ingest"]
+
+# Its numbers as time series, for charts and the time-series index: add
+# `yolink/render_time_series` to `unified_time_series_index/time_series_index`'s inputs.
+[[steps]]
+group = "yolink"
+function = "render_time_series"
+inputs = ["yolink/ingest"]
+
+# Free-text search by keyword (BM25). Add it to
+# `unified_document_index/qmd_aggregator`'s inputs. A time-series source
+# takes no `embed` step: its pages are summaries of numbers.
+[[steps]]
+group = "yolink"
+function = "keyword_index"
+inputs = ["yolink/render_markdown"]

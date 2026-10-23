@@ -146,6 +146,28 @@ const COLUMNS: Record<ProbeItemKind, Layout> = {
       { id: "role", name: "Notes", field: "role", width: 120, formatter: (_r, _c, v) => text(v) },
     ],
   },
+  team: {
+    placeholder: "Search these teams…",
+    columns: [
+      { id: "path", name: "Key", field: "path", width: 90, formatter: (_r, _c, v) => text(v) },
+      { id: "title", name: "Team", field: "title", width: 240, formatter: (_r, _c, v) => text(v) },
+      { id: "role", name: "Notes", field: "role", width: 100, formatter: (_r, _c, v) => text(v) },
+    ],
+  },
+  project: {
+    placeholder: "Search these projects…",
+    columns: [
+      { id: "path", name: "Project", field: "path", width: 280, formatter: (_r, _c, v) => text(v) },
+      { id: "role", name: "Notes", field: "role", width: 90, formatter: (_r, _c, v) => text(v) },
+      {
+        id: "updated_at",
+        name: "Updated",
+        field: "updated_at",
+        width: 118,
+        formatter: (_r, _c, _v, _col, item) => ({ text: byDate(item) }),
+      },
+    ],
+  },
   address_book: {
     placeholder: "Search these address books…",
     columns: [

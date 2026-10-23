@@ -158,6 +158,8 @@ pub async fn run(
         rendered_root: rendered_root.clone(),
         now: now.to_string(),
         cadence: control.checkpoint_cadence.unwrap_or_default(),
+        // Each side is collected whole anyway, under its own cap.
+        page_size: datalib_etl_render::pages::PageSize::DEFAULT,
         // A diff group has no store of its own to measure.
         storage: None,
         raw_db: Some(datalib_etl::doltlite_raw::db_path_for(&raw_path)),
@@ -416,7 +418,7 @@ pub fn render_diff_source(
     // No storage report in a diff store (`RunEnd::storage` is `None`
     // above), so nothing is excluded from the count.
     let holdings = store.holdings(None)?;
-    let head = store.head()?;
+    let head = store.content_version()?;
     store.close();
     every_stored_version_must_be_declared(&name, &rendered_root, &versions, declared.as_ref())?;
     Ok(RenderReport {

@@ -195,9 +195,10 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     // run: no status history, nothing on disk. This is the state the
     // sync below has to move. The group reads off its steps, so it
     // says the same.
-    await expect(nameCell(page, "group:pdfs").locator("img.tg-brand")).toHaveAttribute(
-      "title",
-      "PDFs",
+    // The group's Name is its chip, which says its type.
+    await expect(nameCell(page, "group:pdfs").locator("a.chip")).toHaveAttribute(
+      "aria-label",
+      /, Local PDFs source/,
     );
     expect(await statusOf(page, "group:pdfs")).toBe("Never run");
     expect(await bytesOf(page, "group:pdfs")).toBeNull();

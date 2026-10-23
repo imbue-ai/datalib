@@ -362,6 +362,8 @@ The common-use subset:
 | `dolt_blame_<table>` | vtab | per-row `git blame`: the last commit that changed each row. |
 | `dolt_conflicts_<table>` | vtab | a merge's conflicts, visible only inside the transaction that made them; a conflicted merge never commits. |
 | `dolt_commit_ancestors` | vtab | the commit DAG. |
+| `dolt_hashof_db(ref)`, `dolt_hashof_table(t, ref)` | scalar fn | the hash of a commit's tree, or of one table in it; content, not history. See [Trees](#trees-and-keeping-one-through-a-fold). |
+| `dolt_tag(name, ref)` | scalar fn | a tag; `dolt_tags` lists them, `'-d'` deletes one. |
 
 ## How doltlite behaves
 
@@ -726,7 +728,50 @@ Creating and dropping a table in one open still appends chunks, though
 - **gc writes a compacted copy before it drops the original**, so it
   needs about the store's size again in free disk (upstream
   `doc/doltlite/dolt_gc.md`; not measured here).
-- Only `sqlite_mirror` and `fsindex` run gc today.
+- `sqlite_mirror` and `fsindex` run gc, and so does `datalib-dag
+  --compact` on the render stores and the grid index, after folding
+  their history into one commit (`doltlite_raw::fold_history`).
+
+### Trees, and keeping one through a fold
+
+A commit is a tree (every table's rows and schema) plus a parent and a
+message. `dolt_hashof_db(<rev>)` answers the tree's hash, and
+`dolt_hashof_table('<t>', <rev>)` one table's.
+
+- **A tree hash is the content, not the commit.** Two commits holding
+  the same rows and schema share one, and a fold leaves `main`'s tree
+  hash as it was though every commit hash changes.
+- **No read takes a tree hash**: `dolt_at_<t>`, `dolt_diff_<t>` and
+  `<file>@<rev>` take a branch, a tag or a commit, and a tree hash is
+  "ref not found". So is a commit a fold dropped, once gc has run;
+  `dolt_hashof` says "invalid ref spec" for one. To read where a tree
+  is, find a commit that holds it: `dolt_log()` filtered on
+  `dolt_hashof_db(commit_hash)`.
+- **A tree outlives a fold if a tag holds a commit of it that is not on
+  `main`'s history.** Branch at the commit, `dolt_reset('--soft',
+  <first commit>)`, `dolt_commit`, tag the new commit (say
+  `tree/<hash>`), delete the branch. The new commit has the same tree
+  and the first commit as its parent, so it pins that tree and nothing
+  between it and the fold. After the fold and gc it reads through
+  `dolt_at_<t>('tree/<hash>')`, a detached open of `<file>@tree/<hash>`,
+  and `dolt_diff_<t>('tree/<hash>', 'main')`.
+- **A read-only connection that reads each request in a transaction of
+  its own reads on through a fold and gc in another process**: a
+  transaction begun before finishes on the tree it began on, and the next
+  one reads the folded `main`. That is the search applet's connection to
+  the grid index.
+- **A fold must not drop a commit a reader is open on.** A detached
+  `<file>@<commit>` reader in another process, whose commit a fold and
+  gc dropped, gets "database disk image is malformed" on its next read
+  of history; a table scan may still answer from pages it already had.
+  A tag on the commit keeps the reader whole. Render and `grid_index`
+  read this way, so a fold tags what they are pinned to, or waits.
+- **Doltlite has no verb that drops history**: no `dolt_squash_history`,
+  no orphan branch, no shallow history, and `dolt_gc` takes no options.
+  A fold, a tag and gc are the whole kit. Dolt, the separate DoltHub
+  database whose SQL doltlite follows, added `dolt_squash_history` in
+  July 2026; it is our fold as one call. Doltlite has not, through
+  0.51.1.
 
 ### Full-text search (FTS5)
 

@@ -15,6 +15,10 @@ file there opens with a banner saying what it is and how current:
 
 - [`docs/dev/plans/`](docs/dev/plans/) — intended work, some of it
   partly built. `head -n 8 docs/dev/plans/*.md` reads every banner.
+  A plan under review may live in a Claude Doc that people comment
+  on. The doc is then the source of truth, and its file here is a
+  mirror whose banner links the doc: change the doc, then export the
+  tab over the file, never the file alone.
 - [`docs/dev/plans/completed/`](docs/dev/plans/completed/) — landed
   plans, kept as the record of what was decided. A landed plan moves
   here, or is rewritten as reference under `docs/dev/` if someone would
@@ -139,6 +143,26 @@ In docs — and in the few comments you keep — be clear and unhurried,
 explain a term the first time it appears, and don't assume the reader
 already shares your context. Plainspoken means *clear*, not *long*.
 
+## Explain a change by what it does, before and after
+
+**A PR description, a review, or any explanation of a change says what
+was true before, what is true now, and what a person using datalib
+will notice.** Write it for a reader who knows the product but has not
+read the code:
+
+- **Start with the problem as something that could happen**: "an
+  `<img>` in an email made the app re-measure the whole data root",
+  not "closes the GET-walk hole".
+- **Define a word the code uses in a narrow sense** the first time it
+  appears, or write the plain description instead. "Walks the data
+  root" means nothing to a reader until it says "measures the size of
+  every directory under the data root, which takes minutes on a large
+  one".
+- **Give each change a before, an after, and what a person notices.**
+  "Nothing visible" is a valid answer; say it, so the reader knows it
+  was checked. When a route or a flag changes, say what happens to a
+  script or an agent still using the old one.
+
 ## Functional core, imperative shell
 
 **Compute a decision as a pure function over values; act on it in a
@@ -209,7 +233,8 @@ datalib/
                    over etl/files/src/fswalk.rs); four mirror a SQLite
                    file through etl/sqlite_mirror/; three render time
                    series (airvisual, yolink, garmin). fsindex, media,
-                   lightroom and apple_photos have no <p>_render.
+                   lightroom, apple_photos and linear have no
+                   <p>_render.
     etl/sqlite_mirror/ the table-for-table SQLite→doltlite mirror engine.
     table/         `BulkUpsertable`, alone.
     probe/         what "Check connection" and a picker's "Load" ask
@@ -228,6 +253,8 @@ datalib/
                    and the applet.
     store_meta/    `_datalib_meta`, the table every store carries naming
                    the build that wrote it and the shape it is in.
+    blob_store/    the blob store's shape: the one part of a step's data
+                   `datalib-http` reads, and its reader.
     core/          the app stores plus re-exports of `runtime`.
     query/         the search-bar grammar every grid shares; no deps.
     handle/        `Handle`: one identifier for a person (`email:`, `tel:`,
@@ -296,7 +323,9 @@ A source whose data is also time series (Garmin, YoLink, AirVisual) has a
 `time_series_index` under `unified_time_series_index` indexes every
 such store without copying its points (`docs/dev/time_series.md`). The document index is
 queried by the `unified_document_index` applet; `datalib-http`
-reads only the stores' commit logs (`history/`), never their rows. A render
+reads the stores' commit logs (`history/`) and never their rows, except
+a step's blob store, whose one table it serves at `/data/…`
+(`datalib/backend/blob_store/README.md`). A render
 store is readable at every commit: the documents between two checkpoints
 share one transaction. The loop's record — each step's state now, its
 last run and success, each sink's version — is in
@@ -336,7 +365,7 @@ The measurement that checks it:
 bazelisk query 'kind(".*_test", rdeps(//..., //datalib/backend/schema:datalib_schema))'
 ```
 
-73 at the last count. If that number climbs, something took a dependency
+82 at the last count. If that number climbs, something took a dependency
 it should not have.
 
 ## The grid_rows union table
@@ -503,6 +532,12 @@ uv export --no-emit-project --no-emit-workspace --format requirements-txt -o req
 then add `requirement("newpkg")` to the relevant `BUILD.bazel`. Python is
 only used for fixture / test tooling and scripts; everything shipping is
 Rust.
+
+A version bump also changes the wheel hashes `MODULE.bazel.lock` keeps
+under `facts`, and a local build can keep the old ones: Bazel's hidden
+copy of the lockfile, `$(bazel info output_base)/MODULE.bazel.lock`,
+holds the pip extension's last run. CI then refuses the lock ("has
+changed its facts"). Delete that file, then `bazelisk build --nobuild //...`.
 
 ## Running tests
 

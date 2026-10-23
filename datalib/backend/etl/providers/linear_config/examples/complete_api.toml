@@ -1,0 +1,35 @@
+# A Linear workspace over its GraphQL API, signed in through latchkey
+# (`latchkey auth browser linear`), with every option set.
+[[groups]]
+id = "linear"
+name = "Linear"
+type = "linear"
+
+[[steps]]
+group = "linear"
+function = "ingest"
+
+# When to give up on failed requests. The download retries and backs off
+# on its own; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "enterprise"
+
+# Both lists empty (or omitted) copies the whole workspace. Otherwise an
+# issue is copied when its team or its project is named; most issues
+# belong to no project, so name their teams.
+[steps.params.api]
+teams = ["ENG"]                 # by key (any case) or by name
+projects = ["Warp core refit"]  # by name, as Linear shows it
+
+# Nothing renders as documents; this step writes the storage report that
+# puts the source in the grid and counts its issues.
+[[steps]]
+group = "linear"
+function = "render_markdown"
+inputs = ["linear/ingest"]

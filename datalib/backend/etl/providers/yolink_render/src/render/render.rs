@@ -9,7 +9,7 @@ use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::escape_md_inline;
 use datalib_etl_timeseries_render::page::{Device, Page, PageProfile};
-use datalib_etl_timeseries_render::text::{iso, thousands};
+use datalib_etl_timeseries_render::text::{stamp, thousands};
 use datalib_id::IdNamespace;
 use datalib_schema::providers::Provider;
 
@@ -88,8 +88,8 @@ fn device(dev: &super::parse::DeviceRow) -> Device {
     let facts = format!(
         "{} · configured from {}{}",
         escape_md_inline(&dev.kind),
-        iso(dev.start_ms).unwrap_or_else(|| dev.start_ms.to_string()),
-        match dev.last_ts_ms.and_then(iso) {
+        stamp(dev.start_ms),
+        match dev.last_ts_ms.map(stamp) {
             Some(t) => format!(" · last reading {t}"),
             None => " · no readings fetched yet".to_string(),
         },

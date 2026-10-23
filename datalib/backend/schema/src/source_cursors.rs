@@ -15,6 +15,10 @@ pub struct SourceCursorRow {
     /// finished consuming it. The next run passes this as `from_ref`.
     #[col(sql = "VARCHAR(64)")]
     pub store_commit: String,
+    /// That commit's tree (`dolt_hashof_db`). When a fold has replaced the
+    /// commit, the next run diffs from the commit that holds this tree.
+    #[col(sql = "VARCHAR(64)")]
+    pub store_tree: Option<String>,
     /// When this cursor was last advanced, in UTC.
     #[col(sql = "VARCHAR(40)")]
     pub indexed_at_utc: String,

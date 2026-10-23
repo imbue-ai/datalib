@@ -15,6 +15,8 @@ export function problemLabel(p: Pick<DocProblem, "field" | "reason" | "rule">): 
       return `${what} was not in the form expected and was left empty`;
     case "uncovered_type":
       return `${what} has a type the renderer does not handle and was left empty`;
+    case "unsupported_json":
+      return `${what} is a kind of content the renderer does not draw; it is shown as the source's JSON`;
     case "deliberate_loss":
       return `${what} was trimmed by the rule ${p.rule ?? "?"}`;
     case "render_failed":

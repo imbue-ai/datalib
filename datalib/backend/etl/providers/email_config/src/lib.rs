@@ -5,11 +5,45 @@ use datalib_source_common::{expand_tilde, LatchkeySettings, RenderCommon, Source
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// This source's config stanzas, for `datalib-step help`.
+pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "jmap",
+        toml: include_str!("../examples/minimal_jmap.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "jmap",
+        toml: include_str!("../examples/complete_jmap.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "gmail",
+        toml: include_str!("../examples/minimal_gmail.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "gmail",
+        toml: include_str!("../examples/complete_gmail.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "mbox",
+        toml: include_str!("../examples/minimal_mbox.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "mbox",
+        toml: include_str!("../examples/complete_mbox.toml"),
+    },
+];
+
 /// The full config for a `type: email` source: the shared `common:` envelope
 /// (paths + cross-source knobs, composed from `source_common` and resolved by
 /// the orchestrator's `normalize()`) plus everything email-specific. `name`
 /// and `enabled` stay orchestrator-owned and are NOT here.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EmailConfig {
     /// Shared per-source envelope (paths + cross-source tunables).
@@ -31,11 +65,11 @@ pub struct EmailConfig {
     /// synthesize for it (JMAP and Gmail learn that from the server).
     #[serde(default)]
     pub mbox: Option<MboxSync>,
-    /// Legacy location of the outlink format — the knob now lives on
-    /// the render step's params ([`EmailRenderConfig::outlink_format`]).
-    /// Still parsed here so old-format configs migrate losslessly; the
-    /// download planner rejects it with a pointer to the new home.
+    /// Retired here: `outlink_format` belongs on the render step's
+    /// params now. Still read, so a config that sets it on the ingest step
+    /// is refused with that fix rather than ignored.
     #[serde(default)]
+    #[schemars(skip)]
     pub outlink_format: Option<EmailOutlink>,
     /// Limit **extraction** to messages under *any* of these mailboxes,
     /// matched on the full label path (POSIX-like, e.g. `Work/Projects`)
@@ -45,17 +79,18 @@ pub struct EmailConfig {
     /// `only_render_labels`.
     #[serde(default)]
     pub only_extract_labels: Vec<String>,
-    /// Legacy location of the render-label filter — now on the render
-    /// step's params ([`EmailRenderConfig::only_render_labels`]). Parsed
-    /// for migration; rejected by the download planner.
+    /// Retired here: `only_render_labels` belongs on the render step's
+    /// params now. Still read, so a config that sets it on the ingest step
+    /// is refused with that fix rather than ignored.
     #[serde(default)]
+    #[schemars(skip)]
     pub only_render_labels: Vec<String>,
 }
 
 /// Params for the email **render** step. Split from [`EmailConfig`]
 /// (the download-step params) so each step's params carry only what
 /// that wave reads.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EmailRenderConfig {
     #[serde(default)]
@@ -130,7 +165,7 @@ impl EmailConfig {
 }
 
 /// JMAP tunables: the `jmap` table of a `type = "email"` ingest step.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EmailSync {
     /// JMAP server hostname. Session discovered at
@@ -148,9 +183,8 @@ pub struct EmailSync {
     /// end-of-sync blob phase. JMAP has no bulk-download method — each
     /// `.eml` is one HTTP GET against the substituted `downloadUrl` — so
     /// the only lever for a large initial backfill is fetching several at
-    /// once. `None` uses the built-in default
-    /// ([`DEFAULT_BLOB_CONCURRENCY`](../datalib_etl_email/download/constant.DEFAULT_BLOB_CONCURRENCY.html));
-    /// `1` restores the old strictly-serial behavior. Clamped to ≥ 1.
+    /// once. Unset uses the built-in default of 8; `1` downloads one at a
+    /// time, and anything lower counts as 1.
     #[serde(default)]
     pub blob_download_concurrency: Option<usize>,
 }
@@ -159,17 +193,23 @@ pub struct EmailSync {
 /// plus account-row data so the synthesized `accounts` row matches
 /// JMAP's shape. The row fields are optional (defaults: `account_id` ←
 /// mbox file stem, `display_name` ← `account_id`, `is_personal` ← true).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MboxSync {
     /// The `.mbox` file, or a directory containing one.
     pub path: PathBuf,
+    /// Id of the account the mailbox is filed under. Defaults to the last
+    /// part of `path`, without its extension, in lowercase with underscores.
     #[serde(default)]
     pub account_id: Option<String>,
+    /// The account's display name. Defaults to `account_id`.
     #[serde(default)]
     pub display_name: Option<String>,
+    /// The account's email address. Unset by default.
     #[serde(default)]
     pub email_address: Option<String>,
+    /// Whether this is a personal (rather than work) account. Defaults to
+    /// true.
     #[serde(default)]
     pub is_personal: Option<bool>,
 }
@@ -183,7 +223,7 @@ impl MboxSync {
 /// How to build the "open this email in webmail" outlink. The provider that
 /// owns the account picks the most robust scheme our download identifiers
 /// allow (Gmail → `rfc822msgid:` search; Fastmail → `app.fastmail.com` path).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum EmailOutlink {
     Gmail,
@@ -191,16 +231,15 @@ pub enum EmailOutlink {
 }
 
 /// Gmail REST API tunables: the `gmail` table.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EmailGmailApi {
-    /// **Retired** — moved to the source-level `latchkey_settings.account`,
-    /// which every latchkey-backed provider now shares (and which the JMAP
-    /// mode needs too, so it could not stay under `gmail`). Still
-    /// parsed so a config written against the old location fails at load
-    /// time with the fix rather than being silently ignored; see
-    /// [`EmailGmailApi::validate`].
+    /// **Retired** — use `latchkey_settings.account` beside the `gmail`
+    /// table instead, which every source that signs in through latchkey
+    /// shares. Still read, so a config that sets it here is refused at
+    /// load with that fix rather than ignored.
     #[serde(default)]
+    #[schemars(skip)]
     pub account: Option<String>,
     /// Gmail `userId` path segment. `me` (the default) is the
     /// authenticated user and is almost always right; a literal address
@@ -223,9 +262,9 @@ pub struct EmailGmailApi {
     /// Applies to this run only.
     #[serde(default)]
     pub full_resync: bool,
-    /// How many `messages.get` requests to keep in flight. `None` uses
-    /// the built-in default. Raising it does not raise throughput past
-    /// the quota ceiling below — it only helps hide per-request latency.
+    /// How many `messages.get` requests to keep in flight. Unset uses the
+    /// built-in default of 8. Raising it does not raise throughput past
+    /// `quota_units_per_minute`; it only hides the wait on each request.
     #[serde(default)]
     pub request_concurrency: Option<usize>,
     /// Client-side ceiling on Gmail API quota units spent per minute.

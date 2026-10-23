@@ -38,9 +38,9 @@ internet saw, and the world's directory, which holds the backend's log.
 
 | Real thing | In the suite |
 |---|---|
-| The third-party sites | `fake_sites.mjs`: one TLS server that answers by `Host` for `slack.com`, `claude.ai`, `chatgpt.com` and `connectapi.garmin.com`, in made-up TNG data. Only the endpoints the probes call, in the shapes they read. Anything else is a 404, Chrome's own background traffic included, so nothing leaves the machine. The claude.ai and chatgpt.com login pages send an already signed-in browser on with no new cookie, as the real ones do, and otherwise sign in whoever `internet.signInAs` names. |
+| The third-party sites | `fake_sites.mjs`: one TLS server that answers by `Host` for `slack.com`, `claude.ai`, `chatgpt.com` and `connectapi.garmin.com`, in made-up TNG data, and for the first page of Google's two: `accounts.google.com` turns a sign-in down, and `console.cloud.google.com` asks for 2-Step Verification, since Google past that point is not faked. Only the endpoints the probes call, in the shapes they read. Anything else is a 404, Chrome's own background traffic included, so nothing leaves the machine. The claude.ai and chatgpt.com login pages send an already signed-in browser on with no new cookie, as the real ones do, and otherwise sign in whoever `internet.signInAs` names. |
 | The network, for curl | `LATCHKEY_CURL` is a two-line script that logs its argv and runs the real `latchkey-curl-router` with `--connect-to ::127.0.0.1:<port> -k`. latchkey still sees the real URL, so its own service definitions match; the router still sends the hosts datalib marks through curl-impersonate (`expectImpersonated` checks the User-Agent that arrives). |
-| The browser | latchkey's real `ensure-browser` runs, with the sources the backend passes. `fake_node.mjs` then wraps whatever it found — the same binary, plus `--headless=new` and `--host-resolver-rules` pointing every host at the fake internet. The browser config is written only when the backend asks for one, so a login that skips `ensure-browser` fails. |
+| The browser | latchkey's real `ensure-browser` runs, with the sources the backend passes. `fake_node.mjs` then wraps whatever it found — the same binary, plus `--headless=new` and `--host-resolver-rules` pointing every host but `localhost`, where latchkey's OAuth logins listen for the browser to come back, at the fake internet. The browser config is written only when the backend asks for one, so a login that skips `ensure-browser` fails. |
 | The bundled `node` | The staged runtime's `node` runs `fake_node.mjs` before each latchkey: it logs the run (`world.latchkeyRuns()`), refuses one that has neither a key nor a gateway (it would open the real keychain), and does the browser wrapping above. |
 | A misbehaving service | `internet.override(host, fault)` with a handler from `faults.mjs`: a refused credential, Cloudflare's challenge, a 429, a 503, a body that is not JSON. `faults.spec.ts` runs every source against each, and against no credential, no network (`offline`) and a stopped gateway (`gatewayDown`). |
 | A person's own latchkey plugin | `world.installOwnGarminPlugin()` copies the vendored Garmin plugin into the world's store without datalib's stamp, so a spec can check a sign-in leaves it alone. |
@@ -48,8 +48,8 @@ internet saw, and the world's directory, which holds the backend's log.
 | A machine with no browser | `worldOptions: { browser: "download" }`: discovery fails with latchkey's own error, and the download step "fetches" Playwright's Chromium once the spec calls `world.releaseDownload()`. `"none"`: the download fails too. The real download, a few hundred MB, is never run. |
 | Minds' gateway | `worldOptions: { gatewaySeed }` starts a real `latchkey gateway` with its own store; the backend then gets `LATCHKEY_GATEWAY` and nothing else. |
 
-Not covered yet: the real keychain, Fastmail's and Google's OAuth
-logins, and a headed browser. The plan for those is
+Not covered yet: the real keychain, Fastmail's OAuth login and
+Google's past its consent screen, and a headed browser. The plan for those is
 `docs/dev/plans/latchkey_auth_testing.md`.
 
 ## Writing a spec

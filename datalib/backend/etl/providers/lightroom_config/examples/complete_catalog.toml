@@ -1,0 +1,42 @@
+# An Adobe Lightroom Classic catalog (the `.lrcat` file) mirrored table for
+# table, with every option set. No sign-in.
+[[groups]]
+id = "lightroom"
+name = "Lightroom"
+type = "lightroom"
+
+[[steps]]
+group = "lightroom"
+function = "ingest"
+
+# Which tables and columns to mirror. Globs: `*` and `?` only.
+[steps.params]
+include_tables = ["*"]                              # the default: every table
+exclude_tables = ["Ag*Oz*"]                         # skip these, after include_tables; default none
+exclude_columns = ["Adobe_AdditionalMetadata.xmp"]  # `Table.column` globs left out entirely; default none
+skip_xmp = false     # true also leaves out the per-image XMP packet and the
+                     # flattened search indexes, the bulkiest derived columns; default false
+# Lightroom keys its tables on `id_local`, which it may renumber on a catalog
+# upgrade; `id_global` is the stable id beside it. A table with one of these
+# columns as a single-column UNIQUE index is keyed on it (first match wins);
+# [] keys every table on what it declares. Default ["id_global"].
+stable_key_columns = ["id_global"]
+# Pin a table's key yourself, `table = [columns]`; an empty list mirrors the
+# table with no key. The key is applied as a real PRIMARY KEY, so a column
+# that turns out not to be unique fails the whole run. Default none.
+primary_keys = { AgOzSpaceIds = [] }
+snapshot = true      # read a `VACUUM INTO` copy, not the live file; default true
+gc = false           # collect unreachable chunks each run: a smaller store,
+                     # history kept, but it rewrites the store; default false
+
+# The `.lrcat` to mirror, or one of Lightroom's backup `.zip` files.
+[steps.params.catalog]
+path = "~/Pictures/Lightroom/Enterprise.lrcat"
+
+# Lightroom renders no documents yet: query the raw store with
+# `datalib-doltlite`. This step writes the storage report every source
+# gets, which is what puts Lightroom in the grid.
+[[steps]]
+group = "lightroom"
+function = "render_markdown"
+inputs = ["lightroom/ingest"]

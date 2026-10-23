@@ -24,7 +24,7 @@ table that selects its mode. They are not one form with a mode dropdown
 — they authenticate against different latchkey services and want
 different words on screen — and `variantKey` is what tells two entries
 of one step type apart. The mbox mode, and a JMAP server other than
-Fastmail, have no form: the catch-all "Email (mbox or other server)"
+Fastmail, have no form: the catch-all "Email (mbox or JMAP)"
 entry sends you to the config editor.
 
 Both forms fill their label pickers from `datalib-step probe email`
@@ -154,8 +154,8 @@ provider uses — injects and refreshes the token. Setup is one command:
 latchkey auth browser google-gmail
 ```
 
-(If it reports no OAuth client, `latchkey auth browser-prepare
-google-gmail` creates one via the Cloud Console and takes a few minutes.)
+(If it says the service requires preparation, it has no OAuth client
+yet: [`latchkey.md`](latchkey.md#an-oauth-client-of-your-own).)
 
 The config is an empty table:
 

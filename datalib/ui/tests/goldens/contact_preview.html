@@ -53,6 +53,16 @@
   --datalib-log-error: #991b1b;
   --datalib-log-warn: #854d0e;
   --datalib-log-ok: #166534;
+
+  /* A chart's categorical line colours, the validated default palette's
+     first six (checked light on #fff, dark on #1a1b1e). Every chart
+     takes them in order (cards/plot/plot.ts::seriesColor). */
+  --viz-series-1: #2a78d6;
+  --viz-series-2: #eb6834;
+  --viz-series-3: #1baf7a;
+  --viz-series-4: #eda100;
+  --viz-series-5: #e87ba4;
+  --viz-series-6: #008300;
 }
 
 
@@ -144,6 +154,13 @@ a {
     --datalib-log-error: #f87171;
     --datalib-log-warn: #facc15;
     --datalib-log-ok: #4ade80;
+
+    --viz-series-1: #3987e5;
+    --viz-series-2: #d95926;
+    --viz-series-3: #199e70;
+    --viz-series-4: #c98500;
+    --viz-series-5: #d55181;
+    --viz-series-6: #008300;
   }
 pre code.hljs {
   display: block;
@@ -905,6 +922,15 @@ code.hljs {
      line rather than shrinking until the name breaks. */
   white-space: nowrap;
   flex-shrink: 0;
+  /* Never wider than what holds it: there its name ends in "…", and the
+     tooltip has it whole. */
+  max-width: 100%;
+  min-width: 0;
+}
+.chip-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .handle-resolved,
 .handle-linkable {
@@ -978,6 +1004,12 @@ a.chip.handle-resolved,
 a.chip {
   color: inherit;
   text-decoration: none;
+}
+/* A date (dates.ts): no fill, since there is nothing to link it to; the
+   hover outline and the menu say it is a chip. */
+time.date-chip {
+  padding: 0 0.3em;
+  cursor: default;
 }
 /* A group or step chip: its pipeline glyph sits like a brand mark, and a
    status worth noticing is a dot after the name (the words are on hover). */
@@ -1720,7 +1752,7 @@ a.chip {
 <h3 class="preview-name">zz-synthetic-contacts/samples/render_markdown/00000000-0000-4000-8000-000000000001/index.md</h3>
 <div class="chat-body markdown-body"><div class="contact-head" data-page-title-uuid="00000000-0000-4000-8000-000000000001">
 <div class="contact-photo">
-<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA5NiA5NiI+PHJlY3Qgd2lkdGg9Ijk2IiBoZWlnaHQ9Ijk2IiBmaWxsPSJoc2woMjE1IDQ1JSA0NSUpIi8+PHRleHQgeD0iNDgiIHk9IjYwIiBmb250LWZhbWlseT0ic2Fucy1zZXJpZiIgZm9udC1zaXplPSIzNiIgZmlsbD0iI2ZmZiIgdGV4dC1hbmNob3I9Im1pZGRsZSI+SlA8L3RleHQ+PC9zdmc+" alt="Jean-Luc Picard"></p>
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4IDgiPjxyZWN0IHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiM5NGEzYjgiLz48L3N2Zz4=" alt="Jean-Luc Picard"></p>
 </div>
 <div class="contact-who">
 <h1><a href="mailto:picard@enterprise.starfleet" title="Jean-Luc Picard &lt;picard@enterprise.starfleet&gt;" class="chip" data-handle="email:picard@enterprise.starfleet">Jean-Luc Picard</a></h1>

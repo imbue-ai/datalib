@@ -1,28 +1,12 @@
-// `syncDashboardView({ group, step })` in card source: one group's sync
-// as a dashboard — its row and each step's, laid out vertically with
-// charts over the run and the group's log (cards/SyncDashboardCard.ce.vue).
-// Opened from a Manage row's menu or its Queue or ETA cell; `step`
-// scrolls to that step's section.
-import SyncDashboardCard from "../SyncDashboardCard.ce.vue";
-import TimeChart from "../TimeChart.ce.vue";
-import RunLogPanel from "@/components/RunLogPanel.ce.vue";
-import tableGridCss from "../tableGrid.css?inline";
-import chipCss from "../chip.css?inline";
-// uPlot's own layout rules (the canvas, the cursor and the overlay),
-// which have to be inside the card's shadow root to reach them.
-import uplotCss from "uplot/dist/uPlot.min.css?inline";
-// The log panel's grid needs its theme in the same root.
-import slickCss from "@slickgrid-universal/common/dist/styles/css/slickgrid-theme-default.css?inline";
-import { vueCard } from "../vueCard";
+// `syncDashboardView({ group, step })` in card source: the older name of a
+// source's card (`sourceView`), opening on its Sync tab. Kept so a saved
+// layout or a link written before still opens.
+import { sourceView } from "./sourceView";
 import type { CardRender } from "../types";
 import type { SyncDashboardOpts } from "../cardSources";
 
 export { syncDashboardSource, type SyncDashboardOpts } from "../cardSources";
 
 export function syncDashboardView(opts: SyncDashboardOpts): CardRender {
-  return vueCard(
-    SyncDashboardCard,
-    { opts },
-    { styleSources: [slickCss, tableGridCss, chipCss, uplotCss, TimeChart, RunLogPanel] },
-  );
+  return sourceView({ ...opts, tab: "sync" });
 }

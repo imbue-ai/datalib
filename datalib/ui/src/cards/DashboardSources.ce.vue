@@ -1,8 +1,9 @@
 <script setup lang="ts">
 // Each source's state: when it last synced, how many items it holds and
 // how much space. A library with none says so, with a way to add one.
-import { iconUrl } from "@/config/icons";
 import { formatBytes } from "@/config/bytes";
+import { uriFromEntity } from "./chipLinks";
+import EntityChip from "./EntityChip.ce.vue";
 import type { Dashboard } from "./useDashboard";
 
 defineProps<{ d: Dashboard }>();
@@ -16,7 +17,7 @@ defineProps<{ d: Dashboard }>();
       <button class="link" @click="d.open('sourcesView()')">Open Sources</button>
     </h2>
     <div v-if="d.sources.length" class="grid grid-head">
-      <span /><span>Name</span><span>Status</span><span>Updated</span><span class="num">Items</span
+      <span>Name</span><span>Status</span><span>Updated</span><span class="num">Items</span
       ><span class="num">Size</span>
     </div>
     <div v-if="d.stage === 'empty'" class="row add-first">
@@ -24,9 +25,14 @@ defineProps<{ d: Dashboard }>();
       <button class="dashboard-btn dashboard-btn-strong" @click="d.addSource">Add source</button>
     </div>
     <div v-for="r in d.sources" :key="r.id" class="grid grid-row">
-      <img v-if="iconUrl(r.name.icon)" class="tile" :src="iconUrl(r.name.icon)!" alt="" />
-      <span v-else />
-      <span class="name" :title="r.name.detail ?? r.id">{{ r.name.label }}</span>
+      <span class="name">
+        <EntityChip
+          :uri="uriFromEntity('group', r.id)"
+          :shown="r.name.label"
+          quiet
+          :open-card="(source) => d.open(source)"
+        />
+      </span>
       <span class="status" :class="d.statusClass(r)" :title="r.status.detail ?? ''"
         ><span class="dot" />{{ r.status.label }}</span
       >

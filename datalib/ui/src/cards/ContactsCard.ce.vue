@@ -252,6 +252,7 @@ onBeforeUnmount(() => {
         :menu="(anchor, targets) => menu(anchor, targets)"
         @ready="(api) => (grid = api)"
         @cellDoubleClick="(row) => openPerson(row)"
+        @openCard="(source) => props.ctx.host.openCards(source)"
       />
     </div>
     <HandlePopover

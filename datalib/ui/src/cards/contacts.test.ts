@@ -1,7 +1,7 @@
 // The chip rules: which links count, what a chip and its tooltip say,
 // what a copy carries, and the name a new contact is offered.
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import chipCss from "./chip.css?inline";
 
@@ -21,6 +21,12 @@ import {
   chipAnchors,
   searchQueryFor,
   movesPeople,
+  draftOf,
+  saveDraft,
+  setContactPhoto,
+  people,
+  linkHandle,
+  unlinkHandle,
 } from "./contacts";
 
 function dom(html: string): HTMLElement {
@@ -193,13 +199,13 @@ describe("a photo", () => {
     );
     const slack = withPhoto(
       contact("slack", "Riker", [[TEL, null]]),
-      "/applet/unified_document_index/asset/u/blobs/r.png",
+      `/data/beeper/ingest/blob/${"ab".repeat(32)}`,
     );
     expect(chipLook(TEL, "+1 555", { mine, sourceContacts: [slack] }, true).photo).toBe(
       "/applet/datalib_contacts/photo/c1",
     );
     expect(chipLook(TEL, "+1 555", { mine: null, sourceContacts: [slack] }, true).photo).toBe(
-      "/applet/unified_document_index/asset/u/blobs/r.png",
+      `/data/beeper/ingest/blob/${"ab".repeat(32)}`,
     );
     expect(chipLook(TEL, "+1 555", NOBODY, true).photo).toBeNull();
     const el = dom(`<a class="chip" data-handle="${TEL}">+1 555</a>`)
@@ -374,5 +380,98 @@ describe("identifierLook", () => {
     const loose = identifierLook(TEL, "", NOBODY, true);
     expect(loose.text).toBe("+15550123456");
     expect(loose.classes).toContain("handle-unresolved");
+  });
+});
+
+describe("the card's edit calls", () => {
+  type Sent = { url: string; method: string; type: string | null; body: unknown };
+  function answer(status: number, body: unknown): Sent[] {
+    const sent: Sent[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      sent.push({
+        url,
+        method: init?.method ?? "GET",
+        type: headers["content-type"] ?? null,
+        body: init?.body,
+      });
+      return new Response(JSON.stringify(body), { status });
+    });
+    return sent;
+  }
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("reads a contact with no draft as none, not as a failure", async () => {
+    answer(404, { error: "c1 has no draft" });
+    expect(await draftOf("c1")).toBeNull();
+  });
+
+  it("names the published commit the card showed when it saves", async () => {
+    const sent = answer(200, { outcome: "saved", commit: "abc" });
+    expect(await saveDraft("c 1", "seen-hash")).toEqual({ outcome: "saved", commit: "abc" });
+    expect(sent).toEqual([
+      {
+        url: "/applet/datalib_contacts/contact/c%201/draft/save",
+        method: "POST",
+        type: "application/json",
+        body: JSON.stringify({ seen: "seen-hash" }),
+      },
+    ]);
+  });
+
+  it("sends a photo as its own bytes and type, not as JSON", async () => {
+    const sent = answer(200, { photo_url: "/applet/datalib_contacts/photo/c1?v=1" });
+    const photo = new Blob(["png"], { type: "image/png" });
+    await setContactPhoto("c1", photo);
+    expect(sent[0]).toMatchObject({ url: "/applet/datalib_contacts/photo/c1", method: "PUT" });
+    expect(sent[0]!.type).toBe("image/png");
+    expect(sent[0]!.body).toBe(photo);
+  });
+});
+
+describe("an edit to a link", () => {
+  /// What the live updates need to exist; nothing here reads them.
+  class QuietEventSource {
+    static CLOSED = 2;
+    readyState = 0;
+    addEventListener() {}
+    close() {}
+  }
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** Linking riker@ forgot only riker@, so a card drawn from wriker@ kept
+   *  the contact's old list of handles until a live update came, seconds
+   *  later. */
+  it("forgets every handle of the contact it joins or leaves", async () => {
+    const riker = contact("datalib_contacts", "Will Riker", [
+      ["email:wriker@enterprise.test", null],
+      ["email:will@alaska.test", null],
+    ]);
+    vi.stubGlobal("EventSource", QuietEventSource);
+    vi.stubGlobal("fetch", async (url: string) => {
+      const body = url.endsWith("/resolve")
+        ? {
+            resolved: {
+              "email:wriker@enterprise.test": riker,
+              "email:will@alaska.test": riker,
+            },
+          }
+        : url.endsWith("/people")
+          ? { people: {} }
+          : {};
+      return new Response(JSON.stringify(body), { status: 200 });
+    });
+    const shown = ["email:wriker@enterprise.test", "email:will@alaska.test", "email:worf@k.test"];
+    await people.ask(shown);
+    expect(people.get("email:wriker@enterprise.test")?.mine?.key).toBe(riker.key);
+
+    await linkHandle("email:riker@enterprise.test", riker.key);
+    expect(people.get("email:wriker@enterprise.test")).toBeUndefined();
+    expect(people.get("email:worf@k.test")).toBeDefined();
+
+    await people.ask(shown);
+    await unlinkHandle("email:will@alaska.test");
+    expect(people.get("email:wriker@enterprise.test")).toBeUndefined();
+    expect(people.get("email:worf@k.test")).toBeDefined();
   });
 });

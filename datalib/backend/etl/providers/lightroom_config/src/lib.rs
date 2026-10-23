@@ -21,7 +21,7 @@ pub const XMP_COLUMN_PATTERNS: &[&str] = &[
 /// (`catalog.path`), a folder of Lightroom's backups (`backups.path`), or
 /// both, the backups replayed first and the catalog mirrored on top. The
 /// doltlite mirror lands in the ingest step's tree.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct LightroomConfig {
     /// Shared per-source envelope (paths + cross-source tunables),
@@ -39,10 +39,10 @@ pub struct LightroomConfig {
 
     /// Table-name globs to mirror. Default `["*"]` — every table in the
     /// catalog. Matched against the bare table name; `*` and `?` are the
-    /// only metacharacters (see [`glob_match`]).
+    /// only wildcards.
     pub include_tables: Vec<String>,
 
-    /// Table-name globs to skip, applied after [`Self::include_tables`].
+    /// Table-name globs to skip, applied after `include_tables`.
     /// Default empty: mirror everything.
     pub exclude_tables: Vec<String>,
 
@@ -51,7 +51,9 @@ pub struct LightroomConfig {
     /// nothing in the store and never shows up in a diff.
     pub exclude_columns: Vec<String>,
 
-    /// Fold [`XMP_COLUMN_PATTERNS`] into [`Self::exclude_columns`].
+    /// Also leave out the bulkiest columns, which Lightroom derives from
+    /// others that stay: the per-image XMP packet and the flattened
+    /// search-index strings.
     pub skip_xmp: bool,
 
     /// Column names that, when present as a single-column UNIQUE index on
@@ -60,7 +62,7 @@ pub struct LightroomConfig {
     pub stable_key_columns: Vec<String>,
 
     /// Per-table primary-key override, `table -> [columns]`. Beats both
-    /// [`Self::stable_key_columns`] and the declared key. An empty column
+    /// `stable_key_columns` and the declared key. An empty column
     /// list forces the table to be mirrored keyless.
     pub primary_keys: BTreeMap<String, Vec<String>>,
 
@@ -132,6 +134,30 @@ impl LightroomConfig {
 pub type LightroomRenderConfig = datalib_source_common::BareRenderConfig;
 
 pub use datalib_source_common::glob_match;
+
+/// This source's config stanzas, for `datalib-step help`.
+pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "catalog",
+        toml: include_str!("../examples/minimal_catalog.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "catalog",
+        toml: include_str!("../examples/complete_catalog.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "backups",
+        toml: include_str!("../examples/minimal_backups.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "backups",
+        toml: include_str!("../examples/complete_backups.toml"),
+    },
+];
 
 impl datalib_source_common::IngestMethods for LightroomConfig {
     const METHODS: &'static [datalib_source_common::IngestMethod] = &[

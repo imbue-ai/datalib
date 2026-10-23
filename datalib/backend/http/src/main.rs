@@ -1,17 +1,45 @@
 //! `datalib-http` — single-binary search backend.
 
 use clap::Parser;
-use datalib_http::{router, ApiToken, TrustedProxy};
+use datalib_cli_help::Example;
+use datalib_http::{router, ApiToken, FrameAncestors};
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
 const DEFAULT_BIND: &str = "127.0.0.1:8731";
 
+const LONG_ABOUT: &str = "\
+Serve the datalib app for one data root: the web UI, its API, and the \
+sync loop, which runs the root's config.toml the way datalib-dag does.
+
+It listens on 127.0.0.1:8731, or DATALIB_BIND (127.0.0.1:0 lets the OS \
+pick a port). Every route needs the API token it writes to \
+<data_root>/system/api-token on each start, sent as \
+`Authorization: Bearer <token>`; DATALIB_TOKEN pins it instead. The \
+guides <origin>/agent/config.md and <origin>/agent/cards.md need no token.";
+
+const EXAMPLES: &[Example] = &[
+    Example {
+        what: "serve the app for a data root, opening a browser at a terminal",
+        command: "datalib-http ~/datalib",
+    },
+    Example {
+        what: "start a new root on its starter config",
+        command: "datalib-http ~/datalib --init",
+    },
+    Example {
+        what: "serve it to a script: any free port, no browser, and the URL (token included) in a file",
+        command: "DATALIB_BIND=127.0.0.1:0 datalib-http ~/datalib --no-open --url-file ~/datalib-url",
+    },
+];
+
 #[derive(Debug, Parser)]
 #[command(
     name = "datalib-http",
-    about = "Single-binary search backend for the datalib data root.",
-    long_about = None,
+    bin_name = "datalib-http",
+    about = "Serve the datalib app (web UI, API and sync loop) for one data root.",
+    long_about = LONG_ABOUT,
+    after_help = datalib_cli_help::render(EXAMPLES),
 )]
 struct Args {
     /// Data root directory written by the pipeline. Created if
@@ -108,12 +136,12 @@ async fn main() -> anyhow::Result<()> {
     // carries it: the browser (and the Tauri webview) authenticate by
     // loading `<url>?token=…` once, then ride the session cookie.
     let api_token = ApiToken::mint(&root)?;
-    let trusted_proxy = TrustedProxy::from_env()?;
-    if let Some(proxy) = trusted_proxy {
+    datalib_http::auth::refuse_retired_env()?;
+    let frame_ancestors = FrameAncestors::from_env()?;
+    if frame_ancestors != FrameAncestors::default() {
         tracing::info!(
-            "behind the {} proxy: its identity header stands in for the token, \
-             and the app page may be framed",
-            proxy.as_str()
+            "the app page may be framed by {}",
+            frame_ancestors.sources()
         );
     }
 
@@ -166,7 +194,7 @@ async fn main() -> anyhow::Result<()> {
         datalib_http::binaries::resolve_binary_dir(),
         args.now.clone(),
         api_token,
-        trusted_proxy,
+        frame_ancestors,
     )
     .await?;
 
@@ -290,4 +318,15 @@ async fn terminated(mut signals: ShutdownSignals, parent_gone: tokio::sync::ones
         ));
         std::process::exit(0);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::CommandFactory;
+
+    #[test]
+    fn the_help_examples_parse() {
+        super::Args::command().debug_assert();
+        datalib_cli_help::assert_examples_parse(super::Args::command(), super::EXAMPLES);
+    }
 }

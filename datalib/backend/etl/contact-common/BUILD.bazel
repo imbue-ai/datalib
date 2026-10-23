@@ -16,6 +16,7 @@ rust_library(
         "//datalib/backend/handle:datalib_handle",
         "//datalib/backend/schema:datalib_schema",
         "@datalib_crates//:anyhow",
+        "@datalib_crates//:tracing",
     ],
 )
 

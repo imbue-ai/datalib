@@ -1,3 +1,4 @@
+load("@aspect_bazel_lib//lib:copy_to_bin.bzl", "copy_to_bin")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
 load("//datalib/backend/unified_document_index:qmd_fixture.bzl", "QMD_FIXTURE_DATA", "QMD_FIXTURE_ENV")
 load("//tools:insta.bzl", "insta_update")
@@ -38,8 +39,8 @@ rust_binary(
         "@datalib_crates//:anyhow",
         "@datalib_crates//:axum",
         "@datalib_crates//:chrono",
+        "//datalib/backend/cli_help:datalib_cli_help",
         "@datalib_crates//:clap",
-        "@datalib_crates//:mime_guess",
         "@datalib_crates//:serde",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:serde_json",
@@ -89,4 +90,12 @@ insta_update(
         "RUST_TEST_THREADS": "1",
     },
     test = ":applet_unittests",
+)
+
+# The applets' card components as the browser runs them, for the UI's
+# unit tests (`datalib/ui/tests/untrusted_card_args.test.ts`).
+copy_to_bin(
+    name = "card_components",
+    srcs = glob(["src/**/*.js"]),
+    visibility = ["//datalib/ui:__pkg__"],
 )

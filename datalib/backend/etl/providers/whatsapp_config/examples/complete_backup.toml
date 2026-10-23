@@ -1,0 +1,43 @@
+# WhatsApp from an Android end-to-end-encrypted backup, with every option
+# set, and searchable. The 64-digit key is read from the environment
+# variable `key_env_var` names, never from this file.
+[[groups]]
+id = "whatsapp"
+name = "WhatsApp"
+type = "whatsapp"
+
+[[steps]]
+group = "whatsapp"
+function = "ingest"
+
+# The decrypted database is mirrored table for table; these pick the tables.
+[steps.params]
+include_tables = ["*"]                  # table-name globs to mirror (`*` and `?`); default ["*"], every table
+exclude_tables = ["ai_thread_*"]        # table-name globs to skip, after include_tables; default none
+exclude_columns = ["message_media.media_key"]  # `table.column` globs to drop; default none
+skip_churn = true                       # leave out props, backup_changes and frequent, which change
+                                        # on every backup; default true
+gc = false                              # reclaim unused space in the store at the start of each run;
+                                        # default false
+
+[steps.params.backup]
+path = "~/Downloads/whatsapp-backup"         # holds Databases/msgstore.db.crypt15 and Media/
+key_env_var = "WHATSAPP_ENTERPRISE_PHONE_KEY"  # the variable holding the key as 64 hex digits;
+                                               # default WHATSAPP_BACKUP_DECRYPTION_KEY
+
+[[steps]]
+group = "whatsapp"
+function = "render_markdown"
+inputs = ["whatsapp/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "whatsapp"
+function = "keyword_index"
+inputs = ["whatsapp/render_markdown"]
+
+[[steps]]
+group = "whatsapp"
+function = "embed"
+inputs = ["whatsapp/keyword_index"]

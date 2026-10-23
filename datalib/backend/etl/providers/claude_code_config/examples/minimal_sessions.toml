@@ -1,0 +1,18 @@
+# Claude Code sessions (terminal, desktop app, IDE extension), read off the
+# transcripts Claude Code keeps on this machine. No sign-in: an empty
+# `sessions` table reads the standard place, ~/.claude/projects.
+[[groups]]
+id = "claude_code"
+name = "Claude Code"
+type = "claude_code"
+
+[[steps]]
+group = "claude_code"
+function = "ingest"
+
+[steps.params.sessions]
+
+[[steps]]
+group = "claude_code"
+function = "render_markdown"
+inputs = ["claude_code/ingest"]

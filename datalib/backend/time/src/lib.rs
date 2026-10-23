@@ -314,8 +314,20 @@ pub fn display_ts_from_unix_millis(ms: Option<i64>) -> String {
         return "(no timestamp)".to_string();
     };
     IsoOffsetTimestamp::from_unix_millis(ms)
-        .map(|t| t.inner().format("%Y-%m-%d %H:%M:%S UTC").to_string())
+        .map(|t| full_ts(&t))
         .unwrap_or_else(|| format!("@{ms}ms"))
+}
+
+/// The whole instant, for a stamp's hover: `2369-04-15 08:30:00 UTC`,
+/// or the offset the stamp was written in where it is not UTC
+/// (`2026-01-06 08:00:00 +01:00`). Display only.
+pub fn full_ts(t: &IsoOffsetTimestamp) -> String {
+    let dt = t.inner();
+    if dt.offset().local_minus_utc() == 0 {
+        dt.format("%Y-%m-%d %H:%M:%S UTC").to_string()
+    } else {
+        dt.format("%Y-%m-%d %H:%M:%S %:z").to_string()
+    }
 }
 
 /// Compact, Slack-style stamp for a rendered message header:
@@ -337,15 +349,26 @@ pub fn display_ts_from_unix_millis(ms: Option<i64>) -> String {
 /// Display only; nothing derived from it reaches the index.
 pub fn short_ts(t: &IsoOffsetTimestamp) -> String {
     let dt = t.inner();
-    let day = dt.day();
+    format!("{} at {}", short_date(dt.date_naive()), dt.format("%H:%M"))
+}
+
+/// A day with no time of day, in [`short_ts`]'s words: `Tue Apr 15th, 2369`.
+pub fn short_date(d: NaiveDate) -> String {
+    let day = d.day();
     format!(
-        "{dow} {mon} {day}{ord}, {year} at {time}",
-        dow = dt.format("%a"),
-        mon = dt.format("%b"),
+        "{dow} {mon} {day}{ord}, {year}",
+        dow = d.format("%a"),
+        mon = d.format("%b"),
         ord = ordinal_suffix(day),
-        year = dt.format("%Y"),
-        time = dt.format("%H:%M"),
+        year = d.format("%Y"),
     )
+}
+
+/// A day written `YYYY-MM-DD`, in [`short_date`]'s words. `None` for
+/// anything else.
+pub fn short_day(s: &str) -> Option<String> {
+    let d = NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()?;
+    (d.format("%Y-%m-%d").to_string() == s).then(|| short_date(d))
 }
 
 fn ordinal_suffix(day: u32) -> &'static str {
@@ -887,6 +910,22 @@ mod tests {
         assert_eq!(day("2026-08-21T00:00:00Z"), "21st");
         assert_eq!(day("2026-08-23T00:00:00Z"), "23rd");
         assert_eq!(day("2026-08-31T00:00:00Z"), "31st");
+    }
+
+    #[test]
+    fn a_day_and_a_full_stamp_read_like_the_short_one() {
+        assert_eq!(
+            short_day("2369-03-18").as_deref(),
+            Some("Tue Mar 18th, 2369")
+        );
+        assert_eq!(short_day("2369-3-18"), None, "only the padded spelling");
+        assert_eq!(short_day("2369-03-18T00:00:00Z"), None);
+        let full = |s: &str| full_ts(&parse_strict(s).unwrap());
+        assert_eq!(full("2369-04-15T08:30:00Z"), "2369-04-15 08:30:00 UTC");
+        assert_eq!(
+            full("2026-01-06T08:00:00+01:00"),
+            "2026-01-06 08:00:00 +01:00"
+        );
     }
 
     #[test]

@@ -3,10 +3,9 @@
 //! renders: a page is one bucket, a comment thread another.
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
-use datalib_etl::blob_cas::BlobBundle;
+use anyhow::Result;
 use datalib_etl_notion::ingest::db::{db_path_for, AttachmentRow, RawDb};
 use datalib_etl_render::inputs::{changed_rows, RawRange};
 use serde_json::Value;
@@ -35,16 +34,20 @@ pub struct ParsedNotion {
     /// the comment itself, so this is for the places it does not: a
     /// page's `created_by` / `last_edited_by`, and people properties.
     pub user_names: HashMap<String, String>,
+    /// `user_id -> email address`, for the users Notion gave one for:
+    /// what makes a comment's author a chip.
+    pub user_emails: HashMap<String, String>,
     /// `block_id -> the text a comment on that block is anchored to`.
     /// A comment names its block and carries no quote, so without this
     /// a thread's anchor is an opaque uuid.
     pub anchor_text: HashMap<String, String>,
     /// `notion_attachments` row ids per page, bytes fetched or not.
     pub attachment_ids_by_page: HashMap<String, Vec<String>>,
-    /// Attachment bytes per page, pre-loaded from the sibling CAS.
-    /// Render calls `bundle.materialize_to_dir(<page_dir>/blobs)` once
-    /// per page and resolves each slot with `bundle.filename_for`.
-    pub blobs_by_page: HashMap<String, BlobBundle>,
+    /// The attachment refs whose bytes were fetched, per page: what
+    /// render loads, a batch of pages at a time.
+    pub refs_by_page: HashMap<String, Vec<String>>,
+    /// The raw store everything was read from, at `head`.
+    pub db_path: Option<PathBuf>,
     /// The commit everything was read at.
     pub head: Option<String>,
     /// The buckets to render — page ids and discussion ids; `None`
@@ -70,7 +73,9 @@ pub fn parse_api_dir(path: &Path, range: RawRange<'_>) -> Result<ParsedNotion> {
             };
             let parsed = load(&db, range).await;
             db.close().await;
-            parsed
+            let mut parsed = parsed?;
+            parsed.db_path = Some(db_path);
+            Ok(parsed)
         })
     })
 }
@@ -80,6 +85,7 @@ async fn load(db: &RawDb, range: RawRange<'_>) -> Result<ParsedNotion> {
     let changed = changed_rows(db.pool(), range, pin, &TABLES).await?;
 
     let user_names = db.load_user_names().await?;
+    let user_emails = db.load_user_emails().await?;
     let anchor_text = db.load_comment_anchors().await?;
     let mut pages = db.load_pages().await?;
     let mut page_markdown = db.load_page_markdown().await?;
@@ -121,24 +127,16 @@ async fn load(db: &RawDb, range: RawRange<'_>) -> Result<ParsedNotion> {
             refs_by_page.entry(a.page_id).or_default().push(a.ref_id);
         }
     }
-    let mut blobs_by_page = BlobBundle::load_many(
-        db.pool(),
-        Some(db.cas().pool()),
-        ATTACHMENTS_PROJECTION_SQL,
-        refs_by_page,
-    )
-    .await
-    .context("load attachments")?;
-    blobs_by_page.retain(|_, bundle| !bundle.is_empty() || bundle.has_missing());
-
     Ok(ParsedNotion {
         pages,
         markdown_by_page: page_markdown.into_iter().collect(),
         comments,
         user_names,
+        user_emails,
         anchor_text,
         attachment_ids_by_page,
-        blobs_by_page,
+        refs_by_page,
+        db_path: None,
         head: Some(pin.commit().to_string()),
         render,
     })
@@ -220,7 +218,7 @@ pub fn parent_block_of(c: &Value) -> Option<&str> {
 /// Maps an image block's `ref_id` (`"{block_uuid}:image"`) to its CAS
 /// `blake3`, through the pinned view: an edge read from the working set
 /// can name a row the producer has not committed.
-const ATTACHMENTS_PROJECTION_SQL: &str = "
+pub(crate) const ATTACHMENTS_PROJECTION_SQL: &str = "
     SELECT ref_id, blake3,
            NULL AS content_type,
            NULL AS upstream_name

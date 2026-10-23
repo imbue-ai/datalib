@@ -5,7 +5,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use datalib_core::app_store::AppStore;
-use datalib_http::{router, ApiToken, AppState, TrustedProxy};
+use datalib_http::{router, ApiToken, AppState, FrameAncestors};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tower::ServiceExt;
@@ -18,12 +18,12 @@ async fn fetch(path: &str) -> (StatusCode, String) {
 }
 
 async fn fetch_with_headers(path: &str) -> (StatusCode, axum::http::HeaderMap, String) {
-    fetch_behind(path, None).await
+    fetch_framed_by(path, FrameAncestors::default()).await
 }
 
-async fn fetch_behind(
+async fn fetch_framed_by(
     path: &str,
-    trusted_proxy: Option<TrustedProxy>,
+    frame_ancestors: FrameAncestors,
 ) -> (StatusCode, axum::http::HeaderMap, String) {
     let db_path = tempfile::TempDir::with_prefix("datalib-http-csp-itest-")
         .expect("create tempdir")
@@ -50,7 +50,7 @@ async fn fetch_behind(
             None,
         )),
         api_token: ApiToken::from_value(TOKEN, root.as_path()),
-        trusted_proxy,
+        frame_ancestors,
     };
     let req = Request::get(path)
         .header("x-datalib-token", TOKEN)
@@ -146,15 +146,15 @@ async fn the_app_page_carries_its_csp() {
     assert!(headers.get("content-security-policy").is_none());
 }
 
-/// Behind a trusted proxy the proxy appends its own `frame-ancestors`,
-/// naming the page that frames the app; two policies intersect, so the
-/// app's `'none'` has to go, and only that — every other directive is
-/// the same policy.
+/// Studio frames the app, and a proxy's own `frame-ancestors` cannot
+/// loosen the app's `'none'`: the browser enforces both. So the
+/// launcher names the frames, and only that directive changes.
 #[tokio::test]
-async fn behind_a_trusted_proxy_the_app_page_leaves_framing_to_the_proxy() {
+async fn named_frame_ancestors_replace_none_and_nothing_else() {
     let (status, alone, _) = fetch_with_headers("/").await;
     assert_eq!(status, StatusCode::OK);
-    let (status, framed, html) = fetch_behind("/", Some(TrustedProxy::Imbue)).await;
+    let studio = "http://localhost:* https://*.localhost:* https://studio.imbue.com";
+    let (status, framed, html) = fetch_framed_by("/", FrameAncestors::parse(studio).unwrap()).await;
     assert_eq!(status, StatusCode::OK);
     assert!(html.contains("<div id=\"app\">"), "not the app shell");
     let csp_of = |headers: &axum::http::HeaderMap| {
@@ -170,7 +170,11 @@ async fn behind_a_trusted_proxy_the_app_page_leaves_framing_to_the_proxy() {
         "frame-ancestors 'none'",
         "{alone}"
     );
-    assert_eq!(header_directive(&framed, "frame-ancestors"), "", "{framed}");
+    assert_eq!(
+        header_directive(&framed, "frame-ancestors"),
+        format!("frame-ancestors {studio}"),
+        "{framed}"
+    );
     let without = |csp: &str| {
         csp.split(';')
             .map(|d| d.split_whitespace().collect::<Vec<_>>().join(" "))

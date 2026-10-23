@@ -61,9 +61,15 @@ pub const RESET_FLAG: &str = "--reset";
 /// shape where it can do that in place, fetches nothing, and says in its
 /// outcome when it cannot (`needs_rerun`).
 pub const MIGRATE_FLAG: &str = "--migrate";
+/// Appended by `datalib-dag --compact`, to a step that takes it
+/// (`StepSpec::compacts`): the step folds history nothing reads into fewer
+/// commits, gives back the disk it held, and runs nothing else.
+pub const COMPACT_FLAG: &str = "--compact";
 /// Seconds between a step's checkpoints, at most — see
 /// `config::CheckpointCadence`.
 pub const ENV_CHECKPOINT_CADENCE: &str = "DATALIB_DAG_CHECKPOINT_CADENCE";
+/// How much a render reads at once — see `config::RenderPages`.
+pub const ENV_RENDER_PAGES: &str = "DATALIB_DAG_RENDER_PAGES";
 
 /// The flag a step's params arrive on: the path of a JSON file holding
 /// the entry's `params` subtree. A file rather than an argument because

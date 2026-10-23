@@ -29,32 +29,6 @@ has. Anything that can run commands as you can use them to act as you
 on that service — see the warning in the first-time guide before
 storing any.
 
-## AirVisual
-
-`type = "airvisual"` — reads each monitor's own history files
-(`export`). Mirrors particulates, AQI, CO₂, temperature, humidity and
-VOC as time series, rendered as one page of charts.
-
-An AirVisual Pro (IQAir's indoor air-quality monitor) keeps its history
-on the unit — no cloud account is involved — and serves it over a Samba
-share: `smb://<ip>/airvisual`,
-user `airvisual`, with the password shown on the device under
-**Settings › Network › Access Pro data**. Mount the share (in the
-Finder, **Go › Connect to Server…**) and point one `devices` entry at
-the mount, or at a copy of that folder:
-
-```toml
-[[steps.params.export.devices]]
-path = "/Volumes/airvisual"
-```
-
-Every `YYYYMM_AirVisual_values.txt` under the path is read, the
-`archive*/` folders the device starts on each clock change too; a
-later run re-reads only the month being written. Each device's
-identity is its serial and its name is what it calls itself, both read
-from the folder's `latest_config_measurements.json`; set `serial` for a
-copy without it, and `name` to override what the device says.
-
 ## Apple Messages
 
 `type = "apple_messages"` — reads the Messages app's own `chat.db` on a
@@ -92,7 +66,7 @@ permitted", grant Datalib Full Disk Access in System Settings → Privacy
 What gets mirrored is `database/Photos.sqlite`, about ninety tables of
 Photos' own schema, table for table, with only changed rows stored on
 each run. The originals sit beside it at
-`<library>/originals/<X>/<UUID>.<ext>`; a [media](#media) source pointed
+`<library>/originals/<X>/<UUID>.<ext>`; a [local media](#local-media) source pointed
 at that folder gives you their EXIF and content hashes.
 
 ## Beeper
@@ -107,7 +81,7 @@ no credentials. Lightly used — expect rough edges. It keeps what the
 app's cache lets go, so it never notices a deletion (the provider's
 `INGEST.md` says why).
 
-## CalDAV
+## Calendar (CalDAV)
 
 `type = "calendar"` — any CalDAV server, such as iCloud or Nextcloud
 (`caldav`), **or** a folder of `.ics` files (`ics`). Mirrors your
@@ -262,7 +236,7 @@ the standard home, `~/.codex`. Give it a `path` for a copy of that
 folder from another machine. A thread Codex later deletes stays in the
 mirror.
 
-## Contacts
+## Contacts (CardDAV)
 
 `type = "contacts"` — any CardDAV server, such as iCloud or Nextcloud,
 through latchkey (`carddav`), **or** local `.vcf` files (`vcf`).
@@ -283,7 +257,7 @@ An `addressbooks` list of names narrows a server to those address books,
 matched exactly; leave it out for all of them. The wizard's **Test
 connection** lists them to pick from.
 
-## Email
+## Email (mbox or JMAP)
 
 `type = "email"` — a Google Takeout `.mbox` on disk (`mbox`), **or** a
 JMAP server other than Fastmail through latchkey (`jmap`). Mirrors mail
@@ -361,7 +335,7 @@ Contacts](#fastmail-contacts) and [Fastmail Calendar](#fastmail-calendar).
 ## Fastmail Calendar
 
 `type = "calendar"` — Fastmail's calendars over CalDAV, through latchkey
-(`fastmail`). Rendered the way [CalDAV](#caldav) says.
+(`fastmail`). Rendered the way [Calendar (CalDAV)](#calendar-caldav) says.
 
 Fastmail's CalDAV login is built into latchkey as `fastmail-dav`, and
 takes an app password (Settings → Privacy & Security → Integrations →
@@ -385,7 +359,7 @@ nothing else; `calendars` narrows it to the calendars you name.
 ## Fastmail Contacts
 
 `type = "contacts"` — Fastmail's address books over CardDAV, through
-latchkey (`fastmail`). Rendered the way [Contacts](#contacts) says.
+latchkey (`fastmail`). Rendered the way [Contacts (CardDAV)](#contacts-carddav) says.
 
 The same `fastmail-dav` login as [Fastmail Calendar](#fastmail-calendar):
 an app password (Settings → Privacy & Security → Integrations → App
@@ -467,18 +441,50 @@ for, and latchkey keeps the OAuth token:
 latchkey auth browser google-gmail
 ```
 
+The first time, latchkey needs an OAuth client to sign in with:
+[your own Google OAuth client](#your-own-google-oauth-client).
+
 Use a `gmail` table on the ingest step. Incremental sync is driven by
 Gmail's own change history, so deletions and label changes show up as
 events. Throughput is capped by Google's quota at roughly 300 messages
 a minute, so a large mailbox backfills over several runs. A Takeout
 `.mbox` of the same mailbox is the no-credentials route — see
-[Email](#email).
+[Email](#email-mbox-or-jmap).
+
+### Your own Google OAuth client
+
+Every Google source signs in through an OAuth client in a Google Cloud
+project of your own, and latchkey needs one for each Google service
+before its first sign-in. In the Add source form, **Sign in with
+browser** says when one is missing and offers to create it or to take
+one you made; for Google Drive it takes only one you made, and keeps it
+for all four of Drive's services. From a terminal, latchkey can create one, which takes a
+few minutes and a Cloud project per service:
+
+```sh
+latchkey auth browser-prepare google-gmail
+```
+
+Or make one yourself and give it to every Google service at once: in
+the Google Cloud console, a project with the Gmail, Google Calendar,
+Google Drive, Google Docs, Google Sheets and Google Slides APIs turned
+on, and in it an OAuth client of type **Desktop app**. Then, with its
+id and secret:
+
+```sh
+for s in google-gmail google-calendar google-drive google-docs google-sheets google-slides; do
+  latchkey auth prepare "$s" '{"clientId":"<id>","clientSecret":"<secret>"}'
+done
+```
+
+Each service is still signed in to on its own, since latchkey asks for
+each one's permissions separately.
 
 ## Google Calendar
 
 `type = "calendar"` — the Google Calendar API through latchkey
 (`google`). Mirrors every calendar on the account's list, subscribed
-ones included. Rendered the way [CalDAV](#caldav) says.
+ones included. Rendered the way [Calendar (CalDAV)](#calendar-caldav) says.
 
 Built into latchkey; one command opens a browser, you sign in and
 approve every scope it asks for:
@@ -487,10 +493,13 @@ approve every scope it asks for:
 latchkey auth browser google-calendar
 ```
 
+The first time, latchkey needs an OAuth client to sign in with:
+[your own Google OAuth client](#your-own-google-oauth-client).
+
 The `google` table needs nothing else; `calendars` narrows it to the
 calendars you name.
 
-## Google Chat
+## Google Chat (Takeout)
 
 `type = "google_takeout"` — the **Chat** product of a Google Takeout
 export (`export`, with `google_chat = true`). Mirrors your Google Chat
@@ -500,6 +509,59 @@ Request a Takeout with **Chat** ticked and unpack it — see
 [Google Takeout](#google-takeout), which is the source this is one
 feed of. The Add source form ticks it; in a hand-written config, set
 `google_chat = true` beside `export.path`.
+
+## Google Drive
+
+`type = "google_drive"` — your Google Docs, Sheets and Slides through
+the Drive API and latchkey (`api`). Each Doc renders as one document
+with its comment threads folded in after the text they were made on;
+Sheets and Slides are kept but not rendered yet. Each sync keeps every
+file whose version moved,
+whole and in Google's own form, beside its comments, its revision list
+and the images it shows. It can also keep a copy LibreOffice opens
+(`exports`, below). Older versions stay, and a file you delete from
+Drive stays in the backup.
+
+The download reaches four Google APIs, and latchkey signs each with its
+own service, so it needs all four signed in as the same account. In the
+Add source form, **Sign in with browser** signs in to Drive, Docs,
+Sheets and Slides one after another; approve every scope each one asks
+for. If one is turned down, the button then reads **Finish signing in
+as …** and does only the ones left. From a terminal:
+
+```sh
+latchkey auth browser google-drive
+latchkey auth browser google-docs
+latchkey auth browser google-sheets
+latchkey auth browser google-slides
+```
+
+Each needs an OAuth client first, and one client can serve all four:
+[your own Google OAuth client](#your-own-google-oauth-client). The form
+asks for one you made and keeps it for all four, rather than creating
+one, since latchkey would make a Cloud project for each. If Google
+answers that an API is not enabled, turn it on in that client's Cloud
+project.
+
+The form asks which files: every file the account can open, only the
+ones it owns (`owned_only`), or only the ones you list (`file_ids`, a
+link or an id each). `kinds`, `exports` and `revision_exports` are under
+Advanced options. `exports` says which copies Drive converts each version to, beside its
+native JSON: `["odf"]` for `.odt`, `.ods` and `.odp`, `"ooxml"`,
+`"pdf"`, or, written into the config by hand, a list per kind. By
+default there are none.
+`revision_exports` takes the same values for the revisions Drive lists,
+and is the only way to keep versions from before your first sync: each
+Doc and Sheet revision is fetched once, as an export. It is off by
+default too. A deck's revisions are never fetched, since Google exports
+a deck as it is now whatever revision is asked for.
+
+The first sync fetches every file. A later one costs one listing
+request per thousand files, plus a few requests per file that changed.
+Each version kept costs its native JSON, tens of KB gzipped. An export,
+if you turn them on, costs 1–4 MB a version, since Google embeds the
+fonts in each, and so does each old revision's; the first sync of a
+file with a long history then fetches every revision.
 
 ## Google Takeout
 
@@ -522,12 +584,12 @@ source at its `Takeout` folder.
 
 Useful products: **Chat**, **Voice**, **Maps**, **YouTube history** and
 **Gemini** (read by this source), and **Mail**
-(a single `.mbox`, read by the [email](#email) source instead). The
+(a single `.mbox`, read by the [email](#email-mbox-or-jmap) source instead). The
 Add source form ticks every product; untick what you want left out. In
 a hand-written config every feed is off until its flag beside
 `export.path` turns it on (`google_chat = true`, `google_voice = true`,
-…); [Google Chat](#google-chat) and
-[Google Voice](#google-voice) have sections of their own. A Takeout is
+…); [Google Chat](#google-chat-takeout) and
+[Google Voice](#google-voice-takeout) have sections of their own. A Takeout is
 a complete snapshot, so it is also the way to notice what Google has
 deleted since the last one: put a newer export in its place, and
 what it no longer holds leaves the mirror on the next sync. A product
@@ -537,7 +599,7 @@ cannot tell apart: a large Takeout comes as several zips, and a product
 missing some of them looks smaller, not missing, so keep every part in
 the folder (or, unpacking by hand, unpack every part).
 
-## Google Voice
+## Google Voice (Takeout)
 
 `type = "google_takeout"` — the **Voice** product of a Google Takeout
 export (`export`, with `google_voice = true`). Mirrors your texts,
@@ -547,6 +609,32 @@ Request a Takeout with **Voice** ticked and unpack it — see
 [Google Takeout](#google-takeout), which is the source this is one
 feed of. Set `google_voice = true` beside `export.path`; the spam
 folder stays out unless `google_voice_include_spam = true`.
+
+## IQAir AirVisual
+
+`type = "airvisual"` — reads each monitor's own history files
+(`export`). Mirrors particulates, AQI, CO₂, temperature, humidity and
+VOC as time series, rendered as one page of charts.
+
+An AirVisual Pro (IQAir's indoor air-quality monitor) keeps its history
+on the unit — no cloud account is involved — and serves it over a Samba
+share: `smb://<ip>/airvisual`,
+user `airvisual`, with the password shown on the device under
+**Settings › Network › Access Pro data**. Mount the share (in the
+Finder, **Go › Connect to Server…**) and point one `devices` entry at
+the mount, or at a copy of that folder:
+
+```toml
+[[steps.params.export.devices]]
+path = "/Volumes/airvisual"
+```
+
+Every `YYYYMM_AirVisual_values.txt` under the path is read, the
+`archive*/` folders the device starts on each clock change too; a
+later run re-reads only the month being written. Each device's
+identity is its serial and its name is what it calls itself, both read
+from the folder's `latest_config_measurements.json`; set `serial` for a
+copy without it, and `name` to override what the device says.
 
 ## Lightroom
 
@@ -571,6 +659,37 @@ when it was taken, so the store holds the catalog's history from before
 you started syncing it. Every later sync adds the backups taken since,
 then mirrors the catalog on top.
 
+## Linear
+
+`type = "linear"` — Linear's GraphQL API through latchkey (`api`).
+Copies one workspace: issues with their history, comments, documents,
+project updates and attachments, plus the teams, people, states,
+labels, cycles, projects, milestones and initiatives they refer to.
+Nothing is rendered; each kind of object is a table of the objects as
+Linear sent them.
+
+Sign in once in the browser:
+
+```sh
+latchkey auth browser linear
+```
+
+Or make a personal API key in Linear (**Settings** → **Security &
+access** → **Personal API keys**; read access is enough) and store it
+without `Bearer`:
+
+```sh
+latchkey auth set linear -H "Authorization: lin_api_…"
+```
+
+An empty `api` table copies the whole workspace. To copy part of it,
+name teams by key or name in `teams` and projects by name in
+`projects`. An issue is copied when its team or its project is named,
+and most issues belong to no project, so name their teams. The first
+sync copies everything, newest first. Each sync after that reads only
+what changed since, and for a quiet workspace that takes seconds.
+`datalib/backend/etl/providers/linear/INGEST.md` has the details.
+
 ## LinkedIn
 
 `type = "linkedin"` — LinkedIn's "Get a copy of your data" export
@@ -591,7 +710,7 @@ Connections come without photos: the export has none, and linkedin.com
 shows a profile only to someone signed in. Photos an earlier version
 fetched are kept.
 
-## Local files
+## Local file index
 
 `type = "fsindex"` — any directory tree on disk (`fswalk.path`).
 Mirrors an index of every entry — path, kind, size, blake3 hash;
@@ -602,7 +721,7 @@ inode, so a rescan of a big tree is fast, and it stays read-only
 against its input unless you turn `stamp` on. Query the index in the
 source's raw store.
 
-## Media
+## Local media
 
 `type = "media"` — a directory tree of music, photos and video
 (`fswalk.path`). Mirrors every audio, image and video file with its
@@ -615,6 +734,17 @@ same song synced to three folders is one row with three locations, and
 a second hash over just the signal (`payload_blake3`) survives
 retagging. Query the raw store directly; the provider's `INGEST.md`
 has the recipes.
+
+## Local PDFs
+
+`type = "pdf"` — a directory tree on disk (`fswalk.path`). Mirrors
+every PDF under it, converted to markdown and keyed on content hash, so
+PDFs show up in the grid and in search.
+
+Nothing but a path. Two copies of the same paper convert once and share
+one row; renaming or moving a PDF preserves its identity. No OCR yet: a
+scanned, image-only PDF is recorded (`needs_ocr = 1` in the source's
+`pdf_documents` table) and produces no text.
 
 ## Notion
 
@@ -661,18 +791,7 @@ To mirror only part of the workspace, list the pages in `api.roots`
 along. A database embedded in one of those pages does not: its rows
 are mirrored only by the whole-workspace default.
 
-## PDFs
-
-`type = "pdf"` — a directory tree on disk (`fswalk.path`). Mirrors
-every PDF under it, converted to markdown and keyed on content hash, so
-PDFs show up in the grid and in search.
-
-Nothing but a path. Two copies of the same paper convert once and share
-one row; renaming or moving a PDF preserves its identity. No OCR yet: a
-scanned, image-only PDF is recorded (`needs_ocr = 1` in the source's
-`pdf_documents` table) and produces no text.
-
-## Perseus
+## Perseus Digital Library
 
 `type = "perseus"` — a public download (`github`). Mirrors TEI
 editions of Greek and Latin texts from the Perseus Digital Library.
@@ -687,7 +806,7 @@ Ancient-Greek-BERT model, about 450 MB, fetched once on first use into
 `~/.cache/datalib/models` (or `$XDG_CACHE_HOME/datalib/models`) and
 checked against its pinned sha256 on every load.
 
-## Signal
+## Signal backups
 
 `type = "signal"` — a folder of Android backups (`backup.path`). Mirrors
 messages and media. Every backup in the folder is kept as a version of
@@ -747,7 +866,7 @@ the source's `backup.path` at that directory — it walks every `*.xml`
 inside, so keeping multiple dated backups there is fine; re-ingesting a
 newer export deduplicates against what's already there.
 
-## WhatsApp
+## WhatsApp backups
 
 `type = "whatsapp"` — an Android `crypt15` backup (`backup.path`).
 Mirrors messages and media.

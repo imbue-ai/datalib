@@ -100,8 +100,16 @@ database per source, at
   - `source_measurements` — the storage report's samples
     ([`grid_rows.md`](grid_rows.md)).
 
-The human artifact stays a file: a `.md` with YAML frontmatter, beside
-a `blobs/` directory for its attachments.
+The human artifact stays a file: a `.md` with YAML frontmatter. An
+attachment its source's blob store holds is linked there, at
+`/data/<group>/<function>/blob/<hash>`, which `datalib-http` answers
+([`blob_store/README.md`](../../datalib/backend/blob_store/README.md)).
+An email's attachments and inline images are MIME parts of the `.eml`
+its blob store holds, linked inside it at
+`/data/<group>/<function>/blob/<eml hash>/part/<part hash>`. A
+person's photo is linked in its source's blob store too
+([`contacts.md`](contacts.md) §"Photos"), so nothing a page shows is
+written beside it.
 
 Every table's schema is a hand-written struct in `datalib_schema` with
 `#[derive(PortableTable)]` deriving the DDL, so the same struct defines
@@ -144,9 +152,9 @@ somewhere downstream:
 - **Deletion is expressible.** A `dolt_diff` can name a row that
   *left*, which is how a document a source stops holding reaches the
   grid index as a deletion. Reading whole stores could never see that.
-- **The step's output version is free.** A doltlite artifact versions
-  as its commit hash, so the render step reports its store's HEAD, and
-  the index skips a render that changed nothing
+- **The step's output version is free.** The render step reports the
+  hash of its store's HEAD tree (`dolt_hashof_db`), which moves only
+  when the rows do, so the index skips a render that changed nothing
   ([`dag/README.md`](../../datalib/backend/dag/README.md) says what an
   unreported version costs).
 
@@ -166,9 +174,8 @@ the tree cannot simply stop existing — it would have to be materialized
 for the indexer, or qmd's role taken over by something that reads from
 the database (a direction
 [`multimodal_retrieval.md`](plans/multimodal_retrieval.md) already
-proposes for other reasons). Two smaller things point the same way:
-attachment blobs are materialized into each page's `blobs/` directory,
-and the markdown is deliberately human-readable and greppable on disk.
+proposes for other reasons). A smaller thing points the same way: the
+markdown is deliberately human-readable and greppable on disk.
 Moving the markdown into the store saves space only if the file tree
 then goes away; `plans/multimodal_retrieval.md` §4 measured the same
 text already stored five times on a real data root.
@@ -374,7 +381,7 @@ small. It should grow deliberately: the test for admitting one is
 whether two providers disagreeing about it would produce a *wrong
 answer* rather than merely an inconsistent-looking one.
 
-The tree does not yet follow this rule for timestamps: seven of the 24
+The tree does not yet follow this rule for timestamps: seven of the 25
 render crates (`calendar`, `chatgpt`, `facebook`, `google_takeout`,
 `linkedin`, `perseus`, `sms_backup_restore`) call `chrono` directly
 rather than going through `datalib-time` alone. The retrofit is in
@@ -867,6 +874,74 @@ removes.
    same as a store with no commit to pin (case 3): nothing to read,
    cursor untouched.
 
+### Memory: a page at a time
+
+A render's memory should follow how much it reads at once, not how big
+the source is. A render that loads every row first, parses every
+payload and then renders needs several GB for a large mailbox or
+workspace. One that loads a single bucket per query pays the fixed
+cost of a query for each one (a lookup from the tree's root, a round
+trip), and that cost dominates a source with 200k threads. Between
+the two is a **page**: a run of a few hundred buckets read and
+rendered together, then dropped before the next.
+
+`datalib_etl_render::pages` holds the two pieces a render pages with:
+
+- **`BucketPages`** hands out bucket keys a page at a time. On a full
+  walk it reads the primary table's key column in order, starting
+  after the last key it handed out (keyset pagination): one ordered
+  range scan per page, nothing kept between pages but that key, and
+  the pool's one connection free between them. On a narrowed run it
+  hands out the stale set, sorted, in pages of the same size. A key's
+  rows never straddle two pages.
+- **`batches`** cuts a page's blob loads by bytes, so one bucket with
+  large attachments cannot pull a whole page's worth into memory.
+
+The provider loads what hangs off a page's keys (rows, then join rows)
+with one bound JSON array each (`etl/README.md` §"Binding a set of
+values"), renders it, and declares the page's buckets before reading
+the next, so nothing about a bucket outlives its page. Only the small
+tables every bucket looks up (users, channels, accounts, mailboxes)
+are read whole, up front. Email and Slack render this way; the other
+renders still read their rows whole
+([`audits/2026-10-20_render_memory.md`](audits/2026-10-20_render_memory.md)
+lists them).
+
+Blob bytes are the larger part of most stores, and a render that still
+reads its rows whole can at least leave them where they are until they
+are needed. Every other render with attachments builds its documents
+from the rows, narrows to the ones this run renders, and then loads a
+batch of documents' attachments at a time, cut by `blob_mb`, just
+before the batch renders. For a chat-shaped source that is
+`datalib_etl_chat_common::blobs`: `ChatBlobs` reads a chat's refs off
+its attachments, weighs them with `BlobBundle::sizes_many` (the blob
+store's `byte_len`, no bytes read), and `render_batched` loads and
+renders one batch at a time; `render_batched_at` reopens the raw store
+at the commit a parse read (`BlobsAt`) for a render whose parse has
+closed it. Beeper weighs its documents from what its parse recorded,
+and Notion loads its pages' bundles through `PageBlobs`. A person's
+photo is only ever a link, so no render loads one. A chat's bundle is never
+split, so one very large chat is still one batch. Only email's bundles
+hold bytes, its `.eml`s, which it renders from; everyone else's name the
+blob store that holds them.
+
+**The size is the person's to choose.** A config's `[render_pages]`
+table sets `buckets` (per page) and `blob_mb` (per blob batch); the
+runner hands it to every step as `DATALIB_DAG_RENDER_PAGES`, and a
+processor reads it as `RenderCtx::page_size`. Changing it changes no
+document, so it is not a render param and re-renders nothing. The
+defaults, 500 buckets and 64 MB, sit where a page's queries already
+cost little next to rendering it.
+
+What a page bounds is the reading side. On a synthetic Slack store of
+240k threads a cold render peaked at 0.7–1.3 GB paged, against
+2.6–3.5 GB reading everything first, in the same time. What is left is
+mostly the writer: doltlite holds each table's pending edits in memory
+until they reach 64 MB or the SQL transaction commits, and each
+connection keeps a 64 MiB page cache. Committing the SQL transaction
+more often trims the peak but leaves more pages that later checkpoints
+pin on disk; the audit has the numbers.
+
 ### Rendering the delta itself
 
 If you can render a collection of things, consider rendering the
@@ -908,6 +983,30 @@ The crate that enforces all of this —
 `parse_with_assumed_utc`, `bump_micros` — is shared with download and
 documented in
 [the ingestion doc](data_architecture_ingestion.md#single-source-of-truth-datalib-time).
+
+### A stamp on a page
+
+**Every time a document shows is a `<time>` element written by
+`datalib_etl_render::message`**, so a reader sees one form whatever the
+source:
+
+```html
+<time datetime="2026-01-06T08:00:00+01:00" title="2026-01-06 08:00:00 +01:00">Tue Jan 6th, 2026 at 08:00</time>
+<time datetime="2369-03-18">Tue Mar 18th, 2369</time>
+```
+
+The text is the short form any markdown viewer shows; `datetime` is the
+machine-readable value, which the viewer reads to draw the stamp; the
+`title` is the whole instant. A message header writes it with
+`timestamp_html` (class `msg-ts`); anywhere else, `stamp_html` for an
+instant, or `stamp_text_html` for a stamp a record keeps as text: an
+RFC 3339 instant, a `YYYY-MM-DD` day, or else the text as written. A
+stamp keeps the offset the source gave it. A grid row's text is not
+markdown and keeps plain words (`datalib_time::short_ts`). Not
+`<time>`s yet: a calendar event's "When", which is a range in the
+event's own zone; a contact's details ("Friends since"); and Garmin's
+record lines and a device's last sync, which Garmin writes without an
+offset.
 
 ### No fabricated timestamps
 A corollary of "[don't make up data](data_architecture_ingestion.md#wire-fidelity-of-the-raw-store)", called out because timestamps are the easiest place to violate it:

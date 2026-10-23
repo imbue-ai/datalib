@@ -203,7 +203,8 @@ fn launcher_create(app: AppHandle, input: String) -> Result<(), String> {
             tauri::async_runtime::spawn(boot(app, root, false));
         }
         launcher::Target::New => {
-            std::fs::create_dir_all(&root).map_err(|e| format!("Could not create {shown}: {e}"))?;
+            launcher::create_library_dir(&root, &libraries_dir(&app))
+                .map_err(|e| format!("Could not create {shown}: {e}"))?;
             tauri::async_runtime::spawn(boot(app, root, true));
         }
         launcher::Target::Occupied => {

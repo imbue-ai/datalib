@@ -8,7 +8,18 @@
 // exactly; the Rust tests and `chip_links.test.ts` run the same cases.
 
 /** The handle kinds this build knows; `datalib_handle::HandleKind`. */
-const KINDS = new Set(["email", "tel", "slack", "signal_aci", "facebook", "linkedin"]);
+const KINDS = new Set([
+  "email",
+  "tel",
+  "slack",
+  "signal_aci",
+  "facebook",
+  "linkedin",
+  "google",
+  "github",
+  "gitlab",
+  "notion",
+]);
 
 /** The handle (`email:…`, `tel:…`, `slack:T/U`) a URI names, or null
  *  when it names none this build knows.
@@ -42,14 +53,15 @@ export function handleFromUri(href) {
       return null;
     }
     if (kind === "facebook") return facebookHandle(value);
+    if (kind === "google") return googleHandle(value);
     if (kind === "linkedin") return linkedinHandle(value);
-    if (kind === "signal_aci") {
-      // A Signal account id: a UUID, spelled lowercase with dashes
-      // (`Handle::signal_aci`).
-      const hex = value.replace(/-/g, "").toLowerCase();
-      if (!/^[0-9a-f]{32}$/.test(hex)) return null;
-      const dashed = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-      return `signal_aci:${dashed}`;
+    if (kind === "github") return githubHandle(value);
+    if (kind === "gitlab") return gitlabHandle(value);
+    if (kind === "signal_aci" || kind === "notion") {
+      // A Signal account id or a Notion user id: a UUID, spelled
+      // lowercase with dashes (`Handle::signal_aci`, `Handle::notion_user`).
+      const dashed = dashedUuid(value);
+      return dashed ? `${kind}:${dashed}` : null;
     }
     // A kind with a scheme of its own reads back through that scheme.
     return KINDS.has(kind) ? handleFromUri(uriFromHandle(`${kind}:${value}`) ?? "") : null;
@@ -82,7 +94,41 @@ export function uriFromHandle(handle) {
   if (kind === "signal_aci") return `datalib:handle/signal_aci/${value}`;
   if (kind === "facebook") return `datalib:handle/facebook/${percentEncode(value)}`;
   if (kind === "linkedin") return `https://www.linkedin.com/in/${percentEncode(value)}`;
+  if (kind === "google" || kind === "github" || kind === "gitlab" || kind === "notion") {
+    return `datalib:handle/${kind}/${percentEncode(value)}`;
+  }
   return null;
+}
+
+/** A UUID, with or without dashes in any case, lowercase with dashes.
+ *  @param {string} value
+ *  @returns {string | null} */
+function dashedUuid(value) {
+  const hex = value.replace(/-/g, "").toLowerCase();
+  if (!/^[0-9a-f]{32}$/.test(hex)) return null;
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/** `Handle::github`: a login, lowercased; an app's ends in `[bot]`.
+ *  @param {string} value
+ *  @returns {string | null} */
+function githubHandle(value) {
+  const login = value.trim().toLowerCase();
+  const name = login.endsWith("[bot]") ? login.slice(0, -"[bot]".length) : login;
+  return /^[a-z0-9-]{1,39}$/.test(name) ? `github:${login}` : null;
+}
+
+/** `Handle::gitlab`: `<host>/<username>`, both lowercased.
+ *  @param {string} value
+ *  @returns {string | null} */
+function gitlabHandle(value) {
+  const slash = value.indexOf("/");
+  if (slash <= 0) return null;
+  const host = value.slice(0, slash).trim().toLowerCase();
+  const user = value.slice(slash + 1).trim().toLowerCase();
+  return /^[a-z0-9.:-]+$/.test(host) && /^[a-z0-9._-]+$/.test(user)
+    ? `gitlab:${host}/${user}`
+    : null;
 }
 
 /** The member a LinkedIn profile URL names, by its slug decoded and
@@ -131,6 +177,17 @@ function facebookHandle(value) {
     return /^\d+$/.test(id) ? `facebook:deleted/${id}` : null;
   }
   return null;
+}
+
+/** A Google account by the name it shows, `name/<name>` with its
+ *  whitespace collapsed (`Handle::google_name`).
+ *  @param {string} value
+ *  @returns {string | null} */
+function googleHandle(value) {
+  if (!value.startsWith("name/")) return null;
+  const name = value.slice("name/".length).trim().split(/\s+/).join(" ");
+  // eslint-disable-next-line no-control-regex
+  return name && !/[\u0000-\u001f\u007f-\u009f]/.test(name) ? `google:name/${name}` : null;
 }
 
 /** Every byte but an unreserved one and `/` as `%XX`, as `to_uri` does.

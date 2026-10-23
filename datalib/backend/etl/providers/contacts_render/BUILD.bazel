@@ -23,7 +23,6 @@ rust_library(
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
-        "@datalib_crates//:base64",
         "@datalib_crates//:tokio",
     ],
 )
@@ -34,5 +33,6 @@ rust_test(
     crate = ":datalib_etl_contacts_render",
     edition = "2021",
     deps = [
+        "@datalib_crates//:base64",
     ],
 )

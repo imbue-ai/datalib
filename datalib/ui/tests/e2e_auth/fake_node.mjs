@@ -37,7 +37,8 @@ if (!env.LATCHKEY_ENCRYPTION_KEY && !gateway) {
 }
 
 /// Point latchkey's browser config at `found`, wrapped: headless, and
-/// with every hostname resolved to the fake internet.
+/// with every hostname resolved to the fake internet except localhost,
+/// where latchkey's OAuth logins listen for the browser to come back.
 function useBrowser(found) {
   const file = path.join(env.LATCHKEY_DIRECTORY, "config.json");
   const config = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
@@ -48,7 +49,7 @@ function useBrowser(found) {
   writeFileSync(
     wrapper,
     `#!/bin/sh\nexec ${quote(found)} --headless=new ` +
-      `--host-resolver-rules=${quote(`MAP * 127.0.0.1:${env.DATALIB_TEST_AUTH_FAKE_PORT}`)} ` +
+      `--host-resolver-rules=${quote(`MAP * 127.0.0.1:${env.DATALIB_TEST_AUTH_FAKE_PORT}, EXCLUDE localhost`)} ` +
       `--ignore-certificate-errors "$@"\n`,
   );
   chmodSync(wrapper, 0o755);

@@ -1,0 +1,17 @@
+# Gmail over the Gmail API, signed in through latchkey (`latchkey auth
+# browser google-gmail`). An empty `gmail` table mirrors the whole mailbox.
+[[groups]]
+id = "email"
+name = "Gmail"
+type = "email"
+
+[[steps]]
+group = "email"
+function = "ingest"
+
+[steps.params.gmail]
+
+[[steps]]
+group = "email"
+function = "render_markdown"
+inputs = ["email/ingest"]

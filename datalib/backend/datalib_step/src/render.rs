@@ -8,6 +8,7 @@ use std::sync::Mutex;
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::pages::PageSize;
 use datalib_etl_render::processor::{BucketEnd, Input, ReadScope, RenderCtx, RenderProcessor};
 use datalib_schema::problems::{ProblemRow, ScopeKind, Severity, Stage, METRIC};
 use datalib_schema::render_cursor::RenderCursorRow;
@@ -70,6 +71,7 @@ pub async fn run(
         // renderer sampling its own clock.
         now: now.to_string(),
         cadence: control.checkpoint_cadence.unwrap_or_default(),
+        page_size: page_size(),
         storage,
         raw_db: Some(datalib_etl::doltlite_raw::db_path_for(&raw_path)),
         progress: progress.clone(),
@@ -157,11 +159,10 @@ pub(crate) fn report_holdings(progress: &Progress, h: Holdings) {
     progress.metric(datalib_metrics::ITEMS, &[], h.items);
 }
 
-/// What a render reports: its store's HEAD, the tree's content version.
-/// Doltlite advances it only when a commit changed something, so a run
-/// that rewrote nothing reports the same string, and it is spelled as each
-/// seal spells its commit, so finishing on the commit last sealed moves
-/// nothing downstream. Without doltlite there is nothing content-derived
+/// What a render reports: its store's content version, the hash of its
+/// HEAD's tree. A run that rewrote nothing reports the same string, and it
+/// is spelled as each seal spells its commit's tree, so finishing on the
+/// commit last sealed moves nothing downstream. Without doltlite there is nothing content-derived
 /// to vouch for, and every success reads as new.
 pub fn claims(step: &str, report: &RenderReport) -> Vec<OutputClaim> {
     report
@@ -175,6 +176,29 @@ pub fn claims(step: &str, report: &RenderReport) -> Vec<OutputClaim> {
         .collect()
 }
 
+/// The config's `[render_pages]` over the render's defaults. One the
+/// step cannot read is logged and the defaults stand.
+pub(crate) fn page_size() -> PageSize {
+    use datalib_dag::subprocess::ENV_RENDER_PAGES;
+    let Ok(raw) = std::env::var(ENV_RENDER_PAGES) else {
+        return PageSize::DEFAULT;
+    };
+    match datalib_dag::config::RenderPages::decode(&raw) {
+        Some(pages) => PageSize {
+            buckets: pages
+                .buckets
+                .map_or(PageSize::DEFAULT.buckets, |n| n as usize),
+            bytes: pages
+                .blob_mb
+                .map_or(PageSize::DEFAULT.bytes, |mb| mb * 1024 * 1024),
+        },
+        None => {
+            tracing::warn!(raw = %raw, "{ENV_RENDER_PAGES} is not readable; using the default page size");
+            PageSize::DEFAULT
+        }
+    }
+}
+
 /// One source's render, as the core takes it: everything the step shell
 /// resolved from its environment, and nothing the step protocol knows.
 pub struct RenderSource {
@@ -186,6 +210,8 @@ pub struct RenderSource {
     pub now: String,
     /// The user's latency/history dial, the same one downloads take.
     pub cadence: datalib_etl::checkpointer::Cadence,
+    /// How much of the raw store each processor reads at once.
+    pub page_size: PageSize,
     /// The storage report to write beside the documents, if the source
     /// has one.
     pub storage: Option<crate::introspect::Measured>,
@@ -228,6 +254,7 @@ pub fn render_source(
         rendered_root,
         now,
         cadence,
+        page_size,
         storage,
         raw_db,
         progress,
@@ -326,7 +353,7 @@ pub fn render_source(
             // `None` means nothing was dirty after all, so no
             // version moved and there is nothing to announce.
             if let Some(hash) = sealed {
-                progress.checkpoint_rows(&hash, rows);
+                progress.checkpoint_rows(&store.tree_of(&hash)?, rows);
             }
             // A seal is the one moment inside a run when everything
             // written so far is committed and nothing is half-written,
@@ -402,7 +429,8 @@ pub fn render_source(
                 &mut on_doc,
                 &mut on_declare,
                 &mut on_problems,
-            );
+            )
+            .with_page_size(page_size);
             futures::executor::block_on(proc.run(&ctx))
                 .with_context(|| format!("processor {}", proc.id()))?;
             consumed.push(ctx.consumed_commit());
@@ -571,7 +599,7 @@ pub fn render_source(
     let versions = store.render_versions()?;
     let problems = store.own_problem_counts()?;
     let holdings = store.holdings(storage_uuid.as_deref())?;
-    let head = store.head()?;
+    let head = store.content_version()?;
     store.close();
     every_stored_version_must_be_declared(&name, &rendered_root, &versions, declared.as_ref())?;
     Ok(RenderReport {

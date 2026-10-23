@@ -1,6 +1,6 @@
 # Untrusted data stays data
 
-**Status: agreed 2026-10-20; §3.1 and §3.3 built (#1268), §3.2 in #1269.** This
+**Status: agreed 2026-10-20; §3.1 and §3.3 built (#1268); §3.2 revised 2026-10-22 and built in the PR from `claude/cookie-studio-ready`, which replaces #1269.** This
 replaces the first version of this plan (#1241, `bbc500272`), which
 proposed five pieces. Two of them were dropped after review, and two were
 changed; §5 says which and why. Line numbers are at `56d70dd61`.
@@ -106,17 +106,31 @@ cannot set:
    browser does not preflight, such as `/api/steps/<id>/turn_off`, whose
    handler accepts an empty body (`datalib/backend/http/src/lib.rs`
    `by_of`).
-3. **A request with no `Sec-Fetch-Site`** (`curl`, an older browser) is
-   let through when it presents the token. A cookie-only write without
-   it must carry an `Origin` naming the server, or it is refused.
-4. **`Host` must name the server:** `127.0.0.1:<port>`,
-   `localhost:<port>`, `[::1]:<port>`, or under `DATALIB_TRUSTED_PROXY`
-   the forwarder's host. This defeats DNS rebinding, which today, in
-   proxy mode, lets a page forge `X-Imbue-Identity: {"owner":true}`.
-   The applets already check `Host` the same way (`applets.md`).
+3. **A request with no `Sec-Fetch-Site`** is not a page: only modern
+   browsers are supported, and they all send it. It goes on to the token
+   check like any other.
 
-The case table (method × `Sec-Fetch-Site` × `Sec-Fetch-Mode` × credential
-× proxy mode × `Host`) is the unit test.
+The case table (method × `Sec-Fetch-Site` × `Sec-Fetch-Mode`) is the
+unit test.
+
+**Revised 2026-10-22, for Imbue Studio.** Studio frames the app in a page
+on another site, behind its own proxy. Three changes make it work
+without trusting the proxy's word:
+
+- **The session cookie is set twice:** `SameSite=Lax` as before, and
+  `SameSite=None; Secure; Partitioned` for the frame, where a `Lax`
+  cookie is not stored. Safari 18.5 through 26.1 rejects partitioned
+  cookies, so the `Lax` copy stays. Both are host-only.
+- **Proxy mode is gone.** `DATALIB_TRUSTED_PROXY` and `X-Imbue-Identity`
+  stood in for the token behind Studio's proxy; now the token, by cookie,
+  is needed there too, and setting the variable stops the server with a
+  message. A share visitor the gateway admits is admitted.
+- **`DATALIB_FRAME_ANCESTORS`** names who may frame the app page; unset,
+  nobody may. Studio's launcher sets a fixed list of its origins.
+
+The `Host` check this section first proposed (a rule 4) is not
+built. A rebound page never receives the host-only cookie and cannot learn
+the token; only proxy mode's identity header gave it something to forge.
 
 Rule 1 relies on two more things, which this work checks rather than
 assumes: every document served as data keeps its `sandbox` CSP
@@ -178,8 +192,6 @@ cookie attached.
 
 ## 6. Open
 
-- **Which `Host` the Imbue forwarder sends**, its own name or the
-  server's address. Rule 4 accepts either.
 - **`GET` routes with side effects.** §3.2's rule 1 lets a navigation
   from any site reach any path with the cookie, so it assumes none. The
   audit done with §3.2 found two that break it:
@@ -190,7 +202,8 @@ cookie attached.
   - The search applet's first free-text query starts `qmd mcp` and a
     node embedder.
 
-  Smaller ones: `?refresh=1` on `/api/manage/rows` and
-  `/api/pipeline/storage` walks the data root; reading a finished
-  connect or probe result drops it from memory. The first two are the
-  next work.
+  Smaller ones: reading a finished connect or probe result drops it
+  from memory. (`?refresh=1` on `/api/manage/rows` and
+  `/api/pipeline/storage` walked the data root; a walk is a `POST
+  …/refresh` now, and a GET asking for one is refused.) The first two
+  are the next work.

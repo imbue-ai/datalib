@@ -5,6 +5,7 @@
 import {
   acceptCompletion,
   autocompletion,
+  closeCompletion,
   completionStatus,
   selectedCompletionIndex,
   setSelectedCompletion,
@@ -34,35 +35,17 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import { fetchSearchKeys, fetchSearchValues, type KeyValues, type SearchKeySpec } from "@/api";
-import { personSource, searchSource } from "@/cards/cardSources";
+import { chipMenuOf, chipName, runChipAction, type Chip } from "@/cards/chipActions";
 import {
   canLinkHandles,
   chipCell,
   contactCell,
-  contactLook,
   contactsById,
-  chipLook,
-  chipMenu,
-  composeUri,
-  copyText,
   handleValue,
-  NOBODY,
   people,
-  searchQueryFor,
 } from "@/cards/contacts";
-import {
-  browseQuery,
-  entities,
-  entityCardSource,
-  entityCell,
-  entityCopyText,
-  entityMenu,
-} from "@/cards/entities";
-import { copyToClipboard } from "@/clipboard";
-import { openExternal } from "@/externalLinks";
-import { filterToken } from "@/grid/query";
-import { pushToast } from "@/toasts";
-import { fieldChipMenu, toggleNegate, type FieldMenuEntry, type FieldMenuId } from "./chipMenu";
+import { entities, entityCell } from "@/cards/entities";
+import { fieldChipMenu, toggleNegate, type FieldMenuId } from "./chipMenu";
 import {
   chipFor,
   chipKey,
@@ -301,29 +284,12 @@ const menuField = StateField.define<number | null>({
     ),
 });
 
-/// A chip's name and its own menu entries, as every surface shows them.
-function chipNamed(chip: ChipRef, value: string): { name: string; own: FieldMenuEntry[] } {
-  if (chip.kind === "entity") {
-    const name = entities.get(chip.uri)?.label || value;
-    return { name, own: entityMenu(chip.uri, name) };
-  }
-  if (chip.kind === "contact") {
-    const name = contactLook("a contact", contactsById.get(chip.id)).text;
-    return {
-      name,
-      own: [
-        { id: "copy-name", label: `Copy “${name}”` },
-        { id: "search", label: `Everything with ${name}`, separator: true },
-      ],
-    };
-  }
-  const who = people.get(chip.handle) ?? NOBODY;
-  const shown = handleValue(chip.handle);
-  return {
-    name: chipLook(chip.handle, shown, who, false).text,
-    // Linking a handle is the popover's, which the field does not host.
-    own: chipMenu(chip.handle, shown, who, false),
-  };
+/// A field chip as `chipActions` takes it: the value typed stands for a
+/// group or step until the resolver answers, and a handle for a person.
+function asChip(chip: ChipRef, value: string): Chip {
+  const shownAs =
+    chip.kind === "entity" ? value : chip.kind === "person" ? handleValue(chip.handle) : "";
+  return { ref: chip, shownAs };
 }
 
 function menuDom(view: EditorView, at: number): HTMLElement {
@@ -335,74 +301,42 @@ function menuDom(view: EditorView, at: number): HTMLElement {
     (c) => c.word.valueFrom === at,
   )?.chip;
   if (!w || !chip) return dom;
-  const { name, own } = chipNamed(chip, w.value);
-  for (const entry of fieldChipMenu(name, w.negate, own)) {
+  const pressed = asChip(chip, w.value);
+  // Linking a handle is the popover's, which the field does not host.
+  const own = chipMenuOf(pressed, false);
+  for (const entry of fieldChipMenu(chipName(pressed), w.negate, own)) {
     if (entry.separator)
       dom.append(
         Object.assign(document.createElement("div"), { className: "cm-chip-menu-divider" }),
       );
     const item = document.createElement("div");
     item.className = "cm-chip-menu-item";
+    if (entry.danger) item.classList.add("cm-chip-menu-danger");
     item.setAttribute("role", "menuitem");
     item.textContent = entry.label;
+    if (entry.disabled) {
+      item.classList.add("cm-chip-menu-disabled");
+      item.setAttribute("aria-disabled", "true");
+      item.title = entry.disabled;
+    }
     // On mousedown, so the field keeps its focus.
     item.addEventListener("mousedown", (e) => {
       e.preventDefault();
+      if (entry.disabled) return;
       view.dispatch({ effects: showMenu.of(null) });
-      void runMenu(view, entry.id, w, chip, name);
+      void runMenu(view, entry.id, w, pressed);
     });
     dom.append(item);
   }
   return dom;
 }
 
-async function runMenu(view: EditorView, id: FieldMenuId, w: Word, chip: ChipRef, name: string) {
-  const hooks = view.state.facet(hooksFacet);
-  const copy = async (text: string) => {
-    if (await copyToClipboard(text)) pushToast(`Copied ${text}`, "info");
-    else pushToast("The clipboard refused the copy");
-  };
-  const person = chip.kind === "person" ? chip.handle : null;
-  const uri = chip.kind === "entity" ? chip.uri : null;
-  const contact = chip.kind === "contact" ? chip.id : null;
-  switch (id) {
-    case "edit-text":
-      editChip(view, w);
-      break;
-    case "toggle-negate":
-      view.dispatch({ changes: toggleNegate(w) });
-      break;
-    case "copy-name":
-      await copy(name);
-      break;
-    case "copy-id":
-      await copy(person ? handleValue(person) : w.value);
-      break;
-    case "copy-both":
-      await copy(person ? copyText(person, name) : entityCopyText(uri ?? "", name));
-      break;
-    case "open": {
-      const source = uri ? entityCardSource(uri) : person ? personSource(person) : null;
-      if (source) hooks?.openCard(source);
-      break;
-    }
-    case "compose": {
-      const mailto = person ? composeUri(person) : null;
-      if (mailto) void openExternal(mailto);
-      break;
-    }
-    case "browse": {
-      const q = uri ? browseQuery(uri) : null;
-      if (q) hooks?.openCard(searchSource(q));
-      break;
-    }
-    case "search":
-      if (person) hooks?.openCard(searchSource(searchQueryFor(person)));
-      if (contact)
-        hooks?.openCard(searchSource(filterToken("with", `${CONTACT}${contact}`, false)));
-      break;
-    case "edit":
-      break;
+async function runMenu(view: EditorView, id: FieldMenuId, w: Word, chip: Chip) {
+  if (id === "edit-text") editChip(view, w);
+  else if (id === "toggle-negate") view.dispatch({ changes: toggleNegate(w) });
+  else {
+    const hooks = view.state.facet(hooksFacet);
+    await runChipAction(id, chip, { openCard: (source) => hooks?.openCard(source) });
   }
 }
 
@@ -592,6 +526,9 @@ const theme = EditorView.theme({
     textOverflow: "ellipsis",
   },
   ".cm-chip-menu-item:hover": { background: "var(--datalib-hover, rgb(127 127 127 / 15%))" },
+  ".cm-chip-menu-danger": { color: "var(--datalib-log-error)" },
+  ".cm-chip-menu-disabled": { opacity: "0.45", cursor: "default" },
+  ".cm-chip-menu-disabled:hover": { background: "transparent" },
   ".cm-chip-menu-divider": {
     height: "1px",
     background: "var(--datalib-border)",
@@ -657,7 +594,7 @@ export function fieldExtensions(hooks: FieldHooks): Extension[] {
     ),
     Prec.high(
       keymap.of([
-        { key: "Enter", run: () => (hooks.onSubmit(), true) },
+        { key: "Enter", run: (view) => (closeCompletion(view), hooks.onSubmit(), true) },
         // Told, and passed on: a dialog the field is in still closes.
         { key: "Escape", run: () => (hooks.onEscape(), false) },
       ]),

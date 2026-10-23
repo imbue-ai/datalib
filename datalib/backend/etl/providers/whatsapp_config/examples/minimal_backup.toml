@@ -1,0 +1,19 @@
+# WhatsApp from an Android end-to-end-encrypted backup: the `WhatsApp/`
+# folder pulled off the phone. Its 64-digit key is read from the
+# WHATSAPP_BACKUP_DECRYPTION_KEY environment variable, never from this file.
+[[groups]]
+id = "whatsapp"
+name = "WhatsApp"
+type = "whatsapp"
+
+[[steps]]
+group = "whatsapp"
+function = "ingest"
+
+[steps.params.backup]
+path = "~/Downloads/whatsapp-backup"  # holds Databases/msgstore.db.crypt15 and Media/
+
+[[steps]]
+group = "whatsapp"
+function = "render_markdown"
+inputs = ["whatsapp/ingest"]

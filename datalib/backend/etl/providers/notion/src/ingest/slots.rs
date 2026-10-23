@@ -18,13 +18,30 @@
 //! so a URL is only rewritten when it is BOTH on a Notion file host AND
 //! carries a signature parameter.
 
-/// Hosts Notion serves uploaded file bytes from.
-fn is_notion_file_host(host: &str) -> bool {
+/// Where Notion serves uploaded file bytes from. Any link in a page's
+/// text is checked here, and a slot is fetched, so the authority must be
+/// a bare host Notion owns: no user, no port, nothing a different parser
+/// would read as another host.
+fn is_notion_file_link(scheme: &str, host: &str, path: &str) -> bool {
+    let bare = !host.is_empty()
+        && host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-');
+    if !scheme.eq_ignore_ascii_case("https") || !bare {
+        return false;
+    }
     let h = host.to_ascii_lowercase();
-    h.starts_with("prod-files-secure.")
-        || h == "file.notion.so"
+    h == "file.notion.so"
         || h.ends_with(".notion-static.com")
-        || h == "s3.us-west-2.amazonaws.com"
+        || is_notion_bucket_host(&h)
+        || (h == "s3.us-west-2.amazonaws.com" && path.starts_with("/secure.notion-static.com/"))
+}
+
+/// `prod-files-secure.s3.<region>.amazonaws.com`: Notion's own bucket.
+fn is_notion_bucket_host(host: &str) -> bool {
+    host.strip_prefix("prod-files-secure.s3.")
+        .and_then(|rest| rest.strip_suffix(".amazonaws.com"))
+        .is_some_and(|region| !region.is_empty() && !region.contains('.'))
 }
 
 /// Query parameters that mark a link as pre-signed and therefore
@@ -48,14 +65,11 @@ fn split_url(url: &str) -> Option<(&str, &str, &str)> {
 /// signed Notion file link, which is the signal to leave it alone.
 pub fn slot_of(url: &str) -> Option<String> {
     let (scheme, host, path_etc) = split_url(url)?;
-    if !is_notion_file_host(host) {
-        return None;
-    }
     let (path, query) = match path_etc.split_once('?') {
         Some((p, q)) => (p, q.split('#').next().unwrap_or(q)),
         None => return None,
     };
-    if !has_signature(query) {
+    if !is_notion_file_link(scheme, host, path) || !has_signature(query) {
         return None;
     }
     Some(format!("{scheme}://{host}{path}"))
@@ -144,6 +158,39 @@ mod tests {
     fn notion_host_without_a_signature_is_left_alone() {
         let u = "https://prod-files-secure.s3.us-west-2.amazonaws.com/a/b/c.png?width=64";
         assert_eq!(slot_of(u), None);
+    }
+
+    /// A slot is fetched, and any link a page's text holds is checked,
+    /// so a link that only looks like Notion's must not become one.
+    #[test]
+    fn a_link_that_only_resembles_a_notion_file_is_not_a_slot() {
+        let q = "?X-Amz-Signature=deadbeef";
+        for url in [
+            format!("http://prod-files-secure.s3.us-west-2.amazonaws.com/a/b.png{q}"),
+            format!("https://prod-files-secure.a@127.0.0.1/a/b.png{q}"),
+            format!("https://file.notion.so:8443/a/b.png{q}"),
+            format!("https://prod-files-secure.example.org/a/b.png{q}"),
+            format!("https://prod-files-secure.s3.evil.example.amazonaws.com/a/b.png{q}"),
+            format!("https://s3.us-west-2.amazonaws.com/someone-elses-bucket/b.png{q}"),
+            format!("https://file.notion.so.example.org/a/b.png{q}"),
+        ] {
+            assert_eq!(slot_of(&url), None, "{url} must not be treated as a slot");
+            assert_eq!(rewrite(&url).0, url, "{url} must survive verbatim");
+        }
+    }
+
+    #[test]
+    fn every_host_notion_serves_files_from_still_makes_a_slot() {
+        let q = "?X-Amz-Signature=deadbeef";
+        for base in [
+            "https://prod-files-secure.s3.us-west-2.amazonaws.com/a/b.png",
+            "https://prod-files-secure.s3.eu-central-1.amazonaws.com/a/b.png",
+            "https://file.notion.so/f/a/b.png",
+            "https://secure.notion-static.com/a/b.png",
+            "https://s3.us-west-2.amazonaws.com/secure.notion-static.com/a/b.png",
+        ] {
+            assert_eq!(slot_of(&format!("{base}{q}")).as_deref(), Some(base));
+        }
     }
 
     #[test]

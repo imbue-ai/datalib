@@ -23,7 +23,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use axum::extract::{Query, State};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use datalib_columns::{
     source_catalog, Action, Chip, ColumnSpec, ColumnType, Identity, Quantity, Sample, Timeseries,
@@ -243,14 +243,6 @@ pub struct ManageResponse {
     pub sync_paused: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct ManageParams {
-    /// Walk the disk before answering rather than serving the sampler's
-    /// last tick. Lenient like `/api/pipeline/storage`'s.
-    #[serde(default)]
-    refresh: Option<String>,
-}
-
 /// A Manage answer that takes this long says where the time went: the
 /// request line has only the total, and the run store's slow-statement
 /// warnings do not say who asked.
@@ -272,16 +264,29 @@ fn ms(d: Duration) -> u64 {
 
 pub async fn get_manage_rows(
     State(s): State<AppState>,
-    Query(p): Query<ManageParams>,
+    Query(p): Query<crate::RefreshParams>,
+    headers: HeaderMap,
+) -> Result<Json<ManageResponse>, (StatusCode, String)> {
+    crate::refuse_refresh("/api/manage/rows", &p)?;
+    Ok(answer(&s, &headers, false).await)
+}
+
+/// `POST /api/manage/rows/refresh`: walk the disk, then answer as the
+/// GET does.
+pub async fn refresh_manage_rows(
+    State(s): State<AppState>,
     headers: HeaderMap,
 ) -> Json<ManageResponse> {
+    answer(&s, &headers, true).await
+}
+
+async fn answer(s: &AppState, headers: &HeaderMap, refresh: bool) -> Json<ManageResponse> {
     let started = Instant::now();
-    let refresh = crate::flag_is_set(p.refresh.as_deref());
     if refresh {
         usage::sample_on_demand(&s.usage, &s.app, s.root.clone(), &s.root_tx).await;
     }
     let walk = started.elapsed();
-    let (response, took) = manage_rows(&s).await;
+    let (response, took) = manage_rows(s).await;
     let summary_started = Instant::now();
     if response.ok {
         summary::record(
@@ -396,13 +401,15 @@ pub struct EntitiesBody {
 }
 
 /// What a chip naming a group or a step shows: its name as the config
-/// gives it now, its mark, what the mark stands for, and its status.
+/// gives it now, its mark, what the mark stands for, and its status —
+/// and its row of the Sources table, whose actions are the chip's menu.
 #[derive(Debug, Clone, Serialize)]
 pub struct EntityView {
     pub label: String,
     pub icon: Option<String>,
     pub detail: Option<String>,
     pub status: StatusView,
+    pub row: ManageRow,
 }
 
 /// `POST /api/entities`: who each `datalib:group/…` or `datalib:step/…`
@@ -443,6 +450,7 @@ fn entity_view(rows: &[ManageRow], entity: datalib_columns::Entity) -> Option<En
                 icon: row.name.icon.clone(),
                 detail: row.name.detail.clone(),
                 status: row.status.clone(),
+                row: row.clone(),
             })
         }
         Entity::Step(id) => {
@@ -458,6 +466,7 @@ fn entity_view(rows: &[ManageRow], entity: datalib_columns::Entity) -> Option<En
                 icon: row.name.icon.clone(),
                 detail: row.name.detail.clone(),
                 status: row.status.clone(),
+                row: row.clone(),
             })
         }
     }

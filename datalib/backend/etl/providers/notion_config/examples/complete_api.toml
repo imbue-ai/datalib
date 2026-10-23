@@ -1,0 +1,54 @@
+# Notion over its API, signed in through latchkey (`latchkey auth set notion
+# -H "Authorization: Bearer ntn_…" -H "Notion-Version: 2026-03-11"`), with
+# every option set, and searchable.
+[[groups]]
+id = "notion"
+name = "Notion"
+type = "notion"
+
+[[steps]]
+group = "notion"
+function = "ingest"
+
+# When to give up on rate limits. The download always honours a 429's
+# Retry-After and backs off; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "enterprise"
+
+[steps.params.api]
+# Mirror only these pages and every page their bodies link, by page id or
+# pasted link. A database embedded in one is not walked; its rows come only
+# with the whole-workspace mirror. Omit for the whole workspace.
+roots = [
+  "https://www.notion.so/enterprise/Bridge-Crew-Rota-0123456789abcdef0123456789abcdef",
+  "fedcba9876543210fedcba9876543210",
+]
+refresh_window_days = 7  # whole-workspace mirror: re-list this many days of edits before
+                         # the newest seen, so a page shared late is caught; default 0
+max_pages = 5000         # stop after this many pages, a guard against a mis-scoped
+                         # run; unset is no limit (0 is refused)
+comments = true          # comment threads; default true
+attachments = true       # files attached to pages; default true
+
+[[steps]]
+group = "notion"
+function = "render_markdown"
+inputs = ["notion/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "notion"
+function = "keyword_index"
+inputs = ["notion/render_markdown"]
+
+[[steps]]
+group = "notion"
+function = "embed"
+inputs = ["notion/keyword_index"]

@@ -738,6 +738,7 @@ pub async fn build_grid_index_for(
 
     let mut stanzas: Vec<(String, PathBuf)> = Vec::new();
     let mut pass = PassCounts::default();
+    let mut not_yet_rendered: Vec<&str> = Vec::new();
     for source in sources {
         let rendered_root = out_dir
             .join(source)
@@ -746,8 +747,16 @@ pub async fn build_grid_index_for(
             stanzas.push((source.clone(), rendered_root));
         } else {
             pass.not_yet_rendered += 1;
-            tracing::debug!(source, "no render store yet; skipping it this pass");
+            not_yet_rendered.push(source);
         }
+    }
+    // One line a pass: a fan-in takes a pass each time a render seals,
+    // and a line per waiting source each time drowns the step's log.
+    if !not_yet_rendered.is_empty() {
+        tracing::debug!(
+            sources = %not_yet_rendered.join(", "),
+            "no render store yet for these sources; skipping them this pass"
+        );
     }
     stanzas.sort();
     stanzas.dedup();
@@ -761,7 +770,7 @@ pub async fn build_grid_index_for(
             &stanza,
             &rendered_root,
             out_dir,
-            cursors.get(&stanza).map(String::as_str),
+            cursors.get(&stanza),
             indexed.get(&stanza),
             &mut pass,
         ) {
@@ -853,9 +862,10 @@ enum SourceRead {
         /// Its problems at the pin. The copy is wholesale: the pinned store
         /// is the complete truth about that source's problems.
         problems: Vec<ProblemRow>,
-        /// The commit read. `None` when `dolt_log()` did not answer, and an
-        /// unwritten cursor cold-starts the next pass — the safe direction.
-        head: Option<String>,
+        /// The commit read and its tree. `None` when `dolt_log()` did not
+        /// answer, and an unwritten cursor cold-starts the next pass — the
+        /// safe direction.
+        head: Option<(String, String)>,
     },
 }
 
@@ -865,7 +875,7 @@ fn read_source(
     stanza: &str,
     rendered_root: &Path,
     out_dir: &Path,
-    cursor: Option<&str>,
+    cursor: Option<&Cursor>,
     indexed: Option<&HashSet<String>>,
     pass: &mut PassCounts,
 ) -> Result<Option<SourceRead>> {
@@ -905,7 +915,7 @@ fn read_open_store(
     store: &crate::indexed_markdown::IndexedMarkdownStore,
     stanza: &str,
     out_dir: &Path,
-    cursor: Option<&str>,
+    cursor: Option<&Cursor>,
     indexed: Option<&HashSet<String>>,
     pass: &mut PassCounts,
 ) -> Result<SourceRead> {
@@ -922,6 +932,15 @@ fn read_open_store(
         return Ok(SourceRead::Unreadable);
     }
     let pin = store.pin().expect("a reader is pinned at open").clone();
+    let from = match cursor {
+        Some(c) => store
+            .resolve_commit(&c.commit, c.tree.as_deref())
+            .with_context(|| format!("resolve {stanza}'s cursor"))?
+            // Neither is there: the diff below fails on it and says so.
+            .or_else(|| Some(c.commit.clone())),
+        None => None,
+    };
+    let cursor = from.as_deref();
     let scan = store
         .changed_since(cursor, &pin)
         .with_context(|| format!("diff render store for {stanza}"))?;
@@ -987,11 +1006,20 @@ fn read_open_store(
             .cloned()
             .collect(),
     };
+    let head = match scan.new_head {
+        Some(commit) => {
+            let tree = store
+                .tree_of(&commit)
+                .with_context(|| format!("read the tree of {stanza}'s render store"))?;
+            Some((commit, tree))
+        }
+        None => None,
+    };
     Ok(SourceRead::Read {
         docs,
         removed,
         problems,
-        head: scan.new_head,
+        head,
     })
 }
 
@@ -1058,12 +1086,13 @@ async fn apply_source(
         summary.problems_copied += problems.len();
         // Last and in the same transaction: a failure above rolls back to
         // both the old rows and the old cursor.
-        if let Some(store_commit) = head {
+        if let Some((store_commit, store_tree)) = head {
             write_source_cursor(
                 conn,
                 &SourceCursorRow {
                     source_id: stanza.to_string(),
                     store_commit,
+                    store_tree: Some(store_tree),
                     indexed_at_utc: now.utc.clone(),
                     tz_offset: now.tz_offset.clone(),
                     documents_applied: markdowns as i64,
@@ -1190,14 +1219,28 @@ async fn load_markdown_uuids_by_source(
     Ok(out)
 }
 
-pub async fn load_source_cursors(pool: &SqlitePool) -> Result<HashMap<String, String>> {
-    let rows = sqlx::query("SELECT source_id, store_commit FROM source_cursors")
+/// Where the index left one source's render store: the commit it read,
+/// and that commit's tree for when a fold has replaced the commit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Cursor {
+    pub commit: String,
+    pub tree: Option<String>,
+}
+
+pub async fn load_source_cursors(pool: &SqlitePool) -> Result<HashMap<String, Cursor>> {
+    let rows = sqlx::query("SELECT source_id, store_commit, store_tree FROM source_cursors")
         .fetch_all(pool)
         .await
         .context("load_source_cursors")?;
-    let mut out: HashMap<String, String> = HashMap::with_capacity(rows.len());
+    let mut out = HashMap::with_capacity(rows.len());
     for r in rows {
-        out.insert(r.try_get("source_id")?, r.try_get("store_commit")?);
+        out.insert(
+            r.try_get("source_id")?,
+            Cursor {
+                commit: r.try_get("store_commit")?,
+                tree: r.try_get("store_tree")?,
+            },
+        );
     }
     Ok(out)
 }
@@ -2989,9 +3032,80 @@ mod source_cursor_tests {
             .unwrap()
             .expect("the store has commits");
         let pin = store.pin().unwrap().clone();
-        let head = store.changed_since(None, &pin).unwrap().new_head;
+        let head = store.changed_since(None, &pin).unwrap().new_head.unwrap();
+        let tree = store.tree_of(&head).unwrap();
         store.close();
-        assert_eq!(Some(recorded), head, "the cursor is the store's HEAD");
+        assert_eq!(recorded.commit, head, "the cursor is the store's HEAD");
+        assert_eq!(recorded.tree, Some(tree), "and records HEAD's tree");
+    }
+
+    /// Folds a render store's history into one commit holding HEAD's tree,
+    /// on the writer's branch and `main` both, and collects the rest.
+    async fn fold(root: &Path, source: &str) {
+        let path = crate::indexed_markdown::path_for(&rendered_root(root, source));
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
+            .connect_with(
+                SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display())).unwrap(),
+            )
+            .await
+            .unwrap();
+        sqlx::query("SELECT dolt_checkout('datalib_writer')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let first: String = sqlx::query_scalar(
+            "SELECT commit_hash FROM dolt_log() WHERE message = 'Initialize data repository'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query("SELECT dolt_reset('--soft', ?)")
+            .bind(&first)
+            .execute(&pool)
+            .await
+            .unwrap();
+        datalib_etl::doltlite_raw::commit_run(&pool, "fold")
+            .await
+            .unwrap()
+            .expect("a fold commit");
+        sqlx::query("SELECT dolt_gc()")
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+    }
+
+    /// A fold replaces every commit of a render store, the one the index's
+    /// cursor names included, with one holding the same tree. The index
+    /// finds that commit by the tree it recorded and reads nothing; after
+    /// the next render it reads only what moved.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_fold_of_the_render_store_costs_the_index_nothing() {
+        let td = tempdir().unwrap();
+        let root = td.path();
+        let pool = index_pool(root).await;
+        render(
+            root,
+            "src",
+            &[doc(root, "src", "md-1", "a"), doc(root, "src", "md-2", "b")],
+        );
+        render(root, "src", &[doc(root, "src", "md-2", "b-again")]);
+        build_grid_index(&pool, root, |_| {}, None).await.unwrap();
+        let before = load_source_cursors(&pool).await.unwrap()["src"].clone();
+
+        fold(root, "src").await;
+        let s = build_grid_index(&pool, root, |_| {}, None).await.unwrap();
+        assert_eq!(s.markdowns_total, 0, "the fold changed no document");
+        let after = load_source_cursors(&pool).await.unwrap()["src"].clone();
+        assert_ne!(after.commit, before.commit);
+        assert_eq!(after.tree, before.tree);
+
+        render(root, "src", &[doc(root, "src", "md-1", "a-changed")]);
+        let s = build_grid_index(&pool, root, |_| {}, None).await.unwrap();
+        assert_eq!(s.markdowns_total, 1, "one document read, not two");
     }
 
     /// Only what moved is read — the untouched document stays unread,
@@ -3110,12 +3224,15 @@ mod source_cursor_tests {
         render(root, "src", &[doc(root, "src", "md-1", "a")]);
         build_grid_index(&pool, root, |_| {}, None).await.unwrap();
 
-        // A hash from no history anyone has.
-        sqlx::query("UPDATE source_cursors SET store_commit = ? WHERE source_id = 'src'")
-            .bind("0123456789abcdef0123456789abcdef")
-            .execute(&pool)
-            .await
-            .unwrap();
+        // A commit and a tree from no history anyone has.
+        sqlx::query(
+            "UPDATE source_cursors SET store_commit = ?, store_tree = ? WHERE source_id = 'src'",
+        )
+        .bind("0123456789abcdef0123456789abcdef01234567")
+        .bind("89abcdef0123456789abcdef0123456789abcdef")
+        .execute(&pool)
+        .await
+        .unwrap();
 
         let s = build_grid_index(&pool, root, |_| {}, None).await.unwrap();
         assert_eq!(

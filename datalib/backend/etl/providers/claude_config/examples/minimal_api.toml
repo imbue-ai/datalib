@@ -1,0 +1,19 @@
+# Claude.ai conversations and projects over its web API, signed in through
+# latchkey's `claude-ai` service with your browser's `sessionKey` cookie
+# (see "Claude" in getting_your_data.md). An empty `api` table mirrors every
+# conversation in every org.
+[[groups]]
+id = "claude"
+name = "Claude"
+type = "claude"
+
+[[steps]]
+group = "claude"
+function = "ingest"
+
+[steps.params.api]
+
+[[steps]]
+group = "claude"
+function = "render_markdown"
+inputs = ["claude/ingest"]

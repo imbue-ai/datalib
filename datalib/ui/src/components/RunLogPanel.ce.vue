@@ -54,7 +54,16 @@ import { EVERYTHING, scopeOf, withScope, type LogScope as Scope } from "@/grid/l
 import "@/cards/tableGrid.css";
 import "@/cards/chip.css";
 import { uriFromEntity } from "@/cards/chipLinks";
-import { entities, entityCardSource, entityCell } from "@/cards/entities";
+import { entities, entityCell } from "@/cards/entities";
+import {
+  CHIP_SELECTOR,
+  asMenuEntries,
+  chipCardSource,
+  chipMenuOf,
+  chipOf,
+  runChipAction,
+  type Chip,
+} from "@/cards/chipActions";
 import { type ProcessInfo, type RunInfo, type RunLogLine } from "@/api";
 import { useApi } from "@/cards/cardApi";
 import {
@@ -105,7 +114,7 @@ const emit = defineEmits<{
   /// A line was selected — by a click, or the arrow keys moving on —
   /// for the caller to open in full.
   (e: "line-selected", seq: number): void;
-  /// A group or step chip was double-clicked: the card source to open.
+  /// A chip asked for a card: its double-click, or an entry of its menu.
   (e: "open-card", source: string): void;
 }>();
 
@@ -713,11 +722,17 @@ function copyCell(column: Column<RunLogLine>, line: RunLogLine): string {
 /// What a group row says: the column, its value and how many lines
 /// share it. An element rather than a string for the reason `plain`
 /// gives.
-function groupTitle(name: string) {
+function groupTitle(name: string, kind: "group" | "step" | null = null) {
   return (g: GroupingFormatterItem) => {
     const el = document.createElement("span");
     el.className = "rl-group";
-    el.textContent = `${name}: ${g.value === "" || g.value == null ? "—" : String(g.value)}`;
+    const value = g.value === "" || g.value == null ? null : String(g.value);
+    if (kind && value) {
+      const uri = uriFromEntity(kind, value);
+      el.append(`${name}: `, entityCell(uri, value, entities.lookup(uri), null));
+    } else {
+      el.textContent = `${name}: ${value ?? "—"}`;
+    }
     const count = document.createElement("span");
     count.className = "rl-group-count";
     count.textContent = ` (${g.count})`;
@@ -729,8 +744,8 @@ function groupTitle(name: string) {
 /// A column the drag-to-group bar accepts. Only a column carrying
 /// `grouping` can be dropped there, which is how Time and Fields (one of
 /// a kind per line: a group per row) stay out of it.
-function groupable(name: string, field: keyof RunLogLine) {
-  return { grouping: { getter: field, formatter: groupTitle(name), collapsed: false } };
+function groupable(name: string, field: keyof RunLogLine, kind: "group" | "step" | null = null) {
+  return { grouping: { getter: field, formatter: groupTitle(name, kind), collapsed: false } };
 }
 
 function buildColumns(): Column<RunLogLine>[] {
@@ -804,7 +819,7 @@ function columnSet(): Column<RunLogLine>[] {
       hidden: true,
       formatter: groupChip,
       sortable: true,
-      ...groupable("Group", "group_id"),
+      ...groupable("Group", "group_id", "group"),
     },
     {
       id: "step",
@@ -813,7 +828,7 @@ function columnSet(): Column<RunLogLine>[] {
       width: 140,
       formatter: stepChip,
       sortable: true,
-      ...groupable("Step", "step"),
+      ...groupable("Step", "step", "step"),
     },
     {
       id: "level",
@@ -932,12 +947,29 @@ function cellUnderMenu(args: MenuFromCellCallbackArgs): {
   return { header: String(column.name ?? key), key, value, shown };
 }
 
-/// The menu for the cell under the right-click. Read on each opening,
-/// since the entries name the cell's value.
+/// The chip in the cell under the right-click, the Group's or the Step's.
+function chipUnderMenu(args: MenuFromCellCallbackArgs): Chip | null {
+  const node =
+    args.row != null && args.cell != null ? args.grid.getCellNode(args.row, args.cell) : null;
+  const el = node?.querySelector<HTMLElement>(CHIP_SELECTOR);
+  return el ? chipOf(el) : null;
+}
+
+/// The chip's own menu, as it is everywhere.
+function chipEntries(chip: Chip): MenuEntry[] {
+  const host = { openCard: (source: string) => emit("open-card", source) };
+  return asMenuEntries(chipMenuOf(chip, false), (id) => void runChipAction(id, chip, host));
+}
+
+/// The menu for the cell under the right-click: its chip's entries, then
+/// the cell's. Read on each opening, since the entries name the cell's
+/// value.
 function menuEntries(args: MenuFromCellCallbackArgs): MenuEntry[] {
   const cell = cellUnderMenu(args);
-  const entries: MenuEntry[] = [];
+  const chip = chipUnderMenu(args);
+  const entries: MenuEntry[] = chip ? chipEntries(chip) : [];
   if (cell) {
+    if (entries.length) entries.push({ name: "", separator: true });
     entries.push(
       {
         name: `Keep only ${cell.header}=${cell.shown}`,
@@ -1038,7 +1070,7 @@ function gridOptions(): GridOption {
       // Ours copies the cell as a copied line has it; the grid's copies
       // the raw field, the whole of `fields` for Source.
       hideCopyCellValueCommand: true,
-      ...menuSlots(6, menuEntries),
+      ...menuSlots(28, menuEntries),
     },
   };
 }
@@ -1072,8 +1104,9 @@ function createGrid(first: RunLogLine[]) {
     if (entityAt(e)) e.getNativeEvent<MouseEvent>()?.preventDefault();
   });
   b.slickGrid.onDblClick.subscribe((e) => {
-    const chip = entityAt(e);
-    const source = chip ? entityCardSource(chip.dataset.entity ?? "") : null;
+    const el = entityAt(e);
+    const chip = el ? chipOf(el) : null;
+    const source = chip ? chipCardSource(chip.ref, null) : null;
     if (source) emit("open-card", source);
   });
   // A new line keeps the selection on its line, and the grid reports
@@ -1114,12 +1147,24 @@ onMounted(async () => {
   // processes first, so a step opens on its attempt rather than on the
   // run and then jumps; the pickers' lists with them, so the header can
   // say what opened.
-  const opening: Scope = props.launchId
+  let opening: Scope = props.launchId
     ? { ...EVERYTHING, processId: props.launchId }
     : props.runId === ALL_RUNS
       ? EVERYTHING
       : { ...EVERYTHING, run: props.runId };
   await Promise.all([loadProcesses(opening.run), loadRuns()]);
+  // A step opened with no run — a step chip's "Show its log" — opens on
+  // the step's newest run, as its Sources row does; one that never ran,
+  // on the step alone. Never on everything, which loses the step.
+  if (props.step && !opening.run && !opening.processId) {
+    const newest = runs.value[0]?.run_id ?? null;
+    if (newest) {
+      opening = { ...EVERYTHING, run: newest };
+      await loadProcesses(newest);
+    } else {
+      opening = { ...EVERYTHING, step: props.step };
+    }
+  }
   rescope(opening.run && props.step ? onStep(opening.run, props.step) : opening);
   unsubscribe = subscribeLive(
     {

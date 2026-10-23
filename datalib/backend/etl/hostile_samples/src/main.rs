@@ -242,7 +242,7 @@ fn chat_common(scratch: &Path) -> Result<Vec<Document>> {
         source_ref: None,
     };
     let attachment = |rel: Option<&str>, name: String, url: Option<String>| NormalizedAttachment {
-        rel_path: rel.map(str::to_string),
+        href: rel.map(str::to_string),
         file_name: Some(name),
         mime_type: Some("application/octet-stream".into()),
         byte_len: Some(1701),
@@ -463,6 +463,7 @@ fn contacts(scratch: &Path) -> Result<Vec<Document>> {
         member_handles: Vec::new(),
         upstream_account: None,
         inputs: Vec::new(),
+        problems: Vec::new(),
     };
     let profile = ContactRenderProfile {
         provider: Provider::Contacts,
@@ -538,6 +539,8 @@ fn forge(scratch: &Path) -> Result<Vec<Document>> {
         from_ref: Some(f.hostile("from ref")),
         to_ref: Some(f.hostile("to ref")),
         author: Some(f.hostile("change request author")),
+        // A chip, whose text is the name as typed.
+        author_handle: datalib_handle::Handle::github("data-soong"),
         created_at: Some(f.hostile("created at")),
         updated_at: None,
         merged_at: None,
@@ -553,6 +556,7 @@ fn forge(scratch: &Path) -> Result<Vec<Document>> {
         external_id: 1,
         in_reply_to_id: None,
         author: Some(f.hostile("comment author")),
+        author_handle: None,
         body: "*looks good*".into(),
         url: Some("https://x.test/c".into()),
         path: Some(f.hostile("comment path")),

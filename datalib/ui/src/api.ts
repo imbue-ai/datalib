@@ -198,6 +198,7 @@ export type ProblemReason =
   | "no_identity"
   | "coercion_failed"
   | "uncovered_type"
+  | "unsupported_json"
   | "deliberate_loss"
   | "render_failed"
   | "fetch_failed"
@@ -334,6 +335,19 @@ export async function forgetRemoteAllow(allowUuid: string): Promise<void> {
     method: "DELETE",
   });
   if (!r.ok && r.status !== 404) throw new Error(`DELETE allow → ${r.status}: ${await r.text()}`);
+}
+
+// --- Applets ----------------------------------------------------------------
+
+/** Whether a failed call means the root simply runs no applet `id`: the
+ *  gateway's 502 names the applet it has no entry for. */
+export function appletAbsent(id: string, status: number, body: string): boolean {
+  if (status !== 502) return false;
+  try {
+    return (JSON.parse(body) as { error?: string }).error === `no applet "${id}"`;
+  } catch {
+    return false;
+  }
 }
 
 // --- The unified_document_index applet --------------------------------------------
@@ -476,16 +490,18 @@ export function fetchAccounts(signal?: AbortSignal): Promise<AccountsMap> {
 }
 
 // `toast: false` is for a caller that shows the failure where it happened.
-type GetOptions = { toast?: boolean };
+/// `method: "POST"` is for a read that does work first and answers the
+/// same body, like a walk of the data root (`…/refresh`).
+type GetOptions = { toast?: boolean; method?: "GET" | "POST" };
 
 async function getJson<T>(
   url: string,
   signal?: AbortSignal,
-  { toast = true }: GetOptions = {},
+  { toast = true, method = "GET" }: GetOptions = {},
 ): Promise<T> {
   let r: Response;
   try {
-    r = await fetch(url, { signal });
+    r = await fetch(url, { signal, method });
   } catch (e) {
     // Network error / aborted before headers. Don't toast on abort
     // (caller-initiated cancellation, e.g. debounced search supersession).
@@ -995,8 +1011,9 @@ export function fetchPipelineStorage(
   refresh = false,
   signal?: AbortSignal,
 ): Promise<PipelineStorage> {
-  const q = refresh ? "?refresh=1" : "";
-  return getJson<PipelineStorage>(`/api/pipeline/storage${q}`, signal);
+  return refresh
+    ? getJson<PipelineStorage>("/api/pipeline/storage/refresh", signal, { method: "POST" })
+    : getJson<PipelineStorage>("/api/pipeline/storage", signal);
 }
 
 /// Free space on the data root's disk (`GET /api/pipeline/disk`). The
@@ -1212,8 +1229,9 @@ export type ManageResponse = {
 /// disk before answering — see `fetchPipelineStorage` for when that is
 /// worth asking for.
 export function fetchManageRows(refresh = false, signal?: AbortSignal): Promise<ManageResponse> {
-  const q = refresh ? "?refresh=1" : "";
-  return getJson<ManageResponse>(`/api/manage/rows${q}`, signal);
+  return refresh
+    ? getJson<ManageResponse>("/api/manage/rows/refresh", signal, { method: "POST" })
+    : getJson<ManageResponse>("/api/manage/rows", signal);
 }
 
 /// One metric series of one step over one run: a running total, or the
@@ -1373,6 +1391,14 @@ export async function turnOnStep(id: string): Promise<void> {
 /// whatever else is syncing; "queued" when one has not stopped yet.
 export async function resetSteps(targets: string[]): Promise<"done" | "queued"> {
   const r = await post("/api/reset", { targets });
+  return r.status === 202 ? "queued" : "done";
+}
+
+/// Fold away the history of every rendered document store and the grid
+/// index, and give back the disk it held (`step_protocol.md` § Compact).
+/// "queued" when it is still going after the server's wait.
+export async function compactHistory(): Promise<"done" | "queued"> {
+  const r = await post("/api/compact", {});
   return r.status === 202 ? "queued" : "done";
 }
 
@@ -1729,9 +1755,17 @@ export type ServiceRegistration = {
 /// `mailbox` (emails are filed here), `keyword` (a Gmail flag —
 /// downloadable, but never matched by the render-side filter),
 /// `conversation` (one chat thread — a Claude chat, a Slack DM),
-/// `channel` (a Slack channel), `calendar` or `address_book`.
+/// `channel` (a Slack channel), `calendar`, `address_book`, or a Linear
+/// `team` or `project`.
 export type ProbeItemKind =
-  "mailbox" | "keyword" | "conversation" | "channel" | "calendar" | "address_book";
+  | "mailbox"
+  | "keyword"
+  | "conversation"
+  | "channel"
+  | "calendar"
+  | "address_book"
+  | "team"
+  | "project";
 
 /// One row a probe offers a filter field. Mirrors `ProbeItem` in
 /// datalib/backend/probe/src/lib.rs.
@@ -1767,6 +1801,7 @@ export type ProbeReport = {
 /// one sentence per kind (`config/issues.ts`).
 export type IssueKind =
   | "no_credential"
+  | "no_oauth_client"
   | "expired"
   | "rejected"
   | "forbidden"
@@ -1790,7 +1825,7 @@ export type Failure = { issue: IssueKind; detail: string };
 export type ConnectState = "running" | "ok" | "failed";
 
 /// What a running login is doing. Mirrors `ConnectPhase` there.
-export type ConnectPhase = "preparing" | "downloading_browser" | "signing_in";
+export type ConnectPhase = "preparing" | "downloading_browser" | "creating_client" | "signing_in";
 
 export type ConnectAttempt = {
   id: string;
@@ -1844,11 +1879,14 @@ export function latchkeyService(service: string): Promise<LatchkeyService> {
 
 /// Start latchkey's browser login. Returns immediately with an id to
 /// poll — the flow waits for a person, so there is nothing to await.
+/// `createOAuthClient` has latchkey create the service's OAuth client
+/// first (`auth browser-prepare`).
 export function startLatchkeyConnect(
   service: string,
   account?: string,
   register?: ServiceRegistration,
   ephemeralBrowser = false,
+  createOAuthClient = false,
 ): Promise<ConnectAttempt> {
   return quietJson<ConnectAttempt>(`/api/latchkey/${encodeURIComponent(service)}/connect`, {
     method: "POST",
@@ -1857,7 +1895,19 @@ export function startLatchkeyConnect(
       account: account ?? "",
       register: register ?? null,
       ephemeral_browser: ephemeralBrowser,
+      create_oauth_client: createOAuthClient,
     }),
+  });
+}
+
+/// Store a pasted OAuth client — Google Cloud's `client_secret.json`, or
+/// latchkey's `{clientId, clientSecret}` — as the one the service signs
+/// in with (`latchkey auth prepare`).
+export function setLatchkeyOAuthClient(service: string, client: string): Promise<{ ok: true }> {
+  return quietJson<{ ok: true }>(`/api/latchkey/${encodeURIComponent(service)}/oauth_client`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ client }),
   });
 }
 

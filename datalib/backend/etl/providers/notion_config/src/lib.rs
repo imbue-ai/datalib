@@ -5,9 +5,23 @@
 use datalib_source_common::{LatchkeySettings, SourceCommon};
 use serde::{Deserialize, Serialize};
 
+/// This source's config stanzas, for `datalib-step help`.
+pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "api",
+        toml: include_str!("../examples/minimal_api.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "api",
+        toml: include_str!("../examples/complete_api.toml"),
+    },
+];
+
 /// The notion-owned slice of a `notion` source. `api` is its one way
 /// in; an `ingest` step without it is refused (`IngestMethods` below).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NotionConfig {
     #[serde(default)]
@@ -41,7 +55,7 @@ impl NotionConfig {
 /// personal access token sees what its creator sees, and `POST
 /// /v1/search` enumerates that, so the useful default is the whole
 /// workspace. `roots` narrows it; it never enables it.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NotionSync {
     /// In the whole-workspace mirror, list this many days of edits below

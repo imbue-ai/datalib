@@ -1,0 +1,20 @@
+# A backup of a Google account's Docs, Sheets and Slides, signed in through
+# four latchkey services as the same account: `latchkey auth browser
+# google-drive`, then the same for google-docs, google-sheets and google-slides.
+[[groups]]
+id = "google_drive"
+name = "Google Drive"
+type = "google_drive"
+
+[[steps]]
+group = "google_drive"
+function = "ingest"
+
+[steps.params.api]
+
+# Each Doc as one document, its comment threads folded in; Sheets and
+# Slides are kept but not rendered yet.
+[[steps]]
+group = "google_drive"
+function = "render_markdown"
+inputs = ["google_drive/ingest"]

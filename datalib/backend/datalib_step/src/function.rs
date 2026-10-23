@@ -21,27 +21,14 @@ use strum::VariantArray;
 )]
 #[strum(serialize_all = "snake_case")]
 pub enum Function {
-    /// Bring a source's data in — from a live origin or from files on
-    /// disk — into its raw store.
     Ingest,
-    /// Turn a raw store into markdown plus `grid_rows`.
     RenderMarkdown,
-    /// Stack every source's render store into the unified grid table.
     GridIndex,
-    /// Read every source's `keyword_index` and `embed`: keep the qmd
-    /// index's collections to those sources, and report on the whole.
     QmdAggregator,
-    /// Bring one source's qmd collection in line with its rendered tree:
-    /// the keyword (BM25) index.
     KeywordIndex,
-    /// Embed what one source's qmd collection is missing: the vectors
-    /// semantic search reads.
     Embed,
-    /// Lay the qmd index's document embeddings out on a plane.
     EmbeddingMap,
-    /// Turn a raw store into its time series.
     RenderTimeSeries,
-    /// Stack every source's time series into the time-series index.
     TimeSeriesIndex,
 }
 
@@ -53,6 +40,69 @@ impl Function {
     /// `None` for a function this binary does not perform.
     pub fn parse(s: &str) -> Option<Function> {
         s.parse().ok()
+    }
+
+    // What `datalib-dag --reset` can empty; `reset.rs` refuses the rest
+    // through this, and `datalib-step help` tells a function's page by it.
+    pub fn resets(self) -> bool {
+        matches!(
+            self,
+            Function::Ingest | Function::RenderMarkdown | Function::EmbeddingMap
+        )
+    }
+
+    pub fn describe(self) -> &'static str {
+        match self {
+            Function::Ingest => {
+                "Bring a source's data in, from its service or from files on disk, into its \
+                 raw store, <group>/ingest/. Its params say where from: \
+                 `datalib-step help <type>`. One per source; inputs = []."
+            }
+            Function::RenderMarkdown => {
+                "Turn a source's raw store into markdown documents and the rows the grid \
+                 shows, under <group>/render_markdown/. One per source; \
+                 inputs = [\"<group>/ingest\"]."
+            }
+            Function::GridIndex => {
+                "Stack every source's rendered rows into the one SQL index the grid and \
+                 search read, unified_document_index/grid_index/db.doltlite_db. Goes \
+                 under the `unified_document_index` group; its inputs name each \
+                 source's `<group>/render_markdown`."
+            }
+            Function::KeywordIndex => {
+                "Bring a source's collection of the qmd search index up to date for \
+                 keyword (BM25) search. One per searched source; \
+                 inputs = [\"<group>/render_markdown\"]."
+            }
+            Function::Embed => {
+                "Embed what a source's qmd collection lacks, for search by meaning. The \
+                 slow one: turn it off for a source with `datalib-dag turn-off <config> \
+                 <group>/embed`, and keyword search still works. One per searched \
+                 source; inputs = [\"<group>/keyword_index\"]."
+            }
+            Function::QmdAggregator => {
+                "Keep the qmd search index to the sources it reads, and report on the \
+                 whole. Goes under the `unified_document_index` group; its inputs name \
+                 each searched source's `<group>/keyword_index` and `<group>/embed`. \
+                 Without it, free-text search is off."
+            }
+            Function::EmbeddingMap => {
+                "Lay the search index's embeddings out on a plane, for the map card. Goes \
+                 under the `unified_document_index` group; \
+                 inputs = [\"unified_document_index/qmd_aggregator\"]."
+            }
+            Function::RenderTimeSeries => {
+                "Turn a raw store into its time series, under \
+                 <group>/render_time_series/, beside render_markdown, for a source whose \
+                 data is also numbers over time (garmin, yolink, airvisual). \
+                 inputs = [\"<group>/ingest\"]."
+            }
+            Function::TimeSeriesIndex => {
+                "Index every source's time series, without copying the points. Goes \
+                 under the `unified_time_series_index` group; its inputs name each \
+                 source's `<group>/render_time_series`."
+            }
+        }
     }
 
     pub fn known_list() -> String {

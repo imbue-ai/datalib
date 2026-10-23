@@ -45,7 +45,9 @@ use datalib_schema::providers::Provider;
 ///     as one.
 /// v12: a connection and a message's sender carry a `linkedin:` handle,
 ///     and the owner's posts and comments their primary address.
-pub const RENDER_VERSION: u32 = 12;
+/// v13: a connection's photo is linked where the blob store holds it,
+///     and one the store lacks is a `blob_missing` problem.
+pub const RENDER_VERSION: u32 = 13;
 
 fn profile() -> RenderProfile {
     RenderProfile {

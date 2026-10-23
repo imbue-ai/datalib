@@ -7,6 +7,14 @@ touch — config, sync, querying, extending — and points to the deeper
 docs for each. It is about *using* datalib; for working on the datalib
 codebase itself, see [`AGENTS.md`](../AGENTS.md).
 
+From a shell, **`datalib-step help`** is the map: the steps from an
+empty directory to a first sync, each with its command, and
+`datalib-step help <type>` (what a source mirrors, how it signs in, its
+ingest methods) and `datalib-step help <function>` (what a step does
+and how to run it) from there. `datalib-step help agent` prints this
+guide, which a release also carries beside its binaries as
+`docs/agent_user.md`. Every binary's `--help` ends with examples.
+
 The human-facing guides are worth reading first, and worth pointing the
 user at: the [first-time user guide](user/first_time_user.md) is the
 walkthrough from install to first sync, with the warnings about what a
@@ -86,10 +94,12 @@ header, and a step's `params` sub-tables come after its plain keys — a
 
 - **Complete commented example:**
   [`configs/dag_example.toml`](../configs/dag_example.toml).
-- **Per-source knobs and step pairs**:
+- **Every source, every option**:
   [`docs/user/config_examples/all_sources.toml`](user/config_examples/all_sources.toml)
-  — one commented group with its `ingest` + `render_markdown` step pair
-  per supported source, ready to copy. A `config.toml` in the retired
+  — one commented group per way into each source, with its steps and
+  every option set, and the index groups reading them all. It is
+  generated from the complete stanzas `datalib-step examples <type>`
+  prints, so it is always one that loads. A `config.toml` in the retired
   shape (steps naming a `datalib-step download …` command) is refused;
   rewrite it once with `datalib-migrate-config <data_root> --force`.
 - **Credentials**: web-API sources authenticate through
@@ -115,15 +125,29 @@ datalib-dag --check <data_root>/config.toml   # validate, run nothing
 `--check` prints *every* problem with the config rather than the first,
 as `file:line:col: severity: message` with the offending line and a
 `help:` line under each — so fixing a config takes one round-trip, not
-one per typo. Exit 0 when every entry loads, 1 if the file is not a
-config at all (or the root was written by a newer datalib), 2 if some
-entries were dropped.
+one per typo. It also has `datalib-step` plan every built-in step's
+params, so a misspelled or misplaced option is reported at its line
+before a sync rather than when the step runs. Exit 0 when every entry
+loads and every step's params plan, 1 if the file is not a config at
+all (or the root was written by a newer datalib), 2 if some entries
+were dropped or some step's params would be refused.
+
+`datalib-step examples <type>` prints each source's config stanzas:
+for every way into the source, a minimal one (the least that syncs) and
+a complete one (every option set, each with a comment). Its page also
+says how to give the group an id of your own and which index inputs to
+add it to. `datalib-step help <type> <method>` lists every option with
+its type, default and meaning. Both are read from the source's own
+config crate, and a test loads and plans every stanza.
 
 Useful flags: `--sync <step-id>` (repeatable; runs the named steps and
 everything downstream of them, and nothing else — pending work in other
 sources waits for a full run), `--parallelism N`, `--reset
 <step-id>` (see **Resetting** below; alone it does nothing else,
-with `--sync` it runs first), `--binary-dir DIR` (put at the front of
+with `--sync` it runs first), `--compact` (folds the history of every
+render store and the grid index into one commit and gives back the disk
+it held; their content stays, so nothing re-runs; refused while the app
+is up, where `POST /api/compact {}` does the same), `--binary-dir DIR` (put at the front of
 every step's `PATH`, so a bare `command` like `datalib-step` resolves
 there; defaults to the config's `binary_dir`, else the directory
 `datalib-dag` itself is in). A sync that fails with "has a shape this build's DDL
@@ -131,6 +155,17 @@ cannot be reached from by adding columns" is a raw store an older build
 wrote in a shape this one cannot keep; nothing was changed, and if
 upstream still has the data, `--reset <source>/ingest --sync
 <source>/ingest` is the way through.
+
+**To run one step, `--sync` it** — never run `datalib-step` for it by
+hand. The runner is what sets the step's environment, takes the root's
+lock and records the version the step published, which is how the steps
+that read it learn it moved; a step run by hand records nothing. An
+ingest step always runs when synced; any other runs only if what it
+reads moved, so to rebuild a source's documents from what is already
+downloaded, reset its render step in the same command:
+`datalib-dag <config> --reset slack/render_markdown --sync
+slack/render_markdown`. `datalib-step help <function>` gives the
+command for each kind of step.
 
 **The stderr stream is NDJSON and made for you**: `run_plan` (every step's
 id and group, in topo order), then `step_start` / `progress_*` / `log` / `hint` /
@@ -292,7 +327,10 @@ Pick the surface that fits the question:
   markdown per conversation/document. Read files directly, or serve
   them via `GET /applet/unified_document_index/chat/{markdown_uuid}`. The raw per-source
   doltlite stores under `<group>/ingest/` keep full wire fidelity when the
-  rendered form isn't enough.
+  rendered form isn't enough. An attachment or a person's photo a page
+  links as `/data/<group>/<function>/blob/<hash>` is a row of that step's
+  `blobs.sqlite`: fetch the path from `datalib-http` with the token, or
+  read the row (`SELECT bytes FROM cas_objects WHERE blake3 = '<hash>'`).
 - **Semantic search** — the qmd index:
 
   ```sh
@@ -343,7 +381,8 @@ Pick the surface that fits the question:
   lines, oldest first, with `before_seq=` paging back and `after_seq=`
   tailing),
   `GET /applet/unified_document_index/docs`, `GET /applet/unified_document_index/chat/{uuid}`,
-  `GET /applet/unified_document_index/asset/{uuid}/{path}`, `GET /api/dag` (the derived step
+  `GET /data/<group>/<function>/blob/<hash>` (an attachment or photo a
+  page links), `GET /api/dag` (the derived step
   graph), and the config/sync endpoints above.
 
   Every route needs the server's per-process API token — loopback does
@@ -423,7 +462,8 @@ document.
 - **A config the runner rejects**: `datalib-dag --check
   <data_root>/config.toml` lists every problem with a line number;
   `PUT /api/config` (or the Manage tab) returns the same list in
-  `diagnostics` and writes nothing. A data root holding a pre-TOML
+  `diagnostics`, built-in steps whose params a sync would refuse
+  included, and writes nothing. A data root holding a pre-TOML
   `config.yaml` reads as unconfigured — set it up again from the app.
 - **Every step reads `waiting for disk space`**: the data root's disk
   went under the config's `[disk_space]` pause line (10 GB unless the

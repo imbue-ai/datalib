@@ -14,8 +14,9 @@ import { filterToken } from "@/grid/query";
 import { uriFromHandle } from "./chipLinks";
 import { Resolver } from "./resolver";
 import { pushToast } from "@/toasts";
-import { UNIFIED_DOCUMENT_INDEX } from "@/api";
+import { UNIFIED_DOCUMENT_INDEX, appletAbsent } from "@/api";
 import { changed, subscribeLive, type RootEvent } from "@/live";
+import type { ContactEdit, DraftView, Saved } from "./contactEdit";
 
 export const CONTACTS_APPLET = "/applet/datalib_contacts";
 
@@ -54,7 +55,17 @@ export type Who = { mine: NormalizedContact | null; sourceContacts: NormalizedCo
 
 // ── Pure rules ─────────────────────────────────────────────────────────
 
-export type HandleKind = "email" | "tel" | "slack" | "signal_aci" | "facebook" | "linkedin";
+export type HandleKind =
+  | "email"
+  | "tel"
+  | "slack"
+  | "signal_aci"
+  | "facebook"
+  | "linkedin"
+  | "google"
+  | "github"
+  | "gitlab"
+  | "notion";
 
 export function handleKind(handle: string): HandleKind | null {
   const kind = handle.slice(0, handle.indexOf(":"));
@@ -63,7 +74,11 @@ export function handleKind(handle: string): HandleKind | null {
     kind === "slack" ||
     kind === "signal_aci" ||
     kind === "facebook" ||
-    kind === "linkedin"
+    kind === "linkedin" ||
+    kind === "google" ||
+    kind === "github" ||
+    kind === "gitlab" ||
+    kind === "notion"
     ? kind
     : null;
 }
@@ -79,6 +94,10 @@ const KIND_ICON: Record<HandleKind, string> = {
   signal_aci: "signal",
   facebook: "facebook",
   linkedin: "linkedin",
+  google: "google_drive",
+  github: "github",
+  gitlab: "gitlab",
+  notion: "notion",
 };
 
 export function handleIcon(handle: string): string | null {
@@ -169,9 +188,8 @@ export function chipLook(handle: string, shownAs: string, who: Who, canLink: boo
   };
 }
 
-/** What a right-click on a chip offers. An entry is an *id* the surface
- *  binds a handler to — the document view and a grid cell draw the same
- *  menu and act on it their own way (docs/dev/chips.md § Clicks). */
+/** What a right-click on a person's chip offers, as ids `chipActions`
+ *  acts on, in its `CHIP_ACTIONS` order (docs/dev/chips.md § Clicks). */
 export type ChipMenuId =
   "open" | "compose" | "copy-id" | "copy-name" | "copy-both" | "search" | "edit";
 export type ChipMenuEntry = { id: ChipMenuId; label: string; separator?: boolean };
@@ -318,18 +336,13 @@ export function chipAnchors(root: Element): HTMLElement[] {
 /** Whether a failed call means the app is simply not configured: the
  *  gateway's 502 names the applet it has no entry for. */
 export function isAbsent(status: number, body: string): boolean {
-  if (status !== 502) return false;
-  try {
-    return (JSON.parse(body) as { error?: string }).error === 'no applet "datalib_contacts"';
-  } catch {
-    return false;
-  }
+  return appletAbsent("datalib_contacts", status, body);
 }
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(`${CONTACTS_APPLET}${path}`, {
     ...init,
-    headers: init?.body ? { "content-type": "application/json" } : undefined,
+    headers: init?.headers ?? (init?.body ? { "content-type": "application/json" } : undefined),
   });
   const text = await r.text();
   if (!r.ok) {
@@ -379,8 +392,9 @@ export async function searchContacts(q: string): Promise<ContactSummary[]> {
   return r.contacts;
 }
 
-// Every edit forgets the handles it touched, so every document and grid
-// showing them draws them again from the next answer.
+// Every edit forgets the handles it touched, and the other handles of a
+// contact it changed, so every document, grid and card showing them draws
+// them again from the next answer.
 
 export async function createContact(name: string, handles: string[]): Promise<string> {
   const id = (await post<{ contact_id: string }>("/contacts", { name, handles })).contact_id;
@@ -388,19 +402,28 @@ export async function createContact(name: string, handles: string[]): Promise<st
   return id;
 }
 
+/** `handle` and every handle of `contactId` held so far: each one's
+ *  answer carries the contact, and with it the list of its handles. */
+function withItsContact(handle: string, contactId: string | undefined): string[] {
+  if (!contactId) return [handle];
+  return [handle, ...people.keysWhere((who) => who.mine?.key === contactId)];
+}
+
 export async function linkHandle(handle: string, contactId: string): Promise<void> {
+  const before = people.get(handle)?.mine?.key;
   await post("/link", { handle, contact_id: contactId });
-  people.forget([handle]);
+  people.forget([...withItsContact(handle, contactId), ...withItsContact(handle, before)]);
 }
 
 export async function unlinkHandle(handle: string): Promise<void> {
+  const owner = people.get(handle)?.mine?.key;
   await post("/unlink", { handle });
-  people.forget([handle]);
+  people.forget(withItsContact(handle, owner));
 }
 
 export async function setStoppedWorking(handle: string, by: string | null): Promise<void> {
   await post("/stopped_working", { handle, by });
-  people.forget([handle]);
+  people.forget(withItsContact(handle, people.get(handle)?.mine?.key));
 }
 
 // A merge or a delete moves every handle of a contact, which this page
@@ -417,6 +440,78 @@ export async function mergeContacts(from: string, into: string): Promise<void> {
 /** The contact and everything of it; its handles are nobody's after. */
 export async function deleteContact(contactId: string): Promise<void> {
   await call(`/contact/${encodeURIComponent(contactId)}`, { method: "DELETE" });
+  people.revalidate();
+  contactsById.revalidate();
+}
+
+// ── Editing a contact on its card ─────────────────────────────────────
+// The name, note and fields go through the contact's draft, which no
+// reader sees until a save publishes it; a photo changes at once.
+
+const contactPath = (id: string) => `/contact/${encodeURIComponent(id)}`;
+
+/** The contact as published: what every reader sees. */
+export function publishedEdit(contactId: string): Promise<ContactEdit> {
+  return call<ContactEdit>(`${contactPath(contactId)}/edit`);
+}
+
+/** The contact's draft, or null when it has none. */
+export async function draftOf(contactId: string): Promise<DraftView | null> {
+  const r = await fetch(`${CONTACTS_APPLET}${contactPath(contactId)}/draft`);
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error(`draft → ${r.status}: ${await r.text()}`);
+  return (await r.json()) as DraftView;
+}
+
+/** The contact's draft, cut now if it has none. */
+export function openDraft(contactId: string): Promise<DraftView> {
+  return call<DraftView>(`${contactPath(contactId)}/draft`, { method: "POST" });
+}
+
+/** Answers each field's value as a handle, by field id, where it is one. */
+export async function autosaveDraft(
+  contactId: string,
+  edit: ContactEdit,
+): Promise<Record<string, string>> {
+  const r = await call<{ handles: Record<string, string> }>(`${contactPath(contactId)}/draft`, {
+    method: "PUT",
+    body: JSON.stringify(edit),
+  });
+  return r.handles;
+}
+
+/** Publish the draft, unless the contact moved since `seen`, the
+ *  published commit the card last showed: then nothing is saved and the
+ *  answer is the new view. A save renames every chip of the contact. */
+export async function saveDraft(contactId: string, seen: string): Promise<Saved> {
+  const saved = await post<Saved>(`${contactPath(contactId)}/draft/save`, { seen });
+  if (saved.outcome === "saved") {
+    people.revalidate();
+    contactsById.revalidate();
+  }
+  return saved;
+}
+
+export async function discardDraft(contactId: string): Promise<void> {
+  await call(`${contactPath(contactId)}/draft`, { method: "DELETE" });
+}
+
+/** The image types the contacts app takes for a photo
+ *  (`contact_schema::DRAWABLE_PHOTO_TYPES`, hand-kept). */
+export const PHOTO_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+
+export async function setContactPhoto(contactId: string, photo: Blob): Promise<void> {
+  await call(`/photo/${encodeURIComponent(contactId)}`, {
+    method: "PUT",
+    headers: { "content-type": photo.type },
+    body: photo,
+  });
+  people.revalidate();
+  contactsById.revalidate();
+}
+
+export async function dropContactPhoto(contactId: string): Promise<void> {
+  await call(`/photo/${encodeURIComponent(contactId)}`, { method: "DELETE" });
   people.revalidate();
   contactsById.revalidate();
 }
@@ -576,7 +671,11 @@ export function drawChip(el: HTMLElement, look: ChipLook): void {
     // gone since the render) gives way to what the chip draws without one.
     lead.addEventListener("error", () => drawChip(el, { ...look, photo: null }), { once: true });
   }
-  const text = el.ownerDocument.createTextNode(look.text);
+  // The name in an element of its own, so a chip with less room than it
+  // needs can end it in "…"; the tooltip has it whole.
+  const text = el.ownerDocument.createElement("span");
+  text.className = "chip-text";
+  text.textContent = look.text;
   if (lead) el.replaceChildren(lead, text);
   else el.replaceChildren(text);
 }

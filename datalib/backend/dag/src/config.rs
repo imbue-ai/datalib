@@ -75,6 +75,10 @@ pub struct DagConfig {
     /// [`DiskFloor`].
     #[serde(default)]
     pub disk_space: Option<DiskFloor>,
+    /// How much a render reads at once. Omitted means the render's own
+    /// defaults.
+    #[serde(default)]
+    pub render_pages: Option<RenderPages>,
 }
 
 /// The retention rule for `system/runs/runs.sqlite`, as a person writes it in
@@ -144,8 +148,8 @@ impl RunHistory {
 }
 
 /// The latency/history tradeoff, in seconds, as a person writes it in
-/// `config.toml`: at most this long between a step's checkpoints early in
-/// a run. `datalib-step` lets it grow over a long one
+/// `config.toml`: how long a step waits before its first checkpoint.
+/// `datalib-step` doubles the wait after each one
 /// (`datalib_etl::checkpointer::Cadence`).
 ///
 /// Plain numbers rather than the `etl` type they become: the runner does not
@@ -172,6 +176,48 @@ impl CheckpointCadence {
             return None;
         }
         Some(Self { at_most_every_secs })
+    }
+}
+
+/// How much a render holds in memory at once, as a person writes it in
+/// `config.toml`: `buckets` threads (or conversations, or whatever the
+/// source renders as a unit) read from the raw store together, and at most
+/// `blob_mb` of their attachments loaded at a time. Smaller pages hold less
+/// and cost more queries. Either omitted means the render's default
+/// (`datalib_etl_render::pages::PageSize::DEFAULT`).
+///
+/// Plain numbers for the same reason as [`CheckpointCadence`]: the runner
+/// forwards them, and the step owns what a page is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RenderPages {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub buckets: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blob_mb: Option<u64>,
+}
+
+impl RenderPages {
+    /// The wire form: `<buckets>,<blob_mb>`, either side empty when omitted.
+    pub fn encode(&self) -> String {
+        let side = |v: Option<u64>| v.map(|n| n.to_string()).unwrap_or_default();
+        format!("{},{}", side(self.buckets), side(self.blob_mb))
+    }
+
+    /// `None` for anything this build cannot read, a zero included: the
+    /// step's defaults are a safe answer, as for [`CheckpointCadence`].
+    pub fn decode(s: &str) -> Option<Self> {
+        let (buckets, blob_mb) = s.trim().split_once(',')?;
+        let side = |v: &str| -> Option<Option<u64>> {
+            match v.trim() {
+                "" => Some(None),
+                n => n.parse::<u64>().ok().filter(|n| *n > 0).map(Some),
+            }
+        };
+        Some(Self {
+            buckets: side(buckets)?,
+            blob_mb: side(blob_mb)?,
+        })
     }
 }
 
@@ -828,6 +874,8 @@ struct RawConfig {
     log_level: Option<datalib_runs::LogLevel>,
     #[serde(default)]
     disk_space: Option<DiskFloor>,
+    #[serde(default)]
+    render_pages: Option<RenderPages>,
 }
 
 /// One entry on its way in: where it sits in the file, and what it
@@ -1544,6 +1592,49 @@ fn inert_path_is_written(params: Option<&toml::Value>, path: &str) -> bool {
     at.is_some()
 }
 
+/// Where a step sits in the config text, for a problem found after the
+/// check (`datalib-step check-params`): the line of `key = …` in its
+/// params when a key is named and found there, else its `[[steps]]`
+/// header. `None` for a step the text does not declare.
+pub fn step_span(text: &str, step_id: &str, key: Option<&str>) -> Option<std::ops::Range<usize>> {
+    let header = entries_of(text).spans.get(step_id).cloned()?;
+    Some(match key {
+        Some(key) => params_key_span(text, header, key),
+        None => header,
+    })
+}
+
+/// What `datalib-step check-params` printed for this config, as
+/// diagnostics against its text: one `Rejected` per built-in step whose
+/// params a sync would refuse, at the line of the key the message names
+/// when it names one. The runner links no provider, so the step program
+/// is what reads params; `datalib-dag --check` and `PUT /api/config` both
+/// show its answer through here.
+pub fn params_diagnostics(text: &str, check_params_stdout: &str) -> Vec<Diagnostic> {
+    check_params_stdout
+        .lines()
+        .filter_map(|line| {
+            let problem: serde_json::Value = serde_json::from_str(line).ok()?;
+            let step = problem.get("step")?.as_str()?;
+            let message = problem.get("message")?.as_str()?;
+            let key = message
+                .split_once("unknown field `")
+                .and_then(|(_, rest)| rest.split_once('`'))
+                .map(|(key, _)| key);
+            let mut d = Diagnostic::new(
+                Severity::Rejected,
+                format!("a sync would refuse its params: {message}"),
+            )
+            .with_help("`datalib-step help <type> <method>` lists every option a source takes");
+            d.entry = Some(EntryRef::step_id(step));
+            if let Some(span) = step_span(text, step, key) {
+                d.set_span(text, span);
+            }
+            Some(d)
+        })
+        .collect()
+}
+
 /// Where `key = …` sits in this entry's body, its `[steps.params…]`
 /// sub-tables included, for a key nested in `params` that
 /// [`key_span`] stops short of. The entry's header when it is not found.
@@ -1698,6 +1789,7 @@ fn spec_of(
     let mut spec = StepSpec::new(&e.id, StepRun::Subprocess { argv, env, params });
     spec.code_version = e.code_version.clone();
     spec.migrates = e.command.is_none();
+    spec.compacts = e.command.is_none();
     spec.group = e.group.clone();
     spec.group_type = group_type.map(str::to_string);
     spec.function = e.function.clone();
@@ -1988,6 +2080,7 @@ fn entries_of(text: &str) -> Entries {
             run_history: raw.run_history,
             log_level: raw.log_level,
             disk_space: raw.disk_space,
+            render_pages: raw.render_pages,
         },
         specs,
         lock_specs: accepted.lock_specs,
@@ -2124,6 +2217,7 @@ impl DagConfig {
             run_history: None,
             log_level: None,
             disk_space: None,
+            render_pages: None,
         }
     }
 }
@@ -2152,6 +2246,74 @@ mod cadence_tests {
                 "{bad:?} must not parse"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod render_pages_tests {
+    use super::RenderPages;
+
+    #[test]
+    fn render_pages_survive_the_trip_through_the_env_var() {
+        for pages in [
+            RenderPages::default(),
+            RenderPages {
+                buckets: Some(200),
+                blob_mb: None,
+            },
+            RenderPages {
+                buckets: None,
+                blob_mb: Some(16),
+            },
+            RenderPages {
+                buckets: Some(1),
+                blob_mb: Some(1),
+            },
+        ] {
+            assert_eq!(RenderPages::decode(&pages.encode()), Some(pages));
+        }
+    }
+
+    /// A zero or a word is `None`, never a guess: the render falls back
+    /// to its own page size and logs.
+    #[test]
+    fn unreadable_render_pages_are_none() {
+        for bad in ["", "500", "0,64", "500,0", "-1,64", "five,64", "500,64,1"] {
+            assert_eq!(RenderPages::decode(bad), None, "{bad:?} must not parse");
+        }
+    }
+}
+
+#[cfg(test)]
+mod params_diagnostics_tests {
+    use super::*;
+
+    const TEXT: &str = "[[groups]]\nid = \"slack\"\ntype = \"slack\"\n\n[[steps]]\n\
+                        group = \"slack\"\nfunction = \"ingest\"\n\n[steps.params.api]\n\
+                        chanels = [\"bridge\"]\n";
+
+    /// `check-params` names the step and serde names the key; the
+    /// diagnostic has to land on the key's own line, not the step's
+    /// header, or an editor highlights the wrong place.
+    #[test]
+    fn a_refused_param_lands_on_its_key() {
+        let out = r#"{"step":"slack/ingest","message":"unknown field `chanels`, expected one of `channels`"}"#;
+        let found = params_diagnostics(TEXT, out);
+        assert_eq!(found.len(), 1, "{found:?}");
+        let d = &found[0];
+        assert_eq!(d.severity, Severity::Rejected);
+        assert_eq!(d.entry, Some(EntryRef::step_id("slack/ingest")));
+        assert_eq!(d.line, Some(10), "{d:?}");
+        assert!(d.message.contains("chanels"), "{d:?}");
+    }
+
+    #[test]
+    fn a_problem_without_a_key_lands_on_the_step_and_noise_is_skipped() {
+        let out =
+            "not json\n{\"step\":\"slack/ingest\",\"message\":\"its group declares no type\"}\n";
+        let found = params_diagnostics(TEXT, out);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].line, Some(5), "the step's [[steps]] header");
     }
 }
 
@@ -2221,10 +2383,11 @@ mod tests {
         assert_ne!(none.fingerprint_material(), v1.fingerprint_material());
     }
 
-    /// Only `datalib-step`'s own steps take the `--migrate` verb: a custom
-    /// command that has never heard of it would run as if synced.
+    /// Only `datalib-step`'s own steps take the `--migrate` and
+    /// `--compact` verbs: a custom command that has never heard of one
+    /// would run as if synced.
     #[test]
-    fn only_builtin_steps_are_asked_to_migrate() {
+    fn only_builtin_steps_are_asked_to_migrate_or_compact() {
         let cfg: DagConfig = toml::from_str(
             r#"
             [[groups]]
@@ -2246,6 +2409,8 @@ mod tests {
         let spec = |id: &str| specs.iter().find(|s| s.id == id).unwrap().clone();
         assert!(spec("mail/ingest").migrates);
         assert!(!spec("custom/render").migrates);
+        assert!(spec("mail/ingest").compacts);
+        assert!(!spec("custom/render").compacts);
     }
 
     /// Editing `params` changes the argv the runner executes, which is

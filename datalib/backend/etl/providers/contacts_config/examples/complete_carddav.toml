@@ -1,0 +1,50 @@
+# Any other CardDAV server, signed in through a latchkey service
+# registered for its host, with every option set, and searchable.
+[[groups]]
+id = "contacts"
+name = "CardDAV Contacts"
+type = "contacts"
+
+[[steps]]
+group = "contacts"
+function = "ingest"
+
+# When to give up on a failing server. The download always backs off and
+# retries; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "picard@example.com"
+
+[steps.params.carddav]
+# Where discovery starts. The host alone is usually enough: discovery tries
+# `/.well-known/carddav` when it does not answer.
+server_url = "https://cloud.example.com/remote.php/dav/"
+addressbooks = ["Enterprise Crew"]  # names as the server shows them, matched exactly;
+                                    # omit for every address book
+
+[[steps]]
+group = "contacts"
+function = "render_markdown"
+inputs = ["contacts/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "contacts"
+function = "keyword_index"
+inputs = ["contacts/render_markdown"]
+
+[[steps]]
+group = "contacts"
+function = "embed"
+inputs = ["contacts/keyword_index"]

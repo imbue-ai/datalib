@@ -13,6 +13,7 @@ rust_library(
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
     deps = [
+        "@datalib_crates//:schemars",
         "@datalib_crates//:serde",
         "@datalib_crates//:strum",
     ],

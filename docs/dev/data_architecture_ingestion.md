@@ -408,7 +408,9 @@ therefore what it can see:
 | `linkedin` | each CSV, read whole | rows its table no longer lists, and, when `Connections.csv` read cleanly, the `contact_photos` edges of connections it no longer lists. A CSV left out of the export, one that will not read, or one with no header row (0 bytes, or only the Notes preamble) deletes nothing, photo edges included; articles prune only after a clean walk |
 | `lightroom`, `apple_photos`, `whatsapp` (msgstore) | the database file, dropped and refilled | structurally. A source with no table to mirror (0 bytes, no tables, filters matching none) drops nothing: a `phase:source` problem, or for lightroom a backup problem or a failed step |
 | `apple_messages` | — | nothing: append-only, since `chat.db` evicts |
+| `google_drive` | — | nothing: a backup, so a file that leaves the listing keeps its rows and captures |
 | `yolink` | — | nothing; append-only telemetry |
+| `linear` | — | nothing: an archived record is listed with its `archivedAt`, and one Linear deletes outright stays as last fetched |
 | `notion`, `beeper` | — | not wired (rework; poorly supported) |
 
 **The hard part is not the deletion, it is establishing the
@@ -612,9 +614,11 @@ channel list, claude's orgs and project docs).
 | github, gitlab | `listed_change_requests`, from each scope's search | the PR / MR sidecar, at `updated_at` | each scope's `updated_at` |
 | email (JMAP, Gmail) | `listed_messages`, from the delta or an enumeration | `emails` sidecar, then the `.eml` edge | — |
 | notion | search results are the `pages` rows | `page_markdown`, `page_comments`, attachment edges | the search's `last_edited_time` |
+| linear | each walked connection's pages are the rows | each table's sidecar, at `updatedAt` | each connection's `updatedAt`, per selection |
 | garmin | days, activities, files | each table's sidecar | activity dates |
 | contacts, calendar (DAV) | `dav_resources`, at each href's etag | `dav_resources` sidecar | — |
 | calendar (Google) | the events page is the content | — | — |
+| google_drive | the file listing, at each file's Drive `version`; each stored revision's export links | `files` sidecar, written with the whole capture; `revision_exports` sidecar, at no version | — |
 | chatgpt, claude | the conversation enumeration, at `update_time` / `updated_at` | `conversations` sidecar, its attachment edges, claude's `projects` and `project_docs_listings` | — |
 | yolink | — | — | each device's readings |
 
@@ -690,6 +694,7 @@ leaves an on-disk superset, and nothing deletes it.
 | yolink | An earlier `devices[].start` is a gap below the spans the device holds |
 | contacts, calendar | A newly selected collection has no token and is listed whole |
 | chatgpt, claude | The enumeration is re-read every run, so a moved `since` admits what it now covers |
+| google_drive | A new kind, a wider `file_ids` or `owned_only` turned off is a listing that names more, and what it names that is not held is owed. A new `revision_exports` format makes every stored revision's export in it owed. A new `exports` format does not reach the versions already captured: that export is only of the current version |
 
 No source records the config it ran under: a local source reads its
 whole input every run under the config it has now (email's mbox

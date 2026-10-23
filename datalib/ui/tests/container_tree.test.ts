@@ -3,6 +3,7 @@ import {
   find,
   instantiate,
   isSolidified,
+  kept,
   landing,
   makeBox,
   makeCard,
@@ -307,6 +308,25 @@ describe("pinned tabs", () => {
     root = openFrom(root, "a", [makeCard("b", "y()")]) as BoxNode;
     expect(tabShowing(root, "s1", "y()")).toBeNull();
     expect(tabShowing(root, "a", "y()")).toBe("b");
+  });
+
+  /** A sync dashboard double-clicked from a log tab opened a second
+   *  "Sync · slack" beside the one already open: a card that is one per
+   *  window is found in any tab, under its own notion of "the same". */
+  it("a card that is one per window is found in any tab, by its own key", () => {
+    const identify = (s: string) =>
+      s.startsWith("dash(")
+        ? { key: s.replace(/, *step.*\)$/, ")"), anywhere: true }
+        : { key: s, anywhere: false };
+    const root = openFrom(setSolidified(fixture(), "sandbox", true), "s1", [
+      makeCard("a", "dash(slack)"),
+    ]) as BoxNode;
+    // Opened from another tab altogether ("dash"), naming a step inside it.
+    expect(tabShowing(root, "d1", "dash(slack, step)", identify)).toBe("a");
+    expect(tabShowing(root, "d1", "dash(github)", identify)).toBeNull();
+    // Without the view's own key: the exact source, and the near tabs only.
+    expect(tabShowing(root, "d1", "dash(slack)")).toBeNull();
+    expect(tabShowing(root, "s1", "dash(slack)")).toBe("a");
     // A pinned tab that shows the card comes first.
     const src = makeCard("src", "x()");
     const pinned = setPinned({ ...root, children: [...root.children, src] }, "src", true);
@@ -343,5 +363,43 @@ describe("pinned tabs", () => {
   it("a stored pin is read back", () => {
     const stored: unknown = JSON.parse(JSON.stringify(pinnedFixture()));
     expect(pinnedTabs(parseTree(stored)!).map((t) => t.id)).toEqual(["dash"]);
+  });
+});
+
+describe("what a link opened", () => {
+  // The fixture with a tab a link opened, selected, as ContainersView adds one.
+  function linkedFixture(): BoxNode {
+    const link = {
+      ...makeBox("link", "columns", [makeCard("l1", "tableView({})")]),
+      fromLink: true,
+    } as const;
+    return { ...fixture(), children: [...fixture().children, link], selected: "link" };
+  }
+
+  /// A link's author wrote its source, so the layout the library keeps
+  /// must not bring it back at the next launch.
+  it("is left out of what the library keeps", () => {
+    const root = kept(linkedFixture());
+    expect(ids(root)).toEqual(["dash", "sandbox"]);
+    expect(root.selected).toBe("sandbox");
+  });
+
+  it("is kept once the person names or pins it", () => {
+    expect(ids(kept(rename(linkedFixture(), "link", "Mine") as BoxNode))).toContain("link");
+    expect(ids(kept(setPinned(linkedFixture(), "link", true) as BoxNode))).toContain("link");
+  });
+
+  /// Solidified, a link's tab opens a card as a tab of its own, opened by
+  /// it. Dropping the link's tab must not take the person's tabs with it.
+  it("does not take the tabs opened from it", () => {
+    const solid = setSolidified(linkedFixture(), "link", true);
+    const opened = openFrom(solid, "l1", [makeCard("doc", "documentView()")]);
+    const named = rename(opened, "doc", "My reading") as BoxNode;
+    expect(find(named, "doc")?.openedBy).toBe("link");
+
+    const root = kept(named);
+    expect(ids(root)).toEqual(["dash", "sandbox", "doc"]);
+    expect(find(root, "doc")?.openedBy).toBeNull();
+    expect(find(root, "doc")?.name).toBe("My reading");
   });
 });

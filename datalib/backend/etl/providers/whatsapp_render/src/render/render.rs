@@ -5,14 +5,13 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use datalib_etl::blob_cas::BlobBundle;
 
 use datalib_etl::doltlite_raw;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::TextFormat;
 use datalib_etl_chat_common::{
-    render::{Bucket, Buckets, RenderProfile},
-    NormalizedChat,
+    render::{Bucket, Buckets, ChatRenderer, RenderProfile},
+    render_batched_at, BlobsAt, NormalizedChat,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
@@ -50,11 +49,9 @@ fn profile() -> RenderProfile {
     }
 }
 
-/// Render every chat. `raw_dir` is the source's `input_path` — same
-/// value render's `parse` walks — used here only to find the
-/// doltlite db for the dolt_diff render-cursor scan. Attachment bytes
-/// arrive pre-loaded in `blobs_by_chat`, which parse hydrates from the
-/// sibling CAS in the same call that built `chats`.
+/// Render every chat. `raw_dir` finds the doltlite db: the diff scan
+/// reads it, and the chats' attachment bytes are read from it at
+/// `commit`, the one `parse` built `chats` from.
 ///
 /// Returns the raw commit the render consumed — what the render step
 /// records as the cursor, or `None` when there was no store to pin — and
@@ -62,12 +59,13 @@ fn profile() -> RenderProfile {
 #[allow(clippy::too_many_arguments)]
 pub fn render_all(
     chats: &[NormalizedChat],
-    blobs_by_chat: &HashMap<String, BlobBundle>,
+    commit: &str,
     raw_dir: &Path,
     out_dir: &Path,
     source_id: &str,
     progress: &Progress,
     range: RawRange<'_>,
+    blob_bytes: u64,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<(Option<String>, Buckets)> {
     // Incremental gate: with a cursor, ask doltlite which chats changed
@@ -124,15 +122,27 @@ pub fn render_all(
         .collect();
     named.extend(narrowed.gone);
     let to_render: &[NormalizedChat] = filtered.as_deref().unwrap_or(chats);
-    let summary = datalib_etl_chat_common::render::render_all(
-        &profile(),
-        to_render,
+    let profile = profile();
+    let mut renderer = ChatRenderer::new(
+        &profile,
         out_dir,
         source_id,
-        blobs_by_chat,
+        to_render.iter().map(|c| c.buckets.len()).sum(),
         progress,
         on_doc_complete,
+    );
+    let at = BlobsAt {
+        db_path: db_path.clone(),
+        commit: commit.to_string(),
+    };
+    render_batched_at(
+        &at,
+        &|_: &NormalizedChat| ATTACHMENTS_PROJECTION_SQL,
+        &mut renderer,
+        to_render,
+        blob_bytes,
     )?;
+    let summary = renderer.finish();
     // Named chats first, with no documents: one the diff named whose
     // messages all went builds no chat, and chat-common never sees it.
     // The rendered ones follow and replace that.
@@ -146,6 +156,17 @@ pub fn render_all(
     buckets.extend(summary.buckets);
     Ok((scan.head, buckets))
 }
+
+/// SQL projection resolving an attachment's `ref_id` — the file's
+/// blake3, which render stamps onto each `NormalizedAttachment` — to
+/// its CAS entry. Consumed by `BlobBundle::load_many`, a batch of chats at a time. A row exists only for a file the scan actually saw, so
+/// a half-extracted `Media/` tree simply yields no bytes.
+const ATTACHMENTS_PROJECTION_SQL: &str = "
+    SELECT blake3 AS ref_id, blake3,
+           mime_type AS content_type,
+           relative_path AS upstream_name
+      FROM wa_media_files
+     WHERE blake3 IN ({placeholders})";
 
 /// What changed between two commits, as chat JIDs: the ones HEAD still
 /// carries (re-render) and the ones it does not (gone upstream).
@@ -652,12 +673,13 @@ mod tests {
                 };
             let (consumed, buckets) = render_all(
                 &parsed.chats,
-                &parsed.blobs_by_chat,
+                &parsed.commit,
                 &raw_dir,
                 &out_dir,
                 "test",
                 &progress,
                 range,
+                1,
                 &mut on_complete,
             )
             .expect("render_all");

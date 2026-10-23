@@ -353,7 +353,7 @@ fn post_placeholder(
 fn linkout(url: &str) -> Vec<NormalizedAttachment> {
     match nonempty(url) {
         Some(u) => vec![NormalizedAttachment {
-            rel_path: None,
+            href: None,
             file_name: None,
             mime_type: None,
             byte_len: None,

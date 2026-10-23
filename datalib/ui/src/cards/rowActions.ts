@@ -23,11 +23,9 @@ import {
 import { confirmAction, openRawStore, pickPath, revealInFileManager } from "@/desktop";
 import { pushToast } from "@/toasts";
 import type { Api } from "./cardApi";
-import { appletBrowseSource } from "./cardSources";
-import { historySource } from "./libs/historyView";
-import { logSource } from "./libs/logView";
-import { syncDashboardSource } from "./libs/syncDashboardView";
+import { appletBrowseSource, historySource, logSource, syncDashboardSource } from "./cardSources";
 import type { HostCommands } from "./types";
+import type { SearchOpts } from "./libs/gridView";
 
 /// A Manage row with what its Browse opens: a card, or a raw store in
 /// another program.
@@ -60,16 +58,23 @@ export const browseAction = (r: ManageRow) => r.actions.find((a) => a.id === "br
 /// by the row's `browse` action; this is only the card behind it. The
 /// index group has no type: browsing it is the unified projection
 /// across every source, which is the card the app already opens on.
-function groupBrowse(g: ManageRow): string | null {
+export function groupBrowseOpts(g: ManageRow): SearchOpts | null {
   if (!browseAction(g)?.enabled) return null;
   const type = g.type?.id ?? null;
-  if (!type) return "searchView()";
+  if (!type) return {};
   const columns = browseColumns(type);
-  const args: string[] = [`q: ${JSON.stringify(browseQuery(g.id, type))}`];
-  // A set of columns is something only the table shows.
-  if (columns) args.push(`columns: ${JSON.stringify(columns)}`, `view: "table"`);
-  args.push(`name: ${JSON.stringify(browseName(g.name.label, type))}`);
-  return `searchView({ ${args.join(", ")} })`;
+  return {
+    q: browseQuery(g.id, type),
+    // A set of columns is something only the table shows.
+    ...(columns ? { columns, view: "table" as const } : {}),
+    name: browseName(g.name.label, type),
+  };
+}
+
+function groupBrowse(g: ManageRow): string | null {
+  const opts = groupBrowseOpts(g);
+  if (!opts) return null;
+  return Object.keys(opts).length ? `searchView(${JSON.stringify(opts)})` : "searchView()";
 }
 
 /// A row's Browse: `system/` browses the run log, a group its view, a
@@ -131,7 +136,7 @@ export function menuTarget(row: ActionRow, editBlocked: string | null): MenuTarg
 
 export type RowActionHost<R extends ActionRow> = {
   api: Api;
-  host: HostCommands;
+  host: Pick<HostCommands, "openCards">;
   /// Every row the card holds, for a group's steps and its status child.
   rows: () => R[];
   /// The run in flight, or the one that finished last.

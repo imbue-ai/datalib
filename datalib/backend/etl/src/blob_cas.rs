@@ -8,7 +8,6 @@
 //! One payload can reach a bundle under two refs with different metadata, so
 //! filenames dedupe on the content hash rather than on the derived name.
 
-use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
@@ -21,17 +20,11 @@ use crate::doltlite_raw::NotFetched;
 
 // Schema
 
-/// Sole table in the per-source blobs database. Pure content-addressed
-/// storage: bytes keyed by their blake3, nothing source-specific — and
-/// no stamp, since when a row arrived is the date of the commit that
-/// brought it.
-pub const CAS_OBJECTS_DDL: &str = "CREATE TABLE IF NOT EXISTS cas_objects (
-    blake3            TEXT PRIMARY KEY,
-    byte_len          INTEGER NOT NULL,
-    content_type      TEXT NULL,
-    bytes             BLOB NOT NULL,
-    CHECK (length(blake3) = 64)
-)";
+/// The CAS read-only, as a bare pool.
+pub use datalib_blob_store::open_reader as open_cas_reader;
+/// The CAS's one table; its shape is the blob-store contract
+/// `datalib-http` reads (`datalib/backend/blob_store/README.md`).
+pub use datalib_blob_store::CAS_OBJECTS_DDL;
 
 // Path helpers
 
@@ -67,16 +60,21 @@ pub struct CasInsert<'a, K> {
     pub content_type: Option<&'a str>,
 }
 
-/// How long a reader waits out a writer's commit. A commit writes bytes
-/// already in memory, so it lasts as long as the disk write.
+/// How long the writer waits out another connection's lock. A commit
+/// writes bytes already in memory, so it lasts as long as the disk write.
 const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// The CAS read-only, as a bare pool, for a render that reads blobs
-/// beside its pinned entity store. There is nothing to pin: a reader sees
-/// committed transactions only, and every blob commits before the edge
-/// row naming it is written (`flush_cas_edges`).
-pub async fn open_cas_reader(cas_path: &Path) -> Result<SqlitePool> {
-    connect(cas_path, true).await
+/// The id of the step whose tree holds the CAS at `cas_path`: a step
+/// writes `<data root>/<group>/<function>/`, so the two directories
+/// above the file. A page names the CAS by it (`datalib_blob_store::address`).
+fn step_of(cas_path: &Path) -> String {
+    let dirs: Vec<String> = cas_path
+        .parent()
+        .into_iter()
+        .flat_map(Path::components)
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    dirs[dirs.len().saturating_sub(2)..].join("/")
 }
 
 /// The blob store beside the raw store at `entity_db_path`, read-only,
@@ -85,10 +83,12 @@ pub async fn open_cas_reader(cas_path: &Path) -> Result<SqlitePool> {
 /// doltlite CAS is read in place until the source's next download
 /// converts it, since a render may not write the raw directory and an
 /// attachment it cannot find renders as missing until its page changes.
-pub async fn open_cas_for_render(entity_db_path: &Path) -> Result<Option<SqlitePool>> {
+pub async fn open_cas_for_render(entity_db_path: &Path) -> Result<Option<BlobCas>> {
     let cas_path = cas_path_for(entity_db_path);
+    let step = step_of(&cas_path);
     if cas_path.is_file() {
-        return open_cas_reader(&cas_path).await.map(Some);
+        let pool = datalib_blob_store::open_reader(&cas_path).await?;
+        return Ok(Some(BlobCas { pool, step }));
     }
     let old = cas_path.with_file_name(DOLTLITE_CAS);
     if !old.is_file() {
@@ -101,17 +101,19 @@ pub async fn open_cas_for_render(entity_db_path: &Path) -> Result<Option<SqliteP
     let reader = crate::doltlite_raw::open_reader(&old, None)
         .await
         .with_context(|| format!("open blob cas {}", old.display()))?;
-    Ok(reader.map(|r| r.pool().clone()))
+    Ok(reader.map(|r| BlobCas {
+        pool: r.pool().clone(),
+        step,
+    }))
 }
 
 /// The CAS is plain SQLite rather than a doltlite store: it is its own
 /// history, since a hash is present or not and a row never changes, so a
 /// doltlite commit log would only keep every page it ever rewrote.
-async fn connect(cas_path: &Path, read_only: bool) -> Result<SqlitePool> {
+async fn connect(cas_path: &Path) -> Result<SqlitePool> {
     let opts = SqliteConnectOptions::new()
         .filename(datalib_runtime::plain_sqlite::uri(cas_path))
-        .read_only(read_only)
-        .create_if_missing(!read_only)
+        .create_if_missing(true)
         // The blobs-before-edges order survives a power cut only if the
         // blob's commit reached the disk.
         .synchronous(SqliteSynchronous::Full)
@@ -239,13 +241,15 @@ fn conversion_sql(target: &Path) -> String {
 #[derive(Clone, Debug)]
 pub struct BlobCas {
     pool: SqlitePool,
+    /// The step whose tree holds this CAS, which a page's address names.
+    step: String,
 }
 
 impl BlobCas {
     /// The download step's handle on its CAS.
     pub async fn open(cas_path: &Path) -> Result<Self> {
         convert_a_doltlite_cas(cas_path).await?;
-        let pool = connect(cas_path, false).await?;
+        let pool = connect(cas_path).await?;
         let ready = async {
             sqlx::query(CAS_OBJECTS_DDL)
                 .execute(&pool)
@@ -258,25 +262,32 @@ impl BlobCas {
             pool.close().await;
             return Err(e);
         }
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            step: step_of(cas_path),
+        })
     }
 
     /// Open the CAS to *read* it, for a render pass.
     pub async fn open_reader(cas_path: &Path) -> Result<Self> {
         Ok(Self {
-            pool: open_cas_reader(cas_path).await?,
+            pool: datalib_blob_store::open_reader(cas_path).await?,
+            step: step_of(cas_path),
         })
     }
 
     /// [`open_cas_for_render`], as a handle.
     pub async fn open_for_render(entity_db_path: &Path) -> Result<Option<Self>> {
-        Ok(open_cas_for_render(entity_db_path)
-            .await?
-            .map(|pool| Self { pool }))
+        open_cas_for_render(entity_db_path).await
     }
 
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    /// The step whose tree holds this CAS: `<group>/<function>`.
+    pub fn step(&self) -> &str {
+        &self.step
     }
 
     /// Wait for the connection to actually go away. Dropping the handle
@@ -453,12 +464,6 @@ pub fn blake3_hex(bytes: &[u8]) -> String {
     blake3::hash(bytes).to_hex().to_string()
 }
 
-// Read side — every provider now uses [`BlobBundle`] (below). The
-// retired `BlobView` / `BlobReader` / `SqliteBlobReader` /
-// `InMemoryBlobReader` / `materialize_to_disk` / `materialize_refs` /
-// `attachment_md` surface was deleted with the notion port (the last
-// consumer); see git history if you need its old shape.
-
 // content-type → extension
 
 /// Pick a file extension from a `content_type` like `image/png` or
@@ -519,7 +524,7 @@ pub fn extension_from_upstream_name(name: Option<&str>) -> Option<String> {
 }
 
 /// Total order over the candidate names refs sharing one content hash
-/// derive, used by [`BlobBundle::names_by_blake3`] to pick a winner.
+/// derive, used by [`BlobBundle::filename_for`] to pick a winner.
 /// Higher wins: a name carrying an extension beats a bare stem, and
 /// among equals the lexicographically smallest name wins (`Reverse`).
 /// Deliberately total — ties broken by `HashMap` order would make the
@@ -530,21 +535,35 @@ fn name_rank(name: &str) -> (bool, std::cmp::Reverse<&str>) {
 
 // BlobBundle — per-doc unit of attachment data, read + write
 
-/// One attachment's worth of data inside a [`BlobBundle`] — blake3 +
-/// bytes + the metadata `rendered_filename` needs.
+/// Where a page finds a [`Blob`]'s bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Held {
+    /// A row of the CAS of `step` (`<group>/<function>`).
+    InStore { step: String },
+    /// A MIME part of the message the CAS of `step` holds under the hash
+    /// `message`; the blob's own hash is that of the part's decoded bytes.
+    InMessage { step: String, message: String },
+}
+
+/// One attachment inside a [`BlobBundle`]: its hash, what is known about
+/// it, and where a page finds it.
 #[derive(Debug, Clone)]
 pub struct Blob {
     pub blake3: String,
-    pub bytes: Vec<u8>,
+    pub byte_len: u64,
     pub content_type: Option<String>,
     pub upstream_name: Option<String>,
+    pub held: Held,
+    /// Present where a loader asked for them
+    /// ([`BlobBundle::load_many_with_bytes`]).
+    pub bytes: Option<Vec<u8>>,
 }
 
 impl Blob {
     pub fn rendered_filename(&self) -> String {
         let ext = extension_for_content_type(self.content_type.as_deref())
             .or_else(|| extension_from_upstream_name(self.upstream_name.as_deref()))
-            .or_else(|| extension_from_magic(&self.bytes));
+            .or_else(|| self.bytes.as_deref().and_then(extension_from_magic));
         let short = &self.blake3[..16.min(self.blake3.len())];
         match ext {
             Some(e) => format!("{short}.{e}"),
@@ -576,6 +595,12 @@ impl BlobBundle {
         self.by_ref.len()
     }
 
+    /// What the bundle's blobs weigh, a blob shared by two refs counted
+    /// twice.
+    pub fn total_bytes(&self) -> u64 {
+        self.by_ref.values().map(|b| b.byte_len).sum()
+    }
+
     pub fn get(&self, ref_id: &str) -> Option<&Blob> {
         self.by_ref.get(ref_id)
     }
@@ -584,43 +609,84 @@ impl BlobBundle {
         self.by_ref.iter().map(|(k, v)| (k.as_str(), v))
     }
 
-    /// Record one attachment held in memory, named by its hash.
-    pub fn add(
-        &mut self,
-        ref_id: impl Into<String>,
-        bytes: Vec<u8>,
-        content_type: Option<String>,
-        upstream_name: Option<String>,
-    ) {
-        let blake3 = blake3_hex(&bytes);
-        self.add_hashed(ref_id, blake3, bytes, content_type, upstream_name);
-    }
-
     /// Every ref `other` holds or misses; `other`'s wins a shared ref.
     pub fn extend(&mut self, other: BlobBundle) {
         self.by_ref.extend(other.by_ref);
         self.missing.extend(other.missing);
     }
 
-    /// [`add`](Self::add) for bytes the caller has already hashed, so a
-    /// large attachment is not hashed twice. `blake3` is trusted.
-    pub fn add_hashed(
+    /// Record bytes the CAS of `step` holds, for a loader of its own.
+    pub fn add_stored(
         &mut self,
         ref_id: impl Into<String>,
-        blake3: String,
-        bytes: Vec<u8>,
-        content_type: Option<String>,
+        step: impl Into<String>,
+        described: Described,
         upstream_name: Option<String>,
     ) {
         self.by_ref.insert(
             ref_id.into(),
             Blob {
-                blake3,
-                bytes,
-                content_type,
+                blake3: described.blake3,
+                byte_len: described.byte_len,
+                content_type: described.content_type,
                 upstream_name,
+                held: Held::InStore { step: step.into() },
+                bytes: None,
             },
         );
+    }
+
+    /// [`Self::add_stored`] with the bytes in hand, as
+    /// [`Self::load_many_with_bytes`] leaves them.
+    pub fn add_stored_with_bytes(
+        &mut self,
+        ref_id: impl Into<String>,
+        step: impl Into<String>,
+        bytes: Vec<u8>,
+        content_type: Option<String>,
+    ) {
+        self.by_ref.insert(
+            ref_id.into(),
+            Blob {
+                blake3: blake3_hex(&bytes),
+                byte_len: bytes.len() as u64,
+                content_type,
+                upstream_name: None,
+                held: Held::InStore { step: step.into() },
+                bytes: Some(bytes),
+            },
+        );
+    }
+
+    /// Record a MIME part of the message `message` holds, by the hash of
+    /// the part's decoded bytes. A page links the part inside the stored
+    /// message, so nothing is written for it. `false`, and nothing
+    /// recorded, when `message` is not in a CAS.
+    pub fn add_part(
+        &mut self,
+        ref_id: impl Into<String>,
+        message: &Blob,
+        part: Described,
+        upstream_name: Option<String>,
+    ) -> bool {
+        let Held::InStore { step } = &message.held else {
+            return false;
+        };
+        self.by_ref.insert(
+            ref_id.into(),
+            Blob {
+                blake3: part.blake3,
+                byte_len: part.byte_len,
+                content_type: part.content_type,
+                upstream_name,
+                held: Held::InMessage {
+                    step: step.clone(),
+                    message: message.blake3.clone(),
+                },
+                bytes: None,
+            },
+        );
+        true
     }
 
     /// Whether `ref_id`'s edge says its bytes were stored, though the
@@ -642,13 +708,45 @@ impl BlobBundle {
     // ── parse side ───────────────────────────────────────────────────
 
     /// A bundle for each key that names at least one ref, from one query
-    /// over every key's refs rather than one per key. With no CAS
-    /// (`cas_pool` `None`), every ref an edge holds a hash for is missing.
+    /// over every key's refs rather than one per key. The bytes stay in
+    /// the CAS: a page links them there. With no CAS (`cas` `None`), every
+    /// ref an edge holds a hash for is missing.
     pub async fn load_many<K, R>(
         refs_pool: &SqlitePool,
-        cas_pool: Option<&SqlitePool>,
+        cas: Option<&BlobCas>,
         projection_sql_template: &str,
         refs_by_key: impl IntoIterator<Item = (K, R)>,
+    ) -> Result<HashMap<K, Self>>
+    where
+        K: Eq + Hash + Clone,
+        R: IntoIterator,
+        R::Item: Into<String>,
+    {
+        Self::load(refs_pool, cas, projection_sql_template, refs_by_key, false).await
+    }
+
+    /// [`load_many`](Self::load_many) for a render that reads the bytes
+    /// themselves: email, which renders each message from its `.eml`.
+    pub async fn load_many_with_bytes<K, R>(
+        refs_pool: &SqlitePool,
+        cas: Option<&BlobCas>,
+        projection_sql_template: &str,
+        refs_by_key: impl IntoIterator<Item = (K, R)>,
+    ) -> Result<HashMap<K, Self>>
+    where
+        K: Eq + Hash + Clone,
+        R: IntoIterator,
+        R::Item: Into<String>,
+    {
+        Self::load(refs_pool, cas, projection_sql_template, refs_by_key, true).await
+    }
+
+    async fn load<K, R>(
+        refs_pool: &SqlitePool,
+        cas: Option<&BlobCas>,
+        projection_sql_template: &str,
+        refs_by_key: impl IntoIterator<Item = (K, R)>,
+        with_bytes: bool,
     ) -> Result<HashMap<K, Self>>
     where
         K: Eq + Hash + Clone,
@@ -713,23 +811,27 @@ impl BlobBundle {
         }
         drop(rows);
 
-        // Stage 2: the bytes, a chunk at a time, each handed out before the
-        // next is read. `blake3` is `cas_objects`' key, so a chunk is an
-        // index lookup, not a scan.
+        // Stage 2: what the CAS holds of them, a chunk at a time, each
+        // handed out before the next is read. `blake3` is `cas_objects`'
+        // key, so a chunk is an index lookup, not a scan.
+        let sql = if with_bytes {
+            "SELECT blake3, byte_len, content_type, bytes FROM cas_objects \
+              WHERE blake3 IN (SELECT value FROM json_each(?))"
+        } else {
+            "SELECT blake3, byte_len, content_type FROM cas_objects \
+              WHERE blake3 IN (SELECT value FROM json_each(?))"
+        };
         let hashes: Vec<String> = pending_by_blake3.keys().cloned().collect();
-        let chunks = cas_pool
+        let chunks = cas
             .map(|cas| hashes.chunks(crate::bulk::SQL_CHUNK).map(move |c| (cas, c)))
             .into_iter()
             .flatten();
-        for (cas_pool, chunk) in chunks {
-            let cas_rows = sqlx::query(
-                "SELECT blake3, bytes, content_type FROM cas_objects \
-                  WHERE blake3 IN (SELECT value FROM json_each(?))",
-            )
-            .bind(serde_json::to_string(chunk)?)
-            .fetch_all(cas_pool)
-            .await
-            .context("BlobBundle::load_many cas_objects")?;
+        for (cas, chunk) in chunks {
+            let cas_rows = sqlx::query(sql)
+                .bind(serde_json::to_string(chunk)?)
+                .fetch_all(&cas.pool)
+                .await
+                .context("BlobBundle::load_many cas_objects")?;
             for cr in &cas_rows {
                 let Ok(blake3) = cr.try_get::<String, _>("blake3") else {
                     continue;
@@ -737,7 +839,9 @@ impl BlobBundle {
                 let Some(entries) = pending_by_blake3.remove(&blake3) else {
                     continue;
                 };
-                let bytes: Vec<u8> = cr.try_get("bytes").unwrap_or_default();
+                let byte_len: i64 = cr.try_get("byte_len").unwrap_or_default();
+                let bytes: Option<Vec<u8>> =
+                    with_bytes.then(|| cr.try_get("bytes").unwrap_or_default());
                 let cas_ct: Option<String> = cr.try_get("content_type").ok().flatten();
                 for entry in entries {
                     for key in &keys_by_ref[&entry.ref_id] {
@@ -745,9 +849,13 @@ impl BlobBundle {
                             entry.ref_id.clone(),
                             Blob {
                                 blake3: blake3.clone(),
-                                bytes: bytes.clone(),
+                                byte_len: byte_len as u64,
                                 content_type: entry.content_type.clone().or_else(|| cas_ct.clone()),
                                 upstream_name: entry.upstream_name.clone(),
+                                held: Held::InStore {
+                                    step: cas.step.clone(),
+                                },
+                                bytes: bytes.clone(),
                             },
                         );
                     }
@@ -767,35 +875,102 @@ impl BlobBundle {
         Ok(out)
     }
 
-    // ── render side (sync) ───────────────────────────────────────────
-
-    fn names_by_blake3(&self) -> BTreeMap<&str, String> {
-        let mut out: BTreeMap<&str, String> = BTreeMap::new();
-        for blob in self.by_ref.values() {
-            let cand = blob.rendered_filename();
-            match out.entry(blob.blake3.as_str()) {
-                Entry::Vacant(v) => {
-                    v.insert(cand);
-                }
-                Entry::Occupied(mut o) => {
-                    if name_rank(&cand) > name_rank(o.get()) {
-                        o.insert(cand);
-                    }
-                }
+    /// What [`Self::load_many`] would load for each key, in bytes, read
+    /// from the blob store's `byte_len` without touching a byte: what a
+    /// render cuts its blob batches by. A key whose refs hold nothing is 0.
+    pub async fn sizes_many<K, R>(
+        refs_pool: &SqlitePool,
+        cas: Option<&BlobCas>,
+        projection_sql_template: &str,
+        refs_by_key: impl IntoIterator<Item = (K, R)>,
+    ) -> Result<HashMap<K, u64>>
+    where
+        K: Eq + Hash + Clone,
+        R: IntoIterator,
+        R::Item: Into<String>,
+    {
+        let mut out: HashMap<K, u64> = HashMap::new();
+        let mut refs_of: Vec<(K, Vec<String>)> = Vec::new();
+        let mut all_refs: HashSet<String> = HashSet::new();
+        for (key, refs) in refs_by_key {
+            let refs: Vec<String> = refs.into_iter().map(Into::into).collect();
+            all_refs.extend(refs.iter().cloned());
+            out.entry(key.clone()).or_insert(0);
+            refs_of.push((key, refs));
+        }
+        let Some(cas) = cas.filter(|_| !all_refs.is_empty()) else {
+            return Ok(out);
+        };
+        let ref_ids = serde_json::to_string(&all_refs.iter().collect::<Vec<_>>())?;
+        let occurrences = projection_sql_template.matches("{placeholders}").count();
+        let sql =
+            projection_sql_template.replace("{placeholders}", "SELECT value FROM json_each(?)");
+        // Audited: as in `load_many` — a module-level `const` template, the
+        // one substitution a `json_each` over one bound parameter.
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+        for _ in 0..occurrences {
+            q = q.bind(&ref_ids);
+        }
+        let rows = q
+            .fetch_all(refs_pool)
+            .await
+            .context("BlobBundle::sizes_many projection")?;
+        let mut hash_of: HashMap<String, String> = HashMap::with_capacity(rows.len());
+        for r in &rows {
+            let ref_id: String = r.try_get("ref_id").context("sizes_many ref_id")?;
+            if let Some(blake3) = r
+                .try_get::<Option<String>, _>("blake3")
+                .context("sizes_many blake3")?
+            {
+                hash_of.insert(ref_id, blake3);
             }
         }
-        out
+        drop(rows);
+        let hashes: Vec<&String> = hash_of
+            .values()
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        let mut len_of: HashMap<String, u64> = HashMap::with_capacity(hashes.len());
+        for chunk in hashes.chunks(crate::bulk::SQL_CHUNK) {
+            let lens: Vec<(String, i64)> = sqlx::query_as(
+                "SELECT blake3, byte_len FROM cas_objects \
+                  WHERE blake3 IN (SELECT value FROM json_each(?))",
+            )
+            .bind(serde_json::to_string(chunk)?)
+            .fetch_all(&cas.pool)
+            .await
+            .context("BlobBundle::sizes_many cas_objects")?;
+            len_of.extend(lens.into_iter().map(|(h, n)| (h, n.max(0) as u64)));
+        }
+        for (key, refs) in refs_of {
+            let distinct: HashSet<&String> = refs.iter().filter_map(|r| hash_of.get(r)).collect();
+            let bytes: u64 = distinct.iter().filter_map(|h| len_of.get(*h)).sum();
+            *out.entry(key).or_insert(0) += bytes;
+        }
+        Ok(out)
     }
 
-    /// The name `ref_id`'s bytes are materialized under, deduped across
-    /// every ref in the bundle sharing those bytes. Callers building a
-    /// `blobs/<file>` link MUST use this rather than
-    /// [`Blob::rendered_filename`], or the link can name a file
-    /// [`Self::materialize_to_dir`] chose not to write.
+    // ── render side (sync) ───────────────────────────────────────────
+
+    /// Where a page finds `ref_id`'s bytes: their address in the CAS that
+    /// holds them or the message they are a part of.
+    pub fn href_for(&self, ref_id: &str) -> Option<String> {
+        let blob = self.by_ref.get(ref_id)?;
+        match &blob.held {
+            Held::InStore { step } => Some(datalib_blob_store::address(step, &blob.blake3)),
+            Held::InMessage { step, message } => Some(datalib_blob_store::part_address(
+                step,
+                message,
+                &blob.blake3,
+            )),
+        }
+    }
+
+    /// The name a page shows for `ref_id`'s bytes, the same for every ref
+    /// in the bundle sharing those bytes.
     pub fn filename_for(&self, ref_id: &str) -> Option<String> {
         let blob = self.by_ref.get(ref_id)?;
-        // Only this ref's hash-mates matter, so scan for the winner
-        // directly instead of building the whole map for one lookup.
         let mut best = blob.rendered_filename();
         for other in self.by_ref.values() {
             if other.blake3 != blob.blake3 {
@@ -808,60 +983,61 @@ impl BlobBundle {
         }
         Some(best)
     }
+}
 
-    /// Write each distinct payload's bytes into
-    /// `blobs_dir/<filename_for(ref)>`, once — refs sharing a content
-    /// hash share the one file. Skips a write when the target already
-    /// exists with the expected size, so re-running render against the
-    /// same bundle is idempotent.
-    pub fn materialize_to_dir(&self, blobs_dir: &Path) -> std::io::Result<()> {
-        if self.by_ref.is_empty() {
-            return Ok(());
-        }
-        std::fs::create_dir_all(blobs_dir)?;
-        let names = self.names_by_blake3();
-        let mut by_hash: HashMap<&str, &Blob> = HashMap::new();
-        for blob in self.by_ref.values() {
-            by_hash.entry(blob.blake3.as_str()).or_insert(blob);
-        }
-        for (hash, fname) in &names {
-            let Some(blob) = by_hash.get(hash) else {
-                continue;
-            };
-            let abs = blobs_dir.join(fname);
-            if let Ok(meta) = std::fs::metadata(&abs) {
-                if meta.len() == blob.bytes.len() as u64 {
-                    continue;
-                }
-            }
-            std::fs::write(&abs, &blob.bytes)?;
-        }
-        Ok(())
+/// What the CAS holds under one hash, short of the bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Described {
+    pub blake3: String,
+    pub byte_len: u64,
+    pub content_type: Option<String>,
+}
+
+impl BlobCas {
+    /// What the CAS holds under `blake3`, without reading the bytes.
+    pub async fn describe(&self, blake3: &str) -> Result<Option<Described>> {
+        let row =
+            sqlx::query("SELECT blake3, byte_len, content_type FROM cas_objects WHERE blake3 = ?")
+                .bind(blake3)
+                .fetch_optional(&self.pool)
+                .await
+                .with_context(|| format!("cas describe {blake3}"))?;
+        row.map(|r| {
+            Ok(Described {
+                blake3: r.try_get("blake3")?,
+                byte_len: r.try_get::<i64, _>("byte_len")? as u64,
+                content_type: r.try_get("content_type")?,
+            })
+        })
+        .transpose()
     }
 
-    /// Emit `![alt](blobs/<file>)` for images, `[\[file\] alt](…)`
-    /// otherwise. Returns the "attachment not yet fetched" placeholder
-    /// when the bundle has no entry for this `ref_id`.
-    pub fn markdown_link(&self, ref_id: &str, display: Option<&str>, is_image: bool) -> String {
-        let Some(blob) = self.by_ref.get(ref_id) else {
-            let label = display.unwrap_or(ref_id);
-            return format!("*[attachment not yet fetched: {label}]*");
-        };
-        let fname = self
-            .filename_for(ref_id)
-            .unwrap_or_else(|| blob.rendered_filename());
-        let display_clean = display.unwrap_or("").replace(']', "");
-        let alt = if display_clean.is_empty() {
-            fname.clone()
-        } else {
-            display_clean
-        };
-        let link = format!("blobs/{fname}");
-        if is_image {
-            format!("![{alt}]({link})")
-        } else {
-            format!("[\\[file\\] {alt}]({link})")
+    /// [`Self::describe`] for every hash in `hashes` at once, keyed by
+    /// hash; one the CAS lacks has no entry.
+    pub async fn describe_many(&self, hashes: &[&str]) -> Result<HashMap<String, Described>> {
+        let mut out = HashMap::new();
+        for chunk in hashes.chunks(crate::bulk::SQL_CHUNK) {
+            let rows = sqlx::query(
+                "SELECT blake3, byte_len, content_type FROM cas_objects
+                  WHERE blake3 IN (SELECT value FROM json_each(?))",
+            )
+            .bind(serde_json::to_string(chunk)?)
+            .fetch_all(&self.pool)
+            .await
+            .context("cas describe_many")?;
+            for r in rows {
+                let blake3: String = r.try_get("blake3")?;
+                out.insert(
+                    blake3.clone(),
+                    Described {
+                        blake3,
+                        byte_len: r.try_get::<i64, _>("byte_len")? as u64,
+                        content_type: r.try_get("content_type")?,
+                    },
+                );
+            }
         }
+        Ok(out)
     }
 }
 
@@ -1344,17 +1520,12 @@ mod tests {
         let hash = doltlite_cas_with(d.path(), b"kept").await;
         let entities = d.path().join("entities.doltlite_db");
 
-        let pool = open_cas_for_render(&entities)
+        let cas = open_cas_for_render(&entities)
             .await
             .unwrap()
             .expect("the old store is read");
-        let bytes: Vec<u8> = sqlx::query_scalar("SELECT bytes FROM cas_objects WHERE blake3 = ?")
-            .bind(&hash)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(bytes, b"kept");
-        pool.close().await;
+        assert_eq!(cas.get(&hash).await.unwrap().unwrap().bytes, b"kept");
+        cas.close().await;
         assert!(d.path().join(DOLTLITE_CAS).exists());
         assert!(!d.path().join(crate::raw_layout::BLOBS_DB).exists());
 
@@ -1480,7 +1651,7 @@ mod tests {
     async fn an_older_cas_has_its_types_rederived_from_the_bytes_once() {
         let d = tempdir().unwrap();
         let path = d.path().join("blobs.sqlite");
-        let pool = connect(&path, false).await.unwrap();
+        let pool = connect(&path).await.unwrap();
         sqlx::query(CAS_OBJECTS_DDL).execute(&pool).await.unwrap();
         let rows: [(&[u8], Option<&str>); 4] = [
             (JPEG, Some("image/png")),
@@ -1547,41 +1718,115 @@ mod tests {
 
     // ── BlobBundle ──────────────────────────────────────────────────
 
-    #[test]
-    fn bundle_add_then_get() {
-        let mut b = BlobBundle::new();
-        b.add(
-            "ref-1",
-            b"hello".to_vec(),
-            Some("text/plain".into()),
-            Some("greeting.txt".into()),
+    /// `bytes` as a step's CAS holds them, recorded under `ref_id`.
+    fn held(
+        b: &mut BlobBundle,
+        ref_id: &str,
+        bytes: &[u8],
+        content_type: Option<String>,
+        upstream_name: Option<String>,
+    ) {
+        b.by_ref.insert(
+            ref_id.to_string(),
+            Blob {
+                blake3: blake3_hex(bytes),
+                byte_len: bytes.len() as u64,
+                content_type,
+                upstream_name,
+                held: Held::InStore {
+                    step: "gmail/ingest".into(),
+                },
+                bytes: Some(bytes.to_vec()),
+            },
         );
-        let got = b.get("ref-1").expect("present");
-        assert_eq!(got.blake3.len(), 64);
-        assert_eq!(got.bytes, b"hello");
-        assert_eq!(got.content_type.as_deref(), Some("text/plain"));
     }
 
+    /// A step writes `<data root>/<group>/<function>/`, so the two
+    /// directories above its CAS are the step a page's address names.
     #[test]
-    fn bundle_markdown_link_placeholder_when_missing() {
-        let b = BlobBundle::new();
-        let s = b.markdown_link("missing", Some("doc.pdf"), false);
-        assert!(s.contains("not yet fetched"));
-        assert!(s.contains("doc.pdf"));
+    fn a_cas_is_named_by_the_step_whose_tree_holds_it() {
+        assert_eq!(
+            step_of(Path::new("/root/gmail/ingest/blobs.sqlite")),
+            "gmail/ingest"
+        );
     }
 
-    #[test]
-    fn bundle_markdown_link_image_when_present() {
+    /// Every hash the CAS holds comes back with its stored type, and a
+    /// hash it lacks is simply absent.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn describe_many_answers_only_what_is_held() {
+        let d = tempdir().unwrap();
+        let cas = BlobCas::open(&d.path().join("blobs.sqlite")).await.unwrap();
+        let png = cas
+            .put(b"\x89PNG\r\n\x1a\n", Some("application/octet-stream"))
+            .await
+            .unwrap();
+        let text = cas.put(b"tea", None).await.unwrap();
+        let absent = blake3_hex(b"earl grey");
+        let got = cas.describe_many(&[&png, &text, &absent]).await.unwrap();
+        cas.close().await;
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[&png].content_type.as_deref(), Some("image/png"));
+        assert_eq!(got[&text].byte_len, 3);
+        assert!(!got.contains_key(&absent));
+    }
+
+    /// Bytes a CAS holds are linked at their address.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stored_bytes_are_linked_at_their_address() {
+        let d = tempdir().unwrap();
+        let tree = d.path().join("gmail").join("ingest");
+        std::fs::create_dir_all(&tree).unwrap();
+        let cas = BlobCas::open(&tree.join("blobs.sqlite")).await.unwrap();
+        let hash = cas
+            .put(b"\x89PNG\r\n\x1a\n", Some("image/png"))
+            .await
+            .unwrap();
         let mut b = BlobBundle::new();
-        b.add(
-            "img-1",
-            b"\x89PNG\r\n\x1a\n".to_vec(),
-            Some("image/png".into()),
+        b.add_stored(
+            "kept",
+            cas.step(),
+            cas.describe(&hash).await.unwrap().unwrap(),
             Some("kitten.png".into()),
         );
-        let s = b.markdown_link("img-1", Some("kitten.png"), true);
-        assert!(s.starts_with("![kitten.png](blobs/"));
-        assert!(s.ends_with(".png)"));
+        cas.close().await;
+        assert_eq!(
+            b.href_for("kept").as_deref(),
+            Some(format!("/data/gmail/ingest/blob/{hash}").as_str())
+        );
+        assert_eq!(b.href_for("absent"), None);
+    }
+
+    /// A part of a stored message is linked inside it; a part of a part
+    /// has no message to be linked in, so it is not recorded.
+    #[test]
+    fn a_part_is_linked_inside_its_stored_message() {
+        let message = blake3_hex(b"From: data@enterprise.example");
+        let part = Described {
+            blake3: blake3_hex(b"\x89PNG\r\n\x1a\n"),
+            byte_len: 8,
+            content_type: Some("image/png".into()),
+        };
+        let mut emls = BlobBundle::new();
+        emls.add_stored(
+            "eml",
+            "gmail/ingest",
+            Described {
+                blake3: message.clone(),
+                byte_len: 29,
+                content_type: Some("message/rfc822".into()),
+            },
+            None,
+        );
+        let mut b = BlobBundle::new();
+        assert!(b.add_part("p", emls.get("eml").unwrap(), part.clone(), None));
+        let inner = b.get("p").unwrap().clone();
+        assert!(!b.add_part("q", &inner, part.clone(), None));
+        assert_eq!(
+            b.href_for("p").as_deref(),
+            Some(format!("/data/gmail/ingest/blob/{message}/part/{}", part.blake3).as_str())
+        );
+        assert_eq!(b.href_for("q"), None);
     }
 
     /// A generated ChatGPT image arrives as `image/*` with no name; its
@@ -1590,9 +1835,13 @@ mod tests {
     fn bytes_of_a_vague_type_are_named_by_their_magic() {
         let blob = |bytes: &[u8]| Blob {
             blake3: "ab".repeat(32),
-            bytes: bytes.to_vec(),
+            byte_len: bytes.len() as u64,
             content_type: Some("image/*".into()),
             upstream_name: None,
+            held: Held::InStore {
+                step: "chatgpt/ingest".into(),
+            },
+            bytes: Some(bytes.to_vec()),
         };
         assert!(blob(b"\x89PNG\r\n\x1a\n")
             .rendered_filename()
@@ -1622,19 +1871,19 @@ mod tests {
         let mut b = BlobBundle::new();
         // An inline MIME part whose type maps to no extension, with no
         // upstream filename to fall back to: a bare hex stem.
-        b.add(
+        held(
+            &mut b,
             "inline:x",
-            BYTES.to_vec(),
+            BYTES,
             Some("application/x-thing".into()),
             None,
         );
         // The same bytes again as a named attachment part.
-        b.add("att:x", BYTES.to_vec(), None, Some("report.pdf".into()));
+        held(&mut b, "att:x", BYTES, None, Some("report.pdf".into()));
         let inline = b.filename_for("inline:x").unwrap();
         let att = b.filename_for("att:x").unwrap();
         assert_eq!(inline, att, "one payload, one name");
         assert!(att.ends_with(".pdf"), "keeps the usable extension: {att}");
-        assert_eq!(b.names_by_blake3().len(), 1, "one file per content hash");
     }
 
     /// The winner must not come from `HashMap` iteration order, or the
@@ -1652,7 +1901,7 @@ mod tests {
             let order: Vec<usize> = if flip { vec![2, 1, 0] } else { vec![0, 1, 2] };
             for i in order {
                 let (r, ct, name) = &refs[i];
-                b.add(*r, BYTES.to_vec(), ct.clone(), name.clone());
+                held(&mut b, r, BYTES, ct.clone(), name.clone());
             }
             b
         };
@@ -1665,60 +1914,6 @@ mod tests {
         // `.pdf` < `.zip` lexicographically, and both beat the bare stem
         // `application/octet-stream` alone would give.
         assert!(fwd.filename_for("a").unwrap().ends_with(".pdf"));
-    }
-
-    /// Every ref sharing a payload writes one file, and `markdown_link`
-    /// points at it from both sides.
-    #[test]
-    fn materialize_writes_shared_payload_once() {
-        let d = tempdir().unwrap();
-        const BYTES: &[u8] = b"one payload, two refs";
-        let mut b = BlobBundle::new();
-        b.add(
-            "inline:x",
-            BYTES.to_vec(),
-            Some("application/x-thing".into()),
-            None,
-        );
-        b.add("att:x", BYTES.to_vec(), None, Some("report.pdf".into()));
-        let blobs_dir = d.path().join("blobs");
-        b.materialize_to_dir(&blobs_dir).unwrap();
-        let mut names: Vec<String> = std::fs::read_dir(&blobs_dir)
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .collect();
-        names.sort();
-        assert_eq!(names.len(), 1, "one file, not two: {names:?}");
-        let written = format!("blobs/{}", names[0]);
-        for r in ["inline:x", "att:x"] {
-            let link = b.markdown_link(r, Some("report.pdf"), false);
-            assert!(
-                link.contains(&written),
-                "link for {r} must name the written file: {link}"
-            );
-        }
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn bundle_materialize_writes_files() {
-        let d = tempdir().unwrap();
-        let mut b = BlobBundle::new();
-        b.add("r1", b"alpha".to_vec(), Some("image/png".into()), None);
-        b.add("r2", b"beta".to_vec(), Some("text/plain".into()), None);
-        let blobs_dir = d.path().join("blobs");
-        b.materialize_to_dir(&blobs_dir).unwrap();
-        let entries: Vec<_> = std::fs::read_dir(&blobs_dir)
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .collect();
-        assert_eq!(entries.len(), 2);
-        // names are <short blake3>.<ext>
-        for p in &entries {
-            let name = p.file_name().unwrap().to_string_lossy();
-            assert!(name.contains('.'), "expected ext in {name}");
-        }
     }
 
     /// One read serves every key: each gets the refs it named and nothing
@@ -1785,7 +1980,7 @@ mod tests {
                FROM attachments WHERE file_id IN ({placeholders}) AND file_id <> 'a'";
         let bundles = BlobBundle::load_many(
             &refs_pool,
-            Some(cas.pool()),
+            Some(&cas),
             projection,
             [
                 ("one", vec!["a", "b", "missing", "lost"]),
@@ -1799,7 +1994,14 @@ mod tests {
         let one = &bundles["one"];
         assert_eq!(one.len(), 2);
         let a = one.get("a").expect("a present");
-        assert_eq!(a.bytes, b"alpha");
+        assert_eq!(a.bytes, None, "the bytes stay in the CAS");
+        assert_eq!(a.byte_len, 5);
+        assert_eq!(
+            a.held,
+            Held::InStore {
+                step: cas.step().to_string()
+            }
+        );
         // content_type comes from CAS when projection doesn't supply it
         assert_eq!(a.content_type.as_deref(), Some("image/png"));
         assert_eq!(a.upstream_name.as_deref(), Some("alpha.png"));
@@ -1811,14 +2013,28 @@ mod tests {
         assert!(one.is_missing("lost"), "an edge naming bytes the CAS lacks");
         assert!(!one.is_missing("a"));
         assert_eq!(
-            bundles["two"].get("b").map(|b| b.bytes.as_slice()),
-            Some(&b"beta"[..]),
+            bundles["two"].get("b").map(|b| b.blake3.as_str()),
+            Some(h2.as_str()),
             "a ref two keys name reaches both"
         );
         assert!(bundles["absent"].is_empty(), "named refs, found none");
         assert!(
             !bundles.contains_key("none"),
             "a key that names no ref gets no bundle"
+        );
+
+        let with_bytes = BlobBundle::load_many_with_bytes(
+            &refs_pool,
+            Some(&cas),
+            projection,
+            [("k", vec!["a"])],
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            with_bytes["k"].get("a").and_then(|b| b.bytes.as_deref()),
+            Some(&b"alpha"[..]),
+            "a render that reads the bytes gets them"
         );
 
         let no_cas = BlobBundle::load_many(&refs_pool, None, projection, [("one", vec!["a"])])
