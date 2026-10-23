@@ -40,7 +40,8 @@ test("a key, then a source picked from its values, is drawn as the source's chip
 });
 
 /// Enter with nothing chosen searches what was typed: a value taken by
-/// hand is a search, not a pick.
+/// hand is a search, not a pick. The suggestions close with it; they
+/// used to stay open over the results.
 test("Enter with no suggestion chosen leaves the typed value as it is", async ({ page }) => {
   await page.goto(GRID);
   await typeInto(field(page), "");
@@ -48,6 +49,7 @@ test("Enter with no suggestion chosen leaves the typed value as it is", async ({
   await expect(menu(page)).toBeVisible();
   await field(page).press("Enter");
   await expect(field(page)).toHaveAttribute("data-query", "source_id:sla");
+  await expect(menu(page)).toBeHidden();
 });
 
 const slackChip = (page: Page) => field(page).locator('a.chip[data-entity="datalib:group/slack"]');

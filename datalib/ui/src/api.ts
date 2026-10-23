@@ -337,6 +337,19 @@ export async function forgetRemoteAllow(allowUuid: string): Promise<void> {
   if (!r.ok && r.status !== 404) throw new Error(`DELETE allow → ${r.status}: ${await r.text()}`);
 }
 
+// --- Applets ----------------------------------------------------------------
+
+/** Whether a failed call means the root simply runs no applet `id`: the
+ *  gateway's 502 names the applet it has no entry for. */
+export function appletAbsent(id: string, status: number, body: string): boolean {
+  if (status !== 502) return false;
+  try {
+    return (JSON.parse(body) as { error?: string }).error === `no applet "${id}"`;
+  } catch {
+    return false;
+  }
+}
+
 // --- The unified_document_index applet --------------------------------------------
 export const UNIFIED_DOCUMENT_INDEX = "/applet/unified_document_index";
 

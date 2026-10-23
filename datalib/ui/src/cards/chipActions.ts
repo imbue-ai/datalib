@@ -84,6 +84,22 @@ export type ChipEntry = {
  *  the surface adds, as the search field and the log-line card do. */
 export type MenuItem = Omit<ChipEntry, "id"> & { id: string };
 
+type Size = { width: number; height: number };
+
+/** Where a menu of `size` opens for a press at `at`: there, or moved
+ *  left and up just enough to stay on screen. */
+export function menuPlacement(
+  at: { x: number; y: number },
+  size: Size,
+  viewport: Size,
+): { left: number; top: number } {
+  const MARGIN = 8;
+  return {
+    left: Math.max(0, Math.min(at.x, viewport.width - size.width - MARGIN)),
+    top: Math.max(0, Math.min(at.y, viewport.height - size.height - MARGIN)),
+  };
+}
+
 /** The row's entries a chip leaves out: the ones that need the config's
  *  text, which only the Sources card holds, and the ones the chip's own
  *  entries already are (its dashboard is the chip's Open; its id is the
