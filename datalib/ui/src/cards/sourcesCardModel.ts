@@ -86,7 +86,9 @@ order, and never above a group they read from.</p>
 with an icon for what the row is doing or did last, then says when it got there. That
 icon, and the mark before a name — the service a source mirrors, or what a step
 does — give their word on hover. Hovering a name shows its id: for a group, the
-folder its data is in.
+folder its data is in. A name is a <b>chip</b>: <b>double-click</b> it to open that
+source's sync dashboard, or a step's section of it; rename a source from its
+row's menu.
 <b>Right-click a header</b> to show or hide columns: <b>Last synced</b> and
 <b>Last success</b> start hidden. <b>Double-click a Status</b> to read that
 step's log — from the run in flight while it runs, else from the run it last took
@@ -320,7 +322,13 @@ export function useSourcesCard(ctx: CardCtx) {
     }
     if (r.kind === "group") {
       const editBlocked = groupEditBlocked(r.id);
-      return { ...browsing, editBlocked, editGroup: editBlocked ? null : r.id };
+      return {
+        ...browsing,
+        // Its chip: a double-click opens the source; Rename is the menu's.
+        name: { ...r.name, entity: uriFromEntity("group", r.id) },
+        editBlocked,
+        editGroup: editBlocked ? null : r.id,
+      };
     }
     // Edit: the wizard's one form describes a source — a group and its two
     // steps — so a step under a group edits through its group. Everything
@@ -435,6 +443,16 @@ export function useSourcesCard(ctx: CardCtx) {
     else if (field === "status") void actions.openStepLog(data);
   }
 
+  /// The row whose name the menu's Rename is opening, the one edit a
+  /// Name cell takes: a double-click on a name opens what it names.
+  let renaming: string | null = null;
+  function canEditCell(row: Row, field: string): boolean {
+    if (field !== "name") return true;
+    const ok = row.kind === "group" && renaming === row.key;
+    renaming = null;
+    return ok;
+  }
+
   /// An in-place edit of the Name cell: a group's rename.
   function onCellEdit(row: Row, field: string, value: string) {
     if (field === "name" && row.kind === "group") void renameRow(row, value);
@@ -473,6 +491,7 @@ export function useSourcesCard(ctx: CardCtx) {
         actions.openHistory([first], true);
         return;
       case "rename":
+        renaming = anchor.key;
         gridApi?.startEditing(anchor, "name");
         return;
       case "remove":
@@ -1019,6 +1038,7 @@ export function useSourcesCard(ctx: CardCtx) {
     contextMenuItems,
     isGroupOpenByDefault,
     onGridReady,
+    canEditCell,
     onCellDoubleClicked,
     onCellEdit,
     onRowGroupOpened,

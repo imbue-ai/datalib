@@ -128,3 +128,38 @@ describe("a group row of an identity column", () => {
     expect(el.textContent).toBe("Source: Work Slack (12)");
   });
 });
+
+describe("a Name cell that is a chip", () => {
+  const spec: ColumnSpec = {
+    field: "name",
+    header: "Name",
+    type: "identity",
+    default_visible: true,
+    editable: false,
+    badges: "problems",
+  };
+  /** A step's Name became its chip and its problem counts went with the
+   *  plain label: the chip keeps them beside it. */
+  it("keeps the problem counts beside the chip", () => {
+    const [col] = typedColumns<Record<string, unknown>>([spec], {
+      chips: { who: () => undefined, canLink: () => false, entity: () => undefined },
+    });
+    const name: Identity = {
+      id: "slack/ingest",
+      label: "Download",
+      entity: "datalib:step/slack/ingest",
+    };
+    const problems = [{ kind: "error", text: "2" }];
+    const cell = (col.formatter as Formatter)(
+      0,
+      0,
+      "Download",
+      col,
+      { name, problems },
+      {} as never,
+    );
+    const el = cell as HTMLElement;
+    expect(el.querySelector('a.chip[data-entity="datalib:step/slack/ingest"]')).not.toBeNull();
+    expect(el.querySelector('[data-field="problems"]')?.textContent).toContain("2");
+  });
+});

@@ -722,6 +722,34 @@ command = "/bin/true"
     await expect(dash.locator('.sd-section[data-step="chipped/ingest"] a.chip')).toBeVisible();
   });
 
+  // A group's Name is its chip too: a double-click opens its dashboard
+  // rather than renaming it, which the row's menu still does.
+  test("a group's name is its chip, and a double-click opens it rather than renaming it", async ({
+    page,
+  }) => {
+    await writeConfig(
+      page,
+      `${config()}
+
+[[groups]]
+id = "named"
+name = "Named PDFs"
+type = "pdf"
+
+[[steps]]
+group = "named"
+function = "ingest"
+command = "/bin/true"
+`,
+    );
+    const chip = nameCell(page, "group:named").locator('a.chip[data-entity="datalib:group/named"]');
+    await expect(chip).toHaveText("Named PDFs");
+    await chip.dblclick();
+    const dash = shownCards(page).filter({ has: page.locator(".sd") });
+    await expect(dash.locator('.sd-group a.chip[data-entity="datalib:group/named"]')).toBeVisible();
+    await expect(page.locator(".tg-grid input.editor-text")).toHaveCount(0);
+  });
+
   // A source that syncs once and fails from then on: Last synced
   // follows the failure, Last success stays on the one that worked —
   // on the step and on its group (#646).
