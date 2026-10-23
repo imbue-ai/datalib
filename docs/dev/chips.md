@@ -69,7 +69,8 @@ writes the same URIs in `ui/src/cards/chipLinks.js` (`handleFromUri`,
 tested over the same cases, so they cannot drift apart without a test
 failing.
 
-Who writes chips today: chat-common for a message's author,
+Who writes chips today: calendar-common for an event's organizer and
+each guest with an address; chat-common for a message's author,
 recipients and reactors (`chat-common/README.md` §"The message
 header"); Slack for a `<@U…>` mention in a body; contact-common for
 the person a contact's page is about, as its heading, and for each

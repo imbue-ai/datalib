@@ -21,8 +21,9 @@ use super::{google, ics, ids};
 /// re-rendering: 2 when a Google time started showing in its own zone;
 /// 6 so a full walk sweeps the occurrences earlier versions kept after a
 /// "this and following" edit moved them to a new UID; 7 when "Added" and
-/// "Last changed" became `<time>` stamps.
-pub const RENDER_VERSION: u32 = 7;
+/// "Last changed" became `<time>` stamps; 8 when an organizer or guest
+/// with an address became a chip.
+pub const RENDER_VERSION: u32 = 8;
 
 /// A calendar as its events need it.
 #[derive(Debug, Clone)]

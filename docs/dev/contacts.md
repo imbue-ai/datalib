@@ -217,8 +217,9 @@ What each source has today:
 | Google Drive | a comment's author, by name; the account's own comments by its address, where the file names the account | a person chip in a Doc, by address |
 | Facebook | a Messenger message's sender, by name; a deleted account by its conversation, where it is that conversation's only one; the account's owner, by name, on every post, album, comment, reaction and edit (a store with no profile knows them only as "Me", and gives none) | each Messenger reaction's; a friend's name, in the source contact |
 | Beeper | a Slack user by `slack:<team>/<user>`, read out of the bridge's Matrix id (the owner by the Slack user the room was bridged for); anyone else by a number or address the app lists for them (`participant_identifiers`); a Matrix id alone has no kind | each reaction's; the person's numbers, addresses and cached avatar, in the source contact |
+| calendar | an event's organizer, by address | each guest with an address, as a chip on the event's page |
 
-The AI chats, calendar, GitHub, GitLab and Notion write no handles.
+The AI chats, GitHub, GitLab and Notion write no handles.
 Where a source renders the owner's side as "Me" (WhatsApp, Signal,
 Messages, SMS backup, Google Voice), "Me" has no handle. Where it does
 not (email, Slack, Google Chat), the owner's own messages carry their
