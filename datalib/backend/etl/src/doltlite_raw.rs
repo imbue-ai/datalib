@@ -2037,6 +2037,88 @@ pub async fn reset_store(db_path: &Path) -> Result<()> {
     result.with_context(|| format!("reset {}", db_path.display()))
 }
 
+/// What [`fold_history`] did to one store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Folded {
+    /// The commits its history held before, its first included.
+    pub commits_before: usize,
+}
+
+/// Fold a derived store's history into one commit on its first, holding
+/// HEAD's tree, and collect the pages only the old commits reached. Every
+/// commit hash the store had is gone afterwards; its tree, and so its
+/// [`content_version`], is the same. `None` when there is no store or its
+/// history is one commit already.
+///
+/// Only for a store nothing reads the history of. A branch or tag other
+/// than `main` and the writer's keeps what it reaches; a derived store has
+/// none.
+pub async fn fold_history(db_path: &Path) -> Result<Option<Folded>> {
+    if !db_path.exists() {
+        return Ok(None);
+    }
+    let pool = open_inner(
+        db_path,
+        &[],
+        &[],
+        false,
+        StoreKind::Raw,
+        OnSchemaBreak::Refuse,
+        &[],
+    )
+    .await?;
+    let result = fold_on(&pool).await;
+    pool.close().await;
+    result.with_context(|| format!("fold {}", db_path.display()))
+}
+
+async fn fold_on(pool: &SqlitePool) -> Result<Option<Folded>> {
+    let log: Vec<String> = sqlx::query_scalar("SELECT commit_hash FROM dolt_log()")
+        .fetch_all(pool)
+        .await
+        .context("read dolt_log")?;
+    // The store's first commit and one on top of it: folded already.
+    if log.len() <= 2 {
+        return Ok(None);
+    }
+    let (head, first) = (&log[0], &log[log.len() - 1]);
+    let tree = tree_of(pool, head).await?;
+    sqlx::query("SELECT dolt_reset('--soft', ?)")
+        .bind(first)
+        .execute(pool)
+        .await
+        .context("reset to the first commit")?;
+    // The working set, not the stage: the commit below takes everything,
+    // and the open may have left a table in it.
+    let working: String = sqlx::query_scalar("SELECT dolt_hashof_db()")
+        .fetch_one(pool)
+        .await
+        .context("dolt_hashof_db()")?;
+    if working != tree {
+        sqlx::query("SELECT dolt_reset('--soft', ?)")
+            .bind(head)
+            .execute(pool)
+            .await
+            .context("put the history back")?;
+        anyhow::bail!(
+            "folding would change the store's tree from {tree} to {working}; left as it was"
+        );
+    }
+    commit_run(
+        pool,
+        &format!("compact: {} commits folded into one", log.len() - 1),
+    )
+    .await?
+    .context("the fold committed nothing")?;
+    sqlx::query("SELECT dolt_gc()")
+        .execute(pool)
+        .await
+        .context("dolt_gc")?;
+    Ok(Some(Folded {
+        commits_before: log.len(),
+    }))
+}
+
 // ── Generic object-table ops ────────────────────────────────────────
 
 /// Pre-seed an `id`-only row (NULL payload) and its sidecar, for an entity
@@ -3237,6 +3319,61 @@ mod tests {
         assert_ne!(folded, head);
         assert_eq!(content_version(&pool).await.unwrap(), before);
         pool.close().await;
+    }
+
+    /// A fold leaves one commit on the store's first, holding the same
+    /// tree and rows, and gives back what only the old commits held. A
+    /// store folded already, or never written, has nothing to fold.
+    #[tokio::test]
+    async fn fold_history_keeps_the_tree_and_drops_the_rest() {
+        let td = tempfile::tempdir().unwrap();
+        let path = td.path().join("s.doltlite_db");
+        let pool = open(
+            &path,
+            &["CREATE TABLE t (id INTEGER PRIMARY KEY, body TEXT)"],
+        )
+        .await
+        .unwrap();
+        for round in 0..4 {
+            sqlx::query(
+                "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 500) \
+                 INSERT OR REPLACE INTO t SELECT i, hex(randomblob(200)) FROM n",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+            commit_run(&pool, &format!("round {round}")).await.unwrap();
+        }
+        let version = content_version(&pool).await.unwrap();
+        pool.close().await;
+        let before = std::fs::metadata(&path).unwrap().len();
+
+        let folded = fold_history(&path).await.unwrap();
+        assert_eq!(
+            folded,
+            Some(Folded { commits_before: 6 }),
+            "the first commit, the schema's and four rounds"
+        );
+        assert!(
+            std::fs::metadata(&path).unwrap().len() * 2 < before,
+            "the fold gave back nothing"
+        );
+        assert_eq!(content_version_at_path(&path).await.unwrap(), version);
+        let pool = plain_pool(&path).await;
+        let commits: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_log()")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM t")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+        assert_eq!((commits, rows), (2, 500));
+
+        assert_eq!(fold_history(&path).await.unwrap(), None, "folded already");
+        let missing = td.path().join("nope.doltlite_db");
+        assert_eq!(fold_history(&missing).await.unwrap(), None);
     }
 
     /// A cursor whose commit a fold dropped resolves to the commit holding

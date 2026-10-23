@@ -7,6 +7,7 @@
 //! utilities that are not steps.
 
 mod check_params;
+mod compact;
 mod dispatch;
 mod embedding_map;
 mod events;
@@ -149,13 +150,18 @@ struct Cli {
     models_dir: Option<PathBuf>,
     /// Appended by `datalib-dag --reset`: empty this part of what the step
     /// wrote (`store`) and do nothing else (`step_protocol.md` § Reset).
-    #[arg(long, value_name = "PART", conflicts_with = "migrate")]
+    #[arg(long, value_name = "PART", conflicts_with_all = ["migrate", "compact"])]
     reset: Option<String>,
     /// Appended by a launch after an upgrade: bring what the step wrote to
     /// this build's shape where that can be done in place, fetch nothing,
     /// and say when it cannot (`step_protocol.md` § Migrate).
-    #[arg(long)]
+    #[arg(long, conflicts_with = "compact")]
     migrate: bool,
+    /// Appended by `datalib-dag --compact`: fold the history of a store
+    /// nothing reads the history of into one commit, and give back the
+    /// disk it held (`step_protocol.md` § Compact).
+    #[arg(long)]
+    compact: bool,
     #[command(flatten)]
     obs: datalib_obs::ObsArgs,
 }
@@ -519,6 +525,9 @@ async fn run(
             }
             if cli.migrate {
                 return migrate::run(&env, data_root, emitter).await;
+            }
+            if cli.compact {
+                return compact::run(&env, data_root).await;
             }
             run_function(
                 env,
