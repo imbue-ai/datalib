@@ -944,11 +944,13 @@ export async function saveConfig(text: string, signal?: AbortSignal): Promise<Sa
 export type PackageArtifact = { url: string; sha256: string; size?: number | null };
 
 /// A source type a package adds: its group `type`, the command each
-/// function runs, and its add-source form in the shape of `CatalogEntry`.
+/// function runs, its add-source form in the shape of `CatalogEntry`, and
+/// the applets each source of the type gets.
 export type PackageSource = {
   type: string;
   commands: Record<string, string>;
   wizard: Record<string, unknown>;
+  applets: PackageApplet[];
 };
 
 export type PackageApplet = {
@@ -967,7 +969,6 @@ export type PackageManifest = {
   step_protocol?: number | null;
   artifacts: Record<string, PackageArtifact>;
   sources: PackageSource[];
-  applets: PackageApplet[];
 };
 
 /// A manifest fetched for review: what adding it would pin.

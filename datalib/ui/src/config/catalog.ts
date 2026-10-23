@@ -5,6 +5,7 @@
 // docs/dev/wizard_file_pickers.md (a path field offers a native picker).
 
 import { shallowRef } from "vue";
+import type { PackageApplet } from "@/api";
 import { NAME_IT_HELP } from "./accountNaming";
 
 /// A form field, mapped onto a dotted path into a step's `params` tree
@@ -241,13 +242,15 @@ export type CatalogEntry = {
   package?: PackageOrigin;
 };
 
-/// Which package an entry came from, and the command each of its steps
-/// runs, by function (`ingest`, `render_markdown`).
+/// Which package an entry came from, the command each of its steps runs,
+/// by function (`ingest`, `render_markdown`, `render_time_series`), and
+/// the applets a source of it gets.
 export type PackageOrigin = {
   id: string;
   name: string;
   version: string;
   commands: Record<string, string>;
+  applets: PackageApplet[];
 };
 
 /// A fixed params value, written without being asked about. See

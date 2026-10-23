@@ -27,7 +27,7 @@ import { parseTOML, getStaticTOMLValue } from "toml-eslint-parser";
 import { NAME_IT_HELP } from "./accountNaming";
 import { formatBytes, parseByteSize } from "./byteSize";
 import { catalogForStep } from "./catalog";
-import type { Answer, CatalogEntry, Field, FieldPhase, Preset } from "./catalog";
+import type { Answer, CatalogEntry, Field, FieldPhase, PackageOrigin, Preset } from "./catalog";
 import { editStringArray, quote } from "./tomlText";
 import { deleteIn, setIn } from "./tomlPatch";
 
@@ -1115,15 +1115,25 @@ export function embedAllowed(type: string | null | undefined): boolean {
 
 /// Give a source of a time-series type its `render_time_series` step and
 /// a place in the time-series index's inputs, adding the index and the
-/// applet that serves it when the config has none. A source of any other type is left as it is.
-export function setTimeSeriesStep(text: string, group: string, type: string): string {
-  if (!TIME_SERIES_TYPES.includes(type)) return text;
+/// applet that serves it when the config has none. A package source is
+/// one when its package has a `render_time_series` program, which its
+/// step then runs. A source of any other type is left as it is.
+export function setTimeSeriesStep(
+  text: string,
+  group: string,
+  type: string,
+  pkg?: PackageOrigin,
+): string {
+  const command = pkg?.commands.render_time_series;
+  if (pkg ? !command : !TIME_SERIES_TYPES.includes(type)) return text;
   const id = `${group}/render_time_series`;
   let next = text;
   if (!listSteps(next).some((s) => s.id === id)) {
+    const packageLines =
+      pkg && command ? `\npackage = ${quote(pkg.id)}\ncommand = ${quote(command)}` : "";
     next = insertEntries(
       next,
-      `[[steps]]\ngroup = ${quote(group)}\nfunction = "render_time_series"\ninputs = [${quote(stepIdFor(group, "download"))}]`,
+      `[[steps]]\ngroup = ${quote(group)}\nfunction = "render_time_series"${packageLines}\ninputs = [${quote(stepIdFor(group, "download"))}]`,
     );
   }
   if (!listSteps(next).some((s) => fanInFunctionOf(s) === "time_series_index")) {

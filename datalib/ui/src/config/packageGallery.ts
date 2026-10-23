@@ -14,6 +14,7 @@ export const GALLERY: GalleryEntry[] = [
   {
     source: "github:qi-imbue/datalib-hello",
     name: "Hello",
-    description: "A minimal example: a source that writes a greeting, and a card that shows it.",
+    description:
+      "An example: a source that writes a greeting each sync, as a document and a time series, with a card that lists them.",
   },
 ];

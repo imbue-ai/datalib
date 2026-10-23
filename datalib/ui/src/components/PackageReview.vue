@@ -48,24 +48,26 @@ const unchanged = computed(() => !!props.current && found.value?.sha256 === prop
 const programs = computed(() => {
   const m = found.value?.manifest;
   if (!m) return [];
-  const words = [
-    ...m.sources.flatMap((s) => Object.values(s.commands)),
-    ...m.applets.map((a) => a.command),
-  ].map((c) => c.trim().split(/\s+/)[0]);
+  const words = m.sources
+    .flatMap((s) => [...Object.values(s.commands), ...s.applets.map((a) => a.command)])
+    .map((c) => c.trim().split(/\s+/)[0]);
   return [...new Set(words)];
 });
 
 const adds = computed(() => {
   const m = found.value?.manifest;
   if (!m) return [];
-  return [
-    ...m.sources.map((s) => ({
-      what: "A source type",
-      name: typeof s.wizard.label === "string" ? s.wizard.label : s.type,
-      where: "in Add source",
-    })),
-    ...m.applets.map((a) => ({ what: "An applet", name: a.id, where: "which can add cards" })),
-  ];
+  return m.sources.flatMap((s) => {
+    const label = typeof s.wizard.label === "string" ? s.wizard.label : s.type;
+    return [
+      { what: "A source type", name: label, where: "in Add source" },
+      ...s.applets.map((a) => ({
+        what: "An applet",
+        name: a.id,
+        where: `with each ${label} source, which can add cards`,
+      })),
+    ];
+  });
 });
 
 const buildLine = computed(() => {

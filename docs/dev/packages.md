@@ -1,8 +1,8 @@
 # Packages
 
 A **package** is a set of programs from outside datalib that a library
-runs as steps and applets: a source type datalib doesn't ship, or a
-card. A package is published as one manifest file at a URL, usually an
+runs as steps and applets: a source type datalib doesn't ship, with the
+cards that show it. A package is published as one manifest file at a URL, usually an
 asset of a GitHub release. There is no server of ours in between: anyone
 who knows the link can add the package, and the gallery of packages datalib
 suggests is one more file listing links (§"The gallery").
@@ -43,8 +43,8 @@ blurb = "Hourly observations from a NOAA station."
 sections = [{ heading = "Which station?", fields = ["station"] }]
 fields = [{ kind = "text", target = "station", label = "Station", required = true }]
 
-[[applets]]                       # an applet it adds, written into the config with it
-id = "weather_chart"
+[[sources.applets]]               # an applet each source of this type gets
+id = "chart"
 command = "bin/weather-chart"
 ```
 
@@ -53,10 +53,11 @@ command = "bin/weather-chart"
   the manifest's own, or absolute. The platform datalib runs on takes
   its own build first, then `any`.
 - **`sources`**: `commands` maps a function to the command its step
-  runs. `ingest` is required. A source with `render_markdown` also gets
-  a render step that reads the ingest's tree; one without it renders
-  nothing. The first word of a command is a path inside the unpacked
-  archive. What each program must do is the step protocol
+  runs. `ingest` is required. `render_markdown` and `render_time_series`
+  are optional; each is a step that reads the ingest's tree and writes
+  the store the indexes read, exactly as a built-in source's does
+  (§"Rendering"). The first word of a command is a path inside the
+  unpacked archive. What each program must do is the step protocol
   (`step_protocol.md`).
 - **`sources.wizard`**: the add-source form, written as a `CatalogEntry`
   (`datalib/ui/src/config/catalog.ts`) without `type`: the same
@@ -65,8 +66,15 @@ command = "bin/weather-chart"
   same code, so `wizard_design.md` applies to it unchanged. A form can
   only ask for what a field kind can ask for; a package cannot bring its
   own form code.
-- **`applets`**: `applets.md` is the contract. The command's first word is
-  a path inside the package, as for a step.
+- **`sources.applets`**: the applets a source of this type brings. An
+  applet belongs to a source: it is written into the config when a
+  source of the type is added, filed under the source's group, and
+  removed with it. A package has no applets of its own. `id` is the
+  applet's name within the source (letters, digits, `_`); the config's
+  id is `<group>_<id>`. The applet gets `source = "<group>"` in its
+  params, so it knows which source's trees to read. `applets.md` is the
+  contract; the command's first word is a path inside the package, as
+  for a step.
 
 The platforms datalib is released for (`.github/workflows/release.yml`),
 and so the keys `artifacts` may use:
@@ -134,6 +142,53 @@ command = "bin/fetch-weather"
   fingerprint: updating a package makes its steps run again on the next
   sync.
 
+## Rendering
+
+A package source's `render_markdown` and `render_time_series` programs
+write what datalib's own render steps write, in the same place:
+
+- **`<group>/render_markdown/indexed_markdown.doltlite_db`** and the
+  `.md` files beside it. `grid_index` reads the store into the grid,
+  and the source's `keyword_index` and `embed` read the files for
+  search. The step reports the store's tree hash as its version.
+- **`<group>/render_time_series/time_series.doltlite_db`**, which
+  `time_series_index` lists and the Time series card charts. The step
+  reports the store's commit hash as its version.
+
+The wizard adds these steps to the inputs of `grid_index`, the search
+aggregator and `time_series_index` (`setTimeSeriesStep` in
+`config/sourceSteps.ts`), as it does for a built-in source. Nothing in
+the indexes asks a store which type or provider wrote it.
+
+These stores are datalib's own formats, not a published interface. A
+writer has to match them exactly:
+
+1. **The tables, byte for byte.** `grid_index` reads a render store only
+   when its `_datalib_meta.schema_hash` (blake3 over the `CREATE`
+   statements) equals the one this build computes
+   (`datalib/backend/etl/render/src/indexed_markdown.rs`, `schema_hash`). A release
+   that changes a render table therefore hides every package's
+   documents until the package ships a build with the new tables.
+2. **The doltlite writer rules.** Write on the `datalib_writer` branch
+   and move `main` to it when a run ends; readers only look at `main`
+   (`datalib/backend/etl/src/doltlite_raw.rs`, `commit_run`).
+3. **`_datalib_meta.datalib_version`.** A store naming a newer datalib
+   than the one running makes the app refuse the whole data root
+   (`datalib/backend/store_meta/src/guard.rs`). A package should write a value that is
+   not a datalib version.
+4. **The time-series chunk encoding** (`time_series.md` §"The chunk
+   encoding"). A time-series store the index cannot read fails
+   `time_series_index` for every source, not only that one.
+
+A built-in render step also gets something a package's does not: the
+launch's migrate and compact passes skip a step with a `command`
+(`datalib/backend/dag/src/config.rs`, `spec_of`), so a package's stores
+are never migrated in place.
+
+The Hello package (`github:qi-imbue/datalib-hello`) writes both stores
+from a separate repo, with a copy of these formats kept in its own
+`datalib-sdk` crate.
+
 ## Adding, updating and removing one
 
 The UI writes the config; the server only fetches.
@@ -150,9 +205,9 @@ The UI writes the config; the server only fetches.
    unpacks it into `system/packages/<pin>/`. A `.datalib-installed`
    stamp there names the platform; a stamp for another platform
    (a library copied from a Mac to Linux) means not installed.
-4. **Write.** Only then does the UI add the `[[packages]]` entry and the
-   package's applets to the config. Steps that name the package can run
-   at once.
+4. **Write.** Only then does the UI add the `[[packages]]` entry to the
+   config. Adding a source of one of its types then writes the source's
+   steps and applets, which run at once.
 
 `GET /api/packages` lists the config's packages and their state:
 `installed`, `fetching` or `failed`. Listing starts a fetch for any
@@ -161,11 +216,13 @@ machine, or a config edited by hand. A failed fetch is shown above the
 Sources table with the sources that wait on it; nothing else stops.
 
 An update is the same review, then the same fetch, then a new `url` and
-`sha256` on the entry. The package's applets follow the new version: one
+`sha256` on the entry. Each source's applets follow the new version: one
 it no longer has is removed, a new one is added, and one it still has
-(matched by `command`) is left as the config has it. Removing a package removes its entry and its
-applets. Removal is refused while a source's steps still run the
-package; remove the source first. The unpacked directory stays until the
+(matched by `command`) is left as the config has it. A source's steps
+are not changed by an update: a function the new version adds reaches a
+source when it is added again. Removing a package removes its entry.
+Removal is refused while a source's steps still run the package; remove
+the source first, which takes its applets with it. The unpacked directory stays until the
 library is cleaned up by hand.
 
 ## Where it is in the UI
@@ -176,7 +233,6 @@ library is cleaned up by hand.
   opens its form when it adds exactly one source.
 - **Packages** on the Sources card lists the library's packages, offers
   "Check for update" and "Remove", and has the same box for adding one.
-  This is the way in for a package that adds only applets.
 - Both show the gallery (§"The gallery") above the link box.
 
 ## Trust

@@ -11,7 +11,14 @@ import {
   type PackagesResponse,
 } from "@/api";
 import { setPackageEntries, type CatalogEntry } from "./catalog";
-import { listPackages, listSteps, removeSteps, slugify, suggestId } from "./sourceSteps";
+import {
+  listGroups,
+  listPackages,
+  listSteps,
+  removeSteps,
+  slugify,
+  suggestId,
+} from "./sourceSteps";
 import { quote } from "./tomlText";
 import { setIn } from "./tomlPatch";
 
@@ -37,7 +44,13 @@ export function entriesOfManifest(id: string, m: PackageManifest): CatalogEntry[
       kind: "package",
       wizard: true,
       rendersDocuments: "render_markdown" in s.commands,
-      package: { id, name: m.name, version: m.version, commands: s.commands },
+      package: {
+        id,
+        name: m.name,
+        version: m.version,
+        commands: s.commands,
+        applets: s.applets ?? [],
+      },
     } as CatalogEntry;
   });
 }
@@ -48,9 +61,10 @@ export function packageIdFor(text: string, m: PackageManifest): string {
   return suggestId(taken, slugify(m.name), "package");
 }
 
-/// `text` with the looked-up package added as `[[packages]]` entry `id`,
-/// and its applets with it. The entry goes after the last package, or
-/// above the first table when there is none, so the packages read first.
+/// `text` with the looked-up package added as `[[packages]]` entry `id`.
+/// The entry goes after the last package, or above the first table when
+/// there is none, so the packages read first. Its applets come with each
+/// source that brings them (`addSourceApplets`), not with the package.
 export function addPackage(
   text: string,
   opts: { id: string; source: string; lookup: PackageLookup },
@@ -69,12 +83,19 @@ export function addPackage(
     at === null
       ? `${text.replace(/\s*$/, "")}\n\n${entry}\n`
       : `${text.slice(0, at).replace(/\s*$/, "")}\n\n${entry}\n\n${text.slice(at).replace(/^\s*/, "")}`;
-  return appendApplets(next, id, lookup.manifest.applets).replace(/^\s+/, "");
+  return next.replace(/^\s+/, "");
 }
 
-/// `text` with an `[[applets]]` entry running package `pkg` for each of
-/// `applets`, under the manifest's id unless the config already has it.
-function appendApplets(text: string, pkg: string, applets: PackageApplet[]): string {
+/// `text` with an `[[applets]]` entry for each of `applets`, filed under
+/// source `group` and running package `pkg`. Its id is the source's id
+/// and the applet's, made a JavaScript identifier, unless that is taken;
+/// `params.source` tells it which source it serves.
+export function addSourceApplets(
+  text: string,
+  group: string,
+  pkg: string,
+  applets: PackageApplet[],
+): string {
   const taken = new Set(
     listSteps(text)
       .filter((s) => s.kind === "applet")
@@ -82,31 +103,27 @@ function appendApplets(text: string, pkg: string, applets: PackageApplet[]): str
   );
   let next = text;
   for (const a of applets) {
-    const appletId = suggestId(taken, a.id, a.id).replace(/-/g, "_");
+    const base = `${group}_${a.id}`.replace(/[^A-Za-z0-9_]/g, "_").replace(/^(?=\d)/, "_");
+    const appletId = suggestId(taken, base, base).replace(/-/g, "_");
     taken.add(appletId);
-    next = `${next.replace(/\s*$/, "")}\n\n${appletBlock(appletId, pkg, a.command, a.params)}\n`;
+    next = `${next.replace(/\s*$/, "")}\n\n${appletBlock(appletId, group, pkg, a)}\n`;
   }
   return next;
 }
 
-function appletBlock(
-  id: string,
-  pkg: string,
-  command: string,
-  params?: Record<string, unknown> | null,
-): string {
+function appletBlock(id: string, group: string, pkg: string, a: PackageApplet): string {
   const lines = [
     "[[applets]]",
     `id = ${quote(id)}`,
+    `group = ${quote(group)}`,
     `package = ${quote(pkg)}`,
-    `command = ${quote(command)}`,
+    `command = ${quote(a.command)}`,
+    "[applets.params]",
+    `source = ${quote(group)}`,
   ];
-  const plain = Object.entries(params ?? {}).filter(
-    ([, v]) => typeof v === "string" || typeof v === "number" || typeof v === "boolean",
-  );
-  if (plain.length) {
-    lines.push("[applets.params]");
-    for (const [k, v] of plain) {
+  for (const [k, v] of Object.entries(a.params ?? {})) {
+    if (k === "source") continue;
+    if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") {
       lines.push(`${k} = ${typeof v === "string" ? quote(v) : String(v)}`);
     }
   }
@@ -131,22 +148,28 @@ function firstTableStart(text: string): number | null {
 }
 
 /// `text` with package `id` pinned to the looked-up manifest instead, and
-/// its applets brought in line with the new version's: one it no longer
-/// has goes, a new one is added. An applet is matched by its command,
-/// since the config may hold it under another id; a kept one keeps its
-/// entry as it is.
+/// each of its sources' applets brought in line with the new version's:
+/// one it no longer has goes, a new one is added. An applet is matched by
+/// its command, since the config may hold it under another id; a kept one
+/// keeps its entry as it is.
 export function updatePackage(text: string, id: string, lookup: PackageLookup): string {
   const index = listPackages(text).findIndex((p) => p.id === id);
   if (index < 0) throw new Error(`No package ${id} in the config.`);
   const ref = { array: "packages", index };
   let next = setIn(text, ref, ["url"], quote(lookup.url));
   next = setIn(next, ref, ["sha256"], quote(lookup.sha256));
-  const wanted = lookup.manifest.applets;
-  const have = listSteps(next).filter((s) => s.kind === "applet" && s.package === id);
-  const gone = have.filter((s) => !wanted.some((a) => a.command === s.command));
-  if (gone.length) next = removeSteps(next, gone);
-  const added = wanted.filter((a) => !have.some((s) => s.command === a.command));
-  return appendApplets(next, id, added);
+  for (const group of sourcesUsing(next, id)) {
+    const type = listGroups(next).find((g) => g.id === group)?.type;
+    const wanted = lookup.manifest.sources.find((s) => s.type === type)?.applets ?? [];
+    const have = listSteps(next).filter(
+      (s) => s.kind === "applet" && s.package === id && s.group === group,
+    );
+    const gone = have.filter((s) => !wanted.some((a) => a.command === s.command));
+    if (gone.length) next = removeSteps(next, gone);
+    const added = wanted.filter((a) => !have.some((s) => s.command === a.command));
+    next = addSourceApplets(next, group, id, added);
+  }
+  return next;
 }
 
 /// The groups whose steps run a package's programs. A package they use

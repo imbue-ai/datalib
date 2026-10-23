@@ -13,6 +13,7 @@ import {
 } from "@/api";
 import {
   addPackage,
+  addSourceApplets,
   packageIdFor,
   packagesState,
   refreshPackages,
@@ -779,7 +780,10 @@ export function useSourcesCard(ctx: CardCtx) {
     } else {
       next = setQmdSteps(next, payload.id, "none");
     }
-    next = setTimeSeriesStep(next, payload.id, payload.entry.type);
+    next = setTimeSeriesStep(next, payload.id, payload.entry.type, payload.entry.package);
+    // A package source's applets come with it, and leave with its group.
+    const pkg = payload.entry.package;
+    if (!current && pkg) next = addSourceApplets(next, payload.id, pkg.id, pkg.applets);
 
     // Banners are for a person, so they say the name; the id is what the
     // config and the disk use.

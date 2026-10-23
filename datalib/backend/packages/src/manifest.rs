@@ -1,6 +1,6 @@
 //! `datalib-package.toml`: what a package is, the build for each platform,
 //! and what it adds to a library — source types, each with its own
-//! add-source form, and applets.
+//! add-source form and the applets each of its sources brings.
 
 use std::collections::BTreeMap;
 
@@ -12,9 +12,10 @@ use crate::platform::{ANY, TARGETS};
 /// The manifest shape this build reads.
 pub const SCHEMA: u32 = 1;
 
-/// The functions a package source may run. `ingest` is required; a source
-/// with `render_markdown` also gets a render step reading the ingest's tree.
-pub const SOURCE_FUNCTIONS: &[&str] = &["ingest", "render_markdown"];
+/// The functions a package source may run. `ingest` is required; each of
+/// the others is a step reading the ingest's tree, written only when the
+/// package has a program for it.
+pub const SOURCE_FUNCTIONS: &[&str] = &["ingest", "render_markdown", "render_time_series"];
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -34,8 +35,6 @@ pub struct Manifest {
     pub artifacts: BTreeMap<String, Artifact>,
     #[serde(default)]
     pub sources: Vec<SourceTemplate>,
-    #[serde(default)]
-    pub applets: Vec<AppletTemplate>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -64,9 +63,14 @@ pub struct SourceTemplate {
     /// `blurb`, `sections`, `fields` and the rest. The UI draws it with the
     /// same code as every built-in source.
     pub wizard: toml::Table,
+    /// The applets each source of this type gets, written into the config
+    /// with the source and removed with it.
+    #[serde(default)]
+    pub applets: Vec<AppletTemplate>,
 }
 
-/// An applet the package adds, written into the config when the package is.
+/// An applet a package source brings. `id` is the applet's name within the
+/// source; the config's id is composed from the source's and this.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AppletTemplate {
@@ -126,6 +130,13 @@ impl Manifest {
             if !s.wizard.get("label").is_some_and(|v| v.is_str()) {
                 bail!("source {:?}: `wizard.label` is required", s.source_type);
             }
+            if let Some(a) = s.applets.iter().find(|a| !is_identifier(&a.id)) {
+                bail!(
+                    "source {:?}: applet id {:?} must be letters, digits and `_`",
+                    s.source_type,
+                    a.id
+                );
+            }
             if s.wizard.contains_key("type") {
                 bail!(
                     "source {:?}: `wizard.type` is the source's own `type`; leave it out",
@@ -143,6 +154,10 @@ impl Manifest {
             .or_else(|| self.artifacts.get_key_value(ANY))
             .map(|(k, a)| (k.as_str(), a))
     }
+}
+
+fn is_identifier(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 
 pub fn is_sha256(s: &str) -> bool {
@@ -192,6 +207,19 @@ blurb = "Hourly observations from a NOAA station."
         assert!(Manifest::parse(&no_ingest).is_err());
         let no_label = WEATHER.replace("label = \"Weather station\"", "");
         assert!(Manifest::parse(&no_label).is_err());
+    }
+
+    #[test]
+    fn an_applet_belongs_to_a_source() {
+        let with =
+            format!("{WEATHER}[[sources.applets]]\nid = \"chart\"\ncommand = \"bin/chart\"\n");
+        let m = Manifest::parse(&with).unwrap();
+        assert_eq!(m.sources[0].applets[0].id, "chart");
+        let top_level =
+            format!("{WEATHER}\n[[applets]]\nid = \"chart\"\ncommand = \"bin/chart\"\n");
+        assert!(Manifest::parse(&top_level).is_err());
+        let bad_id = with.replace("id = \"chart\"", "id = \"a-chart\"");
+        assert!(Manifest::parse(&bad_id).is_err());
     }
 
     #[test]
