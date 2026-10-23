@@ -14,6 +14,7 @@ import { isBrowserClick } from "./chatLink";
 import { uriFromEntity } from "./chipLinks";
 import ChipMenu from "./ChipMenu.ce.vue";
 import ContactEditor from "./ContactEditor.ce.vue";
+import { holds, sourceValues, valueText, type SourceValue } from "./contactFields";
 import EntityChip from "./EntityChip.ce.vue";
 import {
   canLinkHandles,
@@ -109,6 +110,13 @@ reload, until <em>Save</em> publishes it or <em>Discard</em> drops it. If
 the contact was changed somewhere else meanwhile, Save says so and marks
 what changed rather than overwriting it. A photo is set or removed at
 once.</p>
+<p>Each source's <em>Copy to …</em> copies what that source says (a number, a
+title, an address) into your contact's draft, one value at a time or all at
+once; you pick where sources disagree. A copied value does not follow its
+source afterwards: the card says when the source now says something else.
+An address or number field says whether it is linked: <em>Link it</em>
+links it to this contact, and one linked to someone else shows whose it
+is.</p>
 <p>Every handle is a chip: pale blue when it is linked to a contact,
 grey when not. Click one to link it, right-click for its menu, or use a
 section's <em>Link</em> button to link all of that source's unlinked
@@ -305,6 +313,19 @@ async function create() {
   }
 }
 
+// ── Copying what a source says into your contact ─────────────────────
+
+const editor = ref<InstanceType<typeof ContactEditor> | null>(null);
+
+function held(v: SourceValue): boolean {
+  const current = editor.value?.current;
+  return !!current && holds(current, v);
+}
+
+async function copyFrom(s: PersonSection, values: SourceValue[], all = false) {
+  await editor.value?.copy(values, { source_id: s.sourceId, key: s.contact.key }, all);
+}
+
 function photoOf(c: NormalizedContact): string | null {
   return c.photo_url ?? null;
 }
@@ -368,7 +389,14 @@ const headPhoto = computed(() => {
           </span>
         </li>
       </ul>
-      <ContactEditor :contact-id="model.mine.key" :photo-url="model.mine.photo_url ?? null" />
+      <ContactEditor
+        ref="editor"
+        :contact-id="model.mine.key"
+        :photo-url="model.mine.photo_url ?? null"
+        :linked="model.mine.handles"
+        :sources="model.sections.map((s) => s.contact)"
+        :source-name="sourceLabel"
+      />
     </section>
 
     <section
@@ -434,6 +462,32 @@ const headPhoto = computed(() => {
           <dd>{{ line.value }}</dd>
         </template>
       </dl>
+      <details v-if="model.mine && sourceValues(s.contact).length" class="person-copy">
+        <summary>Copy to {{ model.title }}</summary>
+        <ul class="person-copy-values">
+          <li v-for="(v, i) in sourceValues(s.contact)" :key="i">
+            <span>{{ valueText(v) }}</span>
+            <span v-if="held(v)" class="person-muted">in your contact</span>
+            <button
+              v-else
+              type="button"
+              class="person-button"
+              :aria-label="`${v.part === 'name' ? 'Use' : 'Copy'} ${valueText(v)}`"
+              @click.stop="copyFrom(s, [v])"
+            >
+              {{ v.part === "name" ? "Use" : "Copy" }}
+            </button>
+          </li>
+        </ul>
+        <button
+          type="button"
+          class="person-button"
+          :disabled="sourceValues(s.contact).every((v) => v.part === 'name' || held(v))"
+          @click.stop="copyFrom(s, sourceValues(s.contact), true)"
+        >
+          Copy all
+        </button>
+      </details>
     </section>
 
     <p v-if="!model.mine && model.sections.length === 0" class="person-muted person-empty">
@@ -598,6 +652,26 @@ const headPhoto = computed(() => {
 }
 .person-lines dd {
   margin: 0;
+}
+.person-copy {
+  margin-top: 0.4rem;
+}
+.person-copy summary {
+  cursor: pointer;
+  color: var(--datalib-muted);
+}
+.person-copy-values {
+  list-style: none;
+  margin: 0.3rem 0;
+  padding: 0;
+}
+.person-copy-values li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.person-copy-values li + li {
+  margin-top: 0.15rem;
 }
 .person-empty {
   margin-top: 0.75rem;
