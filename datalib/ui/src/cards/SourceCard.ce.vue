@@ -610,25 +610,6 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  /* Categorical line colours, the validated default palette's first six
-     (checked light on #fff, dark on #1a1b1e). */
-  --viz-series-1: #2a78d6;
-  --viz-series-2: #eb6834;
-  --viz-series-3: #1baf7a;
-  --viz-series-4: #eda100;
-  --viz-series-5: #e87ba4;
-  --viz-series-6: #008300;
-}
-@media (prefers-color-scheme: dark) {
-  :host,
-  .card-app-root {
-    --viz-series-1: #3987e5;
-    --viz-series-2: #d95926;
-    --viz-series-3: #199e70;
-    --viz-series-4: #c98500;
-    --viz-series-5: #d55181;
-    --viz-series-6: #008300;
-  }
 }
 /* The card fills its box: the group's strip and the tabs stay put, the
    documents grid takes the rest, and the sync scrolls on its own. */

@@ -235,6 +235,44 @@ export function bandOf(a: Answered): Band[] | null {
   );
 }
 
+/// What a chart draws, as columns over one time axis: every instant, in
+/// milliseconds, at which any of `answers` has a point or a bucket; a
+/// column per answer's line, in SI units; and per answer its band's low
+/// and high columns, all null where the answer had every point. A column
+/// is null at an instant its answer has nothing at.
+export type Columns = {
+  xs: number[];
+  lines: (number | null)[][];
+  bands: { lo: (number | null)[]; hi: (number | null)[] }[];
+};
+
+export function columnsOf(answers: Answered[]): Columns {
+  const lines = answers.map(lineOf);
+  const bands = answers.map(bandOf);
+  const xs = [
+    ...new Set([...lines.flat().map((p) => p.x), ...bands.flatMap((b) => b ?? []).map((b) => b.x)]),
+  ].sort((a, b) => a - b);
+  const at = new Map(xs.map((x, i) => [x, i]));
+  const empty = () => xs.map((): number | null => null);
+  return {
+    xs,
+    lines: lines.map((line) => {
+      const col = empty();
+      for (const p of line) col[at.get(p.x)!] = p.y;
+      return col;
+    }),
+    bands: bands.map((band) => {
+      const lo = empty();
+      const hi = empty();
+      for (const b of band ?? []) {
+        lo[at.get(b.x)!] = b.lo;
+        hi[at.get(b.x)!] = b.hi;
+      }
+      return { lo, hi };
+    }),
+  };
+}
+
 /// About `count` round values covering `[lo, hi]`, ascending.
 export function niceTicks(lo: number, hi: number, count = 4): number[] {
   if (!Number.isFinite(lo) || !Number.isFinite(hi)) return [];
