@@ -24,7 +24,22 @@ datalib-doltlite -readonly signal/ingest/entities.doltlite_db \
 (`docs/dev/doltlite.md` §"What the upstream deleted on you" has the
 recipes; stock `sqlite3` cannot open the store.)
 
-The rules, in `src/ingest/backups.rs` (pure) and `src/ingest/mod.rs`:
+The rules, in `src/ingest/backups.rs` and `src/ingest/keys.rs` (pure)
+and `src/ingest/mod.rs`:
+
+- **A row is keyed by who it is about, not by the backup's numbers.**
+  A backup numbers its recipients and chats itself, and a phone restored
+  or transferred from another numbers them anew. So a recipient is keyed
+  by their ACI, else their PNI, else their number (`aci:<hex>`,
+  `pni:<hex>`, `e164:+<n>`), a group by a hash of its master key
+  (`group:<hash>`), and the account by `self`. A chat takes the key of
+  the recipient it is with, and a message is `<chat>#<author>#<date_sent>`.
+  A phone switch then adds and removes nothing. Rows whose payload holds
+  the backup's own numbers read as modified. A recipient with nothing
+  stable, or a second one claiming a key already taken, is keyed by its
+  number (`recipient:7`, `chat:12`), which holds for that backup only.
+  A contact first seen by number alone changes key once, in the first
+  backup that carries their ACI.
 
 - **A snapshot is known by its bytes.** The ledger, `ingested_backups`,
   is keyed by the blake3 of the snapshot's three files, read through
@@ -53,8 +68,11 @@ The rules, in `src/ingest/backups.rs` (pure) and `src/ingest/mod.rs`:
 - **A stop is honoured between snapshots**; one begun is read whole.
 
 Attachments are decrypted into the blob CAS once: one an earlier
-snapshot already stored is not decrypted again. The shared tree holds
-what Signal keeps now, not what each old snapshot named, so a first
-sync over an old folder can find an old snapshot's attachment missing:
-that is a problem on its edge, the same as any attachment the backup
-holds no bytes for.
+snapshot already stored is not decrypted again. A snapshot that holds
+an attachment without its bytes keeps the bytes an earlier one stored,
+and nothing is reported missing. This happens after a phone switch,
+since the new phone has not downloaded what the old one had, and on an
+old snapshot whose file the shared tree no longer holds. Render finds
+the bytes through the attachment's edge row, never through the
+message's payload. An attachment no snapshot held bytes for is a
+problem on its edge.

@@ -32,7 +32,9 @@ use super::parse::ParsedSignal;
 ///      chat carries Signal's account of its authors (number and ACI).
 /// v11: a recipient known by ACI alone reads as the dashed ACI.
 /// v12: a mention reads as `@Name` rather than `U+FFFC`, and is searched.
-pub const RENDER_VERSION: u32 = 12;
+/// v13: chats and messages are keyed by who they are with and who wrote
+///      them, and an attachment reads its bytes through its stored edge.
+pub const RENDER_VERSION: u32 = 13;
 
 const SOURCE_LABEL: &str = "Signal";
 const PROVIDER: Provider = Provider::Signal;

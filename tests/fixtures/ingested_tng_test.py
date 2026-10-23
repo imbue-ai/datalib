@@ -1316,8 +1316,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "FROM source_contact_handles h JOIN source_contacts c "
                 "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
                 "JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
-                "WHERE m.source_id = 'signal' AND (c.name IN ('Will Riker', 'Q', 'Guinan') "
-                "OR h.handle LIKE 'signal_aci:%') GROUP BY 1 ORDER BY 1;",
+                "WHERE m.source_id = 'signal' AND c.name IN ('Will Riker', 'Q', 'Guinan') "
+                "GROUP BY 1 ORDER BY 1;",
             ),
             [
                 (
@@ -1334,6 +1334,42 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 ),
             ],
             "Signal's account of a person: number and ACI together",
+        )
+        # The Signal fixture is two phones: the backup the account moved
+        # from, holding the PNG's bytes, and the one it moved to, which
+        # numbers everyone anew and never downloaded the PNG. Keyed by who
+        # a chat is with and who wrote a message, the switch removes
+        # nothing, and the PNG keeps the old phone's bytes.
+        signal = self._signal_entities_db
+        commits = self._query(
+            signal,
+            "SELECT commit_hash FROM dolt_log "
+            "WHERE message LIKE 'download signal: backup %' ORDER BY date;",
+        )
+        self.assertEqual(len(commits), 2, "one commit per phone's backup")
+        self.assertEqual(
+            self._query(
+                signal,
+                "SELECT diff_type || '|' || count(*) FROM dolt_diff_chat_items("
+                f"'{commits[0]}', '{commits[1]}') GROUP BY diff_type ORDER BY diff_type;",
+            ),
+            ["added|1", "modified|12"],
+            "the new phone adds its one new message and renumbers the rest",
+        )
+        self.assertEqual(
+            self._query(
+                signal,
+                "SELECT c.recipient_id || '|' || a.id || '|' || (a.blake3 IS NOT NULL) "
+                "FROM chat_item_attachments a JOIN chat_items i ON i.id = a.chat_item_id "
+                "JOIN chats c ON c.id = i.chat_id;",
+            ),
+            [
+                (
+                    "aci:0195683ad14087f9bdf6234da6d6880c|"
+                    "aci:0195683ad14087f9bdf6234da6d6880c#self#12442118940000#0|1"
+                )
+            ],
+            "the PNG on Picard's order keeps the old phone's bytes",
         )
         # Facebook names people and never numbers them: a Messenger
         # author is a `facebook:name/` handle, and a deleted account is
@@ -1740,10 +1776,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
             0,
             "grid_index must commit, leaving a dolt_log entry",
         )
-        # Signal recorded exactly one snapshot in its resume cursor.
+        # Signal recorded both phones' snapshots in its resume cursor.
         cursor1 = self._signal_cursor()
         self.assertEqual(
-            len(cursor1), 1, f"expected one ingested_backups row, got {cursor1}"
+            len(cursor1), 2, f"expected two ingested_backups rows, got {cursor1}"
         )
 
         # --- Run 2: same data root, no flags, five minutes on. Signal's

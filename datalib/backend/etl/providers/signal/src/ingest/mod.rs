@@ -4,6 +4,7 @@
 
 pub mod backups;
 pub mod db;
+pub mod keys;
 pub mod schema_raw;
 
 use std::collections::HashSet;
@@ -19,7 +20,6 @@ use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
 use datalib_signal_backup::{backup, decrypt_attachment, local_media_name, Snapshot};
 use serde::Serialize;
-use sqlx::Row;
 use tracing::info;
 
 use backups::{Found, Top, LEDGER};
@@ -75,6 +75,9 @@ pub struct FetchSummary {
     /// Attachments whose bytes an earlier read already stored, so they
     /// were not decrypted again, across the run.
     pub blobs_skipped: usize,
+    /// Attachments a snapshot had no bytes for that an earlier snapshot
+    /// stored, so they keep them, across the run.
+    pub blobs_kept: usize,
     /// Attachments we couldn't decrypt/read (file missing, MAC fail,
     /// LocatorInfo without a local key, …), across the run. Each is a
     /// `problems` row on its `chat_item_attachments` edge.
@@ -315,27 +318,12 @@ async fn read_snapshot(
     let mut chat_items: Vec<ChatItemRow> = Vec::new();
     let mut pending_attachments = PendingAttachments::default();
 
-    // Pre-load `(media_name → blake3)` for everything decrypted in a prior
-    // read, so an attachment shared between two snapshots skips the AES
-    // step. One query and O(N) memory, against N per-row queries during
-    // the walk. Empty after a blobs reset, so everything re-decrypts.
-    let already_decrypted: std::collections::HashMap<String, String> = {
-        let rows = sqlx::query(
-            "SELECT ref_id, blake3 FROM chat_item_attachments WHERE blake3 IS NOT NULL",
-        )
-        .fetch_all(db.pool())
-        .await
-        .context("preload already-decrypted attachments")?;
-        rows.iter()
-            .map(|r| {
-                Ok((
-                    r.try_get::<String, _>("ref_id")?,
-                    r.try_get::<String, _>("blake3")?,
-                ))
-            })
-            .collect::<Result<_, sqlx::Error>>()
-            .context("decode already-decrypted attachments")?
-    };
+    // Every attachment an earlier read stored bytes for, so one shared
+    // between two snapshots skips the AES step, and one a later snapshot
+    // no longer carries keeps the bytes it had. One query and O(N)
+    // memory, against N per-row queries during the walk.
+    let held = Held::load(db).await?;
+    let mut keys = keys::Keys::default();
 
     let mut undecoded: Vec<String> = Vec::new();
     for frame in snap_data.frames() {
@@ -357,7 +345,7 @@ async fn read_snapshot(
                 });
             }
             Some(backup::frame::Item::Recipient(r)) => {
-                let id = r.id.to_string();
+                let id = keys.add_recipient(r);
                 let (identifier, name) = recipient_pretty(r);
                 let payload = serde_json::to_string(r).context("serialize recipient frame")?;
                 recipients.push(RecipientRow {
@@ -367,8 +355,8 @@ async fn read_snapshot(
                 });
             }
             Some(backup::frame::Item::Chat(c)) => {
-                let id = c.id.to_string();
-                let rid = c.recipient_id.to_string();
+                let id = keys.add_chat(c);
+                let rid = keys.recipient(c.recipient_id);
                 let payload = serde_json::to_string(c).context("serialize chat frame")?;
                 chats.push(ChatRow {
                     id_and_payload: datalib_etl::doltlite_raw::WirePayload { id, payload },
@@ -376,8 +364,8 @@ async fn read_snapshot(
                 });
             }
             Some(backup::frame::Item::ChatItem(ci)) => {
-                let chat_id = ci.chat_id.to_string();
-                let author_id = ci.author_id.to_string();
+                let chat_id = keys.chat(ci.chat_id);
+                let author_id = keys.recipient(ci.author_id);
                 let date_sent = ci.date_sent as i64;
                 let pk = schema_raw::chat_item_id_recipe(&chat_id, &author_id, date_sent);
 
@@ -391,7 +379,7 @@ async fn read_snapshot(
                             &pk,
                             idx,
                             att,
-                            &already_decrypted,
+                            &held,
                             &mut pending_attachments,
                             summary,
                         );
@@ -529,6 +517,36 @@ struct DecryptedCas {
     bytes: Vec<u8>,
 }
 
+/// The attachment edges the store holds bytes for: by row, and by
+/// Signal's media name.
+struct Held {
+    by_row: std::collections::HashMap<String, (String, String)>,
+    by_media_name: std::collections::HashMap<String, String>,
+}
+
+impl Held {
+    async fn load(db: &RawDb) -> Result<Self> {
+        let rows: Vec<(String, String, String)> = sqlx::query_as(
+            "SELECT id, ref_id, blake3 FROM chat_item_attachments WHERE blake3 IS NOT NULL",
+        )
+        .fetch_all(db.pool())
+        .await
+        .context("preload the attachments already stored")?;
+        let by_media_name = rows
+            .iter()
+            .map(|(_, ref_id, blake3)| (ref_id.clone(), blake3.clone()))
+            .collect();
+        let by_row = rows
+            .into_iter()
+            .map(|(id, ref_id, blake3)| (id, (ref_id, blake3)))
+            .collect();
+        Ok(Self {
+            by_row,
+            by_media_name,
+        })
+    }
+}
+
 /// Decrypt one `MessageAttachment`'s bytes out of the shared
 /// `<files_root>/XX/<media_name>` tree and queue them for batched
 /// CAS + entity-table writes via the `PendingAttachments`
@@ -539,44 +557,39 @@ fn ingest_attachment(
     chat_item_pk: &str,
     slot_idx: usize,
     att: &backup::MessageAttachment,
-    already_decrypted: &std::collections::HashMap<String, String>,
+    held: &Held,
     pending: &mut PendingAttachments,
     summary: &mut FetchSummary,
 ) {
     let attachment_id = schema_raw::chat_item_attachment_id_recipe(chat_item_pk, slot_idx);
+    let row = |ref_id: String| schema_raw::ChatItemAttachmentRow {
+        id: attachment_id.clone(),
+        chat_item_id: chat_item_pk.to_string(),
+        ref_id,
+        blake3: None,
+    };
     let (plaintext_hash, local_key) = match locate(att) {
         Ok(found) => found,
         // Nothing to retry: the bytes are not in this backup. The edge
         // carries the attachment's own id for a ref, having no media name.
         Err(why) => {
-            pending.rows.push(schema_raw::ChatItemAttachmentRow {
-                id: attachment_id.clone(),
-                chat_item_id: chat_item_pk.to_string(),
+            let problem = datalib_etl::blob_cas::BlobNotFetched {
                 ref_id: attachment_id.clone(),
-                blake3: None,
-            });
-            pending.errors.push(datalib_etl::blob_cas::BlobNotFetched {
-                ref_id: attachment_id,
                 detail: format!("the backup does not carry this attachment's bytes: {why}"),
                 reason: datalib_problems::Reason::NotFound,
-            });
-            summary.blob_errors += 1;
+            };
+            not_stored(row(attachment_id.clone()), problem, held, pending, summary);
             return;
         }
     };
     let media_name = local_media_name(&plaintext_hash, &local_key);
 
-    // Skip-check: if a prior run already decrypted this media_name
-    // (anywhere in any chat_item), we know the blake3 without
-    // re-decrypting. The CAS already has the bytes (a store reset
-    // leaves `cas_objects` alone), so we just record the new
-    // (chat_item_id, slot) → blake3 edge.
-    if let Some(blake3) = already_decrypted.get(&media_name) {
+    // A prior read already decrypted this media_name (anywhere in any
+    // chat_item), so the CAS has the bytes and only the edge is new.
+    if let Some(blake3) = held.by_media_name.get(&media_name) {
         pending.rows.push(schema_raw::ChatItemAttachmentRow {
-            id: attachment_id,
-            chat_item_id: chat_item_pk.to_string(),
-            ref_id: media_name,
             blake3: Some(blake3.clone()),
+            ..row(media_name)
         });
         summary.blobs_skipped += 1;
         return;
@@ -587,17 +600,11 @@ fn ingest_attachment(
     let enc = match std::fs::read(&enc_path) {
         Ok(b) => b,
         Err(e) => {
-            pending.rows.push(schema_raw::ChatItemAttachmentRow {
-                id: attachment_id.clone(),
-                chat_item_id: chat_item_pk.to_string(),
-                ref_id: media_name,
-                blake3: None,
-            });
-            pending.errors.push(blob_failed(
-                attachment_id,
+            let problem = blob_failed(
+                attachment_id.clone(),
                 format!("read {}: {e}", enc_path.display()),
-            ));
-            summary.blob_errors += 1;
+            );
+            not_stored(row(media_name), problem, held, pending, summary);
             return;
         }
     };
@@ -605,16 +612,8 @@ fn ingest_attachment(
     let plaintext = match decrypt_attachment(&enc, &local_key) {
         Ok(p) => p,
         Err(e) => {
-            pending.rows.push(schema_raw::ChatItemAttachmentRow {
-                id: attachment_id.clone(),
-                chat_item_id: chat_item_pk.to_string(),
-                ref_id: media_name,
-                blake3: None,
-            });
-            pending
-                .errors
-                .push(blob_failed(attachment_id, format!("decrypt: {e}")));
-            summary.blob_errors += 1;
+            let problem = blob_failed(attachment_id.clone(), format!("decrypt: {e}"));
+            not_stored(row(media_name), problem, held, pending, summary);
             return;
         }
     };
@@ -624,13 +623,33 @@ fn ingest_attachment(
         content_type: att.pointer.as_ref().and_then(|p| p.content_type.clone()),
         bytes: plaintext,
     });
-    pending.rows.push(schema_raw::ChatItemAttachmentRow {
-        id: attachment_id,
-        chat_item_id: chat_item_pk.to_string(),
-        ref_id: media_name,
-        blake3: None,
-    });
+    pending.rows.push(row(media_name));
     summary.blobs += 1;
+}
+
+/// An attachment this snapshot has no bytes for. One an earlier snapshot
+/// stored keeps them, and nothing is missing: a phone that never
+/// downloaded a file, or a files tree that no longer holds it, is not
+/// news that the attachment changed.
+fn not_stored(
+    row: schema_raw::ChatItemAttachmentRow,
+    problem: datalib_etl::blob_cas::BlobNotFetched,
+    held: &Held,
+    pending: &mut PendingAttachments,
+    summary: &mut FetchSummary,
+) {
+    if let Some((ref_id, blake3)) = held.by_row.get(&row.id) {
+        pending.rows.push(schema_raw::ChatItemAttachmentRow {
+            ref_id: ref_id.clone(),
+            blake3: Some(blake3.clone()),
+            ..row
+        });
+        summary.blobs_kept += 1;
+        return;
+    }
+    pending.rows.push(row);
+    pending.errors.push(problem);
+    summary.blob_errors += 1;
 }
 
 /// The plaintext hash and local key an attachment's bytes are found and
@@ -720,7 +739,16 @@ fn recipient_pretty(r: &backup::Recipient) -> (Option<String>, Option<String>) {
                 });
             (identifier, name)
         }
+        Some(Destination::Group(g)) => (None, group_title(g)),
         _ => (None, None),
+    }
+}
+
+fn group_title(g: &backup::Group) -> Option<String> {
+    use backup::group::group_attribute_blob::Content;
+    match g.snapshot.as_ref()?.title.as_ref()?.content.as_ref()? {
+        Content::Title(t) if !t.is_empty() => Some(t.clone()),
+        _ => None,
     }
 }
 
