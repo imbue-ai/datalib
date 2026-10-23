@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { freeText, markWords, pickedSource, setSource } from "../src/cards/search";
+import { freeText, markWords, pickedSource, searchTitle, setSource } from "../src/cards/search";
 
 describe("the picked source, as the query says it", () => {
   it("is the one source_id filter, typed or clicked", () => {
@@ -40,5 +40,25 @@ describe("markWords", () => {
   });
   it("finds free text among filter words", () => {
     expect(freeText("kind:chat  warp   -author:q core")).toBe("warp core");
+  });
+});
+
+describe("a search's tab name", () => {
+  const names: Record<string, string> = {
+    "contact:c1": "William T. Riker",
+    "email:riker@enterprise.starfleet": "Will Riker",
+  };
+  const nameOf = (value: string) => names[value] ?? null;
+
+  /** "Everything with" titled its tab `Search: with:contact:6277af2c-…`. */
+  it("calls a person by their name, and everything with one of them so", () => {
+    expect(searchTitle("with:contact:c1", nameOf)).toBe("Everything with William T. Riker");
+    expect(searchTitle("from:email:riker@enterprise.starfleet is:document", nameOf)).toBe(
+      "Search: from:Will Riker is:document",
+    );
+    expect(searchTitle("with:contact:c2", nameOf)).toBe("Search: with:contact:c2");
+    expect(searchTitle("warp core", nameOf)).toBe("Search: warp core");
+    const day = (v: string) => (v === "2369-04-15" ? "Tue, Apr 15, 2369" : null);
+    expect(searchTitle("after:2369-04-15 risa", day)).toBe("Search: after:Tue, Apr 15, 2369 risa");
   });
 });

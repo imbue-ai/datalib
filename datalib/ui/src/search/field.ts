@@ -44,6 +44,7 @@ import {
   handleValue,
   people,
 } from "@/cards/contacts";
+import { dateCell } from "@/cards/dates";
 import { entities, entityCell } from "@/cards/entities";
 import { fieldChipMenu, toggleNegate, type FieldMenuId } from "./chipMenu";
 import {
@@ -52,6 +53,7 @@ import {
   chipWords,
   CONTACT,
   completingAt,
+  dateWords,
   keyNamed,
   termValue,
   words,
@@ -217,18 +219,50 @@ class ChipWidget extends WidgetType {
   }
 }
 
+/// A date typed as a date key's value, drawn as the app draws every
+/// date. Its clicks are a chip's here; it has no menu of its own.
+class DateWidget extends WidgetType {
+  constructor(
+    readonly value: string,
+    readonly selected: boolean,
+  ) {
+    super();
+  }
+  eq(other: DateWidget): boolean {
+    return other.value === this.value && other.selected === this.selected;
+  }
+  toDOM(view: EditorView): HTMLElement {
+    const el = dateCell(this.value);
+    el.draggable = false;
+    if (this.selected) el.classList.add("cm-chip-selected");
+    el.addEventListener("mousedown", (e) => onChipMouse(view, el, e));
+    return el;
+  }
+}
+
 function chipDecorations(state: EditorState): DecorationSet {
   const editing = state.field(editingField);
   const sel = state.selection.main;
-  const ranges = chipWords(state.doc.toString(), state.field(keysField))
-    .filter(({ word }) => !editing || word.to < editing.from || word.from > editing.to)
-    .map(({ word, chip }) => {
-      const selected = !sel.empty && sel.from <= word.valueFrom && sel.to >= word.to;
-      return Decoration.replace({
-        widget: new ChipWidget(chip, word.value, answerOf(chip), selected),
-      }).range(word.valueFrom, word.to);
-    });
-  return Decoration.set(ranges);
+  const query = state.doc.toString();
+  const keys = state.field(keysField);
+  const shown = (word: Word) => !editing || word.to < editing.from || word.from > editing.to;
+  const selected = (word: Word) => !sel.empty && sel.from <= word.valueFrom && sel.to >= word.to;
+  const chipRanges = chipWords(query, keys)
+    .filter(({ word }) => shown(word))
+    .map(({ word, chip }) =>
+      Decoration.replace({
+        widget: new ChipWidget(chip, word.value, answerOf(chip), selected(word)),
+      }).range(word.valueFrom, word.to),
+    );
+  const dateRanges = dateWords(query, keys)
+    .filter(shown)
+    .map((word) =>
+      Decoration.replace({ widget: new DateWidget(word.value, selected(word)) }).range(
+        word.valueFrom,
+        word.to,
+      ),
+    );
+  return Decoration.set([...chipRanges, ...dateRanges], true);
 }
 
 const chips = ViewPlugin.fromClass(

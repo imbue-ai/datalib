@@ -11,6 +11,7 @@ import {
   dayQuery,
   decorateDates,
   parseStamp,
+  rangeEndText,
   rewriteDatesForCopy,
   sideQuery,
   type Stamp,
@@ -98,6 +99,35 @@ describe("the searches a date offers", () => {
       { id: "before", label: "Everything before this" },
       { id: "after", label: "Everything after this" },
     ]);
+  });
+});
+
+describe("a span of time", () => {
+  /** A calendar event's "When" was its own text, in its own format, in
+   *  the event's zone, beside every other date on the page drawn as a
+   *  chip in the reader's. */
+  it("ends on the same day as its clock alone, in the reader's zone", () => {
+    const start = stamp("2026-09-18T19:00:00-07:00");
+    expect(rangeEndText(start, stamp("2026-09-18T22:00:00-07:00"), "America/Los_Angeles")).toBe(
+      "22:00",
+    );
+    // 14:00–16:00 in Los Angeles is 23:00–01:00 in Vienna: there the end
+    // says its own day.
+    const afternoon = stamp("2026-09-18T14:00:00-07:00");
+    expect(rangeEndText(afternoon, stamp("2026-09-18T16:00:00-07:00"), VIENNA)).toBeNull();
+    expect(rangeEndText(stamp("2026-09-18"), stamp("2026-09-19"), VIENNA)).toBeNull();
+  });
+
+  it("draws the end of a span by that rule", () => {
+    const root = document.createElement("div");
+    root.innerHTML =
+      '<span class="time-range"><time datetime="2026-09-18T17:00:00+00:00">a</time> – ' +
+      '<time datetime="2026-09-18T19:30:00+00:00">b</time></span>';
+    decorateDates(root, NOW, "UTC");
+    const [from, to] = Array.from(root.querySelectorAll("time"));
+    expect(from!.textContent).toBe("Fri, Sep 18, 2026, 17:00");
+    expect(to!.textContent).toBe("19:30");
+    expect(to!.title).toContain("2026-09-18 19:30:00 UTC");
   });
 });
 

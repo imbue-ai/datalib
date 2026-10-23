@@ -65,7 +65,8 @@ export type HandleKind =
   | "google"
   | "github"
   | "gitlab"
-  | "notion";
+  | "notion"
+  | "whatsapp";
 
 export function handleKind(handle: string): HandleKind | null {
   const kind = handle.slice(0, handle.indexOf(":"));
@@ -78,7 +79,8 @@ export function handleKind(handle: string): HandleKind | null {
     kind === "google" ||
     kind === "github" ||
     kind === "gitlab" ||
-    kind === "notion"
+    kind === "notion" ||
+    kind === "whatsapp"
     ? kind
     : null;
 }
@@ -98,6 +100,7 @@ const KIND_ICON: Record<HandleKind, string> = {
   github: "github",
   gitlab: "gitlab",
   notion: "notion",
+  whatsapp: "whatsapp",
 };
 
 export function handleIcon(handle: string): string | null {
@@ -738,6 +741,38 @@ export function chipCell(
   a.dataset.shownAs = shownAs;
   drawChip(a, chipLook(handle, shownAs, who ?? { mine: null, sourceContacts: [] }, canLink));
   return a;
+}
+
+/** A conversation titled by the people it is named after: one person's
+ *  chip, or for several one pill with their photos side by side and each
+ *  name a chip of its own, so each still opens, links and copies alone. */
+export function peopleTitle(named: { handle: string; shownAs: string }[]): HTMLElement {
+  const canLink = canLinkHandles();
+  const drawn = named.map(({ handle, shownAs }) => ({
+    handle,
+    shownAs,
+    who: people.lookup(handle) ?? NOBODY,
+  }));
+  if (drawn.length === 1) {
+    const [p] = drawn;
+    return chipCell(p!.handle, p!.shownAs, p!.who, canLink);
+  }
+  const group = document.createElement("span");
+  group.className = "chip-group";
+  const faces = document.createElement("span");
+  faces.className = "chip-group-faces";
+  faces.setAttribute("aria-hidden", "true");
+  group.append(faces);
+  drawn.forEach(({ handle, shownAs, who }, i) => {
+    const look = chipLook(handle, shownAs, who, canLink);
+    faces.append(chipLead(document, look) ?? chipLead(document, { ...look, initial: "?" })!);
+    if (i > 0) group.append(", ");
+    const name = chipCell(handle, shownAs, who, canLink);
+    drawChip(name, { ...look, photo: null, initial: null, icon: null });
+    name.classList.add("chip-bare");
+    group.append(name);
+  });
+  return group;
 }
 
 /** A chip that shows the identifier rather than the person, for a list of

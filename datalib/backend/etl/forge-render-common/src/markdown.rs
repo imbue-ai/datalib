@@ -8,8 +8,8 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl_render::front_matter::yaml_scalar;
-use datalib_etl_render::html::{escape_md_inline, md_code_span, md_link_dest};
-use datalib_etl_render::message::{chip_link, stamp_text_html};
+use datalib_etl_render::html::{escape_md_inline, md_code_span};
+use datalib_etl_render::message::{chip_link, source_link, stamp_text_html};
 use datalib_etl_render::title::Title;
 use datalib_handle::Handle;
 
@@ -154,7 +154,7 @@ fn header(c: &Comment) -> String {
     let link = c
         .url
         .as_deref()
-        .map(|u| format!(" — [link]({})", md_link_dest(u)))
+        .map(|u| format!(" {}", source_link(u)))
         .unwrap_or_default();
     let state = c
         .state
@@ -305,7 +305,8 @@ mod tests {
         assert!(
             body.contains(&format!(
                 "**@{escaped}** *({escaped})* · <time datetime=\"2364-04-11\">Sat Apr 11th, 2364</time> \
-                 — [link](<https://e.invalid/c (1)>)"
+                 <a class=\"source-link\" href=\"https://e.invalid/c (1)\" target=\"_blank\" \
+                 rel=\"noopener noreferrer\">↗</a>"
             )),
             "{body}"
         );
