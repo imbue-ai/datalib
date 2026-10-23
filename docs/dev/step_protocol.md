@@ -554,10 +554,15 @@ migrated. The qmd steps have nothing to answer.
 
 ## Compact
 
-`datalib-dag --compact` asks every step that takes the verb to give
-back the disk its history holds, once each, with `--compact` appended.
-It needs the root to itself, as `--reset` does, so nothing reads a
-store while its history goes. The step decides what that means for
+`datalib-dag --compact`, or the app's `POST /api/compact` (a right-click
+on the data root's size in the status bar), asks every step that takes
+the verb to give back the disk its history holds, once each, with
+`--compact` appended. Nothing that reads a store may be reading it while
+its history goes: the command line needs the root to itself, as
+`--reset` does, and the app's loop holds the steps it asks and every
+step that reads them until it is done (`dag/README.md` §"Resets and
+purges"). The search applet, which the loop does not schedule, reads on
+through a compaction of the grid index (`doltlite.md` § Trees). The step decides what that means for
 what it wrote, runs nothing else, and reports its version as a run
 would; the runner records it, so a step that kept its content and
 reports a content version moves nothing downstream. Report nothing when

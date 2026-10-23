@@ -7,8 +7,12 @@
 // the backend walks on a tick *while a sync runs* and otherwise on
 // request. The free space is `GET /api/pipeline/disk`, looked at every
 // ten seconds; while the config's `[disk_space]` floor holds the steps it
-// turns red and a toast says syncs are paused.
+// turns red and a toast says syncs are paused. A right-click on the size
+// offers to compact the library's history; the size drops when the walk
+// at the end of that busy period says so.
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import ChipMenu from "@/cards/ChipMenu.ce.vue";
+import { adoptStyles } from "@/cards/documentStyles";
 import { type DiskFree, type PipelineStorage } from "@/api";
 import { useApi } from "@/cards/cardApi";
 import { formatBytes } from "@/config/bytes";
@@ -17,13 +21,14 @@ import { sparkTrack } from "@/cards/cellRenderers";
 // one is `tg-` prefixed, so loading it here styles nothing else.
 import "@/cards/tableGrid.css";
 import { changed, subscribeLive } from "@/live";
-import { isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
+import { confirmAction, isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
 import { copyToClipboard } from "@/clipboard";
 import { dismissToast, pushToast } from "@/toasts";
 import { CLEARED_MESSAGE, diskCrossing, diskTitle, lowDiskMessage } from "@/config/diskFree";
 import { PATH_GLYPHS } from "@/config/glyphs";
 
-const { fetchPipelineStorage, fetchPipelineDisk } = useApi();
+const { fetchPipelineStorage, fetchPipelineDisk, compactHistory } = useApi();
+adoptStyles(ChipMenu);
 
 const storage = ref<PipelineStorage | null>(null);
 const canReveal = isDesktopApp();
@@ -118,6 +123,34 @@ async function copyPath() {
   pushToast(ok ? "Data root path copied" : "Could not copy the path", ok ? "info" : "error");
 }
 
+const menuAt = ref<{ x: number; y: number } | null>(null);
+const MENU = [{ id: "compact", label: "Compact history…" }];
+
+const COMPACT_CONFIRM =
+  "Compact the library’s history?\n\n" +
+  "Every source’s rendered documents and the search index keep one commit " +
+  "of history instead of one per run, and the disk the rest held is given " +
+  "back. Your documents and downloads stay as they are, and so does the " +
+  "history of each download. " +
+  "Syncs reading these stores wait until it is done, a minute or two on a " +
+  "large library.";
+
+async function compact() {
+  menuAt.value = null;
+  if (!(await confirmAction(COMPACT_CONFIRM))) return;
+  try {
+    const done = await compactHistory();
+    pushToast(
+      done === "done"
+        ? "Compacted the history."
+        : "Compacting the history. The size here drops when it is done.",
+      "info",
+    );
+  } catch (e) {
+    pushToast(`Could not compact the history: ${e instanceof Error ? e.message : e}`, "error");
+  }
+}
+
 let unsubscribe: (() => void) | null = null;
 onMounted(() => {
   // Fresh on the first paint: the backend only walks on its own while
@@ -167,7 +200,20 @@ onBeforeUnmount(() => unsubscribe?.());
         </svg>
       </button>
     </span>
-    <span class="root-bar-spark" ref="sparkHost" :title="title"></span>
+    <span
+      class="root-bar-spark"
+      ref="sparkHost"
+      :title="title"
+      @contextmenu.prevent="menuAt = { x: $event.clientX, y: $event.clientY }"
+    ></span>
+    <ChipMenu
+      v-if="menuAt"
+      :entries="MENU"
+      :x="menuAt.x"
+      :y="menuAt.y"
+      @pick="compact"
+      @close="menuAt = null"
+    />
     <span
       class="root-bar-spark root-bar-free"
       :class="{ 'root-bar-low': disk?.low }"

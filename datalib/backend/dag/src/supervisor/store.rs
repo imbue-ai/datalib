@@ -109,7 +109,8 @@ impl RequestOutcome {
 }
 
 /// What a wipe does: a reset empties what steps wrote, a purge deletes
-/// the trees of groups the config no longer names.
+/// the trees of groups the config no longer names, a compaction folds
+/// away history nothing reads (`step_protocol.md` § Compact).
 #[derive(
     Debug,
     Clone,
@@ -127,6 +128,7 @@ impl RequestOutcome {
 pub enum WipeKind {
     Reset,
     Purge,
+    Compact,
 }
 
 impl WipeKind {

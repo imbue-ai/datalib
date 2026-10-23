@@ -755,6 +755,11 @@ message. `dolt_hashof_db(<rev>)` answers the tree's hash, and
   between it and the fold. After the fold and gc it reads through
   `dolt_at_<t>('tree/<hash>')`, a detached open of `<file>@tree/<hash>`,
   and `dolt_diff_<t>('tree/<hash>', 'main')`.
+- **A read-only connection that reads each request in a transaction of
+  its own reads on through a fold and gc in another process**: a
+  transaction begun before finishes on the tree it began on, and the next
+  one reads the folded `main`. That is the search applet's connection to
+  the grid index.
 - **A fold must not drop a commit a reader is open on.** A detached
   `<file>@<commit>` reader in another process, whose commit a fold and
   gc dropped, gets "database disk image is malformed" on its next read

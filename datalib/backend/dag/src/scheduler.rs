@@ -228,13 +228,8 @@ impl Runner {
     pub async fn compact(&self, graph: &Graph) -> Result<Vec<Compacted>> {
         let store = crate::supervisor::store::Store::open(&self.data_root).await?;
         let mut out = Vec::new();
-        let steps = graph
-            .topo
-            .iter()
-            .map(|&i| &graph.steps[i])
-            .filter(|spec| spec.compacts)
-            .map(|spec| &spec.id);
-        for step in steps {
+        let steps = crate::supervisor::wipe::compact_targets(graph, &[]);
+        for step in steps.iter().map(|&i| &graph.steps[i].id) {
             let answer = match self
                 .invoke_once(graph, step, &[crate::subprocess::COMPACT_FLAG])
                 .await
@@ -251,6 +246,19 @@ impl Runner {
         }
         store.close().await;
         Ok(out)
+    }
+
+    /// `step` invoked once with `--compact`, and the version it reports.
+    pub(crate) async fn compact_one(
+        &self,
+        graph: &Graph,
+        step: &StepId,
+    ) -> std::result::Result<Option<String>, String> {
+        let (i, outcome) = self
+            .invoke_once(graph, step, &[crate::subprocess::COMPACT_FLAG])
+            .await?;
+        reported_version(&graph.steps[i], &graph.fingerprints[i], &outcome.outputs)
+            .map_err(|e| format!("{e:#}"))
     }
 
     /// One invocation of `step` with `verb` appended to its argv, outside
