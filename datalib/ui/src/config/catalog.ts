@@ -662,6 +662,13 @@ export const CATALOG: CatalogEntry[] = [
           { label: "Only the labels I choose", fields: ["only_extract_labels"] },
         ],
       },
+      {
+        heading: "Start from a Takeout?",
+        answers: [
+          { label: "No, download every message" },
+          { label: "Yes, I have a Google Takeout of this account", fields: ["mbox.path"] },
+        ],
+      },
       { heading: "Large messages", fields: ["common.blob_size_limit_bytes"] },
     ],
     fields: [
@@ -683,6 +690,17 @@ export const CATALOG: CatalogEntry[] = [
         help:
           "A nested label is named in full (Work/Projects), and choosing a parent does not " +
           "include its children. A label added later brings in its mail on the next sync.",
+      },
+      {
+        kind: "path",
+        picks: "dir",
+        pickTitle: "Choose the Mail folder of your Google Takeout",
+        target: "mbox.path",
+        label: "Takeout Mail folder",
+        help:
+          "Messages in the Takeout are not downloaded again, so the first sync takes minutes " +
+          "rather than hours. Mail newer than the Takeout, and every message's labels, still " +
+          "come from Gmail.",
       },
       {
         kind: "bytes",

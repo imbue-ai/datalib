@@ -84,6 +84,27 @@ describe("writing a step", () => {
     expect(toml).toContain('only_extract_labels = ["Inbox", "Work/Projects"]');
   });
 
+  /// A Takeout of the account is the mbox beside the `gmail` table: the
+  /// one pairing of methods the email source accepts.
+  it("writes a chosen Takeout beside the gmail table", () => {
+    const values = seedFieldValues(GMAIL);
+    values["mbox.path"] = "~/backups/Takeout/Mail";
+    const toml = buildStep({ entry: GMAIL, group: "gmail", phase: "download", values });
+    expect(toml).toContain("[steps.params.gmail]");
+    expect(toml).toContain("[steps.params.mbox]");
+    expect(toml).toContain('path = "~/backups/Takeout/Mail"');
+  });
+
+  it("writes no mbox table when no Takeout is chosen", () => {
+    const toml = buildStep({
+      entry: GMAIL,
+      group: "gmail",
+      phase: "download",
+      values: seedFieldValues(GMAIL),
+    });
+    expect(toml).not.toContain("mbox");
+  });
+
   /// The download paces itself against Gmail's quota and backs off when
   /// Google rate-limits it, so there is nothing about throughput for a
   /// person to guess at.
@@ -167,6 +188,18 @@ inputs = ["fastmail/ingest"]
 outlink_format = "fastmail"
 
 [[groups]]
+id = "seeded"
+type = "email"
+
+[[steps]]
+group = "seeded"
+function = "ingest"
+[steps.params.gmail]
+user_id = "me"
+[steps.params.mbox]
+path = "~/backups/Takeout/Mail"
+
+[[groups]]
 id = "archive"
 type = "email"
 
@@ -182,6 +215,15 @@ path = "~/takeout/mail.mbox"
   it("tells a Gmail fetch step from a Fastmail one by its params", () => {
     expect(catalogForStep("email", byId("gmail/ingest").params)!.label).toBe("Gmail");
     expect(catalogForStep("email", byId("fastmail/ingest").params)!.label).toBe("Fastmail");
+  });
+
+  /// A Gmail source that starts from a Takeout reopens on the Gmail form,
+  /// with its Takeout as an answer, not on the formless mbox catch-all.
+  it("reads a Gmail step with a Takeout back onto the Gmail form", () => {
+    const step = byId("seeded/ingest");
+    const entry = catalogForStep("email", step.params)!;
+    expect(entry.label).toBe("Gmail");
+    expect(paramsAreRepresentable(step, entry)).toEqual({ ok: true });
   });
 
   it("falls back to the catch-all for a mode it has no form for", () => {

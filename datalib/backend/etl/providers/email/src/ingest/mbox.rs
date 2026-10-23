@@ -142,7 +142,7 @@ async fn read_files(opts: FetchOptions, found: RunProblems) -> Result<FetchSumma
         .map(|(id, name)| (name.clone(), id.clone()))
         .collect();
     let unfiltered = label_filter.is_none();
-    let mut accumulator = Accumulator::new(account_id.clone(), label_filter, real_ids);
+    let mut accumulator = Accumulator::new(account_id.clone(), label_filter, real_ids, false);
     let mut summary = FetchSummary::default();
     let mut batch = PendingBatch::default();
     let mut emails_seen: u64 = 0;
@@ -265,6 +265,145 @@ async fn read_files(opts: FetchOptions, found: RunProblems) -> Result<FetchSumma
         }
     }
 
+    Ok(summary)
+}
+
+/// A Google Takeout a Gmail API sync starts from: the store it seeds,
+/// and what that sync already knows about the account.
+pub struct Seed<'a> {
+    pub db: &'a RawDb,
+    pub input_path: PathBuf,
+    pub account_id: String,
+    /// Label name → the mailbox id Gmail's `labels.list` gave it.
+    pub real_ids: HashMap<String, String>,
+    /// Email ids the store holds a row for, from either source.
+    pub held: HashSet<String>,
+    /// Email ids Gmail lists, once its listing has covered everything
+    /// the source admits. A message outside it is gone upstream.
+    pub listed: Option<HashSet<String>>,
+    pub only_labels: Vec<String>,
+    pub sealer: Option<&'a datalib_etl::raw_store::Sealer>,
+    pub progress: Progress,
+    pub stop: datalib_etl::stop::StopFlag,
+}
+
+#[derive(Debug, Default, Serialize, Clone)]
+pub struct SeedSummary {
+    /// Messages the Takeout added to the store.
+    pub seeded: usize,
+    /// Messages the store already held, from the API or an earlier seed.
+    pub held: usize,
+    /// Messages Gmail's listing no longer has.
+    pub gone_upstream: usize,
+    /// Messages with no Gmail id on their `From ` line: not a Takeout's.
+    pub not_takeout: usize,
+    pub parse_errors: usize,
+}
+
+/// Read a Takeout into a Gmail store, adding only what the store does
+/// not hold and Gmail has not said is gone. Nothing is updated or
+/// deleted: what exists and how it is labelled is the API's to say, and
+/// the sync that follows says it. So every run may read the Takeout
+/// again, and one that finds nothing new writes nothing.
+pub async fn seed(s: Seed<'_>, found: &RunProblems) -> Result<SeedSummary> {
+    let (files, walk_errors) = list_mbox_files(&s.input_path)?;
+    found.extend(walk_problem(&s.input_path, &walk_errors));
+    let known_blobs = s.db.loaded_blob_ids().await?;
+    s.progress
+        .set_length(Some(files.iter().map(|f| f.size).sum()));
+    let label_filter = (!s.only_labels.is_empty())
+        .then(|| s.only_labels.iter().map(|l| l.trim().to_string()).collect());
+    let mut accumulator =
+        Accumulator::new(s.account_id.clone(), label_filter, s.real_ids.clone(), true);
+    let mut summary = SeedSummary::default();
+    let mut ignored = FetchSummary::default();
+    let mut batch = PendingBatch::default();
+    let mut skipped: Vec<SkippedRecord> = Vec::new();
+    let now = datalib_time::IsoOffsetTimestamp::now_local();
+
+    for f in &files {
+        let messages = match iter_mbox_messages(&f.path) {
+            Ok(messages) => messages,
+            Err(e) => {
+                summary.parse_errors += 1;
+                found.push(file_unread(f, &e));
+                continue;
+            }
+        };
+        let mut unparsed = Unparsed::default();
+        let mut no_gmail_id = 0usize;
+        for message in messages {
+            if s.stop.requested() {
+                break;
+            }
+            let message = match message {
+                Ok(m) => m,
+                Err(e) => {
+                    summary.parse_errors += 1;
+                    found.push(file_unread(f, &e));
+                    break;
+                }
+            };
+            s.progress.inc(message.bytes_consumed);
+            let Some(gmail_id) = message.gmail_id else {
+                no_gmail_id += 1;
+                continue;
+            };
+            let email_id = gmail_id.key();
+            if s.held.contains(&email_id) {
+                summary.held += 1;
+                continue;
+            }
+            if s.listed.as_ref().is_some_and(|l| !l.contains(&email_id)) {
+                summary.gone_upstream += 1;
+                continue;
+            }
+            match accumulator.ingest_message(
+                &message.raw,
+                Some(gmail_id),
+                &known_blobs,
+                &mut batch,
+                &mut ignored,
+            ) {
+                Ok(true) if batch.emails.len() >= FLUSH_BATCH => {
+                    summary.seeded += flush_seed(s.db, &mut batch, &now).await?;
+                    if let Some(sealer) = s.sealer {
+                        sealer.wrote(FLUSH_BATCH as u64).await;
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    summary.parse_errors += 1;
+                    unparsed.add(&e);
+                }
+            }
+        }
+        skipped.extend(unparsed.problem(f));
+        if no_gmail_id > 0 {
+            summary.not_takeout += no_gmail_id;
+            skipped.push(SkippedRecord {
+                entry: f.rel.clone(),
+                problem: datalib_problems::Problem::record(
+                    datalib_problems::Reason::NoIdentity,
+                    &format!(
+                        "{}: {no_gmail_id} messages carry no Gmail id on their `From ` line, so \
+                         they are not this account's Takeout and were left out",
+                        f.rel
+                    ),
+                ),
+            });
+        }
+    }
+    summary.seeded += flush_seed(s.db, &mut batch, &now).await?;
+    found.skipped("takeout", skipped);
+    tracing::info!(
+        event = "gmail_takeout_seed",
+        seeded = summary.seeded,
+        held = summary.held,
+        gone_upstream = summary.gone_upstream,
+        not_takeout = summary.not_takeout,
+        "read the Takeout the Gmail source starts from",
+    );
     Ok(summary)
 }
 
@@ -575,6 +714,10 @@ struct Accumulator {
     /// blob lands). `None` = ingest everything. See
     /// [`FetchOptions::only_labels`].
     label_filter: Option<HashSet<String>>,
+    /// Seeding a Gmail store: a label Gmail does not list is left off
+    /// rather than given a row of its own, since the API refiles every
+    /// seeded message.
+    only_real_labels: bool,
 }
 
 struct MailboxEntry {
@@ -595,6 +738,7 @@ impl Accumulator {
         account_id: String,
         label_filter: Option<HashSet<String>>,
         real_ids: HashMap<String, String>,
+        only_real_labels: bool,
     ) -> Self {
         Self {
             account_id,
@@ -604,6 +748,7 @@ impl Accumulator {
             seen_email_ids: BTreeSet::new(),
             labels_seen: BTreeSet::new(),
             label_filter,
+            only_real_labels,
         }
     }
 
@@ -724,6 +869,8 @@ impl Accumulator {
                 continue;
             }
             match map_label(trimmed) {
+                LabelMap::Mailbox { .. }
+                    if self.only_real_labels && !self.real_ids.contains_key(trimmed) => {}
                 LabelMap::Mailbox { role } => {
                     let id = self.ensure_mailbox(trimmed, role);
                     if !mailbox_ids.contains(&id) {
@@ -833,6 +980,44 @@ async fn flush_batch(
     summary.emails_upserted += batch.emails.len();
     batch.clear();
     Ok(())
+}
+
+/// [`flush_batch`] for a seed: the email rows and their joins, and the
+/// thread rows rebuilt from every email the store holds for them, since
+/// the API may already hold the rest of a seeded message's thread.
+async fn flush_seed(
+    db: &RawDb,
+    batch: &mut PendingBatch,
+    now: &datalib_time::IsoOffsetTimestamp,
+) -> Result<usize> {
+    if batch.emails.is_empty() {
+        return Ok(0);
+    }
+    let threads: BTreeSet<(String, String)> = batch
+        .emails
+        .iter()
+        .map(|r| (r.account_id.clone(), r.thread_id.clone()))
+        .collect();
+    let mut tx = db.pool().begin().await.context("begin seed tx")?;
+    bulk_insert_emails(&mut tx, &batch.emails).await?;
+    bulk_insert_email_mailboxes(&mut tx, &batch.emails).await?;
+    bulk_insert_email_keywords(&mut tx, &batch.emails).await?;
+    super::listed::rebuild_threads_in_tx(&mut tx, now, &threads).await?;
+    tx.commit().await.context("commit seed tx")?;
+    batch
+        .cas
+        .flush(db.pool(), db.cas(), |email_id, blob_id, blake3| {
+            EmlBlobRow {
+                id: EmlBlobRow::pk_recipe(email_id, blob_id),
+                email_id: email_id.to_string(),
+                blob_id: blob_id.to_string(),
+                blake3: blake3.map(str::to_string),
+            }
+        })
+        .await?;
+    let n = batch.emails.len();
+    batch.clear();
+    Ok(n)
 }
 
 async fn flush_account_and_lookups(

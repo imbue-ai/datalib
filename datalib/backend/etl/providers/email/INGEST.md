@@ -224,6 +224,12 @@ with nothing listed to go on with.
   up ends the fetch with one `phase:messages.get` row, and the run
   still succeeds, so what it fetched is kept; the next run fetches what
   is still owed. With nothing mirrored at all, the run fails instead.
+- A Takeout the source starts from
+  ([`email_download_modes.md`](/docs/dev/email_download_modes.md)
+  §"Starting from a Takeout") reports a file it cannot read as a
+  `listing:mbox <file>` row, as the mbox mode does, and messages with
+  no Gmail id as one `skipped:takeout` row per file. Neither stops the
+  API part: what the Takeout did not supply is fetched whole.
 
 **mbox.** Every run reads every `.mbox` under the input, and keeps no
 record of what it read before. The folder is the unit of completeness:
@@ -276,6 +282,9 @@ again must leave the store an uninterrupted run leaves, from an empty
 store and from the store an earlier run left. `tests/email_tests/jmap_render.rs` builds a parsed store in
 memory with real `.eml` bytes and renders it; `jmap_mbox.rs` runs the
 mbox mode end to end over `tests/fixtures/mbox/star_trek.mbox`.
+`gmail_takeout_seed.rs` starts a Gmail mirror from a Takeout: no seeded
+message is fetched whole, a message Gmail no longer has goes and stays
+gone, and a relabel asks for labels alone.
 
 ## The raw store's shape
 

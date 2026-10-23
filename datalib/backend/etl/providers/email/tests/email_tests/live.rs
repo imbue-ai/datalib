@@ -215,10 +215,10 @@ async fn gmail_live_one_label_roundtrip() {
         second.blobs_stored, 0,
         "the second run must not re-store any .eml bytes",
     );
-    // `messages.get` is 20 units; the incremental path should be a
-    // profile + labels + history call and nothing else.
+    // The cheapest `messages.get` is 20 units; the incremental path
+    // should be a profile + labels + history call and nothing else.
     assert!(
-        second.quota_units_spent < u64::from(gmail_api::api::UNITS_MESSAGES_GET),
+        second.quota_units_spent < u64::from(gmail_api::api::UNITS_MESSAGES_GET_MINIMAL),
         "second run spent {} quota units — it fetched message bodies it already had",
         second.quota_units_spent,
     );
