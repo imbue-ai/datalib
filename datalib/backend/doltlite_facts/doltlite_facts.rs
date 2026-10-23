@@ -1594,8 +1594,9 @@ mod trees {
         assert_eq!(tree(&mut w, "HEAD").await, before);
     }
 
-    /// A tree hash is not a ref: no read takes one. So is a commit a fold
-    /// dropped, once gc has run.
+    /// A tree hash is not a ref: no read takes one. Nor is a commit a fold
+    /// dropped, once gc has run; `dolt_hashof` calls it an invalid ref
+    /// spec. A tree is found by filtering the log on its hash.
     #[tokio::test]
     async fn a_read_names_a_ref_never_a_tree_or_a_folded_commit() {
         let (s, rows) = store_with_rows().await;
@@ -1611,6 +1612,23 @@ mod trees {
         err_contains(
             exec(&mut w, &format!("SELECT COUNT(*) FROM dolt_at_t('{rows}')")).await,
             "ref not found",
+        );
+        err_contains(
+            exec(&mut w, &format!("SELECT dolt_hashof('{rows}')")).await,
+            "invalid ref spec",
+        );
+        let holding = |tree: &str| {
+            format!("SELECT commit_hash FROM dolt_log WHERE dolt_hashof_db(commit_hash) = '{tree}'")
+        };
+        assert!(
+            texts(&mut w, &holding(&hash)).await.is_empty(),
+            "the fold kept no commit with that tree"
+        );
+        let head_tree = tree(&mut w, "HEAD").await;
+        assert_eq!(
+            texts(&mut w, &holding(&head_tree)).await,
+            [head(&mut w).await],
+            "a tree is found by the commit that holds it"
         );
     }
 

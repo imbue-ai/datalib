@@ -159,11 +159,10 @@ pub(crate) fn report_holdings(progress: &Progress, h: Holdings) {
     progress.metric(datalib_metrics::ITEMS, &[], h.items);
 }
 
-/// What a render reports: its store's HEAD, the tree's content version.
-/// Doltlite advances it only when a commit changed something, so a run
-/// that rewrote nothing reports the same string, and it is spelled as each
-/// seal spells its commit, so finishing on the commit last sealed moves
-/// nothing downstream. Without doltlite there is nothing content-derived
+/// What a render reports: its store's content version, the hash of its
+/// HEAD's tree. A run that rewrote nothing reports the same string, and it
+/// is spelled as each seal spells its commit's tree, so finishing on the
+/// commit last sealed moves nothing downstream. Without doltlite there is nothing content-derived
 /// to vouch for, and every success reads as new.
 pub fn claims(step: &str, report: &RenderReport) -> Vec<OutputClaim> {
     report
@@ -354,7 +353,7 @@ pub fn render_source(
             // `None` means nothing was dirty after all, so no
             // version moved and there is nothing to announce.
             if let Some(hash) = sealed {
-                progress.checkpoint_rows(&hash, rows);
+                progress.checkpoint_rows(&store.tree_of(&hash)?, rows);
             }
             // A seal is the one moment inside a run when everything
             // written so far is committed and nothing is half-written,
@@ -600,7 +599,7 @@ pub fn render_source(
     let versions = store.render_versions()?;
     let problems = store.own_problem_counts()?;
     let holdings = store.holdings(storage_uuid.as_deref())?;
-    let head = store.head()?;
+    let head = store.content_version()?;
     store.close();
     every_stored_version_must_be_declared(&name, &rendered_root, &versions, declared.as_ref())?;
     Ok(RenderReport {

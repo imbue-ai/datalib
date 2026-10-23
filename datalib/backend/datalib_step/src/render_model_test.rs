@@ -1185,7 +1185,7 @@ async fn a_render_reports_its_head_as_the_store_spells_it() {
     let store = datalib_etl_render::indexed_markdown::path_for(
         &datalib_etl::layout::render_markdown_root(&world.data_root, SOURCE),
     );
-    let head = doltlite_raw::head_commit_at_path(&store).await.unwrap();
+    let head = doltlite_raw::content_version_at_path(&store).await.unwrap();
     assert!(head.is_some(), "the render must have committed");
     let claimed: Vec<String> = crate::render::claims("s/render_markdown", &report)
         .into_iter()

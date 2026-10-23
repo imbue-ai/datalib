@@ -420,7 +420,7 @@ is a 409 with the store's words; a handle that does not parse is a
 | `GET`, `PUT`, `DELETE /photo/{id}` | the photo as bytes; put one (the body, with its `Content-Type`: png, jpeg, gif or webp, at most 4 MB; the route reads up to the gateway's 8 MB so the store's rule is the one that answers), answering its new `photo_url`; drop it |
 | `GET /contact/{id}/edit` | what the card edits, as published: name, note, fields |
 | `POST`, `GET /contact/{id}/draft` | open the contact's draft (cut it if there is none) / read it: `{base, mine, published, published_commit}` |
-| `PUT`, `DELETE /contact/{id}/draft` | autosave the whole edit onto the draft, uncommitted / discard the draft |
+| `PUT`, `DELETE /contact/{id}/draft` | autosave the whole edit onto the draft, uncommitted, answering `{handles: {<field_id>: <handle>}}` for each field whose value is an address or number / discard the draft |
 | `POST /contact/{id}/draft/save` | `{seen}`, the published commit the card last showed; `{"outcome": "saved", "commit"}`, or `{"outcome": "stale", "view"}` with nothing saved when the contact moved since |
 
 The config entry is `[[applets]] id = "datalib_contacts"` with
@@ -466,9 +466,32 @@ the draft was cut from, the form and what is published (`merge3` in
 published elsewhere to something the draft left alone is taken into the
 form, and a part both changed differently is marked "changed elsewhere"
 with *Use theirs* and *Keep mine*. After a stale save, saving again
-keeps what the form says. Not built yet:
-copying a field from a source's record, saying how an email or phone
-field stands against the links, and undo
+keeps what the form says.
+
+The card also sets the contact's fields beside the rest of what it
+knows (`contactFields.ts`):
+
+- **Each address or number field says how it stands against the
+  links.** Linked to this contact, it says nothing more; linked to
+  nobody, it offers *Link it*, one click and never automatic; linked to
+  someone else, it shows that contact's chip, which also catches a
+  typo. The handle comes from the store, which answers each field's
+  handle on every autosave, so the card never repeats the handle rules.
+  A linked address or number that no field holds offers *Add as a
+  field*.
+- **A source's section copies into the contact.** *Copy to …* under
+  each source lists what it says that a contact can hold (name,
+  addresses and numbers, title, organization, its details as fields,
+  note), each with *Copy*, and *Copy all*, which leaves the name to be
+  picked on its own. Copying opens the draft if it is not open; a value
+  the contact already holds, written however, says so instead. A copied
+  field records the source and record it came from (`copied_from`), and
+  typing over it makes it the person's own.
+- **A copy does not follow its source.** Where the source a field was
+  copied from now says something else, the field says so ("… now says
+  *X*", with *Take it*), or that the source no longer says it.
+
+Not built yet: history and undo, and the export
 ([`plans/contact_editing.md`](plans/contact_editing.md)).
 
 ## In the UI

@@ -340,3 +340,63 @@ declare const Buffer: { from(data: string, encoding: "base64"): Uint8Array };
 /// A one-pixel PNG, the smallest photo the contacts app takes.
 const PNG_1PX =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+/// Copying what a source says into your contact: the address book's
+/// record of Geordi offers each value, a copied address that nobody holds
+/// offers to be linked, and the saved field remembers where it came from.
+test("a source's values copy into the contact, and a copied address links in one click", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(90_000);
+  const handle = "email:glaforge@enterprise.starfleet";
+  const other = "email:laforge@enterprise.starfleet";
+  const made = await request.post("/applet/datalib_contacts/contacts", {
+    data: { name: "Geordi", handles: [handle] },
+  });
+  expect(made.ok(), await made.text()).toBeTruthy();
+  const { contact_id: id } = (await made.json()) as { contact_id: string };
+
+  await page.goto(`/${encodeURIComponent(`personView(${JSON.stringify(handle)}, {})`)}`);
+  const card = page.locator(".person");
+  await expect(card.locator(".person-name")).toHaveText(/Geordi$/, { timeout: 15_000 });
+
+  // The address book's record holds his second address too.
+  const book = card.locator(".person-section", { hasText: "laforge@enterprise.starfleet" }).last();
+  await book.locator(".person-copy summary").click();
+  await book.getByRole("button", { name: "Copy Title “Chief Engineer”" }).click();
+  await book
+    .getByRole("button", { name: "Copy Email (work) “laforge@enterprise.starfleet”" })
+    .click();
+  await expect(card.getByLabel("Title", { exact: true })).toHaveValue("Chief Engineer");
+  await expect(book.locator(".person-copy-values")).toContainText(
+    "Title “Chief Engineer”in your contact",
+  );
+
+  // The copied address is linked to nobody; one click links it here.
+  await card.getByRole("button", { name: "Link it" }).click();
+  await expect
+    .poll(async () => {
+      const r = await request.post("/applet/datalib_contacts/resolve", {
+        data: { handles: [other] },
+      });
+      return ((await r.json()) as { resolved: Record<string, { key: string }> }).resolved[other]
+        ?.key;
+    })
+    .toBe(id);
+  await expect(card.getByRole("button", { name: "Link it" })).toHaveCount(0);
+
+  await card.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(card.getByRole("button", { name: "Edit", exact: true })).toBeVisible();
+  const published = (await (
+    await request.get(`/applet/datalib_contacts/contact/${id}/edit`)
+  ).json()) as { fields: { kind: string; value: string; copied_from: unknown }[] };
+  expect(published.fields).toEqual([
+    expect.objectContaining({
+      kind: "title",
+      value: "Chief Engineer",
+      copied_from: expect.objectContaining({ source_id: expect.any(String) }),
+    }),
+    expect.objectContaining({ kind: "email", value: "laforge@enterprise.starfleet" }),
+  ]);
+});

@@ -458,8 +458,16 @@ export function openDraft(contactId: string): Promise<DraftView> {
   return call<DraftView>(`${contactPath(contactId)}/draft`, { method: "POST" });
 }
 
-export async function autosaveDraft(contactId: string, edit: ContactEdit): Promise<void> {
-  await call(`${contactPath(contactId)}/draft`, { method: "PUT", body: JSON.stringify(edit) });
+/** Answers each field's value as a handle, by field id, where it is one. */
+export async function autosaveDraft(
+  contactId: string,
+  edit: ContactEdit,
+): Promise<Record<string, string>> {
+  const r = await call<{ handles: Record<string, string> }>(`${contactPath(contactId)}/draft`, {
+    method: "PUT",
+    body: JSON.stringify(edit),
+  });
+  return r.handles;
 }
 
 /** Publish the draft, unless the contact moved since `seen`, the

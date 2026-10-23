@@ -418,7 +418,7 @@ pub fn render_diff_source(
     // No storage report in a diff store (`RunEnd::storage` is `None`
     // above), so nothing is excluded from the count.
     let holdings = store.holdings(None)?;
-    let head = store.head()?;
+    let head = store.content_version()?;
     store.close();
     every_stored_version_must_be_declared(&name, &rendered_root, &versions, declared.as_ref())?;
     Ok(RenderReport {
