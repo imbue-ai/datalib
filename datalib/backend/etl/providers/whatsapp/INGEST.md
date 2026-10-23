@@ -201,7 +201,7 @@ inputs = ["whatsapp/ingest"]
 
 The key comes from `WHATSAPP_BACKUP_DECRYPTION_KEY` (or the env var
 named by `key_env_var`); how to get it is in
-[`getting_your_data.md`](/docs/user/getting_your_data.md#whatsapp).
+[`getting_your_data.md`](/docs/user/getting_your_data.md#whatsapp-backups).
 
 ## Measuring a backup
 

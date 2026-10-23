@@ -29,18 +29,13 @@ pub fn sample_profile() -> ContactRenderProfile {
     }
 }
 
-/// A stand-in photo: a disc with initials, small enough to keep in a
-/// golden, and drawn by every browser.
-fn avatar(initials: &str, hue: u16) -> Photo {
-    let svg = format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 96 96\">\
-         <rect width=\"96\" height=\"96\" fill=\"hsl({hue} 45% 45%)\"/>\
-         <text x=\"48\" y=\"60\" font-family=\"sans-serif\" font-size=\"36\" \
-         fill=\"#fff\" text-anchor=\"middle\">{initials}</text></svg>"
-    );
-    Photo::Inline {
-        content_type: "image/svg+xml".to_string(),
-        bytes: svg.into_bytes(),
+/// A stand-in photo, as the samples' blob store would hold it. Nothing
+/// serves it, so the preview draws a grey disc in its place.
+fn avatar(initials: &str) -> Photo {
+    Photo::Stored {
+        step: "samples/ingest".to_string(),
+        blake3: datalib_etl::blob_cas::blake3_hex(initials.as_bytes()),
+        content_type: "image/jpeg".to_string(),
     }
 }
 
@@ -52,6 +47,7 @@ fn doc(n: u8, contact: NormalizedContact, group_label: &str) -> ContactDoc {
         member_handles: Vec::new(),
         upstream_account: None,
         inputs: Vec::new(),
+        problems: Vec::new(),
     }
 }
 
@@ -75,7 +71,7 @@ fn everything() -> ContactDoc {
         Detail::new("Birthday", "2305-07-13"),
     ];
     c.note = Some("Make it so.\nPrefers Earl Grey, hot.".into());
-    c.photo = Some(avatar("JP", 215));
+    c.photo = Some(avatar("JP"));
     doc(1, c, "Bridge")
 }
 

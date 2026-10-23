@@ -13,7 +13,7 @@ use tokio::sync::watch;
 use crate::config::DagConfig;
 use crate::run_state::RunState;
 use crate::runs_sink::RunStoreSink;
-use crate::subprocess::{ENV_CHECKPOINT_CADENCE, ENV_NOW, ENV_RUN_ID};
+use crate::subprocess::{ENV_CHECKPOINT_CADENCE, ENV_NOW, ENV_RENDER_PAGES, ENV_RUN_ID};
 use crate::supervisor::announce::{Listener, CONFIG_CHANGED};
 use crate::supervisor::store::{RequestOutcome, Store};
 
@@ -140,6 +140,9 @@ pub fn step_env(
     vars.insert("PYTHONUNBUFFERED".into(), "1".into());
     if let Some(cadence) = cfg.checkpoint_cadence {
         vars.insert(ENV_CHECKPOINT_CADENCE.into(), cadence.encode());
+    }
+    if let Some(pages) = cfg.render_pages {
+        vars.insert(ENV_RENDER_PAGES.into(), pages.encode());
     }
     // A `RUST_LOG` already in the environment is a person's choice and
     // wins; else the config's level.
@@ -467,5 +470,29 @@ mod tests {
         let without = crate::config::parse("").unwrap();
         let env = step_env(&without, None, &[], "now", "run").unwrap();
         assert!(!env.vars.contains_key(ENV_CHECKPOINT_CADENCE));
+    }
+
+    /// A config's `[render_pages]` reaches every step the same way.
+    #[test]
+    fn the_configs_render_pages_reach_every_step() {
+        let with = crate::config::parse(
+            "[render_pages]
+buckets = 200
+",
+        )
+        .unwrap();
+        let env = step_env(&with, None, &[], "now", "run").unwrap();
+        let pages = crate::config::RenderPages::decode(&env.vars[ENV_RENDER_PAGES]);
+        assert_eq!(
+            pages,
+            Some(crate::config::RenderPages {
+                buckets: Some(200),
+                blob_mb: None,
+            })
+        );
+
+        let without = crate::config::parse("").unwrap();
+        let env = step_env(&without, None, &[], "now", "run").unwrap();
+        assert!(!env.vars.contains_key(ENV_RENDER_PAGES));
     }
 }

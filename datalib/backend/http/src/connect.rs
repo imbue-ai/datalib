@@ -334,6 +334,11 @@ pub struct ConnectRequest {
     /// [`EPHEMERAL_BROWSER_ENV`].
     #[serde(default)]
     pub ephemeral_browser: bool,
+    /// Create the OAuth client the service signs in with before the
+    /// login, with `latchkey auth browser-prepare`: Google's services,
+    /// once latchkey has said it holds none ([`IssueKind::NoOauthClient`]).
+    #[serde(default)]
+    pub create_oauth_client: bool,
 }
 
 /// A `latchkey services register` invocation, as data. The wizard
@@ -390,6 +395,9 @@ pub enum ConnectPhase {
     Preparing,
     /// No browser on the machine: fetching one, a one-time download.
     DownloadingBrowser,
+    /// The browser is open on Google Cloud's console, where latchkey
+    /// creates a project and an OAuth client; minutes, mostly unattended.
+    CreatingClient,
     /// The browser is open on the service's login page.
     SigningIn,
 }
@@ -448,6 +456,55 @@ pub async fn set_credential(
         Err(e) => {
             let message = scrub(&e.to_string());
             tracing::error!(service, "latchkey auth set failed: {message}");
+            Err((
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({
+                    "error": message,
+                    "issue": classify(&message, false),
+                })),
+            ))
+        }
+    }
+}
+
+// POST /api/latchkey/{service}/oauth_client
+
+#[derive(Debug, Deserialize)]
+pub struct SetOauthClientRequest {
+    /// What the person pasted: Google Cloud's `client_secret.json`, or
+    /// latchkey's own `{"clientId", "clientSecret"}`.
+    pub client: String,
+}
+
+/// Store a pasted OAuth client as the service's preparation, with
+/// `latchkey auth prepare`, so that a browser login can follow. Like a
+/// pasted credential, the secret is on the child's command line for the
+/// second it runs.
+pub async fn set_oauth_client(
+    State(_s): State<AppState>,
+    Path(service): Path<String>,
+    Json(body): Json<SetOauthClientRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let service = validated_service(&service)?;
+    if let Some(gateway) = latchkey_gateway() {
+        return Err(err(StatusCode::CONFLICT, &gateway_refusal(&gateway)));
+    }
+    let client = crate::oauth_client::latchkey_client_json(&body.client)
+        .map_err(|m| err(StatusCode::BAD_REQUEST, &m))?;
+    let args = vec![
+        "auth".to_string(),
+        "prepare".to_string(),
+        service.clone(),
+        client,
+    ];
+    match latchkey_output(&args).await {
+        Ok(_) => {
+            tracing::info!(service, "latchkey stored a pasted OAuth client");
+            Ok(Json(serde_json::json!({ "ok": true })))
+        }
+        Err(e) => {
+            let message = scrub(&e.to_string());
+            tracing::error!(service, "latchkey auth prepare failed: {message}");
             Err((
                 StatusCode::BAD_GATEWAY,
                 Json(serde_json::json!({
@@ -555,6 +612,7 @@ pub async fn start_connect(
     let body = body.map(|Json(b)| b).unwrap_or_default();
     let account = body.account.unwrap_or_default().trim().to_string();
     let register = body.register.map(|r| register_args(&service, &r));
+    let create_oauth_client = body.create_oauth_client;
     let login_env: Vec<(&str, &str)> = if body.ephemeral_browser {
         vec![(EPHEMERAL_BROWSER_ENV, "1")]
     } else {
@@ -619,6 +677,23 @@ pub async fn start_connect(
                 );
                 fail(&slot, &service, message);
                 return;
+            }
+        }
+        if create_oauth_client {
+            slot.lock().expect("connect slot mutex").phase = ConnectPhase::CreatingClient;
+            let prepare = browser_prepare_args(&service);
+            match tokio::time::timeout(CONNECT_TIMEOUT, latchkey_output(&prepare)).await {
+                Ok(Ok(_)) => tracing::info!(service, "latchkey created an OAuth client"),
+                Ok(Err(e)) => {
+                    fail(&slot, &service, tail(&e.to_string()));
+                    return;
+                }
+                Err(_) => {
+                    let message = "creating the OAuth client did not finish within 15 minutes; \
+                                   start it again";
+                    fail(&slot, &service, message.to_string());
+                    return;
+                }
             }
         }
         slot.lock().expect("connect slot mutex").phase = ConnectPhase::SigningIn;
@@ -710,6 +785,17 @@ fn download_browser_args() -> Vec<String> {
     ]
 }
 
+/// `auth browser-prepare`, which drives Google Cloud's console in the
+/// browser to make a project, turn on the service's APIs and create a
+/// Desktop OAuth client, then stores it as the service's preparation.
+fn browser_prepare_args(service: &str) -> Vec<String> {
+    vec![
+        "auth".to_string(),
+        "browser-prepare".to_string(),
+        service.to_string(),
+    ]
+}
+
 /// The account named in latchkey's "Stored credentials for account
 /// 'x'." line, which `auth browser` prints when the login yielded an
 /// identity. Absent for a cookie capture, which has none and files
@@ -781,10 +867,14 @@ async fn latchkey_output_env(args: &[String], env: &[(&str, &str)]) -> anyhow::R
     // The same resolution `datalib_etl_web::latchkey` uses, reached through
     // `datalib_core` so the pin is not spelled twice.
     let mut cmd: Command = datalib_core::node_runtime::latchkey_command()?.into();
+    // A login that runs past `CONNECT_TIMEOUT` is dropped, and
+    // `auth browser-prepare` waits for a Google sign-in with no limit of
+    // its own; without this it would outlive the attempt indefinitely.
     cmd.args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
     for (key, value) in env {
         cmd.env(key, value);
     }

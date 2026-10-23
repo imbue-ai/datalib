@@ -132,6 +132,12 @@ impl SyncControl {
         self.wipe(WipeKind::Purge, groups, by).await
     }
 
+    /// Fold away the history of `targets`, or of every step that takes the
+    /// verb when it names none, holding them and what reads them meanwhile.
+    pub async fn compact(&self, targets: &[String], by: &str) -> Result<WipeAnswer, String> {
+        self.wipe(WipeKind::Compact, targets, by).await
+    }
+
     /// Ask the loop for a wipe and wait, up to [`WIPE_WAIT`], for it to
     /// say how it went.
     async fn wipe(
@@ -146,12 +152,13 @@ impl SyncControl {
                 match kind {
                     WipeKind::Reset => "reset",
                     WipeKind::Purge => "delete",
+                    WipeKind::Compact => "compact",
                 }
             ));
         }
         let store = self.mailbox().await.map_err(|e| format!("{e:#}"))?;
         // Made before the row, so the loop's close is not missed.
-        let mut listener = Listener::new(store, "a reset or purge's answer");
+        let mut listener = Listener::new(store, "a wipe's answer");
         let id = store
             .open_wipe(kind, targets, by)
             .await

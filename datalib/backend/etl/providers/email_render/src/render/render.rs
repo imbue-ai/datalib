@@ -5,9 +5,9 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use super::ids;
-use super::parse::{EmailThreadBucket, ParsedEmail, EML_BATCH};
+use super::parse::{EmailStore, EmailThreadBucket, Shared};
 use anyhow::{Context, Result};
-use datalib_etl::blob_cas::{blake3_hex, BlobBundle};
+use datalib_etl::blob_cas::{blake3_hex, BlobBundle, Described};
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::normalize::iso_to_ms;
 use datalib_etl_chat_common::render::{Buckets, ChatRenderer, RenderProfile};
@@ -20,6 +20,7 @@ use datalib_etl_email::ingest::db::{LoadedAttachment, LoadedEmail};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{escape_md_block, escape_md_inline};
 use datalib_etl_render::inputs::Lookup;
+use datalib_etl_render::pages::{batches, PageSize};
 use datalib_handle::Handle;
 use datalib_schema::providers::Provider;
 use mail_parser::{Address, MessageParser, MimeHeaders, PartType};
@@ -44,7 +45,9 @@ use mail_parser::{Address, MessageParser, MimeHeaders, PartType};
 /// v11: the author span carries the author's handle as `data-handle`.
 /// v12: a recipients line (To, Cc) under the header, each with its handle.
 /// v13: Bcc on the recipients line, and an `@` mention drawn as a chip.
-pub const RENDER_VERSION: u32 = 13;
+/// v14: attachments and inline images are linked inside the stored
+///     `.eml`, and no `blobs/` is written beside the page.
+pub const RENDER_VERSION: u32 = 14;
 
 /// Which webmail to build each email's `↗` outlink for. Mirrors
 /// `datalib_core::config::EmailOutlink`; the orchestrator maps the
@@ -152,75 +155,75 @@ pub struct Rendered {
     pub excluded: Vec<String>,
 }
 
-pub fn render_all(
-    parsed: &ParsedEmail,
-    root: &std::path::Path,
-    source_id: &str,
-    outlink: Option<OutlinkFormat>,
-    only_labels: &[String],
-    progress: &Progress,
-    on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-) -> Result<Rendered> {
-    let elapsed_ms = parsed.scan.scan_elapsed.map(|d| d.as_millis() as u64);
-    tracing::info!(
-        source = source_id,
-        scan_elapsed_ms = elapsed_ms,
-        threads_to_render = parsed
-            .scan
-            .render
-            .as_ref()
-            .map(|s| s.len() as i64)
-            .unwrap_or(-1),
-        cold_start = parsed.scan.render.is_none(),
-        "[render] email dolt_diff scan"
-    );
+/// How one page of a store's render ended, for the processor to declare
+/// before the next page is read.
+pub struct PageEnd {
+    /// The stale threads this page looked at, by bucket key: declared
+    /// with nothing first, so one that builds no chat goes once the diff
+    /// says its emails left.
+    pub looked_at: Vec<String>,
+    pub rendered: Rendered,
+}
 
-    // mailbox id → the name its label chip shows, empty for none.
-    let mailbox_name: HashMap<String, String> = parsed
-        .mailboxes
-        .iter()
-        .filter_map(|m| {
-            let id = m.get("id")?.as_str()?.to_string();
-            Some((id, chip_name(m)))
-        })
-        .collect();
+/// What every thread's render looks up: mailbox and account names, and
+/// the mailboxes the label filter lets through.
+struct Lookups {
+    mailbox_name: HashMap<String, String>,
+    account_label: HashMap<String, String>,
+    /// `None` renders every thread.
+    label_allow: Option<HashSet<String>>,
+}
 
-    let account_label: HashMap<String, String> = parsed
-        .accounts
-        .iter()
-        .filter_map(|(id, a)| Some((id.clone(), account_label_from_payload(id, a)?)))
-        .collect();
-
-    // Optional render-time label filter. Resolve the configured label
-    // paths to mailbox ids against the same tree (`parentId`) the chips
-    // use; `None` = render every thread. Resolution and exact-match
-    // semantics are shared with the download filter via
-    // [`datalib_etl_email::mailbox_labels`], so a given label means the same thing
-    // at both phases and across JMAP / mbox sources.
-    let label_allow: Option<HashSet<String>> = if only_labels.is_empty() {
-        None
-    } else {
-        let nodes: Vec<datalib_etl_email::mailbox_labels::MailboxNode> = parsed
+impl Lookups {
+    fn new(shared: &Shared, source_id: &str, only_labels: &[String]) -> Self {
+        // mailbox id → the name its label chip shows, empty for none.
+        let mailbox_name = shared
             .mailboxes
             .iter()
-            .filter_map(datalib_etl_email::mailbox_labels::MailboxNode::from_payload)
+            .filter_map(|m| {
+                let id = m.get("id")?.as_str()?.to_string();
+                Some((id, chip_name(m)))
+            })
             .collect();
-        let resolved = datalib_etl_email::mailbox_labels::resolve(&nodes, only_labels);
-        if !resolved.unmatched.is_empty() {
-            tracing::warn!(
-                source = source_id,
-                unmatched = %resolved.unmatched.join(", "),
-                "only_render_labels matched no mailbox; check spelling / parent path",
-            );
+        let account_label = shared
+            .accounts
+            .iter()
+            .filter_map(|(id, a)| Some((id.clone(), account_label_from_payload(id, a)?)))
+            .collect();
+        // Resolve the configured label paths to mailbox ids against the
+        // same tree (`parentId`) the chips use, before any thread is read.
+        // Resolution and exact-match semantics are shared with the
+        // download filter via [`datalib_etl_email::mailbox_labels`], so a
+        // given label means the same thing at both phases and across JMAP
+        // / mbox sources.
+        let label_allow = (!only_labels.is_empty()).then(|| {
+            let nodes: Vec<datalib_etl_email::mailbox_labels::MailboxNode> = shared
+                .mailboxes
+                .iter()
+                .filter_map(datalib_etl_email::mailbox_labels::MailboxNode::from_payload)
+                .collect();
+            let resolved = datalib_etl_email::mailbox_labels::resolve(&nodes, only_labels);
+            if !resolved.unmatched.is_empty() {
+                tracing::warn!(
+                    source = source_id,
+                    unmatched = %resolved.unmatched.join(", "),
+                    "only_render_labels matched no mailbox; check spelling / parent path",
+                );
+            }
+            resolved.ids
+        });
+        Lookups {
+            mailbox_name,
+            account_label,
+            label_allow,
         }
-        Some(resolved.ids)
-    };
+    }
 
-    // Thread-level inclusion: keep the whole thread if ANY of its
-    // emails is filed under an allowed mailbox, so conversations
-    // aren't fragmented across the filter boundary.
-    let allowed = |bucket: &&EmailThreadBucket| {
-        label_allow.as_ref().is_none_or(|allow| {
+    /// Thread-level inclusion: keep the whole thread if ANY of its
+    /// emails is filed under an allowed mailbox, so conversations
+    /// aren't fragmented across the filter boundary.
+    fn allows(&self, bucket: &EmailThreadBucket) -> bool {
+        self.label_allow.as_ref().is_none_or(|allow| {
             bucket.emails.iter().any(|em| {
                 bucket
                     .joins
@@ -229,50 +232,152 @@ pub fn render_all(
                     .is_some_and(|ids| ids.iter().any(|m| allow.contains(m)))
             })
         })
-    };
-    let (threads, filtered): (Vec<_>, Vec<_>) = parsed
-        .docs
-        .iter()
-        .filter(|bucket| !bucket.emails.is_empty())
-        .partition(allowed);
-    let excluded = filtered
-        .iter()
-        .map(|b| ids::thread(source_id, &b.account_id, &b.thread_id).uuid)
-        .collect();
-    // One document per thread. Each thread is built as it renders, its
-    // `.eml`s read a batch of threads ahead: reading, parsing and hashing
-    // them is most of the work, and up front a large mailbox spends it
-    // with no progress to show and every byte in memory at once.
+    }
+}
+
+/// Renders every thread `store` hands out, a page at a time; `on_page`
+/// hears how each page ended before the next is read.
+#[allow(clippy::too_many_arguments)]
+pub fn render_store(
+    store: &EmailStore,
+    root: &std::path::Path,
+    source_id: &str,
+    outlink: Option<OutlinkFormat>,
+    only_labels: &[String],
+    size: PageSize,
+    progress: &Progress,
+    on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+    on_page: &mut dyn FnMut(PageEnd) -> Result<()>,
+) -> Result<()> {
+    let elapsed_ms = store.scan.scan_elapsed.map(|d| d.as_millis() as u64);
+    tracing::info!(
+        source = source_id,
+        scan_elapsed_ms = elapsed_ms,
+        threads_to_render = store.threads,
+        cold_start = store.scan.render.is_none(),
+        "[render] email dolt_diff scan"
+    );
+    let lookups = Lookups::new(&store.shared, source_id, only_labels);
     let profile = profile();
     let mut renderer = ChatRenderer::new(
         &profile,
         root,
         source_id,
-        threads.len(),
+        store.threads,
         progress,
         on_doc_complete,
     );
-    for batch in threads.chunks(EML_BATCH) {
+    let mut pages = store.pages(size.buckets);
+    while let Some(page) = store.next_page(&mut pages)? {
+        let excluded = render_page(
+            &lookups,
+            &page.docs,
+            Some(store),
+            size.bytes,
+            source_id,
+            outlink,
+            &mut renderer,
+        )?;
+        progress.inc(excluded.len() as u64);
+        let looked_at = page
+            .looked_at
+            .iter()
+            .map(|(a, t)| ids::thread(source_id, a, t).uuid)
+            .collect();
+        on_page(PageEnd {
+            looked_at,
+            rendered: Rendered {
+                buckets: renderer.take_buckets(),
+                excluded,
+            },
+        })?;
+    }
+    Ok(())
+}
+
+/// Renders `docs` as one page, their `.eml`s already in their bundles.
+#[allow(clippy::too_many_arguments)]
+pub fn render_all(
+    shared: &Shared,
+    docs: &[EmailThreadBucket],
+    root: &std::path::Path,
+    source_id: &str,
+    outlink: Option<OutlinkFormat>,
+    only_labels: &[String],
+    progress: &Progress,
+    on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+) -> Result<Rendered> {
+    let lookups = Lookups::new(shared, source_id, only_labels);
+    let profile = profile();
+    let mut renderer = ChatRenderer::new(
+        &profile,
+        root,
+        source_id,
+        docs.len(),
+        progress,
+        on_doc_complete,
+    );
+    let excluded = render_page(
+        &lookups,
+        docs,
+        None,
+        u64::MAX,
+        source_id,
+        outlink,
+        &mut renderer,
+    )?;
+    Ok(Rendered {
+        buckets: renderer.finish().buckets,
+        excluded,
+    })
+}
+
+/// One document per thread the label filter lets through; the bucket
+/// keys of the ones it keeps out. Each thread's `.eml`s are read from
+/// `emls` a batch of at most `eml_bytes` ahead of its render: reading,
+/// parsing and hashing them is most of the work.
+fn render_page(
+    lookups: &Lookups,
+    docs: &[EmailThreadBucket],
+    emls: Option<&EmailStore>,
+    eml_bytes: u64,
+    source_id: &str,
+    outlink: Option<OutlinkFormat>,
+    renderer: &mut ChatRenderer<'_>,
+) -> Result<Vec<String>> {
+    let (threads, filtered): (Vec<&EmailThreadBucket>, Vec<_>) = docs
+        .iter()
+        .filter(|bucket| !bucket.emails.is_empty())
+        .partition(|bucket| lookups.allows(bucket));
+    let excluded = filtered
+        .iter()
+        .map(|b| ids::thread(source_id, &b.account_id, &b.thread_id).uuid)
+        .collect();
+    let weights: Vec<u64> = threads.iter().map(|b| b.eml_bytes()).collect();
+    for range in batches(&weights, eml_bytes) {
+        let batch = &threads[range];
         let loaded;
-        let batch: Vec<&EmailThreadBucket> = match &parsed.emls {
+        let batch: Vec<&EmailThreadBucket> = match emls {
             Some(emls) => {
-                loaded = emls.load(batch)?;
+                loaded = emls.load_emls(batch)?;
                 loaded.iter().collect()
             }
             None => batch.to_vec(),
         };
         for bucket in batch {
-            let (chat, bundle) =
-                build_chat(source_id, bucket, &mailbox_name, &account_label, outlink);
+            let (chat, bundle) = build_chat(
+                source_id,
+                bucket,
+                &lookups.mailbox_name,
+                &lookups.account_label,
+                outlink,
+            );
             renderer
                 .render_chat(&chat, &bundle)
                 .context("email chat-common render")?;
         }
     }
-    Ok(Rendered {
-        buckets: renderer.finish().buckets,
-        excluded,
-    })
+    Ok(excluded)
 }
 
 /// The `accounts` row is a JMAP `Account` object, a Gmail stand-in
@@ -305,16 +410,14 @@ fn build_chat(
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "(no subject)".to_string());
 
-    // Render-only bundle: attachment + inline bytes, NOT the raw `.eml`
-    // source blobs (those would otherwise be written to blobs/ too).
+    // The parts each page links, inside the `.eml` that holds them.
     let mut render_bundle = BlobBundle::new();
     let mut items: Vec<NormalizedChatItem> = Vec::with_capacity(bucket.emails.len());
 
     for em in &bucket.emails {
-        let parsed_eml = bucket
-            .blobs
-            .get(&em.blob_id)
-            .map(|b| ParsedEml::from_eml_bytes(&b.bytes))
+        let eml = bucket.blobs.get(&em.blob_id);
+        let parsed_eml = eml
+            .map(|b| ParsedEml::from_eml_bytes(b.bytes.as_deref().unwrap_or_default()))
             .unwrap_or_default();
 
         // Real downloadable attachments → bundle. Filled BEFORE the
@@ -335,36 +438,40 @@ fn build_chat(
         // reference or nothing would link them at all.
         let mut listed_hashes: HashSet<String> = HashSet::new();
         for a in atts {
-            if let Some(blob) = bucket.blobs.get(&a.blob_id) {
-                if !is_inline_attachment(a) {
-                    listed_hashes.insert(blob.blake3.clone());
-                }
-                render_bundle.add_hashed(
-                    a.blob_id.clone(),
-                    blob.blake3.clone(),
-                    blob.bytes.clone(),
-                    blob.content_type.clone(),
-                    blob.upstream_name.clone(),
-                );
+            if !is_inline_attachment(a) {
+                listed_hashes.insert(a.blob_id.clone());
+            }
+            if let Some(eml) = eml {
+                let part = Described {
+                    blake3: a.blob_id.clone(),
+                    byte_len: a.size.unwrap_or(0).max(0) as u64,
+                    content_type: a.content_type.clone(),
+                };
+                render_bundle.add_part(a.blob_id.clone(), eml, part, a.name.clone());
             }
         }
 
-        // Inline `.eml` body parts → bundle (content-addressed ref so
-        // the same image across replies collapses to one file).
-        let mut inline_cid_refs: Vec<(String, String)> = Vec::new();
+        // Inline `.eml` body parts → bundle, linked inside this email's
+        // own `.eml`: a reply that repeats an image links its own copy.
+        let mut inline_cid_to_href: HashMap<String, String> = HashMap::new();
         let mut loose_inline: Vec<String> = Vec::new();
         for inline in &parsed_eml.inline_parts {
             let b3 = blake3_hex(&inline.bytes);
             let ref_id = format!("inline:{b3}");
-            render_bundle.add_hashed(
-                ref_id.clone(),
-                b3.clone(),
-                inline.bytes.clone(),
-                inline.content_type.clone(),
-                None,
-            );
+            let part = Described {
+                blake3: b3.clone(),
+                byte_len: inline.bytes.len() as u64,
+                content_type: inline.content_type.clone(),
+            };
+            if !eml.is_some_and(|eml| render_bundle.add_part(ref_id.clone(), eml, part, None)) {
+                continue;
+            }
             match &inline.cid {
-                Some(cid) => inline_cid_refs.push((cid.clone(), ref_id)),
+                Some(cid) => {
+                    if let Some(href) = render_bundle.href_for(&ref_id) {
+                        inline_cid_to_href.entry(cid.clone()).or_insert(href);
+                    }
+                }
                 None => {
                     // A non-image part that the attachment list already
                     // links adds nothing as a second body link — and
@@ -384,24 +491,14 @@ fn build_chat(
             }
         }
 
-        // Names resolve only once every ref is in the bundle:
-        // `filename_for` collapses refs sharing a content hash onto a
-        // single name, so a mid-fill lookup can hand back a name the
-        // finished bundle won't materialize.
-        let mut inline_cid_to_fname: HashMap<String, String> = HashMap::new();
-        for (cid, ref_id) in inline_cid_refs {
-            if let Some(fname) = render_bundle.filename_for(&ref_id) {
-                inline_cid_to_fname.entry(cid).or_insert(fname);
-            }
-        }
-        let materialized: HashMap<String, String> = atts
+        let linked: HashMap<String, String> = atts
             .iter()
-            .filter_map(|a| Some((a.blob_id.clone(), render_bundle.filename_for(&a.blob_id)?)))
+            .filter_map(|a| Some((a.blob_id.clone(), render_bundle.href_for(&a.blob_id)?)))
             .collect();
 
-        // Body markdown (HTML → md, cid → blobs/<fname>), then fold the
-        // quoted reply history.
-        let body = email_body_markdown(&parsed_eml, atts, &materialized, &inline_cid_to_fname)
+        // Body markdown (HTML → md, cid → the part's address), then fold
+        // the quoted reply history.
+        let body = email_body_markdown(&parsed_eml, atts, &linked, &inline_cid_to_href)
             .unwrap_or_default();
         let (fresh, quoted) = split_quoted(&body);
         // Only the fresh part: a quoted reply repeats the mentions of the
@@ -422,10 +519,12 @@ fn build_chat(
         }
         // Loose inline parts the body never referenced.
         for ref_id in &loose_inline {
-            let Some(fname) = render_bundle.filename_for(ref_id) else {
+            let (Some(link), Some(fname)) = (
+                render_bundle.href_for(ref_id),
+                render_bundle.filename_for(ref_id),
+            ) else {
                 continue;
             };
-            let link = format!("blobs/{fname}");
             if text.contains(&link) {
                 continue;
             }
@@ -449,8 +548,8 @@ fn build_chat(
             text.push_str("\n\n### Attachments\n");
             for a in trailing {
                 let label = escape_md_inline(a.name.as_deref().unwrap_or(&a.part_id));
-                match materialized.get(&a.blob_id) {
-                    Some(fname) => text.push_str(&format!("\n- [{label}](blobs/{fname})")),
+                match linked.get(&a.blob_id) {
+                    Some(href) => text.push_str(&format!("\n- [{label}]({href})")),
                     None => text.push_str(&format!("\n- {label} _(blob not materialized)_")),
                 }
             }
@@ -787,23 +886,20 @@ fn is_inline_attachment(a: &LoadedAttachment) -> bool {
 }
 
 /// Render one email's body to markdown. Prefers the HTML part (htmd
-/// after rewriting `cid:` srcs to materialized blobs); falls back to
+/// after rewriting `cid:` srcs to the parts' addresses); falls back to
 /// the plain-text part, escaped.
 fn email_body_markdown(
     parsed: &ParsedEml,
     attachments: &[LoadedAttachment],
-    materialized: &HashMap<String, String>,
-    inline_cid_to_fname: &HashMap<String, String>,
+    linked: &HashMap<String, String>,
+    inline_cid_to_href: &HashMap<String, String>,
 ) -> Option<String> {
-    let mut cid_to_blob: HashMap<String, String> = HashMap::new();
-    for (cid, fname) in inline_cid_to_fname {
-        cid_to_blob.insert(cid.clone(), format!("blobs/{fname}"));
-    }
+    let mut cid_to_blob = inline_cid_to_href.clone();
     for a in attachments {
-        let (Some(cid), Some(fname)) = (a.cid.as_deref(), materialized.get(&a.blob_id)) else {
+        let (Some(cid), Some(href)) = (a.cid.as_deref(), linked.get(&a.blob_id)) else {
             continue;
         };
-        cid_to_blob.insert(cid.to_string(), format!("blobs/{fname}"));
+        cid_to_blob.insert(cid.to_string(), href.clone());
     }
 
     if !parsed.html_body.trim().is_empty() {

@@ -132,7 +132,6 @@ pub fn serve(port: u16) -> Result<()> {
             .route("/problems/keys", get(problems::keys_handler))
             .route("/problems/values", get(problems::values_handler))
             .route("/chat/{markdown_uuid}", get(chat))
-            .route("/asset/{markdown_uuid}/{*rel}", get(asset))
             .route(
                 "/health",
                 get(|| async { Json(serde_json::json!({"ok": true})) }),
@@ -1390,40 +1389,6 @@ async fn chat(
         problems,
         errors,
     }))
-}
-
-/// Serve a file living next to (or under) a rendered markdown. Relative
-/// `![](blobs/foo.png)` references in the markdown body become
-/// `/applet/unified_document_index/asset/{markdown_uuid}/blobs/foo.png` once the UI rewrites them;
-/// this handler resolves them by looking up the markdown's on-disk path
-/// and joining `rel` against its parent directory.
-async fn asset(
-    State(s): State<Index>,
-    Path((markdown_uuid, rel)): Path<(String, String)>,
-) -> Result<Response<Body>, StatusCode> {
-    let md_path = s
-        .repo
-        .qmd_path_for_markdown(&markdown_uuid)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
-    let parent = md_path.parent().ok_or(StatusCode::NOT_FOUND)?.to_path_buf();
-    let target = parent.join(&rel);
-    let parent_canon = parent
-        .canonicalize()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let target_canon = target.canonicalize().map_err(|_| StatusCode::NOT_FOUND)?;
-    if !target_canon.starts_with(&parent_canon) {
-        return Err(StatusCode::FORBIDDEN);
-    }
-    let bytes = std::fs::read(&target_canon).map_err(|_| StatusCode::NOT_FOUND)?;
-    let mime = mime_guess::from_path(&target_canon)
-        .first_or_octet_stream()
-        .essence_str()
-        .to_string();
-    let resp = Response::builder().header(header::CONTENT_TYPE, &mime);
-    resp.body(Body::from(bytes))
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 /// Strip a leading YAML front-matter block: a `---` line, then everything

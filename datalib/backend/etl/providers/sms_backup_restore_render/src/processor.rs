@@ -41,6 +41,7 @@ impl SourceRender for SmsRender {
             ctx.progress,
             &mut on_doc,
             ctx.raw_range(),
+            ctx.page_size.bytes,
         )
         .context("sms_backup_restore render")?;
 

@@ -46,6 +46,19 @@ pub enum HandleKind {
     /// (`linkedin.com/in/<slug>`), which every connection and message
     /// sender in an export carries.
     Linkedin,
+    /// A Google account by the name it shows: `name/<the name shown>`. A
+    /// comment on a Drive file names its author and nothing else, so two
+    /// people of one name are one handle until a contact tells them apart.
+    Google,
+    /// A GitHub account by its login.
+    Github,
+    /// A GitLab account by its instance's host and its username
+    /// (`gitlab.com/jlpicard`): a self-hosted GitLab is a namespace of
+    /// its own.
+    Gitlab,
+    /// A Notion user by their id, for one Notion gives no address for (a
+    /// bot, or a person whose address it withholds).
+    Notion,
 }
 
 impl HandleKind {
@@ -157,24 +170,41 @@ impl Handle {
     /// A PNI is not accepted here: it names a number, not a person, and
     /// the number is the handle.
     pub fn signal_aci(aci: &str) -> Option<Self> {
-        let hex: String = aci
-            .trim()
-            .chars()
-            .filter(|c| *c != '-')
-            .map(|c| c.to_ascii_lowercase())
-            .collect();
-        if hex.len() != 32 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
-            return None;
-        }
-        let dashed = format!(
-            "{}-{}-{}-{}-{}",
-            &hex[..8],
-            &hex[8..12],
-            &hex[12..16],
-            &hex[16..20],
-            &hex[20..]
-        );
-        Some(Self::of(HandleKind::SignalAci, &dashed))
+        Some(Self::of(HandleKind::SignalAci, &dashed_uuid(aci)?))
+    }
+
+    /// A GitHub account by its login, lowercased, as GitHub matches it.
+    /// A login is letters, digits and dashes; an app's account ends in
+    /// `[bot]`.
+    pub fn github(login: &str) -> Option<Self> {
+        let login = login.trim().to_lowercase();
+        let name = login.strip_suffix("[bot]").unwrap_or(&login);
+        let well_formed = !name.is_empty()
+            && name.len() <= 39
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+        well_formed.then(|| Self::of(HandleKind::Github, &login))
+    }
+
+    /// A GitLab account by its instance's host (a port allowed) and its
+    /// username, both lowercased, as GitLab matches a username.
+    pub fn gitlab(host: &str, username: &str) -> Option<Self> {
+        let host = host.trim().to_lowercase();
+        let username = username.trim().to_lowercase();
+        let host_ok = !host.is_empty()
+            && host
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':'));
+        let user_ok = !username.is_empty()
+            && username
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'));
+        (host_ok && user_ok).then(|| Self::of(HandleKind::Gitlab, &format!("{host}/{username}")))
+    }
+
+    /// A Notion user by their id, a UUID spelled lowercase with dashes.
+    /// Where Notion gives the user's address, the address is the handle.
+    pub fn notion_user(id: &str) -> Option<Self> {
+        Some(Self::of(HandleKind::Notion, &dashed_uuid(id)?))
     }
 
     /// A person on Facebook by the name the export shows, its whitespace
@@ -194,6 +224,14 @@ impl Handle {
         let id = conversation_id.trim();
         (!id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()))
             .then(|| Self::of(HandleKind::Facebook, &format!("deleted/{id}")))
+    }
+
+    /// A Google account by the name a Drive comment shows for it, its
+    /// whitespace trimmed and collapsed.
+    pub fn google_name(name: &str) -> Option<Self> {
+        let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
+        (!name.is_empty() && !name.chars().any(char::is_control))
+            .then(|| Self::of(HandleKind::Google, &format!("name/{name}")))
     }
 
     /// A LinkedIn member by their profile slug, already percent-decoded:
@@ -252,6 +290,16 @@ impl Handle {
                 _ => None,
             },
             HandleKind::Linkedin => Self::linkedin(value),
+            HandleKind::Google => match value.split_once('/')? {
+                ("name", name) => Self::google_name(name),
+                _ => None,
+            },
+            HandleKind::Github => Self::github(value),
+            HandleKind::Gitlab => {
+                let (host, username) = value.split_once('/')?;
+                Self::gitlab(host, username)
+            }
+            HandleKind::Notion => Self::notion_user(value),
         }
     }
 
@@ -291,8 +339,15 @@ impl Handle {
                 )
             }
             // No app follows a link to a Signal account id, so it takes
-            // the spelling for a kind with no scheme of its own.
-            HandleKind::SignalAci | HandleKind::Facebook => {
+            // the spelling for a kind with no scheme of its own. Nor does
+            // a GitHub profile's address serve: `github.com/<x>` is as
+            // often an organization or one of GitHub's own pages.
+            HandleKind::SignalAci
+            | HandleKind::Facebook
+            | HandleKind::Google
+            | HandleKind::Github
+            | HandleKind::Gitlab
+            | HandleKind::Notion => {
                 format!(
                     "datalib:handle/{}/{}",
                     self.kind().as_str(),
@@ -350,7 +405,11 @@ impl Handle {
             HandleKind::Slack
             | HandleKind::SignalAci
             | HandleKind::Facebook
-            | HandleKind::Linkedin => {
+            | HandleKind::Linkedin
+            | HandleKind::Google
+            | HandleKind::Github
+            | HandleKind::Gitlab
+            | HandleKind::Notion => {
                 format!("{shown} ({})", self.as_str())
             }
         }
@@ -359,6 +418,28 @@ impl Handle {
     fn of(kind: HandleKind, value: &str) -> Self {
         Self(format!("{}:{value}", kind.as_str()))
     }
+}
+
+/// A UUID, 32 hex digits with or without dashes in any case, spelled
+/// lowercase with dashes.
+fn dashed_uuid(s: &str) -> Option<String> {
+    let hex: String = s
+        .trim()
+        .chars()
+        .filter(|c| *c != '-')
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    if hex.len() != 32 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(format!(
+        "{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    ))
 }
 
 /// Every byte but an unreserved one (RFC 3986) and `/` as `%XX`, so a
@@ -704,8 +785,28 @@ mod tests {
                 "https://www.linkedin.com/in/jlpicard",
             ),
             (
+                Handle::google_name("Geordi La Forge").unwrap(),
+                "datalib:handle/google/name/Geordi%20La%20Forge",
+            ),
+            (
                 Handle::linkedin("jürgen-müller-1a2b").unwrap(),
                 "https://www.linkedin.com/in/j%C3%BCrgen-m%C3%BCller-1a2b",
+            ),
+            (
+                Handle::github("Data-Soong").unwrap(),
+                "datalib:handle/github/data-soong",
+            ),
+            (
+                Handle::github("dependabot[bot]").unwrap(),
+                "datalib:handle/github/dependabot%5Bbot%5D",
+            ),
+            (
+                Handle::gitlab("GitLab.com", "jlpicard").unwrap(),
+                "datalib:handle/gitlab/gitlab.com/jlpicard",
+            ),
+            (
+                Handle::notion_user("00000001-1701-4D00-8000-000000000001").unwrap(),
+                "datalib:handle/notion/00000001-1701-4d00-8000-000000000001",
             ),
         ] {
             assert_eq!(h.to_uri(), uri);
@@ -740,6 +841,30 @@ mod tests {
             Handle::tel("+15550123456")
         );
         assert_eq!(Handle::from_uri("datalib:handle/fax/+15550123456"), None);
+    }
+
+    #[test]
+    fn a_forge_login_and_a_notion_id_are_taken_only_well_formed() {
+        assert_eq!(
+            Handle::github("  Data-Soong ").map(|h| h.to_string()),
+            Some("github:data-soong".into())
+        );
+        assert_eq!(Handle::github("data soong"), None);
+        assert_eq!(Handle::github("[bot]"), None);
+        assert_eq!(Handle::github(&"x".repeat(40)), None);
+        assert_eq!(
+            Handle::gitlab("gitlab.enterprise.test:8443", "W.Riker_1").map(|h| h.to_string()),
+            Some("gitlab:gitlab.enterprise.test:8443/w.riker_1".into())
+        );
+        assert_eq!(Handle::gitlab("", "jlpicard"), None);
+        assert_eq!(Handle::gitlab("gitlab.com/x", "jlpicard"), None);
+        assert_eq!(Handle::gitlab("gitlab.com", "a/b"), None);
+        assert_eq!(Handle::notion_user("not-a-uuid"), None);
+        let data = Handle::gitlab("gitlab.com", "data-soong").unwrap();
+        assert_eq!(
+            data.describe("Lt. Cmdr. Data"),
+            "Lt. Cmdr. Data (gitlab:gitlab.com/data-soong)"
+        );
     }
 
     #[test]
@@ -787,6 +912,19 @@ mod tests {
         assert_eq!(Handle::facebook_deleted(""), None);
         assert_eq!(Handle::parse("facebook:Q"), None);
         assert_eq!(Handle::parse("facebook:other/Q"), None);
+    }
+
+    #[test]
+    fn a_google_name_is_its_words_and_nothing_else() {
+        let geordi = Handle::google_name("Geordi  La Forge ").unwrap();
+        assert_eq!(geordi.as_str(), "google:name/Geordi La Forge");
+        assert_eq!(Handle::parse("google:name/Geordi La Forge"), Some(geordi));
+        assert_eq!(Handle::parse("google:name/Geordi  La Forge"), None);
+        for bad in ["", "   ", "Q\u{0}"] {
+            assert_eq!(Handle::google_name(bad), None, "{bad:?}");
+        }
+        assert_eq!(Handle::parse("google:Q"), None);
+        assert_eq!(Handle::parse("google:other/Q"), None);
     }
 
     /// Every way an export or a browser writes one profile's address is

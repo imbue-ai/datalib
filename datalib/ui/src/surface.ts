@@ -24,6 +24,13 @@ export function showDataSources() {
   else void router.push(MANAGE_STACK);
 }
 
+/// Show the card `source` names, opening it where none is: a chip in
+/// the chrome double-clicked, or one of its menu's entries.
+export function showCard(source: string) {
+  if (surface.value) surface.value.showCard(source);
+  else void router.push(encodeColumns([{ code: source, size: null, state: "" }]));
+}
+
 /// The toolbar's search box: a search card on `q`, beside whatever is
 /// showing.
 export function searchFor(q: string) {

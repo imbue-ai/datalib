@@ -93,8 +93,90 @@ impl Sealer {
         self.state.stop.requested()
     }
 
+    /// Whether the next [`wrote`](Self::wrote) would seal, for a writer
+    /// that must commit its own SQL transaction first ([`Batch`]).
+    pub fn due(&self) -> bool {
+        self.stopping() || self.state.checkpointer.lock().unwrap().due()
+    }
+
     pub(crate) fn carry(&self, problems: Option<crate::run_problems::RunProblems>) {
         *self.state.problems.lock().unwrap() = problems;
+    }
+}
+
+/// A download's writes between two seals, as one SQL transaction.
+///
+/// Every SQL `COMMIT` writes a new copy of each page of the tree it
+/// touched, and the pages it replaced stay in the file until `dolt_gc()`,
+/// which nothing runs on a raw store. A transaction per page of a
+/// randomly keyed walk therefore grew a store to several times what it
+/// keeps (docs/dev/doltlite.md § "What a write costs"). The rows between
+/// two seals are no safer for having been committed in SQL: a writer's
+/// open discards whatever no seal reached. So this holds one transaction
+/// until a seal is due, commits it, and lets the [`Sealer`] seal.
+///
+/// **The store's pool has one connection, and the open transaction holds
+/// it.** Every read the download makes while a `Batch` is open goes
+/// through [`tx`](Self::tx); one made through the pool waits for good.
+/// [`finish`](Self::finish) commits what is left, and must be awaited
+/// before the pool is used again; dropping a `Batch` rolls it back.
+pub struct Batch<'a> {
+    pool: &'a SqlitePool,
+    sealer: Option<&'a Sealer>,
+    open: Option<sqlx::Transaction<'static, sqlx::Sqlite>>,
+    unsealed: u64,
+}
+
+impl<'a> Batch<'a> {
+    /// Without a sealer, everything is one transaction, committed by
+    /// `finish`.
+    pub fn new(pool: &'a SqlitePool, sealer: Option<&'a Sealer>) -> Self {
+        Self {
+            pool,
+            sealer,
+            open: None,
+            unsealed: 0,
+        }
+    }
+
+    /// The open transaction, begun if there is none.
+    pub async fn tx(&mut self) -> Result<&mut sqlx::Transaction<'static, sqlx::Sqlite>> {
+        if self.open.is_none() {
+            self.open = Some(self.pool.begin().await.context("begin a batch")?);
+        }
+        Ok(self.open.as_mut().expect("just begun"))
+    }
+
+    /// `rows` landed in the open transaction: if a seal is due, commit it
+    /// and seal.
+    pub async fn wrote(&mut self, rows: u64) -> Result<()> {
+        self.unsealed += rows;
+        match self.sealer {
+            Some(sealer) if sealer.due() => self.hand_over(sealer).await,
+            _ => Ok(()),
+        }
+    }
+
+    /// Commit what is open. The sealer hears of the rows, and seals if it
+    /// is time; otherwise the run's last commit takes them.
+    pub async fn finish(mut self) -> Result<()> {
+        match self.sealer {
+            Some(sealer) => self.hand_over(sealer).await,
+            None => self.commit().await,
+        }
+    }
+
+    async fn hand_over(&mut self, sealer: &Sealer) -> Result<()> {
+        self.commit().await?;
+        sealer.wrote(std::mem::take(&mut self.unsealed)).await;
+        Ok(())
+    }
+
+    async fn commit(&mut self) -> Result<()> {
+        if let Some(tx) = self.open.take() {
+            tx.commit().await.context("commit a batch")?;
+        }
+        Ok(())
     }
 }
 
@@ -354,6 +436,76 @@ mod tests {
             before + 1,
             "the consistent point after a stop is the last seal"
         );
+    }
+
+    /// A batch holds its rows in one SQL transaction until a seal is due,
+    /// so the rows between two seals are written to the file once rather
+    /// than once per write. It commits for the seal, and `finish` commits
+    /// what is left without sealing out of turn.
+    #[tokio::test]
+    async fn a_batch_commits_when_a_seal_is_due_and_at_its_finish() {
+        let dir = tempfile::tempdir().unwrap();
+        let entities = store(&dir.path().join("entities.doltlite_db")).await;
+        if !crate::doltlite_raw::has_dolt_extensions(&entities).await {
+            return;
+        }
+        let rows = |pool: &SqlitePool| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, i64>("SELECT count(*) FROM rows_t")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap()
+            }
+        };
+        let hour = crate::checkpointer::Cadence {
+            at_most_every: std::time::Duration::from_secs(3600),
+        };
+        let sealer = Sealer {
+            state: Arc::new(state_with_cadence(
+                entities.clone(),
+                None,
+                crate::progress::Progress::noop(),
+                hour,
+            )),
+        };
+        let before = commits(&entities).await;
+        let mut writes = Batch::new(&entities, Some(&sealer));
+        for id in ["a", "b"] {
+            sqlx::query("INSERT INTO rows_t VALUES (?)")
+                .bind(id)
+                .execute(&mut **writes.tx().await.unwrap())
+                .await
+                .unwrap();
+            writes.wrote(1).await.unwrap();
+        }
+        writes.finish().await.unwrap();
+        assert_eq!(rows(&entities).await, 2, "finish commits the batch");
+        assert_eq!(
+            commits(&entities).await,
+            before,
+            "and an hour's cadence has not come round"
+        );
+
+        let every_write = Sealer {
+            state: Arc::new(state(
+                entities.clone(),
+                None,
+                crate::progress::Progress::noop(),
+            )),
+        };
+        let mut writes = Batch::new(&entities, Some(&every_write));
+        sqlx::query("INSERT INTO rows_t VALUES ('c')")
+            .execute(&mut **writes.tx().await.unwrap())
+            .await
+            .unwrap();
+        writes.wrote(1).await.unwrap();
+        assert_eq!(
+            commits(&entities).await,
+            before + 1,
+            "a due seal commits the batch and seals it"
+        );
+        writes.finish().await.unwrap();
     }
 
     /// The version announced has to be the commit the seal just made —

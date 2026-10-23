@@ -325,7 +325,7 @@
     ]
   },
   "google_drive": {
-    "schema_hash": "c45f648565ce97d01d6f9785ad229a0991f5ed87bfdfd9c4eb4796f13edecd55",
+    "schema_hash": "5b671f5a5c3514d9901bbca1b0e3b3867a1a8c6272e4f2e8e9b7009c926b5079",
     "schema_version": 0,
     "shared_schema_version": 1,
     "sql": [
@@ -342,6 +342,10 @@
       "CREATE TABLE files( id TEXT PRIMARY KEY, payload TEXT NULL)",
       "CREATE TABLE files_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE revision_exports( id TEXT PRIMARY KEY, revision_id TEXT NOT NULL, part TEXT NOT NULL, blake3 TEXT NULL, CHECK(blake3 IS NULL OR length(blake3) = 64))",
+      "CREATE TABLE revision_exports_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
+      "CREATE INDEX revision_exports_by_part ON revision_exports(part, blake3)",
+      "CREATE INDEX revision_exports_by_revision_id ON revision_exports(revision_id)",
       "CREATE TABLE revisions( id TEXT PRIMARY KEY, payload TEXT NULL, file_id TEXT NOT NULL)",
       "CREATE TABLE revisions_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX revisions_by_file ON revisions(file_id)",

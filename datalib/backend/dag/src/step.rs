@@ -40,6 +40,9 @@ pub struct StepSpec {
     /// for `datalib-step`'s own steps. Not in the fingerprint: it says what
     /// the step can be asked, not what it makes.
     pub migrates: bool,
+    /// Whether the step takes the `--compact` verb
+    /// (`docs/dev/step_protocol.md` § Compact). Set like `migrates`.
+    pub compacts: bool,
     /// Whether a consumer may read this step's output *while it is still
     /// being written* — P2 in
     /// `datalib/backend/dag/README.md` § "What a sink owes its consumers".
@@ -124,6 +127,7 @@ impl StepSpec {
             run,
             code_version: None,
             migrates: false,
+            compacts: false,
             streams_output: false,
             reads_pinned: true,
             locks: None,

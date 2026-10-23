@@ -31,7 +31,7 @@ impl SourceRender for NotionRender {
     }
 
     async fn run(&self, raw_path: &Path, ctx: &RenderCtx<'_>) -> Result<String> {
-        use crate::render::{parse_api_dir, render::render_notion};
+        use crate::render::{parse_api_dir, render::render_from_store};
         let parsed = parse_api_dir(raw_path, ctx.raw_range())
             .with_context(|| format!("notion parse {}", raw_path.display()))?;
         // Every bucket this run renders — page or thread — is declared
@@ -41,8 +41,15 @@ impl SourceRender for NotionRender {
             ctx.declare_bucket(key, &[])?;
         }
         let mut on_doc = |md| ctx.emit_doc(md);
-        let s = render_notion(&parsed, ctx.root, ctx.name, ctx.progress, &mut on_doc)
-            .context("render_notion")?;
+        let s = render_from_store(
+            &parsed,
+            ctx.root,
+            ctx.name,
+            ctx.progress,
+            &mut on_doc,
+            ctx.page_size.bytes,
+        )
+        .context("render_notion")?;
         ctx.finish(&s.buckets, parsed.head.as_deref())?;
         Ok(format!("rendered {} document(s)", s.rendered))
     }

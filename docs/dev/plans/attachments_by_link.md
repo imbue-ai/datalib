@@ -1,138 +1,64 @@
-# Attachments by link, not by copy
+# Attachments by address, not by copy
 
-*Proposal (2026-10-20). Nothing here is built.* Render stops copying
-attachment bytes into the rendered tree. A page links to the bytes
-where they already live, and the `unified_document_index` applet serves
-them from there.
+*Mirror of the "Attachments" tab of the [datalib links](https://claude.ai/code/artifact/dd31c9e3-8ef9-4185-a85f-0c29a1318117) Claude Doc, which is the source of truth while this plan is under review. Edit the doc and re-mirror this file; don't edit it here. Proposal (2026-10-20); step 1 landed in PR #1305.*
+
+When datalib renders a page, it writes every attachment the page shows into a `blobs/` folder beside it, though the source's store already holds the same bytes. So every attachment is on disk twice, and most of the copies belong to old mail and chats nobody opens. The proposal: a page points at the bytes where they already are, at a `/data/…` address (first tab), and the server hands them out when someone opens the page.
+
+**Status:** step 1 below (chat sources, Notion and Google Drive Docs as `blob` addresses, with the contract crate and the `/data/` route) landed in PR #1305. Email and contacts are not started.
 
 ## What happens today
 
-Render writes every attachment it links to into a `blobs/` directory
-beside the page, and the page links it relatively (`blobs/<hash16>.<ext>`).
-Three places write those files:
+- **Three places write the copies.** The shared chat renderer does it for email, Slack, Signal, WhatsApp, Claude, ChatGPT, Beeper, SMS, Google Takeout, Facebook and LinkedIn; Notion's renderer for its pages; the shared contact renderer for contact photos.
+- **Email is a special case.** Its store holds only whole emails (`.eml` files), with each attachment inside encoded as text. Render cuts each attachment out and writes it decoded.
+- **In the app, only images reach the server.** The UI points an image at the `/asset/<page uuid>/blobs/…` route, which reads the file beside the page. A download link or an audio or video player is left as `blobs/…`, which resolves against the app's own address. This is from reading the code; not yet tried in the app.
 
-- `BlobBundle::materialize_to_dir` (`etl/src/blob_cas.rs`), called by
-  chat-common (email, Slack, Signal, WhatsApp, Claude, ChatGPT, Beeper,
-  SMS, Google Takeout, Facebook, LinkedIn) and by Notion.
-- contact-common's `write_photo`, for a contact's photo.
+## Where the bytes already are
 
-The UI rewrites `blobs/x.png` to the applet's
-`/asset/{markdown_uuid}/blobs/x.png` (`ui/src/cards/asset_urls.ts`), and
-that route reads the file from disk next to the markdown.
+| Source | Bytes kept in | Address |
+| --- | --- | --- |
+| Chat sources, Notion, LinkedIn photos | the source's blob store, `blobs.sqlite` | `/data/<group>/ingest/blob/<hash>` |
+| Email | inside the stored email, in the blob store | `/data/<group>/ingest/blob/<email hash>/part/<part hash>` |
+| Contacts (CardDAV, `.vcf` files) | inside the stored contact card; the download will also put each photo in the blob store | `/data/<group>/ingest/blob/<hash>` |
 
-So every attachment is on disk twice: once in the source's CAS
-(`<group>/ingest/blobs.sqlite`) and once as a loose file. Email is
-worse: its CAS holds only the `.eml`, so the attachment is there
-base64-encoded and again decoded in `blobs/`. Most of those copies
-belong to old mail and old chats nobody opens.
+An email attachment is cut out of its email each time it is asked for, so showing one image from a 25 MB message reads all 25 MB. Opening old mail is rare enough that this beats keeping a second copy of every attachment.
 
-## The link
+A contact photo is kept once more, in the blob store, so the server never has to read a contact card out of the source's versioned store. Photos are a few tens of KB each. A data root that already holds contacts gets a one-time pass that copies the photos of the cards it has.
 
-Each source has its own stores, so a link names the step whose tree
-holds the bytes, using the step's URI with the thing inside it
-appended (`datalib_uris.md` §2). Three kinds:
+## Serving them
 
-| link | where the bytes are |
-|---|---|
-| `datalib:step/<step_id>/blob/<blake3>` | the row of `<step_id>/blobs.sqlite` with that hash |
-| `datalib:step/<step_id>/eml_part/<eml_blake3>/<part_blake3>` | the MIME part, inside that `.eml` in the CAS, whose decoded bytes have that hash |
-| `datalib:step/<step_id>/vcard_photo/<contact_id>/<photo_blake3>` | the `PHOTO` of that vCard row in `<step_id>/entities.doltlite_db`, if its decoded bytes have that hash |
+- **`datalib-http` answers `/data/…` itself**, reading the step's blob store through the small crate that defines it (first tab, §3). It knows that file's shape and how to take an email apart, and nothing about any source.
+- **The path is checked, never used as a file path.** The group must be one of the config's groups, so the path cannot reach `system/` or anything else that is not a group's. The function only has to be a plain directory name (not empty, not starting with `.`), on purpose: a render-only source's pages link the blob store in an `ingest` tree that no step of this config writes. The hash must be 64 lowercase hex digits. Anything else is "not found".
+- **The blob store needs no special care to read**: it is a plain SQLite file that only ever holds finished writes, so opening it read-only while a sync writes to it is safe.
+- **What an answer carries:** `nosniff` on every answer; the sandbox policy (`DATA_DOCUMENT_CSP`) on a document type that could run script, such as HTML or SVG; script itself sent as `application/octet-stream`, so no page can run it; and `Cache-Control: private, max-age=31536000, immutable`, since an address's bytes never change. Email gains most from the caching, since every fetch re-reads the message.
+- **The choice stays easy to undo.** If serving should move to the search applet (first tab, §7), it moves as one route; no page or address changes.
 
-- **`blob`** covers every chat-common source, Notion, and LinkedIn's
-  contact photos, which are already in the CAS (the `contact_photos`
-  edge).
-- **`eml_part`** covers email's attachments and inline images. Render
-  already names each part by its content hash (`extract_attachments_from_emls`).
-  The server finds the `.eml` in the CAS, parses it, and returns the
-  part whose hash matches. That parse runs on every request. Opening old
-  mail is rare enough that this beats keeping a copy, and since the
-  bytes never change behind a link, the browser caches the answer for
-  good.
-- **`vcard_photo`** covers CardDAV and `.vcf` contacts, whose photo
-  stays inside the vCard by design (the `contacts` ladder dropped
-  `contact_photos`). The hash makes the link specific to one photo: once
-  the card changes, the old link answers 404 and the next render writes
-  a new one.
+## What render does instead
 
-The type served is the CAS's `content_type` (already corrected from the
-bytes at ingest), the part's `Content-Type`, or the vCard's `TYPE`. A
-`?name=` parameter can carry the upstream file name for the download's
-`Content-Disposition`; the link works without it.
+- It writes an address in place of each file. To do that it needs only an attachment's hash, type and name, so it stops loading attachment bytes at all. Email still loads each email, to render its text.
+- An attachment whose bytes the store has lost is still reported on its message, as now.
+- Every chat source and Notion renders once more in full after the upgrade, and render deletes the `blobs/` folder beside a page when it next writes that page.
 
-## Serving it
+## Before, after, and what a person notices
 
-The applet serves the three links at
-`/store/<group>/<function>/<kind>/…`, beside `/asset`. It already
-links the render side, and `datalib-http` must not link `etl` or a
-mail parser.
+| Change | Before | After | What a person notices |
+| --- | --- | --- | --- |
+| Disk | each attachment kept twice | once | Less disk used; how much is to be measured on a real data root. |
+| Sync time | render reads and writes every attachment's bytes | render reads hashes only | Faster renders for sources heavy with attachments; to be measured. |
+| In the app | images shown; download links and players don't open | all of them go through `/data/…` | Links and players in chat pages open. |
+| Outside the app | a page's `.md` file sits beside its attachments and opens in any viewer | the `.md` has `/data/…` paths | Viewing attachments needs a running datalib, until an export exists. |
+| An agent reading the mirror | opens attachment files on disk | fetches `/data/…` with the API token | The agent guide says how. |
+| The first sync after upgrading | — | every chat source and Notion re-renders | One slower sync. |
 
-- **The path is checked, never joined in as typed.** Every CAS is an
-  ingest step's, so the function must be `ingest`, and the group must
-  be a valid id segment (letters, digits, `.`, `_`, `-`; never `.` or
-  `..`). The hash must be 64 hex digits. Anything else is a 404.
-- **Opening the CAS needs no pin.** It is plain SQLite holding only
-  committed rows, so the route opens it read-only, reads, and closes.
-- **The vCard read is a doltlite reader.** It uses a detached read-only
-  open (`doltlite_raw::open_reader`), and its statement goes on the
-  `doltlite_two_process_test` allowlist before it ships
-  (`etl/README.md`).
-- **Bytes that can run script are already contained.** The gateway
-  sends everything an applet serves with `nosniff`, gives HTML and SVG
-  the `DATA_DOCUMENT_CSP` sandbox, and serves script as bytes
-  (`proxied_response` in `http/src/lib.rs`).
-- **Caching is a follow-up.** A link names its bytes by hash, so an
-  answer could be `Cache-Control: immutable`, but the gateway passes on
-  only `Content-Type`. That matters most for `eml_part`, where every
-  request parses the `.eml`.
+## Order of work
 
-## Render
-
-- `BlobBundle` builds links rather than file names: `markdown_link` and
-  chat-common's `rel_path` become a `datalib:step/<step_id>/blob/…` URI.
-  `materialize_to_dir` and `write_photo` go.
-- To render a link, render needs only the hash, the type and the name.
-  `load_many` stops selecting `bytes`, and the existence check that
-  feeds `blob_missing` asks only whether the hash is in `cas_objects`.
-  Email still loads its `.eml`s, because it needs the body.
-- contact-common takes a photo link instead of bytes, and so does the
-  `photo_url` the index carries for chips.
-- The render version moves, so every page is rendered again. When
-  render writes a page, it deletes any `blobs/` directory left beside
-  it.
-
-## The UI
-
-The sanitizer's hook rewrites a link to the applet route wherever one
-appears in a `src` or `href`: a markdown image, a link, or a renderer's
-raw `<audio>` or `<video>`. Today only markdown images are rewritten,
-so an attachment link or a player relative to `blobs/` resolves
-against the app's own URL. The sanitizer's allowlist already admits
-`datalib:`, for chips. A step chip's URI is exactly
-`datalib:step/<group>/<function>`, so `entityFromUri` and
-`Entity::parse` stop claiming anything longer as a step.
-
-## What this gives up
-
-The rendered tree on disk is no longer complete on its own. A `.md`
-opened off disk, or read by an agent, links to bytes it cannot follow
-without the app. `docs/agent_user.md` should say how to fetch one: the
-applet route, or the CAS row by hash. An export that writes the files
-out on demand can come later, if someone needs it.
-
-## Docs to change with it
-
-`data_architecture_parse_and_render.md` (the page "beside a `blobs/`
-directory"), `etl/README.md` § "Blob CAS" (the paragraph on file
-names), `docs/agent_user.md`, and the header comment of `asset_urls.ts`.
-
-## Order
-
-1. The `blob` route and the UI rewrite, then chat-common and Notion
-   switched over. This covers most of the bytes. `materialize_to_dir`
-   stays for email's parts until step 2.
-2. `eml_part`, for email; `materialize_to_dir` goes.
-3. `vcard_photo`, for contacts, and LinkedIn's photos (already in its
-   CAS) as `blob` links, since both go through contact-common's
-   `write_photo`, which goes.
+1. **Chat sources and Notion**, as `blob` addresses, with the contract crate and `datalib-http`'s `/data/` route. Email keeps writing its files until step 2.
+2. **Email**, as `part` addresses; the code that writes copies goes.
+3. **Contacts**: the download puts each photo in its blob store and pages point at it; LinkedIn's photos become `blob` addresses too. The code that writes photo files goes.
 
 The old `/asset` route stays until nothing writes `blobs/`.
+
+## Open questions
+
+- [ ] **How much disk do the copies take on a real data root?** Worth measuring before and after step 1.
+- [ ] **Delete old `blobs/` folders in one sweep at upgrade, or as each page is rewritten?**
+- [ ] **Is an export for reading pages outside the app needed now, or later?**

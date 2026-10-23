@@ -152,9 +152,14 @@ export const BUILTIN_META: Record<keyof ViewLibs, BuiltinMeta> = {
     icon: "chart",
     gallery: "timeSeriesView()",
   },
+  sourceView: {
+    title: "Source",
+    description: "One source: its status and actions, its documents, and its sync.",
+    icon: "dashboard",
+  },
   syncDashboardView: {
     title: "Sync dashboard",
-    description: "One source's sync: its steps, charts over the run, and its log.",
+    description: "One source's card on its Sync tab: its steps, charts over the run, and its log.",
     icon: "dashboard",
   },
   syncStatusView: {

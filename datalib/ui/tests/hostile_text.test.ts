@@ -31,7 +31,7 @@ const asParsed = (s: string) => s.replace(/\r\n?/g, "\n");
 /// it stands in the text as one.
 function page(md: string): HTMLElement {
   const div = document.createElement("div");
-  div.innerHTML = renderDocument(md, null).html;
+  div.innerHTML = renderDocument(md).html;
   for (const br of div.querySelectorAll("br")) br.replaceWith("\n");
   return div;
 }
@@ -80,9 +80,12 @@ const LAYOUT = new Set([
   "BLOCKQUOTE",
 ]);
 
-/// A link is honest when it shows where it goes, as linkify's do.
+/// A link is honest when it shows where it goes, as linkify's do. A
+/// person's chip is not one of these: the viewer draws who its href
+/// resolves to, never its text (docs/dev/chips.md § Trust).
 function disguisedLinks(root: HTMLElement): string[] {
   return [...root.querySelectorAll("a")]
+    .filter((a) => !a.matches("a.chip[data-handle]"))
     .filter((a) => /e\.test/.test(a.getAttribute("href") ?? ""))
     .filter((a) => squash(a.textContent ?? "") !== a.getAttribute("href"))
     .map((a) => a.outerHTML);

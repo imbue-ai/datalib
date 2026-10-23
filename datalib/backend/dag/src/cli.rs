@@ -52,6 +52,10 @@ pub const EXAMPLES: &[Example] = &[
         command: "datalib-dag ~/datalib/config.toml --reset slack/ingest --sync slack/ingest --by claude",
     },
     Example {
+        what: "give back the disk the rendered documents' and the grid's history holds; quit the app first",
+        command: "datalib-dag ~/datalib/config.toml --compact",
+    },
+    Example {
         what: "list the open syncs (with their request ids), the steps turned off and the steps running",
         command: "datalib-dag status ~/datalib/config.toml",
     },
@@ -102,6 +106,14 @@ pub struct Cli {
     /// runs first. Refused while anything else runs the loop on the root.
     #[arg(long, value_name = "STEP_ID", value_delimiter = ',')]
     pub reset: Vec<String>,
+    /// Fold the history of every store nothing reads the history of (each
+    /// source's rendered documents, and the grid index) into one commit,
+    /// and give back the disk it held. Their content stays as it is, so
+    /// nothing runs again for it. Alone, that is all this invocation does;
+    /// with --sync it runs first. Refused while anything else runs the
+    /// loop on the root.
+    #[arg(long)]
+    pub compact: bool,
     /// Who is asking. The request records it, and the app shows it
     /// ("started by claude").
     #[arg(long, value_name = "WHO", default_value = "cli")]

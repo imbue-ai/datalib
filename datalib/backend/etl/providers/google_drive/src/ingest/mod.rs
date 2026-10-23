@@ -9,6 +9,10 @@
 //! unshared, deleted) keeps every row and capture it had, since this is a
 //! backup.
 //!
+//! After the captures, every stored revision of a listed Doc or Sheet is
+//! owed its export in each `revision_exports` format, fetched once
+//! through the revision's export link (`revision_exports`).
+//!
 //! Each kind drains on its own, because each kind's native API is signed
 //! by its own latchkey service: a missing `google-sheets` sign-in ends
 //! the Sheets and leaves the Docs and Slides to finish.
@@ -18,7 +22,7 @@ pub mod db;
 pub mod schema_raw;
 pub mod shape;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result};
@@ -38,7 +42,7 @@ use datalib_etl_web::http::LatchkeySettings;
 use datalib_etl_web::owed::{self, BatchError, Fetcher, Listed, Loop, Outcome};
 
 pub use db::{db_path_for, RawDb};
-use db::{Capture, Part, Split};
+use db::{Body, Capture, HeldImages, Part, RevisionExport, Split};
 use schema_raw::*;
 
 pub struct FetchOptions {
@@ -62,16 +66,24 @@ pub struct FetchSummary {
     pub exports: usize,
     pub exports_declined: usize,
     pub images: usize,
+    /// Images a capture took from a stored capture of the same revision
+    /// instead of fetching them again.
+    pub images_held: usize,
     /// Captured files whose two revision listings named different
     /// revisions.
     pub revision_listings_disagreed: usize,
+    /// Old revisions' exports fetched this run.
+    pub revision_exports: usize,
+    /// Revisions Drive no longer has the content of.
+    pub revision_exports_gone: usize,
 }
 
 impl FetchSummary {
     pub fn line(&self) -> String {
         format!(
             "listed={} owed={} captured={} failed={} left={} exports={} \
-             exports_declined={} images={} revision_listings_disagreed={}",
+             exports_declined={} images={} images_held={} \
+             revision_listings_disagreed={} revision_exports={} revision_exports_gone={}",
             self.listed,
             self.owed,
             self.captured,
@@ -80,7 +92,10 @@ impl FetchSummary {
             self.exports,
             self.exports_declined,
             self.images,
+            self.images_held,
             self.revision_listings_disagreed,
+            self.revision_exports,
+            self.revision_exports_gone,
         )
     }
 }
@@ -124,6 +139,14 @@ async fn walk_files(
         }
     }
 
+    let listed_ids: HashMap<FileKind, HashSet<String>> = by_kind
+        .iter()
+        .map(|(kind, entries)| {
+            let ids = entries.iter().filter_map(|e| str_of(e, "id")).collect();
+            (*kind, ids)
+        })
+        .collect();
+
     for kind in opts.api.kinds.iter().copied() {
         if opts.control.stop.requested() {
             break;
@@ -137,6 +160,8 @@ async fn walk_files(
         }
         let info = api::kind_info(kind);
         opts.progress.set_length(Some(owed.len() as u64));
+        let owed_ids: Vec<&str> = owed.iter().map(|l| l.key.as_str()).collect();
+        let held = opts.db.held_images(&owed_ids).await?;
         let captures = Captures {
             kind,
             exports: opts.api.exports.for_kind(kind),
@@ -150,7 +175,9 @@ async fn walk_files(
                 .collect(),
             exports_done: AtomicUsize::new(0),
             exports_declined: AtomicUsize::new(0),
+            held,
             images: AtomicUsize::new(0),
+            images_held: AtomicUsize::new(0),
             revision_listings_disagreed: AtomicUsize::new(0),
         };
         let drained = owed::drain(
@@ -177,10 +204,186 @@ async fn walk_files(
         summary.exports += captures.exports_done.load(Ordering::Relaxed);
         summary.exports_declined += captures.exports_declined.load(Ordering::Relaxed);
         summary.images += captures.images.load(Ordering::Relaxed);
+        summary.images_held += captures.images_held.load(Ordering::Relaxed);
         summary.revision_listings_disagreed +=
             captures.revision_listings_disagreed.load(Ordering::Relaxed);
     }
+
+    for kind in opts.api.kinds.iter().copied() {
+        if opts.control.stop.requested() {
+            break;
+        }
+        let empty = HashSet::new();
+        let files = listed_ids.get(&kind).unwrap_or(&empty);
+        export_revisions(opts, found, summary, kind, files).await?;
+    }
     Ok(())
+}
+
+/// Fetch the configured exports of every stored revision of `kind`'s
+/// listed files that the store does not hold yet. A file no longer
+/// listed is left alone: its links would only answer that it is gone.
+async fn export_revisions(
+    opts: &FetchOptions,
+    found: &RunProblems,
+    summary: &mut FetchSummary,
+    kind: FileKind,
+    files: &HashSet<String>,
+) -> Result<()> {
+    // A deck's export link ignores `revision=` and always exports the
+    // deck as it is now (measured in every format), so a deck's old
+    // revisions have no copy to fetch.
+    if kind == FileKind::Presentation {
+        return Ok(());
+    }
+    let formats = opts.api.revision_exports.for_kind(kind);
+    if formats.is_empty() || files.is_empty() {
+        return Ok(());
+    }
+    let info = api::kind_info(kind);
+    let mut wanted: HashMap<String, Wanted> = HashMap::new();
+    let mut listed = Vec::new();
+    for revision in opts.db.revisions_of_kind(info.mime_type).await? {
+        if !files.contains(&revision.file_id) {
+            continue;
+        }
+        for format in formats {
+            let Some(url) = api::export_link(kind, *format, &revision.export_links) else {
+                continue;
+            };
+            let (mime, ext) = api::export_type(kind, *format);
+            let part = export_part(ext);
+            let id = format!("{}#{part}", revision.id);
+            listed.push(Listed::new(id.clone(), None::<String>));
+            wanted.insert(
+                id,
+                Wanted {
+                    revision_id: revision.id.clone(),
+                    part,
+                    url,
+                    content_type: mime.to_string(),
+                },
+            );
+        }
+    }
+    let owed = owed::owed(opts.db.pool(), REVISION_EXPORTS, listed).await?;
+    if owed.is_empty() {
+        return Ok(());
+    }
+    opts.progress
+        .set_message(&format!("google_drive: {} old revisions", owed.len()));
+    opts.progress.set_length(Some(owed.len() as u64));
+    let fetcher = RevisionExports {
+        latchkey: &opts.latchkey,
+        db: &opts.db,
+        progress: &opts.progress,
+        stop: &opts.control.stop,
+        wanted,
+        gone: AtomicUsize::new(0),
+    };
+    let drained = owed::drain(
+        &Loop {
+            pool: opts.db.pool(),
+            table: REVISION_EXPORTS,
+            phase: "revision exports",
+            stop: &opts.control.stop,
+            found,
+            sealer: opts.sealer.as_ref(),
+            batch: 1,
+            concurrency: 4,
+            flush: 8,
+            flush_bytes: 64 << 20,
+            failures_in_a_row: 10,
+        },
+        owed,
+        &fetcher,
+    )
+    .await?;
+    let gone = fetcher.gone.load(Ordering::Relaxed);
+    summary.revision_exports += drained.got - gone;
+    summary.revision_exports_gone += gone;
+    summary.failed += drained.failed;
+    summary.left += drained.left;
+    Ok(())
+}
+
+/// What an owed revision export is fetched from and stored as.
+struct Wanted {
+    revision_id: String,
+    part: String,
+    url: String,
+    content_type: String,
+}
+
+struct RevisionExports<'a> {
+    latchkey: &'a LatchkeySettings,
+    db: &'a RawDb,
+    progress: &'a Progress,
+    stop: &'a datalib_etl::stop::StopFlag,
+    wanted: HashMap<String, Wanted>,
+    gone: AtomicUsize,
+}
+
+#[async_trait]
+impl Fetcher<RevisionExport> for RevisionExports<'_> {
+    async fn fetch(
+        &self,
+        batch: Vec<Listed>,
+    ) -> std::result::Result<Vec<owed::Fetched<RevisionExport>>, BatchError> {
+        let mut out = Vec::with_capacity(batch.len());
+        for listed in batch {
+            let Some(w) = self.wanted.get(&listed.key) else {
+                out.push(owed::Fetched {
+                    listed,
+                    outcome: Outcome::Failed("owed but not wanted".to_string()),
+                });
+                continue;
+            };
+            let export = |bytes| RevisionExport {
+                id: listed.key.clone(),
+                revision_id: w.revision_id.clone(),
+                part: w.part.clone(),
+                content_type: w.content_type.clone(),
+                bytes,
+            };
+            let outcome = match api::get_revision_export(&w.url, self.latchkey).await {
+                Ok(bytes) => Outcome::Got(export(Some(bytes))),
+                Err(e) if api::is_not_found(&e) => {
+                    self.gone.fetch_add(1, Ordering::Relaxed);
+                    Outcome::Unusable(
+                        export(None),
+                        datalib_problems::Reason::NotFound,
+                        "Drive no longer has this revision's content".to_string(),
+                    )
+                }
+                Err(e) if api::is_service(&e) => return Err(BatchError::Terminal(e)),
+                Err(e) if self.stop.requested() => return Err(BatchError::Batch(e)),
+                Err(e) => Outcome::Failed(format!("{e:#}")),
+            };
+            self.progress.inc(1);
+            out.push(owed::Fetched { listed, outcome });
+        }
+        Ok(out)
+    }
+
+    async fn store(
+        &self,
+        tx: &mut Transaction<'static, Sqlite>,
+        batch: &[owed::Fetched<RevisionExport>],
+    ) -> Result<()> {
+        let exports: Vec<&RevisionExport> = batch
+            .iter()
+            .filter_map(|f| match &f.outcome {
+                Outcome::Got(e) | Outcome::Unusable(e, ..) => Some(e),
+                _ => None,
+            })
+            .collect();
+        db::store_revision_exports(tx, self.db.cas(), &exports).await
+    }
+
+    fn weight(&self, content: &RevisionExport) -> usize {
+        content.bytes.as_ref().map_or(0, Vec::len)
+    }
 }
 
 /// Every file the config asks for, as Drive's listing entry. A listing
@@ -266,9 +469,13 @@ struct Captures<'a> {
     progress: &'a Progress,
     stop: &'a datalib_etl::stop::StopFlag,
     entries: HashMap<String, Value>,
+    /// Read before the drain: a fetch must not wait on the store's one
+    /// connection, which a flush can hold while this fetch is not polled.
+    held: HeldImages,
     exports_done: AtomicUsize,
     exports_declined: AtomicUsize,
     images: AtomicUsize,
+    images_held: AtomicUsize,
     revision_listings_disagreed: AtomicUsize,
 }
 
@@ -324,10 +531,13 @@ impl Captures<'_> {
             .set_message(&format!("google_drive: file {id}"));
         let lk = self.latchkey;
 
-        let can_read_revisions = entry
-            .pointer("/capabilities/canReadRevisions")
-            .and_then(Value::as_bool)
-            != Some(false);
+        let can = |capability: &str| {
+            entry
+                .pointer(&format!("/capabilities/{capability}"))
+                .and_then(Value::as_bool)
+                != Some(false)
+        };
+        let can_read_revisions = can("canReadRevisions");
         // Drive's first listing after a quiet spell can leave out a
         // file's oldest revision, and one made right after has it
         // (docs/dev/plans/google_drive.md), so a capture lists twice and
@@ -351,50 +561,81 @@ impl Captures<'_> {
         };
         let comments = paged(|token| api::comments_url(id, token), "comments", lk).await?;
 
-        let native_bytes = api::get_bytes(&api::native_url(self.kind, id), lk).await?;
+        let native_bytes =
+            api::get_bytes(&api::native_url(self.kind, id, can("canComment")), lk).await?;
         let mut native: Value = serde_json::from_slice(&native_bytes)
             .with_context(|| format!("parse the native JSON of {id}"))?;
         let links = shape::take_image_links(&mut native);
+        let native_revision_id = shape::native_revision_id(&native);
         let mut parts = vec![Part {
             name: PART_NATIVE.to_string(),
-            bytes: Some(shape::gzip(&serde_json::to_vec(&native)?)?),
+            body: Body::Fetched(shape::gzip(&serde_json::to_vec(&native)?)?),
             content_type: Some(NATIVE_CONTENT_TYPE.to_string()),
         }];
 
-        let mut by_url: HashMap<&str, Vec<u8>> = HashMap::new();
+        // Google signs an image link afresh on every read, so the link
+        // cannot say whether we hold the image; the revision can.
+        let mut by_url: HashMap<&str, (Vec<u8>, Option<String>)> = HashMap::new();
         for (pointer, url) in &links {
+            let name = image_part(pointer);
+            let held = native_revision_id
+                .as_deref()
+                .and_then(|revision| self.held.get(id, revision, &name));
+            if let Some(blake3) = held {
+                self.images_held.fetch_add(1, Ordering::Relaxed);
+                parts.push(Part {
+                    name,
+                    body: Body::Held(blake3.to_string()),
+                    content_type: None,
+                });
+                continue;
+            }
             if !by_url.contains_key(url.as_str()) {
-                let bytes = api::get_image(url)
+                let image = api::get_image(url)
                     .await
                     .with_context(|| format!("image at {pointer}"))?;
                 self.images.fetch_add(1, Ordering::Relaxed);
-                by_url.insert(url, bytes);
+                by_url.insert(url, image);
             }
+            let (bytes, content_type) = by_url[url.as_str()].clone();
             parts.push(Part {
-                name: image_part(pointer),
-                bytes: by_url.get(url.as_str()).cloned(),
-                content_type: None,
+                name,
+                body: Body::Fetched(bytes),
+                content_type,
             });
         }
 
-        let mut declined = Vec::new();
+        // An owner can turn off download for those who may not edit, and
+        // then Drive refuses every export (`cannotExportFile`).
+        let may_download = can("canDownload");
+        let (mut too_large, mut not_allowed) = (Vec::new(), Vec::new());
         for format in self.exports {
             let (mime, ext) = api::export_type(self.kind, *format);
-            let bytes = match api::get_bytes(&api::export_url(id, mime), lk).await {
+            let got = if may_download {
+                api::get_bytes(&api::export_url(id, mime), lk).await
+            } else {
+                Err(api::ApiError::ExportNotAllowed("canDownload is false".into()).into())
+            };
+            let body = match got {
                 Ok(bytes) => {
                     self.exports_done.fetch_add(1, Ordering::Relaxed);
-                    Some(bytes)
+                    Body::Fetched(bytes)
                 }
                 Err(e) if api::is_export_too_large(&e) => {
                     self.exports_declined.fetch_add(1, Ordering::Relaxed);
-                    declined.push(ext);
-                    None
+                    too_large.push(ext);
+                    Body::Declined
+                }
+                Err(e) if api::is_export_not_allowed(&e) => {
+                    self.exports_declined.fetch_add(1, Ordering::Relaxed);
+                    not_allowed.push(ext);
+                    Body::Declined
                 }
                 Err(e) => return Err(e),
             };
             parts.push(Part {
                 name: export_part(ext),
-                bytes,
+                body,
                 content_type: Some(mime.to_string()),
             });
         }
@@ -412,7 +653,7 @@ impl Captures<'_> {
                     file_id: id.to_string(),
                     version: version.to_string(),
                     modified_time: str_of(entry, "modifiedTime"),
-                    native_revision_id: shape::native_revision_id(&native),
+                    native_revision_id,
                     head_revision_id: revisions.last().and_then(|r| str_of(r, "id")),
                 },
                 volatile: shape::image_links_volatile(&links),
@@ -427,20 +668,35 @@ impl Captures<'_> {
             })?,
             parts,
         };
-        Ok(if declined.is_empty() {
-            Outcome::Got(capture)
-        } else {
-            Outcome::Unusable(
-                capture,
-                datalib_problems::Reason::FetchFailed,
-                format!(
-                    "Google declined to export this version as {} (over its 10 MB export \
-                     limit); the native JSON and the other parts are kept",
-                    declined.join(", ")
-                ),
-            )
+        Ok(match declined_exports(&too_large, &not_allowed) {
+            None => Outcome::Got(capture),
+            Some(why) => Outcome::Unusable(capture, datalib_problems::Reason::FetchFailed, why),
         })
     }
+}
+
+/// What a capture whose exports Google declined says about them.
+fn declined_exports(too_large: &[&str], not_allowed: &[&str]) -> Option<String> {
+    let mut why = Vec::new();
+    if !too_large.is_empty() {
+        why.push(format!(
+            "Google declined to export this version as {} (over its 10 MB export limit)",
+            too_large.join(", ")
+        ));
+    }
+    if !not_allowed.is_empty() {
+        why.push(format!(
+            "Google does not let this account export it as {} (its owner turned off \
+             download for viewers and commenters)",
+            not_allowed.join(", ")
+        ));
+    }
+    (!why.is_empty()).then(|| {
+        format!(
+            "{}; the native JSON and the other parts are kept",
+            why.join("; ")
+        )
+    })
 }
 
 /// Every item of a paged Drive list.

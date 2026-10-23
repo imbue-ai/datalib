@@ -220,9 +220,7 @@
 }
 .grid {
   display: grid;
-  grid-template-columns:
-    calc(var(--datalib-icon-size) + 4px) minmax(0, 1.4fr) minmax(0, 1.6fr)
-    110px 80px 90px;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1.6fr) 110px 80px 90px;
   column-gap: 12px;
   align-items: center;
   padding: 0 10px;
@@ -280,8 +278,16 @@
 .recent:hover {
   background: var(--datalib-hover);
 }
+/* In a row of shrinking parts a source's chip keeps its width up to a
+   quarter of the row, and ends its name in "…" past that; the snippet
+   is what gives way. */
+.recent .entity-chip-box {
+  flex: 0 0 auto;
+  max-width: 25%;
+}
 .recent-title {
-  flex: 0 1 auto;
+  /* Up to its cap before the snippet gives way, beside a source's chip. */
+  flex: 0 0 auto;
   max-width: 40%;
   overflow: hidden;
   text-overflow: ellipsis;

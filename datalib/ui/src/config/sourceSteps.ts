@@ -542,7 +542,7 @@ export function seedFieldValues(entry: CatalogEntry, steps?: SourceSteps): Field
 function formValue(field: Field, existing: unknown): unknown {
   switch (field.kind) {
     case "string_list":
-      return (existing as string[]) ?? [];
+      return Array.isArray(existing) ? existing : [];
     case "select":
       return matchOption(field.options, existing);
     case "bytes":
@@ -884,11 +884,18 @@ function = ${quote(functionOf(opts.phase))}${packageLines}${inputsLine}${params 
   return block.trimEnd();
 }
 
+/// Whether a source of `entry` gets its render step, given what the
+/// person answered (`wanted`). A download-only provider always does; a
+/// package source whose package has no `render_markdown` program cannot.
+export function writesRenderStep(entry: CatalogEntry, wanted?: boolean): boolean {
+  if (entry.package && !entry.package.commands.render_markdown) return false;
+  return entry.rendersDocuments === false || wanted !== false;
+}
+
 /// Everything the wizard writes for one source, in the order it goes
 /// into the file: the group (when creating), the ingest step, and the
-/// render step for a provider that renders. A provider that renders
-/// nothing (`renderStep: false`) gets no render step and no
-/// `renderId`.
+/// render step unless the source turned rendering off. A download-only
+/// provider (`rendersDocuments: false`) always gets its render step.
 export function buildSource(opts: {
   entry: CatalogEntry;
   group: string;
@@ -898,15 +905,15 @@ export function buildSource(opts: {
   /// Write the `[[groups]]` block too. Off when editing: the group
   /// already exists and is renamed in place.
   withGroup: boolean;
-  /// Whether this source wants its render step. Defaults to whatever
-  /// the provider can do; the wizard passes the answer the person gave,
-  /// which is the one that decides.
+  /// Whether this source wants its render step: yes by default, and
+  /// the wizard passes the answer the person gave. Ignored for a
+  /// download-only provider.
   renders?: boolean;
 }): { groupBody: string | null; stepsBody: string; renderId: string | null } {
   const { entry, group, values } = opts;
   const ingestId = stepIdFor(group, "download");
   const ingest = buildStep({ entry, group, phase: "download", values });
-  const renders = entry.renderStep !== false && opts.renders !== false;
+  const renders = writesRenderStep(entry, opts.renders);
   const render = renders
     ? buildStep({ entry, group, phase: "render", inputs: [ingestId], values })
     : null;
@@ -1401,7 +1408,7 @@ export function patchSource(
   opts: { entry: CatalogEntry; group: string; values: FieldValues; renders?: boolean },
 ): string {
   const { entry, group, values } = opts;
-  const renders = entry.renderStep !== false && opts.renders !== false;
+  const renders = writesRenderStep(entry, opts.renders);
   let next = text;
   for (const phase of ["download", "render"] as const) {
     if (phase === "render" && !renders) continue;
@@ -1454,6 +1461,7 @@ function patchStep(
     ...fieldsFor(entry, phase).map((f) => f.target),
     ...INERT,
   ]);
+  const fields = new Map(fieldsFor(entry, phase).map((f) => [f.target, f]));
   for (const target of owned) {
     const path = ["params", ...target.split(".")];
     const want = wanted.get(target);
@@ -1461,7 +1469,7 @@ function patchStep(
     if (want) {
       if (alreadySays(want.field, had, want.value)) continue;
       text = setIn(text, ref, path, tomlValue(want.field, want.value));
-    } else if (had !== undefined) {
+    } else if (had !== undefined && readsBack(fields.get(target), had)) {
       text = deleteIn(text, ref, path);
     }
   }
@@ -1471,6 +1479,14 @@ function patchStep(
     text = setIn(text, ref, ["params", entry.method], "{}");
   }
   return text;
+}
+
+/// Whether a field can show the value the config holds. One it cannot
+/// (Google Drive's `exports` written as a table per kind, where the
+/// field takes a list) shows empty, and an empty box must not delete
+/// it; `untouchedSettings` names it instead.
+function readsBack(field: Field | undefined, had: unknown): boolean {
+  return field?.kind !== "string_list" || Array.isArray(had);
 }
 
 /// Does the config's value `had` already say what the form's `want`

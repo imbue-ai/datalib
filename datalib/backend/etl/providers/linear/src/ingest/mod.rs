@@ -23,7 +23,7 @@ use std::collections::HashSet;
 use anyhow::Result;
 use datalib_etl::download_problems::RunProblem;
 use datalib_etl::download_run::DownloadRun;
-use datalib_etl::raw_store::Sealer;
+use datalib_etl::raw_store::{Batch, Sealer};
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl_linear_config::LinearSync;
 use datalib_etl_web::coverage::{self, Span};
@@ -242,9 +242,11 @@ fn walks(sel: &Selection) -> Vec<Walked> {
 
 struct Ctx<'a> {
     api: &'a dyn Api,
-    db: &'a RawDb,
     opts: &'a FetchOptions,
     found: &'a RunProblems,
+    /// Every read and write of the store goes through this until the run
+    /// ends: it holds the store's one connection between seals.
+    writes: Batch<'a>,
 }
 
 impl Ctx<'_> {
@@ -252,11 +254,9 @@ impl Ctx<'_> {
         self.opts.control.stop.requested()
     }
 
-    async fn wrote(&self, rows: usize) {
+    async fn wrote(&mut self, rows: usize) -> Result<()> {
         self.opts.progress.inc(rows as u64);
-        if let Some(sealer) = &self.opts.sealer {
-            sealer.wrote(rows as u64).await;
-        }
+        self.writes.wrote(rows as u64).await
     }
 
     /// Every page of `l`. A page that fails part-way leaves what came
@@ -303,19 +303,22 @@ impl Ctx<'_> {
         }
     }
 
-    async fn store_whole(&self, kind: Kind, records: &[Value], s: &mut FetchSummary) -> Result<()> {
+    async fn store_whole(
+        &mut self,
+        kind: Kind,
+        records: &[Value],
+        s: &mut FetchSummary,
+    ) -> Result<()> {
         let now = IsoOffsetTimestamp::now_local();
-        let mut tx = self.db.pool().begin().await?;
-        let n = db::write(&mut tx, kind, records, Stamp::FirstSeen, &now).await?;
-        tx.commit().await?;
+        let tx = self.writes.tx().await?;
+        let n = db::write(tx, kind, records, Stamp::FirstSeen, &now).await?;
         s.workspace += n;
-        self.wrote(n).await;
-        Ok(())
+        self.wrote(n).await
     }
 
     /// Teams and projects first, since the selection is resolved
     /// against them, then the rest of the small lists.
-    async fn workspace(&self, s: &mut FetchSummary) -> Result<Option<Selection>> {
+    async fn workspace(&mut self, s: &mut FetchSummary) -> Result<Option<Selection>> {
         let Some(teams) = self.list(&TEAMS).await? else {
             return Ok(None);
         };
@@ -344,10 +347,10 @@ impl Ctx<'_> {
         Ok(Some(sel))
     }
 
-    async fn walk(&self, w: &Walked, sel: &Selection, s: &mut FetchSummary) -> Result<()> {
+    async fn walk(&mut self, w: &Walked, sel: &Selection, s: &mut FetchSummary) -> Result<()> {
         self.opts.progress.set_message(w.kind.table);
         let scope = format!("{}:{}", w.kind.table, sel.key());
-        let held = coverage::held(self.db.pool(), &scope).await?;
+        let held = coverage::held(&mut **self.writes.tx().await?, &scope).await?;
         for gap in walk::gaps_newest_first(&held) {
             let mut pos = Position::start(&gap);
             loop {
@@ -393,9 +396,9 @@ impl Ctx<'_> {
     }
 
     /// Stores the records of one page not already held at their
-    /// `updatedAt`, with `cover` claimed, in one transaction.
+    /// `updatedAt`, with `cover` claimed.
     async fn store_page(
-        &self,
+        &mut self,
         w: &Walked,
         sel: &Selection,
         mut records: Vec<Value>,
@@ -435,7 +438,7 @@ impl Ctx<'_> {
 
         let table = w.kind.table;
         let ids: Vec<&str> = records.iter().filter_map(id_of).collect();
-        let held = owed::held_versions(self.db.pool(), table, ids).await?;
+        let held = owed::held_versions_in(self.writes.tx().await?, table, ids).await?;
         let changed: Vec<Value> = records
             .into_iter()
             .filter(|r| {
@@ -455,15 +458,15 @@ impl Ctx<'_> {
         }
 
         let now = IsoOffsetTimestamp::now_local();
-        let mut tx = self.db.pool().begin().await?;
-        let n = db::write(&mut tx, w.kind, &changed, Stamp::Fetched, &now).await?;
+        let tx = self.writes.tx().await?;
+        let n = db::write(tx, w.kind, &changed, Stamp::Fetched, &now).await?;
         for r in &changed {
             if let Some(id) = id_of(r) {
-                owed::set_held_version(&mut tx, table, id, updated_at(r)).await?;
+                owed::set_held_version(tx, table, id, updated_at(r)).await?;
             }
         }
         let h = db::write(
-            &mut tx,
+            tx,
             schema_raw::ISSUE_HISTORY,
             &history,
             Stamp::FirstSeen,
@@ -471,13 +474,11 @@ impl Ctx<'_> {
         )
         .await?;
         if let Some(span) = cover {
-            coverage::cover(&mut tx, scope, span).await?;
+            coverage::cover(tx, scope, span).await?;
         }
-        tx.commit().await?;
         s.written += n;
         s.history += h;
-        self.wrote(n + h).await;
-        Ok(())
+        self.wrote(n + h).await
     }
 
     /// The history entries of `issue` past the ones that came with it.
@@ -528,20 +529,31 @@ async fn download(api: &dyn Api, opts: FetchOptions, found: RunProblems) -> Resu
     let db = opts.db.clone();
     let run_config = json!({ "teams": opts.sync.teams, "projects": opts.sync.projects });
     let run = DownloadRun::start(db.pool(), &run_config).await?;
-    let ctx = Ctx {
+    let mut ctx = Ctx {
         api,
-        db: &db,
         opts: &opts,
         found: &found,
+        writes: Batch::new(db.pool(), opts.sealer.as_ref()),
     };
     let mut s = FetchSummary::default();
-    let result = phases(&ctx, &mut s).await;
+    let result = phases(&mut ctx, &mut s).await;
+    // What failed may have struck between two writes that belong
+    // together, so it is rolled back; the batch frees the store's one
+    // connection either way before the run's record is written.
+    let Ctx { writes, .. } = ctx;
+    let result = match result {
+        Ok(()) => writes.finish().await,
+        Err(e) => {
+            drop(writes);
+            Err(e)
+        }
+    };
     s.requests = api.requests();
     run.finish(&result, &s).await;
     result.map(|()| s)
 }
 
-async fn phases(ctx: &Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
+async fn phases(ctx: &mut Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
     let ended = match run_phases(ctx, s).await {
         Ok(()) => return Ok(()),
         Err(e) => match e.downcast::<RunEnded>() {
@@ -580,7 +592,7 @@ async fn phases(ctx: &Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
     Ok(())
 }
 
-async fn run_phases(ctx: &Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
+async fn run_phases(ctx: &mut Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
     let Some(sel) = ctx.workspace(s).await? else {
         anyhow::bail!(
             "Linear's list of teams or projects did not come, so the selection could not be \

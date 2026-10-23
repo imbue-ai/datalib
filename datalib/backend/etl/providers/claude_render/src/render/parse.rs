@@ -5,7 +5,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use datalib_etl::blob_cas::{self, BlobBundle, CasEdgeRow};
+use datalib_etl::blob_cas::CasEdgeRow;
+use datalib_etl_chat_common::BlobsAt;
 use datalib_etl_render::inputs::{Inputs, RawRange};
 use serde_json::{Map, Value};
 use sqlx::sqlite::SqlitePool;
@@ -15,8 +16,8 @@ use datalib_etl_claude::ingest::normalize::normalize_to_export_shape;
 use datalib_etl_claude::ingest::schema_raw::ConversationAttachmentRow;
 
 /// SQL projection that maps an Anthropic `file_uuid` to its CAS
-/// blake3. Consumed by [`BlobBundle::load_many`].
-const ATTACHMENTS_PROJECTION_SQL: &str = "
+/// blake3. Render reads a batch of conversations' bytes through it.
+pub(crate) const ATTACHMENTS_PROJECTION_SQL: &str = "
     SELECT file_uuid AS ref_id, blake3,
            NULL AS content_type, NULL AS upstream_name
       FROM claude_attachments
@@ -133,14 +134,6 @@ pub struct AttachmentRow {
 pub struct ClaudeConversation {
     pub conv: ConversationRow,
     pub upstream_payload: Value,
-    /// This conversation's attachment bytes, loaded in bulk by
-    /// [`parse`] (two SQL queries per conversation regardless of
-    /// attachment count). Render walks it synchronously via
-    /// [`BlobBundle::markdown_link`] and
-    /// [`BlobBundle::materialize_to_dir`]. Empty when the conversation
-    /// has no attachments or no doltlite db is present (legacy
-    /// JSON-tree fixture).
-    pub blobs: BlobBundle,
     /// Every raw row this conversation reads — its row and attachment
     /// edges from the load, its account's `users` row and its project as
     /// render looks them up.
@@ -199,6 +192,9 @@ pub struct ParsedExport {
     /// unchanged.
     pub docs_skipped: usize,
     pub scan: ScanResult,
+    /// Where render reads the conversations' attachment bytes, a batch
+    /// at a time. `None` when no store was read.
+    pub blobs_at: Option<BlobsAt>,
 }
 
 impl ParsedExport {
@@ -258,12 +254,25 @@ async fn parse_doltlite_async(
     else {
         return Ok(ParsedExport::default());
     };
+    let commit = reader.pin().commit().to_string();
+    let parsed = parse_open(&reader, source_id, range).await;
+    // Closed, not dropped: render opens this store again for the bytes.
+    reader.close().await;
+    let mut parsed = parsed?;
+    parsed.blobs_at = Some(BlobsAt {
+        db_path: db_path.to_path_buf(),
+        commit,
+    });
+    Ok(parsed)
+}
+
+async fn parse_open(
+    reader: &datalib_etl::doltlite_raw::Reader,
+    source_id: &str,
+    range: RawRange<'_>,
+) -> Result<ParsedExport> {
     let pool = reader.pool().clone();
     let pin = reader.pin().clone();
-
-    let cas_pool = blob_cas::open_cas_for_render(db_path)
-        .await
-        .with_context(|| format!("open the blob store beside {}", db_path.display()))?;
 
     // Open at one commit before anything reads this store: the diff below
     // and the rows behind it have to name that commit.
@@ -325,9 +334,9 @@ async fn parse_doltlite_async(
     };
     parsed.scan = scan;
 
-    // Per-doc BlobBundle: walk each conversation's
-    // `chat_messages[*].files[*].file_uuid` and bulk-load the matching
-    // edge-table rows + CAS bytes, every conversation's together.
+    // Each conversation declares the attachment edges its
+    // `chat_messages[*].files[*].file_uuid` name; render reads their
+    // bytes a batch at a time.
     let refs_by_conv: Vec<Vec<String>> = parsed
         .conversations
         .iter()
@@ -341,23 +350,6 @@ async fn parse_doltlite_async(
             );
         }
     }
-    let loaded = BlobBundle::load_many(
-        &pool,
-        cas_pool.as_ref(),
-        ATTACHMENTS_PROJECTION_SQL,
-        refs_by_conv.into_iter().enumerate(),
-    )
-    .await;
-    if let Some(cas) = cas_pool {
-        cas.close().await;
-    }
-    let mut blobs = loaded?;
-    for (i, conv) in parsed.conversations.iter_mut().enumerate() {
-        if let Some(b) = blobs.remove(&i) {
-            conv.blobs = b;
-        }
-    }
-
     Ok(parsed)
 }
 
@@ -580,7 +572,6 @@ pub fn parse_loaded(raw: datalib_etl_claude::ingest::db::LoadedRaw) -> ParsedExp
             Ok(Some(conv)) => out.conversations.push(ClaudeConversation {
                 conv,
                 upstream_payload: normalized,
-                blobs: BlobBundle::default(),
                 inputs,
             }),
             Ok(None) => {}

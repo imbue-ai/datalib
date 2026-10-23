@@ -65,6 +65,7 @@ pub fn build_friends(friends: &[(String, Value)], owner: &Owner) -> Vec<ContactD
                 member_handles: Vec::new(),
                 upstream_account: None,
                 inputs: inputs.declared(),
+                problems: Vec::new(),
             }
         })
         .collect()

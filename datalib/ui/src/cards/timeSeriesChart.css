@@ -48,6 +48,11 @@
   height: 16rem;
   margin: 0.75rem 0;
 }
+/* The chart's height is held while it loads, then given back when there
+   is only a note to show. */
+.ts-embed.is-note {
+  height: auto;
+}
 .ts-embed-key {
   display: flex;
   flex-wrap: wrap;

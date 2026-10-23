@@ -10,10 +10,10 @@ describe("a chip's menu in the search field", () => {
     expect(fieldChipMenu("Work Slack", false, slack).map((e) => e.id)).toEqual([
       "edit-text",
       "toggle-negate",
-      "copy-name",
-      "copy-id",
-      "copy-both",
       "open",
+      "copy-id",
+      "copy-name",
+      "copy-both",
       "browse",
     ]);
     const [, negate, firstOfChip] = fieldChipMenu("Work Slack", true, slack);

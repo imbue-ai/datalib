@@ -47,6 +47,10 @@ and dark backgrounds and fails one that doesn't show up on either.
     blue.
   - `yolink.png`: YoLink publishes no vector mark. This is the circle
     logo shop.yosmart.com serves as its favicon.
+- **A brand's own calendar or contacts** is the generic glyph below in
+  the brand's colours: `fastmail_calendar.svg` and
+  `fastmail_contacts.svg` take Fastmail's blue and yellow from
+  `fastmail.svg`, so they sit beside Fastmail but read as what they hold.
 - **Generic glyphs** (`apple_photos`, `calendar`, `contacts`, `fsindex`,
   `media`, `pdf`, `perseus`, `search`, `system`) are
   [Material Design Icons](https://pictogrammers.com/library/mdi/)

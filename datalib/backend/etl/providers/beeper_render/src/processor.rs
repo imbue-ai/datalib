@@ -66,6 +66,7 @@ impl SourceRender for BeeperRender {
             ctx.progress,
             &mut on_doc,
             &raw_db_path,
+            ctx.page_size.bytes,
         )
         .context("beeper render_all")?;
         // A room this run looked at that has no event left builds no

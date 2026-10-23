@@ -416,6 +416,58 @@ mod tests {
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
+    /// A contacts store every past release left holds cards whose photos
+    /// were never put in the blob store, since only this build's download
+    /// puts them there; migrating it puts them there, so each card's page
+    /// has its photo to link.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_contacts_store_from_every_release_puts_its_cards_photos_in_the_blob_store() {
+        const PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQMAAAAl21bKAAAAA1BMVEX/AAAZ4gk3AAAAAXRSTlMAQObYZgAAAApJREFUCNdjYAAAAAIAAeIhvDMAAAAASUVORK5CYII=";
+        let card = format!(
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:tng-picard\r\nFN:Jean-Luc Picard\r\n\
+             PHOTO;ENCODING=b;TYPE=PNG:{PNG_B64}\r\nEND:VCARD\r\n"
+        );
+        let photo = datalib_etl_contacts::ingest::photo::card_photo(&card)
+            .0
+            .expect("the card carries a photo");
+        let hash = datalib_etl::blob_cas::blake3_hex(&photo.bytes);
+        let releases: Vec<(String, Shape)> = recorded(&shapes_dir())
+            .into_iter()
+            .filter_map(|(release, mut shapes)| Some((release, shapes.remove("contacts")?)))
+            .collect();
+        assert!(!releases.is_empty(), "no release recorded a contacts store");
+        for (release, shape) in releases {
+            let dir = tempfile::tempdir().unwrap();
+            let raw = store_at(dir.path(), &shape, &release).await;
+            let pool = plain_pool(&entities_db(&raw)).await;
+            sqlx::query("UPDATE contacts SET payload = json_object('vcard', ?)")
+                .bind(&card)
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("SELECT dolt_commit('-Am', 'a card with a photo')")
+                .execute(&pool)
+                .await
+                .unwrap();
+            pool.close().await;
+
+            crate::dispatch::migrate("contacts", &raw).await.unwrap();
+
+            let cas = datalib_etl::blob_cas::BlobCas::open_reader(
+                &raw.join(datalib_etl::raw_layout::BLOBS_DB),
+            )
+            .await
+            .unwrap();
+            let held = cas.describe(&hash).await.unwrap();
+            cas.close().await;
+            assert_eq!(
+                held.and_then(|h| h.content_type).as_deref(),
+                Some("image/png"),
+                "contacts from {release}: the card's photo is not in the blob store"
+            );
+        }
+    }
+
     /// Migrating a store already in this build's shape commits nothing, so
     /// a launch on an up-to-date root moves no version and re-renders
     /// nothing.

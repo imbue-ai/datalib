@@ -15,6 +15,10 @@ file there opens with a banner saying what it is and how current:
 
 - [`docs/dev/plans/`](docs/dev/plans/) — intended work, some of it
   partly built. `head -n 8 docs/dev/plans/*.md` reads every banner.
+  A plan under review may live in a Claude Doc that people comment
+  on. The doc is then the source of truth, and its file here is a
+  mirror whose banner links the doc: change the doc, then export the
+  tab over the file, never the file alone.
 - [`docs/dev/plans/completed/`](docs/dev/plans/completed/) — landed
   plans, kept as the record of what was decided. A landed plan moves
   here, or is rewritten as reference under `docs/dev/` if someone would
@@ -253,6 +257,8 @@ datalib/
                    and the applet.
     store_meta/    `_datalib_meta`, the table every store carries naming
                    the build that wrote it and the shape it is in.
+    blob_store/    the blob store's shape: the one part of a step's data
+                   `datalib-http` reads, and its reader.
     core/          the app stores plus re-exports of `runtime`.
     query/         the search-bar grammar every grid shares; no deps.
     handle/        `Handle`: one identifier for a person (`email:`, `tel:`,
@@ -321,7 +327,9 @@ A source whose data is also time series (Garmin, YoLink, AirVisual) has a
 `time_series_index` under `unified_time_series_index` indexes every
 such store without copying its points (`docs/dev/time_series.md`). The document index is
 queried by the `unified_document_index` applet; `datalib-http`
-reads only the stores' commit logs (`history/`), never their rows. A render
+reads the stores' commit logs (`history/`) and never their rows, except
+a step's blob store, whose one table it serves at `/data/…`
+(`datalib/backend/blob_store/README.md`). A render
 store is readable at every commit: the documents between two checkpoints
 share one transaction. The loop's record — each step's state now, its
 last run and success, each sink's version — is in
@@ -361,7 +369,7 @@ The measurement that checks it:
 bazelisk query 'kind(".*_test", rdeps(//..., //datalib/backend/schema:datalib_schema))'
 ```
 
-73 at the last count. If that number climbs, something took a dependency
+82 at the last count. If that number climbs, something took a dependency
 it should not have.
 
 ## The grid_rows union table

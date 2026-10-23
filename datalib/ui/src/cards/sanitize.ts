@@ -22,7 +22,13 @@
 // server's `/api/remote_media` route (`remoteMedia.ts`). Nothing leaves
 // here pointing at a remote host, and the app's CSP refuses anything
 // that still does.
+//
+// A reference to our own origin is a request too, sent with the
+// person's cookie, so it loads only if it is an attachment's blob-store
+// address (`blobAddress`). Anything else on this origin, a relative
+// reference included, is dropped.
 import DOMPurify from "dompurify";
+import { blobAddress } from "./blob_address";
 import {
   blockAttribute,
   hostOf,
@@ -59,6 +65,16 @@ let accept: (url: string) => boolean = () => false;
 let context: RemoteContext = NO_CONTEXT;
 let found: RemoteRef[] = [];
 
+/** Neither remote nor another scheme (`data:`, `blob:`, which the CSP
+ *  judges): a path the browser resolves against this origin. */
+function isOwn(url: string): boolean {
+  return !isRemoteUrl(url) && !/^[a-z][a-z0-9+.-]*:/i.test(url.trim());
+}
+
+function toOwn(url: string): string | null {
+  return blobAddress(url);
+}
+
 function toProxy(url: string): string {
   return proxied(url, context);
 }
@@ -76,7 +92,9 @@ DOMPurify.addHook("afterSanitizeAttributes", (node) => {
     if (name.startsWith("data-remote-")) el.removeAttribute(name);
   }
   for (const attr of loadingAttributes(el.nodeName)) {
-    const value = el.getAttribute(attr);
+    const raw = el.getAttribute(attr);
+    if (raw === null) continue;
+    const value = ownPass(el, attr, raw);
     if (value === null) continue;
     if (attr === "srcset") {
       // All or nothing: a srcset half held would still name a host.
@@ -101,6 +119,20 @@ DOMPurify.addHook("afterSanitizeAttributes", (node) => {
     }
   }
 });
+
+/** The attribute with its references to our own origin made safe, and
+ *  written back; null when nothing is left of it. */
+function ownPass(el: Element, attr: string, value: string): string | null {
+  let next: string | null;
+  if (attr === "srcset") next = rewriteSrcset(value, toOwn, isOwn).srcset || null;
+  else if (attr === "style") next = rewriteStyleUrls(value, toOwn, isOwn).style;
+  else if (isOwn(value)) next = toOwn(value);
+  else next = value;
+  if (next === value) return value;
+  if (next === null) el.removeAttribute(attr);
+  else el.setAttribute(attr, next);
+  return next;
+}
 
 export function sanitizeRenderedHtml(html: string, options: SanitizeOptions = {}): Sanitized {
   accept = options.accept ?? (() => false);

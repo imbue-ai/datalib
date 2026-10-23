@@ -12,7 +12,7 @@ use datalib_etl_web::http::LatchkeySettings;
 use datalib_etl_web::interrupt::dump_tables;
 use datalib_etl_web::playback;
 
-use crate::tape::{self, Edition, DECK, DOC, SHEET};
+use crate::tape::{self, Edition, DECK, DOC, SHEET, VIEW_ONLY_DOC};
 
 pub const TABLES: &[&str] = &[
     "files",
@@ -20,10 +20,11 @@ pub const TABLES: &[&str] = &[
     "comments",
     "captures",
     "capture_parts",
+    "revision_exports",
 ];
 
 pub async fn run(playback: &Path, store: &Path) -> FetchSummary {
-    run_with(playback, store, GoogleDriveApi::default()).await
+    run_with(playback, store, tape::api_with_odf()).await
 }
 
 async fn run_with(playback: &Path, store: &Path, api: GoogleDriveApi) -> FetchSummary {
@@ -215,6 +216,91 @@ async fn a_first_sync_captures_every_file_in_its_native_form() {
             (DECK.to_string(), Some("30".to_string())),
         ]
     );
+
+    // Old revisions: revision 1's export came by way of its redirect;
+    // revision 29 is listed but gone, kept as an edge with no bytes and a
+    // warning; the deck's revision is not asked for, as a deck's links
+    // ignore the revision.
+    assert_eq!(
+        (s.revision_exports, s.revision_exports_gone),
+        (1, 1),
+        "{s:?}"
+    );
+    let exports: Vec<(String, Option<String>)> =
+        sqlx::query_as("SELECT id, blake3 FROM revision_exports ORDER BY id")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+    assert_eq!(exports.len(), 2, "{exports:?}");
+    assert_eq!(exports[0].0, format!("{DOC}#1#export.odt"));
+    assert_eq!(
+        blob(&db, exports[0].1.as_deref().unwrap()).await,
+        tape::DOC_ODT_REV1
+    );
+    assert_eq!(exports[1], (format!("{DOC}#29#export.odt"), None));
+    let gone: String = sqlx::query_scalar("SELECT severity FROM problems WHERE scope_key = ?")
+        .bind(format!("revision_exports:{DOC}#29#export.odt"))
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    assert_eq!(gone, "warning");
+    db.close().await;
+}
+
+/// The Docs API refuses a Doc's suggestions (403) to an account that may
+/// only view it, so asking for them inline left every such Doc owed
+/// forever. Its listing entry says so up front, and it is read without
+/// them, in the mode Google answers with, which the stored JSON keeps.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_doc_the_account_may_only_view_is_read_without_suggestions() {
+    let d = tempfile::tempdir().unwrap();
+    let t = tape::tape(d.path(), Edition::Before);
+    tape::view_only_doc(&t, true);
+    let store = d.path().join("store");
+    let s = run(&t, &store).await;
+    assert_eq!((s.listed, s.captured, s.failed), (4, 4, 0), "{s:?}");
+
+    let db = open(&store).await;
+    let parts = parts_of(&db, &format!("{VIEW_ONLY_DOC}#5")).await;
+    let names: Vec<&str> = parts.iter().map(|(p, _)| p.as_str()).collect();
+    assert_eq!(names, vec!["export.odt", "native.json.gz"]);
+    let native: serde_json::Value =
+        serde_json::from_slice(&gunzip(&blob(&db, parts[1].1.as_deref().unwrap()).await)).unwrap();
+    assert_eq!(native, tape::view_only_native());
+    assert_eq!(native["suggestionsViewMode"], "PREVIEW_WITHOUT_SUGGESTIONS");
+    db.close().await;
+}
+
+/// Drive refuses to export a file whose owner turned off download
+/// (`cannotExportFile`), which failed the whole capture though its native
+/// JSON reads fine. Its listing entry says so, so no export is asked for:
+/// the capture is kept with an empty export part and a warning.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_doc_the_account_may_not_download_is_kept_without_its_export() {
+    let d = tempfile::tempdir().unwrap();
+    let t = tape::tape(d.path(), Edition::Before);
+    tape::view_only_doc(&t, false);
+    let store = d.path().join("store");
+    let s = run(&t, &store).await;
+    assert_eq!((s.listed, s.captured, s.failed), (4, 4, 0), "{s:?}");
+    assert_eq!((s.exports, s.exports_declined), (2, 2), "{s:?}");
+
+    let db = open(&store).await;
+    let parts = parts_of(&db, &format!("{VIEW_ONLY_DOC}#5")).await;
+    assert_eq!(parts[0], ("export.odt".to_string(), None));
+    assert_eq!(parts[1].0, "native.json.gz");
+    assert!(parts[1].1.is_some());
+    let (severity, detail): (String, String) =
+        sqlx::query_as("SELECT severity, sample FROM problems WHERE scope_key = ?")
+            .bind(format!("files:{VIEW_ONLY_DOC}"))
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+    assert_eq!(severity, "warning");
+    assert!(
+        detail.contains("odt") && detail.contains("download"),
+        "{detail}"
+    );
     db.close().await;
 }
 
@@ -290,6 +376,15 @@ async fn a_new_version_is_captured_beside_the_old_one() {
     run(&tape::tape(d.path(), Edition::Before), &store).await;
     let s = run(&tape::tape(d.path(), Edition::After), &store).await;
     assert_eq!((s.owed, s.captured, s.failed), (1, 1, 0), "{s:?}");
+    // A new revision may have new images, so its image is fetched again.
+    assert_eq!((s.images, s.images_held), (1, 0), "{s:?}");
+    // Only the new revision's export is fetched: revision 1's is held,
+    // and the second tape could not answer for it.
+    assert_eq!(
+        (s.revision_exports, s.revision_exports_gone),
+        (1, 0),
+        "{s:?}"
+    );
 
     let db = open(&store).await;
     let captures: Vec<(String, Option<String>)> = sqlx::query_as(
@@ -327,6 +422,75 @@ async fn a_new_version_is_captured_beside_the_old_one() {
         .await,
         3
     );
+    let rev41: String = sqlx::query_scalar(
+        "SELECT blake3 FROM revision_exports WHERE id = '1PicardLogSupplemental#41#export.odt'",
+    )
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+    assert_eq!(blob(&db, &rev41).await, tape::DOC_ODT_REV41);
+    db.close().await;
+}
+
+/// Drive moves a shared file's `version` with nothing in it edited, and
+/// each such bump fetched every image of a deck again: 152 images, most
+/// of a minute, in one sync of a real account. A capture whose native
+/// JSON names a revision already captured takes its images from there.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_version_bump_with_the_same_revision_fetches_no_image_again() {
+    let d = tempfile::tempdir().unwrap();
+    let store = d.path().join("store");
+    run(&tape::tape(d.path(), Edition::Before), &store).await;
+    let s = run(&tape::bumped_deck(d.path()), &store).await;
+    assert_eq!((s.owed, s.captured, s.failed), (1, 1, 0), "{s:?}");
+    assert_eq!((s.images, s.images_held), (0, 1), "{s:?}");
+
+    let db = open(&store).await;
+    let old = parts_of(&db, &format!("{DECK}#30")).await;
+    let new = parts_of(&db, &format!("{DECK}#31")).await;
+    let image = |parts: &[(String, Option<String>)]| {
+        parts
+            .iter()
+            .find(|(p, _)| p.starts_with("image:"))
+            .cloned()
+            .expect("an image part")
+    };
+    assert_eq!(image(&new), image(&old));
+    assert_eq!(
+        blob(&db, image(&new).1.as_deref().unwrap()).await,
+        tape::RIGEL_PNG
+    );
+    db.close().await;
+}
+
+/// An image's type is the one its response names, so a format the bytes
+/// alone do not identify (SVG) keeps its type.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_image_is_stored_with_the_type_its_response_names() {
+    let d = tempfile::tempdir().unwrap();
+    let t = tape::tape(d.path(), Edition::Before);
+    let svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>";
+    let mut resp = tape::bytes(200, svg);
+    resp.headers
+        .insert("content-type".into(), "image/svg+xml".into());
+    tape::put(
+        &t,
+        api::req_signed("https://docs.google.com/slides-images-rt/rigel-vii"),
+        resp,
+    );
+    let store = d.path().join("store");
+    run(&t, &store).await;
+
+    let db = open(&store).await;
+    let blake3: String = sqlx::query_scalar(
+        "SELECT blake3 FROM capture_parts WHERE capture_id = ? AND part LIKE 'image:%'",
+    )
+    .bind(format!("{DECK}#30"))
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+    let stored = db.cas().get(&blake3).await.unwrap().expect("blob");
+    assert_eq!(stored.content_type.as_deref(), Some("image/svg+xml"));
     db.close().await;
 }
 
@@ -339,7 +503,7 @@ async fn a_kind_whose_service_is_refused_stops_alone() {
     let t = tape::tape(d.path(), Edition::Before);
     tape::put(
         &t,
-        api::req_bytes(&api::native_url(FileKind::Spreadsheet, SHEET)),
+        api::req_bytes(&api::native_url(FileKind::Spreadsheet, SHEET, true)),
         tape::bytes(
             403,
             br#"{"error": {"code": 403, "message": "Request had insufficient authentication scopes.",
@@ -408,5 +572,42 @@ async fn exports_follow_each_kinds_list() {
         .map(|(p, _)| p)
         .collect();
     assert_eq!(names, vec!["native.json.gz".to_string()]);
+    db.close().await;
+}
+
+/// The default keeps Google's JSON, the images, comments and revisions,
+/// and asks Drive for no converted copy of anything.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_default_keeps_the_json_and_fetches_no_odf() {
+    let d = tempfile::tempdir().unwrap();
+    let t = tape::tape(d.path(), Edition::Before);
+    let store = d.path().join("store");
+    let s = run_with(&t, &store, GoogleDriveApi::default()).await;
+    assert_eq!(
+        (s.captured, s.failed, s.exports, s.revision_exports),
+        (3, 0, 0, 0),
+        "{s:?}"
+    );
+    let db = open(&store).await;
+    assert_eq!(
+        scalar(
+            &db,
+            "SELECT COUNT(*) FROM capture_parts WHERE part LIKE 'export.%'"
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        scalar(&db, "SELECT COUNT(*) FROM revision_exports").await,
+        0
+    );
+    assert_eq!(
+        scalar(
+            &db,
+            "SELECT COUNT(*) FROM capture_parts WHERE part = 'native.json.gz'"
+        )
+        .await,
+        3
+    );
     db.close().await;
 }

@@ -2,15 +2,14 @@
 //! `chat-common` normalized model and delegate the markdown / grid-row /
 //! grid-row plumbing to [`datalib_etl_chat_common::render::render_all`].
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
 
-use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
-use datalib_etl_chat_common::render::{render_all as cc_render_all, Buckets, RenderProfile};
+use datalib_etl_chat_common::render::{Buckets, ChatRenderer, RenderProfile};
 use datalib_etl_chat_common::types::{
     own_stamp_ms, AuthorKind, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
     NormalizedDoc, NormalizedReaction, UpstreamRef,
@@ -19,9 +18,14 @@ use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_handle::Handle;
 
-use super::mrkdwn::{emojize_shortcodes, mentioned_users, resolve_mentions, to_commonmark, Labels};
-use super::{ids, slack_link, ts_to_ms, Message, ParsedSlack};
+use super::emoji;
+use super::mrkdwn::{mentioned_users, resolve_mentions, to_commonmark, Labels};
+use super::parse::{ParsedSlack, Shared, SlackStore, SlackThreadBucket};
+use super::{ids, slack_link, ts_to_ms, Message};
 use datalib_etl_render::inputs::Lookup;
+use datalib_etl_render::pages::{batches, PageSize};
+use datalib_etl_render::processor::Unparsed;
+use datalib_etl_slack::ingest::schema_raw::split_key;
 use datalib_schema::providers::Provider;
 
 /// Bump when the on-disk render layout changes in a way that must
@@ -50,16 +54,28 @@ use datalib_schema::providers::Provider;
 ///     typed before a mention or link no longer makes it an image.
 /// v13: a permalink is on the workspace's own host (`auth.test`'s `url`),
 ///     so it opens in that workspace, not the browser's current one.
-pub const RENDER_VERSION: u32 = 13;
+/// v14: emoji shortcodes are Slack's own names, skin tones included, and
+///     code keeps its shortcodes as typed.
+pub const RENDER_VERSION: u32 = 14;
 
 #[derive(Debug, Default)]
 pub struct RenderSummary {
     pub threads_total: usize,
     pub threads_rendered: usize,
-    pub threads_skipped: usize,
     /// Every thread rendered, by uuid — what the processor declares
     /// through `RenderCtx::declare_bucket`.
     pub buckets: Buckets,
+}
+
+/// How one page of a store's render ended, for the processor to declare
+/// before the next page is read.
+pub struct PageEnd {
+    /// The stale threads this page looked at, by bucket key: declared
+    /// with nothing first, so one with no message left goes.
+    pub looked_at: Vec<String>,
+    pub buckets: Buckets,
+    /// `messages` rows of the page that would not read as JSON.
+    pub unparsed: Vec<Unparsed>,
 }
 
 fn profile() -> RenderProfile {
@@ -76,9 +92,100 @@ fn profile() -> RenderProfile {
     }
 }
 
-/// Render every thread bucket in `parsed` under `out_dir` via the shared
-/// chat renderer. Idempotent at the dolt_diff level — buckets the scan
-/// reported as unchanged never appear in `parsed.threads`.
+/// What every thread's render looks up.
+struct Lookups<'a> {
+    shared: &'a Shared,
+    user_labels: BTreeMap<String, String>,
+    channel_labels: BTreeMap<String, String>,
+    account: Option<String>,
+    org_name: Option<String>,
+}
+
+impl<'a> Lookups<'a> {
+    fn new(shared: &'a Shared) -> Self {
+        Lookups {
+            shared,
+            user_labels: shared
+                .users
+                .iter()
+                .map(|(id, u)| (id.clone(), u.label()))
+                .collect(),
+            channel_labels: shared
+                .channels
+                .iter()
+                .filter_map(|(id, c)| Some((id.clone(), c.name.clone()?)))
+                .collect(),
+            account: shared.account_label(),
+            // The workspace is the organization this login lives in,
+            // which is what `org_name` means for Claude's Team workspaces
+            // too.
+            org_name: shared
+                .workspace
+                .as_ref()
+                .and_then(|w| w.team_name.clone())
+                .filter(|n| !n.trim().is_empty()),
+        }
+    }
+}
+
+/// Renders every thread `store` hands out, a page at a time; `on_page`
+/// hears how each page ended before the next is read.
+#[allow(clippy::too_many_arguments)]
+pub fn render_store(
+    store: &SlackStore,
+    out_dir: &Path,
+    source_id: &str,
+    size: PageSize,
+    progress: &Progress,
+    on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+    on_page: &mut dyn FnMut(PageEnd) -> Result<()>,
+) -> Result<()> {
+    let elapsed_ms = store.scan.scan_elapsed.map(|d| d.as_millis() as u64);
+    tracing::info!(
+        source = source_id,
+        scan_elapsed_ms = elapsed_ms,
+        threads_to_render = store.threads,
+        cold_start = store.scan.render.is_none(),
+        "[render] slack dolt_diff scan"
+    );
+    let lookups = Lookups::new(&store.shared);
+    let profile = profile();
+    let mut renderer = ChatRenderer::new(
+        &profile,
+        out_dir,
+        source_id,
+        store.threads,
+        progress,
+        on_doc_complete,
+    );
+    let mut pages = store.pages(size.buckets);
+    while let Some(page) = store.next_page(&mut pages)? {
+        render_threads(
+            &lookups,
+            &page.threads,
+            Some(store),
+            size.bytes,
+            source_id,
+            &mut renderer,
+        )?;
+        let looked_at = page
+            .looked_at
+            .iter()
+            .filter_map(|key| {
+                let (team, channel, ts) = split_key(key)?;
+                Some(ids::thread(source_id, team, channel, ts).uuid)
+            })
+            .collect();
+        on_page(PageEnd {
+            looked_at,
+            buckets: renderer.take_buckets(),
+            unparsed: page.unparsed,
+        })?;
+    }
+    Ok(())
+}
+
+/// Renders every thread in `parsed`, its attachments already loaded.
 pub fn render_all(
     parsed: &ParsedSlack,
     out_dir: &Path,
@@ -86,185 +193,182 @@ pub fn render_all(
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
-    // Log how long the dolt_diff scan took (matches chatgpt/claude).
-    let elapsed_ms = parsed.scan.scan_elapsed.map(|d| d.as_millis() as u64);
-    tracing::info!(
-        source = source_id,
-        scan_elapsed_ms = elapsed_ms,
-        threads_to_render = parsed
-            .scan
-            .render
-            .as_ref()
-            .map(|s| s.len() as i64)
-            .unwrap_or(-1),
-        cold_start = parsed.scan.render.is_none(),
-        "[render] slack dolt_diff scan"
-    );
-
-    let user_labels: BTreeMap<String, String> = parsed
-        .users
-        .iter()
-        .map(|(id, u)| (id.clone(), u.label()))
-        .collect();
-    let channel_labels: BTreeMap<String, String> = parsed
-        .channels
-        .iter()
-        .filter_map(|(id, c)| Some((id.clone(), c.name.clone()?)))
-        .collect();
-    let (chats, blobs_by_chat) = build_chats(parsed, source_id, &user_labels, &channel_labels);
-
-    let cc = cc_render_all(
-        &profile(),
-        &chats,
+    let lookups = Lookups::new(&parsed.shared);
+    let profile = profile();
+    let mut renderer = ChatRenderer::new(
+        &profile,
         out_dir,
         source_id,
-        &blobs_by_chat,
+        parsed.threads.len(),
         progress,
         on_doc_complete,
-    )
-    .context("slack chat-common render")?;
-
+    );
+    render_threads(
+        &lookups,
+        &parsed.threads,
+        None,
+        u64::MAX,
+        source_id,
+        &mut renderer,
+    )?;
+    let cc = renderer.finish();
     Ok(RenderSummary {
-        threads_total: parsed.threads.len() + parsed.docs_skipped,
+        threads_total: parsed.threads.len(),
         threads_rendered: cc.docs_rendered,
-        threads_skipped: parsed.docs_skipped,
         buckets: cc.buckets,
     })
 }
 
-fn build_chats(
-    parsed: &ParsedSlack,
+/// One document per thread, each built just before it renders. Its
+/// attachments are read from `blobs` a batch of at most `blob_bytes`
+/// ahead.
+fn render_threads(
+    lookups: &Lookups<'_>,
+    threads: &[SlackThreadBucket],
+    blobs: Option<&SlackStore>,
+    blob_bytes: u64,
     source_id: &str,
-    user_labels: &BTreeMap<String, String>,
-    channel_labels: &BTreeMap<String, String>,
-) -> (Vec<NormalizedChat>, HashMap<String, BlobBundle>) {
+    renderer: &mut ChatRenderer<'_>,
+) -> Result<()> {
+    let weights: Vec<u64> = threads.iter().map(|t| t.attachment_bytes()).collect();
+    for range in batches(&weights, blob_bytes) {
+        let batch: Vec<&SlackThreadBucket> = threads[range].iter().collect();
+        let loaded;
+        let batch: Vec<&SlackThreadBucket> = match blobs {
+            Some(store) => {
+                loaded = store.load_blobs(&batch)?;
+                loaded.iter().collect()
+            }
+            None => batch,
+        };
+        for bucket in batch {
+            let chat = build_chat(lookups, bucket, source_id);
+            renderer
+                .render_chat(&chat, &bucket.blobs)
+                .context("slack chat-common render")?;
+        }
+    }
+    Ok(())
+}
+
+fn build_chat(
+    lookups: &Lookups<'_>,
+    bucket: &SlackThreadBucket,
+    source_id: &str,
+) -> NormalizedChat {
+    let shared = lookups.shared;
     // Who this mirror belongs to, from `auth.test`. Used to subtract
     // the account itself out of a group DM's participant list when
     // naming it — see `Channel::display`.
-    let self_user_id = parsed
+    let self_user_id = shared
         .workspace
         .as_ref()
         .and_then(|w| w.self_user_id.as_deref());
-    let account = parsed.account_label();
-    let team_url = parsed
+    let team_url = shared
         .workspace
         .as_ref()
         .and_then(|w| w.team_url.as_deref());
-    // The workspace is the organization this login lives in, which is
-    // what `org_name` means for Claude's Team workspaces too.
-    let org_name = parsed
-        .workspace
-        .as_ref()
-        .and_then(|w| w.team_name.clone())
-        .filter(|n| !n.trim().is_empty());
-    let mut chats = Vec::with_capacity(parsed.threads.len());
-    let mut blobs_by_chat: HashMap<String, BlobBundle> = HashMap::new();
+    // Every user and channel this thread resolves is recorded on the
+    // bucket as it is asked for, so the thread declares exactly what
+    // it read.
+    let labels = Labels {
+        users: bucket.inputs.lookup("users", &lookups.user_labels),
+        channels: bucket.inputs.lookup("channels", &lookups.channel_labels),
+        team_id: bucket.messages.first().map_or("", |m| m.team_id.as_str()),
+    };
+    let channels = bucket.inputs.lookup("channels", &shared.channels);
+    let root: &Message = bucket
+        .messages
+        .iter()
+        .find(|m| m.is_thread_root)
+        .unwrap_or_else(|| bucket.messages.first().expect("non-empty thread bucket"));
+    // `#general` for a channel, `@Jean-Luc Picard` for a DM, and
+    // `#<channel_id>` when the channel row never arrived — the same
+    // fallback this line has always had. See `Channel::display`.
+    let cname = match channels.get(&root.channel_id) {
+        Some(c) => c.display(labels.users, self_user_id),
+        None => format!("#{}", root.channel_id),
+    };
+    let named_after = channels
+        .get(&root.channel_id)
+        .map(|c| c.named_after(labels.users, self_user_id, &root.team_id))
+        .unwrap_or_default();
+    let thread = ids::thread(source_id, &root.team_id, &root.channel_id, &root.ts);
+    let thread_uuid = thread.uuid.clone();
 
-    for bucket in &parsed.threads {
-        // Every user and channel this thread resolves is recorded on the
-        // bucket as it is asked for, so the thread declares exactly what
-        // it read.
-        let labels = Labels {
-            users: bucket.inputs.lookup("users", user_labels),
-            channels: bucket.inputs.lookup("channels", channel_labels),
-            team_id: bucket.messages.first().map_or("", |m| m.team_id.as_str()),
+    // A top-level message is read up to its conversation's mark, a
+    // reply up to its thread's, which Slack keeps only for a thread
+    // the account follows. The account's own messages are never
+    // unread, whatever the mark says.
+    let channel_mark = shared.read_marks.channels.get(&root.channel_id);
+    let thread_mark = shared.read_marks.threads.get(&bucket.thread_key);
+    let unread = |m: &Message| {
+        let mark = if m.is_thread_root {
+            channel_mark
+        } else {
+            thread_mark
         };
-        let channels = bucket.inputs.lookup("channels", &parsed.channels);
-        let root: &Message = bucket
-            .messages
-            .iter()
-            .find(|m| m.is_thread_root)
-            .unwrap_or_else(|| bucket.messages.first().expect("non-empty thread bucket"));
-        // `#general` for a channel, `@Jean-Luc Picard` for a DM, and
-        // `#<channel_id>` when the channel row never arrived — the same
-        // fallback this line has always had. See `Channel::display`.
-        let cname = match channels.get(&root.channel_id) {
-            Some(c) => c.display(labels.users, self_user_id),
-            None => format!("#{}", root.channel_id),
-        };
-        let named_after = channels
-            .get(&root.channel_id)
-            .map(|c| c.named_after(labels.users, self_user_id, &root.team_id))
-            .unwrap_or_default();
-        let thread = ids::thread(source_id, &root.team_id, &root.channel_id, &root.ts);
-        let thread_uuid = thread.uuid.clone();
+        m.user_id.as_deref() != self_user_id
+            && mark.is_some_and(|last_read| ids::after_mark(&m.ts, last_read))
+    };
+    let items: Vec<NormalizedChatItem> = bucket
+        .messages
+        .iter()
+        .map(|m| build_item(source_id, m, root, team_url, labels, unread(m)))
+        .collect();
 
-        // A top-level message is read up to its conversation's mark, a
-        // reply up to its thread's, which Slack keeps only for a thread
-        // the account follows. The account's own messages are never
-        // unread, whatever the mark says.
-        let channel_mark = parsed.read_marks.channels.get(&root.channel_id);
-        let thread_mark = parsed.read_marks.threads.get(&bucket.thread_key);
-        let unread = |m: &Message| {
-            let mark = if m.is_thread_root {
-                channel_mark
-            } else {
-                thread_mark
-            };
-            m.user_id.as_deref() != self_user_id
-                && mark.is_some_and(|last_read| ids::after_mark(&m.ts, last_read))
-        };
-        let items: Vec<NormalizedChatItem> = bucket
-            .messages
-            .iter()
-            .map(|m| build_item(source_id, m, root, team_url, labels, unread(m)))
-            .collect();
+    // "#channel: <root snippet>" preserves the old scannable H1; the
+    // bare "#channel" remains the conversation_name (via `display`).
+    let title = format!("{cname}: {}", thread_title(&root.text, labels));
 
-        // "#channel: <root snippet>" preserves the old scannable H1; the
-        // bare "#channel" remains the conversation_name (via `display`).
-        let title = format!("{cname}: {}", thread_title(&root.text, labels));
-
-        chats.push(NormalizedChat {
-            named_after,
-            path_prefix: None,
-            id: thread_uuid.clone(),
-            chat_uuid: thread_uuid.clone(),
-            display: cname,
-            title: Some(title),
-            author: None,
-            account: account.clone(),
-            project: None,
-            // The exact natural key the thread's `uuid` was minted
-            // from — `{channel_id}#{thread_ts}`, the tuple
-            // `conversations.replies` takes back. Must be this
-            // spelling, not a prettier one: the round-trip check
-            // recomputes `uuid` from it.
-            external_id: Some(thread.natural_key),
-            // Thread permalink → chat-level `↗` + chat grid source_url.
-            source_url: Some(slack_link(
-                team_url,
-                &root.team_id,
-                &root.channel_id,
-                &root.ts,
-                None,
-            )),
-            // Every row in this thread was minted under
-            // `Some(team_id)`; the round-trip check
-            // recomputes `uuid` from this exact string.
-            upstream_account: Some(root.team_id.clone()),
-            org_uuid: Some(root.team_id.clone()),
-            org_name: org_name.clone(),
-            buckets: vec![NormalizedDoc {
-                orphan_reactions: Vec::new(),
-                period_key: "all".to_string(),
-                markdown_uuid: thread_uuid.clone(),
-                source_ref: None,
-                items,
-            }],
-            // Each author's profile, read the way their label was.
-            contacts: authors_of(bucket)
-                .filter_map(|uid| bucket.inputs.lookup("users", &parsed.users).get(uid))
-                .filter_map(|u| u.contact(source_id))
-                .collect(),
-            inputs: bucket.inputs.declared(),
-        });
-        blobs_by_chat.insert(thread_uuid, bucket.blobs.clone());
+    NormalizedChat {
+        named_after,
+        path_prefix: None,
+        id: thread_uuid.clone(),
+        chat_uuid: thread_uuid.clone(),
+        display: cname,
+        title: Some(title),
+        author: None,
+        account: lookups.account.clone(),
+        project: None,
+        // The exact natural key the thread's `uuid` was minted
+        // from — `{channel_id}#{thread_ts}`, the tuple
+        // `conversations.replies` takes back. Must be this
+        // spelling, not a prettier one: the round-trip check
+        // recomputes `uuid` from it.
+        external_id: Some(thread.natural_key),
+        // Thread permalink → chat-level `↗` + chat grid source_url.
+        source_url: Some(slack_link(
+            team_url,
+            &root.team_id,
+            &root.channel_id,
+            &root.ts,
+            None,
+        )),
+        // Every row in this thread was minted under
+        // `Some(team_id)`; the round-trip check
+        // recomputes `uuid` from this exact string.
+        upstream_account: Some(root.team_id.clone()),
+        org_uuid: Some(root.team_id.clone()),
+        org_name: lookups.org_name.clone(),
+        buckets: vec![NormalizedDoc {
+            orphan_reactions: Vec::new(),
+            period_key: "all".to_string(),
+            markdown_uuid: thread_uuid,
+            source_ref: None,
+            items,
+        }],
+        // Each author's profile, read the way their label was.
+        contacts: authors_of(bucket)
+            .filter_map(|uid| bucket.inputs.lookup("users", &shared.users).get(uid))
+            .filter_map(|u| u.contact(source_id))
+            .collect(),
+        inputs: bucket.inputs.declared(),
     }
-    (chats, blobs_by_chat)
 }
 
 /// Each user who wrote in the thread, once, in the order they first did.
-fn authors_of(bucket: &super::parse::SlackThreadBucket) -> impl Iterator<Item = &str> {
+fn authors_of(bucket: &SlackThreadBucket) -> impl Iterator<Item = &str> {
     let mut seen = std::collections::HashSet::new();
     bucket
         .messages
@@ -387,7 +491,7 @@ fn build_attachments(raw: &Value) -> Vec<NormalizedAttachment> {
                         f.get("id").and_then(|v| v.as_str()).map(str::to_string)
                     };
                     NormalizedAttachment {
-                        rel_path: None,
+                        href: None,
                         file_name,
                         mime_type,
                         byte_len: f.get("size").and_then(|v| v.as_i64()),
@@ -431,7 +535,7 @@ fn build_reactions(
         let Some(name) = r.get("name").and_then(|v| v.as_str()) else {
             continue;
         };
-        let emoji = emojize_shortcodes(&format!(":{name}:"));
+        let emoji = emoji::lookup(name).unwrap_or_else(|| format!(":{name}:"));
         let users: Vec<&str> = r
             .get("users")
             .and_then(|v| v.as_array())
@@ -468,4 +572,45 @@ fn build_reactions(
         }
     }
     out
+}
+
+#[cfg(test)]
+mod reaction_tests {
+    use super::*;
+    use datalib_etl_render::inputs::Inputs;
+    use serde_json::json;
+
+    fn reacted(reactions: Value) -> Message {
+        Message {
+            team_id: "T1".into(),
+            channel_id: "C1".into(),
+            ts: "12604000100.000100".into(),
+            thread_ts: None,
+            effective_thread_ts: "12604000100.000100".into(),
+            is_thread_root: true,
+            user_id: Some("U1".into()),
+            text: "Engage.".into(),
+            ts_iso: None,
+            raw_json: json!({ "reactions": reactions }),
+        }
+    }
+
+    /// The regression: a toned reaction (Slack names it `+1::skin-tone-2`)
+    /// showed as `👍:skin-tone-2:`. A workspace's own emoji keeps its name.
+    #[test]
+    fn a_reaction_shows_its_tone_and_a_custom_one_its_name() {
+        let m = reacted(json!([
+            { "name": "+1::skin-tone-2", "users": ["U2"], "count": 1 },
+            { "name": "thinking_face", "count": 3 },
+            { "name": "ferengi-dance", "users": ["U3"], "count": 1 },
+        ]));
+        let inputs = Inputs::default();
+        let users = BTreeMap::new();
+        let shown: Vec<String> =
+            build_reactions("src", &m.raw_json, &m, inputs.lookup("users", &users))
+                .into_iter()
+                .map(|r| r.emoji)
+                .collect();
+        assert_eq!(shown, ["👍🏻", "🤔", ":ferengi-dance:"]);
+    }
 }

@@ -167,6 +167,34 @@ test("a tab the person renames keeps its name after a reload", async ({ page }) 
   await expect(tabs(page).nth(3)).toContainText("My reading");
 });
 
+// A card opened from a link runs on whatever the link's author wrote
+// (docs/dev/cards.md, "Opening a card never writes"), so it is shown and
+// not kept: the layout a person's own change saves does not carry it,
+// and it does not come back at the next launch.
+test("a card opened from a link is shown but not kept", async ({ page }) => {
+  const title = "Opened from a link";
+  const source = `tableView({ url: "/api/remote_media/allow", title: "${title}" })`;
+  await page.goto("/" + encodeURIComponent(source));
+  await expect(tabs(page)).toHaveCount(4);
+
+  await tabs(page).first().click();
+  await expect(mainCards(page)).toHaveCount(5);
+  await recentDocument(page).click();
+  await expect(tabs(page)).toHaveCount(5);
+  await tabs(page).nth(4).getByTitle("more").click();
+  await page.getByRole("menuitem", { name: "Rename…" }).click();
+  await page.getByLabel("Name").fill("My reading");
+  await page.getByRole("button", { name: "OK" }).click();
+  await expect
+    .poll(async () => (await savedTabs(page))?.some((t) => t.name === "My reading"), {
+      timeout: 10_000,
+    })
+    .toBe(true);
+
+  const saved = await (await page.request.get("/api/ui/state/layout")).text();
+  expect(saved).not.toContain(title);
+});
+
 test("a composite cannot take a built-in composite's name", async ({ page }) => {
   await page.goto("/");
   await expect(mainCards(page)).toHaveCount(5);

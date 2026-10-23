@@ -35,7 +35,7 @@ export function entriesOfManifest(id: string, m: PackageManifest): CatalogEntry[
       type: s.type,
       kind: "package",
       wizard: true,
-      renderStep: "render_markdown" in s.commands,
+      rendersDocuments: "render_markdown" in s.commands,
       package: { id, name: m.name, version: m.version, commands: s.commands },
     } as CatalogEntry;
   });

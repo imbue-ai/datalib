@@ -23,6 +23,7 @@ use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stag
 use crate::grid_index::RenderedMarkdown;
 pub use crate::indexed_markdown::Input;
 use crate::inputs::{Bucket, RawRange};
+use crate::pages::PageSize;
 
 /// One source's render wave, as a unit the step driver can run.
 #[async_trait]
@@ -295,6 +296,8 @@ pub struct RenderCtx<'a> {
     /// driver could not say — no cursor, or nothing declared yet — and
     /// the provider's scan is on its own.
     pub stale_buckets: Option<&'a HashSet<String>>,
+    /// How much of the raw store to read at once.
+    pub page_size: PageSize,
     emit: DocSink<'a>,
     declare: DeclareSink<'a>,
     problems: ProblemsSink<'a>,
@@ -323,6 +326,7 @@ impl<'a> RenderCtx<'a> {
             raw_cursor,
             raw_pin,
             stale_buckets,
+            page_size: PageSize::DEFAULT,
             emit: DocSink {
                 cb: Mutex::new(on_doc),
             },
@@ -334,6 +338,10 @@ impl<'a> RenderCtx<'a> {
             },
             consumed: Mutex::new(None),
         }
+    }
+
+    pub fn with_page_size(self, page_size: PageSize) -> Self {
+        Self { page_size, ..self }
     }
 
     /// The raw store as this run should read it — see [`RawRange`].

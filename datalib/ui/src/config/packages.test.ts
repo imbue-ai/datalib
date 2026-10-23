@@ -122,7 +122,7 @@ describe("a package source", () => {
       label: "Weather station",
       kind: "package",
       wizard: true,
-      renderStep: false,
+      rendersDocuments: false,
       package: { id: "weather", version: "1.2.0" },
     });
   });

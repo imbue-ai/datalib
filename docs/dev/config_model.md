@@ -173,9 +173,9 @@ complete one per ingest method, each a `[[groups]]` entry and its steps
 under the type's own name as the group id. Its structs derive
 `schemars::JsonSchema`, so the params' JSON Schema, doc comments
 included, is the field reference. `datalib_step/src/source_docs.rs`
-maps every `SourceType` to the two, and `datalib-step help` prints them
-(`help <type>`, `help <type> <method>`, `--example minimal|complete
---id <group>`). Its test loads and plans every stanza and holds each
+maps every `SourceType` to the two; `datalib-step examples <type>`
+prints the stanzas and `datalib-step help <type> <method>` the
+reference. Its test loads and plans every stanza and holds each
 complete one to every option of its method's table; the shared
 `common` and `latchkey_settings` options are set only where a source
 reads them. A retired field a planner refuses stays readable by serde
@@ -370,9 +370,12 @@ catalog entry's `sections`, with the render fields and everything else
 no section names under Advanced options
 ([`wizard_design.md`](wizard_design.md)). Editing renames the group in place and
 rewrites both steps where the first of them stood. A source missing one of its
-two steps gets it back on save; a render step under a provider that
-renders nothing (`renderStep: false` in `ui/src/config/catalog.ts`) is
-removed and unwired, and the dialog says so before Save.
+two steps gets it back on save. A download-only provider
+(`rendersDocuments: false` in `ui/src/config/catalog.ts`) still gets its
+render step: it renders no documents, but it writes the storage report and
+carries the download's problems into the index, so the Manage row's counts
+lead somewhere. The form offers it no Rendering section, since there is
+nothing to render or search.
 
 The screen lists groups, and the steps under each, in file order, and a
 header click's sort is undone by a third click. So the writers keep the

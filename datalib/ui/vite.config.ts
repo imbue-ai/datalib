@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig, searchForWorkspaceRoot } from "vite";
 import vue from "@vitejs/plugin-vue";
 import path from "node:path";
 import { thirdPartyNotices } from "./tools/thirdPartyNotices";
@@ -73,6 +73,18 @@ export default defineConfig(({ command }) => ({
     host: "127.0.0.1",
     port: 5173,
     strictPort: true,
+    // The unit tests also load the applets' card components, which live
+    // beside the applets' Rust (tests/untrusted_card_args.test.ts).
+    ...(process.env.VITEST
+      ? {
+          fs: {
+            allow: [
+              searchForWorkspaceRoot(process.cwd()),
+              path.resolve(process.cwd(), "../backend/applets/src"),
+            ],
+          },
+        }
+      : {}),
     proxy: {
       "/api": {
         target: BACKEND,

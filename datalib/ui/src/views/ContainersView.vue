@@ -22,6 +22,7 @@ import { chainHref } from "@/cards/chainHref";
 import { setCardHelp } from "@/cards/help";
 import { cardType, newCardId } from "@/cards/cardId";
 import { displayTitle } from "@/cards/title";
+import { sameCard } from "@/cards/cardSources";
 import { editMode } from "@/editMode";
 import { decodeColumns } from "@/router/columns";
 import { pushToast } from "@/toasts";
@@ -46,6 +47,7 @@ import {
   find,
   instantiate,
   isSolidified,
+  kept,
   makeBox,
   makeCard,
   move,
@@ -83,7 +85,12 @@ import {
   type PanelSection,
 } from "@/views/containersApi";
 import { PANEL_ICONS } from "@/views/panelIcons";
-import type { CardCtx, HostCommands } from "@/cards/types";
+import {
+  TOPIC_CARD_REOPENED,
+  type CardCtx,
+  type CardReopenedPayload,
+  type HostCommands,
+} from "@/cards/types";
 
 const route = useRoute();
 const router = useRouter();
@@ -151,7 +158,7 @@ async function save(keepalive = false) {
     return;
   }
   try {
-    await putUiState(STATE_NAME, root.value, { keepalive });
+    await putUiState(STATE_NAME, kept(root.value), { keepalive });
     saveFailed = false;
   } catch (e) {
     console.warn("could not keep the layout", e);
@@ -180,6 +187,8 @@ onBeforeUnmount(() => {
 // container of their own, so what they open lands beside them as it
 // did when the URL was the whole layout. The tree, not the URL, is
 // what this layout keeps, so once opened the address goes back to "/".
+// Whoever wrote the link wrote their source, so the library does not
+// keep them until the person does (`kept`; docs/dev/cards.md).
 function routeNode(): TreeNode | null {
   const specs = decodeColumns(route.path);
   if (specs.length === 0) return null;
@@ -187,7 +196,7 @@ function routeNode(): TreeNode | null {
     ...makeCard(newCardId(), s.code, s.state),
     basis: s.size != null ? s.size * DEFAULT_COLUMN : null,
   }));
-  return makeBox(newCardId(), "columns", nodes);
+  return { ...makeBox(newCardId(), "columns", nodes), fromLink: true };
 }
 
 function openRoute() {
@@ -296,9 +305,12 @@ function ctxFor(card: CardNode): CardCtx {
     const cardId = card.id;
     const host: HostCommands = {
       openCards: (...sources) => {
-        const shown = sources.length === 1 ? tabShowing(root.value, cardId, sources[0]) : null;
+        const shown =
+          sources.length === 1 ? tabShowing(root.value, cardId, sources[0], sameCard) : null;
         if (shown !== null) {
           select(shown);
+          const reopened: CardReopenedPayload = { cardId: shown, source: sources[0] };
+          bus.publish(TOPIC_CARD_REOPENED, reopened);
           return [shown];
         }
         const nodes = sources.map((s) => makeCard(newCardId(), s));
@@ -408,11 +420,18 @@ function addBox(boxId: string, layout: Layout) {
 function newTab() {
   addCard(root.value.id);
 }
-// A card opened from the chrome gets a tab of its own.
+// A card opened from the chrome gets a tab of its own, unless the same
+// card (`sameCard`) is already open, which is shown instead.
 function showCard(source: string) {
-  const have = allCards.value.find((c) => c.source === source);
-  if (have) select(have.id);
-  else addCard(root.value.id, source);
+  const wanted = sameCard(source).key;
+  const have = allCards.value.find((c) => sameCard(c.source).key === wanted);
+  if (!have) {
+    addCard(root.value.id, source);
+    return;
+  }
+  select(have.id);
+  const reopened: CardReopenedPayload = { cardId: have.id, source };
+  bus.publish(TOPIC_CARD_REOPENED, reopened);
 }
 defineExpose({ addCard: newTab, showCard });
 
@@ -832,6 +851,8 @@ provide(CONTAINERS_API, api);
 }
 .ct-sidebar {
   flex: 0 0 240px;
+  /* Without it, one long unbroken card title widens the whole sidebar. */
+  min-width: 0;
   display: flex;
   flex-direction: column;
   min-height: 0;

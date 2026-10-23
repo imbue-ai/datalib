@@ -17,6 +17,7 @@ use datalib_etl_chat_common::types::{
 use datalib_etl_google_takeout::ingest::schema_raw::ChatAttachmentRow;
 use datalib_etl_render::html::{escape_md_block, escape_md_inline, md_link_dest};
 use datalib_etl_render::inputs::Inputs;
+use datalib_etl_render::message::stamp_html;
 use datalib_handle::Handle;
 use datalib_schema::problems::{Problem, Reason, Severity};
 use serde_json::Value;
@@ -491,10 +492,12 @@ fn message_items(
         .filter(|u| !u.trim().is_empty());
     if let Some(u) = edited {
         let ms = own_stamp_ms(Some(u), "updated_date", parse_date_ms, &mut problems);
-        parts.push(match ms.map(day_of) {
-            Some(day) => format!("*Edited {day}*"),
-            None => "*Edited*".to_string(),
-        });
+        parts.push(
+            match ms.and_then(datalib_time::IsoOffsetTimestamp::from_unix_millis) {
+                Some(t) => format!("*Edited {}*", stamp_html(&t)),
+                None => "*Edited*".to_string(),
+            },
+        );
     }
     if let Some(acting) = creator
         .and_then(|c| c.get("acting_user"))
@@ -902,7 +905,7 @@ fn files(
             .filter(|n| !n.is_empty())
             .unwrap_or(export);
         out.push(NormalizedAttachment {
-            rel_path: None,
+            href: None,
             file_name: Some(shown.to_string()),
             mime_type: mime_of(export),
             byte_len: None,
@@ -965,12 +968,6 @@ pub fn parse_date_ms(s: &str) -> Option<i64> {
     datalib_time::parse_strict(&rfc3339)
         .ok()
         .map(|t| t.to_unix_millis())
-}
-
-fn day_of(ms: i64) -> String {
-    chrono::DateTime::from_timestamp_millis(ms)
-        .map(|t| t.format("%Y-%m-%d").to_string())
-        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -1046,7 +1043,7 @@ mod tests {
             .text
             .as_deref()
             .unwrap()
-            .ends_with("*Edited 2364-02-11*"));
+            .contains("*Edited <time datetime=\"2364-02-11T"));
         assert!(got.iter().all(|i| i.problems.is_empty()), "{got:?}");
     }
 

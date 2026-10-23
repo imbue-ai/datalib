@@ -2,9 +2,11 @@
 
 A backup of a Google account's Docs, Sheets and Slides. The store keeps
 each file in Google's own native form at every version a run saw. Beside
-it are the file's comments, its revision list, the images it shows, and
-an export LibreOffice can open. There is no render step yet. Why it is
-shaped this way, what Google offers and what is still to come:
+it are the file's comments, its revision list and the images it shows,
+and, when the config asks, an export LibreOffice can open (`exports`,
+`revision_exports`, both off by default). The Docs render to markdown
+([`../google_drive_render/TRANSLATE.md`](../google_drive_render/TRANSLATE.md)).
+Why it is shaped this way, what Google offers and what is still to come:
 [`docs/dev/plans/google_drive.md`](../../../../../docs/dev/plans/google_drive.md).
 
 ## Where it comes from
@@ -50,17 +52,57 @@ its own.
      counted in `revision_listings_disagreed`;
    - the comments, paged, with `includeDeleted=true`;
    - the native JSON, gzipped, as Google sent it less its image links,
-     which go in the capture's sidecar (`volatile_payload`);
-   - every image link in it, once per distinct URL;
+     which go in the capture's sidecar (`volatile_payload`). A Doc comes
+     with its suggestions inline, unless the account may only view it
+     (`capabilities.canComment = false`): the Docs API refuses a
+     viewer's suggestions with a 403, so that Doc is asked for in
+     Google's default mode, which leaves them out. The stored JSON's
+     `suggestionsViewMode` says which it got (`SUGGESTIONS_INLINE` or
+     `PREVIEW_WITHOUT_SUGGESTIONS`);
+   - every image link in it, once per distinct URL, stored with the
+     type its response names. An image a stored capture of the same
+     file already holds at the same place, under a native JSON naming
+     the same `revisionId`, is not fetched again: the new capture's
+     part names the held blob, and the run counts it in `images_held`.
+     Google signs each link afresh on every read, so only the revision
+     can say the image is unchanged. Drive moves a file's `version`
+     with nothing in it edited: in one sync of a real account, 5 of the
+     6 files owed were shared with it and came back byte-identical,
+     and fetching the 152 images of the three decks among them took
+     most of the run's minute. Sheets have no `revisionId`, so a
+     Sheet's images are always fetched;
    - one export per format `exports` names for the file's kind: a list
-     for every kind, `[]` for none, or a table per kind.
+     for every kind, `[]` for none, or a table per kind. None is asked
+     for when the owner has turned off download for those who may not
+     edit (`capabilities.canDownload = false`): Drive refuses every
+     export of that file (`cannotExportFile`).
 
    A capture is written whole, in one transaction, or not at all. If any
    request fails, the file stays owed with the error on its sidecar and
-   a `files:<id>` problem. An export Google declines as too large
-   (`exportSizeLimitExceeded`, over 10 MB) is the one exception: the
-   capture is kept, its export part has no bytes, and a warning on the
-   file says which format was declined.
+   a `files:<id>` problem. An export Google declines is the one
+   exception, whether as too large (`exportSizeLimitExceeded`, over
+   10 MB) or as not allowed (`canDownload = false`, or a
+   `cannotExportFile` answer): the capture is kept, its export part has
+   no bytes, and a warning on the file says which format was declined
+   and why.
+4. **Old revisions.** For every Doc and Sheet in this run's listing,
+   each stored revision with an export link for a format
+   `revision_exports` names is owed that export, until it is held
+   (`revision_exports`, held at no version, since a revision's content
+   does not change). Each export is two requests:
+   - the revision's `exportLinks` URL on `docs.google.com`, which
+     latchkey signs (≥ 3.19.2) and Drive answers with a `307`;
+   - the `Location` it names, a signed `googleusercontent.com` download,
+     fetched plain so the credential never follows it to another host
+     (`api::get_revision_export`).
+
+   A `404` means Drive no longer has that revision's content: the edge
+   is kept with no bytes and a warning, and not asked for again. A
+   deck's revisions are never fetched: its export link ignores
+   `revision=` and exports the deck as it is now. Measured on one deck,
+   revision 1 and the newest exported identical ODP, PPTX and PDF.
+   Docs and Sheets honour it: three revisions of a Doc and three of a
+   Sheet each came back different.
 
 Each run leaves a row in `sync_runs`: its config, its summary (`listed`, `owed`, `captured`, …) and what it changed in each table.
 
@@ -74,7 +116,9 @@ nothing.
 not byte-stable: two exports of one version differ in their zip
 timestamps. A second capture of an unchanged file would store a second
 3 MB copy of the same thing. The native JSON, less its image links,
-is the same on every read, but it is only fetched with the rest.
+is the same on every read, but it is only fetched with the rest. A
+`version` Drive moved without an edit is still captured again, every
+request but the held images included.
 
 ## The store
 
@@ -88,6 +132,7 @@ Drive's:
 | `comments` | `{file}#{comment}` | each thread with its replies inline, deleted ones marked `deleted` |
 | `captures` | `{file}#{version}` | one row per version captured: the listing's `modifiedTime`, the native JSON's own `revisionId` (Docs and Slides), and the newest Drive revision listed |
 | `capture_parts` | `{capture}#{part}` | a CAS edge per part: `native.json.gz`, `export.<ext>`, `image:<JSON pointer>` |
+| `revision_exports` | `{file}#{revision}#export.<ext>` | a CAS edge per old revision's export, NULL `blake3` for one Drive no longer has |
 
 Every table has its `_bookkeeping` sidecar. `files_bookkeeping.held_version`
 is the one held version in the store.
@@ -118,15 +163,14 @@ The exports are big because Google embeds the document's fonts in each.
 
 ## What it does not do
 
-- **No old revisions' contents.** Only the current version can be
-  exported or read natively. Old revisions export only from
-  `docs.google.com` links, which latchkey does not sign, so history
-  starts at the first capture.
+- **No native JSON before the first sync.** Google's native APIs read
+  only the current version, so a version from before the first sync is
+  kept only as its export, and a deck's not at all.
 - **No delta listing.** Drive's `changes` API is not used; the whole
   listing is read every run.
 - **Only native files.** Other Drive files (PDFs, images, uploaded
   Office files) are not listed.
-- **No render, and no index.** Nothing reaches the grid or search yet.
+- **Only Docs render.** Sheets and Slides stay in the raw store.
 - **No Add source form.** A config entry is written by hand
   (`docs/user/config_examples/all_sources.toml`).
 - **A capture can be newer than its version.** It is keyed by the
@@ -162,7 +206,11 @@ sqlite3 blobs.sqlite "SELECT writefile('native.json.gz', bytes) FROM cas_objects
 ```
 
 The hermetic tests are `//datalib/backend/etl/providers/google_drive:google_drive_tests`,
-on a TNG tape (`tests/google_drive_tests/tape.rs`). The live check runs
+on a TNG tape (`tests/google_drive_tests/tape.rs`). The TNG fixture
+pipeline (`//tests/fixtures:ingested_tng`) syncs the account in
+`tests/fixtures/google_drive_tng/tng.json`, which
+`datalib-step synthesize google_drive` (`src/synthesize.rs`) expands into
+playback tapes. The live check runs
 against the signed-in account:
 `GOOGLE_DRIVE_TEST_FILE_IDS=<id>,<id> DATALIB_RUNTIME_DIR=<staged runtime> bazel run //datalib/backend/etl/providers/google_drive:google_drive_live`
 (`scripts/stage_runtime.sh` stages one).

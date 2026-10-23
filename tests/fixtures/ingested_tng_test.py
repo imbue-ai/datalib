@@ -143,7 +143,8 @@ CLAUDE_ATTACHMENT_WITHOUT_BYTES = (
     "|claude_attachments:c0000004-1701-4d00-8000-00000000c004"
     "#f0000001-1701-4d00-8000-0000000f0001"
     "|00000000-0000-89b3-8bed-0eecc97d45ce"  # conversation c0000004's row
-    "||fetch_failed|no recorded response: GET https://claude.ai/api/organizations/0aa00000-1701-4d00…"
+    "||fetch_failed|no recorded response: GET https://claude.ai/api/organizations"
+    "/0aa00000-1701-4d00-8000-0000000000aa/files/f0000001-1701-4d00-8000-0000000f0001/contents"
 )
 FACEBOOK_VIDEO_NOT_IN_EXPORT = (
     "1c9f7753-ba2d-5a9e-8fbb-b9b6a0d5ad13"
@@ -414,6 +415,8 @@ EXPECTED_PROVIDERS = frozenset(
         # Ingested through playback like the chat providers; its pages,
         # days, activities and records are what land in the grid.
         "garmin",
+        # Ingested through playback; each Doc and each of its comments.
+        "google_drive",
     }
 )
 
@@ -924,10 +927,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
     def _whatsapp_attachments(self) -> tuple[list[str], list[str], list[str]]:
         """WhatsApp's rendered attachments, as (linked, missing, placeholders).
 
-        `linked` is every `blobs/…` target the markdown points at,
-        `missing` the subset with no file behind it, and `placeholders`
-        every attachment that rendered as "(not yet fetched)" instead of
-        a link.
+        `linked` is every `/data/<step>/blob/<hash>` address the markdown
+        points at, `missing` the subset whose step's blob store does not
+        hold that hash, and `placeholders` every attachment that rendered
+        as "(not yet fetched)" instead of a link.
 
         WhatsApp is the source where a broken attachment is invisible
         from the outside: ingest registers the bytes in the CAS whether
@@ -945,11 +948,27 @@ class IngestedTngPipelineTest(unittest.TestCase):
             placeholders += [
                 line.strip() for line in body.splitlines() if "not yet fetched" in line
             ]
-            for target in re.findall(r"\(blobs/([^)]+)\)", body):
-                linked.append(target)
-                if not (md.parent / "blobs" / target).is_file():
-                    missing.append(f"{md.name} -> blobs/{target}")
+            for step, digest in re.findall(
+                r"\(/data/([^/)]+/[^/)]+)/blob/([0-9a-f]{64})\)", body
+            ):
+                linked.append(digest)
+                if not self._blob_held(step, digest):
+                    missing.append(f"{md.name} -> /data/{step}/blob/{digest}")
         return linked, missing, placeholders
+
+    def _blob_held(self, step: str, digest: str) -> bool:
+        """Whether `step`'s blob store holds the bytes `digest` names."""
+        store = self.workspace / step / "blobs.sqlite"
+        if not store.is_file():
+            return False
+        con = sqlite3.connect(f"file:{store}?mode=ro", uri=True)
+        try:
+            row = con.execute(
+                "SELECT 1 FROM cas_objects WHERE blake3 = ?", (digest,)
+            ).fetchone()
+        finally:
+            con.close()
+        return row is not None
 
     def _problems(self) -> dict[str, list[str]]:
         """Per-source `problems` rows, as `source -> [summary…]`.
@@ -1130,9 +1149,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "every source that rendered must also have measured itself",
         )
         # Who a handle is, as each source that mentions it says: the
-        # rows a chip reads. One address, four sources, one name — Slack's
-        # through its profile, which ties his Slack user to the address, and
-        # the address book's, whose photo is what his chips draw.
+        # rows a chip reads. One address, five sources, one name — Slack's
+        # through its profile, which ties his Slack user to the address,
+        # Drive's through the comments the account wrote, and the address
+        # book's, whose photo is what his chips draw.
         self.assertEqual(
             self._query(
                 self._index_db,
@@ -1142,6 +1162,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "WHERE h.handle = 'email:picard@enterprise.starfleet' ORDER BY 1;",
             ),
             [
+                "google-drive|Jean-Luc Picard",
                 "google-takeout|Jean-Luc Picard",
                 "slack|Jean-Luc Picard",
                 "tng_contacts|Jean-Luc Picard",
@@ -1179,6 +1200,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             [
                 "beeper",
                 "facebook",
+                "google-drive",
                 "google-takeout",
                 "linkedin",
                 "signal",
@@ -1190,14 +1212,14 @@ class IngestedTngPipelineTest(unittest.TestCase):
             ],
             "every source that knows people put them in the index",
         )
-        # Beeper knows a bridged Slack user by their Slack id, and serves
-        # the avatar the app had cached.
+        # Beeper knows a bridged Slack user by their Slack id, and links
+        # the avatar the app had cached where its blob store holds it.
         self.assertEqual(
             self._query(
                 self._index_db,
                 "SELECT DISTINCT c.contact_key || '|' || "
                 "(coalesce(json_extract(c.contact_json, '$.photo_url'), '') LIKE "
-                "'/applet/unified_document_index/asset/%') "
+                "'/data/beeper/ingest/blob/%') "
                 "FROM source_contacts c WHERE c.source_id = 'beeper' "
                 "AND c.contact_key LIKE 'slack:%' ORDER BY 1;",
             ),
@@ -1284,23 +1306,33 @@ class IngestedTngPipelineTest(unittest.TestCase):
             ["U_TROI|0"],
             "a Slack reactor who writes nothing",
         )
-        # A card's photo is written beside its page and the index holds
-        # where the app serves it from, so a chip can draw it; a card
-        # without one carries no URL. The Borg cards, from a Google export, have
-        # none.
-        self.assertEqual(
-            self._query(
+        # A card's photo is in its source's blob store, where the download
+        # put it, and the index holds its address there, so a chip can
+        # draw it; a card without one carries no URL. The Borg cards, from
+        # a Google export, have none.
+        photos = dict(
+            row.split("|", 1)
+            for row in self._query(
                 self._index_db,
-                "SELECT c.name || '|' || coalesce(json_extract(c.contact_json, '$.photo_url') "
-                "  = '/applet/unified_document_index/asset/' || c.markdown_uuid || '/blobs/' "
-                "    || c.markdown_uuid || '.jpg', 'none') "
+                "SELECT c.name || '|' || coalesce(json_extract(c.contact_json, '$.photo_url'), "
+                "'none') "
                 "FROM source_contacts c JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
                 "WHERE m.source_id = 'tng_contacts' "
                 "AND c.name IN ('William T. Riker', 'Jean-Luc Picard', 'Hugh') ORDER BY 1;",
-            ),
-            ["Hugh|none", "Jean-Luc Picard|1", "William T. Riker|1"],
-            "a card's photo, as the URL the index serves it at",
+            )
         )
+        self.assertEqual(photos.pop("Hugh"), "none")
+        self.assertEqual(sorted(photos), ["Jean-Luc Picard", "William T. Riker"])
+        for name, url in photos.items():
+            address = re.fullmatch(
+                r"/data/(tng_contacts/ingest)/blob/([0-9a-f]{64})", url
+            )
+            if address is None:
+                self.fail(f"{name}'s photo URL: {url}")
+            self.assertTrue(
+                self._blob_held(*address.groups()),
+                f"{name}'s photo is in the blob store",
+            )
         # Signal ties a number to an ACI: Riker's account carries both,
         # so a link made through either finds the other; Q, whom the
         # backup knows by ACI alone, has the ACI as his handle; Guinan,
@@ -1375,6 +1407,55 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "linkedin:wriker|William Riker",
             ],
             "a LinkedIn connection and a message sender by their profile",
+        )
+        # Drive names a comment's author and nothing else, so a comment
+        # author is a `google:name/` handle; the account's own comments
+        # are its address, which the file's owner entry gives.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT DISTINCT h.handle || '|' || c.name "
+                "FROM source_contact_handles h JOIN source_contacts c "
+                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
+                "JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
+                "WHERE m.source_id = 'google-drive' ORDER BY 1;",
+            ),
+            [
+                "email:picard@enterprise.starfleet|Jean-Luc Picard",
+                "google:name/Data|Data",
+                "google:name/Deanna Troi|Deanna Troi",
+                "google:name/Geordi La Forge|Geordi La Forge",
+            ],
+            "a Drive comment's author by name, the account by its address",
+        )
+        # A forge author is their account (a GitLab one on its host), and
+        # a Notion author their address where Notion gave one: the grid's
+        # Author chip and `from:` reach them.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT DISTINCT provider || '|' || author_handle FROM grid_rows "
+                "WHERE provider IN ('github', 'gitlab', 'notion') "
+                "AND author_handle IS NOT NULL ORDER BY 1;",
+            ),
+            [
+                "github|github:data-soong",
+                "github|github:geordi-laforge",
+                "github|github:jlpicard",
+                "github|github:worf-rozhenko",
+                "github|github:wtriker",
+                "gitlab|gitlab:gitlab.com/bcrusher",
+                "gitlab|gitlab:gitlab.com/data-soong",
+                "gitlab|gitlab:gitlab.com/geordi-laforge",
+                "gitlab|gitlab:gitlab.com/jlpicard",
+                "gitlab|gitlab:gitlab.com/worf-rozhenko",
+                "gitlab|gitlab:gitlab.com/wtriker",
+                "notion|email:beverly.crusher@enterprise.starfleet.invalid",
+                "notion|email:data@enterprise.starfleet.invalid",
+                "notion|email:geordi.laforge@enterprise.starfleet.invalid",
+                "notion|email:jean-luc.picard@enterprise.starfleet.invalid",
+            ],
+            "forge and Notion authors by their handles",
         )
         # A Slack mention is a chip link: the viewer resolves the href to
         # the person, and any other markdown viewer shows a link whose
@@ -1598,7 +1679,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             len(linked),
             3,
             "each WhatsApp media file whose bytes are on disk must render "
-            f"as a link into blobs/; got {linked}",
+            f"as a link into its blob store; got {linked}",
         )
         self.assertEqual(missing, [], "a rendered attachment link points at no file")
         # The fourth media message names a file the phone deleted. It

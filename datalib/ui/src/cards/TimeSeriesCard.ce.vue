@@ -22,6 +22,8 @@ import {
 } from "./timeSeries";
 import { fetchPoints, fetchTimeSeries } from "./timeSeriesApi";
 import TimeSeriesChart from "./TimeSeriesChart.vue";
+import EntityChip from "./EntityChip.ce.vue";
+import { uriFromEntity } from "./chipLinks";
 import type { CardCtx } from "./types";
 
 const props = defineProps<{ ctx: CardCtx }>();
@@ -193,7 +195,13 @@ onBeforeUnmount(() => {
         </div>
         <section v-for="g in groups" :key="g.source" class="ts-group">
           <h3 class="ts-source">
-            {{ g.source }} · {{ g.items.length + g.abouts.reduce((n, a) => n + a.items.length, 0) }}
+            <EntityChip
+              :uri="uriFromEntity('group', g.source)"
+              :shown="g.source"
+              quiet
+              :open-card="(source) => props.ctx.host.openCards(source)"
+            />
+            · {{ g.items.length + g.abouts.reduce((n, a) => n + a.items.length, 0) }}
           </h3>
           <label
             v-for="s in g.items"
@@ -336,6 +344,9 @@ onBeforeUnmount(() => {
   padding-bottom: 0.5rem;
 }
 .ts-source {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
   margin: 0;
   padding: 0.6rem 0.75rem 0.2rem;
   font-size: var(--datalib-font-size-small);

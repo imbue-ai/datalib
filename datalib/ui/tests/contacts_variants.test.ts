@@ -93,8 +93,8 @@ path = "~/backups/contacts"
 `);
     for (const [id, label] of [
       ["f/ingest", "Fastmail Contacts"],
-      ["c/ingest", "CardDAV contacts"],
-      ["v/ingest", "Contact files (.vcf)"],
+      ["c/ingest", "Contacts (CardDAV)"],
+      ["v/ingest", "Contacts (.vcf files)"],
     ]) {
       const step = steps.find((s) => s.id === id)!;
       expect(catalogForStep("contacts", step.params)!.label, id).toBe(label);

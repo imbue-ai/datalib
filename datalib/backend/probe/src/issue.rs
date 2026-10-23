@@ -30,6 +30,9 @@ pub enum IssueKind {
     /// latchkey holds no credential for the service, or the service is
     /// not registered with it.
     NoCredential,
+    /// The service signs in with an OAuth client of the person's own,
+    /// and latchkey has none for it yet (Google's services).
+    NoOauthClient,
     /// latchkey's own record says the credential has expired.
     Expired,
     /// The service refused the credential: signed out, revoked, wrong.
@@ -115,6 +118,9 @@ pub fn classify(text: &str, gateway: bool) -> IssueKind {
         "No browser configured",
     ]) {
         return IssueKind::NoBrowser;
+    }
+    if has(&["requires preparation first"]) {
+        return IssueKind::NoOauthClient;
     }
     if has(&[
         "No credentials found for",
@@ -257,6 +263,10 @@ mod tests {
         (
             "Error: Credentials for google-gmail are expired.\nRun 'latchkey auth browser google-gmail' first.",
             IssueKind::Expired,
+        ),
+        (
+            "Error: Service google-docs requires preparation first. Run 'latchkey auth browser-prepare google-docs' before logging in, or pass --account to reuse the client stored with an existing account's credentials.",
+            IssueKind::NoOauthClient,
         ),
         (
             "No encryption key available. Set LATCHKEY_ENCRYPTION_KEY or allow access to the system keyring.",

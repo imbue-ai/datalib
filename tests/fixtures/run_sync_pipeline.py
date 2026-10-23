@@ -98,7 +98,11 @@ Args (positional):
                       `ics` method reads them, and renders a document
                       per event, per recurring series and per changed
                       occurrence.
-    30: datalib-http binary, optional. Given, every sync goes through a
+    30: google_drive_tng  JSON spec for the TNG account's Docs (the
+                      path is to the .json file itself; the images it
+                      names sit beside it). `datalib-step synthesize
+                      google_drive` expands it into playback fixtures.
+    31: datalib-http binary, optional. Given, every sync goes through a
                       server on the root, driven over its API the way
                       the web client drives it (`sync_drivers.py`);
                       absent, through `datalib-dag`.
@@ -221,7 +225,8 @@ def prepare(argv: list[str]) -> Prepared:
     claude_code_fx = Path(argv[27]).resolve()
     codex_fx = Path(argv[28]).resolve()
     calendar_fx = Path(argv[29]).resolve()
-    http_bin = Path(argv[30]).resolve() if len(argv) > 30 else None
+    google_drive_spec = Path(argv[30]).resolve()
+    http_bin = Path(argv[31]).resolve() if len(argv) > 31 else None
 
     data_root.mkdir(parents=True, exist_ok=True)
     # The DAG config + playback fixtures + per-source input dirs all
@@ -371,6 +376,9 @@ def prepare(argv: list[str]) -> Prepared:
         # Two calendars as `.ics` exports: a series with a moved and a
         # cancelled occurrence, all-day and floating events.
         "tng_calendar": ("calendar", calendar_fx, calendar_fx),
+        # The synth input is the spec file; the ingest replays the tapes
+        # it wrote. The path is unused (the method is `api`).
+        "google-drive": ("google_drive", google_drive_spec, google_drive_spec),
     }
 
     # ── Synth: build HTTP playback fixtures per source. ─────────────
@@ -957,6 +965,10 @@ def _source_config(
         # `since` is the spec's; the walk's `today` is the pipeline's
         # `--now`, which the spec matches too.
         source["api"] = {"since": "2369-04-01"}
+    elif type_str == "google_drive":
+        # The spec holds the native JSON and nothing converted, so no
+        # export is asked for.
+        source["api"] = {"exports": []}
     else:
         source["api"] = {}
     return source

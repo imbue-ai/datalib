@@ -21,12 +21,13 @@ pub struct NormalizedContact {
     /// The names the source shows, the one it prefers first.
     pub names: Vec<String>,
     pub handles: Vec<ContactHandle>,
+    #[serde(default, deserialize_with = "read_photo")]
     pub photo: Option<Photo>,
-    /// Where the app serves the photo from, as a path on its own origin
-    /// (`/applet/…`): a source's photo beside its rendered document, or
-    /// the contacts app's for a contact a person gave one. Never another
-    /// host's URL, which the app does not fetch unasked. `None` draws the
-    /// person's initial instead.
+    /// Where the app serves the photo from, as a path on its own origin:
+    /// a source's photo at its blob-store address (`/data/…`), or the
+    /// contacts app's (`/applet/…`) for a contact a person gave one.
+    /// Never another host's URL, which the app does not fetch unasked.
+    /// `None` draws the person's initial instead.
     #[serde(default)]
     pub photo_url: Option<String>,
     pub org: Option<String>,
@@ -198,7 +199,11 @@ impl Medium {
             HandleKind::Slack
             | HandleKind::SignalAci
             | HandleKind::Facebook
-            | HandleKind::Linkedin => Medium::Other,
+            | HandleKind::Linkedin
+            | HandleKind::Google
+            | HandleKind::Github
+            | HandleKind::Gitlab
+            | HandleKind::Notion => Medium::Other,
         }
     }
 }
@@ -242,15 +247,36 @@ pub fn is_drawable_photo(content_type: &str) -> bool {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Photo {
-    /// The image itself, from the source's own record.
-    Inline {
+    /// The image, in the blob store of the step `step`
+    /// (`<group>/<function>`) under the blake3 of its bytes, with the
+    /// type the store holds it as.
+    Stored {
+        step: String,
+        blake3: String,
         content_type: String,
-        /// Written to the document's `blobs/`; never stored as a row.
-        #[serde(skip)]
-        bytes: Vec<u8>,
     },
     /// Only where it can be fetched; nothing fetched it yet.
     Url(String),
+}
+
+/// A render store written before photos were linked holds the retired
+/// `Inline` spelling, whose bytes were never kept; it reads as no photo
+/// until the document renders again.
+fn read_photo<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Photo>, D::Error> {
+    #[derive(Deserialize)]
+    enum Retired {
+        Inline(serde::de::IgnoredAny),
+    }
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Written {
+        Current(Photo),
+        Retired(Retired),
+    }
+    Ok(match Option::<Written>::deserialize(d)? {
+        Some(Written::Current(photo)) => Some(photo),
+        Some(Written::Retired(Retired::Inline(_))) | None => None,
+    })
 }
 
 #[cfg(test)]
@@ -286,6 +312,29 @@ mod tests {
         assert_eq!(h.handle, None);
         let h = ContactHandle::phone(None, "+1 555 010 1234");
         assert_eq!(h.handle.unwrap().as_str(), "tel:+15550101234");
+    }
+
+    /// A contact a render store kept from before photos were linked
+    /// still reads, without the photo whose bytes were never stored; one
+    /// written now reads back as it was.
+    #[test]
+    fn a_retired_inline_photo_reads_as_none() {
+        let mut c = NormalizedContact::new("tng", "riker", ContactKind::Person);
+        let mut old = serde_json::to_value(&c).unwrap();
+        old["photo"] = serde_json::json!({"Inline": {"content_type": "image/png"}});
+        let read: NormalizedContact = serde_json::from_value(old).unwrap();
+        assert_eq!(read.photo, None);
+
+        c.photo = Some(Photo::Stored {
+            step: "tng/ingest".into(),
+            blake3: "ab".repeat(32),
+            content_type: "image/png".into(),
+        });
+        let json = serde_json::to_string(&c).unwrap();
+        assert_eq!(serde_json::from_str::<NormalizedContact>(&json).unwrap(), c);
+        c.photo = None;
+        let json = serde_json::to_string(&c).unwrap();
+        assert_eq!(serde_json::from_str::<NormalizedContact>(&json).unwrap(), c);
     }
 
     #[test]

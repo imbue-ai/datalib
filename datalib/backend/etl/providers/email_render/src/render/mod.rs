@@ -1,6 +1,6 @@
 //! JMAP render: read raw doltlite db → render one markdown document
-//! per JMAP Thread, plus its rows in the render store, plus the thread's
-//! attachment blobs materialized at `<thread>/blobs/<safe_filename>`.
+//! per JMAP Thread, plus its rows in the render store. Its attachments
+//! are linked inside the stored `.eml`s, never copied beside the page.
 
 pub mod ids;
 pub mod mentions;
