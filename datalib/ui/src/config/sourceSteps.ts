@@ -61,6 +61,8 @@ export type ConfiguredStep = {
   type: string | null;
   /// The `[[packages]]` entry whose program it runs, if any.
   package: string | null;
+  /// The `command` it declares; null for a built-in step.
+  command: string | null;
   /// The ids this step declares as inputs.
   inputs: string[];
   params: Record<string, unknown>;
@@ -294,6 +296,7 @@ export function listSteps(text: string): ConfiguredStep[] {
         // written; a step outside any group has none.
         type: groupEntry?.type ?? null,
         package: typeof step?.package === "string" ? step.package : null,
+        command: typeof step?.command === "string" ? step.command : null,
         inputs: (Array.isArray(step?.inputs) ? (step!.inputs as unknown[]) : []).filter(
           (v): v is string => typeof v === "string",
         ),
@@ -334,6 +337,7 @@ export function listSteps(text: string): ConfiguredStep[] {
         // shape as a step's provider word, and what names the applet.
         type: appletType(typeof applet?.command === "string" ? applet.command : ""),
         package: typeof applet?.package === "string" ? applet.package : null,
+        command: typeof applet?.command === "string" ? applet.command : null,
         inputs: [],
         params: {},
         start,

@@ -160,7 +160,9 @@ machine, or a config edited by hand. A failed fetch is shown above the
 Sources table with the sources that wait on it; nothing else stops.
 
 An update is the same review, then the same fetch, then a new `url` and
-`sha256` on the entry. Removing a package removes its entry and its
+`sha256` on the entry. The package's applets follow the new version: one
+it no longer has is removed, a new one is added, and one it still has
+(matched by `command`) is left as the config has it. Removing a package removes its entry and its
 applets. Removal is refused while a source's steps still run the
 package; remove the source first. The unpacked directory stays until the
 library is cleaned up by hand.

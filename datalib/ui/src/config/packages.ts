@@ -5,6 +5,7 @@
 import { shallowRef } from "vue";
 import {
   fetchPackages,
+  type PackageApplet,
   type PackageLookup,
   type PackageManifest,
   type PackagesResponse,
@@ -64,21 +65,28 @@ export function addPackage(
   ].join("\n");
   const existing = listPackages(text).filter((p) => p.end > 0);
   const at = existing.length ? Math.max(...existing.map((p) => p.end)) : firstTableStart(text);
-  let next =
+  const next =
     at === null
       ? `${text.replace(/\s*$/, "")}\n\n${entry}\n`
       : `${text.slice(0, at).replace(/\s*$/, "")}\n\n${entry}\n\n${text.slice(at).replace(/^\s*/, "")}`;
-  const takenApplets = new Set(
-    listSteps(next)
+  return appendApplets(next, id, lookup.manifest.applets).replace(/^\s+/, "");
+}
+
+/// `text` with an `[[applets]]` entry running package `pkg` for each of
+/// `applets`, under the manifest's id unless the config already has it.
+function appendApplets(text: string, pkg: string, applets: PackageApplet[]): string {
+  const taken = new Set(
+    listSteps(text)
       .filter((s) => s.kind === "applet")
       .map((s) => s.id),
   );
-  for (const a of lookup.manifest.applets) {
-    const appletId = suggestId(takenApplets, a.id, a.id).replace(/-/g, "_");
-    takenApplets.add(appletId);
-    next = `${next.replace(/\s*$/, "")}\n\n${appletBlock(appletId, id, a.command, a.params)}\n`;
+  let next = text;
+  for (const a of applets) {
+    const appletId = suggestId(taken, a.id, a.id).replace(/-/g, "_");
+    taken.add(appletId);
+    next = `${next.replace(/\s*$/, "")}\n\n${appletBlock(appletId, pkg, a.command, a.params)}\n`;
   }
-  return next.replace(/^\s+/, "");
+  return next;
 }
 
 function appletBlock(
@@ -122,14 +130,23 @@ function firstTableStart(text: string): number | null {
   return at;
 }
 
-/// `text` with package `id` pinned to the looked-up manifest instead.
+/// `text` with package `id` pinned to the looked-up manifest instead, and
+/// its applets brought in line with the new version's: one it no longer
+/// has goes, a new one is added. An applet is matched by its command,
+/// since the config may hold it under another id; a kept one keeps its
+/// entry as it is.
 export function updatePackage(text: string, id: string, lookup: PackageLookup): string {
   const index = listPackages(text).findIndex((p) => p.id === id);
   if (index < 0) throw new Error(`No package ${id} in the config.`);
   const ref = { array: "packages", index };
   let next = setIn(text, ref, ["url"], quote(lookup.url));
   next = setIn(next, ref, ["sha256"], quote(lookup.sha256));
-  return next;
+  const wanted = lookup.manifest.applets;
+  const have = listSteps(next).filter((s) => s.kind === "applet" && s.package === id);
+  const gone = have.filter((s) => !wanted.some((a) => a.command === s.command));
+  if (gone.length) next = removeSteps(next, gone);
+  const added = wanted.filter((a) => !have.some((s) => s.command === a.command));
+  return appendApplets(next, id, added);
 }
 
 /// The groups whose steps run a package's programs. A package they use

@@ -92,6 +92,27 @@ describe("updatePackage and removePackage", () => {
     expect(next.replace(SHA2, SHA)).toBe(added);
   });
 
+  it("an update adds the applets a new version brings and drops the ones it lost", () => {
+    const v2 = {
+      ...MANIFEST,
+      applets: [{ id: "weather_chart", command: "bin/weather-chart" }],
+    };
+    const next = updatePackage(added, "weather", lookup(SHA2, v2));
+    const applets = listSteps(next).filter((s) => s.kind === "applet");
+    expect(applets.map((s) => [s.id, s.package, s.command])).toEqual([
+      ["weather_chart", "weather", "bin/weather-chart"],
+    ]);
+  });
+
+  it("an update keeps an applet the new version still has, as it is", () => {
+    const edited = added.replace(
+      'command = "bin/weather-view"',
+      'command = "bin/weather-view"\n[applets.params]\nzoom = 2',
+    );
+    const next = updatePackage(edited, "weather", lookup(SHA2));
+    expect(next.replace(SHA2, SHA)).toBe(edited);
+  });
+
   it("removing takes the package's applets with it", () => {
     const next = removePackage(added, "weather");
     expect(listPackages(next)).toEqual([]);

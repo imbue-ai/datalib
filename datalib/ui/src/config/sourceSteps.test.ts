@@ -31,6 +31,7 @@ function step(params: Record<string, unknown>): ConfiguredStep {
     phase: "ingest",
     type: "slack",
     package: null,
+    command: null,
     inputs: [],
     params,
     start: 0,
