@@ -173,8 +173,10 @@ under the type's own name as the group id. Its structs derive
 included, is the field reference. `datalib_step/src/source_docs.rs`
 maps every `SourceType` to the two; `datalib-step examples <type>`
 prints the stanzas and `datalib-step help <type> <method>` the
-reference. Its test loads and plans every stanza and holds each
-complete one to every option of its method's table; the shared
+reference. A minimal stanza holds its method alone; a complete one may
+also hold the method it pairs with (Gmail's shows its Takeout). Its
+test loads and plans every stanza and holds each complete one to every
+option of its method's table; the shared
 `common` and `latchkey_settings` options are set only where a source
 reads them. A retired field a planner refuses stays readable by serde
 and leaves the schema with `#[schemars(skip)]`.

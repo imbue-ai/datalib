@@ -1077,6 +1077,14 @@ quota_units_per_minute = 5000         # ceiling on Gmail quota spent a minute (G
 message_budget = 20000                # stop after this many messages and finish the rest next
                                       # run; unset (the default) has no limit
 
+# Start from a Google Takeout of this same account: the `.mbox`, or the
+# Takeout's Mail folder. Its messages are not downloaded again; Gmail
+# sends their labels and the mail newer than the Takeout. Only `path`
+# is read here; the account is the one Gmail signs in as. Omit the
+# table to download every message.
+[steps.params.mbox]
+path = "~/Takeout/Mail"
+
 [[steps]]
 group = "email-gmail"
 function = "render_markdown"
