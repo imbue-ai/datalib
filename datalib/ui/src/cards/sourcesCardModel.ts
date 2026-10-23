@@ -41,7 +41,7 @@ import { ingestLabel } from "@/config/ingestMethods";
 import { rowMenu, type MenuAction } from "@/config/rowMenu";
 import { menuTarget, rowActions, withBrowse, type ActionRow } from "./rowActions";
 import { uriFromEntity } from "./chipLinks";
-import { changed, subscribeLive } from "@/live";
+import { changed, oneAtATime, subscribeLive } from "@/live";
 import { confirmAction, isDesktopApp, revealActionLabel } from "@/desktop";
 
 export const SOURCES_HELP = `
@@ -649,6 +649,10 @@ export function useSourcesCard(ctx: CardCtx) {
     }
   }
 
+  /// A reload a frame asks for: the loop sends them in bursts as a run's
+  /// steps move, and each one read the whole table again.
+  const refreshRows = oneAtATime(() => loadRows());
+
   /// Write new config text and adopt whatever the backend then reports.
   /// The backend validates with the real loader — including the duplicate
   /// and reserved-name checks — so a rejection comes back as `ok:false`
@@ -977,11 +981,8 @@ export function useSourcesCard(ctx: CardCtx) {
   }
 
   onMounted(async () => {
-    // Fresh sizes on the first paint. The backend only walks the disk
-    // while a run is in flight, so on an idle root — the usual state —
-    // this is the walk that produces the numbers on screen.
-    await reloadAll(true);
-
+    // Listen before the first load: a card closed while that load is out
+    // has already run its unmount, and would never stop listening.
     unsubscribe = subscribeLive(
       {
         root: (e) => {
@@ -989,7 +990,7 @@ export function useSourcesCard(ctx: CardCtx) {
             // Deliberately *not* a fresh walk: this fires once a second while
             // a run is going. The sampler is already walking on its own
             // cadence; this just reads what it found.
-            void loadRows();
+            refreshRows();
           }
           // The loop's record moving is the nearest thing to "a step
           // committed" — nothing watches the stores themselves — and its
@@ -1006,6 +1007,10 @@ export function useSourcesCard(ctx: CardCtx) {
       },
       { onScreen: cardEl.value ?? undefined },
     );
+    // Fresh sizes on the first paint. The backend only walks the disk
+    // while a run is in flight, so on an idle root — the usual state —
+    // this is the walk that produces the numbers on screen.
+    await reloadAll(true);
   });
 
   onUnmounted(() => {

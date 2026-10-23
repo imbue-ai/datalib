@@ -1394,6 +1394,14 @@ export async function resetSteps(targets: string[]): Promise<"done" | "queued"> 
   return r.status === 202 ? "queued" : "done";
 }
 
+/// Fold away the history of every rendered document store and the grid
+/// index, and give back the disk it held (`step_protocol.md` § Compact).
+/// "queued" when it is still going after the server's wait.
+export async function compactHistory(): Promise<"done" | "queued"> {
+  const r = await post("/api/compact", {});
+  return r.status === 202 ? "queued" : "done";
+}
+
 /// Delete the trees of groups already gone from the config, and forget
 /// their steps ran. "queued" when one of their steps has not stopped yet.
 export async function purgeGroups(groups: string[]): Promise<"done" | "queued"> {

@@ -65,7 +65,8 @@ export type HandleKind =
   | "google"
   | "github"
   | "gitlab"
-  | "notion";
+  | "notion"
+  | "whatsapp";
 
 export function handleKind(handle: string): HandleKind | null {
   const kind = handle.slice(0, handle.indexOf(":"));
@@ -78,7 +79,8 @@ export function handleKind(handle: string): HandleKind | null {
     kind === "google" ||
     kind === "github" ||
     kind === "gitlab" ||
-    kind === "notion"
+    kind === "notion" ||
+    kind === "whatsapp"
     ? kind
     : null;
 }
@@ -98,6 +100,7 @@ const KIND_ICON: Record<HandleKind, string> = {
   github: "github",
   gitlab: "gitlab",
   notion: "notion",
+  whatsapp: "whatsapp",
 };
 
 export function handleIcon(handle: string): string | null {
@@ -392,8 +395,9 @@ export async function searchContacts(q: string): Promise<ContactSummary[]> {
   return r.contacts;
 }
 
-// Every edit forgets the handles it touched, so every document and grid
-// showing them draws them again from the next answer.
+// Every edit forgets the handles it touched, and the other handles of a
+// contact it changed, so every document, grid and card showing them draws
+// them again from the next answer.
 
 export async function createContact(name: string, handles: string[]): Promise<string> {
   const id = (await post<{ contact_id: string }>("/contacts", { name, handles })).contact_id;
@@ -401,19 +405,28 @@ export async function createContact(name: string, handles: string[]): Promise<st
   return id;
 }
 
+/** `handle` and every handle of `contactId` held so far: each one's
+ *  answer carries the contact, and with it the list of its handles. */
+function withItsContact(handle: string, contactId: string | undefined): string[] {
+  if (!contactId) return [handle];
+  return [handle, ...people.keysWhere((who) => who.mine?.key === contactId)];
+}
+
 export async function linkHandle(handle: string, contactId: string): Promise<void> {
+  const before = people.get(handle)?.mine?.key;
   await post("/link", { handle, contact_id: contactId });
-  people.forget([handle]);
+  people.forget([...withItsContact(handle, contactId), ...withItsContact(handle, before)]);
 }
 
 export async function unlinkHandle(handle: string): Promise<void> {
+  const owner = people.get(handle)?.mine?.key;
   await post("/unlink", { handle });
-  people.forget([handle]);
+  people.forget(withItsContact(handle, owner));
 }
 
 export async function setStoppedWorking(handle: string, by: string | null): Promise<void> {
   await post("/stopped_working", { handle, by });
-  people.forget([handle]);
+  people.forget(withItsContact(handle, people.get(handle)?.mine?.key));
 }
 
 // A merge or a delete moves every handle of a contact, which this page
@@ -728,6 +741,38 @@ export function chipCell(
   a.dataset.shownAs = shownAs;
   drawChip(a, chipLook(handle, shownAs, who ?? { mine: null, sourceContacts: [] }, canLink));
   return a;
+}
+
+/** A conversation titled by the people it is named after: one person's
+ *  chip, or for several one pill with their photos side by side and each
+ *  name a chip of its own, so each still opens, links and copies alone. */
+export function peopleTitle(named: { handle: string; shownAs: string }[]): HTMLElement {
+  const canLink = canLinkHandles();
+  const drawn = named.map(({ handle, shownAs }) => ({
+    handle,
+    shownAs,
+    who: people.lookup(handle) ?? NOBODY,
+  }));
+  if (drawn.length === 1) {
+    const [p] = drawn;
+    return chipCell(p!.handle, p!.shownAs, p!.who, canLink);
+  }
+  const group = document.createElement("span");
+  group.className = "chip-group";
+  const faces = document.createElement("span");
+  faces.className = "chip-group-faces";
+  faces.setAttribute("aria-hidden", "true");
+  group.append(faces);
+  drawn.forEach(({ handle, shownAs, who }, i) => {
+    const look = chipLook(handle, shownAs, who, canLink);
+    faces.append(chipLead(document, look) ?? chipLead(document, { ...look, initial: "?" })!);
+    if (i > 0) group.append(", ");
+    const name = chipCell(handle, shownAs, who, canLink);
+    drawChip(name, { ...look, photo: null, initial: null, icon: null });
+    name.classList.add("chip-bare");
+    group.append(name);
+  });
+  return group;
 }
 
 /** A chip that shows the identifier rather than the person, for a list of

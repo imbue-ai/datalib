@@ -260,6 +260,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/steps/{id}/turn_on", post(step_turn_on))
         .route("/api/reset", post(reset_steps))
         .route("/api/purge", post(purge_groups))
+        .route("/api/compact", post(compact_steps))
         .route("/api/runs", get(runs_list))
         .route("/api/processes", get(processes_list))
         .route("/api/log/{seq}", get(log_line))
@@ -1735,6 +1736,15 @@ struct ResetRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct CompactRequest {
+    /// Step ids; none for every step that takes the verb.
+    #[serde(default)]
+    targets: Vec<String>,
+    #[serde(default)]
+    by: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct PurgeRequest {
     /// Group ids the config no longer names.
     groups: Vec<String>,
@@ -1924,6 +1934,19 @@ async fn purge_groups(
 ) -> Result<StatusCode, Refusal> {
     let by = req.by.unwrap_or_else(|| "ui".to_string());
     wiped(s.sync.purge(&req.groups, &by).await)
+}
+
+/// `POST /api/compact` — fold away the history nothing reads, and give
+/// back the disk it held (`step_protocol.md` § Compact). No targets is
+/// every step that takes the verb. 204 once done; 202 while it runs,
+/// once the steps it holds have stopped; 409, with the reason, for a
+/// step it cannot compact.
+async fn compact_steps(
+    State(s): State<AppState>,
+    Json(req): Json<CompactRequest>,
+) -> Result<StatusCode, Refusal> {
+    let by = req.by.unwrap_or_else(|| "ui".to_string());
+    wiped(s.sync.compact(&req.targets, &by).await)
 }
 
 fn wiped(answer: Result<supervisor::WipeAnswer, String>) -> Result<StatusCode, Refusal> {

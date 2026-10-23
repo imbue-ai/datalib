@@ -130,3 +130,42 @@ time.date-chip {
 .entity-interrupted::after {
   background: var(--datalib-log-error, #dc2626);
 }
+
+/* A conversation titled by several people (`peopleTitle`): one pill, their
+   photos overlapping at its start, then each name a chip of its own. */
+.chip-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25em;
+  max-width: 100%;
+  min-width: 0;
+  padding: 0 0.5em 0 0.2em;
+  border-radius: 999px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: var(--datalib-chip-unlinked-bg, rgba(110, 110, 115, 0.16));
+}
+.chip-group-faces {
+  display: inline-flex;
+  flex-shrink: 0;
+  margin-right: 0.15em;
+}
+.chip-group-faces > * {
+  width: 1.3em;
+  height: 1.3em;
+  border-radius: 50%;
+  object-fit: cover;
+  box-shadow: 0 0 0 1.5px var(--datalib-bg, #fff);
+}
+.chip-group-faces > * + * {
+  margin-left: -0.45em;
+}
+.chip-group > a.chip.chip-bare {
+  padding: 0;
+  background: none;
+}
+/* Between names a "+" reads as part of the list; a click still links. */
+.chip-group > .handle-linkable::after {
+  content: none;
+}

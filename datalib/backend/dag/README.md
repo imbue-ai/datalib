@@ -627,8 +627,9 @@ host's stop. The server's host and the tests both run it.
 ## Resets and purges
 
 A **wipe** is a row in the mailbox's `wipes` table: a reset (empty what
-these steps wrote) or a purge (delete the trees of groups the config no
-longer names, and forget their steps ran). The loop carries one out as
+these steps wrote), a purge (delete the trees of groups the config no
+longer names, and forget their steps ran) or a compaction (fold away the
+history nothing reads, `step_protocol.md` § Compact). The loop carries one out as
 soon as the steps it touches have stopped, whatever else is syncing; it
 does not wait for the sync to end. What it decides is in
 `supervisor/wipe.rs`, and the loop does it (`round.rs`,
@@ -636,7 +637,11 @@ does not wait for the sync to end. What it decides is in
 
 - **It holds its steps.** A step being wiped is treated as turned off for
   as long as the wipe is open: stopped if it runs, not started, and its
-  row says `being reset` or `being deleted`. It leaves the requests that
+  row says `being reset`, `being deleted` or `being compacted`. A
+  compaction holds the steps it asks and every step that reads one, since
+  a reader on a commit the fold drops would be left reading nothing; with
+  no targets it asks every step that takes the verb
+  (`StepSpec::compacts`). It leaves the requests that
   named it as a root, so a reset does not refill a download, and a purged
   group's config change is not waited on; a request left with nothing is
   stopped.
@@ -649,18 +654,18 @@ does not wait for the sync to end. What it decides is in
   lacks, a purge of a group it still has or of anything that is not a
   group id. The row closes with the reason in `error`.
 
-The server's `POST /api/reset` and `POST /api/purge` write the row and
-wait up to ten seconds for it to close: 204 once done, 202 when its steps
-have not stopped yet, 409 with the reason when refused.
+The server's `POST /api/reset`, `POST /api/purge` and `POST /api/compact`
+write the row and wait up to ten seconds for it to close: 204 once done,
+202 when its steps have not stopped yet or it is still going, 409 with
+the reason when refused. A compaction opens nothing downstream: the fold
+keeps every store's content, so no version moves.
 
-**Compacting** is not a wipe and has no row: `datalib-dag --compact`
-takes `runner-lock` itself, as `--reset` from the command line does, so
-it is refused while the app or another `datalib-dag` runs the loop.
-`Runner::compact` invokes every step that takes the verb
-(`StepSpec::compacts`) with `--compact` and records the version each
-reports (`step_protocol.md` § Compact). The binary measures each step's
-tree as a directory before and after, never its store, and prints what
-it gave back.
+From the command line, `datalib-dag --compact` takes `runner-lock`
+itself, as `--reset` does, so it is refused while the app or another
+`datalib-dag` runs the loop. `Runner::compact` asks the same steps and
+records the same versions; the binary measures each step's tree as a
+directory before and after, never its store, and prints what it gave
+back.
 
 ## The record
 

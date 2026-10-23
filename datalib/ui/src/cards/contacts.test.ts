@@ -24,6 +24,10 @@ import {
   draftOf,
   saveDraft,
   setContactPhoto,
+  people,
+  linkHandle,
+  unlinkHandle,
+  peopleTitle,
 } from "./contacts";
 
 function dom(html: string): HTMLElement {
@@ -423,5 +427,81 @@ describe("the card's edit calls", () => {
     expect(sent[0]).toMatchObject({ url: "/applet/datalib_contacts/photo/c1", method: "PUT" });
     expect(sent[0]!.type).toBe("image/png");
     expect(sent[0]!.body).toBe(photo);
+  });
+});
+
+describe("an edit to a link", () => {
+  /// What the live updates need to exist; nothing here reads them.
+  class QuietEventSource {
+    static CLOSED = 2;
+    readyState = 0;
+    addEventListener() {}
+    close() {}
+  }
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** Linking riker@ forgot only riker@, so a card drawn from wriker@ kept
+   *  the contact's old list of handles until a live update came, seconds
+   *  later. */
+  it("forgets every handle of the contact it joins or leaves", async () => {
+    const riker = contact("datalib_contacts", "Will Riker", [
+      ["email:wriker@enterprise.test", null],
+      ["email:will@alaska.test", null],
+    ]);
+    vi.stubGlobal("EventSource", QuietEventSource);
+    vi.stubGlobal("fetch", async (url: string) => {
+      const body = url.endsWith("/resolve")
+        ? {
+            resolved: {
+              "email:wriker@enterprise.test": riker,
+              "email:will@alaska.test": riker,
+            },
+          }
+        : url.endsWith("/people")
+          ? { people: {} }
+          : {};
+      return new Response(JSON.stringify(body), { status: 200 });
+    });
+    const shown = ["email:wriker@enterprise.test", "email:will@alaska.test", "email:worf@k.test"];
+    await people.ask(shown);
+    expect(people.get("email:wriker@enterprise.test")?.mine?.key).toBe(riker.key);
+
+    await linkHandle("email:riker@enterprise.test", riker.key);
+    expect(people.get("email:wriker@enterprise.test")).toBeUndefined();
+    expect(people.get("email:worf@k.test")).toBeDefined();
+
+    await people.ask(shown);
+    await unlinkHandle("email:will@alaska.test");
+    expect(people.get("email:wriker@enterprise.test")).toBeUndefined();
+    expect(people.get("email:worf@k.test")).toBeDefined();
+  });
+});
+
+describe("a conversation titled by its people", () => {
+  /** A chat named after its people was titled with the text the source
+   *  showed, so a WhatsApp stranger read as a raw id and a group as a
+   *  comma list nobody could click. */
+  it("is one person's chip, or for several their photos together and each name a chip", () => {
+    const one = peopleTitle([
+      { handle: "whatsapp:100000000000108", shownAs: "WhatsApp user …0108" },
+    ]);
+    expect(one.matches("a.chip[data-handle='whatsapp:100000000000108']")).toBe(true);
+    expect(one.textContent).toBe("WhatsApp user …0108");
+
+    const crew = peopleTitle([
+      { handle: "tel:+17015550101", shownAs: "William Riker" },
+      { handle: "tel:+17015550102", shownAs: "Data" },
+      { handle: "tel:+17015550103", shownAs: "Geordi La Forge" },
+    ]);
+    expect(crew.classList.contains("chip-group")).toBe(true);
+    expect(crew.querySelectorAll(".chip-group-faces > *")).toHaveLength(3);
+    const names = [...crew.querySelectorAll<HTMLElement>("a.chip[data-handle]")];
+    expect(names.map((a) => a.dataset.handle)).toEqual([
+      "tel:+17015550101",
+      "tel:+17015550102",
+      "tel:+17015550103",
+    ]);
+    expect(names.every((a) => !a.querySelector(".handle-photo, .handle-initial"))).toBe(true);
+    expect(crew.textContent).toContain("William Riker, Data, Geordi La Forge");
   });
 });

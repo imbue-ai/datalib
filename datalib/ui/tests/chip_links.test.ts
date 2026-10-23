@@ -37,6 +37,7 @@ describe("handleFromUri / uriFromHandle", () => {
         "notion:00000001-1701-4d00-8000-000000000001",
         "datalib:handle/notion/00000001-1701-4d00-8000-000000000001",
       ],
+      ["whatsapp:100000000000108", "datalib:handle/whatsapp/100000000000108"],
     ]) {
       expect(uriFromHandle(handle)).toBe(uri);
       expect(handleFromUri(uri)).toBe(handle);
@@ -58,6 +59,7 @@ describe("handleFromUri / uriFromHandle", () => {
     expect(handleFromUri("datalib:handle/github/data%20soong")).toBeNull();
     expect(handleFromUri("datalib:handle/gitlab/jlpicard")).toBeNull();
     expect(handleFromUri("datalib:handle/notion/not-a-uuid")).toBeNull();
+    expect(handleFromUri("datalib:handle/whatsapp/12ab")).toBeNull();
     expect(handleFromUri("datalib:handle/facebook/name/Q%2")).toBeNull();
     expect(handleFromUri("datalib:handle/facebook/name/%20%20")).toBeNull();
     expect(handleFromUri("datalib:handle/facebook/deleted/12a")).toBeNull();

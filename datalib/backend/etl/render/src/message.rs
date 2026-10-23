@@ -98,13 +98,19 @@ impl MessageHeader<'_> {
         }
         s.push_str(&timestamp_html(self.date_ms));
         if let Some(url) = self.source_url {
-            s.push_str(&format!(
-                " <a class=\"source-link\" href=\"{url}\" target=\"_blank\" rel=\"noopener noreferrer\">↗</a>",
-                url = escape_attr(url),
-            ));
+            s.push(' ');
+            s.push_str(&source_link(url));
         }
         s
     }
+}
+
+/// The `↗` that opens a message, comment or page at its source.
+pub fn source_link(url: &str) -> String {
+    format!(
+        "<a class=\"source-link\" href=\"{}\" target=\"_blank\" rel=\"noopener noreferrer\">↗</a>",
+        escape_attr(url)
+    )
 }
 
 /// A timestamp a reader can hover for the full instant, or a plain span

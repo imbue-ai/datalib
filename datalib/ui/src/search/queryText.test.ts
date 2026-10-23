@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SearchKeySpec } from "@/api";
-import { chipWords, completingAt, termValue, words } from "./queryText";
+import { chipWords, completingAt, dateWords, termValue, words } from "./queryText";
 
 const KEYS: SearchKeySpec[] = [
   { key: "source_id", aliases: [], values: { kind: "source" }, partial: false },
@@ -8,6 +8,7 @@ const KEYS: SearchKeySpec[] = [
   { key: "step", aliases: [], values: { kind: "step" }, partial: false },
   { key: "author_handle", aliases: ["handle"], values: { kind: "text" }, partial: false },
   { key: "from", aliases: ["author"], values: { kind: "person" }, partial: true },
+  { key: "after", aliases: [], values: { kind: "stamp" }, partial: false },
 ];
 
 /** `|` marks the cursor. */
@@ -119,6 +120,18 @@ describe("chipWords", () => {
     expect(chipWords(q, KEYS).map(({ chip }) => chip)).toEqual([
       { kind: "person", handle: "email:riker@enterprise.org" },
       { kind: "person", handle: "tel:+12025550101" },
+    ]);
+  });
+});
+
+describe("dateWords", () => {
+  /** A date menu searched `after:2369-05-28 before:2369-05-29`, drawn as
+   *  plain text where every other date in the app is a chip. */
+  it("draws a date key's value as a date when it reads as one", () => {
+    const q = "after:2369-05-28 after:2026-04-15T10:05:00Z after:yesterday channel:2026-01-01";
+    expect(dateWords(q, KEYS).map((w) => q.slice(w.valueFrom, w.to))).toEqual([
+      "2369-05-28",
+      "2026-04-15T10:05:00Z",
     ]);
   });
 });

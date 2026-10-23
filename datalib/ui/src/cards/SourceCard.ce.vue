@@ -12,7 +12,7 @@ import { UNIFIED_DOCUMENT_INDEX, type Dashboard, type ManageResponse, type Manag
 import { useApi } from "./cardApi";
 import { rowMenu, type MenuAction } from "@/config/rowMenu";
 import { isDesktopApp, revealActionLabel } from "@/desktop";
-import { changed, subscribeLive } from "@/live";
+import { changed, oneAtATime, subscribeLive } from "@/live";
 import { formatShortStamp, formatStamp } from "@/config/timeFormat";
 import { formatBytes } from "@/config/bytes";
 import RunLogPanel from "@/components/RunLogPanel.ce.vue";
@@ -338,21 +338,19 @@ function openFromChip(source: string) {
 }
 let unsubscribe: (() => void) | null = null;
 let clock: ReturnType<typeof setInterval> | null = null;
+/// A reload a frame asks for, one at a time: the loop sends them in bursts.
+const refreshRows = oneAtATime(() => loadRows());
 
 onMounted(async () => {
-  // Draw from the server's last measurement, then walk the disk for
-  // fresh sizes: a walk of a large root takes seconds, and the card
-  // would stand blank for all of them.
-  await Promise.all([loadRows(), loadDashboard()]);
-  void loadRows(true);
-  if (props.opts.step) wantedStep.value = props.opts.step;
+  // Listen before the first load: a card closed while that load is out
+  // has already run its unmount, and would never stop listening.
   clock = setInterval(() => {
     if (dash.value?.live) now.value = Date.now();
   }, 1000);
   unsubscribe = subscribeLive(
     {
       root: (e) => {
-        if (changed(e, "manage.rows")) void loadRows();
+        if (changed(e, "manage.rows")) refreshRows();
         if (changed(e, "runs") || changed(e, "storage")) scheduleDashboard();
         if (e.kind === "config_changed") {
           void loadRows();
@@ -366,6 +364,12 @@ onMounted(async () => {
     },
     { onScreen: cardEl.value ?? undefined },
   );
+  // Draw from the server's last measurement, then walk the disk for
+  // fresh sizes: a walk of a large root takes seconds, and the card
+  // would stand blank for all of them.
+  await Promise.all([loadRows(), loadDashboard()]);
+  void loadRows(true);
+  if (props.opts.step) wantedStep.value = props.opts.step;
 });
 
 onUnmounted(() => {
@@ -610,25 +614,6 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  /* Categorical line colours, the validated default palette's first six
-     (checked light on #fff, dark on #1a1b1e). */
-  --viz-series-1: #2a78d6;
-  --viz-series-2: #eb6834;
-  --viz-series-3: #1baf7a;
-  --viz-series-4: #eda100;
-  --viz-series-5: #e87ba4;
-  --viz-series-6: #008300;
-}
-@media (prefers-color-scheme: dark) {
-  :host,
-  .card-app-root {
-    --viz-series-1: #3987e5;
-    --viz-series-2: #d95926;
-    --viz-series-3: #199e70;
-    --viz-series-4: #c98500;
-    --viz-series-5: #d55181;
-    --viz-series-6: #008300;
-  }
 }
 /* The card fills its box: the group's strip and the tabs stay put, the
    documents grid takes the rest, and the sync scrolls on its own. */

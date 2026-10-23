@@ -59,6 +59,9 @@ pub enum HandleKind {
     /// A Notion user by their id, for one Notion gives no address for (a
     /// bot, or a person whose address it withholds).
     Notion,
+    /// A WhatsApp account by its linked id (the digits of an `…@lid` JID),
+    /// for one the backup maps to no phone number.
+    Whatsapp,
 }
 
 impl HandleKind {
@@ -149,12 +152,22 @@ impl Handle {
 
     /// A WhatsApp JID. A person's JID is their phone number at
     /// `s.whatsapp.net`, so it becomes a `tel:` handle; a group
-    /// (`@g.us`), a linked-device id (`@lid`) or anything else is not a
-    /// phone number and has no handle yet.
+    /// (`@g.us`), a linked id (`@lid`, see [`Handle::whatsapp_lid`]) or
+    /// anything else is not a phone number.
     pub fn whatsapp_jid(jid: &str) -> Option<Self> {
         let number = jid.strip_suffix("@s.whatsapp.net")?;
         let number = number.split_once(':').map_or(number, |(n, _device)| n);
         Self::tel(&format!("+{number}"))
+    }
+
+    /// A WhatsApp linked id, `<digits>@lid` (a device suffix dropped):
+    /// the one name WhatsApp gives some accounts. Where the backup maps it
+    /// to a number, the number's `tel:` handle is the person's instead.
+    pub fn whatsapp_lid(jid: &str) -> Option<Self> {
+        let id = jid.trim().strip_suffix("@lid")?;
+        let id = id.split_once(':').map_or(id, |(n, _device)| n);
+        (!id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()))
+            .then(|| Self::of(HandleKind::Whatsapp, id))
     }
 
     /// A Slack user, which is only unique within its workspace.
@@ -300,6 +313,7 @@ impl Handle {
                 Self::gitlab(host, username)
             }
             HandleKind::Notion => Self::notion_user(value),
+            HandleKind::Whatsapp => Self::whatsapp_lid(&format!("{value}@lid")),
         }
     }
 
@@ -347,7 +361,8 @@ impl Handle {
             | HandleKind::Google
             | HandleKind::Github
             | HandleKind::Gitlab
-            | HandleKind::Notion => {
+            | HandleKind::Notion
+            | HandleKind::Whatsapp => {
                 format!(
                     "datalib:handle/{}/{}",
                     self.kind().as_str(),
@@ -409,7 +424,8 @@ impl Handle {
             | HandleKind::Google
             | HandleKind::Github
             | HandleKind::Gitlab
-            | HandleKind::Notion => {
+            | HandleKind::Notion
+            | HandleKind::Whatsapp => {
                 format!("{shown} ({})", self.as_str())
             }
         }
@@ -675,6 +691,19 @@ mod tests {
         assert_eq!(Handle::whatsapp_jid("123456789012345@lid"), None);
     }
 
+    /// A sender WhatsApp knows only by a linked id, with no number the
+    /// backup maps it to, was no handle at all: no chip, nothing to link.
+    #[test]
+    fn a_whatsapp_linked_id_is_a_handle_of_its_own() {
+        let lid = Handle::whatsapp_lid("100000000000108@lid").unwrap();
+        assert_eq!(lid.as_str(), "whatsapp:100000000000108");
+        assert_eq!(Handle::whatsapp_lid("100000000000108:3@lid"), Some(lid));
+        assert_eq!(Handle::whatsapp_lid("15550123456@s.whatsapp.net"), None);
+        assert_eq!(Handle::whatsapp_lid("bridge-crew@g.us"), None);
+        assert_eq!(Handle::whatsapp_lid("@lid"), None);
+        assert_eq!(Handle::whatsapp_lid("12ab@lid"), None);
+    }
+
     #[test]
     fn slack_is_scoped_to_its_workspace() {
         assert_eq!(
@@ -807,6 +836,10 @@ mod tests {
             (
                 Handle::notion_user("00000001-1701-4D00-8000-000000000001").unwrap(),
                 "datalib:handle/notion/00000001-1701-4d00-8000-000000000001",
+            ),
+            (
+                Handle::whatsapp_lid("100000000000108@lid").unwrap(),
+                "datalib:handle/whatsapp/100000000000108",
             ),
         ] {
             assert_eq!(h.to_uri(), uri);

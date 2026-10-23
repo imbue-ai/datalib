@@ -1,8 +1,8 @@
-//! What a wipe — a reset or a purge (`store::WipeKind`) — touches, when
+//! What a wipe — a reset, a purge or a compaction (`store::WipeKind`) — touches, when
 //! the loop may carry it out, and what it leaves in the record. Pure; the
 //! loop (`round.rs`) stops the steps, runs the reset and deletes the trees.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::graph::Graph;
 use crate::supervisor::record::{Record, StepRecord};
@@ -10,9 +10,19 @@ use crate::supervisor::store::WipeKind;
 
 /// The steps of `graph` a wipe holds: none of them may run until it is
 /// done. A reset holds its targets; a purge, every step still writing
-/// under one of its groups, which is any the config has not yet let go.
+/// under one of its groups, which is any the config has not yet let go;
+/// a compaction, the steps it asks and every step that reads one, since a
+/// reader on a commit the fold drops would be left reading nothing.
 pub fn held(graph: &Graph, kind: WipeKind, targets: &[String]) -> Vec<usize> {
     match kind {
+        WipeKind::Compact => {
+            let asked = compact_targets(graph, targets);
+            let readers = asked
+                .iter()
+                .flat_map(|&i| graph.dependents[i].iter().copied());
+            let held: BTreeSet<usize> = asked.iter().copied().chain(readers).collect();
+            held.into_iter().collect()
+        }
         WipeKind::Reset => targets
             .iter()
             .filter_map(|t| graph.by_id.get(t).copied())
@@ -26,10 +36,15 @@ pub fn held(graph: &Graph, kind: WipeKind, targets: &[String]) -> Vec<usize> {
 /// Why the wipe cannot be done at all, or `None`. `latest` is the newest
 /// graph the loop has heard of, taken on or not.
 pub fn refusal(latest: &Graph, kind: WipeKind, targets: &[String]) -> Option<String> {
-    if targets.is_empty() {
+    if targets.is_empty() && kind != WipeKind::Compact {
         return Some("nothing to wipe".into());
     }
     match kind {
+        WipeKind::Compact => targets.iter().find_map(|t| match latest.by_id.get(t) {
+            None => Some(format!("the config has no step {t:?}")),
+            Some(&i) if !latest.steps[i].compacts => Some(format!("{t:?} does not take --compact")),
+            Some(_) => None,
+        }),
         WipeKind::Reset => targets
             .iter()
             .find(|t| !latest.by_id.contains_key(*t))
@@ -45,6 +60,42 @@ pub fn refusal(latest: &Graph, kind: WipeKind, targets: &[String]) -> Option<Str
                 .map(|g| format!("the config still has {g:?}; remove it from the config first"))
         }
     }
+}
+
+/// The steps a compaction asks, in graph order: its targets, or with none
+/// named, every step that takes the verb.
+pub fn compact_targets(graph: &Graph, targets: &[String]) -> Vec<usize> {
+    if targets.is_empty() {
+        return graph
+            .topo
+            .iter()
+            .copied()
+            .filter(|&i| graph.steps[i].compacts)
+            .collect();
+    }
+    graph
+        .topo
+        .iter()
+        .copied()
+        .filter(|&i| targets.contains(&graph.steps[i].id))
+        .collect()
+}
+
+/// Failures grouped by what went wrong, each naming its first few steps:
+/// one cause, which a missing binary makes of every step, reads as one.
+pub fn by_cause(failed: &BTreeMap<String, Vec<&str>>) -> String {
+    const NAMED: usize = 3;
+    failed
+        .iter()
+        .map(|(why, steps)| {
+            let named = steps[..steps.len().min(NAMED)].join(", ");
+            match steps.len().saturating_sub(NAMED) {
+                0 => format!("{named} ({why})"),
+                more => format!("{named} and {more} more ({why})"),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 /// What a reset syncs next. A step that reads something is rebuilt from
@@ -156,6 +207,63 @@ mod tests {
         purged.sort();
         assert_eq!(purged, ["a/ingest", "a/render"]);
         assert!(held(&g, WipeKind::Purge, &strings(&["gone"])).is_empty());
+    }
+
+    /// A compaction holds the steps it asks and every step reading one; with
+    /// no targets it asks every step that takes the verb.
+    #[test]
+    fn a_compaction_holds_what_it_asks_and_what_reads_it() {
+        let mut g = graph(&[
+            ("a/ingest", &[]),
+            ("a/render", &["a/ingest"]),
+            ("b/render", &[]),
+            ("idx/grid", &["a/render", "b/render"]),
+            ("idx/qmd", &["idx/grid"]),
+        ]);
+        for id in ["a/ingest", "a/render", "b/render", "idx/grid"] {
+            let i = g.by_id[id];
+            g.steps[i].compacts = true;
+        }
+        let names = |ix: Vec<usize>| -> Vec<String> {
+            let mut out: Vec<String> = ix.into_iter().map(|i| g.steps[i].id.clone()).collect();
+            out.sort();
+            out
+        };
+        assert_eq!(
+            names(held(&g, WipeKind::Compact, &strings(&["a/render"]))),
+            ["a/render", "idx/grid"]
+        );
+        assert_eq!(
+            names(compact_targets(&g, &[])),
+            ["a/ingest", "a/render", "b/render", "idx/grid"]
+        );
+        assert_eq!(
+            names(held(&g, WipeKind::Compact, &[])),
+            ["a/ingest", "a/render", "b/render", "idx/grid", "idx/qmd"]
+        );
+        assert_eq!(refusal(&g, WipeKind::Compact, &[]), None);
+        assert!(refusal(&g, WipeKind::Compact, &strings(&["idx/qmd"]))
+            .unwrap()
+            .contains("does not take --compact"));
+        assert!(refusal(&g, WipeKind::Compact, &strings(&["nope/x"]))
+            .unwrap()
+            .contains("no step"));
+    }
+
+    /// One cause shared by many steps is said once.
+    #[test]
+    fn failures_are_said_once_per_cause() {
+        let failed = BTreeMap::from([
+            (
+                "spawn: no such file".to_string(),
+                vec!["a/render", "b/render", "c/render", "d/render", "e/render"],
+            ),
+            ("disk full".to_string(), vec!["idx/grid"]),
+        ]);
+        assert_eq!(
+            by_cause(&failed),
+            "idx/grid (disk full); a/render, b/render, c/render and 2 more (spawn: no such file)"
+        );
     }
 
     /// A purge deletes a directory under the data root, so it takes only

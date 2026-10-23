@@ -55,7 +55,7 @@ async fn list_conversations(
     let mut offset = 0usize;
     while items.len() < MAX_ITEMS {
         let page = client
-            .list_conversations_page(offset, PAGE_SIZE)
+            .list_conversations_page(offset, PAGE_SIZE, false)
             .await
             .map_err(|e| anyhow!("list conversations at offset {offset}: {e}"))?;
         let page_items: Vec<Value> = page

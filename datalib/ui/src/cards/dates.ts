@@ -225,14 +225,35 @@ export function dateMenu(datetime: string, s: Stamp, zone?: string): DateMenuEnt
   ];
 }
 
+/** What the end of a span (`<span class="time-range">`, an event's
+ *  start and end) shows when it falls on its start's day in the viewer's
+ *  zone: its clock alone. Null when it shows its own day. */
+export function rangeEndText(start: Stamp, end: Stamp, zone?: string): string | null {
+  if (start.kind !== "instant" || end.kind !== "instant") return null;
+  if (daysAround(start, zone)[0] !== daysAround(end, zone)[0]) return null;
+  return fmt(zone, CLOCK).format(end.ms);
+}
+
 /** Draw every `<time datetime>` under `root` as a date chip. A stamp the
  *  viewer cannot read keeps the render's own text and hover. */
-export function decorateDates(root: HTMLElement, now = Date.now()): void {
+export function decorateDates(root: HTMLElement, now = Date.now(), zone?: string): void {
   for (const el of Array.from(root.querySelectorAll<HTMLElement>("time[datetime]"))) {
     const s = parseStamp(el.getAttribute("datetime") ?? "");
     if (!s) continue;
     el.classList.add("chip");
     el.draggable = true;
-    drawChip(el, dateLook(s, now));
+    const look = dateLook(s, now, zone);
+    const text = spanEndText(el, s, zone);
+    drawChip(el, text ? { ...look, text, ariaLabel: look.text } : look);
   }
+}
+
+/** The end of a span's clock-only text, where `el` is that end. */
+function spanEndText(el: HTMLElement, end: Stamp, zone: string | undefined): string | null {
+  const span = el.parentElement;
+  if (!span?.classList.contains("time-range")) return null;
+  const times = span.querySelectorAll<HTMLElement>(":scope > time[datetime]");
+  if (times.length !== 2 || times[1] !== el) return null;
+  const start = parseStamp(times[0]!.getAttribute("datetime") ?? "");
+  return start ? rangeEndText(start, end, zone) : null;
 }

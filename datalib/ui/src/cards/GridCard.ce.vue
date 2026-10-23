@@ -18,7 +18,7 @@
 // ctx.host.openCards — structural changes never go through the bus.
 // Double-clicking a row opens that document as a standalone
 // single-column page in a new tab.
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 // The grid is the framework-agnostic bundle, not the Vue wrapper: a
 // card is a custom element, and the wrapper finds its container by a
 // selector on `document`, which cannot see into a shadow root. The
@@ -47,10 +47,14 @@ import { entities, entityCopyText } from "./entities";
 import {
   canLinkHandles,
   chipCell,
+  contactsById,
   handleKind,
   copyText as copyHandleText,
+  nameOf,
   people,
 } from "./contacts";
+import { CONTACT } from "@/search/queryText";
+import { dateText, parseStamp } from "./dates";
 import {
   CHIP_SELECTOR,
   chipCardSource,
@@ -135,7 +139,7 @@ import {
 import { searchFailure, type SearchFailure } from "./searchFailure";
 import { DEFAULT_QUERY, PLAIN_HINT, searchPlaceholder } from "./searchDefaults";
 import SearchList from "./SearchList.ce.vue";
-import { freeText, pickedSource, setSource } from "./search";
+import { freeText, pickedSource, searchTitle, setSource } from "./search";
 import SearchField from "@/search/SearchField.vue";
 import { iconUrl } from "@/config/icons";
 import { lastSearchView, rememberSearchView, type SearchViewId } from "./searchViewPref";
@@ -227,10 +231,33 @@ the one you picked last.</p>
 );
 
 // An unnamed card's name tracks the live query, not just the factory
-// argument — searching from inside the card renames it.
+// argument — searching from inside the card renames it — and calls a
+// person in it by their name once it is known, and a date as its chip.
+function shownValue(value: string): string | null {
+  const stamp = parseStamp(value);
+  if (stamp) return dateText(stamp);
+  if (value.startsWith(CONTACT)) {
+    const contact = contactsById.lookup(value.slice(CONTACT.length));
+    return contact ? nameOf(contact) : null;
+  }
+  if (!handleKind(value)) return null;
+  const who = people.lookup(value);
+  const record = who?.mine ?? who?.sourceContacts[0];
+  return record ? nameOf(record) : null;
+}
+const namesAnswered = ref(0);
+const stopTitlePeople = people.subscribe(() => namesAnswered.value++);
+const stopTitleContacts = contactsById.subscribe(() => namesAnswered.value++);
+onBeforeUnmount(() => {
+  stopTitlePeople();
+  stopTitleContacts();
+});
 watch(
-  query,
-  (q) => props.ctx.setTitle(props.name ?? (q && q !== DEFAULT_QUERY ? `Search: ${q}` : "Search")),
+  [query, namesAnswered],
+  ([q]) =>
+    props.ctx.setTitle(
+      props.name ?? (q && q !== DEFAULT_QUERY ? searchTitle(q, shownValue) : "Search"),
+    ),
   { immediate: true },
 );
 const rows = shallowRef<Row[]>([]);
@@ -1215,6 +1242,16 @@ onMounted(loadSources);
 
 const allCount = computed(() => sources.value.reduce((n, g) => n + g.count, 0));
 const source = computed(() => pickedSource(query.value));
+
+// The chips are one line that scrolls sideways; the picked one is kept
+// in sight, however it was picked.
+const sourceChips = ref<HTMLElement | null>(null);
+watch([source, sources], async () => {
+  await nextTick();
+  sourceChips.value
+    ?.querySelector(".source-chip.is-on")
+    ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+});
 
 function pickSource(id: string | null) {
   query.value = setSource(query.value, id);
@@ -2320,7 +2357,13 @@ onBeforeUnmount(() => {
           {{ t.label }} <span class="answer-count">{{ tabCount(t.id) }}</span>
         </button>
       </div>
-      <div v-if="sources.length > 0" class="source-chips" role="group" aria-label="Sources">
+      <div
+        v-if="sources.length > 0"
+        ref="sourceChips"
+        class="source-chips"
+        role="group"
+        aria-label="Sources"
+      >
         <button
           type="button"
           class="source-chip"
@@ -2337,6 +2380,7 @@ onBeforeUnmount(() => {
           class="source-chip"
           :class="{ 'is-on': source === g.sample.source_id }"
           :aria-pressed="source === g.sample.source_id"
+          :data-source="g.sample.source_id"
           @click="pickSource(g.sample.source_id ?? null)"
         >
           <img

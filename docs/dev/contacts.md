@@ -210,7 +210,7 @@ What each source has today:
 |---|---|---|
 | email | the From address | To, Cc and Bcc (the sender's copy) as recipients; an `@` or `+` mention, a `mailto:` link in the fresh part of an HTML body |
 | Slack | `slack:<team>/<user>` | a `<@U…>` mention in a body; each reaction's user; the profile's email, in the source contact |
-| WhatsApp | the sender's number, a linked id (`…@lid`) through `jid_map` | each reaction's sender |
+| WhatsApp | the sender's number, a linked id (`…@lid`) through `jid_map`, else the linked id itself (`whatsapp:<digits>`, labelled "WhatsApp user …" and its last four digits when nothing names it) | each reaction's sender |
 | Signal | the number, else the account id (ACI); a recipient known by PNI alone has none | a mention (a `mentionAci` body range), by number else ACI, written `@Name` in place of its `U+FFFC`; number and ACI together, in the source contact; one known by ACI alone reads as the dashed ACI. The ACI is read by its one path in the stored frame, and one that will not read is a problem on the recipient (`aci`, `CoercionFailed`), not a silent loss |
 | Messages | the number or Apple ID address | each tapback's |
 | Google Chat and Voice | the address or number | |

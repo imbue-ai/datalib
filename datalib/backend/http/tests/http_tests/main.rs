@@ -8,6 +8,7 @@
 
 mod applet;
 mod auth_endpoint;
+mod compact_endpoint;
 mod config_init;
 mod config_upgrade;
 mod dactal_csp;

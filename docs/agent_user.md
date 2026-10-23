@@ -147,7 +147,7 @@ sources waits for a full run), `--parallelism N`, `--reset
 with `--sync` it runs first), `--compact` (folds the history of every
 render store and the grid index into one commit and gives back the disk
 it held; their content stays, so nothing re-runs; refused while the app
-is up), `--binary-dir DIR` (put at the front of
+is up, where `POST /api/compact {}` does the same), `--binary-dir DIR` (put at the front of
 every step's `PATH`, so a bare `command` like `datalib-step` resolves
 there; defaults to the config's `binary_dir`, else the directory
 `datalib-dag` itself is in). A sync that fails with "has a shape this build's DDL
