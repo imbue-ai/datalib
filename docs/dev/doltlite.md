@@ -728,7 +728,9 @@ Creating and dropping a table in one open still appends chunks, though
 - **gc writes a compacted copy before it drops the original**, so it
   needs about the store's size again in free disk (upstream
   `doc/doltlite/dolt_gc.md`; not measured here).
-- Only `sqlite_mirror` and `fsindex` run gc today.
+- `sqlite_mirror` and `fsindex` run gc, and so does `datalib-dag
+  --compact` on the render stores and the grid index, after folding
+  their history into one commit (`doltlite_raw::fold_history`).
 
 ### Trees, and keeping one through a fold
 

@@ -4,6 +4,7 @@
 mod calendar_split;
 mod check_params;
 mod clear_before_ingest;
+mod compact;
 mod embedding_map;
 mod final_message;
 mod interrupt;

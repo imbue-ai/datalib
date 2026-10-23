@@ -1,6 +1,7 @@
 //! `datalib-dag` — run a DAG config file (see `datalib_dag::config`
 //! for the schema).
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -23,11 +24,12 @@ const VERSION_RESOLVED: &str = {
     }
 };
 use datalib_dag::cli::{Cli, Verb};
+use datalib_dag::disk_space::human_bytes;
 use datalib_dag::events::FanOutSink;
 use datalib_dag::supervisor::host;
 use datalib_dag::supervisor::reload::ConfigFile;
 use datalib_dag::supervisor::store::{RequestOutcome, Store};
-use datalib_dag::{config, subprocess, EventSink, NdjsonSink, Runner};
+use datalib_dag::{config, subprocess, EventSink, Graph, NdjsonSink, Runner};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -77,6 +79,7 @@ async fn main() -> Result<()> {
         check: check_only,
         sync: sync_only,
         reset,
+        compact,
         by,
         binary_dir,
         parallelism,
@@ -168,12 +171,17 @@ async fn main() -> Result<()> {
         );
     }
 
-    // `--reset` empties stores, so it needs the root to itself: it is
-    // refused, not queued, while anyone runs the loop.
-    let reset_lock = if reset.is_empty() {
-        None
+    // `--reset` empties stores and `--compact` folds their history away,
+    // so each needs the root to itself: refused, not queued, while anyone
+    // runs the loop.
+    let alone = !reset.is_empty() || compact;
+    let reset_lock = if alone {
+        Some(acquire_or_explain(
+            &data_root,
+            if compact { "--compact" } else { "--reset" },
+        )?)
     } else {
-        Some(acquire_or_explain(&data_root)?)
+        None
     };
 
     // Cancellation. The first SIGINT/SIGTERM asks for *this* request to
@@ -226,8 +234,9 @@ async fn main() -> Result<()> {
         .with_context(|| format!("create data_root {}", data_root.display()))?;
     let store = Store::open(&data_root).await?;
 
-    // The request this invocation stands for; none for a reset alone.
-    let own = if reset.is_empty() || !sync_only.is_empty() {
+    // The request this invocation stands for; none for a reset or a
+    // compaction alone.
+    let own = if !alone || !sync_only.is_empty() {
         let roots: Vec<String> = if sync_only.is_empty() {
             graph.fringe_ids().into_iter().map(str::to_string).collect()
         } else {
@@ -253,7 +262,9 @@ async fn main() -> Result<()> {
     let _lock = match reset_lock {
         Some(lock) => lock,
         None => {
-            let own = own.as_deref().expect("a request unless resetting");
+            let own = own
+                .as_deref()
+                .expect("a request unless resetting or compacting");
             match follow_or_lock(&data_root, &store, own).await? {
                 Taken::Lock(lock) => lock,
                 Taken::Closed(outcome) => {
@@ -349,8 +360,16 @@ async fn main() -> Result<()> {
         if !reset.is_empty() {
             runner.reset(&graph, &reset).await?;
         }
+        let compact_failed = if compact {
+            compact_and_report(&runner, &graph, &data_root).await?
+        } else {
+            false
+        };
         let Some(own) = own else {
             store.close().await;
+            if compact_failed {
+                std::process::exit(2);
+            }
             return Ok(());
         };
         let report = runner.serve(&graph, &store).await?;
@@ -500,12 +519,73 @@ async fn follow_or_lock(data_root: &Path, store: &Store, own: &str) -> Result<Ta
     }
 }
 
-fn acquire_or_explain(data_root: &Path) -> Result<datalib_dag::lock::RunnerLock> {
+/// `--compact`, and one line per step whose tree it shrank. The trees are
+/// measured from outside, as directories, since the runner never opens a
+/// step's store. `true` when some step could not compact.
+async fn compact_and_report(runner: &Runner, graph: &Graph, data_root: &Path) -> Result<bool> {
+    let tree = |step: &str| tree_bytes(&data_root.join(step));
+    let before: HashMap<String, u64> = graph
+        .steps
+        .iter()
+        .filter(|spec| spec.compacts)
+        .map(|spec| (spec.id.clone(), tree(&spec.id)))
+        .collect();
+    let mut failed = false;
+    let (mut was, mut is) = (0, 0);
+    #[allow(clippy::disallowed_macros)]
+    for c in runner.compact(graph).await? {
+        match c.answer {
+            Ok(()) => {
+                let (from, to) = (before[&c.step], tree(&c.step));
+                if to < from {
+                    println!("{:<40} {} → {}", c.step, human_bytes(from), human_bytes(to));
+                    (was, is) = (was + from, is + to);
+                }
+            }
+            Err(error) => {
+                failed = true;
+                println!("{:<40} could not compact: {error}", c.step);
+            }
+        }
+    }
+    #[allow(clippy::disallowed_macros)]
+    {
+        if was == 0 {
+            println!("nothing to compact");
+        } else {
+            println!(
+                "{:<40} {} → {}",
+                "in all",
+                human_bytes(was),
+                human_bytes(is)
+            );
+        }
+    }
+    Ok(failed)
+}
+
+/// The bytes of every file under `dir`, links not followed; 0 for one
+/// that is not there.
+fn tree_bytes(dir: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|e| match e.file_type() {
+            Ok(t) if t.is_dir() => tree_bytes(&e.path()),
+            Ok(t) if t.is_file() => e.metadata().map(|m| m.len()).unwrap_or(0),
+            _ => 0,
+        })
+        .sum()
+}
+
+fn acquire_or_explain(data_root: &Path, verb: &str) -> Result<datalib_dag::lock::RunnerLock> {
     datalib_dag::lock::acquire_runner(data_root).map_err(|e| {
         if e.is_held() {
             anyhow::anyhow!(
-                "the loop on {} is running{}, and --reset needs the root to itself. \
-                 Wait for it to finish.\n(lock: {})",
+                "the loop on {} is running{}, and {verb} needs the root to itself. \
+                 Quit the app, or wait for the sync to finish.\n(lock: {})",
                 data_root.display(),
                 match e.holder() {
                     Some(h) => format!(" — {h}"),

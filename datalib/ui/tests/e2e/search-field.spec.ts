@@ -120,13 +120,15 @@ test("a person picked for from: is drawn as their chip", async ({ page }) => {
 });
 
 /// A name picked for a person key is written quoted: matched whole, where
-/// the same name typed bare matches any name holding it.
+/// the same name typed bare matches any name holding it. The name is one no
+/// handle goes by (a Gemini answer's author); a person with a handle is
+/// offered as their chip first.
 test("a name picked for from: is quoted, to be matched whole", async ({ page }) => {
   await page.goto(GRID);
-  await typeInto(field(page), "from:wtrik");
-  await expect(menu(page).getByText("wtriker", { exact: true })).toBeVisible();
+  await typeInto(field(page), "from:gemin");
+  await expect(menu(page).getByText("Gemini", { exact: true })).toBeVisible();
   await field(page).press("Tab");
-  await expect(field(page)).toHaveAttribute("data-query", 'from:"wtriker" ');
+  await expect(field(page)).toHaveAttribute("data-query", 'from:"Gemini" ');
 });
 
 /// A Tab pressed while the values for what was just typed are still on

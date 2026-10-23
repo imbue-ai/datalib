@@ -56,7 +56,16 @@ export type Who = { mine: NormalizedContact | null; sourceContacts: NormalizedCo
 // ── Pure rules ─────────────────────────────────────────────────────────
 
 export type HandleKind =
-  "email" | "tel" | "slack" | "signal_aci" | "facebook" | "linkedin" | "google";
+  | "email"
+  | "tel"
+  | "slack"
+  | "signal_aci"
+  | "facebook"
+  | "linkedin"
+  | "google"
+  | "github"
+  | "gitlab"
+  | "notion";
 
 export function handleKind(handle: string): HandleKind | null {
   const kind = handle.slice(0, handle.indexOf(":"));
@@ -66,7 +75,10 @@ export function handleKind(handle: string): HandleKind | null {
     kind === "signal_aci" ||
     kind === "facebook" ||
     kind === "linkedin" ||
-    kind === "google"
+    kind === "google" ||
+    kind === "github" ||
+    kind === "gitlab" ||
+    kind === "notion"
     ? kind
     : null;
 }
@@ -83,6 +95,9 @@ const KIND_ICON: Record<HandleKind, string> = {
   facebook: "facebook",
   linkedin: "linkedin",
   google: "google_drive",
+  github: "github",
+  gitlab: "gitlab",
+  notion: "notion",
 };
 
 export function handleIcon(handle: string): string | null {

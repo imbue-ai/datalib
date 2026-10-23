@@ -46,7 +46,6 @@ cipher = { version = "0.5", features = ["block-padding"] }
 clap = { version = "4.5", features = ["derive", "env"] }
 csv = "1"
 ctr = "0.10"
-emojis = "0.9"
 flate2 = "1.0"
 futures = "0.3"
 # GHASH and AES-CTR, composed by whatsapp-backup into a hand-rolled GCM

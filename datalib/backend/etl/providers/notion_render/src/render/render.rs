@@ -19,11 +19,12 @@ use datalib_etl_render::front_matter::yaml_scalar;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{escape_md_block, escape_md_inline};
 use datalib_etl_render::inputs::{Bucket, Buckets};
-use datalib_etl_render::message::stamp_text_html;
+use datalib_etl_render::message::{chip_link, stamp_text_html};
+use datalib_handle::Handle;
 use regex::Regex;
 use serde_json::Value;
 
-use super::grid_rows::{gather_documents, PageDocument, ThreadDocument};
+use super::grid_rows::{comment_author_handle, gather_documents, PageDocument, ThreadDocument};
 use super::parse::{ParsedNotion, ATTACHMENTS_PROJECTION_SQL};
 use datalib_etl_notion::ingest::db::RawDb;
 use datalib_etl_render::pages::batches;
@@ -36,7 +37,9 @@ use datalib_etl_render::pages::batches;
 /// v8: an attachment links to its address in the blob store rather than
 ///     a copy beside the page.
 /// v9: a comment's time is a `<time>` stamp.
-pub const RENDER_VERSION: u32 = 9;
+/// v10: a comment's author is a chip, by their address where Notion gave
+///      one, and a row carries its author's handle.
+pub const RENDER_VERSION: u32 = 10;
 pub const SLUG_MAX_LEN: usize = 60;
 
 static SLUG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[^a-z0-9]+").unwrap());
@@ -312,6 +315,7 @@ fn render_thread(
     page_title: &str,
     members: &[&Value],
     anchor: Option<&str>,
+    author_of: &dyn Fn(&Value) -> Option<Handle>,
     dir: &Path,
 ) -> Result<PathBuf> {
     fs::create_dir_all(dir)?;
@@ -353,11 +357,11 @@ fn render_thread(
         out.push_str(&format!(
             "<div id=\"m-{uuid}\" data-section-uuid=\"{uuid}\" class=\"msg msg--notion\">\n\n"
         ));
-        out.push_str(&format!(
-            "**{}** · {}\n\n",
-            escape_md_inline(author),
-            stamp_text_html(when)
-        ));
+        let who = match author_of(c) {
+            Some(h) => chip_link(author, &h),
+            None => format!("**{}**", escape_md_inline(author)),
+        };
+        out.push_str(&format!("{who} · {}\n\n", stamp_text_html(when)));
         out.push_str(&escape_md_block(&plain(c.get("rich_text"))));
         out.push_str("\n\n</div>\n\n");
     }
@@ -616,7 +620,17 @@ pub fn render_notion(
             .as_deref()
             .and_then(|b| anchors.get(b))
             .map(String::as_str);
-        let p = render_thread(stanza, discussion_uuid, page_title, members, anchor, dir)?;
+        let emails = inputs.lookup("users", &parsed.user_emails);
+        let author_of = |c: &Value| comment_author_handle(c, emails);
+        let p = render_thread(
+            stanza,
+            discussion_uuid,
+            page_title,
+            members,
+            anchor,
+            &author_of,
+            dir,
+        )?;
         on_doc_complete(RenderedMarkdown {
             markdown_uuid: markdown_uuid.clone(),
             source_id: String::new(),
@@ -828,12 +842,19 @@ mod tests {
             "Handbook",
             &[&c],
             Some("Warp core alignment"),
+            &|_| Handle::email("data@enterprise.test"),
             d.path(),
         )
         .unwrap();
         let md = fs::read_to_string(p).unwrap();
         assert!(md.contains("> Warp core alignment"), "{md}");
         assert!(md.find("> Warp core alignment") < md.find("Recommend recalibration"));
+        assert!(
+            md.contains(
+                "[Data](mailto:data@enterprise.test \"Data <data@enterprise.test>\") · <time"
+            ),
+            "an author with an address is a chip: {md}"
+        );
     }
 
     /// A comment, its author, the block it hangs off and a property are
@@ -848,7 +869,16 @@ mod tests {
         let c = json!({"id": "c1", "created_time": "2369-04-15T01:00:00.000Z",
                        "display_name": {"resolved_name": MARKUP},
                        "rich_text": [{"plain_text": MARKUP}]});
-        let p = render_thread("notion", "d1", "Handbook", &[&c], Some(MARKUP), d.path()).unwrap();
+        let p = render_thread(
+            "notion",
+            "d1",
+            "Handbook",
+            &[&c],
+            Some(MARKUP),
+            &|_| None,
+            d.path(),
+        )
+        .unwrap();
         let md = fs::read_to_string(p).unwrap();
         let (_, body) = md
             .split_once("---\n\n")
@@ -878,7 +908,8 @@ mod tests {
                        "original_content_deleted": true,
                        "display_name": {"resolved_name": "Data"},
                        "rich_text": [{"plain_text": "hi"}]});
-        let p = render_thread("notion", "d1", "Handbook", &[&c], None, d.path()).unwrap();
+        let p =
+            render_thread("notion", "d1", "Handbook", &[&c], None, &|_| None, d.path()).unwrap();
         let md = fs::read_to_string(p).unwrap();
         assert!(md.contains("deleted upstream"), "{md}");
     }

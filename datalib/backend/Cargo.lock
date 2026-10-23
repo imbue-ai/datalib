@@ -887,7 +887,6 @@ dependencies = [
  "clap",
  "csv",
  "ctr",
- "emojis",
  "flate2",
  "futures",
  "ghash",
@@ -1126,15 +1125,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e9c71c2167ca323c882b99918929403426e2373ea17242ff5653e0d5e1058be"
 dependencies = [
  "serde",
-]
-
-[[package]]
-name = "emojis"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "589871e639330783bc20ad89d32ac1b049e02c273d96c907ca27478c8bc674a2"
-dependencies = [
- "phf 0.13.1",
 ]
 
 [[package]]

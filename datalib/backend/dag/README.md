@@ -653,6 +653,15 @@ The server's `POST /api/reset` and `POST /api/purge` write the row and
 wait up to ten seconds for it to close: 204 once done, 202 when its steps
 have not stopped yet, 409 with the reason when refused.
 
+**Compacting** is not a wipe and has no row: `datalib-dag --compact`
+takes `runner-lock` itself, as `--reset` from the command line does, so
+it is refused while the app or another `datalib-dag` runs the loop.
+`Runner::compact` invokes every step that takes the verb
+(`StepSpec::compacts`) with `--compact` and records the version each
+reports (`step_protocol.md` § Compact). The binary measures each step's
+tree as a directory before and after, never its store, and prints what
+it gave back.
+
 ## The record
 
 The loop's memory is its **record**, in `system/supervisor.sqlite`

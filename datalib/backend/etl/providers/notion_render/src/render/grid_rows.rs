@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use anyhow::Result;
 use datalib_etl_render::inputs::{Inputs, Lookup};
+use datalib_handle::Handle;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
@@ -90,6 +91,29 @@ fn comment_author(c: &Value) -> Option<String> {
     short_id_author(uid)
 }
 
+/// Who wrote a comment, as a handle: their address where Notion gave
+/// one, else their Notion user id.
+pub(crate) fn comment_author_handle(
+    c: &Value,
+    emails: Lookup<'_, HashMap<String, String>>,
+) -> Option<Handle> {
+    let uid = c.get("created_by")?.get("id")?.as_str()?;
+    user_handle(uid, emails)
+}
+
+/// A Notion user as a handle: their address where Notion gave one, else
+/// their id. An address that will not read as one is not an address.
+fn user_handle(uid: &str, emails: Lookup<'_, HashMap<String, String>>) -> Option<Handle> {
+    emails
+        .get(uid)
+        .and_then(|e| Handle::email(e))
+        .or_else(|| Handle::notion_user(uid))
+}
+
+fn handle_str(h: Option<Handle>) -> Option<String> {
+    h.map(|h| h.as_str().to_string())
+}
+
 /// A page author. Unlike a comment, a page object carries only
 /// `created_by.id`, so this needs the `users` table the download side
 /// fills one id at a time.
@@ -111,6 +135,7 @@ fn page_row(
     title: &str,
     stanza: &str,
     users: Lookup<'_, HashMap<String, String>>,
+    emails: Lookup<'_, HashMap<String, String>>,
     problems: &mut Vec<ProblemRow>,
 ) -> Option<GridRow> {
     let pid = page
@@ -138,6 +163,7 @@ fn page_row(
         .created_at(created_at)
         .modified_at(modified_at)
         .author(resolved_author(author_id, users))
+        .author_handle(handle_str(user_handle(author_id, emails)))
         .conversation_name(Some(title.to_string()))
         .conversation_uuid(id.uuid.clone())
         .entire_chat(format!("/chat/{}", id.uuid))
@@ -160,6 +186,7 @@ fn thread_rows(
     stanza: &str,
     parent_block_id: Option<&str>,
     anchor: Option<&str>,
+    emails: Lookup<'_, HashMap<String, String>>,
     problems: &mut Vec<ProblemRow>,
 ) -> Vec<GridRow> {
     if members_sorted.is_empty() {
@@ -211,6 +238,7 @@ fn thread_rows(
                     .map(str::to_string),
             )
             .author(comment_author(first))
+            .author_handle(handle_str(comment_author_handle(first, emails)))
             .conversation_name(Some(page_title.to_string()))
             .conversation_uuid(thread.uuid.clone())
             .entire_chat(format!("/chat/{}", thread.uuid))
@@ -246,6 +274,7 @@ fn thread_rows(
                         .map(str::to_string),
                 )
                 .author(comment_author(c))
+                .author_handle(handle_str(comment_author_handle(c, emails)))
                 .conversation_name(Some(page_title.to_string()))
                 .conversation_uuid(thread.uuid.clone())
                 .message_index(Some(idx as i64))
@@ -348,7 +377,8 @@ pub fn gather_documents(parsed: &ParsedNotion, stanza: &str) -> Result<DocumentR
         let mut problems: Vec<ProblemRow> = Vec::new();
         let mut rows: Vec<GridRow> = Vec::new();
         let users = inputs.lookup("users", &parsed.user_names);
-        if let Some(r) = page_row(page, &title, stanza, users, &mut problems) {
+        let emails = inputs.lookup("users", &parsed.user_emails);
+        if let Some(r) = page_row(page, &title, stanza, users, emails, &mut problems) {
             rows.push(r);
         }
         let created_time = page.get("created_time").and_then(|v| v.as_str());
@@ -407,6 +437,7 @@ pub fn gather_documents(parsed: &ParsedNotion, stanza: &str) -> Result<DocumentR
             stanza,
             parent_block_id.as_deref(),
             anchor,
+            inputs.lookup("users", &parsed.user_emails),
             &mut problems,
         );
         threads.push(ThreadDocument {
@@ -581,6 +612,43 @@ mod tests {
         let mut anon = c.clone();
         anon["display_name"] = json!({"type": "user"});
         assert_eq!(comment_author(&anon).as_deref(), Some("47b71049"));
+    }
+
+    /// A comment's row carries its author's handle: their address where
+    /// Notion gave one, else their Notion user id.
+    #[test]
+    fn a_comment_row_carries_its_author_by_address_else_by_id() {
+        let author = "47b71049-b1e7-4fc2-9d1e-4528dd803a62";
+        let parsed = |emails: HashMap<String, String>| ParsedNotion {
+            pages: vec![page("p1", "Standup Notes")],
+            comments: vec![comment(
+                "c1",
+                "p1",
+                "d1",
+                "Data",
+                "2369-04-15T01:00:00.000Z",
+            )],
+            user_emails: emails,
+            ..Default::default()
+        };
+        let handles = |parsed: &ParsedNotion| -> Vec<Option<String>> {
+            let docs = gather_documents(parsed, "notion").unwrap();
+            docs.threads[0]
+                .rows
+                .iter()
+                .map(|r| r.author_handle.clone())
+                .collect()
+        };
+        let by_address = parsed([(author.to_string(), "Data@Enterprise.test".to_string())].into());
+        assert_eq!(
+            handles(&by_address),
+            vec![Some("email:data@enterprise.test".to_string()); 2],
+            "the thread's row and the comment's"
+        );
+        assert_eq!(
+            handles(&parsed(HashMap::new())),
+            vec![Some(format!("notion:{author}")); 2]
+        );
     }
 
     /// A database row has no body. It still needs a page document, or
