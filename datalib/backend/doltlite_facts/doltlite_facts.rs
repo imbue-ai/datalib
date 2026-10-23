@@ -1724,6 +1724,65 @@ mod trees {
         }
     }
 
+    /// The search applet keeps one read-only connection for the app's life
+    /// and reads each request in a transaction of its own. A fold and gc in
+    /// another process leave it whole: the request in flight finishes on
+    /// the tree it began on, and the next one reads the folded `main`.
+    #[tokio::test]
+    async fn a_read_only_connection_reads_on_across_a_fold_elsewhere() {
+        let s = Store::new();
+        let mut w = s.rw().await;
+        ok(
+            &mut w,
+            "CREATE TABLE big (id INTEGER PRIMARY KEY, body TEXT)",
+        )
+        .await;
+        // Several times SQLite's default page cache, so a scan reads the file.
+        ok(
+            &mut w,
+            "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 30000) \
+             INSERT INTO big SELECT i, hex(randomblob(150)) FROM n",
+        )
+        .await;
+        commit(&mut w, "fill").await;
+        ok(
+            &mut w,
+            "UPDATE big SET body = hex(randomblob(150)) WHERE id <= 15000",
+        )
+        .await;
+        let before = commit(&mut w, "more").await;
+        let init = first_commit(&mut w).await;
+        let scan = "SELECT count(*) || ':' || sum(length(body)) || ':' || max(body) FROM big";
+        let expected = text(&mut w, scan).await;
+        w.close().await.expect("close");
+
+        let mut r = s.ro().await;
+        ok(&mut r, "BEGIN").await;
+        assert_eq!(
+            int(&mut r, "SELECT length(body) FROM big WHERE id = 1").await,
+            300
+        );
+        let (folded, out) = shell(&[
+            &s.path.display().to_string(),
+            &format!(
+                "SELECT dolt_reset('--soft', '{init}'); \
+                 SELECT dolt_commit('-Am', 'fold'); SELECT dolt_gc();"
+            ),
+        ]);
+        assert!(folded, "{out}");
+        assert_eq!(text(&mut r, scan).await, expected, "the request in flight");
+        ok(&mut r, "COMMIT").await;
+
+        ok(&mut r, "BEGIN").await;
+        assert_eq!(text(&mut r, scan).await, expected, "the next request");
+        assert_ne!(
+            text(&mut r, "SELECT dolt_hashof('HEAD')").await.as_deref(),
+            Some(before.as_str())
+        );
+        assert_eq!(int(&mut r, "SELECT count(*) FROM dolt_log").await, 2);
+        ok(&mut r, "COMMIT").await;
+    }
+
     /// Doltlite has no verb that drops history: no `dolt_squash_history`
     /// (Dolt, a separate project, has one), no orphan branch, and
     /// `dolt_gc` takes no options.
