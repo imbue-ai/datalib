@@ -32,6 +32,7 @@ import {
 } from "./contacts";
 import ChipMenu from "./ChipMenu.ce.vue";
 import {
+  chipDragQuery,
   chipElAt,
   chipMenuOf,
   chipOf,
@@ -41,6 +42,7 @@ import {
   type ChipEntry,
   type ChipHost,
 } from "./chipActions";
+import { decorateDates, rewriteDatesForCopy } from "./dates";
 import { decorateEntities, entities } from "./entities";
 import HandlePopover from "./HandlePopover.ce.vue";
 import { renderDocument } from "./renderDocument";
@@ -266,6 +268,17 @@ function chipHost(el: HTMLElement, x: number, y: number): ChipHost {
   };
 }
 
+/// A chip dragged into a search bar drops the search it stands for, as
+/// text the field takes like any typed (docs/dev/chips.md § "A date"),
+/// spaced so it never runs into a word already there.
+function onChipDragStart(ev: DragEvent) {
+  const el = chipElAt(asElement(ev.target));
+  const chip = el ? chipOf(el) : null;
+  const q = chip ? chipDragQuery(chip.ref) : null;
+  if (!q || !ev.dataTransfer) return;
+  ev.dataTransfer.setData("text/plain", ` ${q} `);
+}
+
 type ChipMenuAt = { el: HTMLElement; chip: Chip; entries: ChipEntry[]; x: number; y: number };
 const chipMenuAt = ref<ChipMenuAt | null>(null);
 
@@ -458,6 +471,7 @@ function paint() {
   decorateLongMessages(el);
   void redrawHandles();
   void decorateEntities(el);
+  decorateDates(el);
   decorateEdgeSources();
   if (bodyChanged) {
     // The desktop app's WebKit could leave a body scrolled before it was
@@ -513,13 +527,16 @@ function onFrameLoad() {
     onFrameLinkClick(ev);
   });
   on("dblclick", onChipDblClick);
+  on("dragstart", onChipDragStart);
   on("mouseover", onBodyMouseOver);
   on("mouseout", onBodyMouseOut);
   on("copy", (ev) => {
     const markdownUuid = props.markdownUuid;
-    copyWithHandles(ev, doc.body, (f) =>
-      markdownUuid ? rewriteIdButtonsForCopy(f, markdownUuid) : false,
-    );
+    copyWithHandles(ev, doc.body, (f) => {
+      const dates = rewriteDatesForCopy(f);
+      const ids = markdownUuid ? rewriteIdButtonsForCopy(f, markdownUuid) : false;
+      return dates || ids;
+    });
   });
   on("contextmenu", (ev) => {
     if (onChipContextMenu(ev)) return;

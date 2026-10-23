@@ -96,6 +96,12 @@ a.chip {
   color: inherit;
   text-decoration: none;
 }
+/* A date (dates.ts): no fill, since there is nothing to link it to; the
+   hover outline and the menu say it is a chip. */
+time.date-chip {
+  padding: 0 0.3em;
+  cursor: default;
+}
 /* A group or step chip: its pipeline glyph sits like a brand mark, and a
    status worth noticing is a dot after the name (the words are on hover). */
 .handle-glyph {
