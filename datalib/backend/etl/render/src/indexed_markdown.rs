@@ -1304,9 +1304,23 @@ impl IndexedMarkdownStore {
         blocking(datalib_etl::doltlite_raw::commit_run(&self.pool, summary))
     }
 
-    /// The store's HEAD: its content version. `None` without doltlite.
-    pub fn head(&self) -> Result<Option<String>> {
-        blocking(datalib_etl::doltlite_raw::head_commit(&self.pool))
+    /// The store's content version, its HEAD's tree. `None` without
+    /// doltlite.
+    pub fn content_version(&self) -> Result<Option<String>> {
+        blocking(datalib_etl::doltlite_raw::content_version(&self.pool))
+    }
+
+    /// The version a seal of `commit` reports.
+    pub fn tree_of(&self, commit: &str) -> Result<String> {
+        blocking(datalib_etl::doltlite_raw::tree_of(&self.pool, commit))
+    }
+
+    /// The commit a consumer's cursor names, through a fold: see
+    /// [`datalib_etl::doltlite_raw::resolve_commit`].
+    pub fn resolve_commit(&self, commit: &str, tree: Option<&str>) -> Result<Option<String>> {
+        blocking(datalib_etl::doltlite_raw::resolve_commit(
+            &self.pool, commit, tree,
+        ))
     }
 
     pub fn close(self) {

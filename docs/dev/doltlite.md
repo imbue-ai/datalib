@@ -741,7 +741,10 @@ message. `dolt_hashof_db(<rev>)` answers the tree's hash, and
   hash as it was though every commit hash changes.
 - **No read takes a tree hash**: `dolt_at_<t>`, `dolt_diff_<t>` and
   `<file>@<rev>` take a branch, a tag or a commit, and a tree hash is
-  "ref not found". So is a commit a fold dropped, once gc has run.
+  "ref not found". So is a commit a fold dropped, once gc has run;
+  `dolt_hashof` says "invalid ref spec" for one. To read where a tree
+  is, find a commit that holds it: `dolt_log()` filtered on
+  `dolt_hashof_db(commit_hash)`.
 - **A tree outlives a fold if a tag holds a commit of it that is not on
   `main`'s history.** Branch at the commit, `dolt_reset('--soft',
   <first commit>)`, `dolt_commit`, tag the new commit (say

@@ -1863,6 +1863,7 @@ render_inputs
 source_cursors
     source_id
     store_commit
+    store_tree
     indexed_at_utc
     tz_offset
     documents_applied
