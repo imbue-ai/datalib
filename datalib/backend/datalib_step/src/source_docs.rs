@@ -391,7 +391,9 @@ mod tests {
 
     /// Every source shows a minimal and a complete stanza for each of its
     /// ingest methods; each loads and plans as a sync would, holds the
-    /// method it is named for, and still loads under another group id.
+    /// method it is named for, and still loads under another group id. A
+    /// complete stanza may also hold a method its own pairs with (Gmail's
+    /// Takeout); its config's `validate`, run by the load, says which do.
     /// A method's complete stanza writes every option of its own table,
     /// and a source's complete stanzas together write every other option
     /// but the shared `common` and `latchkey_settings` ones, which a
@@ -427,7 +429,15 @@ mod tests {
                         .iter()
                         .map(|h| h.path)
                         .collect();
-                    assert_eq!(holds, [m.path], "{name}: holds the method it is named for");
+                    match kind {
+                        ExampleKind::Minimal => {
+                            assert_eq!(holds, [m.path], "{name}: holds the method it is named for")
+                        }
+                        ExampleKind::Complete => assert!(
+                            holds.contains(&m.path),
+                            "{name}: holds the method it is named for, not only {holds:?}"
+                        ),
+                    }
                     for needed in ["render_markdown", "render_time_series"] {
                         let wanted = needed == "render_markdown" || t.renders_time_series();
                         if wanted && !loaded.functions.iter().any(|f| f == needed) {
