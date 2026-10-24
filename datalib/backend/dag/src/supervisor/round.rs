@@ -72,6 +72,7 @@ struct Slot {
     live: Option<Live>,
     ended: Option<Ended>,
     warned_not_streaming: bool,
+    said_waiting_for_disk: bool,
     /// What the round's report says of it.
     status: Option<StepStatus>,
     attempts: u32,
@@ -630,6 +631,19 @@ impl Runner {
                     }
                     let _ = stop.send(true);
                 }
+            }
+            // The step's log, not only its row, says so: a one-shot
+            // `datalib-dag` prints the log and nothing of the row, and
+            // would otherwise sit with no word on its stream of why.
+            for (i, slot) in slots.iter_mut().enumerate() {
+                let waiting = t.states[i] == Row::Waiting(Wait::DiskSpace);
+                if let Some(low) = low.filter(|_| waiting && !slot.said_waiting_for_disk) {
+                    self.note(
+                        &graph.steps[i].id,
+                        format!("waiting for disk space: {}", low.describe()),
+                    );
+                }
+                slot.said_waiting_for_disk = waiting;
             }
             record.save(&state).await?;
 
@@ -2111,6 +2125,40 @@ mod tests {
         running.await.unwrap().unwrap();
         assert_eq!(outcome(&other, &id).await, Some(Some(RequestOutcome::Done)));
         assert_eq!(t.runs(0), 2, "stopped once, then run to the end");
+    }
+
+    /// A floor no disk can meet from the start: the step never starts,
+    /// and its log says why. A one-shot `datalib-dag` prints only the
+    /// log, so without the line a run on a small disk sat silent until
+    /// killed (the v0.45.0 docker doc test).
+    #[tokio::test]
+    async fn a_step_the_floor_keeps_from_starting_says_so_on_its_log() {
+        let t = Three::new();
+        let mut graph = Graph::build(vec![t.step(0)]).unwrap();
+        graph.disk_floor = Some(DiskFloor {
+            pause_below: u64::MAX,
+            resume_at: u64::MAX,
+        });
+        let config = Swappable::new(&graph);
+        let other = Store::open(t.root.path()).await.unwrap();
+        let id = other.open_request(&["a/raw".into()], "ui").await.unwrap();
+        let running = t.serve(graph.clone(), config.clone());
+        until_recorded(t.root.path(), "a/raw", "waiting for disk", |st| {
+            st.state == Some(StateKind::Waiting)
+        })
+        .await;
+        assert!(
+            t.events.logged("a/raw", "waiting for disk space: "),
+            "the step's log says why"
+        );
+        assert_eq!(t.runs(0), 0);
+
+        t.go.store(true, Ordering::SeqCst);
+        graph.disk_floor = None;
+        *config.0.lock().unwrap() = graph;
+        announce_config(t.root.path());
+        running.await.unwrap().unwrap();
+        assert_eq!(outcome(&other, &id).await, Some(Some(RequestOutcome::Done)));
     }
 
     /// A step edited while it runs finishes on the definition it started
