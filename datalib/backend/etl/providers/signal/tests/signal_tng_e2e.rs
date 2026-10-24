@@ -19,6 +19,12 @@ use datalib_signal_backup::{
 };
 use sha2::{Digest, Sha256};
 
+/// The raw store's keys for the bridge crew: Picard is the account, the
+/// chat is the one with Riker, and the backup knows Riker by number.
+const PICARD: &str = "self";
+const RIKER: &str = "e164:+17015550101";
+const BRIDGE: &str = RIKER;
+
 const FIXTURE_AEP: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
 /// 67-byte minimal valid PNG: 1×1 transparent. Hand-assembled rather
@@ -591,7 +597,7 @@ async fn what_a_backup_does_not_hold_is_a_problem() -> Result<()> {
     write_frames(&snapshots, "signal-backup-2364-04-09-12-00-00", &frames)?;
 
     fetch_once(&snapshots, &store, &cache).await?;
-    let item = ingest::schema_raw::chat_item_id_recipe("100", "1", 12442118940000);
+    let item = ingest::schema_raw::chat_item_id_recipe(BRIDGE, PICARD, 12442118940000);
     let expected = vec![
         (
             format!("chat_item_attachments:{item}#0"),
@@ -615,50 +621,77 @@ async fn what_a_backup_does_not_hold_is_a_problem() -> Result<()> {
     Ok(())
 }
 
-/// A newer backup that no longer locates an attachment wrote its edge
-/// again with no bytes and a ref of its own, so the bytes the older
-/// backup decrypted were no longer reachable from the message.
+/// A phone restored from another numbers every recipient and chat anew,
+/// and the keys were built from those numbers: the switch deleted every
+/// message and wrote it again under another key, and an attachment the
+/// new phone never downloaded lost the bytes the old phone's backup had
+/// stored. The keys follow who a chat is with and who wrote a message,
+/// so the switch adds and removes nothing, and the bytes stay.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_newer_backup_without_the_bytes_keeps_the_older_copy() -> Result<()> {
+async fn a_phone_switch_keeps_every_message_and_its_bytes() -> Result<()> {
     let tmp = tempfile::tempdir()?;
     let snapshots = tmp.path().join("snapshots");
     let store = tmp.path().join("raw").join("signal");
     let cache = tmp.path().join("fingerprints.sqlite");
     let (media_name, plaintext_hash) = write_test_attachment(&snapshots.join("files"))?;
 
-    let message = |att: backup::MessageAttachment| {
-        let mut frame = chat_item(100, 1, 12442118940000, "Make it so.", true);
-        if let Some(backup::frame::Item::ChatItem(ci)) = frame.item.as_mut() {
-            if let Some(backup::chat_item::Item::StandardMessage(sm)) = ci.item.as_mut() {
-                sm.attachments.push(att);
-            }
-        }
-        frame
-    };
-    let crew = [
+    let old_phone = [
         recipient_self(1, "Jean-Luc Picard"),
         recipient_contact(2, "Will Riker", 17015550101),
         chat_frame(100, 2),
+        chat_item(100, 2, 12442118460000, "All decks at green status.", false),
+        with_attachment(
+            chat_item(100, 1, 12442118940000, "Make it so.", true),
+            png_attachment(&plaintext_hash),
+        ),
     ];
-    let mut with_bytes = crew.to_vec();
-    with_bytes.push(message(png_attachment(&plaintext_hash)));
-    write_frames(&snapshots, "signal-backup-2364-04-09-12-00-00", &with_bytes)?;
+    write_day(&snapshots, 0, &old_phone)?;
     fetch_once(&snapshots, &store, &cache).await?;
 
-    let mut without = crew.to_vec();
-    without.push(message(backup::MessageAttachment {
-        pointer: Some(backup::FilePointer {
-            file_name: Some("delta-shield.png".into()),
-            ..Default::default()
-        }),
-        ..Default::default()
-    }));
-    write_frames(&snapshots, "signal-backup-2364-04-10-12-00-00", &without)?;
+    // The new phone lists the same two people the other way round, under
+    // other numbers, and holds the attachment without its bytes.
+    let new_phone = [
+        recipient_contact(5, "Will Riker", 17015550101),
+        recipient_self(9, "Jean-Luc Picard"),
+        chat_frame(3, 5),
+        chat_item(3, 5, 12442118460000, "All decks at green status.", false),
+        with_attachment(
+            chat_item(3, 9, 12442118940000, "Make it so.", true),
+            backup::MessageAttachment {
+                pointer: Some(backup::FilePointer {
+                    content_type: Some("image/png".into()),
+                    file_name: Some("delta-shield.png".into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        ),
+    ];
+    write_day(&snapshots, 1, &new_phone)?;
     fetch_once(&snapshots, &store, &cache).await?;
 
-    let item = ingest::schema_raw::chat_item_id_recipe("100", "1", 12442118940000);
-    let edge = format!("{item}#0");
+    let item = ingest::schema_raw::chat_item_id_recipe(BRIDGE, PICARD, 12442118940000);
+    let edge = ingest::schema_raw::chat_item_attachment_id_recipe(&item, 0);
     let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(&store)).await?;
+    let hashes: Vec<String> = sqlx::query_scalar(
+        "SELECT commit_hash FROM dolt_log WHERE message LIKE 'download signal: backup %' \
+          ORDER BY date",
+    )
+    .fetch_all(db.pool())
+    .await?;
+    let mut came_and_went = Vec::new();
+    for table in ["recipients", "chats", "chat_items", "chat_item_attachments"] {
+        let rows: Vec<(String, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT diff_type, coalesce(to_id, from_id) FROM dolt_diff_{table}(?, ?) \
+              WHERE diff_type <> 'modified'"
+        )))
+        .bind(&hashes[0])
+        .bind(&hashes[1])
+        .fetch_all(db.pool())
+        .await?;
+        came_and_went.extend(rows);
+    }
+    assert_eq!(came_and_went, [], "the switch added or removed rows");
     let (ref_id, blake3): (String, Option<String>) =
         sqlx::query_as("SELECT ref_id, blake3 FROM chat_item_attachments WHERE id = ?")
             .bind(&edge)
@@ -670,12 +703,34 @@ async fn a_newer_backup_without_the_bytes_keeps_the_older_copy() -> Result<()> {
         blake3.as_deref(),
         Some(datalib_etl::blob_cas::blake3_hex(TINY_PNG).as_str())
     );
-    assert_eq!(
-        problems(&store).await?,
-        vec![(
-            format!("chat_item_attachments:{edge}"),
-            "warning".to_string()
-        )]
+    assert_eq!(problems(&store).await?, [], "bytes held are not missing");
+
+    // Render reads the bytes through the edge, though the new phone's
+    // payload has no key to find them by.
+    let parsed = tokio::task::spawn_blocking({
+        let raw = store.clone();
+        move || parse_raw_dir(&raw)
+    })
+    .await??;
+    let out = tmp.path().join("data");
+    let mut mds = Vec::new();
+    render_all(
+        &parsed,
+        &out,
+        "signal-tng",
+        &Progress::noop(),
+        &mut |doc| {
+            mds.push(std::fs::read_to_string(&doc.md_path)?);
+            Ok(())
+        },
+        1,
+    )?;
+    assert_eq!(mds.len(), 1);
+    let png_hash = datalib_etl::blob_cas::blake3_hex(TINY_PNG);
+    assert!(
+        mds[0].contains("![delta-shield.png](") && mds[0].contains(&format!("/blob/{png_hash})")),
+        "the attachment links the old phone's bytes in:\n{}",
+        mds[0]
     );
     Ok(())
 }
@@ -782,14 +837,14 @@ async fn a_newer_backup_replaces_what_the_older_one_held() -> Result<()> {
     assert_eq!(
         ids(&store, "chat_items").await?,
         [ingest::schema_raw::chat_item_id_recipe(
-            "100",
-            "1",
+            BRIDGE,
+            PICARD,
             12442118400000
         )],
         "the messages the newer backup dropped are gone"
     );
-    assert_eq!(ids(&store, "recipients").await?, ["1", "2"]);
-    assert_eq!(ids(&store, "chats").await?, ["100"]);
+    assert_eq!(ids(&store, "recipients").await?, [RIKER, PICARD]);
+    assert_eq!(ids(&store, "chats").await?, [BRIDGE]);
     assert!(ids(&store, "chat_item_attachments").await?.is_empty());
     Ok(())
 }
@@ -865,7 +920,7 @@ async fn no_backup_to_read_deletes_nothing() -> Result<()> {
     std::fs::remove_dir_all(&snapshots)?;
     assert!(fetch_once(&snapshots, &store, &cache).await.is_err());
     assert_eq!(ids(&store, "chat_items").await?.len(), 1);
-    assert_eq!(ids(&store, "recipients").await?, ["1", "2"]);
+    assert_eq!(ids(&store, "recipients").await?, [RIKER, PICARD]);
     Ok(())
 }
 
@@ -941,7 +996,7 @@ async fn backup_log(store: &Path) -> Result<Vec<(String, String)>> {
 async fn texts(store: &Path) -> Result<Vec<String>> {
     let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(store)).await?;
     let rows: Vec<String> = sqlx::query_scalar(
-        "SELECT (SELECT value FROM json_tree(payload) WHERE key = 'body') FROM chat_items ORDER BY id",
+        "SELECT (SELECT value FROM json_tree(payload) WHERE key = 'body') FROM chat_items ORDER BY date_sent",
     )
     .fetch_all(db.pool())
     .await?;
@@ -1046,12 +1101,13 @@ async fn each_backup_is_a_commit_and_two_diff_to_show_what_was_lost() -> Result<
             .fetch_one(db.pool())
             .await?;
     db.close().await;
-    let id = |author: &str, sent: i64| ingest::schema_raw::chat_item_id_recipe("100", author, sent);
+    let id =
+        |author: &str, sent: i64| ingest::schema_raw::chat_item_id_recipe(BRIDGE, author, sent);
     assert_eq!(
         diff,
         [
-            ("modified".to_string(), id("1", 12442118400000)),
-            ("removed".to_string(), id("2", 12442118460000)),
+            ("removed".to_string(), id(RIKER, 12442118460000)),
+            ("modified".to_string(), id(PICARD, 12442118400000)),
         ]
     );
     assert_eq!(restamped, 1, "only the vessel message is new on day one");

@@ -6,11 +6,10 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use datalib_etl::blob_cas::CasEdgeRow;
 use datalib_etl::periodize::Period;
 use datalib_etl_chat_common::BlobsAt;
 use datalib_etl_render::inputs::{Inputs, RawRange};
-use datalib_etl_signal::ingest::schema_raw::ChatItemAttachmentRow;
+use datalib_etl_signal::ingest::schema_raw::chat_item_attachment_id_recipe;
 use datalib_signal_backup::backup;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
@@ -150,8 +149,10 @@ pub struct ParsedChatItem {
 
 #[derive(Debug, Clone)]
 pub struct ParsedAttachment {
-    /// `local_media_name(plaintext_hash, local_key)` — the same key
-    /// download used when calling `db.store_blob`.
+    /// Its `chat_item_attachments` row.
+    pub row_id: String,
+    /// The row's `ref_id`: the media name the bytes were stored under,
+    /// which may be an older snapshot's when this one carried none.
     pub ref_id: String,
     pub content_type: Option<String>,
     pub file_name: Option<String>,
@@ -252,10 +253,7 @@ async fn parse_open(
         for item in &bucket.items {
             read.read("chat_items", &item.item_pk);
             for att in &item.attachments {
-                read.read(
-                    "chat_item_attachments",
-                    &ChatItemAttachmentRow::pk_recipe(&item.item_pk, &att.ref_id),
-                );
+                read.read("chat_item_attachments", &att.row_id);
             }
         }
     }
@@ -477,11 +475,24 @@ async fn load_buckets(
     );
     // Audited: `period_key_expr` comes from `period_key_sql(period)` over the
     // `Period` enum; the chat ids are bound as one JSON array.
+    let chat_ids_json = serde_json::to_string(chat_ids)?;
     let irows = sqlx::query(sqlx::AssertSqlSafe(sql))
-        .bind(serde_json::to_string(chat_ids)?)
+        .bind(&chat_ids_json)
         .fetch_all(pool)
         .await
         .context("read chat_items")?;
+    let edges: HashMap<String, String> = sqlx::query_as(
+        "SELECT a.id, a.ref_id
+           FROM chat_item_attachments a
+           JOIN chat_items i ON i.id = a.chat_item_id
+          WHERE i.chat_id IN (SELECT value FROM json_each(?))",
+    )
+    .bind(&chat_ids_json)
+    .fetch_all(pool)
+    .await
+    .context("read chat_item_attachments")?
+    .into_iter()
+    .collect();
 
     let mut bucket_idx: HashMap<(String, String), usize> = HashMap::new();
     let mut docs: Vec<DocBucket> = Vec::new();
@@ -508,6 +519,23 @@ async fn load_buckets(
             attachments,
             mentions,
         } = decode_chat_item(&payload);
+        // Each slot by the edge download wrote for it, which holds the
+        // bytes an older snapshot stored when this one has none.
+        let attachments = attachments
+            .into_iter()
+            .enumerate()
+            .filter_map(|(slot, meta)| {
+                let row_id = chat_item_attachment_id_recipe(&item_pk, slot);
+                let ref_id = edges.get(&row_id)?.clone();
+                Some(ParsedAttachment {
+                    row_id,
+                    ref_id,
+                    content_type: meta.content_type,
+                    file_name: meta.file_name,
+                    is_image: meta.is_image,
+                })
+            })
+            .collect();
         docs[idx].items.push(ParsedChatItem {
             item_pk,
             author_id,
@@ -528,8 +556,17 @@ struct Decoded {
     text: Option<String>,
     outgoing: bool,
     unread: bool,
-    attachments: Vec<ParsedAttachment>,
+    /// One per `StandardMessage.attachments` slot, in order.
+    attachments: Vec<AttachmentMeta>,
     mentions: Vec<Option<String>>,
+}
+
+/// What a message's payload says about one attachment slot.
+#[derive(Debug, Default)]
+struct AttachmentMeta {
+    content_type: Option<String>,
+    file_name: Option<String>,
+    is_image: bool,
 }
 
 /// Parse a `chat_items.payload` JSON string (a `Frame::ChatItem`
@@ -557,11 +594,7 @@ fn decode_chat_item(payload: &str) -> Decoded {
                     Some(t.body)
                 }
             });
-            let attachments = sm
-                .attachments
-                .iter()
-                .filter_map(attachment_from_message)
-                .collect();
+            let attachments = sm.attachments.iter().map(attachment_meta).collect();
             Decoded {
                 text,
                 outgoing,
@@ -597,33 +630,18 @@ fn mentioned_acis(text: &backup::Text) -> Vec<Option<String>> {
         .collect()
 }
 
-fn attachment_from_message(att: &backup::MessageAttachment) -> Option<ParsedAttachment> {
-    let ptr = att.pointer.as_ref()?;
-    let li = ptr.locator_info.as_ref()?;
-    let local_key = li.local_key.as_deref()?;
-    if local_key.len() != 64 {
-        return None;
-    }
-    let plaintext_hash = match li.integrity_check.as_ref()? {
-        backup::file_pointer::locator_info::IntegrityCheck::PlaintextHash(h) if !h.is_empty() => {
-            h.clone()
-        }
-        _ => return None,
+fn attachment_meta(att: &backup::MessageAttachment) -> AttachmentMeta {
+    let Some(ptr) = att.pointer.as_ref() else {
+        return AttachmentMeta::default();
     };
-    let mut lk = [0u8; 64];
-    lk.copy_from_slice(local_key);
-    let ref_id = datalib_signal_backup::local_media_name(&plaintext_hash, &lk);
     let content_type = ptr.content_type.clone();
-    let is_image = content_type
-        .as_deref()
-        .map(|ct| ct.starts_with("image/"))
-        .unwrap_or(false);
-    Some(ParsedAttachment {
-        ref_id,
+    AttachmentMeta {
+        is_image: content_type
+            .as_deref()
+            .is_some_and(|ct| ct.starts_with("image/")),
         content_type,
         file_name: ptr.file_name.clone(),
-        is_image,
-    })
+    }
 }
 
 #[cfg(test)]
@@ -714,9 +732,10 @@ mod tests {
 #[cfg(test)]
 mod load_tests {
     use super::*;
+    use datalib_etl::blob_cas::CasEdgeRow;
     use datalib_etl::bulk::SQLITE_MAX_VARIABLES;
     use datalib_etl::doltlite_raw::WirePayloadRow;
-    use datalib_etl_signal::ingest::schema_raw::ChatItemRow;
+    use datalib_etl_signal::ingest::schema_raw::{ChatItemAttachmentRow, ChatItemRow};
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
 
@@ -731,10 +750,12 @@ mod load_tests {
             .connect_with(SqliteConnectOptions::from_str("sqlite::memory:").unwrap())
             .await
             .unwrap();
-        sqlx::query(sqlx::AssertSqlSafe(ChatItemRow::ddl()))
-            .execute(&pool)
-            .await
-            .unwrap();
+        for ddl in [ChatItemRow::ddl(), ChatItemAttachmentRow::ddl()] {
+            sqlx::query(sqlx::AssertSqlSafe(ddl))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
         let n = SQLITE_MAX_VARIABLES + 1;
         sqlx::query(
             "WITH RECURSIVE s(value) AS (SELECT 1 UNION ALL SELECT value + 1 FROM s WHERE value < ?1)
