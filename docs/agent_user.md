@@ -468,7 +468,9 @@ document.
 - **Every step reads `waiting for disk space`**: the data root's disk
   went under the config's `[disk_space]` pause line (10 GB unless the
   config moves it), so the loop stopped what ran and starts nothing
-  until the disk is back to the resume line (15 GB). Free space, or
+  until the disk is back to the resume line (15 GB). A one-shot
+  `datalib-dag` that seems to hang after its `run_plan` line is this:
+  each held step logs `waiting for disk space: …` once. Free space, or
   lower the lines; the open syncs carry on by themselves.
 - **A step that silently stopped running**: check `diagnostics` on
   `GET /api/config`, or `--check`. A config with one unusable entry

@@ -225,7 +225,8 @@ A resume line under the pause line refuses the config, and
 `pause_below_bytes = 0` turns the floor off. While the steps are held:
 
 - **nothing starts**, and every step that is due reads `waiting for disk
-  space` (rule 9);
+  space` (rule 9) and says so once on its log, the only place a one-shot
+  `datalib-dag` shows it;
 - **everything running is stopped**, as a stop is: SIGINT, then a
   checkpoint and an exit. That is neither a failure nor a run (rule 4),
   so the step runs again once there is room, and each stopped step's log

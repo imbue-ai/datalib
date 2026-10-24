@@ -835,6 +835,10 @@ jobs:
       - name: Check docs/user/docker.md against the pushed image
         env:
           REF_NAME: ${{ github.ref_name }}
+          # The runner's /tmp has about 8 GB free, under the pipeline's
+          # 10 GB free-disk floor, so a data root there never starts a
+          # step. RUNNER_TEMP is on the main disk.
+          TMPDIR: ${{ runner.temp }}
         run: |
           set -euo pipefail
           version="${REF_NAME#v}"
