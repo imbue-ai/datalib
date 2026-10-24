@@ -26,6 +26,12 @@ const CATALOG: &[Entry] = &[
     e("claude", Some("export"), "Claude (export)", Some("claude")),
     e("claude_code", None, "Claude Code", Some("claude_code")),
     e("chatgpt", None, "ChatGPT", Some("chatgpt")),
+    e(
+        "chatgpt",
+        Some("export"),
+        "ChatGPT (export)",
+        Some("chatgpt"),
+    ),
     e("codex", None, "Codex", Some("codex")),
     e("github", None, "GitHub", Some("github")),
     e("gitlab", None, "GitLab", Some("gitlab")),
@@ -178,6 +184,11 @@ mod tests {
         assert_eq!(
             source_type("claude", &json!({"export": {"path": "x"}})).label,
             "Claude (export)"
+        );
+        assert_eq!(source_type("chatgpt", &json!({"api": {}})).label, "ChatGPT");
+        assert_eq!(
+            source_type("chatgpt", &json!({"export": {"path": "x"}})).label,
+            "ChatGPT (export)"
         );
         assert_eq!(
             source_type("contacts", &json!({"fastmail": {}})).label,
