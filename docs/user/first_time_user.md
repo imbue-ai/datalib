@@ -77,7 +77,10 @@ unpacks it into `~/.local/lib/datalib` and links the tools into
 - `datalib-http` — the app: a local web server with the UI built in.
 - `datalib-dag` and `datalib-step` — the sync pipeline, which the app
   runs for you and which you can also run from the terminal.
-- `datalib-applet` — serves the search grid inside the app.
+- `datalib-applet` — serves the search grid inside the app, and
+  searches from the terminal with no app running:
+  `datalib-applet search ~/datalib 'from:picard warp core'` prints what
+  the search box would find, as JSON.
 - `datalib-doltlite` — the shell for reading and exporting your stores
   (step 8).
 - `datalib-migrate-config` — rewrites a config file from an older
