@@ -3,13 +3,16 @@
 //! `history.list` or a `messages.list` walk says which messages exist
 //! and which changed; `super::listed` keeps that apart from what has
 //! been fetched, and `messages.get` is asked for whatever the store owes.
+//! With a label filter, `threads.get` is asked for each thread that
+//! changed: how many messages it has, and, for whole threads, which.
 
 pub mod api;
 pub mod ingest;
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -37,8 +40,8 @@ use super::envelope::GmailId;
 use super::labels;
 use super::listed::{self, Named, WHOLE_ACCOUNT};
 use super::mbox;
-use super::schema_raw::{EmailRow, EmlBlobRow};
-use api::{Client, GmailMessage, QuotaThrottle};
+use super::schema_raw::{EmailRow, EmlBlobRow, GMAIL_API_VIA};
+use api::{Client, GmailMessage, GmailThread, QuotaThrottle};
 use ingest::{Ingested, LabelIndex};
 
 /// `messages.list` page size. Google's maximum is 500; ids are tiny, so
@@ -49,8 +52,9 @@ const LIST_PAGE_SIZE: u32 = 500;
 const FLUSH_BATCH: usize = 200;
 const FLUSH_BYTES: usize = 32 * 1024 * 1024;
 
-/// The phase name a `problems` row carries when the fetch gave up.
+/// The phase names a `problems` row carries when a fetch gave up.
 const P_MESSAGES_GET: &str = "messages.get";
+const P_THREADS_GET: &str = "threads.get";
 
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
@@ -119,6 +123,11 @@ pub struct FetchSummary {
     /// asked for: from walking every label, or one `messages.get` each.
     pub relabeled_from_walks: usize,
     pub relabeled_one_by_one: usize,
+    /// Threads whose message count Gmail gave, one `threads.get` each.
+    pub threads_counted: usize,
+    /// Messages those answers named that were not listed: the rest of a
+    /// kept message's thread, under `whole_threads`.
+    pub listed_from_threads: usize,
     pub blobs_stored: usize,
     pub blobs_skipped: usize,
     pub blobs_oversize: usize,
@@ -181,6 +190,7 @@ async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
             "full_resync": opts.config.full_resync,
             "only_extract_labels": opts.only_labels,
             "message_budget": opts.config.message_budget,
+            "whole_threads": opts.config.whole_threads(),
         }),
     )
     .await?;
@@ -229,7 +239,7 @@ async fn run_sync(db: &RawDb, opts: &FetchOptions, found: &RunProblems) -> Resul
             "name": display_name,
             "email": email_address,
             "isPersonal": true,
-            "_source": { "via": "gmail.googleapis.com" },
+            "_source": { "via": GMAIL_API_VIA },
         }),
         None,
     )
@@ -303,6 +313,7 @@ async fn run_sync(db: &RawDb, opts: &FetchOptions, found: &RunProblems) -> Resul
         user_id: &user_id,
         client: &client,
         messages_total: profile.messages_total,
+        whole_threads: opts.config.whole_threads() && !filter_label_ids.is_empty(),
         now: &now,
         // Nothing fixed to seed it with: the bar stays at 0/0 until the
         // owed query says how much there is to fetch.
@@ -350,6 +361,9 @@ struct Run<'a> {
     client: &'a Client,
     /// `users.getProfile`'s count, which prices a walk of every label.
     messages_total: Option<u64>,
+    /// `whole_threads`, under a label filter: without one every message
+    /// is mirrored anyway.
+    whole_threads: bool,
     now: &'a IsoOffsetTimestamp,
     /// The run's one progress bar. Announcing a total is what turns the
     /// Manage screen's activity cell from a bare count into "N queued"
@@ -382,7 +396,19 @@ impl Run<'_> {
         }
         self.walk_unlisted_scopes(throttle, filter_label_ids, summary)
             .await?;
-        self.fetch_owed(throttle, filter_label_ids, summary).await
+        self.fetch_owed(throttle, filter_label_ids, summary).await?;
+        // Without a filter every thread is held whole.
+        if filter_label_ids.is_empty() {
+            return Ok(());
+        }
+        self.fetch_owed_threads(throttle, summary).await?;
+        if summary.listed_from_threads > 0 {
+            self.fetch_owed(throttle, filter_label_ids, summary).await?;
+        }
+        if self.whole_threads && !summary.stopped_early() {
+            summary.emails_destroyed += self.drop_unkept_threads(filter_label_ids).await?;
+        }
+        Ok(())
     }
 
     /// Replay `history.list` from the stored `historyId`. Its pages are
@@ -436,8 +462,14 @@ impl Run<'_> {
             deleted = changes.deleted.len(),
             "replayed history since the stored cursor",
         );
+        let threads: BTreeSet<String> = changes
+            .threads
+            .iter()
+            .map(|t| ingest::normalize_thread_id(t))
+            .collect();
         let mut tx = self.db.pool().begin().await.context("begin history tx")?;
         listed::list_in_tx(&mut tx, &changes.named, Some(history_id), Named::Changed).await?;
+        listed::list_threads_in_tx(&mut tx, &threads, Some(history_id)).await?;
         summary.emails_destroyed +=
             listed::forget_in_tx(&mut tx, self.now, &changes.deleted, email_id_of).await?;
         listed::save_token_in_tx(&mut tx, &scope, history_id).await?;
@@ -570,6 +602,7 @@ impl Run<'_> {
             held_without_bytes(pool, self.opts.blob_size_limit_bytes).await?,
         );
         if let Some(budget) = self.opts.config.message_budget {
+            let budget = budget.saturating_sub(summary.emails_upserted);
             if owed.len() > budget {
                 summary.budget_exhausted = true;
                 info!(
@@ -610,6 +643,11 @@ impl Run<'_> {
         self.bar.expect(owed.len() as u64);
         self.bar.doing("fetching");
 
+        let kept_threads = if self.whole_threads {
+            threads_kept_by(pool, self.account_id, filter_label_ids).await?
+        } else {
+            HashSet::new()
+        };
         let f = MessagesGet {
             db: self.db,
             index: self.index,
@@ -625,6 +663,8 @@ impl Run<'_> {
             // server-side, but `history.list` names every message in the
             // account.
             only_label_ids: filter_label_ids.iter().map(String::as_str).collect(),
+            whole_threads: self.whole_threads,
+            kept_threads: Mutex::new(kept_threads),
             now: self.now,
             bar: &self.bar,
             filtered: AtomicUsize::new(0),
@@ -664,6 +704,124 @@ impl Run<'_> {
             }
         }
         Ok(())
+    }
+
+    /// Ask `threads.get` for every listed thread the store owes: how many
+    /// messages Gmail has in it goes on its `threads` row, and under
+    /// `whole_threads` the ones not listed are listed, at the thread's
+    /// stamp, for the fetch after this to take.
+    async fn fetch_owed_threads(
+        &mut self,
+        throttle: &mut QuotaThrottle,
+        summary: &mut FetchSummary,
+    ) -> Result<()> {
+        if summary.stopped_early() {
+            return Ok(());
+        }
+        let pool = self.db.pool();
+        let owed = owed::owed(
+            pool,
+            listed::LISTED_THREADS,
+            listed::thread_listing(pool).await?,
+        )
+        .await?;
+        if owed.is_empty() {
+            return Ok(());
+        }
+        info!(
+            event = "gmail_threads_owed",
+            account = %self.account_id,
+            count = owed.len(),
+            whole_threads = self.whole_threads,
+            "asking for the threads that changed",
+        );
+        self.bar.expect(owed.len() as u64);
+        self.bar.doing("threads");
+        let f = ThreadsGet {
+            db: self.db,
+            user_id: self.user_id,
+            client: self.client,
+            throttle: tokio::sync::Mutex::new(throttle),
+            stop: &self.opts.control.stop,
+            whole_threads: self.whole_threads,
+            now: self.now,
+            bar: &self.bar,
+            counted: AtomicUsize::new(0),
+            listed: AtomicUsize::new(0),
+        };
+        let l = owed::Loop {
+            pool,
+            table: listed::LISTED_THREADS,
+            phase: P_THREADS_GET,
+            stop: &self.opts.control.stop,
+            found: self.found,
+            sealer: self.opts.sealer.as_ref(),
+            batch: 1,
+            concurrency: 1,
+            flush: self.opts.flush_batch.unwrap_or(FLUSH_BATCH),
+            flush_bytes: 0,
+            failures_in_a_row: 0,
+        };
+        let drained = owed::drain(&l, owed, &f).await?;
+        summary.threads_counted += f.counted.load(Ordering::Relaxed);
+        summary.listed_from_threads += f.listed.load(Ordering::Relaxed);
+        summary.interrupted |= drained.left > 0 && self.stopping();
+        Ok(())
+    }
+
+    /// Under `whole_threads`, a held thread none of whose messages the
+    /// filter keeps any more goes whole. A thread with a message still
+    /// owed waits for it: its labels may be what keeps the thread.
+    /// Returns how many emails went.
+    async fn drop_unkept_threads(&self, filter_label_ids: &[String]) -> Result<usize> {
+        let pool = self.db.pool();
+        let rows: Vec<(String, String, Option<String>, bool)> = sqlx::query_as(
+            "SELECT e.thread_id, e.gmail_message_id, l.stamp, l.id IS NOT NULL
+             FROM emails e LEFT JOIN listed_messages l ON l.id = e.gmail_message_id
+             WHERE e.account_id = ?1 AND e.thread_id IN (
+                SELECT thread_id FROM emails WHERE account_id = ?1 GROUP BY thread_id
+                HAVING max(label_ids IS NULL OR gmail_message_id IS NULL) = 0
+                   AND max(EXISTS (SELECT 1 FROM json_each(label_ids)
+                                   WHERE value IN (SELECT value FROM json_each(?2)))) = 0)",
+        )
+        .bind(self.account_id)
+        .bind(serde_json::to_string(filter_label_ids)?)
+        .fetch_all(pool)
+        .await
+        .context("select the threads the filter no longer keeps")?;
+        let listing: Vec<Listed> = rows
+            .iter()
+            .filter(|(_, _, _, listed)| *listed)
+            .map(|(_, id, stamp, _)| Listed::new(id.clone(), stamp.clone()))
+            .collect();
+        let waiting: HashSet<String> = owed::owed(pool, listed::LISTED, listing)
+            .await?
+            .into_iter()
+            .map(|l| l.key)
+            .collect();
+        let waiting_threads: HashSet<&str> = rows
+            .iter()
+            .filter(|(_, id, _, _)| waiting.contains(id))
+            .map(|(thread, ..)| thread.as_str())
+            .collect();
+        let gone: Vec<String> = rows
+            .iter()
+            .filter(|(thread, ..)| !waiting_threads.contains(thread.as_str()))
+            .map(|(_, id, ..)| id.clone())
+            .collect();
+        if gone.is_empty() {
+            return Ok(0);
+        }
+        let mut tx = pool.begin().await.context("begin unkept threads tx")?;
+        let n = listed::forget_in_tx(&mut tx, self.now, &gone, email_id_of).await?;
+        tx.commit().await.context("commit unkept threads tx")?;
+        info!(
+            event = "gmail_unkept_threads",
+            account = %self.account_id,
+            emails = n,
+            "dropped the threads no message of which the filter keeps",
+        );
+        Ok(n)
     }
 
     /// Every label of `wanted`'s messages, from one `messages.list` walk
@@ -809,6 +967,27 @@ async fn seed_from_takeout(
     .await
 }
 
+/// The threads of `account_id` holding an email that carries one of
+/// `filter_label_ids`: under `whole_threads`, every message in them is
+/// kept.
+async fn threads_kept_by(
+    pool: &sqlx::SqlitePool,
+    account_id: &str,
+    filter_label_ids: &[String],
+) -> Result<HashSet<String>> {
+    let rows: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT thread_id FROM emails WHERE account_id = ?
+         AND EXISTS (SELECT 1 FROM json_each(label_ids)
+                     WHERE value IN (SELECT value FROM json_each(?)))",
+    )
+    .bind(account_id)
+    .bind(serde_json::to_string(filter_label_ids)?)
+    .fetch_all(pool)
+    .await
+    .context("select the threads the filter keeps")?;
+    Ok(rows.into_iter().collect())
+}
+
 /// Every email whose `.eml` the store holds, with its hash and its
 /// thread: what a message needs besides its labels to be written again.
 async fn held_bytes(pool: &sqlx::SqlitePool) -> Result<HashMap<String, (String, String)>> {
@@ -843,6 +1022,10 @@ struct MessagesGet<'a> {
     stop: &'a StopFlag,
     cap: Option<u64>,
     only_label_ids: BTreeSet<&'a str>,
+    whole_threads: bool,
+    /// Under `whole_threads`, the threads (by the `threads` row's id) a
+    /// message the filter keeps is in: held, or fetched this run.
+    kept_threads: Mutex<HashSet<String>>,
     now: &'a IsoOffsetTimestamp,
     bar: &'a RunBar,
     filtered: AtomicUsize,
@@ -872,15 +1055,11 @@ enum Body {
 
 impl MessagesGet<'_> {
     /// What a fetched message comes to: gone when it carries none of
-    /// the configured labels; else its row, with its bytes when they fit
+    /// the configured labels and, under `whole_threads`, no kept message
+    /// shares its thread; else its row, with its bytes when they fit
     /// under the cap and a warning on its `.eml` when not.
     fn keep(&self, ingested: Ingested, held: bool) -> Outcome<Stored> {
-        if !self.only_label_ids.is_empty()
-            && !ingested
-                .label_ids
-                .iter()
-                .any(|id| self.only_label_ids.contains(id.as_str()))
-        {
+        if !self.keeps(&ingested) {
             self.filtered.fetch_add(1, Ordering::Relaxed);
             return Outcome::Gone;
         }
@@ -904,6 +1083,24 @@ impl MessagesGet<'_> {
             eml,
             body,
         })
+    }
+
+    fn keeps(&self, ingested: &Ingested) -> bool {
+        if self.only_label_ids.is_empty() {
+            return true;
+        }
+        let matches = ingested
+            .label_ids
+            .iter()
+            .any(|id| self.only_label_ids.contains(id.as_str()));
+        if !self.whole_threads {
+            return matches;
+        }
+        let mut kept = self.kept_threads.lock().expect("kept threads");
+        if matches {
+            kept.insert(ingested.row.thread_id.clone());
+        }
+        matches || kept.contains(&ingested.row.thread_id)
     }
 
     /// A message whose bytes the store holds: its labels from the walks
@@ -990,8 +1187,10 @@ impl Fetcher<Stored> for MessagesGet<'_> {
 
     /// The flush's bytes into the CAS; then the email rows, their joins
     /// and threads, and the messages that are gone
-    /// (`listed::write_batch_in_tx`); then the `.eml` edges, whose
-    /// sidecar is this fetcher's to stamp, the listing's being the loop's.
+    /// (`listed::write_batch_in_tx`); the threads of the emails written,
+    /// listed at the stamp each was fetched for; then the `.eml` edges,
+    /// whose sidecar is this fetcher's to stamp, the listing's being the
+    /// loop's.
     async fn store(
         &self,
         tx: &mut Transaction<'static, Sqlite>,
@@ -1000,11 +1199,16 @@ impl Fetcher<Stored> for MessagesGet<'_> {
         let mut got = Vec::new();
         let mut gone = Vec::new();
         let mut edges = Vec::new();
+        let mut threads: BTreeMap<Option<&str>, BTreeSet<String>> = BTreeMap::new();
         for f in batch {
             match &f.outcome {
                 Outcome::Got(s) | Outcome::Unusable(s, ..) => {
                     got.push(s.row.clone());
                     edges.push(s);
+                    threads
+                        .entry(f.listed.version.as_deref())
+                        .or_default()
+                        .insert(s.row.thread_id.clone());
                 }
                 Outcome::Gone => gone.push(f.listed.key.clone()),
                 Outcome::Failed(_) | Outcome::Skipped(..) => {}
@@ -1025,6 +1229,9 @@ impl Fetcher<Stored> for MessagesGet<'_> {
         let stored = self.db.cas().put_many(inserts).await?;
         let n = listed::write_batch_in_tx(tx, self.now, got, &gone, email_id_of).await?;
         self.destroyed.fetch_add(n, Ordering::Relaxed);
+        for (stamp, ids) in &threads {
+            listed::list_threads_in_tx(tx, ids, *stamp).await?;
+        }
 
         let rows: Vec<EmlBlobRow> = edges
             .iter()
@@ -1059,6 +1266,101 @@ impl Fetcher<Stored> for MessagesGet<'_> {
             Body::New(bytes) => bytes.len(),
             Body::Held | Body::OverCap(_) => 0,
         }
+    }
+}
+
+/// The fetcher of the thread phase: one `threads.get` per request.
+struct ThreadsGet<'a> {
+    db: &'a RawDb,
+    user_id: &'a str,
+    client: &'a Client,
+    throttle: tokio::sync::Mutex<&'a mut QuotaThrottle>,
+    stop: &'a StopFlag,
+    whole_threads: bool,
+    now: &'a IsoOffsetTimestamp,
+    bar: &'a RunBar,
+    counted: AtomicUsize,
+    listed: AtomicUsize,
+}
+
+impl ThreadsGet<'_> {
+    /// `None` when the store holds no such thread any more, or its id is
+    /// not one Gmail minted.
+    async fn get(&self, thread_id: &str) -> Result<Option<GmailThread>> {
+        let held: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM threads WHERE id = ?)")
+            .bind(thread_id)
+            .fetch_one(self.db.pool())
+            .await
+            .context("ask whether the thread is held")?;
+        let Some(gmail_id) = ingest::gmail_thread_id(thread_id).filter(|_| held) else {
+            return Ok(None);
+        };
+        self.throttle
+            .lock()
+            .await
+            .acquire(api::UNITS_THREADS_GET)
+            .await;
+        api::get_thread_minimal(self.user_id, self.client, &gmail_id)
+            .await
+            .map(Some)
+    }
+}
+
+#[async_trait]
+impl Fetcher<GmailThread> for ThreadsGet<'_> {
+    async fn fetch(
+        &self,
+        batch: Vec<Listed>,
+    ) -> std::result::Result<Vec<Fetched<GmailThread>>, BatchError> {
+        let mut answers = Vec::with_capacity(batch.len());
+        for listed in batch {
+            let got = self.get(&listed.key).await;
+            self.bar.did(1);
+            let outcome = match got {
+                Ok(Some(thread)) => Outcome::Got(thread),
+                Ok(None) => Outcome::Gone,
+                Err(e) if is_not_found(&e) => Outcome::Gone,
+                Err(e) if self.stop.requested() => return Err(BatchError::Batch(e)),
+                Err(e) if api::is_terminal(&e) => return Err(BatchError::Terminal(e)),
+                Err(e) => Outcome::Failed(format!("{e}")),
+            };
+            answers.push(Fetched { listed, outcome });
+        }
+        Ok(answers)
+    }
+
+    /// Each thread's count onto its row and, under `whole_threads`, its
+    /// messages into the listing; a thread that is gone leaves it.
+    async fn store(
+        &self,
+        tx: &mut Transaction<'static, Sqlite>,
+        batch: &[Fetched<GmailThread>],
+    ) -> Result<()> {
+        for f in batch {
+            match &f.outcome {
+                Outcome::Got(thread) | Outcome::Unusable(thread, ..) => {
+                    let count = thread.messages.len() as i64;
+                    listed::count_upstream_in_tx(tx, self.now, &f.listed.key, count).await?;
+                    self.counted.fetch_add(1, Ordering::Relaxed);
+                    if self.whole_threads {
+                        let ids: Vec<String> =
+                            thread.messages.iter().map(|m| m.id.clone()).collect();
+                        let stamp = f.listed.version.as_deref();
+                        let n = listed::list_in_tx(tx, &ids, stamp, Named::Exists).await?;
+                        self.listed.fetch_add(n as usize, Ordering::Relaxed);
+                    }
+                }
+                Outcome::Gone => {
+                    sqlx::query("DELETE FROM listed_threads WHERE id = ?")
+                        .bind(&f.listed.key)
+                        .execute(&mut **tx)
+                        .await
+                        .with_context(|| format!("unlist thread {}", f.listed.key))?;
+                }
+                Outcome::Failed(_) | Outcome::Skipped(..) => {}
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1107,6 +1409,8 @@ struct Changes {
     /// Added or relabeled: either way the message is to be fetched.
     named: Vec<String>,
     deleted: Vec<String>,
+    /// The threads of both, in Gmail's hex.
+    threads: Vec<String>,
     history_id: Option<String>,
 }
 
@@ -1128,6 +1432,7 @@ async fn collect_history(
         out.named.extend(page.added);
         out.named.extend(page.relabeled);
         out.deleted.extend(page.deleted);
+        out.threads.extend(page.threads);
         if let Some(h) = page.history_id {
             out.history_id = Some(h);
         }

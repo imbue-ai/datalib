@@ -4,6 +4,8 @@
 //! and a later sync from the store the first left, against an upstream
 //! where a message arrived in an existing thread, one gained a label,
 //! one lost a label and one was deleted, over two `history.list` pages.
+//! And a first sync under a label filter, whose kept message's thread
+//! is asked for and its other message fetched.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -23,12 +25,13 @@ use serde_json::{json, Value};
 use crate::jmap_interrupt::{contents, copy_store};
 use crate::support::{
     gmail_get_url, gmail_history_url, gmail_list_url, gmail_message, inbox_label, put_gmail,
-    put_gmail_account, put_gmail_response,
+    put_gmail_account, put_gmail_response, put_gmail_threads,
 };
 
 struct Gmail {
     playback: PathBuf,
     earlier: Option<PathBuf>,
+    labels: Vec<String>,
 }
 
 #[async_trait]
@@ -50,6 +53,7 @@ impl Rig for Gmail {
         let mut opts = FetchOptions::new(db.clone());
         // Two messages to a write, so a cut lands between writes.
         opts.flush_batch = Some(2);
+        opts.only_labels = self.labels.clone();
         opts.control = DownloadControl {
             stop,
             ..Default::default()
@@ -116,14 +120,25 @@ fn record_listing(playback: &Path, ids: &[String]) {
 fn record_before(playback: &Path) {
     put_gmail_account(playback, "9001", labels());
     record_listing(playback, &(1..=8).map(id).collect::<Vec<_>>());
-    for n in 1..=8 {
-        let on: &[&str] = if n == 2 || n == 3 {
-            &["INBOX", AWAY_TEAM]
-        } else {
-            &["INBOX"]
-        };
-        put_gmail(playback, &gmail_get_url(&id(n)), &message(n, on));
+    put_gmail(
+        playback,
+        &gmail_list_url(&[AWAY_TEAM]),
+        &json!({ "messages": [{ "id": id(2) }, { "id": id(3) }] }),
+    );
+    let messages: Vec<Value> = (1..=8)
+        .map(|n| {
+            let on: &[&str] = if n == 2 || n == 3 {
+                &["INBOX", AWAY_TEAM]
+            } else {
+                &["INBOX"]
+            };
+            message(n, on)
+        })
+        .collect();
+    for (n, m) in (1..=8).zip(&messages) {
+        put_gmail(playback, &gmail_get_url(&id(n)), m);
     }
+    put_gmail_threads(playback, &messages);
     put_gmail(
         playback,
         &gmail_history_url("9001"),
@@ -195,6 +210,7 @@ async fn a_first_download_cut_off_at_any_request_resumes_to_the_same_store() {
     let rig = Gmail {
         playback: d.path().join("playback"),
         earlier: None,
+        labels: Vec::new(),
     };
     record_before(&rig.playback);
     for how in [How::Kill, How::Stop] {
@@ -214,6 +230,7 @@ async fn a_later_download_cut_off_at_any_request_resumes_to_the_same_store() {
     let first = Gmail {
         playback: d.path().join("playback-before"),
         earlier: None,
+        labels: Vec::new(),
     };
     record_before(&first.playback);
     let earlier = d.path().join("earlier");
@@ -225,8 +242,28 @@ async fn a_later_download_cut_off_at_any_request_resumes_to_the_same_store() {
     let rig = Gmail {
         playback: d.path().join("playback-after"),
         earlier: Some(earlier),
+        labels: Vec::new(),
     };
     record_after(&rig.playback);
+    for how in [How::Kill, How::Stop] {
+        let scratch = d.path().join(format!("cuts-{how:?}"));
+        every_cut_resumes(&rig, how, &scratch, every)
+            .await
+            .unwrap_or_else(|e| panic!("{how:?}: {e:#}"));
+    }
+}
+
+/// The away team's walk lists the second and third messages; the
+/// second's thread brings in the first, which is not on the away team.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_whole_thread_download_cut_off_at_any_request_resumes_to_the_same_store() {
+    let d = tempfile::tempdir().unwrap();
+    let rig = Gmail {
+        playback: d.path().join("playback"),
+        earlier: None,
+        labels: vec!["away team".to_string()],
+    };
+    record_before(&rig.playback);
     for how in [How::Kill, How::Stop] {
         let scratch = d.path().join(format!("cuts-{how:?}"));
         every_cut_resumes(&rig, how, &scratch, every)

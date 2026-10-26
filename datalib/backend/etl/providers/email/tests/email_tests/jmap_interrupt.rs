@@ -35,21 +35,25 @@ pub const MIRRORED: &[&str] = &[
     "email_blobs",
     "listed_messages",
     "listed_whole",
+    "listed_threads",
     "sync_scope_state",
 ];
 
-/// [`MIRRORED`], then the version held for each listed message.
+/// [`MIRRORED`], then the version held for each listed message and
+/// thread.
 pub async fn contents(db: &RawDb) -> Result<String> {
     let mut out = dump_tables(db.pool(), MIRRORED).await?;
     out.push_str("== held\n");
-    let held: Vec<(String, String)> = sqlx::query_as(
+    for sql in [
         "SELECT id, held_version FROM listed_messages_bookkeeping
          WHERE held_version IS NOT NULL ORDER BY id",
-    )
-    .fetch_all(db.pool())
-    .await?;
-    for (id, version) in held {
-        out.push_str(&format!("{id}={version}\n"));
+        "SELECT id, held_version FROM listed_threads_bookkeeping
+         WHERE held_version IS NOT NULL ORDER BY id",
+    ] {
+        let held: Vec<(String, String)> = sqlx::query_as(sql).fetch_all(db.pool()).await?;
+        for (id, version) in held {
+            out.push_str(&format!("{id}={version}\n"));
+        }
     }
     Ok(out)
 }

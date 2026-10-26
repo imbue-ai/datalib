@@ -10,7 +10,10 @@
 //! in the transaction that writes the email; what is owed is the
 //! difference, asked of the store each time and never stored.
 //! `listed_whole` names the scopes (a mailbox, a label, or the account)
-//! an enumeration has listed to its end. The rule and why:
+//! an enumeration has listed to its end. `listed_threads` (Gmail only)
+//! has a row per held thread, keyed by the `threads` row's id, with the
+//! token that last named a message in it: a thread is owed a
+//! `threads.get` until it is held at that token. The rule and why:
 //! docs/dev/data_architecture_ingestion.md, "What is left to fetch".
 
 use std::collections::BTreeSet;
@@ -27,11 +30,16 @@ use super::db::{delete_emails_in_tx, refresh_email_joins};
 use super::schema_raw::{EmailRow, ThreadRow};
 
 pub const LISTED: &str = "listed_messages";
+pub const LISTED_THREADS: &str = "listed_threads";
 
 pub const DDL: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS listed_messages (id TEXT PRIMARY KEY, stamp TEXT NULL)",
     "CREATE TABLE IF NOT EXISTS listed_whole (scope TEXT PRIMARY KEY)",
+    LISTED_THREADS_DDL,
 ];
+
+const LISTED_THREADS_DDL: &str =
+    "CREATE TABLE IF NOT EXISTS listed_threads (id TEXT PRIMARY KEY, stamp TEXT NULL)";
 
 /// The scope of an enumeration no filter narrows.
 pub const WHOLE_ACCOUNT: &str = "*";
@@ -55,12 +63,14 @@ pub enum Named {
     Exists,
 }
 
+/// Returns how many rows it wrote: for [`Named::Exists`], how many
+/// messages were not listed before.
 pub async fn list_in_tx(
     tx: &mut Transaction<'_, Sqlite>,
     ids: &[String],
     stamp: Option<&str>,
     named: Named,
-) -> Result<()> {
+) -> Result<u64> {
     let sql = match named {
         Named::Changed => {
             "INSERT INTO listed_messages (id, stamp) VALUES (?, ?)
@@ -70,15 +80,53 @@ pub async fn list_in_tx(
             "INSERT INTO listed_messages (id, stamp) VALUES (?, ?) ON CONFLICT(id) DO NOTHING"
         }
     };
+    let mut wrote = 0;
     for id in ids {
-        sqlx::query(sql)
+        wrote += sqlx::query(sql)
             .bind(id)
             .bind(stamp)
             .execute(&mut **tx)
             .await
-            .with_context(|| format!("list message {id}"))?;
+            .with_context(|| format!("list message {id}"))?
+            .rows_affected();
+    }
+    Ok(wrote)
+}
+
+/// List the held threads of `thread_ids` (the `threads` rows' ids) at
+/// `stamp`: a message in each was named under it. A thread the store
+/// does not hold is not listed; its first email lists it.
+pub async fn list_threads_in_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    thread_ids: &BTreeSet<String>,
+    stamp: Option<&str>,
+) -> Result<()> {
+    for id in thread_ids {
+        sqlx::query(
+            "INSERT INTO listed_threads (id, stamp) SELECT ?1, ?2
+             WHERE EXISTS (SELECT 1 FROM threads WHERE id = ?1)
+             ON CONFLICT(id) DO UPDATE SET stamp = excluded.stamp",
+        )
+        .bind(id)
+        .bind(stamp)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("list thread {id}"))?;
     }
     Ok(())
+}
+
+/// Every listed thread at its stamp, newest first.
+pub async fn thread_listing(pool: &SqlitePool) -> Result<Vec<Listed>> {
+    let rows: Vec<(String, Option<String>)> =
+        sqlx::query_as("SELECT id, stamp FROM listed_threads ORDER BY id DESC")
+            .fetch_all(pool)
+            .await
+            .context("select the listed threads")?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, stamp)| Listed::new(id, stamp))
+        .collect())
 }
 
 /// Every listed message at its stamp, as `owed::owed` takes it: in id
@@ -175,6 +223,8 @@ pub async fn forget_in_tx(
 
 /// A thread row is its emails, oldest first: written from the email
 /// rows in the transaction that changes them, so it is never behind.
+/// What upstream last said the thread holds is kept. A thread with no
+/// email left goes, and so does its listing.
 pub(super) async fn rebuild_threads_in_tx(
     tx: &mut Transaction<'_, Sqlite>,
     now: &IsoOffsetTimestamp,
@@ -182,35 +232,82 @@ pub(super) async fn rebuild_threads_in_tx(
 ) -> Result<()> {
     let mut rows = Vec::new();
     for (account_id, thread_id) in threads {
-        let email_ids: Vec<String> = sqlx::query_scalar(
-            "SELECT id FROM emails WHERE thread_id = ? AND account_id = ?
-             ORDER BY coalesce(received_at, ''), id",
-        )
-        .bind(thread_id)
-        .bind(account_id)
-        .fetch_all(&mut **tx)
-        .await
-        .with_context(|| format!("read the emails of thread {thread_id}"))?;
-        if email_ids.is_empty() {
-            for sql in [
-                "DELETE FROM threads WHERE id = ?",
-                "DELETE FROM threads_bookkeeping WHERE id = ?",
-            ] {
-                sqlx::query(sql)
-                    .bind(thread_id)
-                    .execute(&mut **tx)
-                    .await
-                    .with_context(|| format!("delete thread {thread_id}"))?;
+        let upstream: Option<i64> =
+            sqlx::query_scalar("SELECT upstream_email_count FROM threads WHERE id = ?")
+                .bind(thread_id)
+                .fetch_optional(&mut **tx)
+                .await
+                .with_context(|| format!("read thread {thread_id}"))?
+                .flatten();
+        match thread_row_in_tx(tx, account_id, thread_id, upstream).await? {
+            Some(row) => rows.push(row),
+            None => {
+                for sql in [
+                    "DELETE FROM threads WHERE id = ?",
+                    "DELETE FROM threads_bookkeeping WHERE id = ?",
+                    "DELETE FROM listed_threads WHERE id = ?",
+                ] {
+                    sqlx::query(sql)
+                        .bind(thread_id)
+                        .execute(&mut **tx)
+                        .await
+                        .with_context(|| format!("delete thread {thread_id}"))?;
+                }
+                owed::forget(tx, LISTED_THREADS, thread_id).await?;
             }
-            continue;
         }
-        rows.push(ThreadRow::from_jmap_payload(
-            thread_id,
-            account_id,
-            &json!({ "id": thread_id, "emailIds": email_ids }),
-        )?);
     }
     bulk_upsert_in_tx(tx, &rows, now).await
+}
+
+/// Record how many messages upstream says the held thread `thread_id`
+/// has. A thread the store does not hold is left alone.
+pub async fn count_upstream_in_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    now: &IsoOffsetTimestamp,
+    thread_id: &str,
+    count: i64,
+) -> Result<()> {
+    let account_id: Option<String> =
+        sqlx::query_scalar("SELECT account_id FROM threads WHERE id = ?")
+            .bind(thread_id)
+            .fetch_optional(&mut **tx)
+            .await
+            .with_context(|| format!("read thread {thread_id}"))?;
+    let Some(account_id) = account_id else {
+        return Ok(());
+    };
+    let Some(row) = thread_row_in_tx(tx, &account_id, thread_id, Some(count)).await? else {
+        return Ok(());
+    };
+    bulk_upsert_in_tx(tx, std::slice::from_ref(&row), now).await
+}
+
+async fn thread_row_in_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    account_id: &str,
+    thread_id: &str,
+    upstream_email_count: Option<i64>,
+) -> Result<Option<ThreadRow>> {
+    let email_ids: Vec<String> = sqlx::query_scalar(
+        "SELECT id FROM emails WHERE thread_id = ? AND account_id = ?
+         ORDER BY coalesce(received_at, ''), id",
+    )
+    .bind(thread_id)
+    .bind(account_id)
+    .fetch_all(&mut **tx)
+    .await
+    .with_context(|| format!("read the emails of thread {thread_id}"))?;
+    if email_ids.is_empty() {
+        return Ok(None);
+    }
+    let mut payload = json!({ "id": thread_id, "emailIds": email_ids });
+    if let Some(count) = upstream_email_count {
+        payload["upstreamEmailCount"] = json!(count);
+    }
+    Ok(Some(ThreadRow::from_jmap_payload(
+        thread_id, account_id, &payload,
+    )?))
 }
 
 // ── tokens and scopes ───────────────────────────────────────────────
@@ -485,6 +582,72 @@ pub async fn migrate_relist_gmail_scopes(conn: &mut SqliteConnection) -> Result<
     Ok(())
 }
 
+/// Gmail's own ids and labels go on each email the API answered for,
+/// read from what its row already holds, and how many messages Gmail
+/// says a thread has goes on the thread. Every thread a Gmail message
+/// is held in is listed under no stamp, so the next run with a label
+/// filter asks Gmail once for each.
+pub async fn migrate_gmail_ids_and_thread_counts(conn: &mut SqliteConnection) -> Result<()> {
+    for (table, column, decl) in [
+        ("emails", "gmail_message_id", "TEXT NULL"),
+        ("emails", "gmail_thread_id", "TEXT NULL"),
+        ("emails", "label_ids", "TEXT NULL"),
+        ("threads", "upstream_email_count", "INTEGER NULL"),
+    ] {
+        let has: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pragma_table_info(?) WHERE name = ?)")
+                .bind(table)
+                .bind(column)
+                .fetch_one(&mut *conn)
+                .await?;
+        if !has {
+            // Audited: names and declarations are the literals above.
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "ALTER TABLE {table} ADD COLUMN {column} {decl}"
+            )))
+            .execute(&mut *conn)
+            .await?;
+        }
+    }
+    let listing_bookkeeping = dr::bookkeeping_ddl_for(LISTED_THREADS);
+    for ddl in [LISTED_THREADS_DDL, listing_bookkeeping.as_str()] {
+        // Audited: this module's own DDL.
+        sqlx::query(sqlx::AssertSqlSafe(ddl.to_string()))
+            .execute(&mut *conn)
+            .await?;
+    }
+    let rows: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT id, account_id, json(payload) FROM emails WHERE payload ->> '$._source.via' = ?",
+    )
+    .bind(super::schema_raw::GMAIL_API_VIA)
+    .fetch_all(&mut *conn)
+    .await?;
+    for (id, account_id, payload) in rows {
+        let envelope: serde_json::Value = serde_json::from_str(&payload)
+            .with_context(|| format!("parse the payload of email {id}"))?;
+        let Some(row) = EmailRow::from_jmap_envelope(&account_id, &envelope) else {
+            continue;
+        };
+        sqlx::query(
+            "UPDATE emails SET gmail_message_id = ?, gmail_thread_id = ?, label_ids = ?
+             WHERE id = ?",
+        )
+        .bind(&row.gmail_message_id)
+        .bind(&row.gmail_thread_id)
+        .bind(&row.label_ids)
+        .bind(&id)
+        .execute(&mut *conn)
+        .await?;
+    }
+    sqlx::query(
+        "INSERT OR IGNORE INTO listed_threads (id, stamp)
+         SELECT DISTINCT thread_id, NULL FROM emails WHERE gmail_thread_id IS NOT NULL",
+    )
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -703,5 +866,84 @@ mod tests {
             assert!(owed_ids(&db).await.is_empty(), "{token_scope}");
             db.close().await;
         }
+    }
+
+    /// The sixth rung puts Gmail's ids and labels on an email the API
+    /// answered for, read from its payload, lists its thread under no
+    /// stamp so the next filtered run asks for it, and leaves an mbox
+    /// email's columns empty.
+    #[tokio::test]
+    async fn the_sixth_rung_reads_gmails_ids_and_labels_off_each_email() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("g.doltlite_db");
+        {
+            let ddl = full_ddl();
+            let ddl: Vec<&str> = ddl.iter().map(String::as_str).collect();
+            let pool = dr::open(&path, &ddl).await.unwrap();
+            for sql in [
+                "ALTER TABLE emails DROP COLUMN gmail_message_id",
+                "ALTER TABLE emails DROP COLUMN gmail_thread_id",
+                "ALTER TABLE emails DROP COLUMN label_ids",
+                "ALTER TABLE threads DROP COLUMN upstream_email_count",
+                "DROP TABLE listed_threads",
+                "DROP TABLE listed_threads_bookkeeping",
+                "INSERT INTO emails (id, payload, account_id, thread_id, blob_id) VALUES
+                    ('18c9f2a1b2c3d901', jsonb('{
+                        \"id\": \"18c9f2a1b2c3d901\", \"blobId\": \"B1\",
+                        \"threadId\": \"1786225503531948289\",
+                        \"mailboxIds\": {\"gmail:g@example.test:INBOX\": true},
+                        \"keywords\": {\"$flagged\": true},
+                        \"_source\": {\"via\": \"gmail.googleapis.com\",
+                            \"gmailMessageId\": \"18c9f2a1b2c3d901\",
+                            \"gmailThreadId\": \"18c9f2a1b2c3d901\"}}'),
+                     'g@example.test', '1786225503531948289', 'B1'),
+                    ('picard@enterprise.test', jsonb('{
+                        \"id\": \"picard@enterprise.test\", \"blobId\": \"B2\",
+                        \"threadId\": \"T2\", \"mailboxIds\": {}, \"keywords\": {}}'),
+                     'takeout', 'T2', 'B2')",
+                "INSERT INTO threads (id, payload, account_id, email_count) VALUES
+                    ('1786225503531948289', jsonb('{}'), 'g@example.test', 1),
+                    ('T2', jsonb('{}'), 'takeout', 1)",
+                "UPDATE _datalib_meta SET value = '5' WHERE key = 'schema_version'",
+            ] {
+                sqlx::query(sql).execute(&pool).await.unwrap();
+            }
+            dr::commit_run(&pool, "the fifth rung's rows")
+                .await
+                .unwrap();
+            pool.close().await;
+        }
+
+        let db = RawDb::open(&path).await.expect("the sixth rung carries it");
+        assert_eq!(
+            strings(
+                &db,
+                "SELECT id || '=' || coalesce(gmail_message_id, '-') || '/'
+                    || coalesce(gmail_thread_id, '-') || '/' || coalesce(label_ids, '-')
+                 FROM emails ORDER BY id"
+            )
+            .await,
+            [
+                r#"18c9f2a1b2c3d901=18c9f2a1b2c3d901/18c9f2a1b2c3d901/["INBOX","STARRED","UNREAD"]"#,
+                "picard@enterprise.test=-/-/-",
+            ]
+        );
+        assert_eq!(
+            strings(
+                &db,
+                "SELECT id || '=' || coalesce(stamp, '') FROM listed_threads"
+            )
+            .await,
+            ["1786225503531948289="]
+        );
+        let owed = owed::owed(
+            db.pool(),
+            LISTED_THREADS,
+            thread_listing(db.pool()).await.unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(owed.len(), 1);
+        db.close().await;
     }
 }

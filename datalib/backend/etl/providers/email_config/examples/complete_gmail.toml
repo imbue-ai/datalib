@@ -43,6 +43,8 @@ quota_units_per_minute = 5000         # ceiling on Gmail quota spent a minute (G
                                       # its own when rate-limited
 message_budget = 20000                # stop after this many messages and finish the rest next
                                       # run; unset (the default) has no limit
+whole_threads = true                  # with only_extract_labels, also mirror the rest of each
+                                      # kept message's thread, whatever its labels; default true
 
 # Start from a Google Takeout of this same account: the `.mbox`, or the
 # Takeout's Mail folder. Its messages are not downloaded again; Gmail

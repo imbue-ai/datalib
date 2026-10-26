@@ -316,6 +316,17 @@ pub struct EmailGmailApi {
     /// mailbox needs no budget, the run paces itself.
     #[serde(default)]
     pub message_budget: Option<usize>,
+    /// With `only_extract_labels`, also mirror every other message in
+    /// the thread of a message the filter keeps, whatever its labels, so
+    /// a conversation whose earlier messages were archived arrives
+    /// whole. A thread none of whose messages the filter keeps any more
+    /// goes. Costs one `threads.get` (10 quota units) per thread that
+    /// changes. `false` keeps only the messages the filter matches; each
+    /// thread then says how many messages Gmail has for it, so a partial
+    /// one shows. Without a label filter every message is mirrored
+    /// anyway. Defaults to true.
+    #[serde(default)]
+    pub whole_threads: Option<bool>,
 }
 
 /// Gmail's per-user quota is 6000 units/minute. Default below it so
@@ -325,6 +336,10 @@ pub const DEFAULT_QUOTA_UNITS_PER_MINUTE: u32 = 5_000;
 impl EmailGmailApi {
     pub fn user_id(&self) -> &str {
         self.user_id.as_deref().unwrap_or("me")
+    }
+
+    pub fn whole_threads(&self) -> bool {
+        self.whole_threads.unwrap_or(true)
     }
 
     pub fn quota_units_per_minute(&self) -> u32 {

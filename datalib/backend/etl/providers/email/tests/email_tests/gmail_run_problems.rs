@@ -13,7 +13,7 @@ use serde_json::json;
 
 use crate::support::{
     gmail_get_url, gmail_history_url, gmail_list_url, gmail_message, inbox_label, put_gmail,
-    put_gmail_account, put_gmail_response, Mirror,
+    put_gmail_account, put_gmail_response, put_gmail_threads, Mirror,
 };
 
 const PICARD: &str = "18c9f2a1b2c3d701";
@@ -223,16 +223,14 @@ async fn a_label_walk_that_fails_costs_only_that_label() {
         &json!({ "messages": [{ "id": PICARD }] }),
     );
     put_gmail_response(&m.playback, &gmail_list_url(&["Label_9"]), &status(400));
-    put_gmail(
-        &m.playback,
-        &gmail_get_url(PICARD),
-        &gmail_message(PICARD, &["Label_7"], "Engage"),
-    );
-    put_gmail(
-        &m.playback,
-        &gmail_get_url(RIKER),
-        &gmail_message(RIKER, &["Label_9"], "Number One"),
-    );
+    let messages = [
+        gmail_message(PICARD, &["Label_7"], "Engage"),
+        gmail_message(RIKER, &["Label_9"], "Number One"),
+    ];
+    for (id, message) in [PICARD, RIKER].iter().zip(&messages) {
+        put_gmail(&m.playback, &gmail_get_url(id), message);
+    }
+    put_gmail_threads(&m.playback, &messages);
     let labels = |o: &mut FetchOptions| {
         o.only_labels = vec!["away team".into(), "holodeck".into()];
     };

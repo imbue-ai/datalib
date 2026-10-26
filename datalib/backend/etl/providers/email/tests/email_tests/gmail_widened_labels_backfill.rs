@@ -14,11 +14,11 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use datalib_etl_email::ingest::gmail_api::{self, FetchOptions, FetchSummary};
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::support::{
     gmail_get_url, gmail_history_url, gmail_list_url, gmail_message, inbox_label, put_gmail,
-    put_gmail_account, Mirror,
+    put_gmail_account, put_gmail_threads, Mirror,
 };
 
 /// Under `datalib`, the label the mirror started with.
@@ -146,11 +146,16 @@ fn write_fixtures(playback: &Path) {
             { "id": UNDER_LIB }, { "id": UNDER_TRAVEL }, { "id": INBOX_ONLY },
         ]}),
     );
-    for (id, labels) in [
+    let messages: Vec<Value> = [
         (UNDER_LIB, &["INBOX", "Label_7"][..]),
         (UNDER_TRAVEL, &["INBOX", "Label_9"][..]),
         (INBOX_ONLY, &["INBOX"][..]),
-    ] {
-        put_gmail(playback, &gmail_get_url(id), &gmail_message(id, labels, id));
+    ]
+    .into_iter()
+    .map(|(id, labels)| gmail_message(id, labels, id))
+    .collect();
+    for m in &messages {
+        put_gmail(playback, &gmail_get_url(m["id"].as_str().unwrap()), m);
     }
+    put_gmail_threads(playback, &messages);
 }
