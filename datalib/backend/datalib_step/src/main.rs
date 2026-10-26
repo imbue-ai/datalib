@@ -90,6 +90,10 @@ const EXAMPLES: &[Example] = &[
         command: "datalib-step probe slack --params-file slack-params.json --list channels",
     },
     Example {
+        what: "ask a source with more than one way in through one of them, and list its labels",
+        command: "datalib-step probe email --method gmail --list labels",
+    },
+    Example {
         what: "put the Node runtime for qmd and latchkey in place before the first sync",
         command: "datalib-step pull-runtime",
     },
@@ -190,6 +194,11 @@ enum Cmd {
     Probe {
         /// Source type (`slack`, `claude`, …): the provider to ask.
         source_type: String,
+        /// Which live way in to ask through (`gmail` or `jmap` for
+        /// email). Needed only when the source has more than one and the
+        /// params file names none.
+        #[arg(long)]
+        method: Option<String>,
         /// The list to load as well: `channels`, `conversations`,
         /// `labels`, `mailboxes`, `calendars` or `addressbooks`.
         #[arg(long)]
@@ -216,10 +225,13 @@ enum Cmd {
     /// Utility (not a pipeline step): put the Node runtime for qmd and
     /// latchkey in place — the tree beside the binaries when one is
     /// shipped, else the release asset `runtime.manifest` names,
-    /// fetched sha256-verified into `~/.cache/datalib/runtime` — and
-    /// run `qmd --version` and `latchkey --version` through it. What
-    /// every sync does on its first `qmd` or `latchkey`, runnable ahead
-    /// of time. Needs no data root.
+    /// fetched sha256-verified into `$XDG_CACHE_HOME/datalib/runtime`
+    /// (`~/.cache/datalib/runtime` by default) — and run `qmd --version`
+    /// and `latchkey --version` through it. What every sync does on its
+    /// first `qmd` or `latchkey`, runnable ahead of time. Needs no data
+    /// root. Every install on the machine shares that cache, which keeps
+    /// one release's runtime and removes the rest; to try a release
+    /// beside another, set `XDG_CACHE_HOME` for it.
     PullRuntime,
     /// Utility (not a pipeline step): rewrite a config file in the order
     /// data flows — each step below the steps it reads, each group's
@@ -305,8 +317,19 @@ async fn main() {
     // owns no tree, claims no outputs and must leave stdout holding
     // exactly one JSON object, so an `outcome` event line after it
     // would corrupt the only thing its caller reads.
-    if let Some(Cmd::Probe { source_type, list }) = &cli.cmd {
-        probe::run_cli(source_type, list.as_deref(), cli.params_file.as_deref()).await;
+    if let Some(Cmd::Probe {
+        source_type,
+        method,
+        list,
+    }) = &cli.cmd
+    {
+        probe::run_cli(
+            source_type,
+            method.as_deref(),
+            list.as_deref(),
+            cli.params_file.as_deref(),
+        )
+        .await;
     }
     // `pull-models` likewise: nothing here is a step.
     if let Some(Cmd::PullModels { models_dir }) = &cli.cmd {

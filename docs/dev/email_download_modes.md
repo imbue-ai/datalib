@@ -396,6 +396,15 @@ Each of these fails silently: a single run passes.
   configured name that matches no label is a download problem; when
   *none* match, the run fails, because an empty `labelIds` means
   "everything".
+- **Check a fetched message against label ids, not names.** The
+  configured labels are resolved to Gmail's ids once
+  (`LabelIndex::ids_for_names`, which takes a path or an id), and the
+  check after `messages.get` compares those ids with the message's
+  `labelIds`. A build that compared the configured strings with the
+  labels' paths dropped every message of a filter written as ids
+  (`INBOX` against `Inbox`), and since a dropped message loses its
+  listing, never asked for them again; raw-store rung 5 has every
+  Gmail store walk its labels once more to list them.
 - **Repeated `labelIds` intersect.** `only_extract_labels` means
   "carrying **any** of these", and `messages.list` cannot express a
   union: asking for three labels at once returns the messages carrying

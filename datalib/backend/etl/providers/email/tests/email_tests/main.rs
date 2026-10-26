@@ -2,6 +2,7 @@
 //! behaviour.
 
 mod gmail_failed_fetch_is_owed;
+mod gmail_filter_and_budget;
 mod gmail_history_replay;
 mod gmail_interrupt;
 mod gmail_label_lifecycle;

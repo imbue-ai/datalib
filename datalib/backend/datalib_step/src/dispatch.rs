@@ -485,6 +485,21 @@ mod tests {
         }
     }
 
+    /// `gmail.request_concurrency` was never read; a config that set it
+    /// still syncs.
+    #[test]
+    fn a_retired_gmail_request_concurrency_still_plans() {
+        let td = tempfile::tempdir().unwrap();
+        plan(
+            "email",
+            Phase::Ingest,
+            "email",
+            raw_dir(td.path(), "email", Phase::Ingest),
+            serde_json::json!({"gmail": {"request_concurrency": 16}}),
+        )
+        .unwrap();
+    }
+
     #[test]
     fn plans_slack_download_and_render_from_phase_params() {
         let td = tempfile::tempdir().unwrap();

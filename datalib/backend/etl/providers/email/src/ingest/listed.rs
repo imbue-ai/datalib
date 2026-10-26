@@ -468,6 +468,23 @@ pub async fn migrate_held_into_the_sidecar(conn: &mut SqliteConnection) -> Resul
     Ok(())
 }
 
+/// Builds before this rung compared `only_extract_labels` written as
+/// Gmail's ids (`INBOX`) with the labels' names (`Inbox`), so a walk
+/// listed a label's mail and the fetch then dropped every message, its
+/// listing with it, while the label stayed listed whole. Forgetting
+/// which labels were listed whole has the next run walk them again,
+/// which lists what was dropped; what is held stays held. A JMAP store
+/// is left alone.
+pub async fn migrate_relist_gmail_scopes(conn: &mut SqliteConnection) -> Result<()> {
+    sqlx::query(
+        "DELETE FROM listed_whole WHERE EXISTS (SELECT 1 FROM sync_scope_state
+            WHERE scope LIKE 'gmail:%:historyId')",
+    )
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -639,5 +656,52 @@ mod tests {
         .await
         .is_empty());
         db.close().await;
+    }
+
+    /// The fifth rung has a Gmail store walk its labels again, and keeps
+    /// what it holds; a JMAP store's mailboxes stay listed whole.
+    #[tokio::test]
+    async fn the_fifth_rung_walks_a_gmail_stores_labels_again() {
+        let d = tempfile::tempdir().unwrap();
+        for (token_scope, whole_after) in [
+            ("gmail:g@example.test:historyId", &[][..]),
+            ("jmap:A1:state:Email", &["mb-1"][..]),
+        ] {
+            let path = d.path().join(format!("{}.doltlite_db", &token_scope[..4]));
+            {
+                let ddl = full_ddl();
+                let ddl: Vec<&str> = ddl.iter().map(String::as_str).collect();
+                let pool = dr::open(&path, &ddl).await.unwrap();
+                for sql in [
+                    "INSERT INTO listed_whole (scope) VALUES ('mb-1')",
+                    "INSERT INTO listed_messages (id, stamp) VALUES ('picard', NULL)",
+                    "INSERT INTO listed_messages_bookkeeping (id, attempt_count, fetched_at_utc)
+                        VALUES ('picard', 0, '2369-04-14T00:00:00')",
+                    "UPDATE _datalib_meta SET value = '4' WHERE key = 'schema_version'",
+                ] {
+                    sqlx::query(sql).execute(&pool).await.unwrap();
+                }
+                sqlx::query(
+                    "INSERT INTO sync_scope_state (scope, last_seen_at_utc) VALUES (?, '7')",
+                )
+                .bind(token_scope)
+                .execute(&pool)
+                .await
+                .unwrap();
+                dr::commit_run(&pool, "the fourth rung's rows")
+                    .await
+                    .unwrap();
+                pool.close().await;
+            }
+
+            let db = RawDb::open(&path).await.expect("the fifth rung carries it");
+            assert_eq!(
+                strings(&db, "SELECT scope FROM listed_whole").await,
+                whole_after,
+                "{token_scope}"
+            );
+            assert!(owed_ids(&db).await.is_empty(), "{token_scope}");
+            db.close().await;
+        }
     }
 }

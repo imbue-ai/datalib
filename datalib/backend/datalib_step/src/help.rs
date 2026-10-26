@@ -65,7 +65,8 @@ const SETUP: &[SetupStep] = &[
     },
     SetupStep {
         say: "Check the sign-in: ask the service which account the credentials reach. \
-              Writes nothing.",
+              Writes nothing. A source with more than one way in names it: \
+              `datalib-step probe email --method gmail`.",
         commands: &[Example {
             what: "check the sign-in",
             command: "datalib-step probe slack",

@@ -168,8 +168,10 @@ impl LabelIndex {
     }
 
     /// A configured name is matched against the canonical path for a
-    /// system label (`inbox`, not `INBOX`) and the raw name for a user
-    /// label, or the raw name either way.
+    /// system label (`Inbox`, not `INBOX`) and the raw name for a user
+    /// label, or the raw name either way; failing those, against Gmail's
+    /// id for a label (`Label_7`), which is what the API and the stored
+    /// mailbox ids show.
     pub fn id_for_name(&self, name: &str) -> Option<String> {
         self.by_id
             .values()
@@ -181,6 +183,7 @@ impl LabelIndex {
                 };
                 canonical == name || l.name == name
             })
+            .or_else(|| self.by_id.get(name))
             .map(|l| l.id.clone())
     }
 
@@ -245,8 +248,8 @@ pub struct Ingested {
     pub email_id: String,
     pub blob_id: String,
     pub raw: Vec<u8>,
-    /// Canonical label paths, for the extract-time label filter.
-    pub label_paths: Vec<String>,
+    /// Gmail's label ids, for the fetch-time label filter.
+    pub label_ids: Vec<String>,
 }
 
 pub fn ingest(account_id: &str, index: &LabelIndex, msg: &GmailMessage) -> Result<Ingested> {
@@ -302,7 +305,7 @@ pub fn ingest(account_id: &str, index: &LabelIndex, msg: &GmailMessage) -> Resul
         email_id,
         blob_id,
         raw: msg.raw.clone(),
-        label_paths: index.label_paths(&msg.label_ids),
+        label_ids: msg.label_ids.clone(),
     })
 }
 
@@ -482,6 +485,22 @@ mod tests {
             idx.ids_for_names(&["INBOX".into()]).unwrap().resolved,
             vec!["INBOX"]
         );
+        // A user label by Google's id for it.
+        assert_eq!(
+            idx.ids_for_names(&["Label_7".into()]).unwrap().resolved,
+            vec!["Label_7"]
+        );
+    }
+
+    /// A user label whose name is another label's id is that label, not
+    /// the one the id names.
+    #[test]
+    fn a_name_wins_over_an_id_spelled_the_same() {
+        let idx = LabelIndex::new(vec![
+            label("Label_1", "Label_2", false),
+            label("Label_2", "Travel", false),
+        ]);
+        assert_eq!(idx.id_for_name("Label_2").as_deref(), Some("Label_1"));
     }
 
     /// One typo costs that label, not the run: the labels that do
