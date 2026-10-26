@@ -107,6 +107,10 @@ pub enum HttpService {
     /// no credential, the URL itself is signed, so every request goes
     /// out plain.
     Yolink,
+    /// Zoom's REST API (`api.zoom.us`), and the recording downloads on
+    /// `zoom.us`, which latchkey does not sign and which carry Zoom's
+    /// own download token instead.
+    Zoom,
     /// Fixture-synthesis tests only.
     #[strum(serialize = "test_provider")]
     Test,

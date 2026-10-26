@@ -1,0 +1,22 @@
+# One Zoom user's meetings over Zoom's API, signed in through latchkey
+# (`latchkey auth browser zoom`, which needs a Zoom account admin). Names
+# the user whose meetings to copy, since the sign-in is for the whole
+# Zoom account.
+[[groups]]
+id = "zoom"
+name = "Zoom"
+type = "zoom"
+
+[[steps]]
+group = "zoom"
+function = "ingest"
+
+[steps.params.api]
+user = "picard@enterprise.example"
+
+# Each meeting as one document: who came, the AI summary and the
+# transcript, speaker by speaker.
+[[steps]]
+group = "zoom"
+function = "render_markdown"
+inputs = ["zoom/ingest"]

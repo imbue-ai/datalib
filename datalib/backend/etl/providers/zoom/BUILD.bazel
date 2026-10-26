@@ -1,0 +1,67 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//tools:live.bzl", "live_run")
+
+rust_library(
+    name = "datalib_etl_zoom",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_zoom",
+    edition = "2021",
+    proc_macro_deps = [
+        "//datalib/backend/etl/macros:datalib_etl_macros",
+        "@datalib_crates//:async-trait",
+    ],
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/zoom_config:datalib_etl_zoom_config",
+        "//datalib/backend/etl/web:datalib_etl_web",
+        "//datalib/backend/probe:datalib_probe",
+        "//datalib/backend/problems:datalib_problems",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:chrono",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "zoom_unittests",
+    size = "small",
+    crate = ":datalib_etl_zoom",
+    edition = "2021",
+)
+
+# Every hermetic Zoom test in one binary; the modules are listed in its
+# `main.rs`. The `live` module reaches a real Zoom account and is skipped
+# here; `bazel run :zoom_live` runs it.
+rust_test(
+    name = "zoom_tests",
+    srcs = glob(["tests/zoom_tests/*.rs"]),
+    args = [
+        "--skip",
+        "live::",
+    ],
+    crate_root = "tests/zoom_tests/main.rs",
+    edition = "2021",
+    proc_macro_deps = ["@datalib_crates//:async-trait"],
+    deps = [
+        ":datalib_etl_zoom",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/zoom_config:datalib_etl_zoom_config",
+        "//datalib/backend/etl/web:datalib_etl_web",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:chrono",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+live_run(
+    name = "zoom_live",
+    test = ":zoom_tests",
+)
