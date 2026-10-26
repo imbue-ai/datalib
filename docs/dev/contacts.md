@@ -223,6 +223,7 @@ What each source has today:
 | calendar | an event's organizer, by address | each guest with an address, as a chip on the event's page |
 | GitHub, GitLab | a change request's or a comment's author, by login (GitLab's on the host the merge request's address is on) | |
 | Notion | a comment's author, and a page's last editor, by the address the users table gives, else by user id | |
+| Zoom | a transcript speaker, by the address of the participant of the same name, where Zoom gave one | each participant with an address, as a chip in the meeting's details |
 
 The AI chats write no handles.
 Where a source renders the owner's side as "Me" (WhatsApp, Signal,
