@@ -1,6 +1,7 @@
 //! What each loop fetches and how a flush of it is stored, one
 //! [`Fetcher`] per kind: a conversation's detail, an attachment's bytes.
-//! Each is one request per record; the loop (`datalib_etl_web::owed`) owns
+//! Each is one request per record, or none when the run's export holds
+//! it; the loop (`datalib_etl_web::owed`) owns
 //! the stop, the failure budget, the flush and what each outcome means
 //! for the record's sidecar.
 
@@ -48,18 +49,21 @@ impl Fetcher<Conversation> for Conversations<'_> {
         let mut out = Vec::with_capacity(batch.len());
         for listed in batch {
             ctx.opts.progress.set_message(&listed.key);
-            let outcome = match ctx.client.get_conversation(&listed.key).await {
-                Ok(full) => match parse_conversation(&listed.key, &full) {
-                    Ok(c) => Outcome::Got(c),
-                    Err(e) => Outcome::Failed(format!("{e:#}")),
-                },
-                Err(e) => not_fetched(ctx, e)?,
+            let outcome = match ctx.export_copy_of(&listed) {
+                Some(copy) => parsed(&listed.key, copy),
+                None => {
+                    let outcome = match ctx.client.get_conversation(&listed.key).await {
+                        Ok(full) => parsed(&listed.key, &full),
+                        Err(e) => not_fetched(ctx, e)?,
+                    };
+                    if ctx.opts.sleep_between > Duration::ZERO {
+                        sleep(ctx.opts.sleep_between).await;
+                    }
+                    outcome
+                }
             };
             ctx.opts.progress.inc(1);
             out.push(Fetched { listed, outcome });
-            if ctx.opts.sleep_between > Duration::ZERO {
-                sleep(ctx.opts.sleep_between).await;
-            }
         }
         Ok(out)
     }
@@ -84,6 +88,13 @@ impl Fetcher<Conversation> for Conversations<'_> {
 
     fn weight(&self, c: &Conversation) -> usize {
         c.payload.len()
+    }
+}
+
+fn parsed(id: &str, full: &Value) -> Outcome<Conversation> {
+    match parse_conversation(id, full) {
+        Ok(c) => Outcome::Got(c),
+        Err(e) => Outcome::Failed(format!("{e:#}")),
     }
 }
 
@@ -156,7 +167,8 @@ impl Attachments<'_> {
     /// One edge's bytes, by the two-hop dance: the file's metadata through
     /// the API, then the signed URL it names, which Azure serves to any
     /// client (the chatgpt cookie is refused there). Bytes the CAS already
-    /// holds for the file, under any conversation, cost no request.
+    /// holds for the file, under any conversation, or the export holds,
+    /// cost no request.
     async fn one(&self, key: &str) -> Result<Outcome<Blob>, BatchError> {
         let ctx = self.0;
         let (Some(conv_id), Some((_, file_id))) = (
@@ -183,6 +195,12 @@ impl Attachments<'_> {
             // with the refetch, or will.
             return Ok(Outcome::Gone);
         };
+        if let Some(export) = ctx.export {
+            if let Some(bytes) = export.file(file_id).map_err(BatchError::Abort)? {
+                ctx.counts.blobs_from_export.fetch_add(1, Ordering::Relaxed);
+                return Ok(Outcome::Got(Blob::Fetched(bytes, file.mime)));
+            }
+        }
         let meta = match ctx
             .client
             .get(&format!("/backend-api/files/{file_id}/download"))

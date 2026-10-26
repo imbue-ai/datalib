@@ -18,8 +18,8 @@ pub async fn migrate(raw_dir: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Ingest wave: `api` walks chatgpt.com, `export` ingests an unpacked
-/// data export from its `path`. `validate` has already refused both.
+/// Ingest wave: `api` walks chatgpt.com, asking `export` first when
+/// both are set; `export` alone ingests the export as a snapshot.
 pub fn plan_ingest(ctx: PlanContext, config: ChatgptConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
@@ -31,6 +31,7 @@ pub fn plan_ingest(ctx: PlanContext, config: ChatgptConfig) -> Result<Vec<Box<dy
             raw_path,
             sync,
             latchkey: latchkey_settings,
+            export: config.export.map(|e| e.path()),
         }));
     } else if let Some(export) = config.export {
         procs.push(Box::new(ChatgptExportIngest {
@@ -49,6 +50,7 @@ struct ChatgptIngest {
     /// Which latchkey identity to authenticate as, forwarded whole from
     /// the source's `latchkey_settings:` block.
     latchkey: LatchkeySettings,
+    export: Option<PathBuf>,
 }
 
 #[async_trait]
@@ -82,14 +84,24 @@ impl DataProcessor for ChatgptIngest {
                 since: self.sync.since.clone(),
                 conv_uuids: self.sync.conv_uuids.clone(),
                 now: Some(ctx.now.to_string()),
+                export: self.export.clone(),
                 progress: ctx.progress.clone(),
                 control: ctx.control.clone(),
                 sealer: Some(sealer),
             })
             .await?;
             Ok(format!(
-                "fetched={} skipped={} out_of_scope={} errors={} listing={} pruned={} requests={}",
-                s.fetched, s.skipped, s.out_of_scope, s.errors, s.listing, s.pruned, s.requests,
+                "fetched={} from_export={} skipped={} out_of_scope={} errors={} listing={} \
+                 pruned={} blobs_from_export={} requests={}",
+                s.fetched,
+                s.from_export,
+                s.skipped,
+                s.out_of_scope,
+                s.errors,
+                s.listing,
+                s.pruned,
+                s.blobs_from_export,
+                s.requests,
             ))
         })
         .await

@@ -31,6 +31,14 @@ sleep_between = 0.5    # seconds to wait between requests (0 to 3600); default: 
 conv_uuids = ["https://chatgpt.com/c/abc123de-f456-7890-abcd-ef0123456789"]
                        # only these conversations, by id or pasted link; omit for all
 
+# Start from a data export of this same account: the `.zip`, or the
+# folder it was unzipped into. A conversation the export holds as the
+# listing names it, and a file the export holds, are not downloaded;
+# the API fetches what moved since. The listing alone decides what is
+# deleted. Omit the table to download every conversation.
+[steps.params.export]
+path = "~/Downloads/chatgpt-export.zip"
+
 [[steps]]
 group = "chatgpt"
 function = "render_markdown"
