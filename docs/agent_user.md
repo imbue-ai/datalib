@@ -109,6 +109,17 @@ header, and a step's `params` sub-tables come after its plain keys — a
   [`docs/user/getting_your_data.md`](user/getting_your_data.md).
   On auth failure, sync events include a `hint` with the exact
   `latchkey auth set …` recipe for that provider.
+- **How far back (and ahead)**: every source that can mirror part of
+  its history takes `since` in its method table (`[steps.params.api]`,
+  `[steps.params.gmail]`, `[steps.params.google]`, …), and a calendar
+  and Garmin also take `until`. Each is a day (`"2026-09-01"`), an
+  RFC 3339 instant, or an offset from the run's start (`"-30d"`,
+  `"+21d"`; units `h`, `d`, `w`), so `since = "-30d"` keeps the last
+  month without a daily edit. A record an offset slides past stays in
+  the mirror, except in a windowed calendar, which drops events the
+  window no longer reaches. An earlier `since` backfills on the next
+  run. Each source's default and what the window bounds:
+  [`config_model.md` §"Time windows"](dev/config_model.md#time-windows-since-and-until).
 - The web UI's **Manage** tab scaffolds and validates the config
   (`GET /api/config/scaffold`, `PUT /api/config` validates before
   writing).

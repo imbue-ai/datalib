@@ -227,6 +227,20 @@ same namespacing discipline as the JMAP path's `jmap:` keys. A run:
    reported. `history.list` only names what *changed*, and mail that
    already sat under a newly configured label did not, so a widened
    `only_extract_labels` is a label with no row, and is walked.
+   With `since`, a walk asks only for mail after it (`q=after:<epoch
+   seconds>`, which Gmail reads as that instant; a date there would be
+   midnight Pacific). Such a walk says nothing of older mail, so it
+   deletes nothing it did not name, and the mirror keeps what a sliding
+   `since` leaves behind. Where each scope's last whole walk began is
+   `gmail:<account>:listed_since:<scope>` in `sync_scope_state` (no row:
+   from the first message, as every store before `since` was), written
+   before the scope is recorded as listed whole. A `since` earlier than
+   that walks the scope again, which lists the older mail and makes it
+   owed. A later one walks nothing, and so does not cancel what an
+   earlier, wider walk already listed: the fetch goes newest first, so
+   the window's mail comes first. The delta follows the whole mailbox,
+   so an old message that is relabeled is fetched again whatever its
+   age, and Gmail takes no `until`.
 3. **Fetches what is owed** with `messages.get?format=RAW`, newest id
    first: a listed message not held at its listed `historyId`, and one
    held with no `.eml` stored that now fits under

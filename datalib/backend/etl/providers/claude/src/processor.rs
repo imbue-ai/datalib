@@ -73,6 +73,13 @@ impl DataProcessor for ClaudeIngest {
         // file, so a checkpoint that sealed only the entities store would
         // publish a message naming blobs no reader can resolve yet.
         let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
+        let since = match &self.sync.since {
+            Some(s) => Some(datalib_time::TimeBound::absolute(
+                s,
+                &datalib_time::parse_strict(ctx.now)?,
+            )?),
+            None => None,
+        };
         ctx.run_store(pool, Some(cas_pool), |sealer| async {
             let s = ingest::fetch(ingest::FetchOptions {
                 db,
@@ -85,7 +92,7 @@ impl DataProcessor for ClaudeIngest {
                     .map(|v| v as usize)
                     .unwrap_or(0),
                 sleep_between: Duration::ZERO,
-                since: self.sync.since.clone(),
+                since,
                 conv_uuids: self.sync.conv_uuids.clone(),
                 projects: self.sync.projects,
                 project_uuids: self.sync.project_uuids.clone(),

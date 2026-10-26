@@ -67,11 +67,12 @@ pub struct SlackApiSync {
     /// with `all_channels`).
     #[serde(default)]
     pub channels: Option<Vec<String>>,
-    /// Oldest message to fetch — `YYYY-MM-DD` or RFC 3339. This is the
-    /// knob that decides how far back the mirror goes, so "just the last
-    /// week" means setting this to seven days ago. Unset defaults to
-    /// 2024-01-01 (the provider's `DEFAULT_SINCE`). A date before 1970
-    /// asks for everything.
+    /// Oldest message to fetch: a day (`2026-09-01`), an RFC 3339
+    /// instant, or an offset from the run's start (`-30d`, `-2w`). This
+    /// is the knob that decides how far back the mirror goes. An offset
+    /// slides forward each run; a message it leaves behind stays in the
+    /// mirror. Unset defaults to 2024-01-01 (the provider's
+    /// `DEFAULT_SINCE`). A date before 1970 asks for everything.
     #[serde(default)]
     pub since: Option<String>,
     /// Also mirror channels the account can see but isn't a member of.
@@ -121,6 +122,8 @@ impl SlackApiSync {
     /// discoverable from the outcome, so this fails at config-load
     /// time with the fix in the message.
     pub fn validate(&self) -> anyhow::Result<()> {
+        datalib_time::TimeWindow::check("api", self.since.as_deref(), None)
+            .map_err(anyhow::Error::msg)?;
         if !self.dms {
             if let Some(convs) = &self.dm_conversations {
                 if !convs.is_empty() {
@@ -178,6 +181,30 @@ mod tests {
         // of this combination is discoverable from the outcome.
         assert!(msg.contains("dm_conversations"), "{msg}");
         assert!(msg.contains("dms = true"), "{msg}");
+    }
+
+    /// `since` takes the shared window grammar: what loaded before
+    /// still loads, an offset loads, and a typo is refused at load.
+    #[test]
+    fn since_takes_the_window_grammar() {
+        let since = |s: &str| {
+            SlackApiSync {
+                since: Some(s.into()),
+                ..Default::default()
+            }
+            .validate()
+        };
+        for ok in [
+            "2024-01-01",
+            "2024-03-20T18:28:51Z",
+            "1900-01-01",
+            "-30d",
+            "-2w",
+        ] {
+            since(ok).unwrap_or_else(|e| panic!("{ok}: {e}"));
+        }
+        let err = since("30 days").unwrap_err().to_string();
+        assert!(err.contains("`api.since`"), "{err}");
     }
 
     #[test]

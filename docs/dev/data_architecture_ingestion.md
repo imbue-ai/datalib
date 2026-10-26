@@ -688,7 +688,7 @@ leaves an on-disk superset, and nothing deletes it.
 |---|---|
 | slack | An earlier `since` is a gap below the spans held; `media` turned on makes every stored file edge without bytes owed |
 | github, gitlab | A wider `refresh_window_days` is a gap below each scope's `coverage` |
-| email (JMAP, Gmail) | An admitted mailbox or label with no `listed_whole` row is enumerated until an enumeration of it finishes; a raised `blob_size_limit_bytes` makes a held message with no `.eml` owed |
+| email (JMAP, Gmail) | An admitted mailbox or label with no `listed_whole` row is enumerated until an enumeration of it finishes, and so, on Gmail, is one whose last walk began after the `since` now set; a raised `blob_size_limit_bytes` makes a held message with no `.eml` owed |
 | garmin | An earlier `since` leaves days with no row and dates with no `coverage`, and the next run fetches exactly those |
 | notion | A wider `refresh_window_days` lowers where the search stops |
 | yolink | An earlier `devices[].start` is a gap below the spans the device holds |

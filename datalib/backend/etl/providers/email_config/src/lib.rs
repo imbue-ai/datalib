@@ -298,6 +298,17 @@ pub struct EmailGmailApi {
     /// reported by `users.getProfile`.
     #[serde(default)]
     pub email_address: Option<String>,
+    /// Oldest mail to mirror: a day (`2026-09-01`, the run's own midnight), an RFC
+    /// 3339 instant, or an offset from the run's start (`-30d`). A walk
+    /// asks Gmail only for mail after it (`after:` on the listing), so a
+    /// first sync of the last month takes minutes, not hours. Mail an
+    /// offset slides past stays mirrored, and one that changes later
+    /// (relabeled, say) is fetched again whatever its age. An earlier
+    /// start backfills on the next run. Narrowing it does not cancel what
+    /// a wider listing already owes; the fetch goes newest first. Gmail
+    /// has no `until`: the mailbox is followed forward from the walk.
+    #[serde(default)]
+    pub since: Option<String>,
     /// Discard the stored `historyId` cursor and walk every configured
     /// label again. Messages already mirrored are not fetched again.
     /// Applies to this run only.
@@ -337,6 +348,8 @@ impl EmailGmailApi {
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
+        datalib_time::TimeWindow::check("gmail", self.since.as_deref(), None)
+            .map_err(anyhow::Error::msg)?;
         if self.quota_units_per_minute.is_some_and(|q| q == 0) {
             anyhow::bail!(
                 "email `gmail.quota_units_per_minute` must be > 0 (omit it for the default \
@@ -507,6 +520,28 @@ mod tests {
         }))
         .unwrap();
         assert!(cfg.validate().is_err());
+    }
+
+    /// `gmail.since` takes the shared window grammar; Gmail has no
+    /// `until`, and says so at load rather than ignoring one.
+    #[test]
+    fn gmail_since_takes_the_window_grammar() {
+        let load = |gmail: serde_json::Value| {
+            serde_json::from_value::<EmailConfig>(serde_json::json!({ "gmail": gmail }))
+                .map_err(anyhow::Error::from)
+                .and_then(|c| c.validate())
+        };
+        for ok in ["2026-09-01", "2026-09-01T09:00:00-07:00", "-30d"] {
+            load(serde_json::json!({ "since": ok })).unwrap_or_else(|e| panic!("{ok}: {e}"));
+        }
+        let err = load(serde_json::json!({ "since": "a month ago" }))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("`gmail.since`"), "{err}");
+        let err = load(serde_json::json!({ "until": "+1d" }))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("until"), "{err}");
     }
 
     #[test]

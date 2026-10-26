@@ -155,6 +155,13 @@ impl DataProcessor for EmailIngest {
                             path.display()
                         ));
                     }
+                    let since = match gmail.since.as_deref() {
+                        Some(s) => Some(
+                            datalib_time::TimeBound::parse(s)?
+                                .instant(&datalib_time::parse_strict(ctx.now)?),
+                        ),
+                        None => None,
+                    };
                     let cache = match takeout {
                         Some(_) => Some(host_fingerprints().await?),
                         None => None,
@@ -167,6 +174,7 @@ impl DataProcessor for EmailIngest {
                         takeout: takeout.clone(),
                         cache,
                         only_labels: self.only_extract_labels.clone(),
+                        since,
                         blob_size_limit_bytes: self.blob_size_limit_bytes,
                         flush_batch: None,
                         progress: ctx.progress.clone(),

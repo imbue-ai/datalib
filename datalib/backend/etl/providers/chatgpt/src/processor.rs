@@ -82,6 +82,13 @@ impl DataProcessor for ChatgptIngest {
         let entity_db = ingest::db_path_for(&self.raw_path);
         let db = ingest::RawDb::open(&entity_db).await?;
         let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
+        let since = match &self.sync.since {
+            Some(s) => Some(datalib_time::TimeBound::absolute(
+                s,
+                &datalib_time::parse_strict(ctx.now)?,
+            )?),
+            None => None,
+        };
         ctx.run_store(pool, Some(cas_pool), |sealer| async {
             let s = ingest::fetch(ingest::FetchOptions {
                 db,
@@ -89,7 +96,7 @@ impl DataProcessor for ChatgptIngest {
                 max_pages: self.sync.max_pages.map(|v| v as usize),
                 limit: self.sync.limit.map(|v| v as usize),
                 sleep_between: self.sync.sleep_between(),
-                since: self.sync.since.clone(),
+                since,
                 conv_uuids: self.sync.conv_uuids.clone(),
                 now: Some(ctx.now.to_string()),
                 export: self.export.clone(),

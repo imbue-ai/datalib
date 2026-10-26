@@ -10,6 +10,7 @@ rust_library(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "//datalib/backend/source_common:datalib_source_common",
+        "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:schemars",
         "@datalib_crates//:serde",
