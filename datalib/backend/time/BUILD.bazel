@@ -6,7 +6,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 # fabricate") live in one place. See `src/lib.rs` and AGENTS.md's "Timestamp convention".
 rust_library(
     name = "datalib_time",
-    srcs = ["src/lib.rs"],
+    srcs = glob(["src/**/*.rs"]),
     crate_name = "datalib_time",
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],

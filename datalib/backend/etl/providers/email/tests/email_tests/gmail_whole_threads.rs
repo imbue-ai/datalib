@@ -43,6 +43,34 @@ async fn the_rest_of_a_kept_messages_thread_is_mirrored() {
     assert_eq!(again.quota_units_spent, 4, "{again:?}");
 }
 
+/// `since` narrows the inbox's walk, not a kept reply's thread: the
+/// hail, older than the window and out of the inbox, comes with it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_kept_messages_thread_reaches_back_past_since() {
+    let h = Harness::new();
+    let since = "2026-09-01T00:00:00+00:00";
+    let secs = datalib_time::parse_strict(since)
+        .unwrap()
+        .inner()
+        .timestamp();
+    put_gmail(
+        &h.0.playback,
+        &format!("{}&q=after%3A{secs}", gmail_list_url(&["INBOX"])),
+        &json!({ "messages": [{ "id": REPLY, "threadId": HAIL }] }),
+    );
+    let run =
+        h.0.run(|db| {
+            let mut opts = FetchOptions::new(db);
+            opts.only_labels = vec!["Inbox".to_string()];
+            opts.since = Some(since.parse().unwrap());
+            gmail_api::fetch(opts)
+        })
+        .await
+        .expect("gmail fetch under playback");
+    assert_eq!(run.listed_from_threads, 1, "{run:?}");
+    assert_eq!(h.0.gmail_ids().await, ids(&[HAIL, REPLY]));
+}
+
 /// Kept by label alone, the thread is held in part, and its row says so.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn without_whole_threads_a_partial_thread_shows_gmails_count() {

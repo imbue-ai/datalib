@@ -181,8 +181,10 @@ The two API modes share one mechanism (`listed.rs`):
   member of a thread holding an email the filter keeps (Gmail: by
   `emails.label_ids`; JMAP: by its mailboxes) that is not listed
   already. It is then owed and fetched like any other message, and
-  kept whatever its labels. This happens before the fetch and again
-  after it, when that fetch kept new threads.
+  kept whatever its labels, and on Gmail whatever its age: the walk
+  that fills `thread_members` is not narrowed to `since`, so a kept
+  message's thread reaches back past it. This happens before the fetch
+  and again after it, when that fetch kept new threads.
 - **A thread the filter no longer keeps goes whole**: after the fetch,
   a thread none of whose emails the filter keeps loses every email,
   unless one of them is still owed, since its labels may be what keeps

@@ -369,16 +369,23 @@ pub struct MessagePage {
 // One label, not many: Gmail intersects repeated `labelIds`, so a
 // request naming three labels returns only messages carrying all three.
 // A union over several labels is several walks — see `walk_unlisted_scopes`.
+// `after` is epoch seconds: Gmail reads a date in `after:` at midnight
+// Pacific, and seconds as the instant they name.
 fn messages_list_url(
     user_id: &str,
     page_token: Option<&str>,
     page_size: u32,
     label_id: Option<&str>,
+    after: Option<i64>,
 ) -> String {
     let mut url = format!("{BASE}/{user_id}/messages?maxResults={page_size}&includeSpamTrash=true");
     if let Some(id) = label_id {
         url.push_str("&labelIds=");
         url.push_str(&percent_encode(id));
+    }
+    if let Some(secs) = after {
+        url.push_str("&q=");
+        url.push_str(&percent_encode(&format!("after:{secs}")));
     }
     if let Some(token) = page_token {
         url.push_str("&pageToken=");
@@ -393,9 +400,10 @@ pub async fn list_messages(
     page_token: Option<&str>,
     page_size: u32,
     label_id: Option<&str>,
+    after: Option<i64>,
 ) -> Result<MessagePage> {
     let v = get_json(
-        &messages_list_url(user_id, page_token, page_size, label_id),
+        &messages_list_url(user_id, page_token, page_size, label_id, after),
         client,
     )
     .await?;
@@ -618,14 +626,14 @@ mod tests {
     /// and that request answers a different question.
     #[test]
     fn asks_for_at_most_one_label_per_request() {
-        let filtered = messages_list_url("me", None, 500, Some("Label_7"));
+        let filtered = messages_list_url("me", None, 500, Some("Label_7"), None);
         assert_eq!(filtered.matches("labelIds=").count(), 1, "{filtered}");
         assert!(filtered.contains("labelIds=Label_7"), "{filtered}");
 
         // No filter is no `labelIds` at all, which Gmail reads as the
         // whole mailbox. An empty one would mean the same, but only by
         // accident.
-        let unfiltered = messages_list_url("me", None, 500, None);
+        let unfiltered = messages_list_url("me", None, 500, None, None);
         assert!(!unfiltered.contains("labelIds"), "{unfiltered}");
     }
 
@@ -633,9 +641,22 @@ mod tests {
     /// would end the query string.
     #[test]
     fn escapes_a_label_id_into_the_query() {
-        let url = messages_list_url("me", Some("tok&en"), 500, Some("a/b c"));
+        let url = messages_list_url("me", Some("tok&en"), 500, Some("a/b c"), None);
         assert!(url.contains("labelIds=a%2Fb%20c"), "{url}");
         assert!(url.contains("pageToken=tok%26en"), "{url}");
+    }
+
+    /// `since` reaches Gmail as a search for the instant in epoch
+    /// seconds; without one the URL is what it always was, so a playback
+    /// recorded before `since` existed still answers.
+    #[test]
+    fn a_window_asks_gmail_for_mail_after_its_start() {
+        let url = messages_list_url("me", None, 500, Some("INBOX"), Some(1_788_220_800));
+        assert!(
+            url.ends_with("&labelIds=INBOX&q=after%3A1788220800"),
+            "{url}"
+        );
+        assert!(!messages_list_url("me", None, 500, None, None).contains("q="));
     }
 
     #[test]

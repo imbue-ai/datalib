@@ -107,9 +107,12 @@ and the rule on the series page is what they are.
 
 A `calendars` list of names narrows a server to those calendars; leave
 it out for all of them. Adding a calendar to the list later downloads
-it whole. `since` and `until` (`YYYY-MM-DD`) narrow it to a stretch of
-days: only events with some part in it, and only the changed dates of a
-series that fall in it. A windowed calendar is listed whole every run.
+it whole. `since` and `until` narrow it to a stretch of days: only
+events with some part in it, and only the changed dates of a series
+that fall in it. Each is a day (`"2026-09-01"`) or an offset from the
+day of the sync (`since = "-2d"`, `until = "+21d"`), which moves with
+it. A windowed calendar is listed whole every run, and an event the
+window no longer reaches leaves the mirror.
 
 ## ChatGPT
 
@@ -421,9 +424,10 @@ latchkey reaches Garmin through its Garmin plugin, which the Add a
 source dialog installs into `~/.latchkey/plugins/garmin` the first time
 you sign in there. Sign in with the browser, or import a token folder
 the `garth` Python tool wrote (`~/.garth`). The sign-in lasts about a
-year. `since` says how far back to mirror. The
-first sync makes one request per metric per day since `since`, so a
-long history takes a while; later syncs re-read only the trailing week.
+year. `since` says how far back to mirror: a day (`"2024-01-01"`), or
+an offset from the day of the sync (`"-90d"`). The first sync makes one
+request per metric per day since `since`, so a long history takes a
+while; later syncs re-read only the trailing week.
 
 ## GitHub
 
@@ -482,6 +486,12 @@ path = "~/Downloads/gmail-takeout"
 
 or answer "Start from a Takeout?" in the Gmail form. The Takeout alone
 is the no-credentials route — see [Email](#email-mbox-or-jmap).
+
+To mirror only recent mail, set `since` in the `gmail` table: a day
+(`"2026-09-01"`) or an offset from the sync (`"-30d"`). The first sync
+then lists only the mail after it, which takes minutes where a whole
+mailbox takes hours. Mail older than a sliding `since` stays mirrored,
+and an earlier `since` brings the older mail in on the next sync.
 
 ### Your own Google OAuth client
 
@@ -867,6 +877,10 @@ Built into latchkey — no manual export:
 ```sh
 latchkey auth browser slack
 ```
+
+`since` in the `api` table is the oldest message to mirror: a day
+(`"2025-01-01"`) or an offset from the sync (`"-30d"`); unset is
+2024-01-01. Messages older than a sliding `since` stay mirrored.
 
 ## SMS Backup and Restore
 
