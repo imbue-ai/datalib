@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use datalib_dag::config::{DagConfig, TIME_SERIES_INDEX_GROUP};
 use datalib_dag::config_array::edit_string_array;
-use datalib_dag::config_order::{entry_ranges, sort_config};
+use datalib_dag::config_order::entry_ranges;
 use datalib_obs::status_line;
 use datalib_runtime::layout::UNIFIED_DOCUMENT_INDEX_DIR;
 use datalib_source_common::ExampleKind;
@@ -233,9 +233,6 @@ pub fn append(config: &str, stanza: &str) -> Result<Appended, String> {
     for (span, with) in edits {
         text.replace_range(span, &with);
     }
-    if let Some(sorted) = sort_config(&text)? {
-        text = sorted;
-    }
 
     let added_time_series_index = needs_time_series_index
         && match datalib_migrate_config::upgrade_time_series_steps(&text)
@@ -396,12 +393,19 @@ pub fn run_cli(word: &str, path: &Path, method: Option<&str>, id: Option<&str>) 
 mod tests {
     use super::*;
 
+    /// Loads with nothing to report, and reads in data-flow order: the
+    /// stanza went where `topo-sort-config` would leave it.
     fn checks_clean(text: &str) {
         let checked = datalib_dag::config::check_text(text);
         assert!(
             checked.is_clean(),
             "{}\n---\n{text}",
             checked.render(Path::new("config.toml"))
+        );
+        assert_eq!(
+            datalib_dag::config_order::sort_config(text),
+            Ok(None),
+            "{text}"
         );
     }
 

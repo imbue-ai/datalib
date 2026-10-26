@@ -30,23 +30,29 @@ struct SetupStep {
 const SETUP: &[SetupStep] = &[
     SetupStep {
         say: "Make a data root: one directory holding config.toml and everything synced \
-              into it. Start from the commented example config (`configs/dag_example.toml` \
-              in the repo), or run `datalib-http <data_root> --init` once, which writes a \
-              starter config with the index steps and no sources.",
-        commands: &[],
+              into it. `datalib-dag init` writes a starter config with the index steps and \
+              no sources, and nothing else. The commented example config, \
+              `configs/dag_example.toml`, is in the repo and beside the binaries in a release.",
+        commands: &[Example {
+            what: "start a data root",
+            command: "datalib-dag init ~/datalib",
+        }],
     },
     SetupStep {
         say: "Add a source: a [[groups]] entry with its `type`, and its steps. The source's \
-              page says what it mirrors, how it signs in and which ingest methods it has; \
-              its examples are stanzas to append, and how to wire one in.",
+              page says what it mirrors, how it signs in and which ingest methods it has. \
+              `examples --append` adds its least config and puts its steps in the index \
+              steps' `inputs`; name the method with `--method` when it has more than one, \
+              and give it an id of its own with `--id` to add a second account. Then set \
+              its options in the config; `examples` without `--append` shows every one.",
         commands: &[
             Example {
                 what: "what the Slack source needs",
                 command: "datalib-step help slack",
             },
             Example {
-                what: "config stanzas for Slack",
-                command: "datalib-step examples slack",
+                what: "add Slack to the config",
+                command: "datalib-step examples slack --append ~/datalib/config.toml",
             },
         ],
     },
@@ -201,11 +207,17 @@ fn examples_intro(t: SourceType) -> Vec<String> {
              it is. `name` is free text the app shows, and can be anything."
         ),
         format!(
+            "`datalib-step examples {t} --append <config>` appends the minimal stanza for \
+             you, with `--method` to pick one and `--id` to rename its group, and does the \
+             wiring below; it refuses an id the config already has, and a result \
+             `datalib-dag --check` would refuse."
+        ),
+        format!(
             "A source's documents reach the grid and search only through the index groups, \
-             which name the steps they read. After appending, add `<id>/render_markdown` to \
-             the `inputs` of `unified_document_index/grid_index`, and if the stanza has \
-             `keyword_index` and `embed` steps, add both to the `inputs` of \
-             `unified_document_index/qmd_aggregator`.{}",
+             which name the steps they read. After appending by hand, add \
+             `<id>/render_markdown` to the `inputs` of `unified_document_index/grid_index`, \
+             and if the stanza has `keyword_index` and `embed` steps, add both to the \
+             `inputs` of `unified_document_index/qmd_aggregator`.{}",
             if t.renders_time_series() {
                 " Add `<id>/render_time_series` to the `inputs` of \
                  `unified_time_series_index/time_series_index`."
