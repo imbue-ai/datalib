@@ -642,7 +642,7 @@ inputs = ["chatgpt-api/keyword_index"]
 
 # --- chatgpt by `export` ------------------------------------------------
 
-# An unpacked ChatGPT data export on disk, with every option set, and
+# A ChatGPT data export on disk, zipped or not, with every option set, and
 # searchable. No sign-in. The export is a complete snapshot: a
 # conversation a newer export no longer holds leaves the mirror. To keep
 # it current afterwards, swap `export` for `api` (the chatgpt INGEST.md,
@@ -657,7 +657,7 @@ group = "chatgpt-export"
 function = "ingest"
 
 [steps.params.export]
-path = "~/Downloads/chatgpt-export"  # the folder holding `conversations.json`
+path = "~/Downloads/chatgpt-export.zip"  # the .zip, or the folder it was unzipped into
 
 [[steps]]
 group = "chatgpt-export"

@@ -1,6 +1,6 @@
-# An unpacked ChatGPT data export on disk, requested from chatgpt.com's
-# Settings → Data controls → Export data. No sign-in and no rate limit:
-# `path` is the folder holding `conversations.json`.
+# A ChatGPT data export on disk, requested from chatgpt.com's Settings →
+# Data controls → Export data. No sign-in and no rate limit: `path` is the
+# .zip as it downloaded, or the folder it was unzipped into.
 [[groups]]
 id = "chatgpt"
 name = "ChatGPT export"
@@ -11,7 +11,7 @@ group = "chatgpt"
 function = "ingest"
 
 [steps.params.export]
-path = "~/Downloads/chatgpt-export"
+path = "~/Downloads/chatgpt-export.zip"
 
 [[steps]]
 group = "chatgpt"

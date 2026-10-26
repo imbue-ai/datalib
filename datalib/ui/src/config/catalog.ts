@@ -1384,27 +1384,28 @@ export const CATALOG: CatalogEntry[] = [
     type: "chatgpt",
     variantKey: "export",
     label: "ChatGPT (export)",
-    blurb: "Ingest an unpacked ChatGPT data export already on disk.",
+    blurb: "Ingest a ChatGPT data export already on disk.",
     keywords: ["chatgpt", "openai", "gpt", "export", "backup"],
     kind: "export",
     icon: "chatgpt",
     defaultName: "chatgpt-export",
     nameHint: "ChatGPT export",
     wizard: true,
-    sections: [{ heading: "Export folder", fields: ["export.path"] }],
+    sections: [{ heading: "Export file", fields: ["export.path"] }],
     fields: [
       {
         kind: "path",
-        picks: "dir",
-        pickTitle: "Choose the unpacked ChatGPT export",
+        picks: "file",
+        pickTitle: "Choose the ChatGPT export .zip",
+        extensions: ["zip"],
         required: true,
         target: "export.path",
-        label: "Export folder",
+        label: "Export file",
         help:
-          "The folder you unpacked the ChatGPT export into: the one holding conversations.json, " +
-          "~/Downloads/chatgpt-export say. Ask for one in ChatGPT's Settings → Data controls → " +
-          "Export data. The export is a complete snapshot: a conversation it no longer mentions " +
-          "is dropped from the copy.",
+          "The .zip ChatGPT emailed you a link to, as it downloaded: ~/Downloads/chatgpt-export.zip " +
+          "say. Ask for one in ChatGPT's Settings → Data controls → Export data. The folder you " +
+          "unzipped it into works too; type its path. The export is a complete snapshot: a " +
+          "conversation it no longer mentions is dropped from the copy.",
       },
     ],
   },

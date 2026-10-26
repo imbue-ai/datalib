@@ -45,9 +45,9 @@ pub struct ChatgptConfig {
     /// The live ChatGPT API.
     #[serde(default)]
     pub api: Option<ChatgptApiSync>,
-    /// The directory a ChatGPT data export was unpacked into — the one
-    /// holding `conversations.json`. Ingested as a whole snapshot: what
-    /// the export no longer has is pruned from the store.
+    /// A ChatGPT data export: the `.zip` as it downloaded, or the folder
+    /// it was unzipped into. Ingested as a whole snapshot: what the
+    /// export no longer has is pruned from the store.
     #[serde(default)]
     pub export: Option<LocalPath>,
 }

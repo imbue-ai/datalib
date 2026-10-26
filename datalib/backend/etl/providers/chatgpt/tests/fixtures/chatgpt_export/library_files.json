@@ -1,0 +1,54 @@
+[
+  {
+    "created_at": "2370-10-28T08:02:00.000000+00:00",
+    "file_extension": "jpg",
+    "file_id": "file_tng0001",
+    "file_name": "viewscreen.jpg",
+    "file_size_bytes": 776,
+    "library_artifact_type": null,
+    "library_file_category": "image",
+    "mime_type": null,
+    "origination_message_id": "msg-fake-survey-0011",
+    "origination_thread_id": "68fa0005-fake-7000-8000-positronic0005",
+    "state": "ready"
+  },
+  {
+    "created_at": "2370-10-28T08:02:00.000000+00:00",
+    "file_extension": "jpg",
+    "file_id": "file_tng0002",
+    "file_name": "beach.jpg",
+    "file_size_bytes": 776,
+    "library_artifact_type": null,
+    "library_file_category": "image",
+    "mime_type": null,
+    "origination_message_id": "msg-fake-survey-0011",
+    "origination_thread_id": "68fa0005-fake-7000-8000-positronic0005",
+    "state": "ready"
+  },
+  {
+    "created_at": "2370-10-28T08:02:00.000000+00:00",
+    "file_extension": "pdf",
+    "file_id": "file_tng0003",
+    "file_name": "Away Team Report.pdf",
+    "file_size_bytes": 400,
+    "library_artifact_type": null,
+    "library_file_category": "pdf",
+    "mime_type": null,
+    "origination_message_id": "msg-fake-survey-0011",
+    "origination_thread_id": "68fa0005-fake-7000-8000-positronic0005",
+    "state": "ready"
+  },
+  {
+    "created_at": "2370-10-28T08:02:00.000000+00:00",
+    "file_extension": "png",
+    "file_id": "file_tng0004",
+    "file_name": "file_tng0004.png",
+    "file_size_bytes": 77,
+    "library_artifact_type": "image",
+    "library_file_category": "image",
+    "mime_type": null,
+    "origination_message_id": "msg-fake-survey-0016",
+    "origination_thread_id": "68fa0005-fake-7000-8000-positronic0005",
+    "state": "ready"
+  }
+]

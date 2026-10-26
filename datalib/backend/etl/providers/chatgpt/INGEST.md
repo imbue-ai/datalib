@@ -7,7 +7,7 @@ exactly one:
 | table                     | reads                                         | signs in |
 |---------------------------|-----------------------------------------------|----------|
 | `[steps.params.api]`      | chatgpt.com's web API, one request per conversation | yes |
-| `[steps.params.export]`   | an unpacked data export off its `path` (below) | no      |
+| `[steps.params.export]`   | a data export's `.zip`, or the folder it was unzipped into (below) | no |
 
 The API method:
 
@@ -197,36 +197,56 @@ lands on the hash it already had.
 
 ## The `export` method: ingesting a data export
 
-ChatGPT's Settings → Data controls → Export data emails a link to a zip
-of the whole account. `[steps.params.export] path = …` names the
-folder it was unpacked into:
+ChatGPT's Settings → Data controls → Export data emails a link to a
+`.zip` of the whole account. `[steps.params.export] path = …` names
+that zip, read in place, or the folder it was unzipped into. Inside
+(as of an October 2026 export):
 
 ```
-<path>/
-  conversations.json   # every conversation, each whole, mapping tree included
-  user.json            # the account (optional)
-  file-…, file_…       # attached files, named for the file id, some in folders
+export_manifest.json           # names every file; `logical_files` lists the parts below
+conversations-000.json, -001…  # `conversations.json`, split into parts of 100
+user.json                      # the account: id, email
+file_<id>.dat                  # attached and generated files, no extension
+conversation_asset_file_names.json, library_files.json, chat.html, …
 ```
 
-The ingest ([`src/ingest/export.rs`](src/ingest/export.rs)) writes the
-rows the API walk writes and holds them at the versions the API would
-list them at, and makes no request, so no rate limit applies:
+The root is the folder holding the shallowest `export_manifest.json`
+(`sites/` has one of its own), or, in an export without one,
+`conversations.json`; so a zip of the unzipped folder reads too
+([`src/ingest/export_archive.rs`](src/ingest/export_archive.rs)). The
+ingest ([`src/ingest/export.rs`](src/ingest/export.rs)) writes the rows
+the API walk writes and holds them at the versions the API would list
+them at, and makes no request, so no rate limit applies:
 
-- **Conversations.** Each entry of `conversations.json` is stored as a
+- **Conversations.** Every part the manifest lists is read; a listed
+  part the export lacks fails the run, since read as a smaller export
+  it would prune what that part holds. Each conversation is stored as a
   detail fetch would be (`parse_conversation`, volatile fields and all)
   and held at its `update_time` in whole seconds. One the store already
   holds at that version is not written again, so reading an unchanged
   export commits nothing.
+- **What an export leaves out.** Its conversations carry the user's and
+  the assistant's messages and nothing else: no tool messages (code
+  output, a file read, a generated image's step), no system prompt, and
+  no node's `children`, with each `parent` pointing past what was left
+  out. Render walks `parent`s and never reads `children`, so a page from
+  an export is the page from the API less its tool steps
+  (`an_export_renders_every_message_but_tool_and_system_ones`). The API
+  fills them in when it next fetches the conversation, which it does only
+  once the conversation changes.
 - **The account.** `user.json` becomes the `me` row when the store has
   none. An export of an account other than the one the store holds is
   refused before anything is written, since its prune would empty the
   mirror.
 - **Attachments.** The edges are the files each conversation names, as
   for the API. Their bytes come from the export's own copy, found by the
-  file id that starts its name (`file-AbC123-notes.pdf`,
-  `file_00ab…-<uuid>.png`) anywhere under `path`. A file the export
+  file id that starts its name (`file_00ab….dat`; `file-AbC123-notes.pdf`
+  in an older export) anywhere under the root; the name and MIME type
+  render shows come from the message, as for the API. A file the export
   does not have stays owed, counted in one `phase:attachments` row: an
-  `api` run fetches it.
+  `api` run fetches it. A generated file (an image, a diff) is in the
+  export with a `library_files.json` row, but the tool message that
+  named it is not, so nothing names it and it is not stored.
 - **Deletions.** The export is a complete snapshot, so a stored
   conversation it does not list is deleted with its edges, in the
   transaction that writes the rest. Entries none of which has an id are
@@ -395,12 +415,20 @@ filegroup. Every hermetic test is a module of
 partial failure records, and when it clears), `interrupt` (a run cut
 off anywhere resumes to the same store), `token_renewal` (an expired
 token is signed in again once, and kept only for the account held), `upgrade` (an older store
-opens holding what it had) and `export_then_api` (an API run over an
-export-seeded store fetches only what moved) replay small snapshots of the same shape
+opens holding what it had) and `export_then_api` (below) replay small snapshots of the same shape
 through a playback tape (`docs/dev/testing.md` § "Watching a sync stream" explains the
-tapes). The shared `tests/fixtures` root ingests it too. The export reader's own cases (a
-shrinking export, a file it lacks, another account's export, an
-unchanged one read again) are unit tests in `src/ingest/export.rs`.
+tapes). The shared `tests/fixtures` root ingests it too.
+
+`tests/fixtures/chatgpt_export/` is the same TNG account laid out as a
+data export in the real one's shape (`export_manifest.json`, two
+`conversations-NNN.json` parts, `file_<id>.dat`, `library_files.json`,
+tool and system messages left out), the Bazel `tng_export_fixture`.
+`export_then_api` zips it and reads the zip: an API run over the
+store it seeds fetches only what moved, and its pages hold every
+message the API's do but the tool steps. The export reader's own cases
+(a shrinking export, a file it lacks, another account's export, an
+unchanged one read again) are unit tests in `src/ingest/export.rs`, and
+the zip and folder layouts are in `src/ingest/export_archive.rs`.
 
 The `live` module downloads one real conversation and snapshots it.
 `:chatgpt_tests` skips it (`--skip live::`); run it with

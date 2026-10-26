@@ -182,13 +182,14 @@ As with Claude, the impersonating curl clears Cloudflare, so no
 The API fetches one conversation per request, and chatgpt.com
 rate-limits a large account's first sync: each run gets as far as the
 limit lets it and the next picks up the rest. To skip that wait, ask
-for a data export in ChatGPT's Settings → Data controls → Export data,
-unzip it, and give the source an `export` table pointing at the
-folder. It needs no sign-in and brings the attached files too. Once
-it has synced, swap `export` for `api`, and the API fetches only
-what changed after the export was taken. Don't swap back: an export
-is a complete snapshot, so reading an older one drops every
-conversation it predates.
+for a data export in ChatGPT's Settings → Data controls → Export data
+and give the source an `export` table whose `path` is the downloaded
+`.zip` (no need to unzip it). It needs no sign-in and brings the
+attached files too, though not the tool steps (code output, file
+reads, image generation) the API shows. Once it has synced, swap
+`export` for `api`, and the API fetches only what changed after the
+export was taken. Don't swap back: an export is a complete snapshot,
+so reading an older one drops every conversation it predates.
 
 ## Claude
 

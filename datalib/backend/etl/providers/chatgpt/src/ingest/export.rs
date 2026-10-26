@@ -1,11 +1,11 @@
-//! Ingest an unpacked ChatGPT **data export** (chatgpt.com → Settings →
-//! Data controls → Export data) into the raw store the API download
+//! Ingest a ChatGPT **data export** (chatgpt.com → Settings → Data
+//! controls → Export data), zipped or unzipped, into the raw store the API download
 //! writes: the same rows, held at the same versions, so an API run over
 //! an export-seeded store fetches only what moved since. No request is
 //! made, so no rate limit applies.
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
 use datalib_etl::blob_cas::{CasEdgeRow as _, CasInsert};
@@ -18,6 +18,7 @@ use serde_json::Value;
 use tracing::{info, instrument};
 
 use super::db::{FileRef, RawDb};
+use super::export_archive::ExportArchive;
 use super::schema_raw::{ConversationAttachmentRow, MeRow, ATTACHMENTS, CONVERSATIONS};
 use super::{attachment_targets, parse_conversation, version_of};
 
@@ -32,7 +33,8 @@ pub struct IngestOptions {
     /// (`datalib/backend/etl/README.md` § "One writer per file, by
     /// construction").
     pub db: RawDb,
-    /// The unpacked export directory (`export.path`).
+    /// The export's `.zip`, or the folder it was unzipped into
+    /// (`export.path`).
     pub input_path: PathBuf,
     /// Run timestamp, shared by every bookkeeping stamp this ingest
     /// writes.
@@ -65,47 +67,36 @@ pub async fn ingest(opts: IngestOptions) -> Result<IngestSummary> {
 }
 
 async fn read_export(opts: IngestOptions, found: RunProblems) -> Result<IngestSummary> {
-    let dir = &opts.input_path;
     // Read before writing, so a malformed export fails the run without
     // having touched the store.
-    let conversations = read_conversations(dir)?;
-    let user = read_user(dir)?;
+    let mut archive = ExportArchive::open(&opts.input_path)?;
+    let conversations = read_conversations(&mut archive)?;
+    let user = archive
+        .read_json("user.json")?
+        .filter(|u| u.get("id").and_then(Value::as_str).is_some());
     check_account(&opts.db, user.as_ref()).await?;
 
     let mut summary = IngestSummary::default();
     let files =
         conversations_in_one_tx(&opts, &conversations, user.as_ref(), &mut summary, &found).await?;
     drop(conversations);
-    attachments(&opts, &files, &mut summary, &found).await?;
+    attachments(&opts, &mut archive, &files, &mut summary, &found).await?;
     Ok(summary)
 }
 
-fn read_conversations(dir: &Path) -> Result<Vec<Value>> {
-    let path = dir.join("conversations.json");
-    if !path.exists() {
-        bail!(
-            "no conversations.json under {} — point `export.path` at the directory \
-             you unpacked the ChatGPT export into",
-            dir.display()
-        );
+/// Every conversation, from each part `conversations.json` is split
+/// into. A part the manifest lists and the export lacks fails the run:
+/// read as a smaller export, it would prune what the part holds.
+fn read_conversations(archive: &mut ExportArchive) -> Result<Vec<Value>> {
+    let mut out = Vec::new();
+    for part in archive.conversation_parts()? {
+        match archive.read_json(&part)? {
+            Some(Value::Array(a)) => out.extend(a),
+            Some(_) => bail!("{part} must hold a JSON array"),
+            None => bail!("the export has no {part}; is it whole?"),
+        }
     }
-    let txt = std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-    match serde_json::from_str(&txt).with_context(|| format!("parse {}", path.display()))? {
-        Value::Array(a) => Ok(a),
-        _ => bail!("{} must hold a JSON array", path.display()),
-    }
-}
-
-/// `user.json`, the account the export is of; `None` when absent.
-fn read_user(dir: &Path) -> Result<Option<Value>> {
-    let path = dir.join("user.json");
-    if !path.exists() {
-        return Ok(None);
-    }
-    let txt = std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-    let v: Value =
-        serde_json::from_str(&txt).with_context(|| format!("parse {}", path.display()))?;
-    Ok(v.get("id").and_then(Value::as_str).is_some().then_some(v))
+    Ok(out)
 }
 
 /// An export of one account read into a store holding another would
@@ -231,6 +222,7 @@ fn me_row(user: &Value) -> Result<MeRow> {
 /// owed, so an `api` run fetches it.
 async fn attachments(
     opts: &IngestOptions,
+    archive: &mut ExportArchive,
     files: &HashMap<String, Vec<FileRef>>,
     summary: &mut IngestSummary,
     found: &RunProblems,
@@ -240,7 +232,7 @@ async fn attachments(
     if owed.is_empty() {
         return Ok(());
     }
-    let on_disk = index_export_files(&opts.input_path)?;
+    let in_export = archive.files_by_id();
     opts.progress.set_message("attachments");
     opts.progress.set_length(Some(owed.len() as u64));
 
@@ -260,8 +252,10 @@ async fn attachments(
         let bytes = if let Some(blake3) = db.blake3_of_file(file_id).await? {
             summary.skipped_blobs += 1;
             Bytes::Held(blake3)
-        } else if let Some(path) = on_disk.get(file_id) {
-            let read = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
+        } else if let Some(name) = in_export.get(file_id) {
+            let read = archive
+                .read(name)?
+                .with_context(|| format!("{name} went from the export as it was read"))?;
             let mime = files
                 .get(conv_id)
                 .and_then(|fs| fs.iter().find(|f| f.id == file_id))
@@ -327,43 +321,12 @@ async fn store_blobs(db: &RawDb, batch: Vec<(Listed, Bytes)>) -> Result<()> {
     Ok(())
 }
 
-/// Every file under the export named for the file id it holds, by that
-/// id. The export writes a file as its id, then `-` and an upload name
-/// or a uuid, then the extension (`file-AbC123-notes.pdf`,
-/// `file_00ab-<uuid>.png`), some of them in folders.
-fn index_export_files(dir: &Path) -> Result<HashMap<String, PathBuf>> {
-    let mut out = HashMap::new();
-    let mut todo = vec![dir.to_path_buf()];
-    while let Some(d) = todo.pop() {
-        for entry in std::fs::read_dir(&d).with_context(|| format!("read {}", d.display()))? {
-            let path = entry?.path();
-            if path.is_dir() {
-                todo.push(path);
-            } else if let Some(id) = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .and_then(file_id_of_name)
-            {
-                out.entry(id.to_string()).or_insert(path);
-            }
-        }
-    }
-    Ok(out)
-}
-
-fn file_id_of_name(name: &str) -> Option<&str> {
-    let rest = name
-        .strip_prefix("file-")
-        .or_else(|| name.strip_prefix("file_"))?;
-    let end = rest.find(['-', '.']).unwrap_or(rest.len());
-    (end > 0).then(|| &name[..name.len() - rest.len() + end])
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::db::db_path_for;
     use super::*;
     use serde_json::json;
+    use std::path::Path;
 
     const NOW: &str = "2026-10-22T00:00:00-07:00";
 
@@ -418,21 +381,6 @@ mod tests {
             .fetch_all(db.pool())
             .await
             .unwrap()
-    }
-
-    #[test]
-    fn a_file_id_is_read_off_the_name_the_export_gives_it() {
-        assert_eq!(
-            file_id_of_name("file-AbC123-notes.pdf"),
-            Some("file-AbC123")
-        );
-        assert_eq!(
-            file_id_of_name("file_00ab12-2f6e7a9c-1111-4222-8333-944445555666.png"),
-            Some("file_00ab12")
-        );
-        assert_eq!(file_id_of_name("file_tng0001.jpg"), Some("file_tng0001"));
-        assert_eq!(file_id_of_name("file-"), None);
-        assert_eq!(file_id_of_name("conversations.json"), None);
     }
 
     /// The export's conversations, its account and its files land in
