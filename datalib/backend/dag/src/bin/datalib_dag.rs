@@ -96,7 +96,7 @@ async fn main() -> Result<()> {
     let sync_only = trimmed(sync_only);
     let reset = trimmed(reset);
 
-    let (checked, data_root) = config::load_graded(&config_path)?;
+    let (checked, data_root) = load_config(&config_path)?;
 
     // Say what is wrong before doing anything, whether or not we are
     // about to run. Printed to stderr so a `--check` used in a pipeline
@@ -615,7 +615,7 @@ async fn run_verb(verb: Verb) -> Result<()> {
         | Verb::TurnOff { config, .. }
         | Verb::TurnOn { config, .. } => config,
     };
-    let (checked, data_root) = config::load_graded(config_path)?;
+    let (checked, data_root) = load_config(config_path)?;
     if checked.is_fatal() {
         bail!(
             "{} is not a config: nothing in it could be read",
@@ -670,6 +670,24 @@ async fn run_verb(verb: Verb) -> Result<()> {
         println!("{line}");
     }
     Ok(())
+}
+
+/// A config that is not there is most often a root not set up yet, so
+/// the error names the command that sets one up.
+fn load_config(path: &Path) -> Result<(config::ConfigCheck, std::path::PathBuf)> {
+    if !path.exists() {
+        let root = match (path.file_name(), path.parent()) {
+            (Some(name), Some(dir)) if name == config::CONFIG_FILE_NAME => {
+                dir.display().to_string()
+            }
+            _ => "<data_root>".to_string(),
+        };
+        bail!(
+            "{} does not exist. `datalib-dag init {root}` writes a starter config there.",
+            path.display()
+        );
+    }
+    config::load_graded(path)
 }
 
 #[allow(clippy::disallowed_macros)]
