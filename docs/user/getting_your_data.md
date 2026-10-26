@@ -288,8 +288,12 @@ messages and their attachments. [Gmail](#gmail) and
 other two routes into the same source.
 
 **A Takeout `.mbox`.** Google Takeout's **Mail** product is a single
-`.mbox` file; see [Google Takeout](#google-takeout) for requesting and
-unpacking one. Point an `mbox` table's `path` at it. No credentials.
+`.mbox` file; see [Google Takeout](#google-takeout) for requesting one.
+Point an `mbox` table's `path` at the folder holding the export's
+`.zip` or `.tgz` parts as Google sent them (no need to unpack them), or,
+unpacked, at the `.mbox`. No credentials. A sync reads the Takeout only
+when it, or the settings, changed since the last sync that read it
+through.
 
 **Another JMAP server.** Any RFC 8620/8621 server works the way
 Fastmail does: register its host as a latchkey service, store the
@@ -472,11 +476,12 @@ Gmail's own change history, so deletions and label changes show up as
 events. Throughput is capped by Google's quota at roughly 100 messages
 a minute, so a large mailbox backfills over several runs. With a Takeout
 of the same account, the first sync downloads only what is newer than
-it: put the Takeout's `Mail` folder beside the `gmail` table,
+it: put the folder holding the Takeout's `.zip` or `.tgz` parts (or,
+unpacked, its `Mail` folder) beside the `gmail` table,
 
 ```toml
 [steps.params.mbox]
-path = "~/Takeout/Mail"
+path = "~/Downloads/gmail-takeout"
 ```
 
 or answer "Start from a Takeout?" in the Gmail form. The Takeout alone

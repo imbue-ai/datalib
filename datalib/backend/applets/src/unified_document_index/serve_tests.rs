@@ -11,13 +11,24 @@ use std::time::{Duration, Instant};
 const SECRET: &str = "a-test-secret";
 const DEADLINE: Duration = Duration::from_secs(30);
 
-fn applet() -> Command {
+fn applet_bin() -> Command {
     // Absolute, because the gateway starts the applet in the data root.
     let bin = std::env::var("APPLET_BIN").expect("APPLET_BIN from the BUILD rule");
     let mut cmd = Command::new(std::fs::canonicalize(bin).expect("the applet binary"));
+    cmd.env_remove(super::DATA_ROOT_ENV);
+    cmd
+}
+
+fn applet() -> Command {
+    let mut cmd = applet_bin();
     cmd.args(["unified_document_index", "-p", "0"])
-        .env(crate::gate::ENV_SECRET, SECRET)
-        .env_remove(super::DATA_ROOT_ENV);
+        .env(crate::gate::ENV_SECRET, SECRET);
+    cmd
+}
+
+fn search_command(root: &std::path::Path, q: &str) -> Command {
+    let mut cmd = applet_bin();
+    cmd.arg("search").arg(root).arg(q);
     cmd
 }
 
@@ -166,4 +177,92 @@ fn people_by_handle_gives_each_sources_account() {
         assert_eq!(c["names"][0], "Jean-Luc Picard", "{body}");
     }
     child.kill().ok();
+}
+
+fn percent_encoded(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+/// `datalib-applet search` prints what `/search` answers, for the same
+/// root and the same parameters, byte for byte as JSON: structured terms,
+/// paging and sort, an identifier, the Fields and Words tabs, and a
+/// refusal. It exits 1 on the refusal, saying why on stderr.
+#[test]
+fn the_search_command_answers_what_the_search_box_gets() {
+    let root = tempfile::tempdir().unwrap();
+    datalib_qmd_fixture::materialize_root_with_grid(root.path());
+    let mut server = applet()
+        .env(super::DATA_ROOT_ENV, root.path())
+        .current_dir(root.path())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("start the applet");
+    let port = announced_port(&mut server);
+
+    let searches: &[(&str, &[(&str, &str)])] = &[
+        ("", &[("limit", "3")]),
+        (
+            "is:document",
+            &[("limit", "2"), ("offset", "2"), ("sort", "created_at:asc")],
+        ),
+        ("picard@enterprise.starfleet", &[("limit", "5")]),
+        ("enterprise", &[("tab", "fields"), ("limit", "5")]),
+        ("enterprise", &[("tab", "words"), ("limit", "5")]),
+        ("frm:picard", &[]),
+    ];
+    for (q, params) in searches {
+        let mut path = format!("/search?q={}", percent_encoded(q));
+        let mut cli = search_command(root.path(), q);
+        for (key, value) in *params {
+            path.push_str(&format!("&{key}={}", percent_encoded(value)));
+            cli.arg(format!("--{key}")).arg(value);
+        }
+        let (status, served) = get(port, &path, Some(SECRET));
+        assert_eq!(status, 200, "{served}");
+        let out = cli.output().expect("run the search command");
+        let printed: serde_json::Value =
+            serde_json::from_slice(&out.stdout).expect("the search command prints JSON");
+        assert_eq!(printed, served, "{q:?} {params:?}");
+        let refused = !served["refused"].as_array().is_none_or(Vec::is_empty);
+        let rows = served["rows"].as_array().map_or(0, Vec::len);
+        assert!(
+            refused || rows > 0,
+            "{q:?} found nothing, so it compares nothing"
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(
+            out.status.code(),
+            Some(if refused { 1 } else { 0 }),
+            "{stderr}"
+        );
+        if refused {
+            assert!(stderr.contains("`frm:`"), "{stderr}");
+        }
+    }
+    server.kill().ok();
+}
+
+/// A path that is not a data root is an error naming what is missing, not
+/// an empty answer an agent would read as "nothing matched".
+#[test]
+fn the_search_command_refuses_a_directory_with_no_index() {
+    let empty = tempfile::tempdir().unwrap();
+    let out = search_command(empty.path(), "")
+        .output()
+        .expect("run the search command");
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        out.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("has no grid index"), "{stderr}");
 }

@@ -203,17 +203,21 @@ pub struct EmailSync {
     pub blob_download_concurrency: Option<usize>,
 }
 
-/// The mbox download path: a `.mbox` file, or a directory holding one,
-/// plus account-row data so the synthesized `accounts` row matches
-/// JMAP's shape. The row fields are optional (defaults: `account_id` ←
-/// mbox file stem, `display_name` ← `account_id`, `is_personal` ← true).
+/// The mbox download path: a `.mbox` file or a directory holding one, or
+/// a Google Takeout's `.zip`/`.tgz` or the folder of its parts, plus
+/// account-row data so the synthesized `accounts` row matches JMAP's
+/// shape. The row fields are optional (defaults: `account_id` ← mbox
+/// file stem, `display_name` ← `account_id`, `is_personal` ← true).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MboxSync {
-    /// The `.mbox` file, or a directory containing one.
+    /// The `.mbox` file or a directory containing one; or a Google
+    /// Takeout as it was sent, its `.zip` or `.tgz`, or the folder holding
+    /// every part of it, which need not be unpacked.
     pub path: PathBuf,
     /// Id of the account the mailbox is filed under. Defaults to the last
-    /// part of `path`, without its extension, in lowercase with underscores.
+    /// part of `path`, without its extension, in lowercase with underscores;
+    /// `takeout` when `path` is one `.zip` or `.tgz`.
     #[serde(default)]
     pub account_id: Option<String>,
     /// The account's display name. Defaults to `account_id`.

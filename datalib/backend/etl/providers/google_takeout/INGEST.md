@@ -8,7 +8,9 @@ network: the download step walks files the user exported themselves.
 
 ## Zipped exports
 
-`src/ingest/unpack.rs`. When `export.path` holds archive parts directly
+`src/ingest/unpack.rs`, over the parts and entries
+`datalib_etl_files::archive` reads (the `email` source reads a Gmail
+Takeout's parts with it too). When `export.path` holds archive parts directly
 (`takeout-<stamp>-<n>-<nnn>.zip`, `.tgz` or `.tar.gz`), they are the
 export, and anything else in the folder, an unpacked `Takeout/`
 included, is ignored. Parts of two exports in one folder are refused:

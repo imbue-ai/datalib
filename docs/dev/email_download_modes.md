@@ -349,7 +349,9 @@ membership for free.
 ### Starting from a Takeout
 
 A Gmail source may name a Takeout of the same account beside its
-`gmail` table — the `.mbox`, or the Takeout's `Mail` folder — the way a
+`gmail` table — the `.zip` or `.tgz` as Google sent it, the folder
+holding every part of one export, or, unpacked, the `.mbox` or the
+Takeout's `Mail` folder — the way a
 Lightroom source names its backups beside its catalog
 ([`config_model.md`](config_model.md) §"Where the data comes from"):
 
@@ -395,10 +397,16 @@ Takeout and is left out, with a `skipped:takeout` row naming the file.
 JMAP beside an mbox is refused: its ids are its own, so a Takeout
 would double the mailbox rather than seed it.
 
-Every run reads the whole Takeout again (an unchanged one writes
-nothing); local files are cheap to read, and nothing is stored about
-what was read. Deleting the Takeout or dropping `mbox` from the step
-deletes nothing.
+A Takeout that was read through cleanly, by a run that was not
+stopped, is not read again while its files hash the same and the
+account and `only_extract_labels` are unchanged: the `email/takeout_seed`
+stamp in `ingested_files`, as the mbox mode keeps its own (the
+provider's `INGEST.md`, "mbox"). Skipping it loses nothing, since a
+second read of the same Takeout could only add what the store does not
+hold and Gmail still lists, and a message the store stopped holding
+since was deleted because Gmail no longer lists it. A new Takeout put
+in its place, or a changed label filter, is read again whole. Deleting
+the Takeout or dropping `mbox` from the step deletes nothing.
 
 ## 4. Traps in the Gmail API
 
