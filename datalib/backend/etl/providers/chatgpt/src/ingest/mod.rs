@@ -38,7 +38,7 @@ use tracing::{info, info_span, instrument, Instrument};
 
 pub use api::{ChatGPTClient, ChatGPTError};
 pub use db::{db_path_for, Conversation, FileRef, LoadedConversation, LoadedRaw, RawDb};
-use export::ExportCopy;
+use export::ExportFiles;
 use fetchers::{Attachments, Conversations};
 use schema_raw::{MeRow, ATTACHMENTS, CONVERSATIONS, CONVERSATION_VOLATILE_PATHS};
 
@@ -88,10 +88,9 @@ pub struct FetchOptions {
     /// The run-pinned `--now`, which stamps the `me` row; `None`
     /// samples the clock.
     pub now: Option<String>,
-    /// A data export of this account (`export.path`), asked before
-    /// chatgpt.com for a conversation it holds at the listed version and
-    /// for a file's bytes. It never prunes or adds: the listing decides
-    /// what the store holds.
+    /// A data export of this account (`export.path`), asked for a
+    /// file's bytes before chatgpt.com. Its conversations are the export
+    /// step's to read (`export::Reading::FillGaps`).
     pub export: Option<PathBuf>,
     pub progress: datalib_etl::progress::Progress,
     /// Cross-provider knobs (the checkpoint cadence, the stop flag).
@@ -123,10 +122,7 @@ impl FetchOptions {
 pub struct FetchSummary {
     /// Conversations fetched from chatgpt.com.
     pub fetched: usize,
-    /// Owed conversations taken from the export, held there at the
-    /// version listed.
-    pub from_export: usize,
-    /// Listed, in scope, and already held at the version listed.
+    /// Listed, in scope, and already held at or after the version listed.
     pub skipped: usize,
     /// Listed items ignored because their `update_time` predates the
     /// configured `since`. Items behind an early-stopped listing walk
@@ -169,9 +165,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         "conv_uuids": opts.conv_uuids,
         "export": opts.export,
     });
-    // Read before writing, so a malformed export fails the run without
-    // having touched the store.
-    let export = opts.export.as_deref().map(ExportCopy::open).transpose()?;
+    let export = opts.export.as_deref().map(ExportFiles::open).transpose()?;
     let run = DownloadRun::start(db.pool(), &run_config).await?;
     let held = db.load_me().await?;
     let client = ChatGPTClient::with_latchkey(opts.latchkey.clone())
@@ -217,7 +211,7 @@ pub(crate) struct Ctx<'a> {
     pub db: &'a RawDb,
     pub opts: &'a FetchOptions,
     pub found: &'a RunProblems,
-    pub export: Option<&'a ExportCopy>,
+    pub export: Option<&'a ExportFiles>,
     /// Per conversation fetched this run, the files it names: what the
     /// attachment loop asks for without reading the row back.
     pub files: Mutex<HashMap<String, Vec<FileRef>>>,
@@ -229,10 +223,6 @@ pub(crate) struct Ctx<'a> {
 impl Ctx<'_> {
     pub fn stop(&self) -> &StopFlag {
         &self.opts.control.stop
-    }
-
-    pub fn export_copy_of(&self, listed: &Listed) -> Option<&Value> {
-        self.export?.conversation_at(listed)
     }
 
     async fn wrote(&self, rows: u64) {
@@ -438,40 +428,19 @@ impl Ctx<'_> {
             listed.push(Listed::new(id, version_of(update_time)));
         }
         let in_scope = listed.len();
-        let owed = owed_missing_first(self.db.pool(), CONVERSATIONS, listed).await?;
+        let mut owed = owed_missing_first(self.db.pool(), CONVERSATIONS, listed).await?;
         s.skipped = in_scope - owed.len();
-        // `limit` caps requests; what the export holds costs none.
-        let (from_export, mut live): (Vec<Listed>, Vec<Listed>) = owed
-            .into_iter()
-            .partition(|l| self.export_copy_of(l).is_some());
         if let Some(limit) = self.opts.limit {
-            live.truncate(limit);
+            owed.truncate(limit);
         }
         info!(
             event = "chatgpt_priority_split",
-            owed = from_export.len() + live.len(),
-            from_export = from_export.len(),
+            owed = owed.len(),
             up_to_date = s.skipped,
             out_of_scope = s.out_of_scope,
             "sorted the listing into what to fetch"
         );
-        self.opts
-            .progress
-            .set_length(Some((from_export.len() + live.len()) as u64));
-        let copied = self
-            .drain(
-                CONVERSATIONS,
-                "conversations",
-                from_export,
-                &Conversations(self),
-                100,
-            )
-            .await?;
-        s.from_export = copied.got;
-        s.errors = copied.failed;
-        if copied.terminal.is_some() || self.stop().requested() {
-            return Ok(copied.terminal.is_some());
-        }
+        self.opts.progress.set_length(Some(owed.len() as u64));
         let drained = self
             // One conversation per transaction: each is one slow request,
             // and a seal may follow every one, so a long first sync
@@ -479,13 +448,13 @@ impl Ctx<'_> {
             .drain(
                 CONVERSATIONS,
                 "conversations",
-                live,
+                owed,
                 &Conversations(self),
                 1,
             )
             .await?;
         s.fetched = drained.got;
-        s.errors += drained.failed;
+        s.errors = drained.failed;
         Ok(drained.terminal.is_some())
     }
 
@@ -549,9 +518,9 @@ async fn phases(ctx: &Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
     Ok(())
 }
 
-/// Of `listed`, what `table` does not hold at the version listed: the
-/// records never fetched first, then the stale, so a run cut short
-/// spent its budget on new work.
+/// Of `listed`, what `table` does not hold at or after the version
+/// listed: the records never fetched first, then the stale, so a run cut
+/// short spent its budget on new work.
 async fn owed_missing_first(
     pool: &sqlx::SqlitePool,
     table: &str,
@@ -560,9 +529,21 @@ async fn owed_missing_first(
     let held = owed::held_versions(pool, table, listed.iter().map(|l| l.key.as_str())).await?;
     let (missing, stale): (Vec<Listed>, Vec<Listed>) = listed
         .into_iter()
-        .filter(|l| !held.get(&l.key).is_some_and(|h| h.satisfies(&l.version)))
+        .filter(|l| !held.get(&l.key).is_some_and(|h| current(h, &l.version)))
         .partition(|l| !held.get(&l.key).is_some_and(|h| h.fetched));
     Ok(missing.into_iter().chain(stale).collect())
+}
+
+/// Whether what is held is no older than the version listed. The
+/// listing's `update_time` can trail the detail's, and a conversation
+/// held from its detail (an export, `conv_uuids`) is held at the
+/// detail's, so the two are compared as instants (INGEST.md, "The
+/// listing can trail the detail").
+fn current(held: &owed::Held, listed: &Option<String>) -> bool {
+    let secs = |v: &Option<String>| v.as_deref()?.parse::<i64>().ok();
+    held.satisfies(listed)
+        || (held.fetched
+            && matches!((secs(&held.version), secs(listed)), (Some(h), Some(l)) if h >= l))
 }
 
 async fn upsert_me(ctx: &Ctx<'_>, payload: &Value) -> Result<()> {

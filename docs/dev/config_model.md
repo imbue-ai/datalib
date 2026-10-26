@@ -158,9 +158,9 @@ and a present of one thing, so a step may name both and the present
 lands on top: `lightroom`'s `backups` folder and its `catalog`; email's
 `mbox` beside `gmail`, a Takeout of the account the API starts from
 (`email_download_modes.md` §"Starting from a Takeout"); and
-`chatgpt`'s `export` beside `api`, which the API asks before fetching
-a conversation or a file (the provider's `INGEST.md` §"An export and
-the API together").
+`chatgpt`'s `export` beside `api`, which fills in the conversations
+the store has never held before the API runs (the provider's
+`INGEST.md` §"An export and the API together").
 
 Knobs that apply whatever the method (email's `only_extract_labels`,
 the `common.*` envelope) stay at the top level of `params`. Render

@@ -30,8 +30,9 @@ pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
 
 /// Two ways in, one raw store: `api` walks chatgpt.com, `export` reads
 /// a data export off disk. An `ingest` step with neither is refused
-/// (`IngestMethods` below). With both, the API run takes from the export
-/// what it holds at the version listed, and only the listing prunes.
+/// (`IngestMethods` below). With both, the export fills in what the store
+/// has never held, then the API run decides the rest, and only its
+/// listing prunes.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ChatgptConfig {
@@ -48,7 +49,8 @@ pub struct ChatgptConfig {
     /// A ChatGPT data export: the `.zip` as it downloaded, or the folder
     /// it was unzipped into. Alone, it is ingested as a whole snapshot:
     /// what the export no longer has is pruned from the store. Beside
-    /// `api`, it is a local copy the API asks first, and prunes nothing.
+    /// `api`, it seeds what the store has never held and prunes nothing.
+    /// Either way it is read again only once its bytes change.
     #[serde(default)]
     pub export: Option<LocalPath>,
 }
@@ -149,8 +151,8 @@ mod tests {
         }
     }
 
-    /// An export beside `api` is the copy the API asks first, so a
-    /// step may name both.
+    /// An export beside `api` seeds what the API keeps fresh, so a step
+    /// may name both.
     #[test]
     fn api_and_export_together_are_one_step() {
         let c: ChatgptConfig =

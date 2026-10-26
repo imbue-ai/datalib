@@ -144,5 +144,6 @@ pub fn full_ddl() -> Vec<String> {
     for table in DATA_TABLES {
         out.push(dr::bookkeeping_ddl_for(table));
     }
+    out.push(datalib_etl_files::file_checkpoint::INGESTED_FILES_DDL.to_string());
     out
 }

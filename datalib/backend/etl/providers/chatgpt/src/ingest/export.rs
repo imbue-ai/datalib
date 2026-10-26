@@ -1,9 +1,11 @@
 //! Ingest a ChatGPT **data export** (chatgpt.com → Settings → Data
 //! controls → Export data), zipped or unzipped, into the raw store the API download
 //! writes: the same rows, each held at its detail's `update_time`. No
-//! request is made, so no rate limit applies. An `api` run given an
-//! export too takes from it what it would otherwise fetch
-//! ([`ExportCopy`]).
+//! request is made, so no rate limit applies. Alone, the export is the
+//! account ([`Reading::Snapshot`]); beside `api` it only fills in what the
+//! store has never held ([`Reading::FillGaps`]), and the API run after it
+//! takes files from it too ([`ExportFiles`]). An export unchanged since it
+//! was last read is not read again.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -14,6 +16,9 @@ use datalib_etl::blob_cas::{CasEdgeRow as _, CasInsert};
 use datalib_etl::bulk::bulk_upsert_first_seen_in_tx;
 use datalib_etl::doltlite_raw::WirePayload;
 use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl_files::file_checkpoint;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
+use datalib_etl_files::fsscan::{self, Changes, Scan, ScanOptions};
 use datalib_etl_web::owed::{self, Listed};
 use serde::Serialize;
 use serde_json::Value;
@@ -28,6 +33,22 @@ use super::{attachment_targets, parse_conversation, version_of};
 /// a time, not the whole export, in memory.
 const BLOB_BATCH_BYTES: usize = 32 << 20;
 
+/// The `file_checkpoint` scope holding what the export was when it was
+/// last read whole.
+const EXPORT_SCOPE: &str = "chatgpt:export";
+
+/// What an export is to the store it is read into.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reading {
+    /// The export is the account: what it holds is written over the
+    /// store, and what it no longer holds is deleted.
+    Snapshot,
+    /// Beside `api`: the export fills in the conversations the store has
+    /// never held and deletes nothing. The API run after it decides what
+    /// exists and what is current.
+    FillGaps,
+}
+
 #[derive(Debug, Clone)]
 pub struct IngestOptions {
     /// The store this run writes into, opened and closed by the caller.
@@ -38,6 +59,10 @@ pub struct IngestOptions {
     /// The export's `.zip`, or the folder it was unzipped into
     /// (`export.path`).
     pub input_path: PathBuf,
+    pub reading: Reading,
+    /// The host's file fingerprints, which say whether the export changed
+    /// since it was last read.
+    pub cache: FingerprintCache,
     /// Run timestamp, shared by every bookkeeping stamp this ingest
     /// writes.
     pub now: String,
@@ -47,9 +72,13 @@ pub struct IngestOptions {
 
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct IngestSummary {
+    /// The export is byte for byte what was last read whole, so it was
+    /// not read again and every count below is zero.
+    pub export_unchanged: bool,
     /// Conversations written: new, or at a version the store did not hold.
     pub conversations: usize,
-    /// Conversations the store already held at the export's version.
+    /// Conversations left as stored: held at the export's version, or,
+    /// beside `api`, held at all.
     pub unchanged: usize,
     /// Conversations dropped because the export no longer has them.
     pub pruned: usize,
@@ -72,18 +101,59 @@ async fn read_export(opts: IngestOptions, found: RunProblems) -> Result<IngestSu
     // Read before writing, so a malformed export fails the run without
     // having touched the store.
     let mut archive = ExportArchive::open(&opts.input_path)?;
-    let conversations = read_conversations(&mut archive)?;
     let user = archive
         .read_json("user.json")?
         .filter(|u| u.get("id").and_then(Value::as_str).is_some());
     check_account(&opts.db, user.as_ref()).await?;
+    let (scan, changes) = changes_since_last_read(&opts).await?;
+    if !changes.any() && scan.errors.is_empty() && scan.unreadable.is_empty() {
+        info!(
+            event = "chatgpt_export_unchanged",
+            "the export is what was last read; not reading it again"
+        );
+        return Ok(IngestSummary {
+            export_unchanged: true,
+            ..IngestSummary::default()
+        });
+    }
+    let conversations = read_conversations(&mut archive)?;
 
     let mut summary = IngestSummary::default();
     let files =
         conversations_in_one_tx(&opts, &conversations, user.as_ref(), &mut summary, &found).await?;
     drop(conversations);
     attachments(&opts, &mut archive, &files, &mut summary, &found).await?;
+    if !opts.control.stop.requested() {
+        mark_read(&opts.db, &scan, &changes).await?;
+    }
     Ok(summary)
+}
+
+async fn changes_since_last_read(opts: &IngestOptions) -> Result<(Scan, Changes)> {
+    let scan = fsscan::scan(
+        &opts.cache,
+        &opts.input_path,
+        &ScanOptions::default(),
+        |_| true,
+    )
+    .await?;
+    let read = file_checkpoint::load_cursor(opts.db.pool(), EXPORT_SCOPE).await?;
+    let changes = scan.changes_since(&read);
+    Ok((scan, changes))
+}
+
+/// Stamped only once the whole export has been read, so a run cut off
+/// partway reads it all again.
+async fn mark_read(db: &RawDb, scan: &Scan, changes: &Changes) -> Result<()> {
+    let mut tx = db.pool().begin().await.context("begin export stamp tx")?;
+    for f in &scan.files {
+        file_checkpoint::record_file(&mut tx, EXPORT_SCOPE, f).await?;
+    }
+    for rel in changes.gone() {
+        file_checkpoint::forget_file(&mut tx, EXPORT_SCOPE, rel).await?;
+    }
+    tx.commit().await.context("commit export stamp tx")?;
+    Ok(())
 }
 
 /// Every conversation, from each part `conversations.json` is split
@@ -157,9 +227,13 @@ async fn conversations_in_one_tx(
     if let (Some(user), false) = (user, has_me) {
         bulk_upsert_first_seen_in_tx(&mut tx, &[me_row(user)?], &now).await?;
     }
+    let keeps = |h: &owed::Held, version: &Option<String>| match opts.reading {
+        Reading::Snapshot => h.satisfies(version),
+        Reading::FillGaps => h.fetched,
+    };
     for (l, c) in &listed {
         opts.progress.inc(1);
-        if held.get(&l.key).is_some_and(|h| h.satisfies(&l.version)) {
+        if held.get(&l.key).is_some_and(|h| keeps(h, &l.version)) {
             summary.unchanged += 1;
             continue;
         }
@@ -168,7 +242,9 @@ async fn conversations_in_one_tx(
         owed::hold(&mut tx, CONVERSATIONS, &l.key, l.version.as_deref()).await?;
         summary.conversations += 1;
     }
-    if conversations.is_empty() || !listed.is_empty() {
+    if opts.reading == Reading::FillGaps {
+        // Only a complete API listing says a conversation is gone.
+    } else if conversations.is_empty() || !listed.is_empty() {
         let keep: HashSet<String> = files.keys().cloned().collect();
         let gone =
             datalib_etl::prune::prune_scope_in_tx(&mut tx, CONVERSATIONS, &[], &keep).await?;
@@ -276,7 +352,8 @@ async fn attachments(
         }
     }
     store_blobs(db, batch).await?;
-    if summary.not_in_export > 0 {
+    // Beside `api`, the API run that follows fetches them.
+    if summary.not_in_export > 0 && opts.reading == Reading::Snapshot {
         found.phase(
             "attachments",
             format!(
@@ -288,52 +365,27 @@ async fn attachments(
     Ok(())
 }
 
-/// An export an `api` run asks before chatgpt.com: a conversation it
-/// holds at or after the version the listing names, and a file's bytes. Never a
-/// census: what it lacks, or holds and the listing does not name, says
-/// nothing about what exists, so it neither prunes nor adds.
-pub struct ExportCopy {
-    conversations: HashMap<String, Value>,
+/// The files of an export beside `api`, which the API run takes before
+/// asking chatgpt.com for them. Opening reads the zip's index (or the
+/// folder's names) and `user.json`, not the conversations.
+pub struct ExportFiles {
     account: Option<String>,
     files: HashMap<String, String>,
     archive: Mutex<ExportArchive>,
 }
 
-impl ExportCopy {
-    /// Reads every conversation up front, so a malformed export fails
-    /// the run before it has written anything.
+impl ExportFiles {
     pub fn open(path: &Path) -> Result<Self> {
         let mut archive = ExportArchive::open(path)?;
-        let conversations = read_conversations(&mut archive)?
-            .into_iter()
-            .filter_map(|c| Some((id_of(&c)?.to_string(), c)))
-            .collect();
         let account = archive
             .read_json("user.json")?
             .and_then(|u| u.get("id")?.as_str().map(String::from));
         let files = archive.files_by_id();
         Ok(Self {
-            conversations,
             account,
             files,
             archive: Mutex::new(archive),
         })
-    }
-
-    /// The export's copy of `listed`, when it is no older than the
-    /// version listed. The export carries the detail's `update_time`,
-    /// and the listing's can trail it by seconds to days (INGEST.md,
-    /// "The listing can trail the detail"), so the two are compared as
-    /// instants, not matched as text.
-    pub fn conversation_at(&self, listed: &Listed) -> Option<&Value> {
-        let c = self.conversations.get(&listed.key)?;
-        let ours = version_of(c.get("update_time"));
-        let secs = |v: &Option<String>| v.as_deref()?.parse::<i64>().ok();
-        let current = match (secs(&ours), secs(&listed.version)) {
-            (Some(ours), Some(listed)) => ours >= listed,
-            _ => listed.version.is_some() && ours == listed.version,
-        };
-        current.then_some(c)
     }
 
     pub fn file(&self, file_id: &str) -> Result<Option<Vec<u8>>> {
@@ -343,8 +395,8 @@ impl ExportCopy {
         self.archive.lock().unwrap().read(name)
     }
 
-    /// An export of another account than the one signed in would never
-    /// match a listed conversation; it is a config mistake, said as one.
+    /// An export of another account than the one signed in is a config
+    /// mistake, said as one.
     pub fn check_account(&self, me: &Value) -> Result<()> {
         let (Some(theirs), Some(ours)) = (self.account.as_deref(), me["id"].as_str()) else {
             return Ok(());
@@ -408,10 +460,19 @@ mod tests {
         std::fs::write(p, serde_json::to_string_pretty(v).unwrap()).unwrap();
     }
 
-    fn opts(db: &RawDb, export: &Path) -> IngestOptions {
+    /// The host's fingerprint cache, kept outside the export it scans.
+    async fn cache_in(dir: &Path) -> FingerprintCache {
+        FingerprintCache::open(&dir.join("fpcache.sqlite"))
+            .await
+            .unwrap()
+    }
+
+    fn opts(db: &RawDb, export: &Path, cache: &FingerprintCache) -> IngestOptions {
         IngestOptions {
             db: db.clone(),
             input_path: export.to_path_buf(),
+            reading: Reading::Snapshot,
+            cache: cache.clone(),
             now: NOW.to_string(),
             progress: Default::default(),
             control: Default::default(),
@@ -462,6 +523,7 @@ mod tests {
     async fn an_export_fills_the_store_and_holds_what_it_wrote() {
         let ex = tempfile::tempdir().unwrap();
         let raw = tempfile::tempdir().unwrap();
+        let cache = cache_in(raw.path()).await;
         write(
             ex.path(),
             "conversations.json",
@@ -483,7 +545,7 @@ mod tests {
         .unwrap();
 
         let db = RawDb::open(&db_path_for(raw.path())).await.unwrap();
-        let s = ingest(opts(&db, ex.path())).await.unwrap();
+        let s = ingest(opts(&db, ex.path(), &cache)).await.unwrap();
         assert_eq!((s.conversations, s.new_blobs, s.not_in_export), (2, 1, 0));
         assert_eq!(ids(&db).await, ["c1", "c2"]);
         assert_eq!(db.load_me().await.unwrap().unwrap()["id"], "user-data");
@@ -507,40 +569,103 @@ mod tests {
         db.close().await;
     }
 
-    /// Every run reads the whole export, so reading an unchanged one
-    /// again must leave the store as it was: a re-stamped sidecar is a
-    /// commit, and a bigger store, on every sync.
+    /// An export whose bytes are what was last read is not read again,
+    /// so a sync over it commits nothing; rewriting the same bytes (a
+    /// download of it again) is no change either.
     #[tokio::test]
-    async fn reading_an_unchanged_export_again_commits_nothing() {
+    async fn an_unchanged_export_is_not_read_again() {
         let ex = tempfile::tempdir().unwrap();
         let raw = tempfile::tempdir().unwrap();
-        write(
-            ex.path(),
-            "conversations.json",
-            &json!([conv("c1", 1_710_959_331.0, &["file-AbC1"])]),
-        );
+        let cache = cache_in(raw.path()).await;
+        let convs = json!([conv("c1", 1_710_959_331.0, &["file-AbC1"])]);
+        write(ex.path(), "conversations.json", &convs);
         write(ex.path(), "user.json", &json!({"id": "user-data"}));
         std::fs::write(ex.path().join("file-AbC1-log.txt"), b"Captain's log").unwrap();
         let db = RawDb::open(&db_path_for(raw.path())).await.unwrap();
-        let mut commits = Vec::new();
-        for now in [NOW, "2026-10-22T00:05:00-07:00"] {
+        let mut runs = Vec::new();
+        for (i, now) in [
+            NOW,
+            "2026-10-22T00:05:00-07:00",
+            "2026-10-22T00:10:00-07:00",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if i == 2 {
+                write(ex.path(), "conversations.json", &convs);
+            }
             let s = ingest(IngestOptions {
                 now: now.to_string(),
-                ..opts(&db, ex.path())
+                ..opts(&db, ex.path(), &cache)
             })
             .await
             .unwrap();
-            commits.push((
-                s.unchanged,
-                datalib_etl::doltlite_raw::commit_run(db.pool(), "test")
-                    .await
-                    .unwrap(),
-            ));
+            let commit = datalib_etl::doltlite_raw::commit_run(db.pool(), "test")
+                .await
+                .unwrap();
+            runs.push((s.export_unchanged, s.conversations, commit.is_some()));
         }
         db.close().await;
-        assert_eq!(commits[0].0, 0);
-        assert!(commits[0].1.is_some());
-        assert_eq!(commits[1], (1, None), "an unchanged export changes nothing");
+        assert_eq!(runs[0], (false, 1, true));
+        assert_eq!(runs[1], (true, 0, false), "read again unchanged");
+        assert_eq!(runs[2], (true, 0, false), "the same bytes written again");
+    }
+
+    /// Beside `api`, the export fills in only conversations the store
+    /// has never held: one the API holds stays as the API stored it,
+    /// at whatever version, and one the export lacks is not deleted.
+    #[tokio::test]
+    async fn beside_api_an_export_fills_gaps_and_deletes_nothing() {
+        let ex = tempfile::tempdir().unwrap();
+        let raw = tempfile::tempdir().unwrap();
+        let cache = cache_in(raw.path()).await;
+        let db = RawDb::open(&db_path_for(raw.path())).await.unwrap();
+        let fill = || IngestOptions {
+            reading: Reading::FillGaps,
+            ..opts(&db, ex.path(), &cache)
+        };
+        // What the API stored: c1 at a later version than the export's,
+        // c2 at an earlier one, and c3, which the export does not have.
+        write(
+            ex.path(),
+            "conversations.json",
+            &json!([
+                conv("c1", 9.0, &[]),
+                conv("c2", 1.0, &[]),
+                conv("c3", 1.0, &[])
+            ]),
+        );
+        ingest(fill()).await.unwrap();
+        let api_payload = |id: &str| -> String { format!("{id} as the API stored it") };
+        for id in ["c1", "c2", "c3"] {
+            sqlx::query("UPDATE conversations SET title = ? WHERE id = ?")
+                .bind(api_payload(id))
+                .bind(id)
+                .execute(db.pool())
+                .await
+                .unwrap();
+        }
+
+        write(
+            ex.path(),
+            "conversations.json",
+            &json!([
+                conv("c1", 5.0, &[]),
+                conv("c2", 7.0, &[]),
+                conv("c4", 1.0, &[])
+            ]),
+        );
+        let s = ingest(fill()).await.unwrap();
+        assert_eq!((s.conversations, s.unchanged, s.pruned), (1, 2, 0));
+        assert_eq!(ids(&db).await, ["c1", "c2", "c3", "c4"]);
+        let titles: Vec<String> = sqlx::query_scalar(
+            "SELECT title FROM conversations WHERE id IN ('c1','c2') ORDER BY id",
+        )
+        .fetch_all(db.pool())
+        .await
+        .unwrap();
+        assert_eq!(titles, [api_payload("c1"), api_payload("c2")]);
+        db.close().await;
     }
 
     /// An export is a complete snapshot, so a conversation it stops
@@ -549,19 +674,20 @@ mod tests {
     async fn a_shrinking_export_deletes_what_it_dropped() {
         let ex = tempfile::tempdir().unwrap();
         let raw = tempfile::tempdir().unwrap();
+        let cache = cache_in(raw.path()).await;
         write(
             ex.path(),
             "conversations.json",
             &json!([conv("c1", 1.0, &[]), conv("c2", 2.0, &["file-AbC2"])]),
         );
         let db = RawDb::open(&db_path_for(raw.path())).await.unwrap();
-        ingest(opts(&db, ex.path())).await.unwrap();
+        ingest(opts(&db, ex.path(), &cache)).await.unwrap();
         write(
             ex.path(),
             "conversations.json",
             &json!([conv("c1", 1.0, &[])]),
         );
-        let s = ingest(opts(&db, ex.path())).await.unwrap();
+        let s = ingest(opts(&db, ex.path(), &cache)).await.unwrap();
         assert_eq!(s.pruned, 1);
         assert_eq!(ids(&db).await, ["c1"]);
         assert!(db.attachments_listed().await.unwrap().is_empty());
@@ -580,13 +706,14 @@ mod tests {
     async fn a_file_missing_from_the_export_stays_owed() {
         let ex = tempfile::tempdir().unwrap();
         let raw = tempfile::tempdir().unwrap();
+        let cache = cache_in(raw.path()).await;
         write(
             ex.path(),
             "conversations.json",
             &json!([conv("c1", 1.0, &["file-Gone"])]),
         );
         let db = RawDb::open(&db_path_for(raw.path())).await.unwrap();
-        let s = ingest(opts(&db, ex.path())).await.unwrap();
+        let s = ingest(opts(&db, ex.path(), &cache)).await.unwrap();
         assert_eq!(s.not_in_export, 1);
         let edges = db.attachments_listed().await.unwrap();
         assert_eq!(
@@ -606,8 +733,12 @@ mod tests {
     async fn a_directory_without_conversations_json_fails_loudly() {
         let ex = tempfile::tempdir().unwrap();
         let raw = tempfile::tempdir().unwrap();
+        let cache = cache_in(raw.path()).await;
         let db = RawDb::open(&db_path_for(raw.path())).await.unwrap();
-        let err = format!("{:#}", ingest(opts(&db, ex.path())).await.unwrap_err());
+        let err = format!(
+            "{:#}",
+            ingest(opts(&db, ex.path(), &cache)).await.unwrap_err()
+        );
         assert!(err.contains("conversations.json"), "{err}");
         assert!(err.contains("export.path"), "{err}");
         db.close().await;
@@ -619,6 +750,7 @@ mod tests {
     async fn another_accounts_export_is_refused() {
         let ex = tempfile::tempdir().unwrap();
         let raw = tempfile::tempdir().unwrap();
+        let cache = cache_in(raw.path()).await;
         write(
             ex.path(),
             "conversations.json",
@@ -626,7 +758,7 @@ mod tests {
         );
         write(ex.path(), "user.json", &json!({"id": "user-data"}));
         let db = RawDb::open(&db_path_for(raw.path())).await.unwrap();
-        ingest(opts(&db, ex.path())).await.unwrap();
+        ingest(opts(&db, ex.path(), &cache)).await.unwrap();
 
         write(
             ex.path(),
@@ -634,45 +766,24 @@ mod tests {
             &json!([conv("c9", 1.0, &[])]),
         );
         write(ex.path(), "user.json", &json!({"id": "user-lore"}));
-        let err = format!("{:#}", ingest(opts(&db, ex.path())).await.unwrap_err());
+        let err = format!(
+            "{:#}",
+            ingest(opts(&db, ex.path(), &cache)).await.unwrap_err()
+        );
         assert!(err.contains("user-lore"), "{err}");
         assert_eq!(ids(&db).await, ["c1"]);
         db.close().await;
     }
 
-    /// Beside `api`, the export answers for a conversation it holds at
-    /// or after the version the listing names: the listing's
-    /// `update_time` can trail the detail's, which is the export's.
-    /// Anything older is fetched live.
+    /// Another account's export beside `api` is refused by name.
     #[test]
-    fn an_export_copy_answers_at_or_after_the_listed_version() {
-        let ex = tempfile::tempdir().unwrap();
-        write(
-            ex.path(),
-            "conversations.json",
-            &json!([conv("c1", 1_710_959_331.42, &[])]),
-        );
-        let copy = ExportCopy::open(ex.path()).unwrap();
-        let at = |version: Option<&str>| copy.conversation_at(&Listed::new("c1", version));
-        assert!(at(Some("1710959331")).is_some());
-        assert!(at(Some("1710959320")).is_some(), "a listing that trails");
-        assert!(at(Some("1710959932")).is_none(), "moved since the export");
-        assert!(at(None).is_none(), "a listing with no version");
-        assert!(copy
-            .conversation_at(&Listed::new("c2", Some("1710959331")))
-            .is_none());
-    }
-
-    /// Another account's export beside `api` would never match a
-    /// listed conversation; the run says so instead.
-    #[test]
-    fn an_export_copy_of_another_account_is_refused() {
+    fn an_export_of_another_account_beside_api_is_refused() {
         let ex = tempfile::tempdir().unwrap();
         write(ex.path(), "conversations.json", &json!([]));
         write(ex.path(), "user.json", &json!({"id": "user-lore"}));
-        let copy = ExportCopy::open(ex.path()).unwrap();
-        copy.check_account(&json!({"id": "user-lore"})).unwrap();
-        let err = copy
+        let files = ExportFiles::open(ex.path()).unwrap();
+        files.check_account(&json!({"id": "user-lore"})).unwrap();
+        let err = files
             .check_account(&json!({"id": "user-data"}))
             .unwrap_err()
             .to_string();
@@ -688,20 +799,21 @@ mod tests {
     async fn an_export_with_no_id_anywhere_deletes_nothing() {
         let ex = tempfile::tempdir().unwrap();
         let raw = tempfile::tempdir().unwrap();
+        let cache = cache_in(raw.path()).await;
         write(
             ex.path(),
             "conversations.json",
             &json!([conv("c1", 1.0, &[])]),
         );
         let db = RawDb::open(&db_path_for(raw.path())).await.unwrap();
-        ingest(opts(&db, ex.path())).await.unwrap();
+        ingest(opts(&db, ex.path(), &cache)).await.unwrap();
 
         let mut unkeyed = conv("c1", 2.0, &[]);
         let o = unkeyed.as_object_mut().unwrap();
         o.remove("id");
         o.remove("conversation_id");
         write(ex.path(), "conversations.json", &json!([unkeyed]));
-        let s = ingest(opts(&db, ex.path())).await.unwrap();
+        let s = ingest(opts(&db, ex.path(), &cache)).await.unwrap();
         assert_eq!((s.pruned, s.without_id), (0, 1));
         assert_eq!(ids(&db).await, ["c1"]);
         assert_eq!(
@@ -710,7 +822,7 @@ mod tests {
         );
 
         write(ex.path(), "conversations.json", &json!([]));
-        ingest(opts(&db, ex.path())).await.unwrap();
+        ingest(opts(&db, ex.path(), &cache)).await.unwrap();
         assert!(
             ids(&db).await.is_empty(),
             "an export that lists nothing empties it"
