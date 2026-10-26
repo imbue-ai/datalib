@@ -231,23 +231,38 @@ with nothing listed to go on with.
   no Gmail id as one `skipped:takeout` row per file. Neither stops the
   API part: what the Takeout did not supply is fetched whole.
 
-**mbox.** Every run reads every `.mbox` under the input, and keeps no
-record of what it read before. The folder is the unit of completeness:
-two files can hold one message and rows are keyed by the message, so
+**mbox.** The input is a `.mbox` file or a folder holding some, or a
+Takeout as Google sent it: one `.zip`/`.tgz`, or the folder holding
+every part of one export (`datalib_etl_files::archive`). A folder of
+parts is that Takeout, and anything else in it, an unpacked copy
+included, is passed over, as the `google_takeout` source does. A part's
+`.mbox` entries are read straight out of it, never unpacked to disk,
+and each is named `<part>/<entry>` in a problem row.
+
+A run reads every `.mbox` or none. It reads none when the input's
+files (the `.mbox` files, or the parts) hash to what the last clean
+read saw, through the host's fingerprint cache, and the settings it
+reads them with (`path`, the account fields, `only_extract_labels`)
+are the same: the `email/mbox_read` stamp in `ingested_files`
+(`datalib_etl_files::read_stamp`). A run that read every file without a
+problem and was not stopped writes that stamp; any other leaves the old
+one, so the next run reads everything again.
+
+The folder is the unit of completeness: two files can hold one message and rows are keyed by the message, so
 only a clean read of every file says what left the input. A run that
 gets one stores what it read and deletes every email no file holds,
 every name-keyed label no message carries (when no label filter is
 set), and everything filed under an account other than the configured
 one: its emails, threads and name-keyed labels, then its row. That is
 how a changed `account_id` (configured, or made from the input's name)
-moves the mail. A changed `only_extract_labels` needs nothing more:
-the next run reads everything anyway, and the prune counts every
-message it met, filtered or not, so narrowing the filter deletes
-nothing.
+moves the mail. A changed `only_extract_labels` changes the stamp, so
+the next run reads everything, and the prune counts every message it
+met, filtered or not, so narrowing the filter deletes nothing.
 
 A file that will not open, whose read fails part-way, or that holds no
 message at all (0 bytes, or not one `From ` line) is a
-`listing:mbox <file>` row. An mbox has no envelope that could say "no
+`listing:mbox <file>` row. A part that will not read is a
+`listing:files` row, since the files past the failure were never seen. An mbox has no envelope that could say "no
 messages", so an empty file is never read as an emptied mailbox;
 deleting the file is what drops the messages only it held. Messages
 that will not parse are one `skipped:mbox:` row per file, naming it,
@@ -258,9 +273,10 @@ problem is present, or the walk of the folder missed an entry
 reads every message, an `only_extract_labels` entry that no message
 carries becomes a `config:` row.
 
-Every run rewrites each email's `_bookkeeping` stamp, so a sync of an
-unchanged folder still commits; the `.eml` bytes and their edges are
-written only for an `.eml` the store does not hold yet.
+A run that reads rewrites each email's `_bookkeeping` stamp, so it
+commits even when nothing in the files moved (a widened label filter);
+the `.eml` bytes and their edges are written only for an `.eml` the
+store does not hold yet. A run that skips the read writes nothing.
 
 ## Rate limits
 
