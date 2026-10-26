@@ -608,11 +608,18 @@ fn exit_code(outcome: Option<RequestOutcome>, dropped_entries: usize) -> i32 {
 }
 
 async fn run_verb(verb: Verb) -> Result<()> {
-    let (checked, data_root) = config::load_graded(verb.config())?;
+    let config_path = match &verb {
+        Verb::Init { data_root } => return init(data_root),
+        Verb::Status { config, .. }
+        | Verb::Stop { config, .. }
+        | Verb::TurnOff { config, .. }
+        | Verb::TurnOn { config, .. } => config,
+    };
+    let (checked, data_root) = config::load_graded(config_path)?;
     if checked.is_fatal() {
         bail!(
             "{} is not a config: nothing in it could be read",
-            verb.config().display()
+            config_path.display()
         );
     }
     let store = Store::open(&data_root).await?;
@@ -648,6 +655,7 @@ async fn run_verb(verb: Verb) -> Result<()> {
                 }
             }
         }
+        Verb::Init { .. } => unreachable!("init returned above"),
         Verb::TurnOn { step, .. } => match store.turned_off().await?.get(step) {
             None => vec![format!("{step} was not off")],
             Some(who) => {
@@ -660,6 +668,24 @@ async fn run_verb(verb: Verb) -> Result<()> {
     #[allow(clippy::disallowed_macros)]
     for line in said {
         println!("{line}");
+    }
+    Ok(())
+}
+
+#[allow(clippy::disallowed_macros)]
+fn init(data_root: &Path) -> Result<()> {
+    let path = config::root_config_path(data_root);
+    if datalib_dag::starter::write_starter_config(data_root)
+        .with_context(|| format!("write {}", path.display()))?
+    {
+        println!(
+            "wrote the starter config, with no sources yet: {}\n\
+             add one with `datalib-step examples <type> --append {}`",
+            path.display(),
+            path.display()
+        );
+    } else {
+        println!("{} already exists; left as it is", path.display());
     }
     Ok(())
 }
