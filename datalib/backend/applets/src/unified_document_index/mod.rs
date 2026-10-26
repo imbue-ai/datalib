@@ -1547,6 +1547,63 @@ mod tests {
         pool.close().await;
     }
 
+    /// Whether this process has a file open whose inode is `ino`.
+    fn held_open(ino: u64) -> bool {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::read_dir("/dev/fd")
+            .unwrap()
+            .flatten()
+            .filter_map(|fd| std::fs::metadata(fd.path()).ok())
+            .any(|m| m.ino() == ino)
+    }
+
+    /// Compacting the grid index swaps a new file in under the same name.
+    /// The applet's held reader lets go of the old one at its next read
+    /// (doltlite notices the swap), which is what frees its disk; until
+    /// then the data root reads smaller than the free space has grown.
+    #[tokio::test]
+    async fn a_compacted_grid_index_is_reopened() {
+        use std::os::unix::fs::MetadataExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let (a, b, c) = (
+            "00000000-0000-4000-8000-0000000000a1",
+            "00000000-0000-4000-8000-0000000000b2",
+            "00000000-0000-4000-8000-0000000000c3",
+        );
+        index_chats(root, &[(a, "2026-01-01T00:00:00Z")]).await;
+        index_chats(root, &[(b, "2026-01-02T00:00:00Z")]).await;
+        let s = index_over(root).await;
+        let found = |rows: Vec<datalib_unified_document_index::search::SearchRow>| {
+            rows.into_iter().map(|r| r.uuid).collect::<Vec<_>>()
+        };
+        let uuids = vec![a.to_string(), b.to_string(), c.to_string()];
+        assert_eq!(found(s.repo.rows_by_uuids(&uuids).await.unwrap()), [a, b]);
+
+        let db = datalib_runtime::layout::grid_index_db(root);
+        let before = std::fs::metadata(&db).unwrap().ino();
+        assert!(held_open(before), "the first read left no reader open");
+        datalib_etl::doltlite_raw::fold_history(&db)
+            .await
+            .unwrap()
+            .expect("two syncs leave a history to fold");
+        assert_ne!(
+            std::fs::metadata(&db).unwrap().ino(),
+            before,
+            "the fold no longer swaps the file, so this test no longer tests that"
+        );
+        index_chats(root, &[(c, "2026-01-03T00:00:00Z")]).await;
+
+        assert_eq!(
+            found(s.repo.rows_by_uuids(&uuids).await.unwrap()),
+            [a, b, c]
+        );
+        assert!(
+            !held_open(before),
+            "the reader still holds the grid index compaction replaced"
+        );
+    }
+
     /// A pasted uuid or address is answered from the search terms file, never by
     /// qmd. This root has no qmd index, so a search that asked qmd says so,
     /// which is what the same search did before the terms were written.
