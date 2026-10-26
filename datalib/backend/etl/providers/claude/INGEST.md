@@ -304,7 +304,8 @@ live copy.
 Items whose listing `updated_at` predates the configured `since`
 (`api.since`, a day, an RFC 3339 instant or an offset such as `-30d`
 resolved against the run's start; CLI `--since`, RFC 3339 or
-`YYYY-MM-DD`; a day is midnight UTC)
+`YYYY-MM-DD`, assumed UTC; in a config a day is midnight in the
+run's own offset)
 are out of scope: they are never detail-fetched and are invisible to
 the overlap. The filter only gates fetching — already-stored rows are
 untouched — so moving `since` further back later lists the newly in

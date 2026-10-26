@@ -294,7 +294,7 @@ pub struct EmailGmailApi {
     /// reported by `users.getProfile`.
     #[serde(default)]
     pub email_address: Option<String>,
-    /// Oldest mail to mirror: a day (`2026-09-01`, midnight UTC), an RFC
+    /// Oldest mail to mirror: a day (`2026-09-01`, the run's own midnight), an RFC
     /// 3339 instant, or an offset from the run's start (`-30d`). A walk
     /// asks Gmail only for mail after it (`after:` on the listing), so a
     /// first sync of the last month takes minutes, not hours. Mail an

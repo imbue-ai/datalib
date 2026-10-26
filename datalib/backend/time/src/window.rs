@@ -1,19 +1,23 @@
 //! How a config says where a source's time window starts and ends: the
 //! one grammar every `since` / `until` shares. A bound is a day
 //! (`2026-09-01`), an instant (`2026-09-01T09:00:00-07:00`), or an offset
-//! from the run's `now` (`-30d`, `+21d`, `-12h`, `-2w`). An offset is
-//! resolved afresh each run against `DATALIB_DAG_NOW`, so the window
-//! slides; what a source does with records that slide out of it is the
-//! source's to say (docs/dev/config_model.md, "Time windows").
+//! from the run's `now` (`-30d`, `+21d`, `-12h`, `-2w`). A day and an
+//! offset are both read where the run is: in the offset `now` carries
+//! (`DATALIB_DAG_NOW`, stamped in the machine's local offset). An offset
+//! is resolved afresh each run, so the window slides; what a source does
+//! with records that slide out of it is the source's to say
+//! (docs/dev/config_model.md, "Time windows").
 
-use chrono::{DateTime, Duration, FixedOffset, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, Duration, FixedOffset, NaiveDate, TimeZone};
 
 use crate::IsoOffsetTimestamp;
 
 /// One end of a window, as written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimeBound {
-    /// `YYYY-MM-DD`. As an instant it is midnight UTC; as a day, itself.
+    /// `YYYY-MM-DD`. As an instant it is midnight in `now`'s offset, so
+    /// across a daylight-saving change it is an hour off the zone's own
+    /// midnight; as a day, itself.
     Day(NaiveDate),
     /// RFC 3339, its offset kept. As a day, its date in that offset.
     Instant(DateTime<FixedOffset>),
@@ -64,19 +68,23 @@ impl TimeBound {
             .map_err(|_| unreadable())
     }
 
-    /// `s` as a source that reads a day or an RFC 3339 instant takes it:
-    /// as written, or an offset's instant on this run.
+    /// `s` as an RFC 3339 instant on this run: an instant as written, a
+    /// day or an offset resolved against `now`.
     pub fn absolute(s: &str, now: &IsoOffsetTimestamp) -> Result<String, WindowError> {
         Ok(match Self::parse(s)? {
-            b @ Self::Relative(_) => b.instant(now).to_rfc3339(),
-            Self::Day(_) | Self::Instant(_) => s.to_string(),
+            Self::Instant(_) => s.to_string(),
+            b => b.instant(now).to_rfc3339(),
         })
     }
 
     pub fn instant(&self, now: &IsoOffsetTimestamp) -> IsoOffsetTimestamp {
         match *self {
-            Self::Day(d) => Utc
-                .from_utc_datetime(&d.and_hms_opt(0, 0, 0).expect("midnight exists"))
+            Self::Day(d) => now
+                .inner()
+                .offset()
+                .from_local_datetime(&d.and_hms_opt(0, 0, 0).expect("midnight exists"))
+                .single()
+                .expect("a fixed offset has one reading of every local time")
                 .into(),
             Self::Instant(t) => t.into(),
             Self::Relative(span) => (now.inner() + span).into(),
@@ -91,18 +99,15 @@ impl TimeBound {
         }
     }
 
-    /// Whether `self` comes after `other` whatever the clock says; `false`
-    /// when only a clock could tell (an offset against a date).
+    /// Whether `self` comes after `other` whatever the run's clock and
+    /// offset; `false` when only a run could tell (an offset against a
+    /// date, or a day against an instant).
     fn surely_after(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Relative(a), Self::Relative(b)) => a > b,
-            (Self::Relative(_), _) | (_, Self::Relative(_)) => false,
             (Self::Day(a), Self::Day(b)) => a > b,
-            // Any `now` will do: neither end reads it.
-            (a, b) => {
-                let now = IsoOffsetTimestamp::from(DateTime::<Utc>::UNIX_EPOCH);
-                a.instant(&now).inner() > b.instant(&now).inner()
-            }
+            (Self::Instant(a), Self::Instant(b)) => a > b,
+            _ => false,
         }
     }
 }
@@ -196,10 +201,17 @@ mod tests {
         NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
     }
 
+    /// A day is the run's own midnight: `since = "2026-09-01"` means
+    /// the start of that day where the person running the sync is.
     #[test]
-    fn a_day_is_midnight_utc_and_itself() {
+    fn a_day_is_midnight_where_the_run_is_and_itself() {
         let b = TimeBound::parse("2026-09-01").unwrap();
-        assert_eq!(b.instant(&now()).to_rfc3339(), "2026-09-01T00:00:00+00:00");
+        assert_eq!(b.instant(&now()).to_rfc3339(), "2026-09-01T00:00:00-07:00");
+        let in_berlin = crate::parse_strict("2026-10-26T23:30:00+01:00").unwrap();
+        assert_eq!(
+            b.instant(&in_berlin).to_rfc3339(),
+            "2026-09-01T00:00:00+01:00"
+        );
         assert_eq!(b.day(&now()), day("2026-09-01"));
     }
 
@@ -256,15 +268,15 @@ mod tests {
         }
     }
 
-    /// Every value that loaded before the grammar still loads, to the
-    /// same instant: Slack, Claude and ChatGPT took a day or RFC 3339,
-    /// the calendar and Garmin a day, and Slack's "before 1970 is
-    /// everything" stays a day.
+    /// Every value that loaded before the grammar still loads: an
+    /// instant to the same instant, a day to that day's midnight where
+    /// the run is (it was midnight UTC), and Slack's "before 1970 is
+    /// everything" stays before 1970.
     #[test]
-    fn values_written_before_the_grammar_mean_what_they_meant() {
+    fn values_written_before_the_grammar_still_load() {
         for (s, at) in [
-            ("2024-01-01", "2024-01-01T00:00:00+00:00"),
-            ("1900-01-01", "1900-01-01T00:00:00+00:00"),
+            ("2024-01-01", "2024-01-01T00:00:00-07:00"),
+            ("1900-01-01", "1900-01-01T00:00:00-07:00"),
             ("2024-03-20T18:28:51Z", "2024-03-20T18:28:51+00:00"),
             ("2024-03-20T18:28:51+02:00", "2024-03-20T18:28:51+02:00"),
         ] {
@@ -280,7 +292,11 @@ mod tests {
         let parse = |s, u| TimeWindow::parse(Some(s), Some(u));
         assert!(parse("2026-09-02", "2026-09-01").is_err());
         assert!(parse("-1d", "-2d").is_err());
-        assert!(parse("2026-09-01T12:00:00Z", "2026-09-01").is_err());
+        assert!(parse("2026-09-01T12:00:00Z", "2026-09-01T11:00:00Z").is_err());
+        assert!(
+            parse("2026-09-01T12:00:00Z", "2026-09-01").is_ok(),
+            "where midnight falls depends on the run's offset"
+        );
         assert!(
             parse("2026-09-01", "2026-09-01").is_ok(),
             "one day, both ends included"
@@ -310,9 +326,9 @@ mod tests {
     }
 
     #[test]
-    fn absolute_keeps_what_was_written_and_resolves_an_offset() {
+    fn absolute_keeps_an_instant_and_resolves_a_day_or_an_offset() {
         let abs = |s| TimeBound::absolute(s, &now()).unwrap();
-        assert_eq!(abs("2024-01-01"), "2024-01-01");
+        assert_eq!(abs("2024-01-01"), "2024-01-01T00:00:00-07:00");
         assert_eq!(abs("2024-03-20T18:28:51Z"), "2024-03-20T18:28:51Z");
         assert_eq!(abs("-30d"), "2026-09-26T15:30:00-07:00");
         assert!(TimeBound::absolute("soon", &now()).is_err());

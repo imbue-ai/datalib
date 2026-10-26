@@ -177,16 +177,17 @@ every one reads the same grammar, `datalib_time::TimeBound`
 
 | written | means |
 |---|---|
-| `2026-09-01` | that day; where an instant is wanted, its midnight UTC |
+| `2026-09-01` | that day; where an instant is wanted, its midnight in the run's offset (the machine's local one), so an hour off across a daylight-saving change |
 | `2026-09-01T09:00:00-07:00` | that instant (RFC 3339, offset required); where a day is wanted, its date in its own offset |
 | `-30d`, `+21d`, `-12h`, `-2w` | that far from the run's `now` (`DATALIB_DAG_NOW`), sign required, in hours, days or weeks |
 
-An offset is resolved once, at the start of each run, by the source's
-processor, which hands its download an absolute value; so a relative
-window slides forward run by run. A config's `validate` reads every
-bound and refuses an `until` before its `since` wherever no clock is
-needed to tell, so `datalib-dag --check` names the key; a day against
-an offset is checked when a run resolves them. A method that cannot
+A day or an offset is resolved once, at the start of each run, by the
+source's processor, which hands its download an absolute value; so a
+relative window slides forward run by run. A config's `validate` reads
+every bound and refuses an `until` before its `since` wherever neither
+the run's clock nor its offset is needed to tell, so `datalib-dag
+--check` names the key; a day against an offset or an instant is
+checked when a run resolves them. A method that cannot
 honor `until` has no such key, and naming one is refused as an unknown
 field.
 

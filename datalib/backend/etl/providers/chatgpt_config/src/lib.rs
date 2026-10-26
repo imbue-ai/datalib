@@ -80,7 +80,7 @@ impl ChatgptConfig {
 #[serde(deny_unknown_fields)]
 pub struct ChatgptApiSync {
     /// Only sync conversations whose `update_time` is at or after this:
-    /// a day (`YYYY-MM-DD`, midnight UTC), an RFC 3339 instant, or an
+    /// a day (`YYYY-MM-DD`, the run's own midnight), an RFC 3339 instant, or an
     /// offset from the run's start (`-30d`). Older conversations are
     /// never detail-fetched, and the listing walk stops early once it
     /// pages past the cutoff (the listing is newest-updated-first). One

@@ -79,7 +79,7 @@ impl ClaudeConfig {
 #[serde(deny_unknown_fields)]
 pub struct ClaudeApiSync {
     /// Only sync conversations whose `updated_at` is at or after this:
-    /// a day (`YYYY-MM-DD`, midnight UTC), an RFC 3339 instant, or an
+    /// a day (`YYYY-MM-DD`, the run's own midnight), an RFC 3339 instant, or an
     /// offset from the run's start (`-30d`). Older conversations are
     /// never detail-fetched, and one already mirrored stays; moving the
     /// start further back later backfills on the next run. Unset → sync
