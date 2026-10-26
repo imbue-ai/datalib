@@ -10,6 +10,7 @@ pub mod when;
 
 pub use render::{render_all, CalendarRenderProfile, RenderSummary};
 pub use types::{
-    Attendee, EventLink, EventShape, NormalizedEvent, OccurrenceRef, Person, SeriesRef,
+    Attendee, EventLink, EventShape, GuestAnswers, NormalizedEvent, OccurrenceRef, Person,
+    QuestionAnswer, SeriesRef,
 };
 pub use when::EventTime;

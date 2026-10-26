@@ -5,7 +5,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use datalib_etl_calendar::ingest::db::{
-    LoadedAccount, LoadedCalendar, LoadedGoogleEvent, LoadedIcsObject, RawDb,
+    LoadedAccount, LoadedCalendar, LoadedCalendlyEvent, LoadedGoogleEvent, LoadedIcsObject, RawDb,
 };
 use datalib_etl_render::inputs::{changed_rows, RawRange};
 use datalib_etl_render::processor::Unparsed;
@@ -16,8 +16,10 @@ pub struct Parsed {
     pub calendars: Vec<LoadedCalendar>,
     pub ics: Vec<LoadedIcsObject>,
     pub google: Vec<LoadedGoogleEvent>,
+    pub calendly: Vec<LoadedCalendlyEvent>,
     /// Event rows that would not read. While there are any, an event
-    /// missing from `ics` and `google` may only be unreadable, not gone.
+    /// missing from `ics`, `google` and `calendly` may only be
+    /// unreadable, not gone.
     pub unparsed: Vec<Unparsed>,
     /// The rows the diff names as changed since the cursor, per table;
     /// `None` when there is no cursor and everything renders.
@@ -26,7 +28,14 @@ pub struct Parsed {
     pub head: Option<String>,
 }
 
-pub const TABLES: &[&str] = &["ics_objects", "google_events", "calendars", "accounts"];
+pub const TABLES: &[&str] = &[
+    "ics_objects",
+    "google_events",
+    "calendly_events",
+    "calendly_invitees",
+    "calendars",
+    "accounts",
+];
 
 /// `None` when the store is absent or cannot be read — not an empty
 /// calendar, which would sweep every document the source has.
@@ -44,8 +53,10 @@ pub fn parse(db_path: &Path, range: RawRange<'_>) -> Result<Option<Parsed>> {
                 let pin = db.pin().expect("open_reader returns a pinned handle");
                 let (ics, bad_ics) = db.load_ics_objects().await?;
                 let (google, bad_google) = db.load_google_events().await?;
+                let (calendly, bad_calendly) = db.load_calendly_events().await?;
                 let unparsed = (bad_ics.into_iter().map(|r| ("ics_objects", r)))
                     .chain(bad_google.into_iter().map(|r| ("google_events", r)))
+                    .chain(bad_calendly.into_iter().map(|r| ("calendly_events", r)))
                     .map(|(table, r)| Unparsed::new(table, r.id, &r.sample))
                     .collect();
                 Ok::<_, anyhow::Error>(Parsed {
@@ -53,6 +64,7 @@ pub fn parse(db_path: &Path, range: RawRange<'_>) -> Result<Option<Parsed>> {
                     calendars: db.load_calendars().await?,
                     ics,
                     google,
+                    calendly,
                     unparsed,
                     changed: changed_rows(db.pool(), range, pin, TABLES).await?,
                     head: Some(pin.commit().to_string()),

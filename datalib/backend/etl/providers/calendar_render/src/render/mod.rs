@@ -1,5 +1,6 @@
 //! Raw calendar objects → normalized events → markdown + grid rows.
 
+pub mod calendly;
 pub mod google;
 pub mod ics;
 pub mod ids;

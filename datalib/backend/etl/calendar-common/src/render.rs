@@ -376,6 +376,25 @@ fn render_markdown(
         out.push_str("\n\n");
     }
 
+    if !event.answers.is_empty() {
+        out.push_str("## Booking answers\n\n");
+        for g in &event.answers {
+            let who = person_md(g.person.name.as_deref(), g.person.email.as_deref())
+                .unwrap_or_else(|| "(unnamed)".into());
+            out.push_str(&format!("### {who}\n\n"));
+            for qa in &g.answers {
+                out.push_str(&format!(
+                    "**{}**\n\n{}\n\n",
+                    escape_md_inline(&one_line(&qa.question)),
+                    match qa.answer.trim() {
+                        "" => "—".to_string(),
+                        a => text_block(a),
+                    }
+                ));
+            }
+        }
+    }
+
     if let EventShape::Series {
         rules,
         rdates,
@@ -459,6 +478,11 @@ fn build_grid_row(
     text.extend(repeats_lines(event));
     text.extend(event.location.clone());
     text.extend(event.description.clone());
+    for g in &event.answers {
+        for qa in &g.answers {
+            text.push(format!("{}: {}", one_line(&qa.question), qa.answer.trim()));
+        }
+    }
     text.push(event.calendar_label.clone());
     if let Some(o) = &event.organizer {
         text.extend(person_line(o.name.as_deref(), o.email.as_deref()));
@@ -597,6 +621,12 @@ fn capitalize(s: &str) -> String {
     }
 }
 
+/// Text that has to stay on one line (a question set in bold), its
+/// breaks as spaces.
+fn one_line(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Plain text as a markdown block that reads as it was typed, every
 /// line break kept.
 fn text_block(s: &str) -> String {
@@ -652,7 +682,9 @@ mod tests {
     }
 
     use super::*;
-    use crate::types::{Attendee, EventLink, OccurrenceRef, Person, SeriesRef};
+    use crate::types::{
+        Attendee, EventLink, GuestAnswers, OccurrenceRef, Person, QuestionAnswer, SeriesRef,
+    };
 
     const SERIES: &str = "11111111-1111-8111-8111-111111111111";
     const MOVED: &str = "22222222-2222-8222-8222-222222222222";
@@ -691,6 +723,7 @@ mod tests {
                 resource: false,
             }],
             links: Vec::new(),
+            answers: Vec::new(),
             source_url: None,
             created: None,
             modified_at: Some("2026-09-02T16:00:00+00:00".into()),
@@ -862,6 +895,63 @@ mod tests {
         assert!(row.preview.contains("Weekly on Monday and Thursday"));
         // What the event says comes before the guest list.
         assert!(row.preview.contains("Ship's status."));
+    }
+
+    /// A booking form's answers are on the page under who gave them, and
+    /// in the grid's text, so a search for what someone wrote finds the
+    /// meeting.
+    #[test]
+    fn booking_answers_are_on_the_page_and_searchable() {
+        let mut event = base(SERIES, EventShape::Single);
+        event.answers = vec![GuestAnswers {
+            person: Person {
+                name: Some("Reginald Barclay".into()),
+                email: Some("barclay@enterprise.test".into()),
+            },
+            answers: vec![
+                QuestionAnswer {
+                    question: "What would you like\nto discuss?".into(),
+                    answer: "The holodeck.\nAgain.".into(),
+                },
+                QuestionAnswer {
+                    question: "Anything else?".into(),
+                    answer: "  ".into(),
+                },
+            ],
+        }];
+        let md = join(&render_markdown(&profile(), &event, "tng_calendar", None));
+        let section = md
+            .split_once("## Booking answers\n\n")
+            .expect("an answers section")
+            .1;
+        assert!(section.starts_with("### [Reginald Barclay]("), "{section}");
+        assert!(
+            section.contains("**What would you like to discuss?**\n\nThe holodeck.<br>\nAgain.\n"),
+            "{section}"
+        );
+        assert!(section.contains("**Anything else?**\n\n—\n"), "{section}");
+
+        // The preview is the body's first 240 characters; leave out what
+        // would come before the answers.
+        event.start = None;
+        event.location = None;
+        event.description = None;
+        let mut problems = Vec::new();
+        let row = build_grid_row(
+            &profile(),
+            &event,
+            "tng_calendar",
+            "x/index.md",
+            None,
+            &mut problems,
+        )
+        .expect("valid row");
+        assert!(
+            row.preview
+                .contains("What would you like to discuss?: The holodeck."),
+            "{}",
+            row.preview
+        );
     }
 
     #[test]

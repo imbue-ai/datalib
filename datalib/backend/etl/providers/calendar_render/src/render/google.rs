@@ -198,6 +198,7 @@ fn event(
             .filter_map(attendee)
             .collect(),
         links: links(v),
+        answers: Vec::new(),
         source_url: str_of(v, "htmlLink").map(str::to_string),
         created: str_of(v, "created").and_then(datalib_time::coerce_record_stamp),
         modified_at: str_of(v, "updated").and_then(datalib_time::coerce_record_stamp),

@@ -140,6 +140,7 @@ fn event(
         organizer: v.prop("ORGANIZER").map(person),
         attendees: v.props_named("ATTENDEE").map(attendee).collect(),
         links: links(v),
+        answers: Vec::new(),
         source_url: None,
         created: v
             .prop("CREATED")

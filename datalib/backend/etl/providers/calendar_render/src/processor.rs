@@ -43,7 +43,7 @@ impl SourceRender for CalendarRender {
             return Ok("no raw store yet".into());
         };
         ctx.report_unparsed(
-            &ReadScope::Whole(vec!["ics_objects", "google_events"]),
+            &ReadScope::Whole(vec!["ics_objects", "google_events", "calendly_events"]),
             &parsed.unparsed,
             Some(self.render_version()),
         )?;
