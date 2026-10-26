@@ -26,7 +26,6 @@ async fn run(store: &std::path::Path, api: &ZoomApi) -> FetchSummary {
             account: std::env::var("ZOOM_TEST_ACCOUNT").ok(),
         },
         api: api.clone(),
-        blob_size_limit_bytes: None,
         today: Utc::now().date_naive(),
         progress: Default::default(),
         control: Default::default(),
@@ -57,21 +56,20 @@ async fn the_last_weeks_copy_whole_and_a_second_run_owes_nothing() {
     assert_eq!(first.failed, 0, "{first:?}");
 
     let db = RawDb::open(&db_path_for(&store)).await.unwrap();
-    let transcripts: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM recordings r, json_each(r.payload, '$.recording_files') f \
-         WHERE json_extract(f.value, '$.file_type') = 'TRANSCRIPT'",
+    let meetings: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM (SELECT id FROM recordings UNION SELECT id FROM reported_meetings)",
     )
     .fetch_one(db.pool())
     .await
     .unwrap();
-    eprintln!("[test] transcripts listed: {transcripts}");
+    eprintln!("[test] meetings listed: {meetings}");
     db.close().await;
 
     let second = run(&store, &api).await;
     eprintln!("[test] second run: {}", second.line());
     assert_eq!(
-        (second.files, second.participants, second.summaries),
-        (0, 0, 0),
+        (second.participants, second.summaries),
+        (0, 0),
         "{second:?}"
     );
 }

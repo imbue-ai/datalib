@@ -1,7 +1,7 @@
 //! A Zoom download cut off at any request, then run again, ends with the
 //! store an uninterrupted run leaves (`datalib_etl_web::interrupt`): from
 //! an empty store, and from the store that run left against an account
-//! where a transcript and a summary moved and a meeting was added.
+//! where a summary moved and a meeting was added.
 
 use std::path::{Path, PathBuf};
 
@@ -55,7 +55,6 @@ impl Rig for Zoom {
             db: db.clone(),
             latchkey: LatchkeySettings::default(),
             api: tape::api(),
-            blob_size_limit_bytes: None,
             today: tape::today(),
             progress: Default::default(),
             control: DownloadControl {
@@ -76,8 +75,8 @@ impl Rig for Zoom {
     async fn contents(&self, dir: &Path) -> Result<String> {
         let db = self.open(dir).await?;
         let mut out = dump_tables(db.pool(), TABLES).await?;
-        for table in ["recording_files", "participants", "summaries"] {
-            // `table` is one of the three names above.
+        for table in ["participants", "summaries"] {
+            // `table` is one of the two names above.
             let sql = format!(
                 "SELECT id, fetched_at_utc IS NOT NULL, held_version \
                  FROM {table}_bookkeeping ORDER BY id"
@@ -111,8 +110,8 @@ async fn a_first_sync_cut_off_at_any_request_resumes_to_the_same_store() {
 }
 
 /// From an empty store nothing is ever *changed*; a download that read
-/// a stored file as done whatever its size passes the test above and
-/// fails this one.
+/// a stored summary as done whatever its modified time passes the test
+/// above and fails this one.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_later_sync_cut_off_at_any_request_resumes_to_the_same_store() {
     let d = tempfile::tempdir().unwrap();

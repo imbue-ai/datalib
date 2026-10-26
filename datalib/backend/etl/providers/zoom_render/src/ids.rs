@@ -1,7 +1,7 @@
 //! Zoom entity ids. A meeting UUID is Zoom's and names one meeting
-//! instance; every part of its document is keyed within it.
+//! instance; each part of its document is keyed by it.
 
-use datalib_id::{composite_key, IdNamespace, Identity, Minter};
+use datalib_id::{IdNamespace, Identity, Minter};
 use datalib_time::RecordStampPrecision;
 
 pub const ID_NAMESPACE: IdNamespace = IdNamespace::Zoom;
@@ -10,7 +10,6 @@ pub const STAMP_PRECISION: RecordStampPrecision = RecordStampPrecision::Millis;
 pub const KIND_MEETING: &str = "meeting";
 pub const KIND_DETAILS: &str = "meeting_details";
 pub const KIND_SUMMARY: &str = "meeting_summary";
-pub const KIND_TURN: &str = "transcript_turn";
 
 const IDS: Minter = Minter::new(ID_NAMESPACE, STAMP_PRECISION);
 
@@ -28,23 +27,6 @@ pub fn summary(source_id: &str, uuid: &str, at: Option<i64>) -> Identity {
     IDS.mint(source_id, KIND_SUMMARY, uuid.to_string(), at)
 }
 
-/// One speaker's turn, keyed by the transcript file and the number of
-/// the cue it starts at, which the VTT file gives each cue.
-pub fn turn(
-    source_id: &str,
-    uuid: &str,
-    file_key: &str,
-    first_cue: &str,
-    at: Option<i64>,
-) -> Identity {
-    IDS.mint(
-        source_id,
-        KIND_TURN,
-        composite_key(&[uuid, file_key, first_cue]),
-        at,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -57,7 +39,6 @@ mod tests {
             meeting("src", "nCC1701+D/briefing=="),
             details("src", "nCC1701+D/briefing==", at),
             summary("src", "nCC1701+D/briefing==", at),
-            turn("src", "nCC1701+D/briefing==", "file-vtt", "1", at),
         ] {
             assert_eq!(
                 got.uuid,

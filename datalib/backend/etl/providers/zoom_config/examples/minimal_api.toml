@@ -14,8 +14,7 @@ function = "ingest"
 [steps.params.api]
 user = "picard@enterprise.example"
 
-# Each meeting as one document: who came, the AI summary and the
-# transcript, speaker by speaker.
+# Each meeting as one document: when, who came and the AI summary.
 [[steps]]
 group = "zoom"
 function = "render_markdown"

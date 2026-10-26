@@ -26,7 +26,6 @@ pub fn plan_ingest(ctx: PlanContext, config: ZoomConfig) -> Result<Vec<Box<dyn D
             id: format!("zoom/{name}/download"),
             raw_path,
             latchkey: config.latchkey_settings,
-            blob_size_limit_bytes: config.common.blob_size_limit_bytes,
             api,
         }));
     }
@@ -37,7 +36,6 @@ struct ZoomIngest {
     id: String,
     raw_path: PathBuf,
     latchkey: LatchkeySettings,
-    blob_size_limit_bytes: Option<u64>,
     api: ZoomApi,
 }
 
@@ -62,13 +60,12 @@ impl DataProcessor for ZoomIngest {
             .naive_utc()
             .date();
         let db = ingest::RawDb::open(&ingest::db_path_for(&self.raw_path)).await?;
-        let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
-        ctx.run_store(pool, Some(cas_pool), |sealer| async {
+        let pool = db.pool().clone();
+        ctx.run_store(pool, None, |sealer| async {
             let s = ingest::fetch(ingest::FetchOptions {
                 db,
                 latchkey: self.latchkey.clone(),
                 api: self.api.clone(),
-                blob_size_limit_bytes: self.blob_size_limit_bytes,
                 today,
                 progress: ctx.progress.clone(),
                 control: ctx.control.clone(),

@@ -1,15 +1,14 @@
 //! One document per meeting, through chat-common: a first section with
-//! when, who hosted, who came and the recording's files; the AI
-//! Companion's summary; then the transcript, one section per speaker's
-//! turn.
+//! when, who hosted, who came and what Zoom keeps of the recording, then
+//! the AI Companion's summary.
 
 use std::collections::BTreeMap;
 
 use datalib_etl_chat_common::normalize::iso_to_ms;
 use datalib_etl_chat_common::render::RenderProfile;
 use datalib_etl_chat_common::types::{
-    own_stamp_ms, AuthorKind, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
-    NormalizedDoc, UpstreamRef,
+    own_stamp_ms, AuthorKind, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc,
+    UpstreamRef,
 };
 use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::html::{escape_md_block, escape_md_inline};
@@ -20,16 +19,14 @@ use datalib_schema::providers::Provider;
 use serde_json::Value;
 
 use crate::ids;
-use crate::store::Meeting;
-use crate::vtt;
+use crate::store::{Meeting, TABLES};
 
-/// v1: details, summary and transcript turns.
+/// v1: details and summary.
 pub const RENDER_VERSION: u32 = 1;
 
 pub const SOURCE_LABEL: &str = "Zoom";
 const KIND_DETAILS: &str = "Zoom Meeting Details";
 const KIND_SUMMARY: &str = "Zoom Meeting Summary";
-const KIND_TURN: &str = "Zoom Transcript";
 
 pub fn profile() -> RenderProfile {
     RenderProfile {
@@ -37,7 +34,7 @@ pub fn profile() -> RenderProfile {
         provider: Provider::Zoom,
         source_label: SOURCE_LABEL.to_string(),
         chat_kind: "Zoom Meeting".to_string(),
-        message_kind: KIND_TURN.to_string(),
+        message_kind: KIND_DETAILS.to_string(),
         reaction_kind: "Zoom Reaction".to_string(),
         chat_entity_kind: ids::KIND_MEETING,
         render_version: RENDER_VERSION,
@@ -50,9 +47,6 @@ pub fn profile() -> RenderProfile {
 /// What one meeting renders from besides its rows.
 pub struct MeetingInput<'a> {
     pub meeting: &'a Meeting,
-    /// The transcript's text, `None` for a meeting with no transcript
-    /// file, or the problem that kept it from being read.
-    pub transcript: Option<Result<String, Problem>>,
     /// The email of the user the store copies, when this meeting is
     /// theirs: whose mirror it is.
     pub account: Option<String>,
@@ -60,18 +54,9 @@ pub struct MeetingInput<'a> {
 
 /// Every row a meeting's document reads, for its bucket's inputs.
 pub fn declare_inputs(m: &Meeting, inputs: &Inputs) {
-    for table in [
-        datalib_etl_zoom::ingest::schema_raw::RECORDINGS,
-        datalib_etl_zoom::ingest::schema_raw::REPORTED_MEETINGS,
-        datalib_etl_zoom::ingest::schema_raw::PARTICIPANTS,
-        datalib_etl_zoom::ingest::schema_raw::SUMMARIES,
-    ] {
+    for table in TABLES {
         inputs.read(table, &m.uuid);
     }
-    inputs.read_all(
-        datalib_etl_zoom::ingest::schema_raw::RECORDING_FILES,
-        m.files.iter().map(|f| f.edge_id.as_str()),
-    );
 }
 
 pub fn build_chat(source_id: &str, input: MeetingInput<'_>, inputs: &Inputs) -> NormalizedChat {
@@ -94,14 +79,6 @@ pub fn build_chat(source_id: &str, input: MeetingInput<'_>, inputs: &Inputs) -> 
     let mut items = vec![details_item(source_id, m, start_ms, &people, problems)];
     if let Some(summary) = summary_item(source_id, m, start_ms) {
         items.push(summary);
-    }
-    match &input.transcript {
-        Some(Ok(text)) => {
-            let file_key = m.transcript().map_or("transcript", |f| f.file_key.as_str());
-            items.extend(turn_items(source_id, m, file_key, text, start_ms, &people));
-        }
-        Some(Err(problem)) => items[0].problems.push(problem.clone()),
-        None => {}
     }
 
     NormalizedChat {
@@ -217,6 +194,13 @@ fn details_item(
     if let Some(n) = m.field("id").and_then(Value::as_i64) {
         lines.push(format!("- **Meeting ID:** {n}"));
     }
+    let kept = kept_in_zoom(m);
+    if !kept.is_empty() {
+        lines.push(format!(
+            "- **Zoom keeps:** {}",
+            escape_md_inline(&kept.join(", "))
+        ));
+    }
     let mut text = lines.join("\n");
     if !people.is_empty() {
         let who: Vec<String> = people
@@ -239,33 +223,6 @@ fn details_item(
             escape_md_inline(why)
         ));
     }
-    let attachments: Vec<NormalizedAttachment> = m
-        .files
-        .iter()
-        .filter(|f| f.blake3.is_some())
-        .map(|f| {
-            let entry = m.file_entry(&f.file_key);
-            let s = |k: &str| entry.and_then(|e| e.get(k)).and_then(Value::as_str);
-            let label = s("recording_type")
-                .or(s("file_type"))
-                .unwrap_or(&f.file_key);
-            let ext = s("file_extension").unwrap_or("").to_ascii_lowercase();
-            NormalizedAttachment {
-                href: None,
-                file_name: Some(if ext.is_empty() {
-                    label.to_string()
-                } else {
-                    format!("{label}.{ext}")
-                }),
-                mime_type: None,
-                byte_len: entry
-                    .and_then(|e| e.get("file_size"))
-                    .and_then(Value::as_i64),
-                source_url: None,
-                ref_id: Some(f.edge_id.clone()),
-            }
-        })
-        .collect();
     NormalizedChatItem {
         message_uuid: id.uuid.clone(),
         recipients: Vec::new(),
@@ -275,12 +232,8 @@ fn details_item(
         author_kind: AuthorKind::Unknown,
         date_ms: start_ms,
         text: (!text.is_empty()).then_some(text),
-        kind: if attachments.is_empty() {
-            ItemKind::Text
-        } else {
-            ItemKind::Attachment
-        },
-        attachments,
+        kind: ItemKind::Text,
+        attachments: Vec::new(),
         reactions: Vec::new(),
         labels: Vec::new(),
         system_note: None,
@@ -292,6 +245,24 @@ fn details_item(
         unread: false,
         problems,
     }
+}
+
+/// What the recording's files are, as Zoom names their kinds
+/// (`audio_transcript`, `shared_screen_with_speaker_view`), each once.
+/// None of them is downloaded: INGEST.md says why.
+pub fn kept_in_zoom(m: &Meeting) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for f in m.recording_files() {
+        let kind = f
+            .get("recording_type")
+            .or_else(|| f.get("file_type"))
+            .and_then(Value::as_str)
+            .map(|k| k.to_ascii_lowercase().replace('_', " "));
+        if let Some(kind) = kind.filter(|k| !out.contains(k)) {
+            out.push(kind);
+        }
+    }
+    out
 }
 
 /// The summary as markdown: Zoom's own `summary_content`, else the
@@ -374,63 +345,6 @@ fn summary_item(source_id: &str, m: &Meeting, start_ms: Option<i64>) -> Option<N
     })
 }
 
-fn turn_items(
-    source_id: &str,
-    m: &Meeting,
-    file_key: &str,
-    vtt_text: &str,
-    start_ms: Option<i64>,
-    people: &[Attendee],
-) -> Vec<NormalizedChatItem> {
-    // A transcript's times count from the start of the recording, which
-    // can begin after the meeting did.
-    let file_start = m
-        .file_entry(file_key)
-        .and_then(|f| f.get("recording_start"))
-        .and_then(Value::as_str)
-        .and_then(iso_to_ms)
-        .or(start_ms);
-    let handle_of = |speaker: &str| {
-        people
-            .iter()
-            .find(|a| a.name == speaker)
-            .and_then(|a| a.handle.clone())
-    };
-    vtt::turns(&vtt::cues(vtt_text))
-        .into_iter()
-        .map(|t| {
-            let at = file_start.map(|s| s + t.start_ms);
-            let id = ids::turn(source_id, &m.uuid, file_key, &t.first_cue, at);
-            let (author_display, author_kind, author_handle) = match &t.speaker {
-                Some(name) => (name.clone(), AuthorKind::Named, handle_of(name)),
-                None => ("Unknown speaker".to_string(), AuthorKind::Unknown, None),
-            };
-            NormalizedChatItem {
-                message_uuid: id.uuid.clone(),
-                recipients: Vec::new(),
-                mentions: Vec::new(),
-                author_handle,
-                author_display,
-                author_kind,
-                date_ms: at,
-                text: Some(escape_md_block(&t.text)),
-                kind: ItemKind::Text,
-                attachments: Vec::new(),
-                reactions: Vec::new(),
-                labels: Vec::new(),
-                system_note: None,
-                source_url: None,
-                kind_label: Some(KIND_TURN.to_string()),
-                source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key.clone())),
-                is_aside: false,
-                branch: Vec::new(),
-                unread: false,
-                problems: Vec::new(),
-            }
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -442,9 +356,12 @@ mod tests {
             recording: Some(json!({
                 "uuid": "nCC1701+D/briefing==", "id": 85017010, "topic": "Senior staff briefing",
                 "start_time": "2026-10-05T09:00:00Z", "duration": 45,
-                "recording_files": [{"id": "file-vtt", "file_type": "TRANSCRIPT",
-                                     "file_extension": "VTT",
-                                     "recording_start": "2026-10-05T09:01:00Z"}]})),
+                "recording_files": [
+                    {"id": "a-mp4", "file_type": "MP4", "recording_type": "shared_screen_with_speaker_view"},
+                    {"id": "a-m4a", "file_type": "M4A", "recording_type": "audio_only"},
+                    {"id": "a-vtt", "file_type": "TRANSCRIPT", "recording_type": "audio_transcript"},
+                    {"file_type": "TIMELINE"},
+                    {"file_type": "TIMELINE"}]})),
             participants: Some(json!({"participants": [
                 {"name": "Jean-Luc Picard", "user_email": "picard@enterprise.example", "duration": 1500},
                 {"name": "William Riker", "user_email": "riker@enterprise.example", "duration": 600},
@@ -469,31 +386,6 @@ mod tests {
                 ("Guinan", 60, false)
             ]
         );
-    }
-
-    /// A speaker who attended with an email is a chip; one the transcript
-    /// names but the participant list does not is just a name.
-    #[test]
-    fn transcript_turns_are_timed_from_the_recording_and_know_their_speakers() {
-        let m = meeting();
-        let vtt = "WEBVTT\n\n1\n00:00:02.000 --> 00:00:04.000\nWilliam Riker: Ready, sir.\n\n\
-                   2\n00:00:05.000 --> 00:00:06.000\nQ: Mon capitaine!\n";
-        let items = turn_items("src", &m, "file-vtt", vtt, Some(0), &attendees(&m));
-        assert_eq!(items.len(), 2);
-        assert_eq!(
-            items[0].date_ms,
-            iso_to_ms("2026-10-05T09:01:02Z"),
-            "recording_start plus the cue's offset"
-        );
-        assert_eq!(
-            items[0]
-                .author_handle
-                .as_ref()
-                .map(|h| h.value().to_string()),
-            Some("riker@enterprise.example".to_string())
-        );
-        assert_eq!(items[1].author_display, "Q");
-        assert!(items[1].author_handle.is_none());
     }
 
     #[test]
@@ -521,6 +413,13 @@ mod tests {
         let item = details_item("src", &m, Some(0), &attendees(&m), Vec::new());
         let text = item.text.unwrap();
         assert!(text.contains("- **Length:** 45 minutes"), "{text}");
+        assert!(
+            text.contains(
+                "- **Zoom keeps:** shared screen with speaker view, audio only, \
+                 audio transcript, timeline\n"
+            ),
+            "each kind once: {text}"
+        );
         assert!(
             text.contains("- [Jean-Luc Picard](mailto:picard@enterprise.example) (45 minutes)"),
             "{text}"

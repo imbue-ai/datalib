@@ -5,7 +5,6 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 use sqlx::{Sqlite, Transaction};
 
-use datalib_etl::blob_cas::{BlobCas, CasEdgeRow as _, CasInsert};
 use datalib_etl::bulk::{bulk_upsert_first_seen_in_tx, bulk_upsert_in_tx, BulkUpsertable};
 use datalib_etl::doltlite_raw::{self as dr, WirePayload};
 use datalib_time::IsoOffsetTimestamp;
@@ -14,7 +13,7 @@ use super::schema_raw::*;
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
-datalib_etl::raw_db!(pub RawDb: CasEntityStore, full_ddl(), LADDER);
+datalib_etl::raw_db!(pub RawDb: EntityStore, full_ddl(), LADDER);
 
 pub fn payload(id: &str, value: &Value) -> Result<WirePayload> {
     Ok(WirePayload {
@@ -51,18 +50,6 @@ pub async fn store_listed<R: BulkUpsertable>(
 }
 
 impl RawDb {
-    /// Every stored recording's listing entry, oldest meeting first.
-    pub async fn recordings(&self) -> Result<Vec<Value>> {
-        let rows: Vec<(String,)> =
-            sqlx::query_as("SELECT json(payload) FROM recordings ORDER BY start_time, id")
-                .fetch_all(self.pool())
-                .await
-                .context("read the stored recordings")?;
-        rows.into_iter()
-            .map(|(p,)| serde_json::from_str(&p).context("a recordings payload is not JSON"))
-            .collect()
-    }
-
     /// Every meeting either listing named, `(uuid, start_time)`, oldest
     /// first.
     pub async fn meetings(&self) -> Result<Vec<(String, Option<String>)>> {
@@ -84,51 +71,6 @@ impl RawDb {
             .await
             .context("read the stored summary listings")
     }
-}
-
-/// A recording file as fetched: `None` bytes for one Zoom no longer has.
-#[derive(Debug, Clone)]
-pub struct FetchedFile {
-    pub meeting_uuid: String,
-    pub file_key: String,
-    pub content_type: Option<&'static str>,
-    pub bytes: Option<Vec<u8>>,
-}
-
-impl FetchedFile {
-    pub fn key(&self) -> String {
-        RecordingFileRow::pk_recipe(&self.meeting_uuid, &self.file_key)
-    }
-}
-
-/// Write a flush of files: their bytes into the CAS first, which
-/// commits on its own, then the edges naming them.
-pub async fn store_files(
-    tx: &mut Transaction<'static, Sqlite>,
-    cas: &BlobCas,
-    files: &[&FetchedFile],
-) -> Result<()> {
-    let inserts: Vec<CasInsert<'_, String>> = files
-        .iter()
-        .filter_map(|f| {
-            Some(CasInsert {
-                id: f.key(),
-                bytes: f.bytes.as_deref()?,
-                content_type: f.content_type,
-            })
-        })
-        .collect();
-    let stored = cas.put_many(inserts).await?;
-    let edges: Vec<RecordingFileRow> = files
-        .iter()
-        .map(|f| RecordingFileRow {
-            id: f.key(),
-            meeting_uuid: f.meeting_uuid.clone(),
-            file_key: f.file_key.clone(),
-            blake3: stored.get(&f.key()).cloned(),
-        })
-        .collect();
-    bulk_upsert_in_tx(tx, &edges, &IsoOffsetTimestamp::now_local()).await
 }
 
 /// Write fetched rows of a table whose rows are whole answers

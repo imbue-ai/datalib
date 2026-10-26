@@ -1157,22 +1157,22 @@ export const CATALOG: CatalogEntry[] = [
     type: "zoom",
     method: "api",
     label: "Zoom",
-    blurb: "Copy your meetings: their transcripts, who came and the AI summaries.",
-    keywords: ["zoom", "meetings", "transcripts", "recordings", "calls", "video"],
+    blurb: "Copy your meetings: who came and the AI Companion's summaries.",
+    keywords: ["zoom", "meetings", "recordings", "summaries", "calls", "video"],
     kind: "api",
     icon: "zoom",
     defaultName: "zoom",
     nameHint: "Work Zoom",
     wizard: true,
     intro:
-      "Each meeting becomes a document you can read and search: who came, the AI " +
-      "Companion's summary, and the transcript of its cloud recording, speaker by speaker.",
+      "Each meeting becomes a document you can read and search: when, who came and the AI " +
+      "Companion's summary. Transcripts and recordings stay in Zoom.",
     before: {
       text: "Signing in needs a Zoom admin.",
       needs: [
         "A Zoom account admin, or a role allowed to create apps: signing in creates a " +
           "Server-to-Server OAuth app in your Zoom account, with every admin scope it offers",
-        "A paid Zoom plan, for cloud recordings, transcripts and who attended",
+        "A paid Zoom plan, for cloud recordings, reports and who attended",
       ],
     },
     credentialService: "zoom",
@@ -1197,7 +1197,7 @@ export const CATALOG: CatalogEntry[] = [
       },
       {
         heading: "What to copy",
-        fields: ["api.participants", "api.summaries", "api.media"],
+        fields: ["api.participants", "api.summaries"],
       },
     ],
     fields: [
@@ -1231,26 +1231,12 @@ export const CATALOG: CatalogEntry[] = [
       },
       { kind: "bool", target: "api.summaries", label: "AI Companion summaries", default: true },
       {
-        kind: "bool",
-        target: "api.media",
-        label: "Video and audio files too",
-        default: false,
-        help: "An hour of video is several hundred MB.",
-      },
-      {
-        kind: "bytes",
-        target: "common.blob_size_limit_bytes",
-        label: "Largest video or audio file",
-        requires: "api.media",
-        help: "A recording file larger than this is skipped. Empty means no limit.",
-      },
-      {
         kind: "int",
         target: "api.refresh_days",
         label: "Days listed again each sync",
         help:
           "`api.refresh_days`: the newest days every sync asks Zoom about again, for " +
-          "transcripts and summaries added after a meeting ended. Empty means 30.",
+          "summaries added or edited after a meeting ended. Empty means 30.",
       },
     ],
   },

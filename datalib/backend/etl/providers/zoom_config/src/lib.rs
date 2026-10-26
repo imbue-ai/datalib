@@ -1,6 +1,5 @@
-//! Config schema for the `zoom` source: one Zoom user's meetings, their
-//! cloud recordings' transcripts, who attended and the AI Companion's
-//! summaries. Schema only (serde + anyhow), so anything that needs to
+//! Config schema for the `zoom` source: one Zoom user's meetings, who
+//! attended and the AI Companion's summaries. Schema only (serde + anyhow), so anything that needs to
 //! understand a config can link this without the downloader. `api` is
 //! its one way in.
 
@@ -32,9 +31,6 @@ pub const DEFAULT_REFRESH_DAYS: u32 = 30;
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ZoomConfig {
-    /// `common.blob_size_limit_bytes` caps the video and audio files
-    /// `api.media` fetches; the transcripts and chat files are never
-    /// held back by it.
     #[serde(default)]
     pub common: SourceCommon,
     /// Which stored latchkey account of the `zoom` service this source
@@ -70,14 +66,14 @@ pub struct ZoomApi {
     #[serde(default)]
     pub user: Option<String>,
     /// The first day to ask Zoom about, `YYYY-MM-DD`. Default 2013-01-01,
-    /// so the first sync finds every recording Zoom still keeps. Zoom
-    /// lists recordings a month at a time, so this costs one request a
+    /// so the first sync finds every recorded meeting Zoom still keeps.
+    /// Zoom lists meetings a month at a time, so this costs one request a
     /// month, once.
     #[serde(default)]
     pub since: Option<String>,
     /// How many of the newest days every sync lists again, since a
-    /// transcript or a summary is added hours after its meeting ends and
-    /// a recording can be deleted. Default 30.
+    /// summary is added after its meeting ends and can be edited.
+    /// Default 30.
     #[serde(default)]
     pub refresh_days: Option<i64>,
     /// Who attended each meeting, and the meetings that were not
@@ -90,12 +86,6 @@ pub struct ZoomApi {
     /// Default true.
     #[serde(default = "yes")]
     pub summaries: bool,
-    /// The video and audio files of each recording too, each up to
-    /// `common.blob_size_limit_bytes`. An hour of video is several
-    /// hundred MB. Default false: only the transcript, the chat and the
-    /// other small files.
-    #[serde(default)]
-    pub media: bool,
 }
 
 fn yes() -> bool {
@@ -110,7 +100,6 @@ impl Default for ZoomApi {
             refresh_days: None,
             participants: true,
             summaries: true,
-            media: false,
         }
     }
 }
@@ -174,7 +163,7 @@ mod tests {
         assert_eq!(api.user, None);
         assert_eq!(api.since(), EARLIEST_SINCE);
         assert_eq!(api.refresh_days(), DEFAULT_REFRESH_DAYS);
-        assert!(api.participants && api.summaries && !api.media);
+        assert!(api.participants && api.summaries);
     }
 
     #[test]

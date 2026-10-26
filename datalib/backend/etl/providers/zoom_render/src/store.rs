@@ -1,37 +1,20 @@
 //! What a render reads from the `zoom` raw store at its pin: every
-//! meeting's rows, small enough to read whole, and one meeting's
-//! transcript bytes at a time, as it renders.
+//! meeting's rows, small enough to read whole.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use anyhow::{Context, Result};
 use datalib_etl_render::inputs::{changed_rows, RawRange};
 use datalib_etl_zoom::ingest::schema_raw::{
-    PARTICIPANTS, RECORDINGS, RECORDING_FILES, REPORTED_MEETINGS, SUMMARIES,
+    PARTICIPANTS, RECORDINGS, REPORTED_MEETINGS, SUMMARIES,
 };
-use datalib_etl_zoom::ingest::{shape, RawDb};
-use datalib_schema::problems::{Problem, Reason};
+use datalib_etl_zoom::ingest::RawDb;
 use serde_json::Value;
 use sqlx::Row as _;
 
 /// Every table a meeting's document reads; the forward scan diffs each.
-/// Every key in them is the meeting's UUID, or starts with it and `#`.
-pub const TABLES: [&str; 5] = [
-    RECORDINGS,
-    REPORTED_MEETINGS,
-    PARTICIPANTS,
-    SUMMARIES,
-    RECORDING_FILES,
-];
-
-/// One stored recording file: its edge id, its key within the meeting,
-/// and its hash, `None` for one Zoom no longer had.
-#[derive(Debug, Clone)]
-pub struct File {
-    pub edge_id: String,
-    pub file_key: String,
-    pub blake3: Option<String>,
-}
+/// Every key in them is the meeting's UUID.
+pub const TABLES: [&str; 4] = [RECORDINGS, REPORTED_MEETINGS, PARTICIPANTS, SUMMARIES];
 
 /// Everything the store holds about one meeting.
 #[derive(Debug, Clone, Default)]
@@ -41,7 +24,6 @@ pub struct Meeting {
     pub reported: Option<Value>,
     pub participants: Option<Value>,
     pub summary: Option<Value>,
-    pub files: Vec<File>,
 }
 
 impl Meeting {
@@ -60,25 +42,15 @@ impl Meeting {
             .filter(|s| !s.is_empty())
     }
 
-    /// The listing entry of the file stored under `file_key`.
-    pub fn file_entry(&self, file_key: &str) -> Option<&Value> {
+    /// The files Zoom holds of the meeting's recording, as its listing
+    /// entry names them. None of them is downloaded.
+    pub fn recording_files(&self) -> &[Value] {
         self.recording
-            .as_ref()?
-            .get("recording_files")?
-            .as_array()?
-            .iter()
-            .find(|f| shape::file_key(f).as_deref() == Some(file_key))
-    }
-
-    /// The stored transcript file: the `TRANSCRIPT` one the recording
-    /// lists.
-    pub fn transcript(&self) -> Option<&File> {
-        self.files.iter().find(|f| {
-            self.file_entry(&f.file_key)
-                .and_then(|e| e.get("file_type"))
-                .and_then(Value::as_str)
-                == Some("TRANSCRIPT")
-        })
+            .as_ref()
+            .and_then(|r| r.get("recording_files"))
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
     }
 }
 
@@ -88,27 +60,15 @@ pub struct Listing {
     pub meetings: BTreeMap<String, Meeting>,
     /// The user being copied, by Zoom user id: their email.
     pub user_emails: HashMap<String, String>,
-    /// The meetings to render; `None` renders every one.
-    pub render: Option<HashSet<String>>,
-}
-
-/// The meeting a raw key belongs to.
-pub fn meeting_of(key: &str) -> &str {
-    key.split_once('#').map_or(key, |(uuid, _)| uuid)
+    /// The meetings whose rows the diff names; `None` renders every one.
+    pub changed: Option<HashSet<String>>,
 }
 
 pub async fn load(db: &RawDb, range: RawRange<'_>) -> Result<Listing> {
     let pin = db.pin().expect("open_reader returns a pinned handle");
     let changed = changed_rows(db.pool(), range, pin, &TABLES).await?;
-    let forward = changed.map(|by_table| {
-        by_table
-            .values()
-            .flatten()
-            .map(|key| meeting_of(key).to_string())
-            .collect::<HashSet<String>>()
-    });
     let mut out = Listing {
-        render: forward,
+        changed: changed.map(|by_table| by_table.into_values().flatten().collect()),
         ..Listing::default()
     };
 
@@ -127,8 +87,8 @@ pub async fn load(db: &RawDb, range: RawRange<'_>) -> Result<Listing> {
         }
     }
 
-    for table in [RECORDINGS, REPORTED_MEETINGS, PARTICIPANTS, SUMMARIES] {
-        // `table` is one of the four names above.
+    for table in TABLES {
+        // `table` is one of the four names in TABLES.
         let sql = format!("SELECT id, json(payload) AS payload FROM {table}");
         for row in sqlx::query(sqlx::AssertSqlSafe(sql))
             .fetch_all(db.pool())
@@ -153,40 +113,5 @@ pub async fn load(db: &RawDb, range: RawRange<'_>) -> Result<Listing> {
             }
         }
     }
-
-    for row in
-        sqlx::query("SELECT id, meeting_uuid, file_key, blake3 FROM recording_files ORDER BY id")
-            .fetch_all(db.pool())
-            .await
-            .context("read recording_files")?
-    {
-        let uuid: String = row.try_get("meeting_uuid")?;
-        if let Some(meeting) = out.meetings.get_mut(&uuid) {
-            meeting.files.push(File {
-                edge_id: row.try_get("id")?,
-                file_key: row.try_get("file_key")?,
-                blake3: row.try_get("blake3")?,
-            });
-        }
-    }
     Ok(out)
 }
-
-/// A meeting's transcript as text, or why the store cannot give it. The
-/// error is the store's; the problem is the meeting's.
-pub async fn transcript(db: &RawDb, file: &File) -> Result<Result<String, Problem>> {
-    let missing = |why: String| Ok(Err(Problem::field("transcript", Reason::BlobMissing, &why)));
-    let Some(blake3) = file.blake3.as_deref() else {
-        return missing("Zoom no longer had the transcript when it was fetched".to_string());
-    };
-    let Some(object) = db.cas().get(blake3).await? else {
-        return missing(format!("the blob store has lost {blake3}"));
-    };
-    Ok(Ok(String::from_utf8_lossy(&object.bytes).into_owned()))
-}
-
-/// The bytes the recording's files link to, for a meeting's page.
-pub const FILES_SQL: &str = "
-    SELECT id AS ref_id, blake3, NULL AS content_type, file_key AS upstream_name
-      FROM recording_files
-     WHERE id IN ({placeholders}) AND blake3 IS NOT NULL";

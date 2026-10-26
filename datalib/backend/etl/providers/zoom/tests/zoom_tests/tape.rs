@@ -6,20 +6,18 @@
 //! Captain Picard's meetings, listed from 2026-09-01 to "today",
 //! 2026-10-20:
 //!
-//! - the senior staff briefing: recorded, with a video, a transcript, a
-//!   chat file and a timeline (whose link redirects); its participants
+//! - the senior staff briefing: recorded (a video, a transcript, a chat
+//!   file and a timeline, none of which is fetched); its participants
 //!   span two pages, one of them rejoining; the AI Companion summarized
 //!   it;
-//! - an engineering status meeting: recorded, but Zoom has lost its
-//!   transcript by the time it is downloaded;
+//! - an engineering status meeting: recorded;
 //! - a holodeck session: not recorded, so only the report lists it, and
 //!   Zoom will not say who came.
 //!
 //! The recordings listing of the newest window spans two pages.
-//! [`Edition::After`] edits the briefing's transcript and its summary,
-//! and adds an away-team debrief.
+//! [`Edition::After`] edits the briefing's transcript (its listed size
+//! moves) and its summary, and adds an away-team debrief.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
@@ -60,40 +58,8 @@ pub enum Edition {
     After,
 }
 
-pub const BRIEFING_VTT: &str = "WEBVTT\n\n\
-1\n00:00:01.000 --> 00:00:04.500\nJean-Luc Picard: Number One, report.\n\n\
-2\n00:00:05.000 --> 00:00:09.000\nWilliam Riker: All decks report ready, Captain.\n\n\
-3\n00:00:09.500 --> 00:00:12.000\nWilliam Riker: Engineering asks for an hour on the warp core.\n\n\
-4\n00:00:12.500 --> 00:00:16.000\nData: The anomaly is 0.4 light years off the port bow.\n\n\
-5\n00:00:17.000 --> 00:00:19.000\nMake it so.\n";
-
-pub const BRIEFING_VTT_EDITED: &str = "WEBVTT\n\n\
-1\n00:00:01.000 --> 00:00:04.500\nJean-Luc Picard: Number One, report.\n\n\
-2\n00:00:05.000 --> 00:00:09.000\nWilliam Riker: All decks report ready, Captain.\n\n\
-3\n00:00:09.500 --> 00:00:12.000\nWilliam Riker: Engineering asks for an hour on the warp core.\n\n\
-4\n00:00:12.500 --> 00:00:16.000\nData: The anomaly is 0.4 light years off the port bow.\n\n\
-5\n00:00:17.000 --> 00:00:19.000\nJean-Luc Picard: Make it so. Engage.\n";
-
-pub const AWAY_TEAM_VTT: &str = "WEBVTT\n\n\
-1\n00:00:00.500 --> 00:00:03.000\nWorf: The away team is aboard.\n\n\
-2\n00:00:03.500 --> 00:00:06.000\nBeverly Crusher: No injuries to report.\n";
-
-const CHAT_TXT: &str =
-    "09:02:11 From Geordi La Forge to Everyone:\n\tWarp core diagnostics attached.\n";
-const TIMELINE_JSON: &str =
-    r#"{"timeline":[{"ts":"00:00:01.000","users":[{"username":"Jean-Luc Picard"}]}]}"#;
-
 pub fn put(root: &Path, req: HttpRequest, resp: HttpResponse) {
     write_fixture(root, &req, &resp).expect("write fixture");
-}
-
-pub fn bytes(status: u16, body: &[u8]) -> HttpResponse {
-    HttpResponse {
-        status,
-        headers: BTreeMap::new(),
-        body: body.to_vec(),
-        duration_ms: 0,
-    }
 }
 
 pub fn error(status: u16, code: i64, message: &str) -> HttpResponse {
@@ -142,10 +108,10 @@ fn file(
     f
 }
 
-fn briefing_vtt(edition: Edition) -> &'static str {
+fn transcript_size(edition: Edition) -> usize {
     match edition {
-        Edition::Before => BRIEFING_VTT,
-        Edition::After => BRIEFING_VTT_EDITED,
+        Edition::Before => 412,
+        Edition::After => 433,
     }
 }
 
@@ -157,8 +123,8 @@ pub fn briefing(edition: Edition) -> Value {
         "share_url": "https://zoom.us/rec/share/senior-staff-briefing",
         "recording_files": [
             file(BRIEFING, Some("a-mp4"), "MP4", "MP4", Some(734_003_200), "shared_screen_with_speaker_view"),
-            file(BRIEFING, Some("a-vtt"), "TRANSCRIPT", "VTT", Some(briefing_vtt(edition).len()), "audio_transcript"),
-            file(BRIEFING, Some("a-chat"), "CHAT", "TXT", Some(CHAT_TXT.len()), "chat_file"),
+            file(BRIEFING, Some("a-vtt"), "TRANSCRIPT", "VTT", Some(transcript_size(edition)), "audio_transcript"),
+            file(BRIEFING, Some("a-chat"), "CHAT", "TXT", Some(78), "chat_file"),
             file(BRIEFING, None, "TIMELINE", "JSON", None, "timeline"),
         ]
     })
@@ -181,7 +147,7 @@ pub fn away_team() -> Value {
         "topic": "Away team debrief", "type": "1", "start_time": "2026-10-18T16:00:00Z",
         "duration": 10, "recording_count": 1,
         "recording_files": [
-            file(AWAY_TEAM, Some("d-vtt"), "TRANSCRIPT", "VTT", Some(AWAY_TEAM_VTT.len()), "audio_transcript"),
+            file(AWAY_TEAM, Some("d-vtt"), "TRANSCRIPT", "VTT", Some(160), "audio_transcript"),
         ]
     })
 }
@@ -353,65 +319,6 @@ pub fn tape(root: &Path, edition: Edition) -> PathBuf {
         W3,
         None,
         page("summaries", vec![], None),
-    );
-
-    // The files, behind each meeting's download token.
-    let with_token = |meeting: Value, token: &str| {
-        let mut m = meeting;
-        m["download_access_token"] = json!(token);
-        m
-    };
-    json_at(
-        &root,
-        &api::meeting_recordings_url(BRIEFING),
-        with_token(briefing(edition), "tok-briefing"),
-    );
-    json_at(
-        &root,
-        &api::meeting_recordings_url(ENGINEERING),
-        with_token(engineering(), "tok-engineering"),
-    );
-    json_at(
-        &root,
-        &api::meeting_recordings_url(AWAY_TEAM),
-        with_token(away_team(), "tok-away"),
-    );
-    let dl = |key: &str, token: &str| {
-        api::req_download(&format!("https://zoom.us/rec/download/{key}"), token)
-    };
-    put(
-        &root,
-        dl("a-vtt", "tok-briefing"),
-        bytes(200, briefing_vtt(edition).as_bytes()),
-    );
-    put(
-        &root,
-        dl("a-chat", "tok-briefing"),
-        bytes(200, CHAT_TXT.as_bytes()),
-    );
-    let signed = "https://ssrweb.zoom.us/cmr/replay/timeline?signature=made-up";
-    let mut redirect = bytes(302, b"");
-    redirect.headers.insert("location".into(), signed.into());
-    put(&root, dl("timeline", "tok-briefing"), redirect);
-    put(
-        &root,
-        api::req_redirected(signed),
-        bytes(200, TIMELINE_JSON.as_bytes()),
-    );
-    put(
-        &root,
-        dl("a-mp4", "tok-briefing"),
-        bytes(200, b"not really a video"),
-    );
-    put(
-        &root,
-        dl("c-vtt", "tok-engineering"),
-        error(404, 3322, "This meeting transcript does not exist."),
-    );
-    put(
-        &root,
-        dl("d-vtt", "tok-away"),
-        bytes(200, AWAY_TEAM_VTT.as_bytes()),
     );
 
     let people = |token: Option<&str>| api::participants_url(BRIEFING, token);

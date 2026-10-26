@@ -10,11 +10,6 @@ type = "zoom"
 group = "zoom"
 function = "ingest"
 
-# The video and audio files `api.media` fetches are skipped above this
-# size; the transcripts and chat files are never held back by it.
-[steps.params.common]
-blob_size_limit_bytes = "500 MB"
-
 # When to give up on rate limits. The download always backs off and
 # retries; these only decide when to stop.
 [steps.params.common.download_params]
@@ -34,10 +29,8 @@ refresh_days = 30        # the newest days every sync lists again; default 30
 participants = true      # who attended, and unrecorded meetings from Zoom's reports
                          # (the last six months); default true
 summaries = true         # the AI Companion's meeting summaries; default true
-media = false            # the video and audio files too; default false
 
-# Each meeting as one document: who came, the AI summary and the
-# transcript, speaker by speaker. No options.
+# Each meeting as one document: when, who came and the AI summary. No options.
 [[steps]]
 group = "zoom"
 function = "render_markdown"

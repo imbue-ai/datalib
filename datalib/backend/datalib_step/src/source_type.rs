@@ -95,8 +95,8 @@ pub enum SourceType {
     SmsBackupRestore,
     Whatsapp,
     Yolink,
-    /// One Zoom user's meetings: cloud-recording transcripts, who came
-    /// and the AI Companion's summaries, over Zoom's REST API.
+    /// One Zoom user's meetings, who came and the AI Companion's
+    /// summaries, over Zoom's REST API.
     Zoom,
 }
 

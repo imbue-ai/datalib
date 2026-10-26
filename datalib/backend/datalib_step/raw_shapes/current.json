@@ -655,7 +655,7 @@
     ]
   },
   "zoom": {
-    "schema_hash": "8716f775fcdfcb88b70586eec2ad44bdbddced3d8e957a298cc03943126d6842",
+    "schema_hash": "e2241dc55e6c450ec73c2a816dc1612472d4f3905e668ee4fdd97d38d089332f",
     "schema_version": 0,
     "shared_schema_version": 1,
     "sql": [
@@ -663,10 +663,6 @@
       "CREATE TABLE participants( id TEXT PRIMARY KEY, payload TEXT NULL)",
       "CREATE TABLE participants_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
-      "CREATE TABLE recording_files( id TEXT PRIMARY KEY, meeting_uuid TEXT NOT NULL, file_key TEXT NOT NULL, blake3 TEXT NULL, CHECK(blake3 IS NULL OR length(blake3) = 64))",
-      "CREATE TABLE recording_files_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
-      "CREATE INDEX recording_files_by_file_key ON recording_files(file_key, blake3)",
-      "CREATE INDEX recording_files_by_meeting_uuid ON recording_files(meeting_uuid)",
       "CREATE TABLE recordings( id TEXT PRIMARY KEY, payload TEXT NULL, start_time TEXT NULL)",
       "CREATE TABLE recordings_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE reported_meetings( id TEXT PRIMARY KEY, payload TEXT NULL, start_time TEXT NULL)",

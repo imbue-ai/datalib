@@ -11,7 +11,7 @@ use datalib_etl_zoom::ingest::{self, api, db_path_for, FetchSummary, RawDb};
 use datalib_etl_zoom_config::ZoomApi;
 use serde_json::json;
 
-use crate::tape::{self, Edition, AWAY_TEAM, BRIEFING, ENGINEERING, HOLODECK, USER_ID};
+use crate::tape::{self, Edition, USER_ID};
 
 /// Every table the download writes, for a test to dump.
 pub const TABLES: &[&str] = &[
@@ -21,16 +21,10 @@ pub const TABLES: &[&str] = &[
     "participants",
     "summary_listings",
     "summaries",
-    "recording_files",
     "coverage",
 ];
 
-pub async fn run_with(
-    store: &Path,
-    tape: &Path,
-    api: ZoomApi,
-    cap: Option<u64>,
-) -> anyhow::Result<FetchSummary> {
+pub async fn run_with(store: &Path, tape: &Path, api: ZoomApi) -> anyhow::Result<FetchSummary> {
     let db = RawDb::open(&db_path_for(store)).await?;
     let r = playback::scope(
         tape,
@@ -38,7 +32,6 @@ pub async fn run_with(
             db: db.clone(),
             latchkey: LatchkeySettings::default(),
             api,
-            blob_size_limit_bytes: cap,
             today: tape::today(),
             progress: Default::default(),
             control: DownloadControl::default(),
@@ -56,7 +49,7 @@ pub async fn run_with(
 }
 
 async fn run(store: &Path, tape: &Path) -> FetchSummary {
-    run_with(store, tape, tape::api(), None)
+    run_with(store, tape, tape::api())
         .await
         .expect("zoom fetch")
 }
@@ -80,7 +73,7 @@ async fn text(store: &Path, sql: &'static str) -> Option<String> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_first_sync_copies_every_meeting_and_its_transcript() {
+async fn a_first_sync_copies_every_meeting_who_came_and_the_summary() {
     let d = tempfile::tempdir().unwrap();
     let tape = tape::tape(d.path(), Edition::Before);
     let store = d.path().join("store");
@@ -90,48 +83,23 @@ async fn a_first_sync_copies_every_meeting_and_its_transcript() {
     assert_eq!(s.recordings_listed, 2, "{s:?}");
     assert_eq!(s.meetings_reported, 2, "{s:?}");
     assert_eq!(s.summaries_listed, 1, "{s:?}");
-    // The briefing's transcript, chat and timeline; not its video.
-    assert_eq!((s.files, s.files_gone, s.files_skipped), (3, 1, 0), "{s:?}");
     assert_eq!(s.participants, 3, "{s:?}");
     assert_eq!(s.summaries, 1, "{s:?}");
     assert_eq!((s.failed, s.left), (0, 0), "{s:?}");
 
-    let held = |key: &str| format!("{BRIEFING}#{key}");
-    let db = RawDb::open(&db_path_for(&store)).await.unwrap();
-    let edges: Vec<(String, Option<String>)> =
-        sqlx::query_as("SELECT id, blake3 FROM recording_files ORDER BY id")
-            .fetch_all(db.pool())
-            .await
-            .unwrap();
-    let ids: Vec<&str> = edges.iter().map(|(id, _)| id.as_str()).collect();
+    // What Zoom holds of the recording is kept as it was listed; the
+    // tape answers no download, so none was asked for.
     assert_eq!(
-        ids,
-        [
-            format!("{ENGINEERING}#c-vtt"),
-            held("a-chat"),
-            held("a-vtt"),
-            held("timeline@2026-10-05T09:01:00Z")
-        ]
+        scalar(
+            &store,
+            "SELECT json_array_length(payload, '$.recording_files') FROM recordings \
+             WHERE id = 'nCC1701+D/briefing=='"
+        )
+        .await,
+        4
     );
-    assert!(
-        edges[0].1.is_none(),
-        "Zoom had lost the engineering transcript"
-    );
-    let vtt = edges.iter().find(|(id, _)| *id == held("a-vtt")).unwrap();
-    let bytes = db
-        .cas()
-        .get(vtt.1.as_deref().unwrap())
-        .await
-        .unwrap()
-        .unwrap()
-        .bytes;
-    assert_eq!(String::from_utf8(bytes).unwrap(), tape::BRIEFING_VTT);
-    let timeline = edges
-        .iter()
-        .find(|(id, _)| *id == held("timeline@2026-10-05T09:01:00Z"))
-        .unwrap();
-    assert!(timeline.1.is_some(), "the redirect was followed");
 
+    let db = RawDb::open(&db_path_for(&store)).await.unwrap();
     let coverage: Vec<(String, String, String)> =
         sqlx::query_as("SELECT scope, lo, hi FROM coverage ORDER BY scope")
             .fetch_all(db.pool())
@@ -166,7 +134,6 @@ async fn a_first_sync_copies_every_meeting_and_its_transcript() {
     .await
     .unwrap();
     assert!(why.contains("Zoom code 3001"), "{why}");
-    let _ = HOLODECK;
 }
 
 /// Nothing changed upstream, so a second sync lists the refresh window
@@ -179,16 +146,13 @@ async fn a_second_sync_of_an_unchanged_account_owes_nothing() {
     std::fs::create_dir_all(&store).unwrap();
     run(&store, &tape).await;
     let s = run(&store, &tape).await;
-    assert_eq!(
-        (s.files, s.files_gone, s.participants, s.summaries, s.failed),
-        (0, 0, 0, 0, 0),
-        "{s:?}"
-    );
+    assert_eq!((s.participants, s.summaries, s.failed), (0, 0, 0), "{s:?}");
     assert_eq!(s.windows, 6, "two windows of each listing: {s:?}");
 }
 
 /// The briefing's transcript and summary were edited and a meeting was
-/// added: exactly those are fetched.
+/// added: the listing carries the transcript's new size, and exactly the
+/// summary and the new meeting's attendance are fetched.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_later_sync_fetches_what_moved_and_what_is_new() {
     let d = tempfile::tempdir().unwrap();
@@ -196,8 +160,6 @@ async fn a_later_sync_fetches_what_moved_and_what_is_new() {
     std::fs::create_dir_all(&store).unwrap();
     run(&store, &tape::tape(d.path(), Edition::Before)).await;
     let s = run(&store, &tape::tape(d.path(), Edition::After)).await;
-    // The edited transcript and the debrief's.
-    assert_eq!((s.files, s.files_gone), (2, 0), "{s:?}");
     assert_eq!(s.participants, 1, "the debrief's: {s:?}");
     assert_eq!(s.summaries, 1, "the edited one: {s:?}");
 
@@ -211,42 +173,25 @@ async fn a_later_sync_fetches_what_moved_and_what_is_new() {
     assert_eq!(
         scalar(
             &store,
+            "SELECT json_extract(f.value, '$.file_size') FROM recordings r, \
+             json_each(r.payload, '$.recording_files') f \
+             WHERE r.id = 'nCC1701+D/briefing==' AND json_extract(f.value, '$.id') = 'a-vtt'"
+        )
+        .await,
+        433
+    );
+    assert_eq!(
+        scalar(
+            &store,
             "SELECT COUNT(*) FROM recordings WHERE id = 'AwayTeam/Debrief=='"
         )
         .await,
         1
     );
-    let _ = AWAY_TEAM;
-}
-
-/// The video is asked for, and is over the size limit: it is skipped
-/// with a warning and stays owed, and the rest is fetched.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_video_over_the_size_limit_is_skipped() {
-    let d = tempfile::tempdir().unwrap();
-    let tape = tape::tape(d.path(), Edition::Before);
-    let store = d.path().join("store");
-    std::fs::create_dir_all(&store).unwrap();
-    let api = ZoomApi {
-        media: true,
-        ..tape::api()
-    };
-    let s = run_with(&store, &tape, api.clone(), Some(1_000_000))
-        .await
-        .unwrap();
-    assert_eq!((s.files, s.files_skipped), (3, 1), "{s:?}");
-    let s = run_with(&store, &tape, api.clone(), Some(1_000_000))
-        .await
-        .unwrap();
-    assert_eq!(s.files_skipped, 1, "still owed, still skipped: {s:?}");
-
-    // A raised limit fetches it.
-    let s = run_with(&store, &tape, api, None).await.unwrap();
-    assert_eq!((s.files, s.files_skipped), (1, 0), "{s:?}");
 }
 
 /// An account without a paid plan has no reports: the listing is a
-/// problem, and the recordings, transcripts and summaries still come.
+/// problem, and the recordings and summaries still come.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_report_zoom_will_not_give_costs_only_the_report() {
     let d = tempfile::tempdir().unwrap();
@@ -260,7 +205,7 @@ async fn a_report_zoom_will_not_give_costs_only_the_report() {
     std::fs::create_dir_all(&store).unwrap();
     let s = run(&store, &tape).await;
     assert_eq!(s.meetings_reported, 0, "{s:?}");
-    assert_eq!(s.files, 3, "{s:?}");
+    assert_eq!(s.recordings_listed, 2, "{s:?}");
     assert_eq!(s.summaries, 1, "{s:?}");
     assert_eq!(
         scalar(
@@ -294,7 +239,7 @@ async fn with_no_user_named_an_account_s_only_user_is_copied() {
         user: None,
         ..tape::api()
     };
-    let s = run_with(&store, &tape, api, None).await.unwrap();
+    let s = run_with(&store, &tape, api).await.unwrap();
     assert_eq!(s.recordings_listed, 2, "{s:?}");
 
     // Two users and none named: the run says to name one.
@@ -308,6 +253,6 @@ async fn with_no_user_named_an_account_s_only_user_is_copied() {
         user: None,
         ..tape::api()
     };
-    let e = run_with(&store, &tape, api, None).await.unwrap_err();
+    let e = run_with(&store, &tape, api).await.unwrap_err();
     assert!(format!("{e:#}").contains("set `api.user`"), "{e:#}");
 }

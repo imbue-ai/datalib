@@ -1,10 +1,8 @@
 //! Zoom's REST API as this source reads it: every URL it asks for, and
 //! how an answer is judged. Every request is built here, so a test's
-//! playback fixture is keyed the way the download asks.
-//!
-//! latchkey signs `https://api.zoom.us/v2/` only. A recording's
-//! `download_url` is on `zoom.us`, so it goes out plain, carrying the
-//! download token Zoom hands out beside the meeting's files.
+//! playback fixture is keyed the way the download asks. Every request
+//! goes through `latchkey curl` to `https://api.zoom.us/v2/`, the one
+//! host latchkey's `zoom` service signs.
 
 use std::time::Duration;
 
@@ -24,8 +22,6 @@ pub const BASE: &str = "https://api.zoom.us/v2";
 /// Zoom's largest page for every list this source reads.
 pub const PAGE: u32 = 300;
 
-/// A video file runs to hundreds of MB.
-const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(1800);
 const JSON_TIMEOUT: Duration = Duration::from_secs(120);
 
 // ── URLs ─────────────────────────────────────────────────────────────
@@ -67,14 +63,6 @@ pub fn listing_url(
         url.push_str(&percent_encode(token));
     }
     url
-}
-
-/// A meeting's recordings with the token that downloads them.
-pub fn meeting_recordings_url(uuid: &str) -> String {
-    format!(
-        "{BASE}/meetings/{}/recordings?include_fields=download_access_token",
-        uuid_segment(uuid)
-    )
 }
 
 pub fn participants_url(uuid: &str, page_token: Option<&str>) -> String {
@@ -135,7 +123,7 @@ pub enum ApiError {
     /// code 200): the same for every meeting, so the phase asking ends.
     #[error("{0}")]
     NeedsPaidPlan(String),
-    /// 404: no such user, meeting or file, or not one this account sees.
+    /// 404: no such user or meeting, or not one this account sees.
     #[error("{0}")]
     NotFound(String),
     /// Zoom will not give this one: a feature the plan does not include,
@@ -172,24 +160,6 @@ pub fn req_json(url: &str) -> HttpRequest {
         .timeout(JSON_TIMEOUT)
 }
 
-/// A recording file's download. `token` is the meeting's
-/// `download_access_token`; it goes in a header, the way Zoom documents,
-/// since `zoom.us` is not a host latchkey signs.
-pub fn req_download(url: &str, token: &str) -> HttpRequest {
-    HttpRequest::get(HTTP_SERVICE, url)
-        .header("Authorization", format!("Bearer {token}"))
-        .timeout(DOWNLOAD_TIMEOUT)
-        .plain()
-}
-
-/// Where a download redirected to: signed already, so it goes without
-/// the token, which stays with the host it was made for.
-pub fn req_redirected(url: &str) -> HttpRequest {
-    HttpRequest::get(HTTP_SERVICE, url)
-        .timeout(DOWNLOAD_TIMEOUT)
-        .plain()
-}
-
 pub async fn get_json(url: &str, lk: &LatchkeySettings) -> Result<Value> {
     let req = req_json(url).latchkey(lk.clone());
     let resp = send(&req).await?;
@@ -197,26 +167,6 @@ pub async fn get_json(url: &str, lk: &LatchkeySettings) -> Result<Value> {
         return Err(status_error(url, &resp).into());
     }
     serde_json::from_slice(&resp.body).with_context(|| format!("parse JSON from {url}"))
-}
-
-/// A recording file's bytes, following one redirect.
-pub async fn download(url: &str, token: &str) -> Result<Vec<u8>> {
-    let resp = send(&req_download(url, token)).await?;
-    match resp.status {
-        200 => Ok(resp.body),
-        301 | 302 | 303 | 307 | 308 => {
-            let to = resp
-                .header("location")
-                .ok_or_else(|| anyhow!("GET {url}: {} with no Location", resp.status))?;
-            let resp = send(&req_redirected(to)).await?;
-            if resp.status == 200 {
-                Ok(resp.body)
-            } else {
-                Err(status_error(to, &resp).into())
-            }
-        }
-        _ => Err(status_error(url, &resp).into()),
-    }
 }
 
 async fn send(req: &HttpRequest) -> Result<HttpResponse> {
@@ -249,9 +199,8 @@ const PAID_PLAN_CODE: i64 = 200;
 
 /// Zoom's error codes for one thing the account cannot have: 12702
 /// participants of a meeting over a year old, 2305 a summary turned off
-/// or in the trash, 3301 a recording that is gone, 3322 a transcript
-/// that is gone.
-const UNAVAILABLE_CODES: &[i64] = &[12702, 2305, 3301, 3322];
+/// or in the trash.
+const UNAVAILABLE_CODES: &[i64] = &[12702, 2305];
 
 pub fn status_error(url: &str, resp: &HttpResponse) -> ApiError {
     let body = resp.body_str();
@@ -403,8 +352,8 @@ mod tests {
         ));
         assert!(matches!(
             judge(
-                404,
-                r#"{"code":3301,"message":"There is no recording for this session."}"#
+                403,
+                r#"{"code":2305,"message":"The meeting summary has been moved to Trash."}"#
             ),
             ApiError::Unavailable(_)
         ));

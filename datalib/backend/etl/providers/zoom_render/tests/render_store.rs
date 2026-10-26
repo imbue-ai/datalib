@@ -1,7 +1,6 @@
 //! Meetings written into a real raw store the way the download writes
-//! them, then read back and rendered: the store reads (JSONB payloads,
-//! the transcript in the CAS, the files' links) and the incremental pass
-//! are what the unit tests cannot reach.
+//! them, then read back and rendered: the store reads (JSONB payloads)
+//! and the incremental pass are what the unit tests cannot reach.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -9,23 +8,17 @@ use std::path::Path;
 use datalib_etl::doltlite_raw::commit_run;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
-use datalib_etl_zoom::ingest::db::{self, payload, FetchedFile};
+use datalib_etl_zoom::ingest::db::{self, payload};
 use datalib_etl_zoom::ingest::schema_raw::{
     ParticipantsRow, RecordingRow, ReportedMeetingRow, SummaryRow, UserRow,
 };
 use datalib_etl_zoom::ingest::RawDb;
 use datalib_etl_zoom_render::processor::render_store;
-use datalib_schema::problems::Reason;
 use serde_json::{json, Value};
 
 const BRIEFING: &str = "nCC1701+D/briefing==";
 const ENGINEERING: &str = "Eng1neering+Status==";
 const HOLODECK: &str = "//Holodeck3Session==";
-const VTT: &str =
-    "WEBVTT\n\n1\n00:00:01.000 --> 00:00:04.500\nJean-Luc Picard: Number One, report.\n\n\
-    2\n00:00:05.000 --> 00:00:09.000\nWilliam Riker: All decks report ready, Captain.\n\n\
-    3\n00:00:09.500 --> 00:00:12.000\nWilliam Riker: Engineering asks for an hour.\n\n\
-    4\n00:00:17.000 --> 00:00:19.000\nMake it so.\n";
 
 fn recording(uuid: &str, topic: &str, start: &str, files: Value) -> RecordingRow {
     RecordingRow {
@@ -39,13 +32,6 @@ fn recording(uuid: &str, topic: &str, start: &str, files: Value) -> RecordingRow
         )
         .unwrap(),
     }
-}
-
-fn vtt_file(id: &str) -> Value {
-    json!({"id": id, "file_type": "TRANSCRIPT", "file_extension": "VTT",
-           "recording_type": "audio_transcript", "file_size": VTT.len(),
-           "recording_start": "2026-10-05T09:01:00Z",
-           "download_url": format!("https://zoom.us/rec/download/{id}")})
 }
 
 async fn seed(store: &Path, summary: &str) {
@@ -70,15 +56,16 @@ async fn seed(store: &Path, summary: &str) {
                 BRIEFING,
                 "Senior staff briefing",
                 "2026-10-05T09:00:00Z",
-                json!([vtt_file("a-vtt"),
-                       {"id": "a-chat", "file_type": "CHAT", "file_extension": "TXT",
-                        "recording_type": "chat_file", "file_size": 12}]),
+                json!([{"id": "a-vtt", "file_type": "TRANSCRIPT", "recording_type": "audio_transcript",
+                        "download_url": "https://zoom.us/rec/download/a-vtt"},
+                       {"id": "a-chat", "file_type": "CHAT", "recording_type": "chat_file",
+                        "download_url": "https://zoom.us/rec/download/a-chat"}]),
             ),
             recording(
                 ENGINEERING,
                 "Engineering status",
                 "2026-09-30T14:00:00Z",
-                json!([vtt_file("c-vtt")]),
+                json!([]),
             ),
         ],
     )
@@ -135,20 +122,6 @@ async fn seed(store: &Path, summary: &str) {
     )
     .await
     .unwrap();
-    let file = |uuid: &str, key: &str, bytes: Option<&[u8]>| FetchedFile {
-        meeting_uuid: uuid.to_string(),
-        file_key: key.to_string(),
-        content_type: Some("text/vtt"),
-        bytes: bytes.map(<[u8]>::to_vec),
-    };
-    let files = [
-        file(BRIEFING, "a-vtt", Some(VTT.as_bytes())),
-        file(BRIEFING, "a-chat", Some(b"09:02:11 Hi")),
-        file(ENGINEERING, "c-vtt", None),
-    ];
-    db::store_files(&mut tx, db.cas(), &files.iter().collect::<Vec<_>>())
-        .await
-        .unwrap();
     tx.commit().await.unwrap();
     commit_run(db.pool(), "test fixture").await.unwrap();
     db.close().await;
@@ -190,7 +163,7 @@ fn doc<'a>(docs: &'a [RenderedMarkdown], uuid: &str) -> &'a RenderedMarkdown {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn each_meeting_renders_with_its_transcript_and_what_is_missing() {
+async fn each_meeting_renders_with_who_came_and_its_summary() {
     let dir = tempfile::tempdir().unwrap();
     let store = dir.path().join("ingest").join("entities.doltlite_db");
     std::fs::create_dir_all(store.parent().unwrap()).unwrap();
@@ -208,43 +181,26 @@ async fn each_meeting_renders_with_its_transcript_and_what_is_missing() {
     assert!(md.contains("Senior staff briefing"), "{md}");
     assert!(md.contains("An anomaly lies off the port bow."), "{md}");
     assert!(
-        md.contains("All decks report ready, Captain. Engineering asks for an hour."),
+        md.contains("[William Riker](mailto:riker@enterprise.example)"),
         "{md}"
     );
-    assert!(md.contains("Unknown speaker"), "{md}");
     assert!(
-        md.contains("/blob/"),
-        "the transcript and chat link the blob store: {md}"
+        md.contains("Zoom keeps:** audio transcript, chat file"),
+        "{md}"
     );
-    let riker = briefing
-        .rows
-        .iter()
-        .find(|r| r.author.as_deref() == Some("William Riker"))
-        .expect("Riker's turn has a row");
-    assert_eq!(riker.kind, "Zoom Transcript");
-    assert_eq!(
-        riker.author_handle.as_deref(),
-        Some("email:riker@enterprise.example")
-    );
-    assert!(briefing
-        .rows
-        .iter()
-        .any(|r| r.kind == "Zoom Meeting Summary"));
+    assert!(!md.contains("/blob/"), "no recording file is linked: {md}");
+    let kinds: HashSet<&str> = briefing.rows.iter().map(|r| r.kind.as_str()).collect();
+    assert!(kinds.contains("Zoom Meeting Details"), "{kinds:?}");
+    assert!(kinds.contains("Zoom Meeting Summary"), "{kinds:?}");
     assert!(briefing.rows.iter().any(|r| r.is_document));
-
-    let engineering = doc(&docs, ENGINEERING);
-    assert!(
-        engineering
-            .problems
-            .iter()
-            .any(|p| p.reason == Reason::BlobMissing),
-        "{:?}",
-        engineering.problems
-    );
 
     let holodeck = doc(&docs, HOLODECK);
     let md = std::fs::read_to_string(&holodeck.md_path).unwrap();
     assert!(md.contains("Zoom would not say who attended"), "{md}");
+    assert!(
+        md.contains("Jean-Luc Picard"),
+        "the report names the host: {md}"
+    );
 }
 
 /// Only the meeting whose rows moved renders again.

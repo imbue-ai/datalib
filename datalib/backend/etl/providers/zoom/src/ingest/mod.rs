@@ -9,11 +9,11 @@
 //!
 //! What is owed is then worked out from what the store holds, never from
 //! where a walk got to (docs/dev/data_architecture_ingestion.md, "What
-//! is left to fetch"): every file a stored recording names that
-//! `recording_files` does not hold at its size, every stored meeting
-//! with no `participants`, every listed summary not held at its
-//! modified time. Nothing is pruned: a recording deleted in Zoom keeps
-//! what was copied of it.
+//! is left to fetch"): every stored meeting with no `participants`, and
+//! every listed summary not held at its modified time. Nothing is
+//! pruned: a recording deleted in Zoom keeps its rows. No recording
+//! file is downloaded (INGEST.md says why), so every request goes
+//! through latchkey to `api.zoom.us`.
 
 pub mod api;
 pub mod db;
@@ -21,9 +21,7 @@ pub mod schema_raw;
 pub mod shape;
 pub mod window;
 
-use std::collections::{BTreeMap, HashMap};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -44,10 +42,10 @@ use datalib_etl_zoom_config::ZoomApi;
 use datalib_problems::Reason;
 
 use api::Listing;
+use db::payload;
 pub use db::{db_path_for, RawDb};
-use db::{payload, FetchedFile};
 use schema_raw::*;
-use shape::{str_of, WantedFile};
+use shape::str_of;
 use window::ymd;
 
 /// How far back Zoom's past-meetings report reaches: "the month must
@@ -62,9 +60,6 @@ pub struct FetchOptions {
     pub db: RawDb,
     pub latchkey: LatchkeySettings,
     pub api: ZoomApi,
-    /// `common.blob_size_limit_bytes`: the largest video or audio file
-    /// `api.media` fetches.
-    pub blob_size_limit_bytes: Option<u64>,
     /// The run's day, in UTC, which Zoom's dates are in.
     pub today: NaiveDate,
     pub progress: Progress,
@@ -79,11 +74,6 @@ pub struct FetchSummary {
     pub recordings_listed: usize,
     pub meetings_reported: usize,
     pub summaries_listed: usize,
-    pub files: usize,
-    /// Files a recording named that Zoom no longer has.
-    pub files_gone: usize,
-    /// Video and audio files over `blob_size_limit_bytes`.
-    pub files_skipped: usize,
     pub participants: usize,
     pub summaries: usize,
     pub failed: usize,
@@ -95,15 +85,11 @@ impl FetchSummary {
     pub fn line(&self) -> String {
         format!(
             "windows={} recordings_listed={} meetings_reported={} summaries_listed={} \
-             files={} files_gone={} files_skipped={} participants={} summaries={} \
-             failed={} left={}",
+             participants={} summaries={} failed={} left={}",
             self.windows,
             self.recordings_listed,
             self.meetings_reported,
             self.summaries_listed,
-            self.files,
-            self.files_gone,
-            self.files_skipped,
             self.participants,
             self.summaries,
             self.failed,
@@ -146,7 +132,6 @@ async fn walk_user(opts: &FetchOptions, found: &RunProblems, s: &mut FetchSummar
         list(opts, found, s, Listing::Summaries, &user_id, since).await?;
     }
 
-    files(opts, found, s).await?;
     if opts.api.participants {
         participants(opts, found, s).await?;
     }
@@ -299,193 +284,6 @@ fn drain_loop<'a>(
         flush: 16,
         flush_bytes: 64 << 20,
         failures_in_a_row: 10,
-    }
-}
-
-// ── recording files ──────────────────────────────────────────────────
-
-async fn files(opts: &FetchOptions, found: &RunProblems, s: &mut FetchSummary) -> Result<()> {
-    if opts.control.stop.requested() {
-        return Ok(());
-    }
-    let mut wanted: HashMap<String, WantedFile> = HashMap::new();
-    let mut listed = Vec::new();
-    for meeting in opts.db.recordings().await? {
-        for file in shape::wanted_files(&meeting, opts.api.media) {
-            // A key listed twice would be written twice in one flush.
-            let key = file.key();
-            let version = file.size.map(|n| n.to_string());
-            if wanted.insert(key.clone(), file).is_none() {
-                listed.push(Listed::new(key, version));
-            }
-        }
-    }
-    let owed = owed::owed(opts.db.pool(), RECORDING_FILES, listed).await?;
-    if owed.is_empty() {
-        return Ok(());
-    }
-    opts.progress
-        .set_message(&format!("zoom: {} recording files", owed.len()));
-    opts.progress.set_length(Some(owed.len() as u64));
-    let fetcher = Files {
-        latchkey: &opts.latchkey,
-        db: &opts.db,
-        progress: &opts.progress,
-        stop: &opts.control.stop,
-        cap: opts.blob_size_limit_bytes,
-        wanted,
-        meetings: Mutex::new(HashMap::new()),
-        gone: AtomicUsize::new(0),
-    };
-    // One at a time: a meeting's files share the token its first file
-    // fetched.
-    let l = drain_loop(opts, found, RECORDING_FILES, "recording files", 1);
-    let drained = owed::drain(&l, owed, &fetcher).await?;
-    let gone = fetcher.gone.load(Ordering::Relaxed);
-    s.files += drained.got - gone;
-    s.files_gone += gone;
-    s.files_skipped += drained.skipped;
-    s.failed += drained.failed;
-    s.left += drained.left;
-    Ok(())
-}
-
-/// A meeting's fresh recordings answer: the token that downloads its
-/// files and their current links. `None` for a meeting Zoom no longer
-/// has a recording of.
-type MeetingFiles = Option<Arc<(String, Vec<Value>)>>;
-
-struct Files<'a> {
-    latchkey: &'a LatchkeySettings,
-    db: &'a RawDb,
-    progress: &'a Progress,
-    stop: &'a StopFlag,
-    cap: Option<u64>,
-    wanted: HashMap<String, WantedFile>,
-    meetings: Mutex<HashMap<String, MeetingFiles>>,
-    gone: AtomicUsize,
-}
-
-impl Files<'_> {
-    async fn meeting(&self, uuid: &str) -> Result<MeetingFiles> {
-        if let Some(known) = self.meetings.lock().unwrap().get(uuid) {
-            return Ok(known.clone());
-        }
-        let answer = match api::get_json(&api::meeting_recordings_url(uuid), self.latchkey).await {
-            Ok(v) => {
-                let token = str_of(&v, "download_access_token").ok_or_else(|| {
-                    api::ApiError::Service(
-                        "Zoom gave no download_access_token with the meeting's recordings: \
-                         the role of the user who signed in needs \"View the recording \
-                         content\""
-                            .to_string(),
-                    )
-                })?;
-                let files = v
-                    .get("recording_files")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default();
-                Some(Arc::new((token.to_string(), files)))
-            }
-            Err(e) if api::is_not_found(&e) || api::is_unavailable(&e) => None,
-            Err(e) => return Err(e),
-        };
-        self.meetings
-            .lock()
-            .unwrap()
-            .insert(uuid.to_string(), answer.clone());
-        Ok(answer)
-    }
-
-    /// The file's bytes, or `None` bytes for one Zoom no longer has.
-    async fn file(&self, w: &WantedFile) -> Result<FetchedFile> {
-        let mut out = FetchedFile {
-            meeting_uuid: w.meeting_uuid.clone(),
-            file_key: w.file_key.clone(),
-            content_type: None,
-            bytes: None,
-        };
-        let Some(meeting) = self.meeting(&w.meeting_uuid).await? else {
-            return Ok(out);
-        };
-        let (token, files) = meeting.as_ref();
-        let Some(file) = shape::file_named(files, &w.file_key) else {
-            return Ok(out);
-        };
-        out.content_type = shape::content_type(file);
-        let url = str_of(file, "download_url").context("the file has no download_url")?;
-        match api::download(url, token).await {
-            Ok(bytes) => out.bytes = Some(bytes),
-            Err(e) if api::is_not_found(&e) || api::is_unavailable(&e) => {}
-            Err(e) => return Err(e),
-        }
-        Ok(out)
-    }
-
-    fn over_cap(&self, w: &WantedFile) -> Option<String> {
-        let cap = self.cap?;
-        let size = w.size?;
-        (w.media && size > cap).then(|| {
-            format!(
-                "the {} file is {size} bytes, over blob_size_limit_bytes ({cap})",
-                w.file_type
-            )
-        })
-    }
-}
-
-#[async_trait]
-impl Fetcher<FetchedFile> for Files<'_> {
-    async fn fetch(
-        &self,
-        batch: Vec<Listed>,
-    ) -> std::result::Result<Vec<Fetched<FetchedFile>>, BatchError> {
-        let mut out = Vec::with_capacity(batch.len());
-        for listed in batch {
-            let outcome = match self.wanted.get(&listed.key) {
-                None => Outcome::Failed("owed but not wanted".to_string()),
-                Some(w) => match self.over_cap(w) {
-                    Some(why) => Outcome::Skipped(Reason::OverSizeLimit, why),
-                    None => match self.file(w).await {
-                        Ok(f) if f.bytes.is_some() => Outcome::Got(f),
-                        Ok(f) => {
-                            self.gone.fetch_add(1, Ordering::Relaxed);
-                            Outcome::Unusable(
-                                f,
-                                Reason::NotFound,
-                                "Zoom no longer has this recording file".to_string(),
-                            )
-                        }
-                        Err(e) if api::is_service(&e) => return Err(BatchError::Terminal(e)),
-                        Err(e) if self.stop.requested() => return Err(BatchError::Batch(e)),
-                        Err(e) => Outcome::Failed(format!("{e:#}")),
-                    },
-                },
-            };
-            self.progress.inc(1);
-            out.push(Fetched { listed, outcome });
-        }
-        Ok(out)
-    }
-
-    async fn store(
-        &self,
-        tx: &mut Transaction<'static, Sqlite>,
-        batch: &[Fetched<FetchedFile>],
-    ) -> Result<()> {
-        let files: Vec<&FetchedFile> = batch
-            .iter()
-            .filter_map(|f| match &f.outcome {
-                Outcome::Got(file) | Outcome::Unusable(file, ..) => Some(file),
-                _ => None,
-            })
-            .collect();
-        db::store_files(tx, self.db.cas(), &files).await
-    }
-
-    fn weight(&self, content: &FetchedFile) -> usize {
-        content.bytes.as_ref().map_or(0, Vec::len)
     }
 }
 
