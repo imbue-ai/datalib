@@ -73,6 +73,8 @@ pub enum Provider {
     SmsBackupRestore,
     Whatsapp,
     Yolink,
+    /// Zoom meetings: their transcripts, who came and the AI summaries.
+    Zoom,
     /// Fixtures and unit tests only. A real row never carries it; it
     /// exists so the builder's setter can stay typed instead of taking
     /// a free-form string for the benefit of tests.

@@ -97,6 +97,9 @@ pub enum IdNamespace {
     SmsBackupRestore,
     Whatsapp,
     Yolink,
+    /// Zoom's meeting UUIDs, and the transcript cues each recording
+    /// numbers.
+    Zoom,
     /// Not a provider: datalib's own measurements of a source's mirror,
     /// which are minted by this recipe like anything else. Kept in its
     /// own namespace so a storage row can never collide with a row from
