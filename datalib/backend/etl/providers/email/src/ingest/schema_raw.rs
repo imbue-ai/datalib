@@ -28,7 +28,6 @@ pub const DATA_TABLES: &[&str] = &[
     "emails",
     "email_blobs",
     super::listed::LISTED,
-    super::listed::LISTED_THREADS,
 ];
 
 /// Many-to-many join tables. Not in [`DATA_TABLES`] because they're
@@ -171,9 +170,9 @@ impl MailboxRow {
 /// per-account reads scan the table instead.
 ///
 /// `email_count` counts the emails held; `upstream_email_count` is how
-/// many the thread has upstream, as Gmail's `threads.get` last said, so
-/// a thread held in part shows as fewer than that. NULL where nothing
-/// asked: JMAP, mbox, and a Gmail source with no label filter.
+/// many messages Gmail has in the thread, by the thread index
+/// (`listed::THREAD_INDEX`), so a thread held in part shows as fewer.
+/// NULL for JMAP and mbox, and until a Gmail source's index is whole.
 #[derive(Debug, Clone, RawTable)]
 #[raw_table(table = "threads")]
 pub struct ThreadRow {

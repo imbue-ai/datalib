@@ -179,7 +179,7 @@
     ]
   },
   "email": {
-    "schema_hash": "971c1791ab6127b0a946911c21f406eb6b80458cfed3060f6f52c48c22bae1ca",
+    "schema_hash": "3fbd91c913fb01c06645e8f92c1decfb06007f52be1b48107ab3471d1f614c28",
     "schema_version": 6,
     "shared_schema_version": 1,
     "sql": [
@@ -202,8 +202,6 @@
       "CREATE TABLE ingested_files( scope TEXT NOT NULL, rel_path TEXT NOT NULL, blake3 TEXT NOT NULL, size_bytes INTEGER NOT NULL, last_finished_at_utc TEXT NOT NULL, tz_offset TEXT NULL, PRIMARY KEY(scope, rel_path))",
       "CREATE TABLE listed_messages(id TEXT PRIMARY KEY, stamp TEXT NULL)",
       "CREATE TABLE listed_messages_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
-      "CREATE TABLE listed_threads(id TEXT PRIMARY KEY, stamp TEXT NULL)",
-      "CREATE TABLE listed_threads_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE listed_whole(scope TEXT PRIMARY KEY)",
       "CREATE TABLE mailboxes( id TEXT PRIMARY KEY, payload TEXT NULL, account_id TEXT NOT NULL, name TEXT NULL, parent_id TEXT NULL, role TEXT NULL, sort_order INTEGER NULL)",
       "CREATE TABLE mailboxes_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
@@ -211,6 +209,8 @@
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)",
+      "CREATE TABLE thread_members(id TEXT PRIMARY KEY, thread_id TEXT NOT NULL)",
+      "CREATE INDEX thread_members_by_thread ON thread_members(thread_id)",
       "CREATE TABLE threads( id TEXT PRIMARY KEY, payload TEXT NULL, account_id TEXT NOT NULL, email_count INTEGER NULL, upstream_email_count INTEGER NULL)",
       "CREATE TABLE threads_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)"
     ]

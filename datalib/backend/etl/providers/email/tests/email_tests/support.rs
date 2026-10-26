@@ -1,7 +1,7 @@
 //! What the playback tests share: a mirror to download into, the Gmail
 //! fixtures they serve, and a progress recorder.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -181,29 +181,18 @@ pub fn gmail_get_url(id: &str) -> String {
     format!("{GMAIL}/messages/{id}?format=RAW")
 }
 
-pub fn gmail_thread_url(thread_id: &str) -> String {
-    format!("{GMAIL}/threads/{thread_id}?format=MINIMAL")
-}
-
-/// `threads.get` for every thread of `messages`, which are `messages.get`
-/// answers: each message in it with its labels, and no content.
-pub fn put_gmail_threads(playback: &Path, messages: &[Value]) {
-    let mut threads: BTreeMap<String, Vec<Value>> = BTreeMap::new();
-    for m in messages {
-        let thread = m["threadId"].as_str().expect("a threadId").to_string();
-        threads.entry(thread.clone()).or_default().push(json!({
-            "id": m["id"],
-            "threadId": thread,
-            "labelIds": m["labelIds"],
-        }));
-    }
-    for (thread, messages) in threads {
-        put_gmail(
-            playback,
-            &gmail_thread_url(&thread),
-            &json!({ "id": thread, "messages": messages }),
-        );
-    }
+/// The walk of every message in the account, as one page: each of
+/// `messages` (`messages.get` answers) with its thread.
+pub fn put_gmail_all_mail(playback: &Path, messages: &[Value]) {
+    let listed: Vec<Value> = messages
+        .iter()
+        .map(|m| json!({ "id": m["id"], "threadId": m["threadId"] }))
+        .collect();
+    put_gmail(
+        playback,
+        &gmail_list_url(&[]),
+        &json!({ "messages": listed }),
+    );
 }
 
 /// One `messages.get` answer: a plain message under `label_ids`, its own

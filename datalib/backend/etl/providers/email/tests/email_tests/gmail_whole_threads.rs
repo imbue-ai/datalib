@@ -1,9 +1,9 @@
 //! A label filter keeps whole threads (#1368): the rest of a kept
-//! message's thread is listed by `threads.get` and fetched whatever its
-//! labels, and a thread no kept message is in any more goes. With
-//! `whole_threads = false` only the matching messages are kept, and the
-//! thread row says how many Gmail has. Each email carries Gmail's ids
-//! and labels (#1370).
+//! message's thread, which a walk of the whole account names, is listed
+//! and fetched whatever its labels, and a thread no kept message is in
+//! any more goes. With `whole_threads = false` only the matching
+//! messages are kept, and the thread row says how many Gmail has. Each
+//! email carries Gmail's ids and labels (#1370).
 //!
 //! Driven through the HTTP playback layer: no credential, no network.
 
@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 
 use crate::support::{
     gmail_get_url, gmail_history_url, gmail_list_url, gmail_message, inbox_label, put_gmail,
-    put_gmail_account, put_gmail_threads, Mirror,
+    put_gmail_account, put_gmail_all_mail, Mirror,
 };
 
 /// Archived out of the inbox, under `away team`: the thread's start.
@@ -31,15 +31,16 @@ const AWAY_TEAM: &str = "Label_7";
 async fn the_rest_of_a_kept_messages_thread_is_mirrored() {
     let h = Harness::new();
     let run = h.run(None).await;
-    assert_eq!(run.threads_counted, 1, "{run:?}");
+    assert_eq!(run.walked, ["INBOX"], "{run:?}");
     assert_eq!(run.listed_from_threads, 1, "{run:?}");
     assert_eq!(run.emails_upserted, 2, "{run:?}");
     assert_eq!(h.0.gmail_ids().await, ids(&[HAIL, REPLY]));
     assert_eq!(h.thread_counts().await, [(Some(2), Some(2))]);
 
     let again = h.run(None).await;
-    assert_eq!(again.threads_counted, 0, "nothing changed: {again:?}");
+    assert!(again.walked.is_empty(), "{again:?}");
     assert_eq!(again.emails_upserted, 0, "{again:?}");
+    assert_eq!(again.quota_units_spent, 4, "{again:?}");
 }
 
 /// Kept by label alone, the thread is held in part, and its row says so.
@@ -47,10 +48,38 @@ async fn the_rest_of_a_kept_messages_thread_is_mirrored() {
 async fn without_whole_threads_a_partial_thread_shows_gmails_count() {
     let h = Harness::new();
     let run = h.run(Some(false)).await;
-    assert_eq!(run.threads_counted, 1, "{run:?}");
     assert_eq!(run.listed_from_threads, 0, "{run:?}");
     assert_eq!(h.0.gmail_ids().await, ids(&[REPLY]));
     assert_eq!(h.thread_counts().await, [(Some(1), Some(2))]);
+}
+
+/// A reply the filter drops is still a message of the thread: the
+/// count goes up with it, from what `history.list` said, and nothing is
+/// asked of Gmail about the thread.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_message_the_filter_drops_still_counts_toward_its_thread() {
+    const SENT: &str = "18c9f2a1b2c3d803";
+    let h = Harness::new();
+    h.run(Some(false)).await;
+
+    let p = &h.0.playback;
+    put_gmail_account(p, "1001", labels());
+    put_gmail(
+        p,
+        &gmail_history_url("1000"),
+        &json!({
+            "history": [{ "messagesAdded": [
+                { "message": { "id": SENT, "threadId": HAIL, "labelIds": ["SENT"] } },
+            ]}],
+            "historyId": "1001",
+        }),
+    );
+    put_gmail(p, &gmail_get_url(SENT), &message(SENT, &["SENT"]));
+    let run = h.run(Some(false)).await;
+    assert_eq!(run.messages_filtered, 1, "{run:?}");
+    assert_eq!(run.threads_recounted, 1, "{run:?}");
+    assert_eq!(h.0.gmail_ids().await, ids(&[REPLY]));
+    assert_eq!(h.thread_counts().await, [(Some(1), Some(3))]);
 }
 
 /// The reply is archived too: no message of the thread is in the inbox,
@@ -72,8 +101,6 @@ async fn a_thread_the_filter_no_longer_keeps_goes_whole() {
             "historyId": "1001",
         }),
     );
-    let messages = [message(HAIL, &[AWAY_TEAM]), message(REPLY, &[])];
-    put_gmail_threads(p, &messages);
     // The reply's bytes are held, so only its labels are asked for: by
     // walking every label, which costs less than one message at a time.
     put_gmail(p, &gmail_list_url(&["INBOX"]), &json!({}));
@@ -86,15 +113,6 @@ async fn a_thread_the_filter_no_longer_keeps_goes_whole() {
     assert_eq!(run.emails_destroyed, 2, "{run:?}");
     assert!(h.0.gmail_ids().await.is_empty());
     assert!(h.thread_counts().await.is_empty());
-    let listed_threads: i64 =
-        h.0.read(|db| async move {
-            sqlx::query_scalar("SELECT count(*) FROM listed_threads")
-                .fetch_one(db.pool())
-                .await
-                .unwrap()
-        })
-        .await;
-    assert_eq!(listed_threads, 0);
 }
 
 /// Gmail's ids in the API's hex, and its labels as it spells them, with
@@ -205,5 +223,5 @@ fn write_fixtures(playback: &Path) {
     for m in &messages {
         put_gmail(playback, &gmail_get_url(m["id"].as_str().unwrap()), m);
     }
-    put_gmail_threads(playback, &messages);
+    put_gmail_all_mail(playback, &messages);
 }

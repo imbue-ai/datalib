@@ -10,10 +10,11 @@
 //! in the transaction that writes the email; what is owed is the
 //! difference, asked of the store each time and never stored.
 //! `listed_whole` names the scopes (a mailbox, a label, or the account)
-//! an enumeration has listed to its end. `listed_threads` (Gmail only)
-//! has a row per held thread, keyed by the `threads` row's id, with the
-//! token that last named a message in it: a thread is owed a
-//! `threads.get` until it is held at that token. The rule and why:
+//! an enumeration has listed to its end. `thread_members` (Gmail only)
+//! has a row per message in the account, mirrored or not, naming its
+//! thread: what a walk of the whole account and `history.list` say,
+//! which is how whole threads are listed and how many messages Gmail
+//! has in each is counted. The rule and why:
 //! docs/dev/data_architecture_ingestion.md, "What is left to fetch".
 
 use std::collections::BTreeSet;
@@ -30,16 +31,23 @@ use super::db::{delete_emails_in_tx, refresh_email_joins};
 use super::schema_raw::{EmailRow, ThreadRow};
 
 pub const LISTED: &str = "listed_messages";
-pub const LISTED_THREADS: &str = "listed_threads";
 
 pub const DDL: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS listed_messages (id TEXT PRIMARY KEY, stamp TEXT NULL)",
     "CREATE TABLE IF NOT EXISTS listed_whole (scope TEXT PRIMARY KEY)",
-    LISTED_THREADS_DDL,
+    THREAD_MEMBERS_DDL[0],
+    THREAD_MEMBERS_DDL[1],
 ];
 
-const LISTED_THREADS_DDL: &str =
-    "CREATE TABLE IF NOT EXISTS listed_threads (id TEXT PRIMARY KEY, stamp TEXT NULL)";
+/// Keyed by upstream's message id; `thread_id` is the `threads` row's.
+const THREAD_MEMBERS_DDL: [&str; 2] = [
+    "CREATE TABLE IF NOT EXISTS thread_members (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS thread_members_by_thread ON thread_members(thread_id)",
+];
+
+/// The scope of the walk that fills `thread_members`. A label id has no
+/// `#`, so it names no label.
+pub const THREAD_INDEX: &str = "#threads";
 
 /// The scope of an enumeration no filter narrows.
 pub const WHOLE_ACCOUNT: &str = "*";
@@ -93,40 +101,119 @@ pub async fn list_in_tx(
     Ok(wrote)
 }
 
-/// List the held threads of `thread_ids` (the `threads` rows' ids) at
-/// `stamp`: a message in each was named under it. A thread the store
-/// does not hold is not listed; its first email lists it.
-pub async fn list_threads_in_tx(
+/// Record which thread each of `members` (upstream's message id, the
+/// `threads` row's id) is in.
+pub async fn member_in_tx(
     tx: &mut Transaction<'_, Sqlite>,
-    thread_ids: &BTreeSet<String>,
-    stamp: Option<&str>,
+    members: &[(String, String)],
 ) -> Result<()> {
-    for id in thread_ids {
+    for (id, thread_id) in members {
         sqlx::query(
-            "INSERT INTO listed_threads (id, stamp) SELECT ?1, ?2
-             WHERE EXISTS (SELECT 1 FROM threads WHERE id = ?1)
-             ON CONFLICT(id) DO UPDATE SET stamp = excluded.stamp",
+            "INSERT INTO thread_members (id, thread_id) VALUES (?, ?)
+             ON CONFLICT(id) DO UPDATE SET thread_id = excluded.thread_id",
         )
         .bind(id)
-        .bind(stamp)
+        .bind(thread_id)
         .execute(&mut **tx)
         .await
-        .with_context(|| format!("list thread {id}"))?;
+        .with_context(|| format!("record the thread of message {id}"))?;
     }
     Ok(())
 }
 
-/// Every listed thread at its stamp, newest first.
-pub async fn thread_listing(pool: &SqlitePool) -> Result<Vec<Listed>> {
-    let rows: Vec<(String, Option<String>)> =
-        sqlx::query_as("SELECT id, stamp FROM listed_threads ORDER BY id DESC")
-            .fetch_all(pool)
+pub async fn unmember_in_tx(tx: &mut Transaction<'_, Sqlite>, ids: &[String]) -> Result<()> {
+    for id in ids {
+        sqlx::query("DELETE FROM thread_members WHERE id = ?")
+            .bind(id)
+            .execute(&mut **tx)
             .await
-            .context("select the listed threads")?;
-    Ok(rows
-        .into_iter()
-        .map(|(id, stamp)| Listed::new(id, stamp))
-        .collect())
+            .with_context(|| format!("forget the thread of message {id}"))?;
+    }
+    Ok(())
+}
+
+/// A walk of the whole account for [`THREAD_INDEX`] reached its end,
+/// naming `named`: a message it did not name is in no thread, and the
+/// index is whole. One transaction. Returns how many members went.
+pub async fn close_thread_index(pool: &SqlitePool, named: &BTreeSet<String>) -> Result<usize> {
+    let mut tx = pool.begin().await.context("begin thread index close tx")?;
+    let held: Vec<String> = sqlx::query_scalar("SELECT id FROM thread_members")
+        .fetch_all(&mut *tx)
+        .await
+        .context("select the thread members")?;
+    let gone: Vec<String> = held
+        .iter()
+        .filter(|id| !named.contains(*id))
+        .cloned()
+        .collect();
+    unmember_in_tx(&mut tx, &gone).await?;
+    sqlx::query("INSERT INTO listed_whole (scope) VALUES (?) ON CONFLICT(scope) DO NOTHING")
+        .bind(THREAD_INDEX)
+        .execute(&mut *tx)
+        .await
+        .context("record the thread index as listed whole")?;
+    tx.commit().await.context("commit thread index close tx")?;
+    datalib_etl::prune::record("thread members", held.len(), gone.len());
+    Ok(gone.len())
+}
+
+/// List, at `stamp`, every member of a thread of `account_id` that holds
+/// an email carrying one of `label_ids`, and is not listed: the rest of
+/// each kept message's thread. Returns how many it listed.
+pub async fn list_kept_threads(
+    pool: &SqlitePool,
+    account_id: &str,
+    label_ids: &[String],
+    stamp: Option<&str>,
+) -> Result<u64> {
+    let listed = sqlx::query(
+        "INSERT INTO listed_messages (id, stamp)
+         SELECT m.id, ?3 FROM thread_members m
+         WHERE m.thread_id IN (
+            SELECT thread_id FROM emails WHERE account_id = ?1
+            AND EXISTS (SELECT 1 FROM json_each(label_ids)
+                        WHERE value IN (SELECT value FROM json_each(?2))))
+         AND NOT EXISTS (SELECT 1 FROM listed_messages l WHERE l.id = m.id)
+         ON CONFLICT(id) DO NOTHING",
+    )
+    .bind(account_id)
+    .bind(serde_json::to_string(label_ids)?)
+    .bind(stamp)
+    .execute(pool)
+    .await
+    .context("list the rest of the kept threads")?;
+    Ok(listed.rows_affected())
+}
+
+/// Rewrite every thread whose count of upstream messages the thread
+/// index now says otherwise. Nothing while the index is not whole.
+/// Returns how many threads it rewrote.
+pub async fn recount_threads(pool: &SqlitePool, now: &IsoOffsetTimestamp) -> Result<usize> {
+    let mut tx = pool.begin().await.context("begin recount tx")?;
+    if !thread_index_whole(&mut tx).await? {
+        tx.commit().await.context("commit recount tx")?;
+        return Ok(0);
+    }
+    let stale: BTreeSet<(String, String)> = sqlx::query_as(
+        "SELECT account_id, id FROM threads t WHERE upstream_email_count IS NOT
+            (SELECT nullif(count(*), 0) FROM thread_members m WHERE m.thread_id = t.id)",
+    )
+    .fetch_all(&mut *tx)
+    .await
+    .context("select the threads to recount")?
+    .into_iter()
+    .collect();
+    rebuild_threads_in_tx(&mut tx, now, &stale).await?;
+    tx.commit().await.context("commit recount tx")?;
+    Ok(stale.len())
+}
+
+async fn thread_index_whole(tx: &mut Transaction<'_, Sqlite>) -> Result<bool> {
+    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM listed_whole WHERE scope = ?)")
+        .bind(THREAD_INDEX)
+        .fetch_one(&mut **tx)
+        .await
+        .context("ask whether the thread index is whole")
 }
 
 /// Every listed message at its stamp, as `owed::owed` takes it: in id
@@ -223,8 +310,8 @@ pub async fn forget_in_tx(
 
 /// A thread row is its emails, oldest first: written from the email
 /// rows in the transaction that changes them, so it is never behind.
-/// What upstream last said the thread holds is kept. A thread with no
-/// email left goes, and so does its listing.
+/// Its upstream count is the thread index's while that is whole, and
+/// what it was before while not.
 pub(super) async fn rebuild_threads_in_tx(
     tx: &mut Transaction<'_, Sqlite>,
     now: &IsoOffsetTimestamp,
@@ -232,20 +319,23 @@ pub(super) async fn rebuild_threads_in_tx(
 ) -> Result<()> {
     let mut rows = Vec::new();
     for (account_id, thread_id) in threads {
-        let upstream: Option<i64> =
-            sqlx::query_scalar("SELECT upstream_email_count FROM threads WHERE id = ?")
-                .bind(thread_id)
-                .fetch_optional(&mut **tx)
-                .await
-                .with_context(|| format!("read thread {thread_id}"))?
-                .flatten();
+        let sql = if thread_index_whole(tx).await? {
+            "SELECT nullif(count(*), 0) FROM thread_members WHERE thread_id = ?"
+        } else {
+            "SELECT upstream_email_count FROM threads WHERE id = ?"
+        };
+        let upstream: Option<i64> = sqlx::query_scalar(sql)
+            .bind(thread_id)
+            .fetch_optional(&mut **tx)
+            .await
+            .with_context(|| format!("count thread {thread_id}"))?
+            .flatten();
         match thread_row_in_tx(tx, account_id, thread_id, upstream).await? {
             Some(row) => rows.push(row),
             None => {
                 for sql in [
                     "DELETE FROM threads WHERE id = ?",
                     "DELETE FROM threads_bookkeeping WHERE id = ?",
-                    "DELETE FROM listed_threads WHERE id = ?",
                 ] {
                     sqlx::query(sql)
                         .bind(thread_id)
@@ -253,34 +343,10 @@ pub(super) async fn rebuild_threads_in_tx(
                         .await
                         .with_context(|| format!("delete thread {thread_id}"))?;
                 }
-                owed::forget(tx, LISTED_THREADS, thread_id).await?;
             }
         }
     }
     bulk_upsert_in_tx(tx, &rows, now).await
-}
-
-/// Record how many messages upstream says the held thread `thread_id`
-/// has. A thread the store does not hold is left alone.
-pub async fn count_upstream_in_tx(
-    tx: &mut Transaction<'_, Sqlite>,
-    now: &IsoOffsetTimestamp,
-    thread_id: &str,
-    count: i64,
-) -> Result<()> {
-    let account_id: Option<String> =
-        sqlx::query_scalar("SELECT account_id FROM threads WHERE id = ?")
-            .bind(thread_id)
-            .fetch_optional(&mut **tx)
-            .await
-            .with_context(|| format!("read thread {thread_id}"))?;
-    let Some(account_id) = account_id else {
-        return Ok(());
-    };
-    let Some(row) = thread_row_in_tx(tx, &account_id, thread_id, Some(count)).await? else {
-        return Ok(());
-    };
-    bulk_upsert_in_tx(tx, std::slice::from_ref(&row), now).await
 }
 
 async fn thread_row_in_tx(
@@ -583,10 +649,9 @@ pub async fn migrate_relist_gmail_scopes(conn: &mut SqliteConnection) -> Result<
 }
 
 /// Gmail's own ids and labels go on each email the API answered for,
-/// read from what its row already holds, and how many messages Gmail
-/// says a thread has goes on the thread. Every thread a Gmail message
-/// is held in is listed under no stamp, so the next run with a label
-/// filter asks Gmail once for each.
+/// read from what its row already holds; a thread gets a column for how
+/// many messages Gmail has in it, and the thread index its table, which
+/// the next Gmail run fills with one walk of the account.
 pub async fn migrate_gmail_ids_and_thread_counts(conn: &mut SqliteConnection) -> Result<()> {
     for (table, column, decl) in [
         ("emails", "gmail_message_id", "TEXT NULL"),
@@ -609,12 +674,8 @@ pub async fn migrate_gmail_ids_and_thread_counts(conn: &mut SqliteConnection) ->
             .await?;
         }
     }
-    let listing_bookkeeping = dr::bookkeeping_ddl_for(LISTED_THREADS);
-    for ddl in [LISTED_THREADS_DDL, listing_bookkeeping.as_str()] {
-        // Audited: this module's own DDL.
-        sqlx::query(sqlx::AssertSqlSafe(ddl.to_string()))
-            .execute(&mut *conn)
-            .await?;
+    for ddl in THREAD_MEMBERS_DDL {
+        sqlx::query(ddl).execute(&mut *conn).await?;
     }
     let rows: Vec<(String, String, String)> = sqlx::query_as(
         "SELECT id, account_id, json(payload) FROM emails WHERE payload ->> '$._source.via' = ?",
@@ -639,12 +700,6 @@ pub async fn migrate_gmail_ids_and_thread_counts(conn: &mut SqliteConnection) ->
         .execute(&mut *conn)
         .await?;
     }
-    sqlx::query(
-        "INSERT OR IGNORE INTO listed_threads (id, stamp)
-         SELECT DISTINCT thread_id, NULL FROM emails WHERE gmail_thread_id IS NOT NULL",
-    )
-    .execute(&mut *conn)
-    .await?;
     Ok(())
 }
 
@@ -869,9 +924,8 @@ mod tests {
     }
 
     /// The sixth rung puts Gmail's ids and labels on an email the API
-    /// answered for, read from its payload, lists its thread under no
-    /// stamp so the next filtered run asks for it, and leaves an mbox
-    /// email's columns empty.
+    /// answered for, read from its payload, and leaves an mbox email's
+    /// columns empty; the thread index is there to be walked.
     #[tokio::test]
     async fn the_sixth_rung_reads_gmails_ids_and_labels_off_each_email() {
         let d = tempfile::tempdir().unwrap();
@@ -885,8 +939,7 @@ mod tests {
                 "ALTER TABLE emails DROP COLUMN gmail_thread_id",
                 "ALTER TABLE emails DROP COLUMN label_ids",
                 "ALTER TABLE threads DROP COLUMN upstream_email_count",
-                "DROP TABLE listed_threads",
-                "DROP TABLE listed_threads_bookkeeping",
+                "DROP TABLE thread_members",
                 "INSERT INTO emails (id, payload, account_id, thread_id, blob_id) VALUES
                     ('18c9f2a1b2c3d901', jsonb('{
                         \"id\": \"18c9f2a1b2c3d901\", \"blobId\": \"B1\",
@@ -928,22 +981,9 @@ mod tests {
                 "picard@enterprise.test=-/-/-",
             ]
         );
-        assert_eq!(
-            strings(
-                &db,
-                "SELECT id || '=' || coalesce(stamp, '') FROM listed_threads"
-            )
-            .await,
-            ["1786225503531948289="]
-        );
-        let owed = owed::owed(
-            db.pool(),
-            LISTED_THREADS,
-            thread_listing(db.pool()).await.unwrap(),
-        )
-        .await
-        .unwrap();
-        assert_eq!(owed.len(), 1);
+        assert!(strings(&db, "SELECT id FROM thread_members")
+            .await
+            .is_empty());
         db.close().await;
     }
 }

@@ -25,7 +25,7 @@ use serde_json::{json, Value};
 use crate::jmap_interrupt::{contents, copy_store};
 use crate::support::{
     gmail_get_url, gmail_history_url, gmail_list_url, gmail_message, inbox_label, put_gmail,
-    put_gmail_account, put_gmail_response, put_gmail_threads,
+    put_gmail_account, put_gmail_response,
 };
 
 struct Gmail {
@@ -91,10 +91,16 @@ fn labels() -> Value {
 /// thread.
 fn message(n: u8, label_ids: &[&str]) -> Value {
     let mut m = gmail_message(&id(n), label_ids, &format!("Captain's log {n}"));
-    if n == 2 || n == 9 {
-        m["threadId"] = json!(id(1));
-    }
+    m["threadId"] = json!(thread_of(&id(n)));
     m
+}
+
+fn thread_of(message: &str) -> String {
+    if message == id(2) || message == id(9) {
+        id(1)
+    } else {
+        message.to_string()
+    }
 }
 
 /// `messages.list` over `ids`, three to a page.
@@ -106,7 +112,10 @@ fn record_listing(playback: &Path, ids: &[String]) {
             url.push_str(&format!("&pageToken=p{i}"));
         }
         let mut body = json!({
-            "messages": page.iter().map(|id| json!({ "id": id })).collect::<Vec<_>>(),
+            "messages": page
+                .iter()
+                .map(|id| json!({ "id": id, "threadId": thread_of(id) }))
+                .collect::<Vec<_>>(),
             "resultSizeEstimate": ids.len(),
         });
         if i + 1 < pages.len() {
@@ -138,7 +147,7 @@ fn record_before(playback: &Path) {
     for (n, m) in (1..=8).zip(&messages) {
         put_gmail(playback, &gmail_get_url(&id(n)), m);
     }
-    put_gmail_threads(playback, &messages);
+
     put_gmail(
         playback,
         &gmail_history_url("9001"),

@@ -29,7 +29,6 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 pub const UNITS_MESSAGES_GET_RAW: u32 = 60;
 pub const UNITS_MESSAGES_GET_MINIMAL: u32 = 20;
 pub const UNITS_MESSAGES_LIST: u32 = 5;
-pub const UNITS_THREADS_GET: u32 = 10;
 pub const UNITS_HISTORY_LIST: u32 = 2;
 pub const UNITS_LABELS_LIST: u32 = 1;
 pub const UNITS_GET_PROFILE: u32 = 1;
@@ -357,6 +356,9 @@ impl Label {
 #[derive(Debug, Clone, Default)]
 pub struct MessagePage {
     pub ids: Vec<String>,
+    /// `(message, thread)`, in Gmail's hex, for each id the page names
+    /// with its thread.
+    pub members: Vec<(String, String)>,
     pub next_page_token: Option<String>,
     /// Google's guess at how many messages the whole walk will list,
     /// repeated on every page. The only whole-walk number Gmail offers,
@@ -397,11 +399,17 @@ pub async fn list_messages(
         client,
     )
     .await?;
+    let messages = v.get("messages").and_then(Value::as_array);
     Ok(MessagePage {
-        ids: v
-            .get("messages")
-            .and_then(Value::as_array)
+        ids: messages
             .map(|a| a.iter().filter_map(|m| str_field(m, "id")).collect())
+            .unwrap_or_default(),
+        members: messages
+            .map(|a| {
+                a.iter()
+                    .filter_map(|m| Some((str_field(m, "id")?, str_field(m, "threadId")?)))
+                    .collect()
+            })
             .unwrap_or_default(),
         next_page_token: str_field(&v, "nextPageToken"),
         result_size_estimate: v.get("resultSizeEstimate").and_then(Value::as_u64),
@@ -471,32 +479,6 @@ impl GmailMessage {
     }
 }
 
-/// Every message in thread `id` (Gmail's hex), with its labels and no
-/// content.
-pub async fn get_thread_minimal(user_id: &str, client: &Client, id: &str) -> Result<GmailThread> {
-    let v = get_json(
-        &format!("{BASE}/{user_id}/threads/{id}?format=MINIMAL"),
-        client,
-    )
-    .await?;
-    Ok(GmailThread {
-        messages: v
-            .get("messages")
-            .and_then(Value::as_array)
-            .map(|a| {
-                a.iter()
-                    .filter_map(|m| GmailMessage::from_json(m).ok())
-                    .collect()
-            })
-            .unwrap_or_default(),
-    })
-}
-
-#[derive(Debug, Clone)]
-pub struct GmailThread {
-    pub messages: Vec<GmailMessage>,
-}
-
 /// What changed since a `historyId`.
 #[derive(Debug, Clone, Default)]
 pub struct HistoryPage {
@@ -507,8 +489,9 @@ pub struct HistoryPage {
     /// Message ids whose labels moved (`labelsAdded` / `labelsRemoved`).
     /// The bodies are unchanged, so only the envelope needs re-reading.
     pub relabeled: Vec<String>,
-    /// The threads of every message named above, in Gmail's hex.
-    pub threads: Vec<String>,
+    /// `(message, thread)`, in Gmail's hex, for every message added or
+    /// relabeled: `history.list` names the thread with the message.
+    pub members: Vec<(String, String)>,
     pub next_page_token: Option<String>,
     pub history_id: Option<String>,
 }
@@ -538,11 +521,16 @@ pub fn parse_history(v: &Value) -> HistoryPage {
         return page;
     };
     for record in records {
-        let threads = &mut page.threads;
-        collect_ids(record, "messagesAdded", &mut page.added, threads);
-        collect_ids(record, "messagesDeleted", &mut page.deleted, threads);
-        collect_ids(record, "labelsAdded", &mut page.relabeled, threads);
-        collect_ids(record, "labelsRemoved", &mut page.relabeled, threads);
+        let members = &mut page.members;
+        collect_ids(record, "messagesAdded", &mut page.added, members);
+        collect_ids(
+            record,
+            "messagesDeleted",
+            &mut page.deleted,
+            &mut Vec::new(),
+        );
+        collect_ids(record, "labelsAdded", &mut page.relabeled, members);
+        collect_ids(record, "labelsRemoved", &mut page.relabeled, members);
     }
     // A message added and then deleted inside one history window must not
     // be fetched: the id is gone and `messages.get` would 404.
@@ -552,21 +540,27 @@ pub fn parse_history(v: &Value) -> HistoryPage {
     dedupe(&mut page.added);
     dedupe(&mut page.deleted);
     dedupe(&mut page.relabeled);
-    dedupe(&mut page.threads);
+    page.members.retain(|(id, _)| !page.deleted.contains(id));
     page
 }
 
-fn collect_ids(record: &Value, key: &str, out: &mut Vec<String>, threads: &mut Vec<String>) {
+fn collect_ids(
+    record: &Value,
+    key: &str,
+    out: &mut Vec<String>,
+    members: &mut Vec<(String, String)>,
+) {
     let Some(items) = record.get(key).and_then(Value::as_array) else {
         return;
     };
     for message in items.iter().filter_map(|item| item.get("message")) {
-        if let Some(id) = str_field(message, "id") {
-            out.push(id);
-        }
+        let Some(id) = str_field(message, "id") else {
+            continue;
+        };
         if let Some(thread) = str_field(message, "threadId") {
-            threads.push(thread);
+            members.push((id.clone(), thread));
         }
+        out.push(id);
     }
 }
 

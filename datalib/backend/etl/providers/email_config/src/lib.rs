@@ -320,11 +320,12 @@ pub struct EmailGmailApi {
     /// the thread of a message the filter keeps, whatever its labels, so
     /// a conversation whose earlier messages were archived arrives
     /// whole. A thread none of whose messages the filter keeps any more
-    /// goes. Costs one `threads.get` (10 quota units) per thread that
-    /// changes. `false` keeps only the messages the filter matches; each
-    /// thread then says how many messages Gmail has for it, so a partial
-    /// one shows. Without a label filter every message is mirrored
-    /// anyway. Defaults to true.
+    /// goes. Which thread each message is in comes from one walk of the
+    /// whole account (5 quota units per 500 messages) and from
+    /// `history.list`. `false` keeps only the messages the filter
+    /// matches; each thread still says how many messages Gmail has in
+    /// it, so a partial one shows. Without a label filter every message
+    /// is mirrored anyway. Defaults to true.
     #[serde(default)]
     pub whole_threads: Option<bool>,
 }

@@ -18,7 +18,7 @@ use serde_json::{json, Value};
 
 use crate::support::{
     gmail_get_url, gmail_history_url, gmail_list_url, gmail_message, inbox_label, put_gmail,
-    put_gmail_account, put_gmail_threads, Mirror,
+    put_gmail_account, put_gmail_all_mail, Mirror,
 };
 
 /// Under `datalib`, the label the mirror started with.
@@ -157,5 +157,5 @@ fn write_fixtures(playback: &Path) {
     for m in &messages {
         put_gmail(playback, &gmail_get_url(m["id"].as_str().unwrap()), m);
     }
-    put_gmail_threads(playback, &messages);
+    put_gmail_all_mail(playback, &messages);
 }

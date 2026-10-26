@@ -13,7 +13,7 @@ use serde_json::json;
 
 use crate::support::{
     gmail_get_url, gmail_history_url, gmail_list_url, gmail_message, inbox_label, put_gmail,
-    put_gmail_account, put_gmail_response, put_gmail_threads, Mirror,
+    put_gmail_account, put_gmail_all_mail, put_gmail_response, Mirror,
 };
 
 const PICARD: &str = "18c9f2a1b2c3d701";
@@ -230,7 +230,7 @@ async fn a_label_walk_that_fails_costs_only_that_label() {
     for (id, message) in [PICARD, RIKER].iter().zip(&messages) {
         put_gmail(&m.playback, &gmail_get_url(id), message);
     }
-    put_gmail_threads(&m.playback, &messages);
+    put_gmail_all_mail(&m.playback, &messages);
     let labels = |o: &mut FetchOptions| {
         o.only_labels = vec!["away team".into(), "holodeck".into()];
     };
@@ -241,7 +241,7 @@ async fn a_label_walk_that_fails_costs_only_that_label() {
     assert_eq!(problems(&m).await, ["listing:messages.list holodeck"]);
     assert_eq!(
         listed_whole(&m).await,
-        ["Label_7"],
+        ["#threads", "Label_7"],
         "the walk that failed is owed"
     );
     put_gmail(
