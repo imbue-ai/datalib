@@ -296,13 +296,15 @@ question reaches outside that:
   `latest_reply` only once `threads_bookkeeping.held_version` equals
   it. A message deleted in Slack more than `refresh_window_days` ago
   (30 by default) is still in the mirror.
-- **Gmail**: with `since` set, mail older than it is not listed (what
-  a relative `since` slides past stays in the mirror). With
-  `only_extract_labels` set, only messages in those
-  labels are mirrored, so a thread can be partial: `threads.email_count`
-  is what the mirror holds, not the thread's length. A message over the
-  source's size limit has no `.eml`. A run with `message_budget` stops
-  early on purpose.
+- **Email**: with `only_extract_labels` set, only messages in those
+  labels and the rest of their threads are mirrored; with
+  `whole_threads = false` as well, a thread can be partial, and
+  `threads.email_count` (what the mirror holds) is then less than
+  `threads.upstream_email_count` (what the service has). On Gmail, with
+  `since` set, mail older than it is not listed unless it shares a
+  thread with a kept message (what a relative `since` slides past stays
+  in the mirror). A message over the source's size limit has no `.eml`.
+  A run with `message_budget` stops early on purpose.
 - **Calendar**: with `since` or `until` set, only events with an
   occurrence in that window, and an event a relative window moves past is
   dropped from the mirror. Repeating events are stored as series, not
