@@ -1,0 +1,62 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//tools:live.bzl", "live_run")
+
+rust_library(
+    name = "datalib_etl_todoist",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_todoist",
+    edition = "2021",
+    proc_macro_deps = ["@datalib_crates//:async-trait"],
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/todoist_config:datalib_etl_todoist_config",
+        "//datalib/backend/etl/web:datalib_etl_web",
+        "//datalib/backend/probe:datalib_probe",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "todoist_unittests",
+    size = "small",
+    crate = ":datalib_etl_todoist",
+    edition = "2021",
+)
+
+# Every hermetic Todoist test in one binary, against playback tapes; the
+# modules are listed in its `main.rs`. The `live` module reaches the real
+# account and is skipped here; `bazel run :todoist_live` runs it.
+rust_test(
+    name = "todoist_tests",
+    srcs = glob(["tests/todoist_tests/*.rs"]),
+    args = [
+        "--skip",
+        "live::",
+    ],
+    crate_root = "tests/todoist_tests/main.rs",
+    edition = "2021",
+    proc_macro_deps = ["@datalib_crates//:async-trait"],
+    deps = [
+        ":datalib_etl_todoist",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/todoist_config:datalib_etl_todoist_config",
+        "//datalib/backend/etl/web:datalib_etl_web",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+live_run(
+    name = "todoist_live",
+    test = ":todoist_tests",
+)

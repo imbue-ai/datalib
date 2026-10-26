@@ -1,0 +1,20 @@
+# Your Todoist over its API, signed in through latchkey
+# (`latchkey auth browser todoist`). An empty `api` table copies every
+# project, section, label, open task and comment, and every task you have
+# completed since you joined; later syncs read only what changed.
+[[groups]]
+id = "todoist"
+name = "Todoist"
+type = "todoist"
+
+[[steps]]
+group = "todoist"
+function = "ingest"
+
+[steps.params.api]
+
+# One document per project: its sections, its tasks and their comments.
+[[steps]]
+group = "todoist"
+function = "render_markdown"
+inputs = ["todoist/ingest"]
