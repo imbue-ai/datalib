@@ -38,6 +38,9 @@ pub fn plan_ingest(
             calendars: calendars.to_vec(),
             window: ingest::Window::from_config(window)?,
         },
+        CalendarMethod::Calendly { window } => Method::Calendly {
+            window: ingest::Window::from_config(window)?,
+        },
         CalendarMethod::Ics(path) => Method::Ics { path: path.path() },
     };
     Ok(vec![Box::new(CalendarIngest {
@@ -56,6 +59,9 @@ enum Method {
     Caldav {
         server_url: String,
         calendars: Vec<String>,
+        window: Option<ingest::Window>,
+    },
+    Calendly {
         window: Option<ingest::Window>,
     },
     Ics {
@@ -84,6 +90,9 @@ impl CalendarIngest {
                 "method": "caldav", "server_url": server_url, "calendars": calendars,
                 "window": window
             }),
+            Method::Calendly { window } => {
+                serde_json::json!({"method": "calendly", "window": window})
+            }
             Method::Ics { path } => serde_json::json!({"method": "ics", "path": path}),
         }
     }
@@ -124,6 +133,17 @@ impl DataProcessor for CalendarIngest {
                         db,
                         server_url: server_url.clone(),
                         calendars: calendars.clone(),
+                        window: *window,
+                        latchkey: self.latchkey.clone(),
+                        progress: ctx.progress.clone(),
+                        control: ctx.control.clone(),
+                        sealer: Some(sealer),
+                    })
+                    .await
+                }
+                Method::Calendly { window } => {
+                    ingest::calendly::fetch(ingest::calendly::FetchOptions {
+                        db,
                         window: *window,
                         latchkey: self.latchkey.clone(),
                         progress: ctx.progress.clone(),

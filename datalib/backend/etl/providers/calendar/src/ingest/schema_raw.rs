@@ -1,6 +1,7 @@
 //! Raw-store schema for the `calendar` provider. Each download method
 //! keeps what its upstream sent: an iCalendar object per event for
-//! CalDAV and `.ics` files, Google's JSON per event for Google.
+//! CalDAV and `.ics` files, Google's JSON per event for Google, and
+//! Calendly's JSON per scheduled event, with its invitees beside it.
 
 use datalib_etl::bulk::BulkUpsertable;
 use datalib_etl::doltlite_raw::{self as dr, Migration, WirePayload, WirePayloadRow};
@@ -9,7 +10,14 @@ use sqlx::query::Query;
 use sqlx::sqlite::SqliteArguments;
 use sqlx::Sqlite;
 
-pub const DATA_TABLES: &[&str] = &["accounts", "calendars", "ics_objects", "google_events"];
+pub const DATA_TABLES: &[&str] = &[
+    "accounts",
+    "calendars",
+    "ics_objects",
+    "google_events",
+    "calendly_events",
+    "calendly_invitees",
+];
 
 /// `accounts` — the login this store mirrors. One row.
 pub const ACCOUNTS_DDL: &str = "CREATE TABLE IF NOT EXISTS accounts (
@@ -22,14 +30,16 @@ pub const ACCOUNTS_DDL: &str = "CREATE TABLE IF NOT EXISTS accounts (
 
 #[derive(Debug, Clone, Default)]
 pub struct AccountRow {
-    /// The server's host for CalDAV, `google` for Google, `ics` for files.
+    /// The server's host for CalDAV, `google` for Google, `calendly` for
+    /// Calendly, `ics` for files.
     pub id: String,
-    /// `caldav`, `google` or `ics`.
+    /// `caldav`, `google`, `calendly` or `ics`.
     pub method: String,
     pub server_url: Option<String>,
     pub principal_href: Option<String>,
     /// Who the calendars belong to: the CalDAV principal's user, the
-    /// Google account's primary calendar id (its address).
+    /// Google account's primary calendar id (its address), the Calendly
+    /// user's address.
     pub login: Option<String>,
 }
 
@@ -57,7 +67,8 @@ impl BulkUpsertable for AccountRow {
 ///
 /// `id` is the calendar's own id, short enough to lead an event's key:
 /// the last segment of a CalDAV collection's href (Fastmail and iCloud
-/// mint a UUID there), Google's calendar id, an `.ics` file's path
+/// mint a UUID there), Google's calendar id, the Calendly user's uuid
+/// (Calendly keeps one list of meetings per user), an `.ics` file's path
 /// under the configured directory without its extension.
 pub const CALENDARS_DDL: &str = "CREATE TABLE IF NOT EXISTS calendars (
     id TEXT PRIMARY KEY,
@@ -185,7 +196,71 @@ impl GoogleEventRow {
 /// `updated` as the event's `modified_at`.
 pub const GOOGLE_EVENT_VOLATILE_PATHS: &[dr::VolatilePath] = &[&["etag"], &["updated"]];
 
-/// An event row's key: `"{calendar_id}#{uid or Google event id}"`.
+/// `calendly_events` — one Calendly scheduled event, verbatim.
+/// `listing_hash` is the blake3 of the payload: the version of the event
+/// its invitees are fetched for, since the listing says nothing else of
+/// them.
+#[derive(Debug, Clone, WirePayloadRow)]
+#[wire_payload_row(table = "calendly_events")]
+pub struct CalendlyEventRow {
+    pub id_and_payload: WirePayload,
+    pub calendar_id: String,
+    pub start_time: Option<String>,
+    pub status: Option<String>,
+    pub listing_hash: Option<String>,
+}
+
+impl CalendlyEventRow {
+    /// `None` for an event whose `uri` names no uuid.
+    pub fn new(calendar_id: &str, event: &serde_json::Value) -> Option<Self> {
+        let uuid = calendly_uuid(event.get("uri")?.as_str()?)?;
+        let str_of = |k: &str| event.get(k).and_then(|v| v.as_str()).map(str::to_string);
+        let payload = event.to_string();
+        Some(Self {
+            listing_hash: Some(datalib_etl::blob_cas::blake3_hex(payload.as_bytes())),
+            id_and_payload: WirePayload {
+                id: event_pk(calendar_id, uuid),
+                payload,
+            },
+            calendar_id: calendar_id.to_string(),
+            start_time: str_of("start_time"),
+            status: str_of("status"),
+        })
+    }
+}
+
+/// `calendly_invitees` — every invitee of one scheduled event, as
+/// `/scheduled_events/{uuid}/invitees` lists them, keyed like the event.
+/// Payload `{"invitees": [...]}`, in Calendly's order (`created_at`
+/// ascending). Held at the event's `listing_hash`.
+#[derive(Debug, Clone, WirePayloadRow)]
+#[wire_payload_row(table = "calendly_invitees")]
+pub struct CalendlyInviteesRow {
+    pub id_and_payload: WirePayload,
+}
+
+impl CalendlyInviteesRow {
+    pub fn new(event_key: &str, invitees: &[serde_json::Value]) -> Self {
+        Self {
+            id_and_payload: WirePayload {
+                id: event_key.to_string(),
+                payload: serde_json::json!({ "invitees": invitees }).to_string(),
+            },
+        }
+    }
+}
+
+/// The uuid a Calendly resource URI ends in:
+/// `https://api.calendly.com/scheduled_events/<uuid>`.
+pub fn calendly_uuid(uri: &str) -> Option<&str> {
+    uri.trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty() && !s.contains(':'))
+}
+
+/// An event row's key: `"{calendar_id}#{uid, Google event id or
+/// Calendly event uuid}"`.
 pub fn event_pk(calendar_id: &str, event_key: &str) -> String {
     format!("{calendar_id}#{event_key}")
 }
@@ -216,6 +291,10 @@ pub fn full_ddl() -> Vec<String> {
         GoogleEventRow::ddl(),
         "CREATE INDEX IF NOT EXISTS google_events_by_calendar ON google_events(calendar_id)"
             .to_string(),
+        CalendlyEventRow::ddl(),
+        "CREATE INDEX IF NOT EXISTS calendly_events_by_calendar ON calendly_events(calendar_id)"
+            .to_string(),
+        CalendlyInviteesRow::ddl(),
         // The `.ics` method's resume cursor: a file whose size and mtime
         // have not moved is not read again.
         datalib_etl_files::file_checkpoint::INGESTED_FILES_DDL.to_string(),

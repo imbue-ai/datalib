@@ -1,9 +1,11 @@
-//! The three ways a calendar reaches the raw store: CalDAV, Google's
-//! API, and `.ics` files. Each calendar keeps its own sync position, so
-//! the `calendars` filter can widen without a cursor swallowing it: a
-//! calendar added to the list has no token yet and is listed whole.
+//! The four ways a calendar reaches the raw store: CalDAV, Google's
+//! API, Calendly's API, and `.ics` files. Each calendar keeps its own
+//! sync position, so the `calendars` filter can widen without a cursor
+//! swallowing it: a calendar added to the list has no token yet and is
+//! listed whole.
 
 pub mod caldav;
+pub mod calendly;
 pub mod db;
 pub mod google;
 pub mod ics_dir;

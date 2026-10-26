@@ -226,6 +226,34 @@ calendars_bookkeeping
     volatile_payload
     tz_offset
     held_version
+calendly_events
+    id
+    payload
+    calendar_id
+    start_time
+    status
+    listing_hash
+calendly_events_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+    held_version
+calendly_invitees
+    id
+    payload
+calendly_invitees_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+    held_version
 dav_resources
     id
     collection

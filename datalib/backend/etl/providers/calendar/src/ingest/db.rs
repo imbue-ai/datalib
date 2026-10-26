@@ -1,6 +1,6 @@
 //! Doltlite-backed raw store for the `calendar` provider.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result};
 use datalib_etl::bulk::{bulk_upsert_in_tx, BulkUpsertable};
@@ -9,7 +9,10 @@ use sqlx::{Row, Sqlite, Transaction};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
-use super::schema_raw::{full_ddl, AccountRow, CalendarRow, GoogleEventRow, IcsObjectRow, LADDER};
+use super::schema_raw::{
+    full_ddl, AccountRow, CalendarRow, CalendlyEventRow, CalendlyInviteesRow, GoogleEventRow,
+    IcsObjectRow, LADDER,
+};
 
 datalib_etl::raw_db!(pub RawDb: EntityStore, full_ddl(), LADDER);
 
@@ -19,6 +22,8 @@ pub struct LoadedAccount {
     pub id: String,
     pub method: String,
     pub server_url: Option<String>,
+    /// The CalDAV principal; the Calendly user's URI.
+    pub principal_href: Option<String>,
     pub login: Option<String>,
 }
 
@@ -45,6 +50,16 @@ pub struct LoadedGoogleEvent {
     pub id: String,
     pub calendar_id: String,
     pub event: serde_json::Value,
+}
+
+/// One `calendly_events` row and the invitees stored for it, for render.
+/// `invitees` is `None` until a fetch of them has landed.
+#[derive(Debug, Clone)]
+pub struct LoadedCalendlyEvent {
+    pub id: String,
+    pub calendar_id: String,
+    pub event: serde_json::Value,
+    pub invitees: Option<Vec<serde_json::Value>>,
 }
 
 /// A row render could not read, and what it held instead.
@@ -219,12 +234,20 @@ impl RawDb {
         Ok(events)
     }
 
-    /// The calendar, its events of either shape and their sidecars.
+    /// The calendar, its events of any shape and their sidecars.
     /// Returns how many events went.
     async fn delete_calendar(tx: &mut Transaction<'_, Sqlite>, calendar_id: &str) -> Result<usize> {
+        // Keyed like the events they belong to, so they go first.
+        let invitees: Vec<String> =
+            sqlx::query_scalar("SELECT id FROM calendly_events WHERE calendar_id = ?")
+                .bind(calendar_id)
+                .fetch_all(&mut **tx)
+                .await
+                .context("select the calendar's calendly events")?;
+        Self::delete_calendly_invitees(tx, &invitees).await?;
         let mut events = 0;
-        for table in ["ics_objects", "google_events"] {
-            // Audited: `table` is one of the two literals above.
+        for table in ["ics_objects", "google_events", "calendly_events"] {
+            // Audited: `table` is one of the three literals above.
             sqlx::query(sqlx::AssertSqlSafe(format!(
                 "DELETE FROM {table}_bookkeeping WHERE id IN \
                  (SELECT id FROM {table} WHERE calendar_id = ?)"
@@ -316,6 +339,80 @@ impl RawDb {
         Self::delete_ids_in_tx(tx, "google_events", &ids).await
     }
 
+    // ── calendly_events, calendly_invitees ──────────────────────────
+
+    pub async fn upsert_calendly_events_in_tx(
+        tx: &mut Transaction<'_, Sqlite>,
+        rows: &[CalendlyEventRow],
+    ) -> Result<()> {
+        let now = datalib_time::IsoOffsetTimestamp::now_local();
+        bulk_upsert_in_tx(tx, rows, &now).await
+    }
+
+    /// `key → listing_hash` of the Calendly events stored for this
+    /// calendar.
+    pub async fn calendly_listing_hashes(
+        &self,
+        calendar_id: &str,
+    ) -> Result<HashMap<String, Option<String>>> {
+        let rows: Vec<(String, Option<String>)> =
+            sqlx::query_as("SELECT id, listing_hash FROM calendly_events WHERE calendar_id = ?")
+                .bind(calendar_id)
+                .fetch_all(self.pool())
+                .await
+                .context("select calendly event keys")?;
+        Ok(rows.into_iter().collect())
+    }
+
+    /// Every stored Calendly event of this calendar at the version its
+    /// invitees are owed for, soonest first.
+    pub async fn calendly_listed(
+        &self,
+        calendar_id: &str,
+    ) -> Result<Vec<datalib_etl_web::owed::Listed>> {
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT id, listing_hash FROM calendly_events \
+             WHERE calendar_id = ? AND listing_hash IS NOT NULL ORDER BY start_time, id",
+        )
+        .bind(calendar_id)
+        .fetch_all(self.pool())
+        .await
+        .context("select the calendly events as listed")?;
+        Ok(rows
+            .into_iter()
+            .map(|(id, hash)| datalib_etl_web::owed::Listed::new(id, Some(hash)))
+            .collect())
+    }
+
+    pub async fn upsert_calendly_invitees_in_tx(
+        tx: &mut Transaction<'_, Sqlite>,
+        rows: &[CalendlyInviteesRow],
+    ) -> Result<()> {
+        let now = datalib_time::IsoOffsetTimestamp::now_local();
+        bulk_upsert_in_tx(tx, rows, &now).await
+    }
+
+    /// Drop these Calendly events with their invitees, the sidecars of
+    /// both and the invitees' fetch problems.
+    pub async fn delete_calendly_events(
+        tx: &mut Transaction<'_, Sqlite>,
+        keys: &[String],
+    ) -> Result<()> {
+        Self::delete_calendly_invitees(tx, keys).await?;
+        Self::delete_ids_in_tx(tx, "calendly_events", keys).await
+    }
+
+    async fn delete_calendly_invitees(
+        tx: &mut Transaction<'_, Sqlite>,
+        keys: &[String],
+    ) -> Result<()> {
+        Self::delete_ids_in_tx(tx, "calendly_invitees", keys).await?;
+        for key in keys {
+            datalib_etl::prune::forget_record_problems_in_tx(tx, "calendly_invitees", key).await?;
+        }
+        Ok(())
+    }
+
     async fn delete_ids_in_tx(
         tx: &mut Transaction<'_, Sqlite>,
         table: &'static str,
@@ -344,15 +441,21 @@ impl RawDb {
     // ── render reads ────────────────────────────────────────────────
 
     pub async fn load_account(&self) -> Result<Option<LoadedAccount>> {
-        let row =
-            sqlx::query("SELECT id, method, server_url, login FROM accounts ORDER BY id LIMIT 1")
-                .fetch_optional(self.pool())
-                .await
-                .context("select account")?;
+        let row = sqlx::query(
+            "SELECT id, method, server_url, principal_href, login FROM accounts \
+             ORDER BY id LIMIT 1",
+        )
+        .fetch_optional(self.pool())
+        .await
+        .context("select account")?;
         Ok(row.map(|r| LoadedAccount {
             id: r.try_get("id").unwrap_or_default(),
             method: r.try_get("method").unwrap_or_default(),
             server_url: r.try_get::<Option<String>, _>("server_url").ok().flatten(),
+            principal_href: r
+                .try_get::<Option<String>, _>("principal_href")
+                .ok()
+                .flatten(),
             login: r.try_get::<Option<String>, _>("login").ok().flatten(),
         }))
     }
@@ -446,6 +549,61 @@ impl RawDb {
                 id,
                 calendar_id: r.try_get("calendar_id").unwrap_or_default(),
                 event,
+            });
+        }
+        Ok((out, unreadable))
+    }
+
+    pub async fn load_calendly_events(
+        &self,
+    ) -> Result<(Vec<LoadedCalendlyEvent>, Vec<UnreadableRow>)> {
+        // A commit written before Calendly came in has neither table.
+        let tables: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'table' \
+             AND name IN ('calendly_events', 'calendly_invitees')",
+        )
+        .fetch_one(self.pool())
+        .await
+        .context("look for the calendly tables")?;
+        if tables < 2 {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        let rows = sqlx::query(
+            "SELECT e.id, e.calendar_id, json(e.payload) AS payload,
+                    json(i.payload) AS invitees
+               FROM calendly_events e
+               LEFT JOIN calendly_invitees i ON i.id = e.id
+              ORDER BY e.id",
+        )
+        .fetch_all(self.pool())
+        .await
+        .context("select calendly_events")?;
+        let mut out = Vec::with_capacity(rows.len());
+        let mut unreadable = Vec::new();
+        for r in rows {
+            let id: String = r.try_get("id").unwrap_or_default();
+            let payload: Option<String> = r.try_get("payload").ok().flatten();
+            let Some(event) = payload
+                .as_deref()
+                .and_then(|p| serde_json::from_str::<serde_json::Value>(p).ok())
+            else {
+                unreadable.push(UnreadableRow {
+                    id,
+                    sample: payload.unwrap_or_else(|| "the payload is not JSON".into()),
+                });
+                continue;
+            };
+            let invitees = r
+                .try_get::<Option<String>, _>("invitees")
+                .ok()
+                .flatten()
+                .and_then(|p| serde_json::from_str::<serde_json::Value>(&p).ok())
+                .and_then(|v| v.get("invitees").and_then(|i| i.as_array()).cloned());
+            out.push(LoadedCalendlyEvent {
+                id,
+                calendar_id: r.try_get("calendar_id").unwrap_or_default(),
+                event,
+                invitees,
             });
         }
         Ok((out, unreadable))

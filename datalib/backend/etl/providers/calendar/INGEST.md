@@ -17,6 +17,20 @@ One row per event in the upstream's own shape, keyed
   cancelled occurrence is its own row naming its series. Its `etag`
   and `updated` are in the sidecar's `volatile_payload`: Google bumps
   them on hundreds of events at once with nothing else changed.
+- `calendly_events` — a Calendly scheduled event as the listing sent
+  it, its `event_memberships` and `event_guests` put in a fixed order
+  (by user URI, by address). `listing_hash` is the blake3 of that
+  payload. Its calendar is the signed-in user (below).
+- `calendly_invitees` — the invitees of one scheduled event, keyed
+  like the event, payload `{"invitees": [...]}` in booking order.
+
+Calendly's own shape is kept, rather than turned into iCalendar or
+Google's, because two of the things it holds have no place in either:
+an event's invitees are a second request, with an outcome of their own
+(so a failed fetch of them is a record that stays owed, not a hole in
+the event), and each invitee carries their answers to the booking
+form, which render shows as a "Booking answers" section. Render
+projects both onto the shared event (`calendar_render/src/render/calendly.rs`).
 
 `calendars.sync_token` is each calendar's `sync-collection` token. It
 is per calendar, so widening the `calendars` filter needs no scope
@@ -135,3 +149,102 @@ listing cut off before its last page kept no token and starts again.
   named zone before it is shown.
 - **Most descriptions are HTML** (1,276 of 1,492 on one calendar); render
   turns them to text.
+
+## Calendly — from the API reference, not yet run against an account
+
+**Nothing in this section was checked against a live account.** No
+Calendly token was at hand when it was written, so every shape below is
+the one Calendly's published reference gives, and the fixtures in
+`tests/calendar_tests/calendly_*.rs` are made up in that shape. The
+first run against a real account is
+`bazel run //datalib/backend/etl/providers/calendar:calendar_live`
+(`tests/calendar_tests/live.rs`); what it shows belongs here, in place
+of the "unverified" marks.
+
+Sources relied on:
+
+- the OpenAPI document, <https://developer.calendly.com/openapi/calendly-api.yaml>
+  (`/users/me`, `/scheduled_events`, `/scheduled_events/{uuid}/invitees`,
+  and the `User`, `Event`, `Invitee`, `Location`, `Cancellation`,
+  `Guest` and `Pagination` schemas);
+- the pages for [List Events](https://developer.calendly.com/api-docs/calendly-api/scheduled-events/list-scheduled-events.md),
+  [List Event Invitees](https://developer.calendly.com/api-docs/calendly-api/scheduled-events/list-event-invitees.md),
+  [Get current user](https://developer.calendly.com/api-docs/calendly-api/users/get-current-user.md),
+  [rate limits](https://developer.calendly.com/api-docs/overview/rate-limits.md)
+  and [personal access tokens](https://developer.calendly.com/docs/authentication/how-to-authenticate-with-personal-access-tokens.md).
+
+**Sign-in.** latchkey's built-in `calendly` service holds a personal
+access token (`latchkey auth set calendly -H "Authorization: Bearer
+<token>"`); it has no browser login, so the wizard offers only the
+paste. The reference names the scopes the three calls need:
+`users:read` and `scheduled_events:read`. A `401` or `403` ends the
+run and says how to store a token.
+
+**What one run does.**
+
+1. `GET /users/me`. Its `resource.uri` is the user; the last segment
+   of it is the one calendar's id, and every event's key is
+   `{user uuid}#{event uuid}`. The account row is `calendly`, its
+   `login` the user's `email`, its `principal_href` the user URI (which
+   render uses to name the signed-in user as organizer). A token for a
+   different user drops the other user's calendar and meetings.
+2. `GET /scheduled_events?user=<uri>&count=100&sort=start_time:asc`,
+   with `min_start_time` / `max_start_time` for `since` / `until`, page
+   after page by `page_token` (`pagination.next_page_token`). There is
+   no `status` filter, so canceled meetings are listed too
+   (unverified: the reference describes `status` as an optional filter
+   and does not say what leaving it out returns). Each page is one
+   transaction. The listing is whole every run: Calendly offers no
+   delta token and no "updated since" filter, so there is nothing to
+   resume from. When the last page lands and every meeting listed had
+   a `uri`, the meetings the store holds that it did not name are
+   dropped with their invitees. A page that fails, a reply with no
+   `collection`, or a meeting with no `uri` drops nothing and leaves a
+   `listing:meetings` row, until a later listing completes.
+3. Each meeting's invitees are owed when `calendly_invitees` does not
+   hold them at the meeting's current `listing_hash`:
+   `GET /scheduled_events/{uuid}/invitees?count=100&sort=created_at:asc`,
+   every page, through `datalib_etl_web::owed`, one meeting at a time.
+   A meeting whose listing entry has not moved costs no request. One
+   that fails stays owed with its error on the record; ten failures in
+   a row end the loop for the run.
+
+So a second run with nothing new costs `1 + ⌈meetings / 100⌉`
+requests. Rate limits are 500 requests a minute per user on a paid
+plan and 50 on the free one; a `429` is waited out for the
+`X-RateLimit-Reset` seconds Calendly sends (the reference names that
+header, not `Retry-After`).
+
+**Unverified, and worth checking on the first live run:**
+
+- That a change to who booked shows in the meeting's listing entry.
+  Invitees are only read again when the entry's hash moves; the
+  reference's `invitees_counter` (`total`, `active`, `limit`) and
+  `updated_at` suggest a new or canceled invitee moves it, but an
+  invitee's own edits (a no-show mark, a reconfirmation) may not, and
+  would then not be picked up until the meeting changes.
+- That `page_token` on a URL we build pages the same as following
+  `pagination.next_page`, and that `next_page_token` is `null` on the
+  last page.
+- That an event's `location.join_url` stays put. The reference says
+  conference details are dropped six months after a meeting; when that
+  happens the stored copy loses its link too, since the listing is
+  stored as sent.
+- The order of `event_memberships` and `event_guests`. We sort both, so
+  a reshuffle is not a change; if Calendly's own order meant something
+  (the first host as organizer), it is lost, and render names the
+  signed-in user as organizer instead.
+- `start_time`'s precision (`2020-01-02T03:04:05.678123Z` in the
+  reference) and that it is always UTC.
+
+**Inspecting the result.** Stock `sqlite3` cannot open the store;
+`datalib-doltlite` can (or `.dump` it into plain SQLite first):
+
+```sh
+db=<root>/<source id>/ingest/entities.doltlite_db
+datalib-doltlite -readonly $db "SELECT id, start_time, status FROM calendly_events ORDER BY start_time;"
+# Meetings whose invitees are owed: never fetched, or fetched for an older listing.
+datalib-doltlite -readonly $db "SELECT e.id FROM calendly_events e LEFT JOIN calendly_invitees_bookkeeping b ON b.id = e.id WHERE b.held_version IS NOT e.listing_hash OR b.fetched_at_utc IS NULL;"
+# Every answer to a booking question.
+datalib-doltlite -readonly $db "SELECT i.id, json_extract(q.value, '$.question'), json_extract(q.value, '$.answer') FROM calendly_invitees i, json_each(json_extract(i.payload, '$.invitees')) v, json_each(json_extract(v.value, '$.questions_and_answers')) q;"
+```

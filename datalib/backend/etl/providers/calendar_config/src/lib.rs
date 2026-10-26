@@ -39,6 +39,16 @@ pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
     },
     datalib_source_common::ConfigExample {
         kind: datalib_source_common::ExampleKind::Minimal,
+        method: "calendly",
+        toml: include_str!("../examples/minimal_calendly.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "calendly",
+        toml: include_str!("../examples/complete_calendly.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
         method: "ics",
         toml: include_str!("../examples/minimal_ics.toml"),
     },
@@ -54,7 +64,7 @@ pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
 pub const FASTMAIL_CALDAV_URL: &str = "https://caldav.fastmail.com/dav/";
 
 /// The ingest step's params for a `calendar` source. Exactly one of the
-/// four method tables is set.
+/// five method tables is set.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CalendarConfig {
@@ -75,6 +85,11 @@ pub struct CalendarConfig {
     /// Any other CalDAV server: iCloud, Nextcloud, Radicale, ….
     #[serde(default)]
     pub caldav: Option<CaldavSync>,
+    /// The meetings booked with you on Calendly, through Calendly's API
+    /// (latchkey's `calendly` service, which holds a personal access
+    /// token).
+    #[serde(default)]
+    pub calendly: Option<CalendlySync>,
     /// A directory of `.ics` files: a Google Takeout `Calendar/` folder,
     /// an export from Apple Calendar.
     #[serde(default)]
@@ -92,6 +107,10 @@ pub enum CalendarMethod<'a> {
     Caldav {
         server_url: &'a str,
         calendars: &'a [String],
+        window: Window<'a>,
+    },
+    /// The signed-in Calendly user's scheduled events.
+    Calendly {
         window: Window<'a>,
     },
     Ics(&'a LocalPath),
@@ -174,13 +193,24 @@ impl CalendarConfig {
                 },
             ));
         }
+        if let Some(c) = &self.calendly {
+            held.push((
+                "calendly",
+                CalendarMethod::Calendly {
+                    window: Window {
+                        since: c.since.as_deref(),
+                        until: c.until.as_deref(),
+                    },
+                },
+            ));
+        }
         if let Some(p) = &self.ics {
             held.push(("ics", CalendarMethod::Ics(p)));
         }
         match held.len() {
             1 => Ok(held.pop().expect("len checked").1),
             0 => anyhow::bail!(
-                "a calendar source names none of `google`, `fastmail`, `caldav` or `ics`"
+                "a calendar source names none of `google`, `fastmail`, `caldav`, `calendly` or `ics`"
             ),
             _ => anyhow::bail!(
                 "a calendar source sets more than one of {} — pick one. To mirror the same \
@@ -212,6 +242,7 @@ impl CalendarConfig {
                 (table, window)
             }
             CalendarMethod::Google { window, .. } => ("google", window),
+            CalendarMethod::Calendly { window } => ("calendly", window),
             CalendarMethod::Ics(_) => return Ok(()),
         };
         window.validate(table)
@@ -272,6 +303,22 @@ pub struct CaldavSync {
     pub until: Option<String>,
 }
 
+/// The `calendly` table. Calendly has one list of meetings per person,
+/// so there is nothing to choose but the days.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CalendlySync {
+    /// The first day to mirror, `YYYY-MM-DD`. Only meetings that start
+    /// on or after it are mirrored, and a meeting that leaves the range
+    /// is dropped from the copy. Every run lists the range whole.
+    #[serde(default)]
+    pub since: Option<String>,
+    /// The last day to mirror, `YYYY-MM-DD`, included: meetings that
+    /// start on it or before.
+    #[serde(default)]
+    pub until: Option<String>,
+}
+
 pub type CalendarRenderConfig = datalib_source_common::BareRenderConfig;
 
 impl datalib_source_common::IngestMethods for CalendarConfig {
@@ -279,6 +326,7 @@ impl datalib_source_common::IngestMethods for CalendarConfig {
         datalib_source_common::IngestMethod::origin("google"),
         datalib_source_common::IngestMethod::origin("fastmail"),
         datalib_source_common::IngestMethod::origin("caldav"),
+        datalib_source_common::IngestMethod::origin("calendly"),
         datalib_source_common::IngestMethod::local("ics"),
     ];
 }
@@ -335,6 +383,23 @@ mod tests {
         assert!(google("Nov 1", "2025-11-30").validate().is_err());
         let open = parse(serde_json::json!({"fastmail": {"since": "2025-11-01"}}));
         open.validate().unwrap();
+    }
+
+    #[test]
+    fn calendly_takes_only_a_window() {
+        let cfg = parse(serde_json::json!({"calendly": {"since": "2026-01-01"}}));
+        cfg.validate().unwrap();
+        let CalendarMethod::Calendly { window } = cfg.method().unwrap() else {
+            panic!("calendly");
+        };
+        assert_eq!(window.since, Some("2026-01-01"));
+        let backwards = parse(serde_json::json!({
+            "calendly": {"since": "2026-02-01", "until": "2026-01-01"}
+        }));
+        assert!(backwards.validate().is_err());
+        let r: Result<CalendarConfig, _> =
+            serde_json::from_value(serde_json::json!({"calendly": {"calendars": ["x"]}}));
+        assert!(r.is_err(), "Calendly has no calendars to pick");
     }
 
     #[test]

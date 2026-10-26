@@ -85,8 +85,9 @@ app's cache lets go, so it never notices a deletion (the provider's
 
 `type = "calendar"` — any CalDAV server, such as iCloud or Nextcloud
 (`caldav`), **or** a folder of `.ics` files (`ics`). Mirrors your
-events. Fastmail and Google have sections of their own:
-[Fastmail Calendar](#fastmail-calendar), [Google Calendar](#google-calendar).
+events. Calendly, Fastmail and Google have sections of their own:
+[Calendly](#calendly), [Fastmail Calendar](#fastmail-calendar),
+[Google Calendar](#google-calendar).
 
 Every event becomes a page and a row in the grid, dated by when it
 happens, whichever way the calendar was reached. A recurring event is
@@ -110,6 +111,31 @@ it out for all of them. Adding a calendar to the list later downloads
 it whole. `since` and `until` (`YYYY-MM-DD`) narrow it to a stretch of
 days: only events with some part in it, and only the changed dates of a
 series that fall in it. A windowed calendar is listed whole every run.
+
+## Calendly
+
+`type = "calendar"` — Calendly's API through latchkey (`calendly`).
+Mirrors the meetings people book with you: each one with its hosts,
+its invitees and guests, and what every invitee answered on the
+booking form. Cancelled meetings are kept, marked cancelled, with who
+cancelled and why. Rendered the way [Calendar (CalDAV)](#calendar-caldav)
+says, one page per meeting.
+
+Built into latchkey, with no browser sign-in. In Calendly, make a
+personal access token (**Integrations** → **API & Webhooks** →
+**Personal Access Tokens**) with the `users:read` and
+`scheduled_events:read` scopes, copy it, and store it:
+
+```sh
+latchkey auth set calendly -H "Authorization: Bearer $(pbpaste)"
+```
+
+The `calendly` table needs nothing else. `since` and `until`
+(`YYYY-MM-DD`) narrow it to the meetings that start in that stretch of
+days; a meeting that leaves it is dropped from the copy. Every sync
+lists the meetings whole, and reads a meeting's invitees again only
+when the meeting has changed.
+`datalib/backend/etl/providers/calendar/INGEST.md` has the details.
 
 ## ChatGPT
 

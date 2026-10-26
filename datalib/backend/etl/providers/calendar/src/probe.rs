@@ -1,7 +1,8 @@
 //! "Check connection" for a calendar source — do these credentials
 //! reach the account? — and the calendars `calendars` can name. Finding
-//! the account is the calendar listing on both methods, so a check runs
-//! it too and keeps only the account. No event is fetched.
+//! the account is the calendar listing on Google and CalDAV, so a check
+//! runs it too and keeps only the account; on Calendly it is the user.
+//! No event is fetched.
 
 use anyhow::{anyhow, bail, Result};
 use datalib_etl_calendar_config::{CalendarConfig, CalendarMethod};
@@ -9,7 +10,7 @@ use datalib_probe::{ProbeAccount, ProbeAsk, ProbeItem, ProbeItemKind, ProbeList,
 use serde_json::Value;
 
 use crate::ingest::schema_raw::CalendarRow;
-use crate::ingest::{caldav, google, FetchSummary};
+use crate::ingest::{caldav, calendly, google, FetchSummary};
 
 pub async fn probe(config: &CalendarConfig, ask: ProbeAsk) -> Result<ProbeReport> {
     let mut report = reach(config).await?;
@@ -44,6 +45,19 @@ async fn reach(config: &CalendarConfig) -> Result<ProbeReport> {
                 "caldav"
             };
             Ok(report(method, login, &rows, &vec![None; rows.len()]))
+        }
+        // Calendly has one list of meetings per user: the check reads
+        // the user, and the one calendar is that list.
+        CalendarMethod::Calendly { .. } => {
+            let me = calendly::me(lk, &mut summary).await?;
+            let mut r = report(
+                "calendly",
+                me.email.clone().or_else(|| Some(me.uri.clone())),
+                &[calendly::calendar_row(&me)],
+                &[None],
+            );
+            r.account.display_name = me.name;
+            Ok(r)
         }
         CalendarMethod::Ics(_) => Err(anyhow!(
             "an `ics` source reads files on disk, so there is no connection to test"
