@@ -72,10 +72,17 @@ pub async fn run(
             let report = datalib_etl_linear::probe::probe(&config, ask, progress).await?;
             Ok(serde_json::to_value(report)?)
         }
+        SourceType::Zoom => {
+            let config: datalib_etl_zoom_config::ZoomConfig =
+                serde_json::from_value(params.clone())
+                    .context("parse the params as a zoom download config")?;
+            let report = datalib_etl_zoom::probe::probe(&config, ask).await?;
+            Ok(serde_json::to_value(report)?)
+        }
         other => anyhow::bail!(
             "no probe for source type `{other}`. Probing means asking a live service what an \
              account can reach; only `calendar`, `contacts`, `email`, `claude`, `chatgpt`, \
-             `garmin`, `linear` and `slack` implement it so far."
+             `garmin`, `linear`, `slack` and `zoom` implement it so far."
         ),
     }
 }

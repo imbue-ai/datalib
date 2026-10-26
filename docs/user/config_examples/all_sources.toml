@@ -93,6 +93,7 @@ inputs = [
   "sms_backup_restore/render_markdown",
   "whatsapp/render_markdown",
   "yolink/render_markdown",
+  "zoom/render_markdown",
 ]
 
 [[steps]]
@@ -164,6 +165,8 @@ inputs = [
   "whatsapp/keyword_index",
   "whatsapp/embed",
   "yolink/keyword_index",
+  "zoom/keyword_index",
+  "zoom/embed",
 ]
 
 # The app's search, grid and document view.
@@ -2153,3 +2156,62 @@ inputs = ["yolink/ingest"]
 group = "yolink"
 function = "keyword_index"
 inputs = ["yolink/render_markdown"]
+
+# --- zoom by `api` ------------------------------------------------------
+
+# One Zoom user's meetings over Zoom's API, signed in through latchkey
+# (`latchkey auth browser zoom`, which needs a Zoom account admin), with
+# every option set.
+[[groups]]
+id = "zoom"
+name = "Zoom"
+type = "zoom"
+
+[[steps]]
+group = "zoom"
+function = "ingest"
+
+# The video and audio files `api.media` fetches are skipped above this
+# size; the transcripts and chat files are never held back by it.
+[steps.params.common]
+blob_size_limit_bytes = "500 MB"
+
+# When to give up on rate limits. The download always backs off and
+# retries; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "picard@enterprise.example"
+
+[steps.params.api]
+user = "picard@enterprise.example"  # whose meetings, by email or Zoom user id. Omit it
+                                    # for the sign-in's own user, or the account's only one
+since = "2024-01-01"     # the first day to ask about; default 2013-01-01, everything
+refresh_days = 30        # the newest days every sync lists again; default 30
+participants = true      # who attended, and unrecorded meetings from Zoom's reports
+                         # (the last six months); default true
+summaries = true         # the AI Companion's meeting summaries; default true
+media = false            # the video and audio files too; default false
+
+# Each meeting as one document: who came, the AI summary and the
+# transcript, speaker by speaker. No options.
+[[steps]]
+group = "zoom"
+function = "render_markdown"
+inputs = ["zoom/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "zoom"
+function = "keyword_index"
+inputs = ["zoom/render_markdown"]
+
+[[steps]]
+group = "zoom"
+function = "embed"
+inputs = ["zoom/keyword_index"]

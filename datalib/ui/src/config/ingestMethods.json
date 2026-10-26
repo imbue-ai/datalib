@@ -218,5 +218,11 @@
       "path": "api",
       "reach": "origin"
     }
+  ],
+  "zoom": [
+    {
+      "path": "api",
+      "reach": "origin"
+    }
   ]
 }

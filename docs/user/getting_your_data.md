@@ -940,3 +940,38 @@ from, and two 32-hex-character ids, `family_device_id` and
 `device_udid`. The ids are effectively read secrets that cannot be
 rotated, and they go straight into the config — keep that file to
 yourself. `all_sources.toml` shows the shape.
+
+## Zoom
+
+`type = "zoom"` — Zoom's REST API through latchkey (`api`). Copies one
+Zoom user's meetings: each cloud recording's transcript, chat and
+timeline (video and audio only on request), who attended, and the AI
+Companion's summary. Each meeting renders as one document: who came,
+the summary, then the transcript, speaker by speaker.
+
+**Signing in needs a Zoom account admin**, or a role allowed to create
+apps. The browser sign-in creates a Server-to-Server OAuth app in your
+Zoom account, with every admin scope the account offers, and latchkey
+renews its token itself:
+
+```sh
+latchkey auth browser zoom
+```
+
+Or create the Server-to-Server OAuth app yourself in the Zoom App
+Marketplace and store its three credentials:
+
+```sh
+latchkey auth set-nocurl zoom <account-id> <client-id> <client-secret>
+```
+
+That sign-in is for the whole Zoom account rather than for one person
+in it, so name whose meetings to copy in `api.user` (an email or a Zoom
+user id). On an account with one user it can be left out. Cloud
+recordings, transcripts and attendance need a paid Zoom plan, and Zoom
+keeps attendance for 15 months. The first sync asks about every month
+since `api.since` (default 2013); later syncs list the newest
+`refresh_days` again and fetch only what is new or changed. Nothing
+here has been checked against a live Zoom account yet:
+`datalib/backend/etl/providers/zoom/INGEST.md` has the details and what
+is unverified.

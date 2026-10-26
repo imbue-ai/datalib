@@ -411,6 +411,7 @@ therefore what it can see:
 | `google_drive` | — | nothing: a backup, so a file that leaves the listing keeps its rows and captures |
 | `yolink` | — | nothing; append-only telemetry |
 | `linear` | — | nothing: an archived record is listed with its `archivedAt`, and one Linear deletes outright stays as last fetched |
+| `zoom` | — | nothing: a recording deleted in Zoom keeps its row and the files copied of it |
 | `notion`, `beeper` | — | not wired (rework; poorly supported) |
 
 **The hard part is not the deletion, it is establishing the
@@ -621,6 +622,7 @@ channel list, claude's orgs and project docs).
 | google_drive | the file listing, at each file's Drive `version`; each stored revision's export links | `files` sidecar, written with the whole capture; `revision_exports` sidecar, at no version | — |
 | chatgpt, claude | the conversation enumeration, at `update_time` / `updated_at` | `conversations` sidecar, its attachment edges, claude's `projects` and `project_docs_listings` | — |
 | yolink | — | — | each device's readings |
+| zoom | each stored recording's files (at `file_size`); every stored meeting; the summary listings (at `summary_last_modified_time`) | `recording_files`, `participants`, `summaries` sidecars | each listing's dates, per user: recordings, reports, summaries |
 
 Local sources (files on disk) are read whole each run in one seal and
 need none of this.
@@ -695,6 +697,7 @@ leaves an on-disk superset, and nothing deletes it.
 | contacts, calendar | A newly selected collection has no token and is listed whole |
 | chatgpt, claude | The enumeration is re-read every run, so a moved `since` admits what it now covers |
 | google_drive | A new kind, a wider `file_ids` or `owned_only` turned off is a listing that names more, and what it names that is not held is owed. A new `revision_exports` format makes every stored revision's export in it owed. A new `exports` format does not reach the versions already captured: that export is only of the current version |
+| zoom | An earlier `since` is a gap below each listing's coverage; `media` turned on makes every stored recording's video and audio owed, and a raised `blob_size_limit_bytes` the ones it skipped |
 
 No source records the config it ran under: a local source reads its
 whole input every run under the config it has now (email's mbox

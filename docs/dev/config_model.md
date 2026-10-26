@@ -135,7 +135,7 @@ its own `path`. There is no global vocabulary — each provider's
 
 | type | methods |
 |---|---|
-| garmin, github, gitlab, google_drive, linear, notion, slack, yolink | `api` |
+| garmin, github, gitlab, google_drive, linear, notion, slack, yolink, zoom | `api` |
 | chatgpt, claude | `api`, `export` |
 | contacts | `carddav`, `vcf` |
 | email | `jmap`, `gmail`, `mbox` |
