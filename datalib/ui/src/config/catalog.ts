@@ -1399,6 +1399,35 @@ export const CATALOG: CatalogEntry[] = [
     ],
   },
   {
+    type: "chatgpt",
+    variantKey: "export",
+    label: "ChatGPT (export)",
+    blurb: "Ingest a ChatGPT data export already on disk.",
+    keywords: ["chatgpt", "openai", "gpt", "export", "backup"],
+    kind: "export",
+    icon: "chatgpt",
+    defaultName: "chatgpt-export",
+    nameHint: "ChatGPT export",
+    wizard: true,
+    sections: [{ heading: "Export file", fields: ["export.path"] }],
+    fields: [
+      {
+        kind: "path",
+        picks: "file",
+        pickTitle: "Choose the ChatGPT export .zip",
+        extensions: ["zip"],
+        required: true,
+        target: "export.path",
+        label: "Export file",
+        help:
+          "The .zip ChatGPT emailed you a link to, as it downloaded: ~/Downloads/chatgpt-export.zip " +
+          "say. Ask for one in ChatGPT's Settings → Data controls → Export data. The folder you " +
+          "unzipped it into works too; type its path. The export is a complete snapshot: a " +
+          "conversation it no longer mentions is dropped from the copy.",
+      },
+    ],
+  },
+  {
     type: "claude_code",
     // With nothing filled in the form still writes `sessions = {}`, which
     // is the standard store: every Claude Code on this machine keeps its

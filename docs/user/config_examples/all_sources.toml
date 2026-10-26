@@ -61,7 +61,8 @@ inputs = [
   "calendar-fastmail/render_markdown",
   "calendar-caldav/render_markdown",
   "calendar-ics/render_markdown",
-  "chatgpt/render_markdown",
+  "chatgpt-api/render_markdown",
+  "chatgpt-export/render_markdown",
   "claude-api/render_markdown",
   "claude-export/render_markdown",
   "claude_code/render_markdown",
@@ -111,8 +112,10 @@ inputs = [
   "calendar-caldav/embed",
   "calendar-ics/keyword_index",
   "calendar-ics/embed",
-  "chatgpt/keyword_index",
-  "chatgpt/embed",
+  "chatgpt-api/keyword_index",
+  "chatgpt-api/embed",
+  "chatgpt-export/keyword_index",
+  "chatgpt-export/embed",
   "claude-api/keyword_index",
   "claude-api/embed",
   "claude-export/keyword_index",
@@ -591,12 +594,12 @@ inputs = ["calendar-ics/keyword_index"]
 # latchkey (`latchkey auth browser chatgpt`), with every option set, and
 # searchable.
 [[groups]]
-id = "chatgpt"
+id = "chatgpt-api"
 name = "ChatGPT"
 type = "chatgpt"
 
 [[steps]]
-group = "chatgpt"
+group = "chatgpt-api"
 function = "ingest"
 
 # When to give up on rate limits. The download always honours a 429's
@@ -621,21 +624,57 @@ conv_uuids = ["https://chatgpt.com/c/abc123de-f456-7890-abcd-ef0123456789"]
                        # only these conversations, by id or pasted link; omit for all
 
 [[steps]]
-group = "chatgpt"
+group = "chatgpt-api"
 function = "render_markdown"
-inputs = ["chatgpt/ingest"]
+inputs = ["chatgpt-api/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "chatgpt"
+group = "chatgpt-api"
 function = "keyword_index"
-inputs = ["chatgpt/render_markdown"]
+inputs = ["chatgpt-api/render_markdown"]
 
 [[steps]]
-group = "chatgpt"
+group = "chatgpt-api"
 function = "embed"
-inputs = ["chatgpt/keyword_index"]
+inputs = ["chatgpt-api/keyword_index"]
+
+# --- chatgpt by `export` ------------------------------------------------
+
+# A ChatGPT data export on disk, zipped or not, with every option set, and
+# searchable. No sign-in. The export is a complete snapshot: a
+# conversation a newer export no longer holds leaves the mirror. To keep
+# it current afterwards, swap `export` for `api` (the chatgpt INGEST.md,
+# "Seeding from an export"): the API then fetches only what moved.
+[[groups]]
+id = "chatgpt-export"
+name = "ChatGPT export"
+type = "chatgpt"
+
+[[steps]]
+group = "chatgpt-export"
+function = "ingest"
+
+[steps.params.export]
+path = "~/Downloads/chatgpt-export.zip"  # the .zip, or the folder it was unzipped into
+
+[[steps]]
+group = "chatgpt-export"
+function = "render_markdown"
+inputs = ["chatgpt-export/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "chatgpt-export"
+function = "keyword_index"
+inputs = ["chatgpt-export/render_markdown"]
+
+[[steps]]
+group = "chatgpt-export"
+function = "embed"
+inputs = ["chatgpt-export/keyword_index"]
 
 # --- claude by `api` ----------------------------------------------------
 

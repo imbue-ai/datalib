@@ -1,0 +1,134 @@
+{
+  "export_files": [
+    {
+      "path": "chat.html",
+      "size_bytes": 91
+    },
+    {
+      "path": "conversation_asset_file_names.json",
+      "size_bytes": 124
+    },
+    {
+      "path": "conversations-000.json",
+      "size_bytes": 9879
+    },
+    {
+      "path": "conversations-001.json",
+      "size_bytes": 16030
+    },
+    {
+      "path": "file_tng0001.dat",
+      "size_bytes": 776
+    },
+    {
+      "path": "file_tng0002.dat",
+      "size_bytes": 776
+    },
+    {
+      "path": "file_tng0003.dat",
+      "size_bytes": 400
+    },
+    {
+      "path": "file_tng0004.dat",
+      "size_bytes": 77
+    },
+    {
+      "path": "library_files.json",
+      "size_bytes": 1718
+    },
+    {
+      "path": "sectioned_conversations.json",
+      "size_bytes": 3
+    },
+    {
+      "path": "shared_conversations.json",
+      "size_bytes": 173
+    },
+    {
+      "path": "sites/export_manifest.json",
+      "size_bytes": 159
+    },
+    {
+      "path": "user.json",
+      "size_bytes": 144
+    }
+  ],
+  "logical_files": {
+    "chat.html": {
+      "files": [
+        "chat.html"
+      ],
+      "sharded": false
+    },
+    "conversation_asset_file_names.json": {
+      "files": [
+        "conversation_asset_file_names.json"
+      ],
+      "sharded": false
+    },
+    "conversations.json": {
+      "files": [
+        "conversations-000.json",
+        "conversations-001.json"
+      ],
+      "shard_count": 2,
+      "sharded": true
+    },
+    "file_tng0001.dat": {
+      "files": [
+        "file_tng0001.dat"
+      ],
+      "sharded": false
+    },
+    "file_tng0002.dat": {
+      "files": [
+        "file_tng0002.dat"
+      ],
+      "sharded": false
+    },
+    "file_tng0003.dat": {
+      "files": [
+        "file_tng0003.dat"
+      ],
+      "sharded": false
+    },
+    "file_tng0004.dat": {
+      "files": [
+        "file_tng0004.dat"
+      ],
+      "sharded": false
+    },
+    "library_files.json": {
+      "files": [
+        "library_files.json"
+      ],
+      "sharded": false
+    },
+    "sectioned_conversations.json": {
+      "files": [
+        "sectioned_conversations.json"
+      ],
+      "sharded": false
+    },
+    "shared_conversations.json": {
+      "files": [
+        "shared_conversations.json"
+      ],
+      "sharded": false
+    },
+    "sites/export_manifest.json": {
+      "files": [
+        "sites/export_manifest.json"
+      ],
+      "sharded": false
+    },
+    "user.json": {
+      "files": [
+        "user.json"
+      ],
+      "sharded": false
+    }
+  },
+  "manifest_file": "export_manifest.json",
+  "version": 1
+}

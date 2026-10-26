@@ -1,5 +1,5 @@
-//! Program-A `DataProcessor`s for the chatgpt source (download + render).
-//! The source owns its raw store; the orchestrator only drives `run`.
+//! Program-A `DataProcessor`s for the `chatgpt` source: the live API
+//! walk and the export ingest, writing one raw store.
 
 use std::path::PathBuf;
 
@@ -18,7 +18,8 @@ pub async fn migrate(raw_dir: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Ingest wave: present iff `api`.
+/// Ingest wave: `api` walks chatgpt.com, `export` ingests an unpacked
+/// data export from its `path`. `validate` has already refused both.
 pub fn plan_ingest(ctx: PlanContext, config: ChatgptConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
@@ -30,6 +31,12 @@ pub fn plan_ingest(ctx: PlanContext, config: ChatgptConfig) -> Result<Vec<Box<dy
             raw_path,
             sync,
             latchkey: latchkey_settings,
+        }));
+    } else if let Some(export) = config.export {
+        procs.push(Box::new(ChatgptExportIngest {
+            id: format!("chatgpt/{name}/download"),
+            raw_path,
+            input_path: export.path(),
         }));
     }
     Ok(procs)
@@ -83,6 +90,48 @@ impl DataProcessor for ChatgptIngest {
             Ok(format!(
                 "fetched={} skipped={} out_of_scope={} errors={} listing={} pruned={} requests={}",
                 s.fetched, s.skipped, s.out_of_scope, s.errors, s.listing, s.pruned, s.requests,
+            ))
+        })
+        .await
+    }
+}
+
+/// The export ingest: an unpacked data export on disk becomes rows in
+/// the same raw store the API download writes.
+struct ChatgptExportIngest {
+    id: String,
+    raw_path: PathBuf,
+    input_path: PathBuf,
+}
+
+#[async_trait]
+impl DataProcessor for ChatgptExportIngest {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
+        let entity_db = ingest::db_path_for(&self.raw_path);
+        let db = ingest::RawDb::open(&entity_db).await?;
+        let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
+        ctx.run_store(pool, Some(cas_pool), |_| async {
+            let s = ingest::export::ingest(ingest::export::IngestOptions {
+                db,
+                input_path: self.input_path.clone(),
+                now: ctx.now.to_string(),
+                progress: ctx.progress.clone(),
+                control: ctx.control.clone(),
+            })
+            .await?;
+            Ok(format!(
+                "conversations={} unchanged={} pruned={} new_blobs={} skipped_blobs={} \
+                 not_in_export={}",
+                s.conversations,
+                s.unchanged,
+                s.pruned,
+                s.new_blobs,
+                s.skipped_blobs,
+                s.not_in_export,
             ))
         })
         .await
