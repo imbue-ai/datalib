@@ -1,7 +1,8 @@
-//! A store seeded from a data export, then kept fresh by the API. The
-//! export fixture (`tests/fixtures/chatgpt_export`) is the API fixture's
-//! account in the shape a real export has, read here as the `.zip`
-//! ChatGPT sends.
+//! A store seeded from a data export, then kept fresh by the API: an
+//! `export` run and then an `api` one, or one `api` run asking the export
+//! first. The export fixture (`tests/fixtures/chatgpt_export`) is the API
+//! fixture's account in the shape a real export has, read here as the
+//! `.zip` ChatGPT sends.
 
 use std::collections::BTreeMap;
 use std::fs::{self, File};
@@ -11,10 +12,12 @@ use std::path::{Path, PathBuf};
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_chatgpt::ingest::db::block_on_load_all;
 use datalib_etl_chatgpt::ingest::export::{self, IngestOptions, IngestSummary};
+use datalib_etl_chatgpt::ingest::schema_raw::ATTACHMENTS;
 use datalib_etl_chatgpt::ingest::{db_path_for, fetch, FetchOptions, RawDb};
 use datalib_etl_chatgpt::synthesize::ChatgptSynth;
 use datalib_etl_chatgpt_render::render::parse::parse_loaded;
 use datalib_etl_chatgpt_render::render::render::render_all;
+use datalib_etl_web::owed;
 use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::Synthesizer;
 use serde_json::Value;
@@ -147,18 +150,7 @@ async fn an_api_run_after_an_export_fetches_only_what_moved() {
     assert_eq!((seeded.new_blobs, seeded.not_in_export), (3, 0));
 
     // After the export was taken, one conversation moved on chatgpt.com.
-    let moved = "68fa0003-fake-7000-8000-positronic0003";
-    let mut listing = read_json(&api.join("conversations.json"));
-    for item in listing.as_array_mut().unwrap() {
-        if item["id"] == moved {
-            item["update_time"] = (item["update_time"].as_f64().unwrap() + 600.0).into();
-        }
-    }
-    write_json(&api.join("conversations.json"), &listing);
-    let detail_path = api.join(format!("conversations/{moved}.json"));
-    let mut detail = read_json(&detail_path);
-    detail["update_time"] = (detail["update_time"].as_f64().unwrap() + 600.0).into();
-    write_json(&detail_path, &detail);
+    moved_on(&api, "68fa0003-fake-7000-8000-positronic0003");
     ChatgptSynth::new(&api).synthesize(&tape).unwrap();
 
     let s = playback::scope(&tape, fetch(FetchOptions::new(db.clone())))
@@ -174,6 +166,158 @@ async fn an_api_run_after_an_export_fetches_only_what_moved() {
     );
     // `/me`, the one listing page, the end of the listing, the one detail.
     assert!(s.requests <= 4, "{} requests", s.requests);
+}
+
+/// `id` updated on chatgpt.com ten minutes after the export was taken,
+/// in the listing and in its detail.
+fn moved_on(api: &Path, id: &str) {
+    let later = |v: &Value| Value::from(v.as_f64().unwrap() + 600.0);
+    let mut listing = read_json(&api.join("conversations.json"));
+    for item in listing.as_array_mut().unwrap() {
+        if item["id"] == id {
+            item["update_time"] = later(&item["update_time"]);
+        }
+    }
+    write_json(&api.join("conversations.json"), &listing);
+    let detail_path = api.join(format!("conversations/{id}.json"));
+    let mut detail = read_json(&detail_path);
+    detail["update_time"] = later(&detail["update_time"]);
+    write_json(&detail_path, &detail);
+}
+
+/// The listing names `id` a few seconds before its detail's
+/// `update_time`, as chatgpt.com's does for a conversation written to
+/// after its last message (INGEST.md, "The listing can trail the
+/// detail"). The detail, and the export, keep theirs.
+fn listing_trails(api: &Path, id: &str) {
+    let mut listing = read_json(&api.join("conversations.json"));
+    for item in listing.as_array_mut().unwrap() {
+        if item["id"] == id {
+            item["update_time"] = (item["update_time"].as_f64().unwrap() - 12.0).into();
+        }
+    }
+    write_json(&api.join("conversations.json"), &listing);
+}
+
+/// `id` deleted on chatgpt.com: neither listing names it.
+fn deleted_on(api: &Path, id: &str) {
+    let mut listing = read_json(&api.join("conversations.json"));
+    listing
+        .as_array_mut()
+        .unwrap()
+        .retain(|item| item["id"] != id);
+    write_json(&api.join("conversations.json"), &listing);
+}
+
+fn with_export(db: &RawDb, zip: &Path) -> FetchOptions {
+    FetchOptions {
+        export: Some(zip.to_path_buf()),
+        ..FetchOptions::new(db.clone())
+    }
+}
+
+async fn conversation_ids(db: &RawDb) -> Vec<String> {
+    sqlx::query_scalar("SELECT id FROM conversations ORDER BY id")
+        .fetch_all(db.pool())
+        .await
+        .unwrap()
+}
+
+/// One `api` run with the export beside it fills an empty store: the
+/// conversation that moved since the export is the one detail fetched,
+/// one whose listing trails its detail is not, and every file comes
+/// from the export. The tape has no file endpoint
+/// at all, so a file asked of chatgpt.com would fail.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn one_run_with_an_export_fetches_only_what_moved_since() {
+    let d = tempfile::tempdir().unwrap();
+    let (api, zip, tape, raw) = (
+        d.path().join("api"),
+        d.path().join("chatgpt-export.zip"),
+        d.path().join("playback"),
+        d.path().join("raw"),
+    );
+    copy_dir(&api_fixture(), &api);
+    fs::remove_dir_all(api.join("files")).unwrap();
+    zip_of(&export_fixture(), &zip);
+    // The one that names every file, so the files it names are asked
+    // for after a live fetch, not only after the export's copy.
+    moved_on(&api, "68fa0005-fake-7000-8000-positronic0005");
+    listing_trails(&api, "68fa0002-fake-7000-8000-positronic0002");
+    ChatgptSynth::new(&api).synthesize(&tape).unwrap();
+
+    let db = RawDb::open(&db_path_for(&raw)).await.unwrap();
+    let s = playback::scope(&tape, fetch(with_export(&db, &zip)))
+        .await
+        .unwrap();
+    db.commit_all("api").await.unwrap();
+    assert_eq!(
+        (s.fetched, s.from_export, s.skipped, s.errors, s.pruned),
+        (1, 4, 0, 0, 0)
+    );
+    assert_eq!(
+        (s.blobs_from_export, s.new_blobs, s.failed_blobs),
+        (4, 0, 0),
+        "every file came from the export"
+    );
+    // `/me`, the listing and the archived one, the one detail.
+    assert_eq!(s.requests, 4);
+    let edges = db.attachments_listed().await.unwrap();
+    assert_eq!(edges.len(), 4);
+    assert!(owed::owed(db.pool(), ATTACHMENTS, edges)
+        .await
+        .unwrap()
+        .is_empty());
+
+    // Nothing moved since: the next run asks for no detail at all.
+    let again = playback::scope(&tape, fetch(with_export(&db, &zip)))
+        .await
+        .unwrap();
+    assert_eq!((again.fetched, again.from_export, again.skipped), (0, 0, 5));
+    db.close().await;
+}
+
+/// Only the listing deletes. A conversation it stops naming goes, and
+/// stays gone, though the export still holds it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_conversation_the_listing_drops_stays_gone_though_the_export_has_it() {
+    let d = tempfile::tempdir().unwrap();
+    let (api, zip, raw) = (
+        d.path().join("api"),
+        d.path().join("chatgpt-export.zip"),
+        d.path().join("raw"),
+    );
+    copy_dir(&api_fixture(), &api);
+    zip_of(&export_fixture(), &zip);
+    let db = RawDb::open(&db_path_for(&raw)).await.unwrap();
+    let run = |n: usize| {
+        let tape = d.path().join(format!("playback{n}"));
+        ChatgptSynth::new(&api).synthesize(&tape).unwrap();
+        let (db, zip) = (db.clone(), zip.clone());
+        async move {
+            let s = playback::scope(&tape, fetch(with_export(&db, &zip)))
+                .await
+                .unwrap();
+            db.commit_all("api").await.unwrap();
+            s
+        }
+    };
+    let first = run(0).await;
+    assert_eq!((first.fetched, first.from_export), (0, 5));
+
+    let gone = "68fa0001-fake-7000-8000-positronic0001";
+    deleted_on(&api, gone);
+    let second = run(1).await;
+    assert_eq!(
+        (second.pruned, second.fetched, second.from_export),
+        (1, 0, 0)
+    );
+    let third = run(2).await;
+    assert_eq!((third.pruned, third.fetched, third.from_export), (0, 0, 0));
+    let ids = conversation_ids(&db).await;
+    db.close().await;
+    assert_eq!(ids.len(), 4);
+    assert!(!ids.iter().any(|id| id == gone), "{ids:?}");
 }
 
 /// Each message section a rendered page holds, by its uuid, with the

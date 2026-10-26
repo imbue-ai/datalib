@@ -153,11 +153,14 @@ A method is *held* when its path is written and its value is neither
 `null` nor `false`: a table counts by presence (`api = {}` is a
 complete selection). A provider with more than one table refuses a step
 naming two (its config's `validate`, e.g. `claude_config`'s), so a
-store is filled one way. Two pairs are the exception, each a past and
-a present of one thing, so a step may name both and the present lands
-on top: `lightroom`'s `backups` folder and its `catalog`, and email's
+store is filled one way. Three pairs are the exception, each a past
+and a present of one thing, so a step may name both and the present
+lands on top: `lightroom`'s `backups` folder and its `catalog`; email's
 `mbox` beside `gmail`, a Takeout of the account the API starts from
-(`email_download_modes.md` §"Starting from a Takeout").
+(`email_download_modes.md` §"Starting from a Takeout"); and
+`chatgpt`'s `export` beside `api`, which the API asks before fetching
+a conversation or a file (the provider's `INGEST.md` §"An export and
+the API together").
 
 Knobs that apply whatever the method (email's `only_extract_labels`,
 the `common.*` envelope) stay at the top level of `params`. Render

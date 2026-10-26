@@ -29,9 +29,9 @@ pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
 ];
 
 /// Two ways in, one raw store: `api` walks chatgpt.com, `export` reads
-/// an unpacked data export off disk. Exactly one is set; an `ingest` step
-/// with neither is refused (`IngestMethods` below), and one with both by
-/// [`ChatgptConfig::validate`].
+/// a data export off disk. An `ingest` step with neither is refused
+/// (`IngestMethods` below). With both, the API run takes from the export
+/// what it holds at the version listed, and only the listing prunes.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ChatgptConfig {
@@ -46,8 +46,9 @@ pub struct ChatgptConfig {
     #[serde(default)]
     pub api: Option<ChatgptApiSync>,
     /// A ChatGPT data export: the `.zip` as it downloaded, or the folder
-    /// it was unzipped into. Ingested as a whole snapshot: what the
-    /// export no longer has is pruned from the store.
+    /// it was unzipped into. Alone, it is ingested as a whole snapshot:
+    /// what the export no longer has is pruned from the store. Beside
+    /// `api`, it is a local copy the API asks first, and prunes nothing.
     #[serde(default)]
     pub export: Option<LocalPath>,
 }
@@ -57,12 +58,6 @@ impl ChatgptConfig {
         self.latchkey_settings
             .validate()
             .map_err(anyhow::Error::msg)?;
-        if self.api.is_some() && self.export.is_some() {
-            anyhow::bail!(
-                "chatgpt sets both `api` and `export` — pick one. To seed a store from an \
-                 export and then keep it fresh from the API, see the provider's INGEST.md."
-            );
-        }
         if let Some(api) = &self.api {
             not_negative("api.max_pages", api.max_pages).map_err(anyhow::Error::msg)?;
             not_negative("api.limit", api.limit).map_err(anyhow::Error::msg)?;
@@ -154,15 +149,14 @@ mod tests {
         }
     }
 
-    /// One store, two ways to fill it, and a config that names both
-    /// would run a live download and then prune it to the export's
-    /// snapshot. Refused at validate, with the alternative named.
+    /// An export beside `api` is the copy the API asks first, so a
+    /// step may name both.
     #[test]
-    fn api_and_export_together_are_refused() {
+    fn api_and_export_together_are_one_step() {
         let c: ChatgptConfig =
             toml::from_str("api = {}\n[export]\npath = \"~/chatgpt-export\"\n").unwrap();
-        let err = c.validate().unwrap_err().to_string();
-        assert!(err.contains("both"), "{err}");
+        c.validate().unwrap();
+        assert!(c.api.is_some() && c.export.is_some());
         let export_only: ChatgptConfig =
             toml::from_str("[export]\npath = \"~/chatgpt-export\"\n").unwrap();
         export_only.validate().unwrap();

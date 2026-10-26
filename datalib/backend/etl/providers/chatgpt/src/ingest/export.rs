@@ -1,11 +1,13 @@
 //! Ingest a ChatGPT **data export** (chatgpt.com → Settings → Data
 //! controls → Export data), zipped or unzipped, into the raw store the API download
-//! writes: the same rows, held at the same versions, so an API run over
-//! an export-seeded store fetches only what moved since. No request is
-//! made, so no rate limit applies.
+//! writes: the same rows, each held at its detail's `update_time`. No
+//! request is made, so no rate limit applies. An `api` run given an
+//! export too takes from it what it would otherwise fetch
+//! ([`ExportCopy`]).
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use anyhow::{bail, Context, Result};
 use datalib_etl::blob_cas::{CasEdgeRow as _, CasInsert};
@@ -286,6 +288,77 @@ async fn attachments(
     Ok(())
 }
 
+/// An export an `api` run asks before chatgpt.com: a conversation it
+/// holds at or after the version the listing names, and a file's bytes. Never a
+/// census: what it lacks, or holds and the listing does not name, says
+/// nothing about what exists, so it neither prunes nor adds.
+pub struct ExportCopy {
+    conversations: HashMap<String, Value>,
+    account: Option<String>,
+    files: HashMap<String, String>,
+    archive: Mutex<ExportArchive>,
+}
+
+impl ExportCopy {
+    /// Reads every conversation up front, so a malformed export fails
+    /// the run before it has written anything.
+    pub fn open(path: &Path) -> Result<Self> {
+        let mut archive = ExportArchive::open(path)?;
+        let conversations = read_conversations(&mut archive)?
+            .into_iter()
+            .filter_map(|c| Some((id_of(&c)?.to_string(), c)))
+            .collect();
+        let account = archive
+            .read_json("user.json")?
+            .and_then(|u| u.get("id")?.as_str().map(String::from));
+        let files = archive.files_by_id();
+        Ok(Self {
+            conversations,
+            account,
+            files,
+            archive: Mutex::new(archive),
+        })
+    }
+
+    /// The export's copy of `listed`, when it is no older than the
+    /// version listed. The export carries the detail's `update_time`,
+    /// and the listing's can trail it by seconds to days (INGEST.md,
+    /// "The listing can trail the detail"), so the two are compared as
+    /// instants, not matched as text.
+    pub fn conversation_at(&self, listed: &Listed) -> Option<&Value> {
+        let c = self.conversations.get(&listed.key)?;
+        let ours = version_of(c.get("update_time"));
+        let secs = |v: &Option<String>| v.as_deref()?.parse::<i64>().ok();
+        let current = match (secs(&ours), secs(&listed.version)) {
+            (Some(ours), Some(listed)) => ours >= listed,
+            _ => listed.version.is_some() && ours == listed.version,
+        };
+        current.then_some(c)
+    }
+
+    pub fn file(&self, file_id: &str) -> Result<Option<Vec<u8>>> {
+        let Some(name) = self.files.get(file_id) else {
+            return Ok(None);
+        };
+        self.archive.lock().unwrap().read(name)
+    }
+
+    /// An export of another account than the one signed in would never
+    /// match a listed conversation; it is a config mistake, said as one.
+    pub fn check_account(&self, me: &Value) -> Result<()> {
+        let (Some(theirs), Some(ours)) = (self.account.as_deref(), me["id"].as_str()) else {
+            return Ok(());
+        };
+        if theirs != ours {
+            bail!(
+                "`export.path` is an export of account {theirs:?}, and `api` is signed in as \
+                 {ours:?}; point it at this account's export"
+            );
+        }
+        Ok(())
+    }
+}
+
 enum Bytes {
     /// The CAS already holds the file, under another conversation.
     Held(String),
@@ -326,7 +399,6 @@ mod tests {
     use super::super::db::db_path_for;
     use super::*;
     use serde_json::json;
-    use std::path::Path;
 
     const NOW: &str = "2026-10-22T00:00:00-07:00";
 
@@ -566,6 +638,48 @@ mod tests {
         assert!(err.contains("user-lore"), "{err}");
         assert_eq!(ids(&db).await, ["c1"]);
         db.close().await;
+    }
+
+    /// Beside `api`, the export answers for a conversation it holds at
+    /// or after the version the listing names: the listing's
+    /// `update_time` can trail the detail's, which is the export's.
+    /// Anything older is fetched live.
+    #[test]
+    fn an_export_copy_answers_at_or_after_the_listed_version() {
+        let ex = tempfile::tempdir().unwrap();
+        write(
+            ex.path(),
+            "conversations.json",
+            &json!([conv("c1", 1_710_959_331.42, &[])]),
+        );
+        let copy = ExportCopy::open(ex.path()).unwrap();
+        let at = |version: Option<&str>| copy.conversation_at(&Listed::new("c1", version));
+        assert!(at(Some("1710959331")).is_some());
+        assert!(at(Some("1710959320")).is_some(), "a listing that trails");
+        assert!(at(Some("1710959932")).is_none(), "moved since the export");
+        assert!(at(None).is_none(), "a listing with no version");
+        assert!(copy
+            .conversation_at(&Listed::new("c2", Some("1710959331")))
+            .is_none());
+    }
+
+    /// Another account's export beside `api` would never match a
+    /// listed conversation; the run says so instead.
+    #[test]
+    fn an_export_copy_of_another_account_is_refused() {
+        let ex = tempfile::tempdir().unwrap();
+        write(ex.path(), "conversations.json", &json!([]));
+        write(ex.path(), "user.json", &json!({"id": "user-lore"}));
+        let copy = ExportCopy::open(ex.path()).unwrap();
+        copy.check_account(&json!({"id": "user-lore"})).unwrap();
+        let err = copy
+            .check_account(&json!({"id": "user-data"}))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("user-lore") && err.contains("user-data"),
+            "{err}"
+        );
     }
 
     /// Entries none of which has an id are an export in a shape this

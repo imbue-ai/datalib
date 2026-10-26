@@ -113,8 +113,8 @@ series that fall in it. A windowed calendar is listed whole every run.
 
 ## ChatGPT
 
-`type = "chatgpt"` — web API through latchkey (`api`), or an unpacked
-data export (`export`). Mirrors your conversations.
+`type = "chatgpt"` — web API through latchkey (`api`), a data export
+(`export`), or both. Mirrors your conversations.
 
 A one-time registration, then a browser login. ChatGPT uses a bearer
 access token rather than a cookie, and latchkey can go and fetch it
@@ -184,12 +184,20 @@ rate-limits a large account's first sync: each run gets as far as the
 limit lets it and the next picks up the rest. To skip that wait, ask
 for a data export in ChatGPT's Settings → Data controls → Export data
 and give the source an `export` table whose `path` is the downloaded
-`.zip` (no need to unzip it). It needs no sign-in and brings the
-attached files too, though not the tool steps (code output, file
-reads, image generation) the API shows. Once it has synced, swap
-`export` for `api`, and the API fetches only what changed after the
-export was taken. Don't swap back: an export is a complete snapshot,
-so reading an older one drops every conversation it predates.
+`.zip` (no need to unzip it). On its own it needs no sign-in, and it
+brings the attached files too, though not the tool steps (code
+output, file reads, image generation) the API shows.
+
+Better, give one source both an `api` table and the `export` table.
+Each sync then lists your conversations through the API but takes
+every one the export already holds, unchanged, and every attached
+file, from the export, so only what changed after the export was taken
+is downloaded. Only the API's listing deletes a conversation, so an
+export getting older never costs you one. Leave `since` unset, or the
+export fills in only the conversations updated after it. Don't later
+drop the `api` table and keep `export`: an export alone is a complete
+snapshot, and reading an older one drops every conversation it
+predates.
 
 ## Claude
 

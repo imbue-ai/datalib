@@ -15,6 +15,7 @@ mod fetchers;
 pub mod schema_raw;
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -37,6 +38,7 @@ use tracing::{info, info_span, instrument, Instrument};
 
 pub use api::{ChatGPTClient, ChatGPTError};
 pub use db::{db_path_for, Conversation, FileRef, LoadedConversation, LoadedRaw, RawDb};
+use export::ExportCopy;
 use fetchers::{Attachments, Conversations};
 use schema_raw::{MeRow, ATTACHMENTS, CONVERSATIONS, CONVERSATION_VOLATILE_PATHS};
 
@@ -86,6 +88,11 @@ pub struct FetchOptions {
     /// The run-pinned `--now`, which stamps the `me` row; `None`
     /// samples the clock.
     pub now: Option<String>,
+    /// A data export of this account (`export.path`), asked before
+    /// chatgpt.com for a conversation it holds at the listed version and
+    /// for a file's bytes. It never prunes or adds: the listing decides
+    /// what the store holds.
+    pub export: Option<PathBuf>,
     pub progress: datalib_etl::progress::Progress,
     /// Cross-provider knobs (the checkpoint cadence, the stop flag).
     pub control: datalib_etl::control::DownloadControl,
@@ -105,6 +112,7 @@ impl FetchOptions {
             since: None,
             conv_uuids: Vec::new(),
             now: None,
+            export: None,
             progress: datalib_etl::progress::Progress::noop(),
             control: datalib_etl::control::DownloadControl::default(),
         }
@@ -113,7 +121,11 @@ impl FetchOptions {
 
 #[derive(Debug, Default, Serialize)]
 pub struct FetchSummary {
+    /// Conversations fetched from chatgpt.com.
     pub fetched: usize,
+    /// Owed conversations taken from the export, held there at the
+    /// version listed.
+    pub from_export: usize,
     /// Listed, in scope, and already held at the version listed.
     pub skipped: usize,
     /// Listed items ignored because their `update_time` predates the
@@ -126,7 +138,10 @@ pub struct FetchSummary {
     /// Conversations a *complete* listing did not name — deleted upstream.
     /// Always 0 when the listing walk stopped early.
     pub pruned: usize,
+    /// Files fetched from chatgpt.com.
     pub new_blobs: usize,
+    /// Files whose bytes came from the export.
+    pub blobs_from_export: usize,
     /// Edges satisfied from bytes the CAS already held.
     pub skipped_blobs: usize,
     pub failed_blobs: usize,
@@ -152,7 +167,11 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         "limit": opts.limit,
         "since": opts.since,
         "conv_uuids": opts.conv_uuids,
+        "export": opts.export,
     });
+    // Read before writing, so a malformed export fails the run without
+    // having touched the store.
+    let export = opts.export.as_deref().map(ExportCopy::open).transpose()?;
     let run = DownloadRun::start(db.pool(), &run_config).await?;
     let held = db.load_me().await?;
     let client = ChatGPTClient::with_latchkey(opts.latchkey.clone())
@@ -167,6 +186,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         db: &db,
         opts: &opts,
         found: &found,
+        export: export.as_ref(),
         files: Mutex::new(HashMap::new()),
         config_problems: Mutex::new(Vec::new()),
         counts: Counts::default(),
@@ -177,6 +197,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
     summary.network_seconds = client.network_seconds();
     summary.new_blobs = ctx.counts.new_blobs.load(Ordering::Relaxed);
     summary.skipped_blobs = ctx.counts.skipped_blobs.load(Ordering::Relaxed);
+    summary.blobs_from_export = ctx.counts.blobs_from_export.load(Ordering::Relaxed);
     run.finish(&result, &summary).await;
     result?;
     Ok(summary)
@@ -187,6 +208,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
 pub(crate) struct Counts {
     pub new_blobs: AtomicUsize,
     pub skipped_blobs: AtomicUsize,
+    pub blobs_from_export: AtomicUsize,
 }
 
 /// What the listing and every loop of one run share.
@@ -195,6 +217,7 @@ pub(crate) struct Ctx<'a> {
     pub db: &'a RawDb,
     pub opts: &'a FetchOptions,
     pub found: &'a RunProblems,
+    pub export: Option<&'a ExportCopy>,
     /// Per conversation fetched this run, the files it names: what the
     /// attachment loop asks for without reading the row back.
     pub files: Mutex<HashMap<String, Vec<FileRef>>>,
@@ -206,6 +229,10 @@ pub(crate) struct Ctx<'a> {
 impl Ctx<'_> {
     pub fn stop(&self) -> &StopFlag {
         &self.opts.control.stop
+    }
+
+    pub fn export_copy_of(&self, listed: &Listed) -> Option<&Value> {
+        self.export?.conversation_at(listed)
     }
 
     async fn wrote(&self, rows: u64) {
@@ -411,19 +438,40 @@ impl Ctx<'_> {
             listed.push(Listed::new(id, version_of(update_time)));
         }
         let in_scope = listed.len();
-        let mut owed = owed_missing_first(self.db.pool(), CONVERSATIONS, listed).await?;
+        let owed = owed_missing_first(self.db.pool(), CONVERSATIONS, listed).await?;
         s.skipped = in_scope - owed.len();
+        // `limit` caps requests; what the export holds costs none.
+        let (from_export, mut live): (Vec<Listed>, Vec<Listed>) = owed
+            .into_iter()
+            .partition(|l| self.export_copy_of(l).is_some());
         if let Some(limit) = self.opts.limit {
-            owed.truncate(limit);
+            live.truncate(limit);
         }
         info!(
             event = "chatgpt_priority_split",
-            owed = owed.len(),
+            owed = from_export.len() + live.len(),
+            from_export = from_export.len(),
             up_to_date = s.skipped,
             out_of_scope = s.out_of_scope,
             "sorted the listing into what to fetch"
         );
-        self.opts.progress.set_length(Some(owed.len() as u64));
+        self.opts
+            .progress
+            .set_length(Some((from_export.len() + live.len()) as u64));
+        let copied = self
+            .drain(
+                CONVERSATIONS,
+                "conversations",
+                from_export,
+                &Conversations(self),
+                100,
+            )
+            .await?;
+        s.from_export = copied.got;
+        s.errors = copied.failed;
+        if copied.terminal.is_some() || self.stop().requested() {
+            return Ok(copied.terminal.is_some());
+        }
         let drained = self
             // One conversation per transaction: each is one slow request,
             // and a seal may follow every one, so a long first sync
@@ -431,13 +479,13 @@ impl Ctx<'_> {
             .drain(
                 CONVERSATIONS,
                 "conversations",
-                owed,
+                live,
                 &Conversations(self),
                 1,
             )
             .await?;
         s.fetched = drained.got;
-        s.errors = drained.failed;
+        s.errors += drained.failed;
         Ok(drained.terminal.is_some())
     }
 
@@ -465,6 +513,9 @@ async fn phases(ctx: &Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
         .me()
         .await
         .map_err(|e| anyhow::anyhow!("fetch /me: {e}"))?;
+    if let Some(export) = ctx.export {
+        export.check_account(&me)?;
+    }
     upsert_me(ctx, &me).await?;
     info!(
         event = "chatgpt_me",
