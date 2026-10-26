@@ -183,7 +183,8 @@ are the signals, from cheapest to most exact:
   - **Slack**: a conversation whose `history:<channel id>` scope in
     `coverage` is one row, reaching back to the source's `since`, has
     no gap. Two rows or more, or a `lo` later than `since`, means the
-    walk is not done there.
+    walk is not done there. A DM closed in the sidebar has no row at all
+    until it opens again, which is not the same as "not done".
 
     ```sql
     SELECT scope, count(*) AS spans, min(lo), max(hi)
@@ -287,19 +288,24 @@ question reaches outside that:
 
 - **Slack**: anything before the source's `since` (2024-01-01 unless
   set); a time in a conversation outside every `coverage` span; direct
-  messages unless the source sets `dms = true`; channels the account is
+  messages unless the source sets `dms = true`; a DM closed in the
+  account's sidebar, unless it is named in `dm_conversations` (it is
+  walked again once it opens with something new); channels the account is
   not in unless it sets `all_channels`; files when `media = false`. A
   root's `reply_count` is Slack's; the mirror holds every reply up to
   `latest_reply` only once `threads_bookkeeping.held_version` equals
   it. A message deleted in Slack more than `refresh_window_days` ago
   (30 by default) is still in the mirror.
-- **Gmail**: with `only_extract_labels` set, only messages in those
+- **Gmail**: with `since` set, mail older than it is not listed (what
+  a relative `since` slides past stays in the mirror). With
+  `only_extract_labels` set, only messages in those
   labels are mirrored, so a thread can be partial: `threads.email_count`
   is what the mirror holds, not the thread's length. A message over the
   source's size limit has no `.eml`. A run with `message_budget` stops
   early on purpose.
 - **Calendar**: with `since` or `until` set, only events with an
-  occurrence in that window. Repeating events are stored as series, not
+  occurrence in that window, and an event a relative window moves past is
+  dropped from the mirror. Repeating events are stored as series, not
   dates.
 - **Anything sent a moment ago**: see "Your app's own writes" below.
 

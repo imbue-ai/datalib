@@ -233,8 +233,12 @@ their upstream change token here.
 ### `ingested_files`
 
 Which local files a file-reading download has read, by path and hash.
-Declared in the email and calendar stores; only the `.ics` method of
-`calendar` writes it.
+The `.ics` method of `calendar` keeps a row per file. The `email`
+store's mbox mode, and a Gmail source that starts from a Takeout, keep
+a stamp of their last complete read here instead: one row per input
+file, plus a row with an empty `rel_path` for the settings it was read
+with, under the scope `email/mbox_read` or `email/takeout_seed`. While
+the files and settings match the stamp, the run skips the read.
 
 | column | what it holds |
 |---|---|
@@ -483,7 +487,11 @@ SELECT 1 FROM coverage
 ```
 
 **What is not mirrored**: anything before `since`; direct messages,
-unless the source sets `dms = true`; channels the account is not in,
+unless the source sets `dms = true`; with `dms = true` and no
+`dm_conversations` list, a DM closed in the account's Slack sidebar, which
+is not walked and has no `history:` span until it is open with a new
+message (Slack reopens a DM when a message arrives, and closes it after a
+while); channels the account is not in,
 unless it sets `all_channels`; files, when it sets `media = false`;
 Slack Lists. A message deleted in Slack is dropped from the mirror only
 inside the last `refresh_window_days` (30 by default); older deletions
@@ -640,6 +648,9 @@ are in `google_events_bookkeeping.volatile_payload`.
 
 When the source sets `since` or `until`, only events with an
 occurrence in that window are mirrored; ask the service for the rest.
+A windowed calendar is listed whole every run, and an event the window
+has moved past is **dropped** from the mirror, so a relative window
+(`since = "-30d"`) keeps only what is inside it now.
 
 ### `accounts`
 
