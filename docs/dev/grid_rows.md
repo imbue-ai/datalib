@@ -342,6 +342,7 @@ Two nullable measurements. What each one measures is decided per
 | garmin.Garmin Records | — | its entries |
 | garmin.Garmin Activity | — | 1 |
 | a GitHub PR, a GitLab MR, a Notion comment thread | — | itself and its comments; each comment row 1 |
+| todoist.Todoist Project | — | its tasks, open and completed, and its comments; each task or comment row 1 |
 | a calendar event, a contact, a Notion page, a Perseus book or chapter | — | 1 |
 
 On a `datalib.*` row, `byte_size` is bytes on disk **as of the last
