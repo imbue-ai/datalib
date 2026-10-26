@@ -1420,12 +1420,6 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                 "left out the DMs with nothing new since what is held"
             );
         }
-        let walking: Vec<(String, String)> = targets
-            .iter()
-            .zip(&idle)
-            .filter(|(_, idle)| !**idle)
-            .map(|(t, _)| t.clone())
-            .collect();
         if opts.search_replies && !opts.control.stop.requested() {
             let top = ts_key(&datetime_to_slack_ts(&(now - SEARCH_LAG)));
             let search = ReplySearch {
@@ -1437,7 +1431,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             let mut totals = ReplySearchTotals::default();
             // A search that fails settles nothing past where it stopped,
             // so what it missed is searched again next run.
-            if let Err(e) = search.run(&walking, &since, &top, &mut totals).await {
+            if let Err(e) = search.run(&targets, &since, &top, &mut totals).await {
                 if !interrupted(&e) {
                     found.push(listing_problem(M_SEARCH, &e));
                 }
@@ -1453,7 +1447,8 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
 
         // Seeded with one tick per channel, so the bar reads as
         // something before the first channel has listed anything.
-        let bar = RunBar::new(&opts.progress, walking.len() as u64);
+        let walking = idle.iter().filter(|idle| !**idle).count();
+        let bar = RunBar::new(&opts.progress, walking as u64);
         let mirror = Mirror {
             db: &db,
             team_id: &team_id,

@@ -127,7 +127,9 @@ anything new costs a rate-limited call apiece, every run. So with
 hold does not reach**: newer than what is covered, or with a gap
 under it, and not older than `since` (`shows_activity` in
 `ingest/mod.rs`). Every other DM costs no request and no progress
-line. Its threads and files still owed are fetched as usual.
+line. Its threads and files still owed are fetched as usual, and the
+reply search still covers it, so a new reply on an old root is found
+whether or not the reply moved the DM's newest message.
 
 Nothing better is on offer. Checked against the live API:
 
@@ -240,9 +242,6 @@ that settles the page, and the thread is then owed like any other.
 - A conversation whose history nothing has covered yet is not searched:
   the walk ahead reads every root it has fresh. Its reply time up to now
   is settled at the start of the run.
-- A DM that does not [show activity](#which-dms-a-run-walks) is not
-  searched either. Its reply time stays a gap, searched the run it
-  does.
 - A store from before the search has walked history and searched
   nothing, so its first run searches back to `since`, once.
 - Only a token that may search can call `search.messages`. A browser
