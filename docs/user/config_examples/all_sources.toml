@@ -91,6 +91,7 @@ inputs = [
   "signal/render_markdown",
   "slack/render_markdown",
   "sms_backup_restore/render_markdown",
+  "todoist/render_markdown",
   "whatsapp/render_markdown",
   "yolink/render_markdown",
 ]
@@ -161,6 +162,8 @@ inputs = [
   "slack/embed",
   "sms_backup_restore/keyword_index",
   "sms_backup_restore/embed",
+  "todoist/keyword_index",
+  "todoist/embed",
   "whatsapp/keyword_index",
   "whatsapp/embed",
   "yolink/keyword_index",
@@ -2040,6 +2043,57 @@ inputs = ["sms_backup_restore/render_markdown"]
 group = "sms_backup_restore"
 function = "embed"
 inputs = ["sms_backup_restore/keyword_index"]
+
+# --- todoist by `api` ---------------------------------------------------
+
+# Your Todoist over its API, signed in through latchkey
+# (`latchkey auth browser todoist`, or paste the API token from
+# Settings → Integrations → Developer), with every option set.
+[[groups]]
+id = "todoist"
+name = "Todoist"
+type = "todoist"
+
+[[steps]]
+group = "todoist"
+function = "ingest"
+
+# When to give up on failed requests. The download retries and backs off
+# on its own; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "picard@enterprise.test"
+
+# Open tasks always come. Completed ones come too unless `completed` is
+# false; `completed_since` stops the first run's read of them at a date
+# rather than at the day the account joined Todoist.
+[steps.params.api]
+completed = true
+completed_since = "2024-01-01"
+
+# One document per project: its sections, its tasks and their comments,
+# completed tasks folded under each section. No options.
+[[steps]]
+group = "todoist"
+function = "render_markdown"
+inputs = ["todoist/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "todoist"
+function = "keyword_index"
+inputs = ["todoist/render_markdown"]
+
+[[steps]]
+group = "todoist"
+function = "embed"
+inputs = ["todoist/keyword_index"]
 
 # --- whatsapp by `backup` -----------------------------------------------
 

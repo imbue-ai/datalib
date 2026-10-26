@@ -207,6 +207,12 @@
       "reach": "local"
     }
   ],
+  "todoist": [
+    {
+      "path": "api",
+      "reach": "origin"
+    }
+  ],
   "whatsapp": [
     {
       "path": "backup",

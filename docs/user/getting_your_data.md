@@ -886,6 +886,34 @@ the source's `backup.path` at that directory — it walks every `*.xml`
 inside, so keeping multiple dated backups there is fine; re-ingesting a
 newer export deduplicates against what's already there.
 
+## Todoist
+
+`type = "todoist"` — Todoist's API through latchkey (`api`). Copies
+your projects, sections, labels, open tasks and their comments, and the
+tasks you have completed. Each project becomes one document: its
+comments, then each section's open tasks with their subtasks and
+comments, then the section's completed tasks, folded.
+
+Sign in once in the browser; latchkey reads your API token from
+Todoist's settings for you:
+
+```sh
+latchkey auth browser todoist
+```
+
+Or copy the API token yourself (**Settings** → **Integrations** →
+**Developer**) to your clipboard and store it:
+
+```sh
+latchkey auth set todoist -H "Authorization: Bearer $(pbpaste)"
+```
+
+An empty `api` table copies everything. Completed tasks are read back
+to the day you joined Todoist, a quarter at a time; set
+`completed_since = "YYYY-MM-DD"` to stop sooner, or `completed = false`
+to leave them out. Each sync after the first reads only what changed.
+`datalib/backend/etl/providers/todoist/INGEST.md` has the details.
+
 ## WhatsApp backups
 
 `type = "whatsapp"` — an Android `crypt15` backup (`backup.path`).

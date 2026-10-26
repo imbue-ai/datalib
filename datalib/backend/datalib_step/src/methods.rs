@@ -49,6 +49,7 @@ pub fn ingest_methods(source_type: SourceType) -> &'static [IngestMethod] {
         SourceType::SmsBackupRestore => {
             datalib_etl_sms_backup_restore_config::SmsBackupRestoreConfig::METHODS
         }
+        SourceType::Todoist => datalib_etl_todoist_config::TodoistConfig::METHODS,
         SourceType::Whatsapp => datalib_etl_whatsapp_config::WhatsappConfig::METHODS,
         SourceType::Yolink => datalib_etl_yolink_config::YolinkConfig::METHODS,
     }

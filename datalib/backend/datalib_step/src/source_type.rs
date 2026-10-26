@@ -93,6 +93,9 @@ pub enum SourceType {
     Signal,
     Slack,
     SmsBackupRestore,
+    /// Todoist, over its API: projects, sections, tasks open and
+    /// completed, and their comments.
+    Todoist,
     Whatsapp,
     Yolink,
 }
@@ -127,6 +130,7 @@ impl SourceType {
                 | SourceType::Linear
                 | SourceType::Notion
                 | SourceType::Slack
+                | SourceType::Todoist
         )
     }
 

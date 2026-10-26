@@ -626,6 +626,36 @@
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)"
     ]
   },
+  "todoist": {
+    "schema_hash": "c7273fe9170646fa8276eb4d3b81192b0e7c92918451104c842b9c169e8ad745",
+    "schema_version": 0,
+    "shared_schema_version": 1,
+    "sql": [
+      "CREATE TABLE collaborators( id TEXT PRIMARY KEY, payload TEXT NULL)",
+      "CREATE TABLE collaborators_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
+      "CREATE TABLE completed_items( id TEXT PRIMARY KEY, payload TEXT NULL)",
+      "CREATE TABLE completed_items_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
+      "CREATE TABLE coverage(scope TEXT NOT NULL, lo TEXT NOT NULL, hi TEXT NOT NULL, PRIMARY KEY(scope, lo))",
+      "CREATE TABLE items( id TEXT PRIMARY KEY, payload TEXT NULL)",
+      "CREATE TABLE items_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
+      "CREATE TABLE labels( id TEXT PRIMARY KEY, payload TEXT NULL)",
+      "CREATE TABLE labels_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
+      "CREATE TABLE notes( id TEXT PRIMARY KEY, payload TEXT NULL)",
+      "CREATE TABLE notes_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
+      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE project_notes( id TEXT PRIMARY KEY, payload TEXT NULL)",
+      "CREATE TABLE project_notes_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
+      "CREATE TABLE projects( id TEXT PRIMARY KEY, payload TEXT NULL)",
+      "CREATE TABLE projects_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
+      "CREATE TABLE sections( id TEXT PRIMARY KEY, payload TEXT NULL)",
+      "CREATE TABLE sections_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
+      "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
+      "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)",
+      "CREATE TABLE sync_state(id TEXT PRIMARY KEY, sync_token TEXT NOT NULL, full_sync_date_utc TEXT NULL)",
+      "CREATE TABLE user( id TEXT PRIMARY KEY, payload TEXT NULL)",
+      "CREATE TABLE user_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)"
+    ]
+  },
   "whatsapp": {
     "schema_hash": "23c0b6a636904f6b5ebc860d38f0263224c1dbe25e74f9c7fa5fadd165b9e3b1",
     "schema_version": 0,

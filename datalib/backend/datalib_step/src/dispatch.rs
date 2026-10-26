@@ -344,6 +344,12 @@ pub fn plan(
             datalib_etl_sms_backup_restore,
             datalib_etl_sms_backup_restore_render
         ),
+        SourceType::Todoist => arm!(
+            datalib_etl_todoist_config::TodoistConfig,
+            datalib_etl_todoist_config::TodoistRenderConfig,
+            datalib_etl_todoist,
+            datalib_etl_todoist_render
+        ),
         SourceType::Lightroom => ingest_only!(
             datalib_etl_lightroom_config::LightroomConfig,
             datalib_etl_lightroom_config::LightroomRenderConfig,
@@ -412,6 +418,7 @@ pub async fn migrate(step_type: &str, raw_dir: &Path) -> Result<()> {
         SourceType::SmsBackupRestore => {
             datalib_etl_sms_backup_restore::processor::migrate(raw_dir).await
         }
+        SourceType::Todoist => datalib_etl_todoist::processor::migrate(raw_dir).await,
         SourceType::Lightroom => datalib_etl_lightroom::processor::migrate(raw_dir).await,
         SourceType::Linear => datalib_etl_linear::processor::migrate(raw_dir).await,
         SourceType::AppleMessages => datalib_etl_apple_messages::processor::migrate(raw_dir).await,
