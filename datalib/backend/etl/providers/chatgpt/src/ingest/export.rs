@@ -1,9 +1,9 @@
 //! Ingest a ChatGPT **data export** (chatgpt.com → Settings → Data
 //! controls → Export data), zipped or unzipped, into the raw store the API download
-//! writes: the same rows, held at the same versions, so an API run over
-//! an export-seeded store fetches only what moved since. No request is
-//! made, so no rate limit applies. An `api` run given an export too
-//! takes from it what it would otherwise fetch ([`ExportCopy`]).
+//! writes: the same rows, each held at its detail's `update_time`. No
+//! request is made, so no rate limit applies. An `api` run given an
+//! export too takes from it what it would otherwise fetch
+//! ([`ExportCopy`]).
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -289,7 +289,7 @@ async fn attachments(
 }
 
 /// An export an `api` run asks before chatgpt.com: a conversation it
-/// holds at the version the listing names, and a file's bytes. Never a
+/// holds at or after the version the listing names, and a file's bytes. Never a
 /// census: what it lacks, or holds and the listing does not name, says
 /// nothing about what exists, so it neither prunes nor adds.
 pub struct ExportCopy {
@@ -320,11 +320,20 @@ impl ExportCopy {
         })
     }
 
-    /// The export's copy of `listed`, when it is at the version listed.
+    /// The export's copy of `listed`, when it is no older than the
+    /// version listed. The export carries the detail's `update_time`,
+    /// and the listing's can trail it by seconds to days (INGEST.md,
+    /// "The listing can trail the detail"), so the two are compared as
+    /// instants, not matched as text.
     pub fn conversation_at(&self, listed: &Listed) -> Option<&Value> {
         let c = self.conversations.get(&listed.key)?;
-        (listed.version.is_some() && version_of(c.get("update_time")) == listed.version)
-            .then_some(c)
+        let ours = version_of(c.get("update_time"));
+        let secs = |v: &Option<String>| v.as_deref()?.parse::<i64>().ok();
+        let current = match (secs(&ours), secs(&listed.version)) {
+            (Some(ours), Some(listed)) => ours >= listed,
+            _ => listed.version.is_some() && ours == listed.version,
+        };
+        current.then_some(c)
     }
 
     pub fn file(&self, file_id: &str) -> Result<Option<Vec<u8>>> {
@@ -631,10 +640,12 @@ mod tests {
         db.close().await;
     }
 
-    /// Beside `api`, the export answers for a conversation only at the
-    /// version the listing names; anything else is fetched live.
+    /// Beside `api`, the export answers for a conversation it holds at
+    /// or after the version the listing names: the listing's
+    /// `update_time` can trail the detail's, which is the export's.
+    /// Anything older is fetched live.
     #[test]
-    fn an_export_copy_answers_only_at_the_listed_version() {
+    fn an_export_copy_answers_at_or_after_the_listed_version() {
         let ex = tempfile::tempdir().unwrap();
         write(
             ex.path(),
@@ -644,6 +655,7 @@ mod tests {
         let copy = ExportCopy::open(ex.path()).unwrap();
         let at = |version: Option<&str>| copy.conversation_at(&Listed::new("c1", version));
         assert!(at(Some("1710959331")).is_some());
+        assert!(at(Some("1710959320")).is_some(), "a listing that trails");
         assert!(at(Some("1710959932")).is_none(), "moved since the export");
         assert!(at(None).is_none(), "a listing with no version");
         assert!(copy

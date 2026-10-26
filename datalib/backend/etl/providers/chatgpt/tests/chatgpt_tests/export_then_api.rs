@@ -185,6 +185,20 @@ fn moved_on(api: &Path, id: &str) {
     write_json(&detail_path, &detail);
 }
 
+/// The listing names `id` a few seconds before its detail's
+/// `update_time`, as chatgpt.com's does for a conversation written to
+/// after its last message (INGEST.md, "The listing can trail the
+/// detail"). The detail, and the export, keep theirs.
+fn listing_trails(api: &Path, id: &str) {
+    let mut listing = read_json(&api.join("conversations.json"));
+    for item in listing.as_array_mut().unwrap() {
+        if item["id"] == id {
+            item["update_time"] = (item["update_time"].as_f64().unwrap() - 12.0).into();
+        }
+    }
+    write_json(&api.join("conversations.json"), &listing);
+}
+
 /// `id` deleted on chatgpt.com: neither listing names it.
 fn deleted_on(api: &Path, id: &str) {
     let mut listing = read_json(&api.join("conversations.json"));
@@ -211,7 +225,8 @@ async fn conversation_ids(db: &RawDb) -> Vec<String> {
 
 /// One `api` run with the export beside it fills an empty store: the
 /// conversation that moved since the export is the one detail fetched,
-/// and every file comes from the export. The tape has no file endpoint
+/// one whose listing trails its detail is not, and every file comes
+/// from the export. The tape has no file endpoint
 /// at all, so a file asked of chatgpt.com would fail.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn one_run_with_an_export_fetches_only_what_moved_since() {
@@ -228,6 +243,7 @@ async fn one_run_with_an_export_fetches_only_what_moved_since() {
     // The one that names every file, so the files it names are asked
     // for after a live fetch, not only after the export's copy.
     moved_on(&api, "68fa0005-fake-7000-8000-positronic0005");
+    listing_trails(&api, "68fa0002-fake-7000-8000-positronic0002");
     ChatgptSynth::new(&api).synthesize(&tape).unwrap();
 
     let db = RawDb::open(&db_path_for(&raw)).await.unwrap();

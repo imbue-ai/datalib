@@ -123,7 +123,7 @@ request and requires the store an uninterrupted run leaves.
    detail-fetched (`out_of_scope` in the summary), but rows already
    stored stay — moving `since` further back later lists the newly in
    scope ones as owed. Each is `/backend-api/conversation/{id}`,
-   stored with its edges, 25 to a transaction, sealed as they land.
+   stored with its edges, one to a transaction, sealed as they land.
 5. **Attachments owed**, from the edges the store lists (below).
 
 `conv_uuids` replaces steps 2–4 with exactly the named conversations
@@ -133,12 +133,27 @@ fetched every run since nothing lists them; nothing is pruned.
 ### The version is the update time in whole seconds
 
 The listing endpoint reports `update_time` as an ISO-8601 string; the
-detail endpoint reports the same instant as a Unix-epoch float, and
-that is what the row stores (JSON-encoded, `1710959331.420159`). The
-two never match as text, so the version a conversation is listed and
-held at is `update_time` reduced to whole seconds (`version_of`). One
-that will not parse is kept as written. `since` is compared at the
-same grain.
+detail endpoint reports it as a Unix-epoch float, and that is what the
+row stores (JSON-encoded, `1710959331.420159`). The two never match as
+text, so the version a conversation is listed and held at is
+`update_time` reduced to whole seconds (`version_of`). One that will
+not parse is kept as written. `since` is compared at the same grain.
+
+### The listing can trail the detail
+
+For most conversations the two name the same instant. For some the
+listing's is earlier: it is about the time of the newest message,
+while the detail's moves on with a later write, such as the title
+ChatGPT names a new chat with seconds after its first answer.
+Measured on a real account of 582 conversations, 99 were listed
+between one second and about two days before their detail's
+`update_time`, and none after it.
+
+A listing run holds a conversation at the version *listed*, so it
+never refetches one for this. A conversation held at its detail's
+version (by `conv_uuids`, or by an `export`-only step, below) is owed
+once the first time a listing names it earlier, and from then on is
+held at the listed version.
 
 ### Attachments
 
@@ -225,14 +240,14 @@ The root is the folder holding the shallowest `export_manifest.json`
 `conversations.json`; so a zip of the unzipped folder reads too
 ([`src/ingest/export_archive.rs`](src/ingest/export_archive.rs)). The
 ingest ([`src/ingest/export.rs`](src/ingest/export.rs)) writes the rows
-the API walk writes and holds them at the versions the API would list
-them at, and makes no request, so no rate limit applies:
+the API walk writes, and makes no request, so no rate limit applies:
 
 - **Conversations.** Every part the manifest lists is read; a listed
   part the export lacks fails the run, since read as a smaller export
   it would prune what that part holds. Each conversation is stored as a
   detail fetch would be (`parse_conversation`, volatile fields and all)
-  and held at its `update_time` in whole seconds. One the store already
+  and held at its `update_time` in whole seconds: the detail's, which
+  the listing can trail (above). One the store already
   holds at that version is not written again, so reading an unchanged
   export commits nothing.
 - **What an export leaves out.** Its conversations carry the user's and
@@ -286,10 +301,13 @@ path = "~/Downloads/chatgpt-export.zip"
   is read whole before anything is written, so a malformed one fails
   the run with the store untouched, and an export of another account
   than `/me` names fails it too.
-- **A conversation owed** that the export holds at the version listed
-  (its `update_time` in whole seconds, as above) is stored from the
-  export, a hundred to a transaction and costing no request; the rest
-  are fetched live. `limit` counts only the live ones. The summary's
+- **A conversation owed** that the export holds at or after the
+  version listed is stored from the export and held at the version
+  listed, a hundred to a transaction and costing no request; the rest
+  are fetched live. "At or after", because the export carries the
+  detail's `update_time`, which the listing can trail (§"The listing
+  can trail the detail"); an exact match fetched about one
+  conversation in six live for nothing. `limit` counts only the live ones. The summary's
   `from_export` and `fetched` say how many went each way.
 - **An attachment owed** takes its bytes from the export's
   `file_<id>.dat` before asking `/backend-api/files/{id}/download`
@@ -303,15 +321,16 @@ path = "~/Downloads/chatgpt-export.zip"
 - **`conv_uuids`** fetches its conversations live every run, as
   without an export; their files still come from it.
 
-Both ways write the same rows at the same versions, so the first run
-fetches only the conversations that moved since the export was taken,
-and no file the export holds (`tests/chatgpt_tests/export_then_api.rs`).
+So the first run fetches only the conversations that moved since the
+export was taken, and no file the export holds
+(`tests/chatgpt_tests/export_then_api.rs`).
 A conversation stored from the export lacks its tool steps until it
 next changes and the API fetches it whole. Identity is the same either
 way: render mints a conversation's uuid from its ChatGPT id under the
 group id. A store already filled by an `export`-only step takes an
 `api` table beside it the same way, and from then on only the listing
-prunes.
+prunes. Swapping `export` for `api` instead also works, but refetches
+each conversation whose listing trails its detail once.
 
 ## Auth + Cloudflare
 
