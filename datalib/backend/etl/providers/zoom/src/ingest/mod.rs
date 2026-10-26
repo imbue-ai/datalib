@@ -312,9 +312,12 @@ async fn files(opts: &FetchOptions, found: &RunProblems, s: &mut FetchSummary) -
     let mut listed = Vec::new();
     for meeting in opts.db.recordings().await? {
         for file in shape::wanted_files(&meeting, opts.api.media) {
+            // A key listed twice would be written twice in one flush.
             let key = file.key();
-            listed.push(Listed::new(key.clone(), file.size.map(|n| n.to_string())));
-            wanted.insert(key, file);
+            let version = file.size.map(|n| n.to_string());
+            if wanted.insert(key.clone(), file).is_none() {
+                listed.push(Listed::new(key, version));
+            }
         }
     }
     let owed = owed::owed(opts.db.pool(), RECORDING_FILES, listed).await?;

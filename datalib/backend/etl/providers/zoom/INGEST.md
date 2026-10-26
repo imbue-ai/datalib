@@ -122,7 +122,7 @@ Zoom already keeps and nothing here renders. `api.media = true` with a
 | `participants` | meeting UUID | `{"participants": [...]}`, every page in order; `{"participants": [], "unavailable": "<why>"}` where Zoom would not say |
 | `summary_listings` | meeting UUID | the summaries listing's entry; `last_modified` is the version a summary is held at |
 | `summaries` | meeting UUID | `GET /meetings/{uuid}/meeting_summary`, or `{"unavailable": "<why>"}` |
-| `recording_files` | `{meeting uuid}#{file key}` | CAS edge: the file's bytes, `blake3` NULL for a file Zoom no longer has (with a warning). The file key is Zoom's file id, or the lower-cased file type for a `CC` or `TIMELINE` file, which Zoom gives no id |
+| `recording_files` | `{meeting uuid}#{file key}` | CAS edge: the file's bytes, `blake3` NULL for a file Zoom no longer has (with a warning). The file key is Zoom's file id, or for a `CC` or `TIMELINE` file, which Zoom gives no id, the lower-cased type and the recording stretch's start, `timeline@2026-10-05T09:01:00Z` |
 | `coverage` | `(scope, lo)` | `recordings:<user id>`, `reports:<user id>`, `summaries:<user id>`: the dates each listing has read |
 
 A meeting UUID names one meeting instance: each occurrence of a

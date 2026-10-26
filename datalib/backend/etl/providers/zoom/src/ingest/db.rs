@@ -67,9 +67,10 @@ impl RawDb {
     /// first.
     pub async fn meetings(&self) -> Result<Vec<(String, Option<String>)>> {
         sqlx::query_as(
-            "SELECT id, start_time FROM recordings \
-             UNION SELECT id, start_time FROM reported_meetings \
-             ORDER BY 2, 1",
+            "SELECT id, MIN(start_time) FROM \
+             (SELECT id, start_time FROM recordings \
+              UNION ALL SELECT id, start_time FROM reported_meetings) \
+             GROUP BY id ORDER BY 2, 1",
         )
         .fetch_all(self.pool())
         .await

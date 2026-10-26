@@ -94,7 +94,8 @@ pub struct SummaryRow {
 /// `recording_files` — one recording file's bytes in the CAS, keyed
 /// `{meeting_uuid}#{file_key}`. `file_key` is Zoom's file id, or for the
 /// kinds Zoom gives none (a closed-caption or timeline file) the file
-/// type in lower case. `blake3` is NULL for a file Zoom no longer has;
+/// type in lower case and its `recording_start`, `timeline@<start>`
+/// (`shape::file_key`). `blake3` is NULL for a file Zoom no longer has;
 /// a warning on the edge says so.
 #[derive(Debug, Clone, CasEdgeRow)]
 #[cas_edge_row(table = "recording_files")]

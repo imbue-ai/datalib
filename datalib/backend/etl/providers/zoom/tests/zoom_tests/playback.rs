@@ -110,7 +110,7 @@ async fn a_first_sync_copies_every_meeting_and_its_transcript() {
             format!("{ENGINEERING}#c-vtt"),
             held("a-chat"),
             held("a-vtt"),
-            held("timeline")
+            held("timeline@2026-10-05T09:01:00Z")
         ]
     );
     assert!(
@@ -128,7 +128,7 @@ async fn a_first_sync_copies_every_meeting_and_its_transcript() {
     assert_eq!(String::from_utf8(bytes).unwrap(), tape::BRIEFING_VTT);
     let timeline = edges
         .iter()
-        .find(|(id, _)| *id == held("timeline"))
+        .find(|(id, _)| *id == held("timeline@2026-10-05T09:01:00Z"))
         .unwrap();
     assert!(timeline.1.is_some(), "the redirect was followed");
 

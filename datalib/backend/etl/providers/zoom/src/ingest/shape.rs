@@ -35,12 +35,17 @@ pub fn str_of<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
 
 /// The key a file is stored under within its meeting: Zoom's file id,
 /// or for a closed-caption or timeline file, which Zoom gives no id, its
-/// type in lower case.
+/// type in lower case and the start of the recording it belongs to: a
+/// meeting recorded in several stretches has one of each per stretch.
 pub fn file_key(file: &Value) -> Option<String> {
-    match str_of(file, "id") {
-        Some(id) => Some(id.to_string()),
-        None => str_of(file, "file_type").map(str::to_ascii_lowercase),
+    if let Some(id) = str_of(file, "id") {
+        return Some(id.to_string());
     }
+    let kind = str_of(file, "file_type")?.to_ascii_lowercase();
+    Some(match str_of(file, "recording_start") {
+        Some(start) => format!("{kind}@{start}"),
+        None => kind,
+    })
 }
 
 /// The files of a listed meeting that are owed bytes: every one with a
@@ -139,7 +144,10 @@ mod tests {
              "download_url": "https://zoom.us/rec/download/a"},
             {"id": "f-vtt", "file_type": "TRANSCRIPT", "file_size": 40, "status": "completed",
              "download_url": "https://zoom.us/rec/download/b"},
-            {"file_type": "TIMELINE", "download_url": "https://zoom.us/rec/download/c"},
+            {"file_type": "TIMELINE", "download_url": "https://zoom.us/rec/download/c",
+             "recording_start": "2026-10-05T09:01:00Z"},
+            {"file_type": "TIMELINE", "download_url": "https://zoom.us/rec/download/d",
+             "recording_start": "2026-10-05T10:15:00Z"},
             {"id": "f-busy", "file_type": "CHAT", "status": "processing"},
         ]})
     }
@@ -152,10 +160,14 @@ mod tests {
                 .map(WantedFile::key)
                 .collect()
         };
-        assert_eq!(keys(false), ["Ab1/cd==#f-vtt", "Ab1/cd==#timeline"]);
+        let timelines = [
+            "Ab1/cd==#timeline@2026-10-05T09:01:00Z",
+            "Ab1/cd==#timeline@2026-10-05T10:15:00Z",
+        ];
+        assert_eq!(keys(false), [&["Ab1/cd==#f-vtt"][..], &timelines].concat());
         assert_eq!(
             keys(true),
-            ["Ab1/cd==#f-mp4", "Ab1/cd==#f-vtt", "Ab1/cd==#timeline"]
+            [&["Ab1/cd==#f-mp4", "Ab1/cd==#f-vtt"][..], &timelines].concat()
         );
     }
 

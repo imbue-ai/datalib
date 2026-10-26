@@ -9,7 +9,7 @@ use datalib_etl_render::inputs::{changed_rows, RawRange};
 use datalib_etl_zoom::ingest::schema_raw::{
     PARTICIPANTS, RECORDINGS, RECORDING_FILES, REPORTED_MEETINGS, SUMMARIES,
 };
-use datalib_etl_zoom::ingest::RawDb;
+use datalib_etl_zoom::ingest::{shape, RawDb};
 use datalib_schema::problems::{Problem, Reason};
 use serde_json::Value;
 use sqlx::Row as _;
@@ -67,16 +67,7 @@ impl Meeting {
             .get("recording_files")?
             .as_array()?
             .iter()
-            .find(|f| {
-                let id = f
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .filter(|s| !s.is_empty());
-                let ty = f.get("file_type").and_then(Value::as_str);
-                id == Some(file_key)
-                    || (id.is_none()
-                        && ty.map(str::to_ascii_lowercase).as_deref() == Some(file_key))
-            })
+            .find(|f| shape::file_key(f).as_deref() == Some(file_key))
     }
 
     /// The stored transcript file: the `TRANSCRIPT` one the recording
