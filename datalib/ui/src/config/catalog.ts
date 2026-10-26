@@ -1046,6 +1046,61 @@ export const CATALOG: CatalogEntry[] = [
   },
   {
     type: "calendar",
+    variantKey: "calendly",
+    method: "calendly",
+    label: "Calendly",
+    blurb: "Copy the meetings people book with you on Calendly, with their answers.",
+    keywords: ["calendly", "calendar", "scheduling", "bookings", "meetings", "invitees"],
+    kind: "api",
+    icon: "calendar",
+    defaultName: "calendly",
+    nameHint: "Work Calendly",
+    wizard: true,
+    // latchkey's `calendly` takes only a pasted personal access token;
+    // the wizard offers no browser sign-in because latchkey lists none.
+    credentialService: "calendly",
+    credentialPaste: {
+      help:
+        "A personal access token from Calendly: Integrations → API & Webhooks → " +
+        "Personal Access Tokens. Give it the users:read and scheduled_events:read scopes.",
+    },
+    canProbe: true,
+    sections: [
+      {
+        heading: "Which meetings?",
+        answers: [
+          { label: "All meetings" },
+          {
+            label: "Only meetings in a range of dates",
+            fields: ["calendly.since", "calendly.until"],
+          },
+        ],
+      },
+    ],
+    fields: [
+      {
+        kind: "text",
+        latchkey: true,
+        target: "latchkey_settings.account",
+        label: "Calendly account",
+        help: "The name the token is stored under in latchkey. Leave it empty if only one is stored.",
+      },
+      {
+        kind: "date",
+        target: "calendly.since",
+        label: "First day",
+        help: "Only meetings that start in the range are copied. One that leaves it is dropped.",
+      },
+      {
+        kind: "date",
+        target: "calendly.until",
+        label: "Last day",
+        help: "The last day, included. Leave empty for no end.",
+      },
+    ],
+  },
+  {
+    type: "calendar",
     variantKey: "ics",
     label: "Calendar (.ics files)",
     blurb: "A folder of .ics exports, such as Google Takeout's Calendar folder.",
