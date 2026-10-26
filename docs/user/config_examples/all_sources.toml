@@ -1128,8 +1128,9 @@ quota_units_per_minute = 5000         # ceiling on Gmail quota spent a minute (G
 message_budget = 20000                # stop after this many messages and finish the rest next
                                       # run; unset (the default) has no limit
 
-# Start from a Google Takeout of this same account: the `.mbox`, or the
-# Takeout's Mail folder. Its messages are not downloaded again; Gmail
+# Start from a Google Takeout of this same account: the folder holding
+# its .zip or .tgz parts as Google sent them, or unpacked, the `.mbox` or
+# the Takeout's Mail folder. Its messages are not downloaded again; Gmail
 # sends their labels and the mail newer than the Takeout. Only `path`
 # is read here; the account is the one Gmail signs in as. Omit the
 # table to download every message.
@@ -1182,7 +1183,7 @@ whole_threads = true  # also keep the rest of the thread of a message the labels
 
 # Everything but `path` names the account row the mailbox is filed under.
 [steps.params.mbox]
-path = "~/Downloads/email-export/All mail Including Spam and Trash.mbox"  # the file, or a folder holding one
+path = "~/Downloads/email-export/All mail Including Spam and Trash.mbox"  # the file, a folder holding one, or a Takeout's .zip or folder of parts
 account_id = "picard_gmail"           # the account's id; default made from the file's name
 display_name = "Picard's Gmail"       # the account's name; default its account_id
 email_address = "picard@example.com"  # the account's address; unset by default
@@ -1993,7 +1994,9 @@ all_channels = false           # also channels you can see but are not in (ignor
 media = true                   # download attachments into blobs
 dms = true                     # direct messages, 1:1 and group: off unless set
 dm_conversations = ["D024BE7LH", "https://enterprise.slack.com/archives/G0ABC12DE"]
-                               # only these DMs, by id or pasted link; needs `dms = true`
+                               # only these DMs, by id or pasted link; needs `dms = true`.
+                               # Unset, a DM is read only while it is open in Slack's
+                               # sidebar with new messages
 refresh_window_days = 30       # re-walk this many trailing days for edits, reactions
                                # and deletions; default 30, 0 turns it off
 

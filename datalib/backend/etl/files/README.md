@@ -155,3 +155,36 @@ any other path. `Scan::report_problems` makes it a `record:<name>:<path>`
 row beside the walk's `listing:<name>` row, and the row goes the run the
 file opens. A source that deletes only after reading every file still
 holds back while one is unread, since that file may hold anything.
+
+## Skipping a whole read
+
+Most file-backed sources read all of their input or none of it (a
+local source may re-read everything; it keeps no per-file cursor of
+its own). For those, `read_stamp::ReadStamp` is the whole question:
+the scan's files, each with its hash, plus one row hashing the settings
+the read depends on (a label filter, an account name), kept in
+`ingested_files` under the source's scope. `is_current` says whether the
+last complete read saw exactly that; `record` writes it, and is called
+only after a read that finished cleanly: not stopped, no file it could
+not read, no record it could not parse. A scan with a walk error or an
+unreadable file makes no stamp, so it never matches. Leaving a setting
+out of the stamp is the bug to watch for: a widened filter would then
+never read the unchanged file again.
+
+The `email` mbox mode and a Gmail source's Takeout use it. The
+`chatgpt` export keeps an equivalent of its own, and `google_takeout`
+stamps its parts per feed, so turning a feed off does not count as a
+change.
+
+## An export as it was sent
+
+`archive` reads an export left as its `.zip` or `.tgz` parts, without
+unpacking it: `parts_at` says whether a configured path is one (a
+single part, or a folder holding the parts of one export, by Google
+Takeout's part names; parts of two exports are refused), and
+`for_each_entry` hands over each file of a part with its name, size and
+a reader. An entry nobody reads is skipped (a zip) or read past (a
+`.tgz`). `safe_rel` refuses an entry name that would climb out of
+wherever it lands. `google_takeout` unpacks the entries its feeds read
+into a temporary folder; the `email` source streams a Takeout's `.mbox`
+entries straight into its reader.

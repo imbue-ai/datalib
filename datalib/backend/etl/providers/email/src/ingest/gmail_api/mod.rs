@@ -26,6 +26,7 @@ use datalib_etl::download_run::DownloadRun;
 use datalib_etl::progress::{Progress, RunBar};
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_web::http::LatchkeySettings;
 use datalib_etl_web::owed::{self, BatchError, Fetched, Fetcher, Listed, Outcome};
 use datalib_time::IsoOffsetTimestamp;
@@ -76,6 +77,9 @@ pub struct FetchOptions {
     /// before the API is asked, so the API sends their labels and not
     /// the messages again ([`mbox::seed`]).
     pub takeout: Option<PathBuf>,
+    /// The host's file fingerprints, which say whether the Takeout
+    /// changed since its last clean read. `None` reads it every run.
+    pub cache: Option<FingerprintCache>,
     /// When non-empty, only ingest messages carrying at least one of
     /// these labels, each named by its path (`Inbox`, `Work/Projects`) or
     /// by Gmail's id for it (`INBOX`, `Label_7`).
@@ -99,6 +103,7 @@ impl FetchOptions {
             config: EmailGmailApi::default(),
             latchkey: LatchkeySettings::default(),
             takeout: None,
+            cache: None,
             only_labels: Vec::new(),
             whole_threads: true,
             blob_size_limit_bytes: None,
@@ -907,6 +912,7 @@ async fn seed_from_takeout(
             held,
             listed,
             only_labels,
+            cache: opts.cache.as_ref(),
             sealer: opts.sealer.as_ref(),
             progress: opts.progress.clone(),
             stop: opts.control.stop.clone(),
