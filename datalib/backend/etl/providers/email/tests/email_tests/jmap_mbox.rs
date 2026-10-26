@@ -237,6 +237,7 @@ async fn mbox_only_labels_filters_extraction() {
         input_path: fixture_path(),
         account_config: enterprise(),
         only_labels: vec!["Sent".to_string()],
+        whole_threads: false,
         ..mbox::FetchOptions::new(db.clone())
     })
     .await
@@ -267,6 +268,38 @@ async fn mbox_only_labels_filters_extraction() {
             "retained email {} not in Sent mailbox",
             em.id
         );
+    }
+}
+
+/// The same filter keeping whole threads lands the rest of each thread
+/// a `Sent` message is in, whatever its labels, and every thread holds
+/// all the messages the file has for it.
+#[tokio::test(flavor = "multi_thread")]
+async fn mbox_only_labels_keeps_whole_threads() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db_path = tmp.path().join("e.doltlite_db");
+    let db = RawDb::open(&db_path).await.unwrap();
+    mbox::fetch(mbox::FetchOptions {
+        input_path: fixture_path(),
+        account_config: enterprise(),
+        only_labels: vec!["Sent".to_string()],
+        ..mbox::FetchOptions::new(db.clone())
+    })
+    .await
+    .expect("mbox download fetch with label filter");
+    db.commit_all("test").await.unwrap();
+    let threads: Vec<(i64, Option<i64>)> =
+        sqlx::query_as("SELECT email_count, upstream_email_count FROM threads")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+    let emails = db.load_emails().await.unwrap();
+    db.close().await;
+
+    assert!(emails.len() > 2, "only the Sent messages landed");
+    assert!(!threads.is_empty());
+    for (held, upstream) in threads {
+        assert_eq!(Some(held), upstream, "a thread held in part");
     }
 }
 

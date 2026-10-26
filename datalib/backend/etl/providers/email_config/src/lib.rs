@@ -83,6 +83,15 @@ pub struct EmailConfig {
     /// of the render step's `only_render_labels`.
     #[serde(default)]
     pub only_extract_labels: Vec<String>,
+    /// With `only_extract_labels`, also mirror every other message in
+    /// the thread of a message the filter keeps, whatever its labels, so
+    /// a conversation whose earlier messages were archived arrives
+    /// whole. `false` keeps only the messages the filter matches; each
+    /// thread still says how many messages it has upstream, so a partial
+    /// one shows. Without a label filter every message is mirrored
+    /// anyway. Applies to every download mode. Defaults to true.
+    #[serde(default)]
+    pub whole_threads: Option<bool>,
     /// Retired here: `only_render_labels` belongs on the render step's
     /// params now. Still read, so a config that sets it on the ingest step
     /// is refused with that fix rather than ignored.
@@ -167,6 +176,10 @@ impl EmailConfig {
             Some(EmailLiveMode::GmailApi(gmail)) => gmail.validate(),
             _ => Ok(()),
         }
+    }
+
+    pub fn whole_threads(&self) -> bool {
+        self.whole_threads.unwrap_or(true)
     }
 
     /// The Google Takeout a Gmail source starts from, when it names one.

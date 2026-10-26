@@ -1039,6 +1039,7 @@ function = "ingest"
 # Several labels add up. The default, [], mirrors everything.
 [steps.params]
 only_extract_labels = ["Inbox", "Starfleet/Reports"]
+whole_threads = true  # also keep the rest of the thread of a message the labels keep; default true
 
 [steps.params.common]
 blob_size_limit_bytes = "25 MB"  # skip a message (its .eml, attachments and all) larger
@@ -1103,6 +1104,7 @@ function = "ingest"
 # default, [], mirrors everything.
 [steps.params]
 only_extract_labels = ["Inbox", "Starfleet/Reports"]
+whole_threads = true  # also keep the rest of the thread of a message the labels keep; default true
 
 [steps.params.common]
 blob_size_limit_bytes = "25 MB"  # skip a message (its .eml, attachments and all) larger
@@ -1186,6 +1188,7 @@ function = "ingest"
 # in `Work/Projects`. Several labels add up. The default, [], is all.
 [steps.params]
 only_extract_labels = ["Inbox", "Starfleet/Reports"]
+whole_threads = true  # also keep the rest of the thread of a message the labels keep; default true
 
 # Everything but `path` names the account row the mailbox is filed under.
 [steps.params.mbox]

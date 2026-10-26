@@ -244,7 +244,9 @@ async fn an_oversize_eml_is_a_skip_not_a_failure() {
 async fn an_unmatched_label_row_goes_when_the_filter_does() {
     let m = Mirror::new();
     let tape = Tape::new(&m.playback);
-    tape.serve(&Account::new(&[("MB1", "Inbox")], &[("M1", &["MB1"])]));
+    let a = Account::new(&[("MB1", "Inbox")], &[("M1", &["MB1"])]);
+    tape.serve(&a);
+    tape.index(&a);
     run(&m, |o| o.only_mailbox_labels = vec!["Starbase".into()])
         .await
         .expect("first run");

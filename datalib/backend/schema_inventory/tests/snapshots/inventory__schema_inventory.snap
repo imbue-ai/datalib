@@ -432,6 +432,9 @@ emails
     to_json
     cc_json
     has_attachment
+    gmail_message_id
+    gmail_thread_id
+    label_ids
 emails_bookkeeping
     id
     fetched_at_utc
@@ -479,11 +482,15 @@ mailboxes_bookkeeping
     volatile_payload
     tz_offset
     held_version
+thread_members
+    id
+    thread_id
 threads
     id
     payload
     account_id
     email_count
+    upstream_email_count
 threads_bookkeeping
     id
     fetched_at_utc

@@ -356,6 +356,9 @@ impl Label {
 #[derive(Debug, Clone, Default)]
 pub struct MessagePage {
     pub ids: Vec<String>,
+    /// `(message, thread)`, in Gmail's hex, for each id the page names
+    /// with its thread.
+    pub members: Vec<(String, String)>,
     pub next_page_token: Option<String>,
     /// Google's guess at how many messages the whole walk will list,
     /// repeated on every page. The only whole-walk number Gmail offers,
@@ -404,11 +407,17 @@ pub async fn list_messages(
         client,
     )
     .await?;
+    let messages = v.get("messages").and_then(Value::as_array);
     Ok(MessagePage {
-        ids: v
-            .get("messages")
-            .and_then(Value::as_array)
+        ids: messages
             .map(|a| a.iter().filter_map(|m| str_field(m, "id")).collect())
+            .unwrap_or_default(),
+        members: messages
+            .map(|a| {
+                a.iter()
+                    .filter_map(|m| Some((str_field(m, "id")?, str_field(m, "threadId")?)))
+                    .collect()
+            })
             .unwrap_or_default(),
         next_page_token: str_field(&v, "nextPageToken"),
         result_size_estimate: v.get("resultSizeEstimate").and_then(Value::as_u64),
@@ -488,6 +497,9 @@ pub struct HistoryPage {
     /// Message ids whose labels moved (`labelsAdded` / `labelsRemoved`).
     /// The bodies are unchanged, so only the envelope needs re-reading.
     pub relabeled: Vec<String>,
+    /// `(message, thread)`, in Gmail's hex, for every message added or
+    /// relabeled: `history.list` names the thread with the message.
+    pub members: Vec<(String, String)>,
     pub next_page_token: Option<String>,
     pub history_id: Option<String>,
 }
@@ -517,10 +529,16 @@ pub fn parse_history(v: &Value) -> HistoryPage {
         return page;
     };
     for record in records {
-        collect_ids(record, "messagesAdded", &mut page.added);
-        collect_ids(record, "messagesDeleted", &mut page.deleted);
-        collect_ids(record, "labelsAdded", &mut page.relabeled);
-        collect_ids(record, "labelsRemoved", &mut page.relabeled);
+        let members = &mut page.members;
+        collect_ids(record, "messagesAdded", &mut page.added, members);
+        collect_ids(
+            record,
+            "messagesDeleted",
+            &mut page.deleted,
+            &mut Vec::new(),
+        );
+        collect_ids(record, "labelsAdded", &mut page.relabeled, members);
+        collect_ids(record, "labelsRemoved", &mut page.relabeled, members);
     }
     // A message added and then deleted inside one history window must not
     // be fetched: the id is gone and `messages.get` would 404.
@@ -530,17 +548,27 @@ pub fn parse_history(v: &Value) -> HistoryPage {
     dedupe(&mut page.added);
     dedupe(&mut page.deleted);
     dedupe(&mut page.relabeled);
+    page.members.retain(|(id, _)| !page.deleted.contains(id));
     page
 }
 
-fn collect_ids(record: &Value, key: &str, out: &mut Vec<String>) {
+fn collect_ids(
+    record: &Value,
+    key: &str,
+    out: &mut Vec<String>,
+    members: &mut Vec<(String, String)>,
+) {
     let Some(items) = record.get(key).and_then(Value::as_array) else {
         return;
     };
-    for item in items {
-        if let Some(id) = item.get("message").and_then(|m| str_field(m, "id")) {
-            out.push(id);
+    for message in items.iter().filter_map(|item| item.get("message")) {
+        let Some(id) = str_field(message, "id") else {
+            continue;
+        };
+        if let Some(thread) = str_field(message, "threadId") {
+            members.push((id.clone(), thread));
         }
+        out.push(id);
     }
 }
 

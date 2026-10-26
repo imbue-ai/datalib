@@ -15,6 +15,7 @@ function = "ingest"
 # default, [], mirrors everything.
 [steps.params]
 only_extract_labels = ["Inbox", "Starfleet/Reports"]
+whole_threads = true  # also keep the rest of the thread of a message the labels keep; default true
 
 [steps.params.common]
 blob_size_limit_bytes = "25 MB"  # skip a message (its .eml, attachments and all) larger
