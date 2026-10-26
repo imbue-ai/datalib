@@ -97,7 +97,11 @@ pub fn refuse_retired_params(source_type: SourceType, params: &serde_json::Value
 /// Params paths that no longer do anything. Unlike the retired ones they
 /// are dropped rather than refused: the config still loads without them,
 /// and `datalib-dag --check` warns at the line, saying why.
-const INERT_PARAM_PATHS: &[&str] = &["common.always_clear_before_ingest", "export.fetch_photos"];
+const INERT_PARAM_PATHS: &[&str] = &[
+    "common.always_clear_before_ingest",
+    "export.fetch_photos",
+    "gmail.request_concurrency",
+];
 
 /// Removes the [`INERT_PARAM_PATHS`] these params write, returning the
 /// ones it removed.

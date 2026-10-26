@@ -221,12 +221,12 @@ Manage screen's Status column reads directly:
 
 ```sh
 sqlite3 <data_root>/system/supervisor.sqlite \
-  'select step, state, state_detail, turned_off_by, request from steps'
+  'select step, state, state_detail, turned_off_by, requests from steps'
 ```
 
 `state` is `running`, `waiting` (on what: `state_detail`), `off`,
-`blocked`, `failed`, or at rest (`idle`, `stale`, `fresh`); `request` is
-the open request it is being run for. Each request and each step turned
+`blocked`, `failed`, or at rest (`idle`, `stale`, `fresh`); `requests` is
+the open requests it is being run for, a JSON list of their ids. Each request and each step turned
 off records who did it, so the screen shows "turned off by claude" or
 "Stop the sync of Work Slack, started by claude". **Don't turn on or stop
 what a person started without saying so.**
@@ -334,7 +334,7 @@ Pick the surface that fits the question:
 - **Semantic search** — the qmd index:
 
   ```sh
-  rt=$(echo ~/.cache/datalib/runtime/*/)   # the fetched runtime; /opt/datalib/runtime in the image
+  rt=$(echo ${XDG_CACHE_HOME:-~/.cache}/datalib/runtime/*/)   # the fetched runtime; /opt/datalib/runtime in the image
   INDEX_PATH=<data_root>/unified_document_index/qmd_aggregator/qmd/index.sqlite \
       "$rt/node/bin/node" "$rt"/qmd/*/node_modules/@tobilu/qmd/dist/cli/qmd.js query "that thing about the boat"
   ```

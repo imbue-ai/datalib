@@ -179,7 +179,7 @@
   },
   "email": {
     "schema_hash": "ec1776feb33aba025237a48015b09ed6cfc72ea4122300ce4011cebebf2c200e",
-    "schema_version": 4,
+    "schema_version": 5,
     "shared_schema_version": 1,
     "sql": [
       "CREATE TABLE accounts( id TEXT PRIMARY KEY, payload TEXT NULL, name TEXT NULL, email_address TEXT NULL, is_personal INTEGER NULL, is_read_only INTEGER NULL)",

@@ -55,6 +55,11 @@ download of about 100 MB, once per release. You do not need `node`,
 `npm` or `npx` installed. The `latchkey` command does not fetch it
 itself, so step 1 fetches it by hand with `datalib-step pull-runtime`;
 that is also how to fetch it ahead of time for an offline laptop.
+Every install on the machine shares that one directory, and it holds
+one release's runtime at a time: fetching a new release's removes the
+one an older install runs on. To try a release beside another, give it
+a cache of its own by setting `XDG_CACHE_HOME` (it then fetches into
+`$XDG_CACHE_HOME/datalib/runtime`) for every command of that install.
 
 ## 1. Install the tools and make a data root (here it's `~/datalib`)
 

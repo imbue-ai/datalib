@@ -1582,6 +1582,11 @@ const INERT_PARAM_PATHS: &[(&str, &str)] = &[
         "has no effect: linkedin.com shows a profile only to a signed-in visitor now, so \
          connection photos can no longer be fetched; the ones already fetched are kept",
     ),
+    (
+        "gmail.request_concurrency",
+        "has no effect: Gmail messages are fetched one at a time, and the per-minute quota \
+         (`quota_units_per_minute`) is what bounds the rate",
+    ),
 ];
 
 fn inert_path_is_written(params: Option<&toml::Value>, path: &str) -> bool {
@@ -3976,6 +3981,26 @@ command = "datalib-applet unified_document_index"
             "{d:?}"
         );
         assert!(d.message.contains("signed-in"), "{d:?}");
+    }
+
+    /// `gmail.request_concurrency` was never read. A config that sets it
+    /// loads, and the warning says what bounds the rate instead.
+    #[test]
+    fn a_retired_gmail_request_concurrency_only_warns_at_its_line() {
+        let check = check_text(
+            "[[groups]]\nid = \"mail\"\ntype = \"email\"\n\n\
+             [[steps]]\ngroup = \"mail\"\nfunction = \"ingest\"\n\
+             [steps.params.gmail]\nrequest_concurrency = 16\n",
+        );
+        assert!(check.nothing_dropped(), "{:?}", check.diagnostics);
+        let d = &check.diagnostics[0];
+        assert_eq!((d.severity, d.line), (Severity::Warning, Some(9)), "{d:?}");
+        assert!(
+            d.message
+                .starts_with("`gmail.request_concurrency` has no effect"),
+            "{d:?}"
+        );
+        assert!(d.message.contains("quota_units_per_minute"), "{d:?}");
     }
 
     /// A group whose only step was rejected is not empty — somebody filled

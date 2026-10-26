@@ -72,8 +72,9 @@ pub struct FetchOptions {
     /// before the API is asked, so the API sends their labels and not
     /// the messages again ([`mbox::seed`]).
     pub takeout: Option<PathBuf>,
-    /// When non-empty, only ingest messages carrying at least one label
-    /// whose canonical path exactly matches one of these.
+    /// When non-empty, only ingest messages carrying at least one of
+    /// these labels, each named by its path (`Inbox`, `Work/Projects`) or
+    /// by Gmail's id for it (`INBOX`, `Label_7`).
     pub only_labels: Vec<String>,
     pub blob_size_limit_bytes: Option<u64>,
     /// Messages written in one transaction. `None` is [`FLUSH_BATCH`].
@@ -277,8 +278,19 @@ async fn run_sync(db: &RawDb, opts: &FetchOptions, found: &RunProblems) -> Resul
     }
 
     if let Some(path) = &opts.takeout {
-        summary.takeout =
-            Some(seed_from_takeout(db, opts, found, path, &account_id, &filter_label_ids).await?);
+        summary.takeout = Some(
+            seed_from_takeout(
+                db,
+                opts,
+                found,
+                path,
+                &account_id,
+                &filter_label_ids,
+                // A Takeout files mail under the labels' paths.
+                index.label_paths(&filter_label_ids),
+            )
+            .await?,
+        );
     }
 
     let mut run = Run {
@@ -369,7 +381,7 @@ impl Run<'_> {
         }
         self.walk_unlisted_scopes(throttle, filter_label_ids, summary)
             .await?;
-        self.fetch_owed(throttle, summary).await
+        self.fetch_owed(throttle, filter_label_ids, summary).await
     }
 
     /// Replay `history.list` from the stored `historyId`. Its pages are
@@ -544,6 +556,7 @@ impl Run<'_> {
     async fn fetch_owed(
         &mut self,
         throttle: &mut QuotaThrottle,
+        filter_label_ids: &[String],
         summary: &mut FetchSummary,
     ) -> Result<()> {
         if summary.stopped_early() {
@@ -589,7 +602,8 @@ impl Run<'_> {
         } else {
             None
         };
-        if summary.stopped_early() {
+        // Not `stopped_early`: the budget is spent by the fetch below.
+        if summary.interrupted {
             return Ok(());
         }
         self.bar.expect(owed.len() as u64);
@@ -609,7 +623,7 @@ impl Run<'_> {
             // Belt-and-braces client-side label check. A walk is narrowed
             // server-side, but `history.list` names every message in the
             // account.
-            only_labels: self.opts.only_labels.iter().map(String::as_str).collect(),
+            only_label_ids: filter_label_ids.iter().map(String::as_str).collect(),
             now: self.now,
             bar: &self.bar,
             filtered: AtomicUsize::new(0),
@@ -747,6 +761,7 @@ async fn seed_from_takeout(
     path: &std::path::Path,
     account_id: &str,
     filter_label_ids: &[String],
+    only_labels: Vec<String>,
 ) -> Result<mbox::SeedSummary> {
     let pool = db.pool();
     let held: HashSet<String> = sqlx::query_scalar("SELECT id FROM emails")
@@ -783,7 +798,7 @@ async fn seed_from_takeout(
             real_ids,
             held,
             listed,
-            only_labels: opts.only_labels.clone(),
+            only_labels,
             sealer: opts.sealer.as_ref(),
             progress: opts.progress.clone(),
             stop: opts.control.stop.clone(),
@@ -826,7 +841,7 @@ struct MessagesGet<'a> {
     membership: Option<HashMap<String, Vec<String>>>,
     stop: &'a StopFlag,
     cap: Option<u64>,
-    only_labels: BTreeSet<&'a str>,
+    only_label_ids: BTreeSet<&'a str>,
     now: &'a IsoOffsetTimestamp,
     bar: &'a RunBar,
     filtered: AtomicUsize,
@@ -859,11 +874,11 @@ impl MessagesGet<'_> {
     /// the configured labels; else its row, with its bytes when they fit
     /// under the cap and a warning on its `.eml` when not.
     fn keep(&self, ingested: Ingested, held: bool) -> Outcome<Stored> {
-        if !self.only_labels.is_empty()
+        if !self.only_label_ids.is_empty()
             && !ingested
-                .label_paths
+                .label_ids
                 .iter()
-                .any(|p| self.only_labels.contains(p.as_str()))
+                .any(|id| self.only_label_ids.contains(id.as_str()))
         {
             self.filtered.fetch_add(1, Ordering::Relaxed);
             return Outcome::Gone;

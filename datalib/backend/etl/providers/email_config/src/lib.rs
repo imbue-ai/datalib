@@ -76,10 +76,11 @@ pub struct EmailConfig {
     pub outlink_format: Option<EmailOutlink>,
     /// Limit **extraction** to messages under *any* of these mailboxes,
     /// matched on the full label path (POSIX-like, e.g. `Work/Projects`)
-    /// — nested labels must be listed explicitly. Several labels union,
-    /// they do not intersect. Empty = download everything. Applies to
-    /// every download mode. Independent of the render step's
-    /// `only_render_labels`.
+    /// — nested labels must be listed explicitly. With `gmail`, a label
+    /// may also be named by Gmail's id for it (`INBOX`, `SENT`,
+    /// `Label_7`). Several labels union, they do not intersect. Empty =
+    /// download everything. Applies to every download mode. Independent
+    /// of the render step's `only_render_labels`.
     #[serde(default)]
     pub only_extract_labels: Vec<String>,
     /// Retired here: `only_render_labels` belongs on the render step's
@@ -298,14 +299,15 @@ pub struct EmailGmailApi {
     /// Applies to this run only.
     #[serde(default)]
     pub full_resync: bool,
-    /// How many `messages.get` requests to keep in flight. Unset uses the
-    /// built-in default of 8. Raising it does not raise throughput past
-    /// `quota_units_per_minute`; it only hides the wait on each request.
-    #[serde(default)]
-    pub request_concurrency: Option<usize>,
     /// Client-side ceiling on Gmail API quota units spent per minute.
-    /// A starting point: the throttle lowers it on its own whenever
-    /// Google rate-limits a request.
+    /// Google allows one user 6000 a minute and prices a `messages.get`
+    /// that carries the message at 60 (its quota table), so the mail
+    /// arrives at about 100 messages a minute: a 15,000-message mailbox
+    /// takes about two and a half hours the first time, and a Takeout
+    /// (`mbox` beside `gmail`) takes most of that away. Above 6000,
+    /// Google refuses requests and the throttle comes back down; below
+    /// it, the throttle lowers it on its own whenever Google
+    /// rate-limits a request.
     #[serde(default)]
     pub quota_units_per_minute: Option<u32>,
     /// Stop after fetching this many message bodies in one run and exit
@@ -319,9 +321,6 @@ pub struct EmailGmailApi {
 /// Gmail's per-user quota is 6000 units/minute. Default below it so
 /// retries and a little clock skew don't push us into rate limits.
 pub const DEFAULT_QUOTA_UNITS_PER_MINUTE: u32 = 5_000;
-/// Enough in flight to hide per-request latency; the quota throttle, not
-/// this, is what actually bounds throughput.
-pub const DEFAULT_GMAIL_CONCURRENCY: usize = 8;
 
 impl EmailGmailApi {
     pub fn user_id(&self) -> &str {
@@ -331,12 +330,6 @@ impl EmailGmailApi {
     pub fn quota_units_per_minute(&self) -> u32 {
         self.quota_units_per_minute
             .unwrap_or(DEFAULT_QUOTA_UNITS_PER_MINUTE)
-    }
-
-    pub fn request_concurrency(&self) -> usize {
-        self.request_concurrency
-            .unwrap_or(DEFAULT_GMAIL_CONCURRENCY)
-            .max(1)
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
@@ -451,7 +444,6 @@ mod tests {
         assert_eq!(g.user_id(), "me");
         // Google's per-user ceiling is 6000 units/min; stay under it.
         assert!(g.quota_units_per_minute() < 6_000);
-        assert!(g.request_concurrency() >= 1);
     }
 
     /// A zero ceiling would wedge the run forever rather than failing.
@@ -462,16 +454,6 @@ mod tests {
             ..Default::default()
         };
         assert!(g.validate().unwrap_err().to_string().contains("> 0"));
-    }
-
-    /// Concurrency is clamped, not trusted: 0 would deadlock the fan-out.
-    #[test]
-    fn clamps_zero_concurrency_up_to_one() {
-        let g = EmailGmailApi {
-            request_concurrency: Some(0),
-            ..Default::default()
-        };
-        assert_eq!(g.request_concurrency(), 1);
     }
 
     #[test]

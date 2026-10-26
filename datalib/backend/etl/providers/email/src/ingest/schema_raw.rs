@@ -64,7 +64,12 @@ impl AccountRow {
                 .get("name")
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
-            email_address: None,
+            // A JMAP account names no address; Gmail's row says `email`,
+            // the way the render reads it.
+            email_address: ["emailAddress", "email"]
+                .iter()
+                .find_map(|key| payload.get(*key).and_then(|v| v.as_str()))
+                .map(str::to_string),
             is_personal: payload
                 .get("isPersonal")
                 .and_then(|v| v.as_bool())
@@ -442,6 +447,11 @@ pub const LADDER: &[Migration] = &[
                 Ok(())
             })
         },
+    },
+    Migration {
+        version: 5,
+        name: "a Gmail store walks its labels again for what the label filter dropped",
+        apply: |conn| Box::pin(super::listed::migrate_relist_gmail_scopes(conn)),
     },
 ];
 
