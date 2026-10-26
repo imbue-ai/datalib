@@ -50,3 +50,16 @@ inputs = ["calendar/render_markdown"]
 group = "calendar"
 function = "embed"
 inputs = ["calendar/keyword_index"]
+
+# Every occurrence of every event in a window of days around now, one row
+# each, the way Google's `singleEvents=true` lists them, in
+# render_occurrences/occurrences.doltlite_db. The window moves when the
+# step runs, which is when ingest has stored something new.
+[[steps]]
+group = "calendar"
+function = "render_occurrences"
+inputs = ["calendar/ingest"]
+
+[steps.params]
+days_back = 30    # the default
+days_ahead = 400  # the default

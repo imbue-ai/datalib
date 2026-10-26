@@ -27,6 +27,17 @@ pub fn render_markdown_root(data_root: &Path, stanza: &str) -> PathBuf {
 /// writes: `<data_root>/<group>/render_time_series`.
 pub const RENDER_TIME_SERIES_DIR: &str = "render_time_series";
 
+/// The calendar occurrences step's function, and so the directory it
+/// writes: `<data_root>/<group>/render_occurrences`.
+pub const RENDER_OCCURRENCES_DIR: &str = "render_occurrences";
+
+/// A calendar source's occurrences store.
+pub fn render_occurrences_db(data_root: &Path, stanza: &str) -> PathBuf {
+    stanza_dir(data_root, stanza)
+        .join(RENDER_OCCURRENCES_DIR)
+        .join("occurrences.doltlite_db")
+}
+
 /// A source's time-series store.
 pub fn render_time_series_db(data_root: &Path, stanza: &str) -> PathBuf {
     stanza_dir(data_root, stanza)

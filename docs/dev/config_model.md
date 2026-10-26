@@ -98,8 +98,9 @@ same id and definition would read as up to date and write nothing.
 - Step ids are unique and never nested: two steps under one tree would
   be two writers on one doltlite file.
 - The built-in functions are the directory names: `ingest`,
-  `render_markdown`, `render_time_series`, `keyword_index`, `embed`,
-  `grid_index`, `qmd_aggregator`, `embedding_map`, `time_series_index`
+  `render_markdown`, `render_time_series`, `render_occurrences`,
+  `keyword_index`, `embed`, `grid_index`, `qmd_aggregator`,
+  `embedding_map`, `time_series_index`
   (`datalib_step/src/function.rs`, tested against the layout constants
   the render and index crates use). `grid_index`, `qmd_aggregator` and
   `embedding_map` write `unified_document_index/<function>`, and
@@ -111,6 +112,13 @@ same id and definition would read as up to date and write nothing.
   its `render_markdown`, reading its ingest, and the
   `time_series_index` names every such step in its `inputs`.
   `docs/dev/time_series.md` is the design.
+- A `calendar` source may have a `render_occurrences` step beside its
+  `render_markdown`, reading its ingest: every occurrence of every event
+  in a window of days around the run's now, one row each, the way
+  Google's `singleEvents=true` lists them. Its params are `days_back`
+  (30) and `days_ahead` (400). Nothing reads it but whoever asks, so it
+  joins no index. The rows and their columns:
+  `datalib/backend/etl/providers/calendar_render/src/occurrences/README.md`.
 - The qmd steps are the exception to "a step writes its own tree": a
   source's `keyword_index` and `embed`, and `qmd_aggregator`, all write
   the one qmd index file in `unified_document_index/qmd_aggregator`, the
@@ -269,6 +277,8 @@ fingerprint, so changing it re-runs the group.
 - `ingest` or `render_markdown` under a group with no `type`;
 - `render_time_series` under a group with no `type`, or of a type with
   no time series;
+- `render_occurrences` under a group whose type is not `calendar`, or
+  with a param other than `days_back` and `days_ahead`;
 - a `type` it has no provider for — a retired spelling (`*_api`,
   `*_backup`, `claude_export`, `carddav`) names `datalib-migrate-config`;
 - params still carrying `sync`, `common.input_path`, `common.raw_path`,

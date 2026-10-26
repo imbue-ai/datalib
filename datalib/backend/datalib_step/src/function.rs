@@ -30,6 +30,7 @@ pub enum Function {
     EmbeddingMap,
     RenderTimeSeries,
     TimeSeriesIndex,
+    RenderOccurrences,
 }
 
 impl Function {
@@ -102,6 +103,13 @@ impl Function {
                  under the `unified_time_series_index` group; its inputs name each \
                  source's `<group>/render_time_series`."
             }
+            Function::RenderOccurrences => {
+                "List every occurrence of a calendar's events in a window of days around \
+                 now, one row each with Google's instance ids, moved and cancelled dates \
+                 applied, in <group>/render_occurrences/occurrences.doltlite_db. For a \
+                 `calendar` source; params `days_back` (30) and `days_ahead` (400); \
+                 inputs = [\"<group>/ingest\"]."
+            }
         }
     }
 
@@ -139,6 +147,10 @@ mod tests {
         assert_eq!(
             Function::RenderTimeSeries.as_str(),
             datalib_etl::layout::RENDER_TIME_SERIES_DIR
+        );
+        assert_eq!(
+            Function::RenderOccurrences.as_str(),
+            datalib_etl::layout::RENDER_OCCURRENCES_DIR
         );
         assert_eq!(Function::GridIndex.as_str(), datalib_core::layout::GRID_DIR);
         assert_eq!(

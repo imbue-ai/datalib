@@ -146,9 +146,18 @@ fn google_calendar(
     out: &mut Listed,
 ) {
     let mut changed: HashMap<&str, Vec<&LoadedGoogleEvent>> = HashMap::new();
+    let mut titles: HashMap<&str, String> = HashMap::new();
     for e in events {
-        if let Some(series) = google::str_of(&e.event, "recurringEventId") {
-            changed.entry(series).or_default().push(e);
+        match google::str_of(&e.event, "recurringEventId") {
+            Some(series) => changed.entry(series).or_default().push(e),
+            None => {
+                if let (Some(id), Some(title)) = (
+                    google::str_of(&e.event, "id"),
+                    google::text(&e.event, "summary"),
+                ) {
+                    titles.insert(id, title);
+                }
+            }
         }
     }
     for e in events {
@@ -191,7 +200,10 @@ fn google_calendar(
                 occ,
                 zone,
                 google::str_of(v, "status"),
-                google::text(v, "summary"),
+                google::text(v, "summary").or_else(|| {
+                    let series = google::str_of(v, "recurringEventId")?;
+                    titles.get(series).cloned()
+                }),
                 &e.id,
                 payload.to_string(),
             )

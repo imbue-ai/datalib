@@ -89,6 +89,12 @@ fn a_split_google_series_lists_like_single_events() {
             "recurringEventId": "staff01_R20260928T170000",
             "originalStartTime": at("2026-10-19T10:00:00-07:00")
         }),
+        json!({
+            "id": "staff01_20261109T180000Z", "status": "confirmed",
+            "recurringEventId": "staff01_R20260928T170000",
+            "originalStartTime": at("2026-11-09T10:00:00-08:00"),
+            "start": at("2026-11-09T10:00:00-08:00"), "end": at("2026-11-09T11:30:00-08:00")
+        }),
     ]);
     let listed = list(&parsed, &window("2026-09-01", "2026-11-10"));
     assert_eq!(listed.unlisted, []);
@@ -145,6 +151,14 @@ fn a_split_google_series_lists_like_single_events() {
     );
     assert_eq!(payload["updated"], "2026-09-20T12:00:00.000Z");
     assert!(payload.get("recurrence").is_none());
+
+    // Made longer, with no summary of its own: it takes the series'.
+    let longer = row(&listed, "staff01_20261109T180000Z");
+    assert_eq!(
+        longer.end_time.as_deref(),
+        Some("2026-11-09T11:30:00-08:00")
+    );
+    assert_eq!(longer.title.as_deref(), Some("Senior staff"));
 }
 
 /// An all-day series runs on dates; Google names each occurrence by

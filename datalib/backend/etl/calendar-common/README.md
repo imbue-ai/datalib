@@ -18,13 +18,15 @@ so an event reads the same whichever way it arrived.
 | An occurrence that was cancelled (`EXDATE`, a cancelled override) | none — a line on the series page | — |
 | An occurrence the rule produces and nobody touched | none | — |
 
-**Unchanged occurrences are never written out.** A weekly meeting with
+**Unchanged occurrences are never documents.** A weekly meeting with
 no end date has infinitely many, and even a bounded window ("the next
 year") would make the render depend on *today*: the same raw store would
 render differently tomorrow, re-render every series every day, and fail
 the fixture's byte-identical convergence. The rule on the series page is
-the whole truth about them; expanding it is a query-time job (a
-calendar view in the UI), not a stored one.
+the whole truth about them. Listing them is the `render_occurrences`
+step's job, in a store of its own that does depend on today
+(`calendar_render/src/occurrences/README.md`); `occurrences.rs` here
+runs a series forward and `recur.rs` follows its `RRULE`.
 
 **A changed occurrence is a document** because it carries information
 the rule does not: a new time, a new room, a different agenda, different

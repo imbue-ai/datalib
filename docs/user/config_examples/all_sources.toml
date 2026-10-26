@@ -436,6 +436,19 @@ group = "calendar-google"
 function = "embed"
 inputs = ["calendar-google/keyword_index"]
 
+# Every occurrence of every event in a window of days around now, one row
+# each, the way Google's `singleEvents=true` lists them, in
+# render_occurrences/occurrences.doltlite_db. The window moves when the
+# step runs, which is when ingest has stored something new.
+[[steps]]
+group = "calendar-google"
+function = "render_occurrences"
+inputs = ["calendar-google/ingest"]
+
+[steps.params]
+days_back = 30    # the default
+days_ahead = 400  # the default
+
 # --- calendar by `fastmail` ---------------------------------------------
 
 # Fastmail's calendars over CalDAV, signed in through latchkey's
@@ -492,6 +505,19 @@ inputs = ["calendar-fastmail/render_markdown"]
 group = "calendar-fastmail"
 function = "embed"
 inputs = ["calendar-fastmail/keyword_index"]
+
+# Every occurrence of every event in a window of days around now, one row
+# each, the way Google's `singleEvents=true` lists them, in
+# render_occurrences/occurrences.doltlite_db. The window moves when the
+# step runs, which is when ingest has stored something new.
+[[steps]]
+group = "calendar-fastmail"
+function = "render_occurrences"
+inputs = ["calendar-fastmail/ingest"]
+
+[steps.params]
+days_back = 30    # the default
+days_ahead = 400  # the default
 
 # --- calendar by `caldav` -----------------------------------------------
 
@@ -550,6 +576,19 @@ group = "calendar-caldav"
 function = "embed"
 inputs = ["calendar-caldav/keyword_index"]
 
+# Every occurrence of every event in a window of days around now, one row
+# each, the way Google's `singleEvents=true` lists them, in
+# render_occurrences/occurrences.doltlite_db. The window moves when the
+# step runs, which is when ingest has stored something new.
+[[steps]]
+group = "calendar-caldav"
+function = "render_occurrences"
+inputs = ["calendar-caldav/ingest"]
+
+[steps.params]
+days_back = 30    # the default
+days_ahead = 400  # the default
+
 # --- calendar by `ics` --------------------------------------------------
 
 # A folder of `.ics` files on disk (Google Takeout's `Calendar/`, an
@@ -587,6 +626,19 @@ inputs = ["calendar-ics/render_markdown"]
 group = "calendar-ics"
 function = "embed"
 inputs = ["calendar-ics/keyword_index"]
+
+# Every occurrence of every event in a window of days around now, one row
+# each, the way Google's `singleEvents=true` lists them, in
+# render_occurrences/occurrences.doltlite_db. The window moves when the
+# step runs, which is when ingest has stored something new.
+[[steps]]
+group = "calendar-ics"
+function = "render_occurrences"
+inputs = ["calendar-ics/ingest"]
+
+[steps.params]
+days_back = 30    # the default
+days_ahead = 400  # the default
 
 # --- chatgpt by `api` ---------------------------------------------------
 
