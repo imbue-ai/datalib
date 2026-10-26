@@ -39,7 +39,7 @@ use datalib_etl_email_config::EmailGmailApi;
 use super::db::{write_eml_edges_in_tx, RawDb};
 use super::envelope::GmailId;
 use super::labels;
-use super::listed::{self, Named, WHOLE_ACCOUNT};
+use super::listed::{self, Keeps, Named, WHOLE_ACCOUNT};
 use super::mbox;
 use super::schema_raw::{EmailRow, EmlBlobRow, GMAIL_API_VIA};
 use api::{Client, GmailMessage, QuotaThrottle};
@@ -80,6 +80,8 @@ pub struct FetchOptions {
     /// these labels, each named by its path (`Inbox`, `Work/Projects`) or
     /// by Gmail's id for it (`INBOX`, `Label_7`).
     pub only_labels: Vec<String>,
+    /// Keep the rest of the thread of a message `only_labels` keeps.
+    pub whole_threads: bool,
     pub blob_size_limit_bytes: Option<u64>,
     /// Messages written in one transaction. `None` is [`FLUSH_BATCH`].
     pub flush_batch: Option<usize>,
@@ -98,6 +100,7 @@ impl FetchOptions {
             latchkey: LatchkeySettings::default(),
             takeout: None,
             only_labels: Vec::new(),
+            whole_threads: true,
             blob_size_limit_bytes: None,
             flush_batch: None,
             progress: Progress::noop(),
@@ -190,7 +193,7 @@ async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
             "full_resync": opts.config.full_resync,
             "only_extract_labels": opts.only_labels,
             "message_budget": opts.config.message_budget,
-            "whole_threads": opts.config.whole_threads(),
+            "whole_threads": opts.whole_threads,
         }),
     )
     .await?;
@@ -313,7 +316,7 @@ async fn run_sync(db: &RawDb, opts: &FetchOptions, found: &RunProblems) -> Resul
         user_id: &user_id,
         client: &client,
         messages_total: profile.messages_total,
-        whole_threads: opts.config.whole_threads() && !filter_label_ids.is_empty(),
+        whole_threads: opts.whole_threads && !filter_label_ids.is_empty(),
         indexing: !filter_label_ids.is_empty(),
         now: &now,
         // Nothing fixed to seed it with: the bar stays at 0/0 until the
@@ -406,7 +409,14 @@ impl Run<'_> {
             self.fetch_owed(throttle, filter_label_ids, summary).await?;
         }
         if self.whole_threads && !summary.stopped_early() {
-            summary.emails_destroyed += self.drop_unkept_threads(filter_label_ids).await?;
+            summary.emails_destroyed += listed::drop_unkept_threads(
+                self.db.pool(),
+                self.now,
+                self.account_id,
+                Keeps::GmailLabels(filter_label_ids),
+                email_id_of,
+            )
+            .await?;
         }
         if !summary.interrupted {
             summary.threads_recounted = listed::recount_threads(self.db.pool(), self.now).await?;
@@ -426,9 +436,8 @@ impl Run<'_> {
         }
         let pool = self.db.pool();
         let stamp = self.db.load_scope(&state_scope(self.account_id)).await?;
-        let n =
-            listed::list_kept_threads(pool, self.account_id, filter_label_ids, stamp.as_deref())
-                .await?;
+        let keeps = Keeps::GmailLabels(filter_label_ids);
+        let n = listed::list_kept_threads(pool, self.account_id, keeps, stamp.as_deref()).await?;
         summary.listed_from_threads += n as usize;
         Ok(n)
     }
@@ -679,7 +688,8 @@ impl Run<'_> {
         self.bar.doing("fetching");
 
         let kept_threads = if self.whole_threads {
-            threads_kept_by(pool, self.account_id, filter_label_ids).await?
+            listed::kept_threads(pool, self.account_id, Keeps::GmailLabels(filter_label_ids))
+                .await?
         } else {
             HashSet::new()
         };
@@ -741,61 +751,6 @@ impl Run<'_> {
             }
         }
         Ok(())
-    }
-
-    /// Under `whole_threads`, a held thread none of whose messages the
-    /// filter keeps any more goes whole. A thread with a message still
-    /// owed waits for it: its labels may be what keeps the thread.
-    /// Returns how many emails went.
-    async fn drop_unkept_threads(&self, filter_label_ids: &[String]) -> Result<usize> {
-        let pool = self.db.pool();
-        let rows: Vec<(String, String, Option<String>, bool)> = sqlx::query_as(
-            "SELECT e.thread_id, e.gmail_message_id, l.stamp, l.id IS NOT NULL
-             FROM emails e LEFT JOIN listed_messages l ON l.id = e.gmail_message_id
-             WHERE e.account_id = ?1 AND e.thread_id IN (
-                SELECT thread_id FROM emails WHERE account_id = ?1 GROUP BY thread_id
-                HAVING max(label_ids IS NULL OR gmail_message_id IS NULL) = 0
-                   AND max(EXISTS (SELECT 1 FROM json_each(label_ids)
-                                   WHERE value IN (SELECT value FROM json_each(?2)))) = 0)",
-        )
-        .bind(self.account_id)
-        .bind(serde_json::to_string(filter_label_ids)?)
-        .fetch_all(pool)
-        .await
-        .context("select the threads the filter no longer keeps")?;
-        let listing: Vec<Listed> = rows
-            .iter()
-            .filter(|(_, _, _, listed)| *listed)
-            .map(|(_, id, stamp, _)| Listed::new(id.clone(), stamp.clone()))
-            .collect();
-        let waiting: HashSet<String> = owed::owed(pool, listed::LISTED, listing)
-            .await?
-            .into_iter()
-            .map(|l| l.key)
-            .collect();
-        let waiting_threads: HashSet<&str> = rows
-            .iter()
-            .filter(|(_, id, _, _)| waiting.contains(id))
-            .map(|(thread, ..)| thread.as_str())
-            .collect();
-        let gone: Vec<String> = rows
-            .iter()
-            .filter(|(thread, ..)| !waiting_threads.contains(thread.as_str()))
-            .map(|(_, id, ..)| id.clone())
-            .collect();
-        if gone.is_empty() {
-            return Ok(0);
-        }
-        let mut tx = pool.begin().await.context("begin unkept threads tx")?;
-        let n = listed::forget_in_tx(&mut tx, self.now, &gone, email_id_of).await?;
-        tx.commit().await.context("commit unkept threads tx")?;
-        info!(
-            event = "gmail_unkept_threads",
-            account = %self.account_id,
-            emails = n,
-            "dropped the threads no message of which the filter keeps",
-        );
-        Ok(n)
     }
 
     /// Every label of `wanted`'s messages, from one `messages.list` walk
@@ -959,27 +914,6 @@ async fn seed_from_takeout(
         found,
     )
     .await
-}
-
-/// The threads of `account_id` holding an email that carries one of
-/// `filter_label_ids`: under `whole_threads`, every message in them is
-/// kept.
-async fn threads_kept_by(
-    pool: &sqlx::SqlitePool,
-    account_id: &str,
-    filter_label_ids: &[String],
-) -> Result<HashSet<String>> {
-    let rows: Vec<String> = sqlx::query_scalar(
-        "SELECT DISTINCT thread_id FROM emails WHERE account_id = ?
-         AND EXISTS (SELECT 1 FROM json_each(label_ids)
-                     WHERE value IN (SELECT value FROM json_each(?)))",
-    )
-    .bind(account_id)
-    .bind(serde_json::to_string(filter_label_ids)?)
-    .fetch_all(pool)
-    .await
-    .context("select the threads the filter keeps")?;
-    Ok(rows.into_iter().collect())
 }
 
 /// Every email whose `.eml` the store holds, with its hash and its

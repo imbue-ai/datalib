@@ -60,6 +60,9 @@ pub struct FetchOptions {
     /// whose full path exactly matches one of these. Gmail nested labels are
     /// already stored as `Parent/Child`, so this is a direct string compare.
     pub only_labels: Vec<String>,
+    /// Keep every message of a thread (`X-GM-THRID`) a message
+    /// `only_labels` keeps is in.
+    pub whole_threads: bool,
     pub progress: Progress,
     pub control: DownloadControl,
 }
@@ -73,6 +76,7 @@ impl FetchOptions {
             input_path: PathBuf::new(),
             account_config: MboxAccountConfig::default(),
             only_labels: Vec::new(),
+            whole_threads: true,
             progress: Progress::noop(),
             control: DownloadControl::default(),
         }
@@ -143,12 +147,13 @@ async fn read_files(opts: FetchOptions, found: RunProblems) -> Result<FetchSumma
         .collect();
     let unfiltered = label_filter.is_none();
     let mut accumulator = Accumulator::new(account_id.clone(), label_filter, real_ids, false);
+    accumulator.whole_threads = opts.whole_threads && !unfiltered;
     let mut summary = FetchSummary::default();
     let mut batch = PendingBatch::default();
     let mut emails_seen: u64 = 0;
     let mut unparsed_files: Vec<SkippedRecord> = Vec::new();
 
-    for f in &files {
+    for (file_index, f) in files.iter().enumerate() {
         let messages = match iter_mbox_messages(&f.path) {
             Ok(messages) => messages,
             Err(e) => {
@@ -177,6 +182,7 @@ async fn read_files(opts: FetchOptions, found: RunProblems) -> Result<FetchSumma
                 &known_blobs,
                 &mut batch,
                 &mut summary,
+                Place::At(file_index, message.offset),
             ) {
                 Ok(true) => {
                     emails_seen += 1;
@@ -204,6 +210,34 @@ async fn read_files(opts: FetchOptions, found: RunProblems) -> Result<FetchSumma
         if let Some(e) = failed {
             summary.parse_errors += 1;
             found.push(file_unread(f, &e));
+        }
+    }
+    // The rest of each kept thread, read again from where the first pass
+    // met it.
+    for (file_index, offsets) in accumulator.readmitted() {
+        let f = &files[file_index];
+        for offset in offsets {
+            let read = read_message_at(&f.path, offset).and_then(|message| {
+                accumulator.ingest_message(
+                    &message.raw,
+                    message.gmail_id,
+                    &known_blobs,
+                    &mut batch,
+                    &mut summary,
+                    Place::Readmitted,
+                )
+            });
+            match read {
+                Ok(true) if batch.emails.len() >= FLUSH_BATCH => {
+                    flush_batch(&db, &mut batch, &mut summary).await?;
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    summary.parse_errors += 1;
+                    found.push(file_unread(f, &e));
+                    break;
+                }
+            }
         }
     }
     flush_batch(&db, &mut batch, &mut summary).await?;
@@ -364,6 +398,7 @@ pub async fn seed(s: Seed<'_>, found: &RunProblems) -> Result<SeedSummary> {
                 &known_blobs,
                 &mut batch,
                 &mut ignored,
+                Place::Seed,
             ) {
                 Ok(true) if batch.emails.len() >= FLUSH_BATCH => {
                     summary.seeded += flush_seed(s.db, &mut batch, &now).await?;
@@ -593,6 +628,8 @@ struct MboxMessage {
     raw: Vec<u8>,
     /// From the envelope `From ` line, when it is Takeout's.
     gmail_id: Option<GmailId>,
+    /// Where its `From ` line starts in the file.
+    offset: u64,
     /// mbox bytes read since the previous message, for a byte-keyed
     /// progress bar.
     bytes_consumed: u64,
@@ -603,8 +640,25 @@ struct MboxMessage {
 /// escapes unquoted. Streams via `BufReader`, so peak RSS stays bounded.
 fn iter_mbox_messages(path: &Path) -> Result<impl Iterator<Item = Result<MboxMessage>>> {
     let file = File::open(path).with_context(|| format!("open {}", path.display()))?;
-    let mut reader = BufReader::with_capacity(1 << 16, file);
-    let mut pending: Option<(Vec<u8>, Option<GmailId>)> = None;
+    Ok(iter_from(BufReader::with_capacity(1 << 16, file), 0))
+}
+
+/// The message whose `From ` line starts at `offset` in `path`.
+fn read_message_at(path: &Path, offset: u64) -> Result<MboxMessage> {
+    use std::io::{Seek, SeekFrom};
+    let mut file = File::open(path).with_context(|| format!("open {}", path.display()))?;
+    file.seek(SeekFrom::Start(offset))
+        .with_context(|| format!("seek {} to {offset}", path.display()))?;
+    iter_from(BufReader::new(file), offset)
+        .next()
+        .unwrap_or_else(|| Err(anyhow!("no message at byte {offset} any more")))
+}
+
+/// [`iter_mbox_messages`] over `reader`, which is at byte `start` of its
+/// file.
+fn iter_from(mut reader: impl BufRead, start: u64) -> impl Iterator<Item = Result<MboxMessage>> {
+    let mut pending: Option<(Vec<u8>, Option<GmailId>, u64)> = None;
+    let mut read: u64 = start;
     let mut buf: Vec<u8> = Vec::with_capacity(4096);
     let mut started = false;
     // Accumulates every byte read from the file and resets at each yield, so
@@ -619,10 +673,11 @@ fn iter_mbox_messages(path: &Path) -> Result<impl Iterator<Item = Result<MboxMes
                 // remaining bytes counted on this last `read_until`
                 // (which returned 0 — nothing to add).
                 let bytes_consumed = std::mem::take(&mut bytes_since_yield);
-                return pending.take().map(|(raw, gmail_id)| {
+                return pending.take().map(|(raw, gmail_id, offset)| {
                     Ok(MboxMessage {
                         raw,
                         gmail_id,
+                        offset,
                         bytes_consumed,
                     })
                 });
@@ -631,6 +686,8 @@ fn iter_mbox_messages(path: &Path) -> Result<impl Iterator<Item = Result<MboxMes
             Err(e) => return Some(Err(e.into())),
         };
         bytes_since_yield += n as u64;
+        let line_start = read;
+        read += n as u64;
         // Strip trailing newline (and CR if CRLF).
         let mut line: &[u8] = &buf[..n];
         if line.last() == Some(&b'\n') {
@@ -641,13 +698,14 @@ fn iter_mbox_messages(path: &Path) -> Result<impl Iterator<Item = Result<MboxMes
         }
         if is_from_line(line) {
             let prev = pending.take();
-            pending = Some((Vec::with_capacity(4096), takeout_gmail_id(line)));
+            pending = Some((Vec::with_capacity(4096), takeout_gmail_id(line), line_start));
             started = true;
-            if let Some((raw, gmail_id)) = prev {
+            if let Some((raw, gmail_id, offset)) = prev {
                 let bytes_consumed = std::mem::take(&mut bytes_since_yield);
                 return Some(Ok(MboxMessage {
                     raw,
                     gmail_id,
+                    offset,
                     bytes_consumed,
                 }));
             }
@@ -657,20 +715,20 @@ fn iter_mbox_messages(path: &Path) -> Result<impl Iterator<Item = Result<MboxMes
             // Tolerate leading junk before the first `From ` line.
             continue;
         }
-        let (target, _) = pending.as_mut().expect("started => Some");
+        let (target, _, _) = pending.as_mut().expect("started => Some");
         let unescaped = unescape_from_line(line);
         target.extend_from_slice(&unescaped);
         target.push(b'\n');
     });
     // A read error can come back on every read after it, so the stream
     // ends at the first.
-    Ok(it.scan(false, |failed, item| {
+    it.scan(false, |failed, item| {
         if *failed {
             return None;
         }
         *failed = item.is_err();
         Some(item)
-    }))
+    })
 }
 
 fn is_from_line(line: &[u8]) -> bool {
@@ -718,6 +776,27 @@ struct Accumulator {
     /// rather than given a row of its own, since the API refiles every
     /// seeded message.
     only_real_labels: bool,
+    /// Under a label filter: keep every message of a thread one the
+    /// filter keeps is in.
+    whole_threads: bool,
+    /// Threads a message the filter keeps is in.
+    kept_threads: HashSet<String>,
+    /// Thread → email id → where a message the filter left out lies,
+    /// to read again if its thread turns out to be kept.
+    left_out: HashMap<String, BTreeMap<String, (usize, u64)>>,
+    /// Thread → how many messages the files hold for it, filter or not.
+    in_files: HashMap<String, i64>,
+}
+
+/// Where a message the accumulator is handed came from.
+#[derive(Debug, Clone, Copy)]
+enum Place {
+    /// The first pass met it in file `.0` of the run's list, at byte `.1`.
+    At(usize, u64),
+    /// Read again: a message the filter keeps shares its thread.
+    Readmitted,
+    /// A Takeout a Gmail sync starts from.
+    Seed,
 }
 
 struct MailboxEntry {
@@ -749,7 +828,29 @@ impl Accumulator {
             labels_seen: BTreeSet::new(),
             label_filter,
             only_real_labels,
+            whole_threads: false,
+            kept_threads: HashSet::new(),
+            left_out: HashMap::new(),
+            in_files: HashMap::new(),
         }
+    }
+
+    /// Where every message the filter left out of a kept thread lies,
+    /// by file, in file order.
+    fn readmitted(&self) -> BTreeMap<usize, Vec<u64>> {
+        let mut out: BTreeMap<usize, Vec<u64>> = BTreeMap::new();
+        for (thread, messages) in &self.left_out {
+            if !self.kept_threads.contains(thread) {
+                continue;
+            }
+            for (file, offset) in messages.values() {
+                out.entry(*file).or_default().push(*offset);
+            }
+        }
+        for offsets in out.values_mut() {
+            offsets.sort_unstable();
+        }
+        out
     }
 
     /// Parse one message's envelope + MIME structure, stash the row
@@ -764,7 +865,9 @@ impl Accumulator {
         known_blobs: &std::collections::HashMap<String, String>,
         pending: &mut PendingBatch,
         summary: &mut FetchSummary,
+        place: Place,
     ) -> Result<bool> {
+        let readmitted = matches!(place, Place::Readmitted);
         let msg = MessageParser::default()
             .parse(raw)
             .ok_or_else(|| anyhow!("mail-parser returned None"))?;
@@ -777,7 +880,7 @@ impl Accumulator {
         let eml_blake3 = blake3_hex(raw);
         let eml_blob_id = eml_blake3.clone();
         let email_id = envelope::email_id(gmail_id, &msg, &eml_blob_id);
-        if !self.seen_email_ids.insert(email_id.clone()) {
+        if !self.seen_email_ids.insert(email_id.clone()) && !readmitted {
             return Ok(false);
         }
 
@@ -801,7 +904,18 @@ impl Accumulator {
         // on the raw label string (Gmail nested labels are already
         // `Parent/Child` paths), trimmed to mirror the JMAP resolver.
         if let Some(allow) = &self.label_filter {
-            if !labels.iter().any(|l| allow.contains(l.trim())) {
+            if !readmitted {
+                *self.in_files.entry(thread_id.clone()).or_default() += 1;
+            }
+            if labels.iter().any(|l| allow.contains(l.trim())) {
+                self.kept_threads.insert(thread_id.clone());
+            } else if !readmitted {
+                if let (true, Place::At(file, offset)) = (self.whole_threads, place) {
+                    self.left_out
+                        .entry(thread_id.clone())
+                        .or_default()
+                        .insert(email_id.clone(), (file, offset));
+                }
                 return Ok(false);
             }
         }
@@ -1081,22 +1195,26 @@ async fn flush_account_and_lookups(
 
     // Threads — emailIds ordered by (receivedAt, id) for byte-stable
     // payloads across re-ingests.
-    let mut thread_specs: Vec<(String, i64, String)> =
+    let mut thread_specs: Vec<(String, i64, Option<i64>, String)> =
         Vec::with_capacity(accumulator.threads.len());
     for (tid, members) in &accumulator.threads {
         let mut ordered = members.to_vec();
         ordered.sort_by(|a, b| a.received.cmp(&b.received).then_with(|| a.id.cmp(&b.id)));
         let ids: Vec<String> = ordered.into_iter().map(|m| m.id).collect();
         let count = ids.len() as i64;
-        let payload = serde_json::to_string(&serde_json::json!({"id": tid, "emailIds": ids}))
-            .unwrap_or_default();
-        thread_specs.push((tid.clone(), count, payload));
+        let mut payload = serde_json::json!({"id": tid, "emailIds": ids});
+        if let Some(in_files) = accumulator.in_files.get(tid) {
+            payload["upstreamEmailCount"] = serde_json::json!(in_files);
+        }
+        let upstream = accumulator.in_files.get(tid).copied();
+        let payload = serde_json::to_string(&payload).unwrap_or_default();
+        thread_specs.push((tid.clone(), count, upstream, payload));
     }
     bulk_insert_threads(&mut tx, account_id, &thread_specs).await?;
     datalib_etl::bulk::bulk_stamp_first_seen(
         &mut tx,
         "threads",
-        thread_specs.iter().map(|(id, _, _)| id.as_str()),
+        thread_specs.iter().map(|(id, ..)| id.as_str()),
         &now,
     )
     .await?;
@@ -1216,24 +1334,32 @@ async fn bulk_insert_mailboxes(
 async fn bulk_insert_threads(
     tx: &mut Transaction<'_, Sqlite>,
     account_id: &str,
-    specs: &[(String, i64, String)],
+    specs: &[(String, i64, Option<i64>, String)],
 ) -> Result<()> {
     if specs.is_empty() {
         return Ok(());
     }
     for chunk in specs.chunks(SQL_CHUNK) {
-        let mut sql =
-            String::from("INSERT INTO threads (id, account_id, email_count, payload) VALUES ");
-        sql.push_str(&vec!["(?, ?, ?, jsonb(?))"; chunk.len()].join(", "));
+        let mut sql = String::from(
+            "INSERT INTO threads (id, account_id, email_count, upstream_email_count, payload) \
+             VALUES ",
+        );
+        sql.push_str(&vec!["(?, ?, ?, ?, jsonb(?))"; chunk.len()].join(", "));
         sql.push_str(
             " ON CONFLICT(id) DO UPDATE SET
                 account_id = excluded.account_id,
                 email_count = excluded.email_count,
+                upstream_email_count = excluded.upstream_email_count,
                 payload = jsonb(excluded.payload)",
         );
         let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
-        for (id, count, payload) in chunk {
-            q = q.bind(id).bind(account_id).bind(*count).bind(payload);
+        for (id, count, upstream, payload) in chunk {
+            q = q
+                .bind(id)
+                .bind(account_id)
+                .bind(*count)
+                .bind(*upstream)
+                .bind(payload);
         }
         q.execute(&mut **tx).await.context("bulk insert threads")?;
     }
@@ -1484,6 +1610,38 @@ mod tests {
         s
     }
 
+    /// A filter keeps whole threads: the reply under `Sent` brings the
+    /// message it answers, which the read met first and left out, and the
+    /// thread counts both. Kept by label alone, the thread says it has
+    /// two and holds one.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_kept_reply_brings_the_message_it_answers() {
+        for (whole_threads, held) in [(true, 2), (false, 1)] {
+            let (_d, path) = write_tmp_mbox(TWO_MSG_MBOX);
+            let db_dir = tempfile::tempdir().unwrap();
+            let db_path = db_dir.path().join("j.doltlite_db");
+            let s = run_once(&db_path, &path, |db| FetchOptions {
+                only_labels: vec!["Sent".into()],
+                whole_threads,
+                ..FetchOptions::new(db)
+            })
+            .await;
+            assert_eq!(s.emails_upserted, held, "whole_threads={whole_threads}");
+            let db = RawDb::open(&db_path).await.unwrap();
+            let thread: (i64, Option<i64>) =
+                sqlx::query_as("SELECT email_count, upstream_email_count FROM threads")
+                    .fetch_one(db.pool())
+                    .await
+                    .unwrap();
+            db.close().await;
+            assert_eq!(
+                thread,
+                (held as i64, Some(2)),
+                "whole_threads={whole_threads}"
+            );
+        }
+    }
+
     /// An unchanged file whose label filter widened lands the newly
     /// admitted messages: a skip keyed on the file's bytes alone would
     /// never read it again.
@@ -1497,6 +1655,7 @@ mod tests {
         // `Inbox,Sent`; msg one carries `Inbox,Starred,Unread`.)
         let first = run_once(&db_path, &path, |db| FetchOptions {
             only_labels: vec!["Sent".into()],
+            whole_threads: false,
             ..FetchOptions::new(db)
         })
         .await;
@@ -1505,6 +1664,7 @@ mod tests {
         // Widen to include Inbox; the file is byte-identical.
         let second = run_once(&db_path, &path, |db| FetchOptions {
             only_labels: vec!["Sent".into(), "Inbox".into()],
+            whole_threads: false,
             ..FetchOptions::new(db)
         })
         .await;
@@ -1526,6 +1686,7 @@ mod tests {
         run_once(&db_path, &path, FetchOptions::new).await;
         let second = run_once(&db_path, &path, |db| FetchOptions {
             only_labels: vec!["Sent".into()],
+            whole_threads: false,
             ..FetchOptions::new(db)
         })
         .await;
@@ -1682,6 +1843,7 @@ mod tests {
         std::fs::remove_file(dir.path().join("b.mbox")).unwrap();
         let second = run_once(&db_path, dir.path(), |db| FetchOptions {
             only_labels: vec!["Sent".into()],
+            whole_threads: false,
             ..FetchOptions::new(db)
         })
         .await;
@@ -1870,6 +2032,7 @@ mod tests {
         let labels = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         run_once(&db_path, dir.path(), |db| FetchOptions {
             only_labels: labels(&["Sent"]),
+            whole_threads: false,
             ..FetchOptions::new(db)
         })
         .await;
@@ -1882,6 +2045,7 @@ mod tests {
         }
         let widened = |db| FetchOptions {
             only_labels: labels(&["Sent", "Archived"]),
+            whole_threads: false,
             ..FetchOptions::new(db)
         };
         run_once(&db_path, dir.path(), widened).await;
@@ -1972,6 +2136,7 @@ mod tests {
         let db_path = work.path().join("e.doltlite_db");
         run_once(&db_path, &path, |db| FetchOptions {
             only_labels: vec!["Sent".into(), "Starbase".into()],
+            whole_threads: false,
             ..FetchOptions::new(db)
         })
         .await;

@@ -154,40 +154,56 @@ prior state either way.
 A mailbox a full `Mailbox/get` does not list comes off every email and
 its row goes, the same as one `Mailbox/changes` reports destroyed.
 
-## Whole threads (Gmail API)
+## Whole threads
 
-Under a label filter, a Gmail source keeps whole threads by default
-(`whole_threads`, on unless set to false). Archiving takes `INBOX` off
+Under a label filter, every mode keeps whole threads by default
+(`whole_threads`, a sibling of `only_extract_labels`, on unless set to
+false): a message the filter keeps brings every other message of its
+thread, whatever its labels or mailboxes. Archiving takes `INBOX` off
 the start of a conversation, so the filter alone would mirror only its
 newest messages.
 
+The two API modes share one mechanism (`listed.rs`):
+
 - **Which thread each message is in** is `thread_members`: a row per
   message in the account, mirrored or not, with its thread. One walk
-  of the whole account fills it (`messages.list` names each message's
-  `threadId`, 5 quota units a page of 500), recorded as the scope
-  `#threads` in `listed_whole` once it reaches its end, when it also
-  deletes every member it did not name. After that, `history.list`
-  keeps it current: every message it names comes with its thread, and
-  a deleted one leaves. A start over walks it again. `threads.get` is
-  never asked: it costs 40 units a thread.
-- **The rest of a kept thread is listed**, at the cursor: every member
-  of a thread holding an email that carries a configured label, that
-  is not listed already. It is then owed and fetched like any other
-  message, and kept whatever its labels. This happens before the fetch
-  and again after it, when that fetch kept new threads.
+  of the whole account fills it, recorded as the scope `#threads` in
+  `listed_whole` once it reaches its end, when it also deletes every
+  member it did not name. Gmail walks `messages.list`, whose pages name
+  each message's `threadId` (5 quota units a page of 500), and
+  `history.list` keeps it current, naming each message with its
+  thread. JMAP walks `Email/query` and asks `Email/get` for each page's
+  `threadId`s, and every later `Email/get` says the thread of what it
+  fetched; `Email/changes` takes destroyed emails out. A start over
+  walks it again. Gmail's `threads.get` is never asked: it costs 40
+  units a thread.
+- **The rest of a kept thread is listed**, at the current token: every
+  member of a thread holding an email the filter keeps (Gmail: by
+  `emails.label_ids`; JMAP: by its mailboxes) that is not listed
+  already. It is then owed and fetched like any other message, and
+  kept whatever its labels. This happens before the fetch and again
+  after it, when that fetch kept new threads.
 - **A thread the filter no longer keeps goes whole**: after the fetch,
-  a thread none of whose emails carries a configured label loses every
-  email, unless one of them is still owed, since its labels may be
-  what keeps the thread.
-- **Gmail's count of a thread** is `threads.upstream_email_count`: its
-  members, once the walk is whole, and NULL before (and for JMAP, mbox,
-  and a Gmail source with no label filter, whose threads are whole).
-  With `whole_threads = false`, `email_count < upstream_email_count` is
-  a thread held in part. A thread whose count the index changed is
-  written again at the end of the run.
+  a thread none of whose emails the filter keeps loses every email,
+  unless one of them is still owed, since its labels may be what keeps
+  the thread.
+- **The thread's count** is `threads.upstream_email_count`: its
+  members, once the walk is whole, and NULL before (and with no label
+  filter, when every thread is whole). With `whole_threads = false`,
+  `email_count < upstream_email_count` is a thread held in part. A
+  thread whose count the index changed is written again at the end of
+  the run.
+
+**mbox** reads every message every run, so it needs no index. A
+message the filter leaves out is remembered by its thread (`X-GM-THRID`)
+and where it lies in its file; once every file is read, the ones in a
+thread the filter kept are read again from there and written. A
+thread's count is how many messages the files hold for it. An mbox
+with no `X-GM-THRID` has a thread per message, so nothing changes.
 
 Turning `whole_threads` off keeps what it mirrored until those messages
-change, as narrowing `only_extract_labels` does.
+change (JMAP, Gmail) or for good (mbox, which never deletes for the
+filter), as narrowing `only_extract_labels` does.
 
 A store written before these tables existed is carried over by two
 rungs of the migration ladder (`listed::migrate_from_cursors`, then
@@ -260,7 +276,8 @@ with nothing listed to go on with.
   still succeeds, so what it fetched is kept; the next run fetches what
   is still owed. With nothing mirrored at all, the run fails instead.
 - The walk of the whole account that fills `thread_members` is a
-  `listing:messages.list threads` row when it fails. The run goes on,
+  `listing:messages.list threads` row when it fails (JMAP's is a
+  `listing:Email/query threads` row). The run goes on,
   and the next run walks it again; until a walk reaches its end, no
   thread's count changes.
 - A Takeout the source starts from
@@ -324,9 +341,11 @@ mbox mode end to end over `tests/fixtures/mbox/star_trek.mbox`.
 `gmail_takeout_seed.rs` starts a Gmail mirror from a Takeout: no seeded
 message is fetched whole, a message Gmail no longer has goes and stays
 gone, and a relabel asks for labels alone.
-`gmail_whole_threads.rs` keeps the start of a thread whose newest
-message the filter keeps, drops a thread the filter no longer keeps,
-and counts a message the filter drops toward its thread.
+`gmail_whole_threads.rs` and `jmap_whole_threads.rs` keep the start
+of a thread whose newest message the filter keeps, drop a thread the
+filter no longer keeps, and count a message the filter drops toward
+its thread; `jmap_mbox.rs` and `mbox.rs`'s own tests do the same for an
+mbox.
 
 ## The raw store's shape
 
@@ -380,7 +399,7 @@ hash.
 | `accounts`, `mailboxes`, `threads`, `emails` | payload-shaped entity tables, each with a paired `<table>_bookkeeping` sidecar; a mailbox's counts live in the sidecar's `volatile_payload` |
 | `listed_messages` | JMAP and Gmail API modes: a row per message upstream named, with the token that last named it as changed; its `_bookkeeping` sidecar counts the fetches and holds, in `held_version`, the token the email was fetched for |
 | `listed_whole` | JMAP and Gmail API modes: the mailboxes or labels (or `*`) an enumeration has listed to its end, and `#threads` for a whole `thread_members` |
-| `thread_members` | Gmail API mode under a label filter: a row per message in the account, keyed by Gmail's id, naming its `threads` row; see "Whole threads" |
+| `thread_members` | JMAP and Gmail API modes under a label filter: a row per message in the account, keyed by upstream's id, naming its `threads` row; see "Whole threads" |
 | `email_mailboxes`, `email_keywords` | N:M join tables with a synthesized `id` PK, refreshed delete-then-insert per email upsert; no sidecars. Indexed on `email_id`, which that delete and render's load both look up by, and on the other side (`mailbox_id`, `keyword`) |
 | `email_blobs` | CAS edge carrying the `.eml` `blake3`, NULL until the bytes land |
 | `ingested_files` | unused: the shared per-file cursor table, declared but written by no mode |

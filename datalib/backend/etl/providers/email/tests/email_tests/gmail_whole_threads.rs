@@ -187,7 +187,7 @@ impl Harness {
             .run(|db| {
                 let mut opts = FetchOptions::new(db);
                 opts.only_labels = vec!["Inbox".to_string()];
-                opts.config.whole_threads = whole_threads;
+                opts.whole_threads = whole_threads.unwrap_or(true);
                 gmail_api::fetch(opts)
             })
             .await

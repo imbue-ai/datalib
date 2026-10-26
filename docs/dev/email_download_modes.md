@@ -49,6 +49,9 @@ table in `src/ingest/labels.rs` is where they are reconciled.
   way for a JMAP `parentId` tree and a flat Gmail label list, so
   `only_extract_labels` / `only_render_labels` mean the same thing in
   every mode.
+- `whole_threads` (on by default) keeps every message of a thread a
+  message the filter keeps is in, in every mode, and each thread counts
+  what upstream has for it (INGEST.md §"Whole threads").
 - The `↗` outlink for Gmail is built from `Message-ID` (`gmail_outlink`
   in the `email_render` crate), which every mode supplies.
 

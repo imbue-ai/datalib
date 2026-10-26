@@ -20,6 +20,7 @@ mod jmap_progress_countdown;
 mod jmap_render;
 mod jmap_run_problems;
 mod jmap_tape;
+mod jmap_whole_threads;
 mod live;
 mod playback_roundtrip;
 mod progress_countdown;

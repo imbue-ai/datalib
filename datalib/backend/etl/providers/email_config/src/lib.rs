@@ -83,6 +83,15 @@ pub struct EmailConfig {
     /// of the render step's `only_render_labels`.
     #[serde(default)]
     pub only_extract_labels: Vec<String>,
+    /// With `only_extract_labels`, also mirror every other message in
+    /// the thread of a message the filter keeps, whatever its labels, so
+    /// a conversation whose earlier messages were archived arrives
+    /// whole. `false` keeps only the messages the filter matches; each
+    /// thread still says how many messages it has upstream, so a partial
+    /// one shows. Without a label filter every message is mirrored
+    /// anyway. Applies to every download mode. Defaults to true.
+    #[serde(default)]
+    pub whole_threads: Option<bool>,
     /// Retired here: `only_render_labels` belongs on the render step's
     /// params now. Still read, so a config that sets it on the ingest step
     /// is refused with that fix rather than ignored.
@@ -167,6 +176,10 @@ impl EmailConfig {
             Some(EmailLiveMode::GmailApi(gmail)) => gmail.validate(),
             _ => Ok(()),
         }
+    }
+
+    pub fn whole_threads(&self) -> bool {
+        self.whole_threads.unwrap_or(true)
     }
 
     /// The Google Takeout a Gmail source starts from, when it names one.
@@ -316,18 +329,6 @@ pub struct EmailGmailApi {
     /// mailbox needs no budget, the run paces itself.
     #[serde(default)]
     pub message_budget: Option<usize>,
-    /// With `only_extract_labels`, also mirror every other message in
-    /// the thread of a message the filter keeps, whatever its labels, so
-    /// a conversation whose earlier messages were archived arrives
-    /// whole. A thread none of whose messages the filter keeps any more
-    /// goes. Which thread each message is in comes from one walk of the
-    /// whole account (5 quota units per 500 messages) and from
-    /// `history.list`. `false` keeps only the messages the filter
-    /// matches; each thread still says how many messages Gmail has in
-    /// it, so a partial one shows. Without a label filter every message
-    /// is mirrored anyway. Defaults to true.
-    #[serde(default)]
-    pub whole_threads: Option<bool>,
 }
 
 /// Gmail's per-user quota is 6000 units/minute. Default below it so
@@ -337,10 +338,6 @@ pub const DEFAULT_QUOTA_UNITS_PER_MINUTE: u32 = 5_000;
 impl EmailGmailApi {
     pub fn user_id(&self) -> &str {
         self.user_id.as_deref().unwrap_or("me")
-    }
-
-    pub fn whole_threads(&self) -> bool {
-        self.whole_threads.unwrap_or(true)
     }
 
     pub fn quota_units_per_minute(&self) -> u32 {

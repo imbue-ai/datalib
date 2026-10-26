@@ -10,7 +10,7 @@
 //! in the transaction that writes the email; what is owed is the
 //! difference, asked of the store each time and never stored.
 //! `listed_whole` names the scopes (a mailbox, a label, or the account)
-//! an enumeration has listed to its end. `thread_members` (Gmail only)
+//! an enumeration has listed to its end. `thread_members` (JMAP, Gmail)
 //! has a row per message in the account, mirrored or not, naming its
 //! thread: what a walk of the whole account and `history.list` say,
 //! which is how whole threads are listed and how many messages Gmail
@@ -157,32 +157,158 @@ pub async fn close_thread_index(pool: &SqlitePool, named: &BTreeSet<String>) -> 
     Ok(gone.len())
 }
 
+/// What a label filter keeps an email for, in the store's terms.
+#[derive(Debug, Clone, Copy)]
+pub enum Keeps<'a> {
+    /// The Gmail API: it carries one of these label ids
+    /// (`emails.label_ids`). Its listing is keyed by `gmail_message_id`.
+    GmailLabels(&'a [String]),
+    /// JMAP: it is filed under one of these mailboxes. Its listing is
+    /// keyed by its own id.
+    Mailboxes(&'a [String]),
+}
+
+impl Keeps<'_> {
+    fn ids(&self) -> Result<String> {
+        let (Keeps::GmailLabels(ids) | Keeps::Mailboxes(ids)) = self;
+        Ok(serde_json::to_string(ids)?)
+    }
+
+    /// True for an email `e` the filter keeps, the ids bound as `?2`.
+    fn kept_sql(&self) -> &'static str {
+        match self {
+            Keeps::GmailLabels(_) => {
+                "EXISTS (SELECT 1 FROM json_each(e.label_ids)
+                         WHERE value IN (SELECT value FROM json_each(?2)))"
+            }
+            Keeps::Mailboxes(_) => {
+                "EXISTS (SELECT 1 FROM email_mailboxes em WHERE em.email_id = e.id
+                         AND em.mailbox_id IN (SELECT value FROM json_each(?2)))"
+            }
+        }
+    }
+
+    /// Email `e`'s key in `listed_messages`; NULL where it has none.
+    fn listing_key_sql(&self) -> &'static str {
+        match self {
+            Keeps::GmailLabels(_) => "e.gmail_message_id",
+            Keeps::Mailboxes(_) => "e.id",
+        }
+    }
+
+    /// True when what `e` carries is known: a row the Gmail API has not
+    /// answered for yet (a Takeout's) has no `label_ids`.
+    fn known_sql(&self) -> &'static str {
+        match self {
+            Keeps::GmailLabels(_) => "e.label_ids IS NOT NULL AND e.gmail_message_id IS NOT NULL",
+            Keeps::Mailboxes(_) => "1",
+        }
+    }
+}
+
+/// The threads of `account_id` holding an email the filter keeps.
+pub async fn kept_threads(
+    pool: &SqlitePool,
+    account_id: &str,
+    keeps: Keeps<'_>,
+) -> Result<std::collections::HashSet<String>> {
+    // Audited: the clause is one of `Keeps`'s literals; values are bound.
+    let sql = format!(
+        "SELECT DISTINCT e.thread_id FROM emails e WHERE e.account_id = ?1 AND {}",
+        keeps.kept_sql()
+    );
+    let rows: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+        .bind(account_id)
+        .bind(keeps.ids()?)
+        .fetch_all(pool)
+        .await
+        .context("select the threads the filter keeps")?;
+    Ok(rows.into_iter().collect())
+}
+
 /// List, at `stamp`, every member of a thread of `account_id` that holds
-/// an email carrying one of `label_ids`, and is not listed: the rest of
-/// each kept message's thread. Returns how many it listed.
+/// an email the filter keeps, and is not listed: the rest of each kept
+/// message's thread. Returns how many it listed.
 pub async fn list_kept_threads(
     pool: &SqlitePool,
     account_id: &str,
-    label_ids: &[String],
+    keeps: Keeps<'_>,
     stamp: Option<&str>,
 ) -> Result<u64> {
-    let listed = sqlx::query(
+    // Audited: the clause is one of `Keeps`'s literals; values are bound.
+    let sql = format!(
         "INSERT INTO listed_messages (id, stamp)
          SELECT m.id, ?3 FROM thread_members m
-         WHERE m.thread_id IN (
-            SELECT thread_id FROM emails WHERE account_id = ?1
-            AND EXISTS (SELECT 1 FROM json_each(label_ids)
-                        WHERE value IN (SELECT value FROM json_each(?2))))
+         WHERE m.thread_id IN (SELECT e.thread_id FROM emails e WHERE e.account_id = ?1 AND {})
          AND NOT EXISTS (SELECT 1 FROM listed_messages l WHERE l.id = m.id)
          ON CONFLICT(id) DO NOTHING",
-    )
-    .bind(account_id)
-    .bind(serde_json::to_string(label_ids)?)
-    .bind(stamp)
-    .execute(pool)
-    .await
-    .context("list the rest of the kept threads")?;
+        keeps.kept_sql()
+    );
+    let listed = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(account_id)
+        .bind(keeps.ids()?)
+        .bind(stamp)
+        .execute(pool)
+        .await
+        .context("list the rest of the kept threads")?;
     Ok(listed.rows_affected())
+}
+
+/// A held thread of `account_id` none of whose emails the filter keeps
+/// any more goes whole. A thread with an email still owed waits for it:
+/// its labels may be what keeps the thread. Returns how many emails went.
+pub async fn drop_unkept_threads(
+    pool: &SqlitePool,
+    now: &IsoOffsetTimestamp,
+    account_id: &str,
+    keeps: Keeps<'_>,
+    email_id_of: EmailIdOf,
+) -> Result<usize> {
+    let key = keeps.listing_key_sql();
+    // Audited: the clauses are `Keeps`'s literals; values are bound.
+    let sql = format!(
+        "SELECT e.thread_id, {key}, l.stamp, l.id IS NOT NULL
+         FROM emails e LEFT JOIN listed_messages l ON l.id = {key}
+         WHERE e.account_id = ?1 AND e.thread_id IN (
+            SELECT e.thread_id FROM emails e WHERE e.account_id = ?1 GROUP BY e.thread_id
+            HAVING min({known}) = 1 AND max({kept}) = 0)",
+        known = keeps.known_sql(),
+        kept = keeps.kept_sql(),
+    );
+    let rows: Vec<(String, String, Option<String>, bool)> =
+        sqlx::query_as(sqlx::AssertSqlSafe(sql))
+            .bind(account_id)
+            .bind(keeps.ids()?)
+            .fetch_all(pool)
+            .await
+            .context("select the threads the filter no longer keeps")?;
+    let listing: Vec<Listed> = rows
+        .iter()
+        .filter(|(_, _, _, listed)| *listed)
+        .map(|(_, id, stamp, _)| Listed::new(id.clone(), stamp.clone()))
+        .collect();
+    let waiting: BTreeSet<String> = owed::owed(pool, LISTED, listing)
+        .await?
+        .into_iter()
+        .map(|l| l.key)
+        .collect();
+    let waiting_threads: BTreeSet<&str> = rows
+        .iter()
+        .filter(|(_, id, _, _)| waiting.contains(id))
+        .map(|(thread, ..)| thread.as_str())
+        .collect();
+    let gone: Vec<String> = rows
+        .iter()
+        .filter(|(thread, ..)| !waiting_threads.contains(thread.as_str()))
+        .map(|(_, id, ..)| id.clone())
+        .collect();
+    if gone.is_empty() {
+        return Ok(0);
+    }
+    let mut tx = pool.begin().await.context("begin unkept threads tx")?;
+    let n = forget_in_tx(&mut tx, now, &gone, email_id_of).await?;
+    tx.commit().await.context("commit unkept threads tx")?;
+    Ok(n)
 }
 
 /// Rewrite every thread whose count of upstream messages the thread
@@ -206,6 +332,14 @@ pub async fn recount_threads(pool: &SqlitePool, now: &IsoOffsetTimestamp) -> Res
     rebuild_threads_in_tx(&mut tx, now, &stale).await?;
     tx.commit().await.context("commit recount tx")?;
     Ok(stale.len())
+}
+
+/// Whether a walk of the account has filled `thread_members` to its end.
+pub async fn thread_index_is_whole(pool: &SqlitePool) -> Result<bool> {
+    let mut tx = pool.begin().await.context("begin thread index read")?;
+    let whole = thread_index_whole(&mut tx).await?;
+    tx.commit().await.context("end thread index read")?;
+    Ok(whole)
 }
 
 async fn thread_index_whole(tx: &mut Transaction<'_, Sqlite>) -> Result<bool> {

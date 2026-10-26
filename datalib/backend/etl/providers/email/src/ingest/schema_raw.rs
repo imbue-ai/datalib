@@ -170,9 +170,10 @@ impl MailboxRow {
 /// per-account reads scan the table instead.
 ///
 /// `email_count` counts the emails held; `upstream_email_count` is how
-/// many messages Gmail has in the thread, by the thread index
-/// (`listed::THREAD_INDEX`), so a thread held in part shows as fewer.
-/// NULL for JMAP and mbox, and until a Gmail source's index is whole.
+/// many messages upstream has in the thread, by the thread index
+/// (`listed::THREAD_INDEX`) or, for an mbox, the files, so a thread held
+/// in part shows as fewer. NULL with no label filter, and until the
+/// index is whole.
 #[derive(Debug, Clone, RawTable)]
 #[raw_table(table = "threads")]
 pub struct ThreadRow {
