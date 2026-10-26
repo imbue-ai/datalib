@@ -625,6 +625,51 @@ export const CATALOG: CatalogEntry[] = [
       },
     ],
   },
+  {
+    type: "todoist",
+    method: "api",
+    label: "Todoist",
+    blurb: "Copy your Todoist projects, tasks and comments.",
+    keywords: ["todoist", "tasks", "todo", "to-do", "projects"],
+    kind: "api",
+    icon: "todoist",
+    defaultName: "todoist",
+    nameHint: "Personal Todoist",
+    wizard: true,
+    intro:
+      "Each project becomes a document you can read and search: its sections, its tasks " +
+      "and their comments.",
+    credentialService: "todoist",
+    credentialPaste: {
+      help: "The API token is in Todoist under Settings → Integrations → Developer.",
+    },
+    canProbe: true,
+    sections: [
+      {
+        heading: "Completed tasks?",
+        answers: [
+          {
+            label: "Copy them too",
+            help: "The first sync reads back to the day you joined, a quarter at a time.",
+            sets: { "api.completed": true },
+          },
+          { label: "Only open tasks", sets: { "api.completed": false } },
+        ],
+      },
+    ],
+    fields: [
+      { kind: "bool", target: "api.completed", label: "Copy completed tasks", default: true },
+      {
+        kind: "date",
+        target: "api.completed_since",
+        label: "Completed since",
+        requires: "api.completed",
+        help:
+          "How far back the first sync reads completed tasks. Empty reads back to the day " +
+          "the account joined Todoist.",
+      },
+    ],
+  },
 
   // ── the two `email` variants ──────────────────────────────────────
   //

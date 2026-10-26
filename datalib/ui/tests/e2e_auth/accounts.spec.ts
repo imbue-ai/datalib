@@ -143,6 +143,7 @@ test("each browser-login service names accounts the way the wizard is told", asy
     "fastmail",
     "garmin",
     "linear",
+    "todoist",
   ]) {
     expect(await naming(service), service).toBe("service");
     // latchkey refuses a name it does not hold, before any browser opens.
