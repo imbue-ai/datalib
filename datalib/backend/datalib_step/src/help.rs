@@ -16,6 +16,20 @@ use crate::source_type::SourceType;
 
 const AGENT_GUIDE: &str = include_str!("../../../../docs/agent_user.md");
 const AGENT_GUIDE_PATH: &str = "docs/agent_user.md";
+pub const RAW_STORES: &str = include_str!("../../../../docs/user/raw_stores.md");
+const BUILDING_ON_DATALIB: &str = include_str!("../../../../docs/user/building_on_datalib.md");
+
+/// The guides printed whole, by topic word: `(word, text, path in the repo)`.
+/// A release writes each beside the binaries (`scripts/release/stage_tarball.sh`).
+const GUIDES: &[(&str, &str, &str)] = &[
+    ("agent", AGENT_GUIDE, AGENT_GUIDE_PATH),
+    ("raw-stores", RAW_STORES, "docs/user/raw_stores.md"),
+    (
+        "apps",
+        BUILDING_ON_DATALIB,
+        "docs/user/building_on_datalib.md",
+    ),
+];
 const GETTING_YOUR_DATA: &str = include_str!("../../../../docs/user/getting_your_data.md");
 const GETTING_YOUR_DATA_PATH: &str = "docs/user/getting_your_data.md";
 const REPO: &str = "https://github.com/imbue-ai/datalib";
@@ -90,17 +104,21 @@ const SETUP: &[SetupStep] = &[
 
 pub fn page(topic: &[String], commands: &[String], git_ref: &str) -> Result<String, String> {
     let base = format!("{REPO}/blob/{git_ref}");
+    if let [word] = topic {
+        if let Some((_, text, path)) = GUIDES.iter().find(|(w, ..)| w == word) {
+            return Ok(absolute_links(text, path, &base));
+        }
+    }
     let source = topic.first().and_then(|w| SourceType::parse(w));
     match (topic, source) {
         ([], _) => Ok(overview(commands)),
-        ([word], _) if word == "agent" => Ok(absolute_links(AGENT_GUIDE, AGENT_GUIDE_PATH, &base)),
         ([_], Some(t)) => Ok(source_page(t, &base)),
         ([_, method], Some(t)) => Ok(method_page(t, known_method(t, method)?)),
         ([word], None) => match Function::parse(word) {
             Some(f) => Ok(function_page(f)),
             None => Err(format!(
                 "no help on {word:?}. Try `datalib-step help` for the topics: \
-                 `agent`, a source type, a function or a command."
+                 `agent`, `raw-stores`, `apps`, a source type, a function or a command."
             )),
         },
         _ => Err(format!(
@@ -247,6 +265,14 @@ fn overview(commands: &[String]) -> String {
              troubleshooting",
         ),
         (
+            "datalib-step help raw-stores",
+            "what each source's raw store holds, and how to read and follow it",
+        ),
+        (
+            "datalib-step help apps",
+            "building an app on datalib: syncing, freshness, a step of your own",
+        ),
+        (
             "datalib-step help <type>",
             "one source: what it mirrors, how it signs in, its ingest methods",
         ),
@@ -280,7 +306,10 @@ fn overview(commands: &[String]) -> String {
     }
     out.push_str("\nCommands:\n");
     out.push_str(&wrap(&commands.join(", "), 2, 2));
-    out.push_str("\nThe agent guide also ships beside the binaries, as docs/agent_user.md.");
+    out.push_str(
+        "\nThe guides also ship beside the binaries, as docs/agent_user.md, \
+         docs/raw_stores.md and docs/building_on_datalib.md.",
+    );
     out
 }
 
@@ -592,13 +621,19 @@ mod tests {
         );
     }
 
-    /// The guide is read outside the repo: from a tarball, or printed in a
+    /// A guide is read outside the repo: from a tarball, or printed in a
     /// terminal. A relative link there leads nowhere.
     #[test]
-    fn the_agent_guide_has_no_relative_link_left() {
-        let page = page(&["agent".into()], &commands(), "abc123").unwrap();
-        assert!(page.contains("# datalib — agent user guide"));
-        assert_eq!(relative_links(&page), Vec::<String>::new());
+    fn no_guide_has_a_relative_link_left() {
+        for (word, title) in [
+            ("agent", "# datalib — agent user guide"),
+            ("raw-stores", "# Reading the raw stores"),
+            ("apps", "# Building an app on datalib"),
+        ] {
+            let page = page(&[word.into()], &commands(), "abc123").unwrap();
+            assert!(page.starts_with(title), "{word}");
+            assert_eq!(relative_links(&page), Vec::<String>::new(), "{word}");
+        }
     }
 
     #[test]

@@ -98,6 +98,10 @@ check() { # triple, expected runtime triple, expect cuda line (yes/no)
     grep -q 'github.com/imbue-ai/datalib/blob/0123456789abcdef0123456789abcdef01234567/' "$guide" \
         || { echo "ERROR: the guide's links do not name the release's commit" >&2; exit 1; }
     ! grep -q '/blob/main/' "$guide" || { echo "ERROR: the guide links to main, not the release's commit" >&2; exit 1; }
+    grep -q '^# Reading the raw stores' "$dir/docs/raw_stores.md" \
+        || { echo "ERROR: docs/raw_stores.md missing or not the guide" >&2; exit 1; }
+    grep -q '^# Building an app on datalib' "$dir/docs/building_on_datalib.md" \
+        || { echo "ERROR: docs/building_on_datalib.md missing or not the guide" >&2; exit 1; }
 
     local manifest="$dir/runtime.manifest"
     local cpu="runtime-$runtime_triple.tar.gz"

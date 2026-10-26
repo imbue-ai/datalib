@@ -15,7 +15,9 @@ rust_binary(
     # `datalib-step help` prints these (src/help.rs).
     compile_data = [
         "//docs:agent_user.md",
+        "//docs/user:building_on_datalib.md",
         "//docs/user:getting_your_data.md",
+        "//docs/user:raw_stores.md",
     ],
     crate_name = "datalib_step",
     crate_root = "src/main.rs",
