@@ -215,6 +215,27 @@ impl Tape {
         }
     }
 
+    /// The walk of the whole account a label filter keeps the thread
+    /// index with: the unfiltered `Email/query` pages, and an `Email/get`
+    /// of each page's `threadId`s.
+    pub fn index(&self, a: &Account) {
+        self.query(a, &[]);
+        let ids = a.ids();
+        for page in ids.chunks(self.query_page) {
+            for chunk in page.chunks(250) {
+                let list: Vec<Value> = chunk
+                    .iter()
+                    .map(|id| json!({ "id": id, "threadId": a.emails[id].thread }))
+                    .collect();
+                self.call(
+                    "Email/get",
+                    json!({ "accountId": ACCOUNT, "ids": chunk, "properties": ["threadId"] }),
+                    json!({ "state": a.email_state, "list": list, "notFound": [] }),
+                );
+            }
+        }
+    }
+
     /// One `Email/get` of exactly `ids`: the ones `a` has in `list`, the
     /// rest in `notFound`.
     pub fn gets(&self, a: &Account, ids: &[&str]) {

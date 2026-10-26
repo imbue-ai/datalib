@@ -96,24 +96,25 @@ async fn a_newly_admitted_mailbox_is_enumerated_until_an_enumeration_finishes() 
         &[("M1", &["MB1"]), ("M2", &["MB2"])],
     );
     tape.serve(&a);
+    tape.index(&a);
     tape.query(&a, &["MB1"]);
     tape.gets(&a, &["M1"]);
     tape.gets(&a, &["M2"]);
     run(&m, &["Inbox"]).await.expect("first run");
     assert_eq!(emails(&m).await, ["M1"]);
-    assert_eq!(listed_whole(&m).await, ["MB1"]);
+    assert_eq!(listed_whole(&m).await, ["#threads", "MB1"]);
 
     tape.refuse("Email/query", query_args(0, &["MB2"]), 400);
     run(&m, &["Inbox", "Work"])
         .await
         .expect("an enumeration that fails does not fail the run");
     assert_eq!(problems(&m).await, ["listing:Email/query"]);
-    assert_eq!(listed_whole(&m).await, ["MB1"]);
+    assert_eq!(listed_whole(&m).await, ["#threads", "MB1"]);
 
     tape.query(&a, &["MB2"]);
     run(&m, &["Inbox", "Work"]).await.expect("third run");
     assert_eq!(emails(&m).await, ["M1", "M2"]);
-    assert_eq!(listed_whole(&m).await, ["MB1", "MB2"]);
+    assert_eq!(listed_whole(&m).await, ["#threads", "MB1", "MB2"]);
     assert!(problems(&m).await.is_empty(), "{:?}", problems(&m).await);
 }
 

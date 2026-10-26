@@ -181,6 +181,20 @@ pub fn gmail_get_url(id: &str) -> String {
     format!("{GMAIL}/messages/{id}?format=RAW")
 }
 
+/// The walk of every message in the account, as one page: each of
+/// `messages` (`messages.get` answers) with its thread.
+pub fn put_gmail_all_mail(playback: &Path, messages: &[Value]) {
+    let listed: Vec<Value> = messages
+        .iter()
+        .map(|m| json!({ "id": m["id"], "threadId": m["threadId"] }))
+        .collect();
+    put_gmail(
+        playback,
+        &gmail_list_url(&[]),
+        &json!({ "messages": listed }),
+    );
+}
+
 /// One `messages.get` answer: a plain message under `label_ids`, its own
 /// thread, its `.eml` in Gmail's `raw` encoding.
 pub fn gmail_message(id: &str, label_ids: &[&str], subject: &str) -> Value {
