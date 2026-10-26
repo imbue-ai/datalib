@@ -1,8 +1,8 @@
 # ChatGPT: download
 
 The `chatgpt` source mirrors a chatgpt.com account's conversations into
-a raw doltlite store. It has two ingest methods, and an ingest step names
-exactly one:
+a raw doltlite store. It has two ingest methods; an ingest step names
+one, or both (§"An export and the API together"):
 
 | table                     | reads                                         | signs in |
 |---------------------------|-----------------------------------------------|----------|
@@ -265,22 +265,53 @@ them at, and makes no request, so no rate limit applies:
 
 Every run reads the whole export again; only what changed is written.
 
-### Seeding from an export, then keeping it fresh with the API
+A source that only ever reads exports takes a newer one by pointing
+`path` at it. Never turn an `api` step into an `export`-only one: the
+export's prune deletes every conversation made after it was taken. Put
+the export beside `api` instead (next).
 
-The way past the API's rate limit on a large account: ingest an export
-first, then swap the ingest step's `export` table for `api`. Both write
-the same rows at the same versions, so the first API run owes only the
-conversations that moved since the export was taken, and no attachment
-the export held (`tests/chatgpt_tests/export_then_api.rs`). Identity
-survives the swap: render mints a conversation's uuid from its
-ChatGPT id under the group id, and neither changes.
+### An export and the API together
 
-The swap is one-way. Read an export into a store the API has since
-filled, and its prune deletes every conversation made after the
-export was taken; the step refuses a config naming both tables for
-that reason. A source that only ever reads exports takes a newer one
-by pointing `path` at it; to read one into a store the API has been
-filling, start a new source from it.
+The way past the API's rate limit on a large account: an ingest step
+that names both tables runs the API download, with the export as a
+local copy it asks first.
+
+```toml
+[steps.params.api]
+[steps.params.export]
+path = "~/Downloads/chatgpt-export.zip"
+```
+
+- **The listing is the API's**, walked as in §"One run". The export
+  is read whole before anything is written, so a malformed one fails
+  the run with the store untouched, and an export of another account
+  than `/me` names fails it too.
+- **A conversation owed** that the export holds at the version listed
+  (its `update_time` in whole seconds, as above) is stored from the
+  export, a hundred to a transaction and costing no request; the rest
+  are fetched live. `limit` counts only the live ones. The summary's
+  `from_export` and `fetched` say how many went each way.
+- **An attachment owed** takes its bytes from the export's
+  `file_<id>.dat` before asking `/backend-api/files/{id}/download`
+  (`blobs_from_export`). A file the export lacks is fetched as usual.
+- **Deletions come only from a complete listing.** The export prunes
+  nothing and adds nothing the listing does not name, so a
+  conversation deleted on chatgpt.com goes and stays gone though the
+  export still has it. With `since` set, only what the listing reaches
+  is owed, so the export seeds only conversations updated after
+  `since`; leave it unset to seed the whole account.
+- **`conv_uuids`** fetches its conversations live every run, as
+  without an export; their files still come from it.
+
+Both ways write the same rows at the same versions, so the first run
+fetches only the conversations that moved since the export was taken,
+and no file the export holds (`tests/chatgpt_tests/export_then_api.rs`).
+A conversation stored from the export lacks its tool steps until it
+next changes and the API fetches it whole. Identity is the same either
+way: render mints a conversation's uuid from its ChatGPT id under the
+group id. A store already filled by an `export`-only step takes an
+`api` table beside it the same way, and from then on only the listing
+prunes.
 
 ## Auth + Cloudflare
 
@@ -435,8 +466,10 @@ data export in the real one's shape (`export_manifest.json`, two
 `conversations-NNN.json` parts, `file_<id>.dat`, `library_files.json`,
 tool and system messages left out), the Bazel `tng_export_fixture`.
 `export_then_api` zips it and reads the zip: an API run over the
-store it seeds fetches only what moved, and its pages hold every
-message the API's do but the tool steps. The export reader's own cases
+store it seeds, or one run with the export beside it, fetches only
+what moved and no file the export holds; a conversation the listing
+drops stays gone though the export has it; and the export's pages hold
+every message the API's do but the tool steps. The export reader's own cases
 (a shrinking export, a file it lacks, another account's export, an
 unchanged one read again) are unit tests in `src/ingest/export.rs`, and
 the zip and folder layouts are in `src/ingest/export_archive.rs`.
