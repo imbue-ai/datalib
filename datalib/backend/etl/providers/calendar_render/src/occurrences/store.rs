@@ -64,6 +64,9 @@ const COLUMNS: &[&str] = &[
     "payload",
 ];
 
+/// One row's placeholders, one per column.
+const ONE_ROW: &str = "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+
 /// Rows per `INSERT`, well under SQLite's 32,766 bound values.
 const CHUNK: usize = 1000;
 
@@ -114,12 +117,11 @@ pub async fn replace(pool: &SqlitePool, listed: &Listed, window: &Window) -> Res
             .await
             .with_context(|| format!("empty {table}"))?;
     }
-    let one_row = format!("({})", vec!["?"; COLUMNS.len()].join(", "));
     for chunk in listed.rows.chunks(CHUNK) {
         let sql = format!(
             "INSERT INTO occurrences ({}) VALUES {}",
             COLUMNS.join(", "),
-            vec![one_row.as_str(); chunk.len()].join(", ")
+            vec![ONE_ROW; chunk.len()].join(", ")
         );
         // Safe: the columns are constants, the placeholders are sized
         // from the chunk, and every value is bound.
@@ -167,4 +169,12 @@ fn bind_row<'q>(q: Query<'q>, r: &'q OccurrenceRow) -> Query<'q> {
         .bind(r.title.as_deref())
         .bind(&r.event_row)
         .bind(&r.payload)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_rows_placeholders_are_one_per_column() {
+        assert_eq!(super::ONE_ROW.matches('?').count(), super::COLUMNS.len());
+    }
 }
