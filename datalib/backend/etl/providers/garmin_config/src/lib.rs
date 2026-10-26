@@ -57,13 +57,15 @@ pub struct GarminApi {
     #[serde(default)]
     #[schemars(skip)]
     pub token_dir: Option<String>,
-    /// Earliest calendar day to mirror, `YYYY-MM-DD`. Default: a year
-    /// before the first run. Move it earlier to backfill.
+    /// Earliest calendar day to mirror: a day (`YYYY-MM-DD`), an RFC
+    /// 3339 instant (its own date), or an offset from the run's day
+    /// (`-90d`). Default: a year before the first run. Move it earlier
+    /// to backfill; a day an offset slides past stays mirrored.
     #[serde(default)]
     pub since: Option<String>,
-    /// Last calendar day to mirror, `YYYY-MM-DD`. Default: today. A day
-    /// in the past fixes the window, so a mirror of a finished stretch
-    /// stops growing.
+    /// Last calendar day to mirror, in the same forms as `since`.
+    /// Default: today, and no later day is walked. A day in the past
+    /// fixes the window, so a mirror of a finished stretch stops growing.
     #[serde(default)]
     pub until: Option<String>,
     /// Days after a day ends that every run fetches it again. Default 7.
@@ -129,19 +131,8 @@ impl GarminConfig {
                  in from the Add a source dialog), then delete the line"
             );
         }
-        if let Some(since) = &api.since {
-            if !is_yyyy_mm_dd(since) {
-                anyhow::bail!("garmin: api.since {since:?} is not YYYY-MM-DD");
-            }
-        }
-        if let Some(until) = &api.until {
-            if !is_yyyy_mm_dd(until) {
-                anyhow::bail!("garmin: api.until {until:?} is not YYYY-MM-DD");
-            }
-            if api.since.as_ref().is_some_and(|since| since > until) {
-                anyhow::bail!("garmin: api.until {until:?} is before api.since");
-            }
-        }
+        datalib_time::TimeWindow::check("api", api.since.as_deref(), api.until.as_deref())
+            .map_err(|e| anyhow::anyhow!("garmin: {e}"))?;
         if api.refresh_days.is_some_and(|d| d < 0) {
             anyhow::bail!("garmin: api.refresh_days must not be negative");
         }
@@ -183,16 +174,6 @@ impl GarminApi {
             None => DAILY_METRICS.to_vec(),
         }
     }
-}
-
-fn is_yyyy_mm_dd(s: &str) -> bool {
-    let b = s.as_bytes();
-    b.len() == 10
-        && b[4] == b'-'
-        && b[7] == b'-'
-        && b[..4].iter().all(u8::is_ascii_digit)
-        && b[5..7].iter().all(u8::is_ascii_digit)
-        && b[8..10].iter().all(u8::is_ascii_digit)
 }
 
 /// Params for the render step: no provider-specific knobs.
@@ -240,6 +221,8 @@ mod tests {
         assert!(window("2025-08-01", "2025-08-01").is_ok());
         assert!(window("2025-08-01", "2025-07-31").is_err());
         assert!(window("2025-08-01", "31 Aug").is_err());
+        assert!(window("-90d", "+0d").is_ok());
+        assert!(window("-1d", "-2d").is_err());
     }
 
     #[test]

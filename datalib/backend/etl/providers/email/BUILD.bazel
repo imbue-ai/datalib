@@ -106,6 +106,7 @@ rust_test(
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/web:datalib_etl_web",
         "//datalib/backend/obs:datalib_obs",
+        "//datalib/backend/time:datalib_time",
         ":datalib_etl_email",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde_json",

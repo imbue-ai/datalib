@@ -663,6 +663,13 @@ export const CATALOG: CatalogEntry[] = [
         ],
       },
       {
+        heading: "How far back?",
+        answers: [
+          { label: "Everything" },
+          { label: "Only mail since a date I choose", fields: ["gmail.since"] },
+        ],
+      },
+      {
         heading: "Start from a Takeout?",
         answers: [
           { label: "No, download every message" },
@@ -690,6 +697,14 @@ export const CATALOG: CatalogEntry[] = [
         help:
           "A nested label is named in full (Work/Projects), and choosing a parent does not " +
           "include its children. A label added later brings in its mail on the next sync.",
+      },
+      {
+        kind: "date",
+        target: "gmail.since",
+        label: "Start date",
+        help:
+          "The first sync lists only mail from this day on, so it takes minutes rather than " +
+          "hours. Choosing an earlier date later brings in the older mail on the next sync.",
       },
       {
         kind: "path",

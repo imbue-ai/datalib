@@ -76,6 +76,8 @@ pub struct FetchOptions {
     /// these labels, each named by its path (`Inbox`, `Work/Projects`) or
     /// by Gmail's id for it (`INBOX`, `Label_7`).
     pub only_labels: Vec<String>,
+    /// The window's start on this run: a walk lists only mail after it.
+    pub since: Option<IsoOffsetTimestamp>,
     pub blob_size_limit_bytes: Option<u64>,
     /// Messages written in one transaction. `None` is [`FLUSH_BATCH`].
     pub flush_batch: Option<usize>,
@@ -94,6 +96,7 @@ impl FetchOptions {
             latchkey: LatchkeySettings::default(),
             takeout: None,
             only_labels: Vec::new(),
+            since: None,
             blob_size_limit_bytes: None,
             flush_batch: None,
             progress: Progress::noop(),
@@ -156,6 +159,25 @@ fn state_scope(account_id: &str) -> String {
     format!("gmail:{account_id}:historyId")
 }
 
+/// Where a scope's last whole walk started, when it had a `since`. No
+/// row is a walk from the account's first message.
+fn listed_since_scope(account_id: &str, scope: &str) -> String {
+    format!("gmail:{account_id}:listed_since:{scope}")
+}
+
+/// Whether a scope walked whole from `listed_from` (`None`: from the
+/// first message) leaves part of the window that starts at `since`
+/// (`None`: everything) unlisted, so widening it is a walk.
+fn window_widened(listed_from: Option<&str>, since: Option<&IsoOffsetTimestamp>) -> bool {
+    match (listed_from, since) {
+        (None, _) => false,
+        (Some(_), None) => true,
+        (Some(from), Some(since)) => {
+            datalib_time::parse_strict(from).map_or(true, |from| since.inner() < from.inner())
+        }
+    }
+}
+
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
     let sealer = opts.sealer.clone();
@@ -180,6 +202,7 @@ async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
             "account": opts.latchkey.account(),
             "full_resync": opts.config.full_resync,
             "only_extract_labels": opts.only_labels,
+            "since": opts.since,
             "message_budget": opts.config.message_budget,
         }),
     )
@@ -447,18 +470,20 @@ impl Run<'_> {
 
     /// Walk `messages.list` over every configured label (or the account)
     /// no walk has listed whole: a first run, a start over, a label the
-    /// filter newly admits. Each page lists its ids; a message already
-    /// listed is left as it is. A walk starts again every run until it
-    /// reaches its end, and only then is its scope recorded as listed
-    /// whole and, when it covered the whole account, what it did not
-    /// name deleted.
+    /// filter newly admits, a scope an earlier `since` now reaches back
+    /// past. With `since`, a walk lists only mail after it. Each page
+    /// lists its ids; a message already listed is left as it is. A walk
+    /// starts again every run until it reaches its end, and only then is
+    /// its scope recorded as listed whole and, when it covered the whole
+    /// account with no window, what it did not name deleted.
     async fn walk_unlisted_scopes(
         &mut self,
         throttle: &mut QuotaThrottle,
         filter_label_ids: &[String],
         summary: &mut FetchSummary,
     ) -> Result<()> {
-        let scopes = listed::scopes_owed(self.db.pool(), &admitted(filter_label_ids)).await?;
+        let scopes = self.scopes_to_walk(filter_label_ids).await?;
+        let after = self.opts.since.as_ref().map(|t| t.inner().timestamp());
         let stamp = self.db.load_scope(&state_scope(self.account_id)).await?;
         for scope in scopes {
             if summary.stopped_early() {
@@ -483,6 +508,7 @@ impl Run<'_> {
                     token.as_deref(),
                     LIST_PAGE_SIZE,
                     label_id,
+                    after,
                 )
                 .await
                 {
@@ -523,15 +549,21 @@ impl Run<'_> {
             if !reached_the_end {
                 continue;
             }
+            // Recorded before the scope is listed whole, so a run cut off
+            // between the two walks it again rather than reading it as
+            // listed from the first message.
+            self.record_listed_since(&scope).await?;
             // A walk of the whole account also says which seeded messages
             // Gmail no longer has: they were never listed, so only their
-            // rows can name them.
+            // rows can name them. A window's walk says nothing of the mail
+            // before it, which the mirror keeps.
+            let whole = label_id.is_none() && after.is_none();
             summary.emails_destroyed += listed::close_enumeration(
                 self.db.pool(),
                 self.now,
                 std::slice::from_ref(&scope),
-                label_id.is_none().then_some(&named),
-                label_id.is_none().then_some(self.account_id),
+                whole.then_some(&named),
+                whole.then_some(self.account_id),
                 email_id_of,
             )
             .await?;
@@ -545,6 +577,41 @@ impl Run<'_> {
             summary.walked.push(label);
         }
         Ok(())
+    }
+
+    /// The admitted scopes no walk has listed whole, and those listed
+    /// whole from a later start than `since` now asks for.
+    async fn scopes_to_walk(&self, filter_label_ids: &[String]) -> Result<Vec<String>> {
+        let admitted = admitted(filter_label_ids);
+        let unlisted = listed::scopes_owed(self.db.pool(), &admitted).await?;
+        let mut scopes = Vec::new();
+        for scope in admitted {
+            let listed_from = self
+                .db
+                .load_scope(&listed_since_scope(self.account_id, &scope))
+                .await?;
+            if unlisted.contains(&scope)
+                || window_widened(listed_from.as_deref(), self.opts.since.as_ref())
+            {
+                scopes.push(scope);
+            }
+        }
+        Ok(scopes)
+    }
+
+    async fn record_listed_since(&self, scope: &str) -> Result<()> {
+        let key = listed_since_scope(self.account_id, scope);
+        match &self.opts.since {
+            Some(since) => self.db.save_scope(&key, &since.to_rfc3339()).await,
+            None => {
+                sqlx::query("DELETE FROM sync_scope_state WHERE scope = ?")
+                    .bind(&key)
+                    .execute(self.db.pool())
+                    .await
+                    .with_context(|| format!("forget {key}"))?;
+                Ok(())
+            }
+        }
     }
 
     /// Fetch, with `messages.get`, every listed message the store owes,
@@ -693,6 +760,7 @@ impl Run<'_> {
                     token.as_deref(),
                     LIST_PAGE_SIZE,
                     Some(label_id),
+                    None,
                 )
                 .await
                 {
@@ -1163,6 +1231,29 @@ mod tests {
         assert_ne!(state_scope("a@x"), state_scope("b@x"));
         // Must not collide with the JMAP path's keys in the same table.
         assert!(state_scope("a@x").starts_with("gmail:"));
+    }
+
+    /// Widening is a walk exactly when the new start is earlier than
+    /// where the last whole walk began; a store from before `since`
+    /// existed has no record, which reads as listed from the first
+    /// message, so an upgrade walks nothing.
+    #[test]
+    fn a_scope_is_walked_again_when_the_window_reaches_back_past_it() {
+        let at = |s: &str| datalib_time::parse_strict(s).unwrap();
+        let sept = "2026-09-01T00:00:00+00:00";
+        assert!(!window_widened(None, None));
+        assert!(!window_widened(None, Some(&at(sept))));
+        assert!(window_widened(Some(sept), None));
+        assert!(window_widened(
+            Some(sept),
+            Some(&at("2026-08-01T00:00:00Z"))
+        ));
+        assert!(!window_widened(Some(sept), Some(&at(sept))));
+        assert!(!window_widened(
+            Some(sept),
+            Some(&at("2026-10-01T00:00:00Z"))
+        ));
+        assert!(window_widened(Some("garbled"), Some(&at(sept))));
     }
 
     /// A 404 has to be recognized through anyhow's context chain — it

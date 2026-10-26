@@ -32,7 +32,8 @@ account = "picard@example.com calendar"
 calendars = ["Bridge Duty", "Away Missions"]  # names as the service shows them, or ids;
                                                # omit for every calendar. One added later
                                                # downloads whole on the next run
-since = "2024-01-01"  # first day mirrored, YYYY-MM-DD; omit for all of history
+since = "2024-01-01"  # first day mirrored: a day, or days from the sync's own ("-2d");
+                      # omit for all of history
 until = "2026-12-31"  # last day mirrored, included; omit for no end. With either set,
                       # the calendar is listed whole every run rather than resumed
 

@@ -60,6 +60,10 @@ impl ClaudeConfig {
         self.latchkey_settings
             .validate()
             .map_err(anyhow::Error::msg)?;
+        if let Some(api) = &self.api {
+            datalib_time::TimeWindow::check("api", api.since.as_deref(), None)
+                .map_err(anyhow::Error::msg)?;
+        }
         if self.api.is_some() && self.export.is_some() {
             anyhow::bail!(
                 "claude sets both `api` and `export` — pick one. To seed a store from an \
@@ -74,10 +78,11 @@ impl ClaudeConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ClaudeApiSync {
-    /// Only sync conversations whose `updated_at` is at or after this
-    /// instant (RFC 3339 or `YYYY-MM-DD`, assumed UTC). Older
-    /// conversations are never detail-fetched; moving the date further
-    /// back later backfills them on the next run. Unset → sync
+    /// Only sync conversations whose `updated_at` is at or after this:
+    /// a day (`YYYY-MM-DD`, midnight UTC), an RFC 3339 instant, or an
+    /// offset from the run's start (`-30d`). Older conversations are
+    /// never detail-fetched, and one already mirrored stays; moving the
+    /// start further back later backfills on the next run. Unset → sync
     /// everything.
     #[serde(default)]
     pub since: Option<String>,
@@ -212,5 +217,22 @@ mod tests {
         assert!(c.project_uuids.is_empty());
         let c: ClaudeApiSync = toml::from_str(r#"project_uuids = ["a", "b"]"#).unwrap();
         assert_eq!(c.project_uuids, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    /// `api.since` takes the shared window grammar, and a typo is
+    /// refused at load with the key named; `until` is not a key here.
+    #[test]
+    fn since_takes_the_window_grammar() {
+        let load = |since: &str| {
+            toml::from_str::<ClaudeConfig>(&format!("[api]\nsince = {since:?}\n"))
+                .unwrap()
+                .validate()
+        };
+        for ok in ["2024-03-20", "2024-03-20T18:28:51+02:00", "-30d"] {
+            load(ok).unwrap_or_else(|e| panic!("{ok}: {e}"));
+        }
+        let err = load("last month").unwrap_err().to_string();
+        assert!(err.contains("`api.since`"), "{err}");
+        assert!(toml::from_str::<ClaudeConfig>("[api]\nuntil = \"+1d\"\n").is_err());
     }
 }

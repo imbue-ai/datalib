@@ -151,6 +151,13 @@ impl DataProcessor for EmailIngest {
                             path.display()
                         ));
                     }
+                    let since = match gmail.since.as_deref() {
+                        Some(s) => Some(
+                            datalib_time::TimeBound::parse(s)?
+                                .instant(&datalib_time::parse_strict(ctx.now)?),
+                        ),
+                        None => None,
+                    };
                     let s = ingest::gmail_api::fetch(ingest::gmail_api::FetchOptions {
                         db,
                         sealer: Some(sealer),
@@ -158,6 +165,7 @@ impl DataProcessor for EmailIngest {
                         latchkey: self.latchkey.clone(),
                         takeout: takeout.clone(),
                         only_labels: self.only_extract_labels.clone(),
+                        since,
                         blob_size_limit_bytes: self.blob_size_limit_bytes,
                         flush_batch: None,
                         progress: ctx.progress.clone(),
