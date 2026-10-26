@@ -1,0 +1,46 @@
+# A Google Takeout export on disk (takeout.google.com), with every option
+# set, and searchable. No sign-in: the export is a file you downloaded.
+[[groups]]
+id = "google_takeout"
+name = "Google Takeout"
+type = "google_takeout"
+
+[[steps]]
+group = "google_takeout"
+function = "ingest"
+
+# Each Takeout is a complete snapshot of the products you ticked: a record a
+# newer export no longer holds leaves the mirror on the next sync. A product
+# missing from the export altogether deletes nothing. Every feed defaults to
+# false, so you turn on each one you want.
+[steps.params.export]
+path = "~/Downloads/takeout-export"  # the `Takeout/` folder, or a folder of one export's .zip/.tgz parts
+google_chat = true                 # Chat DMs, spaces and bots, with attachments
+google_voice = true                # Voice texts, voicemails, calls and bills
+google_voice_include_spam = false  # also read Voice/Spam/ (needs google_voice)
+gemini_apps = true                 # Gemini prompts and responses
+maps_reviews = true                # your Maps reviews
+maps_saved_places = true           # places you starred in Maps
+maps_saved_lists = true            # Maps lists under Saved/, with the notes on their places
+maps_photos = false                # photos you added to Maps
+my_maps = true                     # My Maps maps: pins, lines, shapes and their text
+play_books = true                  # Play Books highlights, notes, bookmarks, listening positions
+youtube_watch_history = true       # every video you watched
+youtube_subscriptions = true       # the channels you subscribe to
+
+[[steps]]
+group = "google_takeout"
+function = "render_markdown"
+inputs = ["google_takeout/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "google_takeout"
+function = "keyword_index"
+inputs = ["google_takeout/render_markdown"]
+
+[[steps]]
+group = "google_takeout"
+function = "embed"
+inputs = ["google_takeout/keyword_index"]

@@ -14,6 +14,8 @@ pub const STAMP_PRECISION: RecordStampPrecision = RecordStampPrecision::Seconds;
 pub const KIND_SPACE: &str = "space";
 pub const KIND_SPACE_MONTH: &str = "space_month";
 pub const KIND_MESSAGE: &str = "message";
+pub const KIND_MESSAGE_VERSION: &str = "message_version";
+pub const KIND_MESSAGE_REACTION: &str = "message_reaction";
 pub const KIND_VOICE_CONVERSATION: &str = "voice_conversation";
 pub const KIND_VOICE_MONTH: &str = "voice_month";
 pub const KIND_VOICE_MESSAGE: &str = "voice_message";
@@ -26,6 +28,11 @@ pub const KIND_YOUTUBE_SUBSCRIPTION: &str = "youtube_subscription";
 pub const KIND_MAPS_REVIEW: &str = "maps_review";
 pub const KIND_MAPS_SAVED_PLACE: &str = "maps_saved_place";
 pub const KIND_MAPS_PHOTO: &str = "maps_photo";
+pub const KIND_SAVED_LIST_ITEM: &str = "saved_list_item";
+pub const KIND_MY_MAPS_PLACEMARK: &str = "my_maps_placemark";
+pub const KIND_PLAY_BOOKS_ENTRY: &str = "play_books_entry";
+/// The note at the top of a page, keyed by the page.
+pub const KIND_FEED_NOTE: &str = "feed_note";
 
 const IDS: Minter = Minter::new(ID_NAMESPACE, STAMP_PRECISION);
 
@@ -44,6 +51,31 @@ pub fn space_month(source_id: &str, space: &str, period_key: &str) -> Identity {
 
 pub fn message(source_id: &str, message_id: &str, date_ms: Option<i64>) -> Identity {
     IDS.mint(source_id, KIND_MESSAGE, message_id.to_string(), date_ms)
+}
+
+/// The `n`th earlier version of a Chat message, oldest first.
+pub fn message_version(
+    source_id: &str,
+    message_id: &str,
+    n: usize,
+    date_ms: Option<i64>,
+) -> Identity {
+    IDS.mint(
+        source_id,
+        KIND_MESSAGE_VERSION,
+        composite_key(&[message_id, &n.to_string()]),
+        date_ms,
+    )
+}
+
+/// One person's one emoji on a Chat message: the export gives it no time.
+pub fn message_reaction(source_id: &str, message_id: &str, reactor: &str, emoji: &str) -> Identity {
+    IDS.mint(
+        source_id,
+        KIND_MESSAGE_REACTION,
+        composite_key(&[message_id, reactor, emoji]),
+        None,
+    )
 }
 
 /// `chat_id` carries its `voice:` prefix, as the bucket does.
@@ -106,6 +138,8 @@ mod tests {
             space("src", "s"),
             space_month("src", "s", "2024-03"),
             message("src", "s/t/m", MS),
+            message_version("src", "s/t/m", 0, MS),
+            message_reaction("src", "s/t/m", "data@enterprise.starfleet", "🖖"),
             voice_conversation("src", "voice:+1555"),
             voice_month("src", "voice:+1555", "2024-03"),
             voice_message("src", "r1", MS),

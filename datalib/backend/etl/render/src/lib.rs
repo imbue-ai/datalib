@@ -1,5 +1,5 @@
 //! The render half of the ETL framework: the per-source render store,
-//! the unified-index load, and the run context a render processor is
+//! the document-index load, and the run context a render processor is
 //! handed.
 //!
 //! It sits above [`datalib_etl`] rather than inside it because this is
@@ -15,6 +15,8 @@ pub mod html;
 pub mod indexed_markdown;
 pub mod inputs;
 pub mod message;
+pub mod pages;
+pub mod photo;
 pub mod processor;
 pub mod search_terms;
 pub mod section;

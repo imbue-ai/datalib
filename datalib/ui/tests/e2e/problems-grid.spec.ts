@@ -6,6 +6,7 @@ import { test, expect, type APIRequestContext, type Page } from "@playwright/tes
 import {
   actOnRowByUuid,
   cardOf,
+  expandGroup,
   gridSettled,
   nameCell,
   SEARCH_ROWS,
@@ -21,7 +22,7 @@ type Problem = {
 };
 
 async function problems(request: APIRequestContext, q: string): Promise<Problem[]> {
-  const r = await request.get(`/applet/unified_index/problems?q=${encodeURIComponent(q)}`);
+  const r = await request.get(`/applet/unified_document_index/problems?q=${encodeURIComponent(q)}`);
   expect(r.ok()).toBe(true);
   return ((await r.json()) as { rows: Problem[] }).rows;
 }
@@ -31,16 +32,16 @@ const held = (page: Page) =>
     (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.rows(),
   ) as Promise<Problem[]>;
 
-/// Give a group row counts after its name, whatever the served root's
-/// run store holds: the counts come from metrics a render run reports
-/// (covered in `manage_rows.rs`), and this spec is about where a
-/// double-click on them leads.
-async function withCounts(page: Page, source: string) {
+/// Give a row counts after its name — a group's, or with `key` a step's —
+/// whatever the served root's run store holds: the counts come from
+/// metrics a render run reports (covered in `manage_rows.rs`), and this
+/// spec is about where a double-click on them leads.
+async function withCounts(page: Page, source: string, key = `group:${source}`) {
   await page.route("**/api/manage/rows**", async (route) => {
     const response = await route.fetch();
     const body = (await response.json()) as { rows: { key: string; problems: unknown[] }[] };
     for (const r of body.rows) {
-      if (r.key === `group:${source}`) {
+      if (r.key === key) {
         r.problems = [
           { kind: "error", text: "2", title: "2 errors" },
           { kind: "warning", text: "5", title: "5 warnings" },
@@ -89,6 +90,26 @@ test("a source's problems open in the grid, its filter in the search bar", async
   await gridSettled(page);
   const rows = await held(page);
   expect(rows.map((r) => r.problem_uuid).sort()).toEqual(theirs.map((p) => p.problem_uuid).sort());
+});
+
+/// A step's Name is its chip, and its counts stay beside the chip: they
+/// were dropped once when the chip replaced the whole cell, which no test
+/// caught because only a group row's counts were checked. A double-click
+/// on them still opens the step's problems, not the chip's card.
+test("a step's counts sit beside its chip, and open its problems", async ({ page, request }) => {
+  const [source] = await busiest(request);
+  const step = `${source}/render_markdown`;
+  await withCounts(page, source, step);
+  await page.goto("/data_sources");
+  await expandGroup(page, source);
+  const cell = nameCell(page, step);
+  await expect(cell.locator(`a.chip[data-entity="datalib:step/${step}"]`)).toBeVisible();
+  await expect(cell.locator(".tg-badges .tg-badge")).toHaveText(["2", "5"]);
+  await cell.locator(".tg-chip-warning").dblclick();
+  await expect(page.getByTestId("search-input")).toHaveAttribute(
+    "data-query",
+    `source_id:${source} -stage:fetch`,
+  );
 });
 
 /// In a short window too: the menu is taller than the room above or below

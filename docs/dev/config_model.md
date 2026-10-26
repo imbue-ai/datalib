@@ -28,22 +28,22 @@ function = "render_markdown"
 inputs = ["work-slack/ingest"]
 
 [[groups]]
-id = "unified_index"       # no type: it mirrors nothing
+id = "unified_document_index"       # no type: it mirrors nothing
 
 [[steps]]
-group = "unified_index"
+group = "unified_document_index"
 function = "grid_index"
 inputs = ["work-slack/render_markdown"]
 
 [[applets]]
-group = "unified_index"
-id = "unified_index"
-command = "datalib-applet unified_index"
+group = "unified_document_index"
+id = "unified_document_index"
+command = "datalib-applet unified_document_index"
 ```
 
 **A group** is one thing on the Manage screen: an `id`, an optional
 `name`, an optional `type`, an optional `description`. A source is a
-group with a `type`; the unified index is a group without one. `name`
+group with a `type`; the unified document index is a group without one. `name`
 and `description` are display text — never forwarded to a step, never
 fingerprinted — so editing either re-runs nothing.
 
@@ -98,15 +98,22 @@ same id and definition would read as up to date and write nothing.
 - Step ids are unique and never nested: two steps under one tree would
   be two writers on one doltlite file.
 - The built-in functions are the directory names: `ingest`,
-  `render_markdown`, `keyword_index`, `embed`, `grid_index`,
-  `qmd_aggregator`, `embedding_map` (`datalib_step/src/function.rs`,
-  tested against the layout constants the render and index crates use).
-  `grid_index`, `qmd_aggregator` and `embedding_map` write
-  `unified_index/<function>` and nothing else, because the applet that
-  reads them finds them from the data root alone.
+  `render_markdown`, `render_time_series`, `keyword_index`, `embed`,
+  `grid_index`, `qmd_aggregator`, `embedding_map`, `time_series_index`
+  (`datalib_step/src/function.rs`, tested against the layout constants
+  the render and index crates use). `grid_index`, `qmd_aggregator` and
+  `embedding_map` write `unified_document_index/<function>`, and
+  `time_series_index` writes `unified_time_series_index/time_series_index`,
+  and nothing else, because the applet that reads each finds it from the
+  data root alone.
+- A source whose type has time series (`TIME_SERIES_SOURCE_TYPES` in
+  `dag/src/config.rs`: `garmin`, `yolink`, `airvisual`) has a `render_time_series` step beside
+  its `render_markdown`, reading its ingest, and the
+  `time_series_index` names every such step in its `inputs`.
+  `docs/dev/time_series.md` is the design.
 - The qmd steps are the exception to "a step writes its own tree": a
   source's `keyword_index` and `embed`, and `qmd_aggregator`, all write
-  the one qmd index file in `unified_index/qmd_aggregator`, the
+  the one qmd index file in `unified_document_index/qmd_aggregator`, the
   aggregator's tree, each source's steps to its own collection. The
   runner cannot see that file as shared, so they hold one-slot locks
   instead (below).
@@ -128,7 +135,7 @@ its own `path`. There is no global vocabulary — each provider's
 
 | type | methods |
 |---|---|
-| chatgpt, garmin, github, gitlab, notion, slack, yolink | `api` |
+| chatgpt, garmin, github, gitlab, google_drive, linear, notion, slack, yolink | `api` |
 | claude | `api`, `export` |
 | contacts | `carddav`, `vcf` |
 | email | `jmap`, `gmail`, `mbox` |
@@ -146,14 +153,43 @@ A method is *held* when its path is written and its value is neither
 `null` nor `false`: a table counts by presence (`api = {}` is a
 complete selection). A provider with more than one table refuses a step
 naming two (its config's `validate`, e.g. `claude_config`'s), so a
-store is filled one way. `lightroom` is the exception: its `backups`
-folder is the catalog's past and `catalog` its present, so a step may
-name both, and the catalog lands on top.
+store is filled one way. Two pairs are the exception, each a past and
+a present of one thing, so a step may name both and the present lands
+on top: `lightroom`'s `backups` folder and its `catalog`, and email's
+`mbox` beside `gmail`, a Takeout of the account the API starts from
+(`email_download_modes.md` §"Starting from a Takeout").
 
 Knobs that apply whatever the method (email's `only_extract_labels`,
 the `common.*` envelope) stay at the top level of `params`. Render
 knobs go on the render step, whose config is strict: download-shaped
 params on a `render_markdown` step are refused.
+
+## Examples and the field reference
+
+Each config crate carries its own stanzas, `EXAMPLES`: a minimal and a
+complete one per ingest method, each a `[[groups]]` entry and its steps
+under the type's own name as the group id. Its structs derive
+`schemars::JsonSchema`, so the params' JSON Schema, doc comments
+included, is the field reference. `datalib_step/src/source_docs.rs`
+maps every `SourceType` to the two; `datalib-step examples <type>`
+prints the stanzas and `datalib-step help <type> <method>` the
+reference. A minimal stanza holds its method alone; a complete one may
+also hold the method it pairs with (Gmail's shows its Takeout). Its
+test loads and plans every stanza and holds each complete one to every
+option of its method's table; the shared
+`common` and `latchkey_settings` options are set only where a source
+reads them. A retired field a planner refuses stays readable by serde
+and leaves the schema with `#[schemars(skip)]`.
+
+`datalib-step check-params <config>` plans every built-in step's params
+the way a sync would and prints one JSON line per step it would refuse.
+The runner and the server link no provider, so both ask it:
+`datalib-dag --check`, and `PUT /api/config` and `POST
+/api/config/check` (`http/src/params_check.rs`), which refuse to write
+a config a sync would refuse a step of. `params_diagnostics` in
+`dag/src/config.rs` turns the answer into ordinary `rejected`
+diagnostics at the misspelled key's line, so every door shows it the
+same way. A custom command's params are never asked about.
 
 ## `Reach`: origin or local
 
@@ -228,13 +264,16 @@ fingerprint, so changing it re-runs the group.
 - a step id that is not `<group>/<function>` as the environment
   spells them;
 - `ingest` or `render_markdown` under a group with no `type`;
+- `render_time_series` under a group with no `type`, or of a type with
+  no time series;
 - a `type` it has no provider for — a retired spelling (`*_api`,
   `*_backup`, `claude_export`, `carddav`) names `datalib-migrate-config`;
 - params still carrying `sync`, `common.input_path`, `common.raw_path`,
   `gmail_api` or a top-level `fetch_photos`, likewise naming the tool;
 - an `ingest` step whose params hold none of its type's methods;
 - `grid_index`, `qmd_aggregator` or `embedding_map` under any group but
-  `unified_index`.
+  `unified_document_index`, and `time_series_index` under any but
+  `unified_time_series_index`.
 
 A render reads its raw store from its first input; one that declares
 none reads its own group's `ingest` tree and logs a warning. A store
@@ -331,14 +370,17 @@ catalog entry's `sections`, with the render fields and everything else
 no section names under Advanced options
 ([`wizard_design.md`](wizard_design.md)). Editing renames the group in place and
 rewrites both steps where the first of them stood. A source missing one of its
-two steps gets it back on save; a render step under a provider that
-renders nothing (`renderStep: false` in `ui/src/config/catalog.ts`) is
-removed and unwired, and the dialog says so before Save.
+two steps gets it back on save. A download-only provider
+(`rendersDocuments: false` in `ui/src/config/catalog.ts`) still gets its
+render step: it renders no documents, but it writes the storage report and
+carries the download's problems into the index, so the Manage row's counts
+lead somewhere. The form offers it no Rendering section, since there is
+nothing to render or search.
 
 The screen lists groups, and the steps under each, in file order, and a
 header click's sort is undone by a third click. So the writers keep the
 file in the order data flows (`insertEntries`): a new source goes after
-the last one and above the `unified_index` group, its qmd steps right
+the last one and above the `unified_document_index` group, its qmd steps right
 after its render, and each step below the steps it reads. A file already
 out of that order where no place fits gets the new entries at the end.
 The runner itself reads only `inputs`.
@@ -376,7 +418,48 @@ retired type words become the current ones, and `sync` /
 `common.input_path` / `common.raw_path` become method tables with
 their own `path` (`convert.rs`). The rewrite is value-level, so comments do not
 survive. The loader and `datalib-step` recognize the old shapes only
-well enough to name the tool. The one rewrite made without asking is the
-qmd steps', a text edit that keeps comments and leaves the file in
-data-flow order: `datalib-http` makes it through `upgrade_qmd_steps`,
-which refuses a result that would drop an entry the original ran.
+well enough to name the tool. Four rewrites are made without asking,
+all text edits that keep comments, and each refuses a result that would
+drop an entry the original ran, other than one it exists to take out. `datalib-http` makes them in this order
+(`http/src/config_upgrade.rs`), at boot, on any change to the file, and
+on a save through `PUT /api/config` before it answers. Its rewrites and
+its saves take turns, since a rewrite that read one save and wrote after
+the next would put the first back:
+
+1. The qmd steps' (`upgrade_qmd_steps`, `qmd_steps.rs`), which also
+   leaves the file in data-flow order.
+2. The document index's name (`upgrade_document_index`,
+   `document_index.rs`): the untyped `unified_index` group, every step
+   filed under it or writing under it, every `inputs` entry naming one,
+   and the applet's `group`, `id` and `datalib-applet unified_index`
+   subcommand become `unified_document_index`. At boot the server then
+   moves `<root>/unified_index/` to `<root>/unified_document_index/` with
+   one rename, so the grid store and the qmd embeddings are kept, and
+   carries the loop's per-step rows in `system/supervisor.sqlite` (a step
+   turned off, its last success, its tree's version) to the new ids. If
+   both trees exist it leaves both and logs an error naming them.
+   `datalib-applet unified_index` still runs, and the gateway still
+   answers `/applet/unified_index/…`, for a config or a card script
+   written before the rename.
+3. The time-series steps (`upgrade_time_series_steps`,
+   `time_series_steps.rs`): a config with no `unified_time_series_index`
+   group and a source whose type has time series gets each such source's
+   `render_time_series` step, the index group with its
+   `time_series_index`, and the `unified_time_series_index` applet that
+   serves it, appended at the end of the file. Once the group
+   is there the time-series steps are the person's, and a step they took
+   out is not put back.
+4. The time-series embeds (`upgrade_time_series_embeds`,
+   `time_series_embeds.rs`): a source whose type has time series loses
+   its `embed` step, with the comments above it, and every `inputs`
+   that named the step stops naming it. Its markdown is daily summaries
+   of numbers, which the keyword index already finds, so the wizard
+   never offers the step (`embedAllowed` in
+   `ui/src/config/sourceSteps.ts`). This rewrite is the only one of the
+   four that is meant to take an entry out; it still refuses a result
+   that loses any other entry.
+
+A source may not take `unified_index`, `unified_document_index` or
+`unified_time_series_index` as its id
+(`datalib_dag::config::RESERVED_STANZA_NAMES`); only an index group,
+which has no `type`, may.

@@ -271,10 +271,14 @@ mod tests {
     }
 
     async fn commit(pool: &SqlitePool) -> Option<String> {
-        sqlx::query_scalar("SELECT dolt_commit('-Am', 'c')")
+        match sqlx::query_scalar("SELECT dolt_commit('-Am', 'c')")
             .fetch_one(pool)
             .await
-            .unwrap()
+        {
+            Ok(hash) => hash,
+            Err(e) if e.to_string().contains("nothing to commit") => None,
+            Err(e) => panic!("dolt_commit: {e}"),
+        }
     }
 
     async fn insert(pool: &SqlitePool, id: i64) {

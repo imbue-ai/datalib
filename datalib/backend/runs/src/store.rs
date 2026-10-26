@@ -58,10 +58,11 @@ fn options(path: &Path, create: bool) -> SqliteConnectOptions {
     SqliteConnectOptions::new()
         .filename(datalib_runtime::plain_sqlite::uri(path))
         .create_if_missing(create)
-        // What the plain-SQLite engine really does: asked for WAL it
-        // answers `wal` and stays in rollback-journal mode, so a reader
-        // waits out a writer's commit (`BUSY_TIMEOUT`).
-        .journal_mode(sqlx::sqlite::SqliteJournalMode::Delete)
+        // WAL, so a reader never waits on a writer. In a rollback
+        // journal every read queued behind every commit, which a busy
+        // disk made seconds long (docs/dev/logging.md § One store). A
+        // file in the old mode turns over at its first open.
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
         // Nothing here is load-bearing, so nothing is worth an fsync. A
         // file torn by a power cut is emptied and remade on the next
         // open (see `open_or_recreate`).
@@ -171,10 +172,11 @@ enum Emptying {
     /// `VACUUM`), which takes the file's lock like any write and works
     /// on a corrupt page.
     Reset,
-    /// Cut the file to nothing, and its journal with it. Doltlite reads
-    /// a file without SQLite's header as its own format and refuses the
-    /// reset, and it refuses every other connection's use of the file
-    /// the same way, so none can be reading or writing it.
+    /// Cut the file to nothing, and its journal and WAL with it.
+    /// Doltlite reads a file without SQLite's header as its own format
+    /// and refuses the reset, and it refuses every other connection's
+    /// use of the file the same way, so none can be reading or writing
+    /// it.
     Truncate,
 }
 
@@ -250,13 +252,15 @@ async fn empty_in_place(path: &Path, emptying: &Emptying) -> Result<(), sqlx::Er
     match emptying {
         Emptying::Reset => reset(path).await,
         Emptying::Truncate => {
-            let mut journal = path.as_os_str().to_os_string();
-            journal.push("-journal");
-            match std::fs::remove_file(journal) {
-                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                    return Err(sqlx::Error::Io(e))
+            for sidecar in ["-journal", "-wal", "-shm"] {
+                let mut file = path.as_os_str().to_os_string();
+                file.push(sidecar);
+                match std::fs::remove_file(file) {
+                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                        return Err(sqlx::Error::Io(e))
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
             std::fs::OpenOptions::new()
                 .write(true)
@@ -340,13 +344,29 @@ async fn write_meta(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
-/// `true` when the file carries this build's schema; `false` for another
-/// version's. A brand-new file (version 0, no tables) gets the schema
+/// The rungs from an older version: the statements that bring a store at
+/// the version named to the next one, in place. Every rung is one
+/// transaction, under the open lock [`open_or_recreate`] holds.
+const UPGRADES: &[(i32, &[&str])] = &[(
+    10,
+    &[
+        "ALTER TABLE processes ADD COLUMN applet VARCHAR(255)",
+        "ALTER TABLE processes ADD COLUMN peak_rss_bytes BIGINT",
+    ],
+)];
+
+/// `true` when the file carries this build's schema, climbing the
+/// [`UPGRADES`] to it first where there are rungs; `false` for a version
+/// with none. A brand-new file (version 0, no tables) gets the schema
 /// installed and reads as a match.
 async fn schema_matches(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
-    let version: i32 = sqlx::query_scalar("PRAGMA user_version")
+    let mut version: i32 = sqlx::query_scalar("PRAGMA user_version")
         .fetch_one(pool)
         .await?;
+    while let Some((_, statements)) = UPGRADES.iter().find(|(from, _)| *from == version) {
+        climb(pool, statements, version + 1).await?;
+        version += 1;
+    }
     if version == SCHEMA_VERSION {
         return Ok(true);
     }
@@ -358,6 +378,21 @@ async fn schema_matches(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
         return Ok(true);
     }
     Ok(false)
+}
+
+async fn climb(pool: &SqlitePool, statements: &[&str], to: i32) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    for statement in statements {
+        // Safe: every statement is a compile-time literal in `UPGRADES`.
+        sqlx::query(sqlx::AssertSqlSafe(*statement))
+            .execute(&mut *tx)
+            .await?;
+    }
+    // Safe: a compile-time integer, not input.
+    sqlx::query(sqlx::AssertSqlSafe(format!("PRAGMA user_version = {to}")))
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await
 }
 
 /// One transaction, because another process deciding what to do with
@@ -479,7 +514,7 @@ pub async fn processes(
     };
     let rows = sqlx::query(
         "SELECT process_id, process, run_id, step, attempt, started_at_utc, finished_at_utc, \
-           exit_code, signal, tz_offset, git_hash \
+           exit_code, signal, tz_offset, git_hash, applet, peak_rss_bytes \
          FROM processes WHERE (? IS NULL OR run_id = ?) AND (? IS NULL OR process = ?) \
          ORDER BY started_at_utc DESC LIMIT ?",
     )
@@ -859,7 +894,7 @@ pub async fn process(data_root: &Path, process_id: &str) -> Option<ProcessRow> {
     let pool = open_existing(&path).await.ok()?;
     let row = sqlx::query(
         "SELECT process_id, process, run_id, step, attempt, started_at_utc, finished_at_utc, \
-           exit_code, signal, tz_offset, git_hash \
+           exit_code, signal, tz_offset, git_hash, applet, peak_rss_bytes \
          FROM processes WHERE process_id = ?",
     )
     .bind(process_id)
@@ -884,6 +919,8 @@ fn process_row_from(r: &sqlx::sqlite::SqliteRow) -> ProcessRow {
         signal: r.get("signal"),
         tz_offset: r.get("tz_offset"),
         git_hash: r.get("git_hash"),
+        applet: r.get("applet"),
+        peak_rss_bytes: r.get("peak_rss_bytes"),
     }
 }
 
@@ -1457,8 +1494,8 @@ async fn insert_process(
     let inserted = sqlx::query(
         "INSERT OR IGNORE INTO processes \
            (process_id, process, run_id, step, attempt, started_at_utc, finished_at_utc, \
-            exit_code, signal, tz_offset, git_hash) \
-         VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)",
+            exit_code, signal, tz_offset, git_hash, applet, peak_rss_bytes) \
+         VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?)",
     )
     .bind(&p.process_id)
     .bind(&p.process)
@@ -1468,6 +1505,8 @@ async fn insert_process(
     .bind(&p.started_at_utc)
     .bind(&p.tz_offset)
     .bind(&p.git_hash)
+    .bind(&p.applet)
+    .bind(p.peak_rss_bytes)
     .execute(&mut **tx)
     .await?
     .rows_affected()
@@ -1475,8 +1514,10 @@ async fn insert_process(
     Ok(inserted)
 }
 
-/// A step's process, as the runner reports it: the whole row at start,
-/// and the same row with its end and exit once it is over.
+/// A process another one reports — a step's attempt by the runner, an
+/// applet or a page by the server: the whole row at start, again as its
+/// peak memory rises, and with its end and exit once it is over. A row
+/// that names no peak keeps the one already stored.
 async fn upsert_process(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     p: &ProcessRow,
@@ -1484,10 +1525,11 @@ async fn upsert_process(
     sqlx::query(
         "INSERT INTO processes \
            (process_id, process, run_id, step, attempt, started_at_utc, finished_at_utc, \
-            exit_code, signal, tz_offset, git_hash) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+            exit_code, signal, tz_offset, git_hash, applet, peak_rss_bytes) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
          ON CONFLICT(process_id) DO UPDATE SET finished_at_utc = excluded.finished_at_utc, \
-           exit_code = excluded.exit_code, signal = excluded.signal",
+           exit_code = excluded.exit_code, signal = excluded.signal, \
+           peak_rss_bytes = COALESCE(excluded.peak_rss_bytes, processes.peak_rss_bytes)",
     )
     .bind(&p.process_id)
     .bind(&p.process)
@@ -1500,6 +1542,8 @@ async fn upsert_process(
     .bind(p.signal)
     .bind(&p.tz_offset)
     .bind(&p.git_hash)
+    .bind(&p.applet)
+    .bind(p.peak_rss_bytes)
     .execute(&mut **tx)
     .await?;
     Ok(())
@@ -2060,12 +2104,15 @@ mod tests {
     }
 
     /// A store from another schema version, with a reader that opened
-    /// it before a writer remade it — `datalib-http`'s reads take no
-    /// lock. When the remake unlinked the file, the reader stayed on
+    /// it before a writer remade it — `datalib-http` opens one per
+    /// read. When the remake unlinked the file, the reader stayed on
     /// the old inode, took the new file's journal for a crashed
     /// writer's, rolled it back and deleted it, and the writer's commit
     /// failed with 5898 (`SQLITE_IOERR_DELETE_NOENT`). CI run
-    /// 36441513702 lost a whole writer's lines this way.
+    /// 36441513702 lost a whole writer's lines this way. In WAL mode
+    /// doltlite's reset waits for the reader to close, as a read does
+    /// within milliseconds; then a reader mid-transaction must not
+    /// cost the writer its commit.
     #[tokio::test]
     async fn a_reader_open_across_the_remake_leaves_the_writers_journal_alone() {
         let td = tempfile::tempdir().unwrap();
@@ -2084,7 +2131,29 @@ mod tests {
             .await
             .unwrap();
 
-        let writer = open_or_recreate(&path).await.unwrap();
+        let remake = tokio::spawn({
+            let path = path.clone();
+            async move { open_or_recreate(&path).await }
+        });
+        // The copy is the step before the reset, so the remake is at
+        // the reset when the reader goes.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !std::fs::read_dir(td.path()).unwrap().any(|e| {
+            e.unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("runs.bak_")
+        }) {
+            assert!(Instant::now() < deadline, "the remake never kept a copy");
+            tokio::task::yield_now().await;
+        }
+        reader.close().await;
+        let writer = remake
+            .await
+            .unwrap()
+            .expect("the remake, once the reader closed");
+
+        let reader = open_existing(&path).await.unwrap();
         let mut tx = writer.begin().await.unwrap();
         sqlx::query(
             "INSERT INTO log (process_id, attempt, ts_utc, level, msg) \

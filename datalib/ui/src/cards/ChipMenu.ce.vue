@@ -1,21 +1,30 @@
 <script setup lang="ts">
-// The right-click menu on a chip, drawn over the document frame. It
-// shows the entries `chipMenu` or `entityMenu` built and reports which
-// one was picked;
-// what each does is the document view's business. A click anywhere
+// The right-click menu on a chip, drawn over a document or a card. It
+// shows the entries `chipMenuOf` built, with any the surface adds, and
+// reports which one was picked; `runChipAction` does a chip's own. A click anywhere
 // else, a second right-click or Escape closes it.
-import { computed, onMounted, onUnmounted } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 
-import type { ChipMenuEntry, ChipMenuId } from "./contacts";
-import type { EntityMenuEntry, EntityMenuId } from "./entities";
+import { menuPlacement, type MenuItem } from "./chipActions";
 
-const props = defineProps<{ entries: (ChipMenuEntry | EntityMenuEntry)[]; x: number; y: number }>();
-const emit = defineEmits<{ pick: [id: ChipMenuId | EntityMenuId]; close: [] }>();
+const props = defineProps<{ entries: MenuItem[]; x: number; y: number }>();
+const emit = defineEmits<{ pick: [id: string]; close: [] }>();
 
-const style = computed(() => ({
-  left: `${Math.min(props.x, window.innerWidth - 260)}px`,
-  top: `${Math.min(props.y, window.innerHeight - 40 * (props.entries.length + 1))}px`,
-}));
+const menu = ref<HTMLElement | null>(null);
+const size = ref({ width: 0, height: 0 });
+
+const style = computed(() => {
+  const { left, top } = menuPlacement({ x: props.x, y: props.y }, size.value, {
+    width: window.innerWidth,
+    height: window.innerHeight,
+  });
+  return { left: `${left}px`, top: `${top}px` };
+});
+
+onMounted(() => {
+  const r = menu.value?.getBoundingClientRect();
+  if (r) size.value = { width: r.width, height: r.height };
+});
 
 function onKey(ev: KeyboardEvent) {
   if (ev.key === "Escape") emit("close");
@@ -25,11 +34,20 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 </script>
 
 <template>
-  <div class="chip-menu-overlay" @click="emit('close')" @contextmenu.prevent="emit('close')">
-    <div class="chip-menu" role="menu" :style="style" @click.stop>
+  <div class="chip-menu-overlay" @click="emit('close')" @contextmenu.prevent.stop="emit('close')">
+    <div ref="menu" class="chip-menu" role="menu" :style="style" @click.stop>
       <template v-for="e in entries" :key="e.id">
         <div v-if="e.separator" class="chip-menu-divider" />
-        <div class="chip-menu-item" role="menuitem" @click="emit('pick', e.id)">{{ e.label }}</div>
+        <div
+          class="chip-menu-item"
+          :class="{ 'chip-menu-disabled': !!e.disabled, 'chip-menu-danger': e.danger }"
+          role="menuitem"
+          :aria-disabled="e.disabled ? 'true' : undefined"
+          :title="e.disabled ?? undefined"
+          @click="e.disabled || emit('pick', e.id)"
+        >
+          {{ e.label }}
+        </div>
       </template>
     </div>
   </div>
@@ -64,6 +82,16 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 }
 .chip-menu-item:hover {
   background: var(--datalib-hover, #eee);
+}
+.chip-menu-danger {
+  color: var(--datalib-log-error);
+}
+.chip-menu-disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.chip-menu-disabled:hover {
+  background: transparent;
 }
 .chip-menu-divider {
   height: 1px;

@@ -145,6 +145,9 @@ mod tests {
         assert!(is_logged("/dactal/nope.js", StatusCode::NOT_FOUND));
         assert!(is_logged("/", StatusCode::OK));
         assert!(is_logged("/api/dag", StatusCode::OK));
-        assert!(is_logged("/applet/unified_index/rows", StatusCode::OK));
+        assert!(is_logged(
+            "/applet/unified_document_index/rows",
+            StatusCode::OK
+        ));
     }
 }

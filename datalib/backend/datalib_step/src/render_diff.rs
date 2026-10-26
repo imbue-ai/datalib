@@ -158,6 +158,8 @@ pub async fn run(
         rendered_root: rendered_root.clone(),
         now: now.to_string(),
         cadence: control.checkpoint_cadence.unwrap_or_default(),
+        // Each side is collected whole anyway, under its own cap.
+        page_size: datalib_etl_render::pages::PageSize::DEFAULT,
         // A diff group has no store of its own to measure.
         storage: None,
         raw_db: Some(datalib_etl::doltlite_raw::db_path_for(&raw_path)),
@@ -312,7 +314,6 @@ pub fn render_diff_source(
                 render_version: base.md.render_version,
                 rows: diff.rows,
                 sections: diff.sections,
-                search_terms: Vec::new(),
                 edges: base.md.edges.clone(),
                 // The people are the source's; a diff row only compares.
                 contacts: Vec::new(),
@@ -417,7 +418,7 @@ pub fn render_diff_source(
     // No storage report in a diff store (`RunEnd::storage` is `None`
     // above), so nothing is excluded from the count.
     let holdings = store.holdings(None)?;
-    let head = store.head()?;
+    let head = store.content_version()?;
     store.close();
     every_stored_version_must_be_declared(&name, &rendered_root, &versions, declared.as_ref())?;
     Ok(RenderReport {
@@ -605,7 +606,6 @@ mod tests {
                         render_version: 1,
                         rows: vec![],
                         sections: vec![Section::keyed(&format!("d{i}"), "x\n".into())],
-                        search_terms: Vec::new(),
                         edges: vec![],
                         contacts: Vec::new(),
                         problems: vec![],
@@ -685,7 +685,6 @@ mod tests {
             render_version: 1,
             rows: vec![],
             sections: vec![],
-            search_terms: Vec::new(),
             edges: vec![],
             contacts: Vec::new(),
             problems: vec![],

@@ -203,35 +203,6 @@ impl EventTime {
     }
 }
 
-/// An event's span in one line. An all-day end is exclusive (RFC 5545
-/// §3.6.1), so a one-day event ends the next day and shows as one date.
-pub fn display_range(start: &EventTime, end: Option<&EventTime>) -> String {
-    match (start, end) {
-        (EventTime::Date(s), Some(EventTime::Date(e))) => {
-            let last = *e - Duration::days(1);
-            if last <= *s {
-                format!("{} (all day)", fmt_date(*s))
-            } else {
-                format!("{} – {} (all day)", fmt_date(*s), fmt_date(last))
-            }
-        }
-        (EventTime::Date(s), _) => format!("{} (all day)", fmt_date(*s)),
-        (EventTime::At { local: s, zone: sz }, Some(EventTime::At { local: e, zone: ez }))
-            if s.date() == e.date() && zone_label(sz) == zone_label(ez) =>
-        {
-            format!(
-                "{}, {}–{} ({})",
-                fmt_date(s.date()),
-                s.format("%H:%M"),
-                e.format("%H:%M"),
-                zone_label(sz)
-            )
-        }
-        (s, Some(e)) => format!("{} → {}", s.display(), e.display()),
-        (s, None) => s.display(),
-    }
-}
-
 fn in_named_zone(local: &NaiveDateTime, name: &str) -> Result<DateTime<FixedOffset>, Unresolved> {
     let tz: chrono_tz::Tz = name
         .parse()
@@ -371,28 +342,6 @@ mod tests {
         assert_eq!(
             d,
             EventTime::Date(NaiveDate::from_ymd_opt(2026, 7, 13).unwrap())
-        );
-    }
-
-    #[test]
-    fn ranges_read_naturally() {
-        let d = |v| EventTime::from_ical(v, None).unwrap();
-        assert_eq!(
-            display_range(&d("20260713"), Some(&d("20260718"))),
-            "Mon 13 Jul 2026 – Fri 17 Jul 2026 (all day)"
-        );
-        assert_eq!(
-            display_range(&d("20260202"), Some(&d("20260203"))),
-            "Mon 2 Feb 2026 (all day)"
-        );
-        let la = Some("America/Los_Angeles");
-        assert_eq!(
-            display_range(&at("20260918T190000", la), Some(&at("20260918T220000", la))),
-            "Fri 18 Sep 2026, 19:00–22:00 (America/Los_Angeles)"
-        );
-        assert_eq!(
-            display_range(&at("20260922T143000Z", None), None),
-            "Tue 22 Sep 2026, 14:30 (UTC)"
         );
     }
 }

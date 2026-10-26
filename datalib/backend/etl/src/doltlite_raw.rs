@@ -1822,6 +1822,71 @@ pub async fn head_commit(pool: &SqlitePool) -> Result<Option<String>> {
         .context("read dolt_log head")
 }
 
+/// A derived store's *content version*, what its step reports to the
+/// runner: the hash of HEAD's tree, every table's rows and schema and none
+/// of the history behind them. Two commits that hold the same rows share
+/// it, so a run that changed nothing reports the same string, and folding
+/// the store's history into one commit moves no version.
+///
+/// A raw or time-series store reports its [`head_commit`] instead: a diff
+/// group names a raw commit, and the time-series index reads each store at
+/// the commit it recorded.
+///
+/// `Ok(None)` against stock libsqlite3 or an empty log; the step then
+/// reports no version, and the runner takes each success as new.
+pub async fn content_version(pool: &SqlitePool) -> Result<Option<String>> {
+    match head_commit(pool).await? {
+        Some(head) => tree_of(pool, &head).await.map(Some),
+        None => Ok(None),
+    }
+}
+
+/// The hash of `commit`'s tree: the version a seal of `commit` reports in
+/// a store that reports [`content_version`].
+pub async fn tree_of(pool: &SqlitePool, commit: &str) -> Result<String> {
+    sqlx::query_scalar::<_, String>("SELECT dolt_hashof_db(?)")
+        .bind(commit)
+        .fetch_one(pool)
+        .await
+        .with_context(|| format!("dolt_hashof_db({commit})"))
+}
+
+/// The commit a consumer's cursor names, for a diff from it: `commit` if
+/// the store still has it, else the newest commit on HEAD's history whose
+/// tree is `tree`. A diff compares trees, so the stand-in gives the same
+/// rows. That is how a cursor outlives a fold, which replaces commits
+/// with one holding the same tree. `None` when neither is there.
+pub async fn resolve_commit(
+    pool: &SqlitePool,
+    commit: &str,
+    tree: Option<&str>,
+) -> Result<Option<String>> {
+    if !has_dolt_extensions(pool).await {
+        return Ok(Some(commit.to_string()));
+    }
+    match sqlx::query_scalar::<_, String>("SELECT dolt_hashof(?)")
+        .bind(commit)
+        .fetch_one(pool)
+        .await
+    {
+        Ok(_) => return Ok(Some(commit.to_string())),
+        // `dolt_hashof` says "invalid ref spec" for a commit the store
+        // does not hold.
+        Err(e) if e.to_string().contains("invalid ref spec") => {}
+        Err(e) => return Err(anyhow::Error::new(e).context(format!("dolt_hashof({commit})"))),
+    }
+    let Some(tree) = tree else {
+        return Ok(None);
+    };
+    sqlx::query_scalar::<_, String>(
+        "SELECT commit_hash FROM dolt_log() WHERE dolt_hashof_db(commit_hash) = ? LIMIT 1",
+    )
+    .bind(tree)
+    .fetch_optional(pool)
+    .await
+    .context("find a commit by its tree")
+}
+
 /// The content tables whose rows differ between two commits: every
 /// table that `datalib_history::holds_records` — all but the
 /// `*_bookkeeping` sidecars, [`SHARED_TABLES`] and `ingested_files`,
@@ -1860,6 +1925,23 @@ pub async fn content_tables_changed(
 /// bookkeeping tables inside a derived store and advance HEAD — a version read
 /// that changes the version it reads.
 pub async fn head_commit_at_path(db_path: &Path) -> Result<Option<String>> {
+    read_at_path(db_path, |pool| Box::pin(head_commit(pool))).await
+}
+
+/// [`content_version`] against a store on disk, read the way
+/// [`head_commit_at_path`] reads.
+pub async fn content_version_at_path(db_path: &Path) -> Result<Option<String>> {
+    read_at_path(db_path, |pool| Box::pin(content_version(pool))).await
+}
+
+async fn read_at_path(
+    db_path: &Path,
+    read: impl for<'p> FnOnce(
+        &'p SqlitePool,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Option<String>>> + Send + 'p>,
+    >,
+) -> Result<Option<String>> {
     if !db_path.exists() {
         return Ok(None);
     }
@@ -1871,9 +1953,9 @@ pub async fn head_commit_at_path(db_path: &Path) -> Result<Option<String>> {
         .connect(&url)
         .await
         .with_context(|| format!("open read-only {}", db_path.display()))?;
-    let head = head_commit(&pool).await;
+    let read = read(&pool).await;
     pool.close().await;
-    head
+    read
 }
 
 /// The raw store's whole-store problem counts by severity, read-only,
@@ -1953,6 +2035,88 @@ pub async fn reset_store(db_path: &Path) -> Result<()> {
     .await;
     pool.close().await;
     result.with_context(|| format!("reset {}", db_path.display()))
+}
+
+/// What [`fold_history`] did to one store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Folded {
+    /// The commits its history held before, its first included.
+    pub commits_before: usize,
+}
+
+/// Fold a derived store's history into one commit on its first, holding
+/// HEAD's tree, and collect the pages only the old commits reached. Every
+/// commit hash the store had is gone afterwards; its tree, and so its
+/// [`content_version`], is the same. `None` when there is no store or its
+/// history is one commit already.
+///
+/// Only for a store nothing reads the history of. A branch or tag other
+/// than `main` and the writer's keeps what it reaches; a derived store has
+/// none.
+pub async fn fold_history(db_path: &Path) -> Result<Option<Folded>> {
+    if !db_path.exists() {
+        return Ok(None);
+    }
+    let pool = open_inner(
+        db_path,
+        &[],
+        &[],
+        false,
+        StoreKind::Raw,
+        OnSchemaBreak::Refuse,
+        &[],
+    )
+    .await?;
+    let result = fold_on(&pool).await;
+    pool.close().await;
+    result.with_context(|| format!("fold {}", db_path.display()))
+}
+
+async fn fold_on(pool: &SqlitePool) -> Result<Option<Folded>> {
+    let log: Vec<String> = sqlx::query_scalar("SELECT commit_hash FROM dolt_log()")
+        .fetch_all(pool)
+        .await
+        .context("read dolt_log")?;
+    // The store's first commit and one on top of it: folded already.
+    if log.len() <= 2 {
+        return Ok(None);
+    }
+    let (head, first) = (&log[0], &log[log.len() - 1]);
+    let tree = tree_of(pool, head).await?;
+    sqlx::query("SELECT dolt_reset('--soft', ?)")
+        .bind(first)
+        .execute(pool)
+        .await
+        .context("reset to the first commit")?;
+    // The working set, not the stage: the commit below takes everything,
+    // and the open may have left a table in it.
+    let working: String = sqlx::query_scalar("SELECT dolt_hashof_db()")
+        .fetch_one(pool)
+        .await
+        .context("dolt_hashof_db()")?;
+    if working != tree {
+        sqlx::query("SELECT dolt_reset('--soft', ?)")
+            .bind(head)
+            .execute(pool)
+            .await
+            .context("put the history back")?;
+        anyhow::bail!(
+            "folding would change the store's tree from {tree} to {working}; left as it was"
+        );
+    }
+    commit_run(
+        pool,
+        &format!("compact: {} commits folded into one", log.len() - 1),
+    )
+    .await?
+    .context("the fold committed nothing")?;
+    sqlx::query("SELECT dolt_gc()")
+        .execute(pool)
+        .await
+        .context("dolt_gc")?;
+    Ok(Some(Folded {
+        commits_before: log.len(),
+    }))
 }
 
 // ── Generic object-table ops ────────────────────────────────────────
@@ -2214,7 +2378,7 @@ async fn record_fetch_problem(
         Scope::Entity(&entity_id),
         None,
         outcome,
-        Problem::record(reason, err).severity(severity),
+        Problem::explained(reason, None, err).severity(severity),
         None,
     )
     .stamped(earlier.as_ref(), &now, Some(&tz_offset));
@@ -3093,6 +3257,155 @@ mod tests {
         assert!(head_commit_at_path(&missing).await.unwrap().is_none());
     }
 
+    /// A derived store seals with the tree of the commit `commit_run`
+    /// returns and finishes with the version read off disk; the loop
+    /// compares the two as strings, so they must be one spelling.
+    #[tokio::test]
+    async fn a_seal_and_the_content_version_after_it_are_one_spelling() {
+        let td = tempfile::tempdir().unwrap();
+        let path = td.path().join("derived.doltlite_db");
+        let pool = plain_pool(&path).await;
+        sqlx::query("CREATE TABLE t (x INTEGER)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let sealed = commit_run(&pool, "seal").await.unwrap().unwrap();
+        let tree = tree_of(&pool, &sealed).await.unwrap();
+        pool.close().await;
+        assert_ne!(tree, sealed);
+        assert_eq!(content_version_at_path(&path).await.unwrap(), Some(tree));
+    }
+
+    /// Folds `pool`'s history into one commit holding HEAD's tree, the way
+    /// a compaction will, and collects what only the old commits reached.
+    async fn fold(pool: &SqlitePool) -> String {
+        let first: String = sqlx::query_scalar(
+            "SELECT commit_hash FROM dolt_log() WHERE message = 'Initialize data repository'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        sqlx::query("SELECT dolt_reset('--soft', ?)")
+            .bind(&first)
+            .execute(pool)
+            .await
+            .unwrap();
+        let folded = commit_run(pool, "fold").await.unwrap().unwrap();
+        sqlx::query("SELECT dolt_gc()").execute(pool).await.unwrap();
+        folded
+    }
+
+    async fn store_with_history(path: &Path) -> (SqlitePool, [String; 2]) {
+        let pool = plain_pool(path).await;
+        let mut commits = Vec::new();
+        for sql in [
+            "CREATE TABLE t (id TEXT PRIMARY KEY)",
+            "INSERT INTO t VALUES ('picard')",
+        ] {
+            sqlx::query(sql).execute(&pool).await.unwrap();
+            commits.push(commit_run(&pool, sql).await.unwrap().unwrap());
+        }
+        (pool, commits.try_into().unwrap())
+    }
+
+    /// Folding a derived store's history moves no version, so nothing that
+    /// reads the store runs again for it.
+    #[tokio::test]
+    async fn a_fold_moves_no_content_version() {
+        let td = tempfile::tempdir().unwrap();
+        let (pool, [_, head]) = store_with_history(&td.path().join("s.doltlite_db")).await;
+        let before = content_version(&pool).await.unwrap();
+        let folded = fold(&pool).await;
+        assert_ne!(folded, head);
+        assert_eq!(content_version(&pool).await.unwrap(), before);
+        pool.close().await;
+    }
+
+    /// A fold leaves one commit on the store's first, holding the same
+    /// tree and rows, and gives back what only the old commits held. A
+    /// store folded already, or never written, has nothing to fold.
+    #[tokio::test]
+    async fn fold_history_keeps_the_tree_and_drops_the_rest() {
+        let td = tempfile::tempdir().unwrap();
+        let path = td.path().join("s.doltlite_db");
+        let pool = open(
+            &path,
+            &["CREATE TABLE t (id INTEGER PRIMARY KEY, body TEXT)"],
+        )
+        .await
+        .unwrap();
+        for round in 0..4 {
+            sqlx::query(
+                "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 500) \
+                 INSERT OR REPLACE INTO t SELECT i, hex(randomblob(200)) FROM n",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+            commit_run(&pool, &format!("round {round}")).await.unwrap();
+        }
+        let version = content_version(&pool).await.unwrap();
+        pool.close().await;
+        let before = std::fs::metadata(&path).unwrap().len();
+
+        let folded = fold_history(&path).await.unwrap();
+        assert_eq!(
+            folded,
+            Some(Folded { commits_before: 6 }),
+            "the first commit, the schema's and four rounds"
+        );
+        assert!(
+            std::fs::metadata(&path).unwrap().len() * 2 < before,
+            "the fold gave back nothing"
+        );
+        assert_eq!(content_version_at_path(&path).await.unwrap(), version);
+        let pool = plain_pool(&path).await;
+        let commits: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_log()")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM t")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+        assert_eq!((commits, rows), (2, 500));
+
+        assert_eq!(fold_history(&path).await.unwrap(), None, "folded already");
+        let missing = td.path().join("nope.doltlite_db");
+        assert_eq!(fold_history(&missing).await.unwrap(), None);
+    }
+
+    /// A cursor whose commit a fold dropped resolves to the commit holding
+    /// its tree; one with no tree, or a tree no commit holds, resolves to
+    /// nothing, and the consumer reads the store whole.
+    #[tokio::test]
+    async fn a_cursor_outlives_a_fold_by_its_tree() {
+        let td = tempfile::tempdir().unwrap();
+        let (pool, [older, head]) = store_with_history(&td.path().join("s.doltlite_db")).await;
+        let tree = tree_of(&pool, &head).await.unwrap();
+        let older_tree = tree_of(&pool, &older).await.unwrap();
+        assert_eq!(
+            resolve_commit(&pool, &head, Some(&tree)).await.unwrap(),
+            Some(head.clone()),
+            "a commit the store holds resolves to itself"
+        );
+        let folded = fold(&pool).await;
+        assert_eq!(
+            resolve_commit(&pool, &head, Some(&tree)).await.unwrap(),
+            Some(folded)
+        );
+        assert_eq!(resolve_commit(&pool, &head, None).await.unwrap(), None);
+        assert_eq!(
+            resolve_commit(&pool, &older, Some(&older_tree))
+                .await
+                .unwrap(),
+            None,
+            "the fold kept no commit with the older tree"
+        );
+        pool.close().await;
+    }
+
     // ── Volatile split / overlay ──────────────────────────────────
 
     #[test]
@@ -3444,14 +3757,18 @@ mod tests {
         assert_eq!(first[0].1, "widgets:w1");
         assert_eq!(first[0].2, "HTTP 500");
 
+        // An error that spends its first 80 characters on the URL, as
+        // an HTTP failure does, is kept whole: the status is at the end.
+        let long = "GET https://api.example.test/v1/widgets/w1?includeEverything=true\
+                    &view=FULL: 403: You do not have permission to access this widget.";
         let mut tx = pool.begin().await.unwrap();
-        record_object_error(&mut tx, "widgets", "w1", "HTTP 503")
+        record_object_error(&mut tx, "widgets", "w1", long)
             .await
             .unwrap();
         tx.commit().await.unwrap();
         let again = rows(&pool).await;
         assert_eq!(again.len(), 1, "one row per entity, not one per attempt");
-        assert_eq!(again[0].2, "HTTP 503", "the newest error");
+        assert_eq!(again[0].2, long, "the newest error, whole");
         assert_eq!(again[0].3, first[0].3, "first seen is kept");
 
         let mut tx = pool.begin().await.unwrap();

@@ -1,7 +1,7 @@
 // The chip rules: which links count, what a chip and its tooltip say,
 // what a copy carries, and the name a new contact is offered.
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import chipCss from "./chip.css?inline";
 
@@ -21,6 +21,14 @@ import {
   chipAnchors,
   searchQueryFor,
   movesPeople,
+  draftOf,
+  saveDraft,
+  setContactPhoto,
+  people,
+  linkHandle,
+  unlinkHandle,
+  peopleTitle,
+  contactLook,
 } from "./contacts";
 
 function dom(html: string): HTMLElement {
@@ -193,13 +201,13 @@ describe("a photo", () => {
     );
     const slack = withPhoto(
       contact("slack", "Riker", [[TEL, null]]),
-      "/applet/unified_index/asset/u/blobs/r.png",
+      `/data/beeper/ingest/blob/${"ab".repeat(32)}`,
     );
     expect(chipLook(TEL, "+1 555", { mine, sourceContacts: [slack] }, true).photo).toBe(
       "/applet/datalib_contacts/photo/c1",
     );
     expect(chipLook(TEL, "+1 555", { mine: null, sourceContacts: [slack] }, true).photo).toBe(
-      "/applet/unified_index/asset/u/blobs/r.png",
+      `/data/beeper/ingest/blob/${"ab".repeat(32)}`,
     );
     expect(chipLook(TEL, "+1 555", NOBODY, true).photo).toBeNull();
     const el = dom(`<a class="chip" data-handle="${TEL}">+1 555</a>`)
@@ -374,5 +382,149 @@ describe("identifierLook", () => {
     const loose = identifierLook(TEL, "", NOBODY, true);
     expect(loose.text).toBe("+15550123456");
     expect(loose.classes).toContain("handle-unresolved");
+  });
+});
+
+describe("the card's edit calls", () => {
+  type Sent = { url: string; method: string; type: string | null; body: unknown };
+  function answer(status: number, body: unknown): Sent[] {
+    const sent: Sent[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      sent.push({
+        url,
+        method: init?.method ?? "GET",
+        type: headers["content-type"] ?? null,
+        body: init?.body,
+      });
+      return new Response(JSON.stringify(body), { status });
+    });
+    return sent;
+  }
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("reads a contact with no draft as none, not as a failure", async () => {
+    answer(404, { error: "c1 has no draft" });
+    expect(await draftOf("c1")).toBeNull();
+  });
+
+  it("names the published commit the card showed when it saves", async () => {
+    const sent = answer(200, { outcome: "saved", commit: "abc" });
+    expect(await saveDraft("c 1", "seen-hash")).toEqual({ outcome: "saved", commit: "abc" });
+    expect(sent).toEqual([
+      {
+        url: "/applet/datalib_contacts/contact/c%201/draft/save",
+        method: "POST",
+        type: "application/json",
+        body: JSON.stringify({ seen: "seen-hash" }),
+      },
+    ]);
+  });
+
+  it("sends a photo as its own bytes and type, not as JSON", async () => {
+    const sent = answer(200, { photo_url: "/applet/datalib_contacts/photo/c1?v=1" });
+    const photo = new Blob(["png"], { type: "image/png" });
+    await setContactPhoto("c1", photo);
+    expect(sent[0]).toMatchObject({ url: "/applet/datalib_contacts/photo/c1", method: "PUT" });
+    expect(sent[0]!.type).toBe("image/png");
+    expect(sent[0]!.body).toBe(photo);
+  });
+});
+
+describe("an edit to a link", () => {
+  /// What the live updates need to exist; nothing here reads them.
+  class QuietEventSource {
+    static CLOSED = 2;
+    readyState = 0;
+    addEventListener() {}
+    close() {}
+  }
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** Linking riker@ forgot only riker@, so a card drawn from wriker@ kept
+   *  the contact's old list of handles until a live update came, seconds
+   *  later. */
+  it("forgets every handle of the contact it joins or leaves", async () => {
+    const riker = contact("datalib_contacts", "Will Riker", [
+      ["email:wriker@enterprise.test", null],
+      ["email:will@alaska.test", null],
+    ]);
+    vi.stubGlobal("EventSource", QuietEventSource);
+    vi.stubGlobal("fetch", async (url: string) => {
+      const body = url.endsWith("/resolve")
+        ? {
+            resolved: {
+              "email:wriker@enterprise.test": riker,
+              "email:will@alaska.test": riker,
+            },
+          }
+        : url.endsWith("/people")
+          ? { people: {} }
+          : {};
+      return new Response(JSON.stringify(body), { status: 200 });
+    });
+    const shown = ["email:wriker@enterprise.test", "email:will@alaska.test", "email:worf@k.test"];
+    await people.ask(shown);
+    expect(people.get("email:wriker@enterprise.test")?.mine?.key).toBe(riker.key);
+
+    await linkHandle("email:riker@enterprise.test", riker.key);
+    expect(people.get("email:wriker@enterprise.test")).toBeUndefined();
+    expect(people.get("email:worf@k.test")).toBeDefined();
+
+    await people.ask(shown);
+    await unlinkHandle("email:will@alaska.test");
+    expect(people.get("email:wriker@enterprise.test")).toBeUndefined();
+    expect(people.get("email:worf@k.test")).toBeDefined();
+  });
+});
+
+describe("a conversation titled by its people", () => {
+  /** A chat named after its people was titled with the text the source
+   *  showed, so a WhatsApp stranger read as a raw id and a group as a
+   *  comma list nobody could click. */
+  it("is one person's chip, or for several their photos together and each name a chip", () => {
+    const one = peopleTitle([
+      { handle: "whatsapp:100000000000108", shownAs: "WhatsApp user …0108" },
+    ]);
+    expect(one.matches("a.chip[data-handle='whatsapp:100000000000108']")).toBe(true);
+    expect(one.textContent).toBe("WhatsApp user …0108");
+
+    const crew = peopleTitle([
+      { handle: "tel:+17015550101", shownAs: "William Riker" },
+      { handle: "tel:+17015550102", shownAs: "Data" },
+      { handle: "tel:+17015550103", shownAs: "Geordi La Forge" },
+    ]);
+    expect(crew.classList.contains("chip-group")).toBe(true);
+    expect(crew.querySelectorAll(".chip-group-faces > *")).toHaveLength(3);
+    const names = [...crew.querySelectorAll<HTMLElement>("a.chip[data-handle]")];
+    expect(names.map((a) => a.dataset.handle)).toEqual([
+      "tel:+17015550101",
+      "tel:+17015550102",
+      "tel:+17015550103",
+    ]);
+    expect(names.every((a) => !a.querySelector(".handle-photo, .handle-initial"))).toBe(true);
+    expect(crew.textContent).toContain("William Riker, Data, Geordi La Forge");
+  });
+});
+
+describe("a contact's chip", () => {
+  /** A contact you made has no photo of its own yet, so its chip showed
+   *  an initial where every one of its handles' chips showed a face. */
+  it("takes a photo from its handles' records until it has its own", () => {
+    const picard = contact("datalib_contacts", "Jean-Luc Picard", [
+      ["email:jlpicard@enterprise.starfleet", null],
+      ["email:picard@enterprise.starfleet", null],
+    ]);
+    const lookup = vi.spyOn(people, "lookup").mockImplementation((handle) =>
+      handle === "email:picard@enterprise.starfleet"
+        ? {
+            mine: null,
+            sourceContacts: [{ ...picard, source_id: "tng_contacts", photo_url: "/p/picard.jpg" }],
+          }
+        : undefined,
+    );
+    expect(contactLook("", picard).photo).toBe("/p/picard.jpg");
+    expect(contactLook("", { ...picard, photo_url: "/p/own.jpg" }).photo).toBe("/p/own.jpg");
+    lookup.mockRestore();
   });
 });

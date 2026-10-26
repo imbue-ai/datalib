@@ -61,9 +61,15 @@ pub const RESET_FLAG: &str = "--reset";
 /// shape where it can do that in place, fetches nothing, and says in its
 /// outcome when it cannot (`needs_rerun`).
 pub const MIGRATE_FLAG: &str = "--migrate";
+/// Appended by `datalib-dag --compact`, to a step that takes it
+/// (`StepSpec::compacts`): the step folds history nothing reads into fewer
+/// commits, gives back the disk it held, and runs nothing else.
+pub const COMPACT_FLAG: &str = "--compact";
 /// Seconds between a step's checkpoints, at most — see
 /// `config::CheckpointCadence`.
 pub const ENV_CHECKPOINT_CADENCE: &str = "DATALIB_DAG_CHECKPOINT_CADENCE";
+/// How much a render reads at once — see `config::RenderPages`.
+pub const ENV_RENDER_PAGES: &str = "DATALIB_DAG_RENDER_PAGES";
 
 /// The flag a step's params arrive on: the path of a JSON file holding
 /// the entry's `params` subtree. A file rather than an argument because
@@ -280,6 +286,9 @@ pub(crate) async fn run_subprocess(
         .with_context(|| format!("spawn {prog:?}"))
         .map_err(internal)?;
     let _pid_guard = child.id().map(RegisteredChild::new);
+    let memory = child
+        .id()
+        .map(|pid| crate::memory::MemoryWatch::start(pid, &ctx.step_id, sink));
     // Aborted once the step has exited and its pipes have closed. Not at
     // the exit alone: a child the step left behind is still in the group,
     // holding stderr, and the drain below waits on it. While any member is
@@ -370,11 +379,23 @@ pub(crate) async fn run_subprocess(
         }
     }
 
+    let lifetime_peak = match child.id() {
+        Some(pid) if memory.is_some() => {
+            tokio::task::spawn_blocking(move || crate::memory::lifetime_peak_after_exit(pid))
+                .await
+                .ok()
+                .flatten()
+        }
+        _ => None,
+    };
     let status = child
         .wait()
         .await
         .context("wait for subprocess")
         .map_err(internal)?;
+    if let Some(memory) = memory {
+        memory.finish(lifetime_peak);
+    }
     let stderr_tail = stderr_task.await.unwrap_or_default();
     if let Some(t) = stop_task {
         t.abort();
@@ -1237,7 +1258,7 @@ mod tests {
         let consumer = {
             let passes = passes.clone();
             StepSpec::new(
-                "unified_index/grid",
+                "unified_document_index/grid",
                 StepRun::in_process(move |ctx: crate::step::StepCtx| {
                     let passes = passes.clone();
                     async move {
@@ -1282,7 +1303,7 @@ mod tests {
             .filter_map(|e| match e {
                 Event::Metric {
                     step, name, value, ..
-                } if step == "unified_index/grid" && name == "queued" => Some(*value),
+                } if step == "unified_document_index/grid" && name == "queued" => Some(*value),
                 _ => None,
             })
             .collect();
@@ -1355,6 +1376,112 @@ mod tests {
             })
             .collect();
         assert_eq!(seals, vec![("v1".to_string(), Some(7))]);
+    }
+
+    /// The runner reports what a step holds in memory, counting what the
+    /// step spawned: the shell here holds a megabyte or two, the `dd` below
+    /// it a 64 MiB buffer. Once the step ends its reading goes to zero and
+    /// its peak stays.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_step_reports_the_memory_it_and_what_it_spawned_hold() {
+        use crate::memory::{RSS_BYTES, RSS_PEAK_BYTES};
+        const BUFFER: i64 = 64 * 1024 * 1024;
+        let root = tempfile::tempdir().unwrap();
+        // dd rewrites its buffer for as long as it runs, so the pages stay
+        // active: an idle buffer is compressed or swapped out of RSS once
+        // the machine is under memory pressure, which a full test run is.
+        // The step kills it when released; the watchdog bounds it if the
+        // test never gets that far, its output closed so it holds none of
+        // the step's pipes.
+        let spec = StepSpec::new(
+            "g/out",
+            sh(r#"
+                mkdir -p "$DATALIB_DAG_DATA_ROOT/g/out"
+                dd if=/dev/zero of=/dev/null bs=67108864 count=1000000 2>/dev/null & d=$!
+                (sleep 60; kill $d) >/dev/null 2>&1 &
+                while [ ! -f "$DATALIB_DAG_DATA_ROOT/release" ]; do sleep 0.1; done
+                kill $d
+            "#),
+        );
+        let g = Graph::build(vec![spec]).unwrap();
+        let rec = Arc::new(Recorder::default());
+        let runner = Runner::new(root.path()).sink(rec.clone());
+        let round = tokio::spawn(async move { runner.run(&g).await });
+        let readings = |series: &str| -> Vec<i64> {
+            rec.0
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|e| match e {
+                    Event::Metric {
+                        step, name, value, ..
+                    } if step == "g/out" && name == series => Some(*value),
+                    _ => None,
+                })
+                .collect()
+        };
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while !readings(RSS_BYTES).iter().any(|&v| v >= BUFFER) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no reading counted the step's child: {:?}",
+                readings(RSS_BYTES)
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        std::fs::write(root.path().join("release"), "").unwrap();
+        let rep = round.await.unwrap().unwrap();
+
+        assert!(rep.all_ok(), "{rep:#?}");
+        assert_eq!(readings(RSS_BYTES).last(), Some(&0));
+        let peak = readings(RSS_PEAK_BYTES).last().copied().unwrap_or(0);
+        assert!(peak >= BUFFER, "peak {peak}");
+    }
+
+    /// A step that ends before the first sample after its start still
+    /// reports a true peak: the runner reads the step's lifetime peak once
+    /// it has exited, before it is reaped. Without that read this step's
+    /// peak was the few hundred kilobytes it held as it started. macOS
+    /// only, the one kernel that keeps the peak past exit for us.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn a_step_too_short_to_sample_still_reports_its_peak() {
+        use crate::memory::RSS_PEAK_BYTES;
+        const BUFFER: i64 = 64 * 1024 * 1024;
+        let root = tempfile::tempdir().unwrap();
+        // `exec`, so the step's own process is the one holding the buffer.
+        let spec = StepSpec::new(
+            "g/out",
+            sh("exec dd if=/dev/zero of=/dev/null bs=67108864 count=2 2>/dev/null"),
+        );
+        let g = Graph::build(vec![spec]).unwrap();
+        let rec = Arc::new(Recorder::default());
+        let started = std::time::Instant::now();
+        let rep = Runner::new(root.path())
+            .sink(rec.clone())
+            .run(&g)
+            .await
+            .unwrap();
+        assert!(rep.all_ok(), "{rep:#?}");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "the step must end before a second sample for this to test anything"
+        );
+
+        let peak = rec
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                Event::Metric { name, value, .. } if name == RSS_PEAK_BYTES => Some(*value),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0);
+        assert!(peak >= BUFFER, "peak {peak}");
     }
 
     #[tokio::test]
@@ -1653,7 +1780,7 @@ mod tests {
         let mut tail = ErrorTail::default();
         let warn =
             r#"{"level":"WARN","fields":{"message":"an entry was skipped"},"target":"takeout"}"#;
-        let recorded = r#"{"level":"ERROR","fields":{"message":"records were lost; each is a problems row","event":"problems_recorded","count":3},"target":"datalib_problems::recorded"}"#;
+        let recorded = r#"{"level":"ERROR","fields":{"message":"records are missing; each is a problems row","event":"problems_recorded","count":3},"target":"datalib_problems::recorded"}"#;
         let lines = [
             warn,
             warn,

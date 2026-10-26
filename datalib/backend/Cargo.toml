@@ -16,7 +16,7 @@
 
 [package]
 name = "datalib-crates"
-version = "0.42.0"
+version = "0.45.0"
 edition = "2021"
 rust-version = "1.83"
 publish = false
@@ -34,11 +34,11 @@ aes = "0.9"
 anyhow = "1.0"
 async-trait = "0.1"
 axum = "0.8"
-base64 = "0.22"
+base64 = "0.23"
 blake3 = { version = "1", default-features = false, features = ["mmap", "pure", "rayon", "std"] }
-candle-core = "0.10"
-candle-nn = "0.10"
-candle-transformers = "0.10"
+candle-core = "0.11"
+candle-nn = "0.11"
+candle-transformers = "0.11"
 cbc = { version = "0.2", features = ["block-padding"] }
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
@@ -46,7 +46,6 @@ cipher = { version = "0.5", features = ["block-padding"] }
 clap = { version = "4.5", features = ["derive", "env"] }
 csv = "1"
 ctr = "0.10"
-emojis = "0.6"
 flate2 = "1.0"
 futures = "0.3"
 # GHASH and AES-CTR, composed by whatsapp-backup into a hand-rolled GCM
@@ -55,10 +54,6 @@ futures = "0.3"
 # ctr, ghash, hkdf, hmac, sha2) move as one generation (#258).
 ghash = "0.6"
 hex = "0.4"
-# rustls, never native-tls, here and on reqwest and tokenizers: native-tls
-# is openssl on Linux, and openssl cannot be linked into the fully static
-# musl release binaries. The roots come bundled, so no /etc/ssl either.
-hf-hub = { version = "0.4.3", default-features = false, features = ["rustls-tls", "tokio"] }
 hkdf = "0.13"
 hmac = "0.13"
 htmd = "0.5"
@@ -67,19 +62,18 @@ indicatif = "0.18"
 kamadak-exif = "0.6"
 libc = "0.2"
 lofty = "0.25"
-lopdf = { version = "0.44", default-features = false }
-mail-parser = "0.10"
-md-5 = "0.10"
+lopdf = { version = "0.45", default-features = false }
+mail-parser = "0.11"
+md-5 = "0.11"
 mime_guess = "2"
 ndarray = "0.17"
 # Default features: FSEvents on macOS, inotify on Linux.
 notify = "8"
-once_cell = "1.20"
-opentelemetry = "0.27"
-opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic", "trace"] }
-opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+opentelemetry = "0.33"
+opentelemetry-otlp = { version = "0.33", default-features = false, features = ["grpc-tonic", "trace"] }
+opentelemetry_sdk = "0.33"
 # Not the `ocr` feature, which pulls PDFium and ONNX Runtime.
-pdf-inspector = { version = "1.17", default-features = false }
+pdf-inspector = { version = "1.25", default-features = false }
 proc-macro2 = "1"
 process-wrap = { version = "10", default-features = false, features = ["process-group", "tokio1"] }
 prost = "0.14"
@@ -87,26 +81,38 @@ prost-types = "0.14"
 # Nothing links it: //tools/prost_toolchain runs its binary, which
 # crate_universe only generates for a crate in this list.
 protoc-gen-prost = "0.5"
-quick-xml = { version = "0.41", features = ["escape-html"] }
+quick-xml = { version = "0.42", features = ["escape-html"] }
 quote = "1"
 rayon = "1.10"
 regex = "1.11"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
-runfiles = "0.2"
+# rustls on ring with webpki's bundled roots: no native-tls (openssl on
+# Linux, which cannot be linked into the fully static musl release
+# binaries), no aws-lc (a second C crypto library in that link), and no
+# /etc/ssl. reqwest's own `rustls` feature is aws-lc plus the platform's
+# root store, hence `rustls-no-provider` and `datalib_fetch::tls_config()`
+# on every client.
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls-no-provider"] }
+runfiles = "0.3"
 # `debug-embed`: without it a debug build reads the UI from the
 # compile-time path at run time, which a Bazel-built binary cannot.
 rust-embed = { version = "8", features = ["debug-embed", "interpolate-folder-path"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+# The config crates' params as JSON Schema: `datalib-step help <type>
+# <method>` prints each field from it, and a test holds every source's
+# complete example to it.
+schemars = "1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-# Only fsindex's per-directory `.fsindex.yaml`; the config is TOML.
-serde_yaml = "0.9"
 sha2 = "0.11"
-shlex = "1"
+shlex = "2"
 similar = "2"
 # `sqlite`, not `sqlite-unbundled`: under Bazel the libsqlite3-sys
 # annotation in MODULE.bazel links doltlite in place of the bundled
 # amalgamation, and `sqlite-unbundled` would add a dynamic libsqlite3
 # that minimal Linux hosts lack. `tls-none`: we only open local files.
+# That annotation's patch is made against libsqlite3-sys 0.30.1, and
+# sqlx accepts anything up to 0.37: after a bare `cargo update`, run
+# `cargo update -p libsqlite3-sys --precise 0.30.1`.
 sqlx = { version = "0.9", default-features = false, features = [
     "chrono",
     "macros",
@@ -118,10 +124,14 @@ sqlx = { version = "0.9", default-features = false, features = [
 strum = { version = "0.28", features = ["derive"] }
 subtle = "2.6"
 syn = { version = "2", features = ["full"] }
+# Only `system`: the step runner reads the memory its steps hold.
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 tar = "0.4"
 tempfile = "3"
 thiserror = "2.0"
-tokenizers = { version = "0.21", default-features = false, features = ["http", "onig", "rustls-tls"] }
+# No `http`: the perseus embedder fetches tokenizer.json itself and
+# loads it from the file.
+tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
 tokio = { version = "1", features = [
     "fs",
     "io-util",
@@ -137,15 +147,16 @@ tokio = { version = "1", features = [
 toml = "1"
 tracing = "0.1"
 tracing-indicatif = "0.3"
-tracing-opentelemetry = "0.28"
+tracing-opentelemetry = "0.34"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 umap-rs = "0.4.5"
 url = "2"
 urlencoding = "2"
 uuid = { version = "1", features = ["serde", "v4", "v5", "v7"] }
 walkdir = "2"
+webpki-roots = "1"
 webbrowser = "1"
-zip = { version = "7", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [dev-dependencies]
 insta = { version = "1.41", features = ["json", "redactions", "yaml"] }

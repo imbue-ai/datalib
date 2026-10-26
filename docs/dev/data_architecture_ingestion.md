@@ -96,7 +96,7 @@ Because dropping the `jsonb()` wrapper silently falls back to text storage with 
 Every entity table `<t>` is paired with a sidecar `<t>_bookkeeping`. The split is load-bearing — three buckets to think about when adding a column:
 
 1. **Upstream payload data** (a Slack `text`, a GitHub `state`, a Notion `last_edited_time`) → lives inside `payload`. If we need to query or index it, use a VIRTUAL generated column + index or an expression index over `payload->>'$.path'`. Do **not** copy it into a stored column.
-2. **Writer-supplied identity / joins** (synthesized-PK components, FK references to parent entities the walker knows but the payload doesn't, namespace discriminators like beeper's `source`/`network`) → stored typed columns on `<t>`.
+2. **Writer-supplied identity / joins** (synthesized-PK components, FK references to parent entities the walker knows but the payload doesn't, namespace discriminators) → stored typed columns on `<t>`.
 3. **Writer-supplied per-fetch state** (`fetched_at_utc`, `attempt_count`, `last_attempt_at_utc`, `last_error`, `volatile_payload`) → the `<t>_bookkeeping` sidecar.
 
 A per-row resume cursor is the one kind of writer state that lives on the entity table: AirVisual's `<device>.last_ts_ms`, an address book's `ctag` / `sync_token`, a contact's `etag`. Each is a typed column advanced by its own `UPDATE` once the work it vouches for is stored, and left out of the upsert's column list so a re-fetch of the row cannot clobber it.
@@ -238,7 +238,7 @@ The raw store preserves the **semantic content** of upstream responses verbatim 
 
 - **JSON-shaped sources** (HTTP API responses from Slack, Claude, Notion, GitHub, etc.) store the response JSON verbatim, as JSONB.
 - **Binary-protocol sources** (Signal's encrypted protobuf backup, future binary feeds) are **decoded** at download time into JSON of equal semantic content. Encryption layers, compression, binary wire encodings, and other transport-level packaging are artifacts of how the data got to us, not part of the wire data itself. Storing them raw on disk would be "too raw" — the point of the raw store is that a human can `grep`/`jq` it without a decoder in the loop.
-- **File-imported sources** (mbox `.eml` bytes, vCard `.vcf` files, WhatsApp `msgstore.db`, Beeper `index.db`) promote the *semantic* content (typed columns, JSONB payloads) into the entity tables. **File-tree imports go through download** just like API-backed sources: a directory of `.vcf` files lands in the same raw-store row shape CardDAV produces, an mbox lands in the same shape JMAP produces. Render has exactly one input contract per provider regardless of whether the data came over the wire or off disk.
+- **File-imported sources** (mbox `.eml` bytes, vCard `.vcf` files) promote the *semantic* content (typed columns, JSONB payloads) into the entity tables. **File-tree imports go through download** just like API-backed sources: a directory of `.vcf` files lands in the same raw-store row shape CardDAV produces, an mbox lands in the same shape JMAP produces. Render has exactly one input contract per provider regardless of whether the data came over the wire or off disk. An application's own SQLite file (WhatsApp's `msgstore.db`, Beeper's `index.db`, Apple Messages' `chat.db`) is the exception: it is already queryable, so it is mirrored table for table (`datalib/backend/etl/sqlite_mirror/`) and render reads its rows directly.
 
 The rationale: **if all we wanted was a copy of the upstream bytes, we'd just use `cp`.** The raw store earns its keep by being *queryable and human-inspectable* in a way the original bytes aren't — JSONB rows, typed columns, predictable structure across providers. That's the criterion for "is this decoding step OK at download time?" If the alternative to decoding is asking the user to install a special tool to see their own data, the decoding belongs in download.
 
@@ -404,11 +404,13 @@ therefore what it can see:
 | `pdf` | the scan; a file over `max_bytes` is present | path rows of files the scan did not find, then documents no path names. Nothing after a walk that reported errors |
 | `facebook` | each table's chunk files, read whole | rows a table no longer holds, only when every chunk file it was last read from is there and read, with the deleted records' media edges and edges to a `uri` a record of that table stopped naming. A missing chunk (a partial unpack), a file that will not parse, or a walk error deletes nothing in that table, edges included; a table none of whose files is present was left out |
 | `claude` (`export`) | `users.json`, `conversations.json` and `projects/`, each read whole | rows a present file no longer lists. A missing `users.json` or `projects/` deletes nothing, nor does a file whose entries are there but none has a uuid (a `phase:<file>` problem) |
-| `signal` | the newest snapshot, when every frame decodes | recipients, chats, messages and attachment edges it no longer holds. A frame that would not decode, a missing snapshot folder or an unset passphrase deletes nothing |
+| `signal` | each snapshot read, when every frame decodes | recipients, chats, messages and attachment edges it no longer holds, in that snapshot's commit. A frame that would not decode, a snapshot that will not open, a missing snapshot folder or an unset passphrase deletes nothing |
 | `linkedin` | each CSV, read whole | rows its table no longer lists, and, when `Connections.csv` read cleanly, the `contact_photos` edges of connections it no longer lists. A CSV left out of the export, one that will not read, or one with no header row (0 bytes, or only the Notes preamble) deletes nothing, photo edges included; articles prune only after a clean walk |
 | `lightroom`, `apple_photos`, `whatsapp` (msgstore) | the database file, dropped and refilled | structurally. A source with no table to mirror (0 bytes, no tables, filters matching none) drops nothing: a `phase:source` problem, or for lightroom a backup problem or a failed step |
 | `apple_messages` | — | nothing: append-only, since `chat.db` evicts |
+| `google_drive` | — | nothing: a backup, so a file that leaves the listing keeps its rows and captures |
 | `yolink` | — | nothing; append-only telemetry |
+| `linear` | — | nothing: an archived record is listed with its `archivedAt`, and one Linear deletes outright stays as last fetched |
 | `notion`, `beeper` | — | not wired (rework; poorly supported) |
 
 **The hard part is not the deletion, it is establishing the
@@ -612,9 +614,11 @@ channel list, claude's orgs and project docs).
 | github, gitlab | `listed_change_requests`, from each scope's search | the PR / MR sidecar, at `updated_at` | each scope's `updated_at` |
 | email (JMAP, Gmail) | `listed_messages`, from the delta or an enumeration | `emails` sidecar, then the `.eml` edge | — |
 | notion | search results are the `pages` rows | `page_markdown`, `page_comments`, attachment edges | the search's `last_edited_time` |
+| linear | each walked connection's pages are the rows | each table's sidecar, at `updatedAt` | each connection's `updatedAt`, per selection |
 | garmin | days, activities, files | each table's sidecar | activity dates |
 | contacts, calendar (DAV) | `dav_resources`, at each href's etag | `dav_resources` sidecar | — |
 | calendar (Google) | the events page is the content | — | — |
+| google_drive | the file listing, at each file's Drive `version`; each stored revision's export links | `files` sidecar, written with the whole capture; `revision_exports` sidecar, at no version | — |
 | chatgpt, claude | the conversation enumeration, at `update_time` / `updated_at` | `conversations` sidecar, its attachment edges, claude's `projects` and `project_docs_listings` | — |
 | yolink | — | — | each device's readings |
 
@@ -690,6 +694,7 @@ leaves an on-disk superset, and nothing deletes it.
 | yolink | An earlier `devices[].start` is a gap below the spans the device holds |
 | contacts, calendar | A newly selected collection has no token and is listed whole |
 | chatgpt, claude | The enumeration is re-read every run, so a moved `since` admits what it now covers |
+| google_drive | A new kind, a wider `file_ids` or `owned_only` turned off is a listing that names more, and what it names that is not held is owed. A new `revision_exports` format makes every stored revision's export in it owed. A new `exports` format does not reach the versions already captured: that export is only of the current version |
 
 No source records the config it ran under: a local source reads its
 whole input every run under the config it has now (email's mbox
@@ -729,7 +734,7 @@ Distinctions every provider should try to follow.
 
   | Kind | Key | Cleared when |
   |---|---|---|
-  | listing, phase | `listing:<name>`, `phase:<name>` | `fetch` returned `Ok`, was not stopped, and did not call `.cut_short()`: then this run's set replaces the last run's. A run that gave up (`.cut_short()`) or returned `Err` adds its rows and clears none. A failure reported after a stop is dropped, since every request after a stop fails at once. |
+  | listing, phase | `listing:<name>`, `phase:<name>` | `fetch` returned `Ok`, was not stopped, and did not call `.cut_short()` (or `.gave_up(…)`, which cuts short): then this run's set replaces the last run's. A run that was cut short or returned `Err` adds its rows and clears none. A failure reported after a stop is dropped, since every request after a stop fails at once. |
   | config | `config:<setting>:<value>` | the run called `.config(set)`, an empty set included, and was not stopped. Call it once every entry has been looked up, and not at all in a run that could not look. |
   | record | `record:<table>:<id>` | the run said which records of the table it tried: `.records_tried_all(table)` (ignored after a stop), or `.records_tried_all_but(table, untried)` for a run that knows what it did not reach: paths under a folder it could not list (`fsscan::Scan::unseen`), ids a budget left for next time. With neither, failures are added and nothing clears. |
   | skipped | `skipped:<part>:<hash>` | the part (a feed, a file) called `.skipped(part, set)`: it read its input this run. A part that read nothing says nothing. |
@@ -740,7 +745,7 @@ Distinctions every provider should try to follow.
 - **Part of a walk that failed deletes nothing.** A walk or listing with errors cannot tell "gone" from "not seen": hold back the prune for what it could not read, and say so (`fsscan::Scan::deletions_held_back`). A file the walk found and could not open is not such an error: it is there (`Scan::present_unread`), keeps its rows, and is a row of its own (`Scan::report_problems`); a source that deletes only after reading every file still holds back while one is unread.
 - **A store that will not take a write fails the step.** Swallowing it (`warn!`, `.ok()`, `unwrap_or_default()`) commits a run that says it wrote what it did not.
 - **Fail the step only when the run can do nothing useful.** A workspace-wide 401 / 403 from the auth provider before anything was fetched, or a listing with nothing stored from an earlier run to fall back on, should return `Err` from `fetch(...)`, which fails the step. The final commit does not happen ([`RawStoreSession::run`](/datalib/backend/etl/src/raw_store.rs) closes the store uncommitted): what the run sealed at its last checkpoint, a point it called consistent, stands, and the rest is discarded at the next `open`. Sealing at the error instead would make durable a state nothing vouched for, such as a conversation stamped current before its attachments were stored, which the next run would skip.
-- **A give-up keeps what the run fetched.** When the shared retry loop gives up, a rate limit holds, or N back-to-back per-item failures trip a budget, stop asking, record one `phase:` row, call `.cut_short()`, hold the cursor, and return `Ok`, so the commit at the end of the run keeps what landed and the next run resumes. Returning `Err` instead discards everything since the last seal — for a provider that never seals mid-run, the whole run. A test's helper must commit only when `fetch` returns `Ok`, as the processor does, or it cannot see the loss.
+- **A give-up keeps what the run fetched.** When the shared retry loop gives up, a rate limit holds, or N back-to-back per-item failures trip a budget, stop asking, record one `phase:` row, call `.gave_up(said)`, hold the cursor, and return `Ok`, so the commit at the end of the run keeps what landed and the next run resumes. `owed::drain` does all of this when it gives up. `.gave_up` cuts the run short and tells the step, which ends `incomplete` once the store is committed: the Manage row says the download is not done, and its dependents still read what it got. A run that covers less on purpose (one page, one conversation) calls only `.cut_short()`, and succeeds. Returning `Err` instead discards everything since the last seal — for a provider that never seals mid-run, the whole run. A test's helper must commit only when `fetch` returns `Ok`, as the processor does, or it cannot see the loss.
 
 The yolink provider's `CONSECUTIVE_FAILURE_BUDGET = 30` is a template for a failure budget.
 

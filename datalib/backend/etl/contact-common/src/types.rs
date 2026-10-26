@@ -4,6 +4,7 @@
 
 use datalib_contact_schema::NormalizedContact;
 use datalib_handle::Handle;
+use datalib_schema::problems::Problem;
 
 #[derive(Debug, Clone)]
 pub struct ContactDoc {
@@ -23,4 +24,7 @@ pub struct ContactDoc {
     pub upstream_account: Option<String>,
     /// Every raw row the card was built from, for incrementality.
     pub inputs: Vec<datalib_etl_render::inputs::Input>,
+    /// What the provider could not do with the card: a photo its blob
+    /// store lacks.
+    pub problems: Vec<Problem>,
 }

@@ -8,6 +8,20 @@ use std::path::{Path, PathBuf};
 use datalib_source_common::{LocalPath, SourceCommon};
 use serde::{Deserialize, Serialize};
 
+/// This source's config stanzas, for `datalib-step help`.
+pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "messages",
+        toml: include_str!("../examples/minimal_messages.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "messages",
+        toml: include_str!("../examples/complete_messages.toml"),
+    },
+];
+
 /// Tables folded out by [`AppleMessagesConfig::skip_churn`]: the app's
 /// counters and key/value settings, the Spotlight and CloudKit work
 /// queues, and the cloud-sync tombstones. None of them says anything
@@ -33,25 +47,27 @@ pub const DATABASE_IN_FOLDER: &str = "chat.db";
 /// The apple_messages-owned slice of an `apple_messages` source. The
 /// `messages` table is its one way in; the rest are the mirror engine's
 /// knobs, the same ones `apple_photos` exposes.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct AppleMessagesConfig {
-    /// Shared per-source envelope (paths + cross-source tunables),
-    /// resolved by the orchestrator's `normalize()`.
+    /// The options every source takes: an attachment size limit, when to
+    /// give up on failing requests, and the debugging event tape.
     pub common: SourceCommon,
     /// The Messages folder (`~/Library/Messages`), or a `chat.db` file
     /// directly — a copy of it, or an iPhone backup's `3d0d7e5f…` file,
-    /// which is the same database. See [`chat_db_path`].
+    /// which is the same database.
     pub messages: Option<LocalPath>,
     /// Table-name globs to mirror. Default `["*"]`.
     pub include_tables: Vec<String>,
-    /// Table-name globs to skip, applied after [`Self::include_tables`].
+    /// Table-name globs to skip, applied after `include_tables`.
     pub exclude_tables: Vec<String>,
     /// `Table.column` globs to drop from the mirror.
     pub exclude_columns: Vec<String>,
-    /// Fold [`CHURN_TABLE_PATTERNS`] and [`CHURN_COLUMN_PATTERNS`] into
-    /// the exclusions. On by default: with it off, a database nobody
-    /// messaged in still commits every run.
+    /// Also leave out what the app's daemons rewrite on their own: its
+    /// counters and settings, the Spotlight and CloudKit work queues, the
+    /// cloud-sync tombstones and every `index_state` column. On by
+    /// default: with it off, a database nobody messaged in still commits
+    /// every run.
     pub skip_churn: bool,
     /// Take a `VACUUM INTO` snapshot before reading. Messages holds the
     /// file open in WAL mode whenever it is running, so this is the

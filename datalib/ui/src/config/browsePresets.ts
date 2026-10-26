@@ -72,7 +72,7 @@ const EXTRA: Record<string, BrowseColumn[]> = {
   notion: ["account", "author_ref"],
   perseus: ["author_ref"],
   yolink: ["channel"],
-  // The device rows: `channel` is the device name.
+  // `channel` is a device row's device and an activity's type.
   garmin: ["channel", "author_ref"],
 
   // The one source with a real per-row size and count: a document's

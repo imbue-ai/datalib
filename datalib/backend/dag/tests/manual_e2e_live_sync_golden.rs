@@ -283,6 +283,8 @@ const ROW_COUNT_ONLY_STANZAS: &[&str] = &["apple_photos", "lightroom", "whatsapp
 /// - Slack's `channels` and `users` are the workspace-wide listings —
 ///   every channel and every member — that `SKIP_PATH_SEGMENTS` keeps
 ///   out of the golden as files; the tables must not let them back in.
+///   Linear's lists of people, teams, states, labels, statuses and
+///   initiatives are the same: read whole whatever projects are chosen.
 /// - A sensor series (`airvisual_samples`, `garmin_daily`) is thousands
 ///   of rows whose values the provider's own fixtures pin; here the
 ///   count says the step read the files, and the rendered plots say
@@ -295,6 +297,18 @@ const ROW_COUNT_ONLY_TABLES: &[(&str, &str)] = &[
     ("tiny-slack", "channels_bookkeeping"),
     ("tiny-slack", "users"),
     ("tiny-slack", "users_bookkeeping"),
+    ("linear", "users"),
+    ("linear", "users_bookkeeping"),
+    ("linear", "teams"),
+    ("linear", "teams_bookkeeping"),
+    ("linear", "workflow_states"),
+    ("linear", "workflow_states_bookkeeping"),
+    ("linear", "issue_labels"),
+    ("linear", "issue_labels_bookkeeping"),
+    ("linear", "project_statuses"),
+    ("linear", "project_statuses_bookkeeping"),
+    ("linear", "initiatives"),
+    ("linear", "initiatives_bookkeeping"),
     ("airvisual", "airvisual_samples"),
     ("garmin", "garmin_daily"),
     ("garmin", "garmin_daily_bookkeeping"),
@@ -532,7 +546,7 @@ fn manual_e2e_live_sync_golden() {
     // Layout invariant: data_root is a flat set of group dirs plus the one
     // reserved `system/` dir — never the old top-level `raw/` or
     // `rendered_md/`, and the aggregate index DB lives under the
-    // `unified_index` group. Guards against a regression to the
+    // `unified_document_index` group. Guards against a regression to the
     // pre-grouping layout.
     assert!(
         !data_root.join("raw").exists() && !data_root.join("rendered_md").exists(),
@@ -540,9 +554,9 @@ fn manual_e2e_live_sync_golden() {
     );
     assert!(
         data_root
-            .join("unified_index/grid_index/db.doltlite_db")
+            .join("unified_document_index/grid_index/db.doltlite_db")
             .is_file(),
-        "backend index DB must live at unified_index/grid_index/db.doltlite_db"
+        "backend index DB must live at unified_document_index/grid_index/db.doltlite_db"
     );
     // Only the genuinely-derived index dirs are tagged as rebuildable cache so
     // `--exclude-caches` backups skip them (the per-group `render_markdown/` tags
@@ -550,8 +564,10 @@ fn manual_e2e_live_sync_golden() {
     // walk below). `system/` must NOT be tagged — job logs are operational
     // history, not rebuildable from raw.
     assert!(
-        data_root.join("unified_index/CACHEDIR.TAG").is_file(),
-        "unified_index/ must carry a CACHEDIR.TAG marking the index tree as derived cache"
+        data_root
+            .join("unified_document_index/CACHEDIR.TAG")
+            .is_file(),
+        "unified_document_index/ must carry a CACHEDIR.TAG marking the index tree as derived cache"
     );
     assert!(
         !data_root.join("system/CACHEDIR.TAG").exists(),
@@ -559,7 +575,7 @@ fn manual_e2e_live_sync_golden() {
     );
 
     // Snapshot each group's `ingest/` and `render_markdown/` trees, mirroring
-    // the on-disk per-group layout. `system/` and the `unified_index` group
+    // the on-disk per-group layout. `system/` and the `unified_document_index` group
     // (the aggregate index + qmd) are skipped — see the module header.
     let mut stanzas: Vec<String> = std::fs::read_dir(&data_root)
         .expect("read data_root")
@@ -600,17 +616,17 @@ fn manual_e2e_live_sync_golden() {
     // with. The rest of the index is the union of the render stores
     // snapshotted above and is deliberately not dumped again.
     insta::with_settings!({
-        snapshot_path => snap_base().join("unified_index").display().to_string(),
+        snapshot_path => snap_base().join("unified_document_index").display().to_string(),
         prepend_module_to_snapshot => false,
         sort_maps => true,
-        description => "unified_index/grid_index/db.doltlite_db#problems",
+        description => "unified_document_index/grid_index/db.doltlite_db#problems",
     }, {
         assert_json_snapshot!("problems", index_problems(&data_root));
     });
 
     // The qmd index: the per-source split the qmd steps exist for.
     insta::with_settings!({
-        snapshot_path => snap_base().join("unified_index").display().to_string(),
+        snapshot_path => snap_base().join("unified_document_index").display().to_string(),
         prepend_module_to_snapshot => false,
         sort_maps => true,
         description => "the qmd index: documents and embedding left, per source",
@@ -622,9 +638,9 @@ fn manual_e2e_live_sync_golden() {
     // pasted into the search. Derived from `grid_rows`, so a change here
     // with no change above is a change in the derivation.
     insta::with_settings!({
-        snapshot_path => snap_base().join("unified_index").display().to_string(),
+        snapshot_path => snap_base().join("unified_document_index").display().to_string(),
         prepend_module_to_snapshot => false,
-        description => "unified_index/grid_index/search_terms.sqlite, one term a line: kind, value, uuid",
+        description => "unified_document_index/grid_index/search_terms.sqlite, one term a line: kind, value, uuid",
     }, {
         assert_snapshot!("search_terms", search_terms(&data_root));
     });
@@ -1397,10 +1413,10 @@ async fn latest_sync_run(path: &Path) -> Value {
     })
 }
 
-/// The unified index's `problems` table, volatile stamps redacted, ordered
+/// The unified document index's `problems` table, volatile stamps redacted, ordered
 /// by `problem_uuid` like every dumped table.
 fn index_problems(data_root: &Path) -> Value {
-    let db = data_root.join("unified_index/grid_index/db.doltlite_db");
+    let db = data_root.join("unified_document_index/grid_index/db.doltlite_db");
     let mut dump = dump_store(&db);
     let mut rows = match &mut dump {
         Value::Object(map) => map
@@ -1505,7 +1521,7 @@ fn read_contact_specs(path: &Path) -> Vec<ContactSpec> {
 /// Every handle the specs link is an author in the index, so each link
 /// lands on documents rather than on nothing.
 fn assert_handles_indexed(data_root: &Path, specs: &[ContactSpec], after: &str) {
-    let db = data_root.join("unified_index/grid_index/db.doltlite_db");
+    let db = data_root.join("unified_document_index/grid_index/db.doltlite_db");
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

@@ -1,5 +1,5 @@
 //! What a built-in step has published, as the version its outcome reports:
-//! the commit its store's `main` is at. Read however the step ended, since a
+//! where its store's `main` is, spelled as the step's seals spell it. Read however the step ended, since a
 //! failed or stopped step's commits stand, and a writer's open can publish
 //! one its crashed predecessor left. A seal names the same commit the same
 //! way, so finishing on the commit last sealed moves nothing downstream.
@@ -15,17 +15,33 @@ use crate::source::StepEnv;
 /// The version a step's success reports too; `None` for a step whose tree
 /// holds no doltlite store.
 pub async fn version(env: &StepEnv, data_root: &Path) -> Result<Option<String>> {
+    use datalib_etl::doltlite_raw::{content_version_at_path, head_commit_at_path};
     let tree = data_root.join(&env.step);
-    let store = match env.function {
-        Function::Ingest => return crate::ingest::raw_store_version(&tree).await,
-        Function::RenderMarkdown => datalib_etl_render::indexed_markdown::path_for(&tree),
-        Function::GridIndex => datalib_core::layout::grid_index_db(data_root),
+    match env.function {
+        Function::Ingest => crate::ingest::raw_store_version(&tree).await,
+        Function::RenderMarkdown => {
+            content_version_at_path(&datalib_etl_render::indexed_markdown::path_for(&tree)).await
+        }
+        Function::GridIndex => {
+            content_version_at_path(&datalib_core::layout::grid_index_db(data_root)).await
+        }
+        Function::RenderTimeSeries | Function::TimeSeriesIndex => {
+            head_commit_at_path(&time_series_store(env, data_root)).await
+        }
         Function::QmdAggregator
         | Function::KeywordIndex
         | Function::Embed
-        | Function::EmbeddingMap => return Ok(None),
-    };
-    datalib_etl::doltlite_raw::head_commit_at_path(&store).await
+        | Function::EmbeddingMap => Ok(None),
+    }
+}
+
+/// The time-series store a `render_time_series` or `time_series_index`
+/// step writes.
+pub fn time_series_store(env: &StepEnv, data_root: &Path) -> std::path::PathBuf {
+    match env.function {
+        Function::TimeSeriesIndex => datalib_core::layout::time_series_index_db(data_root),
+        _ => datalib_etl::layout::render_time_series_db(data_root, &env.group),
+    }
 }
 
 /// The claim a failed or stopped step reports. A head that cannot be read
@@ -92,7 +108,10 @@ mod tests {
         assert_eq!(claimed[0].path, "mail/ingest");
         assert_eq!(Some(claimed[0].version.clone()), sealed);
 
-        let qmd = env("unified_index/qmd_aggregator", Function::QmdAggregator);
+        let qmd = env(
+            "unified_document_index/qmd_aggregator",
+            Function::QmdAggregator,
+        );
         assert!(
             claims(&qmd, root.path()).await.is_empty(),
             "no store of its own"

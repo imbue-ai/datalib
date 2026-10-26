@@ -1,0 +1,42 @@
+# Signal messages from the Android app's local backups, with every option
+# set, and searchable. Each snapshot in `backup.path` is decrypted with
+# the passphrase held in the environment variable `aep_env_var` names:
+#   export SIGNAL_BACKUP_PASSPHRASE_PICARD='<your 30-digit passphrase>'
+[[groups]]
+id = "signal"
+name = "Signal"
+type = "signal"
+
+[[steps]]
+group = "signal"
+function = "ingest"
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+[steps.params.backup]
+path = "~/Downloads/signal-backup"  # the folder holding the signal-backup-* snapshots
+aep_env_var = "SIGNAL_BACKUP_PASSPHRASE_PICARD"  # env var holding the passphrase;
+                                                 # default SIGNAL_BACKUP_PASSPHRASE
+
+[[steps]]
+group = "signal"
+function = "render_markdown"
+inputs = ["signal/ingest"]
+
+[steps.params]
+period = "month"  # span of each rendered doc: month (default), day, year or all
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "signal"
+function = "keyword_index"
+inputs = ["signal/render_markdown"]
+
+[[steps]]
+group = "signal"
+function = "embed"
+inputs = ["signal/keyword_index"]

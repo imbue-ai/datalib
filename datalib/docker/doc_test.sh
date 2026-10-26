@@ -76,16 +76,18 @@ wait_healthy() {
     return 1
 }
 
-# Prints "<total> <space-separated distinct sources>" for a
-# query (`source` is the row's display label: "Claude", "Mail", "PDF"),
-# retrying while the applet behind the grid is still starting.
+# Prints "<total> <rows returned> <space-separated distinct sources>"
+# for a query (`source` is the row's display label: "Claude", "Mail",
+# "PDF"), retrying while the applet behind the grid is still starting.
+# It asks for every row, up to the applet's page cap: a source whose
+# rows sort last is still in the results.
 rows() {
     local q="$1" i out
     for i in $(seq 1 30); do
-        if out="$(api "/applet/unified_index/search?q=${q}&limit=200" 2>/dev/null | python3 -c '
+        if out="$(api "/applet/unified_document_index/search?q=${q}&limit=100000" 2>/dev/null | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
-print(d["total"], " ".join(sorted({r["source"] for r in d["rows"]})))
+print(d["total"], len(d["rows"]), " ".join(sorted({r["source"] for r in d["rows"]})))
 ')"; then echo "$out"; return 0; fi
         sleep 1
     done
@@ -95,10 +97,11 @@ print(d["total"], " ".join(sorted({r["source"] for r in d["rows"]})))
 
 assert_rows() {  # <query> <min total> [required provider…]
     local q="$1" min="$2"; shift 2
-    local out total providers
-    out="$(rows "$q")"; total="${out%% *}"; providers="${out#* }"
+    local out total returned providers
+    out="$(rows "$q")"; read -r total returned providers <<<"$out"
     echo "doc_test:   q='$q' -> $total rows, providers: $providers"
     (( total >= min )) || { echo "doc_test: expected at least $min rows for q='$q'" >&2; return 1; }
+    (( returned == total )) || { echo "doc_test: q='$q' returned $returned of its $total rows, so a provider check would miss the rest" >&2; return 1; }
     local p
     for p in "$@"; do
         [[ " $providers " == *" $p "* ]] || { echo "doc_test: provider '$p' missing from results" >&2; return 1; }
@@ -129,7 +132,7 @@ doc_test_after() {
             assert_rows "Picard" 1
             ;;
         demo-index)
-            docker exec datalib-demo test -s /opt/datalib/demo/unified_index/qmd_aggregator/qmd/index.sqlite
+            docker exec datalib-demo test -s /opt/datalib/demo/unified_document_index/qmd_aggregator/qmd/index.sqlite
             assert_rows "warp%20core" 1
             ;;
         demo-sql|own-sql)
@@ -139,8 +142,8 @@ doc_test_after() {
             # that is how the page's reader will look at their data
             # root. A container that leaves it unreadable (root-owned
             # 0700, the umask leak of #469) fails here and nowhere else.
-            for f in unified_index/grid_index/db.doltlite_db \
-                     unified_index/qmd_aggregator/qmd/index.sqlite; do
+            for f in unified_document_index/grid_index/db.doltlite_db \
+                     unified_document_index/qmd_aggregator/qmd/index.sqlite; do
                 if ! test -s "$DATA_ROOT/$f"; then
                     echo "doc_test: $DATA_ROOT/$f is missing or empty as seen from the host" >&2
                     ls -laR "$DATA_ROOT" >&2 || true

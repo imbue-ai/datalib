@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { renderDocument } from "../src/cards/renderDocument";
 import { sanitizeRenderedHtml as sanitize } from "../src/cards/sanitize";
 
 const sanitizeRenderedHtml = (html: string) => sanitize(html).html;
+
+/** An attachment at its blob-store address: what a body may load from our origin. */
+const OWN = `/data/mail/ingest/blob/${"ab".repeat(32)}`;
 
 /// The page holds the API session, so a message body that runs script is
 /// a message that owns the user's data. These are the shapes that must
@@ -36,8 +40,8 @@ describe("sanitizeRenderedHtml", () => {
     const md =
       `<details open><summary>3 tool calls</summary><p>x</p></details>` +
       `<time class="msg-ts" datetime="2364-04-11T00:00:00+00:00" title="full">short</time>` +
-      `<audio controls src="/applet/unified_index/asset/u/blobs/a.m4a"></audio>` +
-      `<video controls src="/applet/unified_index/asset/u/blobs/a.mp4"></video>` +
+      `<audio controls src="${OWN}"></audio>` +
+      `<video controls src="${OWN}"></video>` +
       `<a class="source-link" href="https://example.com/x" target="_blank" rel="noopener noreferrer">↗</a>` +
       `<a class="chip" href="slack://user?team=T1&amp;id=U2" title="Data (slack:T1/U2)" data-handle="slack:T1/U2">Data</a>` +
       `<a class="chip" href="datalib:group/slack">Slack</a>` +
@@ -45,7 +49,7 @@ describe("sanitizeRenderedHtml", () => {
       `<a href="gopher://old.example/">x</a>` +
       `<h1 class="page-title" data-page-title-uuid="p1">Title</h1>` +
       `<table><tr><th>a</th><td>b</td></tr></table>` +
-      `<img src="/applet/unified_index/asset/u/blobs/a.png" alt="a" loading="lazy">`;
+      `<img src="${OWN}" alt="a" loading="lazy">`;
     const out = sanitizeRenderedHtml(md);
     for (const keep of [
       '<details open="">',
@@ -78,41 +82,83 @@ describe("sanitizeRenderedHtml", () => {
     expect(sanitizeRenderedHtml(md)).toBe(md);
   });
 
-  // An `.html` a sender attached sits in `blobs/`; framed from a message
-  // body it would run inside the app's chrome (audit 2026-10-02 finding 1).
-  it("drops an iframe that frames anything but a plot page", () => {
-    for (const notPlot of [
+  // An `.html` a sender attached is a page on our origin; framed from a
+  // message body it would run inside the app's chrome (audit 2026-10-02
+  // finding 1).
+  // No renderer frames anything, so no iframe survives.
+  it("drops every iframe", () => {
+    for (const src of [
       "blobs/0123456789abcdef.html",
-      "/applet/unified_index/asset/u/blobs/0123456789abcdef.html",
-      "/applet/unified_index/asset/u/plots/../blobs/x.html",
-      "/applet/unified_index/asset/u/plots/%2e%2e/blobs/x.html",
-      "/applet/unified_index/asset/%2e%2e/plots/x.html",
-      "plots\\..\\blobs\\x.html",
-      "plots/t.html?x=1",
-      "plots/t.svg",
-      "/api/remote_media?url=x",
+      OWN,
+      "plots/t.html",
+      "https://evil.example/",
+      "javascript:alert(1)",
     ]) {
-      const out = sanitizeRenderedHtml(`<iframe src="${notPlot}"></iframe>`);
-      expect(out, notPlot).not.toContain("src=");
+      const out = sanitizeRenderedHtml(`<iframe src="${src}"></iframe>`);
+      expect(out, src).not.toContain("iframe");
     }
   });
 
-  it("keeps an iframe that frames a plot page, relative or rewritten", () => {
-    const own = sanitizeRenderedHtml(
-      `<iframe src="/applet/unified_index/asset/u/plots/t.html" title="t" width="100%" height="520" style="border:1px solid gray"></iframe>`,
-    );
-    expect(own).toContain('src="/applet/unified_index/asset/u/plots/t.html"');
-    expect(own).toContain('height="520"');
-    const relative = sanitizeRenderedHtml(`<iframe src="plots/t.html"></iframe>`);
-    expect(relative).toContain('src="plots/t.html"');
-    for (const foreign of [
-      "https://evil.example/",
-      "//evil.example/",
-      "javascript:alert(1)",
-      "data:text/html,<script>alert(1)</script>",
-    ]) {
-      const out = sanitizeRenderedHtml(`<iframe src="${foreign}"></iframe>`);
-      expect(out, foreign).not.toContain("src=");
+  it("keeps a chart's ids for the document view to draw", () => {
+    const chart = `<div class="time-series-chart" data-time-series="a-1 b-2"></div>`;
+    expect(sanitizeRenderedHtml(chart)).toBe(chart);
+  });
+});
+
+/// Every URL in the rendered body the browser would fetch on its own,
+/// as it would resolve it against the app's page: path and query.
+function fetchedOnOpen(html: string): string[] {
+  const root = document.createElement("div");
+  root.innerHTML = html;
+  const out: string[] = [];
+  const add = (raw: string) => {
+    const url = new URL(raw.trim(), location.href);
+    if (url.protocol === "data:" || url.protocol === "blob:") return;
+    out.push(url.origin === location.origin ? url.pathname + url.search : url.href);
+  };
+  for (const el of Array.from(root.querySelectorAll("*"))) {
+    for (const attr of ["src", "poster", "background"]) {
+      const v = el.getAttribute(attr);
+      if (v) add(v);
     }
+    for (const c of (el.getAttribute("srcset") ?? "").split(",")) {
+      const u = c.trim().split(/\s+/)[0];
+      if (u) add(u);
+    }
+    for (const m of (el.getAttribute("style") ?? "").matchAll(/url\(\s*['"]?([^'")]*)/gi))
+      add(m[1]);
+  }
+  return out;
+}
+
+/// A body is whatever the sender wrote, and the frame it is drawn in
+/// may load from our own origin with the person's cookie. Only an
+/// attachment's blob-store address may load from there: anything else is
+/// a GET the sender chose, sent the moment the document opens.
+describe("a body's references to our own origin", () => {
+  it("load nothing but a blob-store address", () => {
+    for (const url of [
+      "/api/manage/rows?refresh=1",
+      "api/manage/rows?refresh=1",
+      "../api/config",
+      "blobs/a.png",
+      "/applet/unified_document_index/asset/md-1/blobs/a.png",
+      `/data/mail/ingest/blob/${"ab".repeat(32)}/../../../../api/config`,
+      `/data/mail/ingest/blob/%2e%2e/%2e%2e/%2e%2e/api/config`,
+      "/api/remote_media?url=https%3A%2F%2Fpixel.example%2Fa.gif&source=other",
+      "/applet/unified_document_index/problems",
+    ]) {
+      const body =
+        `<img src="${url}"><video poster="${url}"></video><audio src="${url}"></audio>` +
+        `<img srcset="${url} 2x"><div style="background:url('${url}')"></div>`;
+      expect(fetchedOnOpen(renderDocument(body).html), url).toEqual([]);
+    }
+  });
+
+  it("keep a blob-store address, and a part of a stored email", () => {
+    const blob = `/data/mail/ingest/blob/${"ab".repeat(32)}`;
+    const part = `${blob}/part/${"cd".repeat(32)}`;
+    const html = renderDocument(`<img src="${blob}"><audio controls src="${part}"></audio>`).html;
+    expect(fetchedOnOpen(html)).toEqual([blob, part]);
   });
 });

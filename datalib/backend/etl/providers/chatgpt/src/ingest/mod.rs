@@ -152,7 +152,14 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         "conv_uuids": opts.conv_uuids,
     });
     let run = DownloadRun::start(db.pool(), &run_config).await?;
-    let client = ChatGPTClient::with_latchkey(opts.latchkey.clone());
+    let held = db.load_me().await?;
+    let client = ChatGPTClient::with_latchkey(opts.latchkey.clone())
+        .holding_account(
+            held.as_ref()
+                .and_then(|me| me["id"].as_str())
+                .map(String::from),
+        )
+        .renewing_by_browser_login();
     let ctx = Ctx {
         client: &client,
         db: &db,
@@ -288,14 +295,13 @@ impl Ctx<'_> {
                 // The transport refused it because of the stop.
                 Err(_) if self.stop().requested() => break,
                 Err(ChatGPTError::RateLimited { reason, .. }) => {
-                    self.found.phase(
-                        "conversations",
-                        format!(
-                            "rate-limited after {} fetched; {} left for the next run: {reason}",
-                            s.fetched,
-                            named.len() - i
-                        ),
+                    let detail = format!(
+                        "rate-limited after {} fetched; {} left for the next run: {reason}",
+                        s.fetched,
+                        named.len() - i
                     );
+                    self.found.phase("conversations", detail.clone());
+                    self.found.gave_up(format!("conversations: {detail}"));
                     return Ok(true);
                 }
                 Err(ChatGPTError::Permanent(msg)) if msg.contains("HTTP 404") => {
@@ -324,19 +330,28 @@ impl Ctx<'_> {
     /// listed, the never-fetched first. Whether a rate limit ended it.
     async fn listed(&self, s: &mut FetchSummary, since_secs: Option<i64>) -> Result<bool> {
         self.opts.progress.set_message("listing conversations");
+        let walk = |archived| {
+            list_all_conversations(
+                self.client,
+                self.opts.max_pages,
+                since_secs,
+                &self.opts.progress,
+                archived,
+            )
+            .instrument(info_span!("chatgpt_list", archived))
+        };
+        let active = walk(false).await;
+        let listing = if active.failed.is_some() {
+            active
+        } else {
+            active.and_archived(walk(true).await)
+        };
         let Listing {
             items,
             complete,
             failed,
             rate_limited,
-        } = list_all_conversations(
-            self.client,
-            self.opts.max_pages,
-            since_secs,
-            &self.opts.progress,
-        )
-        .instrument(info_span!("chatgpt_list"))
-        .await;
+        } = listing;
         if let Some(e) = failed {
             if self.stop().requested() {
                 return Ok(false);
@@ -346,9 +361,10 @@ impl Ctx<'_> {
             if items.is_empty() && !self.db.has_any_conversation().await? {
                 return Err(anyhow::anyhow!("list conversations: {e}"));
             }
-            self.found.listing("conversations", e);
+            self.found.listing("conversations", e.clone());
             // Every detail fetch would be refused the same way.
             if rate_limited {
+                self.found.gave_up(format!("listing conversations: {e}"));
                 return Ok(true);
             }
         }
@@ -360,9 +376,9 @@ impl Ctx<'_> {
         );
         s.listing = items.len();
 
-        // A complete walk is an authoritative census of the account, so a
-        // conversation we hold that it did not name has been deleted on
-        // chatgpt.com. An incomplete one says nothing: the pages it never
+        // A complete walk of both listings is an authoritative census of
+        // the account, so a conversation we hold that neither named has
+        // been deleted on chatgpt.com. An incomplete one says nothing: the pages it never
         // asked for are full of conversations that still exist. With
         // `since` configured most runs stop early and prune nothing.
         if complete {
@@ -685,12 +701,42 @@ struct Listing {
     rate_limited: bool,
 }
 
-#[instrument(skip_all, fields(max_pages, since_secs))]
+impl Listing {
+    /// The conversations and the archived ones as one listing, whole
+    /// only when both walks were. A conversation archived mid-walk can
+    /// be in both; it is listed once.
+    fn and_archived(mut self, archived: Listing) -> Listing {
+        let named: HashSet<String> = self.items.iter().filter_map(conversation_id).collect();
+        self.items.extend(
+            archived
+                .items
+                .into_iter()
+                .filter(|c| conversation_id(c).is_none_or(|id| !named.contains(&id))),
+        );
+        Listing {
+            items: self.items,
+            complete: self.complete && archived.complete,
+            failed: self.failed.or_else(|| {
+                archived
+                    .failed
+                    .map(|e| format!("archived conversations, {e}"))
+            }),
+            rate_limited: self.rate_limited || archived.rate_limited,
+        }
+    }
+}
+
+fn conversation_id(item: &Value) -> Option<String> {
+    item.get("id").and_then(Value::as_str).map(String::from)
+}
+
+#[instrument(skip_all, fields(max_pages, since_secs, archived))]
 async fn list_all_conversations(
     client: &ChatGPTClient,
     max_pages: Option<usize>,
     since_secs: Option<i64>,
     progress: &datalib_etl::progress::Progress,
+    archived: bool,
 ) -> Listing {
     let mut items: Vec<Value> = Vec::new();
     let mut offset = 0usize;
@@ -699,7 +745,10 @@ async fn list_all_conversations(
     let mut failed = None;
     let mut rate_limited = false;
     loop {
-        let page = match client.list_conversations_page(offset, PAGE_SIZE).await {
+        let page = match client
+            .list_conversations_page(offset, PAGE_SIZE, archived)
+            .await
+        {
             Ok(page) => page,
             Err(e) => {
                 rate_limited = matches!(e, ChatGPTError::RateLimited { .. });
@@ -717,6 +766,7 @@ async fn list_all_conversations(
         let total = page.get("total").and_then(Value::as_u64);
         info!(
             event = "chatgpt_listing_page",
+            archived,
             offset = offset,
             got = page_items.len(),
             total = total.unwrap_or(0),

@@ -1,8 +1,9 @@
 # Cards — source-defined cards and the layouts that host them
 
-The datalib UI is a surface of cards: each card is a piece of
-JavaScript source the user can read (and edit) in the card's header
-bar in edit mode. The host evaluates that source to produce the card's content.
+The datalib UI is a surface of cards: each card is defined by its
+source, a call the user can read (and edit) in the card's header bar in
+edit mode. The host parses that source and calls what it names to
+produce the card's content.
 `datalib/ui/src/cards/types.ts` is the canonical home of every
 shape described here; this doc is the narrative version.
 
@@ -13,21 +14,58 @@ what a card gets, what it can ask for, and what it must not assume.
 
 ## Card source
 
-A card's source is a JS **expression**, e.g.
+A card's source is **one call** of a view or component the app already
+has, with values:
 
 ```js
 searchView()
 documentView("e28ed67d-507b-5319-8732-00e249b6ebf6")
 documentView("e28ed67d-…", "11ec65e9-…")   // doc + section to highlight
+gridView({ q: "picard", columns: ["kind", "title"] })
+comp.user.tetris()
 ```
 
-`compileCardSource` (`datalib/ui/src/cards/cardSource.ts`) wraps
-the expression in `new Function(...viewLibNames, "return (<source>)")`
-and calls it with the view factories as arguments, plus one more name:
-`comp`. Two kinds of name are in scope, then, along with JS globals —
-the builtin factories in `ViewLibs`
-(`datalib/ui/src/cards/libs/index.ts`), and every custom component as
-`comp.<namespace>.<name>`.
+That is the whole language (`datalib/ui/src/cards/cardCall.ts`):
+
+```
+source := id "(" [ arg ("," arg)* [","] ] ")"
+id     := name ("." name)*
+arg    := a JSON5 value
+```
+
+The arguments are [JSON5](https://json5.org/): JSON plus unquoted keys,
+single quotes and trailing commas. Code that builds a source writes
+strict JSON (`formatCardCall`), which is valid JSON5.
+
+`compileCardSource` (`datalib/ui/src/cards/cardSource.ts`) parses the
+call, looks the name up, and calls it with the values. A name is one of
+two things, found by exact lookup of an own property, never by walking
+objects (so `constructor` or `__proto__` name nothing):
+
+- a builtin factory in `ViewLibs` (`datalib/ui/src/cards/libs/index.ts`);
+- a custom component, `comp.<namespace>.<name>`.
+
+**Card source is data, never code.** The same grammar holds wherever
+source comes from: the URL, a saved layout, the box in a card's header.
+There is no evaluator in the page, and the app page's CSP has no
+`'unsafe-eval'`, so a string that reaches one by mistake still cannot
+run. Source that does not parse opens a card saying so, with its text.
+To run your own code in a card, write a component
+(`datalib/backend/http/src/agent_cards_guide.md`).
+
+**Opening a card never writes.** A card's arguments come from whoever
+wrote the source, which may be a link in an email or a page on another
+site (any site may navigate the browser to a card URL). So a view or
+component may read and show what its arguments name, but must not save,
+sync, delete or start work because of them; that waits for the person
+to act inside the card. Text from an argument that goes into HTML (help,
+a title drawn as markup) is escaped (`escapeHtml` in
+`datalib/ui/src/cards/help.ts`). An argument that becomes part of a
+request path is checked to be what the view takes (a number, a
+component's name, an applet's id), so it cannot climb to another route
+with `..`. The cards a URL opens get a tab that the layout kept in the
+library leaves out (`kept` in `views/containerTree.ts`) until the person
+names or pins it, so a link cannot put a card back at every launch.
 
 `comp` is namespaced because the components come from a store that is
 too: `system/frontend/user/` holds what a person or an agent wrote, and
@@ -36,16 +74,6 @@ one directory per applet holds what that applet wrote (see
 never a global — which is what lets two applet instances both offer
 `channels`, and what lets a user component be called `gridView` without
 shadowing the builtin.
-
-Because the source is plain JS, a user-authored card is just a bigger
-expression. An IIFE that composes the factories works:
-
-```js
-(() => {
-  // decide arguments programmatically, then delegate
-  return documentView("e28ed67d-…");
-})()
-```
 
 ## CardRender: the rendering contract
 
@@ -354,6 +382,20 @@ opening the same document twice from a search shows the one tab. A tab
 opened from a pinned tab has no opener, so opening the same card from a
 pinned tab twice makes two tabs.
 
+A view can say more about what is "the same card"
+(`cardSources.ts::sameCard`, which `tabShowing` is handed): a key that
+two of its sources share, and whether a tab of it anywhere in the
+window counts. A source's card is one per window: its key is the group,
+under either of its names (`sourceView`, or the older
+`syncDashboardView`), and its `step` and `tab` only say where to look.
+So a source's or a step's chip double-clicked anywhere, or "Show sync
+dashboard" on any row of that group, shows the card already open. The
+host then publishes `card.reopened` on the bus (`TOPIC_CARD_REOPENED`)
+with the source that asked, and the card shows its Sync tab at the step
+it names, or the tab it names. The tab keeps its own source: the step is
+where to look this time, not what the card is. Every other view is the same card only by its exact source, near
+its opener, as above.
+
 A main window with no kept tree starts with three pinned tabs
 (`defaultPins` in `ContainersView.vue`): the Dashboard, Search
 (`searchView()`) and Sources (`sourcesView()`). A kept tree written
@@ -395,7 +437,9 @@ window; the e2e suite sets it, so specs sharing one library do not
 trade tabs.
 
 **The URL.** A path naming cards (`/code:size:state/…`,
-`router/columns.ts`) is a link: the layout opens those cards as a tab
+`router/columns.ts`, where `code` is card source as in § "Card source",
+so the URL is data like any other source) is a link: the layout opens
+those cards as a tab
 and puts the address back to `/`, since what is open is kept in the
 tree. A `/chat/<uuid>` link — the shape every renderer writes into a
 document body — is routed to that document alone (`router/index.ts`).
@@ -429,8 +473,8 @@ source wizard, feedback).
 
 ## Prebuilt views
 
-The factories in `ViewLibs` are the public surface card source
-programs against:
+The factories in `ViewLibs` are the names card source can call
+besides components:
 
 - The Dashboard's sections, each a card of its own, which the Dashboard
   composite — what a new window opens on — lays out as a solidified
@@ -496,13 +540,13 @@ programs against:
 - `gridView(opts: { url, q?, columns?, name?, placeholder? })` — the
   general-purpose grid: a search bar + a SlickGrid over `url`, any
   table that pages, sorts and groups the way the search does (the
-  Manage screen's problems cell opens `/applet/unified_index/problems`
+  Manage screen's problems cell opens `/applet/unified_document_index/problems`
   this way). `url` is required; without one the card says so and names
   `searchView()` for the search. Each answer says which field names a
   row, which document a row opens and whether qmd ranks its free text
   (`RowsSpec`). Persists `q`/`sel`/`cols` state.
 - `documentView(markdownUuid?, sectionUuid?)` — renders one document
-  (`/applet/unified_index/chat/{markdownUuid}`), highlighting and scrolling to
+  (`/applet/unified_document_index/chat/{markdownUuid}`), highlighting and scrolling to
   `sectionUuid`. A different selection is a different card: the grid
   opens a fresh card rather than mutating an existing one. Shows
   doc-level outgoing edges and decorates span-level edge sources
@@ -511,7 +555,7 @@ programs against:
   no script (`cards/docFrame.ts`). Its links, clicks and selection
   reach the card as events, and the frame scrolls itself.
 - `documentPickerView()` — parameter-less gallery stand-in for
-  `documentView`: lists every rendered document (`/applet/unified_index/docs`) and
+  `documentView`: lists every rendered document (`/applet/unified_document_index/docs`) and
   replaces itself with `documentView("<uuid>")` on pick.
 - `aliasView()` — the component library: every custom component in the
   frontend store, by qualified name; a click opens it with its stored
@@ -552,27 +596,38 @@ programs against:
   the wizard make of it"). Through `host.openCards` it opens beside
   itself a `searchView(...)` for Browse, a `gridView(...)` for a problems count, a
   `logView(...)` for a step's log or the server's, a `historyView(...)`
-  for a row's commit history, a `syncDashboardView(...)` for a group's
-  sync, and `configView()`. What a row's actions do is
+  for a row's commit history, a `syncDashboardView(...)` (its source's
+  card, on its Sync tab) for a group's sync, and `configView()`. What a row's actions do is
   `cards/rowActions.ts`, shared with the dashboard; the card keeps only
   what needs the config's text — edit, rename, remove, compare. The
   `/data_sources` route is this card alone at 1.6× width (`MANAGE_STACK`
   in `router/index.ts`). The card's logic is `cards/sourcesCardModel.ts`
   (`useSourcesCard`); the component holds only the template and styles.
-- `syncDashboardView({ group, step })` — one group's sync
-  (`cards/SyncDashboardCard.ce.vue`): the group's Manage row at the top
-  and each step's row under it, laid out vertically, each with a
-  toolbar of its row-menu actions and small charts over one run
-  (`cards/TimeChart.ce.vue`, drawn by [uPlot](https://github.com/leeoniya/uPlot),
-  whose stylesheet the card's `styleSources` carry into its shadow root;
+- `sourceView({ group, step, tab })` — one source as one card
+  (`cards/SourceCard.ce.vue`), what a source's chip opens. The group's
+  Manage row is at the top: its chip, status, ETA, items, size and a
+  toolbar of its row-menu actions. Under it are two tabs. **Documents**
+  is the group's Browse, a `GridCard` drawn inside this card with the
+  query and columns that suit its type (`rowActions.ts::groupBrowseOpts`);
+  it gets a context of its own that opens cards beside this one and keeps
+  its state inside this card's. A group that has no documents has no
+  tabs, only its sync. **Sync** is each step's row under the group's,
+  laid out vertically, each with a toolbar of its row-menu actions and
+  small charts over one run
+  (`cards/TimeChart.ce.vue`, on the shared chart setup in §"Charts";
   which charts, and their arithmetic, are `cards/dashboardCharts.ts`). The series are
   `GET /api/manage/groups/{id}/dashboard`: every metric the step
   reported, its warning and error lines counted up, and its tree's
   size, for the newest run the group took part in or the one picked.
-  Every chart shares the group's time axis and one crosshair (uPlot's
-  cursor sync, keyed per card). The group's
+  Every chart shares the group's time axis, one crosshair and one zoom
+  (uPlot's cursor sync, keyed per card): a drag across any chart zooms
+  them all, and a double-click on any goes back. A chart of several
+  lines has a legend that turns each on and off. The group's
   log for that run is a collapsible `RunLogPanel` at the bottom.
-  `step` scrolls to that step's section.
+  `step` opens Sync at that step's section; without it the card opens on
+  Documents, where there are any. `syncDashboardView({ group, step })`
+  is the card's older name and opens it on Sync, so a saved layout or a
+  link written before still opens.
 - `logView({ run, step, launch, q, jumpToEnd })` — the run log
   (`components/RunLogPanel.ce.vue` in `cards/LogCard.ce.vue`): one
   process's lines — a step's newest attempt, the runner, a launch of the
@@ -619,10 +674,83 @@ programs against:
   everything with them. The contacts app's row on the Manage screen
   opens it with Browse (`appletBrowseSource`), and the card gallery
   lists it.
+- `timeSeriesView()` — every time series in the time-series index
+  (`cards/TimeSeriesCard.ce.vue`, rules in `cards/timeSeries.ts`), from
+  the `unified_time_series_index` applet. A list grouped by source picks
+  them, the time series about one document (an activity's) folded
+  under its name, newest first; each pick is drawn on one chart, one axis per quantity and two
+  at most. Values of one quantity are converted to one unit through the
+  factors the applet reads from their UCUM codes: a duration in hours or
+  minutes and a distance in km as suits its size, anything else in the
+  unit of the first time series on the axis. A time series of text is
+  listed but not drawn. The range buttons end at the newest point picked, and the
+  points are asked for at about one per pixel: past that the applet
+  answers buckets, drawn as each bucket's mean with a band from its
+  minimum to its maximum. Hovering reads every line at that time. The
+  chart's legend names each line, and the axis it is on when there are
+  two; a click turns a line off or on, a double-click shows it alone
+  and another shows them all, and its × takes the line off the chart.
+  Dragging across the chart zooms in and asks the applet for that
+  stretch again at one point per pixel of the plot, so a zoom shows
+  finer data rather than stretched buckets; a double-click goes back to
+  the range. The picks and the range are the card's state, the zoom
+  and the lines turned off are not; it reads again on the root's
+  `time_series_index_changed` frame. The time-series applet's row on the
+  Manage screen opens it with Browse, and the card gallery lists it. Its
+  chart (`TimeSeriesChart.vue`) also draws the charts inside documents
+  (`docs/dev/time_series.md` §"Charts in documents").
 - `configView()` — `config.toml` itself, edited directly, saved through
   the backend's loader. Reloads on the root's `config_changed` frame
   and, a beat sooner, on the `config.written` bus topic a card publishes
   after writing the file.
+
+## Charts
+
+Every chart in the UI is drawn by [uPlot](https://github.com/leeoniya/uPlot)
+on one setup, in `datalib/ui/src/cards/plot/`: the sync dashboard's
+small charts (`TimeChart.ce.vue`), and the time-series chart
+(`TimeSeriesChart.vue`) in the Time series card and inside documents.
+A new chart starts there.
+
+- **`usePlot(box, spec)`** (`usePlot.ts`) is a plot's whole life in a
+  Vue component. It builds the plot on mount and again whenever
+  `spec.shape()` changes, and otherwise hands it `spec.data()` as new
+  data; sizes it to its box (a fixed `height`, or the box's); rebuilds
+  it in the new colours when the colour scheme changes; and destroys
+  it with the component. `syncKey` shares a crosshair, and a zoom, with
+  every plot of that key. `zoom` turns on dragging along x to zoom and a
+  double-click to go back to `zoom.base()`, and tells `zoom.changed`
+  about each. `shown` says which series are drawn, and the box says
+  which are as `data-shown` ("1" or "0" a series), which is what an e2e
+  spec reads off a canvas.
+- **`PlotLegend.vue`** is the legend: every line with its colour and,
+  optionally, a value and a note. A click turns a line on or off; a
+  double-click shows it alone, and another shows them all again (the
+  rules are `plot.ts::toggled` and `isolated`). Its `after` slot holds
+  anything per line, such as the Time series card's ×.
+- **`plot.ts`** holds the rest: `seriesColor(i)`, the categorical
+  palette as the theme's `--viz-series-1`…`6` tokens (in `theme.css`);
+  `themeOf(el)`, which reads the colours a canvas needs off those
+  tokens, since a canvas cannot take `var()`; `axis()`, the app's axis
+  look; and `withAlpha()` for a fill.
+- **`PLOT_CSS`** (`plotCss.ts`) is uPlot's own stylesheet and `plot.css`
+  (the crosshair, the zoom's selection, the legend). Neither a card's
+  shadow root nor a document's frame sees the page's styles, so every
+  card that draws a chart lists it in its `styleSources`, and
+  `docFrame.ts` puts it in the frame's stylesheet.
+
+A plot in a document's frame needs one thing more. uPlot listens on the
+window and document it was loaded in — the app's — for the end of a
+drag and for scrolling, while a chart in a frame gets the frame's.
+`usePlot` passes a drag's mouseup and the frame's scroll on to uPlot
+(`inFrame`), so zoom and the hover readout work there as they do in a
+card.
+
+Two drawings are not uPlot and are not meant to be: a grid cell's
+sparkline (`cellRenderers.ts::sparkTrack`, over `config/sparkline.ts`),
+a 120×18 glyph with no axes or interaction, drawn as SVG so a grid
+repaint costs no canvas; and the embedding map (`UmapCard.ce.vue`), a
+two-dimensional map with its own spatial index, pan and zoom.
 
 ## Typed tables
 
@@ -718,9 +846,9 @@ does not, so they are joined where they are live, and one link made in
 a document redraws every grid showing it. How, and what a chip does on
 click: [`chips.md`](chips.md) §"In a grid".
 
-`GET /api/manage/rows` and the `unified_index` applet's `/search` are
+`GET /api/manage/rows` and the `unified_document_index` applet's `/search` are
 the two producers. The applet resolves the search grid's Source
-identity itself, from `config.toml` (`applets/src/unified_index/columns.rs`)
+identity itself, from `config.toml` (`applets/src/unified_document_index/columns.rs`)
 — the group's name, led by the configured source's own mark, as the
 Manage screen's Name cell is — which is
 what keeps renaming a source free of a re-index. The cell styles live

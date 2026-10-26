@@ -175,7 +175,7 @@ pub async fn forget_in_tx(
 
 /// A thread row is its emails, oldest first: written from the email
 /// rows in the transaction that changes them, so it is never behind.
-async fn rebuild_threads_in_tx(
+pub(super) async fn rebuild_threads_in_tx(
     tx: &mut Transaction<'_, Sqlite>,
     now: &IsoOffsetTimestamp,
     threads: &BTreeSet<(String, String)>,
@@ -301,14 +301,16 @@ pub async fn scopes_owed(pool: &SqlitePool, admitted: &BTreeSet<String>) -> Resu
 
 /// An enumeration of `scopes` reached its end. With `named`, every id
 /// it listed, it covered the whole account, so a listed message it did
-/// not name is gone. One transaction: the scopes are listed whole
-/// exactly when what they did not name has been deleted. Returns how
-/// many emails went.
+/// not name is gone; with `rows_of` too, so is any email row of that
+/// account it did not name, listed or not (a Takeout's). One
+/// transaction: the scopes are listed whole exactly when what they did
+/// not name has been deleted. Returns how many emails went.
 pub async fn close_enumeration(
     pool: &SqlitePool,
     now: &IsoOffsetTimestamp,
     scopes: &[String],
     named: Option<&BTreeSet<String>>,
+    rows_of: Option<&str>,
     email_id_of: EmailIdOf,
 ) -> Result<usize> {
     let mut tx = pool.begin().await.context("begin enumeration close tx")?;
@@ -325,6 +327,22 @@ pub async fn close_enumeration(
             .collect();
         gone = forget_in_tx(&mut tx, now, &unnamed, email_id_of).await?;
         datalib_etl::prune::record("listed messages", listed.len(), unnamed.len());
+        if let Some(account_id) = rows_of {
+            let named_rows: BTreeSet<String> = named.iter().map(|id| email_id_of(id)).collect();
+            let rows: Vec<String> =
+                sqlx::query_scalar("SELECT id FROM emails WHERE account_id = ?")
+                    .bind(account_id)
+                    .fetch_all(&mut *tx)
+                    .await
+                    .context("select the account's emails")?;
+            let unnamed_rows: Vec<String> = rows
+                .iter()
+                .filter(|id| !named_rows.contains(*id))
+                .cloned()
+                .collect();
+            gone += write_batch_in_tx(&mut tx, now, Vec::new(), &unnamed_rows, email_id_of).await?;
+            datalib_etl::prune::record("unlisted emails", rows.len(), unnamed_rows.len());
+        }
     }
     for scope in scopes {
         sqlx::query("INSERT INTO listed_whole (scope) VALUES (?) ON CONFLICT(scope) DO NOTHING")

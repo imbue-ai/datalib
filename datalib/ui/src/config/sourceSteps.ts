@@ -11,12 +11,11 @@
 // a custom executable the wizard knows nothing about.
 //
 // The wizard writes a source as one unit — the group, its `ingest`
-// step and its `render_markdown` step — from one form, and edits it the
-// same way. Writes are whole-text: add/delete splice the text the
-// editor holds. Field-level editing that preserves comments needs a
-// format-preserving TOML writer, so until then `paramsAreRepresentable`
-// gates the Edit button and the wizard never silently drops something
-// it can't model.
+// step and its `render_markdown` step — from one form. Adding and
+// deleting splice whole entries into the text the editor holds. Editing
+// changes only the keys the form owns whose value changed, one key at a
+// time (`tomlPatch.ts`), so whatever else a person wrote into the source
+// — a key the form has no field for, `env`, a comment — is kept as it is.
 //
 // An applet is never scheduled and owns no artifacts, so most row
 // actions don't apply to it — but it is configured, it can fail to
@@ -30,6 +29,7 @@ import { formatBytes, parseByteSize } from "./byteSize";
 import { catalogForStep } from "./catalog";
 import type { Answer, CatalogEntry, Field, FieldPhase, Preset } from "./catalog";
 import { editStringArray, quote } from "./tomlText";
+import { deleteIn, setIn } from "./tomlPatch";
 
 /// Which wave a step belongs to, for display and for picking the right
 /// half of a catalog entry's fields. Read off the step's `function`.
@@ -91,6 +91,7 @@ function groupedName(
 ): string {
   if (!group.name) return defaultName(id);
   if (phase === "ingest") return group.name;
+  if (fn === "render_time_series") return `${group.name} (render time series)`;
   if (phase === "render") return `${group.name} (render markdown)`;
   if (fn === "keyword_index") return `${group.name} (keyword index)`;
   if (fn === "embed") return `${group.name} (embeddings)`;
@@ -103,7 +104,9 @@ function groupedName(
 const PHASE_BY_FUNCTION: Record<string, StepPhase> = {
   ingest: "ingest",
   render_markdown: "render",
+  render_time_series: "render",
   grid_index: "index",
+  time_series_index: "index",
   qmd_aggregator: "index",
   keyword_index: "index",
   embed: "index",
@@ -120,10 +123,12 @@ function phaseOfFunction(fn: string | null): StepPhase {
 /// that lives here rather than in anyone's config file. A `name =` someone did
 /// set still wins, and the id stays visible beside the name in the grid.
 const DEFAULT_NAMES: Record<string, string> = {
-  "unified_index/grid_index": "Unified Index (table)",
-  "unified_index/qmd_aggregator": "Unified Index (QMD)",
-  "unified_index/embedding_map": "Unified Index (map)",
-  unified_index: "Unified Index (Applet)",
+  "unified_document_index/grid_index": "Document Index (table)",
+  "unified_document_index/qmd_aggregator": "Document Index (QMD)",
+  "unified_document_index/embedding_map": "Document Index (map)",
+  unified_document_index: "Document Index (Applet)",
+  "unified_time_series_index/time_series_index": "Time Series Index",
+  unified_time_series_index: "Time Series Index (Applet)",
   datalib_contacts: "Contacts (Applet)",
 };
 
@@ -306,7 +311,7 @@ export function listSteps(text: string): ConfiguredStep[] {
   return [...steps, ...applets];
 }
 
-/// `datalib-applet unified_index` → `unified_index`. Null for anything
+/// `datalib-applet unified_document_index` → `unified_document_index`. Null for anything
 /// else, which is legitimate — an applet may be any executable.
 function appletType(command: string): string | null {
   const words = command.trim().split(/\s+/);
@@ -338,7 +343,9 @@ function leafPaths(value: unknown, prefix = ""): string[] {
   return out;
 }
 
-/// Can the wizard round-trip this step without losing anything?
+/// Does the form have a field for every param this step holds? Saving an
+/// edit keeps the ones it has none for (`patchSource`); the form names
+/// them (`untouchedSettings`).
 export function paramsAreRepresentable(
   step: ConfiguredStep,
   entry: CatalogEntry,
@@ -359,7 +366,7 @@ export function paramsAreRepresentable(
 
 /// Keys a hand-written config may still carry that no longer do anything
 /// (`datalib-dag --check` warns at each). Saving the form drops them,
-/// which is what the warning asks for, so they do not block an edit.
+/// which is what the warning asks for.
 const INERT = new Set(["common.always_clear_before_ingest", "export.fetch_photos"]);
 
 /// A descriptor's presets for one phase. Same default as a field's:
@@ -470,18 +477,13 @@ function matchOption(options: { value: string }[], value: unknown): unknown {
 /// either way.
 export function seedFieldValues(entry: CatalogEntry, steps?: SourceSteps): FieldValues {
   const next: FieldValues = {};
-  for (const field of entry.fields ?? []) {
+  // `fieldsFor`, not `entry.fields`: the account field a latchkey source
+  // gets without declaring one has to be read back too.
+  for (const field of [...fieldsFor(entry, "download"), ...fieldsFor(entry, "render")]) {
     const step = (field.phase ?? "download") === "render" ? steps?.render : steps?.ingest;
     const existing = step ? getParam(step.params, field.target) : undefined;
     if (existing !== undefined) {
-      next[field.target] =
-        field.kind === "string_list"
-          ? ((existing as string[]) ?? [])
-          : field.kind === "select"
-            ? matchOption(field.options, existing)
-            : field.kind === "bytes"
-              ? bytesText(existing)
-              : existing;
+      next[field.target] = formValue(field, existing);
     } else if (field.kind === "int" && field.default !== undefined && !steps) {
       next[field.target] = field.default;
     } else if (field.kind === "bytes" && field.default !== undefined && !steps) {
@@ -497,6 +499,20 @@ export function seedFieldValues(entry: CatalogEntry, steps?: SourceSteps): Field
     }
   }
   return next;
+}
+
+/// A value from the config as the form holds it.
+function formValue(field: Field, existing: unknown): unknown {
+  switch (field.kind) {
+    case "string_list":
+      return Array.isArray(existing) ? existing : [];
+    case "select":
+      return matchOption(field.options, existing);
+    case "bytes":
+      return bytesText(existing);
+    default:
+      return existing;
+  }
 }
 
 // Writing
@@ -826,9 +842,8 @@ function = ${quote(functionOf(opts.phase))}${inputsLine}${params ? `\n${params}`
 
 /// Everything the wizard writes for one source, in the order it goes
 /// into the file: the group (when creating), the ingest step, and the
-/// render step for a provider that renders. A provider that renders
-/// nothing (`renderStep: false`) gets no render step and no
-/// `renderId`.
+/// render step unless the source turned rendering off. A download-only
+/// provider (`rendersDocuments: false`) always gets its render step.
 export function buildSource(opts: {
   entry: CatalogEntry;
   group: string;
@@ -838,15 +853,15 @@ export function buildSource(opts: {
   /// Write the `[[groups]]` block too. Off when editing: the group
   /// already exists and is renamed in place.
   withGroup: boolean;
-  /// Whether this source wants its render step. Defaults to whatever
-  /// the provider can do; the wizard passes the answer the person gave,
-  /// which is the one that decides.
+  /// Whether this source wants its render step: yes by default, and
+  /// the wizard passes the answer the person gave. Ignored for a
+  /// download-only provider.
   renders?: boolean;
 }): { groupBody: string | null; stepsBody: string; renderId: string | null } {
   const { entry, group, values } = opts;
   const ingestId = stepIdFor(group, "download");
   const ingest = buildStep({ entry, group, phase: "download", values });
-  const renders = entry.renderStep !== false && opts.renders !== false;
+  const renders = entry.rendersDocuments === false || opts.renders !== false;
   const render = renders
     ? buildStep({ entry, group, phase: "render", inputs: [ingestId], values })
     : null;
@@ -942,9 +957,14 @@ function setGroupLine(text: string, groupId: string, key: string, line: string |
 
 /// The fan-in steps, by function: the SQL index the grid reads, which
 /// consumes rendered markdown; the qmd aggregator, which runs after each
-/// source's own qmd steps; and the map, which reads the aggregator. A
-/// source can be in one and not another.
-export type FanInFunction = "grid_index" | "qmd_aggregator" | "embedding_map";
+/// source's own qmd steps; the map, which reads the aggregator; and the
+/// time-series index, which reads each source's time series. A source
+/// can be in one and not another.
+export type FanInFunction = "grid_index" | "qmd_aggregator" | "embedding_map" | "time_series_index";
+
+/// The groups the fan-ins are filed under: the document index and the
+/// time-series index.
+const FAN_IN_GROUPS = ["unified_document_index", "unified_time_series_index"];
 
 /// The fan-ins a render step feeds.
 const RENDER_FAN_INS: FanInFunction[] = ["grid_index"];
@@ -958,14 +978,16 @@ const STEP_TABLE = /(\[\[steps\]\])([\s\S]*?)(?=\n[ \t]*\[|$)/g;
 
 const INPUTS_OPEN = /^[ \t]*inputs[ \t]*=[ \t]*\[/m;
 
-/// Is this step body a fan-in — filed under the `unified_index` group,
-/// or, for a custom step, writing an `unified_index/…` id — and, when
-/// `only` names some, one of those?
+/// Is this step body a fan-in — filed under one of `FAN_IN_GROUPS`, or,
+/// for a custom step, writing an id under one — and, when `only` names
+/// some, one of those?
 function isFanIn(body: string, only?: FanInFunction[]): boolean {
-  const verbatim = /id\s*=\s*"unified_index\/([^"]*)"/.exec(body);
-  if (!verbatim && !/group\s*=\s*"unified_index"/.test(body)) return false;
+  const verbatim = /id\s*=\s*"([^"/]*)\/([^"]*)"/.exec(body);
+  const filed = /group\s*=\s*"([^"]*)"/.exec(body)?.[1];
+  const underFanIn = verbatim !== null && FAN_IN_GROUPS.includes(verbatim[1]!);
+  if (!underFanIn && !(filed !== undefined && FAN_IN_GROUPS.includes(filed))) return false;
   if (!only) return true;
-  const fn = /function\s*=\s*"([^"]*)"/.exec(body)?.[1] ?? verbatim?.[1];
+  const fn = /function\s*=\s*"([^"]*)"/.exec(body)?.[1] ?? (underFanIn ? verbatim?.[2] : undefined);
   return only.includes(fn as FanInFunction);
 }
 
@@ -1012,9 +1034,51 @@ export function unwireFromFanIns(text: string, stepId: string, only?: FanInFunct
 /// grouped step says so with `group` + `function`; a custom step filed
 /// outside any group says it in the id it writes.
 export function fanInFunctionOf(step: ConfiguredStep): string | null {
-  if (step.group === "unified_index") return step.function;
+  if (step.group !== null && FAN_IN_GROUPS.includes(step.group)) return step.function;
   const [group, fn] = step.id.split("/");
-  return step.group === null && group === "unified_index" ? (fn ?? null) : null;
+  return step.group === null && group !== undefined && FAN_IN_GROUPS.includes(group)
+    ? (fn ?? null)
+    : null;
+}
+
+/// The source types whose data is also time series. Mirrors
+/// `datalib_dag::config::TIME_SERIES_SOURCE_TYPES`; hand-kept in step with it.
+export const TIME_SERIES_TYPES = ["garmin", "yolink", "airvisual"];
+
+const TIME_SERIES_GROUP = "unified_time_series_index";
+
+/// Whether a source of `type` may have an `embed` step. A time-series
+/// source's markdown is daily summaries of numbers: the keyword index
+/// finds everything in it, and embedding it costs minutes and gigabytes
+/// for nothing. Mirrors `datalib_migrate_config`'s
+/// `upgrade_time_series_embeds`, which takes the step out of a config
+/// that has one.
+export function embedAllowed(type: string | null | undefined): boolean {
+  return !type || !TIME_SERIES_TYPES.includes(type);
+}
+
+/// Give a source of a time-series type its `render_time_series` step and
+/// a place in the time-series index's inputs, adding the index and the
+/// applet that serves it when the config has none. A source of any other type is left as it is.
+export function setTimeSeriesStep(text: string, group: string, type: string): string {
+  if (!TIME_SERIES_TYPES.includes(type)) return text;
+  const id = `${group}/render_time_series`;
+  let next = text;
+  if (!listSteps(next).some((s) => s.id === id)) {
+    next = insertEntries(
+      next,
+      `[[steps]]\ngroup = ${quote(group)}\nfunction = "render_time_series"\ninputs = [${quote(stepIdFor(group, "download"))}]`,
+    );
+  }
+  if (!listSteps(next).some((s) => fanInFunctionOf(s) === "time_series_index")) {
+    next =
+      `${next.replace(/\s*$/, "")}\n\n[[groups]]\nid = ${quote(TIME_SERIES_GROUP)}\n` +
+      `name = "Time Series Index"\n\n[[steps]]\ngroup = ${quote(TIME_SERIES_GROUP)}\n` +
+      `function = "time_series_index"\ninputs = []\n\n[[applets]]\n` +
+      `group = ${quote(TIME_SERIES_GROUP)}\nid = ${quote(TIME_SERIES_GROUP)}\n` +
+      `command = ${quote(`datalib-applet ${TIME_SERIES_GROUP}`)}\n`;
+  }
+  return wireIntoFanIns(next, id, "time_series_index");
 }
 
 /// A source's own qmd steps, as `[[steps]]` blocks: its keyword index,
@@ -1041,14 +1105,17 @@ export function qmdIndexingOf(steps: ConfiguredStep[], group: string): QmdIndexi
   return has("embed") ? "keyword_and_embed" : "keyword";
 }
 
-/// Give a source the qmd steps `indexing` asks for — those it lacks — and
-/// a place in the aggregator's inputs, and take away the ones it does not
-/// ask for, with every step that reads them. Only where the config has the
+/// Give a source the qmd steps `asked` for — those it lacks — and a place
+/// in the aggregator's inputs, and take away the ones it does not ask
+/// for, with every step that reads them. Never an `embed` step for a
+/// type that may not have one (`embedAllowed`). Only where the config has the
 /// aggregator: search is off without one, and the aggregator is what
 /// retires a source's collection once it goes.
-export function setQmdSteps(text: string, group: string, indexing: QmdIndexing): string {
+export function setQmdSteps(text: string, group: string, asked: QmdIndexing): string {
   const [keyword, embed] = buildQmdSteps(group);
   const all = listSteps(text);
+  const type = listGroups(text).find((g) => g.id === group)?.type;
+  const indexing = asked === "keyword_and_embed" && !embedAllowed(type) ? "keyword" : asked;
   const aggregated = all.some((s) => s.kind === "step" && fanInFunctionOf(s) === "qmd_aggregator");
   const wanted =
     !aggregated || indexing === "none" ? [] : indexing === "keyword" ? [keyword] : [keyword, embed];
@@ -1107,7 +1174,7 @@ export function readersOf(ids: string[], all: ConfiguredStep[]): ConfiguredStep[
 }
 
 /// The group every source feeds.
-const INDEX_GROUP = "unified_index";
+const INDEX_GROUP = "unified_document_index";
 
 /// Add entries — a source, a comparison, a source's qmd steps — where the
 /// file keeps reading in the order data flows: each step below the steps
@@ -1278,15 +1345,143 @@ export function moveAgainstDataFlow(
   return above ? { readBy: above } : null;
 }
 
-/// Replace a source's steps with freshly generated ones, where the first
-/// of them was, so an edit moves nothing. Every cut is made against the
-/// text as parsed, the last first. Only safe when
-/// `paramsAreRepresentable` said so — see this module's header.
-export function replaceSteps(text: string, steps: ConfiguredStep[], body: string): string {
-  const [first, ...rest] = spans(text, steps);
-  if (!first) return insertEntries(text, body);
-  return tidy(splice(cut(text, rest), first[0], first[1], body));
+/// Save an edited source's form into `text`. Each of its steps keeps its
+/// place and everything the form does not own; of the keys the form does
+/// own, only those whose value changed are written. A step the source
+/// lacks is added, and a render step it no longer wants is removed. The
+/// group's own lines are `renameGroup`'s and `describeGroup`'s. Throws
+/// when a key cannot be written without changing something else.
+export function patchSource(
+  text: string,
+  opts: { entry: CatalogEntry; group: string; values: FieldValues; renders?: boolean },
+): string {
+  const { entry, group, values } = opts;
+  const renders = entry.rendersDocuments === false || opts.renders !== false;
+  let next = text;
+  for (const phase of ["download", "render"] as const) {
+    if (phase === "render" && !renders) continue;
+    next = patchStep(next, group, phase, entry, values);
+  }
+  const have = sourceStepsOf(group, listSteps(next));
+  if (!have.ingest) {
+    const ingest = buildStep({ entry, group, phase: "download", values });
+    // Above the render step that reads it, so the file still reads in
+    // the order data flows.
+    next = have.render
+      ? tidy(
+          splice(
+            next,
+            extendOverComments(next, have.render.start),
+            extendOverComments(next, have.render.start),
+            ingest,
+          ),
+        )
+      : insertEntries(next, ingest);
+  }
+  if (renders && !have.render) {
+    const inputs = [stepIdFor(group, "download")];
+    next = insertEntries(next, buildStep({ entry, group, phase: "render", inputs, values }));
+  } else if (!renders && have.render) {
+    next = removeSteps(next, [have.render]);
+  }
+  return next;
 }
+
+/// One step's params brought to what the form says, key by key.
+function patchStep(
+  text: string,
+  group: string,
+  phase: FieldPhase,
+  entry: CatalogEntry,
+  values: FieldValues,
+): string {
+  const fn = functionOf(phase);
+  const at = listSteps(text)
+    .filter((s) => s.kind === "step")
+    .findIndex((s) => s.group === group && s.function === fn);
+  if (at < 0) return text;
+  const params = () => listSteps(text).filter((s) => s.kind === "step")[at].params;
+  const ref = { array: "steps", index: at };
+  const before = params();
+  const wanted = new Map(paramEntries(entry, values, phase).map((e) => [e.target, e]));
+  const owned = new Set([
+    ...presetsFor(entry, phase).map((p) => p.target),
+    ...fieldsFor(entry, phase).map((f) => f.target),
+    ...INERT,
+  ]);
+  const fields = new Map(fieldsFor(entry, phase).map((f) => [f.target, f]));
+  for (const target of owned) {
+    const path = ["params", ...target.split(".")];
+    const want = wanted.get(target);
+    const had = getParam(before, target);
+    if (want) {
+      if (alreadySays(want.field, had, want.value)) continue;
+      text = setIn(text, ref, path, tomlValue(want.field, want.value));
+    } else if (had !== undefined && readsBack(fields.get(target), had)) {
+      text = deleteIn(text, ref, path);
+    }
+  }
+  // Removing a method's last key can take its table with it, and the
+  // table's presence is what names the method (see `paramsToml`).
+  if (phase === "download" && entry.method && getParam(params(), entry.method) === undefined) {
+    text = setIn(text, ref, ["params", entry.method], "{}");
+  }
+  return text;
+}
+
+/// Whether a field can show the value the config holds. One it cannot
+/// (Google Drive's `exports` written as a table per kind, where the
+/// field takes a list) shows empty, and an empty box must not delete
+/// it; `untouchedSettings` names it instead.
+function readsBack(field: Field | undefined, had: unknown): boolean {
+  return field?.kind !== "string_list" || Array.isArray(had);
+}
+
+/// Does the config's value `had` already say what the form's `want`
+/// does? A value the form shows unchanged is left as it is written, so
+/// `5_000_000` is not rewritten as "5 MB", nor a select's `"API"` as
+/// `"api"`. A `bool` or `select` the config leaves out reads as its
+/// default, which mirrors the backend's, and is not written in.
+function alreadySays(field: Field | undefined, had: unknown, want: unknown): boolean {
+  if (!field) return JSON.stringify(had) === JSON.stringify(want);
+  if (had === undefined) {
+    if (field.kind === "bool") return !!want === (field.default ?? false);
+    if (field.kind === "select") return want === field.default;
+    return false;
+  }
+  if (field.kind === "bytes") {
+    return parseByteSize(bytesText(had))?.bytes === parseByteSize(bytesText(want))?.bytes;
+  }
+  const read = jsonValue(field, formValue(field, had));
+  return JSON.stringify(read) === JSON.stringify(jsonValue(field, want));
+}
+
+/// What a source's steps hold that its form has no field for: keys on the
+/// step itself (`env`, `command`, `locks`, …) and params no field or
+/// preset names. Saving an edit keeps every one of them.
+export function untouchedSettings(
+  text: string,
+  group: string,
+  entry: CatalogEntry,
+): { step: string; keys: string[] }[] {
+  const raw = (parseConfig(text).root.steps ?? []) as Record<string, unknown>[];
+  const listed = listSteps(text).filter((s) => s.kind === "step");
+  const out: { step: string; keys: string[] }[] = [];
+  listed.forEach((step, i) => {
+    if (step.group !== group || (step.phase !== "ingest" && step.phase !== "render")) return;
+    const own = Object.keys(raw[i] ?? {}).filter((k) => !FORM_STEP_KEYS.has(k));
+    const rep = paramsAreRepresentable(step, entry);
+    const params = rep.ok ? [] : rep.unknown.map((k) => `params.${k}`);
+    const keys = [...own, ...params];
+    if (keys.length) out.push({ step: step.id, keys });
+  });
+  return out;
+}
+
+/// The keys of a `[[steps]]` entry the wizard writes or reads its
+/// meaning from. `inputs` is here because the form never changes a step's
+/// inputs, so there is nothing to warn about.
+const FORM_STEP_KEYS = new Set(["group", "function", "inputs", "params"]);
 
 /// A human name reduced to something that can be a directory: NFKD
 /// normalize, drop combining marks, lowercase, every run of
@@ -1301,11 +1496,17 @@ export function slugify(name: string): string {
   return ascii.slice(0, 40).replace(/-+$/, "");
 }
 
-/// The reserved top-level directories, mirroring
-/// `dag::config::RESERVED_STANZA_NAMES`. An id landing on one of these
+/// The ids a source may not take, mirroring `dag::config::RESERVED_DIRS`
+/// and `dag::config::RESERVED_STANZA_NAMES`. An id landing on one of these
 /// is suffixed like any other collision rather than rejected, so the
 /// wizard never proposes a name the loader would refuse.
-const RESERVED_IDS = new Set(["system", "unified_index"]);
+const RESERVED_IDS = new Set([
+  "system",
+  "datalib_curated",
+  "unified_index",
+  "unified_document_index",
+  "unified_time_series_index",
+]);
 
 /// Propose an id for a new entry: `base` if it is free, else
 /// `base-2`, `base-3`, …
@@ -1319,9 +1520,28 @@ export function suggestId(taken: Set<string>, base: string, fallback: string): s
   return stem;
 }
 
+/// What the Sources table is while it has no rows: still waiting for the
+/// first `GET /api/manage/rows`, unable to get it, or truly empty. Until
+/// the first answer, no rows means nothing — that request can take
+/// seconds while a sync runs, and "Nothing configured yet" in the
+/// meantime reads as a lost config.
+export type EmptyTable = "loading" | "failed" | "empty";
+
+export function emptyTableState(input: {
+  /// Whether any answer has arrived.
+  answered: boolean;
+  /// Why the first request failed, before any answer arrived.
+  error: string | null;
+  rowCount: number;
+}): EmptyTable | null {
+  if (input.rowCount > 0) return null;
+  if (input.answered) return "empty";
+  return input.error ? "failed" : "loading";
+}
+
 /// Why the table is empty, when it shouldn't be.
 ///
-/// The grid derives its rows from the config text in the browser, while
+/// The browser parses the config text for the wizard, while
 /// `GET /api/config` reports what the backend's loader made of the same file.
 /// When those disagree the bug is on this side, and the empty state has to say
 /// so rather than offering a friendly "nothing configured yet".

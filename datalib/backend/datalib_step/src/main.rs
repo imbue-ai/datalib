@@ -6,12 +6,15 @@
 //! `DATALIB_DAG_GROUP_TYPE`, `DATALIB_DAG_STEP`). The subcommands are
 //! utilities that are not steps.
 
+mod check_params;
+mod compact;
 mod dispatch;
 mod embedding_map;
 mod events;
 mod exit_watchdog;
 mod function;
 mod grid_index;
+mod help;
 mod hints;
 mod ingest;
 mod introspect;
@@ -26,17 +29,22 @@ mod render_diff;
 mod render_model_test;
 mod reset;
 mod source;
+mod source_docs;
 mod source_type;
 mod synth;
+mod time_series;
 mod topo_sort_config;
 
+#[cfg(test)]
+mod all_sources_test;
 #[cfg(test)]
 mod config_examples_test;
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use datalib_cli_help::Example;
 use datalib_dag::subprocess::{ENV_CHECKPOINT_CADENCE, ENV_DATA_ROOT, ENV_NOW, ENV_STEP};
 use datalib_dag::FailureKind;
 
@@ -44,10 +52,69 @@ use crate::events::Emitter;
 use crate::function::Function;
 use crate::source::StepEnv;
 
+const LONG_ABOUT: &str = "\
+The built-in step program: datalib-dag runs it for every step in a config \
+with no `command`, and tells it through the environment which function to \
+perform (ingest, render_markdown, grid_index, …) for which group. Do not \
+run it that way yourself: to run one step, `datalib-dag <config> --sync \
+<group>/<function>` runs it, and every step that reads it after it, and \
+records what it published. `datalib-step help <function>` shows how for each.
+
+Its subcommands are tools you can run: ask a source which account its \
+credentials reach, put the runtime and models in place ahead of a first \
+sync, and keep a config in the order data flows.";
+
+const EXAMPLES: &[Example] = &[
+    Example {
+        what: "how to set datalib up from a shell, step by step",
+        command: "datalib-step help",
+    },
+    Example {
+        what: "what one source mirrors, how it signs in, and the least config it needs",
+        command: "datalib-step help slack",
+    },
+    Example {
+        what: "every option of one way in to a source",
+        command: "datalib-step help email gmail",
+    },
+    Example {
+        what: "config stanzas for one source, the least it needs and every option, and how to add one",
+        command: "datalib-step examples slack",
+    },
+    Example {
+        what: "ask which Slack account the credentials reach (writes nothing)",
+        command: "datalib-step probe slack",
+    },
+    Example {
+        what: "the same, with the source's ingest params as JSON, and the channels a picker would offer",
+        command: "datalib-step probe slack --params-file slack-params.json --list channels",
+    },
+    Example {
+        what: "put the Node runtime for qmd and latchkey in place before the first sync",
+        command: "datalib-step pull-runtime",
+    },
+    Example {
+        what: "fetch the search index's embedding models before the first embed",
+        command: "datalib-step pull-models",
+    },
+    Example {
+        what: "say which built-in steps' params a sync would refuse (datalib-dag --check runs this)",
+        command: "datalib-step check-params ~/datalib/config.toml",
+    },
+    Example {
+        what: "say whether a config lists each step below the steps it reads",
+        command: "datalib-step topo-sort-config ~/datalib/config.toml --check",
+    },
+];
+
 #[derive(Parser)]
 #[command(
     name = "datalib-step",
-    about = "The built-in step program for the datalib DAG runner"
+    bin_name = "datalib-step",
+    about = "The built-in step program datalib-dag runs, and tools for setting a source up",
+    long_about = LONG_ABOUT,
+    after_help = datalib_cli_help::render(EXAMPLES),
+    disable_help_subcommand = true
 )]
 struct Cli {
     /// Absent means "be a step": the function, group and tree come from
@@ -83,19 +150,39 @@ struct Cli {
     models_dir: Option<PathBuf>,
     /// Appended by `datalib-dag --reset`: empty this part of what the step
     /// wrote (`store`) and do nothing else (`step_protocol.md` § Reset).
-    #[arg(long, value_name = "PART", conflicts_with = "migrate")]
+    #[arg(long, value_name = "PART", conflicts_with_all = ["migrate", "compact"])]
     reset: Option<String>,
     /// Appended by a launch after an upgrade: bring what the step wrote to
     /// this build's shape where that can be done in place, fetch nothing,
     /// and say when it cannot (`step_protocol.md` § Migrate).
-    #[arg(long)]
+    #[arg(long, conflicts_with = "compact")]
     migrate: bool,
+    /// Appended by `datalib-dag --compact`: fold the history of a store
+    /// nothing reads the history of into one commit, and give back the
+    /// disk it held (`step_protocol.md` § Compact).
+    #[arg(long)]
+    compact: bool,
     #[command(flatten)]
     obs: datalib_obs::ObsArgs,
 }
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// How to set datalib up from a shell: the steps, the source types,
+    /// the step functions, and the whole agent guide (`help agent`).
+    Help {
+        /// `agent`, a source type (`slack`) and optionally one of its
+        /// methods (`slack api`), a function (`embed`) or one of these
+        /// commands (`probe`). None: the overview.
+        topic: Vec<String>,
+    },
+    /// One source's config stanzas: for each of its ingest methods, the
+    /// least a config needs and one that sets every option, with how to
+    /// add one to a config, rename its group and wire it into the index.
+    Examples {
+        /// Source type (`slack`, `email`, …).
+        source_type: String,
+    },
     /// Utility (not a pipeline step): ask a provider which account
     /// these credentials reach — and, with `--list`, one list a picker
     /// offers — and print one JSON object on stdout. Progress goes to
@@ -107,6 +194,14 @@ enum Cmd {
         /// `labels`, `mailboxes`, `calendars` or `addressbooks`.
         #[arg(long)]
         list: Option<String>,
+    },
+    /// Utility (not a pipeline step): plan every built-in step's params
+    /// in a config the way a sync would, and run nothing. Prints one JSON
+    /// object per step a sync would refuse, `{"step", "message"}`; nothing
+    /// when every one plans. `datalib-dag --check` runs it.
+    CheckParams {
+        /// The config file: `<data root>/config.toml`.
+        path: PathBuf,
     },
     /// Utility (not a pipeline step): put qmd's pinned GGUF models in
     /// place, sha256-verified — what an `embed` step does before
@@ -193,6 +288,13 @@ const INTERRUPT_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
+    match &cli.cmd {
+        Some(Cmd::Help { topic }) => std::process::exit(print_help(topic)),
+        Some(Cmd::Examples { source_type }) => {
+            std::process::exit(print_page(help::examples_page(source_type)))
+        }
+        _ => {}
+    }
     let _obs_guard = datalib_obs::init(&cli.obs, "datalib-step").ok();
     // Before the first `qmd` or `latchkey` spawn, wherever it comes
     // from: a release tarball without `runtime/` beside its binaries
@@ -261,6 +363,9 @@ async fn main() {
                 std::process::exit(1);
             }
         }
+    }
+    if let Some(Cmd::CheckParams { path }) = &cli.cmd {
+        std::process::exit(check_params::run_cli(path));
     }
     // `topo-sort-config` likewise: it reads and writes one file.
     if let Some(Cmd::TopoSortConfig { path, check }) = &cli.cmd {
@@ -405,6 +510,9 @@ async fn run(
         // Handled in `main` before the step machinery starts; see
         // there for why it cannot come through the outcome path.
         Some(Cmd::Probe { .. }) => unreachable!("probe is answered in main"),
+        Some(Cmd::Help { .. }) => unreachable!("help is answered in main"),
+        Some(Cmd::Examples { .. }) => unreachable!("examples is answered in main"),
+        Some(Cmd::CheckParams { .. }) => unreachable!("check-params is answered in main"),
         Some(Cmd::PullModels { .. }) => unreachable!("pull-models is answered in main"),
         Some(Cmd::PullRuntime) => unreachable!("pull-runtime is answered in main"),
         Some(Cmd::TopoSortConfig { .. }) => {
@@ -417,6 +525,9 @@ async fn run(
             }
             if cli.migrate {
                 return migrate::run(&env, data_root, emitter).await;
+            }
+            if cli.compact {
+                return compact::run(&env, data_root).await;
             }
             run_function(
                 env,
@@ -458,7 +569,7 @@ async fn run_function(
                 params,
             )?;
             let res = ingest::run(&planned, &env.step, now, control, emitter).await;
-            hints::emit_auth_hint_on_failure(emitter, planned.source_type, &res);
+            hints::emit_hint_on_failure(emitter, planned.source_type, &res);
             res
         }
         Function::RenderMarkdown if env.is_diff_group() => {
@@ -484,7 +595,7 @@ async fn run_function(
             )?;
             let source_type = planned.source_type;
             let res = render::run(planned, &env, &raw_rel, data_root, now, emitter, control).await;
-            hints::emit_auth_hint_on_failure(emitter, source_type, &res);
+            hints::emit_hint_on_failure(emitter, source_type, &res);
             res
         }
         Function::GridIndex => {
@@ -504,6 +615,18 @@ async fn run_function(
         Function::EmbeddingMap => {
             writes_the_index_tree(&env, &embedding_map::out_rel())?;
             embedding_map::run(data_root, now, emitter).await
+        }
+        Function::RenderTimeSeries => time_series::run_render(&env, data_root, emitter).await,
+        Function::TimeSeriesIndex => {
+            anyhow::ensure!(
+                env.step == time_series::index_rel(),
+                "`time_series_index` writes {:?} and nothing else, but this step's id is {:?}: \
+                 declare it under the `{}` group",
+                time_series::index_rel(),
+                env.step,
+                datalib_core::layout::UNIFIED_TIME_SERIES_INDEX_DIR
+            );
+            time_series::run_index(&env, data_root, emitter).await
         }
     }
 }
@@ -543,7 +666,41 @@ fn version_through_runtime(mut cmd: std::process::Command) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// The index steps have one reader each — the `unified_index` applet
+// Links in the docs it prints point at the commit this binary was built
+// from, so they show the docs that describe it.
+fn print_help(topic: &[String]) -> i32 {
+    let mut cmd = Cli::command();
+    cmd.build();
+    if let [name] = topic {
+        if let Some(sub) = cmd.find_subcommand_mut(name) {
+            let _ = sub.print_long_help();
+            return 0;
+        }
+    }
+    let commands: Vec<String> = cmd
+        .get_subcommands()
+        .map(|c| c.get_name().to_string())
+        .filter(|name| name != "help")
+        .collect();
+    let git_ref = datalib_runtime::build_id::git_hash().unwrap_or_else(|| "main".to_string());
+    print_page(help::page(topic, &commands, &git_ref))
+}
+
+#[allow(clippy::disallowed_macros)]
+fn print_page(page: Result<String, String>) -> i32 {
+    match page {
+        Ok(text) => {
+            println!("{text}");
+            0
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            2
+        }
+    }
+}
+
+/// The index steps have one reader each — the `unified_document_index` applet
 /// — which finds them from the data root alone, so their trees are
 /// fixed. A config that files them under another group would have
 /// the runner tracking a tree nothing ever writes.
@@ -551,7 +708,7 @@ fn writes_the_index_tree(env: &StepEnv, expected: &str) -> Result<()> {
     anyhow::ensure!(
         env.step == expected,
         "`{}` writes {expected:?} and nothing else, but this step's id is {:?}: declare it \
-         under the `unified_index` group",
+         under the `unified_document_index` group",
         env.function,
         env.step
     );
@@ -578,4 +735,15 @@ fn interrupt_own_group() {
     }
     datalib_parent_watch::report("the runner is gone; stopping this step and what it spawned");
     unsafe { libc::kill(0, libc::SIGINT) };
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use clap::CommandFactory;
+
+    #[test]
+    fn the_help_examples_parse() {
+        super::Cli::command().debug_assert();
+        datalib_cli_help::assert_examples_parse(super::Cli::command(), super::EXAMPLES);
+    }
 }

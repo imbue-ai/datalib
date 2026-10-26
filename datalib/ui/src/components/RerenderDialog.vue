@@ -1,11 +1,19 @@
 <script setup lang="ts">
 // Asked once a launch's migrate pass is over: the steps listed answered
 // that what they wrote is in a shape this build cannot reach in place, and
-// re-running them reads what is already downloaded. Also says which steps
-// could not be migrated, since that is news from the same launch.
+// re-running them reads what is already downloaded. A step that could not
+// be migrated is the toolbar's upgrade pill's to report, not this.
 import { computed, onMounted, ref } from "vue";
 import type { Upgrade } from "@/api";
-import { failedSources, rerenderSources } from "@/upgrade";
+import { keepsItsName, rerenderSources } from "@/upgrade";
+import { showCard } from "@/surface";
+import { uriFromEntity } from "@/cards/chipLinks";
+import ChipMenu from "@/cards/ChipMenu.ce.vue";
+import EntityChip from "@/cards/EntityChip.ce.vue";
+import { adoptStyles } from "@/cards/documentStyles";
+import "@/cards/chip.css";
+
+adoptStyles(EntityChip, ChipMenu);
 
 const props = defineProps<{ upgrade: Upgrade }>();
 
@@ -14,7 +22,6 @@ const emit = defineEmits<{
 }>();
 
 const sources = computed(() => rerenderSources(props.upgrade));
-const failed = computed(() => failedSources(props.upgrade));
 const rerenderButton = ref<HTMLButtonElement | null>(null);
 
 onMounted(() => rerenderButton.value?.focus());
@@ -42,21 +49,17 @@ function onKeydown(e: KeyboardEvent) {
           source it syncs:
         </p>
         <ul class="sources">
-          <li v-for="s in sources" :key="s">{{ s }}</li>
+          <li v-for="s in sources" :key="s.group">
+            <EntityChip
+              :uri="uriFromEntity('group', s.group)"
+              :shown="s.source"
+              :short="keepsItsName(s.group)"
+              quiet
+              :open-card="showCard"
+            />
+          </li>
         </ul>
         <p>Re-rendering reads what is already downloaded. Nothing is downloaded.</p>
-        <template v-if="failed.length">
-          <p class="failed-lead">
-            These sources could not be brought up to date for this version; their rows on the
-            Sources card say so too:
-          </p>
-          <ul class="sources failed">
-            <li v-for="f in failed" :key="f.source">
-              <strong>{{ f.source }}</strong>
-              <span class="error">{{ f.error }}</span>
-            </li>
-          </ul>
-        </template>
       </div>
       <footer class="dialog-foot">
         <button class="btn ghost" @click="emit('answer', false)">Not now</button>
@@ -84,11 +87,5 @@ function onKeydown(e: KeyboardEvent) {
 .sources {
   margin: 0;
   padding-left: 1.25rem;
-}
-.failed .error {
-  display: block;
-  color: var(--datalib-error-fg);
-  font-size: var(--datalib-font-size-small);
-  overflow-wrap: anywhere;
 }
 </style>

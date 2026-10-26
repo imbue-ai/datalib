@@ -1,4 +1,5 @@
-//! The `garmin` provider's render half: the weight page.
+//! The `garmin` provider's render half: weight, daily metrics,
+//! activities, records.
 
 pub mod processor;
 pub mod render;

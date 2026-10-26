@@ -18,7 +18,8 @@ instead from `bazel run //:precommit` and as a plain step in
   8. A provider that keeps a sync cursor must record the config the
      cursor was taken under, or widening that config is a silent no-op.
   9. The README's source grid and docs/user/getting_your_data.md name
-     every source type, link to each other, and stay alphabetical.
+     every source type, link to each other, and stay alphabetical (the
+     grid within each tier's table).
  10. No workflow step initializes an empty bash array: expanding one
      is "unbound variable" on the macOS runners' bash 3.2.
  11. No doc, config or script tells anyone to run `npx -y latchkey` or
@@ -31,7 +32,8 @@ instead from `bazel run //:precommit` and as a plain step in
      forever and hang the process at exit.
  13. Every source icon is one file in datalib/ui/src/assets/ that both
      catalogs name alike, that shows on the light and the dark theme,
-     and that the README's source grid uses rather than a copy.
+     and that the README's source grid uses rather than a copy; and
+     both catalogs call each source by the same name.
  14. No first-party Rust outside a test renames a temp file into place
      by hand: `datalib_runtime::atomic` is the one write-then-rename.
  15. Every crate datalib/backend/Cargo.toml lists is named by some
@@ -330,6 +332,7 @@ def main() -> int:
     rc |= _check_bound_lists_are_chunked(root)
     rc |= _check_try_get_ok_is_flattened(root)
     rc |= _check_no_playback_set_var(root)
+    rc |= _check_no_ui_code_sinks(root)
     return rc
 
 
@@ -366,13 +369,14 @@ def _check_workflows_no_empty_arrays(root: Path) -> int:
 
 # --- Check 9: the README's source grid matches the docs ---------------
 #
-# The README shows one cell per source, each linking to its section of
-# docs/user/getting_your_data.md; that doc has one `## ` section per
-# source, opening with its `type = "…"`. Both are hand-kept, and the
-# markdown table the grid replaced had quietly dropped three sources.
+# The README shows one cell per source, in one table per support tier,
+# each cell linking to its section of docs/user/getting_your_data.md;
+# that doc has one `## ` section per source, opening with its
+# `type = "…"`. Both are hand-kept, and the markdown table the grid
+# replaced had quietly dropped three sources.
 # So: every type all_sources.toml or the wizard's catalog knows has a
 # section, every section has a cell, every cell's anchor and image
-# resolve, and both lists are alphabetical.
+# resolve, and each table and the doc are alphabetical.
 _GRID_CELL = re.compile(
     r'<a href="docs/user/getting_your_data\.md#([^"]+)">(.*?)<br><b>(.*?)</b></a>',
     re.DOTALL,
@@ -448,9 +452,12 @@ def _check_source_grid(root: Path) -> int:
     for t in sorted(_known_source_types(root) - set(declared)):
         bad.append(f"source type `{t}` has no section in getting_your_data.md")
 
-    labels = [re.sub(r"&amp;", "&", label) for _, _, label in cells]
-    if labels != sorted(labels, key=str.casefold):
-        bad.append("README grid cells are not in alphabetical order")
+    for n, table in enumerate(re.findall(r"<table>.*?</table>", grid, re.DOTALL), 1):
+        labels = [
+            re.sub(r"&amp;", "&", label) for _, _, label in _GRID_CELL.findall(table)
+        ]
+        if labels != sorted(labels, key=str.casefold):
+            bad.append(f"README grid table {n}'s cells are not in alphabetical order")
     headings = [h for h, _, _ in sections]
     if headings != sorted(headings, key=str.casefold):
         bad.append("getting_your_data.md sections are not in alphabetical order")
@@ -789,14 +796,15 @@ def _check_pools_never_recycle(root: Path) -> int:
 # `prefers-color-scheme`. So: every icon a catalog names is a file; the
 # two catalogs agree type for type; every SVG shows on each background it
 # is drawn on; the grid uses the app's files, and docs/assets/ never holds
-# a copy of one.
+# a copy of one. The two catalogs also name each source, and those
+# names are held to agree the same way.
 _ICON_DIR = "datalib/ui/src/assets"
 _RUST_CATALOG = "datalib/backend/columns/src/source_catalog.rs"
 _RUST_ENTRY = re.compile(
-    r'\be\(\s*"([a-z_]+)",\s*(?:None|Some\("([a-z_]+)"\)),\s*"[^"]*",'
+    r'\be\(\s*"([a-z_]+)",\s*(?:None|Some\("([a-z_]+)"\)),\s*"([^"]*)",'
     r'\s*(?:None|Some\("([a-z_]+)"\)),?\s*\)'
 )
-_TS_FIELD = re.compile(r'^    (type|variantKey|icon): "([a-z_]+)",$')
+_TS_FIELD = re.compile(r'^    (type|variantKey|icon|label): "([^"]+)",$')
 _HEX = r"#[0-9A-Fa-f]{6}\b|#[0-9A-Fa-f]{3}\b"
 _SVG_FILL = re.compile(r'\b(?:fill|stroke)="(' + _HEX + r')"')
 _SVG_DARK = re.compile(
@@ -839,22 +847,33 @@ def _svg_palettes(svg: str) -> tuple[set[str], set[str]]:
     return light, dark
 
 
-def _rust_catalog_icons(root: Path) -> dict[tuple[str, str | None], str | None]:
+_CatalogKey = tuple[str, str | None]
+
+
+def _rust_catalog(root: Path) -> dict[_CatalogKey, tuple[str, str | None]]:
+    """(type, variant) → (label, icon)."""
     text = (root / _RUST_CATALOG).read_text(encoding="utf-8")
-    return {(t, v or None): icon or None for t, v, icon in _RUST_ENTRY.findall(text)}
+    return {
+        (t, v or None): (label, icon or None)
+        for t, v, label, icon in _RUST_ENTRY.findall(text)
+    }
 
 
-def _ts_catalog_icons(root: Path) -> dict[tuple[str, str | None], str | None]:
+def _ts_catalog(root: Path) -> dict[_CatalogKey, tuple[str, str | None]]:
+    """(type, variantKey) → (label, icon)."""
     text = (root / "datalib/ui/src/config/catalog.ts").read_text(encoding="utf-8")
     body = text[text.index("export const CATALOG") :]
     body = body[: body.index("\n];")]
-    out: dict[tuple[str, str | None], str | None] = {}
+    out: dict[_CatalogKey, tuple[str, str | None]] = {}
     for entry in re.split(r"^  \{$", body, flags=re.MULTILINE)[1:]:
         fields: dict[str, str] = {}
         for line in entry.splitlines():
             if m := _TS_FIELD.match(line):
                 fields[m.group(1)] = m.group(2)
-        out[(fields["type"], fields.get("variantKey"))] = fields.get("icon")
+        out[(fields["type"], fields.get("variantKey"))] = (
+            fields["label"],
+            fields.get("icon"),
+        )
     return out
 
 
@@ -863,8 +882,10 @@ def _check_icons(root: Path) -> int:
     icon_dir = root / _ICON_DIR
     files = {p.stem: p for p in icon_dir.iterdir() if p.suffix in (".svg", ".png")}
 
-    rust = _rust_catalog_icons(root)
-    ts = _ts_catalog_icons(root)
+    rust_entries = _rust_catalog(root)
+    ts_entries = _ts_catalog(root)
+    rust = {key: icon for key, (_, icon) in rust_entries.items()}
+    ts = {key: icon for key, (_, icon) in ts_entries.items()}
     if not rust or not ts:
         bad.append(f"read no entries from {_RUST_CATALOG} or catalog.ts")
     for where, catalog in ((_RUST_CATALOG, rust), ("catalog.ts", ts)):
@@ -876,10 +897,17 @@ def _check_icons(root: Path) -> int:
     for key in sorted(ts, key=str):
         if key not in rust:
             bad.append(f"catalog.ts has {key[0]}/{key[1]}, which {_RUST_CATALOG} lacks")
-        elif ts[key] != rust[key]:
+            continue
+        if ts[key] != rust[key]:
             bad.append(
                 f"{key[0]}/{key[1]}: catalog.ts says `{ts[key]}`, "
                 f"{_RUST_CATALOG} says `{rust[key]}`"
+            )
+        ts_label, rust_label = ts_entries[key][0], rust_entries[key][0]
+        if ts_label != rust_label:
+            bad.append(
+                f'{key[0]}/{key[1]}: catalog.ts calls it "{ts_label}", '
+                f'{_RUST_CATALOG} "{rust_label}"'
             )
 
     app_bgs = _APP_BG.findall(
@@ -930,6 +958,7 @@ def _check_icons(root: Path) -> int:
     if not bad:
         print(
             f"OK: {len(files)} icons, each named alike by both catalogs, "
+            "which call every source by one name, "
             "visible on both themes, and used by the README as they are."
         )
         return 0
@@ -1042,9 +1071,10 @@ _PLACEHOLDER_RUN = re.compile(
 
 # `?` runs sized by something that is not data, with the reason.
 _RUN_ALLOWED: dict[tuple[str, str], str] = {
-    ("datalib/backend/applets/src/unified_index/problems.rs", "columns.len()"): (
-        "one row's VALUES, one `?` per column of a table the code declares"
-    ),
+    (
+        "datalib/backend/applets/src/unified_document_index/problems.rs",
+        "columns.len()",
+    ): ("one row's VALUES, one `?` per column of a table the code declares"),
     ("datalib/backend/etl/render/src/search_terms.rs", "per_row"): (
         "the helper's own `(?, ?)` tuple; its callers are checked"
     ),
@@ -1173,6 +1203,63 @@ def _check_no_playback_set_var(root: Path) -> int:
         + "\n\n  Run the future under `datalib_etl_web::playback::scope(<tape>, …)`;\n"
         "  `Playback::delay`, `hold` and `hold_sealed` set the rest.\n"
         "  See lint_repo.py check 18.",
+        file=sys.stderr,
+    )
+    return 1
+
+
+# --- Check 19: nothing in the UI turns a string into code or markup -----
+#
+# Card source is parsed as a call and never evaluated, and the app
+# page's CSP has no 'unsafe-eval' (docs/dev/cards.md § "Card source").
+# An evaluator anywhere in datalib/ui/src would need the CSP widened
+# again and would undo that, so none is allowed. A string drawn as HTML,
+# or a module imported from a computed URL, is allowed only where the
+# entry below says why the string is not data someone else wrote.
+_UI_EVAL = re.compile(r"\bnew\s+Function\b|\beval\s*\(")
+_UI_HTML_OR_IMPORT = re.compile(
+    r"\.(?:inner|outer)HTML\s*\+?=(?!=)|\bv-html\b|\binsertAdjacentHTML\b"
+    r"|\bdocument\.write(?:ln)?\s*\(|\bimport\s*\(\s*(?![\"'])"
+)
+_UI_SINK_ALLOWED = {
+    "datalib/ui/src/cards/ChatBody.ce.vue": "a document body, through the "
+    "sanitizer, into the document frame, whose CSP has script-src 'none'",
+    "datalib/ui/src/components/CardControls.vue": "a card's help, which only "
+    "the card's own code sets (cards/help.ts)",
+    "datalib/ui/src/cards/frontendRegistry.ts": "a component from "
+    "/modules/<hash>, which only the token holder or a configured applet writes",
+}
+
+
+def _check_no_ui_code_sinks(root: Path) -> int:
+    hits: list[str] = []
+    for rel in _git_ls_files(root, "datalib/ui/src"):
+        if not rel.endswith((".ts", ".js", ".mjs", ".vue")) or ".test." in rel:
+            continue
+        try:
+            text = (root / rel).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for lineno, line in enumerate(text.splitlines(), 1):
+            if line.strip().startswith(("//", "*", "/*")):
+                continue
+            sink = _UI_EVAL.search(line) or (
+                rel not in _UI_SINK_ALLOWED and _UI_HTML_OR_IMPORT.search(line)
+            )
+            if sink:
+                hits.append(f"  {rel}:{lineno}: {line.strip()}")
+    if not hits:
+        print(
+            "OK: no evaluator in datalib/ui/src, and HTML from strings only where allowed."
+        )
+        return 0
+    print(
+        "ERROR: a string turned into code or markup in the UI:\n\n"
+        + "\n".join(hits)
+        + "\n\n  `new Function` and `eval` are never allowed: the page's CSP has no\n"
+        "  'unsafe-eval'. For HTML, set `textContent` instead; if the string\n"
+        "  really is the app's own markup, add the file to _UI_SINK_ALLOWED in\n"
+        "  scripts/lint_repo.py with the reason it is not someone else's data.",
         file=sys.stderr,
     )
     return 1

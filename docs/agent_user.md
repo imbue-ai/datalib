@@ -7,6 +7,14 @@ touch — config, sync, querying, extending — and points to the deeper
 docs for each. It is about *using* datalib; for working on the datalib
 codebase itself, see [`AGENTS.md`](../AGENTS.md).
 
+From a shell, **`datalib-step help`** is the map: the steps from an
+empty directory to a first sync, each with its command, and
+`datalib-step help <type>` (what a source mirrors, how it signs in, its
+ingest methods) and `datalib-step help <function>` (what a step does
+and how to run it) from there. `datalib-step help agent` prints this
+guide, which a release also carries beside its binaries as
+`docs/agent_user.md`. Every binary's `--help` ends with examples.
+
 The human-facing guides are worth reading first, and worth pointing the
 user at: the [first-time user guide](user/first_time_user.md) is the
 walkthrough from install to first sync, with the warnings about what a
@@ -24,13 +32,13 @@ Everything lives under one **data root** directory. A sync is a DAG of
 steps run by `datalib-dag`: per source (a `[[groups]]` entry) a
 `<group>/ingest` step (bring the raw data in) and a
 `<group>/render_markdown` step (raw → markdown + a per-source index
-database), `grid_index` under the `unified_index` group (the SQL
+database), `grid_index` under the `unified_document_index` group (the SQL
 index), and, for a searched source, `<group>/keyword_index` and
 `<group>/embed`, which fill that source's collection of the search
-index. `unified_index/qmd_aggregator` runs after every source's pair
+index. `unified_document_index/qmd_aggregator` runs after every source's pair
 and keeps the search index to the sources it names. A step's function
 is the directory it writes (the qmd steps are the exception: they all
-write the one index file under `unified_index/qmd_aggregator/`):
+write the one index file under `unified_document_index/qmd_aggregator/`):
 
 ```
 <data_root>/
@@ -40,7 +48,7 @@ write the one index file under `unified_index/qmd_aggregator/`):
 │   └── blobs.sqlite                #   attachment bytes by blake3 (plain SQLite)
 ├── <group>/render_markdown/        # per-source markdown tree
 │   └── indexed_markdown.doltlite_db  #   its rows, edges + render problems
-├── unified_index/                  # derived; carries a CACHEDIR.TAG
+├── unified_document_index/                  # derived; carries a CACHEDIR.TAG
 │   ├── grid_index/db.doltlite_db   # the grid_rows SQL index — query this
 │   ├── grid_index/search_terms.sqlite     # each row's ids, people, labels and names, full-text (plain SQLite)
 │   └── qmd_aggregator/qmd/index.sqlite  # semantic search index
@@ -53,7 +61,7 @@ write the one index file under `unified_index/qmd_aggregator/`):
     └── disk_stats.sqlite           # bytes on disk and free space, over time (plain SQLite)
 ```
 
-The split is by writer: `unified_index/` is produced by the pipeline
+The split is by writer: `unified_document_index/` is produced by the pipeline
 and fully derived, `system/` is the server's own state. Canonical
 definition — the constants both sides read — is
 [`datalib/backend/runtime/src/layout.rs`](../datalib/backend/runtime/src/layout.rs).
@@ -86,10 +94,12 @@ header, and a step's `params` sub-tables come after its plain keys — a
 
 - **Complete commented example:**
   [`configs/dag_example.toml`](../configs/dag_example.toml).
-- **Per-source knobs and step pairs**:
+- **Every source, every option**:
   [`docs/user/config_examples/all_sources.toml`](user/config_examples/all_sources.toml)
-  — one commented group with its `ingest` + `render_markdown` step pair
-  per supported source, ready to copy. A `config.toml` in the retired
+  — one commented group per way into each source, with its steps and
+  every option set, and the index groups reading them all. It is
+  generated from the complete stanzas `datalib-step examples <type>`
+  prints, so it is always one that loads. A `config.toml` in the retired
   shape (steps naming a `datalib-step download …` command) is refused;
   rewrite it once with `datalib-migrate-config <data_root> --force`.
 - **Credentials**: web-API sources authenticate through
@@ -115,15 +125,29 @@ datalib-dag --check <data_root>/config.toml   # validate, run nothing
 `--check` prints *every* problem with the config rather than the first,
 as `file:line:col: severity: message` with the offending line and a
 `help:` line under each — so fixing a config takes one round-trip, not
-one per typo. Exit 0 when every entry loads, 1 if the file is not a
-config at all (or the root was written by a newer datalib), 2 if some
-entries were dropped.
+one per typo. It also has `datalib-step` plan every built-in step's
+params, so a misspelled or misplaced option is reported at its line
+before a sync rather than when the step runs. Exit 0 when every entry
+loads and every step's params plan, 1 if the file is not a config at
+all (or the root was written by a newer datalib), 2 if some entries
+were dropped or some step's params would be refused.
+
+`datalib-step examples <type>` prints each source's config stanzas:
+for every way into the source, a minimal one (the least that syncs) and
+a complete one (every option set, each with a comment). Its page also
+says how to give the group an id of your own and which index inputs to
+add it to. `datalib-step help <type> <method>` lists every option with
+its type, default and meaning. Both are read from the source's own
+config crate, and a test loads and plans every stanza.
 
 Useful flags: `--sync <step-id>` (repeatable; runs the named steps and
 everything downstream of them, and nothing else — pending work in other
 sources waits for a full run), `--parallelism N`, `--reset
 <step-id>` (see **Resetting** below; alone it does nothing else,
-with `--sync` it runs first), `--binary-dir DIR` (put at the front of
+with `--sync` it runs first), `--compact` (folds the history of every
+render store and the grid index into one commit and gives back the disk
+it held; their content stays, so nothing re-runs; refused while the app
+is up, where `POST /api/compact {}` does the same), `--binary-dir DIR` (put at the front of
 every step's `PATH`, so a bare `command` like `datalib-step` resolves
 there; defaults to the config's `binary_dir`, else the directory
 `datalib-dag` itself is in). A sync that fails with "has a shape this build's DDL
@@ -132,11 +156,23 @@ wrote in a shape this one cannot keep; nothing was changed, and if
 upstream still has the data, `--reset <source>/ingest --sync
 <source>/ingest` is the way through.
 
+**To run one step, `--sync` it** — never run `datalib-step` for it by
+hand. The runner is what sets the step's environment, takes the root's
+lock and records the version the step published, which is how the steps
+that read it learn it moved; a step run by hand records nothing. An
+ingest step always runs when synced; any other runs only if what it
+reads moved, so to rebuild a source's documents from what is already
+downloaded, reset its render step in the same command:
+`datalib-dag <config> --reset slack/render_markdown --sync
+slack/render_markdown`. `datalib-step help <function>` gives the
+command for each kind of step.
+
 **The stderr stream is NDJSON and made for you**: `run_plan` (every step's
 id and group, in topo order), then `step_start` / `progress_*` / `log` / `hint` /
 `step_finish` per step, closed by one `run_summary` — parse it instead
 of scraping human output. Failures carry a kind
-(`transient` / `rate_limited` / `auth` / `data` / `cancelled`); the
+(`transient` / `rate_limited` / `auth` / `permission` / `data` /
+`cancelled` / `incomplete`); the
 runner already retries transient/rate-limited ones with backoff, and
 what a failed step committed is still read downstream; only a step
 whose inputs were never written at all is `blocked`. Ctrl-C is graceful:
@@ -247,7 +283,7 @@ is not null` lists the steps that failed. Every table and column is in
 Pick the surface that fits the question:
 
 - **SQL over everything** — the `grid_rows` union table in
-  `unified_index/grid_index/db.doltlite_db`: one row per
+  `unified_document_index/grid_index/db.doltlite_db`: one row per
   message/document/entity across all sources, with `provider`, `kind`,
   `created_at`, `modified_at`, `touched_at`, `author`, `channel`, `conversation_uuid`,
   `preview` (the first 240 characters of the row's text; the whole text
@@ -265,7 +301,7 @@ Pick the surface that fits the question:
   and a transaction it holds open stalls the sync:
 
   ```sh
-  datalib-doltlite -readonly unified_index/grid_index/db.doltlite_db \
+  datalib-doltlite -readonly unified_document_index/grid_index/db.doltlite_db \
     "SELECT provider, count(*) FROM grid_rows GROUP BY 1;"
   ```
 
@@ -274,7 +310,7 @@ Pick the surface that fits the question:
   tables, schemas and indexes, for any tool that speaks only SQLite.
 
   ```sh
-  datalib-doltlite -readonly unified_index/grid_index/db.doltlite_db .dump \
+  datalib-doltlite -readonly unified_document_index/grid_index/db.doltlite_db .dump \
     | sqlite3 grid.sqlite
   ```
 
@@ -289,18 +325,21 @@ Pick the surface that fits the question:
   [`docs/dev/doltlite.md`](dev/doltlite.md).
 - **Markdown** — `<group>/render_markdown/` holds human-readable QMD
   markdown per conversation/document. Read files directly, or serve
-  them via `GET /applet/unified_index/chat/{markdown_uuid}`. The raw per-source
+  them via `GET /applet/unified_document_index/chat/{markdown_uuid}`. The raw per-source
   doltlite stores under `<group>/ingest/` keep full wire fidelity when the
-  rendered form isn't enough.
+  rendered form isn't enough. An attachment or a person's photo a page
+  links as `/data/<group>/<function>/blob/<hash>` is a row of that step's
+  `blobs.sqlite`: fetch the path from `datalib-http` with the token, or
+  read the row (`SELECT bytes FROM cas_objects WHERE blake3 = '<hash>'`).
 - **Semantic search** — the qmd index:
 
   ```sh
   rt=$(echo ~/.cache/datalib/runtime/*/)   # the fetched runtime; /opt/datalib/runtime in the image
-  INDEX_PATH=<data_root>/unified_index/qmd_aggregator/qmd/index.sqlite \
+  INDEX_PATH=<data_root>/unified_document_index/qmd_aggregator/qmd/index.sqlite \
       "$rt/node/bin/node" "$rt"/qmd/*/node_modules/@tobilu/qmd/dist/cli/qmd.js query "that thing about the boat"
   ```
 - **HTTP API** — `datalib-http <data_root>` serves the UI plus:
-  `GET /applet/unified_index/search?q=…` (Gmail-flavored query language:
+  `GET /applet/unified_document_index/search?q=…` (Gmail-flavored query language:
   `field:value`, `-field:value`, quoted values, `field:*` for the rows
   with any value there and `-field:*` for the rows with none; fields
   are `source_id:`, `kind:`, `channel:`, `account:`, `project:`, `convo:`,
@@ -331,7 +370,7 @@ Pick the surface that fits the question:
   source, or within one under `source_id:`); with no `tab`, the free text goes to
   qmd's hybrid query, identifiers aside. It answers a page: `limit=` rows from `offset=`, with `total`
   and the `next_offset`; `sort=created_at:desc,author` orders by grid
-  columns in turn. `GET /applet/unified_index/search/groups?q=…&by=kind`
+  columns in turn. `GET /applet/unified_document_index/search/groups?q=…&by=kind`
   counts the groups, and `within=[["kind","Chat"]]` on `search` lists
   one group), `GET /api/log?q=…` (the
   runner's log lines in the same grammar — keys `run:`, `process:`,
@@ -341,8 +380,9 @@ Pick the surface that fits the question:
   narrow it to a run, a process or a step's attempt; the newest `limit=`
   lines, oldest first, with `before_seq=` paging back and `after_seq=`
   tailing),
-  `GET /applet/unified_index/docs`, `GET /applet/unified_index/chat/{uuid}`,
-  `GET /applet/unified_index/asset/{uuid}/{path}`, `GET /api/dag` (the derived step
+  `GET /applet/unified_document_index/docs`, `GET /applet/unified_document_index/chat/{uuid}`,
+  `GET /data/<group>/<function>/blob/<hash>` (an attachment or photo a
+  page links), `GET /api/dag` (the derived step
   graph), and the config/sync endpoints above.
 
   Every route needs the server's per-process API token — loopback does
@@ -407,8 +447,10 @@ document.
 - **"Why did/didn't this step run?"**: `system/supervisor.sqlite` is
   plain SQLite. `select step, state, state_detail from steps` says what
   each step is doing and what it waits on; `select step, reads,
-  last_status, last_error from steps` gives each step's input versions
-  at its last success and how it last ended; `select * from sinks` the version each tree was published at.
+  last_status, last_failure_kind, last_error from steps` gives each
+  step's input versions at its last success and how it last ended (a
+  `permission` failure is the OS refusing a read: choose the folder
+  again in the app, or grant Full Disk Access); `select * from sinks` the version each tree was published at.
   A step re-runs when an input version moved (download steps always run
   — their input is a remote service). `select step, started_at_utc from
   invocations where outcome is null` is what is running now.
@@ -420,7 +462,8 @@ document.
 - **A config the runner rejects**: `datalib-dag --check
   <data_root>/config.toml` lists every problem with a line number;
   `PUT /api/config` (or the Manage tab) returns the same list in
-  `diagnostics` and writes nothing. A data root holding a pre-TOML
+  `diagnostics`, built-in steps whose params a sync would refuse
+  included, and writes nothing. A data root holding a pre-TOML
   `config.yaml` reads as unconfigured — set it up again from the app.
 - **Every step reads `waiting for disk space`**: the data root's disk
   went under the config's `[disk_space]` pause line (10 GB unless the

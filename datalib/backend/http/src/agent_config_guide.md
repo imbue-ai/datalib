@@ -40,10 +40,10 @@ applets see `docs/dev/applets.md`. Edges are the declared `inputs`,
 which name steps by composed id — file order does not matter to the
 runner. It does to a person: the Sources screen lists groups and steps
 in file order, and writes them in the order data flows, each source
-above the `unified_index` group and each step below the steps it
+above the `unified_document_index` group and each step below the steps it
 reads. Write yours the same way. A step
 with no `inputs` is a **source step** (where a sync normally starts); every
-source feeds the two fan-in steps under the `unified_index` group:
+source feeds the two fan-in steps under the `unified_document_index` group:
 
 ```toml
 # One source = a group with a `type`, plus an ingest step and a
@@ -88,15 +88,15 @@ inputs = ["slack/keyword_index"]
 # `qmd_aggregator`'s, which runs after them and drops from search any
 # source it does not name.
 [[groups]]
-id = "unified_index"
+id = "unified_document_index"
 
 [[steps]]
-group = "unified_index"
+group = "unified_document_index"
 function = "grid_index"
 inputs = ["slack/render_markdown"]
 
 [[steps]]
-group = "unified_index"
+group = "unified_document_index"
 function = "qmd_aggregator"
 inputs = ["slack/keyword_index", "slack/embed"]
 ```
@@ -159,7 +159,7 @@ entries it names. (A `warning` drops nothing and does not block a PUT.)
 
 `app_ready` on `GET /api/config` is the separate question of whether the
 app can serve anything at all: false when the file is not a config,
-when it declares no `unified_index` applet, or when the data root was
+when it declares no `unified_document_index` applet, or when the data root was
 written by a newer datalib. The UI blocks on it.
 
 The config is always TOML in the shape above — the server reads and
@@ -172,7 +172,9 @@ and you should not try to translate the file yourself. A `qmd_index`
 step is different: the server rewrites it into `qmd_aggregator` and each
 source's own `keyword_index` and `embed` steps as soon as it reads the
 file, keeping the old one as `config.toml.bak`, so re-read the config
-after writing one.
+after writing one. The same goes for an index group still named
+`unified_index`: the server renames it, its steps and its applet to
+`unified_document_index`.
 
 ## Adding your own step commands
 

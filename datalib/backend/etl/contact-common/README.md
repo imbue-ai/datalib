@@ -12,7 +12,7 @@ and what a handle is, is [`docs/dev/contacts.md`](../../../../docs/dev/contacts.
 
 <div class="contact-photo">
 
-![Jean-Luc Picard](blobs/….jpg)
+![Jean-Luc Picard](/data/contacts/ingest/blob/…)
 
 </div>
 
@@ -57,8 +57,10 @@ and what a handle is, is [`docs/dev/contacts.md`](../../../../docs/dev/contacts.
   `<a href="mailto:…">`: a click on that leaves the app.
 - **A group lists its members** under `## Members`, each a chip where
   the member has a handle.
-- **The photo is markdown** (`![…](blobs/…)`), not an `<img>`, because
-  the viewer rewrites only markdown images to the asset route.
+- **The photo is markdown** (`![…](/data/<group>/<function>/blob/<hash>)`),
+  linked where its source's blob store holds it; nothing is written
+  beside the page, and a `blobs/` an older build left there goes when
+  the page is next written.
 
 The look is `documentBody.css` (`.contact-head`, `.contact-fields`,
 `.contact-members`); a chip's grey (not linked to a contact) and blue

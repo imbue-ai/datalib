@@ -1,0 +1,46 @@
+# AirVisual Pros' own history files, read off each unit's Samba share
+# (`smb://<ip>/airvisual`, mounted in the Finder) or a copy of that folder,
+# with every option set, and searchable. No sign-in.
+[[groups]]
+id = "airvisual"
+name = "AirVisual"
+type = "airvisual"
+
+[[steps]]
+group = "airvisual"
+function = "ingest"
+
+# One entry per monitor. Every `YYYYMM_AirVisual_values.txt` under `path`
+# is read, the `archive*/` folders too.
+[[steps.params.export.devices]]
+path = "/Volumes/airvisual"  # the mounted share, or a copy of it
+serial = "NCC1701D"          # the device's serial, which keys every sample; default:
+                             # read from the folder's latest_config_measurements.json
+                             # (set it for a copy without that file)
+name = "Bridge"              # what to call it; default: the name the device gives
+                             # itself, then the serial
+
+[[steps.params.export.devices]]
+path = "~/Downloads/airvisual-export/ten-forward"
+
+# One page with a chart per quantity (particulates, AQI, CO2, temperature,
+# humidity, VOC), every device a series. No options.
+[[steps]]
+group = "airvisual"
+function = "render_markdown"
+inputs = ["airvisual/ingest"]
+
+# The readings as time series, for the charts. Add this step to
+# `unified_time_series_index/time_series_index`'s inputs.
+[[steps]]
+group = "airvisual"
+function = "render_time_series"
+inputs = ["airvisual/ingest"]
+
+# Keyword (BM25) search over the page. Add it to
+# `unified_document_index/qmd_aggregator`'s inputs. A time-series source
+# takes no `embed` step: its pages are summaries of numbers.
+[[steps]]
+group = "airvisual"
+function = "keyword_index"
+inputs = ["airvisual/render_markdown"]

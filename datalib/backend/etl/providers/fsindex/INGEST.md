@@ -166,20 +166,20 @@ The gates, in order:
 1. **Stamping must be switched on for the scan.** A config-driven
    scan stamps only with `stamp = true` on its ingest step (default
    off); the standalone `fsindex` CLI stamps unless given `--no-stamp`.
-2. **The cascaded `.fsindex.yaml` must say `stamp_me_with_uuid: true`.**
-   Options cascade root → leaf. A child `.fsindex.yaml` with
-   `stamp_me_with_uuid: false` cancels stamping for its subtree.
+2. **The cascaded `.fsindex.toml` must say `stamp_me_with_uuid = true`.**
+   Options cascade root → leaf. A child `.fsindex.toml` with
+   `stamp_me_with_uuid = false` cancels stamping for its subtree.
    Default off.
 3. **Stamping is per-directory only.** Files don't get
    breadcrumbs; the options for files are xattrs (lossy across `cp`)
    or a parallel shadow tree, and neither is built.
-4. **A directory is stamped at most once.** If `.fsindex.yaml`
-   already carries an `identity:` block, it is not rewritten.
-   Removing the `identity:` block manually is the explicit way to
+4. **A directory is stamped at most once.** If `.fsindex.toml`
+   already carries an `[identity]` table, it is not rewritten.
+   Removing the `[identity]` table by hand is the explicit way to
    re-stamp.
 
 When all gates pass, the scanner generates a UUIDv7 (time-ordered),
-writes it into `.fsindex.yaml` via atomic rename, and logs at
+writes it into `.fsindex.toml` via atomic rename, and logs at
 `info!`:
 
 ```
@@ -188,22 +188,23 @@ fsindex_stamped path=… uuid=…
 
 The breadcrumb file format:
 
-```yaml
+```toml
 # inherited options (user-edited)
-ignore:
-  - "*.tmp"
-  - "node_modules/"
-stamp_me_with_uuid: true
+ignore = ["*.tmp", "node_modules/"]
+stamp_me_with_uuid = true
 
 # machine-managed; do not hand-edit unless you mean to fork identity.
-identity:
-  uuid: 0190f8d7-c8aa-7c3e-b4a1-2e2e9b1f0001
-  stamped_at: 2026-06-14T11:03:22-07:00
-  stamper_version: 1
-  originally_at: "Documents/Photos/2019"
+[identity]
+uuid = "0190f8d7-c8aa-7c3e-b4a1-2e2e9b1f0001"
+stamped_at = "2026-06-14T11:03:22-07:00"
+stamper_version = 1
+originally_at = "Documents/Photos/2019"
 ```
 
-The walker skips `.fsindex.yaml` altogether (`walker.rs`), so it is
+Writing a breadcrumb rewrites the whole file, so comments in it are
+not kept.
+
+The walker skips `.fsindex.toml` altogether (`walker.rs`), so it is
 neither a `files` row nor part of its directory's tree-hash. Otherwise
 the act of stamping would change the directory's hash and every
 ancestor's up to the root.
@@ -241,8 +242,17 @@ The standalone CLI (`datalib-fsindex`, the `fsindex` Bazel target) takes
 `--db <file> --branch <name>`, so two roots can be scanned into two
 branches of one file and share every identical subtree's chunks. That
 is how [`datalib-dirtree-diff`](/datalib/backend/dirtree_diff/README.md)
-compares two trees. A config-driven scan has no branch knob: each
-`fsindex` group gets its own store under `<group>/ingest/`.
+compares two trees; its README has a worked recipe for two folders on a
+Mac. A config-driven scan has no branch knob: each `fsindex` group gets
+its own store under `<group>/ingest/`, and the step publishes each scan
+to `main`.
+
+Without `--branch`, a standalone scan is sealed the way the step's is
+and published to `main`. With it, the scan is committed on that branch
+and `main` does not move, so a read-only open, which reads `main`, sees
+none of it. Name the branch in every read of one:
+`dolt_at_files('<branch>')`, `dolt_diff_files('<a>', '<b>')`, or
+`PATH#<branch>` to `datalib-dirtree-diff`.
 
 ## Inspecting a scan: what changed?
 
@@ -264,12 +274,18 @@ doltlite -readonly -box $db \
      FROM dolt_diff_files('HEAD^1', 'HEAD');"
 ```
 
+A read-only `HEAD` is `main`. For a scan on a branch of its own, write
+the branch where `HEAD` is: `dolt_diff_files('mybranch^1', 'mybranch')`.
+
 Per-table counts, the commit log and the other ref spellings are in
 [`docs/dev/doltlite.md`](/docs/dev/doltlite.md#what-changed-between-two-commits).
 
 ## Options file
 
-Per-directory `.fsindex.yaml`. Options cascade root → leaf; a child
+Per-directory `.fsindex.toml`, in TOML. A `.fsindex.yaml` from an
+earlier build is not read: it is an ordinary file to the scan, so its
+options no longer apply until it is rewritten as `.fsindex.toml`.
+Options cascade root → leaf; a child
 file overrides the inherited value for its subtree. The file is
 gitignore-friendly to commit (it's how the data owner expresses
 "these ignore rules travel with this tree") but the indexer does
@@ -279,9 +295,9 @@ Recognized keys:
 
 | Key                    | Type                | Default | Meaning                                                                                |
 |------------------------|---------------------|---------|----------------------------------------------------------------------------------------|
-| `ignore`               | `list[str]`         | `[]`    | Gitignore-style patterns. Matched via the `ignore` crate; cascades and accumulates.    |
+| `ignore`               | array of strings    | `[]`    | Gitignore-style patterns. Matched via the `ignore` crate; cascades and accumulates.    |
 | `stamp_me_with_uuid`   | `bool`              | `false` | Opt-in to identity-UUID stamping for this directory and its descendants.               |
-| `identity`             | `map`               | absent  | Machine-managed breadcrumb. See §"Stamping policy." Hand-edit at your own risk.        |
+| `identity`             | table               | absent  | Machine-managed breadcrumb. See §"Stamping policy." Hand-edit at your own risk.        |
 
 The options file (which is also the breadcrumb) is not indexed and not
 part of any tree-hash; see §"Stamping policy".
@@ -297,7 +313,7 @@ part of any tree-hash; see §"Stamping policy".
   succeeds or it's a real error, and the next scan simply tries it
   again. An entry the scan could not record — a folder that would not
   list, a file that would not stat or hash, a link that would not read,
-  a name that is not UTF-8, an `.fsindex.yaml` that would not parse,
+  a name that is not UTF-8, an `.fsindex.toml` that would not parse,
   a folder the stamping pass could not stamp — is a `problems` row
   keyed `record:files:<id>` or `record:dirs:<id>`, and the rest of the
   scan goes on. Every scan re-walks the whole tree, so its rows replace

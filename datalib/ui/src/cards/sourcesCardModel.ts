@@ -3,7 +3,7 @@
 // owns only the template and the styles.
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { TOPIC_CONFIG_WRITTEN, type CardCtx } from "./types";
-import { UNIFIED_INDEX, type ManageResponse, type ManageRow } from "@/api";
+import { UNIFIED_DOCUMENT_INDEX, type ManageResponse, type ManageRow } from "@/api";
 import { useApi } from "@/cards/cardApi";
 import {
   listGroups,
@@ -14,20 +14,22 @@ import {
   removeSteps,
   describeGroup,
   renameGroup,
-  replaceSteps,
+  patchSource,
   sourceStepsOf,
   removedWith,
   setQmdSteps,
+  setTimeSeriesStep,
   qmdIndexingOf,
   type QmdIndexing,
   unwireFromFanIns,
   wireIntoFanIns,
-  paramsAreRepresentable,
   entryForStep,
   emptyTableDiagnosis,
+  emptyTableState,
   DIFF_TYPE,
   type ConfiguredGroup,
   type ConfiguredStep,
+  type FieldValues,
   type SourceSteps,
   type StepPhase,
 } from "@/config/sourceSteps";
@@ -38,12 +40,13 @@ import { catalogForStep, type CatalogEntry } from "@/config/catalog";
 import { ingestLabel } from "@/config/ingestMethods";
 import { rowMenu, type MenuAction } from "@/config/rowMenu";
 import { menuTarget, rowActions, withBrowse, type ActionRow } from "./rowActions";
-import { changed, subscribeLive } from "@/live";
+import { uriFromEntity } from "./chipLinks";
+import { changed, oneAtATime, subscribeLive } from "@/live";
 import { confirmAction, isDesktopApp, revealActionLabel } from "@/desktop";
 
 export const SOURCES_HELP = `
 <p>Every top-level row is a <b>group</b> <code>config.toml</code> declares: a source
-(Work Slack, Personal mail), or the unified index that makes them searchable. Open
+(Work Slack, Personal mail), or the unified document index that makes them searchable. Open
 its chevron for the <b>steps</b> that do the work — fetch, render, index — and the
 <b>applets</b> the app spawns to serve it. Actions that don’t apply to a kind are
 disabled and say why.</p>
@@ -83,7 +86,9 @@ order, and never above a group they read from.</p>
 with an icon for what the row is doing or did last, then says when it got there. That
 icon, and the mark before a name — the service a source mirrors, or what a step
 does — give their word on hover. Hovering a name shows its id: for a group, the
-folder its data is in.
+folder its data is in. A name is a <b>chip</b>: <b>double-click</b> it to open that
+source's sync dashboard, or a step's section of it; rename a source from its
+row's menu.
 <b>Right-click a header</b> to show or hide columns: <b>Last synced</b> and
 <b>Last success</b> start hidden. <b>Double-click a Status</b> to read that
 step's log — from the run in flight while it runs, else from the run it last took
@@ -247,6 +252,9 @@ export function useSourcesCard(ctx: CardCtx) {
     entry: CatalogEntry;
     steps: SourceSteps;
     qmdIndexing: QmdIndexing;
+    /// The config as it was when the form opened, for the form to show
+    /// what saving would change and what it would keep.
+    text: string;
   } | null>(null);
 
   /// Non-null when the table is empty for a reason worth shouting about
@@ -292,7 +300,19 @@ export function useSourcesCard(ctx: CardCtx) {
     return all.map((r) => decorate(r, groups));
   });
 
-  const syncAll = computed(() => syncAllButton(rows.value));
+  const emptyTable = computed(() =>
+    emptyTableState({
+      answered: manage.value !== null,
+      error: rowsError.value,
+      rowCount: rows.value.length,
+    }),
+  );
+
+  const syncAll = computed(() =>
+    emptyTable.value === "loading" || emptyTable.value === "failed"
+      ? { ...syncAllButton([]), blocked: "The sources haven’t loaded yet." }
+      : syncAllButton(rows.value, manage.value?.sync_paused ?? null),
+  );
 
   function decorate(r: ManageRow, groups: Map<string, ManageRow>): Row {
     const browsing = withBrowse(r, groups, canReveal);
@@ -302,7 +322,13 @@ export function useSourcesCard(ctx: CardCtx) {
     }
     if (r.kind === "group") {
       const editBlocked = groupEditBlocked(r.id);
-      return { ...browsing, editBlocked, editGroup: editBlocked ? null : r.id };
+      return {
+        ...browsing,
+        // Its chip: a double-click opens the source; Rename is the menu's.
+        name: { ...r.name, entity: uriFromEntity("group", r.id) },
+        editBlocked,
+        editGroup: editBlocked ? null : r.id,
+      };
     }
     // Edit: the wizard's one form describes a source — a group and its two
     // steps — so a step under a group edits through its group. Everything
@@ -325,9 +351,12 @@ export function useSourcesCard(ctx: CardCtx) {
     // provider declares; the server's "Ingest" only when they name no method.
     const ingestLabelled =
       r.group && r.phase === "ingest" ? ingestLabel(r.type?.id ?? null, r.params) : null;
+    // A step is drawn as its chip, under its own short name: the row it
+    // sits under already names its group.
+    const entity = r.kind === "step" ? uriFromEntity("step", r.id) : null;
     return {
       ...browsing,
-      name: ingestLabelled ? { ...r.name, label: ingestLabelled } : r.name,
+      name: { ...r.name, label: ingestLabelled ?? r.name.label, entity },
       editBlocked,
       editGroup: editBlocked ? null : r.group,
     };
@@ -350,16 +379,6 @@ export function useSourcesCard(ctx: CardCtx) {
     }
     if (!entry) return `No guided form: the catalog doesn't know the type "${g.type}".`;
     if (!entry.wizard) return `No guided form for ${entry.label} yet — edit it in Advanced below.`;
-    for (const step of [ingest, render]) {
-      if (!step) continue;
-      const rep = paramsAreRepresentable(step, entry);
-      if (!rep.ok) {
-        return (
-          `The form doesn't model ${rep.unknown.join(", ")} on ${step.id}, and saving would ` +
-          `drop it. Edit this one in Advanced below.`
-        );
-      }
-    }
     return null;
   }
 
@@ -420,8 +439,18 @@ export function useSourcesCard(ctx: CardCtx) {
   /// config.
   function onCellDoubleClicked(data: Row, field: string) {
     if (field === "problems" && data.kind === "system") openConfig();
-    else if (field === "problems") actions.openProblems(data, `${UNIFIED_INDEX}/problems`);
+    else if (field === "problems") actions.openProblems(data, `${UNIFIED_DOCUMENT_INDEX}/problems`);
     else if (field === "status") void actions.openStepLog(data);
+  }
+
+  /// The row whose name the menu's Rename is opening, the one edit a
+  /// Name cell takes: a double-click on a name opens what it names.
+  let renaming: string | null = null;
+  function canEditCell(row: Row, field: string): boolean {
+    if (field !== "name") return true;
+    const ok = row.kind === "group" && renaming === row.key;
+    renaming = null;
+    return ok;
   }
 
   /// An in-place edit of the Name cell: a group's rename.
@@ -462,6 +491,7 @@ export function useSourcesCard(ctx: CardCtx) {
         actions.openHistory([first], true);
         return;
       case "rename":
+        renaming = anchor.key;
         gridApi?.startEditing(anchor, "name");
         return;
       case "remove":
@@ -602,18 +632,26 @@ export function useSourcesCard(ctx: CardCtx) {
 
   const commitRows = freshest<ManageResponse>((m) => {
     manage.value = m;
+    rowsError.value = null;
   });
+  /// Why the rows could not be read, while no answer has arrived yet.
+  const rowsError = ref<string | null>(null);
 
   /// Read the rows. `refresh` asks the backend to walk the disk before
   /// answering rather than serving its last tick — see `fetchManageRows`.
   async function loadRows(refresh = false) {
     try {
       await commitRows(() => fetchManageRows(refresh));
-    } catch {
+    } catch (e) {
       // The last answer stands; an empty table over an error banner would
       // read as "no sources".
+      if (manage.value === null) rowsError.value = (e as Error).message;
     }
   }
+
+  /// A reload a frame asks for: the loop sends them in bursts as a run's
+  /// steps move, and each one read the whole table again.
+  const refreshRows = oneAtATime(() => loadRows());
 
   /// Write new config text and adopt whatever the backend then reports.
   /// The backend validates with the real loader — including the duplicate
@@ -667,7 +705,7 @@ export function useSourcesCard(ctx: CardCtx) {
     const entry = groupEntry(group, steps);
     if (!entry) return;
     const qmdIndexing = steps.render ? qmdIndexingOf(sources.value, group.id) : "keyword_and_embed";
-    editing.value = { group, entry, steps, qmdIndexing };
+    editing.value = { group, entry, steps, qmdIndexing, text: configText.value };
     wizardKey.value++;
     wizardOpen.value = true;
   }
@@ -677,6 +715,7 @@ export function useSourcesCard(ctx: CardCtx) {
     name: string;
     description: string;
     entry: CatalogEntry;
+    values: FieldValues;
     groupBody: string | null;
     stepsBody: string;
     renderId: string | null;
@@ -685,13 +724,20 @@ export function useSourcesCard(ctx: CardCtx) {
     const current = editing.value;
     let next: string;
     if (current) {
-      // Both steps are replaced in one cut-and-append, and a step the
-      // source was missing is simply appended with the other. The name
-      // and the description live on the group, which is edited in place.
-      const existing = [current.steps.ingest, current.steps.render].filter(
-        (s): s is ConfiguredStep => !!s,
-      );
-      next = replaceSteps(configText.value, existing, payload.stepsBody);
+      // Only the keys the form owns are written, so whatever else the
+      // source's entries hold stays. The name and the description live on
+      // the group, which is edited in place.
+      try {
+        next = patchSource(configText.value, {
+          entry: payload.entry,
+          group: current.group.id,
+          values: payload.values,
+          renders: payload.renderId !== null,
+        });
+      } catch (e) {
+        say(false, (e as Error).message);
+        return;
+      }
       next = renameGroup(next, current.group.id, payload.name);
       next = describeGroup(next, current.group.id, payload.description);
       // A render step the provider does not write back — hand-written
@@ -718,6 +764,7 @@ export function useSourcesCard(ctx: CardCtx) {
     } else {
       next = setQmdSteps(next, payload.id, "none");
     }
+    next = setTimeSeriesStep(next, payload.id, payload.entry.type);
 
     // Banners are for a person, so they say the name; the id is what the
     // config and the disk use.
@@ -934,11 +981,8 @@ export function useSourcesCard(ctx: CardCtx) {
   }
 
   onMounted(async () => {
-    // Fresh sizes on the first paint. The backend only walks the disk
-    // while a run is in flight, so on an idle root — the usual state —
-    // this is the walk that produces the numbers on screen.
-    await reloadAll(true);
-
+    // Listen before the first load: a card closed while that load is out
+    // has already run its unmount, and would never stop listening.
     unsubscribe = subscribeLive(
       {
         root: (e) => {
@@ -946,7 +990,7 @@ export function useSourcesCard(ctx: CardCtx) {
             // Deliberately *not* a fresh walk: this fires once a second while
             // a run is going. The sampler is already walking on its own
             // cadence; this just reads what it found.
-            void loadRows();
+            refreshRows();
           }
           // The loop's record moving is the nearest thing to "a step
           // committed" — nothing watches the stores themselves — and its
@@ -963,6 +1007,10 @@ export function useSourcesCard(ctx: CardCtx) {
       },
       { onScreen: cardEl.value ?? undefined },
     );
+    // Fresh sizes on the first paint. The backend only walks the disk
+    // while a run is in flight, so on an idle root — the usual state —
+    // this is the walk that produces the numbers on screen.
+    await reloadAll(true);
   });
 
   onUnmounted(() => {
@@ -981,6 +1029,8 @@ export function useSourcesCard(ctx: CardCtx) {
     configPath,
     droppedRows,
     emptyDiagnosis,
+    emptyTable,
+    rowsError,
     manage,
     storage,
     rows,
@@ -993,6 +1043,7 @@ export function useSourcesCard(ctx: CardCtx) {
     contextMenuItems,
     isGroupOpenByDefault,
     onGridReady,
+    canEditCell,
     onCellDoubleClicked,
     onCellEdit,
     onRowGroupOpened,

@@ -449,7 +449,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         // Nothing fetches a photo now (linkedin.com shows a profile only
         // to a signed-in visitor), but a store an earlier build filled
         // keeps its photos: a re-read of the export leaves them, and the
-        // contact still embeds one.
+        // contact links one where the blob store holds it.
         let db = RawDb::open(&db_path_for(&raw_dir)).await?;
         seed_photo(
             &db,
@@ -494,9 +494,19 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             .find(|d| d.markdown_uuid == picard_uuid)
             .expect("picard re-rendered");
         let md = fs::read_to_string(&picard_doc.md_path)?;
+        let address = format!(
+            "/blob/{}",
+            datalib_etl::blob_cas::blake3_hex(b"PNG bytes for Picard")
+        );
+        assert!(md.contains(&address), "markdown links the photo: {md}");
+        let photo_url = picard_doc.contacts[0].photo_url.as_deref().unwrap_or("");
         assert!(
-            md.contains(&format!("blobs/{picard_uuid}")),
-            "markdown embeds the photo blob: {md}"
+            photo_url.starts_with("/data/") && photo_url.ends_with(&address),
+            "{photo_url}"
+        );
+        assert!(
+            !picard_doc.md_path.parent().unwrap().join("blobs").exists(),
+            "nothing is written beside the page"
         );
         db.close().await;
 

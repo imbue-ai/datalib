@@ -1,7 +1,7 @@
 # Chips: a link the app resolves, drawn as what it names
 
 A **chip** is how datalib shows something inline: a person, a source
-group, a pipeline step. It has a name, a picture or a mark, and behind
+group, a pipeline step, a date. It has a name, a picture or a mark, and behind
 it a stable identifier the app looks up to learn what that thing is
 *now* — the contact a person linked, the name the config gives a
 group today, whether a step is running. The same chip is drawn in a
@@ -18,7 +18,7 @@ machinery every kind shares.
 
 | word | means |
 |---|---|
-| **entity** | what a chip names: a person (by a handle), a group, a step |
+| **entity** | what a chip names: a person (by a handle), a group, a step, a date |
 | **chip link** | how a chip is written down: a markdown link, `[text](href "title")` |
 | **entity URI** | the href, which names the entity (see [The link](#the-link)) |
 | **resolver** | the one place in the page that asks the server what an entity is now, for one kind of entity |
@@ -54,7 +54,8 @@ still works in another app, and `datalib:` otherwise:
 | a person by phone | `tel:+12025550101` | `Handle::to_uri` |
 | a Slack user | `slack://user?team=T01&id=U02` (Slack's own deep link) | `Handle::to_uri` |
 | a LinkedIn member | `https://www.linkedin.com/in/<slug>` (their profile) | `Handle::to_uri` |
-| a person by a handle kind with no scheme | `datalib:handle/<kind>/<value>`, the value percent-encoded but for its `/`s, e.g. a Signal account id or `datalib:handle/facebook/name/Will%20Riker` | `Handle::to_uri` |
+| a person by a handle kind with no scheme | `datalib:handle/<kind>/<value>`, the value percent-encoded but for its `/`s, e.g. a Signal account id, `datalib:handle/facebook/name/Will%20Riker` or `datalib:handle/github/data-soong`. A GitHub profile's address is not used: `github.com/<x>` is as often an organization or one of GitHub's own pages | `Handle::to_uri` |
+| one of your contacts, by its id | `datalib:contact/<id>` (`contactFromUri` in `chipLinks.js`) | `datalib_contacts::contact_uri` |
 | a group | `datalib:group/<id>` | `datalib_columns::Entity::uri` |
 | a step | `datalib:step/<group>/<function>` | `datalib_columns::Entity::uri` |
 
@@ -68,7 +69,10 @@ writes the same URIs in `ui/src/cards/chipLinks.js` (`handleFromUri`,
 tested over the same cases, so they cannot drift apart without a test
 failing.
 
-Who writes chips today: chat-common for a message's author,
+Who writes chips today: calendar-common for an event's organizer and
+each guest with an address; forge-render-common for a pull or merge
+request's author and each comment's; Notion for a comment's author;
+chat-common for a message's author,
 recipients and reactors (`chat-common/README.md` §"The message
 header"); Slack for a `<@U…>` mention in a body; contact-common for
 the person a contact's page is about, as its heading, and for each
@@ -95,7 +99,12 @@ each store's step in a column.
    (`email`, `slack`), else a pipeline glyph (`step:ingest`). The lead
    is decoration: hidden from screen readers and not copied. A photo
    the browser cannot draw falls back to what the chip draws without
-   one.
+   one. A contact you made with no photo of its own shows the first
+   one its handles' records have, the face their chips show. The name is its own element (`.chip-text`), and a chip is
+   never wider than what holds it: with less room than it needs, its
+   name ends in "…", and the tooltip has it whole. In a wrapping row,
+   such as a message header, it still moves to a line of its own
+   before it shrinks.
 
 What goes into the look is each kind's own rule, pure and unit-tested:
 
@@ -111,12 +120,19 @@ What goes into the look is each kind's own rule, pure and unit-tested:
   under its group: "Work Slack · Ingest"), or the producer's until the
   answer lands; its type's mark or its phase's glyph; and a dot after
   the name for a status worth noticing — running, waiting, queued,
-  failed, blocked or interrupted. The words are in the tooltip.
+  failed, blocked or interrupted. The words are in the tooltip. Where
+  the context already names the group — a step's row under it in the
+  Sources table, its section of the group's dashboard — the chip keeps
+  the producer's short name ("Download") and the tooltip carries the
+  whole one (`keepShown`, the grid's `chips.keepLabels`). Where a
+  status is drawn right beside the chip, as in the Dashboard's rows, the
+  chip drops its dot (`quiet`).
 
 `chip.css` is the one look. The document frame, the search and
-problems grids, the log card, the sync dashboard and the render
-preview each include it in their own root, since a card's shadow root
-and the document frame see no page styles.
+problems grids, the log card, the Sources card, a source's card,
+the Dashboard's sections and the render preview each include it in
+their own root, since a card's shadow root and the document frame see
+no page styles.
 
 ## Trust
 
@@ -154,8 +170,8 @@ The two instances:
 | | `people` (`contacts.ts`) | `entities` (`entities.ts`) |
 |---|---|---|
 | keyed by | handle (`email:…`) | entity URI (`datalib:group/…`) |
-| asks | the unified index's `POST /people` and the contacts app's `POST /resolve` | datalib-http's `POST /api/entities` (`manage::post_entities`, from the rows the Manage table reads) |
-| answer | each source's record of the person, and the contact a person made | label, icon token, detail, status |
+| asks | the unified document index's `POST /people` and the contacts app's `POST /resolve` | datalib-http's `POST /api/entities` (`manage::post_entities`, from the rows the Manage table reads) |
+| answer | each source's record of the person, and the contact a person made | label, icon token, detail, status, and its row of the Sources table (`row`), whose actions are its menu |
 | goes stale when | a person edits a contact (create, link, unlink, no longer works): in this page the call forgets the handles it changed; from anywhere else — another window, an agent — the contacts app's commit reaches every page as a `curated` frame, on which `people` and `contactsById` revalidate (`movesPeople`), as on a resync | a sync moves a status, or the config changes: `entities` follows the live connection and revalidates on every frame `movesEntities` names, and on a resync |
 
 Why the viewer joins this itself rather than the producer sending
@@ -182,6 +198,9 @@ A grid draws a chip from an `identity` typed cell
   `phone`, else any handle `source_contact_handles` holds for the
   contact). An identity cell whose `id` is no handle is drawn as plain
   text: a group of contacts, a contact with no handle at all.
+  One whose `id` is a `datalib:contact/` URI is drawn as that contact's
+  chip when the grid is given `chips.contact` (the contacts app's table,
+  for a contact with no handle).
 - **Several people**: an `identities` cell holds a list, each drawn as
   above. The search grid's Subject column is one (`subject_ref`, built
   by `columns.rs::subject_identities`): a contact's own row is its
@@ -191,7 +210,10 @@ A grid draws a chip from an `identity` typed cell
   (`NormalizedChat::named_after`: a DM's other party, an untitled
   group's members); chat-common writes them as `subject` terms on the
   document's row, and the applet reads them beside the row with the name
-  this conversation knows each by, most active first.
+  this conversation knows each by, most active first. The search list
+  titles a result and its preview by the same people
+  (`contacts.ts::peopleTitle`): one person's chip, or for several one
+  pill with their photos overlapping and each name a chip of its own.
 - **A group or a step**: the cell's `entity` is the URI, *beside* a
   bare `id`. The id stays bare because other code keys on it: the
   document view stores a source's "always load images" setting under
@@ -205,13 +227,52 @@ Contact, Subject and Source columns when `people` or `entities` says an
 answer changed. A right-click acts on the chip it landed on, so each
 chip in a cell of several has its own menu. The
 run log draws its Group and Step columns as chips the same way
-(`RunLogPanel.ce.vue`), and `TableGrid` takes the option too, as the
-contacts app's table does (`ContactsCard.ce.vue`). `tableGrid.css` keeps
-the grid theme's link colour off a chip in a cell.
+(`RunLogPanel.ce.vue`), with the chip's menu ahead of the cell's, and
+`TableGrid` takes the option too, as the contacts app's table and the
+Sources table do: a double-click on a chip there opens its card
+(`openCard`) instead of the cell's in-place edit, and its right-click
+is still the row's menu. A group row of an identity column draws its
+value as the chip of the group's first row, where the rows are loaded
+(`typedColumns.ts`), and the run log's Group and Step group rows draw
+theirs too ("Source: Work Slack (12)"). `tableGrid.css` keeps the grid theme's link
+colour off a chip in a cell.
 
-The Manage table's Name cell is not a chip, on purpose: the row *is*
-the group or step, its double-click renames it, and its own menu
-already offers everything a chip's would.
+In the Sources table a group's and a step's Name cell is its chip, a
+step under the row's short name (`sourcesCardModel.ts::decorate`), with
+no status dot (the Status column says it) and the row's problem counts
+beside it. A double-click on it opens what it names; a group is renamed
+from the row's menu (Rename…), the one way a Name cell's editor opens
+(`canEditCell`).
+
+## In a card's own template
+
+`EntityChip.ce.vue` draws a group or step chip where no grid or
+document does:
+
+- **Cards:** the Dashboard's Sources, Needs you, Library and Latest
+  activity sections; the header of a source's card (the group,
+  and each step under its short name); the person card's heading for
+  each source's record; the time-series card's heading for each
+  source; the log-line card's group and step.
+- **The app's chrome:** each row of the toolbar's "what is syncing"
+  menu, the upgrade indicator's list and the re-render dialog's list.
+  The search index keeps its plain name there ("Search index").
+
+It looks the entity up in `entities`, redraws when the answer moves,
+and takes its double-click and right-click from `chipActions`. A single
+click does nothing and goes no further, so a chip inside a clickable
+row (Latest activity) is not a click on the row. The place hands it
+`openCard`; a source's card's own chips show their part of it (a step's
+section of Sync) instead of opening the card again, and the chrome's go through
+`surface.ts::showCard`, which shows the same card (`sameCard`) where
+one is already open. A place may add entries ahead of the chip's own
+(`extra`): the log-line card's "Keep only this group" and "Exclude
+this group" narrow the log beside it.
+
+A card that uses it lists it, `ChipMenu` and `chip.css` in its
+`styleSources`. The chrome is outside every card, so a chrome component
+puts their styles in the document (`documentStyles.ts::adoptStyles`)
+and imports `chip.css`.
 
 ## In the search field
 
@@ -234,19 +295,86 @@ is the field's (Edit as text, Exclude) followed by `entityMenu`'s or
 right-click away; linking a handle stays the popover's
 (`ui/src/search/chipMenu.ts`).
 
+## A date
+
+**Every stamp in a document is a chip too.** A render writes one as
+`<time datetime="…" title="…">short form</time>`
+([`data_architecture_parse_and_render.md`](data_architecture_parse_and_render.md)
+§"A stamp on a page"), and `decorateDates` in `ui/src/cards/dates.ts`
+draws each `<time>` whose `datetime` it can read as a chip. Its value is
+the whole of what it names, so there is no URI and no resolver; the
+`<time>` element is the chip link. `dates.ts` is the one formatter, and
+the rules are pure functions over the parsed stamp:
+
+- **text**: the instant in the viewer's own zone, `Wed, Apr 15, 2026,
+  12:05`; a day, `Wed, Apr 15, 2026`, the same day wherever it is read.
+  The render's own text stays for any other viewer.
+- **hover**: the instant to the second in the viewer's zone, the same
+  in UTC, the clock the source wrote it in when that is neither, and how
+  long ago.
+- **copy**: the text with its zone, `Wed, Apr 15, 2026, 12:05 GMT+2`, and
+  a plain `<time datetime>` as HTML, so a paste names the same instant.
+- **right-click**: copy it as shown or as written (`datetime`);
+  everything on its day (`after:<day> before:<next day>`, days in the
+  viewer's zone, which is how the search reads a bare day); everything
+  before it or after it.
+- **double-click**: a search card for its day.
+
+**A span is two dates read as one.** A render writes an event's start
+and end as two `<time>`s in a `<span class="time-range">`; where the end
+falls on the start's day in the viewer's zone it shows its clock alone
+(`Fri, Sep 18, 2026, 19:00 – 22:00`), and otherwise its own day
+(`rangeEndText`). The calendar's "When", its occurrences and its
+cancelled dates are written this way, so no date on its page is text.
+
+**A date in the search field is one too.** A value of a key that takes
+dates (`after:`, `before:`) that reads as a day or an instant is drawn
+as the same chip in the text where it was typed (`queryText.ts::dateWords`).
+Its clicks are a field chip's — one selects it, two open it as text — and
+it has no menu there.
+
+**Any chip in a document drags as its search.** `chipDragQuery` gives
+what a chip stands for in a search bar — everything with a person or a
+contact, a group's documents, a date's day — and the document puts it on
+the drag as plain text, which the search field takes like anything
+typed. A step names no search and drags as a link.
+
 ## Clicks
 
 | | a person | a group | a step |
 |---|---|---|---|
 | **click** | the link popover, where a contacts app is configured | nothing; the href is never followed | nothing; the href is never followed |
-| **double-click** | the person card (`personView`): your contact and each source's record of them, the source the chip was seen in first | the group's sync dashboard | the step's log |
-| **right-click** | `chipMenu`: open the person card; compose mail to an email address; copy the identifier, the name or both; everything with them (`with:`); link to a contact or edit the link | `entityMenu`: copy the name, the id or both; open its dashboard; browse its documents | `entityMenu`: copy; show its log |
+| **double-click** | the person card (`personView`): your contact and each source's record of them, the source the chip was seen in first | the source's card (`sourceView`), on its documents | its group's card on Sync, scrolled to the step's section |
+| **right-click** | `chipMenu`: open the person card; compose mail to an email address; copy the identifier, the name or both; everything with them (`with:`); link to a contact or edit the link | `entityChipMenu`: open its dashboard; then its Sources row's entries — Browse, Sync now or Stop, Turn off or on, history, step log, reveal, copy path, Reset; then copy the id, the name or both | the same, for the step's row |
 | **hover** | the tooltip: who, the identifier, what each source calls them, their other handles | the tooltip: name and id, its type, its status | the same |
 | **copy** | `Will Riker <riker@enterprise.org>` as text, a working `mailto:` link as HTML | `Work Slack (datalib:group/slack)`, and the link | the same |
 
-A menu entry is an *id* the surface binds, never a handler, so a
-document and a grid cell draw the same entries and act on them their
-own way. A click with a modifier on a person chip is the browser's, as
+**A group or step chip's menu is its row of the Sources table.**
+`/api/entities` answers each with its `row`, so the menu is built as the
+right-click lands, by the same `rowMenu` the Sources table uses
+(`chipActions.ts::entityChipMenu`). It leaves out what needs the
+config's text, which only the Sources card holds (Edit settings, Rename,
+Remove, Compare), and what the chip's own entries already are (its
+dashboard, its id). An entry runs through `rowActions` on the rows read
+fresh at that moment, so a group's steps are there and nothing acts on
+a stale state; what it says is a toast. Until the answer lands, the
+chip offers its own entries alone.
+
+**`ui/src/cards/chipActions.ts` is the one place a chip's clicks are
+decided**: which chip a press landed on (`chipElAt`, `chipOf`), what its
+double-click opens (`chipCardSource`), its menu (`chipMenuOf`, every
+kind's entries in the one order `CHIP_ACTIONS` gives), and what each
+entry does (`runChipAction`). A surface only draws the menu — the
+floating `ChipMenu.ce.vue` over a document or a card, a grid's context
+menu, the search field's tooltip — and hands it a `ChipHost` saying
+what it can do there: open a card, search in place, link a handle. The
+search grid narrows its own query for "Everything with", and replaces
+it for a chip's own Browse (the one a group chip offers before its row
+is known); everywhere else both open a search beside the card. The
+row's Browse opens its browse card, with the source's columns, from
+every surface. A
+contact chip (`data-contact`) has no card of its own yet, so it
+offers copy and "Everything with" only. A click with a modifier on a person chip is the browser's, as
 on any link; no click on a `datalib:` link ever leaves the app. The mail
 app opens only from the menu's Compose entry, through `openExternal`. A
 double-click opens a card by its card source (`cardSources.ts`, which
@@ -281,7 +409,9 @@ A new kind of *handle* is a person and goes through
   (the TypeScript mirror over the same cases, and the plugin's marking).
 - The resolver: `resolver.test.ts` (one request per pass, kept answers,
   forget and stale answers, revalidating, failures).
-- The rules: `contacts.test.ts`, `entities.test.ts`.
+- The rules: `contacts.test.ts`, `entities.test.ts`, `dates.test.ts`, and
+  `chipActions.test.ts` (one menu order for every kind, and where each
+  entry lands).
 - The endpoint: `http_tests::entities_answer_a_chip_for_a_group_and_a_step`.
 - The writers: `etl_render_unittests` (`chip_link`), the storage
   report's test in `introspect.rs`, chat-common's header and reactor

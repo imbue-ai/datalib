@@ -102,7 +102,7 @@ describe("rowMenu", () => {
   });
 
   it("offers Reset on a source and its steps, and nowhere else", () => {
-    const index = target({ id: "unified_index", type: null, statusFrom: null });
+    const index = target({ id: "unified_document_index", type: null, statusFrom: null });
     expect(has(rowMenu([index], opts), "reset")).toBe(false);
     const busy = target({ stopRequestIds: ["req-1"] });
     expect(entry(rowMenu([busy], opts), "reset").disabled).toBe("Busy — stop the sync first");
@@ -116,14 +116,14 @@ describe("rowMenu", () => {
 
   it("offers Reset on the embedding map, the one index step a person resets", () => {
     const map = target({
-      id: "unified_index/embedding_map",
+      id: "unified_document_index/embedding_map",
       kind: "step",
       type: null,
       func: "embedding_map",
     });
     expect(entry(rowMenu([map], opts), "reset").disabled).toBeNull();
     const qmd = target({
-      id: "unified_index/qmd_aggregator",
+      id: "unified_document_index/qmd_aggregator",
       kind: "step",
       type: null,
       func: "qmd_aggregator",

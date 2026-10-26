@@ -195,7 +195,7 @@ does not carry over to `createStore()` without being re-measured.
 
 ## How a running `qmd mcp` behaves
 
-What the hybrid search (`QmdDaemon`, `unified_index/src/qmd/daemon.rs`)
+What the hybrid search (`QmdDaemon`, `unified_document_index/src/qmd/daemon.rs`)
 relies on. The Meaning tab does not go through `qmd mcp`: it asks
 qmd's SDK only to embed the query and scores the stored vectors
 itself. Each is a test in `qmd_facts_test`, which builds a small
@@ -229,7 +229,7 @@ the facts are about qmd and not about our daemon.
    query scoped to a collection gets that collection's best hit even
    when another collection's ranks above it. This is why `source_id:`
    is sent to qmd as a scope (`collection_scope` in
-   `applets/src/unified_index/mod.rs`) and not only applied to its
+   `applets/src/unified_document_index/mod.rs`) and not only applied to its
    answer: a source whose hits would fall outside the global top-N
    still fills the answer. `source_id_scopes_qmd_before_its_limit` in
    the applet's tests checks that the scope reaches qmd.
@@ -265,7 +265,7 @@ the facts are about qmd and not about our daemon.
 
 What follows for our side. By facts 3, 4 and 8, an unscoped search
 sends `collections: []` (`query_arguments` in
-`unified_index/src/qmd/daemon.rs`): it reaches every collection,
+`unified_document_index/src/qmd/daemon.rs`): it reaches every collection,
 however new, and ranks them as one list, at the price of fact 7's
 depth, 20 documents a sub-query in all. Only `source_id:` names a
 collection, and only one. Then by fact 1 a write into the
@@ -318,13 +318,13 @@ they have to be taken back out by hand).
 ```sh
 S=/tmp/qmd-exp; mkdir -p $S/root
 tar -xf bazel-bin/tests/fixtures/ingested/qmd_md.tar -C $S/root --strip-components=1
-export XDG_CACHE_HOME=$S/root/unified_index/qmd_index
+export XDG_CACHE_HOME=$S/root/unified_document_index/qmd_index
 export XDG_CONFIG_HOME=$XDG_CACHE_HOME
 export QMD_CONFIG_DIR=$XDG_CACHE_HOME/qmd
 export NO_COLOR=1
 mkdir -p $XDG_CACHE_HOME/qmd && ln -sfn ~/.cache/qmd/models $XDG_CACHE_HOME/qmd/models
 qmd() { node bazel-bin/third-party/qmd/runtime/node_modules/@tobilu/qmd/dist/cli/qmd.js "$@"; }
-for g in $(ls $S/root | grep -v unified_index); do
+for g in $(ls $S/root | grep -v unified_document_index); do
   qmd collection add $S/root --name $g --mask "$g/render_markdown/**/*.md"; done
 qmd update
 qmd embed -c slack                       # finding 3

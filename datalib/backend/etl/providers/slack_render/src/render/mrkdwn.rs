@@ -2,46 +2,35 @@
 //! slack/mrkdwn.py`.
 
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 
 use datalib_etl_render::html::{code_span_parts, escape_md_inline, escape_md_syntax, md_link_dest};
 use datalib_etl_render::inputs::Lookup;
 use datalib_etl_render::message::chip_link;
 use datalib_handle::Handle;
-use once_cell::sync::Lazy;
 use regex::{Captures, Regex};
 
-static USER_REF: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"<@([UW][A-Z0-9_]+)(?:\|([^>]+))?>").unwrap());
+use super::emoji::emojize;
+
+static USER_REF: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<@([UW][A-Z0-9_]+)(?:\|([^>]+))?>").unwrap());
 // The label may be empty (`<#C123|>`): Slack emits that for a channel
 // the message's author can see but the reader may not.
-static CHANNEL_REF: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"<#([CG][A-Z0-9_]+)(?:\|([^>]*))?>").unwrap());
-static SUBTEAM_REF: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"<!subteam\^[A-Z0-9_]+(?:\|([^>]+))?>").unwrap());
-static SPECIAL_REF: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"<!(here|channel|everyone)(?:\|[^>]+)?>").unwrap());
-static URL_REF: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"<((?:https?|mailto):[^|>\s]+)(?:\|([^>]*))?>").unwrap());
+static CHANNEL_REF: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<#([CG][A-Z0-9_]+)(?:\|([^>]*))?>").unwrap());
+static SUBTEAM_REF: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<!subteam\^[A-Z0-9_]+(?:\|([^>]+))?>").unwrap());
+static SPECIAL_REF: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<!(here|channel|everyone)(?:\|[^>]+)?>").unwrap());
+static URL_REF: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<((?:https?|mailto):[^|>\s]+)(?:\|([^>]*))?>").unwrap());
 // Bold/strike use look-around-style boundary checks but Rust's `regex`
 // crate has no look-around. We compensate by including the boundary
 // char in the match and re-emitting it. See [`reflow_bold`] / [`reflow_strike`].
-static BOLD: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(^|[^\w*])\*([^\s*][^*\n]*?[^\s*]|[^\s*])\*([^\w*]|$)").unwrap());
-static STRIKE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(^|[^\w~])~([^\s~][^~\n]*?[^\s~]|[^\s~])~([^\w~]|$)").unwrap());
-static SHORTCODE: Lazy<Regex> = Lazy::new(|| Regex::new(r":([a-zA-Z0-9_+\-]+):").unwrap());
-
-pub fn emojize_shortcodes(text: &str) -> String {
-    SHORTCODE
-        .replace_all(text, |caps: &Captures<'_>| {
-            match emojis::get_by_shortcode(&caps[1]) {
-                Some(e) => e.as_str().to_string(),
-                None => caps[0].to_string(),
-            }
-        })
-        .into_owned()
-}
-
+static BOLD: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(^|[^\w*])\*([^\s*][^*\n]*?[^\s*]|[^\s*])\*([^\w*]|$)").unwrap());
+static STRIKE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(^|[^\w~])~([^\s~][^~\n]*?[^\s~]|[^\s~])~([^\w~]|$)").unwrap());
 /// What a mention resolves to: `user_id` → real name, `channel_id` →
 /// channel name. An id with no entry falls back to the id itself
 /// (`@U…`, `#C…`), so a mention is never silently dropped. Both are
@@ -69,7 +58,7 @@ pub fn resolve_mentions(text: &str, labels: Labels<'_>) -> String {
             format!("#{}", channel_label(caps, labels, slack_encode))
         })
         .into_owned();
-    decode_entities(&emojize_shortcodes(&replaced))
+    decode_entities(&emojize(&replaced))
 }
 
 /// The people a message's text mentions (`<@U…>`), each once, in the
@@ -121,10 +110,7 @@ fn user_label(caps: &Captures<'_>, labels: Labels<'_>, name: fn(&str) -> String)
 /// makes no handle. The name is what the message showed, as
 /// [`user_label`] reads it.
 fn user_mention(caps: &Captures<'_>, labels: Labels<'_>) -> String {
-    let shown = format!(
-        "@{}",
-        emojize_shortcodes(&user_label(caps, labels, str::to_string))
-    );
+    let shown = format!("@{}", emojize(&user_label(caps, labels, str::to_string)));
     match Handle::slack(labels.team_id, &caps[1]) {
         Some(handle) => chip_link(&shown, &handle),
         None => escape_md_inline(&shown),
@@ -145,7 +131,7 @@ fn channel_label(caps: &Captures<'_>, labels: Labels<'_>, name: fn(&str) -> Stri
 /// A person's or a channel's name on a markdown line, emoji shortcodes
 /// and all.
 fn md_name(name: &str) -> String {
-    escape_md_inline(&emojize_shortcodes(name))
+    escape_md_inline(&emojize(name))
 }
 
 /// Render Slack mrkdwn `text` into CommonMark. A `<#C…|name>` carries
@@ -232,7 +218,17 @@ pub fn to_commonmark(text: &str, labels: Labels<'_>) -> String {
     out = decode_entities_where_literal(&out);
 
     out = terminate_blockquotes(&out);
-    out = emojize_shortcodes(&out);
+    // Slack draws no emoji inside code.
+    out = code_span_parts(&out)
+        .into_iter()
+        .map(|(part, is_code)| {
+            if is_code {
+                part.to_string()
+            } else {
+                emojize(part)
+            }
+        })
+        .collect();
     NAME_HELD
         .replace_all(&out, |caps: &Captures<'_>| {
             caps[1]
@@ -248,7 +244,8 @@ pub fn to_commonmark(text: &str, labels: Labels<'_>) -> String {
 /// text has no business carrying.
 const NAME_OPEN: char = '\u{E000}';
 const NAME_CLOSE: char = '\u{E001}';
-static NAME_HELD: Lazy<Regex> = Lazy::new(|| Regex::new("\u{E000}([0-9]+)\u{E001}").unwrap());
+static NAME_HELD: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new("\u{E000}([0-9]+)\u{E001}").unwrap());
 
 /// [`escape_md_syntax`] over what someone typed: not inside a `<…>`,
 /// which is Slack's own markup (a typed `<` arrives as `&lt;`), and not
@@ -311,10 +308,11 @@ fn code_parts_whole_constructs(text: &str) -> Vec<(String, bool)> {
         .collect()
 }
 
-static SLACK_CONSTRUCT: Lazy<Regex> = Lazy::new(|| Regex::new(r"<[^<>]*>").unwrap());
+static SLACK_CONSTRUCT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<[^<>]*>").unwrap());
 const CONSTRUCT_OPEN: char = '\u{E002}';
 const CONSTRUCT_CLOSE: char = '\u{E003}';
-static CONSTRUCT_HELD: Lazy<Regex> = Lazy::new(|| Regex::new("\u{E002}([0-9]+)\u{E003}").unwrap());
+static CONSTRUCT_HELD: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new("\u{E002}([0-9]+)\u{E003}").unwrap());
 
 /// Slack's entities stay entities in running text, so a `<b>` someone
 /// typed shows as typed rather than being read as HTML. They are decoded
@@ -365,21 +363,20 @@ mod tests {
     use super::*;
 
     use datalib_etl_render::inputs::Inputs;
-    use once_cell::sync::Lazy;
 
-    static USERS: Lazy<BTreeMap<String, String>> = Lazy::new(|| {
+    static USERS: LazyLock<BTreeMap<String, String>> = LazyLock::new(|| {
         let mut m = BTreeMap::new();
         m.insert("U_PICARD".to_string(), "Jean-Luc Picard".to_string());
         m.insert("U_DATA".to_string(), "Lt. Cmdr. Data".to_string());
         m
     });
-    static CHANNELS: Lazy<BTreeMap<String, String>> = Lazy::new(|| {
+    static CHANNELS: LazyLock<BTreeMap<String, String>> = LazyLock::new(|| {
         let mut m = BTreeMap::new();
         m.insert("C_BRIDGE".to_string(), "bridge".to_string());
         m
     });
-    static NONE: Lazy<BTreeMap<String, String>> = Lazy::new(BTreeMap::new);
-    static INPUTS: Lazy<Inputs> = Lazy::new(Inputs::default);
+    static NONE: LazyLock<BTreeMap<String, String>> = LazyLock::new(BTreeMap::new);
+    static INPUTS: LazyLock<Inputs> = LazyLock::new(Inputs::default);
 
     fn labels() -> Labels<'static> {
         Labels {
@@ -464,6 +461,20 @@ mod tests {
         assert_eq!(to_commonmark(":notarealemoji:", lbl), ":notarealemoji:");
     }
 
+    /// The regression: `Foo::new::bar` in code showed as `Foo:🆕:bar`.
+    #[test]
+    fn code_keeps_its_shortcodes() {
+        let lbl = no_labels();
+        assert_eq!(
+            to_commonmark("`Foo::new::bar` is :new::skin-tone-2:", lbl),
+            "`Foo::new::bar` is 🆕🏻"
+        );
+        assert_eq!(
+            to_commonmark("```\nlet x = a::new::b;\n```\n:+1::skin-tone-3:", lbl),
+            "```\nlet x = a::new::b;\n```\n👍🏼"
+        );
+    }
+
     /// Someone typing markup into Slack sees it as they typed it, in
     /// running text and in code alike, and Slack's own quote still quotes.
     #[test]
@@ -515,7 +526,7 @@ mod tests {
     /// is text on a markdown line (#992).
     #[test]
     fn a_name_in_markdown_renders_as_typed() {
-        static ODD: Lazy<BTreeMap<String, String>> = Lazy::new(|| {
+        static ODD: LazyLock<BTreeMap<String, String>> = LazyLock::new(|| {
             BTreeMap::from([("U_Q".to_string(), "[Q](https://e.test) *".to_string())])
         });
         let lbl = Labels {

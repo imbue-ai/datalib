@@ -1,15 +1,16 @@
--- ST:TNG-themed fixture for the Beeper extract path.
+-- ST:TNG-themed `index.db`, the Beeper Texts desktop app's cache.
 --
--- Builds a minimal `index.db` analog with just the columns our
--- extractor reads (see src/extract/index_db.rs). Does NOT include
--- the desktop app's FTS/triggers/etc. — we don't read those.
+-- The four tables the download mirrors carry the real app's DDL, column
+-- for column and key for key: `mx_room_messages` is keyed by a local
+-- `id`, as the real one is, which is why the mirror keys it on
+-- `(roomID, eventID)` instead. The app's other tables (FTS, accounts,
+-- …) are left out; nothing reads them.
 --
--- Pipe into sqlite3 from `build_fixture.sh`:
---     sqlite3 <BeeperTexts>/index.db < index_db.sql
+-- Laid out by //tests/fixtures:make_beeper_texts.py.
 --
--- The "self" user mxid is @picard:beeper.com. Conversation
--- targets: Mr. Data (Signal), Dr. Crusher (Signal), Cmdr. Riker
--- (Google Chat). Activity spans 2024-03 and 2024-04 so the
+-- The "self" user mxid is @picard:beeper.com. Conversation targets:
+-- Mr. Data (Signal), Dr. Crusher (Signal), Cmdr. Riker (Google Chat),
+-- and #bridge (Slack). Activity spans 2024-03 and 2024-04 so the
 -- per-month period bucketing has something to do.
 
 PRAGMA journal_mode = DELETE;
@@ -18,15 +19,15 @@ PRAGMA journal_mode = DELETE;
 -- threads
 -- ─────────────────────────────────────────────────────────────────────
 
-CREATE TABLE IF NOT EXISTS threads (
-    threadID  TEXT NOT NULL PRIMARY KEY,
-    accountID TEXT,
-    thread    TEXT NOT NULL,            -- JSON
-    timestamp INTEGER DEFAULT 0
-);
+CREATE TABLE 'threads' (
+    'threadID' VARCHAR NOT NULL PRIMARY KEY,
+    'accountID' VARCHAR,
+    'thread' JSON NOT NULL,
+    'timestamp' INTEGER DEFAULT 0
+  , is_label INTEGER DEFAULT 0, room_type TEXT);
 
--- Signal DM with Mr. Data. local-signal bridge — has a corresponding
--- megabridge.db that the enrich pass will pair with.
+-- Signal DM with Mr. Data. local-signal bridge — its megabridge.db
+-- holds Signal's own ids for these messages.
 INSERT INTO threads (threadID, accountID, thread, timestamp) VALUES (
     '!tng-data:ba_TNG.local-signal.localhost',
     'local-signal_ba_TNG',
@@ -109,9 +110,66 @@ INSERT INTO threads (threadID, accountID, thread, timestamp) VALUES (
     1710943200000
 );
 
+-- Signal's bridge-crew chat: the same chat the Signal source's TNG
+-- backup holds (signal/tests/fixtures/signal_tng/tng.json), so Riker's
+-- and Q's messages here are that backup's, at the same sent times.
+INSERT INTO threads (threadID, accountID, thread, timestamp) VALUES (
+    '!tng-bridge-crew:ba_TNG.local-signal.localhost',
+    'local-signal_ba_TNG',
+    json_object(
+        'id',          '!tng-bridge-crew:ba_TNG.local-signal.localhost',
+        'accountID',   'local-signal_ba_TNG',
+        'type',        'group',
+        'title',       'Bridge crew',
+        'extra', json_object(
+            'bridge', json_object(
+                'com.beeper.bridge_name', 'local-signal',
+                'com.beeper.room_type',   'group',
+                'channel', json_object(
+                    'id',              'tng-bridge-crew-conv-uuid',
+                    'fi.mau.receiver', 'tng-picard-account-uuid'
+                ),
+                'protocol', json_object(
+                    'id',          'signal',
+                    'displayname', 'Signal'
+                )
+            )
+        )
+    ),
+    12442119000000
+);
+
+-- Slack's #bridge, through the cloud Slack bridge: the channel and the
+-- workspace are the network's own ids, `<team>-<channel>`.
+INSERT INTO threads (threadID, accountID, thread, timestamp) VALUES (
+    '!tng-slack-bridge:beeper.com',
+    'slackgo.T1701D-U0PICARD',
+    json_object(
+        'id',          '!tng-slack-bridge:beeper.com',
+        'accountID',   'slackgo.T1701D-U0PICARD',
+        'type',        'group',
+        'title',       '#bridge',
+        'extra', json_object(
+            'bridge', json_object(
+                'com.beeper.bridge_name', 'slack',
+                'channel', json_object(
+                    'id',              'T1701D-C0BRIDGE',
+                    'fi.mau.receiver', 'T1701D-U0PICARD'
+                ),
+                'network', json_object('id', 'T1701D'),
+                'protocol', json_object(
+                    'id',          'slack',
+                    'displayname', 'Slack'
+                )
+            )
+        )
+    ),
+    1711040400000
+);
+
 -- $space sentinel — every Beeper account has at least one of these
--- (Beeper-internal grouping rooms). Our extractor skips them; here
--- to verify the filter is exercised.
+-- (Beeper-internal grouping rooms). Render skips them; here to verify
+-- the filter is exercised.
 INSERT INTO threads (threadID, accountID, thread, timestamp) VALUES (
     '!tng-internal-space:beeper.local',
     '$space',
@@ -129,19 +187,22 @@ INSERT INTO threads (threadID, accountID, thread, timestamp) VALUES (
 -- participants
 -- ─────────────────────────────────────────────────────────────────────
 
-CREATE TABLE IF NOT EXISTS participants (
-    account_id TEXT NOT NULL,
-    room_id    TEXT NOT NULL,
-    id         TEXT NOT NULL,
-    full_name  TEXT,
-    nickname   TEXT,
-    img_url    TEXT,
-    is_verified INTEGER,
-    cannot_message INTEGER,
-    is_self    INTEGER,
-    is_network_bot INTEGER,
-    is_admin   INTEGER,
-    PRIMARY KEY(room_id, id)
+CREATE TABLE 'participants' (
+  'account_id' TEXT NOT NULL,
+  'room_id' TEXT NOT NULL,
+  'id' TEXT NOT NULL,
+  'full_name' TEXT DEFAULT NULL,
+  'nickname' TEXT DEFAULT NULL,
+  'img_url' TEXT DEFAULT NULL,
+  'is_verified' INTEGER DEFAULT NULL,
+  'cannot_message' INTEGER DEFAULT NULL,
+  'is_self' INTEGER DEFAULT NULL,
+  'is_network_bot' INTEGER DEFAULT NULL,
+  'added_by' TEXT DEFAULT NULL,
+  'is_admin' INTEGER DEFAULT NULL,
+  'is_pending' INTEGER DEFAULT NULL,
+  'has_exited' INTEGER DEFAULT NULL,
+  PRIMARY KEY('room_id', 'id')
 );
 
 INSERT INTO participants (account_id, room_id, id, full_name, is_self) VALUES
@@ -156,34 +217,96 @@ INSERT INTO participants (account_id, room_id, id, full_name, is_self) VALUES
     ('googlechat',          '!tng-gchat-riker:beeper.local',
         '@picard:beeper.com',                              'Jean-Luc Picard', 1),
     ('googlechat',          '!tng-gchat-riker:beeper.local',
-        '@googlechat_115552341:beeper.local',              'William T. Riker', 0);
+        '@googlechat_115552341:beeper.local',              'William T. Riker', 0),
+    ('local-signal_ba_TNG', '!tng-bridge-crew:ba_TNG.local-signal.localhost',
+        '@picard:beeper.com',                              'Jean-Luc Picard', 1),
+    ('local-signal_ba_TNG', '!tng-bridge-crew:ba_TNG.local-signal.localhost',
+        '@signal_riker:local-signal.localhost',            'Will Riker',      0),
+    ('local-signal_ba_TNG', '!tng-bridge-crew:ba_TNG.local-signal.localhost',
+        '@signal_q:local-signal.localhost',                'Q',               0),
+    ('slackgo.T1701D-U0PICARD', '!tng-slack-bridge:beeper.com',
+        '@picard:beeper.com',                              'Jean-Luc Picard', 1),
+    ('slackgo.T1701D-U0PICARD', '!tng-slack-bridge:beeper.com',
+        '@slackgo_t1701d-u0worf:beeper.local',               'Worf',            0);
+
+-- Avatars, cached by the app under `media/`.
+UPDATE participants SET img_url = 'mxc://local.beeper.com/TNGAVWORF'
+ WHERE id = '@slackgo_t1701d-u0worf:beeper.local';
+UPDATE participants SET img_url = 'localmxc://local-signal/TNGAVDATA'
+ WHERE id = '@signal_+15551234001:local-signal.localhost';
+
+-- ─────────────────────────────────────────────────────────────────────
+-- participant_identifiers — the numbers and addresses Beeper knows
+-- ─────────────────────────────────────────────────────────────────────
+
+CREATE TABLE 'participant_identifiers' (
+  'account_id' TEXT NOT NULL,
+  'participant_id' TEXT NOT NULL,
+  'identifier' TEXT NOT NULL,
+  'identifier_type' TEXT NOT NULL,
+  PRIMARY KEY('account_id', 'participant_id', 'identifier')
+);
+
+INSERT INTO participant_identifiers VALUES
+    ('local-signal_ba_TNG', '@signal_+15551234001:local-signal.localhost',
+        '+15551234001', 'phone'),
+    ('local-signal_ba_TNG', '@signal_+15551234002:local-signal.localhost',
+        '+15551234002', 'phone'),
+    ('googlechat', '@googlechat_115552341:beeper.local',
+        'riker@enterprise.org', 'email'),
+    ('hungryserv', '@picard:beeper.com', '@picard:beeper.com', 'username');
 
 -- ─────────────────────────────────────────────────────────────────────
 -- mx_room_messages
 -- ─────────────────────────────────────────────────────────────────────
 --
--- Minimal subset of the real schema — only the columns the
--- extractor SELECTs. Real Beeper has dozens more (FTS support,
--- echo state, derived content). Fixture stays terse.
+-- Written into `tng_messages`, a temporary table of just the columns
+-- that vary here, then copied into the real table in `hsOrder` order,
+-- the order the app gives its rows their `id`.
 
-CREATE TABLE IF NOT EXISTS mx_room_messages (
-    eventID         TEXT NOT NULL,
-    roomID          TEXT NOT NULL,
-    senderContactID TEXT,
-    timestamp       INTEGER NOT NULL,
-    type            TEXT NOT NULL,
-    hsOrder         INTEGER NOT NULL,
-    isDeleted       INTEGER NOT NULL DEFAULT 0,
-    isEdited        INTEGER NOT NULL DEFAULT 0,
-    lastEditionID   TEXT,
-    inReplyToID     TEXT,
-    text_content    TEXT,
-    message         TEXT NOT NULL,
-    PRIMARY KEY(roomID, eventID)
+CREATE TABLE 'mx_room_messages' (
+    'id' INTEGER PRIMARY KEY AUTOINCREMENT,
+    'roomID' TEXT NOT NULL,
+    'eventID' TEXT NOT NULL,
+    'senderContactID' TEXT NOT NULL,
+    'timestamp' INTEGER NOT NULL,
+    'isEdited' INTEGER NOT NULL,
+    'lastEditionID' TEXT,
+    'isDetached' INTEGER NOT NULL DEFAULT 0,
+    'lastEditionTimestamp' INTEGER,
+    'lastEditionOrder' INTEGER,
+    'isDeleted' INTEGER NOT NULL,
+    'isEncrypted' INTEGER NOT NULL,
+    'inReplyToID' TEXT,
+    'isReplyThreadFallback' INTEGER,
+    'type' TEXT NOT NULL,
+    'hsOrder' INTEGER NOT NULL,
+    'isSentByMe' INTEGER NOT NULL,
+    'replyThreadID' TEXT,
+    'replyCount' INTEGER,
+    'replyThreadRootID' TEXT,
+    'protocol' TEXT,
+    'shouldNotify' INTEGER,
+    'shouldPreview' INTEGER,
+    'countsAsUnread' INTEGER,
+    'lastDeletionID' TEXT,
+    'editedType' TEXT,
+    'mentions' TEXT,
+    'message' JSON NOT NULL,
+    'sendStatus' JSON,
+    'text_content' TEXT,
+    'text_formattedContent' TEXT,
+    'text_format' TEXT
+  , echo_echoID VARCHAR, echo_state VARCHAR, echo_canAutoRetry INTEGER DEFAULT 0, echo_isRetryScheduled INTEGER DEFAULT 0, echo_retryCount INTEGER DEFAULT 0, echo_errorCode INTEGER DEFAULT NULL, echo_errorMessage VARCHAR, echo_groupID VARCHAR, echo_groupIndex INTEGER, seenByMeAt INTEGER DEFAULT NULL, message_size INTEGER DEFAULT 0, recipientReadTimerStartedAt INTEGER DEFAULT NULL, threadRootEventID TEXT DEFAULT NULL, countsAsUnreadInThread INTEGER DEFAULT NULL);
+
+CREATE TEMP TABLE tng_messages (
+    eventID TEXT, roomID TEXT, senderContactID TEXT, timestamp INTEGER,
+    type TEXT, hsOrder INTEGER, isDeleted INTEGER, isEdited INTEGER,
+    lastEditionID TEXT, inReplyToID TEXT, text_content TEXT, message TEXT
 );
 
 -- ───── Signal: Data (March 2024) ─────
-INSERT INTO mx_room_messages VALUES (
+INSERT INTO tng_messages VALUES (
     '$tng-data-001:ba_TNG.local-signal.localhost',
     '!tng-data:ba_TNG.local-signal.localhost',
     '@picard:beeper.com',
@@ -199,7 +322,7 @@ INSERT INTO mx_room_messages VALUES (
     )
 );
 
-INSERT INTO mx_room_messages VALUES (
+INSERT INTO tng_messages VALUES (
     '$tng-data-002:ba_TNG.local-signal.localhost',
     '!tng-data:ba_TNG.local-signal.localhost',
     '@signal_+15551234001:local-signal.localhost',
@@ -217,7 +340,7 @@ INSERT INTO mx_room_messages VALUES (
 );
 
 -- Image: Picard sends a schematic — `localmxc://` (local Signal bridge).
-INSERT INTO mx_room_messages VALUES (
+INSERT INTO tng_messages VALUES (
     '$tng-data-003:ba_TNG.local-signal.localhost',
     '!tng-data:ba_TNG.local-signal.localhost',
     '@picard:beeper.com',
@@ -241,7 +364,7 @@ INSERT INTO mx_room_messages VALUES (
 );
 
 -- ───── Signal: Data (April 2024) — exercises multi-period ─────
-INSERT INTO mx_room_messages VALUES (
+INSERT INTO tng_messages VALUES (
     '$tng-data-004:ba_TNG.local-signal.localhost',
     '!tng-data:ba_TNG.local-signal.localhost',
     '@signal_+15551234001:local-signal.localhost',
@@ -257,7 +380,7 @@ INSERT INTO mx_room_messages VALUES (
     )
 );
 
-INSERT INTO mx_room_messages VALUES (
+INSERT INTO tng_messages VALUES (
     '$tng-data-005:ba_TNG.local-signal.localhost',
     '!tng-data:ba_TNG.local-signal.localhost',
     '@picard:beeper.com',
@@ -274,7 +397,7 @@ INSERT INTO mx_room_messages VALUES (
 );
 
 -- ───── Signal: Crusher (April 2024) — has an edit ─────
-INSERT INTO mx_room_messages VALUES (
+INSERT INTO tng_messages VALUES (
     '$tng-bev-001:ba_TNG.local-signal.localhost',
     '!tng-crusher:ba_TNG.local-signal.localhost',
     '@signal_+15551234002:local-signal.localhost',
@@ -290,7 +413,7 @@ INSERT INTO mx_room_messages VALUES (
     )
 );
 
-INSERT INTO mx_room_messages VALUES (
+INSERT INTO tng_messages VALUES (
     '$tng-bev-002:ba_TNG.local-signal.localhost',
     '!tng-crusher:ba_TNG.local-signal.localhost',
     '@picard:beeper.com',
@@ -310,7 +433,7 @@ INSERT INTO mx_room_messages VALUES (
 );
 
 -- ───── Google Chat: Riker (March 2024) — cloud bridge ─────
-INSERT INTO mx_room_messages VALUES (
+INSERT INTO tng_messages VALUES (
     '$tng-riker-001:beeper.local',
     '!tng-gchat-riker:beeper.local',
     '@googlechat_115552341:beeper.local',
@@ -326,7 +449,7 @@ INSERT INTO mx_room_messages VALUES (
     )
 );
 
-INSERT INTO mx_room_messages VALUES (
+INSERT INTO tng_messages VALUES (
     '$tng-riker-002:beeper.local',
     '!tng-gchat-riker:beeper.local',
     '@picard:beeper.com',
@@ -343,7 +466,7 @@ INSERT INTO mx_room_messages VALUES (
 );
 
 -- File attachment: cloud bridge, `mxc://local.beeper.com/...`.
-INSERT INTO mx_room_messages VALUES (
+INSERT INTO tng_messages VALUES (
     '$tng-riker-003:beeper.local',
     '!tng-gchat-riker:beeper.local',
     '@googlechat_115552341:beeper.local',
@@ -369,7 +492,7 @@ INSERT INTO mx_room_messages VALUES (
 -- HIDDEN events — Beeper marks all sorts of system events HIDDEN.
 -- A handful in the Riker room so the translator exercises the
 -- HIDDEN render path.
-INSERT INTO mx_room_messages VALUES (
+INSERT INTO tng_messages VALUES (
     '$tng-riker-hidden-1:beeper.local',
     '!tng-gchat-riker:beeper.local',
     '@googlechatbot:beeper.local',
@@ -378,7 +501,7 @@ INSERT INTO mx_room_messages VALUES (
     'm.room.create',
     json_object('extra', json_object('eventType', 'm.room.create'))
 );
-INSERT INTO mx_room_messages VALUES (
+INSERT INTO tng_messages VALUES (
     '$tng-riker-hidden-2:beeper.local',
     '!tng-gchat-riker:beeper.local',
     '@googlechatbot:beeper.local',
@@ -388,30 +511,101 @@ INSERT INTO mx_room_messages VALUES (
     json_object('extra', json_object('eventType', 'm.bridge'))
 );
 
+-- ───── Signal: bridge crew (April 2364) — the backup's own messages ─────
+INSERT INTO tng_messages VALUES (
+    '$tng-crew-001:ba_TNG.local-signal.localhost',
+    '!tng-bridge-crew:ba_TNG.local-signal.localhost',
+    '@picard:beeper.com',
+    12442118400000,
+    'TEXT', 500, 0, 0, NULL, NULL, NULL,
+    json_object('text', 'Status report.', 'attachments', json('[]'))
+);
+INSERT INTO tng_messages VALUES (
+    '$tng-crew-002:ba_TNG.local-signal.localhost',
+    '!tng-bridge-crew:ba_TNG.local-signal.localhost',
+    '@signal_riker:local-signal.localhost',
+    12442118460000,
+    'TEXT', 501, 0, 0, NULL, NULL, NULL,
+    json_object('text', 'All decks at green status, Captain.', 'attachments', json('[]'))
+);
+INSERT INTO tng_messages VALUES (
+    '$tng-crew-003:ba_TNG.local-signal.localhost',
+    '!tng-bridge-crew:ba_TNG.local-signal.localhost',
+    '@signal_q:local-signal.localhost',
+    12442119000000,
+    'TEXT', 502, 0, 0, NULL, NULL, NULL,
+    json_object('text', 'Mon capitaine, you are so predictable.', 'attachments', json('[]'))
+);
+
+-- ───── Slack: #bridge (March 2024) — cloud bridge ─────
+INSERT INTO tng_messages VALUES (
+    '$tng-slack-001:beeper.com',
+    '!tng-slack-bridge:beeper.com',
+    '@slackgo_t1701d-u0worf:beeper.local',
+    1711040400000,
+    'TEXT', 400, 0, 0, NULL, NULL,
+    NULL,
+    json_object(
+        'eventID',  '$tng-slack-001:beeper.com',
+        'senderID', '@slackgo_t1701d-u0worf:beeper.local',
+        'timestamp', 1711040400000,
+        'text', 'Captain, a Romulan warbird is decloaking off the port bow.',
+        'attachments', json('[]')
+    )
+);
+
+INSERT INTO tng_messages VALUES (
+    '$tng-slack-002:beeper.com',
+    '!tng-slack-bridge:beeper.com',
+    '@picard:beeper.com',
+    1711040460000,
+    'TEXT', 401, 0, 0, NULL, '$tng-slack-001:beeper.com',
+    NULL,
+    json_object(
+        'eventID',  '$tng-slack-002:beeper.com',
+        'senderID', '@picard:beeper.com',
+        'timestamp', 1711040460000,
+        'text', 'Shields up. Red alert.',
+        'attachments', json('[]')
+    )
+);
+
+INSERT INTO mx_room_messages (
+    roomID, eventID, senderContactID, timestamp, isEdited, lastEditionID,
+    isDeleted, isEncrypted, inReplyToID, type, hsOrder, isSentByMe,
+    message, text_content
+)
+SELECT roomID, eventID, senderContactID, timestamp, isEdited, lastEditionID,
+       isDeleted, 0, inReplyToID, type, hsOrder,
+       senderContactID = '@picard:beeper.com', message, text_content
+FROM tng_messages ORDER BY hsOrder;
+
 -- ─────────────────────────────────────────────────────────────────────
 -- mx_reactions
 -- ─────────────────────────────────────────────────────────────────────
 --
--- A single ❤️ reaction by Picard on Data's image. The matching
--- bridge-side row lives in local_signal_megabridge.sql so the
--- enrich pass has work to do.
+-- Two reactions on Data's image, one of them a month late.
 
-CREATE TABLE IF NOT EXISTS mx_reactions (
-    roomID       TEXT NOT NULL,
-    reactionID   TEXT NOT NULL,
-    eventID      TEXT NOT NULL,
-    senderID     TEXT NOT NULL,
-    description  TEXT NOT NULL,
-    "order"      INTEGER NOT NULL DEFAULT 0,
-    timestamp    INTEGER NOT NULL,
-    isEdited     INTEGER NOT NULL DEFAULT 0,
-    isDeleted    INTEGER NOT NULL DEFAULT 0,
-    isSentByMe   INTEGER NOT NULL DEFAULT 0,
-    reaction     TEXT,
+CREATE TABLE 'mx_reactions' (
+    'roomID' VARCHAR NOT NULL,
+    'reactionID' VARCHAR NOT NULL,
+    'eventID' VARCHAR NOT NULL,
+    'senderID' VARCHAR NOT NULL,
+    'description' VARCHAR NOT NULL,
+    'path' VARCHAR,
+    'order' INTEGER NOT NULL,
+    'timestamp' INTEGER NOT NULL,
+    'isEdited' INTEGER NOT NULL,
+    'isDeleted' INTEGER NOT NULL,
+    'isSentByMe' INTEGER NOT NULL,
+    'echoInfo' TEXT,
+    'sendStatus' JSON,
+    'reaction' JSON,
     PRIMARY KEY (roomID, reactionID)
-);
+  );
 
-INSERT INTO mx_reactions VALUES (
+INSERT INTO mx_reactions (roomID, reactionID, eventID, senderID, description,
+    "order", timestamp, isEdited, isDeleted, isSentByMe, reaction) VALUES (
     '!tng-data:ba_TNG.local-signal.localhost',
     '$tng-data-react-001:ba_TNG.local-signal.localhost',
     '$tng-data-003:ba_TNG.local-signal.localhost',
@@ -423,7 +617,8 @@ INSERT INTO mx_reactions VALUES (
 
 -- Cross-month reaction: Data reacts in April to the March image.
 -- Translator should attach this to the March bucket, not April's.
-INSERT INTO mx_reactions VALUES (
+INSERT INTO mx_reactions (roomID, reactionID, eventID, senderID, description,
+    "order", timestamp, isEdited, isDeleted, isSentByMe, reaction) VALUES (
     '!tng-data:ba_TNG.local-signal.localhost',
     '$tng-data-react-002:ba_TNG.local-signal.localhost',
     '$tng-data-003:ba_TNG.local-signal.localhost',

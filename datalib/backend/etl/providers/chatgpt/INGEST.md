@@ -93,9 +93,19 @@ request and requires the store an uninterrupted run leaves.
 2. **List** `/backend-api/conversations?offset=&limit=100&order=updated`,
    newest-updated first, until the pages run out, `max_pages` is hit,
    a page fails, or — with `since` set — a page ends past the cutoff.
-   The walk is *complete* only in the first case.
+   Then the same walk again with `&is_archived=true`: the plain listing
+   leaves an archived conversation out, so without it archiving a chat
+   deleted it from the mirror. (Measured: an archived chat left the
+   plain listing, was the archived listing's one item, and still
+   answered its detail; unarchived, it came back.) The two are one
+   listing, and it is *complete* only when both walks ran out of pages.
+   A complete listing can still be short: for about fifteen minutes
+   after that unarchive, the plain listing named 104 of 582
+   conversations, every one of which still answered. A sync then would
+   have deleted the rest, and doltlite history is what brings them
+   back; the next sync after the listing recovers fetches them again.
 3. **Prune**, only after a complete walk: a conversation the store
-   holds that the listing did not name was deleted on chatgpt.com, so
+   holds that neither listing named was deleted on chatgpt.com, so
    it is deleted here with its edges (its rows stay in doltlite
    history). An incomplete walk says nothing about the pages it never
    asked for, so it prunes nothing; with `since` configured, most runs
@@ -165,10 +175,11 @@ goes on with what it has:
   exponential backoff when the header is absent, inside the shared
   `latchkey_curl` chokepoint; when that gives up, the loop it struck
   ends the run's requests, since every later request would be refused
-  too, and records `phase:conversations` or `phase:attachments`. What
-  was left is still owed, so the next run fetches it, and that run's
-  report clears the row. Twenty-five failures in a row end a loop the
-  same way.
+  too, and records `phase:conversations` or `phase:attachments`
+  (`listing:conversations` when it struck the listing). The step ends
+  `incomplete`, not `succeeded`. What was left is still owed, so the
+  next run fetches it, and that run's report clears the row.
+  Twenty-five failures in a row end a loop the same way.
 - **A named conversation** (`conv_uuids`) that answers `404` is
   `config:conv_uuids:<value>`; any other failure is its
   `conversations:<id>` row, as above. Every named conversation is
@@ -196,16 +207,32 @@ the `Authorization: Bearer <accessToken>` registered under the
 
 ### Refreshing the access token
 
-ChatGPT rotates the bearer token frequently. When `latchkey services
-info chatgpt` reports `invalid`, or requests come back `HTTP 401
-token_expired`, refresh it from the browser:
+The bearer token lasts about ten days. When a request comes back
+`HTTP 401`, the download signs in again by itself: it runs
 
 ```sh
 latchkey auth browser chatgpt
 ```
 
-That opens chatgpt.com, waits for you to log in, reads the fresh
-`accessToken` itself and stores it. No DevTools, no clipboard.
+which opens chatgpt.com in the browser session latchkey keeps. While
+that session is still signed in, the page hands over a fresh
+`accessToken` and the window closes after about ten seconds, with
+nobody touching it. The download then checks `/me`: the new token is
+used only if it is for the account the store already holds, because
+latchkey keeps one browser session for every account and the login
+cannot tell which account it captured. Every request that saw the 401
+waits on that one sign-in and is sent again.
+
+The download signs in once per run, gives up after two minutes, and
+does not sign in at all on a source's first run (no account is held
+yet to check against), under a latchkey gateway, or in a replayed
+test. When the browser's own session has expired too, the window sits
+on the sign-in page; sign in there within the two minutes, or run the
+command above yourself, and the next sync picks the token up.
+
+`/me` answering as an account other than the one held fails the step
+before anything is listed, since that account's listing would prune
+every conversation this one holds.
 
 It works because the `chatgpt` service is registered with latchkey's
 `token-capture` login flow. `latchkey services info chatgpt` says
@@ -298,6 +325,7 @@ latchkey auth set chatgpt -H "Cookie: cf_clearance=$(pbpaste)"
 |------------------------------------------------------------|---------------------------------------|
 | `/backend-api/me`                                          | Identify the calling user             |
 | `/backend-api/conversations?offset=&limit=&order=updated`  | Paginated listing, newest first       |
+| the same, `&is_archived=true`                              | The archived conversations, which the plain listing leaves out |
 | `/backend-api/conversation/{id}`                           | Full message tree for one conversation |
 | `/backend-api/files/{id}/download`                         | Signed URL for one attachment         |
 
@@ -312,7 +340,8 @@ filegroup. Every hermetic test is a module of
 `:chatgpt_tests`: `chatgpt_render` renders the fixture, and
 `incremental_skip`, `playback_roundtrip`, `run_problems` (what a
 partial failure records, and when it clears), `interrupt` (a run cut
-off anywhere resumes to the same store) and `upgrade` (an older store
+off anywhere resumes to the same store), `token_renewal` (an expired
+token is signed in again once, and kept only for the account held) and `upgrade` (an older store
 opens holding what it had) replay small snapshots of the same shape
 through a playback tape (`docs/dev/testing.md` § "Watching a sync stream" explains the
 tapes). The shared `tests/fixtures` root ingests it too.

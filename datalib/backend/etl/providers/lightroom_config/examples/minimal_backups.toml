@@ -1,0 +1,22 @@
+# The folder of backups Adobe Lightroom Classic writes beside its catalog,
+# replayed as the catalog's history: each backup becomes one commit, oldest
+# first. No sign-in.
+[[groups]]
+id = "lightroom"
+name = "Lightroom"
+type = "lightroom"
+
+[[steps]]
+group = "lightroom"
+function = "ingest"
+
+[steps.params.backups]
+path = "~/Pictures/Lightroom/Backups"
+
+# Lightroom renders no documents yet: query the raw store with
+# `datalib-doltlite`. This step writes the storage report every source
+# gets, which is what puts Lightroom in the grid.
+[[steps]]
+group = "lightroom"
+function = "render_markdown"
+inputs = ["lightroom/ingest"]

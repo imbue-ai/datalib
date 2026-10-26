@@ -339,11 +339,13 @@ reads through `dolt_at_` modules,
 `dolt_diff_summary`, `dolt_diff_stat`, `dolt_status`, a `COUNT(*)` per
 table, `BEGIN`/`COMMIT` around plain reads (the held read transaction),
 `dolt_branches`, a read-only open of `<file>@<hash>` with a
-`COUNT(*)` and a `_datalib_meta` read on it, and, on that open or on
+`COUNT(*)`, a `_datalib_meta` read and the rows of a key range with
+their blobs, at a commit the writer has since moved past (the
+time-series applet's read), and, on that open or on
 the held read transaction's connection to `main`, an `ATTACH` of a
 plain SQLite file read-only with an FTS5 `MATCH` on it and a join from
 it to the store's tables — and that list is the allowlist. The plain
-file keeps a rollback journal (dolthub/doltlite#3740), so a transaction
+file is in rollback-journal mode (its writer never asks for WAL), so a transaction
 that reads it holds off its writer's commits for as long as it is open:
 keep one to a request's queries. A transaction around one query waits
 a few milliseconds at most
@@ -384,10 +386,15 @@ wrote for good
 [disk space and `dolt_gc`](/docs/dev/doltlite.md#disk-space-and-dolt_gc)).
 What that means here:
 
-- **Batch writes in one transaction.** Every store already does — a
-  render store's transaction is one checkpoint interval, the grid
-  index's is the whole run, a SQLite mirror's is one table — so within
-  one run the order rows arrive in does not matter.
+- **Batch writes in one transaction.** A render store's transaction is
+  one checkpoint interval, the grid index's is the whole run, a SQLite
+  mirror's is one table, and Linear's download writes through a
+  `raw_store::Batch`, one transaction between two seals; within one of
+  those the order rows arrive in does not matter. The downloads that go
+  through `datalib_etl_web::owed::drain` still commit a transaction per
+  flush, and their stores keep each one's pages until something runs
+  gc. A `Batch` holds the store's one connection while it is open, so a
+  download that adopts one has to read through it too.
 - **Key for adjacency where the key is ours.** Rows a run writes
   together should sort together: `(device_id, ts_ms)`,
   `"{metric}#{date}"`, and the time-prefixed ids `datalib_id` mints (a
@@ -638,11 +645,31 @@ until it is rendered again, and at render a type the provider's edge
 projection names still comes before the CAS's (`BlobBundle::load_many`).
 
 The bundle is the common vocabulary at both ends. Download adds bytes as they
-arrive and drains the bundle at end of bucket; parse loads every document's
-bundle at once with `BlobBundle::load_many`; render then consumes an
-already-loaded bag of bytes — no SQL, no `block_in_place`, no dyn blob reader.
+arrive and drains the bundle at end of bucket; parse loads the documents'
+bundles with `BlobBundle::load_many`; render then consumes an
+already-loaded bundle — no SQL, no `block_in_place`, no dyn blob reader.
 Parse reads the edge table in one query for every document it loads,
-not one per document.
+not one per document. Every render that has attachments loads them a
+batch of documents at a time, cut by bytes, just before the batch
+renders (`datalib_etl_chat_common::blobs` for the chat-shaped ones;
+`docs/dev/data_architecture_parse_and_render.md` §"Memory: a page at a
+time").
+
+**A page links an attachment where the CAS holds it, and render never
+copies it.** The CAS's shape is a contract `datalib-http` reads
+(`datalib/backend/blob_store/README.md`): a page links an attachment at
+`/data/<group>/<function>/blob/<hash>` (`BlobBundle::href_for`), and the
+server answers that from the file. So `load_many` reads each blob's hash,
+size and type and leaves its bytes where they are; a blob remembers which
+step's CAS holds it (`Blob::held`, from where the file sits). Email
+alone reads the bytes (`load_many_with_bytes`), to render each message
+from its `.eml`. An attachment or inline image is a MIME part of that
+`.eml`, and the page links it inside the stored message, at
+`/data/<group>/<function>/blob/<eml hash>/part/<part hash>`
+(`BlobBundle::add_part`), where the part hash is the blake3 of the part's
+decoded bytes. A bundle holds only what a CAS holds, so render writes no
+file beside a page; a `blobs/` an older build left there goes when the
+page is next written.
 
 **The CAS is plain SQLite, not doltlite**, created through the
 `doltlite_engine=sqlite` URI parameter like the run store. A
@@ -675,12 +702,14 @@ into place and deletes the old store. A crash part-way leaves the old
 store whole and the next open starts over.
 
 **A render opens the CAS through `open_cas_for_render`**, never by
-testing for `blobs.sqlite` itself. Until the source's next download
-converts it, that reads an older build's `blobs.doltlite_db` in place,
-read-only: a render may not write the raw directory, and a page
-rendered without its attachments stays that way until the page changes.
+testing for `blobs.sqlite` itself. Until it is converted, that reads an
+older build's `blobs.doltlite_db` in place, read-only: a render may not
+write the raw directory. `datalib-http` reads only the plain file, but a
+launch converts every source's CAS before any render runs, since each
+source's `--migrate` opens its raw store and its CAS with it.
 
-**Filenames dedupe on the content hash, not on the derived name.** A blob's
+**Filenames dedupe on the content hash, not on the derived name** (for
+the bytes render writes beside a page). A blob's
 rendered filename has a content-addressed stem and an extension derived from
 *this ref's* metadata, so one payload reaching the bundle under two refs with
 different metadata derives two names and gets written twice — a Google

@@ -289,7 +289,7 @@ back by render as the natural key.
 |---|---|---|
 | airvisual | none — the page keyed on the source id, a device on its serial | none — a device's stamp is its latest reading |
 | apple_messages | none — `message.guid` is a UUID Messages mints | messages, tapbacks |
-| beeper | none — `rooms.account_id` is nullable; keys are Matrix ids | events, at millisecond precision |
+| beeper | none — `threads.accountID` is nullable; keys are Matrix ids | events, at millisecond precision |
 | calendar | none — keyed on `{calendar}#{UID}` (iCalendar) or `{calendar}#{event id}` (Google); a changed iCalendar occurrence adds its `RECURRENCE-ID` as a UTC instant | none — an event's start moves when it is rescheduled |
 | chatgpt | none — keys are OpenAI's conversation id, and a message's `{conversation}#{message}`, since a conversation branched into a new chat repeats the original's message ids | messages |
 | claude | none — `org_uuid` is nullable (see above); keys are Anthropic's uuids | messages, blocks, project documents |
@@ -300,12 +300,12 @@ back by render as the natural key.
 | facebook | none — keyed on the raw row id (`fbid` where the record has one, else a hash of it) | posts, comments, reactions, photos |
 | garmin | none — the page keyed on the source id, a device on Garmin's id | none |
 | github, gitlab | none — the repository / project leads the key: `{repo}#{number}` | PRs, MRs, comments, reviews, notes — the record's own `created_at` |
-| google_takeout | none — a Chat message id names its space, a Voice row id is the ingest's | messages |
+| google_takeout | none — a Chat message id names its space, a Voice row id is the ingest's | messages, a Chat message's earlier versions |
 | linkedin | none — keyed on the profile URL, the post link, the raw row id | messages, shares, comments |
 | notion | none — page, discussion and comment ids are Notion UUIDs, the backpointer rather than the key; `notion_page_uuid` holds the page's datalib id | pages, comments — Notion's `created_time` |
 | pdf | none — keyed on the blake3, so two copies within a source are one row | documents and pages, when the Info dictionary dates the file |
 | perseus | none — keyed on the CTS locator and edition | none — a classical text has no stamp of its own |
-| signal | none — keyed on the backup's local ids | messages, on `date_sent` |
+| signal | none — keyed on who a chat is with and who wrote a message (ACI, else PNI, else number; a group by its master key's hash), never the backup's own numbering | messages, on `date_sent` |
 | slack | `team_id` | messages, reactions — the `ts` in the key |
 | sms_backup_restore | none — keyed on the raw row id | messages, calls |
 | whatsapp | none — keyed on the chat JID | messages, reactions |
@@ -321,7 +321,7 @@ backup, and expect a re-key when you do:
   column is nullable and the fixture leaves it so.
 - **signal** — `ParsedRecipient.identifier` is the e164 or ACI of the
   *peer*; the backup carries no identifier for the account itself.
-- **beeper** — `rooms.account_id` is nullable.
+- **beeper** — `threads.accountID` is nullable.
 
 ### Adding a provider, or changing a recipe
 

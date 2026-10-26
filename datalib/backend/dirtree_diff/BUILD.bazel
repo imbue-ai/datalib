@@ -1,4 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 rust_library(
     name = "datalib_dirtree_diff",
@@ -30,12 +31,21 @@ rust_binary(
         ":datalib_dirtree_diff",
         "//datalib/backend/obs:datalib_obs",
         "@datalib_crates//:anyhow",
+        "//datalib/backend/cli_help:datalib_cli_help",
         "@datalib_crates//:clap",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
     ],
+)
+
+# The command line's parse: its `--help` examples.
+rust_test(
+    name = "dirtree_diff_bin_unittests",
+    size = "small",
+    crate = ":dirtree_diff",
+    edition = "2021",
 )
 
 # Inline unit tests: the byte-size parser, the `path#ref` parser, the
@@ -68,3 +78,22 @@ rust_test(
     ],
 )
 
+
+# README.md's Mac recipe, run as written against the binaries it names.
+sh_test(
+    name = "recipe_test",
+    size = "small",
+    srcs = ["recipe_test.sh"],
+    args = [
+        "$(rootpath README.md)",
+        "$(rootpath //datalib/backend/etl/providers/fsindex:fsindex)",
+        "$(rootpath :dirtree_diff)",
+        "$(rootpath //third-party/doltlite:doltlite)",
+    ],
+    data = [
+        "README.md",
+        ":dirtree_diff",
+        "//datalib/backend/etl/providers/fsindex:fsindex",
+        "//third-party/doltlite:doltlite",
+    ],
+)

@@ -41,14 +41,18 @@ import {
   applyAnswer,
   buildSource,
   chosenAnswer,
+  embedAllowed,
   fieldIsActive,
   fieldsFor,
   layoutOf,
+  listSteps,
   paramsObject,
+  patchSource,
   seedFieldValues,
   slugify,
   stepIdFor,
   suggestId,
+  untouchedSettings,
   type ConfiguredGroup,
   type FieldValues,
   type Layout,
@@ -59,12 +63,14 @@ import {
 import { FailureError } from "@/apiError";
 import {
   type AccountNaming,
+  type ConnectAttempt,
   type Failure,
   type ConnectPhase,
   type ProbeItem,
   type ProbeItemKind,
   type ProbeProgress,
   type ProbeReport,
+  type ServiceRegistration,
   type StoredAccount,
 } from "@/api";
 import { type SignInWhere } from "@/config/issues";
@@ -81,6 +87,7 @@ import {
 } from "@/config/credentialShape";
 import { ingestReach } from "@/config/ingestMethods";
 import { freshBrowser, loginAccount, nameLeftToService } from "@/config/accountNaming";
+import { listed, servicesToSignIn, signInLabel, targetAccount } from "@/config/multiSignIn";
 import { isDesktopApp, pickPath } from "@/desktop";
 import {
   BYTE_UNITS,
@@ -99,6 +106,7 @@ const {
   latchkeyService,
   runProbe,
   setLatchkeyCredential,
+  setLatchkeyOAuthClient,
   startLatchkeyConnect,
   latchkeyConnectStatus,
 } = useApi();
@@ -117,6 +125,8 @@ const props = defineProps<{
     /// Which of its own qmd steps this source has today — the config's
     /// way of saying how free-text search reaches it.
     qmdIndexing: QmdIndexing;
+    /// The whole config as it was when the form opened.
+    text: string;
   } | null;
 }>();
 
@@ -133,14 +143,17 @@ const emit = defineEmits<{
       /// The group's description as typed, written the same two ways.
       description: string;
       entry: CatalogEntry;
+      /// The form's values, for the caller to patch an edited source's
+      /// steps with (`patchSource`).
+      values: FieldValues;
       /// The `[[groups]]` block, when this dialog is creating a source.
       /// Null when editing: the group already exists.
       groupBody: string | null;
       /// The `[[steps]]` blocks: the ingest step, then the render step
-      /// for a provider that renders.
+      /// unless rendering is off.
       stepsBody: string;
       /// The render step's composed id, for the caller to wire into the
-      /// fan-ins. Null for a provider that renders nothing.
+      /// fan-ins. Null when rendering is off.
       renderId: string | null;
       /// Which of its `keyword_index` and `embed` steps the source gets.
       /// `none` leaves the markdown out of free-text search; the grid
@@ -174,10 +187,10 @@ const values = ref<FieldValues>({});
 /// choice the user made.
 const idTouched = ref(false);
 
-/// Can this provider render at all? A download-only provider (a photo
-/// catalog, a media tree) has no text to render, and no choice to
-/// offer.
-const providerRenders = computed(() => !!chosen.value && chosen.value.renderStep !== false);
+/// Does this provider render documents? A download-only provider (a
+/// photo catalog, a media tree) has no text to render, and no choice to
+/// offer, though it still gets its render step (`rendersDocuments`).
+const providerRenders = computed(() => !!chosen.value && chosen.value.rendersDocuments !== false);
 
 /// Whether this source wants its render step. On by default: mirrored
 /// data that is never rendered reaches neither the grid nor search, so
@@ -185,9 +198,9 @@ const providerRenders = computed(() => !!chosen.value && chosen.value.renderStep
 /// already has.
 const renderWanted = ref(props.editing ? !!props.editing.steps.render : true);
 
-/// Does this source write a render step — the provider can, and this
-/// source asked for it.
-const renders = computed(() => providerRenders.value && renderWanted.value);
+/// Does this source write a render step: always for a download-only
+/// provider, otherwise when this source asked for it.
+const renders = computed(() => !!chosen.value && (!providerRenders.value || renderWanted.value));
 
 /// Whether this source's markdown gets a keyword index, and embeddings
 /// on top of it. Both on by default, for the same reason rendering is: a
@@ -199,9 +212,12 @@ const embedWanted = ref(props.editing ? props.editing.qmdIndexing === "keyword_a
 /// How far into qmd this source goes: only as far as there is markdown to
 /// index, and embeddings only on top of a keyword index.
 const qmdIndexing = computed<QmdIndexing>(() => {
-  if (!renders.value || !keywordWanted.value) return "none";
-  return embedWanted.value ? "keyword_and_embed" : "keyword";
+  if (!renders.value || !providerRenders.value || !keywordWanted.value) return "none";
+  return embedWanted.value && embeds.value ? "keyword_and_embed" : "keyword";
 });
+
+/// Whether this source's type may be embedded at all (`embedAllowed`).
+const embeds = computed(() => embedAllowed(chosen.value?.type));
 
 /// The fields the form shows for one phase: the descriptor's, less any
 /// whose gate is shut.
@@ -319,9 +335,9 @@ const missingSteps = computed<string[]>(() => {
   return out;
 });
 
-/// A render step this source has that its provider does not write — a
-/// hand-written one under a download-only type. Saving removes it, and
-/// that is worth a sentence for the same reason a missing step is.
+/// A render step this source has though rendering is off. Saving
+/// removes it, and that is worth a sentence for the same reason a
+/// missing step is.
 const orphanRender = computed<string | null>(() =>
   props.editing && !renders.value && props.editing.steps.render
     ? props.editing.steps.render.id
@@ -434,7 +450,7 @@ function onPickKeydown(e: KeyboardEvent) {
 /// The id is a single path segment: the steps written under it are
 /// `<id>/ingest` and `<id>/render_markdown`, and the loader composes
 /// those itself.
-const RESERVED = new Set(["system", "unified_index"]);
+const RESERVED = new Set(["system", "unified_document_index"]);
 const groupId = computed(() => id.value.trim());
 
 /// The example the Name help gives. The id would be the tempting thing
@@ -475,7 +491,38 @@ const missingRequired = computed(() => {
   return missing;
 });
 
-const canSubmit = computed(() => !idError.value && missingRequired.value.length === 0);
+/// An edited source's config as saving would leave it, or why it cannot
+/// be saved. Null while creating.
+const patched = computed<{ text: string } | { error: string } | null>(() => {
+  if (!props.editing || !chosen.value) return null;
+  try {
+    return {
+      text: patchSource(props.editing.text, {
+        entry: chosen.value,
+        group: groupId.value,
+        values: values.value,
+        renders: renders.value,
+      }),
+    };
+  } catch (e) {
+    return { error: (e as Error).message };
+  }
+});
+const patchError = computed(() =>
+  patched.value && "error" in patched.value ? patched.value.error : null,
+);
+
+/// What this source's entries hold that the form has no field for, which
+/// saving keeps as it is.
+const untouched = computed(() =>
+  props.editing && chosen.value
+    ? untouchedSettings(props.editing.text, props.editing.group.id, chosen.value)
+    : [],
+);
+
+const canSubmit = computed(
+  () => !idError.value && !patchError.value && missingRequired.value.length === 0,
+);
 
 /// What this dialog writes: the group while creating, and the source's
 /// steps either way.
@@ -493,11 +540,21 @@ const source = computed(() =>
     : null,
 );
 
-const preview = computed(() =>
-  source.value
+/// The TOML to review: what creating adds, or an edited source's steps as
+/// saving leaves them, untouched keys and comments included.
+const preview = computed(() => {
+  if (patched.value && "text" in patched.value) {
+    const text = patched.value.text;
+    return listSteps(text)
+      .filter((s) => s.kind === "step" && s.group === groupId.value)
+      .filter((s) => s.phase === "ingest" || s.phase === "render")
+      .map((s) => text.slice(s.start, s.end).trim())
+      .join("\n\n");
+  }
+  return source.value
     ? `${source.value.groupBody ? `${source.value.groupBody}\n\n` : ""}${source.value.stepsBody}`
-    : "",
-);
+    : "";
+});
 
 function parseList(text: string): string[] {
   return text
@@ -533,6 +590,10 @@ const canPick = isDesktopApp();
 /// like a dead button.
 const pickFailed = ref<Record<string, string>>({});
 
+/// Keyed by field target: what refused when the app tried to read the
+/// path just chosen. The pick still stands; a sync would fail on it.
+const pickUnreadable = ref<Record<string, string>>({});
+
 async function browse(f: Field) {
   if (f.kind !== "path") return;
   const result = await pickPath({
@@ -546,6 +607,8 @@ async function browse(f: Field) {
   if (result.outcome === "picked") {
     values.value[f.target] = result.path;
     delete pickFailed.value[f.target];
+    if (result.unreadable) pickUnreadable.value[f.target] = result.unreadable;
+    else delete pickUnreadable.value[f.target];
   } else if (result.outcome === "unavailable") {
     pickFailed.value[f.target] = result.reason;
   }
@@ -619,6 +682,23 @@ const service = computed(() => {
     : null;
 });
 
+/// Every service a sign-in reaches, the entry's own first, with the
+/// name a person knows each by. One for nearly every source.
+const signInServices = computed(() =>
+  service.value && chosen.value
+    ? [
+        { service: service.value, label: chosen.value.label },
+        ...(chosen.value.credentialAlso ?? []),
+      ]
+    : [],
+);
+const signsInToSeveral = computed(() => signInServices.value.length > 1);
+const labelOf = (name: string) =>
+  signInServices.value.find((s) => s.service === name)?.label ?? name;
+
+/// The accounts each of `signInServices` holds, by service.
+const heldBy = ref<Record<string, string[]>>({});
+
 /// The one field that holds a latchkey account. Every latchkey source
 /// has exactly one (`fieldsFor` adds it where the descriptor does not):
 /// a step mirrors one identity.
@@ -660,6 +740,24 @@ const signsInAgainAs = computed(() =>
     ? loginAccount("service", storedNames.value, accountValue.value)
     : "",
 );
+/// What the sign-in button says.
+const signInButtonLabel = computed(() => {
+  if (signsInToSeveral.value) {
+    const names = signInServices.value.map((s) => s.service);
+    return signInLabel(names, heldBy.value, targetAccount(heldBy.value, accountValue.value));
+  }
+  return signsInAgainAs.value ? `Sign in again as ${signsInAgainAs.value}` : "Sign in with browser";
+});
+/// "Signed in to Google Drive; not yet to Google Docs, …" while the
+/// box's account is held by some of several services and not all.
+const partlySignedIn = computed(() => {
+  const account = targetAccount(heldBy.value, accountValue.value);
+  if (!signsInToSeveral.value || !account) return "";
+  const holds = (s: { service: string }) => (heldBy.value[s.service] ?? []).includes(account);
+  const yes = signInServices.value.filter(holds).map((s) => s.label);
+  const no = signInServices.value.filter((s) => !holds(s)).map((s) => s.label);
+  return no.length ? `Signed in to ${listed(yes)}; not yet to ${listed(no)}.` : "";
+});
 const accountHelp = computed(() =>
   accountNaming.value === "service"
     ? `${chosen.value?.label ?? "The service"} names each account itself when you sign in. ` +
@@ -673,7 +771,15 @@ async function loadAccounts() {
   accounts.value = null;
   accountsFailure.value = null;
   try {
-    const info = await latchkeyService(name);
+    const others = signInServices.value.slice(1).map((s) => s.service);
+    const [info, ...rest] = await Promise.all([
+      latchkeyService(name),
+      ...others.map((s) => latchkeyService(s).catch(() => null)),
+    ]);
+    heldBy.value = Object.fromEntries([
+      [name, info.accounts.map((a) => a.account)],
+      ...others.map((s, i) => [s, (rest[i]?.accounts ?? []).map((a) => a.account)]),
+    ]);
     accounts.value = info.accounts;
     authOptions.value = info.auth_options;
     setExample.value = info.set_example ?? null;
@@ -730,8 +836,12 @@ const setCommand = computed(() => {
 // Pasting a credential
 
 /// Offered wherever latchkey takes a credential by hand — every service
-/// the wizard names — except under a gateway, which refuses `auth set`.
-const canPaste = computed(() => !gateway.value && authOptions.value.includes("set"));
+/// the wizard names — except under a gateway, which refuses `auth set`,
+/// and on a source that signs in to several services, where one pasted
+/// key would reach only the first.
+const canPaste = computed(
+  () => !gateway.value && !signsInToSeveral.value && authOptions.value.includes("set"),
+);
 const pasteShape = computed(() =>
   credentialShape(setExample.value, chosen.value?.credentialPaste?.headers),
 );
@@ -881,77 +991,198 @@ const CONNECT_PHASE_TEXT: Record<ConnectPhase, string> = {
   preparing: "Getting the sign-in ready…",
   downloading_browser:
     "Getting a browser for the sign-in — a one-time download that can take a few minutes…",
+  creating_client:
+    "Creating the OAuth client in the browser window, on the Google Cloud console. This takes a few minutes; the sign-in follows.",
   signing_in: "A browser window should open. Finish the login there.",
 };
 
-async function connectViaLatchkey() {
+/// Which service the running or last sign-in was for, by the name a
+/// person knows it by: a failure is about that one.
+const connectLabel = ref("");
+
+async function connectViaLatchkey(createOAuthClient = false) {
   const name = service.value;
   if (!name || connect.value.state === "running") return;
   if (setOnlyService.value) {
     showConversion.value = true;
     return;
   }
-  connect.value = {
-    state: "running",
-    message: "A browser window should open. Finish the login there.",
-  };
+  connect.value = { state: "running", message: CONNECT_PHASE_TEXT.signing_in };
+  connectLabel.value = chosen.value?.label ?? "";
   try {
-    const account = loginAccount(accountNaming.value, storedNames.value, accountValue.value);
-    const started = await startLatchkeyConnect(
-      name,
-      account,
-      wouldRegister.value,
-      freshBrowser(accountNaming.value, storedNames.value, account),
-    );
-    for (;;) {
-      await new Promise((r) => setTimeout(r, 1500));
-      if (closed) return;
-      const status = await latchkeyConnectStatus(started.id);
-      if (status.status === "running") {
-        connect.value = {
-          state: "running",
-          message: CONNECT_PHASE_TEXT[status.phase],
-          phase: status.phase,
-        };
-        continue;
-      }
-      if (status.status === "ok") {
-        // The point of connecting was to add an account; showing the
-        // stale list would hide the one just added.
-        await loadAccounts();
-        // Follow the login rather than the box: a service that names
-        // its own accounts files the credential under whoever signed
-        // in, and the config has to name that one.
-        const landed = status.account;
-        const field = accountField.value;
-        if (landed && field) values.value[field.target] = landed;
-        // What was checked and loaded before the login was done with a
-        // credential that has just been replaced. The account watcher
-        // resets them too, so the check waits for it.
-        resetProbes();
-        await nextTick();
-        if (canProbe.value) void checkConnection();
-        connect.value = {
-          state: "ok",
-          message: landed
-            ? `Connected as ${landed}.`
-            : "Connected. The account list below is refreshed.",
-        };
-      } else {
-        connect.value = {
-          state: "failed",
-          message: "",
-          failure: {
-            issue: status.issue ?? "unknown",
-            detail: status.output || "The login did not complete.",
-          },
-        };
-      }
+    if (signsInToSeveral.value) {
+      await signInToEach();
       return;
     }
+    const account = loginAccount(accountNaming.value, storedNames.value, accountValue.value);
+    const status = await runLogin(name, account, {
+      register: wouldRegister.value,
+      fresh: freshBrowser(accountNaming.value, storedNames.value, account),
+      createOAuthClient,
+    });
+    if (!status) return;
+    if (status.status === "ok") await signedIn(status.account);
+    else loginFailed(name, status);
   } catch (e) {
     connect.value = { state: "failed", message: "", failure: toFailure(e) };
   }
+}
+
+/// One browser login, polled to its end; null when the dialog closed
+/// first. `step` goes before what it says it is waiting on.
+async function runLogin(
+  name: string,
+  account: string,
+  opts: {
+    register?: ServiceRegistration;
+    fresh?: boolean;
+    createOAuthClient?: boolean;
+    step?: string;
+  },
+): Promise<ConnectAttempt | null> {
+  const started = await startLatchkeyConnect(
+    name,
+    account,
+    opts.register,
+    opts.fresh ?? false,
+    opts.createOAuthClient ?? false,
+  );
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 1500));
+    if (closed) return null;
+    const status = await latchkeyConnectStatus(started.id);
+    if (status.status !== "running") return status;
+    connect.value = {
+      state: "running",
+      message: (opts.step ?? "") + CONNECT_PHASE_TEXT[status.phase],
+      phase: status.phase,
+    };
+  }
+}
+
+/// Every service of a source that reaches several, one login after
+/// another, as one account: the box's, or whoever the first login says.
+/// It stops at the first that fails or lands on someone else.
+async function signInToEach() {
+  let account = targetAccount(heldBy.value, accountValue.value);
+  const names = signInServices.value.map((s) => s.service);
+  const plan = servicesToSignIn(names, heldBy.value, account);
+  for (const [i, name] of plan.entries()) {
+    const label = labelOf(name);
+    const step = plan.length > 1 ? `${label}, ${i + 1} of ${plan.length}: ` : "";
+    connectLabel.value = label;
+    connect.value = { state: "running", message: step + CONNECT_PHASE_TEXT.signing_in };
+    const holds = account !== "" && (heldBy.value[name] ?? []).includes(account);
+    const status = await runLogin(name, holds ? account : "", { step });
+    if (!status) return;
+    if (status.status !== "ok") {
+      loginFailed(name, status);
+      return;
+    }
+    if (account && status.account && status.account !== account) {
+      await loadAccounts();
+      connect.value = {
+        state: "failed",
+        message: "",
+        failure: {
+          issue: "unknown",
+          detail:
+            `${label} signed in as ${status.account}, not ${account}. ` +
+            `Sign in again and choose ${account} in the browser.`,
+        },
+      };
+      return;
+    }
+    account ||= status.account ?? "";
+  }
+  await signedIn(account || null);
+}
+
+function loginFailed(name: string, status: ConnectAttempt) {
+  if (status.issue === "no_oauth_client") {
+    oauthClientMissing.value = true;
+    oauthClientFor.value = name;
+  }
+  connect.value = {
+    state: "failed",
+    message: "",
+    failure: {
+      issue: status.issue ?? "unknown",
+      detail: status.output || "The login did not complete.",
+    },
+  };
+}
+
+async function signedIn(landed: string | null) {
+  oauthClientMissing.value = false;
+  // The point of connecting was to add an account; showing the stale
+  // list would hide the one just added.
+  await loadAccounts();
+  // Follow the login rather than the box: a service that names its own
+  // accounts files the credential under whoever signed in, and the
+  // config has to name that one.
+  const field = accountField.value;
+  if (landed && field) values.value[field.target] = landed;
+  // What was checked and loaded before the login was done with a
+  // credential that has just been replaced. The account watcher resets
+  // them too, so the check waits for it.
+  resetProbes();
+  await nextTick();
+  if (canProbe.value) void checkConnection();
+  connect.value = {
+    state: "ok",
+    message: landed ? `Connected as ${landed}.` : "Connected. The account list below is refreshed.",
+  };
+}
+
+/// Set once a sign-in has said the service has no OAuth client to sign
+/// in with, until one is pasted or a sign-in goes through: a failed
+/// "Create one for me" leaves both ways on offer.
+const oauthClientMissing = ref(false);
+/// The service whose sign-in said so.
+const oauthClientFor = ref<string | null>(null);
+const oauthClientPasted = ref("");
+const oauthClientSave = ref<{ state: "idle" | "saving" | "failed"; failure?: Failure }>({
+  state: "idle",
+});
+watch(service, () => {
+  oauthClientMissing.value = false;
+  oauthClientFor.value = null;
+  oauthClientPasted.value = "";
+  oauthClientSave.value = { state: "idle" };
+});
+
+/// The project `auth browser-prepare` makes, named the way latchkey
+/// names it, so the person knows what will appear in their console.
+const oauthClientProject = computed(
+  () => `Latchkey-${(service.value ?? "").replace(/^google-/, "")}`,
+);
+
+/// "the Google Drive, Google Docs, … APIs": what the pasted client's
+/// project must have turned on.
+const oauthClientApis = computed(() => {
+  const labels = signInServices.value.map((s) => s.label);
+  return `${listed(labels)} API${labels.length > 1 ? "s" : ""}`;
+});
+
+/// One client serves every service, so a source that reaches several
+/// stores it on each: `browser-prepare` would make a Cloud project per
+/// service, which is why such a source is offered only the paste.
+async function saveOAuthClient() {
+  const names = signInServices.value.map((s) => s.service);
+  if (!names.length || !oauthClientPasted.value.trim() || oauthClientSave.value.state === "saving")
+    return;
+  oauthClientSave.value = { state: "saving" };
+  try {
+    for (const name of names) await setLatchkeyOAuthClient(name, oauthClientPasted.value);
+  } catch (e) {
+    oauthClientSave.value = { state: "failed", failure: toFailure(e) };
+    return;
+  }
+  oauthClientPasted.value = "";
+  oauthClientSave.value = { state: "idle" };
+  oauthClientMissing.value = false;
+  await connectViaLatchkey();
 }
 
 /// The names latchkey holds for this service, with what it says of each.
@@ -1119,6 +1350,8 @@ const PROBE_KINDS: Record<ProbeNoun, ProbeItemKind[]> = {
   channels: ["channel"],
   calendars: ["calendar"],
   addressbooks: ["address_book"],
+  teams: ["team"],
+  projects: ["project"],
 };
 
 /// What a `probe:` field should offer, given what its list loaded.
@@ -1152,6 +1385,10 @@ function namesItem(value: string, item: ProbeItem): boolean {
     // The `calendars` filter matches a name without regard to case, and
     // an id as well; the id is what the probe puts in `title`.
     case "calendar":
+      return v.toLowerCase() === item.path.toLowerCase() || v === item.title;
+    // A Linear team is named by its key, without regard to case, or by
+    // its name, which the probe puts in `title`.
+    case "team":
       return v.toLowerCase() === item.path.toLowerCase() || v === item.title;
     default:
       return false;
@@ -1227,6 +1464,7 @@ function submit() {
     name: name.value.trim(),
     description: description.value.trim(),
     entry: chosen.value,
+    values: values.value,
     groupBody: source.value.groupBody,
     stepsBody: source.value.stepsBody,
     renderId: source.value.renderId,
@@ -1248,6 +1486,13 @@ function submit() {
       @click="keepHelpSelectable"
     >
       <header class="wiz-head dialog-head" :class="{ 'wiz-chosen': stage === 'configure' }">
+        <button
+          v-if="mode === 'create' && stage === 'configure'"
+          class="btn ghost wiz-back"
+          @click="stage = 'pick'"
+        >
+          ‹ Back
+        </button>
         <img
           v-if="stage === 'configure' && chosen && iconUrl(chosen.icon)"
           :src="iconUrl(chosen.icon)!"
@@ -1264,13 +1509,6 @@ function submit() {
           }}
         </h2>
         <span v-if="isEdit && chosen" class="wiz-kind">{{ chosen.label }}</span>
-        <button
-          v-if="mode === 'create' && stage === 'configure'"
-          class="btn ghost"
-          @click="stage = 'pick'"
-        >
-          Change
-        </button>
         <button class="wiz-x dialog-x" aria-label="Close" @click="emit('close')">×</button>
       </header>
 
@@ -1335,16 +1573,21 @@ function submit() {
           >. Saving writes {{ missingSteps.length === 1 ? "it" : "them" }}.
         </p>
         <p v-if="orphanRender" class="wiz-cred">
-          <template v-if="providerRenders">
-            Rendering is off under Advanced options, and this source has a render step,
-            <code>{{ orphanRender }}</code
-            >.
-          </template>
-          <template v-else>
-            This source has a render step, <code>{{ orphanRender }}</code
-            >, but {{ chosen.label }} renders nothing.
-          </template>
-          Saving removes it, and takes it out of the index steps’ inputs.
+          Rendering is off under Advanced options, and this source has a render step,
+          <code>{{ orphanRender }}</code
+          >. Saving removes it, and takes it out of the index steps’ inputs.
+        </p>
+        <p v-if="untouched.length" class="wiz-cred">
+          This form has no field for
+          <template v-for="(u, i) in untouched" :key="u.step"
+            ><template v-if="i > 0">; </template
+            ><template v-for="(k, j) in u.keys" :key="k"
+              ><template v-if="j > 0">, </template><code>{{ k }}</code></template
+            >
+            on <code>{{ u.step }}</code></template
+          >. Saving keeps
+          {{ untouched.length === 1 && untouched[0].keys.length === 1 ? "it" : "them" }}
+          as written.
         </p>
 
         <label class="wiz-field wiz-row">
@@ -1417,6 +1660,9 @@ function submit() {
                 <small v-if="accountHelp" class="wiz-help wiz-account-help">{{
                   accountHelp
                 }}</small>
+                <small v-if="partlySignedIn" class="wiz-help wiz-partly-signed-in">{{
+                  partlySignedIn
+                }}</small>
               </div>
 
               <!-- Under a gateway the login happens on the gateway's side,
@@ -1477,29 +1723,114 @@ function submit() {
                       type="button"
                       class="btn primary"
                       :disabled="connect.state === 'running'"
-                      @click="connectViaLatchkey"
+                      @click="connectViaLatchkey()"
                     >
                       {{
                         connect.state !== "running"
-                          ? signsInAgainAs
-                            ? `Sign in again as ${signsInAgainAs}`
-                            : "Sign in with browser"
+                          ? signInButtonLabel
                           : connect.phase === "downloading_browser"
                             ? "Getting a browser…"
-                            : "Waiting for the browser…"
+                            : connect.phase === "creating_client"
+                              ? "Creating the client…"
+                              : "Waiting for the browser…"
                       }}
                     </button>
                   </div>
+                  <p v-if="signsInToSeveral" class="wiz-help">
+                    This signs in to {{ listed(signInServices.map((s) => s.label)) }} one after
+                    another, as one {{ accountField?.label ?? "account" }}: the copy needs all of
+                    them.
+                  </p>
                   <IssueNote
                     v-if="connect.state === 'failed' && connect.failure"
                     class="wiz-connect-failed"
                     :failure="connect.failure"
-                    :service="chosen.label"
+                    :service="connectLabel || chosen.label"
                     :where="signInWhere"
                   />
                   <p v-else-if="connect.state !== 'idle'" class="wiz-help wiz-connect-status">
                     {{ connect.message }}
                   </p>
+                  <!-- Google's services sign in through an OAuth client of the
+                       person's own; latchkey makes one (`auth browser-prepare`)
+                       or takes one made by hand (`auth prepare`). -->
+                  <div
+                    v-if="oauthClientMissing && signInWhere === 'here'"
+                    class="wiz-conn-note wiz-oauth-client"
+                  >
+                    <p class="wiz-help">
+                      {{ chosen.label }} signs in through an OAuth client in a Google Cloud project
+                      of your own, and latchkey has none for
+                      <code>{{ oauthClientFor ?? service }}</code> yet.
+                      <template v-if="signsInToSeveral">
+                        One client serves {{ listed(signInServices.map((s) => s.label)) }}: paste it
+                        once below and it is kept for each, then the sign-in starts.
+                      </template>
+                      <template v-else>
+                        Either way below, the sign-in starts once the client is in place.
+                      </template>
+                    </p>
+                    <!-- browser-prepare makes a Cloud project per service, and
+                         Google limits how many an account may have. -->
+                    <div v-if="!signsInToSeveral" class="wiz-conn-actions">
+                      <button
+                        type="button"
+                        class="btn primary"
+                        :disabled="
+                          connect.state === 'running' || oauthClientSave.state === 'saving'
+                        "
+                        @click="connectViaLatchkey(true)"
+                      >
+                        Create one for me
+                      </button>
+                    </div>
+                    <p v-if="!signsInToSeveral" class="wiz-help">
+                      A browser opens on the Google Cloud console. latchkey makes a project there
+                      named <code>{{ oauthClientProject }}</code
+                      >, turns on the APIs and creates the client, which takes a few minutes. Google
+                      asks you to accept its terms the first time, and wants 2-Step Verification on
+                      the account.
+                    </p>
+                    <label class="wiz-item">
+                      <span class="wiz-sublabel">{{
+                        signsInToSeveral ? "Paste a client you made" : "Or paste a client you made"
+                      }}</span>
+                      <textarea
+                        v-model="oauthClientPasted"
+                        class="wiz-input wiz-oauth-paste"
+                        rows="3"
+                        placeholder='{"installed":{"client_id":"…","client_secret":"…"}}'
+                        autocomplete="off"
+                        spellcheck="false"
+                      />
+                      <small class="wiz-help">
+                        A Desktop app client from the Google Cloud console: paste the JSON file it
+                        downloads. Its project needs the {{ oauthClientApis }} turned on.
+                      </small>
+                    </label>
+                    <div class="wiz-conn-actions">
+                      <button
+                        type="button"
+                        class="btn"
+                        :disabled="
+                          connect.state === 'running' ||
+                          !oauthClientPasted.trim() ||
+                          oauthClientSave.state === 'saving'
+                        "
+                        @click="saveOAuthClient"
+                      >
+                        {{
+                          oauthClientSave.state === "saving" ? "Saving…" : "Save client and sign in"
+                        }}
+                      </button>
+                    </div>
+                    <IssueNote
+                      v-if="oauthClientSave.state === 'failed' && oauthClientSave.failure"
+                      :failure="oauthClientSave.failure"
+                      :service="chosen.label"
+                      :where="signInWhere"
+                    />
+                  </div>
                   <!-- What the button says on a service that has no browser
                        login. Shown rather than done: latchkey refuses to
                        re-register a name it holds, so the only way to add one
@@ -1632,7 +1963,9 @@ function submit() {
               <details class="wiz-help wiz-conn-how">
                 <summary>How sign-ins are stored</summary>
                 <p>
-                  latchkey keeps them, under its <code>{{ service }}</code> service.
+                  latchkey keeps them, under its
+                  <code>{{ signInServices.map((s) => s.service).join(", ") }}</code>
+                  service{{ signsInToSeveral ? "s" : "" }}.
                   <template v-if="signInWays.includes('paste')">
                     To store one from a terminal instead: <code>{{ setCommand }}</code>
                   </template>
@@ -2009,6 +2342,11 @@ function submit() {
                         Couldn’t open the file picker ({{ pickFailed[f.target] }}). Type or paste
                         the path instead.
                       </small>
+                      <small v-if="pickUnreadable[f.target]" class="wiz-error">
+                        Datalib can’t read what you chose ({{ pickUnreadable[f.target] }}), so a
+                        sync would fail. Choose it again, or grant Datalib Full Disk Access in
+                        System Settings → Privacy &amp; Security.
+                      </small>
                     </div>
                   </template>
                 </template>
@@ -2050,7 +2388,7 @@ function submit() {
                       </small>
                     </span>
                   </label>
-                  <label class="wiz-choice">
+                  <label v-if="embeds" class="wiz-choice">
                     <input
                       v-model="embedWanted"
                       type="checkbox"
@@ -2082,7 +2420,13 @@ function submit() {
               </label>
 
               <details class="wiz-review">
-                <summary>Review the TOML this writes</summary>
+                <summary>
+                  {{
+                    isEdit
+                      ? "Review this source’s steps as saving leaves them"
+                      : "Review the TOML this writes"
+                  }}
+                </summary>
                 <pre>{{ preview }}</pre>
               </details>
             </template>
@@ -2093,6 +2437,7 @@ function submit() {
         <p v-if="idError && (mode !== 'create' || !advancedOpen)" class="wiz-error wiz-id-error">
           {{ idError }}
         </p>
+        <p v-if="patchError" class="wiz-error">{{ patchError }}</p>
       </div>
 
       <footer class="wiz-foot dialog-foot">
@@ -2318,6 +2663,20 @@ function submit() {
 .wiz-convert-head {
   margin: 0;
 }
+.wiz-oauth-client {
+  border-left: 3px solid var(--datalib-border);
+  padding-left: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.wiz-oauth-client p {
+  margin: 0;
+}
+.wiz-oauth-paste {
+  font-family: var(--datalib-mono);
+  resize: vertical;
+}
 .wiz-signin {
   border: 1px solid var(--datalib-border);
   border-radius: var(--datalib-radius);
@@ -2422,6 +2781,10 @@ function submit() {
 
 .wiz-kind {
   color: var(--datalib-muted);
+}
+
+.wiz-back {
+  margin-left: -6px;
 }
 
 /* The form: a heading in the left column, its controls in the right,

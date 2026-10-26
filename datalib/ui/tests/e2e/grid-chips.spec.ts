@@ -33,7 +33,9 @@ async function anAuthorChip(page: import("@playwright/test").Page) {
 }
 
 test("an author with a handle is drawn as a chip link", async ({ page, request }) => {
-  const resp = await request.get("/applet/unified_index/search?q=source_id%3Aslack&limit=200");
+  const resp = await request.get(
+    "/applet/unified_document_index/search?q=source_id%3Aslack&limit=200",
+  );
   expect(resp.ok()).toBeTruthy();
   const { rows } = (await resp.json()) as { rows: Row[] };
   const withHandle = rows.find((r) => r.author_handle);
@@ -97,7 +99,7 @@ test("a row's Source is a group chip that resolves, copies its id and opens its 
     .toBe("slack");
 
   await chip.dblclick();
-  await expect(cardOf(page, 'syncDashboardView({"group":"slack"})')).toBeVisible({
+  await expect(cardOf(page, 'sourceView({"group":"slack"})')).toBeVisible({
     timeout: 10_000,
   });
 });
@@ -111,7 +113,7 @@ test("a storage report's group and step are chips that open their cards", async 
   request,
 }) => {
   const resp = await request.get(
-    `/applet/unified_index/search?q=${encodeURIComponent("source_id:datalib")}&limit=500`,
+    `/applet/unified_document_index/search?q=${encodeURIComponent("source_id:datalib")}&limit=500`,
   );
   expect(resp.ok()).toBeTruthy();
   const { rows } = (await resp.json()) as {
@@ -129,7 +131,7 @@ test("a storage report's group and step are chips that open their cards", async 
   // The report names the step its store sits under, `slack/ingest`. This
   // fixture root declares its sources render-only, so no such step is in
   // its config and the chip stays as written: the step's name and id,
-  // nothing resolved. It still opens the step's log.
+  // nothing resolved. It still opens.
   const step = (await inDocFrame(page, 'a.chip[data-entity="datalib:step/slack/ingest"]')).first();
   await expect(step).toHaveAttribute("title", "ingest (slack/ingest)");
 
@@ -142,9 +144,12 @@ test("a storage report's group and step are chips that open their cards", async 
     .toBe("slack");
 
   await group.dblclick();
-  await expect(cardOf(page, 'syncDashboardView({"group":"slack"})')).toBeVisible({
+  await expect(cardOf(page, 'sourceView({"group":"slack"})')).toBeVisible({
     timeout: 10_000,
   });
+  // A step opens its group's dashboard, at the step's own section.
   await step.dblclick();
-  await expect(cardOf(page, 'logView({"step":"slack/ingest"')).toBeVisible({ timeout: 10_000 });
+  await expect(cardOf(page, 'sourceView({"group":"slack","step":"slack/ingest"})')).toBeVisible({
+    timeout: 10_000,
+  });
 });

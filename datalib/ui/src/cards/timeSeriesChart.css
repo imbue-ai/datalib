@@ -1,0 +1,76 @@
+/* The Time series chart (TimeSeriesChart.vue): in the Time series card,
+   and in a document's frame, where docFrame.ts includes it. Every
+   chart's shared rules, the legend's among them, are plot/plot.css. */
+.ts-chart-wrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  gap: 0.3rem;
+  min-height: 0;
+}
+.ts-chart {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 12rem;
+  overflow: hidden;
+}
+/* The plot fills the chart without its own size feeding back into it. */
+.ts-plot {
+  position: absolute;
+  inset: 0;
+}
+.ts-chart.is-empty .ts-plot {
+  visibility: hidden;
+}
+.ts-unit {
+  position: absolute;
+  top: 0;
+  left: 4px;
+  color: var(--datalib-muted);
+  font-size: 11px;
+  font-weight: 600;
+  pointer-events: none;
+}
+.ts-unit-right {
+  left: auto;
+  right: 4px;
+}
+.ts-zoom-note {
+  color: var(--datalib-error-fg);
+  font-size: var(--datalib-font-size-small);
+  white-space: pre-line;
+}
+.ts-tooltip {
+  position: absolute;
+  top: 0.5rem;
+  pointer-events: none;
+  padding: 0.35rem 0.55rem;
+  background: var(--datalib-card-bg);
+  border: 1px solid var(--datalib-border);
+  border-radius: var(--datalib-radius);
+  box-shadow: var(--datalib-shadow);
+  font-size: var(--datalib-font-size-small);
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.ts-when {
+  font-weight: 600;
+}
+/* A chart inside a document (TimeSeriesEmbed.vue). */
+.ts-embed {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  height: 16rem;
+  margin: 0.75rem 0;
+}
+/* The chart's height is held while it loads, then given back when there
+   is only a note to show. */
+.ts-embed.is-note {
+  height: auto;
+}
+.ts-embed-note {
+  color: var(--datalib-muted);
+  font-size: var(--datalib-font-size-small);
+  white-space: pre-line;
+}

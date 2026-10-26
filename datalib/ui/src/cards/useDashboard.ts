@@ -3,10 +3,10 @@
 // the newest documents, kept live, and the actions its buttons take.
 // Read from endpoints other cards already use (the manage rows and the
 // search), so it adds no backend of its own.
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
-import { UNIFIED_INDEX, type ManageResponse, type ManageRow, type SearchRow } from "@/api";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, type Ref } from "vue";
+import { UNIFIED_DOCUMENT_INDEX, type ManageResponse, type ManageRow, type SearchRow } from "@/api";
 import { useApi } from "@/cards/cardApi";
-import { changed, subscribeLive } from "@/live";
+import { changed, oneAtATime, subscribeLive } from "@/live";
 import { formatRelative } from "@/config/timeFormat";
 import { syncAllButton } from "@/config/syncAll";
 import { isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
@@ -17,8 +17,12 @@ import { statusTone, needsYou, type Tone } from "./dashboard";
 import type { CardCtx } from "./types";
 
 // `recent`: whether to load the newest documents, which only the
-// activity section shows.
-export function useDashboard(ctx: CardCtx, opts: { recent: boolean }) {
+// activity section shows. `el`: the card, so it reads nothing new while
+// it is off screen.
+export function useDashboard(
+  ctx: CardCtx,
+  opts: { recent: boolean; el?: Ref<HTMLElement | null> },
+) {
   const api = useApi();
   const manage = ref<ManageResponse | null>(null);
   const recent = ref<SearchRow[]>([]);
@@ -33,6 +37,11 @@ export function useDashboard(ctx: CardCtx, opts: { recent: boolean }) {
       loadError.value = (e as Error).message;
     }
   }
+
+  /// A reload a frame asks for: the loop sends them in bursts as a run's
+  /// steps move, and each one read the whole table again.
+  const refreshRows = oneAtATime(loadRows);
+  const refreshRecent = oneAtATime(() => loadRecent());
 
   async function loadRecent() {
     if (!opts.recent) return;
@@ -87,7 +96,7 @@ export function useDashboard(ctx: CardCtx, opts: { recent: boolean }) {
     return { tone: "ok" as Tone, text: `Synced ${formatRelative(run.finished_at, now.value)}` };
   });
 
-  const syncAll = computed(() => syncAllButton(sources.value));
+  const syncAll = computed(() => syncAllButton(sources.value, manage.value?.sync_paused ?? null));
 
   async function syncEverything() {
     const b = syncAll.value;
@@ -122,9 +131,9 @@ export function useDashboard(ctx: CardCtx, opts: { recent: boolean }) {
   }
 
   function openProblems(row: ManageRow) {
-    const everything = row.id === "unified_index";
+    const everything = row.id === "unified_document_index";
     const q = {
-      url: `${UNIFIED_INDEX}/problems`,
+      url: `${UNIFIED_DOCUMENT_INDEX}/problems`,
       q: everything ? "" : `source_id:${row.id}`,
       name: everything ? "Problems" : `Problems: ${row.name.label}`,
     };
@@ -165,16 +174,19 @@ export function useDashboard(ctx: CardCtx, opts: { recent: boolean }) {
   onMounted(() => {
     void loadRows();
     void loadRecent();
-    stop = subscribeLive({
-      root: (e) => {
-        if (changed(e, "manage.rows") || changed(e, "storage")) void loadRows();
-        if (e.kind === "index_changed") void loadRecent();
+    stop = subscribeLive(
+      {
+        root: (e) => {
+          if (changed(e, "manage.rows") || changed(e, "storage")) refreshRows();
+          if (e.kind === "index_changed") refreshRecent();
+        },
+        resync: () => {
+          refreshRows();
+          refreshRecent();
+        },
       },
-      resync: () => {
-        void loadRows();
-        void loadRecent();
-      },
-    });
+      { onScreen: opts.el?.value ?? undefined },
+    );
     // "Synced 5 minutes ago" keeps counting while the card sits open.
     tick = setInterval(() => (now.value = Date.now()), 30_000);
   });

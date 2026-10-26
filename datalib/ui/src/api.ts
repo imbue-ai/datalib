@@ -12,7 +12,7 @@ export type SearchRow = {
   uuid: string;
   conversation_uuid: string;
   // FK into the markdowns table — every grid row knows which rendered
-  // .md it lives inside. Drives `{UNIFIED_INDEX}/chat/{markdown_uuid}` lookups
+  // .md it lives inside. Drives `{UNIFIED_DOCUMENT_INDEX}/chat/{markdown_uuid}` lookups
   // when the user clicks a row in the preview pane.
   markdown_uuid: string | null;
   message_index: number | null;
@@ -173,7 +173,7 @@ export type SearchResponse = RowsResponse<SearchRow> & { query_echo: QueryEcho }
 // the same as the grid row's `uuid` column.
 // One row from the `edges` table joined with the destination
 // markdown's title. The backend produces this list on every
-// `{UNIFIED_INDEX}/chat/{uuid}` response — see `EdgeRowOut` in
+// `{UNIFIED_DOCUMENT_INDEX}/chat/{uuid}` response — see `EdgeRowOut` in
 // `datalib/backend/core/src/repo.rs`. `src_anchor_uuid`/
 // `dst_anchor_uuid` reference values the renderer emits as
 // `data-section-uuid` attributes in the body; null means the
@@ -198,6 +198,7 @@ export type ProblemReason =
   | "no_identity"
   | "coercion_failed"
   | "uncovered_type"
+  | "unsupported_json"
   | "deliberate_loss"
   | "render_failed"
   | "fetch_failed"
@@ -248,7 +249,7 @@ export type ChatResponse = {
 
 // One rendered document (a `markdowns` row), as listed by the applet
 // for the document-picker card. `markdown_uuid` is the same UUID
-// `documentView(...)` / `{UNIFIED_INDEX}/chat/{uuid}` take.
+// `documentView(...)` / `{UNIFIED_DOCUMENT_INDEX}/chat/{uuid}` take.
 export type DocEntry = {
   markdown_uuid: string;
   title: string | null;
@@ -336,20 +337,33 @@ export async function forgetRemoteAllow(allowUuid: string): Promise<void> {
   if (!r.ok && r.status !== 404) throw new Error(`DELETE allow → ${r.status}: ${await r.text()}`);
 }
 
-// --- The unified_index applet --------------------------------------------
-export const UNIFIED_INDEX = "/applet/unified_index";
+// --- Applets ----------------------------------------------------------------
+
+/** Whether a failed call means the root simply runs no applet `id`: the
+ *  gateway's 502 names the applet it has no entry for. */
+export function appletAbsent(id: string, status: number, body: string): boolean {
+  if (status !== 502) return false;
+  try {
+    return (JSON.parse(body) as { error?: string }).error === `no applet "${id}"`;
+  } catch {
+    return false;
+  }
+}
+
+// --- The unified_document_index applet --------------------------------------------
+export const UNIFIED_DOCUMENT_INDEX = "/applet/unified_document_index";
 
 // Newest-first listing of rendered documents (capped server-side).
 export function fetchDocs(signal?: AbortSignal): Promise<DocEntry[]> {
-  return getJson<DocEntry[]>(`${UNIFIED_INDEX}/docs`, signal);
+  return getJson<DocEntry[]>(`${UNIFIED_DOCUMENT_INDEX}/docs`, signal);
 }
 
 // --- The embedding map ------------------------------------------------------
-// `unified_index/embedding_map`, joined to the grid by the applet
-// (applets/src/unified_index/map.rs). Hand-kept in step with it.
+// `unified_document_index/embedding_map`, joined to the grid by the applet
+// (applets/src/unified_document_index/map.rs). Hand-kept in step with it.
 
 /// The step that writes the map, as `config.toml` composes its id.
-export const EMBEDDING_MAP_STEP = "unified_index/embedding_map";
+export const EMBEDDING_MAP_STEP = "unified_document_index/embedding_map";
 
 export type MapPoint = {
   markdown_uuid: string;
@@ -381,7 +395,7 @@ export type EmbeddingMapResponse = {
 };
 
 export async function fetchEmbeddingMap(signal?: AbortSignal): Promise<EmbeddingMapResponse> {
-  const r = await getJson<EmbeddingMapResponse>(`${UNIFIED_INDEX}/embedding_map`, signal);
+  const r = await getJson<EmbeddingMapResponse>(`${UNIFIED_DOCUMENT_INDEX}/embedding_map`, signal);
   for (const e of r.errors ?? []) pushToast(e);
   return r;
 }
@@ -390,7 +404,7 @@ export async function fetchEmbeddingMap(signal?: AbortSignal): Promise<Embedding
 export async function fetchMapMatches(q: string, signal?: AbortSignal): Promise<Set<string>> {
   const params = new URLSearchParams({ q });
   const r = await getJson<{ markdown_uuids: string[]; errors?: string[] }>(
-    `${UNIFIED_INDEX}/embedding_map/matches?${params.toString()}`,
+    `${UNIFIED_DOCUMENT_INDEX}/embedding_map/matches?${params.toString()}`,
     signal,
   );
   for (const e of r.errors ?? []) pushToast(e);
@@ -423,14 +437,14 @@ export async function fetchQmdState(
   markdownUuids: string[],
   signal?: AbortSignal,
 ): Promise<QmdStateResponse> {
-  const r = await fetch(`${UNIFIED_INDEX}/qmd_state`, {
+  const r = await fetch(`${UNIFIED_DOCUMENT_INDEX}/qmd_state`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ markdown_uuids: markdownUuids }),
     signal,
   });
   if (!r.ok) {
-    throw new Error(`POST ${UNIFIED_INDEX}/qmd_state → ${r.status}`);
+    throw new Error(`POST ${UNIFIED_DOCUMENT_INDEX}/qmd_state → ${r.status}`);
   }
   const data = (await r.json()) as QmdStateResponse;
   if (data.errors && data.errors.length > 0) {
@@ -476,16 +490,18 @@ export function fetchAccounts(signal?: AbortSignal): Promise<AccountsMap> {
 }
 
 // `toast: false` is for a caller that shows the failure where it happened.
-type GetOptions = { toast?: boolean };
+/// `method: "POST"` is for a read that does work first and answers the
+/// same body, like a walk of the data root (`…/refresh`).
+type GetOptions = { toast?: boolean; method?: "GET" | "POST" };
 
 async function getJson<T>(
   url: string,
   signal?: AbortSignal,
-  { toast = true }: GetOptions = {},
+  { toast = true, method = "GET" }: GetOptions = {},
 ): Promise<T> {
   let r: Response;
   try {
-    r = await fetch(url, { signal });
+    r = await fetch(url, { signal, method });
   } catch (e) {
     // Network error / aborted before headers. Don't toast on abort
     // (caller-initiated cancellation, e.g. debounced search supersession).
@@ -530,7 +546,7 @@ export type KeyValues = {
 export type ValueSuggestion = { value: string; count?: number; label?: string };
 
 /// The keys the search bar at `base` takes: `${base}/keys`, for `base` a
-/// table's search (`/applet/unified_index/search`, `/api/log`).
+/// table's search (`/applet/unified_document_index/search`, `/api/log`).
 export function fetchSearchKeys(base: string, signal?: AbortSignal): Promise<SearchKeySpec[]> {
   return getJson<SearchKeySpec[]>(`${base}/keys`, signal, { toast: false });
 }
@@ -561,7 +577,7 @@ export async function fetchHealth(signal?: AbortSignal): Promise<Health> {
 /// `[[column, value], …]` as JSON.
 /// Which answer to free text a search asks for: the grid's own fields,
 /// the words of the documents, or their meaning. Mirrors `SearchTab` in
-/// `applets/src/unified_index/tabs.rs`.
+/// `applets/src/unified_document_index/tabs.rs`.
 export type SearchTab = "fields" | "words" | "meaning";
 
 export type SearchPageSpec = {
@@ -572,7 +588,7 @@ export type SearchPageSpec = {
   tab?: SearchTab | null;
 };
 
-export const SEARCH = `${UNIFIED_INDEX}/search`;
+export const SEARCH = `${UNIFIED_DOCUMENT_INDEX}/search`;
 
 export function fetchSearch(
   q: string,
@@ -652,7 +668,10 @@ export function fetchChat(markdownUuid: string, signal?: AbortSignal): Promise<C
   // One UUID per rendered `.md` file — no disambiguation needed.
   // Provider-specific sharding (beeper's per-period files) is already
   // encoded in the markdown_uuid scheme.
-  return getJson<ChatResponse>(`${UNIFIED_INDEX}/chat/${encodeURIComponent(markdownUuid)}`, signal);
+  return getJson<ChatResponse>(
+    `${UNIFIED_DOCUMENT_INDEX}/chat/${encodeURIComponent(markdownUuid)}`,
+    signal,
+  );
 }
 
 // --- Config / setup API ----------------------------------------------------
@@ -702,7 +721,7 @@ export type ConfigResponse = {
   diagnostics: Diagnostic[];
   // Whether the app can serve its own views at all. False when the
   // file is not a config, or when it loads without a usable
-  // `unified_index` applet — that applet serves the grid, search and
+  // `unified_document_index` applet — that applet serves the grid, search and
   // the document view, so without it every view is a 502 — or when
   // the root was written by a newer datalib (`newer_root`). A root
   // with no config is `exists: false` and the first-run screen's
@@ -992,8 +1011,9 @@ export function fetchPipelineStorage(
   refresh = false,
   signal?: AbortSignal,
 ): Promise<PipelineStorage> {
-  const q = refresh ? "?refresh=1" : "";
-  return getJson<PipelineStorage>(`/api/pipeline/storage${q}`, signal);
+  return refresh
+    ? getJson<PipelineStorage>("/api/pipeline/storage/refresh", signal, { method: "POST" })
+    : getJson<PipelineStorage>("/api/pipeline/storage", signal);
 }
 
 /// Free space on the data root's disk (`GET /api/pipeline/disk`). The
@@ -1200,14 +1220,18 @@ export type ManageResponse = {
     measured_at_utc: string | null;
   };
   rows: ManageRow[];
+  /// Why no sync can be opened right now: the launch is updating the
+  /// stores for this version. Every row's Sync says the same.
+  sync_paused: string | null;
 };
 
 /// The Manage screen's rows, joined server-side. `refresh` walks the
 /// disk before answering — see `fetchPipelineStorage` for when that is
 /// worth asking for.
 export function fetchManageRows(refresh = false, signal?: AbortSignal): Promise<ManageResponse> {
-  const q = refresh ? "?refresh=1" : "";
-  return getJson<ManageResponse>(`/api/manage/rows${q}`, signal);
+  return refresh
+    ? getJson<ManageResponse>("/api/manage/rows/refresh", signal, { method: "POST" })
+    : getJson<ManageResponse>("/api/manage/rows", signal);
 }
 
 /// One metric series of one step over one run: a running total, or the
@@ -1370,6 +1394,14 @@ export async function resetSteps(targets: string[]): Promise<"done" | "queued"> 
   return r.status === 202 ? "queued" : "done";
 }
 
+/// Fold away the history of every rendered document store and the grid
+/// index, and give back the disk it held (`step_protocol.md` § Compact).
+/// "queued" when it is still going after the server's wait.
+export async function compactHistory(): Promise<"done" | "queued"> {
+  const r = await post("/api/compact", {});
+  return r.status === 202 ? "queued" : "done";
+}
+
 /// Delete the trees of groups already gone from the config, and forget
 /// their steps ran. "queued" when one of their steps has not stopped yet.
 export async function purgeGroups(groups: string[]): Promise<"done" | "queued"> {
@@ -1387,7 +1419,7 @@ export async function purgeGroups(groups: string[]): Promise<"done" | "queued"> 
 // Which datalib program a process was: the runner (its own lines), a
 // step it spawned, the app's server (its own, and its applets'), or a
 // page of the app in a tab (what `telemetry.ts` reported from it).
-export type LogProcess = "dag" | "step" | "http" | "ui";
+export type LogProcess = "dag" | "step" | "http" | "applet" | "ui";
 
 // One run. A job started from the app has the job's id as its run id.
 export type RunInfo = {
@@ -1398,8 +1430,8 @@ export type RunInfo = {
 };
 
 // One process the store holds: a run of the runner, one attempt of one
-// of its steps, or a launch of the server. The log's unit — every line
-// belongs to one.
+// of its steps, a launch of the server, an applet it started, or a page.
+// The log's unit — every line belongs to one.
 export type ProcessInfo = {
   process_id: string;
   process: LogProcess | string;
@@ -1418,6 +1450,11 @@ export type ProcessInfo = {
   tz_offset: string | null;
   // The commit it was built from, when known.
   git_hash: string | null;
+  // For an applet's process: which applet, by its config id.
+  applet: string | null;
+  // The most resident memory it and everything below it held, in bytes;
+  // null for a process nobody measured.
+  peak_rss_bytes: number | null;
 };
 
 // Processes newest first; `run` narrows to one run's (its runner and
@@ -1718,9 +1755,17 @@ export type ServiceRegistration = {
 /// `mailbox` (emails are filed here), `keyword` (a Gmail flag —
 /// downloadable, but never matched by the render-side filter),
 /// `conversation` (one chat thread — a Claude chat, a Slack DM),
-/// `channel` (a Slack channel), `calendar` or `address_book`.
+/// `channel` (a Slack channel), `calendar`, `address_book`, or a Linear
+/// `team` or `project`.
 export type ProbeItemKind =
-  "mailbox" | "keyword" | "conversation" | "channel" | "calendar" | "address_book";
+  | "mailbox"
+  | "keyword"
+  | "conversation"
+  | "channel"
+  | "calendar"
+  | "address_book"
+  | "team"
+  | "project";
 
 /// One row a probe offers a filter field. Mirrors `ProbeItem` in
 /// datalib/backend/probe/src/lib.rs.
@@ -1756,6 +1801,7 @@ export type ProbeReport = {
 /// one sentence per kind (`config/issues.ts`).
 export type IssueKind =
   | "no_credential"
+  | "no_oauth_client"
   | "expired"
   | "rejected"
   | "forbidden"
@@ -1779,7 +1825,7 @@ export type Failure = { issue: IssueKind; detail: string };
 export type ConnectState = "running" | "ok" | "failed";
 
 /// What a running login is doing. Mirrors `ConnectPhase` there.
-export type ConnectPhase = "preparing" | "downloading_browser" | "signing_in";
+export type ConnectPhase = "preparing" | "downloading_browser" | "creating_client" | "signing_in";
 
 export type ConnectAttempt = {
   id: string;
@@ -1833,11 +1879,14 @@ export function latchkeyService(service: string): Promise<LatchkeyService> {
 
 /// Start latchkey's browser login. Returns immediately with an id to
 /// poll — the flow waits for a person, so there is nothing to await.
+/// `createOAuthClient` has latchkey create the service's OAuth client
+/// first (`auth browser-prepare`).
 export function startLatchkeyConnect(
   service: string,
   account?: string,
   register?: ServiceRegistration,
   ephemeralBrowser = false,
+  createOAuthClient = false,
 ): Promise<ConnectAttempt> {
   return quietJson<ConnectAttempt>(`/api/latchkey/${encodeURIComponent(service)}/connect`, {
     method: "POST",
@@ -1846,7 +1895,19 @@ export function startLatchkeyConnect(
       account: account ?? "",
       register: register ?? null,
       ephemeral_browser: ephemeralBrowser,
+      create_oauth_client: createOAuthClient,
     }),
+  });
+}
+
+/// Store a pasted OAuth client — Google Cloud's `client_secret.json`, or
+/// latchkey's `{clientId, clientSecret}` — as the one the service signs
+/// in with (`latchkey auth prepare`).
+export function setLatchkeyOAuthClient(service: string, client: string): Promise<{ ok: true }> {
+  return quietJson<{ ok: true }>(`/api/latchkey/${encodeURIComponent(service)}/oauth_client`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ client }),
   });
 }
 

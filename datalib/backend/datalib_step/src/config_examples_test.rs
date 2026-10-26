@@ -7,9 +7,6 @@
 
 use std::path::PathBuf;
 
-use crate::dispatch::{self, Phase};
-use crate::function::Function;
-
 fn example_config(repo_rel: &str) -> PathBuf {
     let r = runfiles::Runfiles::create().expect("runfiles tree");
     let rel = format!("_main/{repo_rel}");
@@ -21,7 +18,7 @@ fn example_config(repo_rel: &str) -> PathBuf {
 }
 
 /// `name` is only used for panic messages.
-fn validate_config(name: &str, path: &std::path::Path) {
+pub(crate) fn validate_config(name: &str, path: &std::path::Path) {
     let (cfg, _data_root) = datalib_dag::config::load(path)
         .unwrap_or_else(|e| panic!("{name}: failed to load as a DAG config: {e:#}"));
     let specs =
@@ -29,72 +26,16 @@ fn validate_config(name: &str, path: &std::path::Path) {
     datalib_dag::Graph::build(specs).unwrap_or_else(|e| panic!("{name}: graph build: {e:#}"));
 
     let data_root = tempfile::tempdir().expect("tempdir");
-    for step in &cfg.steps {
-        // A custom command is somebody else's program; this binary only
-        // vouches for the steps it will run itself.
-        if step.command.is_some() {
-            continue;
-        }
-        let (Some(group), Some(function)) = (step.group.as_deref(), step.function.as_deref())
-        else {
-            panic!("{name}: step {} has no command and no group", step.id);
-        };
-        let phase = match Function::parse(function) {
-            Some(Function::Ingest) => Phase::Ingest,
-            Some(Function::RenderMarkdown) => Phase::Render,
-            Some(
-                Function::GridIndex
-                | Function::QmdAggregator
-                | Function::KeywordIndex
-                | Function::Embed
-                | Function::EmbeddingMap,
-            ) => continue,
-            None => panic!(
-                "{name}: step {}: datalib-step has no function {function:?}",
-                step.id
-            ),
-        };
-        let group_entry = cfg
-            .groups
+    let found = crate::check_params::problems(&cfg, data_root.path());
+    assert!(
+        found.is_empty(),
+        "{name}: a sync would refuse these steps' params:\n{}",
+        found
             .iter()
-            .find(|g| g.id == group)
-            .unwrap_or_else(|| panic!("{name}: step {}: its group is not declared", step.id));
-        let mut params = match &step.params {
-            Some(p) => serde_json::to_value(p)
-                .unwrap_or_else(|e| panic!("{name}: step {}: params → JSON: {e}", step.id)),
-            None => serde_json::json!({}),
-        };
-        // A diff group plans as its source's renderer, once `params.diff`
-        // is taken off — the same split `datalib-step` makes.
-        let ty = if group_entry.r#type.as_deref() == Some(datalib_dag::config::DIFF_GROUP_TYPE) {
-            let (_pair, rest) = crate::render_diff::split_params(params)
-                .unwrap_or_else(|e| panic!("{name}: step {}: {e:#}", step.id));
-            params = rest;
-            let source = group_entry
-                .source
-                .as_deref()
-                .unwrap_or_else(|| panic!("{name}: diff group {group} names no source"));
-            cfg.groups
-                .iter()
-                .find(|g| g.id == source)
-                .and_then(|g| g.r#type.as_deref())
-                .unwrap_or_else(|| {
-                    panic!("{name}: diff group {group}: source {source} has no type")
-                })
-        } else {
-            group_entry
-                .r#type
-                .as_deref()
-                .unwrap_or_else(|| panic!("{name}: step {}: its group declares no type", step.id))
-        };
-        let raw_dir = datalib_etl::layout::ingest_root(data_root.path(), group);
-        dispatch::plan(ty, phase, group, raw_dir, params).unwrap_or_else(|e| {
-            panic!(
-                "{name}: step {}: params don't plan as a {ty} {phase:?} step: {e:#}",
-                step.id
-            )
-        });
-    }
+            .map(|p| format!("{}: {}", p.step, p.message))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
 }
 
 #[test]

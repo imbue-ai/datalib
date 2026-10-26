@@ -19,6 +19,12 @@ use datalib_signal_backup::{
 };
 use sha2::{Digest, Sha256};
 
+/// The raw store's keys for the bridge crew: Picard is the account, the
+/// chat is the one with Riker, and the backup knows Riker by number.
+const PICARD: &str = "self";
+const RIKER: &str = "e164:+17015550101";
+const BRIDGE: &str = RIKER;
+
 const FIXTURE_AEP: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
 /// 67-byte minimal valid PNG: 1×1 transparent. Hand-assembled rather
@@ -92,7 +98,7 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
     // Stash one encrypted PNG under `<snapshot_root>/files/<XX>/<name>`
     // — the layout download walks. Picard's "Make it so." message will
     // reference this attachment so the rendered .md should contain an
-    // `![…](blobs/…png)` image link.
+    // `![…](/data/…/blob/<hash>)` image link.
     let files_root = snapshot_root.join("files");
     let (png_media_name, png_plaintext_hash) = write_test_attachment(&files_root)?;
 
@@ -100,12 +106,6 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
 
     let raw_db_path = data_root.join("raw").join("signal");
     std::fs::create_dir_all(raw_db_path.parent().unwrap())?;
-
-    // SAFETY: bazel test runs each test target in a fresh process, so
-    // mutating the env here is hermetic — no other test sees it.
-    unsafe {
-        std::env::set_var("SIGNAL_BACKUP_PASSPHRASE", FIXTURE_AEP);
-    }
 
     // A temp cache: tests must never touch this host's real one.
     let cache = FingerprintCache::open(&tmp.path().join("fingerprints.sqlite")).await?;
@@ -117,7 +117,7 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
         cache,
         snapshot_root: snapshot_root.clone(),
         files_root: None, // defaults to snapshot_root/files (the layout the fixture writes)
-        aep_env_var: None, // defaults to SIGNAL_BACKUP_PASSPHRASE
+        aep: FIXTURE_AEP.into(),
         progress: Progress::noop(),
         control: DownloadControl::default(),
     })
@@ -184,6 +184,8 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
             "signal-tng",
             &progress,
             &mut on_doc_complete,
+            // One bucket's attachments a batch.
+            1,
         )?;
         assert_eq!(render_summary.docs_rendered, 1);
         assert_eq!(render_summary.messages_rendered, 4);
@@ -205,7 +207,7 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
     // markdown `# …` line) so the Vue side can hook a copy-id button
     // off `data-page-title-uuid`.
     assert!(
-        md.contains("class=\"page-title\"") && md.contains("Signal · Will Riker"),
+        md.contains("class=\"page-title\"") && md.contains(">Will Riker (2364-04)"),
         "page-title H1 with markdown_uuid hook present in:\n{md}"
     );
     assert!(md.contains("Make it so."), "Picard's order rendered");
@@ -221,31 +223,35 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
         "Riker's name resolved from recipient, his number as the handle, in:\n{md}"
     );
 
-    // PNG attachment surfaces as an inline image link under the
-    // "Make it so." bullet, with the upstream filename as the alt
-    // text and the hash-based filename as the target.
+    // PNG attachment surfaces as an inline image under the "Make it
+    // so." message, with the upstream filename as the alt text, linked
+    // at its address in the source's blob store. Nothing is copied
+    // beside the page.
+    let png_hash = datalib_etl::blob_cas::blake3_hex(TINY_PNG);
     assert!(
-        md.contains("![delta-shield.png](blobs/"),
-        "expected the image attachment to render as an inline link in:\n{md}"
+        md.contains(&format!(
+            "![delta-shield.png](/data/raw/signal/blob/{png_hash})"
+        )),
+        "expected the image attachment to link the blob store in:\n{md}"
     );
-    let png_dir = doc
-        .md_path
-        .parent()
-        .expect("md has a parent dir")
-        .join("blobs");
-    let written_pngs: Vec<_> = std::fs::read_dir(&png_dir)?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("png"))
-        .collect();
-    assert_eq!(
-        written_pngs.len(),
-        1,
-        "exactly one PNG materialized on disk"
+    assert!(
+        !doc.md_path
+            .parent()
+            .expect("md has a parent dir")
+            .join("blobs")
+            .exists(),
+        "nothing copied beside the page"
     );
-    let bytes = std::fs::read(written_pngs[0].path())?;
+    let cas = datalib_etl::blob_cas::BlobCas::open_reader(&datalib_etl::blob_cas::cas_path_for(
+        &datalib_etl::doltlite_raw::db_path_for(&raw_db_path),
+    ))
+    .await?;
+    let stored = cas.get(&png_hash).await?;
+    cas.close().await;
     assert_eq!(
-        bytes, TINY_PNG,
-        "materialized PNG matches the plaintext we encrypted in"
+        stored.map(|o| o.bytes).as_deref(),
+        Some(TINY_PNG),
+        "the store holds the plaintext we encrypted in"
     );
 
     // 1 chat-level row + 4 message-level rows = 5 grid rows.
@@ -318,6 +324,7 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
             rendered_docs_second_pass.push(doc);
             Ok(())
         },
+        1,
     )?;
     assert_eq!(
         render_summary_2.docs_rendered, 0,
@@ -459,31 +466,49 @@ async fn fetch_once(snapshot_root: &Path, store: &Path, cache: &Path) -> Result<
         .map(|_| ())
 }
 
-/// One fetch and its commit: `None` when the run changed nothing.
+/// One fetch and its closing commit: HEAD after it, or `None` when the
+/// run changed nothing.
 async fn fetch_with(
     snapshot_root: &Path,
     store: &Path,
     cache: &Path,
     control: DownloadControl,
 ) -> Result<Option<String>> {
-    unsafe {
-        std::env::set_var("SIGNAL_BACKUP_PASSPHRASE", FIXTURE_AEP);
-    }
+    fetch_summary(snapshot_root, store, cache, control)
+        .await
+        .map(|(_, moved)| moved)
+}
+
+async fn fetch_summary(
+    snapshot_root: &Path,
+    store: &Path,
+    cache: &Path,
+    control: DownloadControl,
+) -> Result<(ingest::FetchSummary, Option<String>)> {
     let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(store)).await?;
+    let before = head(db.pool()).await;
     let summary = ingest::fetch(FetchOptions {
         db: db.clone(),
         cache: FingerprintCache::open(cache).await?,
         snapshot_root: snapshot_root.to_path_buf(),
         files_root: None,
-        aep_env_var: None,
+        aep: FIXTURE_AEP.into(),
         progress: Progress::noop(),
         control,
     })
     .await;
     // The CAS beside it is plain SQLite and commits as it writes.
-    let committed = datalib_etl::doltlite_raw::commit_run(db.pool(), "test download").await?;
+    datalib_etl::doltlite_raw::commit_run(db.pool(), "test download").await?;
+    let after = head(db.pool()).await;
     db.close().await;
-    summary.map(|_| committed)
+    summary.map(|s| (s, (after != before).then_some(after)))
+}
+
+async fn head(pool: &sqlx::SqlitePool) -> String {
+    sqlx::query_scalar("SELECT commit_hash FROM dolt_log LIMIT 1")
+        .fetch_one(pool)
+        .await
+        .unwrap_or_default()
 }
 
 async fn problems(store: &Path) -> Result<Vec<(String, String)>> {
@@ -496,6 +521,15 @@ async fn problems(store: &Path) -> Result<Vec<(String, String)>> {
 }
 
 fn write_frames(root: &Path, name: &str, frames: &[backup::Frame]) -> Result<()> {
+    write_frames_at(root, name, 12442118400000, frames)
+}
+
+fn write_frames_at(
+    root: &Path,
+    name: &str,
+    backup_time_ms: u64,
+    frames: &[backup::Frame],
+) -> Result<()> {
     write_snapshot(
         &root.join(name),
         &SnapshotInput {
@@ -505,7 +539,7 @@ fn write_frames(root: &Path, name: &str, frames: &[backup::Frame]) -> Result<()>
             main_iv: &[0u8; 16],
             backup_info: backup::BackupInfo {
                 version: 1,
-                backup_time_ms: 12442118400000,
+                backup_time_ms,
                 ..Default::default()
             },
             frames,
@@ -563,7 +597,7 @@ async fn what_a_backup_does_not_hold_is_a_problem() -> Result<()> {
     write_frames(&snapshots, "signal-backup-2364-04-09-12-00-00", &frames)?;
 
     fetch_once(&snapshots, &store, &cache).await?;
-    let item = ingest::schema_raw::chat_item_id_recipe("100", "1", 12442118940000);
+    let item = ingest::schema_raw::chat_item_id_recipe(BRIDGE, PICARD, 12442118940000);
     let expected = vec![
         (
             format!("chat_item_attachments:{item}#0"),
@@ -587,50 +621,77 @@ async fn what_a_backup_does_not_hold_is_a_problem() -> Result<()> {
     Ok(())
 }
 
-/// A newer backup that no longer locates an attachment wrote its edge
-/// again with no bytes and a ref of its own, so the bytes the older
-/// backup decrypted were no longer reachable from the message.
+/// A phone restored from another numbers every recipient and chat anew,
+/// and the keys were built from those numbers: the switch deleted every
+/// message and wrote it again under another key, and an attachment the
+/// new phone never downloaded lost the bytes the old phone's backup had
+/// stored. The keys follow who a chat is with and who wrote a message,
+/// so the switch adds and removes nothing, and the bytes stay.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_newer_backup_without_the_bytes_keeps_the_older_copy() -> Result<()> {
+async fn a_phone_switch_keeps_every_message_and_its_bytes() -> Result<()> {
     let tmp = tempfile::tempdir()?;
     let snapshots = tmp.path().join("snapshots");
     let store = tmp.path().join("raw").join("signal");
     let cache = tmp.path().join("fingerprints.sqlite");
     let (media_name, plaintext_hash) = write_test_attachment(&snapshots.join("files"))?;
 
-    let message = |att: backup::MessageAttachment| {
-        let mut frame = chat_item(100, 1, 12442118940000, "Make it so.", true);
-        if let Some(backup::frame::Item::ChatItem(ci)) = frame.item.as_mut() {
-            if let Some(backup::chat_item::Item::StandardMessage(sm)) = ci.item.as_mut() {
-                sm.attachments.push(att);
-            }
-        }
-        frame
-    };
-    let crew = [
+    let old_phone = [
         recipient_self(1, "Jean-Luc Picard"),
         recipient_contact(2, "Will Riker", 17015550101),
         chat_frame(100, 2),
+        chat_item(100, 2, 12442118460000, "All decks at green status.", false),
+        with_attachment(
+            chat_item(100, 1, 12442118940000, "Make it so.", true),
+            png_attachment(&plaintext_hash),
+        ),
     ];
-    let mut with_bytes = crew.to_vec();
-    with_bytes.push(message(png_attachment(&plaintext_hash)));
-    write_frames(&snapshots, "signal-backup-2364-04-09-12-00-00", &with_bytes)?;
+    write_day(&snapshots, 0, &old_phone)?;
     fetch_once(&snapshots, &store, &cache).await?;
 
-    let mut without = crew.to_vec();
-    without.push(message(backup::MessageAttachment {
-        pointer: Some(backup::FilePointer {
-            file_name: Some("delta-shield.png".into()),
-            ..Default::default()
-        }),
-        ..Default::default()
-    }));
-    write_frames(&snapshots, "signal-backup-2364-04-10-12-00-00", &without)?;
+    // The new phone lists the same two people the other way round, under
+    // other numbers, and holds the attachment without its bytes.
+    let new_phone = [
+        recipient_contact(5, "Will Riker", 17015550101),
+        recipient_self(9, "Jean-Luc Picard"),
+        chat_frame(3, 5),
+        chat_item(3, 5, 12442118460000, "All decks at green status.", false),
+        with_attachment(
+            chat_item(3, 9, 12442118940000, "Make it so.", true),
+            backup::MessageAttachment {
+                pointer: Some(backup::FilePointer {
+                    content_type: Some("image/png".into()),
+                    file_name: Some("delta-shield.png".into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        ),
+    ];
+    write_day(&snapshots, 1, &new_phone)?;
     fetch_once(&snapshots, &store, &cache).await?;
 
-    let item = ingest::schema_raw::chat_item_id_recipe("100", "1", 12442118940000);
-    let edge = format!("{item}#0");
+    let item = ingest::schema_raw::chat_item_id_recipe(BRIDGE, PICARD, 12442118940000);
+    let edge = ingest::schema_raw::chat_item_attachment_id_recipe(&item, 0);
     let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(&store)).await?;
+    let hashes: Vec<String> = sqlx::query_scalar(
+        "SELECT commit_hash FROM dolt_log WHERE message LIKE 'download signal: backup %' \
+          ORDER BY date",
+    )
+    .fetch_all(db.pool())
+    .await?;
+    let mut came_and_went = Vec::new();
+    for table in ["recipients", "chats", "chat_items", "chat_item_attachments"] {
+        let rows: Vec<(String, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT diff_type, coalesce(to_id, from_id) FROM dolt_diff_{table}(?, ?) \
+              WHERE diff_type <> 'modified'"
+        )))
+        .bind(&hashes[0])
+        .bind(&hashes[1])
+        .fetch_all(db.pool())
+        .await?;
+        came_and_went.extend(rows);
+    }
+    assert_eq!(came_and_went, [], "the switch added or removed rows");
     let (ref_id, blake3): (String, Option<String>) =
         sqlx::query_as("SELECT ref_id, blake3 FROM chat_item_attachments WHERE id = ?")
             .bind(&edge)
@@ -642,12 +703,34 @@ async fn a_newer_backup_without_the_bytes_keeps_the_older_copy() -> Result<()> {
         blake3.as_deref(),
         Some(datalib_etl::blob_cas::blake3_hex(TINY_PNG).as_str())
     );
-    assert_eq!(
-        problems(&store).await?,
-        vec![(
-            format!("chat_item_attachments:{edge}"),
-            "warning".to_string()
-        )]
+    assert_eq!(problems(&store).await?, [], "bytes held are not missing");
+
+    // Render reads the bytes through the edge, though the new phone's
+    // payload has no key to find them by.
+    let parsed = tokio::task::spawn_blocking({
+        let raw = store.clone();
+        move || parse_raw_dir(&raw)
+    })
+    .await??;
+    let out = tmp.path().join("data");
+    let mut mds = Vec::new();
+    render_all(
+        &parsed,
+        &out,
+        "signal-tng",
+        &Progress::noop(),
+        &mut |doc| {
+            mds.push(std::fs::read_to_string(&doc.md_path)?);
+            Ok(())
+        },
+        1,
+    )?;
+    assert_eq!(mds.len(), 1);
+    let png_hash = datalib_etl::blob_cas::blake3_hex(TINY_PNG);
+    assert!(
+        mds[0].contains("![delta-shield.png](") && mds[0].contains(&format!("/blob/{png_hash})")),
+        "the attachment links the old phone's bytes in:\n{}",
+        mds[0]
     );
     Ok(())
 }
@@ -754,14 +837,14 @@ async fn a_newer_backup_replaces_what_the_older_one_held() -> Result<()> {
     assert_eq!(
         ids(&store, "chat_items").await?,
         [ingest::schema_raw::chat_item_id_recipe(
-            "100",
-            "1",
+            BRIDGE,
+            PICARD,
             12442118400000
         )],
         "the messages the newer backup dropped are gone"
     );
-    assert_eq!(ids(&store, "recipients").await?, ["1", "2"]);
-    assert_eq!(ids(&store, "chats").await?, ["100"]);
+    assert_eq!(ids(&store, "recipients").await?, [RIKER, PICARD]);
+    assert_eq!(ids(&store, "chats").await?, [BRIDGE]);
     assert!(ids(&store, "chat_item_attachments").await?.is_empty());
     Ok(())
 }
@@ -817,8 +900,8 @@ async fn a_backup_not_read_whole_deletes_nothing() -> Result<()> {
     Ok(())
 }
 
-/// A backup folder that is gone, or a passphrase that is not set, is no
-/// backup at all: the run fails and the store keeps what it had.
+/// A backup folder that is gone is no backup at all: the run fails and
+/// the store keeps what it had.
 #[tokio::test(flavor = "multi_thread")]
 async fn no_backup_to_read_deletes_nothing() -> Result<()> {
     let tmp = tempfile::tempdir()?;
@@ -834,26 +917,10 @@ async fn no_backup_to_read_deletes_nothing() -> Result<()> {
     write_frames(&snapshots, "signal-backup-2364-04-09-12-00-00", &frames)?;
     fetch_once(&snapshots, &store, &cache).await?;
 
-    let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(&store)).await?;
-    let unset = ingest::fetch(FetchOptions {
-        db: db.clone(),
-        cache: FingerprintCache::open(&cache).await?,
-        snapshot_root: snapshots.clone(),
-        files_root: None,
-        aep_env_var: Some("SIGNAL_BACKUP_PASSPHRASE_NEVER_SET_IN_THIS_TEST".into()),
-        progress: Progress::noop(),
-        control: DownloadControl::default(),
-    })
-    .await;
-    datalib_etl::store_handle::RawStoreHandle::commit_all(&db, "test download").await?;
-    db.close().await;
-    assert!(unset.is_err());
-    assert_eq!(ids(&store, "chat_items").await?.len(), 1);
-
     std::fs::remove_dir_all(&snapshots)?;
     assert!(fetch_once(&snapshots, &store, &cache).await.is_err());
     assert_eq!(ids(&store, "chat_items").await?.len(), 1);
-    assert_eq!(ids(&store, "recipients").await?, ["1", "2"]);
+    assert_eq!(ids(&store, "recipients").await?, [RIKER, PICARD]);
     Ok(())
 }
 
@@ -884,6 +951,321 @@ async fn reading_an_unchanged_backup_again_commits_nothing() -> Result<()> {
     assert_eq!(
         second, None,
         "reading an unchanged backup again changes nothing in the store"
+    );
+    Ok(())
+}
+
+// ── A folder of snapshots ─────────────────────────────────────────────
+
+const DAY_MS: u64 = 86_400_000;
+/// 2364-04-11 00:00:00 UTC.
+const APRIL_11_MS: u64 = 12442118400000;
+
+/// The snapshot Signal would write `day` days after April 11th, named and
+/// dated as Signal names and dates it.
+fn write_day(root: &Path, day: u64, frames: &[backup::Frame]) -> Result<String> {
+    let name = format!("signal-backup-2364-04-{:02}-00-00-00", 11 + day);
+    write_frames_at(root, &name, APRIL_11_MS + day * DAY_MS, frames)?;
+    Ok(name)
+}
+
+fn bridge_crew() -> Vec<backup::Frame> {
+    vec![
+        recipient_self(1, "Jean-Luc Picard"),
+        recipient_contact(2, "Will Riker", 17015550101),
+        chat_frame(100, 2),
+    ]
+}
+
+/// `(first line of message, date)` of every snapshot commit, oldest first.
+async fn backup_log(store: &Path) -> Result<Vec<(String, String)>> {
+    let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(store)).await?;
+    let mut rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT message, date FROM dolt_log WHERE message LIKE 'download signal: backup %'",
+    )
+    .fetch_all(db.pool())
+    .await?;
+    db.close().await;
+    rows.reverse();
+    Ok(rows
+        .into_iter()
+        .map(|(m, d)| (m.lines().next().unwrap_or("").to_string(), d))
+        .collect())
+}
+
+async fn texts(store: &Path) -> Result<Vec<String>> {
+    let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(store)).await?;
+    let rows: Vec<String> = sqlx::query_scalar(
+        "SELECT (SELECT value FROM json_tree(payload) WHERE key = 'body') FROM chat_items ORDER BY date_sent",
+    )
+    .fetch_all(db.pool())
+    .await?;
+    db.close().await;
+    Ok(rows)
+}
+
+/// Only the newest snapshot was read, so a folder of daily backups left
+/// no history to diff: a message lost or changed between two backups was
+/// invisible. Each is now a commit, dated when it was taken, and the
+/// diff between two of them names what went and what changed.
+#[tokio::test(flavor = "multi_thread")]
+async fn each_backup_is_a_commit_and_two_diff_to_show_what_was_lost() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let snapshots = tmp.path().join("snapshots");
+    let store = tmp.path().join("raw").join("signal");
+    let cache = tmp.path().join("fingerprints.sqlite");
+
+    let status = chat_item(100, 1, 12442118400000, "Status report.", true);
+    let green = chat_item(100, 2, 12442118460000, "All decks at green status.", false);
+    let vessel = chat_item(100, 2, 12442118520000, "Sensors detect a vessel.", false);
+    let mut day0 = bridge_crew();
+    day0.extend([status.clone(), green.clone()]);
+    let mut day1 = day0.clone();
+    day1.push(vessel);
+    // Day two: Riker's green-status message is gone, and Picard's report
+    // says something else under the same id.
+    let mut day2 = bridge_crew();
+    day2.push(chat_item(
+        100,
+        1,
+        12442118400000,
+        "Status report, Number One.",
+        true,
+    ));
+    day2.push(chat_item(
+        100,
+        2,
+        12442118520000,
+        "Sensors detect a vessel.",
+        false,
+    ));
+    // Written newest first, so directory order is not what orders them.
+    let names = [
+        write_day(&snapshots, 2, &day2)?,
+        write_day(&snapshots, 0, &day0)?,
+        write_day(&snapshots, 1, &day1)?,
+    ];
+
+    let (summary, moved) =
+        fetch_summary(&snapshots, &store, &cache, DownloadControl::default()).await?;
+    assert!(moved.is_some());
+    assert_eq!(summary.backups_found, 3);
+    assert_eq!(
+        summary.backups_read,
+        [names[1].as_str(), &names[2], &names[0]]
+    );
+    assert_eq!(
+        backup_log(&store).await?,
+        [
+            (
+                format!("download signal: backup {}", names[1]),
+                "2364-04-11 00:00:00".to_string()
+            ),
+            (
+                format!("download signal: backup {}", names[2]),
+                "2364-04-12 00:00:00".to_string()
+            ),
+            (
+                format!("download signal: backup {}", names[0]),
+                "2364-04-13 00:00:00".to_string()
+            ),
+        ]
+    );
+    assert_eq!(
+        texts(&store).await?,
+        ["Status report, Number One.", "Sensors detect a vessel."],
+        "HEAD holds the newest backup"
+    );
+
+    let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(&store)).await?;
+    let hashes: Vec<String> = sqlx::query_scalar(
+        "SELECT commit_hash FROM dolt_log WHERE message LIKE 'download signal: backup %' \
+          ORDER BY date",
+    )
+    .fetch_all(db.pool())
+    .await?;
+    let diff: Vec<(String, String)> = sqlx::query_as(
+        "SELECT diff_type, coalesce(to_id, from_id) FROM dolt_diff_chat_items(?, ?) \
+          ORDER BY 2",
+    )
+    .bind(&hashes[1])
+    .bind(&hashes[2])
+    .fetch_all(db.pool())
+    .await?;
+    // The bookkeeping of a row a day did not change is not written again,
+    // so the day's commit holds only what changed.
+    let restamped: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM dolt_diff_chat_items_bookkeeping(?, ?)")
+            .bind(&hashes[0])
+            .bind(&hashes[1])
+            .fetch_one(db.pool())
+            .await?;
+    db.close().await;
+    let id =
+        |author: &str, sent: i64| ingest::schema_raw::chat_item_id_recipe(BRIDGE, author, sent);
+    assert_eq!(
+        diff,
+        [
+            ("removed".to_string(), id(RIKER, 12442118460000)),
+            ("modified".to_string(), id(PICARD, 12442118400000)),
+        ]
+    );
+    assert_eq!(restamped, 1, "only the vessel message is new on day one");
+
+    // Nothing new: the next run reads nothing and commits nothing.
+    let (again, moved) =
+        fetch_summary(&snapshots, &store, &cache, DownloadControl::default()).await?;
+    assert!(again.backups_read.is_empty());
+    assert_eq!(moved, None);
+    Ok(())
+}
+
+/// A backup older than the newest one held, found late, is read like any
+/// other; HEAD then returns to the newest, so the store never ends on
+/// the past.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_late_older_backup_is_read_and_the_newest_put_back_on_top() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let snapshots = tmp.path().join("snapshots");
+    let store = tmp.path().join("raw").join("signal");
+    let cache = tmp.path().join("fingerprints.sqlite");
+    let mut newer = bridge_crew();
+    newer.push(chat_item(100, 1, 12442118400000, "Make it so.", true));
+    let newest = write_day(&snapshots, 2, &newer)?;
+    fetch_once(&snapshots, &store, &cache).await?;
+
+    let mut older = bridge_crew();
+    older.push(chat_item(100, 2, 12442118460000, "Engage.", false));
+    let late = write_day(&snapshots, 0, &older)?;
+    let (summary, _) =
+        fetch_summary(&snapshots, &store, &cache, DownloadControl::default()).await?;
+    assert_eq!(summary.backups_read, [late.as_str(), &newest]);
+    assert_eq!(texts(&store).await?, ["Make it so."]);
+    let log = backup_log(&store).await?;
+    assert_eq!(log.len(), 3, "{log:?}");
+    assert!(
+        log[2]
+            .0
+            .ends_with("read again to put the newest back on top"),
+        "{log:?}"
+    );
+
+    // HEAD is on the newest now, so nothing is read again.
+    let (summary, moved) =
+        fetch_summary(&snapshots, &store, &cache, DownloadControl::default()).await?;
+    assert!(summary.backups_read.is_empty());
+    assert_eq!(moved, None);
+    Ok(())
+}
+
+/// Reading an older backup on top of one that has left the folder would
+/// delete from HEAD what only the newer one held, and read as data loss.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_newest_backup_gone_from_the_folder_leaves_head_alone() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let snapshots = tmp.path().join("snapshots");
+    let store = tmp.path().join("raw").join("signal");
+    let cache = tmp.path().join("fingerprints.sqlite");
+    let mut older = bridge_crew();
+    older.push(chat_item(100, 1, 12442118400000, "Status report.", true));
+    let mut newer = older.clone();
+    newer.push(chat_item(
+        100,
+        2,
+        12442118460000,
+        "All decks at green status.",
+        false,
+    ));
+    write_day(&snapshots, 0, &older)?;
+    let gone = write_day(&snapshots, 1, &newer)?;
+    fetch_once(&snapshots, &store, &cache).await?;
+
+    std::fs::remove_dir_all(snapshots.join(&gone))?;
+    fetch_once(&snapshots, &store, &cache).await?;
+    assert_eq!(texts(&store).await?.len(), 2);
+    assert_eq!(
+        problems(&store).await?,
+        [(
+            format!("record:ingested_backups:{gone}"),
+            "error".to_string()
+        )]
+    );
+    Ok(())
+}
+
+/// One backup that will not open costs that backup, not the folder: the
+/// rest are read, and it is retried on the next run.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_backup_that_will_not_open_is_a_problem_and_the_rest_are_read() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let snapshots = tmp.path().join("snapshots");
+    let store = tmp.path().join("raw").join("signal");
+    let cache = tmp.path().join("fingerprints.sqlite");
+    let mut frames = bridge_crew();
+    frames.push(chat_item(100, 1, 12442118400000, "Status report.", true));
+    let good = write_day(&snapshots, 0, &frames)?;
+    let broken = write_day(&snapshots, 1, &frames)?;
+    std::fs::write(snapshots.join(&broken).join("main"), b"not a backup")?;
+    let unsynced = write_day(&snapshots, 2, &frames)?;
+    std::fs::remove_file(snapshots.join(&unsynced).join("files"))?;
+
+    let (summary, _) =
+        fetch_summary(&snapshots, &store, &cache, DownloadControl::default()).await?;
+    assert_eq!(summary.backups_read, [good.as_str()]);
+    assert_eq!(
+        problems(&store).await?,
+        [
+            (
+                format!("record:ingested_backups:{broken}"),
+                "error".to_string()
+            ),
+            (
+                format!("record:ingested_backups:{unsynced}"),
+                "error".to_string()
+            ),
+        ]
+    );
+
+    // The folder finishes syncing: that backup reads, and its problem goes.
+    write_day(&snapshots, 2, &frames)?;
+    fetch_once(&snapshots, &store, &cache).await?;
+    assert_eq!(
+        problems(&store).await?,
+        [(
+            format!("record:ingested_backups:{broken}"),
+            "error".to_string()
+        )]
+    );
+    Ok(())
+}
+
+/// A passphrase that opens none of the backups is not one problem per
+/// backup: the run fails, and says why.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_passphrase_that_opens_nothing_fails_the_run() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let snapshots = tmp.path().join("snapshots");
+    let store = tmp.path().join("raw").join("signal");
+    let cache = tmp.path().join("fingerprints.sqlite");
+    write_day(&snapshots, 0, &bridge_crew())?;
+    write_day(&snapshots, 1, &bridge_crew())?;
+
+    let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(&store)).await?;
+    let run = ingest::fetch(FetchOptions {
+        db: db.clone(),
+        cache: FingerprintCache::open(&cache).await?,
+        snapshot_root: snapshots.clone(),
+        files_root: None,
+        aep: "1".repeat(64),
+        progress: Progress::noop(),
+        control: DownloadControl::default(),
+    })
+    .await;
+    db.close().await;
+    let err = format!("{:#}", run.expect_err("no backup opens"));
+    assert!(
+        err.contains("no Signal backup this run tried would read"),
+        "{err}"
     );
     Ok(())
 }

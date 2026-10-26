@@ -268,22 +268,22 @@ function = "embed"
 inputs = ["claude/keyword_index"]
 
 [[groups]]
-id = "unified_index"
+id = "unified_document_index"
 
 [[steps]]
-group = "unified_index"
+group = "unified_document_index"
 function = "grid_index"
 inputs = ["claude/render_markdown"]
 
 [[steps]]
-group = "unified_index"
+group = "unified_document_index"
 function = "qmd_aggregator"
 inputs = ["claude/keyword_index", "claude/embed"]
 
 [[applets]]
-group = "unified_index"
-id = "unified_index"
-command = "datalib-applet unified_index"
+group = "unified_document_index"
+id = "unified_document_index"
+command = "datalib-applet unified_document_index"
 ```
 
 Each step says which group it belongs to and what it does there, and
@@ -332,7 +332,10 @@ It keeps the original beside the result as `config.toml.orig`. Comments
 from the old file don't carry over, so review the result. A config whose
 search is still one shared `qmd_index` step needs none of this: the app
 gives each source its own search steps the first time it reads the
-file, and keeps the old one as `config.toml.bak`. A much older root with
+file, and keeps the old one as `config.toml.bak`. The same is true of a
+config whose index is still called `unified_index`: the app renames it
+`unified_document_index`, and moves the index's folder to match rather
+than rebuilding it. A much older root with
 only a `config.yaml` is not convertible any more: set it up again from
 the app.
 
@@ -392,7 +395,7 @@ faster.
 - A `render_markdown` step per source: each conversation or document
   rendered into readable markdown, attachments included.
 - The `grid_index` step: one row per message or document written into
-  the SQL store at `<data_root>/unified_index/grid_index/db.doltlite_db`.
+  the SQL store at `<data_root>/unified_document_index/grid_index/db.doltlite_db`.
 - A `keyword_index` and an `embed` step per source: that source's part
   of free-text search — its words, then its embeddings, which let a
   search match on meaning. The first `embed` downloads its model once.
@@ -400,7 +403,9 @@ faster.
   minutes per thousand chunks on CPU. It's resumable, so Ctrl-C and
   re-run is safe, and one source's `embed` can be turned off on the
   Data sources card without touching the others. Re-runs after the backlog
-  drains take seconds.
+  drains take seconds. A Garmin, YoLink or AirVisual source has no
+  `embed` step: its markdown is daily summaries of numbers, which the
+  keyword index already finds. The app takes out one a config already has.
 - The `qmd_aggregator` step, once every source's search steps are
   done: it drops any source no longer in the config from the search
   index and reports what the index holds.
@@ -421,7 +426,7 @@ faster.
 │   └── render_markdown/
 ├── gmail-takeout/
 │   └── …
-├── unified_index/                  # the shared indexes, rebuildable
+├── unified_document_index/                  # the shared indexes, rebuildable
 │   ├── grid_index/db.doltlite_db   #   grid rows + markdowns + edges
 │   └── qmd_aggregator/qmd/index.sqlite  #   the semantic search index
 └── system/                         # everything that isn't a source
@@ -436,7 +441,7 @@ faster.
 ```
 
 > **Backups:** the bulky **derived** trees — each `<group>/render_markdown/`,
-> and `unified_index/` — are rebuilt from your raw
+> and `unified_document_index/` — are rebuilt from your raw
 > stores by re-running the pipeline, and each carries a `CACHEDIR.TAG`,
 > so cache-aware backup tools skip them automatically:
 >
@@ -486,6 +491,15 @@ A fresh token is minted every time the server starts, so re-read that
 file rather than saving a copy. `DATALIB_TOKEN=<value>` pins one if you
 need it stable across restarts.
 
+The token is needed behind a reverse proxy too. Nothing a proxy adds to
+a request stands in for it.
+
+The app page refuses to be framed, so no other page can lay it under its
+own buttons. To show it inside another page (Imbue Studio does), set
+`DATALIB_FRAME_ANCESTORS` to the origins allowed to frame it, as a CSP
+`frame-ancestors` list: for example
+`http://localhost:* https://*.localhost:* https://studio.imbue.com`.
+
 ## 6. Re-syncing
 
 Re-run the sync (**Sync everything** in the app, or `datalib-dag config.toml`)
@@ -501,7 +515,7 @@ the `INDEX_PATH` env var:
 
 ```sh
 rt=$(echo ~/.cache/datalib/runtime/*/)
-INDEX_PATH=~/datalib/unified_index/qmd_aggregator/qmd/index.sqlite \
+INDEX_PATH=~/datalib/unified_document_index/qmd_aggregator/qmd/index.sqlite \
     "$rt/node/bin/node" "$rt"/qmd/*/node_modules/@tobilu/qmd/dist/cli/qmd.js query "hello"
 ```
 
@@ -531,7 +545,7 @@ are already in open formats you can read with no datalib at all:
   your language's stdlib — opens directly:
 
   ```sh
-  datalib-doltlite -readonly ~/datalib/unified_index/grid_index/db.doltlite_db .dump \
+  datalib-doltlite -readonly ~/datalib/unified_document_index/grid_index/db.doltlite_db .dump \
     | sqlite3 ~/grid.sqlite
 
   sqlite3 ~/grid.sqlite "SELECT provider, count(*) FROM grid_rows GROUP BY 1;"
@@ -553,14 +567,19 @@ are already in open formats you can read with no datalib at all:
 just explore in place — `datalib-doltlite -readonly <file>` drops you
 in a REPL. Pass `-readonly` whenever you are only looking: anything a
 writable session commits is overwritten by your next sync, and a
-transaction it leaves open stalls that sync. If you prefer a
-GUI, a build of DB Browser for SQLite patched to open doltlite files is
-at <https://github.com/thadd3us/sqlitebrowser/releases> (macOS). In the
-desktop app, **Browse** on a source's download row opens its raw store
+transaction it leaves open stalls that sync. 
+
+If you prefer a GUI, you have two options:
+
+1. The Dolt team makes [the Dolt Workbench](https://github.com/dolthub/dolt-workbench),
+   an open source database workbench with version control features.
+2. A build of DB Browser for SQLite patched to open doltlite files is
+   at <https://github.com/thadd3us/sqlitebrowser/releases> (macOS).
+
+In the desktop app, **Browse** on a source's download row opens its raw store
 read-only for you — in that DB Browser when it is installed, otherwise
-in `datalib-doltlite` in Terminal. More
-recipes, including the commit history and per-sync diffs, are in
-[`docs/dev/doltlite.md`](../dev/doltlite.md).
+in `datalib-doltlite` in Terminal. More recipes, including the commit history 
+and per-sync diffs, are in [`docs/dev/doltlite.md`](../dev/doltlite.md).
 
 ## 9. Feedback
 

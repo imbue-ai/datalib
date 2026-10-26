@@ -13,13 +13,14 @@ use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{escape_attr, escape_md_inline, escape_text};
 use datalib_etl_render::inputs::{Bucket, Buckets};
 use datalib_etl_render::message::chip_link;
+use datalib_etl_render::photo::{photo_address, with_photo_url};
 use datalib_etl_render::section::{join, Section};
 use datalib_schema::grid_rows::GridRow;
-use datalib_schema::problems::ProblemRow;
+use datalib_schema::problems::{Outcome, ProblemRow, Scope, Stage};
 use datalib_schema::providers::Provider;
-use datalib_schema::search_terms::{SearchTermKind, SuppliedSearchTerm};
+use datalib_schema::search_terms::{SearchTerm, SearchTermKind};
 
-use datalib_contact_schema::{is_drawable_photo, ContactHandle, Medium, NormalizedContact, Photo};
+use datalib_contact_schema::{ContactHandle, Medium, NormalizedContact, Photo};
 use datalib_handle::Handle;
 
 use crate::types::ContactDoc;
@@ -54,7 +55,6 @@ pub struct ContactRenderProfile {
 pub struct RenderSummary {
     pub contacts_total: usize,
     pub contacts_rendered: usize,
-    pub photos_materialized: usize,
     /// Every document this call considered, rendered and skipped alike —
     /// and the ones whose render failed, which are documents we could not
     /// rewrite rather than contacts the address book lost. See
@@ -78,7 +78,29 @@ pub fn render_all(
         ..Default::default()
     };
     progress.set_length(Some(summary.contacts_total as u64));
+    render_into(
+        &mut summary,
+        profile,
+        contacts,
+        out_dir,
+        source_id,
+        progress,
+        on_doc_complete,
+    )?;
+    Ok(summary)
+}
 
+/// [`render_all`]'s loop, for a provider that renders its contacts a
+/// batch at a time into one summary; it sets the progress length itself.
+pub fn render_into(
+    summary: &mut RenderSummary,
+    profile: &ContactRenderProfile,
+    contacts: &[ContactDoc],
+    out_dir: &Path,
+    source_id: &str,
+    progress: &Progress,
+    on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+) -> Result<()> {
     for doc in contacts {
         summary.documents.push(doc.doc_uuid.clone());
         summary.buckets.push(Bucket {
@@ -86,18 +108,15 @@ pub fn render_all(
             inputs: doc.inputs.clone(),
         });
         // Nothing here fails on the card's account — a row that will not
-        // validate is recorded as a problem and a photo that will not
-        // write is skipped — so what is left is the disk and the sink,
-        // and either failing is the run's to report, not one card's.
-        let photo_written = render_one(profile, doc, out_dir, source_id, on_doc_complete)
+        // validate is recorded as a problem — so what is left is the disk
+        // and the sink, and either failing is the run's to report, not
+        // one card's.
+        render_one(profile, doc, out_dir, source_id, on_doc_complete)
             .with_context(|| format!("render contact {}", doc.doc_uuid))?;
         summary.contacts_rendered += 1;
-        if photo_written {
-            summary.photos_materialized += 1;
-        }
         progress.inc(1);
     }
-    Ok(summary)
+    Ok(())
 }
 
 fn render_one(
@@ -106,25 +125,15 @@ fn render_one(
     out_dir: &Path,
     source_id: &str,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-) -> Result<bool> {
+) -> Result<()> {
     let m_uuid = &doc.doc_uuid;
     let contact = &doc.contact;
     let (md_path, page_dir) = output_paths(out_dir, source_id, doc);
     fs::create_dir_all(&page_dir).with_context(|| format!("mkdir -p {}", page_dir.display()))?;
+    remove_old_blobs(&page_dir);
 
-    // Photo first — written to `blobs/`, referenced from the markdown
-    // with a relative path. If the photo write fails, the markdown still
-    // renders (skip the embed) so a broken image doesn't poison the row.
-    let photo_rel = match &contact.photo {
-        Some(Photo::Inline {
-            content_type,
-            bytes,
-        }) => write_photo(&page_dir, m_uuid, content_type, bytes).ok(),
-        _ => None,
-    };
-    let photo_written = photo_rel.is_some();
-
-    let sections = render_markdown(profile, doc, source_id, photo_rel.as_deref());
+    let photo = contact.photo.as_ref().and_then(photo_address);
+    let sections = render_markdown(profile, doc, source_id, photo.as_deref());
     fs::write(&md_path, join(&sections)).with_context(|| format!("write {}", md_path.display()))?;
 
     let md_rel = md_path
@@ -133,12 +142,25 @@ fn render_one(
         .to_string_lossy()
         .into_owned();
 
-    let mut problems: Vec<ProblemRow> = Vec::new();
-    let row = build_grid_row(profile, doc, source_id, &md_rel, &mut problems);
-    let search_terms = match &row {
-        Some(row) => about_terms(&row.uuid, contact),
-        None => Vec::new(),
-    };
+    let mut problems: Vec<ProblemRow> = doc
+        .problems
+        .iter()
+        .map(|p| {
+            ProblemRow::new(
+                source_id,
+                Stage::Parse,
+                Scope::Markdown(m_uuid),
+                None,
+                Outcome::Nulled,
+                p.clone(),
+                Some(profile.render_version),
+            )
+        })
+        .collect();
+    let mut row = build_grid_row(profile, doc, source_id, &md_rel, &mut problems);
+    if let Some(row) = &mut row {
+        row.set_supplied_terms(about_terms(contact));
+    }
 
     // `row` reaches the index through `on_doc_complete` below; the
     // renderer writes no projection of its own any more.
@@ -154,44 +176,34 @@ fn render_one(
         render_version: profile.render_version,
         rows: row.into_iter().collect(),
         sections,
-        search_terms,
         edges: Vec::new(),
         // The page is about this person, so it carries them: the index
         // can then say who any of their handles is, and where their
         // photo is served from.
-        contacts: vec![with_photo_url(contact, m_uuid, photo_rel.as_deref())],
+        contacts: vec![with_photo_url(contact)],
         problems,
     })
     .with_context(|| format!("on_doc_complete {m_uuid}"))?;
 
-    Ok(photo_written)
+    Ok(())
 }
 
-/// The contact as the index will hold it: with the photo this render
-/// wrote beside the page as the URL the app serves it at, where it is an
-/// image a browser draws. The index's asset route takes
-/// `<markdown_uuid>/<path relative to the page>`.
-fn with_photo_url(
-    contact: &NormalizedContact,
-    doc_uuid: &str,
-    photo_rel: Option<&str>,
-) -> NormalizedContact {
-    let drawable = matches!(
-        &contact.photo,
-        Some(Photo::Inline { content_type, .. }) if is_drawable_photo(content_type)
-    );
-    let mut out = contact.clone();
-    out.photo_url = photo_rel
-        .filter(|_| drawable)
-        .map(|rel| format!("/applet/unified_index/asset/{doc_uuid}/{rel}"));
-    out
+/// The `blobs/` an older build wrote a photo into beside the page; the
+/// page now links the photo where its blob store holds it.
+fn remove_old_blobs(page_dir: &Path) {
+    let blobs_dir = page_dir.join("blobs");
+    if let Err(e) = fs::remove_dir_all(&blobs_dir) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(dir = %blobs_dir.display(), error = %e, "contact_common: removing an old blobs/ failed");
+        }
+    }
 }
 
 fn output_paths(out_dir: &Path, source_id: &str, doc: &ContactDoc) -> (PathBuf, PathBuf) {
     // One directory per contact, keyed by the stable contact UUID — never a
     // name/group-label slug, so a rename or regrouping re-renders in place.
-    // The contact's `blobs/` (photo) live inside this dir. Display name and
-    // group label still live in the frontmatter + grid row.
+    // Display name and group label still live in the frontmatter + grid
+    // row.
     let page_dir =
         datalib_etl::layout::render_markdown_root(out_dir, source_id).join(&doc.doc_uuid);
     let md_path = page_dir.join("index.md");
@@ -293,7 +305,7 @@ fn split_qualifier(label: &str) -> (String, Option<String>) {
 
 /// Who the card is about, as `with:` finds it: each handle it holds and
 /// each name it gives.
-fn about_terms(uuid: &str, contact: &NormalizedContact) -> Vec<SuppliedSearchTerm> {
+fn about_terms(contact: &NormalizedContact) -> impl Iterator<Item = SearchTerm> + '_ {
     let handles = contact
         .handles
         .iter()
@@ -305,18 +317,9 @@ fn about_terms(uuid: &str, contact: &NormalizedContact) -> Vec<SuppliedSearchTer
         .map(|n| n.trim())
         .filter(|n| !n.is_empty())
         .map(str::to_string);
-    let mut out: Vec<SuppliedSearchTerm> = Vec::new();
-    for value in handles.chain(names) {
-        let term = SuppliedSearchTerm {
-            uuid: uuid.to_string(),
-            kind: SearchTermKind::About,
-            value,
-        };
-        if !out.contains(&term) {
-            out.push(term);
-        }
-    }
-    out
+    handles
+        .chain(names)
+        .map(|value| SearchTerm::new(SearchTermKind::About, value))
 }
 
 /// A contact's first email address or phone number, as the source wrote it.
@@ -370,7 +373,7 @@ fn render_markdown(
     profile: &ContactRenderProfile,
     doc: &ContactDoc,
     source_id: &str,
-    photo_rel: Option<&str>,
+    photo: Option<&str>,
 ) -> Vec<Section> {
     let m_uuid = &doc.doc_uuid;
     let contact = &doc.contact;
@@ -401,7 +404,7 @@ fn render_markdown(
     // The page body — the head, the fields, a group's members — is the
     // one section the contact's grid row names.
     let mut out = String::with_capacity(1024);
-    out.push_str(&head(doc, photo_rel));
+    out.push_str(&head(doc, photo));
     out.push_str(&fields(contact));
     out.push_str(&members(doc));
     vec![frontmatter, Section::keyed(m_uuid, out)]
@@ -412,16 +415,16 @@ fn render_markdown(
 /// filed in. The heading is a markdown `#` so the chip link inside it is
 /// marked; the copy-page-id button finds it through the wrapper's
 /// `data-page-title-uuid`.
-fn head(doc: &ContactDoc, photo_rel: Option<&str>) -> String {
+fn head(doc: &ContactDoc, photo: Option<&str>) -> String {
     let contact = &doc.contact;
     let name = display_or_id(doc);
     let mut out = format!(
         "<div class=\"contact-head\" data-page-title-uuid=\"{}\">\n\n",
         escape_attr(&doc.doc_uuid)
     );
-    if let Some(rel) = photo_rel {
+    if let Some(src) = photo {
         out.push_str(&format!(
-            "<div class=\"contact-photo\">\n\n![{}]({rel})\n\n</div>\n\n",
+            "<div class=\"contact-photo\">\n\n![{}]({src})\n\n</div>\n\n",
             escape_md_inline(name)
         ));
     }
@@ -585,36 +588,6 @@ fn build_grid_row(
         .build_or_record(source_id, &doc.doc_uuid, profile.render_version, problems)
 }
 
-fn write_photo(
-    page_dir: &Path,
-    doc_uuid: &str,
-    content_type: &str,
-    bytes: &[u8],
-) -> Result<String> {
-    let blobs_dir = page_dir.join("blobs");
-    fs::create_dir_all(&blobs_dir).with_context(|| format!("mkdir -p {}", blobs_dir.display()))?;
-    let ext = ext_for(content_type);
-    let filename = format!("{doc_uuid}.{ext}");
-    let path = blobs_dir.join(&filename);
-    fs::write(&path, bytes).with_context(|| format!("write {}", path.display()))?;
-    Ok(format!("blobs/{filename}"))
-}
-
-fn ext_for(content_type: &str) -> &'static str {
-    match content_type.to_ascii_lowercase().as_str() {
-        "image/jpeg" | "image/jpg" => "jpg",
-        "image/png" => "png",
-        "image/gif" => "gif",
-        "image/webp" => "webp",
-        "image/heic" => "heic",
-        // LinkedIn serves its default "ghost" avatar as an SVG og:image
-        // for connections with no public photo; keep the extension so it
-        // renders inline rather than as an opaque `.bin`.
-        "image/svg+xml" | "image/svg" => "svg",
-        _ => "bin",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -640,6 +613,7 @@ mod tests {
             member_handles: Vec::new(),
             upstream_account: None,
             inputs: Vec::new(),
+            problems: Vec::new(),
         }
     }
 
@@ -859,27 +833,38 @@ mod tests {
         assert_eq!(row.account.as_deref(), Some("jlp@enterprise.test"));
     }
 
-    /// A photo the source gave is written beside the page and reaches
-    /// the index as the URL the app serves it at; a contact without one
-    /// carries no URL, so the chip draws an initial.
+    fn stored(content_type: &str) -> Photo {
+        Photo::Stored {
+            step: "linkedin/ingest".to_string(),
+            blake3: "ab".repeat(32),
+            content_type: content_type.to_string(),
+        }
+    }
+
+    /// A stored photo is linked at its blob-store address, on the page
+    /// and as the contact's URL in the index, and nothing is written
+    /// beside the page: a `blobs/` an older build left there goes. A
+    /// photo no browser draws is still on its page but gives the chip no
+    /// URL, and a contact with no photo carries none, so the chip draws
+    /// an initial.
     #[test]
-    fn a_photo_written_beside_the_page_is_the_contacts_photo_url() {
+    fn a_stored_photo_is_linked_where_its_blob_store_holds_it() {
         let dir = tempfile::tempdir().unwrap();
+        let address = format!("/data/linkedin/ingest/blob/{}", "ab".repeat(32));
         let mut with_photo = mk_contact();
-        with_photo.contact.photo = Some(Photo::Inline {
-            content_type: "image/png".to_string(),
-            bytes: b"\x89PNG not really".to_vec(),
-        });
+        with_photo.contact.photo = Some(stored("image/png"));
         let mut without = mk_contact();
         without.doc_uuid = "33333333-3333-3333-3333-333333333333".to_string();
-        // Written beside the page as the source gave it, but no browser
-        // draws it: no URL, so the chip draws an initial.
         let mut opaque = mk_contact();
         opaque.doc_uuid = "44444444-4444-4444-4444-444444444444".to_string();
-        opaque.contact.photo = Some(Photo::Inline {
-            content_type: "application/octet-stream".to_string(),
-            bytes: b"who knows".to_vec(),
-        });
+        opaque.contact.photo = Some(stored("application/octet-stream"));
+        let old_blobs = dir
+            .path()
+            .join("linkedin/render_markdown")
+            .join(&with_photo.doc_uuid)
+            .join("blobs");
+        std::fs::create_dir_all(&old_blobs).unwrap();
+        std::fs::write(old_blobs.join("photo.png"), b"an older build's copy").unwrap();
         let mut got: Vec<RenderedMarkdown> = Vec::new();
         let mut sink = |r: RenderedMarkdown| -> Result<()> {
             got.push(r);
@@ -898,33 +883,43 @@ mod tests {
             .iter()
             .map(|r| r.contacts[0].photo_url.clone())
             .collect();
-        assert_eq!(
-            urls,
-            [
-                Some(
-                    "/applet/unified_index/asset/11111111-1111-1111-1111-111111111111\
-                     /blobs/11111111-1111-1111-1111-111111111111.png"
-                        .to_string()
-                ),
-                None,
-                None,
-            ]
-        );
-        assert!(
-            got[2]
-                .md_path
-                .parent()
-                .unwrap()
-                .join("blobs/44444444-4444-4444-4444-444444444444.bin")
-                .is_file(),
-            "the undrawable photo is still kept beside its page"
-        );
-        let written = got[0]
-            .md_path
-            .parent()
-            .unwrap()
-            .join("blobs/11111111-1111-1111-1111-111111111111.png");
-        assert!(written.is_file(), "the URL names a file beside the page");
+        assert_eq!(urls, [Some(address.clone()), None, None]);
+        let page = |r: &RenderedMarkdown| std::fs::read_to_string(&r.md_path).unwrap();
+        assert!(page(&got[0]).contains(&format!("]({address})")));
+        assert!(page(&got[2]).contains(&format!("]({address})")));
+        assert!(!page(&got[1]).contains("contact-photo"));
+        assert!(!old_blobs.exists(), "the old blobs/ is gone");
+        for r in &got {
+            assert!(!r.md_path.parent().unwrap().join("blobs").exists());
+        }
+    }
+
+    /// A problem the provider found with the card, such as a photo its
+    /// blob store lacks, reaches the index on the card's document.
+    #[test]
+    fn the_cards_own_problems_are_on_its_document() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut doc = mk_contact();
+        doc.problems = vec![datalib_schema::problems::Problem::field(
+            "photo",
+            datalib_schema::problems::Reason::BlobMissing,
+            &"ab".repeat(32),
+        )];
+        let mut got: Vec<RenderedMarkdown> = Vec::new();
+        render_all(
+            &mk_profile(),
+            &[doc],
+            dir.path(),
+            "linkedin",
+            &Progress::default(),
+            &mut |r| {
+                got.push(r);
+                Ok(())
+            },
+        )
+        .unwrap();
+        let reasons: Vec<_> = got[0].problems.iter().map(|p| p.reason).collect();
+        assert_eq!(reasons, [datalib_schema::problems::Reason::BlobMissing]);
     }
 
     /// A contact's row carries its first address and number in columns of
@@ -995,17 +990,20 @@ mod tests {
             ContactHandle::email(None, "Riker@Enterprise.org"),
             ContactHandle::phone(None, "(555) 010-1234"),
         ];
-        let terms: Vec<(SearchTermKind, String)> = about_terms("u", &c)
-            .into_iter()
-            .map(|t| (t.kind, t.value))
-            .collect();
+        let column = datalib_schema::search_terms::encode_supplied(about_terms(&c));
+        let terms: Vec<(SearchTermKind, String)> =
+            datalib_schema::search_terms::decode_supplied(&column.unwrap())
+                .unwrap()
+                .into_iter()
+                .map(|t| (t.kind, t.value))
+                .collect();
         let about = |v: &str| (SearchTermKind::About, v.to_string());
         assert_eq!(
             terms,
             [
-                about("email:riker@enterprise.org"),
+                about("Number One"),
                 about("Will Riker"),
-                about("Number One")
+                about("email:riker@enterprise.org")
             ]
         );
     }

@@ -1,6 +1,6 @@
 //! The `problems` table: one row per thing a step could not fully do to
 //! one record, kept in the store the step owns and copied downstream
-//! with the data until it reaches the unified index and the screen.
+//! with the data until it reaches the unified document index and the screen.
 //! Every closed vocabulary here is an enum: the row binds them as text
 //! and a reader parses them back, never comparing the column to a
 //! literal. The design — ids, severity, the copy rule, what reads the
@@ -101,6 +101,10 @@ closed_vocabulary! {
         /// A value whose type the contract does not cover. → null that
         /// field; never pass it through untyped.
         UncoveredType,
+        /// A piece of a document the renderer does not know how to draw.
+        /// → shown in place as the JSON upstream sent, so nothing is
+        /// lost but its look.
+        UnsupportedJson,
         /// A deliberate lossy rule fired (truncation, chrome-stripping).
         /// These are the rows R3's judgment-call table is generated
         /// from, which is why `Problem::rule` exists.
@@ -274,10 +278,10 @@ impl Problem {
         }
     }
 
-    /// A problem about something larger than one value — a listing, a
-    /// phase, a configured entry — whose sample is the writer's own
-    /// explanation, kept whole: cut at 80 characters it stops saying
-    /// what happened.
+    /// A problem whose sample is an explanation rather than a value —
+    /// about a listing, a phase or a configured entry, or the error a
+    /// fetch got — kept whole: cut at 80 characters it stops saying what
+    /// happened, since a fetch error spends that much on its URL.
     pub fn explained(reason: Reason, field: Option<String>, explanation: &str) -> Self {
         Self {
             reason,

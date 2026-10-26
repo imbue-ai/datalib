@@ -9,6 +9,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl_render::inputs::{changed_rows, RawRange};
+use datalib_handle::Handle;
 use serde_json::Value;
 
 use datalib_etl_github::ingest::db::{db_path_for, LoadedChild, LoadedRaw, RawDb};
@@ -114,6 +115,7 @@ pub fn parse_loaded(source_id: &str, raw: LoadedRaw) -> Parsed {
             from_ref: head.and_then(|h| opt_str(h, "ref")),
             to_ref: base.and_then(|b| opt_str(b, "ref")),
             author: login(p),
+            author_handle: login(p).as_deref().and_then(Handle::github),
             created_at,
             updated_at: opt_str(p, "updated_at"),
             merged_at: opt_str(p, "merged_at"),
@@ -207,6 +209,7 @@ fn push_children(
                 .then(|| p.get("in_reply_to_id").and_then(|v| v.as_i64()))
                 .flatten(),
             author: login(p),
+            author_handle: login(p).as_deref().and_then(Handle::github),
             body: str_field(p, "body"),
             url: opt_str(p, "html_url"),
             path: inline.then(|| opt_str(p, "path")).flatten(),

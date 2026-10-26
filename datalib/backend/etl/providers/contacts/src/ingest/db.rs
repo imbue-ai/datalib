@@ -9,17 +9,29 @@ use anyhow::{Context, Result};
 use sqlx::sqlite::SqlitePool;
 use sqlx::{Row, Sqlite, Transaction};
 
+use datalib_etl::blob_cas::{cas_path_for, BlobCas, CasInsert};
 use datalib_etl::bulk::{bulk_upsert_entity_in_tx, bulk_upsert_in_tx};
 use datalib_etl::doltlite_raw::{self as dr};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
+use super::photo::{self, CardPhoto};
 pub use super::schema_raw::{addressbook_pk, contact_pk, AccountRow, AddressbookRow, ContactRow};
+
+/// Photos per blob-store transaction when copying the cards a store
+/// already holds: a few MB at a time, rather than every photo at once.
+const PHOTOS_PER_PUT: usize = 100;
 use super::schema_raw::{full_ddl, ContactCategoryRow, GroupMemberRow, LADDER};
 
 #[derive(Clone, Debug, RawStoreHandle)]
 pub struct RawDb {
     pool: SqlitePool,
+    /// Where the download keeps each card's inline photo, so a page can
+    /// link it there (`photo`). `Some` on the download's handle; `None`
+    /// on a reader whose store has no blob store yet, since opening a
+    /// missing file read-only is an error and creating it would be a
+    /// write render does not own.
+    cas: Option<BlobCas>,
     /// The commit a reader's connection reads, or `None` for the download
     /// step reading back what it just wrote. Set once, at open.
     pin: Option<datalib_etl::pin::Pin>,
@@ -69,8 +81,10 @@ impl RawDb {
         };
         let pin = reader.pin().clone();
         let pool = reader.pool().clone();
+        let cas = BlobCas::open_for_render(db_path).await?;
         Ok(Some(Self {
             pool,
+            cas,
             pin: Some(pin),
         }))
     }
@@ -84,11 +98,28 @@ impl RawDb {
         let owned = full_ddl();
         let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
         let pool = dr::open_migrating(db_path, &slices, LADDER).await?;
-        Ok(Self { pool, pin: None })
+        let cas = match BlobCas::open(&cas_path_for(db_path)).await {
+            Ok(cas) => cas,
+            Err(e) => {
+                pool.close().await;
+                return Err(e);
+            }
+        };
+        Ok(Self {
+            pool,
+            cas: Some(cas),
+            pin: None,
+        })
     }
 
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    /// `None` only on a reader whose store has no blob store — see the
+    /// field.
+    pub fn cas(&self) -> Option<&BlobCas> {
+        self.cas.as_ref()
     }
 
     /// Release every store this handle opened, and wait for the
@@ -172,6 +203,68 @@ impl RawDb {
         Ok(())
     }
 
+    // ── photos ──────────────────────────────────────────────────────
+
+    /// Keep the inline photo of every card in `rows` in the blob store.
+    /// It commits before the cards do, so a stored card's photo is
+    /// always there to link.
+    pub async fn put_photos(&self, rows: &[&ContactRow]) -> Result<()> {
+        let photos: Vec<CardPhoto> = rows
+            .iter()
+            .flat_map(|r| photo::inline_photos(&r.vcard()))
+            .collect();
+        self.put_card_photos(&photos).await
+    }
+
+    /// The photos of every card the store holds, for a store an older
+    /// build filled before the download kept them. `--migrate` runs it,
+    /// once a build; a photo already there is not written again.
+    /// Returns how many photos the cards carry.
+    pub async fn put_photos_of_held_cards(&self) -> Result<usize> {
+        let mut rows = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT json_extract(payload, '$.vcard') FROM contacts ORDER BY id",
+        )
+        .fetch(&self.pool);
+        let (mut batch, mut total) = (Vec::new(), 0);
+        while let Some(vcard) = futures::TryStreamExt::try_next(&mut rows)
+            .await
+            .context("read the stored cards")?
+        {
+            batch.extend(photo::inline_photos(&vcard.unwrap_or_default()));
+            if batch.len() >= PHOTOS_PER_PUT {
+                total += batch.len();
+                self.put_card_photos(&std::mem::take(&mut batch)).await?;
+            }
+        }
+        total += batch.len();
+        self.put_card_photos(&batch).await?;
+        Ok(total)
+    }
+
+    async fn put_card_photos(&self, photos: &[CardPhoto]) -> Result<()> {
+        if photos.is_empty() {
+            return Ok(());
+        }
+        let cas = self
+            .cas
+            .as_ref()
+            .context("a reader's handle cannot keep photos")?;
+        cas.put_many(
+            photos
+                .iter()
+                .enumerate()
+                .map(|(id, p)| CasInsert {
+                    id,
+                    bytes: &p.bytes,
+                    content_type: Some(&p.content_type),
+                })
+                .collect(),
+        )
+        .await
+        .context("keep the cards' photos")?;
+        Ok(())
+    }
+
     // ── contacts ────────────────────────────────────────────────────
 
     /// Upsert one vCard. Idempotent.
@@ -179,14 +272,16 @@ impl RawDb {
         self.upsert_contacts(std::slice::from_ref(row)).await
     }
 
-    /// Upsert a whole page of cards in a single transaction. One `fsync`
-    /// per page instead of per row.
+    /// Upsert a whole page of cards in a single transaction, after their
+    /// photos. One `fsync` per page instead of per row.
     pub async fn upsert_contacts(&self, rows: &[ContactRow]) -> Result<()> {
         if rows.is_empty() {
             return Ok(());
         }
+        let rows: Vec<&ContactRow> = rows.iter().collect();
+        self.put_photos(&rows).await?;
         let mut tx = self.pool.begin().await.context("begin contacts batch tx")?;
-        Self::upsert_contacts_in_tx(&mut tx, &rows.iter().collect::<Vec<_>>()).await?;
+        Self::upsert_contacts_in_tx(&mut tx, &rows).await?;
         tx.commit().await.context("commit contacts batch tx")?;
         Ok(())
     }

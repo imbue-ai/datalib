@@ -36,7 +36,7 @@ use sqlx::{Row, SqlitePool};
 
 use datalib_columns::Entity;
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::message::entity_link;
+use datalib_etl_render::message::{entity_link, stamp_text_html};
 use datalib_id::{entity_id_str, IdNamespace};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::measurements::{MeasurementKind, SourceMeasurementRow};
@@ -337,9 +337,10 @@ fn report_body(source_id: &str, subjects: &[Subject], now: &str) -> String {
     // The group and each store's step are chips: the app shows the name
     // the config gives them now, and opens them (docs/dev/chips.md).
     let group = entity_link(source_id, &Entity::Group(source_id).uri(), source_id);
+    let measured = stamp_text_html(now);
     let mut out = format!(
         "---\ntitle: {source_id} storage\nsource: {source_id}\nmeasured_at: {now}\n---\n\n\
-         # {group} — storage\n\nMeasured {now}.\n\n"
+         # {group} — storage\n\nMeasured {measured}.\n\n"
     );
     // One table, not one wrapped `<div>` per measurement. A source with
     // a dozen stores and tables used to render a dozen bordered cards
@@ -464,7 +465,6 @@ pub fn plan(
             render_version: RENDER_VERSION,
             rows,
             sections: Vec::new(),
-            search_terms: Vec::new(),
             edges: Vec::new(),
             contacts: Vec::new(),
             problems: Vec::new(),

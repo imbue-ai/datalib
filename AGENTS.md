@@ -15,6 +15,10 @@ file there opens with a banner saying what it is and how current:
 
 - [`docs/dev/plans/`](docs/dev/plans/) — intended work, some of it
   partly built. `head -n 8 docs/dev/plans/*.md` reads every banner.
+  A plan under review may live in a Claude Doc that people comment
+  on. The doc is then the source of truth, and its file here is a
+  mirror whose banner links the doc: change the doc, then export the
+  tab over the file, never the file alone.
 - [`docs/dev/plans/completed/`](docs/dev/plans/completed/) — landed
   plans, kept as the record of what was decided. A landed plan moves
   here, or is rewritten as reference under `docs/dev/` if someone would
@@ -45,6 +49,7 @@ merge conflict waiting to happen.
 - [`docs/dev/latchkey.md`](docs/dev/latchkey.md) — how a web source signs in: the three kinds of latchkey service, who names an account, the keychain, the gateway. Read before touching a sign-in.
 - [`docs/dev/email_download_modes.md`](docs/dev/email_download_modes.md) — JMAP, Gmail API, mbox.
 - [`docs/dev/grid_rows.md`](docs/dev/grid_rows.md) — the `grid_rows` union table and how to add a column.
+- [`docs/dev/time_series.md`](docs/dev/time_series.md) — numbers over time: a source's time-series store, the chunk encoding, UCUM units, the index that points at the stores. **Start here** for anything about time series.
 - [`docs/dev/contacts.md`](docs/dev/contacts.md) — who a handle is: handles, each source's record of a person (`NormalizedContact`), the contacts app, and the chips that draw them. **Start here** for anything about a person; read before adding a handle kind.
 - [`docs/dev/edges.md`](docs/dev/edges.md), [`docs/dev/entity_ids.md`](docs/dev/entity_ids.md) — cross-document edges; the one rule for minting a uuid (read before any `*_uuid` recipe).
 - [`docs/dev/doltlite.md`](docs/dev/doltlite.md) — what the engine does (branches, locks, reads, diffs, plans, write cost, gc), inspecting `.doltlite_db` files, exporting to plain SQLite; tutorial in [`doltlite_codelab.md`](docs/dev/doltlite_codelab.md).
@@ -138,6 +143,26 @@ In docs — and in the few comments you keep — be clear and unhurried,
 explain a term the first time it appears, and don't assume the reader
 already shares your context. Plainspoken means *clear*, not *long*.
 
+## Explain a change by what it does, before and after
+
+**A PR description, a review, or any explanation of a change says what
+was true before, what is true now, and what a person using datalib
+will notice.** Write it for a reader who knows the product but has not
+read the code:
+
+- **Start with the problem as something that could happen**: "an
+  `<img>` in an email made the app re-measure the whole data root",
+  not "closes the GET-walk hole".
+- **Define a word the code uses in a narrow sense** the first time it
+  appears, or write the plain description instead. "Walks the data
+  root" means nothing to a reader until it says "measures the size of
+  every directory under the data root, which takes minutes on a large
+  one".
+- **Give each change a before, an after, and what a person notices.**
+  "Nothing visible" is a valid answer; say it, so the reader knows it
+  was checked. When a route or a flag changes, say what happens to a
+  script or an agent still using the old one.
+
 ## Functional core, imperative shell
 
 **Compute a decision as a pure function over values; act on it in a
@@ -194,9 +219,12 @@ datalib/
                    stops, HTTP playback, DAV, the owed-record
                    bookkeeping. Only those sources link it.
     etl/render/    `datalib_etl_render`: the render store, the
-                   unified-index load, `RenderCtx`. Everything that knows
+                   document-index load, `RenderCtx`. Everything that knows
                    `datalib_schema` sits here or above.
     etl/timeseries_render/ what the time-series render crates share.
+    etl/time_series/ `datalib_etl_time_series`: the time-series stores
+                   and their writers — a source's `render_time_series`
+                   and the `time_series_index` — and the applet's reads.
     etl/providers/ <p>/ (ingest) + <p>_render/ (render) + <p>_config/
                    (config schema) per provider. Twelve of the
                    file-backed ones scan a local tree through
@@ -205,7 +233,8 @@ datalib/
                    over etl/files/src/fswalk.rs); four mirror a SQLite
                    file through etl/sqlite_mirror/; three render time
                    series (airvisual, yolink, garmin). fsindex, media,
-                   lightroom and apple_photos have no <p>_render.
+                   lightroom, apple_photos and linear have no
+                   <p>_render.
     etl/sqlite_mirror/ the table-for-table SQLite→doltlite mirror engine.
     table/         `BulkUpsertable`, alone.
     probe/         what "Check connection" and a picker's "Load" ask
@@ -224,6 +253,8 @@ datalib/
                    and the applet.
     store_meta/    `_datalib_meta`, the table every store carries naming
                    the build that wrote it and the shape it is in.
+    blob_store/    the blob store's shape: the one part of a step's data
+                   `datalib-http` reads, and its reader.
     core/          the app stores plus re-exports of `runtime`.
     query/         the search-bar grammar every grid shares; no deps.
     handle/        `Handle`: one identifier for a person (`email:`, `tel:`,
@@ -231,9 +262,12 @@ datalib/
                    `data-handle`. No first-party deps.
     contact_schema/ `NormalizedContact`: a person as one source describes
                    them. Only the shape; contact-common renders it.
+    time_series_schema/ a time series, its tables, `TimeKind`,
+                   `ValueType` and `Unit` (UCUM codes).
+                   Only the shape.
     contacts/      the contacts app's store under `datalib_curated/`;
                    the `datalib_contacts` applet is its one writer.
-    unified_index/ the grid index, the qmd index, the query language over
+    unified_document_index/ the grid index, the qmd index, the query language over
                    them. Linked by datalib-step and datalib-applet —
                    never by datalib-http or datalib-dag.
     applets/       `datalib-applet`: the applet host.
@@ -268,14 +302,14 @@ separate crates").
 
 `datalib-dag <config.toml>` runs a DAG of subprocess steps. A `[[groups]]`
 entry is one thing on the Manage screen (a source is a group with a
-`type`; the unified index is a group without one); a `[[steps]]` entry is
+`type`; the unified document index is a group without one); a `[[steps]]` entry is
 `group` + `function`, its id composed as `<group>/<function>` — the one
 tree it writes; `inputs` name steps by that id and are the edges; an
 `[[applets]]` entry is a server the gateway spawns. A built-in step has
 no `command` and runs `datalib-step`.
 
 Each source has an `ingest` step and (most) a `render_markdown` step, and
-`grid_index` under `unified_index` reads every render tree its `inputs`
+`grid_index` under `unified_document_index` reads every render tree its `inputs`
 name into the SQL index the grid reads. A searched source fills its own
 collection of the qmd index (free-text search) with two more steps of
 its own, `keyword_index` and then `embed`, so the slow embedding can be
@@ -284,8 +318,14 @@ source's pair: it retires the collection of any source it does not name
 and reports on the whole, and removing it turns search off.
 `embedding_map` reads the aggregator and lays the embeddings out on a
 plane for the map card (`datalib/backend/embedding_map/README.md`).
-All of it is queried by the `unified_index` applet; `datalib-http`
-reads only the stores' commit logs (`history/`), never their rows. A render
+A source whose data is also time series (Garmin, YoLink, AirVisual) has a
+`render_time_series` step beside its `render_markdown`, and
+`time_series_index` under `unified_time_series_index` indexes every
+such store without copying its points (`docs/dev/time_series.md`). The document index is
+queried by the `unified_document_index` applet; `datalib-http`
+reads the stores' commit logs (`history/`) and never their rows, except
+a step's blob store, whose one table it serves at `/data/…`
+(`datalib/backend/blob_store/README.md`). A render
 store is readable at every commit: the documents between two checkpoints
 share one transaction. The loop's record — each step's state now, its
 last run and success, each sink's version — is in
@@ -325,14 +365,14 @@ The measurement that checks it:
 bazelisk query 'kind(".*_test", rdeps(//..., //datalib/backend/schema:datalib_schema))'
 ```
 
-73 at the last count. If that number climbs, something took a dependency
+82 at the last count. If that number climbs, something took a dependency
 it should not have.
 
 ## The grid_rows union table
 
 The grid is one denormalized table, `grid_rows` (the `GridRow` struct in
 `datalib/backend/schema/src/grid_rows.rs`), which `grid_index` fills
-from every source's render store and the `unified_index` applet reads
+from every source's render store and the `unified_document_index` applet reads
 with one SELECT — no per-provider branches in the query path.
 `docs/dev/grid_rows.md` has the checklist for adding a column.
 
@@ -492,6 +532,12 @@ uv export --no-emit-project --no-emit-workspace --format requirements-txt -o req
 then add `requirement("newpkg")` to the relevant `BUILD.bazel`. Python is
 only used for fixture / test tooling and scripts; everything shipping is
 Rust.
+
+A version bump also changes the wheel hashes `MODULE.bazel.lock` keeps
+under `facts`, and a local build can keep the old ones: Bazel's hidden
+copy of the lockfile, `$(bazel info output_base)/MODULE.bazel.lock`,
+holds the pip extension's last run. CI then refuses the lock ("has
+changed its facts"). Delete that file, then `bazelisk build --nobuild //...`.
 
 ## Running tests
 
@@ -680,12 +726,14 @@ upstream (block types, MIME types), free-form display text
 | what a step could not fully do to a record | `Outcome`, `Reason`, `ScopeKind`, `Severity`, `Stage` | `problems/src/lib.rs` (`datalib_problems`) |
 | a configured entry upstream does not have; a listing or phase a run could not do | `ProblemReason`, `RunProblemKind` | `etl/src/download_problems.rs` |
 | how a diff group's row differs between two renders | `DiffStatus` | `schema/src/diff_status.rs` |
-| which answer to free text a search asks for | `SearchTab` | `applets/src/unified_index/tabs.rs` |
+| which answer to free text a search asks for | `SearchTab` | `applets/src/unified_document_index/tabs.rs` |
 | what a term is to its grid row | `SearchTermKind` | `schema/src/search_terms.rs` (`datalib_schema`) |
 | a config's source type | `SourceType` | `datalib_step/src/source_type.rs` |
 | whether an ingest method reaches a service or reads files | `Reach` | `source_common/src/lib.rs` |
 | which of datalib's stores a file is, in its `_datalib_meta` | `StoreKind` | `store_meta/src/lib.rs` (`datalib_store_meta`) |
 | what namespace a handle is in | `HandleKind` | `handle/src/lib.rs` (`datalib_handle`) |
+| what a time-series point's `t` counts | `TimeKind` | `time_series_schema/src/lib.rs` (`datalib_time_series_schema`) |
+| what every value of a time series is | `ValueType` | `time_series_schema/src/lib.rs` (`datalib_time_series_schema`) |
 | a contact is a person or a group; how one is reached | `ContactKind`, `Medium` | `contact_schema/src/lib.rs` (`datalib_contact_schema`) |
 | how a handle was linked | `LinkedHow` | `contacts/src/lib.rs` (`datalib_contacts`) |
 | what a contact's field says | `FieldKind` | `contacts/src/lib.rs` (`datalib_contacts`) |
@@ -740,6 +788,17 @@ bound. **A set of values to match is one bound JSON array**,
 `IN (SELECT value FROM json_each(?))`, never a `?` per value: SQLite
 binds at most 32,766 values per statement, and only a real user's data
 gets there (`datalib/backend/etl/README.md` §"Binding a set of values").
+
+## Card source is data
+
+**Nothing that came from outside becomes code.** A card's source, in a
+URL, a saved layout or a card's header, is one call of a known view or
+component with JSON5 values. It is parsed, never evaluated, and the app
+page's CSP has no `'unsafe-eval'` (`docs/dev/cards.md` § "Card
+source"). Any site can send the browser to a card URL, so **opening a
+card never writes**: a card's arguments come from whoever wrote the
+link. `//:lint_repo` refuses an evaluator anywhere in `datalib/ui/src`,
+and HTML drawn from a string outside its short allowlist.
 
 ## Timestamp convention
 

@@ -16,6 +16,7 @@ import { logLineView } from "./logLineView";
 import { historyView } from "./historyView";
 import { umapView } from "./umapView";
 import { syncDashboardView } from "./syncDashboardView";
+import { sourceView } from "./sourceView";
 import {
   latestActivityView,
   libraryView,
@@ -25,6 +26,7 @@ import {
 } from "./dashboardSections";
 import { personView } from "./personView";
 import { contactsView } from "./contactsView";
+import { timeSeriesView } from "./timeSeriesView";
 
 // The names in scope when card source is evaluated (cardSource.ts).
 export const viewLibs: ViewLibs = {
@@ -51,6 +53,8 @@ export const viewLibs: ViewLibs = {
   historyView,
   umapView,
   syncDashboardView,
+  sourceView,
   personView,
   contactsView,
+  timeSeriesView,
 };

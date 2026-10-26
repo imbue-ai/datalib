@@ -581,6 +581,25 @@ impl RawDb {
         Ok(rows.into_iter().collect())
     }
 
+    /// `(user_id, email)` for every user Notion gave an address for: a
+    /// person, whose `person.email` the users endpoint returns when the
+    /// integration may read it.
+    pub async fn load_user_emails(&self) -> Result<HashMap<String, String>> {
+        let rows: Vec<(String, String)> =
+            sqlx::query_as("SELECT id, json(payload) FROM users WHERE payload IS NOT NULL")
+                .fetch_all(self.pool())
+                .await
+                .context("select user payloads")?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(id, payload)| {
+                let v: Value = serde_json::from_str(&payload).ok()?;
+                let email = v.get("person")?.get("email")?.as_str()?;
+                Some((id, email.to_string()))
+            })
+            .collect())
+    }
+
     /// `(block_id, anchor text)` for every block a comment hangs off.
     pub async fn load_comment_anchors(&self) -> Result<HashMap<String, String>> {
         let rows: Vec<(String, String)> = sqlx::query_as(

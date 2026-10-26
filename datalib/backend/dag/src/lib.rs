@@ -4,6 +4,7 @@
 //! scheduler service.
 
 pub mod artifact;
+pub mod cli;
 pub mod config;
 pub mod config_array;
 pub mod config_lex;
@@ -13,6 +14,7 @@ pub mod disk_space;
 pub mod events;
 pub mod graph;
 pub mod lock;
+pub mod memory;
 pub mod run_state;
 pub mod runs_sink;
 pub mod scheduler;

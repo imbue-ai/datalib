@@ -2,7 +2,8 @@
 // What needs the person: each source whose last sync did not finish
 // well, or whose store holds errors or warnings, with the fix beside it.
 // Nothing at all when nothing does.
-import { iconUrl } from "@/config/icons";
+import { uriFromEntity } from "./chipLinks";
+import EntityChip from "./EntityChip.ce.vue";
 import type { Dashboard } from "./useDashboard";
 
 defineProps<{ d: Dashboard }>();
@@ -14,10 +15,13 @@ defineProps<{ d: Dashboard }>();
       <span class="section-title">Needs you · {{ d.attention.length }}</span>
     </h2>
     <div v-for="a in d.attention" :key="a.row.id" class="row">
-      <img v-if="iconUrl(a.row.name.icon)" class="tile" :src="iconUrl(a.row.name.icon)!" alt="" />
-      <span class="row-text">
-        <strong>{{ a.row.name.label }}</strong> {{ a.text }}
-      </span>
+      <EntityChip
+        :uri="uriFromEntity('group', a.row.id)"
+        :shown="a.row.name.label"
+        quiet
+        :open-card="(source) => d.open(source)"
+      />
+      <span class="row-text">{{ a.text }}</span>
       <button v-if="a.problems" class="link" @click="d.openProblems(a.row)">Review</button>
       <template v-if="a.failed">
         <button class="link" @click="d.openLog(a.row)">View log</button>

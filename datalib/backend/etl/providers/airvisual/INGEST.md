@@ -33,6 +33,17 @@ rows, 11 MB of primary-key index).
 `ingested_files` would take ~13 MB off, at the cost of the column a
 person reads.
 
+**Samples are rows, not time-series chunks.** Storing them in the
+chunk encoding `render_time_series` uses
+([`time_series.md`](/docs/dev/time_series.md)) would shrink the store
+to a few MB, but at this size that is not worth what it costs: the
+encoding would become a format kept at rest, which must stay readable
+for good rather than costing a re-render when it changes; chunks would
+have to be cut by month rather than by position, or re-reading an older
+file would rewrite every chunk after it; and the shell could no longer
+query or diff a sample by its value. Reconsider if a root holds many
+Pros' worth of history.
+
 The one method is `export`, with one `devices` entry per Pro: the folder
 it serves over Samba (`smb://<ip>/airvisual`, user `airvisual`, password
 shown on the device under *Settings › Network › Access Pro data*),

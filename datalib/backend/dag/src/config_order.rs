@@ -40,6 +40,22 @@ pub fn sort_config(text: &str) -> Result<Option<String>, String> {
     Ok(Some(sorted))
 }
 
+/// Where each entry sits in `text`, cut as [`sort_config`] cuts it: an
+/// entry with its sub-tables and the comments and blank lines above its
+/// header. For a rewrite that takes an entry out and leaves the rest of
+/// the file as written.
+pub fn entry_ranges(text: &str) -> Vec<std::ops::Range<usize>> {
+    let base = text.as_ptr() as usize;
+    split(text)
+        .units
+        .iter()
+        .map(|unit| {
+            let start = unit.as_ptr() as usize - base;
+            start..start + unit.len()
+        })
+        .collect()
+}
+
 /// What a piece of the file is to the ordering.
 #[derive(Debug, Default)]
 struct Entry {
@@ -422,12 +438,12 @@ group = "slack"
 function = "render_markdown"
 inputs = ["slack/ingest"]
 
-# ── the unified index ──
+# ── the unified document index ──
 [[groups]]
-id = "unified_index"
+id = "unified_document_index"
 
 [[steps]]
-group = "unified_index"
+group = "unified_document_index"
 function = "grid_index"
 inputs = ["slack/render_markdown"]
 "#;
@@ -474,12 +490,12 @@ type = "slack"
 group = "notes"
 function = "render_markdown"
 
-# ── the unified index ──
+# ── the unified document index ──
 [[groups]]
-id = "unified_index"
+id = "unified_document_index"
 
 [[steps]]
-group = "unified_index"
+group = "unified_document_index"
 function = "qmd_aggregator"
 inputs = ["slack/keyword_index", "notes/keyword_index"]
 
@@ -495,9 +511,9 @@ function = "keyword_index"
 inputs = ["notes/render_markdown"]
 
 [[applets]]
-group = "unified_index"
-id = "unified_index"
-command = "datalib-applet unified_index"
+group = "unified_document_index"
+id = "unified_document_index"
+command = "datalib-applet unified_document_index"
 "#;
         let sorted = sort_config(text).unwrap().expect("out of order");
         assert_eq!(
@@ -508,10 +524,13 @@ command = "datalib-applet unified_index"
                 "slack/keyword_index",
                 "notes/render_markdown",
                 "notes/keyword_index",
-                "unified_index/qmd_aggregator",
+                "unified_document_index/qmd_aggregator",
             ]
         );
-        assert_eq!(groups(&sorted), ["slack", "notes", "unified_index"]);
+        assert_eq!(
+            groups(&sorted),
+            ["slack", "notes", "unified_document_index"]
+        );
         assert!(flows_down(&sorted));
         assert!(sorted.starts_with("data_root = \"~/datalib\"\n\n# ── slack ──\n"));
         // A comment travels with the entry under it, a sub-table with its step.
@@ -522,8 +541,8 @@ command = "datalib-applet unified_index"
                 > at("function = \"render_markdown\"\ninputs = [\"slack/ingest\"]")
         );
         assert!(at("channels = [\"general\"]") < at("function = \"render_markdown\""));
-        assert!(at("# ── the unified index ──") < at("function = \"qmd_aggregator\""));
-        assert!(at("# ── notes ──") < at("# ── the unified index ──"));
+        assert!(at("# ── the unified document index ──") < at("function = \"qmd_aggregator\""));
+        assert!(at("# ── notes ──") < at("# ── the unified document index ──"));
         // Sorting again changes nothing.
         assert_eq!(sort_config(&sorted).unwrap(), None);
     }
@@ -532,21 +551,21 @@ command = "datalib-applet unified_index"
     /// below it; the index goes to the end, with its banner.
     #[test]
     fn moves_an_index_written_first_to_the_end() {
-        let text = r#"# ── the unified index ──
+        let text = r#"# ── the unified document index ──
 # The banner.
 
 [[groups]]
-id = "unified_index"
+id = "unified_document_index"
 
 [[steps]]
-group = "unified_index"
+group = "unified_document_index"
 function = "grid_index"
 inputs = ["slack/render_markdown"]
 
 [[applets]]
-group = "unified_index"
-id = "unified_index"
-command = "datalib-applet unified_index"
+group = "unified_document_index"
+id = "unified_document_index"
+command = "datalib-applet unified_document_index"
 
 # Sources go below.
 
@@ -560,14 +579,14 @@ group = "slack"
 function = "render_markdown"
 "#;
         let sorted = sort_config(text).unwrap().expect("out of order");
-        assert_eq!(groups(&sorted), ["slack", "unified_index"]);
+        assert_eq!(groups(&sorted), ["slack", "unified_document_index"]);
         assert!(sorted.starts_with("# Sources go below.\n\n# ── slack ──\n"));
         assert!(sorted.contains(
-            "# ── the unified index ──\n# The banner.\n\n[[groups]]\nid = \"unified_index\""
+            "# ── the unified document index ──\n# The banner.\n\n[[groups]]\nid = \"unified_document_index\""
         ));
         assert!(sorted
             .trim_end()
-            .ends_with("command = \"datalib-applet unified_index\""));
+            .ends_with("command = \"datalib-applet unified_document_index\""));
     }
 
     /// A `[` at the start of a line inside a multi-line string or array

@@ -20,8 +20,10 @@ mod summary;
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use axum::extract::{Query, State};
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use datalib_columns::{
     source_catalog, Action, Chip, ColumnSpec, ColumnType, Identity, Quantity, Sample, Timeseries,
@@ -34,7 +36,7 @@ use datalib_dag::{Diagnostic, EntryKind, Severity};
 use serde::{Deserialize, Serialize};
 
 use crate::usage::OutputStorage;
-use crate::{usage, AppState, DagRecord, DagRunInfo};
+use crate::{usage, AppState, DagRecord, DagRunInfo, RecordTimings};
 use buttons::SyncOffer;
 use group::{Child, ChildKind, ChildStamp, ChildStatus};
 use status::{StatusView, StepEdges};
@@ -73,8 +75,9 @@ impl Phase {
     fn of_function(function: Option<&str>) -> Self {
         match function {
             Some("ingest") => Phase::Ingest,
-            Some("render_markdown") => Phase::Render,
+            Some("render_markdown") | Some("render_time_series") => Phase::Render,
             Some("grid_index")
+            | Some("time_series_index")
             | Some("qmd_aggregator")
             | Some("keyword_index")
             | Some("embed")
@@ -133,7 +136,7 @@ pub struct ManageRow {
     /// keyed on.
     pub id: String,
     /// The grid's row id. The entry id for a step or an applet; for a
-    /// group, `group:<id>`, because the `unified_index` applet shares
+    /// group, `group:<id>`, because the `unified_document_index` applet shares
     /// its group's id and both are rows.
     pub key: String,
     /// Where the row sits in the tree: `[key]` at the top level, or
@@ -234,24 +237,57 @@ pub struct ManageResponse {
     pub run: Option<DagRunInfo>,
     pub storage: RootStorage,
     pub rows: Vec<ManageRow>,
+    /// Why no sync can be opened from this screen right now, when one
+    /// cannot: the launch is updating the stores for this build. Every
+    /// row's Sync says the same.
+    pub sync_paused: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct ManageParams {
-    /// Walk the disk before answering rather than serving the sampler's
-    /// last tick. Lenient like `/api/pipeline/storage`'s.
-    #[serde(default)]
-    refresh: Option<String>,
+/// A Manage answer that takes this long says where the time went: the
+/// request line has only the total, and the run store's slow-statement
+/// warnings do not say who asked.
+const SLOW_ANSWER: Duration = Duration::from_secs(1);
+
+/// Where one Manage answer spent its time, besides the walk.
+#[derive(Debug, Default)]
+struct Took {
+    record: RecordTimings,
+    requests: Duration,
+    /// Everything after the run and request reads: the sampler's last
+    /// numbers, the config's check, the join.
+    assembly: Duration,
+}
+
+fn ms(d: Duration) -> u64 {
+    d.as_millis() as u64
 }
 
 pub async fn get_manage_rows(
     State(s): State<AppState>,
-    Query(p): Query<ManageParams>,
+    Query(p): Query<crate::RefreshParams>,
+    headers: HeaderMap,
+) -> Result<Json<ManageResponse>, (StatusCode, String)> {
+    crate::refuse_refresh("/api/manage/rows", &p)?;
+    Ok(answer(&s, &headers, false).await)
+}
+
+/// `POST /api/manage/rows/refresh`: walk the disk, then answer as the
+/// GET does.
+pub async fn refresh_manage_rows(
+    State(s): State<AppState>,
+    headers: HeaderMap,
 ) -> Json<ManageResponse> {
-    if crate::flag_is_set(p.refresh.as_deref()) {
+    answer(&s, &headers, true).await
+}
+
+async fn answer(s: &AppState, headers: &HeaderMap, refresh: bool) -> Json<ManageResponse> {
+    let started = Instant::now();
+    if refresh {
         usage::sample_on_demand(&s.usage, &s.app, s.root.clone(), &s.root_tx).await;
     }
-    let response = manage_rows(&s).await;
+    let walk = started.elapsed();
+    let (response, took) = manage_rows(s).await;
+    let summary_started = Instant::now();
     if response.ok {
         summary::record(
             &s.root,
@@ -260,18 +296,45 @@ pub async fn get_manage_rows(
             response.storage.root.bytes,
         );
     }
+    let summary = summary_started.elapsed();
+    let total = started.elapsed();
+    if total >= SLOW_ANSWER {
+        let card = headers
+            .get(crate::ui_events::CARD_HEADER)
+            .and_then(|v| v.to_str().ok());
+        tracing::info!(
+            ms = ms(total),
+            refresh,
+            walk_ms = ms(walk),
+            loop_record_ms = ms(took.record.loop_record),
+            run_progress_ms = ms(took.record.run_progress),
+            run_metrics_ms = ms(took.record.run_metrics),
+            requests_ms = ms(took.requests),
+            assembly_ms = ms(took.assembly),
+            summary_ms = ms(summary),
+            card,
+            "the Manage rows were slow to assemble"
+        );
+    }
     Json(response)
 }
 
 /// Every row of the Manage table as it stands: the config as written,
 /// the loop's record, the disk. What the table and a chip both read.
-async fn manage_rows(s: &AppState) -> ManageResponse {
+async fn manage_rows(s: &AppState) -> (ManageResponse, Took) {
     let config_path = s.config_path();
     let text = std::fs::read_to_string(&config_path).unwrap_or_default();
     let record = crate::dag_record(&s.root, &s.sync).await;
     // After the record: a request it names was opened before the record
     // was saved, so it is there to read, open or not.
+    let requests_started = Instant::now();
     let requests = requests_named(s, &record).await;
+    let assembly_started = Instant::now();
+    let mut took = Took {
+        record: record.took,
+        requests: assembly_started - requests_started,
+        assembly: Duration::ZERO,
+    };
     let storage = s
         .usage
         .snapshot(s.root.as_path(), &usage::measured_trees(&config_path))
@@ -284,7 +347,8 @@ async fn manage_rows(s: &AppState) -> ManageResponse {
     let written = match datalib_dag::written::entries_as_written(&text) {
         Ok(w) => w,
         Err(e) => {
-            return ManageResponse {
+            took.assembly = assembly_started.elapsed();
+            let response = ManageResponse {
                 ok: false,
                 error: Some(e),
                 columns: columns(),
@@ -292,13 +356,20 @@ async fn manage_rows(s: &AppState) -> ManageResponse {
                 run: record.run,
                 storage: root_storage,
                 rows: Vec::new(),
-            }
+                sync_paused: None,
+            };
+            return (response, took);
         }
     };
     let diagnostics = datalib_dag::config::check_text(&text).diagnostics;
     let applet_errors = s.applets.frontend_view().applet_errors;
 
     let raw_stores = raw_stores(&storage.outputs);
+    let sync_paused = s
+        .sync
+        .upgrade()
+        .migrating
+        .then_some(buttons::SYNC_PAUSED_FOR_UPGRADE);
     let rows = Snapshot {
         written: &written,
         diagnostics: &diagnostics,
@@ -307,9 +378,11 @@ async fn manage_rows(s: &AppState) -> ManageResponse {
         outputs: &storage.outputs,
         raw_stores: &raw_stores,
         applet_errors: &applet_errors,
+        sync_paused,
     }
     .rows();
-    ManageResponse {
+    took.assembly = assembly_started.elapsed();
+    let response = ManageResponse {
         ok: true,
         error: None,
         columns: columns(),
@@ -317,7 +390,9 @@ async fn manage_rows(s: &AppState) -> ManageResponse {
         run: record.run,
         storage: root_storage,
         rows,
-    }
+        sync_paused: sync_paused.map(str::to_string),
+    };
+    (response, took)
 }
 
 #[derive(Debug, Deserialize)]
@@ -326,13 +401,15 @@ pub struct EntitiesBody {
 }
 
 /// What a chip naming a group or a step shows: its name as the config
-/// gives it now, its mark, what the mark stands for, and its status.
+/// gives it now, its mark, what the mark stands for, and its status —
+/// and its row of the Sources table, whose actions are the chip's menu.
 #[derive(Debug, Clone, Serialize)]
 pub struct EntityView {
     pub label: String,
     pub icon: Option<String>,
     pub detail: Option<String>,
     pub status: StatusView,
+    pub row: ManageRow,
 }
 
 /// `POST /api/entities`: who each `datalib:group/…` or `datalib:step/…`
@@ -342,7 +419,7 @@ pub async fn post_entities(
     State(s): State<AppState>,
     Json(body): Json<EntitiesBody>,
 ) -> Json<serde_json::Value> {
-    let rows = manage_rows(&s).await.rows;
+    let rows = manage_rows(&s).await.0.rows;
     let answers: serde_json::Map<String, serde_json::Value> = body
         .entities
         .iter()
@@ -373,6 +450,7 @@ fn entity_view(rows: &[ManageRow], entity: datalib_columns::Entity) -> Option<En
                 icon: row.name.icon.clone(),
                 detail: row.name.detail.clone(),
                 status: row.status.clone(),
+                row: row.clone(),
             })
         }
         Entity::Step(id) => {
@@ -388,6 +466,7 @@ fn entity_view(rows: &[ManageRow], entity: datalib_columns::Entity) -> Option<En
                 icon: row.name.icon.clone(),
                 detail: row.name.detail.clone(),
                 status: row.status.clone(),
+                row: row.clone(),
             })
         }
     }
@@ -433,6 +512,8 @@ struct Snapshot<'a> {
     /// Each tree holding a raw store, by step id, to the store's path.
     raw_stores: &'a HashMap<String, String>,
     applet_errors: &'a std::collections::BTreeMap<String, String>,
+    /// Why every Sync is disabled, over whatever each row would offer.
+    sync_paused: Option<&'static str>,
 }
 
 /// A step or applet as written, in the one shape the group rules read.
@@ -483,17 +564,19 @@ impl Child for Entry<'_> {
 /// the name in the grid.
 fn default_name(id: &str) -> String {
     match id {
-        "unified_index/grid_index" => "Unified Index (table)",
-        "unified_index/qmd_aggregator" => "Unified Index (QMD)",
-        "unified_index/embedding_map" => "Unified Index (map)",
-        "unified_index" => "Unified Index (Applet)",
+        "unified_document_index/grid_index" => "Document Index (table)",
+        "unified_document_index/qmd_aggregator" => "Document Index (QMD)",
+        "unified_document_index/embedding_map" => "Document Index (map)",
+        "unified_document_index" => "Document Index (Applet)",
+        "unified_time_series_index/time_series_index" => "Time Series Index",
+        "unified_time_series_index" => "Time Series Index (Applet)",
         other => other,
     }
     .to_string()
 }
 
 /// A group's Name cell leads with its source's mark, the type's label
-/// on hover. A group that mirrors nothing — the unified index — is the
+/// on hover. A group that mirrors nothing — the unified document index — is the
 /// search over every source, and is marked as that.
 fn group_name(g: &WrittenGroup, r#type: Option<&Identity>) -> Identity {
     let (icon, detail) = match r#type {
@@ -516,6 +599,8 @@ fn child_label(step: &WrittenStep) -> String {
     match step.function.as_deref() {
         Some("ingest") => "Ingest",
         Some("render_markdown") => "Render markdown",
+        Some("render_time_series") => "Render time series",
+        Some("time_series_index") => "Time series index",
         Some("grid_index") => "Grid index",
         Some("qmd_aggregator") => "QMD aggregator",
         Some("keyword_index") => "Keyword index",
@@ -902,6 +987,10 @@ impl RowCtx<'_> {
         if step.is_some_and(|s| s.state == Some(StateKind::Running)) {
             return (stop_button("Stopping the sync".into(), true), Vec::new());
         }
+        let offer = match self.snap.sync_paused {
+            Some(why) => Err(why.to_string()),
+            None => offer,
+        };
         let (hint, blocked) = match offer {
             Ok(hint) => (Some(hint), None),
             Err(why) => (None, Some(why)),
@@ -1145,6 +1234,15 @@ impl RowCtx<'_> {
                 "Open every contact in the contacts app.",
                 None,
             ),
+            // So are the time-series index's: Browse opens the Time series
+            // card (`timeSeriesView()`).
+            Entry::Applet(a) if a.id == datalib_dag::config::TIME_SERIES_INDEX_GROUP => {
+                browse_action(
+                    "Browse time series",
+                    "Open every time series your sources keep, on one chart.",
+                    None,
+                )
+            }
             _ => browse_action(
                 "Browse this data",
                 "Open this source\u{2019}s rows in the grid.",
@@ -1160,6 +1258,10 @@ impl RowCtx<'_> {
         };
         let (sync, stop_request_ids) = self.sync_action(&id, sync_offer);
         let dashboard = (matches!(e, Entry::Step(_)) && group.is_some()).then(dashboard_action);
+        let choose_again = buttons::choose_again(
+            &status.key,
+            self.step(&id).and_then(|st| st.last_run.as_ref()),
+        );
         let turned_off_by = self.step(&id).and_then(|st| st.turned_off_by.clone());
         let switch = match e {
             Entry::Step(_) => Some(buttons::switch(
@@ -1201,6 +1303,7 @@ impl RowCtx<'_> {
             disk,
             actions: [browse, sync]
                 .into_iter()
+                .chain(choose_again)
                 .chain(dashboard)
                 .chain(switch)
                 .collect(),
@@ -1383,6 +1486,14 @@ impl RowCtx<'_> {
         } else {
             self.sync_action(&g.id, sync_offer)
         };
+        // A step the OS refused offers its picker on the group's row too,
+        // where a source is usually looked at.
+        let choose_again = child_rows.iter().find_map(|r| {
+            r.actions
+                .iter()
+                .find(|a| a.id == buttons::CHOOSE_AGAIN)
+                .cloned()
+        });
         // A group is off when every step under it is.
         let turned_off: Vec<Option<String>> = steps
             .iter()
@@ -1477,7 +1588,11 @@ impl RowCtx<'_> {
             last_synced,
             last_success,
             disk,
-            actions: vec![browse, sync, dashboard_action(), switch],
+            actions: [browse, sync]
+                .into_iter()
+                .chain(choose_again)
+                .chain([dashboard_action(), switch])
+                .collect(),
             seeds,
             reveal_blocked: on_disk.is_none().then(|| {
                 "Nothing on disk yet \u{2014} this group hasn't produced anything.".to_string()

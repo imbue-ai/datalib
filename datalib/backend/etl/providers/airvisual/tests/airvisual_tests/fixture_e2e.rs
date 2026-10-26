@@ -169,10 +169,17 @@ async fn the_tng_fixture_ingests_and_renders() {
     assert!(md.contains("### Ten Forward"), "{md}");
     assert!(md.contains("### Sickbay"), "{md}");
     assert!(md.contains("serial `TENFWD10X`"), "{md}");
-    let co2 = std::fs::read_to_string(page_dir.join("plots").join("co2.html")).unwrap();
+    assert_eq!(super::render_e2e::charts(&md).len(), 5);
+    let named: Vec<String> =
+        datalib_etl_airvisual_render::render::time_series::read(&raw_path, STANZA)
+            .unwrap()
+            .into_iter()
+            .filter(|s| s.name.starts_with("TENFWD10X/"))
+            .filter_map(|s| s.about_name)
+            .collect();
+    assert!(!named.is_empty());
     assert!(
-        co2.contains("\"name\":\"Ten Forward\""),
-        "legends carry names, not serials"
+        named.iter().all(|n| n == "Ten Forward"),
+        "a device is named, not its serial: {named:?}"
     );
-    assert!(!co2.contains("TENFWD10X"), "{co2}");
 }

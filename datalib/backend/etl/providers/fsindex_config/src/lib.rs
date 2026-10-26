@@ -5,9 +5,23 @@
 use datalib_source_common::{LocalPath, SourceCommon};
 use serde::{Deserialize, Serialize};
 
+/// This source's config stanzas, for `datalib-step help`.
+pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "fswalk",
+        toml: include_str!("../examples/minimal_fswalk.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "fswalk",
+        toml: include_str!("../examples/complete_fswalk.toml"),
+    },
+];
+
 /// The fsindex-owned slice of an `fsindex` source. The scan root is
 /// `fswalk.path`; `stamp` is the one knob.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FsindexConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by
@@ -19,12 +33,10 @@ pub struct FsindexConfig {
     #[serde(default)]
     pub fswalk: Option<LocalPath>,
 
-    /// Write `.fsindex.yaml` UUID breadcrumbs into the scanned tree for any
-    /// directory that opts in via `stamp_me_with_uuid`. **Off by default** for
-    /// a config-driven scan, so the source stays read-only against its input —
-    /// the only framework provider that can mutate its upstream stays opt-in.
-    /// (The standalone `fsindex` CLI defaults stamping ON; this flag is the
-    /// orchestrator-side inverse of its `--no-stamp`.)
+    /// Write `.fsindex.toml` UUID breadcrumbs into the scanned tree for any
+    /// directory that opts in via `stamp_me_with_uuid`. Off by default, so
+    /// the scan only reads the tree. (The standalone `fsindex` command
+    /// stamps unless given `--no-stamp`.)
     #[serde(default)]
     pub stamp: bool,
 }

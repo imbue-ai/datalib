@@ -11,8 +11,9 @@ use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_email::ingest::db::{db_path_for, RawDb};
 use datalib_etl_email::ingest::mbox;
 use datalib_etl_email_render::render::ids;
-use datalib_etl_email_render::render::parse::parse;
-use datalib_etl_email_render::render::render::{render_all, OutlinkFormat};
+use datalib_etl_email_render::render::parse::{open, EmailStore, EmailThreadBucket};
+use datalib_etl_email_render::render::render::{render_store, OutlinkFormat, PageEnd};
+use datalib_etl_render::pages::PageSize;
 
 /// `X-GM-THRID` of the fixture's three-message briefing thread: the Gmail
 /// id of its first message, as Gmail assigns it.
@@ -23,6 +24,62 @@ fn thread_uuid(account_id: &str, thread_id: &str) -> String {
 }
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
+
+/// The part behind each part address `md` links, as the server answers
+/// it from the `.eml`s in the blob store at `cas`. Panics on an address
+/// the server would answer "not found".
+async fn parts_linked(md: &str, cas: &std::path::Path) -> Vec<datalib_blob_store::Stored> {
+    let mut out = Vec::new();
+    for (i, _) in md.match_indices("/part/") {
+        let eml = &md[i.saturating_sub(64)..i];
+        let part = md.get(i + 6..i + 6 + 64).unwrap_or_default();
+        let found = datalib_blob_store::read_part(cas, eml, part)
+            .await
+            .expect("read the blob store");
+        out.push(found.unwrap_or_else(|| panic!("no part {part} in {eml}")));
+    }
+    out
+}
+
+/// Every thread `store` holds, read two to a page, as a render reads them.
+fn every_thread(store: &EmailStore) -> Vec<EmailThreadBucket> {
+    let mut pages = store.pages(2);
+    let mut out = Vec::new();
+    while let Some(page) = store.next_page(&mut pages).expect("next page") {
+        out.extend(page.docs);
+    }
+    out
+}
+
+/// Renders `store` with `size`, returning each document and each page's end.
+fn render_paged(
+    store: &EmailStore,
+    root: &std::path::Path,
+    only_labels: &[String],
+    size: PageSize,
+) -> (Vec<RenderedMarkdown>, Vec<PageEnd>) {
+    let mut docs = Vec::new();
+    let mut pages = Vec::new();
+    render_store(
+        store,
+        root,
+        "star-trek-mbox",
+        Some(OutlinkFormat::Gmail),
+        only_labels,
+        size,
+        &Progress::noop(),
+        &mut |doc| {
+            docs.push(doc);
+            Ok(())
+        },
+        &mut |page| {
+            pages.push(page);
+            Ok(())
+        },
+    )
+    .expect("render_store");
+    (docs, pages)
+}
 
 fn fixture_path() -> PathBuf {
     if let Ok(dir) = std::env::var("JMAP_FIXTURE_DIR") {
@@ -72,8 +129,8 @@ async fn star_trek_mbox_lands_envelope_rows_and_joins() {
     let mailboxes = db.load_mailboxes().await.unwrap();
     let joins = db.load_email_joins().await.unwrap();
 
-    assert_eq!(emails.len(), 6);
-    assert_eq!(threads.len(), 4);
+    assert_eq!(emails.len(), 7);
+    assert_eq!(threads.len(), 5);
 
     let briefing = threads
         .iter()
@@ -220,16 +277,19 @@ async fn mbox_only_labels_filters_extraction() {
 #[tokio::test(flavor = "multi_thread")]
 async fn render_only_labels_filters_to_thread_subset() {
     let (_tmp_extract, db_path) = fetch_into_tmp(fixture_path()).await;
-    let parsed = parse(
+    let store = open(
         &db_path_for(&db_path),
         "star-trek-mbox",
         RawRange::cold(),
         false,
     )
-    .expect("parse cold start");
+    .expect("open")
+    .expect("a committed store");
+    let threads = every_thread(&store);
 
     // "Sent" is a flat mbox label, so its full path equals its name.
-    let sent_id = parsed
+    let sent_id = store
+        .shared
         .mailboxes
         .iter()
         .find(|m| m["name"] == "Sent")
@@ -237,8 +297,7 @@ async fn render_only_labels_filters_to_thread_subset() {
         .as_str()
         .unwrap()
         .to_string();
-    let expected: HashSet<String> = parsed
-        .docs
+    let expected: HashSet<String> = threads
         .iter()
         .filter(|b| {
             b.emails.iter().any(|e| {
@@ -252,61 +311,77 @@ async fn render_only_labels_filters_to_thread_subset() {
         .collect();
     assert!(!expected.is_empty(), "fixture should have a Sent thread");
     assert!(
-        expected.len() < parsed.docs.len(),
+        expected.len() < threads.len(),
         "filter must be a strict subset to be a meaningful test"
     );
 
     let tmp = tempfile::tempdir().unwrap();
-    let progress = Progress::noop();
-    let mut docs: Vec<RenderedMarkdown> = Vec::new();
-    render_all(
-        &parsed,
-        tmp.path(),
-        "star-trek-mbox",
-        Some(OutlinkFormat::Gmail),
-        &["Sent".to_string()],
-        &progress,
-        &mut |doc| {
-            docs.push(doc);
-            Ok(())
-        },
-    )
-    .expect("render_all with render-label filter");
+    let one_a_page = PageSize {
+        buckets: 1,
+        bytes: 1,
+    };
+    let (docs, pages) = render_paged(&store, tmp.path(), &["Sent".to_string()], one_a_page);
+    store.close();
 
     let rendered: HashSet<String> = docs.iter().map(|d| d.markdown_uuid.clone()).collect();
     assert_eq!(rendered, expected, "rendered exactly the Sent threads");
+    let excluded: HashSet<String> = pages
+        .iter()
+        .flat_map(|p| p.rendered.excluded.iter().cloned())
+        .collect();
+    let every: HashSet<String> = threads
+        .iter()
+        .map(|b| thread_uuid(&b.account_id, &b.thread_id))
+        .collect();
+    assert_eq!(
+        excluded,
+        &every - &expected,
+        "every other thread is excluded, by the page that read it"
+    );
 }
 
+/// Parse hands render the threads' rows and none of their `.eml` bytes,
+/// which render reads a batch of threads at a time. Loading every one up
+/// front held a whole mailbox in memory and showed no progress until it
+/// was done.
 #[tokio::test(flavor = "multi_thread")]
 async fn star_trek_mbox_renders_through_render_all() {
     let (_tmp_extract, db_path) = fetch_into_tmp(fixture_path()).await;
-    let parsed = parse(
+    let store = open(
         &db_path_for(&db_path),
         "star-trek-mbox",
         RawRange::cold(),
         false,
     )
-    .expect("parse cold start");
+    .expect("open")
+    .expect("a committed store");
+    assert!(
+        every_thread(&store).iter().all(|b| b.blobs.is_empty()),
+        "a page loaded `.eml` bytes before the render asked for them"
+    );
 
     let tmp = tempfile::tempdir().unwrap();
-    let progress = Progress::noop();
-    let mut docs: Vec<RenderedMarkdown> = Vec::new();
-    render_all(
-        &parsed,
-        tmp.path(),
-        "star-trek-mbox",
-        Some(OutlinkFormat::Gmail),
-        &[],
-        &progress,
-        &mut |doc| {
-            docs.push(doc);
-            Ok(())
-        },
-    )
-    .expect("render_all");
+    // One thread a page and one a batch, so every page boundary is crossed.
+    let one_a_page = PageSize {
+        buckets: 1,
+        bytes: 1,
+    };
+    let (docs, pages) = render_paged(&store, tmp.path(), &[], one_a_page);
+    store.close();
+    let mut declared: Vec<String> = pages
+        .iter()
+        .flat_map(|p| p.rendered.buckets.iter().map(|b| b.key.clone()))
+        .collect();
+    declared.sort();
+    let mut emitted: Vec<String> = docs.iter().map(|d| d.markdown_uuid.clone()).collect();
+    emitted.sort();
+    assert_eq!(
+        declared, emitted,
+        "each page declares the threads it rendered"
+    );
 
     // One rendered document per thread.
-    assert_eq!(docs.len(), 4);
+    assert_eq!(docs.len(), 5);
 
     // chat-common owns the page-dir layout; locate each thread's page by
     // its markdown_uuid (= thread_uuid) from the captured RenderedMarkdowns.
@@ -320,31 +395,24 @@ async fn star_trek_mbox_renders_through_render_all() {
             .to_path_buf()
     };
 
-    // Briefing thread has the attachment materialized.
+    // The briefing thread links its attachment inside the stored `.eml`,
+    // at an address the server finds it by, and writes nothing beside
+    // the page.
+    let cas = datalib_etl::blob_cas::cas_path_for(&db_path);
     let briefing_tuid = thread_uuid("enterprise", BRIEFING_THREAD);
     let briefing_dir = dir_for(&briefing_tuid);
-    let blobs_dir = briefing_dir.join("blobs");
-    assert!(blobs_dir.is_dir(), "blobs/ dir missing");
-    let mut found = false;
-    for entry in std::fs::read_dir(&blobs_dir).unwrap().flatten() {
-        if entry.path().is_file() {
-            if let Ok(body) = std::fs::read_to_string(entry.path()) {
-                if body.contains("Plasma flow") {
-                    found = true;
-                    break;
-                }
-            }
-        }
-    }
+    assert!(!briefing_dir.join("blobs").exists(), "a blobs/ was written");
+    let md = std::fs::read_to_string(briefing_dir.join("all.md")).unwrap();
+    let parts = parts_linked(&md, &cas).await;
     assert!(
-        found,
-        "no attachment in {} contained Plasma flow",
-        blobs_dir.display()
+        parts
+            .iter()
+            .any(|p| String::from_utf8_lossy(&p.bytes).contains("Plasma flow")),
+        "no linked part contained Plasma flow:\n{md}"
     );
 
     // Briefing md mentions every sender — names come from mail-parsing the
     // .eml in CAS, not from a server-pre-decoded payload.
-    let md = std::fs::read_to_string(briefing_dir.join("all.md")).unwrap();
     for needle in ["Admiral Hayes", "Picard", "Geordi"] {
         assert!(md.contains(needle), "expected `{}` in briefing md", needle);
     }
@@ -364,39 +432,31 @@ async fn star_trek_mbox_renders_through_render_all() {
     );
 
     // A `multipart/related` with an inline PNG referenced as
-    // `<img src="cid:…">`: the renderer must materialize it and rewrite the
-    // cid to a `blobs/<hash>.png` link. Regression test for the Fastmail
-    // case where the inline image is absent from `attachments` but present
-    // in the .eml MIME tree.
+    // `<img src="cid:…">`: the renderer must rewrite the cid to the part's
+    // address. Regression test for the Fastmail case where the inline
+    // image is absent from `attachments` but present in the .eml MIME tree.
     let bridge_tuid = thread_uuid("enterprise", "1853647906406507188");
     let bridge_dir = dir_for(&bridge_tuid);
     let bridge_md = std::fs::read_to_string(bridge_dir.join("all.md")).unwrap();
-    let bridge_blobs = bridge_dir.join("blobs");
-    assert!(bridge_blobs.is_dir(), "bridge thread blobs/ dir missing");
-    let png_files: Vec<_> = std::fs::read_dir(&bridge_blobs)
-        .unwrap()
-        .flatten()
-        .filter(|e| {
-            e.path()
-                .extension()
-                .and_then(|s| s.to_str())
-                .map(|x| x == "png")
-                .unwrap_or(false)
-        })
+    assert!(!bridge_dir.join("blobs").exists(), "a blobs/ was written");
+    let images: Vec<_> = parts_linked(&bridge_md, &cas)
+        .await
+        .into_iter()
+        .filter(|p| p.content_type.as_deref() == Some("image/png"))
         .collect();
     assert_eq!(
-        png_files.len(),
+        images.len(),
         1,
-        "expected exactly one .png in {}",
-        bridge_blobs.display()
+        "expected one linked PNG part in the bridge thread:\n{bridge_md}"
     );
-    let png_name = png_files[0].file_name().to_string_lossy().into_owned();
     assert!(
-        bridge_md.contains(&format!("(blobs/{png_name})")),
-        "expected `blobs/{png_name}` markdown link in bridge thread, got:\n{bridge_md}"
+        bridge_md
+            .lines()
+            .any(|l| l.contains("![") && l.contains("/part/")),
+        "expected an image linked at a part address, got:\n{bridge_md}"
     );
     // The raw cid URL should be gone — htmd should see the rewritten
-    // `src="blobs/…"` and emit `![…](blobs/…)`, not `cid:…`.
+    // `src` and emit `![…](/data/…/part/…)`, not `cid:…`.
     assert!(
         !bridge_md.contains("cid:lcars-glyph"),
         "raw cid: reference leaked into bridge thread md:\n{bridge_md}"

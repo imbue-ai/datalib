@@ -13,6 +13,15 @@ pub fn short_ts(ms: i64) -> String {
     short(ms).unwrap_or_else(|| ms.to_string())
 }
 
+/// A stamp on the page, as a `<time>` like every document's; `short_ts`
+/// is for a grid row's text, which is not markdown.
+pub fn stamp(ms: i64) -> String {
+    match datalib_time::IsoOffsetTimestamp::from_unix_millis(ms) {
+        Some(t) => datalib_etl_render::message::stamp_html(&t),
+        None => ms.to_string(),
+    }
+}
+
 /// Median inter-sample gap, in ms. Median rather than mean because a
 /// single multi-day outage would otherwise swamp a sensor that reports
 /// every few minutes.

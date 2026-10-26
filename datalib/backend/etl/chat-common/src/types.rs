@@ -15,18 +15,16 @@ pub enum ItemKind {
 }
 
 /// A single attachment on an item. Multiple attachments per item are
-/// allowed (albums, multi-file messages). The provider materializes
-/// the bytes onto disk before calling `render_all`; this struct just
-/// carries the relative path the markdown link points at.
+/// allowed (albums, multi-file messages).
 #[derive(Debug, Clone, Serialize)]
 pub struct NormalizedAttachment {
-    /// Path relative to the bucket's `<page_dir>` (e.g.
-    /// `"blobs/abc123.jpg"`) that the markdown link / `<img src=…>`
-    /// will target. Provider is responsible for putting the bytes
-    /// at `<page_dir>/<rel_path>` before render.
-    pub rel_path: Option<String>,
+    /// Where the markdown link / `<img src=…>` points: the bytes'
+    /// address in their source's blob store
+    /// (`/data/<group>/<function>/blob/<hash>`, or `…/part/<hash>` for a
+    /// part of a stored email).
+    pub href: Option<String>,
     /// User-visible label (file name, image alt text). Falls back to
-    /// the basename of `rel_path` when missing.
+    /// the last segment of `href` when missing.
     pub file_name: Option<String>,
     /// MIME type if known. Used to decide `<img>` vs link-with-icon
     /// in the markdown body.
@@ -35,17 +33,14 @@ pub struct NormalizedAttachment {
     /// readable size.
     pub byte_len: Option<i64>,
     /// Provider's source URL (e.g. WhatsApp's `direct_path`, Beeper's
-    /// `source_url`). Surfaced when `rel_path` is missing so a reader
+    /// `source_url`). Surfaced when `href` is missing so a reader
     /// can still trace where the bytes were supposed to come from.
     pub source_url: Option<String>,
     /// Upstream ref_id of the attachment bytes — the same key the
-    /// provider hands to its per-chat [`BlobBundle`] in
-    /// `parse`. When chat-common's renderer can resolve the ref_id in
-    /// the bucket's bundle it writes the bytes under
-    /// `<page_dir>/blobs/<short-blake3>.<ext>` and overwrites
-    /// `rel_path` so the markdown link points at the materialized
-    /// blob. Unknown ref_ids fall through to the "(not yet fetched)"
-    /// placeholder.
+    /// provider hands to its per-chat [`BlobBundle`] in `parse`. When
+    /// chat-common's renderer resolves it in the bucket's bundle it sets
+    /// `href` from there. Unknown ref_ids fall through to the
+    /// "(not yet fetched)" placeholder.
     pub ref_id: Option<String>,
 }
 
@@ -178,9 +173,9 @@ pub struct NormalizedChatItem {
     pub attachments: Vec<NormalizedAttachment>,
     pub reactions: Vec<NormalizedReaction>,
     /// Where the item is filed upstream — an email's mailboxes and
-    /// labels. Drawn as one `🏷 a · b` line above the body; not part of
-    /// the item's grid text, which is what it says. Empty for every
-    /// provider but email.
+    /// labels, a Google Chat message's star. Drawn as one `🏷 a · b` line
+    /// above the body; not part of the item's grid text, which is what it
+    /// says.
     pub labels: Vec<String>,
     /// Free-form note rendered in italics under the body. Used today
     /// only for system events ("Worf joined", "ephemeral disappearing

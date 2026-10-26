@@ -28,12 +28,14 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+pub mod applet_memory;
 pub mod applets;
 pub mod auth;
 pub mod binaries;
 pub mod boot;
 pub mod config_upgrade;
 pub mod connect;
+mod data;
 pub mod disk_free;
 mod embed;
 pub mod frontend;
@@ -42,6 +44,8 @@ pub mod lock;
 pub mod logging;
 pub mod loop_guard;
 pub mod manage;
+pub mod oauth_client;
+pub mod params_check;
 pub mod plugins;
 pub mod probe;
 pub mod prometheus;
@@ -55,6 +59,7 @@ pub mod watch;
 
 pub use auth::ApiToken;
 pub use boot::build_state;
+pub use embed::FrameAncestors;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -81,6 +86,9 @@ pub struct AppState {
     /// startup and published to `<root>/system/api-token`; see
     /// [`crate::auth`] for the scheme and why it exists.
     pub api_token: ApiToken,
+    /// Who may frame the app page (`$DATALIB_FRAME_ANCESTORS`); nobody,
+    /// unless Imbue Studio's launcher names its frames.
+    pub frame_ancestors: FrameAncestors,
     /// Bytes on disk, over time. A background task folds what it finds in
     /// here so `GET /api/pipeline/storage` reads a snapshot rather than
     /// walking the disk per open tab. See [`crate::usage`].
@@ -183,7 +191,7 @@ pub fn user_bin_dir() -> Option<PathBuf> {
 
 pub fn router(state: AppState) -> Router {
     // Cloned out before `state` is moved into `with_state` below.
-    let api_token = state.api_token.clone();
+    let gate = state.api_token.clone();
     Router::new()
         .route("/api/health", get(health))
         .route("/api/accounts", get(accounts))
@@ -205,6 +213,10 @@ pub fn router(state: AppState) -> Router {
             post(connect::set_credential),
         )
         .route(
+            "/api/latchkey/{service}/oauth_client",
+            post(connect::set_oauth_client),
+        )
+        .route(
             "/api/latchkey/connect/{id}/status",
             get(connect::connect_status),
         )
@@ -212,6 +224,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/probe/{id}", get(probe::probe_status))
         .route("/api/dag", get(get_dag))
         .route("/api/manage/rows", get(manage::get_manage_rows))
+        .route(
+            "/api/manage/rows/refresh",
+            post(manage::refresh_manage_rows),
+        )
         .route("/api/entities", post(manage::post_entities))
         // Prometheus's own path, so a scrape config needs nothing but the
         // address and the token.
@@ -232,6 +248,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/sync/sources", get(sync_sources))
         .route("/api/pipeline/storage", get(pipeline_storage))
+        .route(
+            "/api/pipeline/storage/refresh",
+            post(pipeline_storage_refresh),
+        )
         .route("/api/pipeline/disk", get(pipeline_disk))
         .route("/api/pipeline/history", get(history::tree_history))
         .route("/api/requests", get(requests_list).post(request_open))
@@ -240,6 +260,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/steps/{id}/turn_on", post(step_turn_on))
         .route("/api/reset", post(reset_steps))
         .route("/api/purge", post(purge_groups))
+        .route("/api/compact", post(compact_steps))
         .route("/api/runs", get(runs_list))
         .route("/api/processes", get(processes_list))
         .route("/api/log/{seq}", get(log_line))
@@ -272,6 +293,12 @@ pub fn router(state: AppState) -> Router {
         // namespace, so byte-identical components resolve to one URL
         // and the browser evaluates them once. See frontend.rs.
         .route("/modules/{hash}", get(get_module))
+        // What a step keeps, by the address a page links it with
+        // (data.rs): its blob store's rows, and nothing else of the step.
+        .route(
+            "/data/{group}/{function}/{kind}/{*rest}",
+            get(data::get_data),
+        )
         // The applet proxy. `{*rest}` keeps the whole remaining path,
         // which the applet sees verbatim.
         .route("/applet/{id}/{*rest}", any(proxy_applet))
@@ -286,7 +313,7 @@ pub fn router(state: AppState) -> Router {
         // the token gate in front a cross-origin page cannot get a usable
         // response anyway, and nothing in-tree needs cross-origin access.
         .layer(axum::middleware::from_fn_with_state(
-            api_token,
+            gate,
             auth::require_token,
         ))
         // Outside the token gate, so a refused request is logged too.
@@ -451,6 +478,11 @@ async fn proxy_impl(
         Err(e) => return applet_error(StatusCode::BAD_REQUEST, &format!("read body: {e}")),
     };
     let target = format!("{path}{query}");
+    // Card scripts written before the rename still call the old prefix.
+    let id = match id.as_str() {
+        "unified_index" => UNIFIED_DOCUMENT_INDEX_APPLET.to_string(),
+        _ => id,
+    };
     let registry = s.applets.clone();
     let result = tokio::task::spawn_blocking(move || {
         // A read: the applet is there or it is not. A config change
@@ -474,10 +506,9 @@ async fn proxy_impl(
 }
 
 /// An applet's answer, as the browser gets it. What an applet serves is
-/// data — a rendered plot page, an attachment out of a render tree — and
-/// a document among it must not run in the app's origin, where it would
-/// hold the session: it gets the sandbox policy of the kind the applet
-/// names, and runs nothing when it names none. A script or wasm file
+/// data, written by whoever wrote the applet, and a document among it
+/// must not run in the app's origin, where it would hold the session: it
+/// gets the sandbox policy that runs nothing. A script or wasm file
 /// goes out as bytes, so the app page's `script-src 'self'` cannot run
 /// one a sender attached.
 fn proxied_response(r: applets::ProxyResponse) -> Response<Body> {
@@ -485,7 +516,7 @@ fn proxied_response(r: applets::ProxyResponse) -> Response<Body> {
         .status(StatusCode::from_u16(r.status).unwrap_or(StatusCode::BAD_GATEWAY))
         .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff");
     if embed::is_scriptable_document(&r.content_type) {
-        resp = resp.header(header::CONTENT_SECURITY_POLICY, r.document.csp());
+        resp = resp.header(header::CONTENT_SECURITY_POLICY, embed::DATA_DOCUMENT_CSP);
     }
     let content_type = if embed::is_executable(&r.content_type) {
         "application/octet-stream".to_string()
@@ -805,13 +836,13 @@ fn source_ids(checked: &datalib_dag::config::ConfigCheck) -> Vec<String> {
 }
 
 /// The applet id that serves the grid, search and the document view.
-const UNIFIED_INDEX_APPLET: &str = "unified_index";
+const UNIFIED_DOCUMENT_INDEX_APPLET: &str = "unified_document_index";
 /// The contacts app's applet id: its mount prefix, and the row whose
 /// Browse opens its table.
 pub(crate) const CONTACTS_APPLET: &str = "datalib_contacts";
 
 fn configured_source_count(fringe: &[String]) -> usize {
-    let prefix = format!("{}/", datalib_core::layout::UNIFIED_INDEX_DIR);
+    let prefix = format!("{}/", datalib_core::layout::UNIFIED_DOCUMENT_INDEX_DIR);
     fringe.iter().filter(|id| !id.starts_with(&prefix)).count()
 }
 
@@ -839,7 +870,7 @@ pub struct ConfigResponse {
     pub diagnostics: Vec<datalib_dag::Diagnostic>,
     /// Whether the app can serve its own views at all. False in three
     /// cases: the file is not a config, or it declares no usable
-    /// `unified_index` applet — one screen for both, because they have
+    /// `unified_document_index` applet — one screen for both, because they have
     /// one consequence: that applet serves the grid, search and the
     /// document view, so without it every view is a 502 — or the root
     /// was written by a newer datalib (`newer_root` says which stores),
@@ -933,7 +964,10 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
             configured_source_count(&source_ids(c)),
             c.diagnostics.clone(),
             !c.is_fatal()
-                && c.cfg.applets.iter().any(|a| a.id == UNIFIED_INDEX_APPLET)
+                && c.cfg
+                    .applets
+                    .iter()
+                    .any(|a| a.id == UNIFIED_DOCUMENT_INDEX_APPLET)
                 && newer_root.is_none(),
         ),
         None => (false, None, 0, Vec::new(), false),
@@ -985,7 +1019,8 @@ pub struct PutConfigRequest {
 #[derive(Debug, Serialize)]
 pub struct ConfigCheckResponse {
     /// Whether this text is acceptable — and, for the PUT, whether it
-    /// was written. True only when every entry loads; a warning (advice
+    /// was written. True only when every entry loads and every built-in
+    /// step's params are ones a sync would accept; a warning (advice
     /// about a config that runs exactly as written) does not make it
     /// false. See `put_config` for why this door is stricter than the
     /// loader.
@@ -999,7 +1034,23 @@ pub struct ConfigCheckResponse {
 }
 
 async fn check_config(Json(req): Json<PutConfigRequest>) -> Json<ConfigCheckResponse> {
-    Json(config_verdict(&req.text))
+    Json(full_verdict(&req.text).await)
+}
+
+/// [`config_verdict`], with each built-in step's params held to what a
+/// sync would accept: a step a sync would refuse is reported against its
+/// line like any other problem, and the text is not written.
+async fn full_verdict(text: &str) -> ConfigCheckResponse {
+    let mut verdict = config_verdict(text);
+    let refused = params_check::refused(text).await;
+    if !refused.is_empty() {
+        verdict.ok = false;
+        if verdict.error.is_none() {
+            verdict.error = refused.first().map(|d| d.describe());
+        }
+        verdict.diagnostics.extend(refused);
+    }
+    verdict
 }
 
 fn config_verdict(text: &str) -> ConfigCheckResponse {
@@ -1021,7 +1072,8 @@ fn config_verdict(text: &str) -> ConfigCheckResponse {
 /// can fix it now — so nothing that drops an entry is written. A warning is
 /// returned and the file is written anyway: it changes nothing about what
 /// runs, and refusing it would make the editor unable to save a config the
-/// app is happily running on.
+/// app is happily running on. A built-in step whose params a sync would
+/// refuse is refused here too (`params_check`), for the same reason.
 ///
 /// Every diagnostic comes back, not just the first, so a caller fixing a
 /// config needs one round-trip rather than one per mistake. Writes via a
@@ -1035,7 +1087,7 @@ async fn put_config(
 
     // Validate the submitted text before it touches the filesystem, so
     // a rejected config never gets written even transiently.
-    let verdict = config_verdict(&req.text);
+    let verdict = full_verdict(&req.text).await;
     if !verdict.ok {
         return Ok(Json(verdict));
     }
@@ -1046,7 +1098,7 @@ async fn put_config(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
     }
-    if let Err(e) = datalib_runtime::atomic::write_owner_only(&path, req.text.as_bytes()) {
+    if let Err(e) = config_upgrade::save(&s.root, &req.text) {
         tracing::error!("put_config: write {}: {e}", path.display());
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
@@ -1332,11 +1384,24 @@ pub struct DagRecord {
     /// step id → the Items cell: what its store held the last time it
     /// counted, and the series behind that. Only render steps report it.
     pub items: std::collections::HashMap<String, datalib_columns::Timeseries>,
+    /// How long each read took, for the line a slow Manage answer writes.
+    pub took: RecordTimings,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RecordTimings {
+    /// The loop's record, in `system/supervisor.sqlite`.
+    pub loop_record: std::time::Duration,
+    /// The rest is the run store, `system/runs/runs.sqlite`: the live
+    /// run's progress, then the metrics behind Problems and Items.
+    pub run_progress: std::time::Duration,
+    pub run_metrics: std::time::Duration,
 }
 
 /// An open run in the record while nothing is running is a run that died,
 /// so `live` is [`supervisor::SyncControl::running`].
 pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) -> DagRecord {
+    let started = std::time::Instant::now();
     let loaded = match sync.mailbox().await {
         Ok(store) => store.load_record().await,
         Err(e) => Err(e),
@@ -1363,6 +1428,7 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
     // the runner writing its first row, the newest run in the store is
     // still the run before — and painting its numbers onto this run's
     // steps is worse than showing none at all.
+    let loop_record = started.elapsed();
     let store = datalib_runs::snapshot(root).await;
     let progress = match (&run, &store.run_id) {
         (Some(r), Some(store_run)) if &r.run_id == store_run => {
@@ -1370,6 +1436,7 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
         }
         _ => Default::default(),
     };
+    let run_progress = started.elapsed() - loop_record;
 
     let problems =
         manage::counts_by_step(&datalib_runs::latest_metric(root, datalib_problems::METRIC).await);
@@ -1381,6 +1448,11 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
         &datalib_runs::latest_metric(root, datalib_metrics::DOCUMENTS).await,
         &datalib_runs::metric_history(root, datalib_metrics::ITEMS, &since).await,
     );
+    let took = RecordTimings {
+        loop_record,
+        run_progress,
+        run_metrics: started.elapsed() - loop_record - run_progress,
+    };
 
     DagRecord {
         run,
@@ -1389,6 +1461,7 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
         progress,
         problems,
         items,
+        took,
     }
 }
 
@@ -1406,6 +1479,7 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
         progress,
         problems: _,
         items: _,
+        took: _,
     } = dag_record(&s.root, &s.sync).await;
 
     let build = || -> anyhow::Result<Vec<DagStepInfo>> {
@@ -1473,7 +1547,7 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
 /// keeping the root self-contained.
 fn scaffold_toml() -> String {
     "\
-# ── the unified index ──────────────────────────────────────────────────
+# ── the unified document index ─────────────────────────────────────────
 # A group is one thing on the Manage screen; its steps are what run.
 # Every source feeds these two — the grid reads its rendered markdown,
 # the qmd aggregator its search steps. A step's id is
@@ -1490,29 +1564,29 @@ fn scaffold_toml() -> String {
 # <origin>/agent/config.md.
 
 [[groups]]
-id = \"unified_index\"
-name = \"Unified Index\"
+id = \"unified_document_index\"
+name = \"Document Index\"
 
 [[steps]]
-group = \"unified_index\"
+group = \"unified_document_index\"
 function = \"grid_index\"
 inputs = []
 
 [[steps]]
-group = \"unified_index\"
+group = \"unified_document_index\"
 function = \"qmd_aggregator\"
 inputs = []
 
 # The applet that serves the grid: the app has no search, no document
 # view and no document picker without it. It is an applet like any
 # other — a server the gateway spawns and proxies at
-# `/applet/unified_index/` — which is why it is written here rather
+# `/applet/unified_document_index/` — which is why it is written here rather
 # than compiled into the backend.
 
 [[applets]]
-group = \"unified_index\"
-id = \"unified_index\"
-command = \"datalib-applet unified_index\"
+group = \"unified_document_index\"
+id = \"unified_document_index\"
+command = \"datalib-applet unified_document_index\"
 
 # The contacts app: the contacts a person makes and the handles they
 # link to them, which the person chips and search read. Without it the
@@ -1520,7 +1594,7 @@ command = \"datalib-applet unified_index\"
 # to link. Its store is `datalib_curated/datalib_contacts/`.
 
 [[applets]]
-group = \"unified_index\"
+group = \"unified_document_index\"
 id = \"datalib_contacts\"
 command = \"datalib-applet datalib_contacts\"
 "
@@ -1547,29 +1621,43 @@ async fn sync_sources(State(s): State<AppState>) -> Json<Vec<SourceInfo>> {
     )
 }
 
-/// Query for [`pipeline_storage`].
+/// The query a reading route takes only to refuse it: `refresh` was a
+/// GET flag once, and is a POST now.
 #[derive(Debug, Deserialize)]
-struct StorageParams {
-    /// Held as text rather than as a `bool`, and read leniently below.
-    /// `serde_urlencoded` accepts only the literals `true` and `false`
-    /// for a bool, so `?refresh=1` — what a person, a curl, or an agent
-    /// actually writes — comes back as a 400 on the whole request
-    /// rather than as a flag that didn't take.
+pub struct RefreshParams {
     #[serde(default)]
     refresh: Option<String>,
 }
 
-pub(crate) fn flag_is_set(v: Option<&str>) -> bool {
-    matches!(v, Some("") | Some("1") | Some("true") | Some("yes"))
+/// A walk of the data root is a `POST {route}/refresh`, never a GET: a
+/// GET is what any link can make the browser send with the person's
+/// cookie — an `<img>` in an email, a card's argument, a page on
+/// another site. A GET still asking for one is refused by name rather
+/// than quietly answered from the last walk.
+pub(crate) fn refuse_refresh(route: &str, p: &RefreshParams) -> Result<(), (StatusCode, String)> {
+    match p.refresh {
+        None => Ok(()),
+        Some(_) => Err((
+            StatusCode::BAD_REQUEST,
+            format!("a GET never walks the data root; POST {route}/refresh does"),
+        )),
+    }
 }
 
 async fn pipeline_storage(
     State(s): State<AppState>,
-    Query(p): Query<StorageParams>,
-) -> Json<usage::PipelineStorage> {
-    if flag_is_set(p.refresh.as_deref()) {
-        usage::sample_on_demand(&s.usage, &s.app, s.root.clone(), &s.root_tx).await;
-    }
+    Query(p): Query<RefreshParams>,
+) -> Result<Json<usage::PipelineStorage>, (StatusCode, String)> {
+    refuse_refresh("/api/pipeline/storage", &p)?;
+    Ok(storage_snapshot(&s).await)
+}
+
+async fn pipeline_storage_refresh(State(s): State<AppState>) -> Json<usage::PipelineStorage> {
+    usage::sample_on_demand(&s.usage, &s.app, s.root.clone(), &s.root_tx).await;
+    storage_snapshot(&s).await
+}
+
+async fn storage_snapshot(s: &AppState) -> Json<usage::PipelineStorage> {
     let steps = usage::declared_trees(&s.config_path());
     Json(s.usage.snapshot(s.root.as_path(), &steps).await)
 }
@@ -1642,6 +1730,15 @@ struct OpenRequest {
 #[derive(Debug, Deserialize)]
 struct ResetRequest {
     /// Step ids.
+    targets: Vec<String>,
+    #[serde(default)]
+    by: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CompactRequest {
+    /// Step ids; none for every step that takes the verb.
+    #[serde(default)]
     targets: Vec<String>,
     #[serde(default)]
     by: Option<String>,
@@ -1837,6 +1934,19 @@ async fn purge_groups(
 ) -> Result<StatusCode, Refusal> {
     let by = req.by.unwrap_or_else(|| "ui".to_string());
     wiped(s.sync.purge(&req.groups, &by).await)
+}
+
+/// `POST /api/compact` — fold away the history nothing reads, and give
+/// back the disk it held (`step_protocol.md` § Compact). No targets is
+/// every step that takes the verb. 204 once done; 202 while it runs,
+/// once the steps it holds have stopped; 409, with the reason, for a
+/// step it cannot compact.
+async fn compact_steps(
+    State(s): State<AppState>,
+    Json(req): Json<CompactRequest>,
+) -> Result<StatusCode, Refusal> {
+    let by = req.by.unwrap_or_else(|| "ui".to_string());
+    wiped(s.sync.compact(&req.targets, &by).await)
 }
 
 fn wiped(answer: Result<supervisor::WipeAnswer, String>) -> Result<StatusCode, Refusal> {
@@ -2159,11 +2269,10 @@ mod tests {
         assert_eq!(names, datalib_runs::key_names());
     }
 
-    fn proxied(content_type: &str, document: embed::DocumentKind) -> Response<Body> {
+    fn proxied(content_type: &str) -> Response<Body> {
         proxied_response(applets::ProxyResponse {
             status: 200,
             content_type: content_type.into(),
-            document,
             body: b"<script>1</script>".to_vec(),
         })
     }
@@ -2178,24 +2287,18 @@ mod tests {
     /// browser reads.
     #[test]
     fn proxied_documents_are_sandboxed_and_data_is_not() {
-        let html = proxied("text/html; charset=utf-8", embed::DocumentKind::Data);
+        let html = proxied("text/html; charset=utf-8");
         assert_eq!(html.status(), StatusCode::OK);
         assert_eq!(
             header_of(&html, header::CONTENT_SECURITY_POLICY),
-            Some(embed::DocumentKind::Data.csp())
+            Some(embed::DATA_DOCUMENT_CSP)
         );
         assert_eq!(
             header_of(&html, header::X_CONTENT_TYPE_OPTIONS),
             Some("nosniff")
         );
 
-        let plot = proxied("text/html", embed::DocumentKind::Plot);
-        assert_eq!(
-            header_of(&plot, header::CONTENT_SECURITY_POLICY),
-            Some(embed::DocumentKind::Plot.csp())
-        );
-
-        let json = proxied("application/json", embed::DocumentKind::Data);
+        let json = proxied("application/json");
         assert!(header_of(&json, header::CONTENT_SECURITY_POLICY).is_none());
         assert_eq!(
             header_of(&json, header::X_CONTENT_TYPE_OPTIONS),
@@ -2213,14 +2316,14 @@ mod tests {
             "application/javascript",
             "application/wasm",
         ] {
-            let r = proxied(ct, embed::DocumentKind::Data);
+            let r = proxied(ct);
             assert_eq!(
                 header_of(&r, header::CONTENT_TYPE),
                 Some("application/octet-stream"),
                 "{ct}"
             );
         }
-        let css = proxied("text/css", embed::DocumentKind::Data);
+        let css = proxied("text/css");
         assert_eq!(header_of(&css, header::CONTENT_TYPE), Some("text/css"));
     }
 
@@ -2362,13 +2465,16 @@ mod tests {
         // nothing is a no-op, not an error.
         assert_eq!(
             source_ids(&checked),
-            ["unified_index/grid_index", "unified_index/qmd_aggregator"]
+            [
+                "unified_document_index/grid_index",
+                "unified_document_index/qmd_aggregator"
+            ]
         );
         // And it declares the applet without which the app has no
         // views at all — the thing `app_ready` reports on — and the
         // contacts app, which a new root gets on by default.
         let applets: Vec<&str> = checked.cfg.applets.iter().map(|a| a.id.as_str()).collect();
-        assert_eq!(applets, [UNIFIED_INDEX_APPLET, CONTACTS_APPLET]);
+        assert_eq!(applets, [UNIFIED_DOCUMENT_INDEX_APPLET, CONTACTS_APPLET]);
     }
 
     /// A scaffolded root has no *sources*, even though its two index
@@ -2380,7 +2486,10 @@ mod tests {
         let fringe = fringe_of(&scaffold_toml());
         assert_eq!(
             fringe,
-            ["unified_index/grid_index", "unified_index/qmd_aggregator"]
+            [
+                "unified_document_index/grid_index",
+                "unified_document_index/qmd_aggregator"
+            ]
         );
         assert_eq!(configured_source_count(&fringe), 0);
     }
@@ -2437,7 +2546,7 @@ mod tests {
             .cfg
             .applets
             .iter()
-            .any(|a| a.id == UNIFIED_INDEX_APPLET));
+            .any(|a| a.id == UNIFIED_DOCUMENT_INDEX_APPLET));
 
         // …and the PUT refuses it anyway, naming every problem so the
         // caller needs one round-trip rather than one per mistake.

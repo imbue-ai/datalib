@@ -4,11 +4,25 @@
 use datalib_source_common::{RenderCommon, SourceCommon};
 use serde::{Deserialize, Serialize};
 
+/// This source's config stanzas, for `datalib-step help`.
+pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "github",
+        toml: include_str!("../examples/minimal_github.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "github",
+        toml: include_str!("../examples/complete_github.toml"),
+    },
+];
+
 /// The perseus-owned slice of a `perseus` source. `github` — TEI files
 /// fetched from PerseusDL — is its one ingest method. A tree staged by
 /// hand has no ingest step at all: its render step names the tree on
 /// `common.input_path`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PerseusConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by
@@ -29,7 +43,7 @@ impl PerseusConfig {
 /// (the download-step params) so each step's params carry only what
 /// that wave reads. Perseus is file-tree-backed, so render reads
 /// `common.input_path` (a tree staged by hand) else the ingest tree.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PerseusRenderConfig {
     #[serde(default)]
@@ -40,17 +54,19 @@ pub struct PerseusRenderConfig {
     pub alignment_pairs: Vec<[String; 2]>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PerseusSync {
-    /// TEI subpaths to fetch from PerseusDL/canonical-greekLit.
+    /// TEI files to fetch, as paths inside PerseusDL/canonical-greekLit's
+    /// `data/` folder. Empty fetches the default Thucydides editions.
     #[serde(default)]
     pub files: Vec<String>,
-    /// Legacy location of the alignment pairs — the knob now lives on
-    /// the render step's params ([`PerseusRenderConfig::alignment_pairs`]).
-    /// Still parsed here so old-format configs migrate losslessly; the
-    /// download planner rejects it with a pointer to the new home.
+    /// Where `alignment_pairs` used to go. It now belongs on the render
+    /// step's params; an older config that still sets it here loads, and
+    /// the ingest step refuses it with a pointer to the render step. Out
+    /// of the schema, so `datalib-step help` does not offer it.
     #[serde(default)]
+    #[schemars(skip)]
     pub alignment_pairs: Vec<[String; 2]>,
 }
 

@@ -108,10 +108,9 @@ Aim: at least one example of every shape we've seen in real backups.
 | Activity type `edited-block-value` (before/after) | `ac710001-...0002`             |
 | Notion `updated` stream (version bump) | `notion_block/updated/events.jsonl` (root page title changed v10→v11) |
 | Render-only source (no download step) | `yolink` — raw store seeded by `yolink-make-fixture` |
-| Timeseries render (one page of plots) | `yolink/render_markdown/index.md` + `plots/*.html` |
-| Non-SI unit converted at render | `sickbay_plasma_fridge` reports `temperature_f`; plots in °C |
-| Two metrics of one quantity on split axes | `deck_12_water_main` — per-sample litres left, totalizer right |
-| Relative `<iframe src>` in a rendered body | yolink plot embeds (rewritten to `/api/asset/…` by the UI) |
+| Timeseries render (one page of charts) | `yolink/render_markdown/index.md`, its `data-time-series` elements |
+| Non-SI unit converted where it is drawn | `sickbay_plasma_fridge` reports `temperature_f`, stored as `[degF]` and charted beside °C |
+| Two metrics of one quantity on two charts | `deck_12_water_main` — per-sample consumption, and the totalizer on a chart of its own |
 
 ## Star Trek: TNG dramatis personae
 
@@ -177,7 +176,7 @@ inside the same second can agree by luck:
 
 **The table contents are the property worth relying on, and they hold.**
 Dump them (`.mode json`, `SELECT * … ORDER BY 1`) and two independent
-runs agree byte for byte. `//datalib/backend/unified_index:fixture_db_snapshot_test`
+runs agree byte for byte. `//datalib/backend/unified_document_index:fixture_db_snapshot_test`
 is an insta snapshot of exactly that, which is why it can exist at all.
 
 The **file** cannot be byte-stable, and no amount of `--now` pinning will

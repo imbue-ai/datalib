@@ -62,14 +62,15 @@ pub fn run(
         Some(SourceType::Notion) => Box::new(datalib_etl_notion::synthesize::NotionSynth::new(
             input.clone(),
         )),
-        Some(SourceType::Beeper) => Box::new(datalib_etl_beeper::synthesize::BeeperSynth::new(
-            input.clone(),
-        )),
         // Garmin's fixture is one spec file, not a tree: `fixture_path`
         // names the JSON.
         Some(SourceType::Garmin) => Box::new(datalib_etl_garmin::synthesize::GarminSynth::new(
             input.clone(),
         )),
+        // Like Garmin's, one spec file whose images sit beside it.
+        Some(SourceType::GoogleDrive) => Box::new(
+            datalib_etl_google_drive::synthesize::GoogleDriveSynth::new(input.clone()),
+        ),
         // Everything else is file-backed or otherwise synth-less: no
         // download HTTP to play back. Skip quietly like sync did.
         _ => {

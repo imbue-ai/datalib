@@ -66,8 +66,6 @@ impl DataProcessor for FsindexIngest {
                 cache.path().display()
             );
             let s = ingest::fetch(ingest::FetchOptions {
-                // Unused when `db` is Some (fetch reuses the open handle); kept for
-                // the standalone-open path's signature.
                 db,
                 source_id: self.source_id.clone(),
                 root: self.root.clone(),

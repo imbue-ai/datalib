@@ -42,7 +42,7 @@ async function openClaude(page: Page, service: object) {
   await page.route("**/api/latchkey/claude-ai", (route) => route.fulfill({ json: service }));
   await page.goto("/data_sources");
   await page.getByRole("button", { name: "Add source" }).click();
-  // By blurb: "Claude" alone also matches the Claude export tile.
+  // By blurb: "Claude" alone also matches the "Claude (export)" tile.
   await wizard(page).locator(".wiz-tile", { hasText: "Copy your claude.ai conversations" }).click();
 }
 

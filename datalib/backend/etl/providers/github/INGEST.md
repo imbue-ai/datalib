@@ -102,9 +102,9 @@ row, and the sync goes on with the rest.
 - **The shared retry loop giving up** (rate limits or failures past
   the source's budget) stops the requests there, rather than failing
   every PR after it; the run keeps what it fetched. A `phase:fetch`
-  row (`phase:search` when it was a search) says so, what the searches
-  listed stays owed, and the next run fetches the rest; the row goes
-  with it.
+  row (`phase:search` when it was a search) says so, and the step ends
+  `incomplete`, not `succeeded`. What the searches listed stays owed,
+  and the next run fetches the rest; the row goes with it.
 - **A search** that fails is a `listing:search <scope>` row — a
   warning when GitHub refused the credential (401/403), an error
   otherwise. It covers nothing, so the next run searches the same
@@ -129,8 +129,8 @@ What it listed before the stop is stored, and the next run fetches it.
 
 ## Single-PR mode
 
-`--pull-request owner/repo#NUM` (also `owner/repo/pull/NUM` or a
-github.com PR URL; repeatable) skips discovery entirely, fetching just
+`--pull-request owner/repo#NUM` (or a github.com PR URL;
+repeatable) skips discovery entirely, fetching just
 those PRs whatever the store holds: nothing is listed or covered, and
 a PR an earlier run could not fetch whole waits for the next discovery
 run. A give-up of the retry loop is a `phase:fetch` row. The config's

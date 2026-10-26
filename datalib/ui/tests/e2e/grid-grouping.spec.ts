@@ -9,7 +9,7 @@ import { GRID, gridSettled, SEARCH_ROWS, type GridApi } from "./grid-helpers";
 type Group = { values: (string | null)[]; count: number };
 
 async function groupsOf(request: APIRequestContext, by: string): Promise<Group[]> {
-  const r = await request.get(`/applet/unified_index/search/groups?q=&by=${by}`);
+  const r = await request.get(`/applet/unified_document_index/search/groups?q=&by=${by}`);
   expect(r.ok()).toBe(true);
   return ((await r.json()) as { groups: Group[] }).groups;
 }

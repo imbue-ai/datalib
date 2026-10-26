@@ -4,7 +4,7 @@
 // the last sync did, notices as strips above the table, and a status
 // column that says its word before its time. Its logic is
 // sourcesCardModel.ts.
-import { computed, onMounted } from "vue";
+import { computed, onBeforeUnmount, onMounted } from "vue";
 import type { Column } from "@slickgrid-universal/common";
 import type { CardCtx } from "./types";
 import type { Quantity, StatusView } from "@/api";
@@ -16,6 +16,8 @@ import { SOURCES_HELP, useSourcesCard, type Row } from "./sourcesCardModel";
 import { formatRelative, formatStamp } from "@/config/timeFormat";
 import { density } from "@/density";
 import { statusTone } from "./dashboard";
+import { entities } from "./entities";
+import type { TableGridApi } from "./tableGridApi";
 
 // `add`: open on the add-source form, as the Dashboard's "Add source" does.
 const props = defineProps<{ ctx: CardCtx; add?: boolean }>();
@@ -33,6 +35,8 @@ const {
   configPath,
   droppedRows,
   emptyDiagnosis,
+  emptyTable,
+  rowsError,
   manage,
   rows,
   syncAll,
@@ -42,6 +46,7 @@ const {
   contextMenuItems,
   isGroupOpenByDefault,
   onGridReady,
+  canEditCell,
   onCellDoubleClicked,
   onCellEdit,
   onRowGroupOpened,
@@ -59,7 +64,8 @@ const {
 /// What the header says when no action of this card has anything to
 /// say: how the last sync went.
 const runLine = computed(() => {
-  const run = manage.value?.run;
+  if (!manage.value) return { ok: true, text: "Loading…" };
+  const run = manage.value.run;
   if (!run) return { ok: true, text: "Not synced yet" };
   if (run.live) return { ok: true, text: "Syncing now" };
   return { ok: true, text: `Last sync finished ${formatRelative(run.finished_at, Date.now())}` };
@@ -130,6 +136,24 @@ const columnOverrides: Record<string, Partial<Column<Row>>> = {
 onMounted(() => {
   if (props.add) openAdd();
 });
+
+// A group's or step's Name is its chip (sourcesCardModel's `decorate`),
+// a step under the short name the row gives it; the Status column beside
+// it says what its dot would.
+const chips = {
+  who: () => undefined,
+  canLink: () => false,
+  entity: (uri: string) => entities.lookup(uri),
+  keepLabels: true,
+  quiet: true,
+};
+let grid: TableGridApi<Row> | null = null;
+function onReady(api: TableGridApi<Row>) {
+  grid = api;
+  onGridReady(api);
+}
+const stopEntities = entities.subscribe(() => grid?.refreshCells(["name"]));
+onBeforeUnmount(stopEntities);
 
 // Rows sized to the density; the grid reads its height once, so a
 // change rebuilds it.
@@ -208,8 +232,11 @@ const rowHeight = computed(() => Math.round(28 + 8 * density.value));
         :columnOverrides="columnOverrides"
         :rowHeight="rowHeight"
         :movable="isMovable"
-        @ready="onGridReady"
+        :chips="chips"
+        :canEdit="canEditCell"
+        @ready="onReady"
         @cellDoubleClick="onCellDoubleClicked"
+        @openCard="(source) => props.ctx.host.openCards(source)"
         @edit="onCellEdit"
         @rowGroupOpened="onRowGroupOpened"
         @move="onRowMove"
@@ -222,7 +249,13 @@ const rowHeight = computed(() => Math.round(28 + 8 * density.value));
       </span>
       <button class="sx-btn" @click="openConfig">Show the config</button>
     </div>
-    <p v-else-if="rows.length === 0 && !parseError" class="sx-empty">
+    <p v-else-if="emptyTable === 'loading' && !parseError" class="sx-empty" role="status">
+      Loading the sources…
+    </p>
+    <p v-else-if="emptyTable === 'failed' && !parseError" class="sx-strip sx-strip-bad">
+      <span class="sx-strip-text">Could not load the sources: {{ rowsError }}</span>
+    </p>
+    <p v-else-if="emptyTable === 'empty' && !parseError" class="sx-empty">
       Nothing configured yet. <b>Add source</b> walks you through one.
     </p>
 

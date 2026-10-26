@@ -13,7 +13,6 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact};
-use datalib_etl::blob_cas::{self, BlobBundle};
 use datalib_etl::doltlite_raw::table_exists;
 use datalib_etl::periodize::Period;
 use datalib_etl_chat_common::types::{AuthorKind, NamedPerson, UpstreamRef};
@@ -28,26 +27,11 @@ use sqlx::Row;
 
 use super::ids;
 
-/// SQL projection resolving an attachment's `ref_id` — the file's
-/// blake3, which render stamps onto each `NormalizedAttachment` — to
-/// its CAS entry. Consumed by [`BlobBundle::load_many`] from the per-chat
-/// load below. A row exists only for a file the scan actually saw, so
-/// a half-extracted `Media/` tree simply yields no bytes.
-const ATTACHMENTS_PROJECTION_SQL: &str = "
-    SELECT blake3 AS ref_id, blake3,
-           mime_type AS content_type,
-           relative_path AS upstream_name
-      FROM wa_media_files
-     WHERE blake3 IN ({placeholders})";
-
-/// What `parse` returns to render: the chat tree plus a per-chat `BlobBundle`
-/// carrying every attachment's bytes pre-loaded from the sibling CAS — the
-/// synchronous bag the chat-common renderer reads at `materialize_to_dir`
-/// time, mirroring slack's shape.
-#[derive(Default)]
+/// What `parse` returns to render: the chat tree, and the commit it was
+/// read at, which render reads the chats' attachment bytes at.
 pub struct ParsedWhatsApp {
     pub chats: Vec<NormalizedChat>,
-    pub blobs_by_chat: HashMap<String, BlobBundle>,
+    pub commit: String,
 }
 
 /// The natural key of a message, resolved from its rowid.
@@ -58,15 +42,17 @@ pub struct MsgKey {
     pub from_me: i64,
 }
 
+/// `None` when nothing has been mirrored to render: no store, nothing
+/// committed, or a store the download opened but never filled.
 pub fn parse(
     raw_dir: &Path,
     period: Period,
     source_id: &str,
     range: RawRange<'_>,
-) -> Result<ParsedWhatsApp> {
+) -> Result<Option<ParsedWhatsApp>> {
     let db_path = datalib_etl::doltlite_raw::db_path_for(raw_dir);
     if !db_path.exists() {
-        return Ok(ParsedWhatsApp::default());
+        return Ok(None);
     }
     // Bridge to sync sqlx code: this fn is called from a sync context
     // (render phase). We need to spin up a tokio runtime since sqlx
@@ -86,7 +72,7 @@ async fn parse_async(
     period: Period,
     source_id: &str,
     range: RawRange<'_>,
-) -> Result<ParsedWhatsApp> {
+) -> Result<Option<ParsedWhatsApp>> {
     // Pinned at open: the driver's pin when it made one, else HEAD. No
     // commit means nothing has been committed to render, which is
     // emptiness rather than a reason to read the working set.
@@ -94,9 +80,23 @@ async fn parse_async(
         .await
         .with_context(|| format!("open {}", db_path.display()))?
     else {
-        return Ok(ParsedWhatsApp::default());
+        return Ok(None);
     };
+    // The store's own sidecar tables are committed when it is first
+    // opened, so a commit can exist before any backup has been mirrored
+    // into it; until one has, there is nothing to render.
+    if !datalib_etl::doltlite_raw::table_exists(reader.pool(), "jid").await? {
+        reader.close().await;
+        return Ok(None);
+    }
     let pool: SqlitePool = reader.pool().clone();
+    // msgstore's tables arrive together with the first mirror. Until one
+    // succeeds — no key, a backup that will not decrypt — the store holds
+    // only the tables this provider declares.
+    if !table_exists(&pool, "jid").await? {
+        pool.close().await;
+        return Ok(None);
+    }
 
     let jids = load_jids(&pool).await?;
     let names = JidNames::load(&pool, &jids).await?;
@@ -144,7 +144,7 @@ async fn parse_async(
             Some(_) => Vec::new(),
             None => vec![NamedPerson {
                 shown: display.clone(),
-                handle: Handle::whatsapp_jid(&chat_jid),
+                handle: names.handle(&chat_jid),
             }],
         };
         chat_idx_by_rowid.insert(rowid, chats.len());
@@ -264,7 +264,7 @@ async fn parse_async(
             .entry(key.clone())
             .or_default()
             .push(NormalizedAttachment {
-                rel_path: None,
+                href: None,
                 file_name: media_name.or_else(|| {
                     file_path
                         .as_deref()
@@ -454,36 +454,10 @@ async fn parse_async(
         });
     }
 
-    // 7) Per-chat BlobBundle: walk every attachment in every chat,
-    //    collect the unique `ref_id`s, then load their bytes from the
-    //    sibling CAS in one shot via ATTACHMENTS_PROJECTION_SQL. Same
-    //    shape slack uses for per-thread bundles — render no longer
-    //    has to open a CAS pool itself.
-    let cas_pool = blob_cas::open_cas_for_render(db_path)
-        .await
-        .with_context(|| format!("open the blob store beside {}", db_path.display()))?;
-    let refs = out.iter().map(|chat| {
-        let refs = chat
-            .buckets
-            .iter()
-            .flat_map(|bucket| &bucket.items)
-            .flat_map(|item| &item.attachments)
-            .filter_map(|att| att.ref_id.as_deref());
-        (chat.id.clone(), refs)
-    });
-    let loaded =
-        BlobBundle::load_many(&pool, cas_pool.as_ref(), ATTACHMENTS_PROJECTION_SQL, refs).await;
-    if let Some(cas) = cas_pool {
-        cas.close().await;
-    }
-    let mut blobs_by_chat = loaded?;
-    blobs_by_chat.retain(|_, bundle| !bundle.is_empty() || bundle.has_missing());
-    pool.close().await;
+    let commit = reader.pin().commit().to_string();
+    reader.close().await;
 
-    Ok(ParsedWhatsApp {
-        chats: out,
-        blobs_by_chat,
-    })
+    Ok(Some(ParsedWhatsApp { chats: out, commit }))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -695,9 +669,11 @@ impl JidNames {
         Ok(out)
     }
 
-    /// A linked id's handle is its phone number's, where `jid_map` knows it.
+    /// A linked id's handle is its phone number's, where `jid_map` knows
+    /// it, else the linked id's own.
     fn handle(&self, jid: &str) -> Option<Handle> {
         Handle::whatsapp_jid(self.phone_jid.get(jid).map_or(jid, String::as_str))
+            .or_else(|| Handle::whatsapp_lid(jid))
     }
 
     /// The person as the phone's address book has them: every name an
@@ -793,13 +769,18 @@ impl JidNames {
     }
 }
 
+/// A person no name was found for: their number, or for a linked id
+/// with none, its last digits, which tell two strangers apart; the
+/// chip's tooltip has the whole id.
 fn label_from_jid(jid: &str) -> String {
     if let Some((user, server)) = jid.split_once('@') {
-        if (server.starts_with("s.whatsapp.net") || server.starts_with("c.us"))
-            && !user.is_empty()
-            && user.chars().all(|c| c.is_ascii_digit())
-        {
+        let digits = !user.is_empty() && user.chars().all(|c| c.is_ascii_digit());
+        if (server.starts_with("s.whatsapp.net") || server.starts_with("c.us")) && digits {
             return format!("+{user}");
+        }
+        if server == "lid" && digits {
+            let tail = &user[user.len().saturating_sub(4)..];
+            return format!("WhatsApp user …{tail}");
         }
     }
     jid.to_string()
@@ -876,13 +857,13 @@ mod jid_names_tests {
         let phone = Handle::tel("+17015550101");
         assert_eq!(names.handle("1@lid"), phone);
         assert_eq!(names.handle("17015550101@s.whatsapp.net"), phone);
-        assert_eq!(names.handle("3@lid"), None);
+        assert_eq!(names.handle("3@lid"), Handle::whatsapp_lid("3@lid"));
         assert_eq!(names.handle("bridge-crew@g.us"), None);
     }
 
     /// The precedence the issue asked for: a learned name, else the
-    /// phone number behind the linked id, else the raw JID — and a
-    /// mapping that is missing must not turn into a blank.
+    /// phone number behind the linked id, else the linked id's last
+    /// digits — and a mapping that is missing must not turn into a blank.
     #[test]
     fn name_then_mapped_phone_then_raw_jid() {
         let mut names = JidNames::default();
@@ -900,7 +881,11 @@ mod jid_names_tests {
         let inputs = Inputs::default();
         assert_eq!(names.label("1@lid", &inputs), "+17015550102");
         assert_eq!(names.label("2@lid", &inputs), "Will Riker");
-        assert_eq!(names.label("3@lid", &inputs), "3@lid");
+        assert_eq!(
+            names.label("100000000000108@lid", &inputs),
+            "WhatsApp user …0108",
+            "a stranger's chat was titled by the raw id"
+        );
         assert_eq!(
             names.label("17015550104@s.whatsapp.net", &inputs),
             "+17015550104"

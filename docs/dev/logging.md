@@ -9,7 +9,7 @@ page is the map.
 ## One store
 
 Everything any datalib process says lands in one file,
-`<data_root>/system/runs/runs.sqlite` — plain SQLite in rollback-journal mode, so
+`<data_root>/system/runs/runs.sqlite` — plain SQLite in WAL mode, so
 `sqlite3` opens it and two writers share it through SQLite's own
 locking. The runner writes it during a run; `datalib-http` writes it
 for the life of the server. The tables:
@@ -43,10 +43,30 @@ it: a reader that opened the old file would stay on the deleted one,
 where no writer holds a lock, take the new file's journal for a crashed
 writer's and delete it — and the new writer's commit would fail. So
 the remake is SQLite's own reset, under the file's lock like any write
-(`open_or_recreate` in `datalib/backend/runs/src/store.rs`).
+(`open_or_recreate` in `datalib/backend/runs/src/store.rs`). In WAL
+mode doltlite's reset waits for every other connection to the file to
+close. Our reads open and close per call, in milliseconds; a process
+that held the file open past the ten-second wait (an older build's
+server, still running) would leave the remaking writer refused at its
+start.
 `runs_two_process_test` runs four writers
 at once — on a fresh root, and on one this build has to remake — and
 checks that every line published reaches the store.
+
+**A reader never waits on a writer.** That is what WAL buys. Every
+Manage answer, chip and log page reads this file while a sync writes
+it. In a rollback journal each of those reads queued behind each commit,
+and a disk busy with a sync and a build made a commit seconds long: a
+Manage answer took fifteen seconds, and the Sources card read as
+empty for all of it. On a copy of a real store, with two writers and
+the disk saturated, WAL cut a Manage answer's reads from a p95 of
+3.4–3.9 s to 1.0–1.2 s, and a commit's from 1.1 s to about 0.1 s.
+`reader_beside_a_writer` in `runs/tests/runs_tests/` holds the store to
+it: a read must be answered while a writer holds the write lock. A
+store an older build left in a rollback journal turns to WAL at its
+first open, rows and all. Recent rows can sit in `runs.sqlite-wal`
+until SQLite folds them into the main file, so copy the store with
+`sqlite3 … ".backup …"` or `VACUUM INTO`, never with `cp` alone.
 
 One thing this rests on: SQLite's file locking is not dependable on a
 network or file-syncing filesystem. **A data root belongs on local
@@ -59,8 +79,10 @@ one, `process_log_days` / `process_log_lines` for the lines outside
 any run — the server's and the pages'. One more key, `disk_usage_days`,
 is for the disk samples rather than this store
 ([`app_stores.md`](app_stores.md) § "Disk stats"). The store is not load-bearing:
-one that will not open is emptied and remade, and a schema bump does
-the same. The old file is copied first to `runs.bak_<UTC stamp>.sqlite`
+one that will not open is emptied and remade. A store from an older
+schema version climbs the rungs in `store.rs`'s `UPGRADES` in place,
+keeping its rows; one at a version with no rung, a newer build's
+included, is emptied and remade too. The old file is copied first to `runs.bak_<UTC stamp>.sqlite`
 beside it, so its lines can still be read with `sqlite3`; nothing
 deletes those copies, so remove them by hand when you are done with
 them. A copy that fails is an ERROR and costs the old lines, never the
@@ -80,7 +102,27 @@ when something saw, and the commit it was built from — what a line's
 | `dag` | a run of the runner | itself | it records nothing; the run row closes |
 | `step` | one attempt of one step — or one pass of a streaming consumer, which is spawned once per producer checkpoint; every pass is its own process, all under `attempt 1` | the runner, at spawn and at `wait(2)` | `exit_code` or `signal` |
 | `http` | a launch of the server, and what its applets said | itself | it cannot see its own end |
+| `applet` | one start of one applet, its config id in `applet`; it writes no lines, which stay the server's | the server, at spawn and when it stops or reaps it | `exit_code` or `signal` |
 | `ui` | one load of the app in one browser tab | the server, on the page's behalf | the page says so on `pagehide` |
+
+A process that was measured also carries **`peak_rss_bytes`**: the most
+resident memory it and everything below it held. The runner fills it
+for a step's attempt from the step's `rss_peak_bytes` series
+([`step_protocol.md`](step_protocol.md)), and the server for an applet
+from its own sampling every five seconds (`http/src/applet_memory.rs`).
+Each writes the row again as the peak rises, so a process whose watcher
+died still leaves its peak so far. It is the place to ask which
+process held the most:
+
+```sh
+sqlite3 <root>/system/runs/runs.sqlite \
+  "SELECT process, COALESCE(step, applet), attempt, peak_rss_bytes / 1048576 AS mib
+     FROM processes WHERE peak_rss_bytes IS NOT NULL
+    ORDER BY peak_rss_bytes DESC LIMIT 20"
+```
+
+An applet's row has no lines, so the retention that prunes the server's
+lines prunes it too, `process_log_days` after it started.
 
 A line also keeps its **subject** — `run_id`, `step`, `attempt` — which
 is not the same thing: the runner's line "step X failed" is authored by
@@ -140,10 +182,15 @@ and the log card opens at `min_level:info`, so the lower levels are
 there when asked for and not otherwise. Little emits `trace` today:
 the few `trace!` lines in the tree are a step's progress ticks
 (`etl/src/progress.rs`), so a log with none is the normal case, not a
-sign the level is lost. The server's one `debug` line in ordinary
-service is a live refetch: a request a page made on a `root` frame,
-which while a sync runs is about one a second for each Manage card
-on screen.
+sign the level is lost. The server's `debug` lines in ordinary
+service are a live refetch — a request a page made on a `root` frame,
+which while a sync runs is about one a second for each Manage card on
+screen — and the disk walk (`usage: walked the data root`, with how
+long it queued and walked), every five seconds while a sync runs.
+A `GET /api/manage/rows` that takes a second or more also writes an
+`info` line, "the Manage rows were slow to assemble", splitting its
+time between the walk, the loop's record, the run store and the join,
+since the request line has only the total.
 
 ## What is not a log line
 
@@ -251,6 +298,13 @@ What it serves (`http/src/prometheus.rs`):
   source that has not synced in a day.
 - **`datalib_tree_bytes{tree=…}`** and **`datalib_root_bytes`**: what
   the usage sampler last measured.
+- **`datalib_applet_rss_bytes{applet=…}`** and
+  **`datalib_applet_rss_peak_bytes{applet=…}`**: the resident memory of
+  each running applet and every process below it, read every five
+  seconds (`http/src/applet_memory.rs`), and the most since it started.
+  The peak is also on the applet's row in `processes`, which outlives
+  the server (§"Every line has an author"). A step's own memory is the
+  `rss_bytes` series above (`step_protocol.md`).
 
 `//tests/fixtures:metrics_export_e2e_test` scrapes a real server and
 parses the answer with `prometheus_client`, the Prometheus project's

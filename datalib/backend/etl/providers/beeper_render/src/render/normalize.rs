@@ -5,11 +5,12 @@
 //! per-network too ("Signal Chat", "Google Chat Message") and so is the
 //! composite `source_label`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
+use datalib_contact_schema::{ContactKind, NormalizedContact, Photo};
 use datalib_etl_chat_common::types::{
-    AuthorKind, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
-    NormalizedReaction, OrphanReactions, UpstreamRef,
+    AuthorKind, ItemKind, NamedPerson, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
+    NormalizedDoc, NormalizedReaction, OrphanReactions, UpstreamRef,
 };
 use datalib_etl_chat_common::RenderProfile;
 use datalib_etl_chat_common::TextFormat;
@@ -18,8 +19,11 @@ use datalib_etl_render::inputs::Inputs;
 use datalib_schema::providers::Provider;
 
 use super::ids;
-use super::parse::{Blob, DocBucket, Event, ParsedBeeper, Room};
+use super::parse::{Blob, DocBucket, Event, ParsedBeeper, Person, Room};
 use super::RENDER_VERSION;
+
+/// Each avatar the blob store holds as an image, by blake3.
+pub type Avatars = HashMap<String, Photo>;
 
 /// Everything one network's chats need to render: the profile that
 /// names its grid-row taxonomy, and the chats themselves.
@@ -34,7 +38,7 @@ pub struct NetworkChats {
 /// spanning three periods yields three chats over one `chat_uuid`. That
 /// keeps the chat-level grid row per-document, which is what beeper has
 /// always emitted, and it keeps each bucket's attachments keyed apart.
-pub fn to_networks(parsed: &ParsedBeeper, source_id: &str) -> Vec<NetworkChats> {
+pub fn to_networks(parsed: &ParsedBeeper, source_id: &str, avatars: &Avatars) -> Vec<NetworkChats> {
     let mut by_network: BTreeMap<String, Vec<NormalizedChat>> = BTreeMap::new();
 
     for doc in &parsed.docs {
@@ -51,10 +55,15 @@ pub fn to_networks(parsed: &ParsedBeeper, source_id: &str) -> Vec<NetworkChats> 
         };
         let no_inputs = Inputs::default();
         let inputs = parsed.inputs.get(&doc.room_uuid).unwrap_or(&no_inputs);
+        let people = parsed
+            .people
+            .get(&doc.room_uuid)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         by_network
             .entry(room.network.clone())
             .or_default()
-            .push(to_chat(source_id, room, doc, inputs));
+            .push(to_chat(source_id, room, people, avatars, doc, inputs));
     }
 
     by_network
@@ -93,7 +102,14 @@ pub fn profile_for(network: &str) -> RenderProfile {
     }
 }
 
-fn to_chat(source_id: &str, room: &Room, doc: &DocBucket, inputs: &Inputs) -> NormalizedChat {
+fn to_chat(
+    source_id: &str,
+    room: &Room,
+    people: &[Person],
+    avatars: &Avatars,
+    doc: &DocBucket,
+    inputs: &Inputs,
+) -> NormalizedChat {
     let items: Vec<NormalizedChatItem> = doc
         .messages
         .iter()
@@ -122,17 +138,38 @@ fn to_chat(source_id: &str, room: &Room, doc: &DocBucket, inputs: &Inputs) -> No
         })
         .collect();
 
+    // A room with no name of its own is called by its other people.
+    let named_after: Vec<NamedPerson> = match &room.title {
+        Some(_) => Vec::new(),
+        None => people
+            .iter()
+            .filter(|p| !p.is_self)
+            .map(|p| NamedPerson {
+                shown: p.label(),
+                handle: p.handle.clone(),
+            })
+            .collect(),
+    };
+    let display = room
+        .title
+        .clone()
+        .or_else(|| {
+            let names: Vec<&str> = named_after.iter().map(|p| p.shown.as_str()).collect();
+            (!names.is_empty()).then(|| names.join(", "))
+        })
+        .or_else(|| room.external_room_id.clone())
+        .unwrap_or_else(|| room.native_room_id.clone());
+
     NormalizedChat {
-        named_after: Vec::new(),
-        contacts: Vec::new(),
+        named_after,
+        contacts: people
+            .iter()
+            .filter_map(|p| contact(source_id, p, avatars))
+            .collect(),
         inputs: inputs.declared(),
         id: bundle_key(doc),
         chat_uuid: ids::room(source_id, &room.native_room_id).uuid,
-        display: room
-            .title
-            .clone()
-            .or_else(|| room.external_room_id.clone())
-            .unwrap_or_else(|| room.native_room_id.clone()),
+        display,
         // `None`, so chat-common derives the same
         // "{source_label} · {display}" heading the other chat sources
         // get — here "Beeper:Signal · Bridge Crew". The old
@@ -146,7 +183,7 @@ fn to_chat(source_id: &str, room: &Room, doc: &DocBucket, inputs: &Inputs) -> No
         // bridge's own id stays on `project`'s neighbour columns.
         external_id: Some(room.native_room_id.clone()),
         upstream_account: None,
-        source_url: None,
+        source_url: room.source_url.clone(),
         org_uuid: None,
         org_name: None,
         // A Beeper stanza bridges several networks, so they stay apart
@@ -187,7 +224,7 @@ fn to_item(source_id: &str, room: &Room, doc: &DocBucket, m: &Event) -> Normaliz
         // kept out of the chat row's search text.
         return NormalizedChatItem {
             message_uuid: ids::event(source_id, &m.native_event_id, m.timestamp_ms).uuid,
-            author_handle: None,
+            author_handle: m.sender_handle.clone(),
             author_kind: AuthorKind::Named,
             author_display: m.sender_label.clone().unwrap_or_default(),
             date_ms: Some(m.timestamp_ms),
@@ -205,13 +242,13 @@ fn to_item(source_id: &str, room: &Room, doc: &DocBucket, m: &Event) -> Normaliz
             unread: false,
             recipients: Vec::new(),
             mentions: Vec::new(),
-            problems: Vec::new(),
+            problems: m.problems.clone(),
         };
     }
 
     NormalizedChatItem {
         message_uuid: ids::event(source_id, &m.native_event_id, m.timestamp_ms).uuid,
-        author_handle: None,
+        author_handle: m.sender_handle.clone(),
         author_kind: AuthorKind::Named,
         author_display: m.sender_label.clone().unwrap_or_default(),
         date_ms: Some(m.timestamp_ms),
@@ -233,14 +270,26 @@ fn to_item(source_id: &str, room: &Room, doc: &DocBucket, m: &Event) -> Normaliz
         unread: false,
         recipients: Vec::new(),
         mentions: Vec::new(),
-        problems: Vec::new(),
+        problems: m.problems.clone(),
     }
+}
+
+/// The person as Beeper knows them, for a person with a handle: their
+/// names, every number and address it lists, and their avatar where the
+/// app had cached it.
+fn contact(source_id: &str, p: &Person, avatars: &Avatars) -> Option<NormalizedContact> {
+    let handle = p.handle.as_ref()?;
+    let mut c = NormalizedContact::new(source_id, handle.as_str(), ContactKind::Person);
+    c.names = p.names.clone();
+    c.handles = p.handles.clone();
+    c.photo = p.avatar.as_ref().and_then(|h| avatars.get(h)).cloned();
+    Some(c)
 }
 
 fn to_attachment(m: &Event, b: &Blob) -> NormalizedAttachment {
     NormalizedAttachment {
         // chat-common fills this in once it has materialized the bytes.
-        rel_path: None,
+        href: None,
         file_name: Some(b.slot.clone()),
         // The event type is what beeper knows an attachment *is*; fall
         // back to it so an untyped image still renders inline.
@@ -254,7 +303,7 @@ fn to_attachment(m: &Event, b: &Blob) -> NormalizedAttachment {
                 _ => None,
             }),
         byte_len: b.byte_len,
-        source_url: b.source_url.clone(),
+        source_url: None,
         ref_id: b.blake3.clone(),
     }
 }
@@ -264,9 +313,7 @@ fn to_reaction(source_id: &str, r: &Event) -> NormalizedReaction {
         // Beeper's own event_uuid already collapses sender+target+emoji
         // on the source side, so it is the reaction's identity.
         reaction_uuid: ids::event(source_id, &r.native_event_id, r.timestamp_ms).uuid,
-        // A Matrix user id has no handle kind yet (contact_linking.md's table
-        // lists `beeper` as a later one).
-        reactor_handle: None,
+        reactor_handle: r.sender_handle.clone(),
         reactor_kind: match r.sender_label {
             Some(_) => AuthorKind::Named,
             None => AuthorKind::Unknown,

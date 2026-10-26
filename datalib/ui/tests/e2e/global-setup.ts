@@ -51,7 +51,8 @@ async function awaitHealthy(servers: Server[], token: string): Promise<void> {
     try {
       for (;;) {
         // Listening is not enough: the first boot of a build asks every
-        // step to migrate before it syncs, behind a blocking screen.
+        // step to migrate before it syncs, and a spec that syncs would
+        // find its Sync disabled until then.
         const ok = await ctx
           .get(`/api/config`, { headers: { authorization: `Bearer ${token}` } })
           .then(async (res) => res.ok() && (await res.json()).upgrade?.settled === true)
@@ -71,7 +72,7 @@ async function awaitHealthy(servers: Server[], token: string): Promise<void> {
   }
 }
 
-/// Spawn each sandbox backend's `unified_index` applet before its spec
+/// Spawn each sandbox backend's `unified_document_index` applet before its spec
 /// asks for it.
 ///
 /// An empty `q` is answered from SQL and never reaches qmd, which is
@@ -87,7 +88,7 @@ async function warmApplets(urls: string[], token: string): Promise<void> {
       // Unasserted: a spec that needs the applet will say so far more
       // clearly than a setup step can, and one that doesn't should not
       // be blocked by a warm-up.
-      await ctx.get("/applet/unified_index/search?q=&limit=1").catch(() => {});
+      await ctx.get("/applet/unified_document_index/search?q=&limit=1").catch(() => {});
       await ctx.dispose();
     }),
   );

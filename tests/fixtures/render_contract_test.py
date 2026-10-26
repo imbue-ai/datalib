@@ -112,6 +112,12 @@ def _thread_states(pid: int) -> str:
     return "".join(out) if Path("/proc").is_dir() else ""
 
 
+def _quote(column: str) -> str:
+    """A column name as a SQL identifier: some sources name one after a
+    keyword (Beeper's `mx_reactions."order"`)."""
+    return '"' + column.replace('"', '""') + '"'
+
+
 class _Hung(subprocess.TimeoutExpired):
     def __init__(
         self, cmd: list[str], timeout: float, out: str, err: str, threads: str
@@ -442,7 +448,7 @@ class RenderContractTest(unittest.TestCase):
         whose CHECK constraints refuse the general form."""
         payload_only = payload_only or any(name == "payload" for name, _, _ in cols)
         sets = [
-            f"{name} = {self._tweak_expr(table, name, payload_only=payload_only)}"
+            f"{_quote(name)} = {self._tweak_expr(table, name, payload_only=payload_only)}"
             for name, _typ, pk in cols
             if not pk and not self._identity_like(name)
         ]
@@ -452,6 +458,7 @@ class RenderContractTest(unittest.TestCase):
 
     def _tweak_expr(self, table: str, name: str, *, payload_only: bool) -> str:
         """The marked value of column `name`, as an expression."""
+        name = _quote(name)
 
         # A payload is a JSONB blob or JSON text, depending on the
         # provider; rewritten in kind, the marker lands on the

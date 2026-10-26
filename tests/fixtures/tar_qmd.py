@@ -7,7 +7,7 @@ so the pipeline operates at the layer of DB + qmd files; the genrule is
 the Bazel-distribution boundary that wants archives.
 
 Layout: `data_root` holds one dir per source stanza (`<stanza>/render_markdown/…`)
-plus the reserved `system/` and `unified_index/` dirs. We tar every stanza's
+plus the reserved `system/` and `unified_document_index/` dirs. We tar every stanza's
 `render_markdown` subtree, each entry prefixed with `qmd/<stanza>/render_markdown/<rel>`,
 so callers can extract with `--strip-components=1` to land
 `<stanza>/render_markdown/…` at a root data directory.
@@ -15,8 +15,10 @@ so callers can extract with `--strip-components=1` to land
 TWO archives come out, and the split is a build-cache decision:
 
   * `qmd.tar` — the whole rendered tree. Markdown, each source's
-    `indexed_markdown.doltlite_db` (which carries its render cursor), and
-    the attachment blobs (images, audio, PDFs). This is what
+    `indexed_markdown.doltlite_db` (which carries its render cursor), the
+    attachment files render wrote beside a page, and each source's blob
+    store (`<stanza>/ingest/blobs.sqlite`), which a page links its
+    attachments in as `/data/<stanza>/ingest/blob/<hash>`. This is what
     `materialize_tng_root.sh` extracts to build a data root you can
     actually browse.
 
@@ -83,9 +85,9 @@ def main() -> int:
     # Every top-level dir that is not owned by the app itself is a source
     # stanza with a `render_markdown/` subtree. Tar them all, rooted at
     # `qmd/<stanza>/...`. `system/` is the server's own state and
-    # `unified_index/` is the index the steps write, so neither is a
+    # `unified_document_index/` is the index the steps write, so neither is a
     # stanza even though both sit at the same level.
-    not_stanzas = {"system", "unified_index"}
+    not_stanzas = {"system", "unified_document_index"}
     rendered_dirs = sorted(
         d
         for d in src_root.glob("*/render_markdown")
@@ -97,6 +99,9 @@ def main() -> int:
     for rendered in rendered_dirs:
         children = sorted(p for p in rendered.rglob("*") if p.is_file() or p.is_dir())
         all_entries.extend([rendered] + children)
+        blob_store = rendered.parent / "ingest" / "blobs.sqlite"
+        if blob_store.is_file():
+            all_entries.extend([blob_store.parent, blob_store])
         for p in children:
             if p.is_file() and p.suffix == ".md":
                 md_entries.add(p)

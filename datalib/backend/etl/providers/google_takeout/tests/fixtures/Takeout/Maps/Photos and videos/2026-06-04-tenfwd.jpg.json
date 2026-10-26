@@ -1,6 +1,22 @@
 {
-  "creationTime": {"timestamp": "2026-06-04T19:30:00Z"},
+  "creationTime": {
+    "timestamp": "2026-06-04T19:30:00Z",
+    "formatted": "Jun 4, 2026, 7:30:00 PM UTC"
+  },
   "title": "Ten Forward bar",
   "description": "View from Picard's usual table",
-  "geoData": {"latitude": -0.1, "longitude": 51.5}
+  "geoData": {
+    "latitude": -0.1,
+    "longitude": 51.5
+  },
+  "photoTakenTime": {
+    "timestamp": "1780600000",
+    "formatted": "Jun 4, 2026, 7:06:40 PM UTC"
+  },
+  "geoDataExif": {
+    "latitude": -0.1,
+    "longitude": 51.5,
+    "altitude": 0.0
+  },
+  "imageViews": "1701"
 }

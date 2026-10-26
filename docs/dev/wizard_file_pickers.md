@@ -131,12 +131,16 @@ selects and copies in WebKit, where the `<label>` around each field
 would otherwise take the click that ends a drag and focus its input
 (`wizard-help-select.spec.ts`).
 
-What is still missing is validation on selection: the descriptor knows
-what the folder should contain (`Databases/msgstore.db.crypt15` for
-WhatsApp) and nothing checks it. That is where the design's `inspect`
-probe goes — and where the macOS permission check below wants to live
-too, since both are "look at the path now, in this process, rather than
-during a sync days later".
+Every pick is also checked for access, in the app's own process, before
+`pickPath` returns: `check_read_access`
+([`src/read_access.rs`](../../datalib/tauri/src/read_access.rs)) lists the
+chosen folder and reads one byte of the first file it finds within two
+levels, and a refusal comes back as `unreadable` on the `picked` outcome.
+The wizard keeps the pick and says under the field that a sync would
+fail on it. What is still missing is checking the *contents*: the
+descriptor knows what the folder should contain
+(`Databases/msgstore.db.crypt15` for WhatsApp) and nothing checks it.
+That is where the design's `inspect` probe goes.
 
 ## What the picker buys us in macOS permissions
 
@@ -204,13 +208,28 @@ picks the folder that holds them. A refusal inside a protected folder
 can look like absence (`stat` answers `No such file or directory`), so
 check a missing file in Finder before blaming the grant.
 
-What is **not** measured is whether the grant
-survives quitting and relaunching the app; the TCC database that would
-say so is itself protected. Until it is, the wizard's help text for
-such a source names Full Disk Access as the durable fallback, and the
-right place to notice a lapse is the `inspect` probe: **`readdir` the
-chosen path in the shell process, right after picking**, and say so
-immediately when it fails, rather than during a sync days later.
+A grant can lapse. It has been seen to (a Dropbox folder chosen in the
+wizard, refused weeks later), and an unsigned or ad-hoc-signed
+development build is a new app to macOS each time it is rebuilt. What is
+not measured is whether a grant survives quitting and relaunching a
+signed release; the TCC database that would say so is itself protected.
+So the wizard's help text for such a source names Full Disk Access as
+the durable fallback, and a lapse is recovered where it is seen:
+
+- **The step says so.** `datalib-step` classifies an
+  `io::ErrorKind::PermissionDenied` anywhere in a failure's cause chain
+  as `FailureKind::Permission` (`datalib_step/src/hints.rs`), which is
+  not retried, and emits a hint naming the fix.
+- **The loop keeps the kind** on the step's record
+  (`steps.last_failure_kind` in `system/supervisor.sqlite`).
+- **The Manage row offers the picker.** While a step's last run failed
+  that way, its row and its group's carry a **Choose folder again**
+  button (`choose_again` in `http/src/manage/buttons.rs`). In the app it
+  opens the picker at the path the step's settings name (the source's
+  first `kind: "path"` field, `ui/src/config/chooseAgain.ts`), checks
+  the app can read what was chosen, writes it into the config if it
+  moved, and syncs the step. A browser has no picker and drops the
+  button.
 
 None of this reaches the CLI. `datalib-dag <config>` from a terminal is
 attributed to the terminal, which has its own grants or prompts for

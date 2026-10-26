@@ -40,6 +40,7 @@ async fn state(root: &Path, root_tx: broadcast::Sender<RootFrame>) -> AppState {
         newer_root: Vec::new(),
         shutting_down: Default::default(),
         api_token: ApiToken::from_value(TEST_TOKEN, root.as_path()),
+        frame_ancestors: Default::default(),
         applets: Arc::new(AppletRegistry::from_data_root(&root, None)),
     }
 }

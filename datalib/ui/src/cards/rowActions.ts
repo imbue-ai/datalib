@@ -14,14 +14,18 @@ import {
   type MenuTarget,
 } from "@/config/rowMenu";
 import { copyToClipboard } from "@/clipboard";
-import { confirmAction, openRawStore, revealInFileManager } from "@/desktop";
+import {
+  CHOOSE_AGAIN,
+  chooseAgainButton,
+  chooseAgainFor,
+  withStepPath,
+} from "@/config/chooseAgain";
+import { confirmAction, openRawStore, pickPath, revealInFileManager } from "@/desktop";
 import { pushToast } from "@/toasts";
 import type { Api } from "./cardApi";
-import { appletBrowseSource } from "./cardSources";
-import { historySource } from "./libs/historyView";
-import { logSource } from "./libs/logView";
-import { syncDashboardSource } from "./libs/syncDashboardView";
+import { appletBrowseSource, historySource, logSource, syncDashboardSource } from "./cardSources";
 import type { HostCommands } from "./types";
+import type { SearchOpts } from "./libs/gridView";
 
 /// A Manage row with what its Browse opens: a card, or a raw store in
 /// another program.
@@ -54,16 +58,23 @@ export const browseAction = (r: ManageRow) => r.actions.find((a) => a.id === "br
 /// by the row's `browse` action; this is only the card behind it. The
 /// index group has no type: browsing it is the unified projection
 /// across every source, which is the card the app already opens on.
-function groupBrowse(g: ManageRow): string | null {
+export function groupBrowseOpts(g: ManageRow): SearchOpts | null {
   if (!browseAction(g)?.enabled) return null;
   const type = g.type?.id ?? null;
-  if (!type) return "searchView()";
+  if (!type) return {};
   const columns = browseColumns(type);
-  const args: string[] = [`q: ${JSON.stringify(browseQuery(g.id, type))}`];
-  // A set of columns is something only the table shows.
-  if (columns) args.push(`columns: ${JSON.stringify(columns)}`, `view: "table"`);
-  args.push(`name: ${JSON.stringify(browseName(g.name.label, type))}`);
-  return `searchView({ ${args.join(", ")} })`;
+  return {
+    q: browseQuery(g.id, type),
+    // A set of columns is something only the table shows.
+    ...(columns ? { columns, view: "table" as const } : {}),
+    name: browseName(g.name.label, type),
+  };
+}
+
+function groupBrowse(g: ManageRow): string | null {
+  const opts = groupBrowseOpts(g);
+  if (!opts) return null;
+  return Object.keys(opts).length ? `searchView(${JSON.stringify(opts)})` : "searchView()";
 }
 
 /// A row's Browse: `system/` browses the run log, a group its view, a
@@ -77,18 +88,25 @@ export function withBrowse<R extends ManageRow>(
   if (r.kind === "system") {
     return { ...r, browseSource: browseAction(r)?.enabled ? "logView()" : null, rawStore: null };
   }
-  if (r.kind === "group") return { ...r, browseSource: groupBrowse(r), rawStore: null };
+  if (r.kind === "group") {
+    // Which step's path the group's button re-picks is settled on click.
+    const actions = canReveal ? r.actions : r.actions.filter((a) => a.id !== CHOOSE_AGAIN);
+    return { ...r, actions, browseSource: groupBrowse(r), rawStore: null };
+  }
   if (r.kind === "applet") {
     const browseSource = browseAction(r)?.enabled ? appletBrowseSource(r.id) : null;
     return { ...r, browseSource, rawStore: null };
   }
   const group = r.group ? groups.get(r.group) : undefined;
   const rawStore = canReveal ? r.raw_store_path : null;
+  const found = chooseAgainFor(r.type?.id ?? null, r.params);
   return {
     ...r,
-    actions: rawStore
-      ? r.actions.map((a) => (a.id === "browse" ? RAW_STORE_BROWSE : a))
-      : r.actions,
+    actions: r.actions.flatMap((a) => {
+      if (a.id === "browse" && rawStore) return [RAW_STORE_BROWSE];
+      if (a.id === CHOOSE_AGAIN) return chooseAgainButton(a, found, canReveal) ?? [];
+      return [a];
+    }),
     browseSource: r.kind === "step" && group ? groupBrowse(group) : null,
     rawStore,
   };
@@ -118,7 +136,7 @@ export function menuTarget(row: ActionRow, editBlocked: string | null): MenuTarg
 
 export type RowActionHost<R extends ActionRow> = {
   api: Api;
-  host: HostCommands;
+  host: Pick<HostCommands, "openCards">;
   /// Every row the card holds, for a group's steps and its status child.
   rows: () => R[];
   /// The run in flight, or the one that finished last.
@@ -215,11 +233,13 @@ export function rowActions<R extends ActionRow>(h: RowActionHost<R>) {
             ? " -stage:fetch"
             : "";
     const q =
-      sourceId === "unified_index" ? "scope_key:render_store" : `source_id:${sourceId}${stage}`;
+      sourceId === "unified_document_index"
+        ? "scope_key:render_store"
+        : `source_id:${sourceId}${stage}`;
     const source =
       row.kind === "group" ? row : h.rows().find((r) => r.kind === "group" && r.id === sourceId);
     const name =
-      sourceId === "unified_index"
+      sourceId === "unified_document_index"
         ? "Problems: the index"
         : `Problems: ${source?.name.label ?? sourceId}`;
     const opts = {
@@ -360,6 +380,59 @@ export function rowActions<R extends ActionRow>(h: RowActionHost<R>) {
     return [...new Set(ids)];
   }
 
+  /// After the OS refused a step a read: open the picker at the path its
+  /// settings name, which on macOS is what grants access, check the app
+  /// can now read what was chosen, write it into the config if it moved,
+  /// and sync. A group's button is its refused step's.
+  async function chooseAgain(row: R) {
+    const step =
+      row.kind === "group"
+        ? stepsUnder(row).find((s) => s.actions.some((a) => a.id === CHOOSE_AGAIN))
+        : row;
+    const found = step ? chooseAgainFor(step.type?.id ?? null, step.params) : null;
+    if (!step || !found) {
+      h.say(false, `${shown(row)} names no file or folder to choose again.`);
+      return;
+    }
+    const { field, current } = found;
+    const pick = await pickPath({
+      picks: field.picks ?? "dir",
+      title: field.pickTitle ?? field.label,
+      startAt: current,
+      startIn: field.startIn,
+      extensions: field.extensions,
+    });
+    if (pick.outcome === "canceled") return;
+    if (pick.outcome === "unavailable") {
+      h.say(false, `Couldn’t open the picker (${pick.reason}).`);
+      return;
+    }
+    if (pick.unreadable) {
+      h.say(
+        false,
+        `Datalib still can’t read ${pick.path} (${pick.unreadable}). Choose it again, or ` +
+          "grant Datalib Full Disk Access in System Settings → Privacy & Security.",
+      );
+      return;
+    }
+    await act(async () => {
+      if (pick.path !== current) {
+        const config = await h.api.fetchConfig();
+        const saved = await h.api.saveConfig(
+          withStepPath(config.text, step.id, field.target, pick.path),
+        );
+        if (!saved.ok) throw new Error(`Couldn’t save the new path: ${saved.error}`);
+      }
+      const requests = await h.api.openRequest(step.seeds);
+      h.say(
+        true,
+        `Datalib can read ${pick.path}. Queued a sync of ${shown(row)}.`,
+        requests.map((r) => r.id),
+      );
+      await h.reload();
+    });
+  }
+
   /// Empty what these rows wrote, keeping the history. A render is
   /// rebuilt from what it reads at once; a download is not refilled, but
   /// what reads it catches up, so its documents leave the grid. Whatever
@@ -456,6 +529,7 @@ export function rowActions<R extends ActionRow>(h: RowActionHost<R>) {
     stop: (row) => {
       if (row.stop_request_ids.length > 0) void stopSyncs(row.stop_request_ids);
     },
+    [CHOOSE_AGAIN]: (row) => void chooseAgain(row),
     in_syncs: (row) => {
       const on = row.actions.find((a) => a.id === "in_syncs")?.on;
       void setTurnedOff([row], !!on);

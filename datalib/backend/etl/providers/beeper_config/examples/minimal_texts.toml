@@ -1,0 +1,18 @@
+# The Beeper Texts desktop app's local data: every chat it holds, from every
+# network it bridges. No sign-in; it reads the app's data directory
+# (`~/Library/Application Support/BeeperTexts` on macOS).
+[[groups]]
+id = "beeper"
+name = "Beeper"
+type = "beeper"
+
+[[steps]]
+group = "beeper"
+function = "ingest"
+
+[steps.params.texts]
+
+[[steps]]
+group = "beeper"
+function = "render_markdown"
+inputs = ["beeper/ingest"]

@@ -75,6 +75,16 @@ impl Snapshot {
         }
     }
 
+    /// The header record [`Self::frames`] skips: when the backup was
+    /// taken, and by which version.
+    pub fn backup_info(&self) -> Result<backup::BackupInfo> {
+        let record = self
+            .raw_records()
+            .next()
+            .ok_or_else(|| anyhow!("main holds no BackupInfo record"))??;
+        prost::Message::decode(record).map_err(|e| anyhow!("decode BackupInfo: {e}"))
+    }
+
     pub fn raw_records(&self) -> RecordIter<'_> {
         RecordIter {
             buf: &self.decrypted_main,

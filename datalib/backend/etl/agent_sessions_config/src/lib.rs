@@ -10,11 +10,10 @@ use std::path::{Path, PathBuf};
 /// An agent-session source. `sessions` is its one way in today; a
 /// `cloud` table for sessions run in the vendor's cloud is the planned
 /// second (`docs/dev/plans/agent_sessions.md`).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SessionsConfig {
-    /// Shared per-source envelope (paths + cross-source tunables), resolved by
-    /// the orchestrator's `normalize()`.
+    /// The options every source takes, whatever its method.
     #[serde(default)]
     pub common: SourceCommon,
     #[serde(default)]
@@ -36,7 +35,7 @@ impl datalib_source_common::IngestMethods for SessionsConfig {
 /// Every field is optional so that a bare `[steps.params.sessions]`
 /// mirrors the standard location, the way an empty `[steps.params.gmail]`
 /// mirrors the only stored account.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SessionsTable {
     /// Where the agent keeps its sessions; the provider's standard
@@ -53,7 +52,7 @@ impl SessionsTable {
 }
 
 /// Params for the render step.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SessionsRenderConfig {
     #[serde(default)]

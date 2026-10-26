@@ -82,7 +82,7 @@ fn main() {
     // command no capability names. Once declared, every app command is
     // checked, so each one here must be granted somewhere
     // (`capabilities/default.json`, `capabilities/open-raw-stores.json`,
-    // `capabilities/switch-libraries.json`).
+    // `capabilities/switch-libraries.json`, `capabilities/pick-local-paths.json`).
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "version",
@@ -93,12 +93,14 @@ fn main() {
             "launcher_open",
             "launcher_pick",
             "launcher_forget",
+            "launcher_delete",
             "launcher_open_folder",
             "launcher_move_from_documents",
             "library_menu",
             "library_switch",
             "libraries_show",
             "open_raw_store",
+            "check_read_access",
         ]),
     ))
     .expect("failed to run tauri-build")

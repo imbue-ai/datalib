@@ -103,7 +103,14 @@ export type Field =
 /// The wizard says `labels` and `mailboxes` in the source's own word for
 /// them (`CatalogEntry.mailboxNoun`), the rest as written.
 export type ProbeNoun =
-  "labels" | "mailboxes" | "conversations" | "channels" | "calendars" | "addressbooks";
+  | "labels"
+  | "mailboxes"
+  | "conversations"
+  | "channels"
+  | "calendars"
+  | "addressbooks"
+  | "teams"
+  | "projects";
 
 /// One answer to a section's question. Choosing it writes `sets` and
 /// shows `fields` under it; the fields of the answers not chosen are
@@ -165,17 +172,23 @@ export type CatalogEntry = {
   mailboxNoun?: "labels" | "folders";
   /// False → in the picker for completeness, but no form exists yet.
   wizard: boolean;
-  /// False for a provider that declares no render step at all.
-  /// Defaults to true, and rendering no *documents* is not a reason to
-  /// set it false: the render step is also what emits the storage
-  /// report, which for a download-only source is the only thing that
-  /// puts it in the grid.
-  renderStep?: boolean;
+  /// False for a download-only provider, whose render step writes no
+  /// documents: only the storage report and the download's problems,
+  /// which is all that puts such a source in the grid. It always gets
+  /// that step, and the wizard offers no choice to render and no search
+  /// steps, since there is no markdown to search.
+  rendersDocuments?: boolean;
   /// The latchkey service name, when the source needs credentials. The
   /// wizard shows its account row only while the params the form
   /// would write reach an origin (`ingestReach`): an import has nothing
   /// to log in to.
   credentialService?: string;
+  /// More latchkey services the download reaches, each needing the same
+  /// account as `credentialService`: Google Drive's Docs, Sheets and
+  /// Slides. One "Sign in with browser" signs in to every one in turn,
+  /// and a missing OAuth client is pasted once for all of them
+  /// (`multiSignIn.ts`). `label` is the name a person knows it by.
+  credentialAlso?: { service: string; label: string }[];
   /// How to register `credentialService` with latchkey when latchkey
   /// has never heard of it, so that a browser login exists at all. The
   /// login flow belongs to the *service* and is fixed when it is
@@ -566,6 +579,52 @@ export const CATALOG: CatalogEntry[] = [
     wizard: false,
     credentialService: "notion",
   },
+  {
+    type: "linear",
+    method: "api",
+    label: "Linear",
+    blurb: "Copy issues, comments, projects and documents from one Linear workspace.",
+    keywords: ["linear", "issues", "tickets", "projects", "tracker"],
+    kind: "api",
+    icon: "linear",
+    defaultName: "linear",
+    nameHint: "Work Linear",
+    wizard: true,
+    // Download-only: the copy is Linear's own objects, kept as they
+    // came, and nothing is rendered.
+    rendersDocuments: false,
+    credentialService: "linear",
+    canProbe: true,
+    sections: [
+      {
+        heading: "Which issues?",
+        answers: [
+          { label: "The whole workspace" },
+          {
+            label: "Only the teams and projects I choose",
+            help: "Most issues belong to a team and no project, so choose their teams.",
+            fields: ["api.teams", "api.projects"],
+          },
+        ],
+      },
+    ],
+    fields: [
+      {
+        kind: "string_list",
+        probe: "teams",
+        target: "api.teams",
+        label: "Teams",
+        help: "Every issue in these teams, and the projects they work on.",
+      },
+      {
+        kind: "string_list",
+        probe: "projects",
+        target: "api.projects",
+        label: "Projects",
+        help: "Every issue in these projects, whichever team it is in.",
+      },
+    ],
+  },
 
   // ── the two `email` variants ──────────────────────────────────────
   //
@@ -603,6 +662,13 @@ export const CATALOG: CatalogEntry[] = [
           { label: "Only the labels I choose", fields: ["only_extract_labels"] },
         ],
       },
+      {
+        heading: "Start from a Takeout?",
+        answers: [
+          { label: "No, download every message" },
+          { label: "Yes, I have a Google Takeout of this account", fields: ["mbox.path"] },
+        ],
+      },
       { heading: "Large messages", fields: ["common.blob_size_limit_bytes"] },
     ],
     fields: [
@@ -624,6 +690,17 @@ export const CATALOG: CatalogEntry[] = [
         help:
           "A nested label is named in full (Work/Projects), and choosing a parent does not " +
           "include its children. A label added later brings in its mail on the next sync.",
+      },
+      {
+        kind: "path",
+        picks: "dir",
+        pickTitle: "Choose the Mail folder of your Google Takeout",
+        target: "mbox.path",
+        label: "Takeout Mail folder",
+        help:
+          "Messages in the Takeout are not downloaded again, so the first sync takes minutes " +
+          "rather than hours. Mail newer than the Takeout, and every message's labels, still " +
+          "come from Gmail.",
       },
       {
         kind: "bytes",
@@ -737,7 +814,7 @@ export const CATALOG: CatalogEntry[] = [
   // way of getting mail", which is not one form.
   {
     type: "email",
-    label: "Email (mbox or other server)",
+    label: "Email (mbox or JMAP)",
     blurb: "A Google Takeout .mbox, or a JMAP server other than Fastmail.",
     keywords: ["email", "mail", "jmap", "imap", "mbox", "takeout"],
     kind: "api",
@@ -821,7 +898,7 @@ export const CATALOG: CatalogEntry[] = [
     blurb: "Copy a Fastmail account's calendars over CalDAV.",
     keywords: ["fastmail", "calendar", "caldav", "events", "meetings", "schedule"],
     kind: "api",
-    icon: "fastmail",
+    icon: "fastmail_calendar",
     defaultName: "fastmail_calendar",
     nameHint: "Personal calendar",
     wizard: true,
@@ -891,7 +968,7 @@ export const CATALOG: CatalogEntry[] = [
   {
     type: "calendar",
     variantKey: "caldav",
-    label: "CalDAV",
+    label: "Calendar (CalDAV)",
     blurb: "Copy the calendars on any CalDAV server: iCloud, Nextcloud, Radicale, ….",
     keywords: ["calendar", "caldav", "icloud", "nextcloud", "radicale", "events", "schedule"],
     kind: "api",
@@ -970,7 +1047,7 @@ export const CATALOG: CatalogEntry[] = [
   {
     type: "calendar",
     variantKey: "ics",
-    label: "Calendar files (.ics)",
+    label: "Calendar (.ics files)",
     blurb: "A folder of .ics exports, such as Google Takeout's Calendar folder.",
     keywords: ["calendar", "ics", "ical", "icalendar", "takeout", "export", "events"],
     kind: "export",
@@ -994,6 +1071,88 @@ export const CATALOG: CatalogEntry[] = [
       },
     ],
   },
+  {
+    type: "google_drive",
+    method: "api",
+    label: "Google Drive",
+    blurb: "Copy the Docs, Sheets and Slides on a Google account.",
+    keywords: ["google", "drive", "docs", "sheets", "slides", "documents", "spreadsheets"],
+    kind: "api",
+    icon: "google_drive",
+    defaultName: "google_drive",
+    nameHint: "Work Drive",
+    wizard: true,
+    intro:
+      "Each Doc becomes a document you can read and search, its comments beside the text. " +
+      "Sheets and Slides are kept, but not shown yet.",
+    credentialService: "google-drive",
+    credentialAlso: [
+      { service: "google-docs", label: "Google Docs" },
+      { service: "google-sheets", label: "Google Sheets" },
+      { service: "google-slides", label: "Google Slides" },
+    ],
+    sections: [
+      {
+        heading: "Which files?",
+        answers: [
+          {
+            label: "Every file the account can open",
+            help: "Files shared with it included.",
+            sets: { "api.owned_only": false },
+          },
+          { label: "Only the files it owns", sets: { "api.owned_only": true } },
+          // No `sets`: a list of files wins over `owned_only` and
+          // `kinds` in the downloader, so a config holding both is
+          // this answer.
+          { label: "Only the files I choose", fields: ["api.file_ids"] },
+        ],
+      },
+    ],
+    fields: [
+      {
+        kind: "text",
+        latchkey: true,
+        target: "latchkey_settings.account",
+        label: "Google account",
+        help:
+          "Which stored Google login to copy. Leave it empty if only one is stored. " +
+          "It has to be signed in to Drive, Docs, Sheets and Slides alike.",
+      },
+      { kind: "bool", target: "api.owned_only", label: "Only files the account owns" },
+      {
+        kind: "string_list",
+        target: "api.file_ids",
+        label: "Files",
+        help: "A link to each, as the address bar shows it, or its id.",
+      },
+      {
+        kind: "string_list",
+        target: "api.kinds",
+        label: "Kinds of file",
+        help:
+          "Any of document, spreadsheet and presentation. Empty means all three. Ignored when " +
+          "files are chosen by name.",
+      },
+      {
+        kind: "string_list",
+        target: "api.exports",
+        label: "Converted copies",
+        help:
+          "Any of odf (.odt, .ods, .odp, which LibreOffice opens), ooxml (.docx, .xlsx, " +
+          ".pptx) and pdf, kept beside Google's own JSON of each version. Each is a request, " +
+          "and 1 to 4 MB a version for a Doc or a deck. Empty means none.",
+      },
+      {
+        kind: "string_list",
+        target: "api.revision_exports",
+        label: "Converted copies of old versions",
+        help:
+          "The same formats, of every revision Drive lists for a Doc or a Sheet, fetched once " +
+          "each: the only copy of a version from before the first sync. Decks get none. Empty " +
+          "means none.",
+      },
+    ],
+  },
   // ── the `contacts` variants ───────────────────────────────────────
   //
   // Like `calendar`: one type, an entry per way in, keyed on its method
@@ -1006,7 +1165,7 @@ export const CATALOG: CatalogEntry[] = [
     blurb: "Copy a Fastmail account's address books over CardDAV.",
     keywords: ["fastmail", "contacts", "carddav", "vcard", "address book"],
     kind: "api",
-    icon: "fastmail",
+    icon: "fastmail_contacts",
     defaultName: "fastmail_contacts",
     nameHint: "Personal contacts",
     wizard: true,
@@ -1051,7 +1210,7 @@ export const CATALOG: CatalogEntry[] = [
   {
     type: "contacts",
     variantKey: "carddav",
-    label: "CardDAV contacts",
+    label: "Contacts (CardDAV)",
     blurb: "Copy the address books on any CardDAV server: iCloud, Nextcloud, Radicale, ….",
     keywords: ["contacts", "carddav", "icloud", "nextcloud", "vcard", "address book"],
     kind: "api",
@@ -1107,7 +1266,7 @@ export const CATALOG: CatalogEntry[] = [
   {
     type: "contacts",
     variantKey: "vcf",
-    label: "Contact files (.vcf)",
+    label: "Contacts (.vcf files)",
     blurb: "A folder of .vcf exports, from Google Contacts, iCloud or a phone.",
     keywords: ["contacts", "vcf", "vcard", "export", "address book"],
     kind: "export",
@@ -1215,7 +1374,7 @@ export const CATALOG: CatalogEntry[] = [
   {
     type: "claude",
     variantKey: "export",
-    label: "Claude export",
+    label: "Claude (export)",
     blurb: "Ingest an unpacked Claude data export already on disk.",
     keywords: ["claude", "anthropic", "export", "backup"],
     kind: "export",
@@ -1342,6 +1501,10 @@ export const CATALOG: CatalogEntry[] = [
           "export.gemini_apps",
         ],
       },
+      {
+        heading: "Lists, maps and books",
+        fields: ["export.maps_saved_lists", "export.my_maps", "export.play_books"],
+      },
     ],
     fields: [
       {
@@ -1414,6 +1577,27 @@ export const CATALOG: CatalogEntry[] = [
         label: "Gemini activity",
         default: true,
       },
+      {
+        kind: "bool",
+        target: "export.maps_saved_lists",
+        label: "Maps saved lists",
+        default: true,
+        help: "Your lists of places, with the notes you wrote on them.",
+      },
+      {
+        kind: "bool",
+        target: "export.my_maps",
+        label: "My Maps",
+        default: true,
+        help: "The maps you drew: pins, lines and shapes, and what you wrote on them.",
+      },
+      {
+        kind: "bool",
+        target: "export.play_books",
+        label: "Play Books notes and highlights",
+        default: true,
+        help: "What you highlighted, noted and bookmarked, a page per book.",
+      },
     ],
   },
   {
@@ -1469,7 +1653,7 @@ export const CATALOG: CatalogEntry[] = [
   },
   {
     type: "signal",
-    label: "Signal",
+    label: "Signal backups",
     blurb: "Decrypt and copy an Android Signal backup.",
     keywords: ["signal", "backup", "messages", "sms", "chat"],
     kind: "export",
@@ -1496,7 +1680,7 @@ export const CATALOG: CatalogEntry[] = [
         required: true,
         target: "backup.path",
         label: "Backup folder",
-        help: "The folder holding your signal-backup-* files. The newest one in it is the one read.",
+        help: "The folder holding your signal-backup-* files. Each one is kept as a version, so you can see what changed from one backup to the next.",
       },
       {
         kind: "text",
@@ -1523,7 +1707,7 @@ export const CATALOG: CatalogEntry[] = [
   },
   {
     type: "whatsapp",
-    label: "WhatsApp",
+    label: "WhatsApp backups",
     blurb: "Decrypt and copy an Android crypt15 backup.",
     keywords: ["whatsapp", "backup", "messages", "chat"],
     kind: "export",
@@ -1567,7 +1751,7 @@ export const CATALOG: CatalogEntry[] = [
   },
   {
     type: "sms_backup_restore",
-    label: "SMS & calls",
+    label: "SMS Backup & Restore",
     blurb: "Android SMS Backup & Restore XML exports.",
     keywords: ["sms", "mms", "calls", "android", "texts"],
     kind: "export",
@@ -1595,18 +1779,78 @@ export const CATALOG: CatalogEntry[] = [
     type: "beeper",
     label: "Beeper",
     blurb:
-      "Read Beeper Texts' local store across its networks. Poorly supported — expect rough edges.",
-    keywords: ["beeper", "matrix", "chat", "imessage"],
-    kind: "export",
+      "Copy the chats Beeper keeps on this Mac, from every network it connects. Poorly " +
+      "supported — expect rough edges.",
+    keywords: ["beeper", "matrix", "chat", "signal", "whatsapp", "slack", "google chat"],
+    kind: "local",
     icon: "beeper",
     defaultName: "beeper",
     nameHint: "Beeper on this Mac",
-    wizard: false,
+    wizard: true,
+    intro:
+      "Copies the chats the Beeper desktop app keeps on this Mac, for every network you " +
+      "connected in it. Only what Beeper has downloaded is here: a chat you never opened in " +
+      "Beeper may have only its latest messages.",
+    sections: [
+      { heading: "Beeper folder", fields: ["texts.path"] },
+      {
+        heading: "Which networks?",
+        answers: [
+          { label: "All of them" },
+          { label: "Only the networks I choose", fields: ["networks"] },
+        ],
+      },
+      { heading: "Photos and files", fields: ["texts.media"] },
+    ],
+    fields: [
+      {
+        kind: "path",
+        // The folder, not `index.db`: a sync also reads each on-device
+        // bridge's database and the cached files beside it.
+        picks: "dir",
+        pickTitle: "Choose your Beeper folder",
+        startIn: "~/Library/Application Support/BeeperTexts",
+        required: true,
+        target: "texts.path",
+        label: "Beeper folder",
+        help: "The folder Beeper keeps its data in, ~/Library/Application Support/BeeperTexts.",
+      },
+      {
+        kind: "string_list",
+        phase: "render",
+        target: "networks",
+        label: "Networks",
+        help:
+          "signal, whatsapp, slack, googlechat, telegram, discord, instagram, facebook, " +
+          "linkedin, twitter or sms. Every network is still copied; this picks what is shown.",
+      },
+      {
+        kind: "bool",
+        target: "texts.media",
+        label: "Copy photos and files",
+        default: true,
+        help: "Only the ones Beeper has downloaded. Off, a message still says what was attached.",
+      },
+      {
+        kind: "select",
+        target: "period",
+        phase: "render",
+        label: "Document span",
+        default: "month",
+        options: [
+          { value: "day", label: "A day" },
+          { value: "month", label: "A month" },
+          { value: "year", label: "A year" },
+          { value: "all", label: "The whole conversation" },
+        ],
+        help: "How much of a conversation goes in one rendered page.",
+      },
+    ],
   },
 
   {
     type: "pdf",
-    label: "PDFs",
+    label: "Local PDFs",
     blurb: "Convert a directory tree of PDFs into searchable markdown.",
     keywords: ["pdf", "documents", "papers", "files"],
     kind: "local",
@@ -1645,7 +1889,7 @@ export const CATALOG: CatalogEntry[] = [
   },
   {
     type: "fsindex",
-    label: "File index",
+    label: "Local file index",
     blurb: "Index a directory tree — paths, sizes, content hashes.",
     keywords: ["files", "filesystem", "index", "directory", "disk"],
     kind: "local",
@@ -1676,15 +1920,15 @@ export const CATALOG: CatalogEntry[] = [
         label: "Write UUID breadcrumbs into the tree",
         default: false,
         help:
-          "Off keeps the scan read-only. On writes a UUID into the .fsindex.yaml of any " +
-          "directory that set stamp_me_with_uuid: true, so it keeps one identity across moves " +
+          "Off keeps the scan read-only. On writes a UUID into the .fsindex.toml of any " +
+          "directory that set stamp_me_with_uuid = true, so it keeps one identity across moves " +
           "and renames.",
       },
     ],
   },
   {
     type: "media",
-    label: "Music, photos & video",
+    label: "Local media",
     blurb: "Index a media tree — tags, EXIF, playlists, and a metadata-free content hash.",
     keywords: ["music", "photos", "video", "mp3", "jpeg", "raw", "dng", "playlists", "media"],
     kind: "local",
@@ -1694,7 +1938,7 @@ export const CATALOG: CatalogEntry[] = [
     wizard: true,
     // Download-only: media has no text to convert, so nothing is
     // rendered and no render step is declared.
-    renderStep: false,
+    rendersDocuments: false,
     sections: [
       { heading: "Media folder", fields: ["fswalk.path"] },
       { heading: "Scan", fields: ["playlists", "skip_dataless"], advanced: true },
@@ -1734,7 +1978,7 @@ export const CATALOG: CatalogEntry[] = [
   {
     type: "airvisual",
     method: "export",
-    label: "AirVisual",
+    label: "IQAir AirVisual",
     blurb: "IQAir AirVisual Pros' own history, read off each unit's network share.",
     keywords: ["airvisual", "iqair", "air quality", "co2", "pm2.5", "sensor", "samba"],
     kind: "local",
@@ -1758,7 +2002,7 @@ export const CATALOG: CatalogEntry[] = [
     wizard: true,
     // Download-only: a photo catalog isn't chat-shaped, so nothing is
     // rendered and no render step is declared.
-    renderStep: false,
+    rendersDocuments: false,
     requiresOneOf: ["catalog.path", "backups.path"],
     intro:
       "Copies a Lightroom Classic catalog, with full history. Choose the catalog, the backups " +
@@ -1893,7 +2137,7 @@ export const CATALOG: CatalogEntry[] = [
     nameHint: "Photos library",
     wizard: true,
     // Download-only, like lightroom: nothing is rendered.
-    renderStep: false,
+    rendersDocuments: false,
     intro:
       "Copies the database inside your Photos library (database/Photos.sqlite), with full history.",
     sections: [
@@ -1950,7 +2194,7 @@ export const CATALOG: CatalogEntry[] = [
   {
     type: "perseus",
     method: "github",
-    label: "Perseus library",
+    label: "Perseus Digital Library",
     blurb: "Classical texts from the Perseus Digital Library.",
     keywords: ["perseus", "greek", "latin", "classics", "sample"],
     kind: "local",

@@ -1,7 +1,7 @@
 //! The libraries screen's decisions, with no Tauri in them: which
 //! libraries it lists, and where a new one goes.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// How many recent roots the libraries screen remembers. Enough to cover
 /// a real rotation (work root, personal root, a scratch root or two)
@@ -38,7 +38,77 @@ pub fn record_recent(file: &Path, root: &Path) -> std::io::Result<()> {
 /// it stays while it is there; one elsewhere is listed only from the
 /// recent list, and so is one whose folder is gone.
 pub fn forgettable(root: &Path, libraries_dir: &Path) -> bool {
-    root.parent() != Some(libraries_dir) || !is_data_root(root)
+    !deletable(root, libraries_dir)
+}
+
+/// Whether the screen offers to delete `root`. Only a library in the
+/// libraries folder: the app made that folder, and such a row has no
+/// Forget, so nothing else takes it off the list. A library elsewhere
+/// sits among a person's own folders and is theirs to delete.
+pub fn deletable(root: &Path, libraries_dir: &Path) -> bool {
+    directly_inside(root, libraries_dir) && is_data_root(root)
+}
+
+/// `root` is a folder of its own one level inside `dir`, judged on the
+/// disk and not only on the path's text: `<dir>/..` names `dir`'s parent
+/// and a symlink names wherever it points, and a delete must reach
+/// neither.
+fn directly_inside(root: &Path, dir: &Path) -> bool {
+    let named_plainly = matches!(root.components().next_back(), Some(Component::Normal(_)))
+        && root.parent() == Some(dir);
+    let is_symlink = std::fs::symlink_metadata(root)
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(true);
+    let on_disk = match (std::fs::canonicalize(root), std::fs::canonicalize(dir)) {
+        (Ok(root), Ok(dir)) => root.parent() == Some(dir.as_path()),
+        _ => false,
+    };
+    named_plainly && !is_symlink && on_disk
+}
+
+/// Create a new library's folder readable by its owner only, and the
+/// libraries folder the same way when it is the one that holds it.
+/// Other missing parents are a person's own folders and keep the
+/// default mode. The server tightens an existing root when it opens it
+/// (`datalib_runtime::layout::restrict_data_root`).
+pub fn create_library_dir(root: &Path, libraries_dir: &Path) -> std::io::Result<()> {
+    if root.parent() == Some(libraries_dir) {
+        create_owner_only_dir(libraries_dir)?;
+    }
+    create_owner_only_dir(root)
+}
+
+fn create_owner_only_dir(dir: &Path) -> std::io::Result<()> {
+    if dir.is_dir() {
+        return Ok(());
+    }
+    if let Some(parent) = dir.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(dir)
+}
+
+/// The claims a process working on a library holds for its life, relative
+/// to the library: the app server's and the runner's
+/// (`datalib/backend/dag/README.md`, "Locks").
+const HELD_WHILE_OPEN: [&str; 2] = ["system/lock", "system/runner-lock"];
+
+/// Whether some process has `root` open: a server or a sync run started
+/// outside this window. A lock file that cannot be asked counts as held,
+/// since the answer decides whether the library is deleted.
+pub fn in_use(root: &Path) -> bool {
+    HELD_WHILE_OPEN
+        .iter()
+        .any(|rel| match std::fs::File::open(root.join(rel)) {
+            Ok(file) => file.try_lock().is_err(),
+            Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+        })
 }
 
 // TODO(after 2026-12-09): remove the move of libraries out of the
@@ -91,7 +161,7 @@ pub fn move_from_documents(
         if to.exists() || !from.exists() {
             continue;
         }
-        std::fs::create_dir_all(libraries_dir)?;
+        create_owner_only_dir(libraries_dir)?;
         std::fs::rename(&from, &to)?;
         drop_own_data_root(&to.join("config.toml"), &from)?;
         replace_recent(recents_file, &from, &to)?;
@@ -475,6 +545,56 @@ mod tests {
         assert!(forgettable(&dir.join("Deleted"), &dir));
     }
 
+    /// Delete is offered for exactly the libraries Forget is not: the ones
+    /// in the libraries folder. One elsewhere is never deleted from here.
+    #[test]
+    fn only_a_library_in_the_libraries_folder_can_be_deleted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = libraries_dir(&tmp.path().join("home"));
+        let default = dir.join(DEFAULT_NAME);
+        let nested = dir.join("nested").join("lib");
+        let elsewhere = tmp.path().join("elsewhere");
+        make_root(&default);
+        make_root(&nested);
+        make_root(&elsewhere);
+        std::fs::create_dir_all(dir.join("not a library")).unwrap();
+
+        assert!(deletable(&default, &dir));
+        assert!(!deletable(&elsewhere, &dir));
+        assert!(!deletable(&nested, &dir));
+        assert!(!deletable(&dir.join("not a library"), &dir));
+        assert!(!deletable(&dir.join("Deleted"), &dir));
+        assert!(!deletable(&dir, &dir));
+        for root in [&default, &nested, &elsewhere] {
+            assert_ne!(deletable(root, &dir), forgettable(root, &dir));
+        }
+    }
+
+    /// A library a server or a runner holds is in use for as long as the
+    /// claim is held, and a lock file left behind by one that exited is
+    /// not a claim.
+    #[test]
+    fn a_library_is_in_use_while_either_claim_is_held() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("lib");
+        make_root(&root);
+        assert!(!in_use(&root), "no lock files at all");
+
+        std::fs::create_dir_all(root.join("system")).unwrap();
+        for rel in HELD_WHILE_OPEN {
+            std::fs::write(root.join(rel), "held by pid 1").unwrap();
+        }
+        assert!(!in_use(&root), "lock files nobody holds");
+
+        for rel in HELD_WHILE_OPEN {
+            let holder = std::fs::File::open(root.join(rel)).unwrap();
+            holder.lock().unwrap();
+            assert!(in_use(&root), "{rel} held");
+            drop(holder);
+            assert!(!in_use(&root), "{rel} let go");
+        }
+    }
+
     /// Only a library on the recent list moves. Each keeps its name, and
     /// the recent list keeps its order and names the new places.
     #[test]
@@ -612,12 +732,18 @@ mod tests {
     }
 
     #[test]
-    fn the_first_library_is_suggested_as_default_and_the_next_has_no_suggestion() {
+    fn default_is_suggested_while_no_library_has_that_name() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = libraries_dir(&tmp.path().join("home"));
         assert_eq!(suggested_name(&dir), DEFAULT_NAME);
         make_root(&dir.join(DEFAULT_NAME));
         assert_eq!(suggested_name(&dir), "");
+        std::fs::remove_dir_all(dir.join(DEFAULT_NAME)).unwrap();
+        assert_eq!(
+            suggested_name(&dir),
+            DEFAULT_NAME,
+            "deleted, so offered again"
+        );
     }
 
     #[test]
@@ -688,5 +814,68 @@ mod tests {
         )
         .unwrap();
         assert_eq!(summary(tmp.path()).unwrap()["sources"], 4);
+    }
+
+    /// A path naming the libraries folder's parent, or a symlink into
+    /// someone else's folder, must not be offered for deletion: a
+    /// delete moves whatever it names to the Trash.
+    #[test]
+    fn only_a_plain_folder_inside_the_libraries_folder_is_deletable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let dir = libraries_dir(&home);
+        make_root(&home);
+        make_root(&dir.join("Default"));
+        let up = dir.join("..");
+        assert_eq!(
+            up.parent(),
+            Some(dir.as_path()),
+            "the text test alone passes"
+        );
+        assert!(is_data_root(&up));
+        assert!(!deletable(&up, &dir));
+        assert!(forgettable(&up, &dir));
+
+        let outside = tmp.path().join("elsewhere");
+        make_root(&outside);
+        #[cfg(unix)]
+        {
+            let link = dir.join("Linked");
+            std::os::unix::fs::symlink(&outside, &link).unwrap();
+            assert!(is_data_root(&link));
+            assert!(!deletable(&link, &dir));
+            assert!(forgettable(&link, &dir));
+        }
+        assert!(deletable(&dir.join("Default"), &dir));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_new_library_and_the_libraries_folder_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let dir = libraries_dir(&home);
+
+        let named = dir.join(DEFAULT_NAME);
+        create_library_dir(&named, &dir).unwrap();
+        assert_eq!(mode(&dir), 0o700);
+        assert_eq!(mode(&named), 0o700);
+
+        let typed = tmp.path().join("projects").join("lib");
+        create_library_dir(&typed, &dir).unwrap();
+        assert_eq!(mode(&typed), 0o700);
+        let plain = tmp.path().join("plain");
+        std::fs::create_dir(&plain).unwrap();
+        assert_eq!(
+            mode(&tmp.path().join("projects")),
+            mode(&plain),
+            "a person's own folder keeps the default mode"
+        );
+
+        create_library_dir(&named, &dir).unwrap();
+        assert_eq!(mode(&named), 0o700, "creating it again is a no-op");
     }
 }

@@ -473,8 +473,9 @@ async fn phases(ctx: &Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
         if e.unauthorized && s.listed == 0 {
             anyhow::bail!("notion: {}", e.reason);
         }
-        ctx.found.push(e.problem());
-        ctx.found.cut_short();
+        let problem = e.problem();
+        ctx.found.gave_up(problem.detail.clone());
+        ctx.found.push(problem);
     } else if !roots.is_empty() {
         let unreadable = ctx.unreadable.lock().unwrap();
         ctx.found.config(roots_upstream_lacks(&roots, &unreadable));

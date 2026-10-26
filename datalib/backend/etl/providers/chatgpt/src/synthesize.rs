@@ -56,34 +56,12 @@ impl Synthesizer for ChatgptSynth {
             count += 1;
         }
 
-        let listing_path = self.api_dir.join("conversations.json");
-        let listing: Vec<Value> = if listing_path.exists() {
-            serde_json::from_slice(&fs::read(&listing_path)?)
-                .with_context(|| format!("parse {}", listing_path.display()))?
-        } else {
-            Vec::new()
-        };
-        let total = listing.len() as u64;
-        let mut offset = 0usize;
-        while offset < listing.len() {
-            let end = (offset + PAGE_SIZE).min(listing.len());
-            let chunk: Vec<Value> = listing[offset..end].to_vec();
-            let body = json!({"items": chunk, "total": total});
-            let url = format!(
-                "{BASE}/backend-api/conversations?offset={offset}&limit={PAGE_SIZE}&order=updated"
-            );
-            write_fixture(out_root, &req_get(&url), &json_response(&body))?;
-            count += 1;
-            offset = end;
+        for (file, archived) in [
+            ("conversations.json", ""),
+            ("conversations_archived.json", "&is_archived=true"),
+        ] {
+            count += synthesize_listing(&self.api_dir.join(file), archived, out_root)?;
         }
-        // Terminating empty page; harmless if total honestly bounds the
-        // loop, but required when total is missing from the snapshot.
-        let url = format!(
-            "{BASE}/backend-api/conversations?offset={offset}&limit={PAGE_SIZE}&order=updated"
-        );
-        let body = json!({"items": [], "total": total});
-        write_fixture(out_root, &req_get(&url), &json_response(&body))?;
-        count += 1;
 
         let convs_dir = self.api_dir.join("conversations");
         if convs_dir.is_dir() {
@@ -112,6 +90,37 @@ impl Synthesizer for ChatgptSynth {
         Ok(SynthesizeReport {
             fixtures_written: count,
         })
+    }
+}
+
+/// One listing's pages from `path`, a JSON array of its items, ending in
+/// the empty page; with no file, the empty page alone. `archived` is the
+/// query that selects the archived listing, or nothing.
+fn synthesize_listing(path: &Path, archived: &str, out_root: &Path) -> Result<usize> {
+    let listing: Vec<Value> = if path.exists() {
+        serde_json::from_slice(&fs::read(path)?)
+            .with_context(|| format!("parse {}", path.display()))?
+    } else {
+        Vec::new()
+    };
+    let total = listing.len() as u64;
+    let mut count = 0usize;
+    let mut offset = 0usize;
+    loop {
+        let end = (offset + PAGE_SIZE).min(listing.len());
+        let chunk: Vec<Value> = listing[offset..end].to_vec();
+        let body = json!({"items": chunk, "total": total});
+        let url = format!(
+            "{BASE}/backend-api/conversations?offset={offset}&limit={PAGE_SIZE}&order=updated{archived}"
+        );
+        write_fixture(out_root, &req_get(&url), &json_response(&body))?;
+        count += 1;
+        // The terminating empty page is harmless when `total` honestly
+        // bounds the loop, and required when a snapshot has no `total`.
+        if offset == listing.len() {
+            return Ok(count);
+        }
+        offset = end;
     }
 }
 
@@ -203,8 +212,9 @@ mod tests {
         let out = d.path().join("playback");
         let synth = ChatgptSynth::new(&api);
         let report = synth.synthesize(&out).unwrap();
-        // me + 2 listing pages + 1 terminator + 1 conv = 5
-        assert_eq!(report.fixtures_written, 5);
+        // me + 2 listing pages + 1 terminator + the empty archived
+        // listing + 1 conv = 6
+        assert_eq!(report.fixtures_written, 6);
 
         let me_req = req_get(&format!("{BASE}/backend-api/me"));
         let me_path = out.join("chatgpt").join(fixture_key(&me_req));

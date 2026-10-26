@@ -18,7 +18,8 @@ pub async fn migrate(raw_dir: &std::path::Path) -> anyhow::Result<()> {
 }
 
 /// Ingest wave: a live table (`jmap`, `gmail`) selects a server
-/// mode; `mbox` reads the `.mbox` at its `path`.
+/// mode; `mbox` reads the `.mbox` at its `path`, or beside `gmail` is
+/// the Takeout that mode starts from.
 pub fn plan_ingest(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     if config.outlink_format.is_some() || !config.only_render_labels.is_empty() {
@@ -32,10 +33,13 @@ pub fn plan_ingest(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dyn 
     let latchkey = config.latchkey_settings.clone();
 
     // Live-server modes are mutually exclusive (`live_mode` enforces
-    // that, and `validate` refuses one beside `mbox`).
+    // that, and `validate` refuses `jmap` beside `mbox`).
     let mode = match config.live_mode()? {
         Some(EmailLiveMode::Jmap(sync)) => Some(ExtractMode::Jmap(sync.clone())),
-        Some(EmailLiveMode::GmailApi(gmail)) => Some(ExtractMode::GmailApi(gmail.clone())),
+        Some(EmailLiveMode::GmailApi(gmail)) => Some(ExtractMode::GmailApi {
+            gmail: gmail.clone(),
+            takeout: config.takeout(),
+        }),
         // Planning never touches the filesystem — `datalib-dag --check`
         // and the schema tests run where the data is not — so whether the
         // path really is an mbox is checked when the download runs.
@@ -63,8 +67,12 @@ pub fn plan_ingest(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dyn 
 enum ExtractMode {
     /// Live JMAP server sync.
     Jmap(EmailSync),
-    /// Gmail REST API sync.
-    GmailApi(EmailGmailApi),
+    /// Gmail REST API sync, starting from a Google Takeout when one is
+    /// named.
+    GmailApi {
+        gmail: EmailGmailApi,
+        takeout: Option<PathBuf>,
+    },
     /// File-backed `.mbox` ingest (e.g. a Google Takeout export).
     Mbox {
         input_path: PathBuf,
@@ -135,12 +143,20 @@ impl DataProcessor for EmailIngest {
                         s.blobs_errored,
                     )
                 }
-                ExtractMode::GmailApi(gmail) => {
+                ExtractMode::GmailApi { gmail, takeout } => {
+                    if let Some(path) = takeout.as_ref().filter(|p| !is_mbox_input(p)) {
+                        return Err(anyhow!(
+                            "`mbox.path` is {} — expected a Google Takeout .mbox file, or a \
+                             directory holding one",
+                            path.display()
+                        ));
+                    }
                     let s = ingest::gmail_api::fetch(ingest::gmail_api::FetchOptions {
                         db,
                         sealer: Some(sealer),
                         config: gmail.clone(),
                         latchkey: self.latchkey.clone(),
+                        takeout: takeout.clone(),
                         only_labels: self.only_extract_labels.clone(),
                         blob_size_limit_bytes: self.blob_size_limit_bytes,
                         flush_batch: None,
@@ -149,12 +165,16 @@ impl DataProcessor for EmailIngest {
                     })
                     .await?;
                     format!(
-                        "mailboxes={} emails={} destroyed={} \
+                        "mailboxes={} emails={} destroyed={} takeout_seeded={} \
+                         relabeled(walks={} one_by_one={}) \
                          blobs(stored={} skipped={} oversize={}) filtered={} \
                          quota_units={} walked=[{}] budget_exhausted={}",
                         s.mailboxes_upserted,
                         s.emails_upserted,
                         s.emails_destroyed,
+                        s.takeout.as_ref().map_or(0, |t| t.seeded),
+                        s.relabeled_from_walks,
+                        s.relabeled_one_by_one,
                         s.blobs_stored,
                         s.blobs_skipped,
                         s.blobs_oversize,

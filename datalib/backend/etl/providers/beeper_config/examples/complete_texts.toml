@@ -1,0 +1,39 @@
+# The Beeper Texts desktop app's local data, with every option set, and
+# searchable. No sign-in; it reads the app's data directory.
+[[groups]]
+id = "beeper"
+name = "Beeper"
+type = "beeper"
+
+[[steps]]
+group = "beeper"
+function = "ingest"
+
+[steps.params.texts]
+path = "~/Library/Application Support/BeeperTexts"  # the app's data directory; this is
+                                                    # the default on macOS
+media = true         # copy the app's cached media into blobs; false keeps the
+                     # attachments' names without their bytes; default true
+
+[[steps]]
+group = "beeper"
+function = "render_markdown"
+inputs = ["beeper/ingest"]
+
+[steps.params]
+period = "month"                     # span of each page: month (default), day, year,
+                                     # or all (one page per chat)
+networks = ["signal", "googlechat"]  # which networks to render; omit for every one
+                                     # (the ingest mirrors them all either way)
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "beeper"
+function = "keyword_index"
+inputs = ["beeper/render_markdown"]
+
+[[steps]]
+group = "beeper"
+function = "embed"
+inputs = ["beeper/keyword_index"]

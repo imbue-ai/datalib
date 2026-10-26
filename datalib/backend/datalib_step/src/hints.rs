@@ -12,6 +12,17 @@ use crate::events::{Emitter, OutputClaim};
 /// chain. The scheduler's retry policy keys off the answer, so this is
 /// the runner's vocabulary rather than a label of our own.
 pub fn classify(e: &anyhow::Error) -> FailureKind {
+    if e.chain()
+        .any(|c| c.is::<datalib_etl::run_problems::GaveUp>())
+    {
+        return FailureKind::Incomplete;
+    }
+    if e.chain().any(|c| {
+        c.downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::PermissionDenied)
+    }) {
+        return FailureKind::Permission;
+    }
     let s: String = e
         .chain()
         .map(|c| c.to_string())
@@ -41,23 +52,42 @@ pub fn classify(e: &anyhow::Error) -> FailureKind {
     }
 }
 
-/// If `res` is an auth-classified failure, emit the provider's fix-it
-/// hint as a structured event (before the outcome line the caller
-/// will emit).
-pub fn emit_auth_hint_on_failure(
+/// If `res` failed in a way a person fixes — a credential, or access
+/// the OS withheld — emit the fix-it hint as a structured event (before
+/// the outcome line the caller will emit).
+pub fn emit_hint_on_failure(
     emitter: &Emitter,
     source_type: SourceType,
     res: &Result<Vec<OutputClaim>>,
 ) {
-    if let Err(e) = res {
-        if classify(e) == FailureKind::Auth {
-            emitter.event(&Event::Hint {
-                step: String::new(), // re-tagged by the runner
-                msg: auth_hint_for(source_type),
-            });
-        }
-    }
+    let Err(e) = res else { return };
+    let msg = match classify(e) {
+        FailureKind::Auth => auth_hint_for(source_type),
+        FailureKind::Permission => PERMISSION_HINT.to_string(),
+        _ => return,
+    };
+    emitter.event(&Event::Hint {
+        step: String::new(), // re-tagged by the runner
+        msg,
+    });
 }
+
+/// macOS keeps some folders private (Desktop, Documents, Downloads,
+/// cloud storage, removable volumes) and lets an app in only once the
+/// person has chosen the path in an open panel. `docs/dev/wizard_file_pickers.md`
+/// §"What the picker buys us in macOS permissions".
+const PERMISSION_HINT: &str = "\
+The operating system would not let Datalib read a file this source's \
+settings name (\"Operation not permitted\"). On a Mac that is privacy \
+protection, not a broken file: choosing the folder in Datalib's own picker \
+is what grants access, and that grant can lapse.
+
+In the app: on the Manage screen, press \"Choose folder again\" on this \
+source's row and pick the same folder; it syncs again on its own. For a \
+grant that lasts, give Datalib Full Disk Access in System Settings → \
+Privacy & Security.
+
+From a terminal, the terminal app is the one that needs the access.";
 
 /// Appended to every per-provider hint whose service can hold more than
 /// one stored account, so the multi-account case is answered where the
@@ -229,9 +259,10 @@ registration at all, because latchkey has a built-in `google-gmail`
 service and routes to it by URL host:
 
   1. {LK} auth browser google-gmail
-     (If it reports no OAuth client, run
-      `{LK} auth browser-prepare google-gmail` first and wait a few
-      minutes for Google to finish creating it.)
+     (If it says google-gmail requires preparation, latchkey has no
+      OAuth client for it yet: `{LK} auth browser-prepare google-gmail`
+      creates one in a few minutes, or `{LK} auth prepare google-gmail
+      '{\"clientId\":\"…\",\"clientSecret\":\"…\"}'` stores one you made.)
   2. Smoke-test:
        {LK} curl -s https://gmail.googleapis.com/gmail/v1/users/me/profile
   3. Point the source at it — an empty table is a complete config:
@@ -264,17 +295,14 @@ See datalib/backend/etl/providers/garmin/INGEST.md for details."
         }
         SourceType::Beeper => {
             "\
-beeper download reads Beeper Texts' on-disk SQLite. No auth dance.
+beeper download mirrors Beeper Texts' on-disk SQLite. No auth dance.
 
   1. Make sure Beeper Texts is installed and has run at least once
      so its data dir exists. Default path:
        ~/Library/Application Support/BeeperTexts/index.db
-     (Pass --beeper-data-dir, or set `path` in the source's `texts`
-     table, to override.)
-  2. Confirm read access (Application Support is NOT Full Disk Access
-     protected, so this should just work):
-       sqlite3 ~/Library/Application\\ Support/BeeperTexts/index.db \\
-           \"SELECT COUNT(*) FROM threads;\"
+     (Set `path` in the source's `texts` table to override.)
+  2. Application Support is not Full Disk Access protected, so a
+     read should just work; a failure here is usually a wrong `path`.
 
 See datalib/backend/etl/providers/beeper/INGEST.md for details."
         }
@@ -304,6 +332,34 @@ mod tests {
         assert_eq!(classify(&tr), FailureKind::Transient);
         let other = anyhow::anyhow!("unparseable row 17");
         assert_eq!(classify(&other), FailureKind::Data);
+    }
+
+    /// macOS refusing a read of a configured path (EPERM, "Operation not
+    /// permitted") is a person's to fix, not bad data.
+    #[test]
+    fn an_os_refusal_anywhere_in_the_chain_is_permission() {
+        let eperm = std::io::Error::from_raw_os_error(1);
+        let e = anyhow::Error::new(eperm)
+            .context("read /backups/msgstore.db.crypt15")
+            .context("decrypt /backups/msgstore.db.crypt15");
+        assert_eq!(classify(&e), FailureKind::Permission);
+        let eacces = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            classify(&anyhow::Error::new(eacces)),
+            FailureKind::Permission
+        );
+        let missing = std::io::Error::from(std::io::ErrorKind::NotFound);
+        assert_eq!(classify(&anyhow::Error::new(missing)), FailureKind::Data);
+    }
+
+    /// A give-up says `timeout` or `HTTP 429` in its words; it is still
+    /// `incomplete`, never a kind the runner would retry at once (#1157).
+    #[test]
+    fn a_give_up_is_incomplete_whatever_its_words() {
+        let said = "HTTP 429 too many requests; stopped after 50 failed in a row";
+        let e = anyhow::Error::new(datalib_etl::run_problems::GaveUp(said.to_string()))
+            .context("source tng-mail");
+        assert_eq!(classify(&e), FailureKind::Incomplete);
     }
 
     #[test]

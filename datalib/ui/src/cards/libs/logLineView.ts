@@ -4,11 +4,17 @@
 // grid.
 import LogLineCard from "../LogLineCard.ce.vue";
 import JsonTree from "../JsonTree.ce.vue";
+import ChipMenu from "../ChipMenu.ce.vue";
+import EntityChip from "../EntityChip.ce.vue";
+import chipCss from "../chip.css?inline";
 import { vueCard } from "../vueCard";
 import type { CardRender } from "../types";
 
 export function logLineView(seq: number): CardRender {
-  return vueCard(LogLineCard, { seq }, { styleSources: [JsonTree] });
+  if (!Number.isSafeInteger(seq) || seq < 0) {
+    throw new Error("logLineView takes a log line's number, as in logLineView(42)");
+  }
+  return vueCard(LogLineCard, { seq }, { styleSources: [JsonTree, EntityChip, ChipMenu, chipCss] });
 }
 
 export function logLineSource(seq: number): string {

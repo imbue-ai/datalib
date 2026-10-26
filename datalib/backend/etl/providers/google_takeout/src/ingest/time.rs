@@ -83,10 +83,8 @@ fn normalize_spaces(s: &str) -> String {
 /// whitespace-separated token. Returns `None` when there's no
 /// whitespace to split on.
 fn split_trailing_abbrev(s: &str) -> Option<(&str, &str)> {
-    let s = s.trim();
-    let idx = s.rfind(char::is_whitespace)?;
-    let body = s[..idx].trim_end();
-    let abbr = s[idx + 1..].trim();
+    let (body, abbr) = s.trim().rsplit_once(char::is_whitespace)?;
+    let body = body.trim_end();
     if body.is_empty() || abbr.is_empty() {
         return None;
     }
@@ -126,6 +124,57 @@ pub fn parse_mdl_grid(s: &str) -> Option<String> {
         .or_else(|_| NaiveDateTime::parse_from_str(&normalized, "%b %d %Y %l:%M:%S %p"))
         .ok()?;
     finalize(naive, offset)
+}
+
+/// The zone a page names in words rather than letters (`Pacific Time`),
+/// as the place whose clock it is. A name that is not one place's is
+/// left out, as the abbreviations two zones share are. The place's
+/// daylight-time rules run only as far as the tz database's years; a
+/// date past them is read in standard time.
+fn zone_named(name: &str) -> Option<chrono_tz::Tz> {
+    use chrono_tz::Tz;
+    Some(match name {
+        "Pacific Time" => Tz::America__Los_Angeles,
+        "Mountain Time" => Tz::America__Denver,
+        "Central Time" => Tz::America__Chicago,
+        "Eastern Time" => Tz::America__New_York,
+        "Alaska Time" => Tz::America__Anchorage,
+        "Atlantic Time" => Tz::America__Halifax,
+        "Newfoundland Time" => Tz::America__St_Johns,
+        "Hawaii-Aleutian Standard Time" => Tz::Pacific__Honolulu,
+        "Greenwich Mean Time" | "Coordinated Universal Time" => Tz::UTC,
+        "Central European Time" => Tz::Europe__Paris,
+        "Eastern European Time" => Tz::Europe__Athens,
+        "Western European Time" => Tz::Europe__Lisbon,
+        "British Time" => Tz::Europe__London,
+        "Australian Eastern Time" => Tz::Australia__Sydney,
+        "Japan Standard Time" => Tz::Asia__Tokyo,
+        _ => return None,
+    })
+}
+
+/// A Play Books entry's date: `Last modified on`, then `Mar 12, 2024,
+/// 9:41:00 AM`, then the zone in words (`Pacific Time`) or letters, one
+/// to a line.
+pub fn parse_play_books_stamp(s: &str) -> Option<String> {
+    let lines: Vec<String> = s
+        .lines()
+        .map(|l| normalize_spaces(l).trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    let (zone, rest) = lines.split_last()?;
+    let parse = |l: &str| {
+        let l = l.replace(',', "");
+        NaiveDateTime::parse_from_str(&l, "%b %e %Y %l:%M:%S %p")
+            .or_else(|_| NaiveDateTime::parse_from_str(&l, "%b %d %Y %l:%M:%S %p"))
+            .ok()
+    };
+    let naive = rest.iter().find_map(|l| parse(l))?;
+    if let Some(tz) = zone_named(zone) {
+        let dt = tz.from_local_datetime(&naive).single()?;
+        return Some(IsoOffsetTimestamp::from(dt.fixed_offset()).to_rfc3339());
+    }
+    finalize(naive, tz_abbrev_offset_minutes(zone)?)
 }
 
 #[cfg(test)]
@@ -195,6 +244,37 @@ mod tests {
     fn a_name_two_zones_share_yields_none() {
         assert!(parse_mdl_grid("Jun 4, 2026, 11:48:37 AM IST").is_none());
         assert!(parse_mdl_grid("Jun 4, 2026, 11:48:37 AM XYZT").is_none());
+    }
+
+    /// A whitespace character wider than one byte before the zone panicked
+    /// on the byte slice past it.
+    #[test]
+    fn a_multibyte_space_before_the_zone_still_splits() {
+        let out = parse_mdl_grid("Jun 4, 2026, 11:48:37 PM\u{2009}PDT").expect("parse");
+        assert!(out.starts_with("2026-06-04T23:48:37"));
+    }
+
+    /// Play Books names the zone in words, and only the place says
+    /// whether daylight time applies.
+    #[test]
+    fn a_zone_in_words_is_read_as_its_place() {
+        let at = |date: &str, zone: &str| {
+            parse_play_books_stamp(&format!("Last modified on\n{date}\n{zone}"))
+        };
+        assert_eq!(
+            at("Jan 12, 2024, 9:41:00\u{202f}AM", "Pacific Time").as_deref(),
+            Some("2024-01-12T09:41:00-08:00")
+        );
+        assert_eq!(
+            at("Jul 4, 2024, 6:00:00 PM", "Pacific Time").as_deref(),
+            Some("2024-07-04T18:00:00-07:00")
+        );
+        assert_eq!(
+            at("Jul 4, 2024, 6:00:00 PM", "PDT").as_deref(),
+            Some("2024-07-04T18:00:00-07:00")
+        );
+        assert_eq!(at("Jul 4, 2024, 6:00:00 PM", "Somewhere Time"), None);
+        assert_eq!(parse_play_books_stamp("Last modified on"), None);
     }
 
     #[test]

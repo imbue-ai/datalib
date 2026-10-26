@@ -122,6 +122,13 @@ pub enum Retired {
     TypesAndMethodTables,
     /// A `qmd_index` fan-in, from before `qmd_aggregator` (`qmd_steps.rs`).
     QmdIndex,
+    /// The index group named `unified_index` (`document_index.rs`).
+    UnifiedIndex,
+    /// No time-series index, and a source that has time series
+    /// (`time_series_steps.rs`).
+    NoTimeSeries,
+    /// A time-series source with an `embed` step (`time_series_embeds.rs`).
+    TimeSeriesEmbed,
 }
 
 /// Which retired shape this config is in, or `None` when it is already
@@ -277,6 +284,9 @@ fn rewrite_ingest_params(ty: &str, params: &mut toml::Table) -> Result<()> {
             if let Some(dir) = t.remove("beeper_data_dir") {
                 t.insert("path".into(), dir);
             }
+            // The network filter is the render step's `networks` now; left
+            // unset there, every network renders.
+            t.remove("sources");
             insert(params, "texts", t);
         }
         "perseus" => {

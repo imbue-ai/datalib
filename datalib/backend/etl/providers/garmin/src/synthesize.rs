@@ -58,8 +58,8 @@ pub struct SpecActivity {
     pub listing: Value,
     #[serde(default)]
     pub detail: Value,
-    /// Bytes for the FIT file inside the download zip, as text. A real
-    /// FIT file is binary; a fixture only needs to round-trip.
+    /// Bytes for the FIT file inside the download zip, as text: a file
+    /// that is no FIT. Without it the zip holds [`synthetic_fit`].
     #[serde(default)]
     pub fit: Option<String>,
     /// An activity entered by hand: its file download answers 404.
@@ -216,14 +216,14 @@ impl Synthesizer for GarminSynth {
             )?;
             let fit = a
                 .fit
-                .clone()
-                .unwrap_or_else(|| format!(".FIT synthetic {id}"));
+                .as_ref()
+                .map_or_else(|| synthetic_fit(&id), |text| text.as_bytes().to_vec());
             put(
                 req_get_bytes(&format!("{base}/download-service/files/activity/{id}")),
                 if a.no_file {
                     not_found()
                 } else {
-                    zip_response(&format!("{id}_ACTIVITY.fit"), fit.as_bytes())?
+                    zip_response(&format!("{id}_ACTIVITY.fit"), &fit)?
                 },
             )?;
         }
@@ -297,6 +297,45 @@ pub fn weight_range_reply(weigh_ins: &[Value], start: NaiveDate, end: NaiveDate)
             .map(|(d, list)| json!({"summaryDate": d, "allWeightMetrics": list}))
             .collect::<Vec<_>>(),
     })
+}
+
+/// Seconds of samples in a [`synthetic_fit`].
+pub const SYNTHETIC_FIT_SECONDS: u32 = 120;
+
+/// A FIT file of made-up one-second samples for activity `id`: heart
+/// rate, cadence, distance, speed and altitude, as a watch writes
+/// them. FIT counts time in 32 bits from 1989 and cannot reach the
+/// 2360s the fixture lives in, so the samples start on 2021-09-08.
+pub fn synthetic_fit(id: &str) -> Vec<u8> {
+    const START: u32 = 1_000_000_000;
+    let seed: u32 = id.bytes().map(u32::from).sum::<u32>() % 10;
+    let mut data = vec![
+        0x40, 0, 0, 20, 0, 6, // definition: local 0 is a record of six fields
+        253, 4, 0x86, // timestamp
+        3, 1, 0x02, // heart_rate
+        4, 1, 0x02, // cadence
+        5, 4, 0x86, // distance, cm
+        73, 4, 0x86, // enhanced_speed, mm/s
+        78, 4, 0x86, // enhanced_altitude, (m + 500) * 5
+    ];
+    let mut distance_cm = 0u32;
+    for i in 0..SYNTHETIC_FIT_SECONDS {
+        let speed_mm_s = 3_000 + (i * 37 + seed) % 400;
+        distance_cm += speed_mm_s / 10;
+        data.push(0x00);
+        data.extend((START + i).to_le_bytes());
+        data.push((120 + (i + seed) % 30) as u8);
+        data.push((85 + i % 3) as u8);
+        data.extend(distance_cm.to_le_bytes());
+        data.extend(speed_mm_s.to_le_bytes());
+        data.extend(((100 + i / 10 + 500) * 5).to_le_bytes());
+    }
+    let mut out = vec![12, 0x10, 0, 0];
+    out.extend((data.len() as u32).to_le_bytes());
+    out.extend(b".FIT");
+    out.extend(data);
+    out.extend([0, 0]);
+    out
 }
 
 fn zip_response(name: &str, bytes: &[u8]) -> Result<HttpResponse> {

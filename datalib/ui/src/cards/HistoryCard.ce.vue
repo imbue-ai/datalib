@@ -9,6 +9,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import type { Column } from "@slickgrid-universal/common";
 import type { ColumnSpec } from "@/api";
 import { useApi } from "@/cards/cardApi";
+import { escapeHtml } from "@/cards/help";
 import { copyToClipboard } from "@/clipboard";
 import { historyRows, truncatedStores, type HistoryRow } from "@/config/commitHistory";
 import {
@@ -38,7 +39,7 @@ const props = defineProps<{ ctx: CardCtx; opts: HistoryViewOpts }>();
 
 props.ctx.setTitle(`History · ${props.opts.title}`);
 props.ctx.setHelp(`
-<p>Every commit in the stores under ${props.opts.trees.map((t) => `<code>${t}/</code>`).join(", ")},
+<p>Every commit in the stores under ${props.opts.trees.map((t) => `<code>${escapeHtml(t)}/</code>`).join(", ")},
 newest first. Each store is a doltlite database that keeps its own log: a download commits
 as it syncs, a render once per pass. Open a commit for what it did to each table; the
 <b>Run</b> link opens the log of the sync that made it.</p>

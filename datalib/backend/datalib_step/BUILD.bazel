@@ -12,6 +12,11 @@ load("//tools:insta.bzl", "insta_update")
 rust_binary(
     name = "datalib_step",
     srcs = glob(["src/**/*.rs"]),
+    # `datalib-step help` prints these (src/help.rs).
+    compile_data = [
+        "//docs:agent_user.md",
+        "//docs/user:getting_your_data.md",
+    ],
     crate_name = "datalib_step",
     crate_root = "src/main.rs",
     edition = "2021",
@@ -19,6 +24,8 @@ rust_binary(
     deps = [
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/dag:datalib_dag",
+        "//datalib/backend/etl/time_series:datalib_etl_time_series",
+        "//datalib/backend/time_series_schema:datalib_time_series_schema",
         "//datalib/backend/embedding_map:datalib_embedding_map",
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/web:datalib_etl_web",
@@ -43,6 +50,9 @@ rust_binary(
         "//datalib/backend/etl/providers/beeper_render:datalib_etl_beeper_render",
         "//datalib/backend/etl/providers/beeper_config:datalib_etl_beeper_config",
         "//datalib/backend/etl/providers/calendar:datalib_etl_calendar",
+        "//datalib/backend/etl/providers/google_drive:datalib_etl_google_drive",
+        "//datalib/backend/etl/providers/google_drive_config:datalib_etl_google_drive_config",
+        "//datalib/backend/etl/providers/google_drive_render:datalib_etl_google_drive_render",
         "//datalib/backend/etl/providers/calendar_config:datalib_etl_calendar_config",
         "//datalib/backend/etl/providers/calendar_render:datalib_etl_calendar_render",
         "//datalib/backend/etl/providers/contacts_config:datalib_etl_contacts_config",
@@ -73,6 +83,8 @@ rust_binary(
         "//datalib/backend/etl/providers/facebook:datalib_etl_facebook",
         "//datalib/backend/etl/providers/facebook_render:datalib_etl_facebook_render",
         "//datalib/backend/etl/providers/facebook_config:datalib_etl_facebook_config",
+        "//datalib/backend/etl/providers/linear:datalib_etl_linear",
+        "//datalib/backend/etl/providers/linear_config:datalib_etl_linear_config",
         "//datalib/backend/etl/providers/linkedin:datalib_etl_linkedin",
         "//datalib/backend/etl/providers/linkedin_render:datalib_etl_linkedin_render",
         "//datalib/backend/etl/providers/linkedin_config:datalib_etl_linkedin_config",
@@ -118,12 +130,14 @@ rust_binary(
         "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/source_common:datalib_source_common",
         "//datalib/backend/time:datalib_time",
-        "//datalib/backend/unified_index:datalib_unified_index",
+        "//datalib/backend/unified_document_index:datalib_unified_document_index",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:blake3",
+        "//datalib/backend/cli_help:datalib_cli_help",
         "@datalib_crates//:clap",
         "@datalib_crates//:futures",
         "@datalib_crates//:libc",
+        "@datalib_crates//:schemars",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:strum",
@@ -173,6 +187,14 @@ insta_update(
 
 # Regenerates datalib/ui/src/config/ingestMethods.json from the provider
 # config crates' `IngestMethods` declarations.
+# Regenerates docs/user/config_examples/all_sources.toml from every
+# source's complete example stanza.
+insta_update(
+    name = "all_sources.update",
+    test = ":datalib_step_unittests",
+    test_args = ["all_sources_is_generated_from_the_stanzas"],
+)
+
 insta_update(
     name = "ingest_methods.update",
     test = ":datalib_step_unittests",
@@ -188,6 +210,7 @@ rust_test(
     crate_root = "tests/step_tests/main.rs",
     data = [
         ":datalib_step",
+        "//datalib/backend/dag:datalib_dag_bin",
         "//datalib/backend/etl/providers/calendar:split_fixture",
         "//datalib/backend/etl/providers/sms_backup_restore:tng_fixture",
         "//tests/fixtures:ingested/qmd-index.tar",
@@ -196,6 +219,7 @@ rust_test(
     edition = "2021",
     env = {
         "CALENDAR_SPLIT_FIXTURE_DIR": "datalib/backend/etl/providers/calendar/tests/fixtures/calendar_split_tng",
+        "DATALIB_DAG_BIN": "$(rootpath //datalib/backend/dag:datalib_dag_bin)",
         "DATALIB_STEP_BIN": "$(rootpath :datalib_step)",
         "DOLTLITE_BIN": "$(rootpath //third-party/doltlite:doltlite)",
         "QMD_INDEX_TAR": "$(rootpath //tests/fixtures:ingested/qmd-index.tar)",

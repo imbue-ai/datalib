@@ -28,6 +28,18 @@ impl LabelIndex {
         }
     }
 
+    pub fn ids(&self) -> impl Iterator<Item = &str> {
+        self.by_id.keys().map(String::as_str)
+    }
+
+    pub fn len(&self) -> usize {
+        self.by_id.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_id.is_empty()
+    }
+
     pub fn name(&self, id: &str) -> String {
         match self.by_id.get(id) {
             Some(label) => label.name.clone(),
@@ -219,6 +231,12 @@ pub fn normalize_thread_id(gmail_thread_id: &str) -> String {
         Ok(n) => n.to_string(),
         Err(_) => gmail_thread_id.to_string(),
     }
+}
+
+/// [`normalize_thread_id`] the other way: the API's spelling of a thread
+/// id a row stores in decimal.
+pub fn gmail_thread_id(stored: &str) -> Option<String> {
+    stored.parse::<u64>().ok().map(|n| format!("{n:x}"))
 }
 
 /// What one ingested message contributes.
@@ -513,6 +531,19 @@ mod tests {
             mailboxes,
             vec![labels::gmail_mailbox_id("acct", "Label_999")]
         );
+    }
+
+    /// A message relabeled from the label walks is written with the
+    /// thread its row stores; spelled wrong, it would read as a thread
+    /// of its own.
+    #[test]
+    fn spells_a_stored_thread_id_back_the_way_the_api_does() {
+        let api = "19b8d627a801a2b0";
+        assert_eq!(
+            gmail_thread_id(&normalize_thread_id(api)).as_deref(),
+            Some(api)
+        );
+        assert_eq!(gmail_thread_id("not-a-number"), None);
     }
 
     /// Hex (API) and decimal (Takeout `X-GM-THRID`) are the same number;

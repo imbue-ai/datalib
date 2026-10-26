@@ -4,15 +4,31 @@
 mod datalib_contacts;
 mod gate;
 mod slack;
-mod unified_index;
+mod unified_document_index;
+mod unified_time_series_index;
 
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use datalib_cli_help::Example;
+
+const EXAMPLES: &[Example] = &[Example {
+    what: "serve the search applet on a port the OS picks, as the gateway does",
+    command: "datalib-applet unified_document_index --port 0 --params-file params.json",
+}];
 
 #[derive(Parser)]
-#[command(name = "datalib-applet", about = "Applet host for the datalib app")]
+#[command(
+    name = "datalib-applet",
+    bin_name = "datalib-applet",
+    about = "Applet host for the datalib app",
+    long_about = "Applet host for the datalib app. datalib-http's gateway starts one \
+                  for each [[applets]] entry in the config and reads the port it \
+                  prints. You do not run it yourself except to work on an applet \
+                  (docs/dev/applets.md).",
+    after_help = datalib_cli_help::render(EXAMPLES)
+)]
 struct Cli {
     #[command(subcommand)]
     applet: Which,
@@ -41,8 +57,13 @@ enum Which {
     Slack,
     /// Serve the grid index and the qmd index: search, columns, the
     /// document list, one document, and the files beside it.
-    #[command(name = "unified_index")]
-    UnifiedIndex,
+    // The old name stays for a config the server has not rewritten yet.
+    #[command(name = "unified_document_index", alias = "unified_index")]
+    UnifiedDocumentIndex,
+    /// Serve the time-series index: the time series, and their points over
+    /// a range, downsampled to a budget.
+    #[command(name = "unified_time_series_index")]
+    UnifiedTimeSeriesIndex,
     /// The contacts app: create contacts and link handles to them, and
     /// resolve a document's handles for its chips.
     #[command(name = "datalib_contacts")]
@@ -81,7 +102,7 @@ fn main() {
             None
         }
     };
-    // The unified_index applet runs qmd; from a release tarball that
+    // The unified_document_index applet runs qmd; from a release tarball that
     // ships no `runtime/`, the first search fetches the manifest's.
     datalib_fetch::enable_runtime_fetch();
     if let Err(e) = run() {
@@ -115,14 +136,30 @@ fn run() -> Result<()> {
         // Contributes no components, so there is nothing to write
         // first: the app's grid and document views are builtins, and
         // this applet only serves the endpoints behind them.
-        Which::UnifiedIndex => {
+        Which::UnifiedDocumentIndex => {
             let port = cli.port.context("-p <port> is required")?;
-            unified_index::serve(port)
+            unified_document_index::serve(port)
+        }
+        // The app's chart is a builtin; nothing to write first.
+        Which::UnifiedTimeSeriesIndex => {
+            let port = cli.port.context("-p <port> is required")?;
+            unified_time_series_index::serve(port)
         }
         // Builtins draw its chips and popovers; nothing to write first.
         Which::DatalibContacts => {
             let port = cli.port.context("-p <port> is required")?;
             datalib_contacts::serve(port)
         }
+    }
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use clap::CommandFactory;
+
+    #[test]
+    fn the_help_examples_parse() {
+        super::Cli::command().debug_assert();
+        datalib_cli_help::assert_examples_parse(super::Cli::command(), super::EXAMPLES);
     }
 }

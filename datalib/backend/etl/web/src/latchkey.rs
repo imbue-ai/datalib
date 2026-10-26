@@ -148,6 +148,49 @@ pub fn latchkey_curl_command(
     Ok(cmd)
 }
 
+/// Runs `latchkey auth browser <service>` for a service whose credential
+/// a browser login mints from the session latchkey keeps
+/// (`docs/dev/latchkey.md` §"Signing in again without a person"). While
+/// that session lasts the login finishes in seconds with nobody at the
+/// keyboard. Once it has gone the browser sits on the sign-in page, so
+/// `limit` bounds the wait, and dropping the child closes the browser
+/// with it.
+pub async fn renew_by_browser_login(
+    service: &str,
+    settings: &datalib_source_common::LatchkeySettings,
+    limit: std::time::Duration,
+) -> anyhow::Result<()> {
+    if crate::playback::current().is_some() {
+        anyhow::bail!("a replayed download does not sign in");
+    }
+    if is_gateway_mode(std::env::var_os(GATEWAY_ENV_VAR).as_deref()) {
+        anyhow::bail!("credentials are held by a latchkey gateway; sign in where it is managed");
+    }
+    let mut cmd = latchkey_tokio_command()?;
+    if let Some(account) = settings.account() {
+        cmd.arg("--account").arg(account);
+    }
+    cmd.args(["auth", "browser", service])
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true);
+    let output = match tokio::time::timeout(limit, cmd.output()).await {
+        Ok(output) => output?,
+        Err(_) => anyhow::bail!(
+            "the browser did not sign in to {service} by itself within {}s; \
+             its session has expired too, so sign in again",
+            limit.as_secs()
+        ),
+    };
+    if !output.status.success() {
+        anyhow::bail!(
+            "latchkey auth browser {service} exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
 fn warn_if_missing() {
     // In gateway mode the gateway supplies its own router curl, so a
     // missing local one costs nothing and the warning would be misleading.
@@ -243,6 +286,25 @@ mod tests {
             None,
             Some(os("http://127.0.0.1:9"))
         ));
+    }
+
+    /// A replayed download must never open a real browser: a test that
+    /// replays a 401 would otherwise put a sign-in window on the screen
+    /// of whoever runs it.
+    #[tokio::test]
+    async fn a_replayed_download_never_signs_in() {
+        let tape = tempfile::tempdir().unwrap();
+        let err = crate::playback::scope(
+            tape.path(),
+            renew_by_browser_login(
+                "chatgpt",
+                &datalib_source_common::LatchkeySettings::default(),
+                std::time::Duration::from_secs(1),
+            ),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("replayed"), "{err:#}");
     }
 
     #[test]

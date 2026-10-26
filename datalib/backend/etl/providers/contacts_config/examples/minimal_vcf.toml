@@ -1,0 +1,18 @@
+# A folder of `.vcf` (vCard) files on disk, as most address books export
+# them. Each file is one address book. No sign-in.
+[[groups]]
+id = "contacts"
+name = "Contacts export"
+type = "contacts"
+
+[[steps]]
+group = "contacts"
+function = "ingest"
+
+[steps.params.vcf]
+path = "~/Downloads/contacts-export"
+
+[[steps]]
+group = "contacts"
+function = "render_markdown"
+inputs = ["contacts/ingest"]

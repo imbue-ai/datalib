@@ -23,7 +23,9 @@ async function renameFromMenu(page: Page) {
 test("a card's requests name the card and its type", async ({ page }) => {
   // The search itself: the field's `/search/keys` asks for the page, not
   // for a card.
-  const search = page.waitForRequest((r) => r.url().includes("/applet/unified_index/search?"));
+  const search = page.waitForRequest((r) =>
+    r.url().includes("/applet/unified_document_index/search?"),
+  );
   await page.goto(GRID);
   const headers = (await search).headers();
   expect(headers["x-datalib-card"]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab]/);
@@ -70,4 +72,16 @@ test("Escape leaves the tab as it was, and a blank name is refused", async ({ pa
   await expect(page.getByText("A name cannot be empty.")).toBeVisible();
   await nameBox(page).press("Escape");
   await expect(gridTab(page)).toHaveText(before);
+});
+
+/// A tab named after a long unbroken query widened the whole sidebar to
+/// fit it; the name is cut short instead.
+test("a long tab name leaves the sidebar its width", async ({ page }) => {
+  await page.goto(GRID);
+  const sidebar = page.locator("nav.ct-sidebar");
+  const width = (await sidebar.boundingBox())!.width;
+  const q = `with:email:${"a".repeat(80)}@enterprise.starfleet`;
+  await search(page, q);
+  await expect(gridTab(page)).toHaveText(`Search: ${q}`);
+  expect((await sidebar.boundingBox())!.width).toBe(width);
 });

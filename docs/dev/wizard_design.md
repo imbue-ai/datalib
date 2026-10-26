@@ -59,6 +59,13 @@ when they are important.
   the setting does and what its empty value means, and stop. Use the
   same "copy" and "sync" as the basic part.
 - **One word for one thing across the whole dialog.**
+- **A source's name is the one the README's source grid uses.** It is
+  the product a person recognizes, with the way in after it when that
+  is not obvious: "Calendar (CalDAV)", "Google Voice (Takeout)",
+  "Signal backups", "Local PDFs". The entry's `label` and its
+  line in `datalib/backend/columns/src/source_catalog.rs` (the name on
+  the Manage screen and in the grid) say it alike; `//:lint_repo`
+  check 13 holds them to it.
 
 ## Keeping a form honest
 
@@ -69,3 +76,13 @@ when they are important.
 - **Editing reopens the same form.** An answer is read back from the
   values (`chosenAnswer` in `sourceSteps.ts`), so every answer must be
   recognizable from what it wrote.
+- **Saving an edit writes only what changed.** `patchSource` sets or
+  removes the keys the form owns (its fields and presets) one at a
+  time, and only where the value differs from what the config says.
+  Everything else in the source's entries is kept as written: params
+  no field names, step keys such as `env` or `command`, and comments
+  (`tomlPatch.ts` does the edits and refuses one that would change
+  anything else). The form lists those keys above the Name, so a person
+  knows they are there. Saving a form with no changes leaves the file
+  byte-for-byte as it was, and `tests/edit_source.test.ts` checks that
+  for every wizard.

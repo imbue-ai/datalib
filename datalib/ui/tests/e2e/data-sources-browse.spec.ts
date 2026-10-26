@@ -25,10 +25,9 @@ const SEARCH = '[data-testid="search-input"]';
 
 /// The fixture root declares every rendered source (`slack`, `github`,
 /// … — see `materialize_tng_root.sh`), so the positive cases browse
-/// what is already there. The negative case is not in the fixture and
-/// is the real shape: `media` is one of the download-only
-/// providers, so a config for it genuinely has no `render_markdown`
-/// step.
+/// what is already there. The negative case is not in the fixture: a
+/// `media` source with no `render_markdown` step, as a config written
+/// before download-only providers got one still has.
 const GROUPS = `
 [[groups]]
 id = "media"
@@ -183,7 +182,7 @@ test("the index group browses every source", async ({ page }) => {
   await openManage(page);
   // No source filter: the index group's browse is every source's
   // documents at once, the grid the app opens on.
-  await browse(page, "unified_index", "is:document");
+  await browse(page, "unified_document_index", "is:document");
 
   // The column that separates sources is the one that earns its place
   // here — the opposite of a per-source browse: the rows come from more
@@ -215,7 +214,7 @@ test("a step's row opens its source, as its group's row does", async ({ page }) 
   await expect(cardOf(page, "source_id:slack")).toBeVisible();
 });
 
-/// A source that renders nothing has no rows at all — not even the
+/// A source with no render step has no rows at all — not even the
 /// storage rows, which render is what emits. The button says so rather
 /// than opening an empty grid onto a source that looks broken.
 test("a download-only source cannot be browsed", async ({ page }) => {

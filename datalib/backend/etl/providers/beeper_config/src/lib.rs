@@ -7,14 +7,28 @@ use std::path::PathBuf;
 use datalib_source_common::{RenderCommon, SourceCommon};
 use serde::{Deserialize, Serialize};
 
+/// This source's config stanzas, for `datalib-step help`.
+pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "texts",
+        toml: include_str!("../examples/minimal_texts.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "texts",
+        toml: include_str!("../examples/complete_texts.toml"),
+    },
+];
+
 /// The beeper-owned slice of a `beeper` source. `texts` — the Beeper
 /// Texts desktop app's own database — is its one way in; an `ingest`
 /// step without it is refused (`IngestMethods` below).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BeeperConfig {
-    /// Shared per-source envelope (paths + cross-source tunables), resolved by
-    /// the orchestrator's `normalize()`.
+    /// The options every source takes: an attachment size limit, when to
+    /// give up on failing requests, and the debugging event tape.
     #[serde(default)]
     pub common: SourceCommon,
     #[serde(default)]
@@ -30,7 +44,7 @@ impl BeeperConfig {
 /// Params for the beeper **render** step. Split from [`BeeperConfig`]
 /// (the download-step params) so each step's params carry only what
 /// that wave reads.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BeeperRenderConfig {
     #[serde(default)]
@@ -42,33 +56,26 @@ pub struct BeeperRenderConfig {
     /// itself landed.
     #[serde(default)]
     pub period: Option<String>,
+    /// Canonical chat network names to render (`"signal"`,
+    /// `"googlechat"`, `"slack"`, …). Unset renders every network the
+    /// mirror holds; the download mirrors them all either way.
+    #[serde(default)]
+    pub networks: Option<Vec<String>>,
 }
 
-/// The `texts` table: which networks to read out of Beeper Texts, where
-/// its data directory is, and whether to copy media.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// The `texts` table: where Beeper Texts' data directory is, and whether
+/// to copy its cached media.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BeeperSync {
-    /// Canonical chat network names to ingest (`"signal"`,
-    /// `"googlechat"`, future: `"slack"`, `"whatsapp"`, …). Empty
-    /// list is an error at fetch time — caller should pick at least
-    /// one explicitly.
-    #[serde(default)]
-    pub sources: Vec<String>,
     /// Beeper Texts' data directory. Defaults to
     /// `~/Library/Application Support/BeeperTexts` on macOS.
     #[serde(default)]
     pub path: Option<PathBuf>,
-    /// Copy cached media bytes into the `blobs` table. Off = metadata
-    /// + source URL only.
+    /// Copy the app's cached media files into the blob store. Off = the
+    /// messages still name their attachments, with no bytes.
     #[serde(default = "default_true")]
     pub media: bool,
-    /// Legacy location of the render period — the knob now lives on
-    /// the render step's params ([`BeeperRenderConfig::period`]).
-    /// Still parsed here so old-format configs migrate losslessly;
-    /// the download planner rejects it with a pointer to the new home.
-    #[serde(default)]
-    pub period: Option<String>,
 }
 
 fn default_true() -> bool {

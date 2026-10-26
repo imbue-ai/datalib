@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // Search-grid card: a search bar + a slickgrid over a table the
-// unified_index applet pages — its /search results by default, or another
+// unified_document_index applet pages — its /search results by default, or another
 // endpoint that pages the same way (/problems) — a page at a time
 // (grid/pagedWindow.ts). The server orders the rows: a header click asks
 // it again in the new order. What a row is named by, the document it
@@ -18,7 +18,7 @@
 // ctx.host.openCards — structural changes never go through the bus.
 // Double-clicking a row opens that document as a standalone
 // single-column page in a new tab.
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 // The grid is the framework-agnostic bundle, not the Vue wrapper: a
 // card is a custom element, and the wrapper finds its container by a
 // selector on `document`, which cannot see into a shadow root. The
@@ -42,30 +42,31 @@ import type {
 } from "@slickgrid-universal/common";
 import { copyText, typedColumns, groupTitle } from "./typedColumns";
 import type { Identity } from "@/api";
-import { entityFromUri, handleFromUri } from "./chipLinks";
+import { handleFromUri } from "./chipLinks";
+import { entities, entityCopyText } from "./entities";
 import {
-  browseQuery,
-  entities,
-  entityCardSource,
-  entityCopyText,
-  entityMenu,
-  type EntityMenuEntry,
-} from "./entities";
-import { personSource } from "./cardSources";
-import {
-  NOBODY,
   canLinkHandles,
   chipCell,
-  chipLook,
-  chipMenu,
-  composeUri,
+  contactsById,
   handleKind,
-  searchQueryFor,
   copyText as copyHandleText,
-  handleValue,
+  nameOf,
   people,
-  type ChipMenuEntry,
 } from "./contacts";
+import { CONTACT } from "@/search/queryText";
+import { dateText, parseStamp } from "./dates";
+import {
+  CHIP_SELECTOR,
+  chipCardSource,
+  chipElAt,
+  chipMenuOf,
+  chipOf,
+  asMenuEntries,
+  runChipAction,
+  type Chip,
+  type ChipEntry,
+  type ChipHost,
+} from "./chipActions";
 import {
   SEARCH,
   type AccountsMap,
@@ -105,7 +106,7 @@ import {
   withToken,
   type FilterEntry,
 } from "@/grid/query";
-import { onAfterMenuShowFit, perOpening } from "@/grid/menu";
+import { menuSlots, onAfterMenuShowFit, perOpening } from "@/grid/menu";
 import { newlyPicked } from "@/grid/selection";
 import { copySelectedRowsOnKey } from "@/grid/copyRows";
 import { markdownsToAsk, widen } from "@/grid/qmdAsk";
@@ -138,7 +139,7 @@ import {
 import { searchFailure, type SearchFailure } from "./searchFailure";
 import { DEFAULT_QUERY, PLAIN_HINT, searchPlaceholder } from "./searchDefaults";
 import SearchList from "./SearchList.ce.vue";
-import { freeText, pickedSource, setSource } from "./search";
+import { freeText, pickedSource, searchTitle, setSource } from "./search";
 import SearchField from "@/search/SearchField.vue";
 import { iconUrl } from "@/config/icons";
 import { lastSearchView, rememberSearchView, type SearchViewId } from "./searchViewPref";
@@ -166,7 +167,7 @@ const props = defineProps<{
   // The card's name, from the card source (`gridView({name: "Slack
   // documents"})`). Without one the card is named for its live query.
   name?: string;
-  // The table the card pages (`gridView({url: "/applet/unified_index/problems"})`);
+  // The table the card pages (`gridView({url: "/applet/unified_document_index/problems"})`);
   // the search when absent (`searchView()`). Its groups are at `${url}/groups`.
   url?: string;
   // What the empty search bar suggests typing.
@@ -176,6 +177,9 @@ const props = defineProps<{
   // search opens on the view picked last; the persisted state's wins
   // over both.
   view?: SearchViewId;
+  // The search is one source's, drawn in that source's card: no row of
+  // every source's chips to narrow it by.
+  oneSource?: boolean;
 }>();
 
 const url = props.url ?? SEARCH;
@@ -227,10 +231,33 @@ the one you picked last.</p>
 );
 
 // An unnamed card's name tracks the live query, not just the factory
-// argument — searching from inside the card renames it.
+// argument — searching from inside the card renames it — and calls a
+// person in it by their name once it is known, and a date as its chip.
+function shownValue(value: string): string | null {
+  const stamp = parseStamp(value);
+  if (stamp) return dateText(stamp);
+  if (value.startsWith(CONTACT)) {
+    const contact = contactsById.lookup(value.slice(CONTACT.length));
+    return contact ? nameOf(contact) : null;
+  }
+  if (!handleKind(value)) return null;
+  const who = people.lookup(value);
+  const record = who?.mine ?? who?.sourceContacts[0];
+  return record ? nameOf(record) : null;
+}
+const namesAnswered = ref(0);
+const stopTitlePeople = people.subscribe(() => namesAnswered.value++);
+const stopTitleContacts = contactsById.subscribe(() => namesAnswered.value++);
+onBeforeUnmount(() => {
+  stopTitlePeople();
+  stopTitleContacts();
+});
 watch(
-  query,
-  (q) => props.ctx.setTitle(props.name ?? (q && q !== DEFAULT_QUERY ? `Search: ${q}` : "Search")),
+  [query, namesAnswered],
+  ([q]) =>
+    props.ctx.setTitle(
+      props.name ?? (q && q !== DEFAULT_QUERY ? searchTitle(q, shownValue) : "Search"),
+    ),
   { immediate: true },
 );
 const rows = shallowRef<Row[]>([]);
@@ -704,8 +731,7 @@ function identityCopyText(v: Identity): string {
 /// itself is noted on its way down.
 let pointedChip: HTMLElement | null = null;
 function notePointedChip(e: MouseEvent) {
-  const target = e.target as Element | null;
-  pointedChip = target?.closest?.<HTMLElement>("a.chip[data-handle], a.chip[data-entity]") ?? null;
+  pointedChip = chipElAt(e.target);
 }
 
 /// Put one id per target on the clipboard, comma-separated.
@@ -1196,7 +1222,7 @@ const sources = ref<RowGroup<Row>[]>([]);
 const sourcesQuery = computed(() => setSource(settledQuery.value, null));
 let sourcesAsked = 0;
 async function loadSources() {
-  if (!isSearch) return;
+  if (!isSearch || props.oneSource) return;
   const asked = ++sourcesAsked;
   try {
     const r = await fetchGroups<Row>(
@@ -1216,6 +1242,16 @@ onMounted(loadSources);
 
 const allCount = computed(() => sources.value.reduce((n, g) => n + g.count, 0));
 const source = computed(() => pickedSource(query.value));
+
+// The chips are one line that scrolls sideways; the picked one is kept
+// in sight, however it was picked.
+const sourceChips = ref<HTMLElement | null>(null);
+watch([source, sources], async () => {
+  await nextTick();
+  sourceChips.value
+    ?.querySelector(".source-chip.is-on")
+    ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+});
 
 function pickSource(id: string | null) {
   query.value = setSource(query.value, id);
@@ -1686,11 +1722,9 @@ type MenuScope = {
   filter: FilterEntry[];
   notion: FilterEntry[];
   links: { web: Row[]; local: string[] };
-  /// The chip in the cell under the click, when the cell is an Author
-  /// with a handle: the same entries a document's chip offers.
-  chip: { handle: string; name: string; entries: ChipMenuEntry[] } | null;
-  /// The group or step chip in the cell under the click: its entries.
-  entity: { uri: string; name: string; entries: EntityMenuEntry[] } | null;
+  /// The chip under the click, of any kind: the same entries it offers
+  /// in a document.
+  chip: { chip: Chip; entries: ChipEntry[] } | null;
 };
 
 const linkOf = (r: Row): string => r.source_url || "";
@@ -1738,40 +1772,17 @@ function menuScope(args: MenuFromCellCallbackArgs): MenuScope {
   const pointed = pointedChip && el?.contains(pointedChip) ? pointedChip : null;
   const first = (selector: string) =>
     el?.querySelectorAll(selector).length === 1 ? el.querySelector<HTMLElement>(selector) : null;
-  const chipEl = pointed ? (pointed.dataset.handle ? pointed : null) : first("a.chip[data-handle]");
-  const chip = chipEl
-    ? (() => {
-        const handle = chipEl.dataset.handle ?? "";
-        const shownAs = chipEl.dataset.shownAs ?? "";
-        const w = people.get(handle) ?? NOBODY;
-        // No popover in a grid cell yet, so the link entry is not offered
-        // here; the document view has it.
-        return {
-          handle,
-          name: chipLook(handle, shownAs, w, false).text,
-          entries: chipMenu(handle, shownAs, w, false),
-        };
-      })()
-    : null;
-  const entityEl = pointed
-    ? pointed.dataset.entity
-      ? pointed
-      : null
-    : first("a.chip[data-entity]");
-  const entity = entityEl
-    ? (() => {
-        const uri = entityEl.dataset.entity ?? "";
-        const name = entityEl.dataset.label ?? entityEl.dataset.shownAs ?? uri;
-        return { uri, name, entries: entityMenu(uri, name) };
-      })()
-    : null;
+  const chipEl = pointed ?? first(CHIP_SELECTOR);
+  const pressed = chipEl ? chipOf(chipEl) : null;
+  // No popover in a grid cell yet, so the link entry is not offered
+  // here; the document view has it.
+  const chip = pressed ? { chip: pressed, entries: chipMenuOf(pressed, false) } : null;
   return {
     anchor,
     cell,
     copy,
     targets,
     chip,
-    entity,
     filter: filterCtx ? keepExcludeEntries(filterCtx) : [],
     notion: notionCtx ? keepExcludeEntries(notionCtx) : [],
     links: {
@@ -1818,48 +1829,29 @@ function openFeedback(surface: "grid_cell" | "grid_row", m: MenuScope) {
 // The right-click menu, ahead of the grid's own entries (the grouping
 // commands). Each entry decides for itself whether the
 // cell under the click gives it anything to do.
-const entityEntry = (id: EntityMenuEntry["id"], run: (m: MenuScope) => void) =>
-  entry(`entity-${id}`, (m) => m.entity?.entries.find((e) => e.id === id)?.label ?? null, run);
 
-/// A group's dashboard or a step's log, beside this card.
-function openEntity(uri: string) {
-  const source = entityCardSource(uri);
-  if (source) props.ctx.host.openCards(source);
+/// What a chip's entries do in the grid: open a card beside it, and
+/// search within this grid rather than beside it.
+function chipHost(m: MenuScope): ChipHost {
+  return {
+    openCard: (source) => props.ctx.host.openCards(source),
+    search: (q, how) => (how === "narrow" ? appendFilterToQuery(q) : (query.value = q)),
+    seenIn: m.anchor?.source_id || null,
+  };
 }
 
-const chipEntry = (id: ChipMenuEntry["id"], run: (m: MenuScope) => void) =>
-  entry(`chip-${id}`, (m) => m.chip?.entries.find((e) => e.id === id)?.label ?? null, run);
+/// The chip's entries in a bank of slots, since a group's or step's
+/// menu is its Sources row's and varies with it (`grid/menu.ts`).
+const chipSlots = menuSlots(24, (args) => {
+  const m = scopeOf(args);
+  return m.chip
+    ? asMenuEntries(m.chip.entries, (id) => void runChipAction(id, m.chip!.chip, chipHost(m)))
+    : [];
+});
 
 const menuItems: (MenuCommandItem | "divider")[] = [
-  chipEntry("open", (m) =>
-    props.ctx.host.openCards(personSource(m.chip!.handle, { seenIn: m.anchor?.source_id || null })),
-  ),
+  ...chipSlots.commandItems,
   dividerAfter((m) => m.chip !== null),
-  chipEntry("compose", (m) => {
-    const mailto = composeUri(m.chip!.handle);
-    if (mailto) void openExternal(mailto);
-  }),
-  chipEntry("copy-id", (m) => void copyToClipboard(handleValue(m.chip!.handle))),
-  chipEntry("copy-name", (m) => void copyToClipboard(m.chip!.name)),
-  chipEntry("copy-both", (m) => void copyToClipboard(copyHandleText(m.chip!.handle, m.chip!.name))),
-  dividerAfter((m) => m.chip !== null),
-  chipEntry("search", (m) => appendFilterToQuery(searchQueryFor(m.chip!.handle))),
-  dividerAfter((m) => m.chip !== null),
-  entityEntry("copy-name", (m) => void copyToClipboard(m.entity!.name)),
-  entityEntry(
-    "copy-id",
-    (m) => void copyToClipboard(entityFromUri(m.entity!.uri)?.id ?? m.entity!.uri),
-  ),
-  entityEntry(
-    "copy-both",
-    (m) => void copyToClipboard(entityCopyText(m.entity!.uri, m.entity!.name)),
-  ),
-  entityEntry("open", (m) => openEntity(m.entity!.uri)),
-  entityEntry("browse", (m) => {
-    const q = browseQuery(m.entity!.uri);
-    if (q) query.value = q;
-  }),
-  dividerAfter((m) => m.entity !== null),
   entry(
     "keep",
     (m) => m.filter[0]?.label ?? null,
@@ -2020,7 +2012,11 @@ function gridOptions(): GridOption {
       // Ours copies the cell as its row's copy does; the grid's copies
       // the raw field, an object as "[object Object]".
       hideCopyCellValueCommand: true,
-      onBeforeMenuShow: scopes.onBeforeMenuShow,
+      // The scope first, which the chip's slots read.
+      onBeforeMenuShow: (e, args) => {
+        scopes.onBeforeMenuShow(e, args);
+        chipSlots.onBeforeMenuShow(e, args);
+      },
       onAfterMenuShow: onAfterMenuShowFit,
       // The grid scrolls itself — a page landing above the viewport holds
       // the top row in place, a selection is scrolled back to — and a menu
@@ -2231,8 +2227,7 @@ function pickAndOpen(data: Row) {
 
 /// The chip under a pointer event in a cell, if any.
 function chipAt(e: SlickEventData): HTMLElement | null {
-  const target = e.getNativeEvent<MouseEvent>()?.target as Element | null | undefined;
-  return target?.closest?.<HTMLElement>("a.chip[data-handle], a.chip[data-entity]") ?? null;
+  return chipElAt(e.getNativeEvent<MouseEvent>()?.target);
 }
 
 function onClick(e: SlickEventData, args: OnClickEventArgs) {
@@ -2259,14 +2254,12 @@ function onDblClick(e: SlickEventData, args: OnDblClickEventArgs) {
   // Double-click on a chip opens its card: a person's, led by this
   // row's source, or a group's dashboard or a step's log
   // (docs/dev/chips.md § Clicks).
-  const chip = chipAt(e);
-  if (chip?.dataset.entity) {
-    openEntity(chip.dataset.entity);
-    return;
-  }
+  const el = chipAt(e);
+  const chip = el ? chipOf(el) : null;
   if (chip) {
     const seenIn = rowData(args.row)?.source_id || null;
-    props.ctx.host.openCards(personSource(chip.dataset.handle ?? "", { seenIn }));
+    const source = chipCardSource(chip.ref, seenIn);
+    if (source) props.ctx.host.openCards(source);
     return;
   }
   const data = rowData(args.row);
@@ -2364,7 +2357,13 @@ onBeforeUnmount(() => {
           {{ t.label }} <span class="answer-count">{{ tabCount(t.id) }}</span>
         </button>
       </div>
-      <div v-if="sources.length > 0" class="source-chips" role="group" aria-label="Sources">
+      <div
+        v-if="sources.length > 0"
+        ref="sourceChips"
+        class="source-chips"
+        role="group"
+        aria-label="Sources"
+      >
         <button
           type="button"
           class="source-chip"
@@ -2381,6 +2380,7 @@ onBeforeUnmount(() => {
           class="source-chip"
           :class="{ 'is-on': source === g.sample.source_id }"
           :aria-pressed="source === g.sample.source_id"
+          :data-source="g.sample.source_id"
           @click="pickSource(g.sample.source_id ?? null)"
         >
           <img
@@ -2510,6 +2510,9 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: flex-end;
   gap: 0.75rem;
+  /* The answer tabs' height, held when they are not there, so the results
+     do not move when a search's tabs come or go. */
+  min-height: calc(var(--datalib-control-h) + 6px);
   border-bottom: 1px solid var(--datalib-border);
 }
 .source-chips {
@@ -2615,14 +2618,19 @@ onBeforeUnmount(() => {
 .view-tab.is-on svg {
   color: var(--datalib-accent);
 }
+/* One line that scrolls sideways: wrapped, a count that grew added a row
+   and moved every result under it. */
 .source-chips {
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
-  flex-wrap: wrap;
   gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 .source-chip {
+  flex: 0 0 auto;
+  white-space: nowrap;
   display: flex;
   align-items: center;
   gap: 6px;

@@ -1,6 +1,7 @@
 //! Google Takeout extractor entry point.
 
 pub mod attachment_path;
+pub mod coverage;
 pub mod db;
 pub mod gemini_apps;
 pub mod google_chat;
@@ -9,7 +10,12 @@ pub mod maps_photos;
 pub mod maps_reviews;
 pub mod maps_saved_places;
 pub mod mdl_html;
+pub mod my_maps;
+pub mod per_file;
+pub mod play_books;
+pub mod saved_lists;
 pub mod schema_raw;
+pub mod shape;
 pub mod time;
 pub mod unpack;
 pub mod youtube_subscriptions;
@@ -49,6 +55,12 @@ pub struct SyncFlags {
     /// (download + render). Off by default — spam is bulky and only
     /// useful for parser hardening / practice corpora.
     pub google_voice_include_spam: bool,
+    /// Maps lists under `Saved/`, with the notes on their places.
+    pub maps_saved_lists: bool,
+    /// My Maps maps (`My Maps/*.kmz`): pins, lines and shapes.
+    pub my_maps: bool,
+    /// Play Books highlights, notes, bookmarks and listening positions.
+    pub play_books: bool,
 }
 
 impl SyncFlags {
@@ -63,6 +75,9 @@ impl SyncFlags {
             gemini_apps: true,
             google_voice: true,
             google_voice_include_spam: true,
+            maps_saved_lists: true,
+            my_maps: true,
+            play_books: true,
         }
     }
 }
@@ -106,6 +121,9 @@ pub struct FetchSummary {
     pub voice_bills: usize,
     pub voice_greetings: usize,
     pub voice_attachments: usize,
+    pub maps_saved_lists: usize,
+    pub my_maps_placemarks: usize,
+    pub play_books_annotations: usize,
     pub blobs_stored: usize,
     /// Feeds that failed as a whole, each a `phase:<feed>` problem row.
     pub feeds_failed: usize,
@@ -137,7 +155,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let parts = unpack::parts_in(&opts.input_path)?;
     if parts.is_empty() {
-        let (summary, _) = read_tree(&opts, &opts.input_path, &found).await?;
+        let (summary, scan) = read_tree(&opts, &opts.input_path, &found).await?;
+        let files = scan.files.iter().map(|f| (f.rel.as_str(), f.size));
+        found.skipped(coverage::PART, coverage::report(files, &opts.sync));
         return Ok(summary);
     }
     read_archives(&opts, &parts, &found).await
@@ -201,6 +221,11 @@ async fn read_archives(
             .await
             .context("unpack task panicked")??
     };
+    let listed = unpacked
+        .listed
+        .iter()
+        .map(|(rel, size)| (rel.as_str(), *size));
+    found.skipped(coverage::PART, coverage::report(listed, &opts.sync));
     let read = read_tree(opts, &root, found).await;
     forget_fingerprints_under(&opts.cache, &root).await?;
     let (mut summary, scan) = read?;
@@ -214,7 +239,7 @@ async fn read_archives(
         }
     }
     summary.archives = parts.len();
-    summary.unpacked = unpacked;
+    summary.unpacked = unpacked.files;
     Ok(summary)
 }
 
@@ -359,6 +384,27 @@ async fn read_tree(
             summary.removed += s.removed;
             summary.files_removed += s.files_removed;
             found.extend(s.held_back);
+        }
+    }
+    if opts.sync.maps_saved_lists {
+        let feed = saved_lists::ingest(&db, scan, progress, found);
+        if let Some(n) = found.run_phase("maps_saved_lists", feed).await {
+            summary.maps_saved_lists = n.written;
+            summary.removed += n.removed;
+        }
+    }
+    if opts.sync.my_maps {
+        let feed = my_maps::ingest(&db, scan, progress, found);
+        if let Some(n) = found.run_phase("my_maps", feed).await {
+            summary.my_maps_placemarks = n.written;
+            summary.removed += n.removed;
+        }
+    }
+    if opts.sync.play_books {
+        let feed = play_books::ingest(&db, scan, progress, found);
+        if let Some(n) = found.run_phase("play_books", feed).await {
+            summary.play_books_annotations = n.written;
+            summary.removed += n.removed;
         }
     }
     summary.feeds_failed = found.count(RunProblemKind::Phase);

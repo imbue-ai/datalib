@@ -4,6 +4,8 @@
 // `datalib_etl::draft`; why it is shaped this way is
 // docs/dev/plans/contact_editing.md.
 
+use std::collections::BTreeMap;
+
 use anyhow::{bail, Context, Result};
 use datalib_etl::bulk::bulk_upsert_entity_in_tx;
 use datalib_etl::draft::{self, OnDraft};
@@ -286,7 +288,14 @@ impl Store {
 
     /// Autosave: write `edit` onto the contact's draft, uncommitted.
     /// Nothing is published; a reader sees none of it until [`Store::save`].
-    pub async fn autosave(&self, contact_id: &str, edit: &ContactEdit) -> Result<()> {
+    /// Answers each field's value as a handle, by field id, where it is
+    /// one, so the card can say how the field stands against the links
+    /// without knowing the handle rules itself.
+    pub async fn autosave(
+        &self,
+        contact_id: &str,
+        edit: &ContactEdit,
+    ) -> Result<BTreeMap<String, String>> {
         check(edit)?;
         let _held = self.drafts.lock().await;
         let b = branch(contact_id);
@@ -302,7 +311,12 @@ impl Store {
         }
         .await;
         on.leave().await?;
-        written
+        written?;
+        Ok(edit
+            .fields
+            .iter()
+            .filter_map(|f| handle_of(f.kind, &f.value).map(|h| (f.field_id.clone(), h)))
+            .collect())
     }
 
     /// Publish the contact's draft, as one commit, and drop it — unless
@@ -421,7 +435,12 @@ mod tests {
                 field("f2", FieldKind::Phone, "+1 (555) 012-3456"),
             ],
         );
-        f.store.autosave(&f.riker, &mine).await.unwrap();
+        let handles = f.store.autosave(&f.riker, &mine).await.unwrap();
+        assert_eq!(
+            handles,
+            BTreeMap::from([("f2".to_string(), "tel:+15550123456".to_string())]),
+            "the number field's handle, for the card to check against the links"
+        );
 
         let published = f.store.edit_of(&f.riker).await.unwrap().unwrap();
         assert_eq!(published.name, "William Riker", "not published yet");

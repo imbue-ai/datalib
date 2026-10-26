@@ -3,13 +3,14 @@
 //! The page body is **not** rendered here. Notion returns it already
 //! rendered as enhanced markdown, and the download step stores it whole;
 //! this writes it out with frontmatter, resolving each attachment slot
-//! to the file the CAS materialized beside it. What used to be a
+//! to its address in the source's blob store. What used to be a
 //! block-type matrix maintained against Notion's evolving block set is
 //! now Notion's problem.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
@@ -18,22 +19,30 @@ use datalib_etl_render::front_matter::yaml_scalar;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{escape_md_block, escape_md_inline};
 use datalib_etl_render::inputs::{Bucket, Buckets};
-use once_cell::sync::Lazy;
+use datalib_etl_render::message::{chip_link, stamp_text_html};
+use datalib_handle::Handle;
 use regex::Regex;
 use serde_json::Value;
 
-use super::grid_rows::{gather_documents, PageDocument, ThreadDocument};
-use super::parse::ParsedNotion;
+use super::grid_rows::{comment_author_handle, gather_documents, PageDocument, ThreadDocument};
+use super::parse::{ParsedNotion, ATTACHMENTS_PROJECTION_SQL};
+use datalib_etl_notion::ingest::db::RawDb;
+use datalib_etl_render::pages::batches;
 
 /// v4: ids are minted through `datalib_id` instead of passing Notion's
 ///     through, every row carries its backpointer, and a page's or
 ///     comment's id carries its `created_time` in its leading bits
 ///     (`datalib_id`'s v8 layout). Every uuid moved; `notion_page_uuid`
 ///     now holds the page's datalib id.
-pub const RENDER_VERSION: u32 = 7;
+/// v8: an attachment links to its address in the blob store rather than
+///     a copy beside the page.
+/// v9: a comment's time is a `<time>` stamp.
+/// v10: a comment's author is a chip, by their address where Notion gave
+///      one, and a row carries its author's handle.
+pub const RENDER_VERSION: u32 = 10;
 pub const SLUG_MAX_LEN: usize = 60;
 
-static SLUG_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[^a-z0-9]+").unwrap());
+static SLUG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[^a-z0-9]+").unwrap());
 
 pub fn slugify(name: &str) -> String {
     if name.is_empty() {
@@ -128,13 +137,13 @@ pub fn thread_qmd_path_rel(stanza: &str, page_id: &str, discussion_id: &str) -> 
         .to_string_lossy()
         .into_owned()
 }
-/// Rewrite attachment slots to the filenames the bundle materialized.
+/// Rewrite attachment slots to where the bundle says the bytes are.
 ///
 /// The stored markdown references each attachment by slot — the
 /// unsigned upstream URL — because that is the only identifier that
 /// survives Notion re-signing the link on every fetch. A slot with no
 /// bytes in the CAS is left as-is: an upstream link still beats a
-/// broken relative path.
+/// broken one.
 fn localize_attachments(markdown: &str, bundle: &BlobBundle) -> String {
     let mut out = markdown.to_string();
     let slots: Vec<String> = bundle
@@ -142,8 +151,8 @@ fn localize_attachments(markdown: &str, bundle: &BlobBundle) -> String {
         .map(|(ref_id, _)| ref_id.to_string())
         .collect();
     for slot in slots {
-        if let Some(name) = bundle.filename_for(&slot) {
-            out = out.replace(&slot, &format!("blobs/{name}"));
+        if let Some(href) = bundle.href_for(&slot) {
+            out = out.replace(&slot, &href);
         }
     }
     out
@@ -306,6 +315,7 @@ fn render_thread(
     page_title: &str,
     members: &[&Value],
     anchor: Option<&str>,
+    author_of: &dyn Fn(&Value) -> Option<Handle>,
     dir: &Path,
 ) -> Result<PathBuf> {
     fs::create_dir_all(dir)?;
@@ -347,16 +357,147 @@ fn render_thread(
         out.push_str(&format!(
             "<div id=\"m-{uuid}\" data-section-uuid=\"{uuid}\" class=\"msg msg--notion\">\n\n"
         ));
-        out.push_str(&format!(
-            "**{}** · {}\n\n",
-            escape_md_inline(author),
-            escape_md_inline(when)
-        ));
+        let who = match author_of(c) {
+            Some(h) => chip_link(author, &h),
+            None => format!("**{}**", escape_md_inline(author)),
+        };
+        out.push_str(&format!("{who} · {}\n\n", stamp_text_html(when)));
         out.push_str(&escape_md_block(&plain(c.get("rich_text"))));
         out.push_str("\n\n</div>\n\n");
     }
     fs::write(&path, out).with_context(|| format!("write {}", path.display()))?;
     Ok(path)
+}
+
+/// Where a pass reads its pages' attachment bytes: what each page's
+/// weigh, and the bundles of a batch of pages.
+pub trait PageBlobs {
+    fn weights(&self, pages: &[&str]) -> Result<Vec<u64>>;
+    fn load(&self, pages: &[&str]) -> Result<HashMap<String, BlobBundle>>;
+}
+
+/// Bundles already in hand.
+impl PageBlobs for HashMap<String, BlobBundle> {
+    fn weights(&self, pages: &[&str]) -> Result<Vec<u64>> {
+        Ok(pages
+            .iter()
+            .map(|p| self.get(*p).map_or(0, |b| b.total_bytes()))
+            .collect())
+    }
+
+    fn load(&self, pages: &[&str]) -> Result<HashMap<String, BlobBundle>> {
+        Ok(pages
+            .iter()
+            .filter_map(|p| Some((p.to_string(), self.get(*p)?.clone())))
+            .collect())
+    }
+}
+
+/// The bytes behind `parsed.refs_by_page`, read from the raw store at the
+/// commit the parse read and the blob store beside it, open until
+/// [`StorePageBlobs::close`].
+pub struct StorePageBlobs<'a> {
+    db: RawDb,
+    refs_by_page: &'a HashMap<String, Vec<String>>,
+}
+
+impl<'a> StorePageBlobs<'a> {
+    /// `None` when the parse read no store, or no page has bytes.
+    pub fn open(parsed: &'a ParsedNotion) -> Result<Option<Self>> {
+        let (Some(db_path), Some(head)) = (&parsed.db_path, &parsed.head) else {
+            return Ok(None);
+        };
+        if parsed.refs_by_page.is_empty() {
+            return Ok(None);
+        }
+        let Some(db) = block_on(RawDb::open_reader(db_path, Some(head)))? else {
+            return Ok(None);
+        };
+        Ok(Some(Self {
+            db,
+            refs_by_page: &parsed.refs_by_page,
+        }))
+    }
+
+    fn refs<'p>(&self, pages: &[&'p str]) -> Vec<(&'p str, Vec<String>)> {
+        pages
+            .iter()
+            .map(|p| (*p, self.refs_by_page.get(*p).cloned().unwrap_or_default()))
+            .collect()
+    }
+
+    pub fn close(self) {
+        block_on(self.db.close());
+    }
+}
+
+impl PageBlobs for StorePageBlobs<'_> {
+    fn weights(&self, pages: &[&str]) -> Result<Vec<u64>> {
+        let sizes = block_on(BlobBundle::sizes_many(
+            self.db.pool(),
+            Some(self.db.cas()),
+            ATTACHMENTS_PROJECTION_SQL,
+            self.refs(pages),
+        ))?;
+        Ok(pages
+            .iter()
+            .map(|p| sizes.get(p).copied().unwrap_or(0))
+            .collect())
+    }
+
+    fn load(&self, pages: &[&str]) -> Result<HashMap<String, BlobBundle>> {
+        let bundles = block_on(BlobBundle::load_many(
+            self.db.pool(),
+            Some(self.db.cas()),
+            ATTACHMENTS_PROJECTION_SQL,
+            self.refs(pages),
+        ))
+        .context("load attachments")?;
+        Ok(bundles
+            .into_iter()
+            .map(|(page, bundle)| (page.to_string(), bundle))
+            .collect())
+    }
+}
+
+fn block_on<F: std::future::Future>(f: F) -> F::Output {
+    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(f))
+}
+
+/// [`render_notion`] with each page's bytes read from the store the parse
+/// read, a batch of at most `blob_bytes` at a time.
+pub fn render_from_store(
+    parsed: &ParsedNotion,
+    root: &Path,
+    stanza: &str,
+    progress: &Progress,
+    on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+    blob_bytes: u64,
+) -> Result<RenderSummary> {
+    match StorePageBlobs::open(parsed)? {
+        Some(blobs) => {
+            let rendered = render_notion(
+                parsed,
+                root,
+                stanza,
+                progress,
+                on_doc_complete,
+                &blobs,
+                blob_bytes,
+            );
+            blobs.close();
+            rendered
+        }
+        None => render_notion(
+            parsed,
+            root,
+            stanza,
+            progress,
+            on_doc_complete,
+            &HashMap::new(),
+            blob_bytes,
+        ),
+    }
 }
 
 pub fn render_notion(
@@ -365,6 +506,8 @@ pub fn render_notion(
     stanza: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+    blobs: &dyn PageBlobs,
+    blob_bytes: u64,
 ) -> Result<RenderSummary> {
     let mut summary = RenderSummary::default();
     let pages_root = datalib_etl::layout::render_markdown_root(root, stanza).join("pages");
@@ -382,61 +525,69 @@ pub fn render_notion(
     progress.set_length(Some((docs.pages.len() + docs.threads.len()) as u64));
 
     let empty_bundle = BlobBundle::default();
-    for doc in &docs.pages {
-        let PageDocument {
-            page_uuid,
-            markdown_uuid,
-            page_title,
-            inputs,
-            ..
-        } = doc;
-        let page_dir = pages_root.join(page_dir_segment(page_uuid));
-        let md_path = page_dir.join("index.md");
-        let Some(page) = pages_by_id.get(page_uuid.as_str()) else {
-            continue;
-        };
-        fs::create_dir_all(&page_dir)?;
-        if let Some(ids) = parsed.attachment_ids_by_page.get(page_uuid) {
-            inputs.read_all("notion_attachments", ids.iter().map(String::as_str));
-        }
-        let bundle = parsed.blobs_by_page.get(page_uuid).unwrap_or(&empty_bundle);
-        if !bundle.is_empty() {
-            bundle.materialize_to_dir(&page_dir.join("blobs"))?;
-        }
-        let body = inputs
-            .lookup("page_markdown", &parsed.markdown_by_page)
-            .get(page_uuid)
-            .map(|m| localize_attachments(m, bundle))
-            .unwrap_or_default();
-        let body = if body.trim().is_empty() {
-            properties_table(page)
-        } else {
-            body
-        };
-        let mut out = frontmatter(page_title, page);
-        out.push_str(&body);
-        fs::write(&md_path, out).with_context(|| format!("write {}", md_path.display()))?;
+    let page_ids: Vec<&str> = docs.pages.iter().map(|d| d.page_uuid.as_str()).collect();
+    let weights = blobs.weights(&page_ids)?;
+    for range in batches(&weights, blob_bytes) {
+        let bundles = blobs.load(&page_ids[range.clone()])?;
+        for doc in &docs.pages[range] {
+            let PageDocument {
+                page_uuid,
+                markdown_uuid,
+                page_title,
+                inputs,
+                ..
+            } = doc;
+            let page_dir = pages_root.join(page_dir_segment(page_uuid));
+            let md_path = page_dir.join("index.md");
+            let Some(page) = pages_by_id.get(page_uuid.as_str()) else {
+                continue;
+            };
+            fs::create_dir_all(&page_dir)?;
+            if let Some(ids) = parsed.attachment_ids_by_page.get(page_uuid) {
+                inputs.read_all("notion_attachments", ids.iter().map(String::as_str));
+            }
+            let bundle = bundles.get(page_uuid).unwrap_or(&empty_bundle);
+            // An older build copied the bytes here; the page links its CAS now.
+            match fs::remove_dir_all(page_dir.join("blobs")) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                    return Err(e).with_context(|| format!("remove {}/blobs", page_dir.display()));
+                }
+                _ => {}
+            }
+            let body = inputs
+                .lookup("page_markdown", &parsed.markdown_by_page)
+                .get(page_uuid)
+                .map(|m| localize_attachments(m, bundle))
+                .unwrap_or_default();
+            let body = if body.trim().is_empty() {
+                properties_table(page)
+            } else {
+                body
+            };
+            let mut out = frontmatter(page_title, page);
+            out.push_str(&body);
+            fs::write(&md_path, out).with_context(|| format!("write {}", md_path.display()))?;
 
-        on_doc_complete(RenderedMarkdown {
-            markdown_uuid: markdown_uuid.clone(),
-            source_id: String::new(),
-            upstream_cursor: None,
-            bucket_key: Some(page_uuid.clone()),
-            md_path: md_path.clone(),
-            render_version: RENDER_VERSION,
-            rows: doc.rows.clone(),
-            sections: Vec::new(),
-            search_terms: Vec::new(),
-            edges: Vec::new(),
-            contacts: Vec::new(),
-            problems: doc.problems.clone(),
-        })?;
-        summary.buckets.push(Bucket {
-            key: page_uuid.clone(),
-            inputs: inputs.declared(),
-        });
-        summary.rendered += 1;
-        progress.inc(1);
+            on_doc_complete(RenderedMarkdown {
+                markdown_uuid: markdown_uuid.clone(),
+                source_id: String::new(),
+                upstream_cursor: None,
+                bucket_key: Some(page_uuid.clone()),
+                md_path: md_path.clone(),
+                render_version: RENDER_VERSION,
+                rows: doc.rows.clone(),
+                sections: Vec::new(),
+                edges: Vec::new(),
+                contacts: Vec::new(),
+                problems: doc.problems.clone(),
+            })?;
+            summary.buckets.push(Bucket {
+                key: page_uuid.clone(),
+                inputs: inputs.declared(),
+            });
+            summary.rendered += 1;
+            progress.inc(1);
+        }
     }
 
     let mut by_disc: BTreeMap<&str, Vec<&Value>> = BTreeMap::new();
@@ -469,7 +620,17 @@ pub fn render_notion(
             .as_deref()
             .and_then(|b| anchors.get(b))
             .map(String::as_str);
-        let p = render_thread(stanza, discussion_uuid, page_title, members, anchor, dir)?;
+        let emails = inputs.lookup("users", &parsed.user_emails);
+        let author_of = |c: &Value| comment_author_handle(c, emails);
+        let p = render_thread(
+            stanza,
+            discussion_uuid,
+            page_title,
+            members,
+            anchor,
+            &author_of,
+            dir,
+        )?;
         on_doc_complete(RenderedMarkdown {
             markdown_uuid: markdown_uuid.clone(),
             source_id: String::new(),
@@ -479,7 +640,6 @@ pub fn render_notion(
             render_version: RENDER_VERSION,
             rows: doc.rows.clone(),
             sections: Vec::new(),
-            search_terms: Vec::new(),
             edges: Vec::new(),
             contacts: Vec::new(),
             problems: doc.problems.clone(),
@@ -507,6 +667,93 @@ mod tests {
     use super::*;
     use serde_json::json;
     use tempfile::tempdir;
+
+    /// A page's attachments are read from the store its parse read, a
+    /// batch at a time, and the page links each where the blob store
+    /// holds it, writing no copy. Every other render test hands in
+    /// bundles already in memory; this is the one that reads a store.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_stored_attachment_is_read_from_the_store_and_linked_there() {
+        use datalib_etl_notion::ingest::db::{PageMarkdownUpsert, PageUpsert};
+        const SLOT: &str =
+            "https://prod-files-secure.s3.us-west-2.amazonaws.com/ws/9c/viewscreen.png";
+        let dir = tempdir().unwrap();
+        let db_file = dir.path().join("notion-api.doltlite_db");
+        let db = RawDb::open(&db_file).await.unwrap();
+        db.upsert_pages(&[PageUpsert {
+            id: "p1".into(),
+            payload: json!({"id": "p1", "object": "page",
+                "properties": {"title": {"type": "title", "title": [{"plain_text": "Bridge"}]}}})
+            .to_string(),
+            ..Default::default()
+        }])
+        .await
+        .unwrap();
+        // Stored as the fetcher stores it: the body with its link already
+        // the unsigned slot, and the slot listed as an attachment.
+        let mut tx = db.pool().begin().await.unwrap();
+        db.store_body(
+            &mut tx,
+            &PageMarkdownUpsert {
+                id: "p1".into(),
+                markdown: format!("![main viewer]({SLOT})\n"),
+                ..Default::default()
+            },
+            &[SLOT.to_string()],
+            true,
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        let edges = db.load_attachments().await.unwrap();
+        assert_eq!(edges.len(), 1, "the body names one attachment");
+        let blake3 = db
+            .cas()
+            .put(b"\x89PNG\r\n\x1a\nviewscreen", Some("image/png"))
+            .await
+            .unwrap();
+        let mut tx = db.pool().begin().await.unwrap();
+        db.store_blob(&mut tx, &edges[0].id, &blake3).await.unwrap();
+        tx.commit().await.unwrap();
+        datalib_etl::doltlite_raw::commit_run(db.pool(), "test fixture")
+            .await
+            .unwrap();
+        db.close().await;
+
+        let parsed = super::super::parse::parse_api_dir(
+            &db_file,
+            datalib_etl_render::inputs::RawRange::cold(),
+        )
+        .unwrap();
+        let out = tempdir().unwrap();
+        let mut paths = Vec::new();
+        render_from_store(
+            &parsed,
+            out.path(),
+            "notion",
+            &Progress::noop(),
+            &mut |md: RenderedMarkdown| {
+                paths.push(md.md_path);
+                Ok(())
+            },
+            1,
+        )
+        .unwrap();
+        let page = paths
+            .iter()
+            .find(|p| p.ends_with("index.md"))
+            .expect("the page rendered");
+        let md = fs::read_to_string(page).unwrap();
+        assert!(
+            md.contains("](/data/") && md.contains(&format!("/blob/{blake3})")),
+            "linked in the blob store: {md}"
+        );
+        assert!(!md.contains(SLOT), "not at the upstream slot: {md}");
+        assert!(
+            !page.parent().unwrap().join("blobs").exists(),
+            "no copy beside the page"
+        );
+    }
 
     /// A database row's properties are its content. Rendering nothing
     /// for a body-less page would drop most of a real workspace.
@@ -562,7 +809,16 @@ mod tests {
             }
             Ok(())
         };
-        render_notion(&parsed, d.path(), "notion", &Progress::noop(), &mut on_doc).unwrap();
+        render_notion(
+            &parsed,
+            d.path(),
+            "notion",
+            &Progress::noop(),
+            &mut on_doc,
+            &HashMap::new(),
+            1,
+        )
+        .unwrap();
         assert!(!advertised.is_empty(), "expected rows with a qmd_path");
         for rel in advertised {
             assert!(
@@ -586,12 +842,19 @@ mod tests {
             "Handbook",
             &[&c],
             Some("Warp core alignment"),
+            &|_| Handle::email("data@enterprise.test"),
             d.path(),
         )
         .unwrap();
         let md = fs::read_to_string(p).unwrap();
         assert!(md.contains("> Warp core alignment"), "{md}");
         assert!(md.find("> Warp core alignment") < md.find("Recommend recalibration"));
+        assert!(
+            md.contains(
+                "[Data](mailto:data@enterprise.test \"Data <data@enterprise.test>\") · <time"
+            ),
+            "an author with an address is a chip: {md}"
+        );
     }
 
     /// A comment, its author, the block it hangs off and a property are
@@ -606,7 +869,16 @@ mod tests {
         let c = json!({"id": "c1", "created_time": "2369-04-15T01:00:00.000Z",
                        "display_name": {"resolved_name": MARKUP},
                        "rich_text": [{"plain_text": MARKUP}]});
-        let p = render_thread("notion", "d1", "Handbook", &[&c], Some(MARKUP), d.path()).unwrap();
+        let p = render_thread(
+            "notion",
+            "d1",
+            "Handbook",
+            &[&c],
+            Some(MARKUP),
+            &|_| None,
+            d.path(),
+        )
+        .unwrap();
         let md = fs::read_to_string(p).unwrap();
         let (_, body) = md
             .split_once("---\n\n")
@@ -636,7 +908,8 @@ mod tests {
                        "original_content_deleted": true,
                        "display_name": {"resolved_name": "Data"},
                        "rich_text": [{"plain_text": "hi"}]});
-        let p = render_thread("notion", "d1", "Handbook", &[&c], None, d.path()).unwrap();
+        let p =
+            render_thread("notion", "d1", "Handbook", &[&c], None, &|_| None, d.path()).unwrap();
         let md = fs::read_to_string(p).unwrap();
         assert!(md.contains("deleted upstream"), "{md}");
     }

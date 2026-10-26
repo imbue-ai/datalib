@@ -2,6 +2,8 @@
 // How big the library is: its items, its size on disk, and a bar of
 // what takes the space.
 import { formatBytes } from "@/config/bytes";
+import { uriFromEntity } from "./chipLinks";
+import EntityChip from "./EntityChip.ce.vue";
 import type { Dashboard } from "./useDashboard";
 
 defineProps<{ d: Dashboard }>();
@@ -40,7 +42,13 @@ defineProps<{ d: Dashboard }>();
       </div>
       <div class="legend">
         <span v-for="s in d.segments" :key="s.id"
-          ><span class="swatch" :class="s.tone" />{{ s.label }} {{ formatBytes(s.bytes) }}</span
+          ><span class="swatch" :class="s.tone" /><EntityChip
+            v-if="s.id !== 'rest'"
+            :uri="uriFromEntity('group', s.id)"
+            :shown="s.label"
+            quiet
+            :open-card="(source) => d.open(source)"
+          /><template v-else>{{ s.label }}</template> {{ formatBytes(s.bytes) }}</span
         >
       </div>
     </div>

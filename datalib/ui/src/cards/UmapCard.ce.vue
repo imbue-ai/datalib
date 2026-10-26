@@ -94,7 +94,7 @@ retitle();
 props.ctx.setHelp(`
 <p>Every document qmd has embedded, placed so that documents with
 similar content sit near each other. The layout is UMAP over qmd's
-embeddings, computed by the <code>unified_index/embedding_map</code>
+embeddings, computed by the <code>unified_document_index/embedding_map</code>
 step. Each sync starts from the last layout, so documents already on
 the map stay where they were as new ones arrive; <b>Lay out afresh</b>
 throws the old layout away.</p>

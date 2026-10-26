@@ -25,6 +25,7 @@ rust_library(
         # events.rs). Keeps the timestamp format identical to the rest of
         # the tree's logs; the binary already depended on it.
         "//datalib/backend/app_schema:app_schema",
+        "//datalib/backend/cli_help:datalib_cli_help",
         "//datalib/backend/flock:datalib_flock",
         "//datalib/backend/metrics:datalib_metrics",
         "//datalib/backend/parent_watch:datalib_parent_watch",
@@ -35,6 +36,7 @@ rust_library(
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:blake3",
+        "@datalib_crates//:clap",
         "@datalib_crates//:libc",
         "@datalib_crates//:process-wrap",
         "@datalib_crates//:serde",
@@ -42,6 +44,7 @@ rust_library(
         "@datalib_crates//:shlex",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:strum",
+        "@datalib_crates//:sysinfo",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
         "@datalib_crates//:toml",
@@ -72,7 +75,7 @@ rust_binary(
     edition = "2021",
     # Must match [package].version in datalib/backend/Cargo.toml;
     # //datalib/backend:version_consistency_test asserts that.
-    version = "0.42.0",
+    version = "0.45.0",
     # Stamp STABLE_GIT_DESCRIBE into `datalib-dag --version` (release.yml
     # smoke-tests that the published tarball reports the tag). `stamp = -1`
     # defers to the --stamp flag (on under --config=release); day-to-day
@@ -90,7 +93,7 @@ rust_binary(
         "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
-        "@datalib_crates//:strum",
+        "@datalib_crates//:clap",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing-subscriber",
     ],

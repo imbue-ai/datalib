@@ -94,7 +94,7 @@ pub async fn ingest(
                 entry: f.rel.clone(),
                 problem: Problem::record(
                     Reason::FetchFailed,
-                    &format!("{}: {}", f.rel, e.root_cause()),
+                    &format!("{}: {}", super::shape::shape_rel(&f.rel), e.root_cause()),
                 ),
             }),
         }
@@ -202,7 +202,8 @@ fn ingest_one(json_path: &Path) -> Result<Option<Photo>> {
         None => (
             None,
             Some(MediaProblem::NotFound(format!(
-                "{stem} is not in the export beside its sidecar"
+                "{} is not in the export beside its sidecar",
+                super::shape::shape_name(&stem)
             ))),
         ),
         Some(media_path) => match std::fs::read(&media_path) {
@@ -214,7 +215,7 @@ fn ingest_one(json_path: &Path) -> Result<Option<Photo>> {
                 None,
                 Some(MediaProblem::Unreadable(format!(
                     "read {}: {e}",
-                    media_path.display()
+                    super::shape::shape_rel(&format!("{}/{stem}", super::maps_photos::DIR_REL))
                 ))),
             ),
         },

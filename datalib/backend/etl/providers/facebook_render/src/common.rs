@@ -4,6 +4,7 @@
 
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::bulk::BulkUpsertable as _;
+pub use datalib_etl_chat_common::findings::{noted, shape_of, unread_keys};
 use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
 use datalib_etl_chat_common::types::{
     AuthorKind, ItemKind, NormalizedAttachment, NormalizedChatItem, UpstreamRef,
@@ -32,7 +33,8 @@ use serde_json::Value;
 /// v10: a life event's edits are its versions; a friend's Contents
 ///     leaves out their `name/` handle; a post on another page repeating
 ///     its own stamp is no problem.
-pub const RENDER_VERSION: u32 = 10;
+/// v11: a post's "Edited" is a `<time>` stamp.
+pub const RENDER_VERSION: u32 = 11;
 
 pub const SOURCE_LABEL: &str = "Facebook";
 
@@ -141,7 +143,7 @@ pub fn media_attachment(
     let uri = str_field(media, "uri")?;
     inputs.read(MediaBlobRow::TABLE, &MediaBlobRow::pk_recipe(owner_id, uri));
     Some(NormalizedAttachment {
-        rel_path: None,
+        href: None,
         file_name: uri.rsplit('/').next().map(str::to_string),
         mime_type: mime_for(uri),
         byte_len: None,
@@ -211,24 +213,6 @@ fn mime_for(uri: &str) -> Option<String> {
         _ => return None,
     };
     Some(mime.to_string())
-}
-
-/// A warning for each key of `v` this render does not read, so a run over
-/// a real export says what it left out. The sample is the value's JSON
-/// shape, never its content: these rows are read to learn the export's
-/// shapes, and the export is private.
-pub fn unread_keys(v: &Value, read: &[&str], path: &str) -> Vec<Problem> {
-    let Some(map) = v.as_object() else {
-        return Vec::new();
-    };
-    map.iter()
-        .filter(|(k, _)| !read.contains(&k.as_str()))
-        .map(|(k, v)| {
-            Problem::field(k.clone(), Reason::UncoveredType, &shape_of(v))
-                .at(format!("{path}/{k}"))
-                .severity(Severity::Warning)
-        })
-        .collect()
 }
 
 /// The keys of a `media` object this render reads or leaves out on
@@ -340,29 +324,6 @@ fn is_empty_entry(lv: &Value) -> bool {
     })
 }
 
-/// What a value is, without what it says: `string(12 chars)`,
-/// `array(3)`, `object{a,b}`, `int`, `bool:true`.
-pub fn shape_of(v: &Value) -> String {
-    match v {
-        Value::Null => "null".to_string(),
-        Value::Bool(b) => format!("bool:{b}"),
-        Value::Number(n) if n.is_i64() || n.is_u64() => "int".to_string(),
-        Value::Number(_) => "float".to_string(),
-        Value::String(s) => format!("string({} chars)", s.chars().count()),
-        Value::Array(a) => format!("array({})", a.len()),
-        Value::Object(m) => {
-            let keys: Vec<&str> = m.keys().map(String::as_str).collect();
-            format!("object{{{}}}", keys.join(","))
-        }
-    }
-}
-
-/// A finding about a record that cost it nothing, worth counting on a
-/// real export.
-pub fn noted(field: &str, explanation: &str) -> Problem {
-    Problem::explained(Reason::Noted, Some(field.to_string()), explanation).severity(Severity::Info)
-}
-
 pub fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()
@@ -420,35 +381,6 @@ mod tests {
         );
         let d = json!({"uri": "a/b.jpg", "title": "T", "description": "Guinan @[1:2048:Guinan]"});
         assert_eq!(media_caption(&d, None).as_deref(), Some("Guinan Guinan"));
-    }
-
-    #[test]
-    fn an_unread_key_is_reported_by_its_shape_alone() {
-        let v = json!({"content": "private words", "call_duration": 42, "x": {"a": 1}});
-        let problems = unread_keys(&v, &["content"], "/message");
-        let mut got: Vec<(String, String, String)> = problems
-            .iter()
-            .map(|p| {
-                (
-                    p.field.clone().unwrap(),
-                    p.sample.clone(),
-                    p.path.clone().unwrap(),
-                )
-            })
-            .collect();
-        got.sort();
-        assert_eq!(
-            got,
-            [
-                (
-                    "call_duration".into(),
-                    "int".into(),
-                    "/message/call_duration".into()
-                ),
-                ("x".into(), "object{a}".into(), "/message/x".into()),
-            ]
-        );
-        assert_eq!(shape_of(&json!("private words")), "string(13 chars)");
     }
 
     #[test]

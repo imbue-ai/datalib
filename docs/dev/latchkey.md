@@ -19,7 +19,8 @@ sign-in, the wizard's account row, or a provider's HTTP client.
   hosts get the Chrome-impersonating curl
   ([`curl_impersonate.md`](curl_impersonate.md)).
 - **The wizard** runs the other commands (`services info`,
-  `auth browser`, `auth set`, `ensure-browser`) from
+  `auth browser`, `auth set`, `ensure-browser`, and for Google
+  `auth browser-prepare` and `auth prepare`) from
   `datalib/backend/http/src/connect.rs`, and checks a connection by
   running `datalib-step probe`, which makes one real request.
 - **`--account` is a global option**, so it goes *before* the
@@ -42,7 +43,7 @@ plus the URLs its credential is good for and how to get one.
 
 | kind | examples | where it comes from |
 |---|---|---|
-| **built-in** | `slack`, `google-gmail`, `google-calendar`, `github`, `fastmail`, `fastmail-dav`, `notion` | ships inside latchkey |
+| **built-in** | `slack`, `google-gmail`, `google-calendar`, `github`, `fastmail`, `fastmail-dav`, `linear`, `notion` | ships inside latchkey |
 | **plugin** | `garmin` | a package under `<latchkey dir>/plugins/<name>/`. datalib vendors the ones it needs (`third-party/latchkey-garmin/`) and installs them on the first sign-in (`http/src/plugins.rs`); a copy without datalib's stamp is the person's own and is never touched. |
 | **registered** | `claude-ai`, `chatgpt` | `latchkey services register`, run by the wizard on the first sign-in from the catalog entry's `credentialRegister`. latchkey refuses to re-register a name it already holds, so a registration someone made by hand stays theirs. |
 
@@ -50,6 +51,59 @@ plus the URLs its credential is good for and how to get one.
 registered service as `user-registered`. When two services cover the
 same URL, `latchkey curl` uses the first one that holds a credential,
 so a stale sibling can shadow the service you just signed in to.
+
+## An OAuth client of your own
+
+Google's services (`google-gmail`, `google-calendar`, `google-drive`,
+`google-docs`, `google-sheets`, `google-slides`) sign in through an
+OAuth client in a Google Cloud project, and latchkey ships none. Until
+a service has one, `auth browser` refuses at once with "requires
+preparation first", which the wizard reads as
+`IssueKind::NoOauthClient`. latchkey keeps one client per service,
+apart from its accounts; every account of the service shares it. Two
+commands store one:
+
+- **`auth browser-prepare <service>`** drives the Cloud console in the
+  browser: it makes or reuses a project named `Latchkey-<service>`
+  (`Latchkey-gmail`), turns on that service's APIs, sets up the consent
+  screen and creates a Desktop app client. It takes minutes, and needs
+  2-Step Verification on the Google account. So each service gets a
+  project of its own, and Google limits how many an account may have.
+- **`auth prepare <service> '{"clientId":…,"clientSecret":…}'`**
+  stores a client made some other way, with no browser. Nothing ties a
+  client to one service, so a single client whose project has every
+  API turned on can be given to all six.
+
+Each service is still its own sign-in, because latchkey asks for each
+one's scopes separately; only the client is shared.
+
+Once a sign-in has reported the refusal, the wizard offers both:
+"Create one for me" sends `create_oauth_client` with the next
+`POST /api/latchkey/<service>/connect`, which runs `browser-prepare`
+before the login; a pasted client goes to
+`POST /api/latchkey/<service>/oauth_client`, which turns Google
+Cloud's downloaded `client_secret.json` into latchkey's shape
+(`http/src/oauth_client.rs`), runs `auth prepare`, and the wizard then
+signs in. latchkey cannot say whether a service has a client short of
+trying, which is why the offer comes after the refusal.
+
+### A source that signs in to several services
+
+Google Drive's download reaches `google-drive`, `google-docs`,
+`google-sheets` and `google-slides`, and needs the same account on
+each. Its catalog entry names the first as `credentialService` and the
+rest as `credentialAlso`, and the wizard's one "Sign in with browser"
+runs `auth browser` for each in turn. Every one of them names its own
+accounts, so the first login says who, and each later one is passed
+`--account` only where that service already holds the account; a login
+that lands on someone else stops the run. A service that already holds
+the account is skipped, so a run cut short is finished by the logins
+left ("Finish signing in as …"), and when all of them hold it every one
+is run again. The decision is `datalib/ui/src/config/multiSignIn.ts`.
+Such a source is offered only the pasted client, stored on every
+service with one `POST …/oauth_client` each: `browser-prepare` would
+make a Cloud project per service. It has no "Paste a key" tab, since a
+pasted key would reach only the first service.
 
 ## Accounts: who names them
 
@@ -67,7 +121,7 @@ login. `latchkey services info` says which, as
 
 | | browser login (`auth browser`) | pasted credential (`auth set`, `auth set-nocurl`) |
 |---|---|---|
-| **detects the login account** (Slack, Gmail, Fastmail, GitHub, Garmin) | The service names the account: the login asks who you signed in as (an email, a workspace user) and stores the credential under that. `--account X` is accepted only when X is already stored, which refreshes it. A new name is refused before any browser opens. | Stored under the name you give. |
+| **detects the login account** (Slack, Gmail, Fastmail, GitHub, Garmin, Linear) | The service names the account: the login asks who you signed in as (an email, a workspace user) and stores the credential under that. `--account X` is accepted only when X is already stored, which refreshes it. A new name is refused before any browser opens. | Stored under the name you give. |
 | **does not** (every registered service, so Claude and ChatGPT; `openrouter`, `ngrok`) | You name it: `--account X` stores under X, a new name included. With none, the default account. | Stored under the name you give. |
 
 The flag describes a browser login, so it means nothing for a service
@@ -153,6 +207,39 @@ the session) when the service does not detect the account and latchkey
 already holds a different account for it: a second Claude or ChatGPT
 account. The decision is `freshBrowser` in
 `datalib/ui/src/config/accountNaming.ts`.
+
+## Starting over
+
+To test a sign-in from scratch, clear every credential and the saved
+browser session at once:
+
+```sh
+npx -y latchkey@<LATCHKEY_VERSION> auth clear -y
+```
+
+With no service name it deletes `credentials.json.enc` and
+`browser_state.json.enc` from latchkey's directory (`~/.latchkey`
+unless `LATCHKEY_DIRECTORY` says otherwise). Every data root on the
+machine shares that directory, and under Minds the gateway's store is
+the host's, so this signs out everywhere. Latchkey's browser keeps no
+profile of its own, so the cookies go with that file. It leaves
+`config.json` (the browser path and the services the wizard
+registered), `plugins/` and the keychain key; to test those first-run
+steps too, move the whole directory aside instead.
+
+## Signing in again without a person
+
+A token-capture service (ChatGPT) stores a token the page mints from
+its session, and that token expires; latchkey has no refresh for it.
+But `auth browser` starts from the saved browser session, so while
+that session is still signed in the login finishes in about ten
+seconds with nobody at the keyboard. A download can therefore renew
+its own credential on a `401` with
+`datalib_etl_web::latchkey::renew_by_browser_login`, which runs it
+under a time limit and refuses under a gateway or in playback. The
+saved session belongs to whoever used it last, so a provider that
+renews must check the account it got before using it
+(`chatgpt/src/ingest/api.rs`).
 
 ## When it fails
 

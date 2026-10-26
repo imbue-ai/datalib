@@ -11,7 +11,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use datalib_etl::blob_cas::{self, BlobBundle, CasEdgeRow};
+use datalib_etl::blob_cas::CasEdgeRow;
+use datalib_etl_chat_common::BlobsAt;
 use datalib_etl_render::inputs::{Inputs, RawRange};
 use datalib_etl_render::processor::Unparsed;
 use serde_json::{Map, Value};
@@ -24,8 +25,8 @@ use datalib_etl_chatgpt::ingest::image_asset_file_id;
 use datalib_etl_chatgpt::ingest::schema_raw::ConversationAttachmentRow;
 
 /// SQL projection that maps a ChatGPT `file_id` to its CAS blake3.
-/// Used by [`BlobBundle::load_many`] from `parse_doltlite_async`.
-const ATTACHMENTS_PROJECTION_SQL: &str = "
+/// Render reads a batch of conversations' bytes through it.
+pub(crate) const ATTACHMENTS_PROJECTION_SQL: &str = "
     SELECT file_id AS ref_id, blake3,
            NULL AS content_type, NULL AS upstream_name
       FROM chatgpt_attachments
@@ -104,14 +105,6 @@ pub struct OAContentPartRow {
 pub struct ChatGPTConversation {
     pub conv: OAConversationRow,
     pub upstream_payload: Value,
-    /// This conversation's attachment bytes, loaded in bulk by
-    /// [`parse`] from the per-provider edge table + CAS in two SQL
-    /// queries. Render walks it synchronously via
-    /// [`BlobBundle::markdown_link`] and
-    /// [`BlobBundle::materialize_to_dir`]. Empty when the conversation
-    /// has no attachments or no doltlite db is present (legacy
-    /// JSON-tree fixture).
-    pub blobs: BlobBundle,
     /// Every raw row this conversation reads — its row, its attachment
     /// edges and the `me` row every page's account column comes from.
     pub inputs: Inputs,
@@ -164,6 +157,9 @@ pub struct ParsedChatGPTApi {
     /// not build a conversation, dropped — reported by the processor
     /// rather than skipped in silence.
     pub unparsed: Vec<Unparsed>,
+    /// Where render reads the conversations' attachment bytes, a batch
+    /// at a time. `None` for the legacy JSON tree, which has none.
+    pub blobs_at: Option<BlobsAt>,
 }
 
 impl ParsedChatGPTApi {
@@ -547,17 +543,25 @@ async fn parse_doltlite_async(
     else {
         return Ok(ParsedChatGPTApi::default());
     };
+    let reader_commit = reader.pin().commit().to_string();
+    let parsed = parse_open(&reader, source_id, range).await;
+    // Closed, not dropped: render opens this store again for the bytes.
+    reader.close().await;
+    let mut parsed = parsed?;
+    parsed.blobs_at = Some(BlobsAt {
+        db_path: db_path.to_path_buf(),
+        commit: reader_commit,
+    });
+    Ok(parsed)
+}
+
+async fn parse_open(
+    reader: &datalib_etl::doltlite_raw::Reader,
+    source_id: &str,
+    range: RawRange<'_>,
+) -> Result<ParsedChatGPTApi> {
     let pool = reader.pool().clone();
     let pin = reader.pin().clone();
-
-    let cas_pool = blob_cas::open_cas_for_render(db_path)
-        .await
-        .with_context(|| format!("open the blob store beside {}", db_path.display()))?;
-
-    // Open at one commit before anything reads this store: the diff below
-    // and the rows behind it have to name that commit.
-    // No commit at all means nothing has been committed here to render, which
-    // is emptiness, not a reason to read the working set.
 
     // Load `me` + `conversations` payloads (filtered if Phase 1
     // narrowed the set).
@@ -589,10 +593,8 @@ async fn parse_doltlite_async(
     parsed.scan = scan;
     parsed.unparsed.append(&mut unparsed);
 
-    // Per-doc BlobBundle: walk each conversation's payload to collect
-    // the attachment file_ids it references, then bulk-load that set
-    // from the per-provider edge table + CAS, every conversation's
-    // together.
+    // Each conversation declares the attachment edges its payload names;
+    // render reads their bytes a batch at a time.
     let refs_by_conv: Vec<Vec<String>> = parsed
         .conversations
         .iter()
@@ -610,28 +612,11 @@ async fn parse_doltlite_async(
             );
         }
     }
-    let loaded = BlobBundle::load_many(
-        &pool,
-        cas_pool.as_ref(),
-        ATTACHMENTS_PROJECTION_SQL,
-        refs_by_conv.into_iter().enumerate(),
-    )
-    .await;
-    if let Some(cas) = cas_pool {
-        cas.close().await;
-    }
-    let mut blobs = loaded?;
-    for (i, conv) in parsed.conversations.iter_mut().enumerate() {
-        if let Some(b) = blobs.remove(&i) {
-            conv.blobs = b;
-        }
-    }
-
     Ok(parsed)
 }
 
 /// Walk one conversation's mapping to enumerate every attachment
-/// `file_id` it references — the input set to [`BlobBundle::load_many`].
+/// `file_id` it references: the attachment edges it declares it read.
 /// Same walk shape that `fetch_attachments_for` does at download time
 /// (and that the legacy `collect_attachments` does inside `shred`),
 /// just without name/mime: we only care about the ref ids here.
@@ -785,11 +770,7 @@ async fn scan_diff(
 }
 
 /// Build a [`ParsedChatGPTApi`] from a snapshot already loaded out of
-/// the doltlite DB. Each conversation starts with an empty
-/// [`BlobBundle`]; the doltlite path fills them in
-/// [`parse_doltlite_async`] after this returns, the JSON-tree fallback
-/// leaves them empty (the legacy fixture has no attachment bytes
-/// anyway).
+/// the doltlite DB.
 pub fn parse_loaded(raw: LoadedRaw) -> ParsedChatGPTApi {
     let mut out = ParsedChatGPTApi::default();
     let account_id = if let Some(me) = raw.me.as_ref() {
@@ -819,7 +800,6 @@ pub fn parse_loaded(raw: LoadedRaw) -> ParsedChatGPTApi {
         out.conversations.push(ChatGPTConversation {
             conv,
             upstream_payload: payload,
-            blobs: BlobBundle::default(),
             inputs,
         });
     }
@@ -904,7 +884,6 @@ pub fn parse_api_json_dir(api_dir: &Path) -> Result<ParsedChatGPTApi> {
         out.conversations.push(ChatGPTConversation {
             conv,
             upstream_payload: d,
-            blobs: BlobBundle::default(),
             inputs: Inputs::default(),
         });
     }

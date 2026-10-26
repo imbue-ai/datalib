@@ -1,0 +1,49 @@
+# ChatGPT conversations over chatgpt.com's web API, signed in through
+# latchkey (`latchkey auth browser chatgpt`), with every option set, and
+# searchable.
+[[groups]]
+id = "chatgpt"
+name = "ChatGPT"
+type = "chatgpt"
+
+[[steps]]
+group = "chatgpt"
+function = "ingest"
+
+# When to give up on rate limits. The download always honours a 429's
+# Retry-After and backs off; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "picard"
+
+[steps.params.api]
+since = "2025-01-01"   # only conversations updated at or after this (YYYY-MM-DD or
+                       # RFC 3339, UTC); move it back later to backfill; default: all
+max_pages = 20         # stop listing after this many pages (100 conversations each);
+                       # default: no cap
+limit = 100            # fetch at most this many conversations per run; default: no cap
+sleep_between = 0.5    # seconds to wait between requests (0 to 3600); default: none
+conv_uuids = ["https://chatgpt.com/c/abc123de-f456-7890-abcd-ef0123456789"]
+                       # only these conversations, by id or pasted link; omit for all
+
+[[steps]]
+group = "chatgpt"
+function = "render_markdown"
+inputs = ["chatgpt/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "chatgpt"
+function = "keyword_index"
+inputs = ["chatgpt/render_markdown"]
+
+[[steps]]
+group = "chatgpt"
+function = "embed"
+inputs = ["chatgpt/keyword_index"]

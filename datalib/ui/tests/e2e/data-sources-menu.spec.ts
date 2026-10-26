@@ -28,7 +28,7 @@ test("a row's menu offers the actions for its kind, grouped, wherever the pointe
   page,
 }) => {
   await openManager(page);
-  const row = groupRow(page, "unified_index");
+  const row = groupRow(page, "unified_document_index");
   await expect(row).toBeVisible({ timeout: 10_000 });
 
   await row.locator('[col-id="status"]').click({ button: "right" });
@@ -50,7 +50,7 @@ test("a row's menu offers the actions for its kind, grouped, wherever the pointe
   await page.keyboard.press("Escape");
 
   // The Name cell offers the same menu as any other.
-  await nameCell(page, "group:unified_index").click({ button: "right" });
+  await nameCell(page, "group:unified_document_index").click({ button: "right" });
   await expect(menuEntries(page)).toHaveCount(11);
   await page.keyboard.press("Escape");
 });
@@ -62,14 +62,14 @@ test("Show sync dashboard opens the group step by step, each with its row's acti
   page,
 }) => {
   await openManager(page);
-  const row = groupRow(page, "unified_index");
+  const row = groupRow(page, "unified_document_index");
   await expect(row).toBeVisible({ timeout: 10_000 });
   await row.locator('[col-id="status"]').click({ button: "right" });
   await menuEntry(page, "Show sync dashboard").click();
 
   const section = (id: string) => page.locator(`.sd-section[data-step="${id}"]`);
-  await expect(section("unified_index")).toBeVisible();
-  const grid = section("unified_index/grid_index");
+  await expect(section("unified_document_index")).toBeVisible();
+  const grid = section("unified_document_index/grid_index");
   await expect(grid.locator(".sd-btn", { hasText: "Show step log" })).toBeVisible();
   await expect(grid.locator(".sd-btn", { hasText: "Sync now" })).toBeVisible();
   await expect(page.locator(".sd-btn", { hasText: "Edit settings…" })).toHaveCount(0);
@@ -78,19 +78,19 @@ test("Show sync dashboard opens the group step by step, each with its row's acti
 /// The same card, from the row's own button rather than its menu.
 test("a row's chart button opens its group's sync dashboard", async ({ page }) => {
   await openManager(page);
-  const row = groupRow(page, "unified_index");
+  const row = groupRow(page, "unified_document_index");
   await expect(row).toBeVisible({ timeout: 10_000 });
   await row.locator('[col-id="actions"] button[aria-label="Show sync dashboard"]').click();
-  await expect(page.locator('.sd-section[data-step="unified_index"]')).toBeVisible();
+  await expect(page.locator('.sd-section[data-step="unified_document_index"]')).toBeVisible();
 });
 
 test("right-clicking inside a selection targets all of it; outside it, the one row", async ({
   page,
 }) => {
   await openManager(page);
-  await expandGroup(page, "unified_index");
-  const grid = pipelineRow(page, "unified_index/grid_index");
-  const qmd = pipelineRow(page, "unified_index/qmd_aggregator");
+  await expandGroup(page, "unified_document_index");
+  const grid = pipelineRow(page, "unified_document_index/grid_index");
+  const qmd = pipelineRow(page, "unified_document_index/qmd_aggregator");
   await expect(grid).toBeVisible();
   await grid.locator('[col-id="status"]').click();
   await qmd.locator('[col-id="status"]').click({ modifiers: ["ControlOrMeta"] });
@@ -111,7 +111,7 @@ test("right-clicking inside a selection targets all of it; outside it, the one r
 
   // A row outside the selection is the one target, and the selection
   // is left exactly as it was — a right-click aims, it does not select.
-  const group = groupRow(page, "unified_index");
+  const group = groupRow(page, "unified_document_index");
   await group.locator('[col-id="status"]').click({ button: "right" });
   await expect(menuEntries(page).last()).toHaveText("Remove from config, with everything under it");
   await expect(page.locator(SELECTED_ROWS)).toHaveCount(2);
@@ -126,10 +126,10 @@ test("Rename edits the group's name in the cell and writes it to the config", as
   await openManager(page);
   const editor = page.locator(".m2-editor");
   const original = await savedConfig(request);
-  const row = groupRow(page, "unified_index");
+  const row = groupRow(page, "unified_document_index");
   await expect(row).toBeVisible({ timeout: 10_000 });
 
-  await nameCell(page, "group:unified_index").click({ button: "right" });
+  await nameCell(page, "group:unified_document_index").click({ button: "right" });
   await menuEntry(page, "Rename…").click();
   const input = page.locator(".tg-grid input.editor-text");
   await expect(input).toBeVisible();
@@ -151,8 +151,11 @@ test("Rename edits the group's name in the cell and writes it to the config", as
   await expect(input).toHaveValue("Everything, indexed");
   await input.press("Enter");
 
-  await expect(page.getByText("Renamed unified_index to Everything, indexed.")).toBeVisible();
-  await expect(nameCell(page, "group:unified_index").locator(".tg-parent")).toHaveText(
+  await expect(
+    page.getByText("Renamed unified_document_index to Everything, indexed."),
+  ).toBeVisible();
+  // The group's Name is its chip, which shows the new name.
+  await expect(nameCell(page, "group:unified_document_index").locator("a.chip")).toHaveText(
     "Everything, indexed",
   );
   await expect(editor).toHaveValue(/name = "Everything, indexed"/);

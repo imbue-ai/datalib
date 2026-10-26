@@ -12,14 +12,30 @@
 //! the page authenticates with no per-callsite changes.
 //!
 //! The cookie is the right carrier here, and a token injected into the HTML
-//! is not: a page on `evil.com` can neither read ours (`HttpOnly`) nor make
-//! the browser send it (`SameSite=Lax`), and DNS rebinding fails closed,
-//! whereas a token in the served HTML is readable by anything that can read
-//! the page.
+//! is not: a page on `evil.com` can neither read ours (`HttpOnly`) nor
+//! receive it (it is host-only: no `Domain`, so the browser sends it to this
+//! host alone), and DNS rebinding fails closed, whereas a token in the
+//! served HTML is readable by anything that can read the page.
+//!
+//! It is set twice, under two names, because no one cookie works everywhere
+//! the app runs. The first is `SameSite=Lax`, for the app opened as the page
+//! itself. The second is `SameSite=None; Secure; Partitioned`, for the app
+//! framed by a page on another site (Imbue Studio): the browser keeps it in a
+//! jar keyed by that top-level site and sends it nowhere else. A `Lax` cookie
+//! is not even stored inside a cross-site frame, and Safari 18.5 through 26.1
+//! rejects any cookie marked `Partitioned`. Neither copy is ever a
+//! `SameSite=None` cookie in the shared jar.
+//!
+//! A cookie is a credential the browser attaches by itself, so a page on
+//! the same *site* — another port of `127.0.0.1`, another app of a Studio
+//! workspace — could make it send one. [`fetch_policy`] refuses those.
+//!
+//! Who may frame the app is `embed::FrameAncestors`; nothing here trusts a
+//! proxy's word in place of the token.
 
 use axum::body::Body;
 use axum::extract::{Request, State};
-use axum::http::{header, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Redirect, Response};
 use sha2::{Digest, Sha256};
@@ -42,14 +58,62 @@ pub const TOKEN_QUERY_KEY: &str = "token";
 /// `Authorization` is already spoken for.
 pub const TOKEN_HEADER: &str = "x-datalib-token";
 
+/// The env var that used to name a proxy whose identity header stood in
+/// for the token. Setting it is now an error rather than ignored, so an
+/// operator who relied on it learns that requests need the token.
+pub const RETIRED_TRUSTED_PROXY_ENV: &str = "DATALIB_TRUSTED_PROXY";
+
+pub fn refuse_retired_env() -> anyhow::Result<()> {
+    match std::env::var(RETIRED_TRUSTED_PROXY_ENV) {
+        Ok(v) if !v.trim().is_empty() => anyhow::bail!(
+            "{RETIRED_TRUSTED_PROXY_ENV} is no longer read: every request needs the API \
+             token, behind a proxy too. Unset it, and set {} to the origins that frame \
+             the app",
+            crate::embed::FRAME_ANCESTORS_ENV
+        ),
+        _ => Ok(()),
+    }
+}
+
+/// What [`fetch_policy`] makes of a request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FetchVerdict {
+    Allow,
+    FromAnotherSite,
+}
+
+/// Where a request came from, judged by the `Sec-Fetch-*` headers a page
+/// cannot set. Every supported browser sends them; a client that sends
+/// none (`curl`, an agent) is not a page, and is let through to the
+/// credential check.
+///
+/// 1. A navigation — `GET` or `HEAD` with `Sec-Fetch-Mode: navigate`,
+///    top-level or into a frame — is allowed from anywhere, so a link, or
+///    Studio's frame, opens the app. That rests on no `GET` route having a
+///    side effect, and on every document served as data carrying its
+///    `sandbox` policy.
+/// 2. Anything else marked `cross-site` or `same-site` is refused.
+///    `same-origin` and `none` (typed in the address bar) are not.
+pub(crate) fn fetch_policy(method: &Method, headers: &HeaderMap) -> FetchVerdict {
+    let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+    let navigation = (*method == Method::GET || *method == Method::HEAD)
+        && header("sec-fetch-mode") == Some("navigate");
+    match header("sec-fetch-site") {
+        _ if navigation => FetchVerdict::Allow,
+        None | Some("same-origin") | Some("none") => FetchVerdict::Allow,
+        Some(_) => FetchVerdict::FromAnotherSite,
+    }
+}
+
 fn is_url_safe(s: &str) -> bool {
     !s.is_empty()
         && s.bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~'))
 }
 
-/// The server's token plus the two paths derived from it: the cookie it
-/// mints and the file it's published in. Cheap to clone (one `Arc`).
+/// The server's token plus what is derived from it: the names of the two
+/// cookies it mints and the file it's published in. Cheap to clone (one
+/// `Arc`).
 #[derive(Clone)]
 pub struct ApiToken(Arc<Inner>);
 
@@ -130,16 +194,35 @@ impl ApiToken {
         Ok(())
     }
 
-    fn cookie_header(&self) -> HeaderValue {
-        // No `Secure`: we're on plain http over loopback, and `Secure`
-        // would make the browser drop the cookie entirely. No
-        // `Max-Age`/`Expires` either — a session cookie is right for a
-        // token that dies with the process anyway.
-        HeaderValue::from_str(&format!(
-            "{}={}; Path=/; HttpOnly; SameSite=Lax",
-            self.0.cookie_name, self.0.value
-        ))
-        .expect("token and cookie name are URL-safe ASCII")
+    fn partitioned_cookie_name(&self) -> String {
+        format!("{}_partitioned", self.0.cookie_name)
+    }
+
+    /// The two copies of the session (see the module header). The `Lax`
+    /// one has no `Secure`, since the app is also served over plain http
+    /// on loopback, where a browser drops a `Secure` cookie; the
+    /// partitioned one needs `Secure`, and is only stored where the page
+    /// is https. Neither has `Max-Age`/`Expires`: a session cookie is
+    /// right for a token that dies with the process anyway.
+    fn cookie_headers(&self) -> [HeaderValue; 2] {
+        let value = &self.0.value;
+        [
+            format!(
+                "{}={value}; Path=/; HttpOnly; SameSite=Lax",
+                self.0.cookie_name
+            ),
+            format!(
+                "{}={value}; Path=/; HttpOnly; Secure; SameSite=None; Partitioned",
+                self.partitioned_cookie_name()
+            ),
+        ]
+        .map(|v| HeaderValue::from_str(&v).expect("token and cookie name are URL-safe ASCII"))
+    }
+
+    fn append_cookies(&self, resp: &mut Response) {
+        for cookie in self.cookie_headers() {
+            resp.headers_mut().append(header::SET_COOKIE, cookie);
+        }
     }
 
     fn credential(&self, req: &Request<Body>) -> Option<Credential> {
@@ -170,7 +253,9 @@ impl ApiToken {
             }
         }
 
-        // Several cookies can share the header; scan for ours by name.
+        // Several cookies can share the header; scan for either of ours by
+        // name.
+        let partitioned = self.partitioned_cookie_name();
         for cookie in headers
             .get_all(header::COOKIE)
             .iter()
@@ -178,7 +263,9 @@ impl ApiToken {
             .flat_map(|v| v.split(';'))
         {
             if let Some((name, val)) = cookie.split_once('=') {
-                if name.trim() == self.0.cookie_name && self.matches(val.trim()) {
+                let name = name.trim();
+                let ours = name == self.0.cookie_name || name == partitioned;
+                if ours && self.matches(val.trim()) {
                     return Some(Credential::Cookie);
                 }
             }
@@ -277,13 +364,17 @@ pub async fn require_token(
     if is_public(&path) {
         return next.run(req).await;
     }
+    if fetch_policy(req.method(), req.headers()) == FetchVerdict::FromAnotherSite {
+        return forbidden(&path, "a page on another site or port made this request");
+    }
+    let auth = &auth;
 
     match auth.credential(&req) {
-        None => unauthorized(&auth, &path),
+        None => unauthorized(auth, &path),
 
         Some(Credential::Cookie) => next.run(req).await,
 
-        // Token in the URL of a document request: hand back the cookie
+        // Token in the URL of a document request: hand back the cookies
         // and bounce to the same URL without it, so it doesn't survive
         // in history / bookmarks / `Referer`. `/api/*` is left alone —
         // a redirect would break the `fetch`/`EventSource` callers that
@@ -294,8 +385,7 @@ pub async fn require_token(
                 None => path,
             };
             let mut resp = Redirect::to(&target).into_response();
-            resp.headers_mut()
-                .append(header::SET_COOKIE, auth.cookie_header());
+            auth.append_cookies(&mut resp);
             resp
         }
 
@@ -306,8 +396,7 @@ pub async fn require_token(
             // that already sends the header has no use for a cookie,
             // and this keeps `Set-Cookie` off every JSON response.
             if !api {
-                resp.headers_mut()
-                    .append(header::SET_COOKIE, auth.cookie_header());
+                auth.append_cookies(&mut resp);
             }
             resp
         }
@@ -330,28 +419,49 @@ fn unauthorized(auth: &ApiToken, path: &str) -> Response {
     // A browser landed here without a session — almost always a stale
     // tab from a previous run of the server (each run mints a fresh
     // token). Say so, and say what to do about it.
+    refusal_page(
+        StatusCode::UNAUTHORIZED,
+        "Datalib — token required",
+        &format!(
+            "<h1>This browser isn't authenticated</h1>\
+             <p>Datalib is running, but the local API requires a token — the same way \
+             a Jupyter notebook server does. Without it, any web page you have open \
+             could reach this server.</p>\
+             <p>If this is a tab left over from an earlier run, the token has changed: \
+             open the URL the launcher printed. Otherwise append the token to the URL \
+             once and this browser gets a session cookie:</p>\
+             <pre>{path}?token=$(cat {token_file})</pre>\
+             <p>The running server's token is in <code>{token_file}</code>.</p>"
+        ),
+    )
+}
+
+fn forbidden(path: &str, why: &str) -> Response {
+    if is_api(path) {
+        return (StatusCode::FORBIDDEN, format!("forbidden: {why}\n")).into_response();
+    }
+    refusal_page(
+        StatusCode::FORBIDDEN,
+        "Datalib — not available",
+        &format!("<h1>Not available</h1><p>Datalib refused this request: {why}.</p>"),
+    )
+}
+
+fn refusal_page(status: StatusCode, title: &str, body: &str) -> Response {
     let html = format!(
         "<!doctype html>\n\
          <html lang=\"en\"><head><meta charset=\"utf-8\">\
-         <title>Datalib — token required</title>\
+         <title>{title}</title>\
          <style>body{{font:15px/1.55 system-ui,sans-serif;margin:8vh auto;max-width:44rem;\
          padding:0 1.5rem;color:#222}}code{{background:#f2f2f2;padding:.15em .35em;\
          border-radius:3px}}pre{{background:#f2f2f2;padding:.8rem 1rem;border-radius:5px;\
          overflow-x:auto}}@media(prefers-color-scheme:dark){{body{{background:#161616;\
          color:#ddd}}code,pre{{background:#242424}}}}</style></head><body>\
-         <h1>This browser isn't authenticated</h1>\
-         <p>Datalib is running, but the local API requires a token — the same way \
-         a Jupyter notebook server does. Without it, any web page you have open \
-         could reach this server.</p>\
-         <p>If this is a tab left over from an earlier run, the token has changed: \
-         open the URL the launcher printed. Otherwise append the token to the URL \
-         once and this browser gets a session cookie:</p>\
-         <pre>{path}?token=$(cat {token_file})</pre>\
-         <p>The running server's token is in <code>{token_file}</code>.</p>\
+         {body}\
          </body></html>\n"
     );
     (
-        StatusCode::UNAUTHORIZED,
+        status,
         [
             (header::CONTENT_TYPE, "text/html; charset=utf-8"),
             (
@@ -434,6 +544,96 @@ mod tests {
         assert!(!is_public("/api/health"));
         assert!(!is_public("/"));
         assert!(!is_public("/agentfoo"));
+    }
+
+    #[test]
+    fn both_cookies_are_host_only_and_only_the_framed_one_is_partitioned() {
+        let t = token();
+        let [lax, framed] = t.cookie_headers().map(|v| v.to_str().unwrap().to_string());
+        assert!(
+            lax.starts_with(&format!("{}=t0ken;", t.0.cookie_name)),
+            "{lax}"
+        );
+        assert!(
+            lax.contains("SameSite=Lax") && !lax.contains("Partitioned"),
+            "{lax}"
+        );
+        assert!(framed.starts_with(&format!("{}=t0ken;", t.partitioned_cookie_name())));
+        for attr in ["Secure", "SameSite=None", "Partitioned", "HttpOnly"] {
+            assert!(framed.contains(attr), "{framed} lacks {attr}");
+        }
+        for cookie in [&lax, &framed] {
+            assert!(
+                !cookie.contains("Domain"),
+                "a Domain would send it to other hosts: {cookie}"
+            );
+        }
+    }
+
+    /// The request policy as a table: method, `Sec-Fetch-Site`,
+    /// `Sec-Fetch-Mode`, verdict.
+    #[test]
+    fn fetch_policy_cases() {
+        use FetchVerdict::{Allow, FromAnotherSite};
+        let cases: &[(Method, Option<&str>, Option<&str>, FetchVerdict)] = &[
+            // The app's own calls, and a URL typed in the address bar.
+            (Method::GET, Some("same-origin"), Some("cors"), Allow),
+            (Method::POST, Some("same-origin"), Some("cors"), Allow),
+            (Method::PUT, Some("none"), Some("navigate"), Allow),
+            // `curl`, an agent: no fetch metadata at all.
+            (Method::POST, None, None, Allow),
+            // A link from anywhere, and Studio's frame, open the app.
+            (Method::GET, Some("cross-site"), Some("navigate"), Allow),
+            (Method::GET, Some("same-site"), Some("navigate"), Allow),
+            (Method::HEAD, Some("cross-site"), Some("navigate"), Allow),
+            // A page on another port, or another app of the workspace,
+            // posting a form or fetching: refused.
+            (
+                Method::POST,
+                Some("same-site"),
+                Some("navigate"),
+                FromAnotherSite,
+            ),
+            (
+                Method::POST,
+                Some("same-site"),
+                Some("no-cors"),
+                FromAnotherSite,
+            ),
+            (
+                Method::POST,
+                Some("cross-site"),
+                Some("navigate"),
+                FromAnotherSite,
+            ),
+            // An embedded `<img>` or `fetch` reading from another site.
+            (
+                Method::GET,
+                Some("cross-site"),
+                Some("no-cors"),
+                FromAnotherSite,
+            ),
+            (
+                Method::GET,
+                Some("same-site"),
+                Some("cors"),
+                FromAnotherSite,
+            ),
+        ];
+        for (method, site, mode, want) in cases {
+            let mut headers = HeaderMap::new();
+            if let Some(site) = site {
+                headers.insert("sec-fetch-site", HeaderValue::from_str(site).unwrap());
+            }
+            if let Some(mode) = mode {
+                headers.insert("sec-fetch-mode", HeaderValue::from_str(mode).unwrap());
+            }
+            assert_eq!(
+                fetch_policy(method, &headers),
+                *want,
+                "{method} site={site:?} mode={mode:?}"
+            );
+        }
     }
 
     #[test]

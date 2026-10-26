@@ -16,6 +16,9 @@ pub const DATA_TABLES: &[&str] = &[
     "chat_users",
     "chat_messages",
     "gemini_activity",
+    "maps_saved_lists",
+    "my_maps_placemarks",
+    "play_books_annotations",
     // Google Voice feed (own `schema_raw`); see `google_voice::schema_raw`.
     "voice_messages",
     "voice_bills",
@@ -92,6 +95,38 @@ pub struct YoutubeWatchRow {
 pub struct YoutubeSubscriptionRow {
     pub id_and_payload: WirePayload,
     pub channel_title: Option<String>,
+}
+
+/// `maps_saved_lists` — one row per place on a list under `Saved/`. A
+/// list has no id upstream, and neither has its entry: the id is the
+/// list's file, the entry's title and URL, and how many times that pair
+/// came before it in the file.
+#[derive(Debug, Clone, WirePayloadRow)]
+#[wire_payload_row(table = "maps_saved_lists")]
+pub struct MapsSavedListRow {
+    pub id_and_payload: WirePayload,
+    /// The export file it came from, which holds the whole of its list.
+    pub file: String,
+}
+
+/// `my_maps_placemarks` — one row per pin, line or shape on a My Maps
+/// map, from the `.kmz` under `My Maps/`. Keyed by the map's file, the
+/// layer's and the placemark's name, its geometry, and the occurrence.
+#[derive(Debug, Clone, WirePayloadRow)]
+#[wire_payload_row(table = "my_maps_placemarks")]
+pub struct MyMapsPlacemarkRow {
+    pub id_and_payload: WirePayload,
+    pub file: String,
+}
+
+/// `play_books_annotations` — one row per highlight, note, bookmark or
+/// listening position in a book's page under `Google Play Books/`.
+#[derive(Debug, Clone, WirePayloadRow)]
+#[wire_payload_row(table = "play_books_annotations")]
+pub struct PlayBooksAnnotationRow {
+    pub id_and_payload: WirePayload,
+    pub file: String,
+    pub when_ts: Option<String>,
 }
 
 // ── Google Chat ─────────────────────────────────────────────────────
@@ -175,6 +210,9 @@ pub fn full_ddl() -> Vec<String> {
         ChatUserRow::ddl(),
         ChatMessageRow::ddl(),
         GeminiActivityRow::ddl(),
+        MapsSavedListRow::ddl(),
+        MyMapsPlacemarkRow::ddl(),
+        PlayBooksAnnotationRow::ddl(),
         // Shared file-cursor table; we own one or more
         // `google_takeout/<feed>` scopes inside it.
         datalib_etl_files::file_checkpoint::INGESTED_FILES_DDL.to_string(),
@@ -204,6 +242,16 @@ pub const LADDER: &[Migration] = &[
                outside North America",
         apply: |conn| Box::pin(read_again(conn, REREAD_V2)),
     },
+    Migration {
+        version: 3,
+        name: "the Chat files are read again for the files of a message's earlier versions",
+        apply: |conn| Box::pin(read_again(conn, REREAD_V3)),
+    },
+    Migration {
+        version: 4,
+        name: "the Voice files are read again for the calls whose names do not say what they are",
+        apply: |conn| Box::pin(read_again(conn, REREAD_V4)),
+    },
 ];
 
 /// The feeds whose reader changed what it makes of an unchanged file:
@@ -224,6 +272,16 @@ pub const REREAD_V2: &[&str] = &[
     "google_takeout/gemini_apps",
     "google_takeout/google_chat",
 ];
+
+/// A Chat message's earlier versions name files of their own, which the
+/// reader now stores too.
+pub const REREAD_V3: &[&str] = &["google_takeout/google_chat"];
+
+/// A Voice file whose name leaves out its type (`<who> - <stamp>.html`)
+/// or cuts it short (`<who> - Pla(3).html`) is now read by its markup.
+/// A failed file was left unstamped, but the parts of a zipped export
+/// were marked read, so only this brings it back.
+pub const REREAD_V4: &[&str] = &["google_takeout/google_voice"];
 
 /// Forget what these feeds' files hashed to, so the next sync reads
 /// them whole, as if new. Which archive parts were read goes too, or an

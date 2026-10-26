@@ -7,9 +7,9 @@
 // hosts; a card with a grid of its own (`GridCard`) calls this and
 // keeps driving its grid itself.
 import type { Column, Formatter, GroupingFormatterItem } from "@slickgrid-universal/common";
-import { entityFromUri, handleFromUri } from "./chipLinks";
+import { contactFromUri, entityFromUri, handleFromUri } from "./chipLinks";
 import { entityCell, type EntityView } from "./entities";
-import { chipCell, type Who } from "./contacts";
+import { chipCell, contactCell, type NormalizedContact, type Who } from "./contacts";
 import { CELL_MEASURE, fitChips } from "./chipFit";
 import { Editors } from "@slickgrid-universal/common";
 import type {
@@ -24,6 +24,7 @@ import type {
 } from "@/api";
 import {
   WIDTH,
+  renderBadges,
   renderChips,
   quantityText,
   renderIdentity,
@@ -59,17 +60,35 @@ export type SlickColumnOptions<T> = {
     canLink: () => boolean;
     /// A group or step identity (`Identity.entity`): what is known of it.
     entity?: (uri: string) => EntityView | undefined;
+    /// A group or step chip keeps the cell's own label, where the grid
+    /// already says the rest: a step nested under its group.
+    keepLabels?: boolean;
+    /// A group or step chip draws no status dot, where a Status column
+    /// beside it says the same.
+    quiet?: boolean;
+    /// One of your contacts, whose id is a `datalib:contact/` URI.
+    contact?: (contactId: string) => NormalizedContact | undefined;
   };
 };
 
 /// A group row's title: the column, the value and how many rows share
-/// it. An element, not markup: the value is the rows' own text.
-export function groupTitle(name: string, show: (value: unknown) => string = String) {
+/// it. An element, not markup: the value is the rows' own text. `chip`
+/// draws the value as a chip instead, where it names one.
+export function groupTitle(
+  name: string,
+  show: (value: unknown) => string = String,
+  chip: (g: GroupingFormatterItem) => HTMLElement | null = () => null,
+) {
   return (g: GroupingFormatterItem) => {
     const el = document.createElement("span");
     el.className = "tg-group";
-    const value = g.value == null || g.value === "" ? "—" : show(g.value);
-    el.textContent = `${name}: ${value}`;
+    const drawn = chip(g);
+    if (drawn) {
+      el.append(`${name}: `, drawn);
+    } else {
+      const value = g.value == null || g.value === "" ? "—" : show(g.value);
+      el.textContent = `${name}: ${value}`;
+    }
     const count = document.createElement("span");
     count.className = "tg-group-count";
     count.textContent = ` (${g.count})`;
@@ -232,7 +251,14 @@ function identityChip<T>(
   chips: SlickColumnOptions<T>["chips"],
 ): HTMLAnchorElement | null {
   if (chips?.entity && v.entity && entityFromUri(v.entity)) {
-    return entityCell(v.entity, v.label, chips.entity(v.entity), v.icon ?? null);
+    return entityCell(v.entity, v.label, chips.entity(v.entity), v.icon ?? null, {
+      keepShown: chips.keepLabels === true,
+      quiet: chips.quiet === true,
+    });
+  }
+  const contactId = chips?.contact ? contactFromUri(v.id) : null;
+  if (contactId && chips?.contact) {
+    return contactCell(contactId, v.label, chips.contact(contactId));
   }
   const handle = chips ? handleFromUri(v.id) : null;
   return handle && chips ? chipCell(handle, v.label, chips.who(handle), chips.canLink()) : null;
@@ -241,7 +267,7 @@ function identityChip<T>(
 /// Show `text` on a drawn chip in place of its full label, which its
 /// tooltip and menu keep.
 function setChipText(chip: HTMLElement, text: string) {
-  const label = [...chip.childNodes].reverse().find((n) => n.nodeType === Node.TEXT_NODE);
+  const label = chip.querySelector(".chip-text");
   if (label) label.textContent = text;
 }
 
@@ -372,12 +398,20 @@ export function typedColumns<T extends Record<string, unknown>>(
           const badges = spec.badges;
           const inner: Formatter<T> = (_r, _c, _v, _col, row) => {
             const v = row?.[f] as Identity | null;
+            const counts = badges ? ((row?.[badges] as Chip[] | null) ?? []) : [];
             const chip = v ? identityChip(v, opts.chips) : null;
+            // A chip keeps the counts the plain label would carry beside it.
+            if (chip && badges && counts.length) {
+              const wrap = document.createElement("span");
+              wrap.className = "tg-identity";
+              wrap.append(chip, renderBadges(badges, counts));
+              return wrap;
+            }
             if (chip) return chip;
             return renderIdentity(
               v,
               !!row?.__hasChildren,
-              badges ? { field: badges, chips: (row?.[badges] as Chip[] | null) ?? [] } : null,
+              badges ? { field: badges, chips: counts } : null,
             );
           };
           return {
@@ -398,7 +432,14 @@ export function typedColumns<T extends Record<string, unknown>>(
               ? {
                   grouping: {
                     getter: (row: T) => label(row[f]),
-                    formatter: groupTitle(spec.header),
+                    // The value as its chip, read off the group's first row,
+                    // where the rows are loaded and it names one. The grid's
+                    // group carries its rows; its declared type leaves them out.
+                    formatter: groupTitle(spec.header, String, (g) => {
+                      const rows = (g as GroupingFormatterItem & { rows?: T[] }).rows;
+                      const v = rows?.[0]?.[f] as Identity | null | undefined;
+                      return v ? identityChip(v, opts.chips) : null;
+                    }),
                     collapsed: false,
                   },
                 }

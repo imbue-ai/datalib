@@ -54,6 +54,71 @@ them like every other binary. From a source checkout they are
 sqlx links the same doltlite amalgamation the rest of the tree does, so
 there is no CLI to locate and no subprocess per query.
 
+## A worked recipe on a Mac: is one folder a superset of another?
+
+Say two backups of the same thing sit in a synced folder, and you want
+to know whether the newer one holds every file the older one does. The
+names have spaces and the folders are synced, which is the usual case
+under `~/Library/CloudStorage`.
+
+```zsh
+old="$HOME/Library/CloudStorage/Dropbox/backups/Archive 2025"
+new="$HOME/Library/CloudStorage/Dropbox/backups/Archive 2026"
+db="$TMPDIR/compare.doltlite_db"     # anywhere outside both trees
+
+datalib-fsindex --db "$db" --root "$old" --branch older --no-stamp
+datalib-fsindex --db "$db" --root "$new" --branch newer --no-stamp
+
+datalib-dirtree-diff --left "$db#older" --right "$db#newer" -o "$TMPDIR/compare.html"
+open "$TMPDIR/compare.html"
+```
+
+Hashing a file that is online-only downloads it. To see how many a
+folder holds before you scan it, run `find "$old" -flags +dataless | wc -l`.
+
+`recipe_test.sh` beside this README runs the recipe's code blocks
+as written, on a made-up tree, so a change that breaks them fails a test.
+
+Rescanning a folder costs a `stat` per unchanged file. The fingerprint
+cache (`~/Library/Caches/datalib/fingerprints.sqlite`) keeps each file's
+hash under its absolute path, and reuses it while size, mtime, ctime and
+inode all match. A second folder's first scan reads every byte, even
+where the files are copies of the first folder's.
+
+`--no-stamp` makes the scan read-only. Without it, a folder whose
+`.fsindex.toml` opts into stamping gets a UUID written into that file,
+which is a change a sync client will upload.
+
+The line `datalib-dirtree-diff` prints answers the question. The newer
+folder holds every byte the older one does when `deleted` is 0.
+`deleted-with-copy-remaining` and moves are fine, since their bytes are
+still on the right under another path. A `modified` entry is a path
+whose content changed, and expect `.DS_Store` among them, because Finder
+rewrites it.
+
+The same question in SQL, with `datalib-doltlite` (from the same
+release):
+
+```zsh
+datalib-doltlite -readonly -box "$db" "
+  SELECT count(*) AS missing, sum(size) AS bytes
+    FROM dolt_at_files('older') AS o
+   WHERE o.kind = 'file' AND o.id NOT LIKE '%.DS_Store'
+     AND o.blake3 NOT IN (SELECT blake3 FROM dolt_at_files('newer'));"
+```
+
+Swap the `SELECT` line for `SELECT o.id, o.size` to list the files
+that are missing. Scans in one file are read by branch name, never as
+`main`; see fsindex's
+[INGEST.md](../etl/providers/fsindex/INGEST.md) §"Several roots in one
+file: branches".
+
+Three zsh traps. Quote every path: zsh does not split an unquoted
+`$var` into words, so `set -- $pair` gives you one argument, not two.
+Quote `"$db#older"` too, since `#` is a glob operator when
+`EXTENDED_GLOB` is set. And keep `$db` outside both trees, or the
+second scan indexes the first scan's store.
+
 ## Can doltlite's prolly diff work across two separate files?
 
 **No, not directly.** Ordinary SQL crosses an `ATTACH` fine, but a
@@ -135,9 +200,10 @@ from its config entry and outlives any particular path.
 
 The checkout is fsindex's `RawDb::checkout_branch`
 (`etl/providers/fsindex/src/ingest/db.rs`), covered by fsindex's
-`tests/fsindex_tests/branch_scan.rs`. Checking out a missing branch
-errors and `-b` on an existing one errors too, so it tries the checkout
-and creates on failure, then reads the active branch back. The branch
+`tests/fsindex_tests/branch_scan.rs`. It connects to the branch with
+`dolt_connect_branch`, which writes nothing, and creates the branch
+with `dolt_checkout('-b', …)` only when that connect fails, then reads
+the active branch back. The branch
 is per connection, so the pool keeps its one connection for good
 ([branches, HEAD and the working set](/docs/dev/doltlite.md#branches-head-and-the-working-set);
 `etl/README.md` §"Every pool is size 1 and never recycled").
@@ -305,13 +371,14 @@ carries a secondary index on `blake3` (deliberately —
 [`STORAGE_NOTES.md`](../etl/providers/fsindex/src/ingest/STORAGE_NOTES.md)
 §2 measures what one costs). A directory digest is
 looked up in `dirs`, which is small enough not to matter; a file digest
-costs a whole-corpus scan of `files` per lookup chunk. It runs only for
+costs one whole-corpus scan of `files`, however many digests are
+wanted, since they go in as one bound array. It runs only for
 digests the move pairing could not already account for, and it says so
 on stderr rather than hiding:
 
 ```
 note: scanning the corpus at 9447a1f522 for 3 unmatched digest(s) —
-      `files` has no blake3 index, so this is a full scan per chunk
+      `files` has no blake3 index, so this is a full scan
 ```
 
 Turn it off with `--no-copy-detection`, which downgrades those rows to a

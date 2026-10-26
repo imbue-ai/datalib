@@ -5,11 +5,45 @@ use datalib_source_common::{expand_tilde, LatchkeySettings, RenderCommon, Source
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// This source's config stanzas, for `datalib-step help`.
+pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "jmap",
+        toml: include_str!("../examples/minimal_jmap.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "jmap",
+        toml: include_str!("../examples/complete_jmap.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "gmail",
+        toml: include_str!("../examples/minimal_gmail.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "gmail",
+        toml: include_str!("../examples/complete_gmail.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "mbox",
+        toml: include_str!("../examples/minimal_mbox.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "mbox",
+        toml: include_str!("../examples/complete_mbox.toml"),
+    },
+];
+
 /// The full config for a `type: email` source: the shared `common:` envelope
 /// (paths + cross-source knobs, composed from `source_common` and resolved by
 /// the orchestrator's `normalize()`) plus everything email-specific. `name`
 /// and `enabled` stay orchestrator-owned and are NOT here.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EmailConfig {
     /// Shared per-source envelope (paths + cross-source tunables).
@@ -24,18 +58,21 @@ pub struct EmailConfig {
     #[serde(default)]
     pub jmap: Option<EmailSync>,
     /// Gmail REST API knobs. `Some` selects the Gmail download path.
-    /// Mutually exclusive with the other two.
+    /// Excludes `jmap`; beside `mbox`, the mbox is a Google Takeout of
+    /// the same account that the API starts from.
     #[serde(default)]
     pub gmail: Option<EmailGmailApi>,
     /// The mbox path: where the `.mbox` is, plus the account row to
     /// synthesize for it (JMAP and Gmail learn that from the server).
+    /// Beside `gmail`, only `path` is read: the account is the one Gmail
+    /// signs in as.
     #[serde(default)]
     pub mbox: Option<MboxSync>,
-    /// Legacy location of the outlink format — the knob now lives on
-    /// the render step's params ([`EmailRenderConfig::outlink_format`]).
-    /// Still parsed here so old-format configs migrate losslessly; the
-    /// download planner rejects it with a pointer to the new home.
+    /// Retired here: `outlink_format` belongs on the render step's
+    /// params now. Still read, so a config that sets it on the ingest step
+    /// is refused with that fix rather than ignored.
     #[serde(default)]
+    #[schemars(skip)]
     pub outlink_format: Option<EmailOutlink>,
     /// Limit **extraction** to messages under *any* of these mailboxes,
     /// matched on the full label path (POSIX-like, e.g. `Work/Projects`)
@@ -45,17 +82,18 @@ pub struct EmailConfig {
     /// `only_render_labels`.
     #[serde(default)]
     pub only_extract_labels: Vec<String>,
-    /// Legacy location of the render-label filter — now on the render
-    /// step's params ([`EmailRenderConfig::only_render_labels`]). Parsed
-    /// for migration; rejected by the download planner.
+    /// Retired here: `only_render_labels` belongs on the render step's
+    /// params now. Still read, so a config that sets it on the ingest step
+    /// is refused with that fix rather than ignored.
     #[serde(default)]
+    #[schemars(skip)]
     pub only_render_labels: Vec<String>,
 }
 
 /// Params for the email **render** step. Split from [`EmailConfig`]
 /// (the download-step params) so each step's params carry only what
 /// that wave reads.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EmailRenderConfig {
     #[serde(default)]
@@ -109,28 +147,38 @@ impl EmailConfig {
     }
 
     /// Provider-local validation, run by the step planner at config load:
-    /// at most one download mode is selected and each one's own fields
-    /// hang together.
+    /// at most one live mode is selected, an mbox sits only beside Gmail,
+    /// and each mode's own fields hang together.
     pub fn validate(&self) -> anyhow::Result<()> {
         self.latchkey_settings
             .validate()
             .map_err(anyhow::Error::msg)?;
         let live = self.live_mode()?;
-        if live.is_some() && self.mbox.is_some() {
-            anyhow::bail!(
-                "email source sets a live download mode and `mbox` — pick one. To mirror \
-                 the same account two ways, declare two sources."
-            );
+        match (&live, &self.mbox) {
+            (Some(EmailLiveMode::Jmap(_)), Some(_)) => anyhow::bail!(
+                "email source sets `jmap` and `mbox` — pick one. Only a Gmail account can \
+                 start from an mbox, a Google Takeout: its messages carry Gmail's ids."
+            ),
+            (Some(EmailLiveMode::GmailApi(_)), Some(mbox)) => mbox.validate_beside_gmail()?,
+            _ => {}
         }
         match live {
             Some(EmailLiveMode::GmailApi(gmail)) => gmail.validate(),
             _ => Ok(()),
         }
     }
+
+    /// The Google Takeout a Gmail source starts from, when it names one.
+    pub fn takeout(&self) -> Option<PathBuf> {
+        match (&self.gmail, &self.mbox) {
+            (Some(_), Some(mbox)) => Some(mbox.path()),
+            _ => None,
+        }
+    }
 }
 
 /// JMAP tunables: the `jmap` table of a `type = "email"` ingest step.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EmailSync {
     /// JMAP server hostname. Session discovered at
@@ -148,9 +196,8 @@ pub struct EmailSync {
     /// end-of-sync blob phase. JMAP has no bulk-download method — each
     /// `.eml` is one HTTP GET against the substituted `downloadUrl` — so
     /// the only lever for a large initial backfill is fetching several at
-    /// once. `None` uses the built-in default
-    /// ([`DEFAULT_BLOB_CONCURRENCY`](../datalib_etl_email/download/constant.DEFAULT_BLOB_CONCURRENCY.html));
-    /// `1` restores the old strictly-serial behavior. Clamped to ≥ 1.
+    /// once. Unset uses the built-in default of 8; `1` downloads one at a
+    /// time, and anything lower counts as 1.
     #[serde(default)]
     pub blob_download_concurrency: Option<usize>,
 }
@@ -159,17 +206,23 @@ pub struct EmailSync {
 /// plus account-row data so the synthesized `accounts` row matches
 /// JMAP's shape. The row fields are optional (defaults: `account_id` ←
 /// mbox file stem, `display_name` ← `account_id`, `is_personal` ← true).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MboxSync {
     /// The `.mbox` file, or a directory containing one.
     pub path: PathBuf,
+    /// Id of the account the mailbox is filed under. Defaults to the last
+    /// part of `path`, without its extension, in lowercase with underscores.
     #[serde(default)]
     pub account_id: Option<String>,
+    /// The account's display name. Defaults to `account_id`.
     #[serde(default)]
     pub display_name: Option<String>,
+    /// The account's email address. Unset by default.
     #[serde(default)]
     pub email_address: Option<String>,
+    /// Whether this is a personal (rather than work) account. Defaults to
+    /// true.
     #[serde(default)]
     pub is_personal: Option<bool>,
 }
@@ -178,12 +231,35 @@ impl MboxSync {
     pub fn path(&self) -> PathBuf {
         expand_tilde(&self.path)
     }
+
+    /// Beside `gmail` the account row is Gmail's, so a field that would
+    /// describe a second one is a mistake, not a setting.
+    fn validate_beside_gmail(&self) -> anyhow::Result<()> {
+        let set: Vec<&str> = [
+            ("account_id", self.account_id.is_some()),
+            ("display_name", self.display_name.is_some()),
+            ("email_address", self.email_address.is_some()),
+            ("is_personal", self.is_personal.is_some()),
+        ]
+        .into_iter()
+        .filter_map(|(key, is_set)| is_set.then_some(key))
+        .collect();
+        if set.is_empty() {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "email `mbox` beside `gmail` is the account's Takeout, filed under the account \
+             Gmail signs in as, so `mbox.{}` does nothing there. Remove it; `gmail` has \
+             its own `account_id`, `display_name` and `email_address`.",
+            set.join("`, `mbox.")
+        )
+    }
 }
 
 /// How to build the "open this email in webmail" outlink. The provider that
 /// owns the account picks the most robust scheme our download identifiers
 /// allow (Gmail → `rfc822msgid:` search; Fastmail → `app.fastmail.com` path).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum EmailOutlink {
     Gmail,
@@ -191,16 +267,15 @@ pub enum EmailOutlink {
 }
 
 /// Gmail REST API tunables: the `gmail` table.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EmailGmailApi {
-    /// **Retired** — moved to the source-level `latchkey_settings.account`,
-    /// which every latchkey-backed provider now shares (and which the JMAP
-    /// mode needs too, so it could not stay under `gmail`). Still
-    /// parsed so a config written against the old location fails at load
-    /// time with the fix rather than being silently ignored; see
-    /// [`EmailGmailApi::validate`].
+    /// **Retired** — use `latchkey_settings.account` beside the `gmail`
+    /// table instead, which every source that signs in through latchkey
+    /// shares. Still read, so a config that sets it here is refused at
+    /// load with that fix rather than ignored.
     #[serde(default)]
+    #[schemars(skip)]
     pub account: Option<String>,
     /// Gmail `userId` path segment. `me` (the default) is the
     /// authenticated user and is almost always right; a literal address
@@ -223,9 +298,9 @@ pub struct EmailGmailApi {
     /// Applies to this run only.
     #[serde(default)]
     pub full_resync: bool,
-    /// How many `messages.get` requests to keep in flight. `None` uses
-    /// the built-in default. Raising it does not raise throughput past
-    /// the quota ceiling below — it only helps hide per-request latency.
+    /// How many `messages.get` requests to keep in flight. Unset uses the
+    /// built-in default of 8. Raising it does not raise throughput past
+    /// `quota_units_per_minute`; it only hides the wait on each request.
     #[serde(default)]
     pub request_concurrency: Option<usize>,
     /// Client-side ceiling on Gmail API quota units spent per minute.
@@ -244,9 +319,6 @@ pub struct EmailGmailApi {
 /// Gmail's per-user quota is 6000 units/minute. Default below it so
 /// retries and a little clock skew don't push us into rate limits.
 pub const DEFAULT_QUOTA_UNITS_PER_MINUTE: u32 = 5_000;
-/// Quota cost of one `users.messages.get`, per Google's quota table.
-/// The dominant cost of any backfill.
-pub const GMAIL_UNITS_MESSAGES_GET: u32 = 20;
 /// Enough in flight to hide per-request latency; the quota throttle, not
 /// this, is what actually bounds throughput.
 pub const DEFAULT_GMAIL_CONCURRENCY: usize = 8;
@@ -325,17 +397,50 @@ mod tests {
         assert!(err.contains("gmail"), "{err}");
     }
 
-    /// A live mode beside an mbox table is the same mistake in a
-    /// different shape.
+    /// A JMAP server's ids are its own, so a Takeout beside it would
+    /// double every message rather than seed it.
     #[test]
-    fn rejects_a_live_mode_beside_an_mbox() {
+    fn rejects_jmap_beside_an_mbox() {
         let cfg: EmailConfig = serde_json::from_value(serde_json::json!({
-            "gmail": {},
+            "jmap": { "hostname": "api.fastmail.com" },
             "mbox": { "path": "/mail.mbox" },
         }))
         .unwrap();
         let err = cfg.validate().unwrap_err().to_string();
         assert!(err.contains("mbox"), "{err}");
+        assert!(cfg.takeout().is_none());
+    }
+
+    /// Gmail beside an mbox is a Takeout the API starts from: the one
+    /// pairing of methods the email source accepts.
+    #[test]
+    fn accepts_gmail_beside_a_takeout() {
+        let cfg: EmailConfig = serde_json::from_value(serde_json::json!({
+            "gmail": {},
+            "mbox": { "path": "~/Takeout/Mail" },
+        }))
+        .unwrap();
+        cfg.validate().unwrap();
+        assert!(cfg.takeout().unwrap().ends_with("Takeout/Mail"));
+        assert!(matches!(
+            cfg.live_mode().unwrap(),
+            Some(EmailLiveMode::GmailApi(_))
+        ));
+    }
+
+    /// The account a Takeout is filed under is the one Gmail signs in
+    /// as; a second account named on the mbox would be ignored, so it is
+    /// refused by name.
+    #[test]
+    fn refuses_an_mbox_account_beside_gmail() {
+        let cfg: EmailConfig = serde_json::from_value(serde_json::json!({
+            "gmail": {},
+            "mbox": { "path": "/mail.mbox", "account_id": "old", "display_name": "Old" },
+        }))
+        .unwrap();
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("mbox.account_id"), "{err}");
+        assert!(err.contains("mbox.display_name"), "{err}");
     }
 
     #[test]

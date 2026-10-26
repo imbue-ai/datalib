@@ -27,9 +27,11 @@ restarted and minted a new one.
 ## The model
 
 The UI is a stack of **cards**. Each card has a **card source**: one
-JavaScript expression, evaluated as `return (<source>)` with the builtin
-view factories (`gridView`, `documentView`, …) and `comp` in scope. It
-must produce a `CardRender`:
+call of a builtin view (`gridView`, `documentView`, …) or a component
+(`comp.<namespace>.<name>`), with JSON5 values as its arguments, such as
+`gridView({ q: "picard" })` or `comp.user.tetris()`. Card source is
+never evaluated: anything that is not such a call does not open. What
+it calls returns a `CardRender`:
 
 ```js
 // a CardRender owns a shadow root and returns a teardown
@@ -91,9 +93,13 @@ export default (args) => (root, ctx) => {
 
 ## Rules for the component
 
-- **It sees only browser globals.** The module is imported, not
-  evaluated as card source: `gridView`, `comp` and other components are
-  not in scope inside it.
+- **It sees only browser globals.** The module is imported:
+  `gridView`, `comp` and other components are not in scope inside it.
+- **Opening a card never writes.** Your arguments come from whoever
+  wrote the card source, which can be a link from anywhere. Read and
+  show what they name; save, sync or delete only when the person acts
+  in the card. Put argument text into the DOM as text
+  (`textContent`), never as HTML.
 - **Shadow DOM isolation.** Your `root` is a shadow root. Document-head
   CSS does not reach it — inject any styles into `root` yourself. The
   app's `--datalib-*` theme CSS custom properties *do* inherit across the
@@ -106,7 +112,7 @@ export default (args) => (root, ctx) => {
 - **Offer help.** `ctx.setHelp("<p>…</p>")` puts a "?" on the card
   that opens what this card shows and how to work it.
 - **Data** comes from the backend HTTP API (same origin): e.g.
-  `GET /applet/unified_index/search?q=…`, `GET /applet/unified_index/chat/{markdown_uuid}`. Fetch with
+  `GET /applet/unified_document_index/search?q=…`, `GET /applet/unified_document_index/chat/{markdown_uuid}`. Fetch with
   relative paths — and *don't* add an auth header in component code. The
   browser holds the token as an HttpOnly session cookie it sends
   automatically; the token is deliberately not reachable from page JS.

@@ -42,84 +42,10 @@ sync_scope_state
     tz_offset
 
 == beeper/raw ==
-beeper_media_attachments
-    id
-    event_uuid
-    ref_id
+beeper_media_files
+    rel_path
     blake3
-beeper_media_attachments_bookkeeping
-    id
-    fetched_at_utc
-    attempt_count
-    last_attempt_at_utc
-    last_error
-    volatile_payload
-    tz_offset
-    held_version
-events
-    id
-    source
-    network
-    room_uuid
-    sender_uuid
-    native_event_id
-    external_event_id
-    event_type
-    timestamp_ms
-    text_content
-    reply_to_native_event_id
-    edit_of_native_event_id
-    reaction_emoji
-    reaction_target_native_event_id
-events_bookkeeping
-    id
-    fetched_at_utc
-    attempt_count
-    last_attempt_at_utc
-    last_error
-    volatile_payload
-    tz_offset
-    held_version
-rooms
-    id
-    source
-    network
-    native_room_id
-    external_room_id
-    external_workspace_id
-    account_id
-    room_type
-    title
-    description
-    is_dm
-    is_space
-rooms_bookkeeping
-    id
-    fetched_at_utc
-    attempt_count
-    last_attempt_at_utc
-    last_error
-    volatile_payload
-    tz_offset
-    held_version
-users
-    id
-    source
-    network
-    native_user_id
-    display_name
-    full_name
-    remote_id
-    avatar_blob_id
-users_bookkeeping
-    id
-    fetched_at_utc
-    attempt_count
-    last_attempt_at_utc
-    last_error
-    volatile_payload
-    tz_offset
-    held_version
+    size_bytes
 
 == chatgpt/raw ==
 chatgpt_attachments
@@ -877,11 +803,51 @@ maps_reviews_bookkeeping
     volatile_payload
     tz_offset
     held_version
+maps_saved_lists
+    id
+    payload
+    file
+maps_saved_lists_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+    held_version
 maps_saved_places
     id
     payload
     when_ts
 maps_saved_places_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+    held_version
+my_maps_placemarks
+    id
+    payload
+    file
+my_maps_placemarks_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+    held_version
+play_books_annotations
+    id
+    payload
+    file
+    when_ts
+play_books_annotations_bookkeeping
     id
     fetched_at_utc
     attempt_count
@@ -1799,7 +1765,7 @@ media_blobs_bookkeeping
     tz_offset
     held_version
 
-== unified_index/grid ==
+== unified_document_index/grid ==
 edges
     edge_uuid
     src_markdown_uuid
@@ -1852,6 +1818,7 @@ grid_rows
     item_count
     diff_status
     diff_changed_columns
+    supplied_terms
 markdowns
     markdown_uuid
     source_id
@@ -1896,6 +1863,7 @@ render_inputs
 source_cursors
     source_id
     store_commit
+    store_tree
     indexed_at_utc
     tz_offset
     documents_applied

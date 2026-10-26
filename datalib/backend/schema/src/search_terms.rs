@@ -124,18 +124,6 @@ impl SearchTermKind {
     }
 }
 
-/// A term a render supplies for one of its rows, beyond what
-/// [`search_terms_of`] derives from the row's columns: who it was
-/// addressed to, where it is filed. Stored in the render store and the
-/// grid index as a `supplied_search_terms` row
-/// (`crate::supplied_search_terms`).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SuppliedSearchTerm {
-    pub uuid: String,
-    pub kind: SearchTermKind,
-    pub value: String,
-}
-
 /// The columns of a `grid_rows` row its terms come from.
 #[derive(Debug, Clone, Default, PartialEq, Eq, sqlx::FromRow)]
 pub struct SearchTermSource {
@@ -149,18 +137,54 @@ pub struct SearchTermSource {
     pub channel: Option<String>,
     pub account: Option<String>,
     pub touched_at_utc: Option<String>,
+    pub supplied_terms: Option<String>,
 }
 
 impl SearchTermSource {
     /// The `SELECT` list that reads one from `grid_rows`.
     pub const COLUMNS: &'static str = "uuid, conversation_uuid, markdown_uuid, notion_page_uuid, \
-         author_handle, conversation_name, author, channel, account, touched_at_utc";
+         author_handle, conversation_name, author, channel, account, touched_at_utc, \
+         supplied_terms";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchTerm {
     pub kind: SearchTermKind,
     pub value: String,
+}
+
+impl SearchTerm {
+    pub fn new(kind: SearchTermKind, value: impl Into<String>) -> Self {
+        Self {
+            kind,
+            value: value.into(),
+        }
+    }
+}
+
+/// A row's supplied terms as `grid_rows.supplied_terms` holds them: a JSON
+/// array of `[kind, value]` pairs, sorted and each once, so an unchanged
+/// row writes the same bytes. `None` for no terms.
+pub fn encode_supplied(terms: impl IntoIterator<Item = SearchTerm>) -> Option<String> {
+    let pairs: std::collections::BTreeSet<(&'static str, String)> = terms
+        .into_iter()
+        .map(|t| (t.kind.as_str(), t.value))
+        .collect();
+    (!pairs.is_empty()).then(|| serde_json::to_string(&pairs).expect("pairs of strings serialize"))
+}
+
+pub fn decode_supplied(json: &str) -> Result<Vec<SearchTerm>, String> {
+    let pairs: Vec<(String, String)> =
+        serde_json::from_str(json).map_err(|e| format!("supplied_terms {json:?}: {e}"))?;
+    pairs
+        .into_iter()
+        .map(|(kind, value)| match SearchTermKind::parse(&kind) {
+            Some(kind) => Ok(SearchTerm { kind, value }),
+            None => Err(format!(
+                "a supplied search term of a kind this build does not know: {kind:?}"
+            )),
+        })
+        .collect()
 }
 
 /// Every term `row` answers to, each `(kind, value)` once and in kind
@@ -211,7 +235,7 @@ pub fn search_terms_of(row: &SearchTermSource) -> Vec<SearchTerm> {
 /// What [`search_terms_of`] derives and how the file lays it out. A file
 /// built under another shape is rebuilt whole, so change it whenever
 /// either changes. A kind a render starts to supply needs no change: it
-/// reaches the file through the diff of `supplied_search_terms`.
+/// reaches the file through the diff of `grid_rows`, as its rows change.
 pub const TERMS_SHAPE: &str = "5";
 
 /// The search terms file's tables, dictionary-encoded: each grid row once in
@@ -280,6 +304,34 @@ mod tests {
                 ("author", "Ann"),
             ]
         );
+    }
+
+    /// A row's supplied terms are a set: in any order and with repeats they
+    /// write one spelling, so an unchanged row is unchanged in its store.
+    #[test]
+    fn supplied_terms_are_one_sorted_set_and_read_back() {
+        use SearchTermKind::{Label, Mention, To};
+        let written = encode_supplied([
+            SearchTerm::new(To, "email:bo@example.com"),
+            SearchTerm::new(Label, "Inbox"),
+            SearchTerm::new(To, "email:bo@example.com"),
+            SearchTerm::new(Mention, "slack:T/U1"),
+        ])
+        .unwrap();
+        assert_eq!(
+            written,
+            r#"[["label","Inbox"],["mention","slack:T/U1"],["to","email:bo@example.com"]]"#
+        );
+        assert_eq!(
+            pairs(&decode_supplied(&written).unwrap()),
+            [
+                ("label", "Inbox"),
+                ("mention", "slack:T/U1"),
+                ("to", "email:bo@example.com")
+            ]
+        );
+        assert_eq!(encode_supplied([]), None);
+        assert!(decode_supplied(r#"[["shoe_size","9"]]"#).is_err());
     }
 
     /// A conversation's own row is its conversation and its document: one

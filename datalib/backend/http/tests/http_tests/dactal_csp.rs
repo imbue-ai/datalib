@@ -5,7 +5,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use datalib_core::app_store::AppStore;
-use datalib_http::{router, ApiToken, AppState};
+use datalib_http::{router, ApiToken, AppState, FrameAncestors};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tower::ServiceExt;
@@ -18,6 +18,13 @@ async fn fetch(path: &str) -> (StatusCode, String) {
 }
 
 async fn fetch_with_headers(path: &str) -> (StatusCode, axum::http::HeaderMap, String) {
+    fetch_framed_by(path, FrameAncestors::default()).await
+}
+
+async fn fetch_framed_by(
+    path: &str,
+    frame_ancestors: FrameAncestors,
+) -> (StatusCode, axum::http::HeaderMap, String) {
     let db_path = tempfile::TempDir::with_prefix("datalib-http-csp-itest-")
         .expect("create tempdir")
         .keep()
@@ -43,6 +50,7 @@ async fn fetch_with_headers(path: &str) -> (StatusCode, axum::http::HeaderMap, S
             None,
         )),
         api_token: ApiToken::from_value(TOKEN, root.as_path()),
+        frame_ancestors,
     };
     let req = Request::get(path)
         .header("x-datalib-token", TOKEN)
@@ -71,8 +79,9 @@ fn header_directive(csp: &str, name: &str) -> String {
 /// The app page's policy is a header, so it covers the SPA fallback too
 /// (`/anything` is the same document). What it must keep: no inline
 /// script and no foreign script, which is what makes a sanitizer bypass
-/// inert; `'unsafe-eval'`, which the card system needs; Tauri's IPC
-/// origins in `connect-src`, or the desktop app's file pickers go dead.
+/// inert; no `'unsafe-eval'`, since card source is parsed and never
+/// evaluated; Tauri's IPC origins in `connect-src`, or the desktop app's
+/// file pickers go dead.
 #[tokio::test]
 async fn the_app_page_carries_its_csp() {
     for path in ["/", "/some/card/route"] {
@@ -88,7 +97,7 @@ async fn the_app_page_carries_its_csp() {
             .unwrap_or_default();
         assert_eq!(
             header_directive(csp, "script-src"),
-            "script-src 'self' 'unsafe-eval'",
+            "script-src 'self'",
             "{path}: {csp}"
         );
         assert!(
@@ -135,6 +144,44 @@ async fn the_app_page_carries_its_csp() {
     let (status, headers, _) = fetch_with_headers("/dactal/main.js").await;
     assert_eq!(status, StatusCode::OK);
     assert!(headers.get("content-security-policy").is_none());
+}
+
+/// Studio frames the app, and a proxy's own `frame-ancestors` cannot
+/// loosen the app's `'none'`: the browser enforces both. So the
+/// launcher names the frames, and only that directive changes.
+#[tokio::test]
+async fn named_frame_ancestors_replace_none_and_nothing_else() {
+    let (status, alone, _) = fetch_with_headers("/").await;
+    assert_eq!(status, StatusCode::OK);
+    let studio = "http://localhost:* https://*.localhost:* https://studio.imbue.com";
+    let (status, framed, html) = fetch_framed_by("/", FrameAncestors::parse(studio).unwrap()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(html.contains("<div id=\"app\">"), "not the app shell");
+    let csp_of = |headers: &axum::http::HeaderMap| {
+        headers
+            .get("content-security-policy")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string()
+    };
+    let (alone, framed) = (csp_of(&alone), csp_of(&framed));
+    assert_eq!(
+        header_directive(&alone, "frame-ancestors"),
+        "frame-ancestors 'none'",
+        "{alone}"
+    );
+    assert_eq!(
+        header_directive(&framed, "frame-ancestors"),
+        format!("frame-ancestors {studio}"),
+        "{framed}"
+    );
+    let without = |csp: &str| {
+        csp.split(';')
+            .map(|d| d.split_whitespace().collect::<Vec<_>>().join(" "))
+            .filter(|d| !d.is_empty() && !d.starts_with("frame-ancestors"))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(without(&alone), without(&framed));
 }
 
 #[tokio::test]

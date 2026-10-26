@@ -3,13 +3,20 @@
 //! Pure functions over what the row builder already knows.
 
 use datalib_columns::Action;
+use datalib_dag::supervisor::record::LastRun;
 use datalib_dag::supervisor::tick::StateKind;
+use datalib_dag::FailureKind;
 
 /// What pressing Sync would do (`Ok`, the hover), or why it cannot be
 /// pressed (`Err`, the disabled hover).
 pub type SyncOffer = Result<String, String>;
 
 const DOWNSTREAM: &str = "then rebuild everything downstream";
+
+/// Every Sync's disabled hover while the launch's migrate pass runs. A
+/// request opened anyway waits for the pass; the app does not offer one.
+pub const SYNC_PAUSED_FOR_UPGRADE: &str =
+    "Sync is paused while datalib updates your data for this version.";
 
 /// A source step always runs when synced. Any other step runs only if it
 /// is out of date, on what its inputs already hold, so Sync on one the
@@ -114,9 +121,56 @@ pub fn switch(
     }
 }
 
+/// The id of the button that asks for a step's folder again.
+pub const CHOOSE_AGAIN: &str = "choose_again";
+
+/// Offered while a step's last run failed because the OS would not let
+/// it read what its settings name. On macOS, choosing the path in the
+/// app's own picker is what grants access
+/// (`docs/dev/wizard_file_pickers.md`); the browser finds the path field
+/// from the source's catalog entry, and drops the button where it has
+/// no picker or no such field.
+pub fn choose_again(status_key: &str, last: Option<&LastRun>) -> Option<Action> {
+    let refused =
+        status_key == "failed" && last.is_some_and(|l| l.failure == Some(FailureKind::Permission));
+    refused.then(|| Action {
+        id: CHOOSE_AGAIN.into(),
+        label: "Choose folder again".into(),
+        enabled: true,
+        hint: Some(
+            "Your Mac would not let Datalib read what this source names. Choose it again \
+             in the picker to grant access; it syncs again once you have."
+                .into(),
+        ),
+        disabled_reason: None,
+        danger: false,
+        on: None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ended(failure: Option<FailureKind>) -> LastRun {
+        LastRun {
+            status: "failed".into(),
+            failure,
+            ..Default::default()
+        }
+    }
+
+    /// Only an OS refusal offers the picker; any other failure, or a
+    /// rerun in flight, does not.
+    #[test]
+    fn choose_again_is_offered_for_a_refused_read_only() {
+        let refused = ended(Some(FailureKind::Permission));
+        assert!(choose_again("failed", Some(&refused)).is_some());
+        assert!(choose_again("running", Some(&refused)).is_none());
+        let bad_data = ended(Some(FailureKind::Data));
+        assert!(choose_again("failed", Some(&bad_data)).is_none());
+        assert!(choose_again("failed", None).is_none());
+    }
 
     fn feeding() -> Vec<String> {
         vec!["mail/ingest".to_string()]

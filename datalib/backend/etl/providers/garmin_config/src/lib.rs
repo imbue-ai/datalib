@@ -6,6 +6,20 @@
 use datalib_source_common::{LatchkeySettings, SourceCommon};
 use serde::{Deserialize, Serialize};
 
+/// This source's config stanzas, for `datalib-step help`.
+pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "api",
+        toml: include_str!("../examples/minimal_api.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "api",
+        toml: include_str!("../examples/complete_api.toml"),
+    },
+];
+
 /// Where the per-day walk starts when the config names no `since`.
 /// A year covers what a first-time user usually wants to see; the start
 /// it gives is recorded in the store, and a `since` set earlier later on
@@ -19,7 +33,7 @@ pub const DEFAULT_SINCE_DAYS: i64 = 365;
 pub const DEFAULT_REFRESH_DAYS: i64 = 7;
 
 /// The garmin-owned slice of a `garmin` source.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GarminConfig {
     #[serde(default)]
@@ -34,13 +48,14 @@ pub struct GarminConfig {
 }
 
 /// The live-API method. The credential is latchkey's.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GarminApi {
     /// **Retired**: the token folder garth wrote. Garmin signs in
     /// through latchkey now; parsed only so a config that still names
     /// it fails with the fix.
     #[serde(default)]
+    #[schemars(skip)]
     pub token_dir: Option<String>,
     /// Earliest calendar day to mirror, `YYYY-MM-DD`. Default: a year
     /// before the first run. Move it earlier to backfill.
@@ -48,14 +63,15 @@ pub struct GarminApi {
     pub since: Option<String>,
     /// Last calendar day to mirror, `YYYY-MM-DD`. Default: today. A day
     /// in the past fixes the window, so a mirror of a finished stretch
-    /// stops growing — what a golden test wants.
+    /// stops growing.
     #[serde(default)]
     pub until: Option<String>,
     /// Days after a day ends that every run fetches it again. Default 7.
     #[serde(default)]
     pub refresh_days: Option<i64>,
-    /// Which per-day metrics to mirror. Default: every one the provider
-    /// knows (`DAILY_METRICS`). Name a subset to trim the request count.
+    /// Which per-day metrics to mirror. Default: every one this source
+    /// knows; a name it does not know is refused with the list. Name a
+    /// subset to trim the request count.
     #[serde(default)]
     pub metrics: Option<Vec<String>>,
     /// Fetch each activity's original FIT file into the blob store.

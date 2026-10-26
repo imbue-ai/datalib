@@ -1,0 +1,26 @@
+# An AirVisual Pro's own history files, read off its Samba share
+# (`smb://<ip>/airvisual`, mounted in the Finder) or a copy of that folder.
+# No sign-in. One `devices` entry per monitor.
+[[groups]]
+id = "airvisual"
+name = "AirVisual"
+type = "airvisual"
+
+[[steps]]
+group = "airvisual"
+function = "ingest"
+
+[[steps.params.export.devices]]
+path = "/Volumes/airvisual"
+
+[[steps]]
+group = "airvisual"
+function = "render_markdown"
+inputs = ["airvisual/ingest"]
+
+# The readings as time series, for the charts. Add this step to
+# `unified_time_series_index/time_series_index`'s inputs.
+[[steps]]
+group = "airvisual"
+function = "render_time_series"
+inputs = ["airvisual/ingest"]

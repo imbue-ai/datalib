@@ -135,9 +135,14 @@ test("each browser-login service names accounts the way the wizard is told", asy
     "slack",
     "google-gmail",
     "google-calendar",
+    "google-drive",
+    "google-docs",
+    "google-sheets",
+    "google-slides",
     "github",
     "fastmail",
     "garmin",
+    "linear",
   ]) {
     expect(await naming(service), service).toBe("service");
     // latchkey refuses a name it does not hold, before any browser opens.

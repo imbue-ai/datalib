@@ -1,0 +1,18 @@
+# An `.mbox` file on disk, such as the Mail product of a Google Takeout
+# export. No sign-in: `path` is the file, or a folder holding one.
+[[groups]]
+id = "email"
+name = "Gmail Takeout"
+type = "email"
+
+[[steps]]
+group = "email"
+function = "ingest"
+
+[steps.params.mbox]
+path = "~/Downloads/email-export"
+
+[[steps]]
+group = "email"
+function = "render_markdown"
+inputs = ["email/ingest"]

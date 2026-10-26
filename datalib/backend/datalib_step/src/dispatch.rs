@@ -349,6 +349,11 @@ pub fn plan(
             datalib_etl_lightroom_config::LightroomRenderConfig,
             datalib_etl_lightroom
         ),
+        SourceType::Linear => ingest_only!(
+            datalib_etl_linear_config::LinearConfig,
+            datalib_etl_linear_config::LinearRenderConfig,
+            datalib_etl_linear
+        ),
         SourceType::AppleMessages => arm!(
             datalib_etl_apple_messages_config::AppleMessagesConfig,
             datalib_etl_apple_messages_config::AppleMessagesRenderConfig,
@@ -359,6 +364,12 @@ pub fn plan(
             datalib_etl_apple_photos_config::ApplePhotosConfig,
             datalib_etl_apple_photos_config::ApplePhotosRenderConfig,
             datalib_etl_apple_photos
+        ),
+        SourceType::GoogleDrive => arm!(
+            datalib_etl_google_drive_config::GoogleDriveConfig,
+            datalib_etl_google_drive_config::GoogleDriveRenderConfig,
+            datalib_etl_google_drive,
+            datalib_etl_google_drive_render
         ),
         SourceType::Fsindex => ingest_only!(
             datalib_etl_fsindex_config::FsindexConfig,
@@ -402,8 +413,10 @@ pub async fn migrate(step_type: &str, raw_dir: &Path) -> Result<()> {
             datalib_etl_sms_backup_restore::processor::migrate(raw_dir).await
         }
         SourceType::Lightroom => datalib_etl_lightroom::processor::migrate(raw_dir).await,
+        SourceType::Linear => datalib_etl_linear::processor::migrate(raw_dir).await,
         SourceType::AppleMessages => datalib_etl_apple_messages::processor::migrate(raw_dir).await,
         SourceType::ApplePhotos => datalib_etl_apple_photos::processor::migrate(raw_dir).await,
+        SourceType::GoogleDrive => datalib_etl_google_drive::processor::migrate(raw_dir).await,
         SourceType::Fsindex => datalib_etl_fsindex::processor::migrate(raw_dir).await,
     }
 }
@@ -569,21 +582,21 @@ mod tests {
         // `period` used to live in the ingest table; the download
         // planner points at its new home on the render step.
         let err = plan(
-            "beeper",
+            "signal",
             Phase::Ingest,
-            "beeper",
-            raw_dir(td.path(), "beeper", Phase::Ingest),
-            serde_json::json!({"texts": {"sources": ["signal"], "period": "day"}}),
+            "signal",
+            raw_dir(td.path(), "signal", Phase::Ingest),
+            serde_json::json!({"backup": {"path": "/backups", "period": "day"}}),
         )
         .unwrap_err()
         .to_string();
         assert!(err.contains("render step's params"), "{err}");
 
         let rn = plan(
-            "beeper",
+            "signal",
             Phase::Render,
-            "beeper",
-            raw_dir(td.path(), "beeper", Phase::Render),
+            "signal",
+            raw_dir(td.path(), "signal", Phase::Render),
             serde_json::json!({"period": "day"}),
         )
         .unwrap();
@@ -643,6 +656,7 @@ mod tests {
         use serde_json::json;
         let changed = [
             ("beeper", json!({"period": "day"})),
+            ("beeper", json!({"networks": ["signal"]})),
             ("claude", json!({"max_project_doc_bytes": 1000})),
             ("claude_code", json!({"max_tool_result_bytes": 1})),
             ("codex", json!({"max_tool_result_bytes": 1})),

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { entityFromUri, handleFromUri, uriFromHandle } from "../src/cards/chipLinks";
+import {
+  contactFromUri,
+  entityFromUri,
+  handleFromUri,
+  uriFromHandle,
+} from "../src/cards/chipLinks";
 import { renderDocument } from "../src/cards/renderDocument";
 
 /// A chip is a link whose href names a handle (docs/dev/chips.md).
@@ -23,7 +28,16 @@ describe("handleFromUri / uriFromHandle", () => {
       ],
       ["facebook:deleted/1000000002", "datalib:handle/facebook/deleted/1000000002"],
       ["linkedin:jlpicard", "https://www.linkedin.com/in/jlpicard"],
+      ["google:name/Geordi La Forge", "datalib:handle/google/name/Geordi%20La%20Forge"],
       ["linkedin:jürgen-müller-1a2b", "https://www.linkedin.com/in/j%C3%BCrgen-m%C3%BCller-1a2b"],
+      ["github:data-soong", "datalib:handle/github/data-soong"],
+      ["github:dependabot[bot]", "datalib:handle/github/dependabot%5Bbot%5D"],
+      ["gitlab:gitlab.com/jlpicard", "datalib:handle/gitlab/gitlab.com/jlpicard"],
+      [
+        "notion:00000001-1701-4d00-8000-000000000001",
+        "datalib:handle/notion/00000001-1701-4d00-8000-000000000001",
+      ],
+      ["whatsapp:100000000000108", "datalib:handle/whatsapp/100000000000108"],
     ]) {
       expect(uriFromHandle(handle)).toBe(uri);
       expect(handleFromUri(uri)).toBe(handle);
@@ -41,10 +55,17 @@ describe("handleFromUri / uriFromHandle", () => {
       "signal_aci:0195683a-d140-87f9-bdf6-234da6d6880c",
     );
     expect(handleFromUri("datalib:handle/signal_aci/0195683a")).toBeNull();
+    expect(handleFromUri("datalib:handle/github/Data-Soong")).toBe("github:data-soong");
+    expect(handleFromUri("datalib:handle/github/data%20soong")).toBeNull();
+    expect(handleFromUri("datalib:handle/gitlab/jlpicard")).toBeNull();
+    expect(handleFromUri("datalib:handle/notion/not-a-uuid")).toBeNull();
+    expect(handleFromUri("datalib:handle/whatsapp/12ab")).toBeNull();
     expect(handleFromUri("datalib:handle/facebook/name/Q%2")).toBeNull();
     expect(handleFromUri("datalib:handle/facebook/name/%20%20")).toBeNull();
     expect(handleFromUri("datalib:handle/facebook/deleted/12a")).toBeNull();
     expect(handleFromUri("datalib:handle/facebook/other/Q")).toBeNull();
+    expect(handleFromUri("datalib:handle/google/name/%20")).toBeNull();
+    expect(handleFromUri("datalib:handle/google/other/Q")).toBeNull();
     expect(handleFromUri("http://fr.linkedin.com/in/JLPicard/?trk=x")).toBe("linkedin:jlpicard");
     expect(handleFromUri("https://www.linkedin.com/in/j%c3%bcrgen-m%c3%bcller-1a2b")).toBe(
       "linkedin:jürgen-müller-1a2b",
@@ -72,10 +93,21 @@ describe("entityFromUri", () => {
   });
 });
 
+/// The URI `datalib_contacts::contact_uri` writes for one of your contacts.
+describe("contactFromUri", () => {
+  it("reads a contact's id, and nothing else", () => {
+    expect(contactFromUri("datalib:contact/7f1c-uuid")).toBe("7f1c-uuid");
+    expect(contactFromUri("datalib:contact/")).toBeNull();
+    expect(contactFromUri("datalib:group/slack")).toBeNull();
+    expect(handleFromUri("datalib:contact/7f1c-uuid")).toBeNull();
+    expect(entityFromUri("datalib:contact/7f1c-uuid")).toBeNull();
+  });
+});
+
 describe("the chipLinks markdown plugin", () => {
   const page = (md: string) => {
     const div = document.createElement("div");
-    div.innerHTML = renderDocument(md, null).html;
+    div.innerHTML = renderDocument(md).html;
     return div;
   };
 

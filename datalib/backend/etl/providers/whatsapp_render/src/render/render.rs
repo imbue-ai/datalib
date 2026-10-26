@@ -5,14 +5,13 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use datalib_etl::blob_cas::BlobBundle;
 
 use datalib_etl::doltlite_raw;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::TextFormat;
 use datalib_etl_chat_common::{
-    render::{Bucket, Buckets, RenderProfile},
-    NormalizedChat,
+    render::{Bucket, Buckets, ChatRenderer, RenderProfile},
+    render_batched_at, BlobsAt, NormalizedChat,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
@@ -50,11 +49,9 @@ fn profile() -> RenderProfile {
     }
 }
 
-/// Render every chat. `raw_dir` is the source's `input_path` — same
-/// value render's `parse` walks — used here only to find the
-/// doltlite db for the dolt_diff render-cursor scan. Attachment bytes
-/// arrive pre-loaded in `blobs_by_chat`, which parse hydrates from the
-/// sibling CAS in the same call that built `chats`.
+/// Render every chat. `raw_dir` finds the doltlite db: the diff scan
+/// reads it, and the chats' attachment bytes are read from it at
+/// `commit`, the one `parse` built `chats` from.
 ///
 /// Returns the raw commit the render consumed — what the render step
 /// records as the cursor, or `None` when there was no store to pin — and
@@ -62,88 +59,90 @@ fn profile() -> RenderProfile {
 #[allow(clippy::too_many_arguments)]
 pub fn render_all(
     chats: &[NormalizedChat],
-    blobs_by_chat: &HashMap<String, BlobBundle>,
+    commit: &str,
     raw_dir: &Path,
     out_dir: &Path,
     source_id: &str,
     progress: &Progress,
     range: RawRange<'_>,
+    blob_bytes: u64,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<(Option<String>, Buckets)> {
     // Incremental gate: with a cursor, ask doltlite which chats changed
     // between that hash and the pinned commit, join the buckets the
     // driver found stale through their declared inputs, and skip the
-    // rest. Cold start (no cursor) or no doltlite db on disk renders
-    // every chat.
+    // rest. Cold start (no cursor) renders every chat.
     let db_path = doltlite_raw::db_path_for(raw_dir);
-
-    let (filtered_owned, new_head, named): (
-        Option<Vec<NormalizedChat>>,
-        Option<String>,
-        Vec<String>,
-    ) = if db_path.exists() {
-        let scan = tokio::task::block_in_place(|| match tokio::runtime::Handle::try_current() {
-            Ok(h) => h.block_on(scan_diff(&db_path, range)),
-            Err(_) => tokio::runtime::Runtime::new()?.block_on(scan_diff(&db_path, range)),
-        })?;
-        tracing::info!(
-            source = source_id,
-            scan_elapsed_ms = scan.elapsed.map(|d| d.as_millis() as u64),
-            changed_chats = scan
-                .changed
-                .as_ref()
-                .map(|c| c.live.len() as i64)
-                .unwrap_or(-1),
-            gone_chats = scan
-                .changed
-                .as_ref()
-                .map(|c| c.gone.len() as i64)
-                .unwrap_or(-1),
-            cold_start = scan.changed.is_none(),
-            "[render] whatsapp dolt_diff scan"
-        );
-        // The driver names stale buckets by chat uuid; the chats are by JID.
-        let by_uuid: HashMap<String, &str> = chats
+    let scan = tokio::task::block_in_place(|| match tokio::runtime::Handle::try_current() {
+        Ok(h) => h.block_on(scan_diff(&db_path, range)),
+        Err(_) => tokio::runtime::Runtime::new()?.block_on(scan_diff(&db_path, range)),
+    })?;
+    tracing::info!(
+        source = source_id,
+        scan_elapsed_ms = scan.elapsed.map(|d| d.as_millis() as u64),
+        changed_chats = scan
+            .changed
+            .as_ref()
+            .map(|c| c.live.len() as i64)
+            .unwrap_or(-1),
+        gone_chats = scan
+            .changed
+            .as_ref()
+            .map(|c| c.gone.len() as i64)
+            .unwrap_or(-1),
+        cold_start = scan.changed.is_none(),
+        "[render] whatsapp dolt_diff scan"
+    );
+    // The driver names stale buckets by chat uuid; the chats are by JID.
+    let by_uuid: HashMap<String, &str> = chats
+        .iter()
+        .map(|c| (c.chat_uuid.clone(), c.id.as_str()))
+        .collect();
+    let narrowed = range.narrow_by(scan.changed.as_ref().map(|c| &c.live), |key| {
+        by_uuid.get(key).map(|jid| jid.to_string())
+    });
+    let filtered = narrowed.render.as_ref().map(|live| {
+        chats
             .iter()
-            .map(|c| (c.chat_uuid.clone(), c.id.as_str()))
-            .collect();
-        let narrowed = range.narrow_by(scan.changed.as_ref().map(|c| &c.live), |key| {
-            by_uuid.get(key).map(|jid| jid.to_string())
-        });
-        let filtered = narrowed.render.as_ref().map(|live| {
-            chats
-                .iter()
-                .filter(|chat| live.contains(&chat.id))
-                .cloned()
-                .collect::<Vec<_>>()
-        });
-        // Every named JID, live or gone: every backup is a full snapshot
-        // (the mirror drops and refills), so a chat the diff named that
-        // HEAD no longer carries is one the phone deleted, and declaring
-        // it with nothing is what removes its documents. A stale bucket
-        // whose chat is gone is already a key.
-        let mut named: Vec<String> = narrowed
-            .render
-            .iter()
-            .flatten()
-            .chain(scan.changed.iter().flat_map(|c| c.gone.iter()))
-            .map(|jid| super::ids::chat(source_id, jid).uuid)
-            .collect();
-        named.extend(narrowed.gone);
-        (filtered, scan.head, named)
-    } else {
-        (None, None, Vec::new())
-    };
-    let to_render: &[NormalizedChat] = filtered_owned.as_deref().unwrap_or(chats);
-    let summary = datalib_etl_chat_common::render::render_all(
-        &profile(),
-        to_render,
+            .filter(|chat| live.contains(&chat.id))
+            .cloned()
+            .collect::<Vec<_>>()
+    });
+    // Every named JID, live or gone: every backup is a full snapshot
+    // (the mirror drops and refills), so a chat the diff named that
+    // HEAD no longer carries is one the phone deleted, and declaring
+    // it with nothing is what removes its documents. A stale bucket
+    // whose chat is gone is already a key.
+    let mut named: Vec<String> = narrowed
+        .render
+        .iter()
+        .flatten()
+        .chain(scan.changed.iter().flat_map(|c| c.gone.iter()))
+        .map(|jid| super::ids::chat(source_id, jid).uuid)
+        .collect();
+    named.extend(narrowed.gone);
+    let to_render: &[NormalizedChat] = filtered.as_deref().unwrap_or(chats);
+    let profile = profile();
+    let mut renderer = ChatRenderer::new(
+        &profile,
         out_dir,
         source_id,
-        blobs_by_chat,
+        to_render.iter().map(|c| c.buckets.len()).sum(),
         progress,
         on_doc_complete,
+    );
+    let at = BlobsAt {
+        db_path: db_path.clone(),
+        commit: commit.to_string(),
+    };
+    render_batched_at(
+        &at,
+        &|_: &NormalizedChat| ATTACHMENTS_PROJECTION_SQL,
+        &mut renderer,
+        to_render,
+        blob_bytes,
     )?;
+    let summary = renderer.finish();
     // Named chats first, with no documents: one the diff named whose
     // messages all went builds no chat, and chat-common never sees it.
     // The rendered ones follow and replace that.
@@ -155,8 +154,19 @@ pub fn render_all(
         })
         .collect();
     buckets.extend(summary.buckets);
-    Ok((new_head, buckets))
+    Ok((scan.head, buckets))
 }
+
+/// SQL projection resolving an attachment's `ref_id` — the file's
+/// blake3, which render stamps onto each `NormalizedAttachment` — to
+/// its CAS entry. Consumed by `BlobBundle::load_many`, a batch of chats at a time. A row exists only for a file the scan actually saw, so
+/// a half-extracted `Media/` tree simply yields no bytes.
+const ATTACHMENTS_PROJECTION_SQL: &str = "
+    SELECT blake3 AS ref_id, blake3,
+           mime_type AS content_type,
+           relative_path AS upstream_name
+      FROM wa_media_files
+     WHERE blake3 IN ({placeholders})";
 
 /// What changed between two commits, as chat JIDs: the ones HEAD still
 /// carries (re-render) and the ones it does not (gone upstream).
@@ -386,6 +396,38 @@ mod tests {
         datalib_etl_whatsapp::schema_raw::WA_MEDIA_FILES_DDL,
     ];
 
+    /// A store whose sidecar tables were committed before any backup was
+    /// mirrored into it (the launch's migrate pass does this) renders
+    /// nothing; it used to fail with "no such table: jid".
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_store_no_backup_was_mirrored_into_renders_nothing() {
+        let td = tempfile::tempdir().expect("tempdir");
+        let raw_dir = td.path().join("raw");
+        std::fs::create_dir_all(&raw_dir).expect("mkdir raw");
+        let db_path = datalib_etl::doltlite_raw::db_path_for(&raw_dir);
+        let pool = open_doltlite(&db_path, datalib_etl_whatsapp::schema_raw::ALL_DDL)
+            .await
+            .expect("open doltlite");
+        if !has_dolt_extensions(&pool).await {
+            return;
+        }
+        for q in [
+            "SELECT dolt_config('user.name', 'datalib-test')",
+            "SELECT dolt_config('user.email', 'test@datalib.local')",
+        ] {
+            sqlx::query(q).execute(&pool).await.expect("dolt_config");
+        }
+        // Opening commits the sidecar tables already; this is a no-op
+        // unless that ever stops being so.
+        commit_run(&pool, "schema: apply DDL")
+            .await
+            .expect("commit_run");
+        pool.close().await;
+
+        let (docs, _, _) = render_capture(&raw_dir, &td.path().join("out"), None).await;
+        assert!(docs.is_empty(), "{docs:?}");
+    }
+
     /// Full incremental-render loop end-to-end:
     ///   1. populate a fresh raw doltlite db with two chats, commit
     ///   2. render → expect both chats rendered, cursor written
@@ -525,6 +567,47 @@ mod tests {
         );
     }
 
+    /// A store no download has filled — opened by the launch's migrate
+    /// pass, or by an ingest that then failed for want of its key —
+    /// renders nothing rather than failing on a msgstore table it lacks
+    /// (#1251).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_store_no_download_filled_renders_nothing() {
+        let td = tempfile::tempdir().expect("tempdir");
+        let raw_dir = td.path().join("raw");
+        std::fs::create_dir_all(&raw_dir).expect("mkdir raw");
+        datalib_etl_whatsapp::processor::migrate(&raw_dir)
+            .await
+            .expect("migrate");
+
+        let out_dir = td.path().join("out");
+        let (docs, gone, cursor) = render_capture(&raw_dir, &out_dir, None).await;
+        assert!(docs.is_empty(), "rendered {docs:?}");
+        assert!(gone.is_empty(), "reported gone {gone:?}");
+        assert_eq!(
+            cursor, None,
+            "a pass that read no msgstore consumes no commit"
+        );
+
+        // The first mirror that succeeds lands in that same store.
+        let db_path = datalib_etl::doltlite_raw::db_path_for(&raw_dir);
+        let pool = open_doltlite(&db_path, MSGSTORE_DDL).await.expect("open");
+        if !has_dolt_extensions(&pool).await {
+            return;
+        }
+        for q in [
+            "SELECT dolt_config('user.name', 'datalib-test')",
+            "SELECT dolt_config('user.email', 'test@datalib.local')",
+        ] {
+            sqlx::query(q).execute(&pool).await.expect("dolt_config");
+        }
+        seed_chat(&pool, 1, "alice@s.whatsapp.net", "k_a1", "hi from alice").await;
+        commit_run(&pool, "first mirror").await.expect("commit_run");
+        pool.close().await;
+        let (docs, _, _) = render_capture(&raw_dir, &out_dir, cursor.as_deref()).await;
+        assert_eq!(docs.len(), 1, "rendered {docs:?}");
+    }
+
     /// One jid, chat and message, all sharing `rowid` — the shape the
     /// mirror engine lays down from a real msgstore.
     async fn seed_chat(pool: &SqlitePool, rowid: i64, chat_jid: &str, key_id: &str, text: &str) {
@@ -578,7 +661,9 @@ mod tests {
                 pin: None,
                 stale: Some(&stale),
             };
-            let parsed = parse(&raw_dir, Period::All, "test", range).expect("parse");
+            let Some(parsed) = parse(&raw_dir, Period::All, "test", range).expect("parse") else {
+                return (Vec::new(), Vec::new(), None);
+            };
             let mut emitted: Vec<String> = Vec::new();
             let progress = datalib_etl::progress::Progress::noop();
             let mut on_complete =
@@ -588,12 +673,13 @@ mod tests {
                 };
             let (consumed, buckets) = render_all(
                 &parsed.chats,
-                &parsed.blobs_by_chat,
+                &parsed.commit,
                 &raw_dir,
                 &out_dir,
                 "test",
                 &progress,
                 range,
+                1,
                 &mut on_complete,
             )
             .expect("render_all");

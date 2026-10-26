@@ -82,7 +82,7 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && test "$(node --version)" = "v${NODE_VERSION}" \
     || { echo "node is $(node --version), not v${NODE_VERSION}: NODE_IMAGE_DIGEST and NODE_VERSION moved apart" >&2; exit 1; } \
     && npm --version
-ARG LATCHKEY_VERSION=3.18.0
+ARG LATCHKEY_VERSION=3.19.3
 RUN npm install -g "latchkey@${LATCHKEY_VERSION}" && npm cache clean --force
 
 # bun — qmd's own dev workflow (`bun install`, `bun src/cli/qmd.ts`).
@@ -107,7 +107,7 @@ RUN ln -s /usr/local/bin/bun /usr/local/bin/bunx \
 # The cache lands at /root/.cache/ms-playwright. GitHub forces
 # HOME=/github/home for container steps, so `test.yml` points the suite
 # at it with `--test_env=PLAYWRIGHT_BROWSERS_PATH`.
-ARG PLAYWRIGHT_VERSION=1.63.0
+ARG PLAYWRIGHT_VERSION=1.64.1
 RUN npx -y "playwright@${PLAYWRIGHT_VERSION}" install --with-deps chromium webkit \
     && rm -rf /var/lib/apt/lists/* /root/.npm
 

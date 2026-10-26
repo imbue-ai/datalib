@@ -5,7 +5,7 @@
 // Also which words of a snippet to mark.
 import { filterToken, isFilterWord, queryWords, unquoteValue } from "@/grid/query";
 
-/// The two predicates that carry free text (`datalib_unified_index`'s
+/// The two predicates that carry free text (`datalib_unified_document_index`'s
 /// `FreeTextMode`): words and meaning together, or meaning alone.
 const HYBRID = "qmd:";
 const MEANING = "qmd_vsearch:";
@@ -29,6 +29,25 @@ export function freeText(query: string): string {
 export function pickedSource(query: string): string | null {
   const picked = queryWords(query).filter((w) => w.startsWith(SOURCE));
   return picked.length === 1 ? carried(picked[0]) : null;
+}
+
+/// A search's tab name: the query, each value in it (a person, a date)
+/// called what `nameOf` calls it where it knows, and a search for
+/// everything with one person called that, as the menu entry that opens
+/// it is.
+export function searchTitle(query: string, nameOf: (value: string) => string | null): string {
+  const named = queryWords(query).map((w) => {
+    const colon = w.indexOf(":");
+    if (colon <= 0) return { w, key: null, name: null };
+    const key = w.slice(0, colon);
+    const name = nameOf(unquoteValue(w.slice(colon + 1)));
+    return { w: name ? `${key}:${name}` : w, key, name };
+  });
+  if (named.length === 0) return "Search";
+  const [only] = named;
+  if (named.length === 1 && only!.key === "with" && only!.name)
+    return `Everything with ${only!.name}`;
+  return `Search: ${named.map((n) => n.w).join(" ")}`;
 }
 
 /// `query` narrowed to the source `id`, or to no source for null: every

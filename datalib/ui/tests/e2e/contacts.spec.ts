@@ -5,6 +5,8 @@ import {
   selectRowByUuid,
   gridSettled,
   inDocFrame,
+  MENU_DISABLED,
+  menuEntry,
   searchAndSettle,
   shownCards,
   typeInto,
@@ -40,7 +42,7 @@ type Row = {
 async function openMessageBy(page: Page, request: APIRequestContext, handle: string) {
   const q = `author_handle:"${handle}"`;
   const resp = await request.get(
-    `/applet/unified_index/search?q=${encodeURIComponent(q)}&limit=50`,
+    `/applet/unified_document_index/search?q=${encodeURIComponent(q)}&limit=50`,
   );
   expect(resp.ok()).toBeTruthy();
   const { rows } = (await resp.json()) as { rows: Row[] };
@@ -148,7 +150,9 @@ test("a contact picked with @ finds everything that reached its handles", async 
   const { contact_id: id } = (await made.json()) as { contact_id: string };
 
   const total = async (q: string) => {
-    const r = await request.get(`/applet/unified_index/search?q=${encodeURIComponent(q)}&limit=1`);
+    const r = await request.get(
+      `/applet/unified_document_index/search?q=${encodeURIComponent(q)}&limit=1`,
+    );
     expect(r.ok()).toBeTruthy();
     const body = (await r.json()) as { total: number; refused?: string[] };
     expect(body.refused ?? []).toEqual([]);
@@ -167,4 +171,232 @@ test("a contact picked with @ finds everything that reached its handles", async 
   await expect(field).toHaveAttribute("data-query", `with:contact:${id} `);
   await expect(field.locator(`a.chip[data-contact="${id}"]`)).toContainText("Jean-Luc");
   expect(await total(`with:contact:${id}`)).toBe(byHandle);
+});
+
+/// Two contacts made for one person by mistake: the one with no handle is
+/// still a chip, selecting both and right-clicking the one to keep merges
+/// the other into it, and Delete takes the survivor away.
+test("the contacts table draws a contact with no handle as a chip, merges and deletes", async ({
+  page,
+  request,
+}) => {
+  const name = `Guinan ${Date.now()}`;
+  const make = async (handles: string[]) => {
+    const r = await request.post("/applet/datalib_contacts/contacts", {
+      data: { name, handles },
+    });
+    expect(r.ok(), await r.text()).toBeTruthy();
+    return ((await r.json()) as { contact_id: string }).contact_id;
+  };
+  const keep = await make(["email:guinan@ten-forward.test"]);
+  const dup = await make([]);
+
+  await page.goto("/contactsView()");
+  const card = page.locator(".contacts-card");
+  await card.getByLabel("Filter contacts").fill(name);
+  const row = (id: string) => card.locator(`.slick-row[data-key="${id}"]`);
+  await expect(row(dup).locator(`a.chip[data-contact="${dup}"]`)).toContainText(name);
+  await expect(row(keep).locator("a.chip[data-handle]")).toContainText(name);
+
+  await row(dup).locator('[col-id="kind"]').click();
+  await row(keep).locator('[col-id="kind"]').click({ button: "right" });
+  await expect(menuEntry(page, /^Merge into this one/)).toHaveClass(MENU_DISABLED);
+  await page.keyboard.press("Escape");
+  await row(dup).locator('[col-id="kind"]').click();
+  await row(keep)
+    .locator('[col-id="kind"]')
+    .click({ modifiers: ["ControlOrMeta"] });
+  await row(keep).locator('[col-id="kind"]').click({ button: "right" });
+  await menuEntry(page, "Merge the other selected contact into this one").click();
+  await expect(row(dup)).toHaveCount(0);
+  await expect(row(keep)).toHaveCount(1);
+  const merged = await request.get(`/applet/datalib_contacts/contact/${dup}`);
+  expect(((await merged.json()) as { key: string }).key, "the old id answers as the survivor").toBe(
+    keep,
+  );
+
+  page.once("dialog", (d) => void d.accept());
+  await row(keep).locator('[col-id="kind"]').click({ button: "right" });
+  await menuEntry(page, "Delete contact…").click();
+  await expect(row(keep)).toHaveCount(0);
+  const gone = await request.get(`/applet/datalib_contacts/contact/${keep}`);
+  expect(gone.status()).toBe(404);
+});
+
+/// Editing your contact on its person card: the edit is a draft nobody
+/// else sees, which a reload resumes; a rename made elsewhere just
+/// before Save makes the save refuse rather than overwrite it, and
+/// saving again keeps the card's name. The photo changes at once.
+test("the person card edits a contact through a draft and refuses a stale save", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(90_000);
+  const handle = `email:counselor.${Date.now()}@betazed.test`;
+  const made = await request.post("/applet/datalib_contacts/contacts", {
+    data: { name: "Deanna", handles: [handle] },
+  });
+  expect(made.ok(), await made.text()).toBeTruthy();
+  const { contact_id: id } = (await made.json()) as { contact_id: string };
+  const api = `/applet/datalib_contacts/contact/${id}`;
+  type Edit = { name: string; note: string | null; fields: { kind: string; value: string }[] };
+  const published = async () => (await (await request.get(`${api}/edit`)).json()) as Edit;
+
+  await page.goto(`/${encodeURIComponent(`personView(${JSON.stringify(handle)}, {})`)}`);
+  const card = page.locator(".person");
+  await expect(card.locator(".person-name")).toHaveText(/Deanna$/, { timeout: 15_000 });
+
+  // 1. The edit autosaves to the draft, and nothing is published.
+  await card.getByRole("button", { name: "Edit", exact: true }).click();
+  await card.getByLabel("Name", { exact: true }).fill("Counselor Troi");
+  await card.getByLabel("Add a field").selectOption("title");
+  await card.getByLabel("Title", { exact: true }).fill("Ship's counselor");
+  await card.getByLabel("Note", { exact: true }).fill("Chocolate.");
+  await expect
+    .poll(async () => {
+      const r = await request.get(`${api}/draft`);
+      return r.ok() ? ((await r.json()) as { mine: Edit }).mine : null;
+    })
+    .toMatchObject({
+      name: "Counselor Troi",
+      note: "Chocolate.",
+      fields: [{ kind: "title", value: "Ship's counselor" }],
+    });
+  expect((await published()).name).toBe("Deanna");
+
+  // 2. A reload resumes the draft.
+  await page.reload();
+  await expect(card.getByLabel("Name", { exact: true })).toHaveValue("Counselor Troi", {
+    timeout: 15_000,
+  });
+
+  // 3. Renamed elsewhere after the card last looked: the save sees it
+  //    first, so it is refused, and the card marks the name.
+  await page.route(
+    "**/draft/save",
+    async (route) => {
+      const renamed = await request.post("/applet/datalib_contacts/rename", {
+        data: { contact_id: id, name: "Deanna Troi-Riker" },
+      });
+      expect(renamed.ok()).toBeTruthy();
+      await route.continue();
+    },
+    { times: 1 },
+  );
+  await card.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(card.getByRole("alert")).toContainText("changed elsewhere");
+  await expect(card.locator(".contact-edit-conflict")).toContainText(
+    "The name was changed elsewhere to “Deanna Troi-Riker”.",
+  );
+  expect((await published()).name).toBe("Deanna Troi-Riker");
+
+  // 4. Keeping mine and saving again publishes the card's edit.
+  await card.getByRole("button", { name: "Keep mine" }).click();
+  await card.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(card.getByRole("button", { name: "Edit", exact: true })).toBeVisible();
+  await expect(card.locator(".person-name")).toHaveText(/Counselor Troi$/);
+  await expect(card.locator(".person-lines")).toContainText("Ship's counselor");
+  expect(await published()).toMatchObject({
+    name: "Counselor Troi",
+    note: "Chocolate.",
+    fields: [{ kind: "title", value: "Ship's counselor" }],
+  });
+  expect((await request.get(`${api}/draft`)).status(), "the save drops the draft").toBe(404);
+
+  // 5. A photo is set from a file and removed, each at once.
+  await card.getByLabel("Photo file").setInputFiles({
+    name: "troi.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(PNG_1PX, "base64"),
+  });
+  await expect(card.locator(".person-head-photo")).toHaveAttribute(
+    "src",
+    new RegExp(`/applet/datalib_contacts/photo/${id}\\?v=\\d+$`),
+  );
+  const first = await card.locator(".person-head-photo").getAttribute("src");
+
+  // An image file dropped on the photo replaces it.
+  const drop = await page.evaluateHandle((b64) => {
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const dt = new DataTransfer();
+    dt.items.add(new File([bytes], "deanna.png", { type: "image/png" }));
+    return dt;
+  }, PNG_1PX);
+  await card.locator(".contact-edit-drop").dispatchEvent("drop", { dataTransfer: drop });
+  await expect(card.locator(".person-head-photo")).not.toHaveAttribute("src", first!);
+  await expect(card.locator(".person-head-photo")).toHaveAttribute(
+    "src",
+    new RegExp(`/applet/datalib_contacts/photo/${id}\\?v=\\d+$`),
+  );
+
+  await card.getByRole("button", { name: "Remove photo" }).click();
+  await expect(card.locator(".person-head-photo")).toHaveCount(0);
+});
+
+// Declared locally rather than pulling in @types/node — same reason as
+// api-token.spec.ts: tsconfig's `types` is deliberately narrow.
+declare const Buffer: { from(data: string, encoding: "base64"): Uint8Array };
+
+/// A one-pixel PNG, the smallest photo the contacts app takes.
+const PNG_1PX =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+/// Copying what a source says into your contact: the address book's
+/// record of Geordi offers each value, a copied address that nobody holds
+/// offers to be linked, and the saved field remembers where it came from.
+test("a source's values copy into the contact, and a copied address links in one click", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(90_000);
+  const handle = "email:glaforge@enterprise.starfleet";
+  const other = "email:laforge@enterprise.starfleet";
+  const made = await request.post("/applet/datalib_contacts/contacts", {
+    data: { name: "Geordi", handles: [handle] },
+  });
+  expect(made.ok(), await made.text()).toBeTruthy();
+  const { contact_id: id } = (await made.json()) as { contact_id: string };
+
+  await page.goto(`/${encodeURIComponent(`personView(${JSON.stringify(handle)}, {})`)}`);
+  const card = page.locator(".person");
+  await expect(card.locator(".person-name")).toHaveText(/Geordi$/, { timeout: 15_000 });
+
+  // The address book's record holds his second address too.
+  const book = card.locator(".person-section", { hasText: "laforge@enterprise.starfleet" }).last();
+  await book.locator(".person-copy summary").click();
+  await book.getByRole("button", { name: "Copy Title “Chief Engineer”" }).click();
+  await book
+    .getByRole("button", { name: "Copy Email (work) “laforge@enterprise.starfleet”" })
+    .click();
+  await expect(card.getByLabel("Title", { exact: true })).toHaveValue("Chief Engineer");
+  await expect(book.locator(".person-copy-values")).toContainText(
+    "Title “Chief Engineer”in your contact",
+  );
+
+  // The copied address is linked to nobody; one click links it here.
+  await card.getByRole("button", { name: "Link it" }).click();
+  await expect
+    .poll(async () => {
+      const r = await request.post("/applet/datalib_contacts/resolve", {
+        data: { handles: [other] },
+      });
+      return ((await r.json()) as { resolved: Record<string, { key: string }> }).resolved[other]
+        ?.key;
+    })
+    .toBe(id);
+  await expect(card.getByRole("button", { name: "Link it" })).toHaveCount(0);
+
+  await card.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(card.getByRole("button", { name: "Edit", exact: true })).toBeVisible();
+  const published = (await (
+    await request.get(`/applet/datalib_contacts/contact/${id}/edit`)
+  ).json()) as { fields: { kind: string; value: string; copied_from: unknown }[] };
+  expect(published.fields).toEqual([
+    expect.objectContaining({
+      kind: "title",
+      value: "Chief Engineer",
+      copied_from: expect.objectContaining({ source_id: expect.any(String) }),
+    }),
+    expect.objectContaining({ kind: "email", value: "laforge@enterprise.starfleet" }),
+  ]);
 });

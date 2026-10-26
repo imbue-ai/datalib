@@ -38,9 +38,9 @@ const embedToggle = (page: Page) => toggle(page, "Embed it for search by meaning
 /// The `inputs` one fan-in declares, read out of the config text.
 function fanInInputs(config: string, fn: string): string[] {
   const table = new RegExp(
-    `\\[\\[steps\\]\\]\\ngroup = "unified_index"\\nfunction = "${fn}"\\ninputs = \\[([^\\]]*)\\]`,
+    `\\[\\[steps\\]\\]\\ngroup = "unified_document_index"\\nfunction = "${fn}"\\ninputs = \\[([^\\]]*)\\]`,
   ).exec(config);
-  if (!table) throw new Error(`no unified_index/${fn} step in the config`);
+  if (!table) throw new Error(`no unified_document_index/${fn} step in the config`);
   return table[1]
     .split(",")
     .map((t) => t.trim().replace(/^"|"$/g, ""))
@@ -56,11 +56,12 @@ const idField = (page: Page) => field(page, "ID");
 /// sits — there is no Step column any more — and `aria-label` is the
 /// only place the word survives, which is also what a person gets by
 /// hovering it.
-const stepMark = (page: Page, id: string) => nameCell(page, id).locator('.tg-mark [role="img"]');
+/// A step's Name is its chip, whose accessible name carries its phase.
+const stepChip = (page: Page, id: string) => nameCell(page, id).locator("a.chip");
 
 async function pickClaude(page: Page) {
   await page.getByRole("button", { name: "Add source" }).click();
-  // By blurb: "Claude" alone also matches the "Claude export" tile.
+  // By blurb: "Claude" alone also matches the "Claude (export)" tile.
   await wizard(page).locator(".wiz-tile", { hasText: "Copy your claude.ai conversations" }).click();
 }
 
@@ -123,7 +124,7 @@ test("one dialog writes a group and two steps: one row, with two under it", asyn
   const group = groupRow(page, "personal-claude");
   const groupName = nameCell(page, "group:personal-claude");
   await expect(groupName).toHaveText("Personal Claude");
-  await expect(groupName.locator(".tg-label")).toHaveAttribute("title", /^personal-claude/);
+  await expect(groupName.locator("a.chip")).toHaveAttribute("title", /\(personal-claude\)/);
   await expect(row(page, "personal-claude/ingest")).toHaveCount(0);
 
   // Opened, the two steps are labelled by what they do; the group owns
@@ -131,21 +132,24 @@ test("one dialog writes a group and two steps: one row, with two under it", asyn
   // reaches claude.ai. The phase is a glyph suffixed onto the label, so
   // it is asserted through the accessible name rather than cell text.
   await expandGroup(page, "personal-claude");
-  // A step's id is not drawn: the label and the glyph say it, and the
-  // hover on the label names it.
+  // A step's id is not drawn: its chip keeps the row's short name, its
+  // glyph and accessible name say the phase, and its hover names it whole.
   await expect(nameCell(page, "personal-claude/ingest")).toContainText("Download");
   await expect(nameCell(page, "personal-claude/ingest")).not.toContainText(
     "personal-claude/ingest",
   );
-  await expect(nameCell(page, "personal-claude/ingest").locator(".tg-label")).toHaveAttribute(
+  await expect(stepChip(page, "personal-claude/ingest")).toHaveAttribute(
     "title",
-    /^personal-claude\/ingest/,
+    /^Personal Claude · .+ \(personal-claude\/ingest\)/,
   );
-  await expect(stepMark(page, "personal-claude/ingest")).toHaveAttribute("aria-label", "Ingest");
-  await expect(nameCell(page, "personal-claude/render_markdown")).toContainText("Render markdown");
-  await expect(stepMark(page, "personal-claude/render_markdown")).toHaveAttribute(
+  await expect(stepChip(page, "personal-claude/ingest")).toHaveAttribute(
     "aria-label",
-    "Render",
+    /^Download, Ingest step/,
+  );
+  await expect(nameCell(page, "personal-claude/render_markdown")).toContainText("Render markdown");
+  await expect(stepChip(page, "personal-claude/render_markdown")).toHaveAttribute(
+    "aria-label",
+    /, Render step/,
   );
 
   // The render step is written once, as its own entry. The fixture
@@ -238,6 +242,36 @@ test("a step's Edit opens its source, and Rendering brings a hand-removed render
   await expect(editor).toHaveValue(/inputs = \["fetch-only\/ingest"\]/);
   const after = await editor.inputValue();
   expect(after.match(/group = "fetch-only"\nfunction = "ingest"/g)).toHaveLength(1);
+});
+
+test("editing a source keeps what the form has no field for", async ({ page }) => {
+  const editor = page.locator(".m2-editor");
+  await pickClaude(page);
+  await nameField(page).fill("Hand Tuned");
+  await wizard(page).getByRole("button", { name: "Add source" }).click();
+  await expect(page.getByText("Added Hand Tuned.")).toBeVisible();
+
+  // A key and a comment written by hand, which no field of the form owns.
+  await expect(editor).toHaveValue(/group = "hand-tuned"/);
+  const text = await editor.inputValue();
+  const tuned = text.replace(
+    'group = "hand-tuned"\nfunction = "ingest"\n',
+    'group = "hand-tuned"\nfunction = "ingest"\n# pinned by hand\ncode_version = "7"\n',
+  );
+  expect(tuned).not.toBe(text);
+  await editor.fill(tuned);
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByText("Saved the config.")).toBeVisible();
+
+  await expandGroup(page, "hand-tuned");
+  await pickRowMenu(page, row(page, "hand-tuned/ingest"), "Edit settings…", wizard(page));
+  await expect(wizard(page)).toContainText("This form has no field for code_version");
+  await nameField(page).fill("Hand Tuned Too");
+  await wizard(page).getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByText("Saved Hand Tuned Too.")).toBeVisible();
+
+  await expect(editor).toHaveValue(/name = "Hand Tuned Too"/);
+  await expect(editor).toHaveValue(/# pinned by hand\ncode_version = "7"\n/);
 });
 
 test("clearing Rendering removes the render step and its index edge", async ({ page }) => {
@@ -370,9 +404,9 @@ test("a provider with render options writes them on the render step, from the on
 
   await expandGroup(page, "signal-work");
   await expect(row(page, "signal-work/render_markdown")).toBeVisible();
-  await expect(stepMark(page, "signal-work/render_markdown")).toHaveAttribute(
+  await expect(stepChip(page, "signal-work/render_markdown")).toHaveAttribute(
     "aria-label",
-    "Render",
+    /, Render step/,
   );
 
   await expect(editor).toHaveValue(/group = "signal-work"/);
@@ -384,14 +418,11 @@ test("a provider with render options writes them on the render step, from the on
   expect(text.match(/id = "signal-work"/g)).toHaveLength(1);
 });
 
-test("a hand-written render step under a download-only type is called out, then removed", async ({
-  page,
-}) => {
-  // Lightroom renders nothing, so the form writes one step. A render
-  // step someone wrote by hand under it cannot be kept — the provider
-  // has no render side — and the dialog says so before Save, the way
-  // it does for a missing step. (Unwiring it from the fan-ins is
-  // covered by the unit tests; this root's config declares none.)
+test("a download-only source gets its render step, and no Rendering section", async ({ page }) => {
+  // Lightroom renders no documents, but its render step is what carries
+  // the storage report and the download's problems into the index, so
+  // the form writes it without asking — and offers none of the render
+  // or search choices.
   const editor = page.locator(".m2-editor");
   await page.getByRole("button", { name: "Add source" }).click();
   await wizard(page).locator(".wiz-tile", { hasText: "Copy a Lightroom Classic catalog" }).click();
@@ -402,27 +433,12 @@ test("a hand-written render step under a download-only type is called out, then 
   await wizard(page).getByRole("button", { name: "Add source" }).click();
   await expect(page.getByText("Added Photos.")).toBeVisible();
 
-  await expect(editor).toHaveValue(/group = "photos"/);
+  await expect(editor).toHaveValue(/group = "photos"\nfunction = "render_markdown"/);
   const text = await editor.inputValue();
   expect(text).toContain('group = "photos"\nfunction = "ingest"');
-  expect(text).not.toContain('group = "photos"\nfunction = "render_markdown"');
-  await editor.fill(
-    `${text.trimEnd()}\n\n[[steps]]\ngroup = "photos"\nfunction = "render_markdown"\ninputs = ["photos/ingest"]\n`,
-  );
-  await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.getByText("Saved the config.")).toBeVisible();
+  expect(text).not.toContain('group = "photos"\nfunction = "keyword_index"');
   await expandGroup(page, "photos");
   await expect(row(page, "photos/render_markdown")).toBeVisible();
-
-  await pickRowMenu(page, groupRow(page, "photos"), "Edit settings…", wizard(page));
-  await expect(wizard(page)).toContainText("Lightroom renders nothing. Saving removes it");
-  await wizard(page).getByRole("button", { name: "Save changes" }).click();
-  await expect(page.getByText("Saved Photos.")).toBeVisible();
-  await expect(
-    page.locator('.tg-grid .slick-row:not([data-pinned])[data-key="photos/render_markdown"]'),
-  ).toHaveCount(0);
-  await expect(editor).not.toHaveValue(/group = "photos"\nfunction = "render_markdown"/);
-  await expect(editor).toHaveValue(/group = "photos"\nfunction = "ingest"/);
 });
 
 test("deleting a fetch step takes its render step with it", async ({ page }) => {

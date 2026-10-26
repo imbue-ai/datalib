@@ -208,6 +208,7 @@ mod tests {
                 status: "succeeded".into(),
                 attempts: 1,
                 error: None,
+                failure: None,
             }),
             last_success_at: Some(YESTERDAY.into()),
             ..Default::default()
@@ -354,12 +355,12 @@ mod tests {
             mk("b/ingest", &[]),
             mk("b/render_markdown", &["b/ingest"]),
             mk(
-                "unified_index/grid_index",
+                "unified_document_index/grid_index",
                 &["a/render_markdown", "b/render_markdown"],
             ),
         ];
         assert_eq!(
-            sources_feeding(&steps, "unified_index/grid_index"),
+            sources_feeding(&steps, "unified_document_index/grid_index"),
             ["a/ingest", "b/ingest"]
         );
         assert_eq!(sources_feeding(&steps, "a/render_markdown"), ["a/ingest"]);

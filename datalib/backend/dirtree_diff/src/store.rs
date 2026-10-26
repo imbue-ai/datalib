@@ -335,22 +335,14 @@ pub async fn duplicate_candidates(
 
 /// digest -> a path holding it at `commit`, for every digest found.
 /// Each `(kind, digest)` is looked up in the table its kind lives in,
-/// so a directory digest never costs the `files` scan.
+/// so a directory digest never costs the `files` scan. One statement
+/// per table, so one scan, however many digests are wanted.
 pub async fn lookup_digests(
     pool: &SqlitePool,
     commit: &Commit,
     wanted: &std::collections::BTreeSet<(String, String)>,
 ) -> Result<std::collections::BTreeMap<String, String>> {
     let mut found = std::collections::BTreeMap::new();
-    if wanted.is_empty() {
-        return Ok(found);
-    }
-    for (_, digest) in wanted {
-        if digest.is_empty() || !digest.chars().all(|c| c.is_ascii_hexdigit()) {
-            bail!("refusing to interpolate non-hex digest {digest:?}");
-        }
-    }
-
     for table in [Table::Dirs, Table::Files] {
         let digests: Vec<&String> = wanted
             .iter()
@@ -364,33 +356,26 @@ pub async fn lookup_digests(
             tracing::info!(
                 commit = %commit, digests = digests.len(),
                 "scanning the corpus for unmatched digests — `files` has no blake3 index, \
-                 so this is a full scan per chunk"
+                 so this is a full scan"
             );
         }
-        for chunk in digests.chunks(400) {
-            let list = chunk
-                .iter()
-                .map(|d| format!("'{d}'"))
-                .collect::<Vec<_>>()
-                .join(",");
-            // Audited for `AssertSqlSafe`: every element was checked to
-            // be ASCII hex above, so the list holds only [0-9a-fA-F]
-            // inside quotes, `commit` is hex by construction, and the
-            // table name is `Table`'s own constant.
-            let sql = format!(
-                "SELECT id, hex(blake3) AS h FROM dolt_at_{}('{commit}') \
-                 WHERE hex(blake3) IN ({list})",
-                table.name()
-            );
-            let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
-                .fetch_all(pool)
-                .await
-                .context("digest lookup")?;
-            for row in &rows {
-                let h: String = row.try_get("h")?;
-                let id: Option<String> = row.try_get("id")?;
-                found.entry(h).or_insert_with(|| id.unwrap_or_default());
-            }
+        // Audited for `AssertSqlSafe`: `commit` is hex by construction,
+        // the table name is `Table`'s own constant, and the digests are
+        // one bound JSON array.
+        let sql = format!(
+            "SELECT id, hex(blake3) AS h FROM dolt_at_{}('{commit}') \
+             WHERE hex(blake3) IN (SELECT value FROM json_each(?))",
+            table.name()
+        );
+        let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+            .bind(serde_json::to_string(&digests)?)
+            .fetch_all(pool)
+            .await
+            .context("digest lookup")?;
+        for row in &rows {
+            let h: String = row.try_get("h")?;
+            let id: Option<String> = row.try_get("id")?;
+            found.entry(h).or_insert_with(|| id.unwrap_or_default());
         }
     }
     Ok(found)

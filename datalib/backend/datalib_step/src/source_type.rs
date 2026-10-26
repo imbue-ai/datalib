@@ -76,8 +76,15 @@ pub enum SourceType {
     Garmin,
     Github,
     Gitlab,
+    /// Google Docs, Sheets and Slides, reached through the Drive API
+    /// (docs/dev/plans/google_drive.md). Named for Drive because that is
+    /// where a person finds them, and where the other kinds will come from.
+    GoogleDrive,
     GoogleTakeout,
     Lightroom,
+    /// A Linear workspace, over its GraphQL API. Download-only: the raw
+    /// tables of Linear's objects are the mirror.
+    Linear,
     Linkedin,
     Media,
     Notion,
@@ -116,8 +123,19 @@ impl SourceType {
                 | SourceType::Garmin
                 | SourceType::Github
                 | SourceType::Gitlab
+                | SourceType::GoogleDrive
+                | SourceType::Linear
                 | SourceType::Notion
                 | SourceType::Slack
+        )
+    }
+
+    /// Whether this type's data is also time series, which its
+    /// `render_time_series` step writes (`crate::time_series`).
+    pub const fn renders_time_series(self) -> bool {
+        matches!(
+            self,
+            SourceType::Garmin | SourceType::Yolink | SourceType::Airvisual
         )
     }
 
@@ -131,6 +149,7 @@ impl SourceType {
             SourceType::Media => Some("media_files"),
             SourceType::Lightroom => Some("Adobe_images"),
             SourceType::ApplePhotos => Some("ZASSET"),
+            SourceType::Linear => Some("issues"),
             _ => None,
         }
     }
@@ -159,6 +178,22 @@ impl SourceType {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A type the row catalog does not know reaches the Manage screen
+    /// and the grid as its bare type name with no mark, which is how
+    /// `google_drive` first shipped.
+    #[test]
+    fn every_type_has_a_label_and_a_mark_in_the_row_catalog() {
+        for &t in SourceType::VARIANTS {
+            let shown =
+                datalib_columns::source_catalog::source_type(t.as_str(), &serde_json::json!({}));
+            assert!(
+                shown.icon.is_some(),
+                "{t} has no entry in datalib/backend/columns/src/source_catalog.rs: give it \
+                 a label and an icon from datalib/ui/src/assets/"
+            );
+        }
+    }
 
     #[test]
     fn every_type_round_trips_and_is_distinct() {
@@ -211,6 +246,7 @@ mod tests {
                 SourceType::ApplePhotos
                     | SourceType::Fsindex
                     | SourceType::Lightroom
+                    | SourceType::Linear
                     | SourceType::Media
             );
             assert_eq!(

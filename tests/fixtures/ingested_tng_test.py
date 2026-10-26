@@ -117,10 +117,11 @@ MAX_STAMP_MS = (1 << 48) - 1
 # deliberately absent from the export, the PDF built to be corrupt.
 # One is the record built to fail: conversation `c0000006`'s reply
 # carries `created_at = "stardate 47988.1"`, which the claude renderer
-# records as a nulled `created_at` on that message. Google Takeout's
-# three are entries shaped like a real export's: an attachment its
-# message names and the export lacks, a watch-history entry that is not
-# a video, a saved place with no date.
+# records as a nulled `created_at` on that message. Google Takeout's are
+# entries shaped like a real export's: an attachment its message names
+# and the export lacks, a watch-history entry that is not a video, a
+# saved place with no date; the files no feed reads; and what the
+# account's Chat membership says of a space.
 #
 # A fetch row about an attachment names the grid row of what owns it,
 # so the screen can open it: the conversation for claude (minted from
@@ -142,7 +143,8 @@ CLAUDE_ATTACHMENT_WITHOUT_BYTES = (
     "|claude_attachments:c0000004-1701-4d00-8000-00000000c004"
     "#f0000001-1701-4d00-8000-0000000f0001"
     "|00000000-0000-89b3-8bed-0eecc97d45ce"  # conversation c0000004's row
-    "||fetch_failed|no recorded response: GET https://claude.ai/api/organizations/0aa00000-1701-4d00…"
+    "||fetch_failed|no recorded response: GET https://claude.ai/api/organizations"
+    "/0aa00000-1701-4d00-8000-0000000000aa/files/f0000001-1701-4d00-8000-0000000f0001/contents"
 )
 FACEBOOK_VIDEO_NOT_IN_EXPORT = (
     "1c9f7753-ba2d-5a9e-8fbb-b9b6a0d5ad13"
@@ -201,15 +203,91 @@ TAKEOUT_POST_NOT_A_VIDEO = (
     "50d82e65-dc5d-522f-afdd-0ded04b3d8f0"
     "|warning|fetch|entity"
     "|skipped:youtube_watch_history:e81888464c90ec04"
-    "||videoUrl|deliberate_loss|https://www.youtube.com/post/UgkxTenForward"
+    "||videoUrl|deliberate_loss|www.youtube.com/post"
 )
 TAKEOUT_CHAT_ATTACHMENT_NOT_IN_EXPORT = (
     "c662c0a8-aa0a-5a9c-a618-a9f36e2d47d5"
     "|warning|fetch|entity"
     "|chat_attachments:TNG-BRIDGE/T2/T2#risa-shore-leave.png"
     "|0195683a-d140-87f9-bdf6-234da6d6880c"  # Riker's message
-    "||not_found|risa-shore-leave.png is not in the export"
+    "||not_found|<name>.png is not in the export"
 )
+# Every kind of file no feed reads is a row, named by the shape of its
+# path: a warning where nothing reads it, a note where it is left out on
+# purpose.
+TAKEOUT_UNREAD_FILES = [
+    (
+        "0b9b217a-c9c3-5247-971c-58196290fc61|info|fetch|entity"
+        "|skipped:unread_files:0d2eec9b183d1d83||file|noted"
+        "|archive_browser.html: 1 file (757 bytes) left out on purpose:"
+        " Takeout's own index of the export"
+    ),
+    (
+        "3c9428df-aa3d-591f-a4a8-8a568bc14ace|info|fetch|entity"
+        "|skipped:unread_files:2fbca57a07910868||file|noted"
+        "|Chrome/History.json: 1 file (27 bytes) left out on purpose:"
+        " browser history, bookmarks, settings and autofill"
+    ),
+    (
+        "4d7311bb-8751-593b-a3e2-80c298e0ae3b|warning|fetch|entity"
+        "|skipped:unread_files:cdda41ed1b897705||file|uncovered_type"
+        "|Tasks/Tasks.json: 1 file (716 bytes) that no feed reads"
+    ),
+    (
+        "e348beb8-1f24-5da7-b962-193299a74a22|warning|fetch|entity"
+        "|skipped:unread_files:0bf544a34be30f8f||file|uncovered_type"
+        "|Gemini/gemini_scheduled_actions_data.html: 1 file (14 bytes) that no feed reads"
+    ),
+    (
+        "e9c2e034-ddb1-5a2a-871d-79455adc1169|warning|fetch|entity"
+        "|skipped:unread_files:b46675de73f27a2b||file|uncovered_type"
+        "|Keep/<name>.json: 1 file (419 bytes) that no feed reads"
+    ),
+    (
+        "f67c52ab-bc75-5d8f-a41e-99c4a4f0b8b6|info|fetch|entity"
+        "|skipped:unread_files:36e7e4c1c5fd7e8a||file|noted"
+        "|Google Play Books/<name>/<name>.pdf: 1 file (18 bytes) left out"
+        " on purpose: the books themselves"
+    ),
+    (
+        "eb0f0733-b37b-504e-80a5-d90d38997842|warning|fetch|entity"
+        "|skipped:unread_files:e7e2c6623c092428||file|uncovered_type"
+        "|Gemini/gemini_gems_data.html: 1 file (14 bytes) that no feed reads"
+    ),
+]
+# Where Google has no location for a place it writes a sentence in its
+# `Comment`: a note on the review and on the saved place, not text.
+TAKEOUT_NO_LOCATION_NOTES = [
+    (
+        "46f72732-7bb5-57ca-abfc-f0926e0cea9a|info|parse|markdown"
+        "|00000000-0000-8274-a762-150808777b86"
+        "|019d7bfb-e900-8689-b06f-03ee09f0819c"
+        "|Comment|noted|Google has no location for this place"
+    ),
+    (
+        "53e76917-0f9b-58fc-838c-8561c5681fda|info|parse|markdown"
+        "|00000000-0000-8274-a762-150808777b86"
+        "|019ca869-5000-8c1e-8c4a-e9f5104df6a9"
+        "|Comment|noted|Google has no location for this place"
+    ),
+]
+# What the account's `user_info.json` says of the Ten Forward space,
+# noted on its first message.
+TAKEOUT_CHAT_SPACE_NOTES = [
+    (
+        "d745bedd-c4b4-5df8-b5ec-0df96f05d97c|info|parse|markdown"
+        "|00000000-0000-82fb-8e25-f16025ef745f"
+        "|019573e8-ee00-8ccc-bca0-7b369a4046d2"
+        "|membership_state|noted"
+        "|the account's membership of this conversation is MEMBER_NOT_A_MEMBER"
+    ),
+    (
+        "e19f9822-c282-5fdf-a54d-8592f38d60e6|info|parse|markdown"
+        "|00000000-0000-82fb-8e25-f16025ef745f"
+        "|019573e8-ee00-8ccc-bca0-7b369a4046d2"
+        "|starred_group_id|noted|the account starred this conversation"
+    ),
+]
 TAKEOUT_SAVED_PLACE_WITHOUT_KEY = (
     "5e4f794e-967e-5d6e-ac01-3e5031ebe907"
     "|error|fetch|entity"
@@ -229,11 +307,16 @@ EXPECTED_PROBLEMS = {
         ]
     ),
     "tng_pdfs": [PDF_THAT_WILL_NOT_IDENTIFY],
-    "google-takeout": [
-        TAKEOUT_POST_NOT_A_VIDEO,
-        TAKEOUT_SAVED_PLACE_WITHOUT_KEY,
-        TAKEOUT_CHAT_ATTACHMENT_NOT_IN_EXPORT,
-    ],
+    "google-takeout": sorted(
+        [
+            TAKEOUT_POST_NOT_A_VIDEO,
+            TAKEOUT_SAVED_PLACE_WITHOUT_KEY,
+            TAKEOUT_CHAT_ATTACHMENT_NOT_IN_EXPORT,
+            *TAKEOUT_UNREAD_FILES,
+            *TAKEOUT_CHAT_SPACE_NOTES,
+            *TAKEOUT_NO_LOCATION_NOTES,
+        ]
+    ),
 }
 
 
@@ -329,9 +412,11 @@ EXPECTED_PROVIDERS = frozenset(
         # the render step ran over that store — see
         # run_sync_pipeline.py's PRESEEDED_RAW.
         "yolink",
-        # Ingested through playback like the chat providers; the weight
-        # page and the device row are what land in the grid.
+        # Ingested through playback like the chat providers; its pages,
+        # days, activities and records are what land in the grid.
         "garmin",
+        # Ingested through playback; each Doc and each of its comments.
+        "google_drive",
     }
 )
 
@@ -440,7 +525,9 @@ class IngestedTngPipelineTest(unittest.TestCase):
     @property
     def _index_db(self) -> Path:
         """The grid index the `grid_index` fan-in step writes."""
-        return self.workspace / "unified_index" / "grid_index" / "db.doltlite_db"
+        return (
+            self.workspace / "unified_document_index" / "grid_index" / "db.doltlite_db"
+        )
 
     @property
     def _signal_entities_db(self) -> Path:
@@ -634,7 +721,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         """Rows whose `qmd_path` disagrees with their markdown's path.
 
         The two columns name the same file and must name it the same
-        way: `GridIndex` (unified_index/src/qmd/mapping.rs) keys grid
+        way: `GridIndex` (unified_document_index/src/qmd/mapping.rs) keys grid
         rows by `norm_path(qmd_path)` and looks each qmd hit up by the
         hit's own data-root-relative path — the same spelling
         `apply_one` stores in `markdowns.md_path`. A provider that
@@ -823,7 +910,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
 
         Each source's render step writes
         `<source>/render_markdown/indexed_markdown.doltlite_db` holding the
-        same rows that stack into the unified index — same derived DDL,
+        same rows that stack into the unified document index — same derived DDL,
         same writer (`grid_index::apply_one`). Asserted from the outside
         with the doltlite CLI, so a store that exists but is empty, or
         holds a shape the CLI cannot read, fails here rather than
@@ -840,10 +927,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
     def _whatsapp_attachments(self) -> tuple[list[str], list[str], list[str]]:
         """WhatsApp's rendered attachments, as (linked, missing, placeholders).
 
-        `linked` is every `blobs/…` target the markdown points at,
-        `missing` the subset with no file behind it, and `placeholders`
-        every attachment that rendered as "(not yet fetched)" instead of
-        a link.
+        `linked` is every `/data/<step>/blob/<hash>` address the markdown
+        points at, `missing` the subset whose step's blob store does not
+        hold that hash, and `placeholders` every attachment that rendered
+        as "(not yet fetched)" instead of a link.
 
         WhatsApp is the source where a broken attachment is invisible
         from the outside: ingest registers the bytes in the CAS whether
@@ -861,11 +948,27 @@ class IngestedTngPipelineTest(unittest.TestCase):
             placeholders += [
                 line.strip() for line in body.splitlines() if "not yet fetched" in line
             ]
-            for target in re.findall(r"\(blobs/([^)]+)\)", body):
-                linked.append(target)
-                if not (md.parent / "blobs" / target).is_file():
-                    missing.append(f"{md.name} -> blobs/{target}")
+            for step, digest in re.findall(
+                r"\(/data/([^/)]+/[^/)]+)/blob/([0-9a-f]{64})\)", body
+            ):
+                linked.append(digest)
+                if not self._blob_held(step, digest):
+                    missing.append(f"{md.name} -> /data/{step}/blob/{digest}")
         return linked, missing, placeholders
+
+    def _blob_held(self, step: str, digest: str) -> bool:
+        """Whether `step`'s blob store holds the bytes `digest` names."""
+        store = self.workspace / step / "blobs.sqlite"
+        if not store.is_file():
+            return False
+        con = sqlite3.connect(f"file:{store}?mode=ro", uri=True)
+        try:
+            row = con.execute(
+                "SELECT 1 FROM cas_objects WHERE blake3 = ?", (digest,)
+            ).fetchone()
+        finally:
+            con.close()
+        return row is not None
 
     def _problems(self) -> dict[str, list[str]]:
         """Per-source `problems` rows, as `source -> [summary…]`.
@@ -1046,9 +1149,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "every source that rendered must also have measured itself",
         )
         # Who a handle is, as each source that mentions it says: the
-        # rows a chip reads. One address, four sources, one name — Slack's
-        # through its profile, which ties his Slack user to the address, and
-        # the address book's, whose photo is what his chips draw.
+        # rows a chip reads. One address, five sources, one name — Slack's
+        # through its profile, which ties his Slack user to the address,
+        # Drive's through the comments the account wrote, and the address
+        # book's, whose photo is what his chips draw.
         self.assertEqual(
             self._query(
                 self._index_db,
@@ -1058,6 +1162,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "WHERE h.handle = 'email:picard@enterprise.starfleet' ORDER BY 1;",
             ),
             [
+                "google-drive|Jean-Luc Picard",
                 "google-takeout|Jean-Luc Picard",
                 "slack|Jean-Luc Picard",
                 "tng_contacts|Jean-Luc Picard",
@@ -1093,7 +1198,9 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "SELECT DISTINCT c.source_id FROM source_contacts c ORDER BY 1;",
             ),
             [
+                "beeper",
                 "facebook",
+                "google-drive",
                 "google-takeout",
                 "linkedin",
                 "signal",
@@ -1105,6 +1212,21 @@ class IngestedTngPipelineTest(unittest.TestCase):
             ],
             "every source that knows people put them in the index",
         )
+        # Beeper knows a bridged Slack user by their Slack id, and links
+        # the avatar the app had cached where its blob store holds it.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT DISTINCT c.contact_key || '|' || "
+                "(coalesce(json_extract(c.contact_json, '$.photo_url'), '') LIKE "
+                "'/data/beeper/ingest/blob/%') "
+                "FROM source_contacts c WHERE c.source_id = 'beeper' "
+                "AND c.contact_key LIKE 'slack:%' ORDER BY 1;",
+            ),
+            ["slack:T1701D/U0PICARD|0", "slack:T1701D/U0WORF|1"],
+            "Beeper's Slack people, Worf with his avatar",
+        )
+        self._assert_beeper_signal_ids_match_the_backup()
         # WhatsApp's account of a person is the phone's address book:
         # every name its entries give, then the name they gave
         # themselves, keyed by the number — reached through a linked id
@@ -1161,6 +1283,18 @@ class IngestedTngPipelineTest(unittest.TestCase):
             ['tel:+17015550105|["Deanna Troi"]|Starfleet|Counselor|0'],
             "a WhatsApp reactor who writes nothing, under her address-book entry",
         )
+        # A stranger WhatsApp knows by a linked id alone, mapped to no
+        # number and named nowhere: still a handle, so their message is a
+        # chip and their chat is titled as a person, not by the raw id.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT DISTINCT author_handle || '|' || conversation_name FROM grid_rows "
+                "WHERE provider = 'whatsapp' AND author_handle LIKE 'whatsapp:%';",
+            ),
+            ["whatsapp:100000000000108|WhatsApp user …0108"],
+            "a linked id with no number or name",
+        )
         # A 1:1 chat leaves an incoming reaction's sender empty, as it does
         # a message's: the chat's person reacted. The account's own
         # reaction names nobody.
@@ -1184,23 +1318,33 @@ class IngestedTngPipelineTest(unittest.TestCase):
             ["U_TROI|0"],
             "a Slack reactor who writes nothing",
         )
-        # A card's photo is written beside its page and the index holds
-        # where the app serves it from, so a chip can draw it; a card
-        # without one carries no URL. The Borg cards, from a Google export, have
-        # none.
-        self.assertEqual(
-            self._query(
+        # A card's photo is in its source's blob store, where the download
+        # put it, and the index holds its address there, so a chip can
+        # draw it; a card without one carries no URL. The Borg cards, from
+        # a Google export, have none.
+        photos = dict(
+            row.split("|", 1)
+            for row in self._query(
                 self._index_db,
-                "SELECT c.name || '|' || coalesce(json_extract(c.contact_json, '$.photo_url') "
-                "  = '/applet/unified_index/asset/' || c.markdown_uuid || '/blobs/' "
-                "    || c.markdown_uuid || '.jpg', 'none') "
+                "SELECT c.name || '|' || coalesce(json_extract(c.contact_json, '$.photo_url'), "
+                "'none') "
                 "FROM source_contacts c JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
                 "WHERE m.source_id = 'tng_contacts' "
                 "AND c.name IN ('William T. Riker', 'Jean-Luc Picard', 'Hugh') ORDER BY 1;",
-            ),
-            ["Hugh|none", "Jean-Luc Picard|1", "William T. Riker|1"],
-            "a card's photo, as the URL the index serves it at",
+            )
         )
+        self.assertEqual(photos.pop("Hugh"), "none")
+        self.assertEqual(sorted(photos), ["Jean-Luc Picard", "William T. Riker"])
+        for name, url in photos.items():
+            address = re.fullmatch(
+                r"/data/(tng_contacts/ingest)/blob/([0-9a-f]{64})", url
+            )
+            if address is None:
+                self.fail(f"{name}'s photo URL: {url}")
+            self.assertTrue(
+                self._blob_held(*address.groups()),
+                f"{name}'s photo is in the blob store",
+            )
         # Signal ties a number to an ACI: Riker's account carries both,
         # so a link made through either finds the other; Q, whom the
         # backup knows by ACI alone, has the ACI as his handle; Guinan,
@@ -1215,8 +1359,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "FROM source_contact_handles h JOIN source_contacts c "
                 "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
                 "JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
-                "WHERE m.source_id = 'signal' AND (c.name IN ('Will Riker', 'Q', 'Guinan') "
-                "OR h.handle LIKE 'signal_aci:%') GROUP BY 1 ORDER BY 1;",
+                "WHERE m.source_id = 'signal' AND c.name IN ('Will Riker', 'Q', 'Guinan') "
+                "GROUP BY 1 ORDER BY 1;",
             ),
             [
                 (
@@ -1233,6 +1377,42 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 ),
             ],
             "Signal's account of a person: number and ACI together",
+        )
+        # The Signal fixture is two phones: the backup the account moved
+        # from, holding the PNG's bytes, and the one it moved to, which
+        # numbers everyone anew and never downloaded the PNG. Keyed by who
+        # a chat is with and who wrote a message, the switch removes
+        # nothing, and the PNG keeps the old phone's bytes.
+        signal = self._signal_entities_db
+        commits = self._query(
+            signal,
+            "SELECT commit_hash FROM dolt_log "
+            "WHERE message LIKE 'download signal: backup %' ORDER BY date;",
+        )
+        self.assertEqual(len(commits), 2, "one commit per phone's backup")
+        self.assertEqual(
+            self._query(
+                signal,
+                "SELECT diff_type || '|' || count(*) FROM dolt_diff_chat_items("
+                f"'{commits[0]}', '{commits[1]}') GROUP BY diff_type ORDER BY diff_type;",
+            ),
+            ["added|1", "modified|12"],
+            "the new phone adds its one new message and renumbers the rest",
+        )
+        self.assertEqual(
+            self._query(
+                signal,
+                "SELECT c.recipient_id || '|' || a.id || '|' || (a.blake3 IS NOT NULL) "
+                "FROM chat_item_attachments a JOIN chat_items i ON i.id = a.chat_item_id "
+                "JOIN chats c ON c.id = i.chat_id;",
+            ),
+            [
+                (
+                    "aci:0195683ad14087f9bdf6234da6d6880c|"
+                    "aci:0195683ad14087f9bdf6234da6d6880c#self#12442118940000#0|1"
+                )
+            ],
+            "the PNG on Picard's order keeps the old phone's bytes",
         )
         # Facebook names people and never numbers them: a Messenger
         # author is a `facebook:name/` handle, and a deleted account is
@@ -1275,6 +1455,55 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "linkedin:wriker|William Riker",
             ],
             "a LinkedIn connection and a message sender by their profile",
+        )
+        # Drive names a comment's author and nothing else, so a comment
+        # author is a `google:name/` handle; the account's own comments
+        # are its address, which the file's owner entry gives.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT DISTINCT h.handle || '|' || c.name "
+                "FROM source_contact_handles h JOIN source_contacts c "
+                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
+                "JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
+                "WHERE m.source_id = 'google-drive' ORDER BY 1;",
+            ),
+            [
+                "email:picard@enterprise.starfleet|Jean-Luc Picard",
+                "google:name/Data|Data",
+                "google:name/Deanna Troi|Deanna Troi",
+                "google:name/Geordi La Forge|Geordi La Forge",
+            ],
+            "a Drive comment's author by name, the account by its address",
+        )
+        # A forge author is their account (a GitLab one on its host), and
+        # a Notion author their address where Notion gave one: the grid's
+        # Author chip and `from:` reach them.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT DISTINCT provider || '|' || author_handle FROM grid_rows "
+                "WHERE provider IN ('github', 'gitlab', 'notion') "
+                "AND author_handle IS NOT NULL ORDER BY 1;",
+            ),
+            [
+                "github|github:data-soong",
+                "github|github:geordi-laforge",
+                "github|github:jlpicard",
+                "github|github:worf-rozhenko",
+                "github|github:wtriker",
+                "gitlab|gitlab:gitlab.com/bcrusher",
+                "gitlab|gitlab:gitlab.com/data-soong",
+                "gitlab|gitlab:gitlab.com/geordi-laforge",
+                "gitlab|gitlab:gitlab.com/jlpicard",
+                "gitlab|gitlab:gitlab.com/worf-rozhenko",
+                "gitlab|gitlab:gitlab.com/wtriker",
+                "notion|email:beverly.crusher@enterprise.starfleet.invalid",
+                "notion|email:data@enterprise.starfleet.invalid",
+                "notion|email:geordi.laforge@enterprise.starfleet.invalid",
+                "notion|email:jean-luc.picard@enterprise.starfleet.invalid",
+            ],
+            "forge and Notion authors by their handles",
         )
         # A Slack mention is a chip link: the viewer resolves the href to
         # the person, and any other markdown viewer shows a link whose
@@ -1357,9 +1586,14 @@ class IngestedTngPipelineTest(unittest.TestCase):
             self._diff_rows_by_text(SLACK_DIFF_GROUP, "raising shields"),
             [
                 ("Slack Message", "modified", "byte_size|content_hash|preview"),
-                ("Slack Thread", "modified", "byte_size|content_hash|preview"),
+                (
+                    "Slack Thread",
+                    "modified",
+                    "byte_size|content_hash|preview|supplied_terms",
+                ),
             ],
-            "the edited message names its text (and its length), and its thread follows",
+            "the edited message names its text (and its length), and its thread "
+            "follows, its participants joined by the new reaction's author",
         )
         self.assertEqual(
             self._diff_rows_by_text(SLACK_DIFF_GROUP, "Warbird, decloaking"),
@@ -1368,10 +1602,14 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 (
                     "Slack Thread",
                     "modified",
-                    "byte_size|content_hash|item_count|modified_at|preview|touched_at",
+                    (
+                        "byte_size|content_hash|item_count|modified_at|preview"
+                        "|supplied_terms|touched_at"
+                    ),
                 ),
             ],
-            "the reply added to the grown thread, whose own row grew with it",
+            "the reply added to the grown thread, whose own row grew with it "
+            "and names the reply's author among those who took part",
         )
         status_report = self._markdown(SLACK_DIFF_GROUP, "Warbird, decloaking")
         self.assertEqual(
@@ -1445,7 +1683,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # ── the per-source render stores ────────────────────────
         # Each source's render step writes its rows into
         # `<source>/render_markdown/indexed_markdown.doltlite_db` — the same
-        # rows, same derived DDL and same writer as the unified index,
+        # rows, same derived DDL and same writer as the unified document index,
         # so "what stacks into the index" needs no second projection to
         # keep in step.
         #
@@ -1489,7 +1727,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             len(linked),
             3,
             "each WhatsApp media file whose bytes are on disk must render "
-            f"as a link into blobs/; got {linked}",
+            f"as a link into its blob store; got {linked}",
         )
         self.assertEqual(missing, [], "a rendered attachment link points at no file")
         # The fourth media message names a file the phone deleted. It
@@ -1630,10 +1868,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
             0,
             "grid_index must commit, leaving a dolt_log entry",
         )
-        # Signal recorded exactly one snapshot in its resume cursor.
+        # Signal recorded both phones' snapshots in its resume cursor.
         cursor1 = self._signal_cursor()
         self.assertEqual(
-            len(cursor1), 1, f"expected one ingested_backups row, got {cursor1}"
+            len(cursor1), 2, f"expected two ingested_backups rows, got {cursor1}"
         )
 
         # --- Run 2: same data root, no flags, five minutes on. Signal's
@@ -1913,7 +2151,9 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # The fan-in reads the sources its inputs name, as the runner
         # would hand them over; here, the one source under test.
         self._run_step(
-            "unified_index", "grid_index", inputs=("claude-api/render_markdown",)
+            "unified_document_index",
+            "grid_index",
+            inputs=("claude-api/render_markdown",),
         )
 
         self.assertEqual(
@@ -1938,7 +2178,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             self.assertFalse(
                 f.is_file(),
                 f"{f} outlived the conversation it renders. The grid no "
-                "longer lists it, but /applet/unified_index/chat/{uuid} "
+                "longer lists it, but /applet/unified_document_index/chat/{uuid} "
                 "still resolves and qmd still finds it — a deletion the "
                 "user can read",
             )
@@ -1994,7 +2234,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         )
         self._run_step("github", "render_markdown", "github", inputs=("github/ingest",))
         self._run_step(
-            "unified_index", "grid_index", inputs=("github/render_markdown",)
+            "unified_document_index", "grid_index", inputs=("github/render_markdown",)
         )
 
         github_docs_after = set(
@@ -2048,6 +2288,44 @@ class IngestedTngPipelineTest(unittest.TestCase):
             if docs:
                 rendered[step] = rendered.get(step, 0) + docs
         return rendered
+
+    def _assert_beeper_signal_ids_match_the_backup(self) -> None:
+        """A Signal message Beeper bridged and the same message in the
+        phone's Signal backup share an id: the bridge stores
+        `<sender ACI>|<sent ms>`, the backup the sender's ACI on their
+        recipient and the sent time on the message. Nothing joins them
+        yet; this keeps the join possible (beeper/INGEST.md §"Matching a
+        message to a phone's backup")."""
+        signal = self._signal_entities_db
+        beeper = self.workspace / "beeper" / "ingest" / "entities.doltlite_db"
+        recipient_of: dict[str, str] = {}
+        for line in self._query(
+            signal, "SELECT id || '|' || json(payload) FROM recipients;"
+        ):
+            recipient, frame = line.split("|", 1)
+            contact = json.loads(frame).get("destination", {}).get("Contact") or {}
+            if contact.get("aci"):
+                aci = str(uuidlib.UUID(bytes=bytes(contact["aci"])))
+                recipient_of[aci] = recipient
+        sent = set(
+            self._query(signal, "SELECT author_id || '|' || date_sent FROM chat_items;")
+        )
+        matched = []
+        for line in self._query(
+            beeper,
+            "SELECT mxid || '|' || id FROM message WHERE bridge_id = 'local-signal';",
+        ):
+            mxid, aci, sent_ms = line.split("|")
+            if aci in recipient_of and f"{recipient_of[aci]}|{sent_ms}" in sent:
+                matched.append(mxid)
+        self.assertEqual(
+            sorted(matched),
+            [
+                "$tng-crew-002:ba_TNG.local-signal.localhost",
+                "$tng-crew-003:ba_TNG.local-signal.localhost",
+            ],
+            "Riker's and Q's bridged messages are the backup's, by ACI and sent time",
+        )
 
     def _assert_problems_reach_the_log(self, expected: dict[str, list[str]]) -> None:
         """Every problem a step stores reaches its log at the row's level

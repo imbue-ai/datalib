@@ -18,7 +18,7 @@
 # (bring the data in), `render_markdown` (turn the raw store into
 # markdown), `keyword_index` and `embed` (fill the source's part of the
 # qmd search index: its keyword index, then its embeddings), and three
-# under the unified index: `grid_index` over every render_markdown tree,
+# under the unified document index: `grid_index` over every render_markdown tree,
 # `qmd_aggregator` over every source's qmd steps, and `embedding_map`,
 # which lays out what the `embed` steps embedded.
 # `params` is per-function — the ingest
@@ -88,6 +88,17 @@ process_log_lines = 200000
 # each run's disk chart are drawn from. As long as a run is kept, so every
 # run still listed keeps its chart.
 disk_usage_days = 30
+
+# How much a render holds in memory at once. It reads the raw store a
+# page of `buckets` at a time (threads, conversations: whatever the
+# source renders as one unit), and loads at most `blob_mb` of their
+# attachments together. Smaller pages hold less and cost more queries;
+# changing them changes no document. Omit the table, or either key, for
+# the defaults, which are these. Email and Slack read both; every other
+# render with attachments reads `blob_mb`.
+[render_pages]
+buckets = 500
+blob_mb = 64
 
 # ── slack ──────────────────────────────────────────────────────────
 # A group has two names. Its `id` is the identity: unique, path-safe,
@@ -238,15 +249,15 @@ inputs = ["slack-diff/keyword_index"]
 # source it does not name, and reports what the index holds. Removing it
 # turns free-text search off.
 [[groups]]
-id = "unified_index"
+id = "unified_document_index"
 
 [[steps]]
-group = "unified_index"
+group = "unified_document_index"
 function = "grid_index"
 inputs = ["slack/render_markdown", "claude/render_markdown", "slack-diff/render_markdown"]
 
 [[steps]]
-group = "unified_index"
+group = "unified_document_index"
 function = "qmd_aggregator"
 inputs = ["slack/keyword_index", "slack/embed", "claude/keyword_index", "claude/embed", "slack-diff/keyword_index", "slack-diff/embed"]
 
@@ -256,9 +267,9 @@ inputs = ["slack/keyword_index", "slack/embed", "claude/keyword_index", "claude/
 # documents stay put as more arrive; resetting the step lays the map out
 # afresh.
 [[steps]]
-group = "unified_index"
+group = "unified_document_index"
 function = "embedding_map"
-inputs = ["unified_index/qmd_aggregator"]
+inputs = ["unified_document_index/qmd_aggregator"]
 
 # ── applets ────────────────────────────────────────────────────────
 # An applet is the third kind of config entry: a long-lived server the
@@ -296,11 +307,11 @@ command = "datalib-applet slack"
 tree = "slack/render_markdown"
 workspace = "Slack"
 
-# The app's own surface: `unified_index` serves the grid, the document
+# The app's own surface: `unified_document_index` serves the grid, the document
 # view and the document picker. Without it the UI has no search — it is
 # an applet rather than a built-in so the backend does not have to know
 # what a grid row is.
 [[applets]]
-group = "unified_index"
-id = "unified_index"
-command = "datalib-applet unified_index"
+group = "unified_document_index"
+id = "unified_document_index"
+command = "datalib-applet unified_document_index"

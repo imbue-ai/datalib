@@ -57,7 +57,7 @@ above it:
    rebuild. Its answer ranks above every source's.
 
 What is still to build: [`plans/contact_linking.md`](plans/contact_linking.md)
-(merge, groups, numbers without a country code), [`plans/search_autocomplete.md`](plans/search_autocomplete.md)
+(groups, numbers without a country code), [`plans/search_autocomplete.md`](plans/search_autocomplete.md)
 (contacts in search) and [`plans/contact_editing.md`](plans/contact_editing.md)
 (the contact card: its fields, drafts, saving, undo, the export).
 How every chip is written, drawn, resolved and clicked — a person's, a
@@ -119,7 +119,11 @@ number. What that costs:
 | `slack` | `<team_id>/<user_id>` | `Handle::slack` | `slack://user?team=<team>&id=<user>` |
 | `signal_aci` | a Signal account id, a lowercase dashed UUID | `Handle::signal_aci` | `datalib:handle/signal_aci/<uuid>` |
 | `facebook` | `name/<the name shown>`, its whitespace collapsed; or `deleted/<conversation id>` | `Handle::facebook_name`, `Handle::facebook_deleted` | `datalib:handle/facebook/<value>`, percent-encoded but for its `/`s |
+| `google` | `name/<the name shown>`, its whitespace collapsed | `Handle::google_name` | `datalib:handle/google/<value>`, percent-encoded but for its `/`s |
 | `linkedin` | the slug of a profile URL (`linkedin.com/in/<slug>`), percent-decoded and lowercased | `Handle::linkedin`, `Handle::linkedin_profile_url` (any `linkedin.com` host; a trailing `/`, query or fragment is dropped) | `https://www.linkedin.com/in/<slug>`, the profile itself |
+| `github` | a login, lowercased (an app's ends in `[bot]`) | `Handle::github` | `datalib:handle/github/<login>` |
+| `gitlab` | `<host>/<username>`, both lowercased: a self-hosted GitLab is a namespace of its own | `Handle::gitlab` | `datalib:handle/gitlab/<host>/<username>` |
+| `notion` | a Notion user id, a lowercase dashed UUID, for a user Notion gives no address for | `Handle::notion_user` | `datalib:handle/notion/<id>` |
 
 A Facebook export names people and never numbers them, so a
 `facebook:name/` handle is a name: two people of one name are one
@@ -128,7 +132,8 @@ deleted since is written `Facebook user`, or with no name at all, and
 gets a handle only in a Messenger conversation that lists it as its one
 deleted account: `facebook:deleted/<that conversation's id>`. The same
 deleted person in two conversations is two handles; several in one
-group are none.
+group are none. A `google:name/` handle is a name for the same reason: a
+comment on a Drive file names its author and nothing else.
 
 `Handle::parse` reads back exactly what `as_str` wrote and refuses any
 other spelling, which is what every store and every wire format goes
@@ -187,7 +192,7 @@ union has the kind); nothing finds the rest:
 |---|---|
 | `handle/src/lib.rs` | the `HandleKind` variant and its constructor; an arm each in `rebuild`, `to_uri` and `describe`; a branch in `from_uri` unless the URI is `datalib:handle/…`; a row in `every_kind_round_trips_through_its_uri` |
 | `contact_schema/src/lib.rs` | `Medium::of_kind` |
-| `applets/src/unified_index/columns.rs` | `handle_mark`, the mark the grid's Author chip shows |
+| `applets/src/unified_document_index/columns.rs` | `handle_mark`, the mark the grid's Author chip shows |
 | `ui/src/cards/chipLinks.js` | `KINDS`, `handleFromUri`, `uriFromHandle`, and a row in `tests/chip_links.test.ts` |
 | `ui/src/cards/contacts.ts` | the `HandleKind` union, `handleKind`, `KIND_ICON`, and `copyText` if `describe` is not `label (handle)` |
 | `ui/src/cards/sanitize.ts` | `ALLOWED_URI_REGEXP`, if the URI's scheme is a new one |
@@ -205,19 +210,24 @@ What each source has today:
 |---|---|---|
 | email | the From address | To, Cc and Bcc (the sender's copy) as recipients; an `@` or `+` mention, a `mailto:` link in the fresh part of an HTML body |
 | Slack | `slack:<team>/<user>` | a `<@U…>` mention in a body; each reaction's user; the profile's email, in the source contact |
-| WhatsApp | the sender's number, a linked id (`…@lid`) through `jid_map` | each reaction's sender |
+| WhatsApp | the sender's number, a linked id (`…@lid`) through `jid_map`, else the linked id itself (`whatsapp:<digits>`, labelled "WhatsApp user …" and its last four digits when nothing names it) | each reaction's sender |
 | Signal | the number, else the account id (ACI); a recipient known by PNI alone has none | a mention (a `mentionAci` body range), by number else ACI, written `@Name` in place of its `U+FFFC`; number and ACI together, in the source contact; one known by ACI alone reads as the dashed ACI. The ACI is read by its one path in the stored frame, and one that will not read is a problem on the recipient (`aci`, `CoercionFailed`), not a silent loss |
 | Messages | the number or Apple ID address | each tapback's |
 | Google Chat and Voice | the address or number | |
 | SMS backup | the number; a group MMS, which does not say which number sent it, has none; a call by the other side's number | the number or numbers a text the account sent went to, as recipients |
 | address books | | a card's numbers and addresses, in the source contact |
 | LinkedIn | a message's sender, by `SENDER PROFILE URL`; the account's owner, by their primary address, on every post and comment | a connection's profile and email address, in the source contact |
+| Google Drive | a comment's author, by name; the account's own comments by its address, where the file names the account | a person chip in a Doc, by address |
 | Facebook | a Messenger message's sender, by name; a deleted account by its conversation, where it is that conversation's only one; the account's owner, by name, on every post, album, comment, reaction and edit (a store with no profile knows them only as "Me", and gives none) | each Messenger reaction's; a friend's name, in the source contact |
-| Beeper | none yet: a Matrix user id has no kind | |
+| Beeper | a Slack user by `slack:<team>/<user>`, read out of the bridge's Matrix id (the owner by the Slack user the room was bridged for); anyone else by a number or address the app lists for them (`participant_identifiers`); a Matrix id alone has no kind | each reaction's; the person's numbers, addresses and cached avatar, in the source contact |
+| calendar | an event's organizer, by address | each guest with an address, as a chip on the event's page |
+| GitHub, GitLab | a change request's or a comment's author, by login (GitLab's on the host the merge request's address is on) | |
+| Notion | a comment's author, and a page's last editor, by the address the users table gives, else by user id | |
 
-The AI chats, calendar, GitHub, GitLab and Notion write no handles.
+The AI chats write no handles.
 Where a source renders the owner's side as "Me" (WhatsApp, Signal,
-Messages, SMS backup, Google Voice), "Me" has no handle. Where it does
+Messages, SMS backup, Google Voice, Claude Code, Codex), "Me" has no
+handle. Where it does
 not (email, Slack, Google Chat), the owner's own messages carry their
 address or user id like anyone else's.
 
@@ -261,8 +271,8 @@ is only the shape: `source_id` and `key` say who describes the person;
 then `kind` (`person` or `group`), `names` (the preferred one first),
 `handles` (each a `ContactHandle`: its `medium`, the value as written,
 its `Handle` if one could be made, a label, and `stopped_working_by`),
-`photo` (the image, or a URL only a fetch could follow), `photo_url`
-(where the app serves it; see below), `org`, `title`, `note`,
+`photo` (the image in a blob store, or a URL only a fetch could
+follow), `photo_url` (where the app serves it; see below), `org`, `title`, `note`,
 `details`, `groups`, `members`, `source_url`, the record's own stamps,
 and `seen` (how much of a chat the person wrote).
 
@@ -277,7 +287,8 @@ Four producers, each needing less of a provider than the one before:
 - **A chat provider, for what only it knows**, in
   `NormalizedChat::contacts`: Slack's profiles (names, title, avatar,
   the email), WhatsApp's address book (`JidNames::contact`), Signal's
-  recipients (number and ACI together). These are rows, not documents.
+  recipients (number and ACI together), Beeper's participants (names,
+  numbers and addresses, the avatar the app cached). These are rows, not documents.
 - **chat-common, for free** (`chat-common/src/people.rs`): a baseline
   per handle per document from what the provider showed: each author
   with the names it wrote under, how many items and the last one's
@@ -293,29 +304,50 @@ and the index hold them in two tables: `source_contacts`
 the index's copy is indexed by handle). `grid_index` loads them the way
 it loads `grid_rows`.
 
-**`POST /people` on the `unified_index` applet** takes `{"handles":
+**`POST /people` on the `unified_document_index` applet** takes `{"handles":
 […]}` and answers `{"people": {<handle>: [NormalizedContact, …]}}`: for
 each handle, every source contact holding it, one per source and key
 (the rows from each document summed), ranked by
-`unified_index/src/people.rs`: a source about people first, then the
+`unified_document_index/src/people.rs`: a source about people first, then the
 chat where the person wrote the most. A handle no source mentions is
 absent. This works with no contacts app at all.
 
 ### Photos
 
-`photo` is what the source gave: the image itself (`Photo::Inline`,
-written beside the rendered page as `blobs/<uuid>.<ext>` and never
-stored as a row) or a URL nothing fetched (`Photo::Url`, a Slack
-avatar). `photo_url` is what a chip draws: a path on the app's own
-origin, never another host's, since the app fetches nothing remote
-unasked, and only for an image a browser draws: png, jpeg, gif or
-webp (`contact_schema::DRAWABLE_PHOTO_TYPES`, the one list, which the
-contacts app's photo rule shares). contact-common fills it with
-`/applet/unified_index/asset/<markdown_uuid>/blobs/<file>`, which the
-index's asset route serves; a photo of another type keeps its file
-beside the page and gets no URL. The contacts app fills it with
-`/applet/datalib_contacts/photo/<contact_id>` for a photo a person put
-on their contact. With no photo, or one the browser fails to load, a
+`photo` is what the source gave: an image its blob store holds
+(`Photo::Stored`: the step whose store it is, the blake3 of the bytes
+and the type the store holds them as) or a URL nothing fetched
+(`Photo::Url`, a Slack avatar). Nothing writes a photo beside a page.
+`photo_url` is what a chip draws: a path on the app's own origin, never
+another host's, since the app fetches nothing remote unasked, and only
+for an image a browser draws: png, jpeg, gif or webp
+(`contact_schema::DRAWABLE_PHOTO_TYPES`, the one list, which the
+contacts app's photo rule shares). For a stored photo it is the photo's
+blob-store address, `/data/<group>/<function>/blob/<blake3>`, which
+`datalib-http` serves (`datalib/backend/blob_store/README.md`);
+`datalib_etl_render::photo` makes it, for contact-common's one person a
+page is about and for each of a chat's source contacts. A stored photo
+of another type is still shown on its contact's page, at the same
+address, and gets no URL.
+
+Where the bytes come from: LinkedIn's photos an earlier build fetched
+and Beeper's cached avatars are in the source's blob store already (an
+avatar counts only when the store holds it as an image). A vCard
+carries its photo inside the card, in the raw store: the contacts
+download decodes each inline `PHOTO` and puts it in the source's blob
+store before the card is stored (`contacts/src/ingest/photo.rs`), and
+the source's `--migrate` puts in the photos of every card a store
+already holds, for a store an older build filled. Render hashes the
+card's decoded photo and links it. A photo the blob store lacks leaves
+the contact with no photo and a `blob_missing` problem on its page.
+
+A render store written before photos were linked holds the retired
+`Inline` spelling in `contact_json`; it reads as no photo until the
+page renders again. The contacts app fills it with
+`/applet/datalib_contacts/photo/<contact_id>?v=<when it was set>` for a
+photo a person put on their contact: a page draws an image it has
+already loaded under one URL again from memory, so a changed photo has
+to be a new URL to show without a reload. With no photo, or one the browser fails to load, a
 chip linked to a contact draws the person's initial, and any other
 chip draws the mark for its handle's kind.
 
@@ -377,23 +409,25 @@ is a 409 with the store's words; a handle that does not parse is a
 |---|---|
 | `POST /resolve` | `{handles}` → `{resolved: {<handle>: NormalizedContact}}`, each handle's contact; a handle nobody holds is absent |
 | `GET /search?q=` | contacts whose name contains `q`, for the popover's typeahead |
-| `GET /contacts` | every contact, by name, as a typed table (`columns`, `rows`): the person as a chip by their first working address, else number, else any handle; the first address and number; how many handles; the note; group or person; when it changed. What the contacts app's own table shows |
+| `GET /contacts` | every contact, by name, as a typed table (`columns`, `rows`): the person as a chip by their first working address, else number, else any handle, else as the contact itself (`datalib:contact/<id>`); the first address and number; how many handles; the note; group or person; when it changed. What the contacts app's own table shows |
 | `POST /contacts` | create, with `name`, optional `kind`, and the `handles` to link at once |
-| `GET /contact/{id}` | one contact, working handles first |
+| `GET /contact/{id}` | one contact, working handles first; a merged-away id answers as its survivor |
+| `DELETE /contact/{id}` | delete the contact and every contact merged into it: their links, fields, photo, drafts and memberships. Its handles are nobody's afterwards; the commit before holds it all |
+| `POST /merge` | `{from, into}`: `into` survives and takes `from`'s links, fields and memberships, its photo and note where it has none (two notes are kept one after the other); `from` stays as a row whose `merged_into` names `into`, so a `contact:<id>` saved anywhere still reaches the person, and anything merged into `from` now points at `into`. Two people or two groups, never one of each |
 | `POST /link`, `POST /unlink` | one handle to or from a contact |
 | `POST /stopped_working` | `{handle, by}`; `by: null` means it works again |
-| `POST /rename` | |
-| `GET`, `PUT`, `DELETE /photo/{id}` | the photo as bytes; put one (the body, with its `Content-Type`: png, jpeg, gif or webp, at most 4 MB; the route reads up to the gateway's 8 MB so the store's rule is the one that answers); drop it |
+| `POST /rename` | `{contact_id, name}`, at once, without a draft |
+| `GET`, `PUT`, `DELETE /photo/{id}` | the photo as bytes; put one (the body, with its `Content-Type`: png, jpeg, gif or webp, at most 4 MB; the route reads up to the gateway's 8 MB so the store's rule is the one that answers), answering its new `photo_url`; drop it |
 | `GET /contact/{id}/edit` | what the card edits, as published: name, note, fields |
 | `POST`, `GET /contact/{id}/draft` | open the contact's draft (cut it if there is none) / read it: `{base, mine, published, published_commit}` |
-| `PUT`, `DELETE /contact/{id}/draft` | autosave the whole edit onto the draft, uncommitted / discard the draft |
+| `PUT`, `DELETE /contact/{id}/draft` | autosave the whole edit onto the draft, uncommitted, answering `{handles: {<field_id>: <handle>}}` for each field whose value is an address or number / discard the draft |
 | `POST /contact/{id}/draft/save` | `{seen}`, the published commit the card last showed; `{"outcome": "saved", "commit"}`, or `{"outcome": "stale", "view"}` with nothing saved when the contact moved since |
 
 The config entry is `[[applets]] id = "datalib_contacts"` with
 `command = "datalib-applet datalib_contacts"`; the gateway passes the
 data root in the environment. A new root's starter config
 (`scaffold_toml` in `datalib-http`) writes it, filed under
-`unified_index`; a config written before that has to add it by hand.
+`unified_document_index`; a config written before that has to add it by hand.
 
 ### Fields, and editing a contact through a draft
 
@@ -413,6 +447,52 @@ survives. The save names the published commit the card last showed; if
 this contact's name, note or fields have moved since, nothing is saved
 and the card gets the new state to show. Links and photos change at
 once, never through a draft.
+
+On the person card, `ContactEditor.ce.vue` is the part under *Your
+contact*: the contact's fields and note as published, *Edit*, and the
+photo, which changes at once: *Set photo…*, *Remove photo*, or a drop
+on it of an image file or of an image dragged from the app itself, such
+as a source's photo on the same card (`photoDrop` in `contactEdit.ts`).
+An image dragged from another site is refused rather than fetched. *Edit*
+opens the draft (`POST …/draft`) and shows the name, the fields (a kind,
+a value and a free-text label each) and the note as a form. Each pause
+in typing, and each time a field loses focus, autosaves the whole edit
+(`PUT …/draft`), less any field still empty; *Save* and *Discard* end
+it. A card opened on a contact that has a draft resumes it, in any
+window, after a reload or a restart. When it opens the draft, on each
+`curated` frame, and on a save refused as stale, the card compares what
+the draft was cut from, the form and what is published (`merge3` in
+`contactEdit.ts`, the same three-way merge the save makes): a change
+published elsewhere to something the draft left alone is taken into the
+form, and a part both changed differently is marked "changed elsewhere"
+with *Use theirs* and *Keep mine*. After a stale save, saving again
+keeps what the form says.
+
+The card also sets the contact's fields beside the rest of what it
+knows (`contactFields.ts`):
+
+- **Each address or number field says how it stands against the
+  links.** Linked to this contact, it says nothing more; linked to
+  nobody, it offers *Link it*, one click and never automatic; linked to
+  someone else, it shows that contact's chip, which also catches a
+  typo. The handle comes from the store, which answers each field's
+  handle on every autosave, so the card never repeats the handle rules.
+  A linked address or number that no field holds offers *Add as a
+  field*.
+- **A source's section copies into the contact.** *Copy to …* under
+  each source lists what it says that a contact can hold (name,
+  addresses and numbers, title, organization, its details as fields,
+  note), each with *Copy*, and *Copy all*, which leaves the name to be
+  picked on its own. Copying opens the draft if it is not open; a value
+  the contact already holds, written however, says so instead. A copied
+  field records the source and record it came from (`copied_from`), and
+  typing over it makes it the person's own.
+- **A copy does not follow its source.** Where the source a field was
+  copied from now says something else, the field says so ("… now says
+  *X*", with *Take it*), or that the source no longer says it.
+
+Not built yet: history and undo, and the export
+([`plans/contact_editing.md`](plans/contact_editing.md)).
 
 ## In the UI
 
@@ -451,8 +531,9 @@ Everything is in `datalib/ui/src/cards/`:
   (`ChipMenu.ce.vue`). `chip.css` is the one look.
 - `PersonCard.ce.vue` is the card a person chip's double-click opens
   (`personView`; its rules are `person.ts`). Its heading is the
-  person's chip; then your contact when the handle is linked to one;
-  then each source's record that holds one of the card's handles, a
+  person's chip; then your contact when the handle is linked to one,
+  which the card edits (§"Fields, and editing a contact through a
+  draft"); then each source's record that holds one of the card's handles, a
   section per source and never merged, the source the chip was seen in
   first, each saying which handle it was found *via*. Every handle on
   it is a chip showing the identifier (`identifierCell`), pale blue
@@ -465,7 +546,11 @@ Everything is in `datalib/ui/src/cards/`:
   table: every contact, read live from the app's `GET /contacts`, never
   through the index, so it needs no sync and shows an edit made
   anywhere as soon as the `curated` frame arrives. Browse on the app's
-  Manage row opens it. Your contacts are not in the search grid: the
+  Manage row opens it. A contact with no handle is drawn as a contact
+  chip (`contactCell`, through `contactsById`). Its right-click deletes
+  the rows it aims at, and merges every other selected row into the one
+  clicked, so duplicates are merged by selecting them all and
+  right-clicking the one to keep. Your contacts are not in the search grid: the
   index holds what sources render, and nothing renders this store.
 - The grid's Author column is a chip too: `grid_rows.author_handle`
   (which `from:` finds through the search terms) comes with each
@@ -512,8 +597,10 @@ spelling a source used, and anyone else whose name holds it. A name
 also reaches every handle a source ever showed under it, through the
 search terms' `names` table, filled from the rows' authors and from
 `source_contacts`. A chip's "Everything with <name>" writes
-`with:<handle>`, so it finds what they wrote, what they received and
-their own cards. Typing `@` at the start of a word offers people and
+`with:contact:<id>` when the handle is linked to one of your contacts,
+so it finds them under every handle linked there, and `with:<handle>`
+otherwise; either finds what they wrote, what they received and their
+own cards (`chipActions.ts::everythingWith`). Typing `@` at the start of a word offers people and
 writes the pick as `with:`.
 
 A conversation's own row answers `with:` for everyone who took part in
@@ -540,7 +627,7 @@ supplies an `about` search term for each handle the card holds and each
 name it gives, and nobody wrote the card. So `with:riker` finds his card
 beside everything he took part in.
 
-[`search_by_example_tests.rs`](../../datalib/backend/applets/src/unified_index/search_by_example_tests.rs)
+[`search_by_example_tests.rs`](../../datalib/backend/applets/src/unified_document_index/search_by_example_tests.rs)
 shows each of these rules on a small cast: how its rows are filed, and
 which queries do and do not find them.
 
@@ -594,14 +681,14 @@ chip in the UI is separate and always uses the latest answer.
   against the current rules, the photo rules.
 - `chat-common`: `people.rs` (the baseline, recipients, reactors, the
   provider merge); `render.rs` (the header and recipients line).
-- `unified_index`: `people.rs` ranking; the applet's `/people` against
+- `unified_document_index`: `people.rs` ranking; the applet's `/people` against
   the fixture index.
 - `tests/fixtures/ingested_tng_test.py`: the end-to-end guard, from the
   TNG fixture through the index: Picard known by one address from
   three sources, one number written two ways by three sources as one
   handle, WhatsApp's address book, Signal's number and ACI together, a
-  Slack mention as a chip link, two cards' photos as the URLs the index
-  serves.
+  Slack mention as a chip link, two cards' photos at their blob-store
+  addresses.
 - UI: `contacts.test.ts`, `resolver.test.ts` and
   `tests/chip_links.test.ts`; the render preview golden shows
   unresolved chips. `tests/e2e/contacts.spec.ts` runs on a root with the
@@ -610,7 +697,7 @@ chip in the UI is separate and always uses the latest answer.
 
 ## Not built
 
-Editing a contact on its card, merge, groups and members, undo, the triage grid of
+Editing a contact on its card, merging or deleting from the person card, groups and members, undo, the triage grid of
 unresolved handles, a
 handle for a number without its country code, a handle that stopped
 working in some apps but not others, mentions in Google Chat,

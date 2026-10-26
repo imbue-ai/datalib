@@ -1,0 +1,31 @@
+# Facebook's "Download your information" export, in JSON, unzipped into one
+# folder, with every option set, and searchable. No sign-in. Each export is
+# a complete snapshot: what a newer one no longer holds leaves the mirror.
+[[groups]]
+id = "facebook"
+name = "Facebook"
+type = "facebook"
+
+[[steps]]
+group = "facebook"
+function = "ingest"
+
+[steps.params.export]
+path = "~/Downloads/facebook-export"  # the folder the export's zips were unzipped into
+
+[[steps]]
+group = "facebook"
+function = "render_markdown"
+inputs = ["facebook/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "facebook"
+function = "keyword_index"
+inputs = ["facebook/render_markdown"]
+
+[[steps]]
+group = "facebook"
+function = "embed"
+inputs = ["facebook/keyword_index"]

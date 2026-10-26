@@ -1,27 +1,32 @@
-//! Signal download entry point.
+//! Signal download entry point: every snapshot under the backup folder
+//! the store does not hold, oldest first, one dated commit each, then the
+//! newest on top. `INGEST.md` beside this crate has the rules.
 
+pub mod backups;
 pub mod db;
+pub mod keys;
 pub mod schema_raw;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Context, Result};
-use datalib_etl::bulk::{bulk_upsert_in_tx, BulkUpsertable};
+use anyhow::{bail, Context, Result};
+use datalib_etl::bulk::{bulk_upsert_first_seen_in_tx, BulkUpsertable};
 use datalib_etl::control::DownloadControl;
+use datalib_etl::doltlite_raw as dr;
 use datalib_etl::progress::Progress;
 use datalib_etl::prune;
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
 use datalib_signal_backup::{backup, decrypt_attachment, local_media_name, Snapshot};
 use serde::Serialize;
-use sqlx::Row;
 use tracing::info;
 
+use backups::{Found, Top, LEDGER};
 pub use db::{db_path_for, RawDb};
 pub use schema_raw::{AccountRow, ChatItemRow, ChatRow, RecipientRow};
 
-const DEFAULT_AEP_ENV: &str = "SIGNAL_BACKUP_PASSPHRASE";
+pub const DEFAULT_AEP_ENV: &str = "SIGNAL_BACKUP_PASSPHRASE";
 
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
@@ -31,8 +36,7 @@ pub struct FetchOptions {
     /// construction").
     pub db: RawDb,
     /// Directory containing one or more `signal-backup-YYYY-MM-DD-HH-MM-SS/`
-    /// snapshot subdirs. The newest (lexicographically — Signal's
-    /// timestamps sort correctly) is the one we ingest.
+    /// snapshot subdirs, every one of which is read.
     pub snapshot_root: PathBuf,
     /// This host's shared fingerprint cache. Host state, so it lives
     /// outside the scan store — see [`datalib_etl_files::fingerprint_cache`].
@@ -43,144 +47,269 @@ pub struct FetchOptions {
     /// produces. Override exists so a user can point at a separated
     /// files tree (e.g. on a different volume) without symlinking.
     pub files_root: Option<PathBuf>,
-    /// Name of the env var holding the AEP. Defaults to
-    /// `SIGNAL_BACKUP_PASSPHRASE`. Letting the user override means a single
-    /// process can keep AEPs for multiple Signal accounts segregated
-    /// at the shell level (`SIGNAL_BACKUP_PASSPHRASE_PERSONAL`, …).
-    pub aep_env_var: Option<String>,
+    /// The account entropy pool the backup is encrypted under.
+    pub aep: String,
     pub progress: Progress,
     pub control: DownloadControl,
 }
 
 #[derive(Debug, Default, Serialize, Clone)]
 pub struct FetchSummary {
+    /// Snapshots in the folder, whether read this run or before.
+    pub backups_found: usize,
+    /// The snapshots this run read, in order; the last is what HEAD holds.
+    pub backups_read: Vec<String>,
+    /// The last snapshot read, and what it held.
+    pub snapshot: String,
+    /// Blake3 hex of that snapshot (see `schema_raw::SNAPSHOT_BLAKE3_RECIPE_DOC`).
+    pub snapshot_blake3: String,
     pub recipients: usize,
     pub chats: usize,
     pub chat_items: usize,
-    /// Number of media file names listed in the snapshot's `files`
-    /// sidecar (which catalogs the shared `files/XX/<name>` tree).
+    /// Media file names listed in its `files` sidecar (which catalogs the
+    /// shared `files/XX/<name>` tree).
     pub media_files: usize,
-    /// Newly-stored attachment blobs (decrypted + landed in the CAS).
+    /// Newly-stored attachment blobs (decrypted + landed in the CAS),
+    /// across the run.
     pub blobs: usize,
-    /// Attachments whose ref already had a hash attached, so we
-    /// short-circuited without touching disk.
+    /// Attachments whose bytes an earlier read already stored, so they
+    /// were not decrypted again, across the run.
     pub blobs_skipped: usize,
+    /// Attachments a snapshot had no bytes for that an earlier snapshot
+    /// stored, so they keep them, across the run.
+    pub blobs_kept: usize,
     /// Attachments we couldn't decrypt/read (file missing, MAC fail,
-    /// LocatorInfo without a local key, …). Each is a `problems` row on
-    /// its `chat_item_attachments` edge.
+    /// LocatorInfo without a local key, …), across the run. Each is a
+    /// `problems` row on its `chat_item_attachments` edge.
     pub blob_errors: usize,
-    pub snapshot: String,
-    /// Blake3 hex of the snapshot (see `schema_raw::SNAPSHOT_BLAKE3_RECIPE_DOC`).
-    pub snapshot_blake3: String,
-    /// Rows an older snapshot held that this one does not.
+    /// Rows a snapshot read before held that the next one did not, across
+    /// the run.
     pub pruned: usize,
-    /// True when fetch short-circuited because this snapshot was
-    /// already recorded in `ingested_backups`. When true, all other
-    /// counters are zero.
-    pub already_ingested: bool,
+}
+
+/// One snapshot read into the store, not yet committed.
+struct Read {
+    backup_time_ms: u64,
+    /// Frames that would not decode, so it was not read whole.
+    undecoded: Vec<String>,
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let pool = opts.db.pool().clone();
-    // Not the run's stop flag: the walk does not stop, so even a stopped
-    // run read every frame, and the snapshot it stamps is never read again.
+    // Not the run's stop flag, which would drop what is reported after a
+    // stop: a snapshot is read whole once begun, and the run's stop is
+    // honoured between snapshots.
     let never_stops = StopFlag::new();
-    run_problems::collecting(&pool, &never_stops, |found| read_snapshot(opts, found)).await
+    run_problems::collecting(&pool, &never_stops, |found| read_backups(opts, found)).await
 }
 
-async fn read_snapshot(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
-    let db = opts.db.clone();
+async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
+    let db = &opts.db;
+    let aep = &opts.aep;
 
-    let aep_env_var = opts
-        .aep_env_var
-        .clone()
-        .unwrap_or_else(|| DEFAULT_AEP_ENV.to_string());
-    let aep = std::env::var(&aep_env_var).map_err(|_| {
-        anyhow!(
-            "${aep_env_var} not set — pass the Signal AEP via that env var (sourced from .envrc.private etc.)"
-        )
-    })?;
-
-    // `snapshot_dir` lives inside the `sync:` block (not on
-    // SourceCommon.input_path), so core's load-time tilde expansion
-    // doesn't reach it. Expand here for the convenience of YAML that
-    // says `snapshot_dir: ~/backups/SignalBackups`.
+    // `path` lives inside the `backup` table (not on SourceCommon.input_path),
+    // so core's load-time tilde expansion doesn't reach it.
     let snapshot_root = expand_tilde(&opts.snapshot_root);
-    let snapshot_dir = pick_latest_snapshot(&snapshot_root)
-        .with_context(|| format!("pick latest snapshot under {}", snapshot_root.display()))?;
     let files_root = opts
         .files_root
         .clone()
         .map(|p| expand_tilde(&p))
         .unwrap_or_else(|| snapshot_root.join("files"));
+
+    let (snapshots, unreadable) = find_snapshots(&opts.cache, &snapshot_root).await?;
+    let plan = backups::plan(snapshots, &db.read_ledger().await?);
+    info!(
+        event = "signal_plan",
+        root = %snapshot_root.display(),
+        found = plan.found.len(),
+        to_read = plan.ingest.len(),
+        unreadable = unreadable.len(),
+        "planned the backup folder"
+    );
+    if plan.ingest.is_empty() {
+        info!(
+            event = "signal_snapshot_already_ingested",
+            root = %snapshot_root.display(),
+            "every snapshot in the folder was ingested before; nothing new to decrypt"
+        );
+    }
+    let mut summary = FetchSummary {
+        backups_found: plan.found.len(),
+        ..Default::default()
+    };
+    let mut failed: Vec<String> = Vec::new();
+    for (name, why) in unreadable {
+        found.record_failed(LEDGER, &name, why);
+        failed.push(name);
+    }
+
+    let mut last: Option<Read> = None;
+    let mut first_failure: Option<String> = None;
+    let stop = &opts.control.stop;
+    for snap in &plan.ingest {
+        if stop.requested() {
+            break;
+        }
+        match read_snapshot(db, aep, &files_root, snap, &mut summary).await? {
+            Ok(read) => {
+                let date = commit_date(read.backup_time_ms);
+                let msg = format!("download signal: backup {}", snap.name);
+                dr::commit_run_dated(db.pool(), &msg, date.as_deref()).await?;
+                last = Some(read);
+            }
+            Err(why) => {
+                first_failure.get_or_insert_with(|| format!("{}: {why}", snap.name));
+                found.record_failed(LEDGER, &snap.name, why);
+                failed.push(snap.name.clone());
+            }
+        }
+    }
+    // Every snapshot it tried would not read: a passphrase that is not
+    // this account's, most likely, and not something to file away as
+    // one problem per backup.
+    if let (None, Some(first)) = (&last, &first_failure) {
+        bail!("no Signal backup this run tried would read; first: {first}");
+    }
+
+    if !stop.requested() {
+        match backups::top(&plan, &db.read_ledger().await?, &failed) {
+            Top::Read(snap) => {
+                match read_snapshot(db, aep, &files_root, snap, &mut summary).await? {
+                    Ok(read) => {
+                        // Dated now: the reason for this commit is now, not
+                        // when the backup was taken.
+                        let msg = format!(
+                            "download signal: backup {}, read again to put the newest back on top",
+                            snap.name
+                        );
+                        dr::commit_run(db.pool(), &msg).await?;
+                        last = Some(read);
+                    }
+                    Err(why) => found.record_failed(LEDGER, &snap.name, why),
+                }
+            }
+            Top::Gone(name) => found.record_failed(
+                LEDGER,
+                &name,
+                "the newest backup the store holds is no longer in the folder, so it cannot \
+                 be read again; HEAD stays on the state the last sync left until a newer \
+                 backup arrives",
+            ),
+            Top::Holds | Top::Nothing => {}
+        }
+        // Every run plans every snapshot, so one not stopped tried every
+        // snapshot an earlier run could not read.
+        found.records_tried_all(LEDGER);
+    }
+
+    match last {
+        // What HEAD holds is the last snapshot read, so its report replaces
+        // the last one's.
+        Some(read) => {
+            if let Some(first) = read.undecoded.first() {
+                found.phase(
+                    "frames",
+                    format!(
+                        "{} backup frame(s) did not decode, so their records are missing and \
+                         nothing this backup dropped was deleted, until a newer backup reads; \
+                         first: {first}",
+                        read.undecoded.len()
+                    ),
+                );
+            }
+        }
+        // Nothing was read, so what the last read could not decode stands.
+        None => found.cut_short(),
+    }
+    Ok(summary)
+}
+
+/// Every snapshot directory under `root`, fingerprinted, and
+/// `(name, why)` for each one that could not be.
+async fn find_snapshots(
+    cache: &datalib_etl_files::fingerprint_cache::FingerprintCache,
+    root: &Path,
+) -> Result<(Vec<Found>, Vec<(String, String)>)> {
+    let mut dirs = Vec::new();
+    for entry in std::fs::read_dir(root).with_context(|| format!("read_dir {}", root.display()))? {
+        let entry = entry.context("read_dir entry")?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if backups::is_snapshot_name(&name) && entry.file_type().is_ok_and(|t| t.is_dir()) {
+            dirs.push((name, entry.path()));
+        }
+    }
+    if dirs.is_empty() {
+        bail!("no signal-backup-* subdirectory under {}", root.display());
+    }
+    let mut found = Vec::new();
+    let mut unreadable = Vec::new();
+    for (name, dir) in dirs {
+        match schema_raw::snapshot_fingerprint(cache, &dir).await {
+            Ok(fingerprint) => found.push(Found {
+                name,
+                dir,
+                fingerprint,
+            }),
+            Err(e) => unreadable.push((name, format!("{e:#}"))),
+        }
+    }
+    Ok((found, unreadable))
+}
+
+/// The commit date for a snapshot: when Signal says it was taken.
+fn commit_date(backup_time_ms: u64) -> Option<String> {
+    let date = i64::try_from(backup_time_ms)
+        .ok()
+        .filter(|&ms| ms > 0)
+        .and_then(chrono::DateTime::from_timestamp_millis)
+        .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+    if date.is_none() {
+        tracing::warn!(
+            backup_time_ms,
+            "signal: a backup carries no usable time; committing it dated now"
+        );
+    }
+    date
+}
+
+/// Read one snapshot into the store's working set and the ledger.
+/// `Ok(Err(why))` for one that would not open, before anything is
+/// written; an `Err` once writing began fails the run, since the working
+/// set may hold half of it.
+async fn read_snapshot(
+    db: &RawDb,
+    aep: &str,
+    files_root: &Path,
+    snap: &Found,
+    summary: &mut FetchSummary,
+) -> Result<Result<Read, String>> {
     info!(
         event = "signal_open_snapshot",
-        snapshot = %snapshot_dir.display(),
+        snapshot = %snap.dir.display(),
         files_root = %files_root.display(),
         "opened the backup snapshot"
     );
-
-    // Resume cursor, fast path: fingerprint the snapshot by the content of its
-    // three files and look it up in `ingested_backups`. No decrypt on the skip,
-    // and the digests come from this host's shared cache, so a snapshot
-    // something else already walked costs three stat calls.
-    let fingerprint = schema_raw::snapshot_fingerprint(&opts.cache, &snapshot_dir)
+    let opened = {
+        let dir = snap.dir.clone();
+        let aep = aep.to_string();
+        tokio::task::spawn_blocking(move || -> Result<_> {
+            // Streams in 64KiB chunks; tens of MB → a few hundred ms.
+            let (blake3, size) = compute_snapshot_blake3(&dir).context("hash snapshot")?;
+            // gunzip + AES on tens of MB.
+            let snap = Snapshot::open(&dir, &aep).context("decrypt snapshot")?;
+            let info = snap.backup_info()?;
+            Ok((blake3, size, snap, info))
+        })
         .await
-        .with_context(|| format!("snapshot fingerprint {}", snapshot_dir.display()))?;
-    if db.snapshot_already_ingested(&fingerprint).await? {
-        info!(
-            event = "signal_snapshot_already_ingested",
-            snapshot = %snapshot_dir.display(),
-            fingerprint = %fingerprint,
-            note = "skipping decrypt + walk; `datalib-dag --reset` this step to re-ingest",
-            "this snapshot was ingested before; nothing to do"
-        );
-        // Nothing was read, so what its one read could not decode stands.
-        found.cut_short();
-        return Ok(FetchSummary {
-            snapshot: snapshot_dir
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default(),
-            snapshot_blake3: String::new(),
-            already_ingested: true,
-            ..Default::default()
-        });
-    }
-
-    // Fingerprint missed. Compute the forensic blake3 (used to fill
-    // the `blake3` column on a successful record) before we open the
-    // decrypted snapshot. Streams in 64KiB chunks; tens of MB → a
-    // few hundred ms.
-    let snapshot_dir_for_hash = snapshot_dir.clone();
-    let (snapshot_blake3, total_byte_size) =
-        tokio::task::spawn_blocking(move || compute_snapshot_blake3(&snapshot_dir_for_hash))
-            .await
-            .context("join snapshot hash task")?
-            .with_context(|| format!("hash snapshot {}", snapshot_dir.display()))?;
-
-    // Heavy crypto work — gunzip + AES on tens of MB — runs in a
-    // blocking thread so we don't block the tokio runtime.
-    let snap = {
-        let snapshot_dir = snapshot_dir.clone();
-        tokio::task::spawn_blocking(move || Snapshot::open(&snapshot_dir, &aep))
-            .await
-            .context("join snapshot decrypt task")?
-            .context("decrypt snapshot")?
+        .context("join snapshot read task")?
     };
-
-    let mut summary = FetchSummary {
-        media_files: snap.file_names().len(),
-        snapshot: snapshot_dir
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default(),
-        snapshot_blake3: snapshot_blake3.clone(),
-        ..Default::default()
+    let (snapshot_blake3, total_byte_size, snap_data, info) = match opened {
+        Ok(o) => o,
+        Err(e) => return Ok(Err(format!("{e:#}"))),
     };
 
     // Entity rows accumulate in memory and go out through the generic
-    // `bulk_upsert_in_tx` at the end — every table by the same path. Attachment
+    // bulk upsert at the end — every table by the same path. Attachment
     // bytes are decrypted during the frame walk but their CAS and entity writes
     // are batched through `PendingAttachments`.
     let mut accounts: Vec<AccountRow> = Vec::new();
@@ -189,32 +318,15 @@ async fn read_snapshot(opts: FetchOptions, found: RunProblems) -> Result<FetchSu
     let mut chat_items: Vec<ChatItemRow> = Vec::new();
     let mut pending_attachments = PendingAttachments::default();
 
-    // Pre-load `(media_name → blake3)` for everything decrypted in a prior
-    // run, so an attachment shared between two snapshots skips the AES
-    // step. One query and O(N) memory, against N per-row queries during
-    // the walk. Empty after a blobs reset, so everything re-decrypts.
-    let already_decrypted: std::collections::HashMap<String, String> = {
-        let rows = sqlx::query(
-            "SELECT ref_id, blake3 FROM chat_item_attachments WHERE blake3 IS NOT NULL",
-        )
-        .fetch_all(db.pool())
-        .await
-        .context("preload already-decrypted attachments")?;
-        rows.iter()
-            .map(|r| {
-                Ok((
-                    r.try_get::<String, _>("ref_id")?,
-                    r.try_get::<String, _>("blake3")?,
-                ))
-            })
-            .collect::<Result<_, sqlx::Error>>()
-            .context("decode already-decrypted attachments")?
-    };
+    // Every attachment an earlier read stored bytes for, so one shared
+    // between two snapshots skips the AES step, and one a later snapshot
+    // no longer carries keeps the bytes it had. One query and O(N)
+    // memory, against N per-row queries during the walk.
+    let held = Held::load(db).await?;
+    let mut keys = keys::Keys::default();
 
-    // Frames that would not decode: their records are missing from this
-    // snapshot's ingest, and it is not read again.
     let mut undecoded: Vec<String> = Vec::new();
-    for frame in snap.frames() {
+    for frame in snap_data.frames() {
         let frame = match frame {
             Ok(f) => f,
             Err(e) => {
@@ -233,7 +345,7 @@ async fn read_snapshot(opts: FetchOptions, found: RunProblems) -> Result<FetchSu
                 });
             }
             Some(backup::frame::Item::Recipient(r)) => {
-                let id = r.id.to_string();
+                let id = keys.add_recipient(r);
                 let (identifier, name) = recipient_pretty(r);
                 let payload = serde_json::to_string(r).context("serialize recipient frame")?;
                 recipients.push(RecipientRow {
@@ -241,38 +353,35 @@ async fn read_snapshot(opts: FetchOptions, found: RunProblems) -> Result<FetchSu
                     identifier,
                     display_name: name,
                 });
-                summary.recipients += 1;
             }
             Some(backup::frame::Item::Chat(c)) => {
-                let id = c.id.to_string();
-                let rid = c.recipient_id.to_string();
+                let id = keys.add_chat(c);
+                let rid = keys.recipient(c.recipient_id);
                 let payload = serde_json::to_string(c).context("serialize chat frame")?;
                 chats.push(ChatRow {
                     id_and_payload: datalib_etl::doltlite_raw::WirePayload { id, payload },
                     recipient_id: rid,
                 });
-                summary.chats += 1;
             }
             Some(backup::frame::Item::ChatItem(ci)) => {
-                let chat_id = ci.chat_id.to_string();
-                let author_id = ci.author_id.to_string();
+                let chat_id = keys.chat(ci.chat_id);
+                let author_id = keys.recipient(ci.author_id);
                 let date_sent = ci.date_sent as i64;
                 let pk = schema_raw::chat_item_id_recipe(&chat_id, &author_id, date_sent);
 
                 // Decrypt synchronously (AES-256 can't be batched), then
-                // queue the entity row and CAS bytes for the end-of-fetch
-                // flush. Re-downloads skip cheaply via
-                // `chat_item_attachments`'s `(ref_id, blake3)` index.
+                // queue the entity row and CAS bytes for the end-of-read
+                // flush.
                 if let Some(backup::chat_item::Item::StandardMessage(sm)) = &ci.item {
                     for (idx, att) in sm.attachments.iter().enumerate() {
                         ingest_attachment(
-                            &files_root,
+                            files_root,
                             &pk,
                             idx,
                             att,
-                            &already_decrypted,
+                            &held,
                             &mut pending_attachments,
-                            &mut summary,
+                            summary,
                         );
                     }
                 }
@@ -284,7 +393,6 @@ async fn read_snapshot(opts: FetchOptions, found: RunProblems) -> Result<FetchSu
                     author_id,
                     date_sent,
                 });
-                summary.chat_items += 1;
             }
             _ => {
                 // StickerPack, AdHocCall, NotificationProfile,
@@ -292,18 +400,27 @@ async fn read_snapshot(opts: FetchOptions, found: RunProblems) -> Result<FetchSu
             }
         }
     }
+    summary.snapshot = snap.name.clone();
+    summary.snapshot_blake3 = snapshot_blake3.clone();
+    summary.recipients = recipients.len();
+    summary.chats = chats.len();
+    summary.chat_items = chat_items.len();
+    summary.media_files = snap_data.file_names().len();
 
     // The snapshot is the whole store, so read whole it replaces what an
     // older one left, in the transaction that writes it. One with a frame
     // that would not decode was not read whole: what it seems to have
     // dropped may be in that frame, so it deletes nothing.
+    //
+    // A row's sidecar is stamped the first time a snapshot holds it and
+    // left alone after, so a day's commit holds only what that day changed.
     let read_whole = undecoded.is_empty();
     let now = datalib_time::IsoOffsetTimestamp::now_local();
     let mut tx = db.pool().begin().await.context("begin snapshot tx")?;
-    bulk_upsert_in_tx(&mut tx, &accounts, &now).await?;
-    bulk_upsert_in_tx(&mut tx, &recipients, &now).await?;
-    bulk_upsert_in_tx(&mut tx, &chats, &now).await?;
-    bulk_upsert_in_tx(&mut tx, &chat_items, &now).await?;
+    bulk_upsert_first_seen_in_tx(&mut tx, &accounts, &now).await?;
+    bulk_upsert_first_seen_in_tx(&mut tx, &recipients, &now).await?;
+    bulk_upsert_first_seen_in_tx(&mut tx, &chats, &now).await?;
+    bulk_upsert_first_seen_in_tx(&mut tx, &chat_items, &now).await?;
     if read_whole {
         let kept = [
             (AccountRow::TABLE, ids_of(&accounts)),
@@ -324,33 +441,23 @@ async fn read_snapshot(opts: FetchOptions, found: RunProblems) -> Result<FetchSu
     tx.commit().await.context("commit snapshot tx")?;
     // Attachment bulk-flush: one CAS-pool tx (`put_many`) + one
     // entity-pool tx (chat_item_attachments + bookkeeping + per-row
-    // error annotations). The run's one seal publishes it with the rows
-    // above, or neither.
-    flush_attachments(&db, pending_attachments).await?;
-
-    // The next snapshot is read whole, so its report replaces this one.
-    if let Some(first) = undecoded.first() {
-        found.phase(
-            "frames",
-            format!(
-                "{} backup frame(s) did not decode, so their records are missing and \
-                 nothing this backup dropped was deleted, until a newer backup reads; \
-                 first: {first}",
-                undecoded.len()
-            ),
-        );
-    }
+    // error annotations), committed with the rows above.
+    flush_attachments(db, pending_attachments).await?;
 
     db.record_snapshot_ingested(
-        &fingerprint,
+        &snap.fingerprint,
         &snapshot_blake3,
-        &snapshot_dir.to_string_lossy(),
+        &snap.dir.to_string_lossy(),
         total_byte_size,
     )
     .await
     .context("record snapshot in ingested_backups")?;
+    summary.backups_read.push(snap.name.clone());
 
-    Ok(summary)
+    Ok(Ok(Read {
+        backup_time_ms: info.backup_time_ms,
+        undecoded,
+    }))
 }
 
 fn ids_of<T: BulkUpsertable>(rows: &[T]) -> HashSet<String> {
@@ -410,6 +517,36 @@ struct DecryptedCas {
     bytes: Vec<u8>,
 }
 
+/// The attachment edges the store holds bytes for: by row, and by
+/// Signal's media name.
+struct Held {
+    by_row: std::collections::HashMap<String, (String, String)>,
+    by_media_name: std::collections::HashMap<String, String>,
+}
+
+impl Held {
+    async fn load(db: &RawDb) -> Result<Self> {
+        let rows: Vec<(String, String, String)> = sqlx::query_as(
+            "SELECT id, ref_id, blake3 FROM chat_item_attachments WHERE blake3 IS NOT NULL",
+        )
+        .fetch_all(db.pool())
+        .await
+        .context("preload the attachments already stored")?;
+        let by_media_name = rows
+            .iter()
+            .map(|(_, ref_id, blake3)| (ref_id.clone(), blake3.clone()))
+            .collect();
+        let by_row = rows
+            .into_iter()
+            .map(|(id, ref_id, blake3)| (id, (ref_id, blake3)))
+            .collect();
+        Ok(Self {
+            by_row,
+            by_media_name,
+        })
+    }
+}
+
 /// Decrypt one `MessageAttachment`'s bytes out of the shared
 /// `<files_root>/XX/<media_name>` tree and queue them for batched
 /// CAS + entity-table writes via the `PendingAttachments`
@@ -420,44 +557,39 @@ fn ingest_attachment(
     chat_item_pk: &str,
     slot_idx: usize,
     att: &backup::MessageAttachment,
-    already_decrypted: &std::collections::HashMap<String, String>,
+    held: &Held,
     pending: &mut PendingAttachments,
     summary: &mut FetchSummary,
 ) {
     let attachment_id = schema_raw::chat_item_attachment_id_recipe(chat_item_pk, slot_idx);
+    let row = |ref_id: String| schema_raw::ChatItemAttachmentRow {
+        id: attachment_id.clone(),
+        chat_item_id: chat_item_pk.to_string(),
+        ref_id,
+        blake3: None,
+    };
     let (plaintext_hash, local_key) = match locate(att) {
         Ok(found) => found,
         // Nothing to retry: the bytes are not in this backup. The edge
         // carries the attachment's own id for a ref, having no media name.
         Err(why) => {
-            pending.rows.push(schema_raw::ChatItemAttachmentRow {
-                id: attachment_id.clone(),
-                chat_item_id: chat_item_pk.to_string(),
+            let problem = datalib_etl::blob_cas::BlobNotFetched {
                 ref_id: attachment_id.clone(),
-                blake3: None,
-            });
-            pending.errors.push(datalib_etl::blob_cas::BlobNotFetched {
-                ref_id: attachment_id,
                 detail: format!("the backup does not carry this attachment's bytes: {why}"),
                 reason: datalib_problems::Reason::NotFound,
-            });
-            summary.blob_errors += 1;
+            };
+            not_stored(row(attachment_id.clone()), problem, held, pending, summary);
             return;
         }
     };
     let media_name = local_media_name(&plaintext_hash, &local_key);
 
-    // Skip-check: if a prior run already decrypted this media_name
-    // (anywhere in any chat_item), we know the blake3 without
-    // re-decrypting. The CAS already has the bytes (a store reset
-    // leaves `cas_objects` alone), so we just record the new
-    // (chat_item_id, slot) → blake3 edge.
-    if let Some(blake3) = already_decrypted.get(&media_name) {
+    // A prior read already decrypted this media_name (anywhere in any
+    // chat_item), so the CAS has the bytes and only the edge is new.
+    if let Some(blake3) = held.by_media_name.get(&media_name) {
         pending.rows.push(schema_raw::ChatItemAttachmentRow {
-            id: attachment_id,
-            chat_item_id: chat_item_pk.to_string(),
-            ref_id: media_name,
             blake3: Some(blake3.clone()),
+            ..row(media_name)
         });
         summary.blobs_skipped += 1;
         return;
@@ -468,17 +600,11 @@ fn ingest_attachment(
     let enc = match std::fs::read(&enc_path) {
         Ok(b) => b,
         Err(e) => {
-            pending.rows.push(schema_raw::ChatItemAttachmentRow {
-                id: attachment_id.clone(),
-                chat_item_id: chat_item_pk.to_string(),
-                ref_id: media_name,
-                blake3: None,
-            });
-            pending.errors.push(blob_failed(
-                attachment_id,
+            let problem = blob_failed(
+                attachment_id.clone(),
                 format!("read {}: {e}", enc_path.display()),
-            ));
-            summary.blob_errors += 1;
+            );
+            not_stored(row(media_name), problem, held, pending, summary);
             return;
         }
     };
@@ -486,16 +612,8 @@ fn ingest_attachment(
     let plaintext = match decrypt_attachment(&enc, &local_key) {
         Ok(p) => p,
         Err(e) => {
-            pending.rows.push(schema_raw::ChatItemAttachmentRow {
-                id: attachment_id.clone(),
-                chat_item_id: chat_item_pk.to_string(),
-                ref_id: media_name,
-                blake3: None,
-            });
-            pending
-                .errors
-                .push(blob_failed(attachment_id, format!("decrypt: {e}")));
-            summary.blob_errors += 1;
+            let problem = blob_failed(attachment_id.clone(), format!("decrypt: {e}"));
+            not_stored(row(media_name), problem, held, pending, summary);
             return;
         }
     };
@@ -505,13 +623,33 @@ fn ingest_attachment(
         content_type: att.pointer.as_ref().and_then(|p| p.content_type.clone()),
         bytes: plaintext,
     });
-    pending.rows.push(schema_raw::ChatItemAttachmentRow {
-        id: attachment_id,
-        chat_item_id: chat_item_pk.to_string(),
-        ref_id: media_name,
-        blake3: None,
-    });
+    pending.rows.push(row(media_name));
     summary.blobs += 1;
+}
+
+/// An attachment this snapshot has no bytes for. One an earlier snapshot
+/// stored keeps them, and nothing is missing: a phone that never
+/// downloaded a file, or a files tree that no longer holds it, is not
+/// news that the attachment changed.
+fn not_stored(
+    row: schema_raw::ChatItemAttachmentRow,
+    problem: datalib_etl::blob_cas::BlobNotFetched,
+    held: &Held,
+    pending: &mut PendingAttachments,
+    summary: &mut FetchSummary,
+) {
+    if let Some((ref_id, blake3)) = held.by_row.get(&row.id) {
+        pending.rows.push(schema_raw::ChatItemAttachmentRow {
+            ref_id: ref_id.clone(),
+            blake3: Some(blake3.clone()),
+            ..row
+        });
+        summary.blobs_kept += 1;
+        return;
+    }
+    pending.rows.push(row);
+    pending.errors.push(problem);
+    summary.blob_errors += 1;
 }
 
 /// The plaintext hash and local key an attachment's bytes are found and
@@ -569,30 +707,6 @@ fn blob_failed(ref_id: String, detail: String) -> datalib_etl::blob_cas::BlobNot
     }
 }
 
-fn pick_latest_snapshot(root: &Path) -> Result<PathBuf> {
-    let mut best: Option<(String, PathBuf)> = None;
-    let entries =
-        std::fs::read_dir(root).with_context(|| format!("read_dir {}", root.display()))?;
-    for entry in entries {
-        let entry = entry.context("read_dir entry")?;
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if !name.starts_with("signal-backup-") {
-            continue;
-        }
-        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-            continue;
-        }
-        let path = entry.path();
-        match &best {
-            Some((b, _)) if b.as_str() >= name.as_ref() => {}
-            _ => best = Some((name.into_owned(), path)),
-        }
-    }
-    best.map(|(_, p)| p)
-        .ok_or_else(|| anyhow!("no signal-backup-* subdirectory under {}", root.display()))
-}
-
 fn recipient_pretty(r: &backup::Recipient) -> (Option<String>, Option<String>) {
     use backup::recipient::Destination;
     match r.destination.as_ref() {
@@ -625,7 +739,16 @@ fn recipient_pretty(r: &backup::Recipient) -> (Option<String>, Option<String>) {
                 });
             (identifier, name)
         }
+        Some(Destination::Group(g)) => (None, group_title(g)),
         _ => (None, None),
+    }
+}
+
+fn group_title(g: &backup::Group) -> Option<String> {
+    use backup::group::group_attribute_blob::Content;
+    match g.snapshot.as_ref()?.title.as_ref()?.content.as_ref()? {
+        Content::Title(t) if !t.is_empty() => Some(t.clone()),
+        _ => None,
     }
 }
 
@@ -646,33 +769,4 @@ fn hex_lower(bytes: &[u8]) -> String {
         out.push(HEX[(b & 0xf) as usize] as char);
     }
     out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-    use tempfile::TempDir;
-
-    #[test]
-    fn picks_latest_snapshot_by_name() {
-        let tmp = TempDir::new().unwrap();
-        for n in [
-            "signal-backup-2026-05-01-10-00-00",
-            "signal-backup-2026-06-08-20-27-22",
-            "signal-backup-2026-02-15-08-15-00",
-            "random-unrelated-dir",
-        ] {
-            fs::create_dir(tmp.path().join(n)).unwrap();
-        }
-        let got = pick_latest_snapshot(tmp.path()).unwrap();
-        assert!(got.ends_with("signal-backup-2026-06-08-20-27-22"));
-    }
-
-    #[test]
-    fn errors_when_no_snapshot_present() {
-        let tmp = TempDir::new().unwrap();
-        fs::create_dir(tmp.path().join("random")).unwrap();
-        assert!(pick_latest_snapshot(tmp.path()).is_err());
-    }
 }

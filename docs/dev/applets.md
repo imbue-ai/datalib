@@ -53,9 +53,10 @@ The child also gets four variables:
 | `DATALIB_APPLET_SECRET` | a secret the gateway minted for this process. **Every request the gateway forwards carries it in an `X-Datalib-Applet-Secret` header, and an applet must refuse a request without it**, and any request whose `Host` is not `127.0.0.1:<its own port>`. The port is loopback, but loopback is not private: any process of the same user can connect, and so can a web page whose hostname resolves to 127.0.0.1. The gateway keeps its routes behind the API token; this is what keeps the applet's port from being a second door to the same data. To run an applet by hand, set the variable to any value and send it. |
 
 `id` must be a valid JavaScript identifier. It is both the mount
-prefix (`/applet/<id>/`) and a name injected into card source, and card
-source is evaluated with `new Function`, so a dotted or digit-leading
-id would be a syntax error at render time rather than at config load.
+prefix (`/applet/<id>/`) and a namespace in card source
+(`comp.<id>.<name>`), whose grammar only reads identifiers, so a dotted
+or digit-leading id would fail to parse at render time rather than at
+config load.
 
 The config loader checks this, id uniqueness and the reserved `user`
 id (`accept_applets` in `datalib/backend/dag/src/config.rs`). A bad
@@ -356,14 +357,14 @@ A request to an applet that is configured but not running answers
 `502` with a JSON `error` naming it — a different message from one
 that is not configured at all, since the two want different fixes.
 One that is running but sends nothing for 30 seconds answers `504`,
-`applet "<id>" did not answer within 30s`. The `unified_index` applet
+`applet "<id>" did not answer within 30s`. The `unified_document_index` applet
 builds a search's whole answer before sending any of it, so a big
 search on a machine short of memory is the usual cause there. A hung
 qmd is not: a free-text search waits at most 20 seconds on it
 (`QMD_ANSWER_DEADLINE`), then asks it for a Node diagnostic report,
 logs what the report says it was doing, stops it, and answers with a
 `qmd_error`. The next search starts a fresh qmd. The reports are kept,
-the newest twenty, in `unified_index/qmd_aggregator/reports/` under the data
+the newest twenty, in `unified_document_index/qmd_aggregator/reports/` under the data
 root.
 
 The gateway forwards an applet's stderr line by line as it arrives and
@@ -378,7 +379,7 @@ seconds for the same grandchild reason.
 
 ## An applet that contributes no components
 
-`unified_index` is the other shape the contract allows: a server that
+`unified_document_index` is the other shape the contract allows: a server that
 contributes **endpoints only**. The
 grid, the document view and the document picker are builtins in the app
 bundle, so there is nothing to write into a namespace — the gateway
@@ -388,14 +389,17 @@ It is also the applet the app cannot run without. A data root whose
 config does not declare it has no search, which is why the scaffold and
 the config examples all write it and `datalib-migrate-config` carries it
 through. The
-UI calls it directly at `/applet/unified_index/…`; there is no `/api/`
-alias, and `datalib-http` does not know those routes exist.
+UI calls it directly at `/applet/unified_document_index/…`; there is no `/api/`
+alias, and `datalib-http` does not know those routes exist. The one
+alias the gateway keeps is the prefix from before the rename:
+`/applet/unified_index/…` reaches the same applet, for card scripts
+written against it.
 
 That is what makes the separation checkable rather than aspirational:
 
 ```sh
 bazel query 'somepath(//datalib/backend/http:datalib_http, \
-                      //datalib/backend/unified_index:datalib_unified_index)'
+                      //datalib/backend/unified_document_index:datalib_unified_document_index)'
 ```
 
 comes back empty. The index crate is linked by `datalib-step`, which
@@ -404,10 +408,18 @@ writes the indexes, and by `datalib-applet`, which serves them.
 ## Reference implementation
 
 `datalib/backend/applets` — `datalib-applet`, one subcommand per
-applet (`slack`, `unified_index` and `datalib_contacts`), the same shape
-as `datalib-step`. `datalib_contacts` is the one that writes: it is the
+applet (`slack`, `unified_document_index`, `unified_time_series_index` and
+`datalib_contacts`), the same shape as `datalib-step`.
+`unified_time_series_index` serves the time-series index read-only:
+`GET /time_series` lists the time series (`?source_id=`, `?q=`),
+`GET /time_series/<id>` is one, and `POST /points` with
+`{ids, from, to, budget}` answers each one's points in the range, or,
+past `budget` points, that many buckets of min, max and mean
+(`etl/time_series/src/read.rs`). It reads the points from each
+source's own store, at the commit the index recorded for it
+(`docs/dev/time_series.md` §"The index"). `datalib_contacts` is the one that writes: it is the
 only writer of the contacts store under `datalib_curated/`
-(`app_stores.md`), and like `unified_index` it contributes endpoints
+(`app_stores.md`), and like `unified_document_index` it contributes endpoints
 only, which the document view calls; one of them,
 `/photo/<contact_id>`, serves the photo a person put on a contact (and
 takes one with `PUT`, drops it with `DELETE`). One

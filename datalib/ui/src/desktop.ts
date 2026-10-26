@@ -225,7 +225,9 @@ export async function confirmAction(message: string): Promise<boolean> {
  * with no user-visible signal of its own.
  */
 export type PathPick =
-  | { outcome: "picked"; path: string }
+  /// `unreadable` says what refused when the app could not read what
+  /// was chosen; macOS can refuse even a path picked just now.
+  | { outcome: "picked"; path: string; unreadable?: string }
   | { outcome: "canceled" }
   | { outcome: "unavailable"; reason: string };
 
@@ -273,11 +275,28 @@ export async function pickPath(req: PathPickRequest): Promise<PathPick> {
     // the plugin's return type is unreachable, and narrowing rather
     // than casting keeps that true if the option ever changes.
     const path = Array.isArray(chosen) ? chosen[0] : chosen;
-    return path ? { outcome: "picked", path } : { outcome: "canceled" };
+    if (!path) return { outcome: "canceled" };
+    const unreadable = await readRefusal(path);
+    return unreadable ? { outcome: "picked", path, unreadable } : { outcome: "picked", path };
   } catch (e) {
     // Reachable with the bridge present but the command unauthorized.
     console.warn("dialog open failed", e);
     return { outcome: "unavailable", reason: String(e) };
+  }
+}
+
+/// What refused when the app read `path`, or null when it could — asked
+/// of the app process right after the pick, rather than learned from a
+/// sync days later. Null too when the check itself is not allowed, which
+/// says nothing about the path.
+async function readRefusal(path: string): Promise<string | null> {
+  const t = internals();
+  if (!t) return null;
+  try {
+    return ((await t.invoke("check_read_access", { path })) as string | null) ?? null;
+  } catch (e) {
+    console.warn("check_read_access unavailable", e);
+    return null;
   }
 }
 

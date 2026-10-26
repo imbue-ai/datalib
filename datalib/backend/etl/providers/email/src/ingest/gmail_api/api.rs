@@ -25,7 +25,9 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 /// Quota unit costs, from Google's published per-method table. Used by
 /// the throttle to spend the per-minute budget accurately rather than
 /// counting requests, which would badly misprice a mixed workload.
-pub const UNITS_MESSAGES_GET: u32 = 20;
+/// `messages.get` costs three times as much when it carries the message.
+pub const UNITS_MESSAGES_GET_RAW: u32 = 60;
+pub const UNITS_MESSAGES_GET_MINIMAL: u32 = 20;
 pub const UNITS_MESSAGES_LIST: u32 = 5;
 pub const UNITS_HISTORY_LIST: u32 = 2;
 pub const UNITS_LABELS_LIST: u32 = 1;
@@ -45,6 +47,18 @@ pub struct Client {
 /// of the configured ceiling).
 const RATE_LIMIT_CUT: f64 = 0.8;
 const RATE_LIMIT_FLOOR: f64 = 0.25;
+
+/// What the bucket holds, in seconds of its rate. Google counts a
+/// minute at a time, and any minute may spend what the bucket holds at
+/// its start plus a minute's refill: a bucket holding the whole minute
+/// lets a run's first minute spend twice the ceiling, and the rate limit
+/// that follows cuts the ceiling for the rest of the run.
+const BURST_SECONDS: f64 = 10.0;
+
+/// The most a bucket refilling at `units_per_minute` holds.
+fn bucket_capacity(units_per_minute: u32) -> f64 {
+    f64::from(units_per_minute) * BURST_SECONDS / 60.0
+}
 
 /// Client-side quota throttle: a leaky bucket over Gmail's per-user
 /// "quota units per minute" limit. Google's own answer is the authority:
@@ -75,7 +89,7 @@ impl QuotaThrottle {
             units_per_minute: units,
             // Start full: a fresh run should not wait before its first
             // request.
-            available: f64::from(units),
+            available: bucket_capacity(units),
             last_refill: Instant::now(),
             spent_total: 0,
             rate_limited: Arc::new(AtomicU64::new(0)),
@@ -100,9 +114,9 @@ impl QuotaThrottle {
 
     pub async fn acquire(&mut self, cost: u32) {
         self.absorb_rate_limits();
-        // A single request costing more than the whole per-minute budget
-        // would never be satisfiable; let it through rather than hang.
-        let cost = f64::from(cost).min(f64::from(self.units_per_minute));
+        // A single request costing more than the bucket holds would never
+        // be satisfiable; let it through rather than hang.
+        let cost = f64::from(cost).min(bucket_capacity(self.units_per_minute));
         loop {
             self.refill();
             if self.available >= cost {
@@ -156,7 +170,7 @@ impl QuotaThrottle {
         }
         self.last_refill = now;
         self.available = (self.available + elapsed * f64::from(self.units_per_minute) / 60.0)
-            .min(f64::from(self.units_per_minute));
+            .min(bucket_capacity(self.units_per_minute));
     }
 }
 
@@ -399,6 +413,22 @@ pub async fn get_message_raw(user_id: &str, client: &Client, id: &str) -> Result
         client,
     )
     .await?;
+    let mut msg = GmailMessage::from_json(&v)?;
+    let encoded =
+        str_field(&v, "raw").ok_or_else(|| anyhow!("messages.get({id}) returned no raw field"))?;
+    msg.raw = decode_base64url(&encoded)
+        .with_context(|| format!("decoding the raw field of message {id}"))?;
+    Ok(msg)
+}
+
+/// Everything `messages.get` says of a message but the message: its
+/// labels and thread, at a third of the price. `raw` comes back empty.
+pub async fn get_message_minimal(user_id: &str, client: &Client, id: &str) -> Result<GmailMessage> {
+    let v = get_json(
+        &format!("{BASE}/{user_id}/messages/{id}?format=MINIMAL"),
+        client,
+    )
+    .await?;
     GmailMessage::from_json(&v)
 }
 
@@ -419,11 +449,8 @@ pub struct GmailMessage {
 impl GmailMessage {
     fn from_json(v: &Value) -> Result<Self> {
         let id = str_field(v, "id").ok_or_else(|| anyhow!("messages.get returned no id"))?;
-        let encoded = str_field(v, "raw")
-            .ok_or_else(|| anyhow!("messages.get({id}) returned no raw field"))?;
         Ok(GmailMessage {
-            raw: decode_base64url(&encoded)
-                .with_context(|| format!("decoding the raw field of message {id}"))?,
+            raw: Vec::new(),
             thread_id: str_field(v, "threadId").unwrap_or_else(|| id.clone()),
             label_ids: v
                 .get("labelIds")
@@ -720,20 +747,21 @@ mod tests {
     async fn lets_the_first_request_through_immediately() {
         let mut t = QuotaThrottle::new(6_000);
         let start = std::time::Instant::now();
-        t.acquire(UNITS_MESSAGES_GET).await;
+        t.acquire(UNITS_MESSAGES_GET_RAW).await;
         assert!(start.elapsed() < Duration::from_millis(50));
-        assert_eq!(t.spent_total(), u64::from(UNITS_MESSAGES_GET));
+        assert_eq!(t.spent_total(), u64::from(UNITS_MESSAGES_GET_RAW));
     }
 
     /// The arithmetic behind the wait. At Gmail's real 6000 units/minute,
-    /// a `messages.get` costs 20, so a fully-drained bucket owes 0.2s —
-    /// i.e. ~300 messages/minute, the number the docs imply.
+    /// a `messages.get` that carries the message costs 60, so a
+    /// fully-drained bucket owes 0.6s — ~100 messages/minute, the number
+    /// the docs give.
     #[test]
     fn prices_the_wait_off_the_refill_rate() {
-        assert_eq!(wait_seconds(0.0, 20.0, 6_000), 0.2);
+        assert_eq!(wait_seconds(0.0, 60.0, 6_000), 0.6);
         assert_eq!(wait_seconds(0.0, 6_000.0, 6_000), 60.0);
         // Halving the ceiling doubles the wait.
-        assert_eq!(wait_seconds(0.0, 20.0, 3_000), 0.4);
+        assert_eq!(wait_seconds(0.0, 60.0, 3_000), 1.2);
     }
 
     /// Units already in the bucket are spent before any waiting.
@@ -746,11 +774,38 @@ mod tests {
         assert!(wait_seconds(10.0, 20.0, 6_000) < wait_seconds(0.0, 20.0, 6_000));
     }
 
-    /// Spending the whole budget must actually block the next request, or
+    /// A run's first minute once spent the full bucket and a minute's
+    /// refill, nearly twice the ceiling; Google rate-limited it, and the
+    /// lowered ceiling halved the rest of the backfill. With the default
+    /// ceiling, no minute may spend more than Google's 6000.
+    #[test]
+    fn no_minute_spends_more_than_google_allows() {
+        let most_in_a_minute =
+            bucket_capacity(datalib_etl_email_config::DEFAULT_QUOTA_UNITS_PER_MINUTE)
+                + f64::from(datalib_etl_email_config::DEFAULT_QUOTA_UNITS_PER_MINUTE);
+        assert!(most_in_a_minute <= 6_000.0, "{most_in_a_minute}");
+    }
+
+    /// A fresh throttle lets through what the bucket holds, and no more.
+    #[tokio::test]
+    async fn starts_with_a_bucket_of_ten_seconds() {
+        let mut t = QuotaThrottle::new(6_000);
+        let start = std::time::Instant::now();
+        t.acquire(1_000).await;
+        assert!(start.elapsed() < Duration::from_millis(50));
+        t.acquire(20).await;
+        assert!(
+            start.elapsed() >= Duration::from_millis(150),
+            "did not throttle: waited {:?}",
+            start.elapsed()
+        );
+    }
+
+    /// Spending the whole bucket must actually block the next request, or
     /// the throttle is decorative. Sized so the wait is real but short:
     /// 20 units at 6000/min is 0.2s.
     #[tokio::test]
-    async fn blocks_once_the_minute_budget_is_spent() {
+    async fn blocks_once_the_bucket_is_spent() {
         let mut t = QuotaThrottle::new(6_000);
         t.acquire(6_000).await;
         let start = std::time::Instant::now();
@@ -846,7 +901,7 @@ mod tests {
 
         client.rate_limited.fetch_add(1, Ordering::Relaxed);
         let start = std::time::Instant::now();
-        t.acquire(UNITS_MESSAGES_GET).await;
+        t.acquire(UNITS_MESSAGES_GET_MINIMAL).await;
         assert_eq!(t.units_per_minute(), 4_800);
         // The bucket was emptied: 20 units at 4800/min is 0.25s.
         assert!(

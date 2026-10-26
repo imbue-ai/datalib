@@ -55,6 +55,7 @@ async fn post_feedback_inserts_row() {
             None,
         )),
         api_token,
+        frame_ancestors: Default::default(),
     };
     let app = router(app_state.clone());
 

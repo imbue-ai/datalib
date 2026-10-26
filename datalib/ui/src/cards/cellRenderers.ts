@@ -180,7 +180,7 @@ export function renderIdentity(
 
 /// Counts drawn as bubbles after a label. `data-field` is what the grid
 /// reads to route a double-click on them to `field`.
-function renderBadges(field: string, chips: Chip[]): HTMLElement {
+export function renderBadges(field: string, chips: Chip[]): HTMLElement {
   const wrap = document.createElement("span");
   wrap.className = "tg-badges";
   wrap.dataset.field = field;
