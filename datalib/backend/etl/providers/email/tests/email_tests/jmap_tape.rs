@@ -124,6 +124,7 @@ impl Tape {
             "apiUrl": "https://jmap.example.test/jmap/api/",
             "downloadUrl": "https://jmap.example.test/jmap/download/{accountId}/{blobId}/{name}?type={type}",
             "uploadUrl": "https://jmap.example.test/jmap/upload/{accountId}/",
+            "username": "t@example.test",
             "primaryAccounts": { "urn:ietf:params:jmap:mail": ACCOUNT },
             "accounts": { ACCOUNT: { "name": "t@example.test", "isPersonal": true } },
         });

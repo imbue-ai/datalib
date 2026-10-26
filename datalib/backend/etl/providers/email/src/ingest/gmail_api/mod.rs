@@ -231,6 +231,7 @@ async fn run_sync(db: &RawDb, opts: &FetchOptions, found: &RunProblems) -> Resul
             "isPersonal": true,
             "_source": { "via": "gmail.googleapis.com" },
         }),
+        None,
     )
     .await?;
 
