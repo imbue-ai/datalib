@@ -189,15 +189,14 @@ brings the attached files too, though not the tool steps (code
 output, file reads, image generation) the API shows.
 
 Better, give one source both an `api` table and the `export` table.
-Each sync then lists your conversations through the API but takes
-every one the export already holds, unchanged, and every attached
-file, from the export, so only what changed after the export was taken
-is downloaded. Only the API's listing deletes a conversation, so an
-export getting older never costs you one. Leave `since` unset, or the
-export fills in only the conversations updated after it. Don't later
-drop the `api` table and keep `export`: an export alone is a complete
-snapshot, and reading an older one drops every conversation it
-predates.
+The first sync fills in every conversation from the export, with its
+files, then the API downloads only what changed after the export was
+taken; later syncs skip the export until you point it at a new one.
+`since` then limits only what the API keeps fresh. Only the API's
+listing deletes a conversation, so an export getting older never costs
+you one. Don't later drop the `api` table and keep `export`: an export
+alone is a complete snapshot, and reading an older one drops every
+conversation it predates.
 
 ## Claude
 

@@ -1,7 +1,7 @@
 //! What each loop fetches and how a flush of it is stored, one
 //! [`Fetcher`] per kind: a conversation's detail, an attachment's bytes.
-//! Each is one request per record, or none when the run's export holds
-//! it; the loop (`datalib_etl_web::owed`) owns the stop, the failure
+//! Each is one request per record, or none for a file the run's export
+//! holds; the loop (`datalib_etl_web::owed`) owns the stop, the failure
 //! budget, the flush and what each outcome means for the record's
 //! sidecar.
 
@@ -49,21 +49,18 @@ impl Fetcher<Conversation> for Conversations<'_> {
         let mut out = Vec::with_capacity(batch.len());
         for listed in batch {
             ctx.opts.progress.set_message(&listed.key);
-            let outcome = match ctx.export_copy_of(&listed) {
-                Some(copy) => parsed(&listed.key, copy),
-                None => {
-                    let outcome = match ctx.client.get_conversation(&listed.key).await {
-                        Ok(full) => parsed(&listed.key, &full),
-                        Err(e) => not_fetched(ctx, e)?,
-                    };
-                    if ctx.opts.sleep_between > Duration::ZERO {
-                        sleep(ctx.opts.sleep_between).await;
-                    }
-                    outcome
-                }
+            let outcome = match ctx.client.get_conversation(&listed.key).await {
+                Ok(full) => match parse_conversation(&listed.key, &full) {
+                    Ok(c) => Outcome::Got(c),
+                    Err(e) => Outcome::Failed(format!("{e:#}")),
+                },
+                Err(e) => not_fetched(ctx, e)?,
             };
             ctx.opts.progress.inc(1);
             out.push(Fetched { listed, outcome });
+            if ctx.opts.sleep_between > Duration::ZERO {
+                sleep(ctx.opts.sleep_between).await;
+            }
         }
         Ok(out)
     }
@@ -88,13 +85,6 @@ impl Fetcher<Conversation> for Conversations<'_> {
 
     fn weight(&self, c: &Conversation) -> usize {
         c.payload.len()
-    }
-}
-
-fn parsed(id: &str, full: &Value) -> Outcome<Conversation> {
-    match parse_conversation(id, full) {
-        Ok(c) => Outcome::Got(c),
-        Err(e) => Outcome::Failed(format!("{e:#}")),
     }
 }
 

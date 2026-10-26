@@ -624,10 +624,11 @@ conv_uuids = ["https://chatgpt.com/c/abc123de-f456-7890-abcd-ef0123456789"]
                        # only these conversations, by id or pasted link; omit for all
 
 # Start from a data export of this same account: the `.zip`, or the
-# folder it was unzipped into. A conversation the export holds as the
-# listing names it, and a file the export holds, are not downloaded;
-# the API fetches what moved since. The listing alone decides what is
-# deleted. Omit the table to download every conversation.
+# folder it was unzipped into. It fills in every conversation the store
+# does not have yet, so they and their files are not downloaded; the API
+# then fetches what moved since, newer than `since` if set. Only the API's
+# listing deletes. The export is read again only when it changes. Omit
+# the table to download every conversation.
 [steps.params.export]
 path = "~/Downloads/chatgpt-export.zip"
 

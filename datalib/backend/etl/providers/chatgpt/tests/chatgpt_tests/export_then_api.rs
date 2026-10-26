@@ -1,6 +1,6 @@
 //! A store seeded from a data export, then kept fresh by the API: an
-//! `export` run and then an `api` one, or one `api` run asking the export
-//! first. The export fixture (`tests/fixtures/chatgpt_export`) is the API
+//! `export` step swapped for an `api` one, or one step naming both, whose
+//! export fills gaps before the API run. The export fixture (`tests/fixtures/chatgpt_export`) is the API
 //! fixture's account in the shape a real export has, read here as the
 //! `.zip` ChatGPT sends.
 
@@ -11,12 +11,13 @@ use std::path::{Path, PathBuf};
 
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_chatgpt::ingest::db::block_on_load_all;
-use datalib_etl_chatgpt::ingest::export::{self, IngestOptions, IngestSummary};
+use datalib_etl_chatgpt::ingest::export::{self, IngestOptions, IngestSummary, Reading};
 use datalib_etl_chatgpt::ingest::schema_raw::ATTACHMENTS;
-use datalib_etl_chatgpt::ingest::{db_path_for, fetch, FetchOptions, RawDb};
+use datalib_etl_chatgpt::ingest::{db_path_for, fetch, FetchOptions, FetchSummary, RawDb};
 use datalib_etl_chatgpt::synthesize::ChatgptSynth;
 use datalib_etl_chatgpt_render::render::parse::parse_loaded;
 use datalib_etl_chatgpt_render::render::render::render_all;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_web::owed;
 use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::Synthesizer;
@@ -87,10 +88,21 @@ fn zip_of(dir: &Path, zip: &Path) {
     w.finish().unwrap();
 }
 
-async fn ingest_export(db: &RawDb, input_path: &Path) -> IngestSummary {
+/// One export read; `dir` keeps the host's fingerprint cache between
+/// reads, as the real one does.
+async fn ingest_export(
+    db: &RawDb,
+    input_path: &Path,
+    reading: Reading,
+    dir: &Path,
+) -> IngestSummary {
     let s = export::ingest(IngestOptions {
         db: db.clone(),
         input_path: input_path.to_path_buf(),
+        reading,
+        cache: FingerprintCache::open(&dir.join("fpcache.sqlite"))
+            .await
+            .unwrap(),
         now: "2026-10-22T00:00:00-07:00".into(),
         progress: Default::default(),
         control: Default::default(),
@@ -143,7 +155,7 @@ async fn an_api_run_after_an_export_fetches_only_what_moved() {
     zip_of(&export_fixture(), &zip);
 
     let db = RawDb::open(&db_path_for(&raw)).await.unwrap();
-    let seeded = ingest_export(&db, &zip).await;
+    let seeded = ingest_export(&db, &zip, Reading::Snapshot, d.path()).await;
     assert_eq!(seeded.conversations, 5);
     // The generated image is in the export, but the tool message that
     // showed it is not, so nothing names it.
@@ -209,13 +221,6 @@ fn deleted_on(api: &Path, id: &str) {
     write_json(&api.join("conversations.json"), &listing);
 }
 
-fn with_export(db: &RawDb, zip: &Path) -> FetchOptions {
-    FetchOptions {
-        export: Some(zip.to_path_buf()),
-        ..FetchOptions::new(db.clone())
-    }
-}
-
 async fn conversation_ids(db: &RawDb) -> Vec<String> {
     sqlx::query_scalar("SELECT id FROM conversations ORDER BY id")
         .fetch_all(db.pool())
@@ -223,45 +228,71 @@ async fn conversation_ids(db: &RawDb) -> Vec<String> {
         .unwrap()
 }
 
-/// One `api` run with the export beside it fills an empty store: the
-/// conversation that moved since the export is the one detail fetched,
-/// one whose listing trails its detail is not, and every file comes
-/// from the export. The tape has no file endpoint
-/// at all, so a file asked of chatgpt.com would fail.
+/// One sync of a step naming both tables, as `plan_ingest` orders it:
+/// the export fills gaps, then the API runs over what it left.
+async fn both(
+    db: &RawDb,
+    zip: &Path,
+    tape: &Path,
+    dir: &Path,
+    api: FetchOptions,
+) -> (IngestSummary, FetchSummary) {
+    let e = ingest_export(db, zip, Reading::FillGaps, dir).await;
+    let a = playback::scope(
+        tape,
+        fetch(FetchOptions {
+            export: Some(zip.to_path_buf()),
+            ..api
+        }),
+    )
+    .await
+    .unwrap();
+    db.commit_all("api").await.unwrap();
+    (e, a)
+}
+
+/// The API fixture laid out for a sync over the export: no `files/`, so
+/// the tape has no file endpoint and a file asked of chatgpt.com fails.
+fn api_without_files(d: &Path) -> PathBuf {
+    let api = d.join("api");
+    copy_dir(&api_fixture(), &api);
+    fs::remove_dir_all(api.join("files")).unwrap();
+    api
+}
+
+/// One step naming both fills an empty store: the export seeds every
+/// conversation, and the API fetches only the one that moved since,
+/// not one whose listing trails its detail. No file is downloaded. The
+/// next sync, over the same export, does not read it again and fetches
+/// nothing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn one_run_with_an_export_fetches_only_what_moved_since() {
+async fn one_step_seeds_from_the_export_and_fetches_only_what_moved() {
     let d = tempfile::tempdir().unwrap();
-    let (api, zip, tape, raw) = (
-        d.path().join("api"),
+    let (zip, tape, raw) = (
         d.path().join("chatgpt-export.zip"),
         d.path().join("playback"),
         d.path().join("raw"),
     );
-    copy_dir(&api_fixture(), &api);
-    fs::remove_dir_all(api.join("files")).unwrap();
+    let api = api_without_files(d.path());
     zip_of(&export_fixture(), &zip);
-    // The one that names every file, so the files it names are asked
-    // for after a live fetch, not only after the export's copy.
+    // The one that names every file, so its files are asked for again
+    // after the live fetch.
     moved_on(&api, "68fa0005-fake-7000-8000-positronic0005");
     listing_trails(&api, "68fa0002-fake-7000-8000-positronic0002");
     ChatgptSynth::new(&api).synthesize(&tape).unwrap();
 
     let db = RawDb::open(&db_path_for(&raw)).await.unwrap();
-    let s = playback::scope(&tape, fetch(with_export(&db, &zip)))
-        .await
-        .unwrap();
-    db.commit_all("api").await.unwrap();
+    let new = || FetchOptions::new(db.clone());
+    let (e, a) = both(&db, &zip, &tape, d.path(), new()).await;
+    assert_eq!((e.conversations, e.new_blobs, e.pruned), (5, 3, 0));
+    assert_eq!((a.fetched, a.skipped, a.errors, a.pruned), (1, 4, 0, 0));
     assert_eq!(
-        (s.fetched, s.from_export, s.skipped, s.errors, s.pruned),
-        (1, 4, 0, 0, 0)
-    );
-    assert_eq!(
-        (s.blobs_from_export, s.new_blobs, s.failed_blobs),
-        (4, 0, 0),
-        "every file came from the export"
+        (a.new_blobs, a.failed_blobs),
+        (0, 0),
+        "no file came from chatgpt.com"
     );
     // `/me`, the listing and the archived one, the one detail.
-    assert_eq!(s.requests, 4);
+    assert_eq!(a.requests, 4);
     let edges = db.attachments_listed().await.unwrap();
     assert_eq!(edges.len(), 4);
     assert!(owed::owed(db.pool(), ATTACHMENTS, edges)
@@ -269,53 +300,63 @@ async fn one_run_with_an_export_fetches_only_what_moved_since() {
         .unwrap()
         .is_empty());
 
-    // Nothing moved since: the next run asks for no detail at all.
-    let again = playback::scope(&tape, fetch(with_export(&db, &zip)))
-        .await
-        .unwrap();
-    assert_eq!((again.fetched, again.from_export, again.skipped), (0, 0, 5));
+    let (e, a) = both(&db, &zip, &tape, d.path(), new()).await;
+    assert!(e.export_unchanged);
+    assert_eq!((a.fetched, a.skipped), (0, 5));
+    db.close().await;
+}
+
+/// `since` scopes only the API: the export still seeds the whole
+/// account, and the API fetches nothing older than `since`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn since_scopes_the_api_and_the_export_seeds_everything() {
+    let d = tempfile::tempdir().unwrap();
+    let (zip, tape, raw) = (
+        d.path().join("chatgpt-export.zip"),
+        d.path().join("playback"),
+        d.path().join("raw"),
+    );
+    let api = api_without_files(d.path());
+    zip_of(&export_fixture(), &zip);
+    moved_on(&api, "68fa0005-fake-7000-8000-positronic0005");
+    ChatgptSynth::new(&api).synthesize(&tape).unwrap();
+
+    let db = RawDb::open(&db_path_for(&raw)).await.unwrap();
+    // After every fixture conversation, the moved one included.
+    let api_opts = FetchOptions {
+        since: Some("2400-01-01".into()),
+        ..FetchOptions::new(db.clone())
+    };
+    let (e, a) = both(&db, &zip, &tape, d.path(), api_opts).await;
+    assert_eq!(e.conversations, 5);
+    assert_eq!((a.fetched, a.out_of_scope), (0, 5));
+    assert_eq!(conversation_ids(&db).await.len(), 5);
     db.close().await;
 }
 
 /// Only the listing deletes. A conversation it stops naming goes, and
-/// stays gone, though the export still holds it.
+/// stays gone while the export is unchanged, though the export holds it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_conversation_the_listing_drops_stays_gone_though_the_export_has_it() {
     let d = tempfile::tempdir().unwrap();
-    let (api, zip, raw) = (
-        d.path().join("api"),
-        d.path().join("chatgpt-export.zip"),
-        d.path().join("raw"),
-    );
-    copy_dir(&api_fixture(), &api);
+    let (zip, raw) = (d.path().join("chatgpt-export.zip"), d.path().join("raw"));
+    let api = api_without_files(d.path());
     zip_of(&export_fixture(), &zip);
     let db = RawDb::open(&db_path_for(&raw)).await.unwrap();
-    let run = |n: usize| {
+    let mut runs = Vec::new();
+    let gone = "68fa0001-fake-7000-8000-positronic0001";
+    for n in 0..3 {
+        if n == 1 {
+            deleted_on(&api, gone);
+        }
         let tape = d.path().join(format!("playback{n}"));
         ChatgptSynth::new(&api).synthesize(&tape).unwrap();
-        let (db, zip) = (db.clone(), zip.clone());
-        async move {
-            let s = playback::scope(&tape, fetch(with_export(&db, &zip)))
-                .await
-                .unwrap();
-            db.commit_all("api").await.unwrap();
-            s
-        }
-    };
-    let first = run(0).await;
-    assert_eq!((first.fetched, first.from_export), (0, 5));
-
-    let gone = "68fa0001-fake-7000-8000-positronic0001";
-    deleted_on(&api, gone);
-    let second = run(1).await;
-    assert_eq!(
-        (second.pruned, second.fetched, second.from_export),
-        (1, 0, 0)
-    );
-    let third = run(2).await;
-    assert_eq!((third.pruned, third.fetched, third.from_export), (0, 0, 0));
+        let (e, a) = both(&db, &zip, &tape, d.path(), FetchOptions::new(db.clone())).await;
+        runs.push((e.conversations, a.fetched, a.pruned));
+    }
     let ids = conversation_ids(&db).await;
     db.close().await;
+    assert_eq!(runs, [(5, 0, 0), (0, 0, 1), (0, 0, 0)]);
     assert_eq!(ids.len(), 4);
     assert!(!ids.iter().any(|id| id == gone), "{ids:?}");
 }
@@ -361,7 +402,7 @@ async fn an_export_renders_every_message_but_tool_and_system_ones() {
     db.commit_all("api").await.unwrap();
     db.close().await;
     let db = RawDb::open(&db_path_for(&from_export)).await.unwrap();
-    ingest_export(&db, &zip).await;
+    ingest_export(&db, &zip, Reading::Snapshot, d.path()).await;
     db.close().await;
 
     let (api_md, export_md) = (rendered(&from_api), rendered(&from_export));
