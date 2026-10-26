@@ -288,7 +288,9 @@ export const CATALOG: CatalogEntry[] = [
           },
           {
             label: "All my direct messages",
-            help: "One-to-one and group conversations.",
+            help:
+              "One-to-one and group conversations. Only the ones open in Slack's sidebar with " +
+              "new messages are read on each sync; a closed one is read when it reopens.",
             sets: { "api.dms": true },
           },
           {

@@ -321,14 +321,15 @@ pub struct AccountTotals {
     pub pruned: usize,
 }
 
-/// `client.counts` has one entry per conversation the account is in,
-/// mirrored or not; only the mirrored ones are kept, so `dms = false`
-/// keeps DMs out of this table as it does out of `channels`.
+/// `client.counts` has one entry per conversation open in the account's
+/// sidebar, mirrored or not; only the mirrored ones are kept, so
+/// `dms = false` keeps DMs out of this table as it does out of
+/// `channels`. Returns the entries kept.
 async fn fetch_read_states(
     db: &RawDb,
     in_scope: &HashSet<String>,
     latchkey: &LatchkeySettings,
-) -> Result<usize> {
+) -> Result<Vec<Value>> {
     let resp = call(M_COUNTS, &empty_params(), latchkey).await?;
     let mut entries: Vec<Value> = Vec::new();
     for surface in ["channels", "mpims", "ims"] {
@@ -348,7 +349,21 @@ async fn fetch_read_states(
         );
     }
     db.upsert_read_states(&entries).await?;
-    Ok(entries.len())
+    Ok(entries)
+}
+
+/// The newest message `client.counts` names for each of `entries`, by
+/// conversation id. Slack lists only the conversations open in the
+/// sidebar, so a conversation missing here is closed, not empty.
+fn open_latest(entries: &[Value]) -> HashMap<String, String> {
+    entries
+        .iter()
+        .filter_map(|e| {
+            let id = e.get("id").and_then(Value::as_str)?;
+            let latest = e.get("latest").and_then(Value::as_str)?;
+            Some((id.to_string(), latest.to_string()))
+        })
+        .collect()
 }
 
 /// Every page of every [`SAVED_FILTERS`] listing, or an error: a walk
@@ -462,6 +477,15 @@ async fn fetch_bookmarks(
     Ok((stored, pruned))
 }
 
+/// What [`fetch_account_state`] found.
+struct AccountState {
+    totals: AccountTotals,
+    problems: Vec<RunProblem>,
+    /// [`open_latest`] of the read states; `None` when `client.counts`
+    /// could not be read.
+    open_latest: Option<HashMap<String, String>>,
+}
+
 /// Read states, saved items and bookmarks for the conversations this run
 /// mirrors. Each listing that fails becomes a `problems` row and costs
 /// only its own table; none of them sinks the message walk.
@@ -472,16 +496,22 @@ async fn fetch_account_state(
     stop: &datalib_etl::stop::StopFlag,
     progress: &datalib_etl::progress::Progress,
     latchkey: &LatchkeySettings,
-) -> Result<(AccountTotals, Vec<RunProblem>)> {
+) -> Result<AccountState> {
     let in_scope: HashSet<String> = targets.iter().map(|(cid, _)| cid.clone()).collect();
     let mut totals = AccountTotals::default();
     let mut problems = Vec::new();
 
     progress.set_message(M_COUNTS);
-    match fetch_read_states(db, &in_scope, latchkey).await {
-        Ok(n) => totals.read_states = n,
-        Err(e) => problems.push(listing_problem(M_COUNTS, &e)),
-    }
+    let open_latest = match fetch_read_states(db, &in_scope, latchkey).await {
+        Ok(entries) => {
+            totals.read_states = entries.len();
+            Some(self::open_latest(&entries))
+        }
+        Err(e) => {
+            problems.push(listing_problem(M_COUNTS, &e));
+            None
+        }
+    };
 
     progress.set_message(M_SAVED);
     match list_saved_items(latchkey).await {
@@ -514,7 +544,11 @@ async fn fetch_account_state(
         problems = problems.len(),
         "recorded read states, saved items and bookmarks"
     );
-    Ok((totals, problems))
+    Ok(AccountState {
+        totals,
+        problems,
+        open_latest,
+    })
 }
 
 // Which conversations this run walks.
@@ -691,6 +725,19 @@ fn stretches(since: &str, refresh_from: Option<&str>, held: &[Span]) -> Vec<Stre
         }
     }
     out
+}
+
+/// Whether a DM is worth a history call this run. `client.counts` puts
+/// its newest message at `latest`, or leaves it out (`None`) when it is
+/// closed in the sidebar; it is walked when a stretch it `owes` reaches
+/// down to that message. Nothing is covered for a DM left out, so the
+/// run that finds it open again owes it whole.
+fn shows_activity(latest: Option<&str>, owes: &[Stretch]) -> bool {
+    let Some(latest) = latest.map(ts_key) else {
+        return false;
+    };
+    owes.iter()
+        .any(|s| s.span.lo < latest || (s.inclusive && s.span.lo == latest))
 }
 
 /// The part of `stretch` one page settles. History is newest first, so
@@ -1326,8 +1373,9 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         );
         let targets = plan.targets;
 
+        let mut open_latest = None;
         if !opts.control.stop.requested() {
-            let (account, problems) = fetch_account_state(
+            let state = fetch_account_state(
                 &db,
                 &targets,
                 &now,
@@ -1336,7 +1384,9 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                 &opts.latchkey,
             )
             .await?;
-            found.extend(problems);
+            found.extend(state.problems);
+            open_latest = state.open_latest;
+            let account = state.totals;
             if let Some(sealer) = opts.sealer.as_ref() {
                 sealer
                     .wrote(
@@ -1349,6 +1399,33 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             }
             grand.account = account;
         }
+        // Most DMs in a workspace a few years old are long quiet, and
+        // each would cost a rate-limited history call to learn it. A DM
+        // named in `dm_conversations` was asked for by name, and without
+        // `client.counts` nothing says which DMs are quiet: those are
+        // walked.
+        let mut idle = vec![false; targets.len()];
+        if let (Some(open), None) = (&open_latest, &opts.dm_conversations) {
+            let dms = targets.len() - plan.dm_targets..targets.len();
+            for i in dms.clone() {
+                let cid = &targets[i].0;
+                let held = coverage::held(db.pool(), &db::history_scope(cid)).await?;
+                let owes = stretches(&since, None, &held);
+                idle[i] = !shows_activity(open.get(cid).map(String::as_str), &owes);
+            }
+            info!(
+                event = "slack_idle_dms_skipped",
+                dms = dms.len(),
+                idle = idle.iter().filter(|i| **i).count(),
+                "left out the DMs with nothing new since what is held"
+            );
+        }
+        let walking: Vec<(String, String)> = targets
+            .iter()
+            .zip(&idle)
+            .filter(|(_, idle)| !**idle)
+            .map(|(t, _)| t.clone())
+            .collect();
         if opts.search_replies && !opts.control.stop.requested() {
             let top = ts_key(&datetime_to_slack_ts(&(now - SEARCH_LAG)));
             let search = ReplySearch {
@@ -1360,7 +1437,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             let mut totals = ReplySearchTotals::default();
             // A search that fails settles nothing past where it stopped,
             // so what it missed is searched again next run.
-            if let Err(e) = search.run(&targets, &since, &top, &mut totals).await {
+            if let Err(e) = search.run(&walking, &since, &top, &mut totals).await {
                 if !interrupted(&e) {
                     found.push(listing_problem(M_SEARCH, &e));
                 }
@@ -1376,7 +1453,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
 
         // Seeded with one tick per channel, so the bar reads as
         // something before the first channel has listed anything.
-        let bar = RunBar::new(&opts.progress, targets.len() as u64);
+        let bar = RunBar::new(&opts.progress, walking.len() as u64);
         let mirror = Mirror {
             db: &db,
             team_id: &team_id,
@@ -1392,15 +1469,18 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         // history not covered (and the refresh window's), the threads
         // not held at their latest reply, the files without bytes. A
         // run that was cut off left exactly that, so nothing is carried
-        // over from it.
+        // over from it. An idle DM walks no history but still gets the
+        // threads and files it owes.
         let mut frontier = Frontier::default();
         for (target, (cid, _)) in targets.iter().enumerate() {
-            let held = coverage::held(db.pool(), &db::history_scope(cid)).await?;
-            frontier.walks.extend(
-                stretches(&since, refresh_from.as_deref(), &held)
-                    .into_iter()
-                    .map(|stretch| Walk::new(target, stretch)),
-            );
+            if !idle[target] {
+                let held = coverage::held(db.pool(), &db::history_scope(cid)).await?;
+                frontier.walks.extend(
+                    stretches(&since, refresh_from.as_deref(), &held)
+                        .into_iter()
+                        .map(|stretch| Walk::new(target, stretch)),
+                );
+            }
             for thread in owed::owed(db.pool(), THREADS, db.threads_listed(cid).await?).await? {
                 frontier.threads.push(thread_reach(&thread), thread);
             }
@@ -1696,6 +1776,39 @@ mod tests {
     }
 
     // ── DM scoping ───────────────────────────────────────────────────
+
+    /// #1374: a DM closed in the sidebar, or open with nothing since
+    /// `since`, costs no history call.
+    #[test]
+    fn a_dm_closed_or_quiet_since_since_is_idle() {
+        let never_walked = planned(None, &[]);
+        assert!(!shows_activity(None, &never_walked));
+        assert!(!shows_activity(Some("1700000000.000000"), &never_walked));
+        // An open DM that never held a message.
+        assert!(!shows_activity(Some("0000000000.000000"), &never_walked));
+        assert!(shows_activity(Some(SINCE), &never_walked));
+        assert!(shows_activity(Some("1735689600.000100"), &never_walked));
+    }
+
+    #[test]
+    fn a_dm_walked_up_to_its_newest_message_is_idle_until_a_newer_one() {
+        let held = [span(SINCE, "1735689600.000100")];
+        let owes = planned(None, &held);
+        assert!(!shows_activity(Some("1735689600.000100"), &owes));
+        assert!(shows_activity(Some("1735689600.000200"), &owes));
+        assert!(!shows_activity(None, &owes));
+    }
+
+    /// A walk cut off, or a `since` moved earlier, leaves a gap under
+    /// what is held, which the newest message alone would not show.
+    #[test]
+    fn a_dm_with_a_gap_under_its_newest_message_is_walked() {
+        let cut_off = [span("1735689600.000050", "1735689600.000100")];
+        assert!(shows_activity(
+            Some("1735689600.000100"),
+            &planned(None, &cut_off)
+        ));
+    }
 
     /// The enforcement point for `dms = false` is the request, not a
     /// local filter: without `im,mpim` Slack never returns a DM at all.
