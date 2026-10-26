@@ -32,12 +32,13 @@ const EXAMPLES: &[Example] = &[
 #[command(
     name = "datalib-applet",
     bin_name = "datalib-applet",
-    about = "Applet host for the datalib app",
-    long_about = "Applet host for the datalib app. datalib-http's gateway starts one \
-                  for each [[applets]] entry in the config and reads the port it \
-                  prints. You do not run it yourself except to work on an applet \
-                  (docs/dev/applets.md), or to search a data root with no server \
-                  (`datalib-applet search`).",
+    about = "Applet host for the datalib app, and its search from the command line",
+    long_about = "Applet host for the datalib app, and its search from the command line. \
+                  `datalib-applet search <data_root> '<query>'` answers as the app's \
+                  search box does, as JSON, with no server. The other commands are \
+                  applets: datalib-http's gateway starts one for each [[applets]] entry \
+                  in the config and reads the port it prints, and you run one yourself \
+                  only to work on it (docs/dev/applets.md).",
     after_help = datalib_cli_help::render(EXAMPLES)
 )]
 struct Cli {
