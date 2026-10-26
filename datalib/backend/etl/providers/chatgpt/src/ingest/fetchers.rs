@@ -1,9 +1,9 @@
 //! What each loop fetches and how a flush of it is stored, one
 //! [`Fetcher`] per kind: a conversation's detail, an attachment's bytes.
 //! Each is one request per record, or none when the run's export holds
-//! it; the loop (`datalib_etl_web::owed`) owns
-//! the stop, the failure budget, the flush and what each outcome means
-//! for the record's sidecar.
+//! it; the loop (`datalib_etl_web::owed`) owns the stop, the failure
+//! budget, the flush and what each outcome means for the record's
+//! sidecar.
 
 use std::sync::atomic::Ordering;
 use std::time::Duration;
