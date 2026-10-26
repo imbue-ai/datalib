@@ -227,6 +227,20 @@ same namespacing discipline as the JMAP path's `jmap:` keys. A run:
    reported. `history.list` only names what *changed*, and mail that
    already sat under a newly configured label did not, so a widened
    `only_extract_labels` is a label with no row, and is walked.
+   With `since`, a walk asks only for mail after it (`q=after:<epoch
+   seconds>`, which Gmail reads as that instant; a date there would be
+   midnight Pacific). Such a walk says nothing of older mail, so it
+   deletes nothing it did not name, and the mirror keeps what a sliding
+   `since` leaves behind. Where each scope's last whole walk began is
+   `gmail:<account>:listed_since:<scope>` in `sync_scope_state` (no row:
+   from the first message, as every store before `since` was), written
+   before the scope is recorded as listed whole. A `since` earlier than
+   that walks the scope again, which lists the older mail and makes it
+   owed. A later one walks nothing, and so does not cancel what an
+   earlier, wider walk already listed: the fetch goes newest first, so
+   the window's mail comes first. The delta follows the whole mailbox,
+   so an old message that is relabeled is fetched again whatever its
+   age, and Gmail takes no `until`.
 3. **Fetches what is owed** with `messages.get?format=RAW`, newest id
    first: a listed message not held at its listed `historyId`, and one
    held with no `.eml` stored that now fits under
@@ -335,7 +349,9 @@ membership for free.
 ### Starting from a Takeout
 
 A Gmail source may name a Takeout of the same account beside its
-`gmail` table — the `.mbox`, or the Takeout's `Mail` folder — the way a
+`gmail` table — the `.zip` or `.tgz` as Google sent it, the folder
+holding every part of one export, or, unpacked, the `.mbox` or the
+Takeout's `Mail` folder — the way a
 Lightroom source names its backups beside its catalog
 ([`config_model.md`](config_model.md) §"Where the data comes from"):
 
@@ -381,10 +397,16 @@ Takeout and is left out, with a `skipped:takeout` row naming the file.
 JMAP beside an mbox is refused: its ids are its own, so a Takeout
 would double the mailbox rather than seed it.
 
-Every run reads the whole Takeout again (an unchanged one writes
-nothing); local files are cheap to read, and nothing is stored about
-what was read. Deleting the Takeout or dropping `mbox` from the step
-deletes nothing.
+A Takeout that was read through cleanly, by a run that was not
+stopped, is not read again while its files hash the same and the
+account and `only_extract_labels` are unchanged: the `email/takeout_seed`
+stamp in `ingested_files`, as the mbox mode keeps its own (the
+provider's `INGEST.md`, "mbox"). Skipping it loses nothing, since a
+second read of the same Takeout could only add what the store does not
+hold and Gmail still lists, and a message the store stopped holding
+since was deleted because Gmail no longer lists it. A new Takeout put
+in its place, or a changed label filter, is read again whole. Deleting
+the Takeout or dropping `mbox` from the step deletes nothing.
 
 ## 4. Traps in the Gmail API
 

@@ -244,6 +244,9 @@ A mirror you can't leave is just another silo, so the exits are plain:
 
 - **Markdown** — `<source id>/render_markdown/` is ordinary `.md` files, one
   per conversation or document. Nothing to export.
+- **Search** — `datalib-applet search <data_root> '<query>'` answers as
+  the app's search box does, as JSON, with no server: for scripts and
+  agents.
 - **SQL** — `datalib-doltlite` ships with the tools and is a `sqlite3`
   shell that understands the versioned format. One pipe writes a plain
   SQLite file for any tool that wants one:

@@ -19,7 +19,7 @@ only_extract_labels = ["Inbox", "Starfleet/Reports"]
 
 # Everything but `path` names the account row the mailbox is filed under.
 [steps.params.mbox]
-path = "~/Downloads/email-export/All mail Including Spam and Trash.mbox"  # the file, or a folder holding one
+path = "~/Downloads/email-export/All mail Including Spam and Trash.mbox"  # the file, a folder holding one, or a Takeout's .zip or folder of parts
 account_id = "picard_gmail"           # the account's id; default made from the file's name
 display_name = "Picard's Gmail"       # the account's name; default its account_id
 email_address = "picard@example.com"  # the account's address; unset by default

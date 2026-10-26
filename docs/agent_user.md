@@ -71,7 +71,8 @@ definition — the constants both sides read — is
 Ten binaries ship in a release: `datalib-dag` (the sync runner),
 `datalib-step` (the built-in step commands), `datalib-http` (API
 server + web UI), `datalib-applet` (the applet host, spawned on demand
-by the http gateway), `latchkey-curl-router` +
+by the http gateway; `datalib-applet search` is the search box from the
+command line), `latchkey-curl-router` +
 `curl-impersonate` (Cloudflare-safe HTTP for downloaders),
 `datalib-doltlite` (the shell for reading and exporting the stores —
 see "Reading the mirrored data" below), `datalib-fsindex` (the
@@ -110,6 +111,17 @@ header, and a step's `params` sub-tables come after its plain keys — a
   [`docs/user/getting_your_data.md`](user/getting_your_data.md).
   On auth failure, sync events include a `hint` with the exact
   `latchkey auth set …` recipe for that provider.
+- **How far back (and ahead)**: every source that can mirror part of
+  its history takes `since` in its method table (`[steps.params.api]`,
+  `[steps.params.gmail]`, `[steps.params.google]`, …), and a calendar
+  and Garmin also take `until`. Each is a day (`"2026-09-01"`), an
+  RFC 3339 instant, or an offset from the run's start (`"-30d"`,
+  `"+21d"`; units `h`, `d`, `w`), so `since = "-30d"` keeps the last
+  month without a daily edit. A record an offset slides past stays in
+  the mirror, except in a windowed calendar, which drops events the
+  window no longer reaches. An earlier `since` backfills on the next
+  run. Each source's default and what the window bounds:
+  [`config_model.md` §"Time windows"](dev/config_model.md#time-windows-since-and-until).
 - The web UI's **Manage** tab scaffolds and validates the config
   (`GET /api/config/scaffold`, `PUT /api/config` validates before
   writing).
@@ -289,6 +301,27 @@ datalib](user/building_on_datalib.md) (`datalib-step help apps`).
 
 Pick the surface that fits the question:
 
+- **The search box, from the command line** — `datalib-applet search
+  <data_root> '<query>'` answers a search exactly as the app's search
+  box does, with no server and no token, and prints the JSON
+  `/search` would (below): the query language, `--tab`, `--limit`,
+  `--offset`, `--sort` and `--within` are the same. Page with
+  `--offset` set to the answer's `next_offset`. It reads only, so it is
+  safe beside a running sync or app.
+
+  ```sh
+  datalib-applet search ~/datalib 'from:picard after:2026-10-01 is:document' --limit 20
+  datalib-applet search ~/datalib 'warp core' --tab words
+  ```
+
+  It exits 1, with each reason on stderr, when the answer is not the
+  search you asked for: a query it refused (`refused`), an error, a
+  free-text search qmd could not answer, or free text on a root with no
+  search index yet (a source's words are searchable once its
+  `keyword_index` step has run). An empty answer with exit 0 means
+  nothing matched. Free text without `--tab` starts qmd and loads its
+  models, which takes 10–20 seconds on a large root; `--tab words` and
+  `--tab fields` take well under a second.
 - **SQL over everything** — the `grid_rows` union table in
   `unified_document_index/grid_index/db.doltlite_db`: one row per
   message/document/entity across all sources, with `provider`, `kind`,

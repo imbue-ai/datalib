@@ -62,10 +62,13 @@ impl DataProcessor for SlackIngest {
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        let now = datalib_time::parse_strict(ctx.now)
-            .with_context(|| format!("slack: run stamp {:?}", ctx.now))?
-            .inner()
-            .with_timezone(&chrono::Utc);
+        let run_at = datalib_time::parse_strict(ctx.now)
+            .with_context(|| format!("slack: run stamp {:?}", ctx.now))?;
+        let now = run_at.inner().with_timezone(&chrono::Utc);
+        let since = match &self.sync.since {
+            Some(s) => datalib_time::TimeBound::absolute(s, &run_at)?,
+            None => ingest::DEFAULT_SINCE.into(),
+        };
         let entity_db = ingest::db_path_for(&self.raw_path);
         let mut db = ingest::RawDb::open(&entity_db).await?;
         let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
@@ -88,11 +91,7 @@ impl DataProcessor for SlackIngest {
                 sealer: Some(sealer),
                 db,
                 channels: self.sync.channels.clone(),
-                since: self
-                    .sync
-                    .since
-                    .clone()
-                    .unwrap_or_else(|| ingest::DEFAULT_SINCE.into()),
+                since,
                 refresh_window_days: self
                     .sync
                     .refresh_window_days

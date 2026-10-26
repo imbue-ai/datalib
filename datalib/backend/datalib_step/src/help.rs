@@ -94,10 +94,14 @@ const SETUP: &[SetupStep] = &[
         }],
     },
     SetupStep {
-        say: "Read what came in: `datalib-doltlite -readonly \
+        say: "Read what came in. Search it as the app's search box does, with no server, \
+              and get JSON back: `datalib-applet search <data_root> 'from:picard \
+              after:2026-10-01'` (`''` lists every row; `datalib-applet search --help` has \
+              the flags). For SQL, `datalib-doltlite -readonly \
               <data_root>/unified_document_index/grid_index/db.doltlite_db \"SELECT provider, \
-              count(*) FROM grid_rows GROUP BY 1\"` (stock sqlite3 cannot open it), or serve \
-              the app with `datalib-http <data_root>`. `datalib-step help agent` has the rest.",
+              count(*) FROM grid_rows GROUP BY 1\"` (stock sqlite3 cannot open it). Or serve \
+              the app with `datalib-http <data_root>`. `datalib-step help agent` has the \
+              rest, the search's query language included.",
         commands: &[],
     },
 ];
