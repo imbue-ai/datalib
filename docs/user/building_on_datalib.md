@@ -121,6 +121,43 @@ It moves where the doubling starts, not whether it doubles. Only `0`
 seals at every consistent point and never grows, at a cost in disk.
 There is no setting for "seal at least every N minutes"; that is a gap.
 
+**How far along is a sync?** Every step reports how much it has done
+and how much it knows is left. These are the numbers behind the Manage
+screen's Queue and ETA, and they live in `system/runs/runs.sqlite`,
+plain SQLite that any `sqlite3` reads:
+
+- `done_total` counts what the step has done this run.
+- `queued` is what it has announced and not done yet. `0` means it is
+  finished; no `queued` row at all means it never said how much there
+  was. The total only grows, as a download learns what it owes (a
+  first Gmail sync adds messages as its listing finds them), so
+  `queued` can climb before it falls.
+
+```sh
+sqlite3 <data_root>/system/runs/runs.sqlite \
+  "SELECT run_id, name, value, updated_at_utc FROM metrics
+    WHERE step = 'gmail/ingest' AND name IN ('done_total', 'queued') AND labels = ''
+    ORDER BY updated_at_utc DESC LIMIT 2"
+```
+
+`metrics` holds each series' newest value per run, and `metric_samples`
+holds the same series over time, for a rate or an ETA of your own. A
+`queued` with a `from=<step>` label is something else: the seals of
+that producer this step has not read yet. Other ways to watch the same
+numbers:
+
+- The `datalib-dag` that runs the loop prints `progress_length` and
+  `progress_inc` events on stderr. One that follows another's loop
+  prints only its request's outcome.
+- With the app up, `GET /api/runs/{run}/steps` gives each step's state
+  and current metrics, and `GET /api/sync/stream` pushes a frame
+  whenever any of it moves.
+- `GET /metrics` serves them for Prometheus as `datalib_step_queued`
+  and `datalib_step_done_total`, beside
+  `datalib_step_last_success_timestamp_seconds` for an alert on a
+  source that has stopped syncing ([`logging.md`](../dev/logging.md)
+  § "From outside the app").
+
 **Is it current, or still catching up?** No one flag says so. These
 are the signals, from cheapest to most exact:
 
@@ -265,6 +302,62 @@ question reaches outside that:
   occurrence in that window. Repeating events are stored as series, not
   dates.
 - **Anything sent a moment ago**: see "Your app's own writes" below.
+
+## What the mirror knows it is missing: problems
+
+A download that cannot get something does not fail the sync over it.
+It records a **problem** and goes on with the rest; only a failure that
+leaves it nothing to do, such as a refused credential, fails the step.
+A problem is one
+row saying what it is about and why, and it stays until a later run
+tries the same thing and it works. Problems are how an app tells "not
+in the mirror because it does not exist" from "not in the mirror
+because the download could not get it".
+
+Each source's problems travel with its data. The download writes them
+into its raw store's `problems` table, where `source_id` is empty. The
+render step copies them under the source's id, and `grid_index` copies
+every source's into one `problems` table in
+`unified_document_index/grid_index/db.doltlite_db`. That last copy is
+the one to query, since it covers every source:
+
+```sh
+datalib-doltlite -readonly unified_document_index/grid_index/db.doltlite_db \
+  "SELECT source_id, severity, outcome, reason, scope_key, sample
+     FROM problems WHERE stage = 'fetch' ORDER BY changed_at_utc DESC LIMIT 20"
+```
+
+With the app up, `GET /applet/unified_document_index/problems?q=…`
+serves the same rows a page at a time, in the search bar's grammar:
+`source_id:gmail severity:error`, with `outcome:`, `reason:`, `stage:`
+and `field:` too. Each step's counts are its `problems` series in the
+run store's `metrics`, one per `severity=` label; they are the
+errors and warnings cell on the Manage screen. The copies lag the
+download by a render and an index run. The raw store's own `problems`
+table is current at every seal.
+
+Reading a download's problem (`stage = 'fetch'`):
+
+- **`scope_key`** says what it is about: `<table>:<id>` for one record
+  (`emails:018f…`, `slack_attachments:…`), `listing:…` for a listing
+  that failed or stopped part way (a label walk, a channel list), and
+  `phase:…` for a part of the run that gave up early.
+- **`severity`** is `error` for a record the mirror never got, and
+  `warning` where an earlier fetch left a copy that may be stale, or
+  where a limit in the config kept the record out on purpose.
+- **`reason`** is why: `fetch_failed`; `over_size_limit` (the source's
+  size limit kept an attachment or `.eml` out); `not_found` or
+  `forbidden` for something the config names that the service does not
+  have or will not show (a misspelled label or channel, reported every
+  run until the config is fixed).
+- **`sample`** is what the service or the download said.
+
+So before your app concludes that something does not exist, look for a
+problem about that record, or a `listing:` or `phase:` problem for the
+part of the source that would have found it. If there is one, the
+mirror's silence means nothing there, and the service is the one to
+ask. The full column list is in [raw_stores.md](raw_stores.md)
+§ "`problems`".
 
 ## Shared rate limits
 
