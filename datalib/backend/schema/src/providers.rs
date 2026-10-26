@@ -71,6 +71,8 @@ pub enum Provider {
     Signal,
     Slack,
     SmsBackupRestore,
+    /// Todoist: a project's sections, tasks and comments.
+    Todoist,
     Whatsapp,
     Yolink,
     /// Fixtures and unit tests only. A real row never carries it; it

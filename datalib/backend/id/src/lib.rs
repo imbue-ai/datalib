@@ -95,6 +95,8 @@ pub enum IdNamespace {
     Signal,
     Slack,
     SmsBackupRestore,
+    /// Todoist's own ids: projects, tasks and the comments on either.
+    Todoist,
     Whatsapp,
     Yolink,
     /// Not a provider: datalib's own measurements of a source's mirror,
