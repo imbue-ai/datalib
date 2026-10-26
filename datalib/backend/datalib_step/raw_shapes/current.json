@@ -71,7 +71,7 @@
     ]
   },
   "chatgpt": {
-    "schema_hash": "ed6e651f8b031144d61d85f42fc20802df2008e9c4cffec351b241c8dabad74d",
+    "schema_hash": "24ea1ae6a2fa5380e8de2747dfbdbd95dde78eba1715f99a6d7a6f7edc0ae9f0",
     "schema_version": 1,
     "shared_schema_version": 1,
     "sql": [
@@ -82,6 +82,7 @@
       "CREATE TABLE conversations( id TEXT PRIMARY KEY, payload TEXT NULL, title TEXT NULL, update_time TEXT NULL)",
       "CREATE TABLE conversations_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX conversations_update ON conversations(update_time)",
+      "CREATE TABLE ingested_files( scope TEXT NOT NULL, rel_path TEXT NOT NULL, blake3 TEXT NOT NULL, size_bytes INTEGER NOT NULL, last_finished_at_utc TEXT NOT NULL, tz_offset TEXT NULL, PRIMARY KEY(scope, rel_path))",
       "CREATE TABLE me( id TEXT PRIMARY KEY, payload TEXT NULL, email TEXT NULL, name TEXT NULL)",
       "CREATE TABLE me_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",

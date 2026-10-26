@@ -76,6 +76,13 @@ conversations_bookkeeping
     volatile_payload
     tz_offset
     held_version
+ingested_files
+    scope
+    rel_path
+    blake3
+    size_bytes
+    last_finished_at_utc
+    tz_offset
 me
     id
     payload
