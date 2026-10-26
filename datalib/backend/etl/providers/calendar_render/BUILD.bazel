@@ -20,10 +20,12 @@ rust_library(
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/id:datalib_id",
         "//datalib/backend/schema:datalib_schema",
+        "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:chrono",
         "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
         "@datalib_crates//:tokio",
     ],
 )
@@ -34,4 +36,5 @@ rust_test(
     crate = ":datalib_etl_calendar_render",
     edition = "2021",
     data = ["//datalib/backend/etl/providers/calendar:tng_fixture"],
+    deps = ["@datalib_crates//:tempfile"],
 )

@@ -208,7 +208,7 @@ fn event(
 
 /// `recurrence` holds iCalendar lines: `RRULE:…`, `EXDATE;TZID=…:…`,
 /// `RDATE…`.
-fn recurrence(v: &Value) -> (Vec<String>, Vec<EventTime>, Vec<EventTime>) {
+pub(crate) fn recurrence(v: &Value) -> (Vec<String>, Vec<EventTime>, Vec<EventTime>) {
     let mut rules = Vec::new();
     let mut rdates = Vec::new();
     let mut exdates = Vec::new();
@@ -238,7 +238,7 @@ fn recurrence(v: &Value) -> (Vec<String>, Vec<EventTime>, Vec<EventTime>) {
     (rules, rdates, exdates)
 }
 
-fn time_at(v: &Value, key: &str) -> Option<EventTime> {
+pub(crate) fn time_at(v: &Value, key: &str) -> Option<EventTime> {
     let t = v.get(key)?;
     EventTime::from_google(
         str_of(t, "date"),
@@ -310,11 +310,11 @@ fn links(v: &Value) -> Vec<EventLink> {
     out
 }
 
-fn str_of<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
+pub(crate) fn str_of<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
     v.get(key).and_then(Value::as_str).filter(|s| !s.is_empty())
 }
 
-fn text(v: &Value, key: &str) -> Option<String> {
+pub(crate) fn text(v: &Value, key: &str) -> Option<String> {
     str_of(v, key)
         .map(str::trim)
         .filter(|s| !s.is_empty())

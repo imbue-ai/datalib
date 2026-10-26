@@ -3,6 +3,8 @@
 //! what its upstream sent into [`NormalizedEvent`]s; this crate does
 //! the rest. `README.md` has the model, recurring events included.
 
+pub mod occurrences;
+pub mod recur;
 pub mod render;
 pub mod rrule;
 pub mod types;

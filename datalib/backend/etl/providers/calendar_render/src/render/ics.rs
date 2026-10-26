@@ -153,18 +153,18 @@ fn event(
     }
 }
 
-fn status(v: &Component) -> Option<String> {
+pub(crate) fn status(v: &Component) -> Option<String> {
     v.prop("STATUS")
         .map(|s| s.value.trim().to_ascii_lowercase())
 }
 
-fn time_of(p: &Property) -> Option<EventTime> {
+pub(crate) fn time_of(p: &Property) -> Option<EventTime> {
     EventTime::from_ical(&p.value, p.param("TZID"))
 }
 
 /// Every time in a list-valued property (`EXDATE`, `RDATE`), which may
 /// repeat and may hold several values; a `PERIOD` is not a start.
-fn times_in(v: &Component, name: &str) -> Vec<EventTime> {
+pub(crate) fn times_in(v: &Component, name: &str) -> Vec<EventTime> {
     v.props_named(name)
         .filter(|p| {
             !p.param("VALUE")
@@ -180,7 +180,7 @@ fn times_in(v: &Component, name: &str) -> Vec<EventTime> {
 }
 
 /// `DTSTART` plus an RFC 5545 duration (`PT1H30M`, `P1D`, `P2W`).
-fn end_from_duration(start: Option<&EventTime>, dur: &Property) -> Option<EventTime> {
+pub(crate) fn end_from_duration(start: Option<&EventTime>, dur: &Property) -> Option<EventTime> {
     let d = dur.value.trim();
     let (neg, d) = match d.strip_prefix('-') {
         Some(rest) => (true, rest),
