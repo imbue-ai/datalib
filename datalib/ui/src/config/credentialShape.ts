@@ -1,7 +1,8 @@
 // What a credential pasted into the wizard looks like for one latchkey
 // service: a username and password (an app password, over HTTP Basic),
-// one or more headers with the pasted secret in one of them, or a folder
-// a plugin reads the credential from (`auth set-nocurl`). Read
+// one or more headers with the pasted secret in one of them, a folder a
+// plugin reads the credential from, or several values in a row (both
+// `auth set-nocurl`: Garmin's token folder, Zoom's three app ids). Read
 // off latchkey's own `auth set` example for the service, unless the
 // catalog says the example is wrong — a service registered by hand gets
 // latchkey's generic Bearer example whatever it really takes.
@@ -14,7 +15,8 @@ export const SECRET = "{secret}";
 export type CredentialShape =
   | { kind: "basic"; userHint: string; secretLabel: string }
   | { kind: "headers"; headers: string[]; secretLabel: string }
-  | { kind: "directory"; placeholder: string; secretLabel: string };
+  | { kind: "directory"; placeholder: string; secretLabel: string }
+  | { kind: "values"; labels: string[]; secretLabel: string };
 
 /// The last resort: the person types the whole header line.
 const WHOLE_HEADER: CredentialShape = { kind: "headers", headers: [SECRET], secretLabel: "header" };
@@ -23,9 +25,13 @@ export function credentialShape(example: string | null, override?: string[]): Cr
   if (override?.length) return { kind: "headers", headers: override, secretLabel: "token" };
   if (!example) return WHOLE_HEADER;
 
-  const folder = /\sauth\s+set-nocurl\s+\S+\s+(\S+)/.exec(example);
-  if (folder)
-    return { kind: "directory", placeholder: folder[1] ?? "", secretLabel: "token folder" };
+  const nocurl = /\sauth\s+set-nocurl\s+\S+\s+(.+)$/.exec(example);
+  if (nocurl) {
+    const args = (nocurl[1] ?? "").trim().split(/\s+/);
+    if (args.length > 1)
+      return { kind: "values", labels: args.map(unbracket), secretLabel: "credentials" };
+    return { kind: "directory", placeholder: args[0] ?? "", secretLabel: "token folder" };
+  }
 
   const basic = /\s-u\s+"([^":]*):([^"]*)"/.exec(example);
   if (basic) {
@@ -60,11 +66,17 @@ function unbracket(s: string): string {
 }
 
 /// What the form sends, or null while a field it needs is empty.
+/// `values` are the boxes of a `values` shape, in its order.
 export function pastedCredential(
   shape: CredentialShape,
   username: string,
   secret: string,
+  values: string[] = [],
 ): PastedCredential | null {
+  if (shape.kind === "values") {
+    const filled = shape.labels.map((_, i) => (values[i] ?? "").trim());
+    return filled.every((v) => v) ? { kind: "values", values: filled } : null;
+  }
   const s = secret.trim();
   if (!s) return null;
   if (shape.kind === "directory") return { kind: "directory", path: s };

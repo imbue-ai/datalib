@@ -847,6 +847,8 @@ const pasteShape = computed(() =>
 );
 const pasteUsername = ref("");
 const pasteSecret = ref("");
+/// The boxes of a pasted credential that is several values (Zoom's).
+const pasteValues = ref<string[]>([]);
 /// Set once the account field is typed in or picked from, or already
 /// named an account when the paste form opened. Until then the field
 /// follows the pasted username, since that is what it is stored under.
@@ -900,7 +902,7 @@ const pasteSecretLabel = computed(() => {
 });
 
 const pasted = computed(() =>
-  pastedCredential(pasteShape.value, pasteUsername.value, pasteSecret.value),
+  pastedCredential(pasteShape.value, pasteUsername.value, pasteSecret.value, pasteValues.value),
 );
 
 /// The header the secret is sent in, shown with the secret elided so a
@@ -936,6 +938,7 @@ async function savePasted() {
     return;
   }
   pasteSecret.value = "";
+  pasteValues.value = [];
   paste.value = { state: "ok", message: "Sign-in saved." };
   await loadAccounts();
   // The credential is only a guess until something uses it; the check
@@ -1439,6 +1442,7 @@ watch(
     resetProbes();
     signInTab.value = null;
     pasteSecret.value = "";
+    pasteValues.value = [];
     paste.value = { state: "idle", message: "" };
     switching.value = false;
     if (!name) return;
@@ -1877,7 +1881,19 @@ function submit() {
                       spellcheck="false"
                     />
                   </label>
-                  <label class="wiz-item">
+                  <template v-if="pasteShape.kind === 'values'">
+                    <label v-for="(label, i) in pasteShape.labels" :key="label" class="wiz-item">
+                      <span class="wiz-sublabel">{{ label }}</span>
+                      <input
+                        v-model="pasteValues[i]"
+                        class="wiz-input"
+                        :type="label.includes('secret') ? 'password' : 'text'"
+                        autocomplete="off"
+                        spellcheck="false"
+                      />
+                    </label>
+                  </template>
+                  <label v-else class="wiz-item">
                     <span class="wiz-sublabel">{{ pasteSecretLabel }}</span>
                     <input
                       v-model="pasteSecret"

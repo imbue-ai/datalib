@@ -418,6 +418,9 @@ pub enum PastedCredential {
     /// A folder the service's plugin reads the credential from, stored
     /// with `auth set-nocurl` (Garmin's garth tokens).
     Directory { path: String },
+    /// The several values `auth set-nocurl` takes, in latchkey's order
+    /// (Zoom's account id, client id and client secret).
+    Values { values: Vec<String> },
 }
 
 #[derive(Debug, Deserialize)]
@@ -534,7 +537,7 @@ fn set_args(
         args.extend(["--account".to_string(), account.to_string()]);
     }
     let set = match credential {
-        PastedCredential::Directory { .. } => "set-nocurl",
+        PastedCredential::Directory { .. } | PastedCredential::Values { .. } => "set-nocurl",
         _ => "set",
     };
     args.extend(["auth".to_string(), set.to_string(), service.to_string()]);
@@ -576,6 +579,20 @@ fn set_args(
                 return Err("a folder is one line and does not start with '-'".into());
             }
             args.push(path.to_string());
+        }
+        PastedCredential::Values { values } => {
+            if values.is_empty() {
+                return Err("paste the credential first".into());
+            }
+            for value in values {
+                let value = value.trim();
+                if value.is_empty() || value.starts_with('-') || !one_line(value) {
+                    return Err(
+                        "each value is one line, not empty, and does not start with '-'".into(),
+                    );
+                }
+                args.push(value.to_string());
+            }
         }
     }
     Ok(args)
@@ -1316,6 +1333,22 @@ mod tests {
         refuse("");
         refuse("--help");
         refuse("a\nb");
+    }
+
+    /// Zoom's pasted form is three values, each its own argument of
+    /// `set-nocurl` in latchkey's order.
+    #[test]
+    fn several_values_become_auth_set_nocurl_arguments() {
+        let values = |v: &[&str]| PastedCredential::Values {
+            values: v.iter().map(|s| s.to_string()).collect(),
+        };
+        assert_eq!(
+            set_args("zoom", "", &values(&[" acct ", "client", "secret"])).unwrap(),
+            vec!["auth", "set-nocurl", "zoom", "acct", "client", "secret"]
+        );
+        assert!(set_args("zoom", "", &values(&["acct", "", "secret"])).is_err());
+        assert!(set_args("zoom", "", &values(&["acct", "--all", "secret"])).is_err());
+        assert!(set_args("zoom", "", &values(&[])).is_err());
     }
 
     #[test]
