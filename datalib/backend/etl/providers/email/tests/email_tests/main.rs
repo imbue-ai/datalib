@@ -10,6 +10,7 @@ mod gmail_label_union;
 mod gmail_run_problems;
 mod gmail_takeout_seed;
 mod gmail_widened_labels_backfill;
+mod jmap_account_row;
 mod jmap_full_resync_prunes;
 mod jmap_interrupt;
 mod jmap_listed_then_fetched;

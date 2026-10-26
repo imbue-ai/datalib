@@ -44,8 +44,10 @@ async fn upsert_account(
     now: &IsoOffsetTimestamp,
     id: &str,
     payload: &Value,
+    address: Option<String>,
 ) -> Result<()> {
-    let row = AccountRow::from_jmap_payload(id, payload)?;
+    let mut row = AccountRow::from_jmap_payload(id, payload)?;
+    row.email_address = address.or(row.email_address);
     let mut tx = db.pool().begin().await.context("begin account tx")?;
     bulk_upsert_in_tx(&mut tx, std::slice::from_ref(&row), now).await?;
     tx.commit().await.context("commit account tx")?;
@@ -396,7 +398,14 @@ async fn run_sync(
         .find(|(k, _)| k == account_id)
         .map(|(_, v)| v.clone())
         .unwrap_or_else(|| json!({}));
-    upsert_account(db, &now, account_id, &account_payload).await?;
+    upsert_account(
+        db,
+        &now,
+        account_id,
+        &account_payload,
+        session.account_address(account_id),
+    )
+    .await?;
 
     // ── mailboxes ───────────────────────────────────────────────────
     bar.doing("mailboxes");
