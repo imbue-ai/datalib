@@ -1,5 +1,5 @@
-// Google, Fastmail, CalDAV and .ics are one `calendar` step type with
-// four descriptors, told apart by which method table the step carries.
+// Google, Fastmail, CalDAV, Calendly and .ics are one `calendar` step
+// type with five descriptors, told apart by which method table the step carries.
 // Written the wrong way, a step names no method and `datalib-step`
 // refuses it; read back the wrong way, it loses its form.
 import { describe, expect, it } from "vitest";
@@ -19,6 +19,7 @@ describe("the catalog's calendar variants", () => {
       "calendar:google",
       "calendar:fastmail",
       "calendar:caldav",
+      "calendar:calendly",
       "calendar:ics",
     ]);
   });
@@ -31,11 +32,14 @@ describe("the catalog's calendar variants", () => {
       expect(field.kind === "string_list" && field.probe, key).toBe("calendars");
     }
     expect(byKey("ics").canProbe).toBeFalsy();
+    // Calendly has one list of meetings per user: a check, no picker.
+    expect(byKey("calendly").canProbe).toBe(true);
+    expect(byKey("calendly").fields!.some((f) => f.kind === "string_list")).toBe(false);
   });
 
   // Both ends have a field, so a source with a window stays editable here.
   it("offers a window of days wherever there is a server to ask", () => {
-    for (const key of ["google", "fastmail", "caldav"]) {
+    for (const key of ["google", "fastmail", "caldav", "calendly"]) {
       const kinds = Object.fromEntries(byKey(key).fields!.map((f) => [f.target, f.kind]));
       expect(kinds[`${key}.since`], key).toBe("date");
       expect(kinds[`${key}.until`], key).toBe("date");
@@ -45,6 +49,7 @@ describe("the catalog's calendar variants", () => {
   it("names the latchkey services latchkey actually ships", () => {
     expect(byKey("google").credentialService).toBe("google-calendar");
     expect(byKey("fastmail").credentialService).toBe("fastmail-dav");
+    expect(byKey("calendly").credentialService).toBe("calendly");
   });
 });
 
@@ -61,6 +66,7 @@ describe("writing a step", () => {
   it("writes the method table even when nothing is filled in", () => {
     expect(toml("google")).toContain("google = {}");
     expect(toml("fastmail")).toContain("fastmail = {}");
+    expect(toml("calendly")).toContain("calendly = {}");
   });
 
   it("writes a CalDAV server and an .ics folder under their own tables", () => {
@@ -79,7 +85,7 @@ describe("writing a step", () => {
 
 describe("reading a step back", () => {
   const STEPS = listSteps(`data_root = "~/datalib"
-${["g", "f", "c", "i"].map((id) => `\n[[groups]]\nid = "${id}"\ntype = "calendar"\n`).join("")}
+${["g", "f", "c", "y", "i"].map((id) => `\n[[groups]]\nid = "${id}"\ntype = "calendar"\n`).join("")}
 [[steps]]
 group = "g"
 function = "ingest"
@@ -103,6 +109,12 @@ function = "ingest"
 server_url = "https://caldav.icloud.com/"
 
 [[steps]]
+group = "y"
+function = "ingest"
+[steps.params.calendly]
+since = "2026-01-01"
+
+[[steps]]
 group = "i"
 function = "ingest"
 [steps.params.ics]
@@ -115,6 +127,7 @@ path = "~/Takeout/Calendar"
       ["g/ingest", "Google Calendar"],
       ["f/ingest", "Fastmail Calendar"],
       ["c/ingest", "Calendar (CalDAV)"],
+      ["y/ingest", "Calendly"],
       ["i/ingest", "Calendar (.ics files)"],
     ]) {
       expect(catalogForStep("calendar", byId(id).params)!.label, id).toBe(label);

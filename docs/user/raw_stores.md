@@ -661,7 +661,9 @@ The stretches of each conversation the download has walked (above).
 Each way in keeps what its service sends. Google Calendar's events are
 Google's JSON, one row per event resource, in `google_events`. CalDAV
 servers (Fastmail, iCloud) and `.ics` files keep iCalendar text, one
-object per event `UID`, in `ics_objects`.
+object per event `UID`, in `ics_objects`. Calendly keeps its JSON, one
+row per scheduled event in `calendly_events` and that event's invitees
+beside it in `calendly_invitees`.
 
 **A repeating event is one row, not one per date.** Google is asked
 with `singleEvents=false`, so a series is one resource with its
@@ -689,11 +691,11 @@ The login this source mirrors. One row.
 
 | column | what it holds |
 |---|---|
-| `id` | `google` for Google, `ics` for files, the server's host for CalDAV |
-| `method` | `google`, `caldav` or `ics` |
-| `server_url` | the CalDAV server's URL |
-| `principal_href` | the CalDAV principal it found |
-| `login` | whose calendars these are: the CalDAV user, or Google's primary calendar id (the account's address) |
+| `id` | `google` for Google, `calendly` for Calendly, `ics` for files, the server's host for CalDAV |
+| `method` | `google`, `calendly`, `caldav` or `ics` |
+| `server_url` | the CalDAV server's URL; Calendly's API |
+| `principal_href` | the CalDAV principal it found; the Calendly user's URI |
+| `login` | whose calendars these are: the CalDAV user, Google's primary calendar id (the account's address), or the Calendly user's address |
 
 ### `calendars`
 
@@ -701,7 +703,7 @@ One row per calendar the account lists.
 
 | column | what it holds |
 |---|---|
-| `id` | Google's calendar id; for CalDAV the last segment of the calendar's URL; for a file, its path under the folder without `.ics` |
+| `id` | Google's calendar id; for CalDAV the last segment of the calendar's URL; for Calendly the user's id (one calendar per user); for a file, its path under the folder without `.ics` |
 | `account_id` | the `accounts.id` |
 | `href` | the calendar's URL on a CalDAV server |
 | `display_name` | its name |
@@ -722,6 +724,30 @@ One row per Google event resource.
 | `event_id` | Google's event id |
 | `recurring_event_id` | for a changed or cancelled occurrence, the series' event id |
 | `status` | `confirmed`, `tentative` or `cancelled` |
+
+### `calendly_events`
+
+One row per Calendly scheduled event, cancelled ones included. Every
+sync lists them whole, and one the listing no longer names is dropped.
+
+| column | what it holds |
+|---|---|
+| `id` | `<calendar id>#<event id>`, the event id being the last segment of its `uri` |
+| `payload` | Calendly's event resource, with `event_memberships` and `event_guests` sorted |
+| `calendar_id` | the `calendars.id` |
+| `start_time` | when it starts, as Calendly wrote it (UTC) |
+| `status` | `active` or `canceled` |
+| `listing_hash` | the blake3 of `payload`: the version its invitees were fetched for |
+
+### `calendly_invitees`
+
+The invitees of one scheduled event, with their answers to the booking
+form. Read again only when the event's `listing_hash` moves.
+
+| column | what it holds |
+|---|---|
+| `id` | the `calendly_events.id` |
+| `payload` | `{"invitees": [...]}`, Calendly's invitee resources in booking order |
 
 ### `ics_objects`
 

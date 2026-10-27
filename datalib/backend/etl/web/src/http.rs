@@ -76,6 +76,9 @@ impl HttpMethod {
 pub enum HttpService {
     /// Calendars over CalDAV (Fastmail, iCloud, Nextcloud, …).
     Caldav,
+    /// Calendly's REST API (`api.calendly.com`), the `calendar` source's
+    /// `calendly` mode.
+    Calendly,
     /// Contacts over CardDAV. Named for the protocol because that is
     /// what latchkey registers.
     Carddav,
