@@ -17,16 +17,13 @@
 //! applet become `unified_document_index`; then `time_series_steps.rs`:
 //! a source with time series gets its `render_time_series` step and the
 //! config its time-series index; then `time_series_embeds.rs`: a
-//! time-series source loses its `embed` step; then
-//! `email_full_resync.rs`: an email source's method table loses
-//! `full_resync`. Those last five rewrites are also the ones
-//! `datalib-http` makes by itself (`upgrade_qmd_steps`,
+//! time-series source loses its `embed` step. Those last four rewrites
+//! are also the ones `datalib-http` makes by itself (`upgrade_qmd_steps`,
 //! `upgrade_document_index`, `upgrade_time_series_steps`,
-//! `upgrade_time_series_embeds`, `upgrade_email_full_resync`).
+//! `upgrade_time_series_embeds`).
 
 pub mod convert;
 pub mod document_index;
-pub mod email_full_resync;
 pub mod qmd_steps;
 pub mod time_series_embeds;
 pub mod time_series_steps;
@@ -62,9 +59,6 @@ pub fn detect(text: &str) -> Result<LegacyFormat> {
     if time_series_embeds::is_retired(text)? {
         return Ok(LegacyFormat::TimeSeriesEmbed);
     }
-    if email_full_resync::is_retired(text)? {
-        return Ok(LegacyFormat::EmailFullResync);
-    }
     bail!("this config is already in the current shape — there is nothing to migrate")
 }
 
@@ -73,8 +67,7 @@ pub fn convert(text: &str) -> Result<String> {
         LegacyFormat::QmdIndex
         | LegacyFormat::UnifiedIndex
         | LegacyFormat::NoTimeSeries
-        | LegacyFormat::TimeSeriesEmbed
-        | LegacyFormat::EmailFullResync => text.to_string(),
+        | LegacyFormat::TimeSeriesEmbed => text.to_string(),
         _ => convert::rewrite(text)?,
     };
     let out = qmd_steps::rewrite(&out)?;
@@ -85,7 +78,6 @@ pub fn convert(text: &str) -> Result<String> {
         out
     };
     let out = time_series_embeds::rewrite(&out)?;
-    let out = email_full_resync::rewrite(&out)?;
     // The conversion is value-level, so anything the loader would refuse in
     // the result surfaces here rather than on the next run. Report what the
     // runner rejected and let the message speak.
@@ -153,17 +145,6 @@ pub fn upgrade_time_series_embeds(text: &str) -> Result<Option<String>> {
     let out = time_series_embeds::rewrite(text)?;
     let gone: Vec<String> = gone.iter().map(|id| format!("step {id}")).collect();
     refuse_a_loss_but(text, &out, str::to_string, &gone)?;
-    Ok(Some(out))
-}
-
-/// Take `full_resync` out of every email source's method table
-/// (`email_full_resync.rs`).
-pub fn upgrade_email_full_resync(text: &str) -> Result<Option<String>> {
-    if !email_full_resync::is_retired(text).unwrap_or(false) {
-        return Ok(None);
-    }
-    let out = email_full_resync::rewrite(text)?;
-    refuse_a_loss(text, &out, str::to_string)?;
     Ok(Some(out))
 }
 

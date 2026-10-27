@@ -129,9 +129,6 @@ pub enum Retired {
     NoTimeSeries,
     /// A time-series source with an `embed` step (`time_series_embeds.rs`).
     TimeSeriesEmbed,
-    /// An email source's `jmap` or `gmail` table with `full_resync`
-    /// (`email_full_resync.rs`).
-    EmailFullResync,
 }
 
 /// Which retired shape this config is in, or `None` when it is already
