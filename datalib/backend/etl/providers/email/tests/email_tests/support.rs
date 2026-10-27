@@ -145,6 +145,18 @@ pub fn put_gmail_response(playback: &Path, url: &str, response: &HttpResponse) {
     .expect("write fixture");
 }
 
+/// `history.list` from `start` answering as Google does once the cursor
+/// is older than it keeps history for.
+pub fn put_gmail_history_expired(playback: &Path, start: &str) {
+    let expired = HttpResponse {
+        status: 404,
+        headers: Default::default(),
+        body: b"{}".to_vec(),
+        duration_ms: 0,
+    };
+    put_gmail_response(playback, &gmail_history_url(start), &expired);
+}
+
 /// `t@example.test`'s profile at `history_id`, and its `labels`.
 pub fn put_gmail_account(playback: &Path, history_id: &str, labels: Value) {
     put_gmail(

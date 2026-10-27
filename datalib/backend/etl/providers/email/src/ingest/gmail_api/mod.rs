@@ -217,7 +217,6 @@ async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
         &json!({
             "user_id": opts.config.user_id(),
             "account": opts.latchkey.account(),
-            "full_resync": opts.config.full_resync,
             "only_extract_labels": opts.only_labels,
             "since": opts.since,
             "message_budget": opts.config.message_budget,
@@ -477,20 +476,15 @@ impl Run<'_> {
     /// message has been fetched is not asked here, so the cursor never
     /// waits on a fetch.
     ///
-    /// `false` when there is nothing to replay from: no cursor,
-    /// `full_resync`, or a cursor older than Google keeps history for.
+    /// `false` when there is nothing to replay from: no cursor, or a
+    /// cursor older than Google keeps history for.
     async fn replay_history(
         &self,
         throttle: &mut QuotaThrottle,
         summary: &mut FetchSummary,
     ) -> Result<bool> {
         let scope = state_scope(self.account_id);
-        let stored = if self.opts.config.full_resync {
-            None
-        } else {
-            self.db.load_scope(&scope).await?
-        };
-        let Some(cursor) = stored else {
+        let Some(cursor) = self.db.load_scope(&scope).await? else {
             return Ok(false);
         };
         throttle.acquire(api::UNITS_HISTORY_LIST).await;
