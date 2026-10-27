@@ -270,7 +270,8 @@ datalib/
     unified_document_index/ the grid index, the qmd index, the query language over
                    them. Linked by datalib-step and datalib-applet —
                    never by datalib-http or datalib-dag.
-    applets/       `datalib-applet`: the applet host.
+    applets/       `datalib-applet`: the applet host, and `datalib-applet
+                   search`, the search box with no server.
     history/       a doltlite store's commit log; its one first-party dep
                    is `pin`, so datalib-http can serve it without
                    linking `etl`.

@@ -54,17 +54,24 @@ impl DataProcessor for GarminIngest {
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        let today = datalib_time::parse_strict(ctx.now)
-            .with_context(|| format!("garmin: run stamp {:?}", ctx.now))?
-            .inner()
-            .date_naive();
+        let run_at = datalib_time::parse_strict(ctx.now)
+            .with_context(|| format!("garmin: run stamp {:?}", ctx.now))?;
+        let today = run_at.inner().date_naive();
+        let mut api = self.api.clone();
+        let (since, until) =
+            datalib_time::TimeWindow::parse(api.since.as_deref(), api.until.as_deref())?
+                .days(&run_at)
+                .context("garmin: api")?;
+        let ymd = |d: chrono::NaiveDate| d.format("%Y-%m-%d").to_string();
+        api.since = since.map(ymd);
+        api.until = until.map(ymd);
         let db = ingest::RawDb::open(&ingest::db_path_for(&self.raw_path)).await?;
         let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
         ctx.run_store(pool, Some(cas_pool), |sealer| async {
             let s = ingest::fetch(ingest::FetchOptions {
                 db,
                 latchkey: self.latchkey.clone(),
-                api: self.api.clone(),
+                api,
                 today,
                 progress: ctx.progress.clone(),
                 control: ctx.control.clone(),

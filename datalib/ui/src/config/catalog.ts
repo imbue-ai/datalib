@@ -288,7 +288,9 @@ export const CATALOG: CatalogEntry[] = [
           },
           {
             label: "All my direct messages",
-            help: "One-to-one and group conversations.",
+            help:
+              "One-to-one and group conversations. Only the ones open in Slack's sidebar with " +
+              "new messages are read on each sync; a closed one is read when it reopens.",
             sets: { "api.dms": true },
           },
           {
@@ -663,6 +665,13 @@ export const CATALOG: CatalogEntry[] = [
         ],
       },
       {
+        heading: "How far back?",
+        answers: [
+          { label: "Everything" },
+          { label: "Only mail since a date I choose", fields: ["gmail.since"] },
+        ],
+      },
+      {
         heading: "Start from a Takeout?",
         answers: [
           { label: "No, download every message" },
@@ -692,12 +701,22 @@ export const CATALOG: CatalogEntry[] = [
           "include its children. A label added later brings in its mail on the next sync.",
       },
       {
+        kind: "date",
+        target: "gmail.since",
+        label: "Start date",
+        help:
+          "The first sync lists only mail from this day on, so it takes minutes rather than " +
+          "hours. Choosing an earlier date later brings in the older mail on the next sync.",
+      },
+      {
         kind: "path",
         picks: "dir",
-        pickTitle: "Choose the Mail folder of your Google Takeout",
+        pickTitle: "Choose the folder holding your Google Takeout",
         target: "mbox.path",
-        label: "Takeout Mail folder",
+        label: "Takeout folder",
         help:
+          "The folder holding the Takeout's .zip or .tgz files as Google sent them, every part, " +
+          "or the Mail folder of an unzipped one. " +
           "Messages in the Takeout are not downloaded again, so the first sync takes minutes " +
           "rather than hours. Mail newer than the Takeout, and every message's labels, still " +
           "come from Gmail.",

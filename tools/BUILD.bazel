@@ -49,6 +49,9 @@ STAGE_TARBALL_DATA = [
     "//:scripts/latchkey-wrapper.sh",
     "//:scripts/release/stage_tarball.sh",
     "//:scripts/third_party_notices.sh",
+    # The example configs the tarball ships beside the agent guide.
+    "//configs:dag_example.toml",
+    "//docs/user/config_examples:all_sources.toml",
     # `:bin` minus its stamped `git-hash`; check_stage_tarball.sh links
     # it in under the name the script expects. With `:bin` itself these
     # two minute-long tests would re-run on every commit.

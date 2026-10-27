@@ -22,8 +22,9 @@ maximum_sequential_failed_requests = 50        # the default
 account = "picard"
 
 [steps.params.api]
-since = "2025-01-01"   # only conversations updated at or after this (YYYY-MM-DD or
-                       # RFC 3339, UTC); move it back later to backfill; default: all
+since = "2025-01-01"   # only conversations updated at or after this (a day, RFC 3339,
+                       # or "-30d" from the sync); move it back later to backfill;
+                       # default: all
 max_pages = 20         # stop listing after this many pages (100 conversations each);
                        # default: no cap
 limit = 100            # fetch at most this many conversations per run; default: no cap

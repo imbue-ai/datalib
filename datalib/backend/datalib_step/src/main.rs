@@ -6,6 +6,7 @@
 //! `DATALIB_DAG_GROUP_TYPE`, `DATALIB_DAG_STEP`). The subcommands are
 //! utilities that are not steps.
 
+mod append;
 mod check_params;
 mod compact;
 mod dispatch;
@@ -81,6 +82,14 @@ const EXAMPLES: &[Example] = &[
     Example {
         what: "config stanzas for one source, the least it needs and every option, and how to add one",
         command: "datalib-step examples slack",
+    },
+    Example {
+        what: "add a source's least config to a config, wired into the index steps that read it",
+        command: "datalib-step examples slack --append ~/datalib/config.toml",
+    },
+    Example {
+        what: "the same for a source with more than one way in, under an id of your own",
+        command: "datalib-step examples email --append ~/datalib/config.toml --method gmail --id work-mail",
     },
     Example {
         what: "ask which Slack account the credentials reach (writes nothing)",
@@ -184,9 +193,25 @@ enum Cmd {
     /// One source's config stanzas: for each of its ingest methods, the
     /// least a config needs and one that sets every option, with how to
     /// add one to a config, rename its group and wire it into the index.
+    /// With `--append`, adds the least one to a config instead.
     Examples {
         /// Source type (`slack`, `email`, …).
         source_type: String,
+        /// Add the minimal stanza to this config, above the index groups,
+        /// and add its steps to the `inputs` of the index steps that read
+        /// them. Refused, writing nothing, when the config already has the
+        /// group or would not then check clean. The previous file is kept
+        /// as `<file>.bak`.
+        #[arg(long, value_name = "CONFIG")]
+        append: Option<PathBuf>,
+        /// With --append: which ingest method's stanza, for a source with
+        /// more than one (`gmail`, `jmap` or `mbox` for email).
+        #[arg(long, requires = "append")]
+        method: Option<String>,
+        /// With --append: the group's id, in place of the type's name. It
+        /// is the folder under the data root its data goes in.
+        #[arg(long, requires = "append")]
+        id: Option<String>,
     },
     /// Utility (not a pipeline step): ask a provider which account
     /// these credentials reach — and, with `--list`, one list a picker
@@ -303,7 +328,18 @@ async fn main() {
     let cli = Cli::parse();
     match &cli.cmd {
         Some(Cmd::Help { topic }) => std::process::exit(print_help(topic)),
-        Some(Cmd::Examples { source_type }) => {
+        Some(Cmd::Examples {
+            source_type,
+            append: Some(config),
+            method,
+            id,
+        }) => std::process::exit(append::run_cli(
+            source_type,
+            config,
+            method.as_deref(),
+            id.as_deref(),
+        )),
+        Some(Cmd::Examples { source_type, .. }) => {
             std::process::exit(print_page(help::examples_page(source_type)))
         }
         _ => {}

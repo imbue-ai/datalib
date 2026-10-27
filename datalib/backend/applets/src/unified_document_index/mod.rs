@@ -29,7 +29,7 @@ mod search_finds_itself_tests;
 mod search_terms;
 #[cfg(test)]
 mod serve_tests;
-mod tabs;
+pub(crate) mod tabs;
 
 use datalib_columns::Identity;
 use datalib_schema::grid_rows::{GridRow, GridRowColumn};
@@ -75,6 +75,69 @@ struct Index {
     results: Arc<results::ResultCache>,
 }
 
+impl Index {
+    /// `deadline` is how long one search may wait on qmd.
+    async fn open(root: PathBuf, deadline: std::time::Duration) -> Result<Index> {
+        let root = Arc::new(root);
+        let repo = datalib_unified_document_index::dolt_repo::DoltRepo::open(root.clone())
+            .await
+            .with_context(|| format!("open the grid index under {}", root.display()))?;
+        let mut qmd = QmdDaemonConfig::new((*root).clone());
+        qmd.answer_deadline = deadline;
+        Ok(Index {
+            qmd: Arc::new(QmdDaemon::new(qmd)),
+            embedder: Arc::new(datalib_qmd_indexer::QueryEmbedder::new(
+                &root, None, deadline,
+            )),
+            qmd_summary: Arc::new(SummaryCache::default()),
+            results: Arc::new(results::ResultCache::default()),
+            repo: Arc::new(repo),
+            root,
+        })
+    }
+}
+
+/// One search, answered exactly as `/search` answers it, with no server:
+/// `datalib-applet search`.
+pub fn search_once(root: PathBuf, p: SearchParams) -> Result<SearchResponse> {
+    // A mistyped root would otherwise answer an empty index: no rows, as
+    // if nothing matched.
+    let grid = datalib_runtime::layout::grid_index_db(&root);
+    anyhow::ensure!(
+        grid.exists(),
+        "{} has no grid index (no {}): is it a data root, and has a sync built its index?",
+        root.display(),
+        grid.display()
+    );
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("build tokio runtime")?;
+    rt.block_on(async move {
+        // Nothing warms the models for a one-off search, so one that
+        // embeds its text waits for them here rather than letting qmd
+        // fetch unpinned copies itself.
+        if let Some(models) = link_models(&root) {
+            if embeds(&parse_query(p.q.as_deref().unwrap_or_default()), p.tab) {
+                provision_models(&models);
+            }
+        }
+        let s = Index::open(root, ONE_SEARCH_DEADLINE).await?;
+        Ok(answer_search(&s, p).await)
+    })
+}
+
+/// How long `search_once` waits on qmd. No gateway's proxy timeout to stay
+/// under, and every one starts qmd cold, loading its models: measured
+/// 14-21 s on a large root, over the server's 20.
+const ONE_SEARCH_DEADLINE: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Whether answering free text runs qmd's embedding model: its hybrid
+/// query and the Meaning tab do; Fields and Words read tables.
+fn embeds(parsed: &ParsedQuery, tab: Option<SearchTab>) -> bool {
+    !parsed.free_text.is_empty() && matches!(tab, None | Some(SearchTab::Meaning))
+}
+
 pub fn serve(port: u16) -> Result<()> {
     let root = std::env::var_os(DATA_ROOT_ENV)
         .map(PathBuf::from)
@@ -89,26 +152,16 @@ pub fn serve(port: u16) -> Result<()> {
         .build()
         .context("build tokio runtime")?;
     rt.block_on(async move {
-        let root = Arc::new(root);
         // Warm the shared model cache before the first search rather
-        // than during it. This used to run in `datalib-http`'s main,
-        // which is the last place that still knew what qmd was.
-        ensure_models(&root);
-        let repo = datalib_unified_document_index::dolt_repo::DoltRepo::open(root.clone())
-            .await
-            .with_context(|| format!("open the grid index under {}", root.display()))?;
-        let state = Index {
-            qmd: Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone()))),
-            embedder: Arc::new(datalib_qmd_indexer::QueryEmbedder::new(
-                &root,
-                None,
-                datalib_unified_document_index::qmd::daemon::QMD_ANSWER_DEADLINE,
-            )),
-            qmd_summary: Arc::new(SummaryCache::default()),
-            results: Arc::new(results::ResultCache::default()),
-            repo: Arc::new(repo),
+        // than during it.
+        if let Some(models) = link_models(&root) {
+            std::thread::spawn(move || provision_models(&models));
+        }
+        let state = Index::open(
             root,
-        };
+            datalib_unified_document_index::qmd::daemon::QMD_ANSWER_DEADLINE,
+        )
+        .await?;
         let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
         let listener = tokio::net::TcpListener::bind(addr)
             .await
@@ -169,16 +222,18 @@ pub(crate) async fn require_gateway(
         .unwrap_or_else(|_| Response::new(Body::empty()))
 }
 
-fn ensure_models(root: &std::path::Path) {
-    // No index yet means no sync has run, so there is nothing to point
-    // at the cache and no search to warm. The first sync creates the
-    // directory and the indexer links it; this call is the belt for a
-    // root the indexer has not touched in this incarnation.
+/// Points the root's qmd state at the shared model cache, and answers the
+/// directory the pinned models belong in. None when there is nothing to
+/// point: no index means no sync has run, and no search to warm.
+fn link_models(root: &std::path::Path) -> Option<PathBuf> {
+    // The first sync creates the directory and the indexer links it;
+    // this call is the belt for a root the indexer has not touched in
+    // this incarnation.
     if !datalib_unified_document_index::qmd::qmd_index_path(root).exists() {
         tracing::info!(
             "no qmd index yet; free-text search finds nothing until the first sync builds one"
         );
-        return;
+        return None;
     }
     let qmd_dir = datalib_unified_document_index::qmd::qmd_state_dir(root);
     let models_dir = datalib_qmd_indexer::default_models_dir();
@@ -191,38 +246,37 @@ fn ensure_models(root: &std::path::Path) {
             models = %qmd_dir.join("models").display(),
             "could not ensure the models symlink; continuing with the models dir as it is"
         );
-        return;
+        return None;
     }
-    // Verify (and on a cold cache, fetch) the pinned models off the
-    // request path: a 2 GB download must not hold up the SQL side of
-    // search, and qmd would otherwise pull unpinned copies itself on
-    // the first semantic query.
-    let effective = datalib_qmd_models::effective_models_dir(&qmd_dir, &models_dir);
-    std::thread::spawn(move || {
-        let models = datalib_qmd_models::PINNED_MODELS;
-        match datalib_qmd_models::ensure_models(
-            &effective,
-            models,
-            datalib_qmd_models::Fetch::from_env(),
-        ) {
-            Ok(outcomes) => {
-                let missing = datalib_qmd_models::missing(models, &outcomes);
-                if !missing.is_empty() {
-                    tracing::warn!(
-                        missing = %missing.join(","),
-                        dir = %effective.display(),
-                        switch = datalib_qmd_models::NO_FETCH_ENV,
-                        "not fetching qmd's models because fetching is switched off; whatever needs them will fail"
-                    );
-                }
+    Some(datalib_qmd_models::effective_models_dir(
+        &qmd_dir,
+        &models_dir,
+    ))
+}
+
+/// Verifies, and on a cold cache fetches, the pinned models: a 2 GB
+/// download the server keeps off the request path, and without which qmd
+/// would pull unpinned copies itself on the first semantic query.
+fn provision_models(dir: &std::path::Path) {
+    let models = datalib_qmd_models::PINNED_MODELS;
+    match datalib_qmd_models::ensure_models(dir, models, datalib_qmd_models::Fetch::from_env()) {
+        Ok(outcomes) => {
+            let missing = datalib_qmd_models::missing(models, &outcomes);
+            if !missing.is_empty() {
+                tracing::warn!(
+                    missing = %missing.join(","),
+                    dir = %dir.display(),
+                    switch = datalib_qmd_models::NO_FETCH_ENV,
+                    "not fetching qmd's models because fetching is switched off; whatever needs them will fail"
+                );
             }
-            Err(e) => tracing::error!(
-                dir = %effective.display(),
-                error = %format!("{e:#}"),
-                "could not provision qmd's models; semantic search will fail until `datalib-step pull-models` succeeds"
-            ),
         }
-    });
+        Err(e) => tracing::error!(
+            dir = %dir.display(),
+            error = %format!("{e:#}"),
+            "could not provision qmd's models; semantic search will fail until `datalib-step pull-models` succeeds"
+        ),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -342,13 +396,16 @@ async fn search_handler(
     State(s): State<Index>,
     Query(p): Query<SearchParams>,
 ) -> Json<SearchResponse> {
+    Json(answer_search(&s, p).await)
+}
+
+/// `/search`'s answer, which `datalib-applet search` prints as it is.
+async fn answer_search(s: &Index, p: SearchParams) -> SearchResponse {
     let q = p.q.unwrap_or_default();
     let parsed = parse_query(&q);
-    let refused = |why| {
-        Json(SearchResponse {
-            refused: vec![why],
-            ..SearchResponse::unread(Vec::new())
-        })
+    let refused = |why| SearchResponse {
+        refused: vec![why],
+        ..SearchResponse::unread(Vec::new())
     };
     if let Some(why) = refusal(&s.root, &parsed) {
         return refused(why);
@@ -383,7 +440,7 @@ async fn search_handler(
         Ok(within) => within.unwrap_or_default(),
         Err(e) => {
             errors.push(e);
-            return Json(SearchResponse::unread(errors));
+            return SearchResponse::unread(errors);
         }
     };
     let spec = PageSpec {
@@ -394,7 +451,7 @@ async fn search_handler(
         limit,
         through,
     };
-    let page = match search_page(&s, &q, &parsed, spec).await {
+    let page = match search_page(s, &q, &parsed, spec).await {
         Ok(page) => page,
         Err(SearchFailure::NoIndex) => {
             qmd_index_missing = true;
@@ -419,7 +476,7 @@ async fn search_handler(
     for row in &mut rows {
         sources.resolve(row);
     }
-    Json(SearchResponse {
+    SearchResponse {
         columns: columns::columns(),
         rows_spec: columns::rows_spec(),
         query_echo: serde_json::json!({
@@ -438,7 +495,30 @@ async fn search_handler(
         at: page.at,
         errors,
         refused: Vec::new(),
-    })
+    }
+}
+
+/// Why `answer` is not the search that was asked for, one reason a line:
+/// what a script reading it must not take for "nothing matched".
+pub fn unanswered(answer: &SearchResponse) -> Vec<String> {
+    let echo = &answer.query_echo;
+    let mut why: Vec<String> = answer
+        .refused
+        .iter()
+        .map(|r| format!("refused: {r}"))
+        .collect();
+    why.extend(answer.errors.iter().cloned());
+    if let Some(e) = echo["qmd_error"].as_str() {
+        why.push(format!("qmd could not answer the free text: {e}"));
+    }
+    if echo["qmd_index_missing"].as_bool() == Some(true) {
+        why.push(
+            "this root has no search index yet, so free text finds nothing: a source's \
+             words are searchable once its `keyword_index` step has run"
+                .to_string(),
+        );
+    }
+    why
 }
 
 #[derive(Debug, Deserialize)]
@@ -2026,23 +2106,12 @@ mod tests {
     }
 
     pub(super) async fn index_over(root: &std::path::Path) -> Index {
-        let root = Arc::new(root.to_path_buf());
-        Index {
-            repo: Arc::new(
-                datalib_unified_document_index::dolt_repo::DoltRepo::open(root.clone())
-                    .await
-                    .unwrap(),
-            ),
-            qmd: Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone()))),
-            embedder: Arc::new(datalib_qmd_indexer::QueryEmbedder::new(
-                &root,
-                None,
-                datalib_unified_document_index::qmd::daemon::QMD_ANSWER_DEADLINE,
-            )),
-            qmd_summary: Arc::new(SummaryCache::default()),
-            results: Arc::new(results::ResultCache::default()),
-            root,
-        }
+        Index::open(
+            root.to_path_buf(),
+            datalib_unified_document_index::qmd::daemon::QMD_ANSWER_DEADLINE,
+        )
+        .await
+        .unwrap()
     }
 
     pub(super) async fn search(

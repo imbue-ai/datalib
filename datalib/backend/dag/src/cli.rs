@@ -3,7 +3,7 @@
 //! it parses.
 
 use std::num::NonZeroUsize;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use datalib_cli_help::Example;
@@ -27,6 +27,10 @@ A step's id is <group>/<function>: slack/ingest, slack/render_markdown, \
 unified_document_index/grid_index.";
 
 pub const EXAMPLES: &[Example] = &[
+    Example {
+        what: "start a new data root on the starter config: the index steps, and no sources yet",
+        command: "datalib-dag init ~/datalib",
+    },
     Example {
         what: "say what is wrong with a config, all at once, and run nothing",
         command: "datalib-dag --check ~/datalib/config.toml",
@@ -135,10 +139,20 @@ pub struct Cli {
     pub run_id: Option<String>,
 }
 
-/// The steering verbs: each writes a row and returns, and whoever runs the
-/// loop acts on it within a second.
+/// `init`, and the steering verbs: each of those writes a row and
+/// returns, and whoever runs the loop acts on it within a second.
 #[derive(Subcommand)]
 pub enum Verb {
+    /// Write the starter config.toml into a data root, creating the root:
+    /// the index steps with nothing to read yet, and no sources. A root
+    /// that already has a config is left as it is. Writes nothing else,
+    /// and starts nothing. `datalib-step examples <type> --append` adds a
+    /// source to it.
+    Init {
+        /// The data root, the directory that will hold config.toml and
+        /// everything synced into it.
+        data_root: PathBuf,
+    },
     /// Print the open sync requests, the steps turned off, and the steps
     /// running now.
     Status {
@@ -183,17 +197,6 @@ pub enum Verb {
     },
 }
 
-impl Verb {
-    pub fn config(&self) -> &Path {
-        match self {
-            Verb::Status { config, .. }
-            | Verb::Stop { config, .. }
-            | Verb::TurnOff { config, .. }
-            | Verb::TurnOn { config, .. } => config,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use clap::{CommandFactory, Parser};
@@ -217,6 +220,15 @@ mod tests {
             .expect("resume");
         assert!(matches!(cli.verb, Some(Verb::TurnOn { .. })));
         Cli::try_parse_from(["datalib-dag", "status", "c.toml", "--by", "x"]).expect("status --by");
+    }
+
+    #[test]
+    fn init_takes_a_data_root_not_a_config() {
+        let cli = Cli::try_parse_from(["datalib-dag", "init", "lib"]).expect("init");
+        assert!(
+            matches!(cli.verb, Some(Verb::Init { ref data_root }) if data_root.as_os_str() == "lib")
+        );
+        assert!(Cli::try_parse_from(["datalib-dag", "init"]).is_err());
     }
 
     #[test]

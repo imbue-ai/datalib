@@ -11,6 +11,7 @@ use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_calendar_config::{CalendarConfig, CalendarMethod};
 use datalib_etl_files::fingerprint_cache::{self, FingerprintCache};
 use datalib_etl_web::http::LatchkeySettings;
+use datalib_time::TimeWindow;
 
 use crate::ingest;
 
@@ -27,7 +28,7 @@ pub fn plan_ingest(
     let method = match config.method()? {
         CalendarMethod::Google { calendars, window } => Method::Google {
             calendars: calendars.to_vec(),
-            window: ingest::Window::from_config(window)?,
+            window: window.parse()?,
         },
         CalendarMethod::Caldav {
             server_url,
@@ -36,7 +37,7 @@ pub fn plan_ingest(
         } => Method::Caldav {
             server_url: server_url.to_string(),
             calendars: calendars.to_vec(),
-            window: ingest::Window::from_config(window)?,
+            window: window.parse()?,
         },
         CalendarMethod::Ics(path) => Method::Ics { path: path.path() },
     };
@@ -51,12 +52,12 @@ pub fn plan_ingest(
 enum Method {
     Google {
         calendars: Vec<String>,
-        window: Option<ingest::Window>,
+        window: TimeWindow,
     },
     Caldav {
         server_url: String,
         calendars: Vec<String>,
-        window: Option<ingest::Window>,
+        window: TimeWindow,
     },
     Ics {
         path: PathBuf,
@@ -71,15 +72,15 @@ pub struct CalendarIngest {
 }
 
 impl CalendarIngest {
-    fn run_config(&self) -> serde_json::Value {
+    fn run_config(&self, window: Option<ingest::Window>) -> serde_json::Value {
         match &self.method {
-            Method::Google { calendars, window } => serde_json::json!({
+            Method::Google { calendars, .. } => serde_json::json!({
                 "method": "google", "calendars": calendars, "window": window
             }),
             Method::Caldav {
                 server_url,
                 calendars,
-                window,
+                ..
             } => serde_json::json!({
                 "method": "caldav", "server_url": server_url, "calendars": calendars,
                 "window": window
@@ -96,18 +97,24 @@ impl DataProcessor for CalendarIngest {
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
+        let window = match &self.method {
+            Method::Google { window, .. } | Method::Caldav { window, .. } => {
+                ingest::Window::resolve(*window, &datalib_time::parse_strict(ctx.now)?)?
+            }
+            Method::Ics { .. } => None,
+        };
         let db = ingest::RawDb::open(&ingest::db_path_for(&self.raw_path)).await?;
         let pool = db.pool().clone();
         ctx.run_store(pool.clone(), None, |sealer| async {
             // The run's own record in `sync_runs`: its summary, and what it
             // changed in each table.
-            let run = DownloadRun::start(&pool, &self.run_config()).await?;
+            let run = DownloadRun::start(&pool, &self.run_config(window)).await?;
             let result = match &self.method {
-                Method::Google { calendars, window } => {
+                Method::Google { calendars, .. } => {
                     ingest::google::fetch(ingest::google::FetchOptions {
                         db,
                         calendars: calendars.clone(),
-                        window: *window,
+                        window,
                         latchkey: self.latchkey.clone(),
                         progress: ctx.progress.clone(),
                         control: ctx.control.clone(),
@@ -118,13 +125,13 @@ impl DataProcessor for CalendarIngest {
                 Method::Caldav {
                     server_url,
                     calendars,
-                    window,
+                    ..
                 } => {
                     ingest::caldav::fetch(ingest::caldav::FetchOptions {
                         db,
                         server_url: server_url.clone(),
                         calendars: calendars.clone(),
-                        window: *window,
+                        window,
                         latchkey: self.latchkey.clone(),
                         progress: ctx.progress.clone(),
                         control: ctx.control.clone(),

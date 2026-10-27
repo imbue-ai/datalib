@@ -34,6 +34,7 @@ rust_binary(
         "//datalib/backend/handle:datalib_handle",
         "//datalib/backend/id:datalib_id",
         "//datalib/backend/metrics:datalib_metrics",
+        "//datalib/backend/migrate_config:datalib_migrate_config",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/etl/providers/claude:datalib_etl_claude",
         "//datalib/backend/etl/providers/claude_render:datalib_etl_claude_render",
@@ -140,10 +141,12 @@ rust_binary(
         "@datalib_crates//:futures",
         "@datalib_crates//:libc",
         "@datalib_crates//:schemars",
+        "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:strum",
         "@datalib_crates//:tokio",
+        "@datalib_crates//:toml",
         "@datalib_crates//:tracing",
     ],
 )
@@ -174,7 +177,6 @@ rust_test(
     proc_macro_deps = ["@datalib_crates//:async-trait"],
     deps = [
         "@datalib_crates//:runfiles",
-        "@datalib_crates//:serde",
         "@datalib_crates//:tempfile",
     ],
 )

@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use datalib_etl_email::ingest::gmail_api::{self, FetchOptions, FetchSummary};
 use datalib_etl_email::ingest::labels::gmail_mailbox_id;
 use datalib_etl_email::ingest::RawDb;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use serde_json::{json, Value};
 
 use crate::support::{
@@ -68,9 +69,9 @@ async fn a_takeout_seeds_the_mailbox_and_the_api_only_labels_it() {
     );
 }
 
-/// Every sync reads the Takeout again. Once Gmail has listed the
-/// account, a message it no longer has stays gone, and one the API has
-/// relabeled keeps the API's labels.
+/// A Takeout read again (with no fingerprint cache, every sync reads
+/// it): once Gmail has listed the account, a message it no longer has
+/// stays gone, and one the API has relabeled keeps the API's labels.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn reading_the_takeout_again_brings_nothing_back() {
     let m = account(None);
@@ -90,6 +91,60 @@ async fn reading_the_takeout_again_brings_nothing_back() {
     assert_eq!(second.emails_upserted, 0, "{second:?}");
     assert_eq!(emails(&m).await, [PICARD, RIKER, WORF]);
     assert_eq!(filed(&m, PICARD).await, [real("INBOX"), real("Label_7")]);
+}
+
+/// A Takeout left zipped, as Google sent it, seeds what the unzipped one
+/// does; and once read cleanly it is not read again while neither it nor
+/// the settings change.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_zipped_takeout_seeds_once_and_is_not_read_again_unchanged() {
+    use std::io::Write;
+    let m = account(None);
+    let unzipped = write_takeout(&m.playback);
+    let mbox = std::fs::read(unzipped.join("All mail Including Spam and Trash.mbox")).unwrap();
+    let parts = m.playback.join("parts");
+    std::fs::create_dir_all(&parts).unwrap();
+    let mut zip = zip::ZipWriter::new(
+        std::fs::File::create(parts.join("takeout-20260105T090000Z-1-001.zip")).unwrap(),
+    );
+    zip.start_file(
+        "Takeout/Mail/All mail Including Spam and Trash.mbox",
+        zip::write::SimpleFileOptions::default(),
+    )
+    .unwrap();
+    zip.write_all(&mbox).unwrap();
+    zip.finish().unwrap();
+    let cache = FingerprintCache::open(&m.playback.join("fingerprints.sqlite"))
+        .await
+        .unwrap();
+    let run_cached = || {
+        let (parts, cache) = (parts.clone(), cache.clone());
+        m.run(|db| {
+            gmail_api::fetch(FetchOptions {
+                takeout: Some(parts),
+                cache: Some(cache),
+                ..FetchOptions::new(db)
+            })
+        })
+    };
+
+    let first = run_cached().await.unwrap();
+    let seeded = first.takeout.as_ref().expect("the takeout was read");
+    assert!(!seeded.unchanged);
+    assert_eq!(seeded.seeded, 3, "{first:?}");
+    assert_eq!(first.messages_failed, 0, "{first:?}");
+    assert_eq!(emails(&m).await, [PICARD, RIKER, WORF]);
+
+    put_gmail(
+        &m.playback,
+        &gmail_history_url("9001"),
+        &json!({ "history": [], "historyId": "9001" }),
+    );
+    let second = run_cached().await.unwrap();
+    let seeded = second.takeout.as_ref().expect("the takeout was looked at");
+    assert!(seeded.unchanged, "{second:?}");
+    assert_eq!((seeded.seeded, seeded.held), (0, 0), "{second:?}");
+    assert_eq!(emails(&m).await, [PICARD, RIKER, WORF]);
 }
 
 /// A relabel of a message whose bytes are held asks for its labels

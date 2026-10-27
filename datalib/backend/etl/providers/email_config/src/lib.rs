@@ -83,6 +83,15 @@ pub struct EmailConfig {
     /// of the render step's `only_render_labels`.
     #[serde(default)]
     pub only_extract_labels: Vec<String>,
+    /// With `only_extract_labels`, also mirror every other message in
+    /// the thread of a message the filter keeps, whatever its labels, so
+    /// a conversation whose earlier messages were archived arrives
+    /// whole. `false` keeps only the messages the filter matches; each
+    /// thread still says how many messages it has upstream, so a partial
+    /// one shows. Without a label filter every message is mirrored
+    /// anyway. Applies to every download mode. Defaults to true.
+    #[serde(default)]
+    pub whole_threads: Option<bool>,
     /// Retired here: `only_render_labels` belongs on the render step's
     /// params now. Still read, so a config that sets it on the ingest step
     /// is refused with that fix rather than ignored.
@@ -169,6 +178,10 @@ impl EmailConfig {
         }
     }
 
+    pub fn whole_threads(&self) -> bool {
+        self.whole_threads.unwrap_or(true)
+    }
+
     /// The Google Takeout a Gmail source starts from, when it names one.
     pub fn takeout(&self) -> Option<PathBuf> {
         match (&self.gmail, &self.mbox) {
@@ -203,17 +216,21 @@ pub struct EmailSync {
     pub blob_download_concurrency: Option<usize>,
 }
 
-/// The mbox download path: a `.mbox` file, or a directory holding one,
-/// plus account-row data so the synthesized `accounts` row matches
-/// JMAP's shape. The row fields are optional (defaults: `account_id` ←
-/// mbox file stem, `display_name` ← `account_id`, `is_personal` ← true).
+/// The mbox download path: a `.mbox` file or a directory holding one, or
+/// a Google Takeout's `.zip`/`.tgz` or the folder of its parts, plus
+/// account-row data so the synthesized `accounts` row matches JMAP's
+/// shape. The row fields are optional (defaults: `account_id` ← mbox
+/// file stem, `display_name` ← `account_id`, `is_personal` ← true).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MboxSync {
-    /// The `.mbox` file, or a directory containing one.
+    /// The `.mbox` file or a directory containing one; or a Google
+    /// Takeout as it was sent, its `.zip` or `.tgz`, or the folder holding
+    /// every part of it, which need not be unpacked.
     pub path: PathBuf,
     /// Id of the account the mailbox is filed under. Defaults to the last
-    /// part of `path`, without its extension, in lowercase with underscores.
+    /// part of `path`, without its extension, in lowercase with underscores;
+    /// `takeout` when `path` is one `.zip` or `.tgz`.
     #[serde(default)]
     pub account_id: Option<String>,
     /// The account's display name. Defaults to `account_id`.
@@ -294,6 +311,17 @@ pub struct EmailGmailApi {
     /// reported by `users.getProfile`.
     #[serde(default)]
     pub email_address: Option<String>,
+    /// Oldest mail to mirror: a day (`2026-09-01`, the run's own midnight), an RFC
+    /// 3339 instant, or an offset from the run's start (`-30d`). A walk
+    /// asks Gmail only for mail after it (`after:` on the listing), so a
+    /// first sync of the last month takes minutes, not hours. Mail an
+    /// offset slides past stays mirrored, and one that changes later
+    /// (relabeled, say) is fetched again whatever its age. An earlier
+    /// start backfills on the next run. Narrowing it does not cancel what
+    /// a wider listing already owes; the fetch goes newest first. Gmail
+    /// has no `until`: the mailbox is followed forward from the walk.
+    #[serde(default)]
+    pub since: Option<String>,
     /// Discard the stored `historyId` cursor and walk every configured
     /// label again. Messages already mirrored are not fetched again.
     /// Applies to this run only.
@@ -333,6 +361,8 @@ impl EmailGmailApi {
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
+        datalib_time::TimeWindow::check("gmail", self.since.as_deref(), None)
+            .map_err(anyhow::Error::msg)?;
         if self.quota_units_per_minute.is_some_and(|q| q == 0) {
             anyhow::bail!(
                 "email `gmail.quota_units_per_minute` must be > 0 (omit it for the default \
@@ -503,6 +533,28 @@ mod tests {
         }))
         .unwrap();
         assert!(cfg.validate().is_err());
+    }
+
+    /// `gmail.since` takes the shared window grammar; Gmail has no
+    /// `until`, and says so at load rather than ignoring one.
+    #[test]
+    fn gmail_since_takes_the_window_grammar() {
+        let load = |gmail: serde_json::Value| {
+            serde_json::from_value::<EmailConfig>(serde_json::json!({ "gmail": gmail }))
+                .map_err(anyhow::Error::from)
+                .and_then(|c| c.validate())
+        };
+        for ok in ["2026-09-01", "2026-09-01T09:00:00-07:00", "-30d"] {
+            load(serde_json::json!({ "since": ok })).unwrap_or_else(|e| panic!("{ok}: {e}"));
+        }
+        let err = load(serde_json::json!({ "since": "a month ago" }))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("`gmail.since`"), "{err}");
+        let err = load(serde_json::json!({ "until": "+1d" }))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("until"), "{err}");
     }
 
     #[test]

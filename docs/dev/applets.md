@@ -409,7 +409,10 @@ writes the indexes, and by `datalib-applet`, which serves them.
 
 `datalib/backend/applets` — `datalib-applet`, one subcommand per
 applet (`slack`, `unified_document_index`, `unified_time_series_index` and
-`datalib_contacts`), the same shape as `datalib-step`.
+`datalib_contacts`), the same shape as `datalib-step`. One more,
+`search`, is not an applet: it answers one `/search` with no server,
+through the same function the route calls (`answer_search`), so the
+command and the search box cannot drift apart.
 `unified_time_series_index` serves the time-series index read-only:
 `GET /time_series` lists the time series (`?source_id=`, `?q=`),
 `GET /time_series/<id>` is one, and `POST /points` with

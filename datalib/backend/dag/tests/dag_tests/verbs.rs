@@ -50,6 +50,39 @@ fn wait_for(what: &str, ready: impl Fn() -> bool) {
     }
 }
 
+/// A config that is not there yet points at the command that writes one,
+/// and that command writes one a sync can then read.
+#[test]
+fn a_missing_config_names_init_and_init_makes_one() {
+    let td = tempfile::tempdir().unwrap();
+    let root = td.path().join("lib");
+    let out = dag(&root, &["--check"]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains(&format!("`datalib-dag init {}`", root.display())),
+        "{err}"
+    );
+    let out = dag(&root, &["status"]);
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("datalib-dag init"),
+        "{out:?}"
+    );
+
+    let out = Command::new(dag_bin())
+        .arg("init")
+        .arg(&root)
+        .output()
+        .expect("run datalib-dag init");
+    assert!(out.status.success(), "{out:?}");
+    let out = Command::new(dag_bin())
+        .arg("--check")
+        .arg(root.join("config.toml"))
+        .output()
+        .expect("run datalib-dag --check");
+    assert!(out.status.success(), "{out:?}");
+}
+
 #[test]
 fn a_source_turned_off_does_not_run_until_it_is_turned_on() {
     let td = root_with_a_source();

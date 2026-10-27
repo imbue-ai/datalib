@@ -612,7 +612,7 @@ channel list, claude's orgs and project docs).
 |---|---|---|---|
 | slack | channels, threads (by `latest_reply`), file edges | `messages`, `threads`, `slack_attachments` sidecars | each channel's history; each conversation's searched reply time |
 | github, gitlab | `listed_change_requests`, from each scope's search | the PR / MR sidecar, at `updated_at` | each scope's `updated_at` |
-| email (JMAP, Gmail) | `listed_messages`, from the delta or an enumeration | `emails` sidecar, then the `.eml` edge | — |
+| email (JMAP, Gmail) | `listed_messages`, from the delta or an enumeration; under a label filter, also the rest of each kept thread, from `thread_members` | `emails` sidecar, then the `.eml` edge | — |
 | notion | search results are the `pages` rows | `page_markdown`, `page_comments`, attachment edges | the search's `last_edited_time` |
 | linear | each walked connection's pages are the rows | each table's sidecar, at `updatedAt` | each connection's `updatedAt`, per selection |
 | garmin | days, activities, files | each table's sidecar | activity dates |
@@ -688,7 +688,7 @@ leaves an on-disk superset, and nothing deletes it.
 |---|---|
 | slack | An earlier `since` is a gap below the spans held; `media` turned on makes every stored file edge without bytes owed |
 | github, gitlab | A wider `refresh_window_days` is a gap below each scope's `coverage` |
-| email (JMAP, Gmail) | An admitted mailbox or label with no `listed_whole` row is enumerated until an enumeration of it finishes; a raised `blob_size_limit_bytes` makes a held message with no `.eml` owed |
+| email (JMAP, Gmail) | An admitted mailbox or label with no `listed_whole` row is enumerated until an enumeration of it finishes, and so, on Gmail, is one whose last walk began after the `since` now set; a raised `blob_size_limit_bytes` makes a held message with no `.eml` owed; `whole_threads` turned on lists the rest of every kept thread |
 | garmin | An earlier `since` leaves days with no row and dates with no `coverage`, and the next run fetches exactly those |
 | notion | A wider `refresh_window_days` lowers where the search stops |
 | yolink | An earlier `devices[].start` is a gap below the spans the device holds |

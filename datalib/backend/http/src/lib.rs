@@ -20,7 +20,7 @@ use axum::{
     Router,
 };
 use datalib_core::repo::{DynAppRepo, RepoError};
-use datalib_dag::config::owner_only_options;
+use datalib_dag::starter::STARTER_CONFIG;
 use datalib_dag::supervisor::store::RequestRow;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1132,7 +1132,7 @@ pub struct InitConfigResponse {
 /// makes the check and the write one operation.
 async fn init_config(State(s): State<AppState>) -> Result<Json<InitConfigResponse>, StatusCode> {
     let path = s.config_path();
-    let created = write_starter_config(&s.root).map_err(|e| {
+    let created = datalib_dag::starter::write_starter_config(&s.root).map_err(|e| {
         tracing::error!("init_config: {}: {e}", path.display());
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
@@ -1147,33 +1147,12 @@ async fn init_config(State(s): State<AppState>) -> Result<Json<InitConfigRespons
     }))
 }
 
-/// Write the starter `config.toml` into `root`, creating the root, unless
-/// a config is already there. True when this call wrote it.
-/// `POST /api/config/init` and `datalib-http --init` both come here.
-///
-/// `create_new` is the whole point: the existence check and the write
-/// are one syscall, so this can never overwrite a config that arrived
-/// between them.
-pub fn write_starter_config(root: &std::path::Path) -> std::io::Result<bool> {
-    use std::io::Write;
-    datalib_core::layout::create_data_root(root)?;
-    let path = datalib_dag::config::root_config_path(root);
-    match owner_only_options().create_new(true).open(&path) {
-        Ok(mut f) => {
-            f.write_all(scaffold_toml().as_bytes())?;
-            Ok(true)
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
-        Err(e) => Err(e),
-    }
-}
-
 async fn config_scaffold(State(s): State<AppState>) -> Json<ConfigResponse> {
     let path = s.config_path();
     Json(ConfigResponse {
         exists: path.exists(),
         path: path.display().to_string(),
-        text: scaffold_toml(),
+        text: STARTER_CONFIG.to_string(),
         parsed_ok: true,
         error: None,
         // The scaffold is a constant this binary ships, and
@@ -1535,70 +1514,6 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
             run: None,
         }),
     }
-}
-
-/// Starter DAG config: the shared fan-in steps that every source's
-/// rendered markdown feeds. Non-empty on purpose — the two index steps
-/// are source-independent and belong in every pipeline. They start with
-/// no inputs, which is a valid graph that indexes nothing; adding a
-/// source adds its render step's id here (the UI's "Add a source"
-/// flow does that for you, and writes the source above this block).
-/// `data_root` is omitted: it defaults to this file's own directory,
-/// keeping the root self-contained.
-fn scaffold_toml() -> String {
-    "\
-# ── the unified document index ─────────────────────────────────────────
-# A group is one thing on the Manage screen; its steps are what run.
-# Every source feeds these two — the grid reads its rendered markdown,
-# the qmd aggregator its search steps. A step's id is
-# `<group>/<function>`, the tree it writes, and `inputs` names the
-# steps it reads by that id. A step with no `command` is one of
-# datalib's own.
-#
-# Sources go above this block: a [[groups]] entry with a `type`, then
-# its steps. The file then reads in the order data flows, each step
-# below the steps it reads, which is where the Sources screen writes
-# them and the order it lists them in. The runner follows `inputs`,
-# not the file. Anything above the first [[…]] header is a top-level
-# key (data_root, binary_dir), not part of an entry. See
-# <origin>/agent/config.md.
-
-[[groups]]
-id = \"unified_document_index\"
-name = \"Document Index\"
-
-[[steps]]
-group = \"unified_document_index\"
-function = \"grid_index\"
-inputs = []
-
-[[steps]]
-group = \"unified_document_index\"
-function = \"qmd_aggregator\"
-inputs = []
-
-# The applet that serves the grid: the app has no search, no document
-# view and no document picker without it. It is an applet like any
-# other — a server the gateway spawns and proxies at
-# `/applet/unified_document_index/` — which is why it is written here rather
-# than compiled into the backend.
-
-[[applets]]
-group = \"unified_document_index\"
-id = \"unified_document_index\"
-command = \"datalib-applet unified_document_index\"
-
-# The contacts app: the contacts a person makes and the handles they
-# link to them, which the person chips and search read. Without it the
-# chips still show what each source says about a person, with nothing
-# to link. Its store is `datalib_curated/datalib_contacts/`.
-
-[[applets]]
-group = \"unified_document_index\"
-id = \"datalib_contacts\"
-command = \"datalib-applet datalib_contacts\"
-"
-    .to_string()
 }
 
 /// Surface the DAG config's source steps to the UI as `{id}` entries —
@@ -2452,8 +2367,8 @@ mod tests {
     /// runner's own validation, with nothing at all to report.
     #[test]
     fn scaffold_is_valid_toml() {
-        let text = scaffold_toml();
-        let checked = datalib_dag::config::check_text(&text);
+        let text = STARTER_CONFIG;
+        let checked = datalib_dag::config::check_text(text);
         assert!(
             checked.is_clean(),
             "scaffold rejected: {}\n---\n{text}",
@@ -2483,7 +2398,7 @@ mod tests {
     /// the confusion `POST /api/config/init` exists to end.
     #[test]
     fn a_scaffolded_root_reports_no_sources() {
-        let fringe = fringe_of(&scaffold_toml());
+        let fringe = fringe_of(STARTER_CONFIG);
         assert_eq!(
             fringe,
             [
@@ -2500,7 +2415,7 @@ mod tests {
     fn a_source_counts_but_the_index_steps_never_do() {
         let text = format!(
             "{}\n[[steps]]\nid = \"slack/raw\"\ncommand = \"c\"\n",
-            scaffold_toml()
+            STARTER_CONFIG
         );
         assert_eq!(configured_source_count(&fringe_of(&text)), 1);
     }
@@ -2536,7 +2451,7 @@ mod tests {
     fn put_refuses_what_the_loader_would_tolerate() {
         let text = format!(
             "{}\n[[steps]]\nid = \"slack/raw\"\ncommand = \"c\"\ntitle = \"Work\"\n",
-            scaffold_toml()
+            STARTER_CONFIG
         );
         // The loader keeps everything but the bad step…
         let checked = datalib_dag::config::check_text(&text);
