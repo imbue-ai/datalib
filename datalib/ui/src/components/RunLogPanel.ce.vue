@@ -17,7 +17,8 @@
 // runner, or the server itself) asks for the lines after the last one
 // seen. A run that has finished is read once.
 //
-import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { timeView } from "@/config/timeView";
 import { SlickVanillaGridBundle } from "@slickgrid-universal/vanilla-bundle";
 import type {
   SlickEventData,
@@ -224,6 +225,9 @@ type Grid = SlickVanillaGridBundle<RunLogLine> & {
 /// reload leaves nothing to show: a grid created inside a hidden box
 /// measures no width and fits its columns to that.
 let bundle: Grid | null = null;
+
+// The clock's zone or format changed: every date on screen, drawn again.
+watch(timeView, () => bundle?.slickGrid.invalidate());
 
 // An answer about a group or step landed or changed: draw its chips again.
 const stopEntities = entities.subscribe(() => {
@@ -771,7 +775,7 @@ function columnSet(): Column<RunLogLine>[] {
       name: "Time",
       field: "ts_utc",
       width: 120,
-      // The whole stamp to the millisecond, in the viewer's zone (a
+      // The whole stamp to the millisecond, in the clock's zone (a
       // step's own lines are stamped in UTC, the runner's in local time).
       // Clipped from the left, and 120px shows the time of day: the
       // seconds and milliseconds are what tell one line from the next,

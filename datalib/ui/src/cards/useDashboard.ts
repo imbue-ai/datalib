@@ -8,6 +8,7 @@ import { UNIFIED_DOCUMENT_INDEX, type ManageResponse, type ManageRow, type Searc
 import { useApi } from "@/cards/cardApi";
 import { changed, oneAtATime, subscribeLive } from "@/live";
 import { formatRelative } from "@/config/timeFormat";
+import { formatAt, parseInstant, timeView } from "@/config/timeView";
 import { syncAllButton } from "@/config/syncAll";
 import { isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
 import { copyToClipboard } from "@/clipboard";
@@ -157,12 +158,12 @@ export function useDashboard(
     pushToast(ok ? "Data root path copied" : "Could not copy the path", ok ? "info" : "error");
   }
 
-  const dateFormat = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
   function when(iso: string | null): string {
-    if (!iso) return "";
-    const t = Date.parse(iso);
-    if (!Number.isFinite(t)) return "";
-    return now.value - t < 86_400_000 ? formatRelative(iso, now.value) : dateFormat.format(t);
+    const at = iso ? parseInstant(iso) : null;
+    if (!iso || !at) return "";
+    return now.value - at.ms < 86_400_000
+      ? formatRelative(iso, now.value)
+      : formatAt(at, timeView.value, { day: "monthDay" });
   }
 
   function statusClass(row: ManageRow): string {

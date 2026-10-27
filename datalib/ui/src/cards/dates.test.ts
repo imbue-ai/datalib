@@ -1,5 +1,5 @@
 // The date chip's rules: which stamps it reads, what it shows in the
-// viewer's zone, its hover, its copy, and the searches it offers.
+// view's zone and format, its hover, its copy, and the searches it offers.
 
 import { describe, expect, it } from "vitest";
 
@@ -16,8 +16,14 @@ import {
   sideQuery,
   type Stamp,
 } from "./dates";
+import { DEFAULT_VIEW, LOCAL, WRITTEN, type TimeView } from "@/config/timeView";
 
-const VIENNA = "Europe/Vienna";
+/** The default view, reading in the named zone. */
+function inZone(name: string): TimeView {
+  return { ...DEFAULT_VIEW, zone: { kind: "named", name } };
+}
+
+const VIENNA = inZone("Europe/Vienna");
 const NOW = Date.parse("2026-04-18T10:05:00Z");
 
 function stamp(datetime: string): Stamp {
@@ -45,11 +51,13 @@ describe("what a datetime names", () => {
 });
 
 describe("what a date chip shows", () => {
-  it("shows an instant in the viewer's zone and a day as written", () => {
+  it("shows an instant in the view's zone and a day as written", () => {
     expect(dateText(stamp("2026-04-15T10:05:00+00:00"), VIENNA)).toBe("Wed, Apr 15, 2026, 12:05");
-    expect(dateText(stamp("2026-04-15T10:05:00+00:00"), "UTC")).toBe("Wed, Apr 15, 2026, 10:05");
+    expect(dateText(stamp("2026-04-15T10:05:00+00:00"), inZone("UTC"))).toBe(
+      "Wed, Apr 15, 2026, 10:05",
+    );
     // A day is the same day wherever it is read.
-    expect(dateText(stamp("2026-04-15"), "Pacific/Kiritimati")).toBe("Wed, Apr 15, 2026");
+    expect(dateText(stamp("2026-04-15"), inZone("Pacific/Kiritimati"))).toBe("Wed, Apr 15, 2026");
   });
 
   it("hovers with the instant to the second, in UTC, as written, and how long ago", () => {
@@ -59,7 +67,7 @@ describe("what a date chip shows", () => {
       "2026-04-15 06:05:30 -04:00 as written",
       "3 days ago",
     ]);
-    // Written in UTC, or in the viewer's own zone: nothing more to say.
+    // Written in UTC, or in the view's own zone: nothing more to say.
     expect(dateTitle(stamp("2026-04-15T12:05:30+02:00"), NOW, VIENNA).split("\n")).toHaveLength(3);
     expect(dateTitle(stamp("2026-04-15"), NOW, VIENNA)).toBe(
       "Wednesday, April 15, 2026\n2026-04-15 · 3 days ago",
@@ -74,13 +82,60 @@ describe("what a date chip shows", () => {
   });
 });
 
-describe("the searches a date offers", () => {
-  it("finds its day in the viewer's zone", () => {
-    // 23:30 UTC is already the next day in Vienna.
-    expect(dayQuery(stamp("2026-04-15T23:30:00Z"), VIENNA)).toBe(
-      "after:2026-04-16 before:2026-04-17",
+describe("the view a date is read in", () => {
+  it("reads each stamp in the offset it was written in", () => {
+    const view = { ...DEFAULT_VIEW, zone: WRITTEN };
+    expect(dateText(stamp("2026-04-15T06:05:00-04:00"), view)).toBe("Wed, Apr 15, 2026, 06:05");
+    expect(dateText(stamp("2026-04-15T18:35:00+05:30"), view)).toBe("Wed, Apr 15, 2026, 18:35");
+    expect(dateCopyText(stamp("2026-04-15T18:35:00+05:30"), view)).toBe(
+      "Wed, Apr 15, 2026, 18:35 GMT+5:30",
     );
+  });
+
+  it("writes ISO days and a 12-hour clock when asked", () => {
+    const at = stamp("2026-04-15T15:05:00Z");
+    expect(dateText(at, { ...inZone("UTC"), days: "iso" })).toBe("2026-04-15 15:05");
+    expect(dateText(at, { ...inZone("UTC"), days: "iso", hours: "h12" })).toBe(
+      "2026-04-15 3:05 PM",
+    );
+    expect(dateText(at, { ...inZone("UTC"), hours: "h12" })).toMatch(
+      /^Wed, Apr 15, 2026, 3:05\sPM$/,
+    );
+    expect(dateText(stamp("2026-04-15"), { ...VIENNA, days: "iso" })).toBe("2026-04-15");
+  });
+});
+
+describe("the searches a date offers", () => {
+  it("finds its day in the view's zone, with that zone's midnights written out", () => {
+    // 23:30 UTC is already the next day in Vienna. The search would read
+    // a bare day as midnight wherever it runs, so the bounds say whose.
+    expect(dayQuery(stamp("2026-04-15T23:30:00Z"), VIENNA)).toBe(
+      "after:2026-04-16T00:00:00+02:00 before:2026-04-17T00:00:00+02:00",
+    );
+    // A day is the same day everywhere.
     expect(dayQuery(stamp("2026-04-30"), VIENNA)).toBe("after:2026-04-30 before:2026-05-01");
+  });
+
+  /** A day that starts in winter time and ends in summer time: one
+   *  offset for both midnights would miss or add an hour. */
+  it("gives each midnight its own offset across a DST change", () => {
+    expect(dayQuery(stamp("2026-03-08T15:00:00Z"), inZone("America/New_York"))).toBe(
+      "after:2026-03-08T00:00:00-05:00 before:2026-03-09T00:00:00-04:00",
+    );
+  });
+
+  it("finds the day the stamp was written on, read as written", () => {
+    const view = { ...DEFAULT_VIEW, zone: WRITTEN };
+    expect(dayQuery(stamp("2026-04-15T23:30:00-04:00"), view)).toBe(
+      "after:2026-04-15T00:00:00-04:00 before:2026-04-16T00:00:00-04:00",
+    );
+  });
+
+  it("writes a bare day when the view reads as this machine does", () => {
+    // Noon UTC is the same day in every zone within eleven hours of it.
+    expect(dayQuery(stamp("2026-04-15T12:00:00Z"), { ...DEFAULT_VIEW, zone: LOCAL })).toBe(
+      "after:2026-04-15 before:2026-04-16",
+    );
   });
 
   it("looks before or after the instant, or around a whole day", () => {
@@ -108,9 +163,9 @@ describe("a span of time", () => {
    *  chip in the reader's. */
   it("ends on the same day as its clock alone, in the reader's zone", () => {
     const start = stamp("2026-09-18T19:00:00-07:00");
-    expect(rangeEndText(start, stamp("2026-09-18T22:00:00-07:00"), "America/Los_Angeles")).toBe(
-      "22:00",
-    );
+    expect(
+      rangeEndText(start, stamp("2026-09-18T22:00:00-07:00"), inZone("America/Los_Angeles")),
+    ).toBe("22:00");
     // 14:00–16:00 in Los Angeles is 23:00–01:00 in Vienna: there the end
     // says its own day.
     const afternoon = stamp("2026-09-18T14:00:00-07:00");
@@ -123,7 +178,7 @@ describe("a span of time", () => {
     root.innerHTML =
       '<span class="time-range"><time datetime="2026-09-18T17:00:00+00:00">a</time> – ' +
       '<time datetime="2026-09-18T19:30:00+00:00">b</time></span>';
-    decorateDates(root, NOW, "UTC");
+    decorateDates(root, NOW, inZone("UTC"));
     const [from, to] = Array.from(root.querySelectorAll("time"));
     expect(from!.textContent).toBe("Fri, Sep 18, 2026, 17:00");
     expect(to!.textContent).toBe("19:30");
