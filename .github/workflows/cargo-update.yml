@@ -1,15 +1,12 @@
 # Keeps datalib/backend/Cargo.lock current, which Dependabot cannot do
-# (`.github/dependabot.yml` says why): once a week it takes every
-# semver-compatible update of the backend's crates, repins
-# MODULE.bazel.lock to match, and opens a PR — or rewrites its open one —
-# from the fixed branch below. Cargo.toml is never touched, so a major
-# version is still a hand bump.
-#
-# The update is crate_universe's own: `CARGO_BAZEL_REPIN=full` runs a
-# plain `cargo update` with the cargo of Bazel's Rust toolchain and
-# writes both lockfiles. The second, plain `--nobuild` records the
-# variable as unset again (the lock keeps its value), and the third
-# proves the result is stable.
+# (`.github/dependabot.yml` says why): once a week it moves every crate
+# to its newest semver-compatible version that is at least 7 days old
+# (the burn-in, docs/dev/first_time_dev.md), repins MODULE.bazel.lock to
+# match, and opens a PR — or rewrites its open one — from the fixed
+# branch below. The burn-in covers the whole lock, so a version a hand
+# repin took in its first week goes back to an older one until it is a
+# week old. Cargo.toml is never touched, so a major version is still a
+# hand bump. cargo is the one in Bazel's Rust toolchain.
 #
 # The PR is opened with GITHUB_TOKEN, and GitHub holds the
 # `pull_request` run of such a PR until a maintainer approves it (it
@@ -73,28 +70,23 @@ jobs:
         with:
           buildbuddy-api-key: ${{ secrets.BUILD_BUDDY_API_KEY }}
           buildbuddy-config: buildbuddy
-      - name: cargo update, through crate_universe
+      - name: cargo update, nothing under a week old
         run: |
           set -euo pipefail
-          held_version() {
-              awk -v crate="$1" '$0 == "name = \"" crate "\"" {f=1; next}
-                  f && /^version = / {gsub(/"/, "", $3); print $3; exit}' datalib/backend/Cargo.lock
+          cargo() {
+              bazel run --ui_event_filters=-info --noshow_progress \
+                @rules_rust//tools/upstream_wrapper:cargo -- \
+                "$@" --manifest-path "${GITHUB_WORKSPACE}/datalib/backend/Cargo.toml"
           }
-          pins=""
-          for crate in ${HELD_CRATES}; do
-              pins+=" ${crate}=$(held_version "${crate}")"
-          done
-          CARGO_BAZEL_REPIN=full bazel build --nobuild //...
-          for pin in ${pins}; do
-              echo "Holding ${pin}"
-              CARGO_BAZEL_REPIN="${pin}" bazel build --nobuild //...
-          done
+          # The doltlite patch in MODULE.bazel is made against one
+          # libsqlite3-sys (Cargo.toml's sqlx entry), and sqlx accepts newer.
+          sqlite_sys="$(cargo pkgid libsqlite3-sys)"
+          cargo -Zmin-publish-age update --config 'registry.min-publish-age="7 days"'
+          cargo update -p libsqlite3-sys --precise "${sqlite_sys##*@}"
         env:
-          # Crates kept at the version main pins. libsqlite3-sys: the
-          # doltlite patch in MODULE.bazel is made against one version
-          # (Cargo.toml's sqlx entry says which), and sqlx accepts newer.
-          HELD_CRATES: libsqlite3-sys
-      - name: Record the repin variable as unset
+          # `-Zmin-publish-age` is unstable; this lets stable cargo take it.
+          RUSTC_BOOTSTRAP: "1"
+      - name: Repin MODULE.bazel.lock
         run: bazel build --nobuild //...
       - name: The lockfile is stable
         run: bazel build --nobuild --lockfile_mode=error //...
@@ -185,8 +177,8 @@ jobs:
           cat > "${RUNNER_TEMP}/body.md" <<EOF
           The weekly \`cargo update\` of \`datalib/backend/Cargo.lock\`, which Dependabot cannot bump (\`.github/dependabot.yml\` says why).
 
-          **Before:** the backend's crates were at the versions \`main\` pinned, some of them behind their newest semver-compatible release.
-          **After:** every crate is at its newest version that \`datalib/backend/Cargo.toml\` allows, and \`MODULE.bazel.lock\` is repinned to match. \`Cargo.toml\` is unchanged, so no major version moves.
+          **Before:** the backend's crates were at the versions \`main\` pinned: some behind their newest semver-compatible release, any taken by hand possibly less than a week old.
+          **After:** every crate is at its newest version that \`datalib/backend/Cargo.toml\` allows and that has been out at least 7 days (a version newer than that goes back to the last one that has), except \`libsqlite3-sys\`, held where the doltlite patch expects it. \`MODULE.bazel.lock\` is repinned to match. \`Cargo.toml\` is unchanged, so no major version moves.
           **What a person notices:** nothing, unless an update changes a crate's behaviour; CI is the check.
 
           $(cat "${RUNNER_TEMP}/changes.md")
