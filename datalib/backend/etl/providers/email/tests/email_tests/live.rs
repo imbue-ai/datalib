@@ -3,7 +3,8 @@
 // stderr/stdout writes defined in clippy.toml.
 #![allow(clippy::disallowed_macros)]
 
-//! Live Gmail REST API download test.
+//! Live Gmail REST API download test: the real `datalib-step` ingest,
+//! with no playback, so its requests go out through latchkey.
 //!
 //! Not run by `bazel test`: every test here is named `live::<fn>`, and
 //! the target skips that prefix. `bazel run //datalib/backend/etl/providers/email:gmail_live` runs
@@ -14,8 +15,49 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use datalib_etl_email::ingest::gmail_api::{self, FetchOptions, FetchSummary};
+use datalib_etl_email::ingest::gmail_api;
 use datalib_etl_email::ingest::{db_path_for, RawDb};
+use serde_json::{json, Value};
+
+use crate::support::{last_run, run_ingest_step};
+
+/// The group each test's source is, and so its store's directory under
+/// the test's data root.
+const GROUP: &str = "gmail";
+
+fn store(root: &Path) -> std::path::PathBuf {
+    root.join(GROUP).join("ingest")
+}
+
+/// What a run recorded of itself in `sync_runs`, as the tests read it.
+#[derive(Debug)]
+struct Run {
+    walked: Vec<String>,
+    emails_upserted: usize,
+    blobs_stored: usize,
+    budget_exhausted: bool,
+    quota_units_spent: u64,
+}
+
+impl Run {
+    fn of(summary: &Value) -> Self {
+        let n = |key: &str| summary[key].as_u64().unwrap_or(0);
+        Self {
+            walked: summary["walked"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            emails_upserted: n("emails_upserted") as usize,
+            blobs_stored: n("blobs_stored") as usize,
+            budget_exhausted: summary["budget_exhausted"].as_bool().unwrap_or(false),
+            quota_units_spent: n("quota_units_spent"),
+        }
+    }
+}
 
 fn test_label() -> String {
     std::env::var("DATALIB_GMAIL_TEST_LABEL").unwrap_or_else(|_| "datalib".to_string())
@@ -28,22 +70,24 @@ fn second_test_label() -> String {
     std::env::var("DATALIB_GMAIL_TEST_LABEL_2").unwrap_or_else(|_| "Starred".to_string())
 }
 
-/// The store is the caller's to open and close — `fetch` never opens one.
-async fn mirror(root: &Path, labels: &[&str], budget: Option<usize>) -> FetchSummary {
-    let db = RawDb::open(&db_path_for(root)).await.expect("open raw db");
-    // `config.account` left unset: latchkey resolves the single stored
-    // account on its own, and hard-coding an address here would make the
-    // test author's mailbox a prerequisite.
-    let mut opts = FetchOptions::new(db.clone());
-    opts.only_labels = labels.iter().map(|l| (*l).to_string()).collect();
-    opts.config.message_budget = budget;
-    let out = gmail_api::fetch(opts).await;
-    db.close().await;
-    out.expect("gmail fetch failed — is `latchkey auth browser google-gmail` done?")
+/// One sync of a Gmail source filtered to `labels` into the data root
+/// `root`, by the real ingest step. `latchkey_settings` is left unset:
+/// latchkey uses the one stored account, and naming an address here would
+/// make the test author's mailbox a prerequisite.
+async fn mirror(root: &Path, labels: &[&str], budget: Option<usize>) -> Run {
+    let params = json!({
+        "only_extract_labels": labels,
+        "gmail": { "message_budget": budget },
+    });
+    run_ingest_step(root, GROUP, &params, None)
+        .expect("the ingest step failed — is `latchkey auth browser google-gmail` done?");
+    Run::of(&last_run(&store(root)).await)
 }
 
 async fn mirrored_gmail_ids(root: &Path) -> BTreeSet<String> {
-    let db = RawDb::open(&db_path_for(root)).await.expect("open raw db");
+    let db = RawDb::open(&db_path_for(&store(root)))
+        .await
+        .expect("open raw db");
     let ids: Vec<String> = sqlx::query_scalar(
         "SELECT id FROM listed_messages_bookkeeping WHERE held_version IS NOT NULL",
     )
@@ -83,7 +127,9 @@ async fn gmail_live_one_label_roundtrip() {
         "no budget was set, so the run must not have stopped early",
     );
 
-    let db = RawDb::open(&db_path_for(&tmp)).await.expect("open raw db");
+    let db = RawDb::open(&db_path_for(&store(&tmp)))
+        .await
+        .expect("open raw db");
 
     // ── the label filter actually filtered ──────────────────────────
     let email_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM emails")
@@ -223,7 +269,7 @@ async fn gmail_live_one_label_roundtrip() {
         second.quota_units_spent,
     );
 
-    let db = RawDb::open(&db_path_for(&tmp))
+    let db = RawDb::open(&db_path_for(&store(&tmp)))
         .await
         .expect("reopen raw db");
     let after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM emails")
