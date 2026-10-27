@@ -161,6 +161,64 @@ fn a_split_google_series_lists_like_single_events() {
     assert_eq!(longer.title.as_deref(), Some("Senior staff"));
 }
 
+/// Google's `singleEvents=true` writes every `dateTime` in the calendar's
+/// offset, whatever zone the event was made in (#1422): a London meeting
+/// on a Vienna calendar is `15:00+01:00` once the clocks go back, not
+/// `14:00+00:00`. A copied row is rewritten the same way, so a date the
+/// rule gives and one somebody moved agree. The `start_time` column keeps
+/// the event's own wall clock.
+#[test]
+fn a_google_payload_is_written_in_the_calendars_zone() {
+    const VIENNA: &str = "Europe/Vienna";
+    let london = |t: &str| json!({"dateTime": t, "timeZone": "Europe/London"});
+    let mut parsed = google(vec![
+        json!({
+            "id": "tea01", "status": "confirmed", "summary": "Tea with Guinan",
+            "start": london("2026-10-14T14:00:00+01:00"), "end": london("2026-10-14T15:00:00+01:00"),
+            "recurrence": ["RRULE:FREQ=WEEKLY;BYDAY=WE"]
+        }),
+        json!({
+            "id": "tea01_20261021T130000Z", "status": "confirmed",
+            "recurringEventId": "tea01",
+            "originalStartTime": london("2026-10-21T14:00:00+01:00"),
+            "start": london("2026-10-22T09:00:00+01:00"), "end": london("2026-10-22T10:00:00+01:00")
+        }),
+    ]);
+    parsed.calendars[0].time_zone = Some(VIENNA.into());
+    let listed = list(&parsed, &window("2026-10-20", "2026-10-29"));
+    assert_eq!(
+        ids(&listed),
+        ["tea01_20261021T130000Z", "tea01_20261028T140000Z"]
+    );
+    let payload = |instance_id: &str| -> Value {
+        serde_json::from_str(&row(&listed, instance_id).payload).unwrap()
+    };
+
+    let generated = payload("tea01_20261028T140000Z");
+    assert_eq!(generated["start"], london("2026-10-28T15:00:00+01:00"));
+    assert_eq!(generated["end"], london("2026-10-28T16:00:00+01:00"));
+    assert_eq!(
+        generated["originalStartTime"],
+        london("2026-10-28T15:00:00+01:00")
+    );
+    assert_eq!(
+        row(&listed, "tea01_20261028T140000Z").start_time,
+        "2026-10-28T14:00:00+00:00"
+    );
+
+    let moved = payload("tea01_20261021T130000Z");
+    assert_eq!(moved["start"], london("2026-10-22T10:00:00+02:00"));
+    assert_eq!(moved["end"], london("2026-10-22T11:00:00+02:00"));
+    assert_eq!(
+        moved["originalStartTime"],
+        london("2026-10-21T15:00:00+02:00")
+    );
+    assert_eq!(
+        row(&listed, "tea01_20261021T130000Z").start_time,
+        "2026-10-22T09:00:00+01:00"
+    );
+}
+
 /// An all-day series runs on dates; Google names each occurrence by
 /// its date alone, and the window reads a date as the calendar's day.
 #[test]
