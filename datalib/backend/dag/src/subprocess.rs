@@ -19,37 +19,37 @@ use crate::step::{ArtifactState, FailureKind, StepCtx, StepError, StepOutcome};
 /// immediate end-of-file would block forever on a pipe nobody writes to.
 const PARENT_PIPE_FD: libc::c_int = 3;
 
-pub const ENV_STEP: &str = "DATALIB_DAG_STEP";
+pub const ENV_STEP: &str = datalib_env::DATALIB_DAG_STEP;
 /// The run this invocation belongs to — the id every row of
 /// `system/runs/runs.sqlite` carries — and which attempt of this
 /// invocation it is: 1 for the first, counting up only as the runner
 /// retries a failure. A step started again later in the same run starts
 /// at 1 again. Stamp them into anything you write that should be
 /// joinable back to the run.
-pub const ENV_RUN_ID: &str = "DATALIB_DAG_RUN_ID";
-pub const ENV_ATTEMPT: &str = "DATALIB_DAG_ATTEMPT";
+pub const ENV_RUN_ID: &str = datalib_env::DATALIB_DAG_RUN_ID;
+pub const ENV_ATTEMPT: &str = datalib_env::DATALIB_DAG_ATTEMPT;
 /// The step's group id, its group's `type`, and its function — the two
 /// halves the step id is composed from, plus the type. Only set for a
 /// step declared under a `[[groups]]` entry; `ENV_GROUP_TYPE` only when
 /// the group declares a type.
-pub const ENV_GROUP: &str = "DATALIB_DAG_GROUP";
-pub const ENV_GROUP_TYPE: &str = "DATALIB_DAG_GROUP_TYPE";
+pub const ENV_GROUP: &str = datalib_env::DATALIB_DAG_GROUP;
+pub const ENV_GROUP_TYPE: &str = datalib_env::DATALIB_DAG_GROUP_TYPE;
 /// Under a diff group only: the group named by its `source` and that
 /// group's `type` — whose raw store the step reads, and which renderer
 /// it runs. Set by the loader in the step's `env` rather than by the
 /// runner, so they are fingerprinted like any other env entry.
-pub const ENV_SOURCE_GROUP: &str = "DATALIB_DAG_SOURCE_GROUP";
-pub const ENV_SOURCE_GROUP_TYPE: &str = "DATALIB_DAG_SOURCE_GROUP_TYPE";
-pub const ENV_FUNCTION: &str = "DATALIB_DAG_FUNCTION";
-pub const ENV_DATA_ROOT: &str = "DATALIB_DAG_DATA_ROOT";
-pub const ENV_INPUTS: &str = "DATALIB_DAG_INPUTS";
-pub const ENV_CHANGED_INPUTS: &str = "DATALIB_DAG_CHANGED_INPUTS";
+pub const ENV_SOURCE_GROUP: &str = datalib_env::DATALIB_DAG_SOURCE_GROUP;
+pub const ENV_SOURCE_GROUP_TYPE: &str = datalib_env::DATALIB_DAG_SOURCE_GROUP_TYPE;
+pub const ENV_FUNCTION: &str = datalib_env::DATALIB_DAG_FUNCTION;
+pub const ENV_DATA_ROOT: &str = datalib_env::DATALIB_DAG_DATA_ROOT;
+pub const ENV_INPUTS: &str = datalib_env::DATALIB_DAG_INPUTS;
+pub const ENV_CHANGED_INPUTS: &str = datalib_env::DATALIB_DAG_CHANGED_INPUTS;
 /// `StepCtx::reads` as a JSON object: input path → version.
-pub const ENV_READS: &str = "DATALIB_READS";
+pub const ENV_READS: &str = datalib_env::DATALIB_READS;
 /// Run-wide pinned timestamp (RFC 3339), set by the runner on every
 /// step so all stamped outputs agree. Steps that record times should
 /// prefer it over sampling their own clock.
-pub const ENV_NOW: &str = "DATALIB_DAG_NOW";
+pub const ENV_NOW: &str = datalib_env::DATALIB_DAG_NOW;
 /// Appended, with the part to empty (`store`), by `datalib-dag --reset`:
 /// the step does no work but empty that part, commit and exit. The runner
 /// then forgets the step ever succeeded, so the next run does its work
@@ -67,9 +67,9 @@ pub const MIGRATE_FLAG: &str = "--migrate";
 pub const COMPACT_FLAG: &str = "--compact";
 /// Seconds between a step's checkpoints, at most — see
 /// `config::CheckpointCadence`.
-pub const ENV_CHECKPOINT_CADENCE: &str = "DATALIB_DAG_CHECKPOINT_CADENCE";
+pub const ENV_CHECKPOINT_CADENCE: &str = datalib_env::DATALIB_DAG_CHECKPOINT_CADENCE;
 /// How much a render reads at once — see `config::RenderPages`.
-pub const ENV_RENDER_PAGES: &str = "DATALIB_DAG_RENDER_PAGES";
+pub const ENV_RENDER_PAGES: &str = datalib_env::DATALIB_DAG_RENDER_PAGES;
 
 /// The flag a step's params arrive on: the path of a JSON file holding
 /// the entry's `params` subtree. A file rather than an argument because

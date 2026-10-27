@@ -1710,10 +1710,10 @@ async fn has_dolt_extensions_on(conn: &mut sqlx::SqliteConnection) -> bool {
 
 /// The run a step belongs to, from the runner's environment
 /// (`docs/dev/step_protocol.md`), or `None` outside a run.
-pub const RUN_ID_ENV: &str = "DATALIB_DAG_RUN_ID";
+pub const RUN_ID_ENV: &str = datalib_env::DATALIB_DAG_RUN_ID;
 
 /// The data root, from the same environment.
-pub const DATA_ROOT_ENV: &str = "DATALIB_DAG_DATA_ROOT";
+pub const DATA_ROOT_ENV: &str = datalib_env::DATALIB_DAG_DATA_ROOT;
 
 /// A store's path as a log line names it: under the data root when the
 /// runner said where that is, since every store's is the same prefix.

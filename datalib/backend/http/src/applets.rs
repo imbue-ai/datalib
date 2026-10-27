@@ -41,12 +41,12 @@ use crate::watch::{RootEvent, RootFrame};
 /// The applet's own id, as the gateway knows it. The reference applet
 /// uses it to label its data; anything building an absolute URL should
 /// prefer [`ENV_APPLET_BASE`].
-pub const ENV_APPLET_ID: &str = "DATALIB_APPLET_ID";
+pub const ENV_APPLET_ID: &str = datalib_env::DATALIB_APPLET_ID;
 
 /// The prefix the gateway proxies to this applet (`/applet/<id>/`). An
 /// applet that emits absolute URLs must build them from this rather
 /// than assuming the mount layout.
-pub const ENV_APPLET_BASE: &str = "DATALIB_APPLET_BASE";
+pub const ENV_APPLET_BASE: &str = datalib_env::DATALIB_APPLET_BASE;
 
 /// The secret an applet requires on every request, carried in
 /// [`APPLET_SECRET_HEADER`]. The gateway mints one per process, hands it
@@ -54,7 +54,7 @@ pub const ENV_APPLET_BASE: &str = "DATALIB_APPLET_BASE";
 /// it forwards. Without it the applet's loopback port is a second door to
 /// the data the gateway keeps behind the API token, open to any local
 /// process and to a web page that resolves its own hostname to 127.0.0.1.
-pub const ENV_APPLET_SECRET: &str = "DATALIB_APPLET_SECRET";
+pub const ENV_APPLET_SECRET: &str = datalib_env::DATALIB_APPLET_SECRET;
 pub const APPLET_SECRET_HEADER: &str = "X-Datalib-Applet-Secret";
 
 /// The prefix of the one line an applet prints to **stdout** once it

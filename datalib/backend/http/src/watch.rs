@@ -63,8 +63,8 @@ async fn until(at: Option<Instant>) {
 
 /// A dataset the UI fetches, named by what serves it. A card subscribes
 /// to the ones it reads and refetches those; a change to anything else
-/// never reaches it. The set is closed and mirrored by hand in
-/// `ui/src/live.ts`.
+/// never reaches it. The UI's `LiveTable` is generated from it
+/// (`ui_mirror.rs`).
 #[derive(
     Debug,
     Clone,

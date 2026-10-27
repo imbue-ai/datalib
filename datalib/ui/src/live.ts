@@ -8,11 +8,12 @@
 // starving its own `fetch` calls with no symptom but hanging requests.
 // Here there is one connection however many subscribers there are.
 
-/// A dataset the server serves, named by what serves it. Mirrors
-/// `watch::Table` by hand. A consumer names the ones it reads and
-/// refetches on those; a change to anything else never reaches it.
-export type LiveTable =
-  "dag" | "manage.rows" | "runs" | "processes" | "log" | "storage" | "disk" | "curated";
+import type { LiveTable } from "./generated/enums";
+
+/// A dataset the server serves, named by what serves it: `watch::Table`,
+/// generated into `./generated/enums`. A consumer names the ones it reads
+/// and refetches on those; a change to anything else never reaches it.
+export type { LiveTable };
 
 /// One `root` frame. Mirrors `watch::RootFrame`; see that module for
 /// what each kind covers and why the frame carries no payload (every

@@ -1,9 +1,22 @@
 // Thin fetch wrapper for the Datalib HTTP API.
 
 import type { ProbeNoun } from "./config/catalog";
+import type {
+  ChipKind,
+  ColumnType,
+  ConnectPhase,
+  ConnectState,
+  DagRunState,
+} from "./generated/enums";
 import type { FeedbackContext } from "./feedback/context";
 import { ApiError, errorDetail, FailureError } from "./apiError";
 import { pushToast } from "./toasts";
+
+// The closed vocabularies the server serializes are generated from the
+// Rust enums into `./generated/enums`, and re-exported here so callers
+// keep one import. A variant added in Rust reaches these without a hand
+// edit; `bazel run //datalib/backend/http:ui_enums.update` regenerates.
+export type { ChipKind, ColumnType, ConnectPhase, ConnectState, DagRunState };
 
 // `DiffStatus` in datalib_schema, hand-kept in step.
 export type DiffStatus = "added" | "removed" | "modified" | "unchanged";
@@ -900,21 +913,10 @@ export type DagStepProgress = {
   updated_at_utc: string;
 };
 
-// What a step is doing, or did, in one run — the runner's own
-// vocabulary (`RunState` in datalib/backend/dag/src/run_state.rs).
-// Keep the two in step: the backend writes these words into the
-// record in system/supervisor.sqlite and the UI switches on them.
-export type DagRunState =
-  | "running"
-  | "succeeded"
-  // Checked, and already up to date.
-  | "skipped_up_to_date"
-  // Outside this run's subgraph, so it was never considered.
-  // Something upstream failed, so this was not invoked.
-  | "blocked"
-  | "failed"
-  // Told to stop, and did: not done, so it runs again next time.
-  | "stopped";
+// What a step is doing, or did, in one run: the runner's `RunState`,
+// generated into `./generated/enums`. The backend writes these words
+// into the record in system/supervisor.sqlite and the UI switches on
+// them.
 
 export type DagStepRun = {
   // The run it happened in — what `/api/runs/{run}/log` takes. Empty
@@ -1080,26 +1082,9 @@ export type ManageRowKind = "group" | "step" | "applet" | "system";
 export type ManagePhase = "ingest" | "render" | "index" | "other";
 
 // ── The column-type vocabulary ─────────────────────────────────────
-// Mirrors `datalib_columns` (datalib/backend/columns/src/lib.rs), by
-// hand: change both halves together. A table's producer declares a
-// `ColumnSpec` per column and the typed viewer (`cards/TableGrid.ce.vue`)
-// draws each cell by its type.
-
-export type ColumnType =
-  | "text"
-  | "count"
-  | "number"
-  | "bytes"
-  | "timestamp"
-  | "datetime"
-  | "timeseries"
-  | "quantity"
-  | "identity"
-  | "identities"
-  | "status"
-  | "chips"
-  | "actions"
-  | "markdown_uuid";
+// `ColumnType` is `datalib_columns`'s, generated into `./generated/enums`.
+// A table's producer declares a `ColumnSpec` per column and the typed
+// viewer (`cards/TableGrid.ce.vue`) draws each cell by its type.
 
 export type ColumnSpec = {
   field: string;
@@ -1172,7 +1157,6 @@ export type StatusView = {
   detail: string | null;
 };
 
-export type ChipKind = "metric" | "warning" | "error";
 export type Chip = { kind: ChipKind; text: string; title: string };
 
 /// A button on a row. Data decides whether it appears and what it says;
@@ -1853,12 +1837,8 @@ export type IssueKind =
 /// datalib/backend/probe/src/issue.rs.
 export type Failure = { issue: IssueKind; detail: string };
 
-/// How one browser-login attempt is going. Mirrors `ConnectState` in
-/// datalib/backend/http/src/connect.rs.
-export type ConnectState = "running" | "ok" | "failed";
-
-/// What a running login is doing. Mirrors `ConnectPhase` there.
-export type ConnectPhase = "preparing" | "downloading_browser" | "creating_client" | "signing_in";
+/// `ConnectState` and `ConnectPhase` (how one browser-login attempt is
+/// going, and what a running one is doing) come from `./generated/enums`.
 
 export type ConnectAttempt = {
   id: string;

@@ -5,13 +5,14 @@
 //! of the same user can connect, and a web page whose hostname resolves to
 //! 127.0.0.1 can too. The gateway keeps its own routes behind the API
 //! token; without this gate the applet would be a second, open door to
-//! the same data. The names here mirror `datalib_http::applets`
-//! (`ENV_APPLET_SECRET`, `APPLET_SECRET_HEADER`); the gateway round-trip
-//! test is what keeps the two spellings together.
+//! the same data. The variable's name is `datalib_env`'s, shared with
+//! the gateway; the header name mirrors
+//! `datalib_http::applets::APPLET_SECRET_HEADER`, and the gateway
+//! round-trip test keeps those two spellings together.
 
 use anyhow::{Context, Result};
 
-pub const ENV_SECRET: &str = "DATALIB_APPLET_SECRET";
+pub const ENV_SECRET: &str = datalib_env::DATALIB_APPLET_SECRET;
 /// Lower-case, since that is how axum and the hand-rolled parser both
 /// present header names.
 pub const SECRET_HEADER: &str = "x-datalib-applet-secret";

@@ -53,6 +53,7 @@ pub mod remote_media;
 pub mod request_log;
 pub mod supervisor;
 pub mod ui_events;
+mod ui_mirror;
 pub mod ui_state;
 pub mod usage;
 pub mod watch;

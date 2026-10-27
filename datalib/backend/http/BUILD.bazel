@@ -1,5 +1,6 @@
 load("@aspect_bazel_lib//lib:transitions.bzl", "platform_transition_filegroup")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//tools:insta.bzl", "insta_update")
 load("//tools:test_slice.bzl", "rust_test_slice", "skip_slices")
 
 exports_files([
@@ -61,6 +62,7 @@ rust_library(
         "src/request_log.rs",
         "src/supervisor.rs",
         "src/ui_events.rs",
+        "src/ui_mirror.rs",
         "src/ui_state.rs",
         "src/usage.rs",
         "src/watch.rs",
@@ -107,6 +109,7 @@ rust_library(
         "//datalib/backend/metrics:datalib_metrics",
         "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/parent_watch:datalib_parent_watch",
+        "//datalib/backend/env:datalib_env",
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/dag:datalib_dag",
         "//datalib/backend/fetch:datalib_fetch",
@@ -144,16 +147,27 @@ rust_test(
     name = "http_unittests",
     size = "small",
     crate = ":datalib_http",
+    # The UI's generated enum unions, which `ui_mirror.rs` checks.
+    data = ["//datalib/ui:src/generated/enums.ts"],
     edition = "2021",
     proc_macro_deps = [
         "@datalib_crates//:async-trait",
     ],
     deps = [
         "@datalib_crates//:libc",
+        "@datalib_crates//:runfiles",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tower",
     ],
+)
+
+# Regenerates datalib/ui/src/generated/enums.ts from the Rust enums the
+# UI switches on (see src/ui_mirror.rs).
+insta_update(
+    name = "ui_enums.update",
+    test = ":http_unittests",
+    test_args = ["ui_enums_match_the_rust_vocabularies"],
 )
 
 # The endpoint tests, one binary: each `tests/http_tests/*.rs` is one

@@ -27,7 +27,7 @@ use datalib_time_series_schema::{TimeSeriesRow, TimeSeriesSourceRow, Unit};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-const DATA_ROOT_ENV: &str = "DATALIB_DAG_DATA_ROOT";
+const DATA_ROOT_ENV: &str = datalib_env::DATALIB_DAG_DATA_ROOT;
 /// Points per time series when a request names no budget: about one per
 /// pixel of a wide chart.
 const DEFAULT_BUDGET: i64 = 1_000;

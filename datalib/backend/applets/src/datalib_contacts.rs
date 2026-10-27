@@ -26,7 +26,7 @@ use datalib_handle::Handle;
 use serde::Deserialize;
 use serde_json::json;
 
-const DATA_ROOT_ENV: &str = "DATALIB_DAG_DATA_ROOT";
+const DATA_ROOT_ENV: &str = datalib_env::DATALIB_DAG_DATA_ROOT;
 const SEARCH_LIMIT: u32 = 20;
 /// What the photo route reads of a body: the gateway's own cap. axum's
 /// default (2 MB) sits under `PHOTO_MAX_BYTES`, so without this a photo
