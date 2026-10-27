@@ -32,6 +32,16 @@ which does the rule arithmetic; zones, `UNTIL` and the dates a series no
 longer has stay ours, because calcard's own expansion has no window and
 matches a changed occurrence by its `SEQUENCE` as well as its date.
 
+**0.3.14 is the last calcard we can take.** Its repository was archived
+and its development moved into Stalwart's server repository, where it is
+`AGPL-3.0-only OR LicenseRef-SEL` and unpublished; `deny.toml` refuses
+anything copyleft, so a later release under that license fails the
+build rather than coming in. We asked whether it will be published
+permissively again in
+[stalwartlabs/stalwart#3346](https://github.com/stalwartlabs/stalwart/discussions/3346).
+Until then a bug in calcard's rule arithmetic is ours to work around
+here, and swapping the engine is a change to `recur.rs` alone.
+
 **A changed occurrence is a document** because it carries information
 the rule does not: a new time, a new room, a different agenda, different
 attendees. It links to its series (`Series: <title>`) and the series to
