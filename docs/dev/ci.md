@@ -75,6 +75,17 @@ the prod docker image with its doc test (`datalib/docker/doc_test.sh`,
 assemble the assets are scripts under `scripts/release/`, run by
 `bazel test //...` before any tag runs them — `release_steps.md`.
 
+**`cargo-update.yml`** keeps `datalib/backend/Cargo.lock` current,
+which Dependabot cannot (`.github/dependabot.yml` says why). Every
+Monday it runs `cargo update` through crate_universe
+(`CARGO_BAZEL_REPIN=full bazel build --nobuild //...`), repins
+`MODULE.bazel.lock`, and opens or rewrites one PR from
+`bot/cargo-update`. GITHUB_TOKEN opens that PR, and nothing it does
+starts a `pull_request` run, so the workflow dispatches `test.yml` on
+the branch itself; the dispatch's checks carry the names the merge
+ruleset requires. Dispatch it by hand to pick up a fixed advisory
+before Monday.
+
 **Neither image build pulls from Docker Hub.** Anonymous Docker Hub
 pulls are rate-limited per IP, and a GitHub-hosted runner shares its IP
 with other people's jobs, so the quota can be spent before a run starts

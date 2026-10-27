@@ -1,0 +1,202 @@
+# Keeps datalib/backend/Cargo.lock current, which Dependabot cannot do
+# (`.github/dependabot.yml` says why): once a week it takes every
+# semver-compatible update of the backend's crates, repins
+# MODULE.bazel.lock to match, and opens a PR — or rewrites its open one —
+# from the fixed branch below. Cargo.toml is never touched, so a major
+# version is still a hand bump.
+#
+# The update is crate_universe's own: `CARGO_BAZEL_REPIN=full` runs a
+# plain `cargo update` with the cargo of Bazel's Rust toolchain and
+# writes both lockfiles. The second, plain `--nobuild` records the
+# variable as unset again (the lock keeps its value), and the third
+# proves the result is stable.
+#
+# The PR is opened with GITHUB_TOKEN, and nothing GITHUB_TOKEN does
+# starts a `pull_request` run, so the last step dispatches `test.yml`
+# on the branch. Its checks land on the PR's head commit under the
+# names the merge ruleset requires. A dispatch builds the branch head
+# rather than its merge into main; the branch is cut from main by the
+# same run, so the two are the same tree until main moves.
+name: cargo-update
+
+on:
+  # Monday 02:00 UTC: 03:00 or 04:00 in Zurich, beside Dependabot's
+  # batch and before the routine that triages it at 07:00.
+  schedule:
+    - cron: "0 2 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cargo-update
+  cancel-in-progress: false
+
+env:
+  BRANCH: bot/cargo-update
+
+jobs:
+  # Fetches and runs third-party code (crate metadata, build analysis),
+  # so it holds a read-only token; the job below does the writing.
+  repin:
+    name: cargo update + repin
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: read  # to pull the devcontainer image from GHCR
+    outputs:
+      base_sha: ${{ steps.base.outputs.sha }}
+    defaults:
+      run:
+        shell: bash
+    container:
+      image: ghcr.io/imbue-ai/datalib_devcontainer:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      # Always main, whichever branch the run was started from.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+      - id: base
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/prepare-bazel
+        with:
+          buildbuddy-api-key: ${{ secrets.BUILD_BUDDY_API_KEY }}
+          buildbuddy-config: buildbuddy
+      - name: cargo update, through crate_universe
+        run: |
+          set -euo pipefail
+          held_version() {
+              awk -v crate="$1" '$0 == "name = \"" crate "\"" {f=1; next}
+                  f && /^version = / {gsub(/"/, "", $3); print $3; exit}' datalib/backend/Cargo.lock
+          }
+          held=()
+          for crate in ${HELD_CRATES}; do
+              held+=("${crate}=$(held_version "${crate}")")
+          done
+          CARGO_BAZEL_REPIN=full bazel build --nobuild //...
+          for pin in "${held[@]}"; do
+              echo "Holding ${pin}"
+              CARGO_BAZEL_REPIN="${pin}" bazel build --nobuild //...
+          done
+        env:
+          # Crates kept at the version main pins. libsqlite3-sys: the
+          # doltlite patch in MODULE.bazel is made against one version
+          # (Cargo.toml's sqlx entry says which), and sqlx accepts newer.
+          HELD_CRATES: libsqlite3-sys
+      - name: Record the repin variable as unset
+        run: bazel build --nobuild //...
+      - name: The lockfile is stable
+        run: bazel build --nobuild --lockfile_mode=error //...
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: lockfiles
+          path: |
+            MODULE.bazel.lock
+            datalib/backend/Cargo.lock
+          retention-days: 7
+
+  pull-request:
+    name: open or update the PR
+    needs: repin
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write       # push the branch
+      pull-requests: write  # open, edit or close the PR
+      actions: write        # dispatch test.yml on it
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      BASE_SHA: ${{ needs.repin.outputs.base_sha }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.repin.outputs.base_sha }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: lockfiles
+          path: ${{ runner.temp }}/lockfiles
+      - name: Commit, push, open or update the PR, start CI
+        run: |
+          set -euo pipefail
+          lock=datalib/backend/Cargo.lock
+          git show "HEAD:${lock}" > "${RUNNER_TEMP}/Cargo.lock.before"
+          cp "${RUNNER_TEMP}/lockfiles/MODULE.bazel.lock" MODULE.bazel.lock
+          cp "${RUNNER_TEMP}/lockfiles/${lock}" "${lock}"
+
+          pr="$(gh pr list --head "${BRANCH}" --state open --json number --jq '.[0].number // empty')"
+
+          if git diff --quiet; then
+              echo "Every crate is already at its newest compatible version."
+              if [[ -n "${pr}" ]]; then
+                  gh pr close "${pr}" --delete-branch \
+                    --comment "main already has every update this PR carried ([run](${RUN_URL}))."
+              fi
+              exit 0
+          fi
+
+          python3 - "${RUNNER_TEMP}/Cargo.lock.before" "${lock}" > "${RUNNER_TEMP}/changes.md" <<'EOF'
+          import sys, tomllib
+
+          def versions(path):
+              with open(path, "rb") as f:
+                  packages = tomllib.load(f)["package"]
+              found = {}
+              for p in packages:
+                  found.setdefault(p["name"], set()).add(p["version"])
+              return found
+
+          before, after = versions(sys.argv[1]), versions(sys.argv[2])
+          print("| crate | was | now |")
+          print("|---|---|---|")
+          for name in sorted(before.keys() | after.keys()):
+              was, now = before.get(name, set()), after.get(name, set())
+              if was != now:
+                  print(f"| `{name}` | {', '.join(sorted(was - now)) or '—'} | {', '.join(sorted(now - was)) or '—'} |")
+          EOF
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -q -am "Update the backend's crates (cargo update)" \
+            -m "$(cat "${RUNNER_TEMP}/changes.md")"
+
+          if git fetch -q origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}" 2>/dev/null \
+              && [[ "$(git rev-parse "HEAD^{tree}")" == "$(git rev-parse "origin/${BRANCH}^{tree}")" ]] \
+              && [[ -n "${pr}" ]]; then
+              echo "PR #${pr} already carries exactly these lockfiles; nothing to push."
+              exit 0
+          fi
+
+          # The branch belongs to this workflow and is rebuilt from main
+          # every week; the PR body says not to push work to it.
+          git push -q --force origin "HEAD:refs/heads/${BRANCH}"
+
+          cat > "${RUNNER_TEMP}/body.md" <<EOF
+          The weekly \`cargo update\` of \`datalib/backend/Cargo.lock\`, which Dependabot cannot bump (\`.github/dependabot.yml\` says why).
+
+          **Before:** the backend's crates were at the versions \`main\` pinned, some of them behind their newest semver-compatible release.
+          **After:** every crate is at its newest version that \`datalib/backend/Cargo.toml\` allows, and \`MODULE.bazel.lock\` is repinned to match. \`Cargo.toml\` is unchanged, so no major version moves.
+          **What a person notices:** nothing, unless an update changes a crate's behaviour; CI is the check.
+
+          $(cat "${RUNNER_TEMP}/changes.md")
+
+          Opened by \`.github/workflows/cargo-update.yml\` ([this run](${RUN_URL})), which rebuilds \`${BRANCH}\` from \`main\` every Monday and force-pushes it: don't push work here. CI runs as a \`workflow_dispatch\` of \`test.yml\` on the branch, because a PR this workflow opens starts no \`pull_request\` run; to re-run CI after merging \`main\` in by hand, push as yourself or dispatch \`test.yml\` on \`${BRANCH}\`.
+          EOF
+
+          if [[ -n "${pr}" ]]; then
+              gh pr edit "${pr}" --body-file "${RUNNER_TEMP}/body.md"
+          else
+              gh pr create --base main --head "${BRANCH}" \
+                --title "Update the backend's Rust crates (weekly cargo update)" \
+                --label dependencies --label rust \
+                --body-file "${RUNNER_TEMP}/body.md"
+          fi
+
+          gh workflow run test.yml --ref "${BRANCH}"
