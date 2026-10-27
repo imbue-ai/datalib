@@ -8,6 +8,7 @@ type = "slack"
 [[steps]]
 group = "slack"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.common]
 blob_size_limit_bytes = "1 MB"  # skip an attachment larger than this; unset is no limit
@@ -45,6 +46,7 @@ refresh_window_days = 30       # re-walk this many trailing days for edits, reac
 [[steps]]
 group = "slack"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["slack/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -52,9 +54,11 @@ inputs = ["slack/ingest"]
 [[steps]]
 group = "slack"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["slack/render_markdown"]
 
 [[steps]]
 group = "slack"
 function = "embed"
+command = "datalib-step"
 inputs = ["slack/keyword_index"]

@@ -8,6 +8,7 @@ type = "sms_backup_restore"
 [[steps]]
 group = "sms_backup_restore"
 function = "ingest"
+command = "datalib-step"
 
 # A JSONL copy of every row written, under ingest/events/, for debugging.
 # Nothing reads it and it grows every run.
@@ -22,6 +23,7 @@ path = "~/Downloads/sms-backup"
 [[steps]]
 group = "sms_backup_restore"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["sms_backup_restore/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -29,9 +31,11 @@ inputs = ["sms_backup_restore/ingest"]
 [[steps]]
 group = "sms_backup_restore"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["sms_backup_restore/render_markdown"]
 
 [[steps]]
 group = "sms_backup_restore"
 function = "embed"
+command = "datalib-step"
 inputs = ["sms_backup_restore/keyword_index"]

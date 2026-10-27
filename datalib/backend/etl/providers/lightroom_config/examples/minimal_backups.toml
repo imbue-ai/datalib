@@ -9,6 +9,7 @@ type = "lightroom"
 [[steps]]
 group = "lightroom"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.backups]
 path = "~/Pictures/Lightroom/Backups"
@@ -19,4 +20,5 @@ path = "~/Pictures/Lightroom/Backups"
 [[steps]]
 group = "lightroom"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["lightroom/ingest"]

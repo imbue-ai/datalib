@@ -9,6 +9,7 @@ type = "pdf"
 [[steps]]
 group = "pdf"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params]
 ignore = ["drafts/**", "**/.Trash/**"]  # gitignore-style patterns to skip, on top of any
@@ -29,6 +30,7 @@ path = "~/Documents/papers"  # the folder to scan, and everything under it
 [[steps]]
 group = "pdf"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["pdf/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -36,9 +38,11 @@ inputs = ["pdf/ingest"]
 [[steps]]
 group = "pdf"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["pdf/render_markdown"]
 
 [[steps]]
 group = "pdf"
 function = "embed"
+command = "datalib-step"
 inputs = ["pdf/keyword_index"]

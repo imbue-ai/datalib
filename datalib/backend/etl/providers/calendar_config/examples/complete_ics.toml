@@ -8,6 +8,7 @@ type = "calendar"
 [[steps]]
 group = "calendar"
 function = "ingest"
+command = "datalib-step"
 
 # A JSONL copy of every row written, under ingest/events/, for debugging.
 # Nothing reads it and it grows every run.
@@ -20,6 +21,7 @@ path = "~/Downloads/calendar-export"  # the folder; each `.ics` file in it is on
 [[steps]]
 group = "calendar"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["calendar/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -27,11 +29,13 @@ inputs = ["calendar/ingest"]
 [[steps]]
 group = "calendar"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["calendar/render_markdown"]
 
 [[steps]]
 group = "calendar"
 function = "embed"
+command = "datalib-step"
 inputs = ["calendar/keyword_index"]
 
 # Every occurrence of every event in a window of days around now, one row
@@ -41,6 +45,7 @@ inputs = ["calendar/keyword_index"]
 [[steps]]
 group = "calendar"
 function = "render_occurrences"
+command = "datalib-step"
 inputs = ["calendar/ingest"]
 
 [steps.params]

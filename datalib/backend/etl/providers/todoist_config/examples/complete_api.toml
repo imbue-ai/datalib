@@ -9,6 +9,7 @@ type = "todoist"
 [[steps]]
 group = "todoist"
 function = "ingest"
+command = "datalib-step"
 
 # When to give up on failed requests. The download retries and backs off
 # on its own; these only decide when to stop.
@@ -33,6 +34,7 @@ completed_since = "2024-01-01"
 [[steps]]
 group = "todoist"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["todoist/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -40,9 +42,11 @@ inputs = ["todoist/ingest"]
 [[steps]]
 group = "todoist"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["todoist/render_markdown"]
 
 [[steps]]
 group = "todoist"
 function = "embed"
+command = "datalib-step"
 inputs = ["todoist/keyword_index"]

@@ -8,6 +8,7 @@ type = "contacts"
 [[steps]]
 group = "contacts"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.vcf]
 path = "~/Downloads/contacts-export"
@@ -15,4 +16,5 @@ path = "~/Downloads/contacts-export"
 [[steps]]
 group = "contacts"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["contacts/ingest"]

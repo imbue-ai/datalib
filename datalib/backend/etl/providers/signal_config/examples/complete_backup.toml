@@ -10,6 +10,7 @@ type = "signal"
 [[steps]]
 group = "signal"
 function = "ingest"
+command = "datalib-step"
 
 # A JSONL copy of every row written, under ingest/events/, for debugging.
 # Nothing reads it and it grows every run.
@@ -24,6 +25,7 @@ aep_env_var = "SIGNAL_BACKUP_PASSPHRASE_PICARD"  # env var holding the passphras
 [[steps]]
 group = "signal"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["signal/ingest"]
 
 [steps.params]
@@ -34,9 +36,11 @@ period = "month"  # span of each rendered doc: month (default), day, year or all
 [[steps]]
 group = "signal"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["signal/render_markdown"]
 
 [[steps]]
 group = "signal"
 function = "embed"
+command = "datalib-step"
 inputs = ["signal/keyword_index"]

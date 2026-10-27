@@ -10,6 +10,7 @@ type = "email"
 [[steps]]
 group = "email"
 function = "ingest"
+command = "datalib-step"
 
 # Mirror only messages carrying these Gmail labels (the `X-Gmail-Labels`
 # header). Labels are full paths and match exactly: `Work` does not take
@@ -29,6 +30,7 @@ is_personal = true                    # a personal (not work) account; default t
 [[steps]]
 group = "email"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["email/ingest"]
 
 [steps.params]
@@ -41,9 +43,11 @@ only_render_labels = ["Inbox"]  # render only threads with a message under these
 [[steps]]
 group = "email"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["email/render_markdown"]
 
 [[steps]]
 group = "email"
 function = "embed"
+command = "datalib-step"
 inputs = ["email/keyword_index"]

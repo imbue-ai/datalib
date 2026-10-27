@@ -9,6 +9,7 @@ type = "yolink"
 [[steps]]
 group = "yolink"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.api]
 
@@ -23,6 +24,7 @@ device_udid = "fedcba9876543210fedcba9876543210"
 [[steps]]
 group = "yolink"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["yolink/ingest"]
 
 # Its numbers as time series, for charts and the time-series index: add
@@ -30,4 +32,5 @@ inputs = ["yolink/ingest"]
 [[steps]]
 group = "yolink"
 function = "render_time_series"
+command = "datalib-step"
 inputs = ["yolink/ingest"]

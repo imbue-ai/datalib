@@ -27,7 +27,7 @@ import { parseTOML, getStaticTOMLValue } from "toml-eslint-parser";
 import { NAME_IT_HELP } from "./accountNaming";
 import { formatBytes, parseByteSize } from "./byteSize";
 import { catalogForStep } from "./catalog";
-import type { Answer, CatalogEntry, Field, FieldPhase, Preset } from "./catalog";
+import type { Answer, CatalogEntry, Field, FieldPhase, PackageOrigin, Preset } from "./catalog";
 import { editStringArray, quote } from "./tomlText";
 import { deleteIn, setIn } from "./tomlPatch";
 
@@ -59,6 +59,12 @@ export type ConfiguredStep = {
   /// `datalib-applet` for an applet; null for anything else, which is a
   /// legitimate config with no catalog entry.
   type: string | null;
+  /// The `[[packages]]` entry whose program it runs, if any: the one
+  /// whose directory its command's program is in (`packageOfCommand`).
+  package: string | null;
+  /// The `command` it declares; null when it declares none, which the
+  /// loader reads as `datalib-step` (`isDatalibStep`).
+  command: string | null;
   /// The ids this step declares as inputs.
   inputs: string[];
   params: Record<string, unknown>;
@@ -142,7 +148,7 @@ export function defaultName(id: string): string {
 
 type ParsedConfig = {
   ast: ReturnType<typeof parseTOML>;
-  root: { groups?: unknown; steps?: unknown; applets?: unknown };
+  root: { groups?: unknown; steps?: unknown; applets?: unknown; packages?: unknown };
 };
 
 /// Parse the config text, throwing with the parser's message (and line,
@@ -200,6 +206,75 @@ function nonBlank(v: unknown): string | null {
   return typeof v === "string" && v.trim() !== "" ? v.trim() : null;
 }
 
+/// A `[[packages]]` entry and where it is in the text.
+export type ConfiguredPackage = {
+  id: string;
+  source: string | null;
+  url: string;
+  sha256: string;
+  start: number;
+  end: number;
+};
+
+/// The program every built-in step runs. It reads its function and its
+/// group's type from the environment, so it takes no arguments.
+export const DATALIB_STEP = "datalib-step";
+
+/// Whether a step's `command` runs `datalib-step`. A step with no
+/// command does too: the loader reads one written before commands were
+/// spelled out that way.
+export function isDatalibStep(command: string | null | undefined): boolean {
+  if (command === null || command === undefined) return true;
+  const program = command.trim().split(/\s+/)[0] ?? "";
+  return program === DATALIB_STEP || program.endsWith(`/${DATALIB_STEP}`);
+}
+
+/// Where the package pinned at `sha256` is unpacked, relative to the data
+/// root. Mirrors `datalib_runtime::layout::package_dir_rel`.
+export function packageDir(sha256: string): string {
+  return `system/packages/${sha256.slice(0, 16)}`;
+}
+
+/// A package's command, as a step or applet runs it from the data root:
+/// its program, a path inside the package, joined to the package's
+/// directory.
+export function inPackage(dir: string, command: string): string {
+  return `${dir}/${command.trimStart()}`;
+}
+
+/// The `[[packages]]` entry whose directory `command`'s program is in.
+export function packageOfCommand(
+  command: string | null,
+  packages: ConfiguredPackage[],
+): string | null {
+  const program = command?.trim().split(/\s+/)[0] ?? "";
+  return packages.find((p) => program.startsWith(`${packageDir(p.sha256)}/`))?.id ?? null;
+}
+
+/// The `[[packages]]` entries a config declares, in file order.
+export function listPackages(text: string): ConfiguredPackage[] {
+  return packagesOf(parseConfig(text));
+}
+
+function packagesOf({ ast, root }: ParsedConfig): ConfiguredPackage[] {
+  const raw = root.packages;
+  if (!Array.isArray(raw)) return [];
+  const at = ranges(ast, "packages");
+  return raw.map((p, i) => {
+    const e = (p ?? {}) as Record<string, unknown>;
+    const str = (v: unknown) => (typeof v === "string" ? v : "");
+    const [start, end] = at.get(i) ?? [0, 0];
+    return {
+      id: str(e.id),
+      source: typeof e.source === "string" ? e.source : null,
+      url: str(e.url),
+      sha256: str(e.sha256),
+      start,
+      end,
+    };
+  });
+}
+
 /// The `[[groups]]` entries a config declares, in file order.
 export function listGroups(text: string): ConfiguredGroup[] {
   return groupsOf(parseConfig(text));
@@ -212,6 +287,7 @@ export function listSteps(text: string): ConfiguredStep[] {
   const parsed = parseConfig(text);
   const { ast, root } = parsed;
   const groupsById = new Map(groupsOf(parsed).map((g) => [g.id, g]));
+  const packages = packagesOf(parsed);
 
   const steps: ConfiguredStep[] = [];
 
@@ -261,6 +337,11 @@ export function listSteps(text: string): ConfiguredStep[] {
         // The group's type is the only place a step's provider is
         // written; a step outside any group has none.
         type: groupEntry?.type ?? null,
+        package: packageOfCommand(
+          typeof step?.command === "string" ? step.command : null,
+          packages,
+        ),
+        command: typeof step?.command === "string" ? step.command : null,
         inputs: (Array.isArray(step?.inputs) ? (step!.inputs as unknown[]) : []).filter(
           (v): v is string => typeof v === "string",
         ),
@@ -299,6 +380,11 @@ export function listSteps(text: string): ConfiguredStep[] {
         // The word after `datalib-applet`, when it is one — the same
         // shape as a step's provider word, and what names the applet.
         type: appletType(typeof applet?.command === "string" ? applet.command : ""),
+        package: packageOfCommand(
+          typeof applet?.command === "string" ? applet.command : null,
+          packages,
+        ),
+        command: typeof applet?.command === "string" ? applet.command : null,
         inputs: [],
         params: {},
         start,
@@ -808,9 +894,9 @@ function descriptionLine(description: string): string | null {
 }
 
 /// One step, as a `[[steps]]` block. No name: a grouped step's label
-/// comes from its group and its function. No command either: a built-in
-/// step is `datalib-step`, which reads the function and the group's type
-/// from the environment.
+/// comes from its group and its function. A built-in step runs
+/// `datalib-step`, which reads the function and the group's type from the
+/// environment; a package source's step runs the package's program.
 export function buildStep(opts: {
   entry: CatalogEntry;
   group: string;
@@ -819,22 +905,26 @@ export function buildStep(opts: {
   values: FieldValues;
 }): string {
   const { entry, group, phase, values } = opts;
+  const command = entry.package?.commands[functionOf(phase)];
   return stepToml({
     group,
     phase,
     inputs: opts.inputs,
+    command: entry.package && command ? inPackage(entry.package.dir, command) : undefined,
     params: paramsToml(entry, values, phase),
   });
 }
 
-/// The `[[steps]]` block itself: group, function, inputs, then a
-/// params body already rendered as TOML. What `buildStep` writes once
+/// The `[[steps]]` block itself: group, function, command, inputs, then
+/// a params body already rendered as TOML. What `buildStep` writes once
 /// it has turned form values into that body — the one place the shape of
 /// a step is spelled out.
 export function stepToml(opts: {
   group: string;
   phase: FieldPhase;
   inputs?: string[];
+  /// What it runs; `datalib-step` when absent.
+  command?: string;
   params?: string;
 }): string {
   const inputs = opts.inputs ?? [];
@@ -842,8 +932,17 @@ export function stepToml(opts: {
   const params = opts.params ?? "";
   const block = `[[steps]]
 group = ${quote(opts.group)}
-function = ${quote(functionOf(opts.phase))}${inputsLine}${params ? `\n${params}` : ""}`;
+function = ${quote(functionOf(opts.phase))}
+command = ${quote(opts.command ?? DATALIB_STEP)}${inputsLine}${params ? `\n${params}` : ""}`;
   return block.trimEnd();
+}
+
+/// Whether a source of `entry` gets its render step, given what the
+/// person answered (`wanted`). A download-only provider always does; a
+/// package source whose package has no `render_markdown` program cannot.
+export function writesRenderStep(entry: CatalogEntry, wanted?: boolean): boolean {
+  if (entry.package && !entry.package.commands.render_markdown) return false;
+  return entry.rendersDocuments === false || wanted !== false;
 }
 
 /// Everything the wizard writes for one source, in the order it goes
@@ -867,7 +966,7 @@ export function buildSource(opts: {
   const { entry, group, values } = opts;
   const ingestId = stepIdFor(group, "download");
   const ingest = buildStep({ entry, group, phase: "download", values });
-  const renders = entry.rendersDocuments === false || opts.renders !== false;
+  const renders = writesRenderStep(entry, opts.renders);
   const render = renders
     ? buildStep({ entry, group, phase: "render", inputs: [ingestId], values })
     : null;
@@ -1065,22 +1164,31 @@ export function embedAllowed(type: string | null | undefined): boolean {
 
 /// Give a source of a time-series type its `render_time_series` step and
 /// a place in the time-series index's inputs, adding the index and the
-/// applet that serves it when the config has none. A source of any other type is left as it is.
-export function setTimeSeriesStep(text: string, group: string, type: string): string {
-  if (!TIME_SERIES_TYPES.includes(type)) return text;
+/// applet that serves it when the config has none. A package source is
+/// one when its package has a `render_time_series` program, which its
+/// step then runs. A source of any other type is left as it is.
+export function setTimeSeriesStep(
+  text: string,
+  group: string,
+  type: string,
+  pkg?: PackageOrigin,
+): string {
+  const command = pkg?.commands.render_time_series;
+  if (pkg ? !command : !TIME_SERIES_TYPES.includes(type)) return text;
   const id = `${group}/render_time_series`;
   let next = text;
   if (!listSteps(next).some((s) => s.id === id)) {
+    const program = pkg && command ? inPackage(pkg.dir, command) : DATALIB_STEP;
     next = insertEntries(
       next,
-      `[[steps]]\ngroup = ${quote(group)}\nfunction = "render_time_series"\ninputs = [${quote(stepIdFor(group, "download"))}]`,
+      `[[steps]]\ngroup = ${quote(group)}\nfunction = "render_time_series"\ncommand = ${quote(program)}\ninputs = [${quote(stepIdFor(group, "download"))}]`,
     );
   }
   if (!listSteps(next).some((s) => fanInFunctionOf(s) === "time_series_index")) {
     next =
       `${next.replace(/\s*$/, "")}\n\n[[groups]]\nid = ${quote(TIME_SERIES_GROUP)}\n` +
       `name = "Time Series Index"\n\n[[steps]]\ngroup = ${quote(TIME_SERIES_GROUP)}\n` +
-      `function = "time_series_index"\ninputs = []\n\n[[applets]]\n` +
+      `function = "time_series_index"\ncommand = ${quote(DATALIB_STEP)}\ninputs = []\n\n[[applets]]\n` +
       `group = ${quote(TIME_SERIES_GROUP)}\nid = ${quote(TIME_SERIES_GROUP)}\n` +
       `command = ${quote(`datalib-applet ${TIME_SERIES_GROUP}`)}\n`;
   }
@@ -1101,7 +1209,7 @@ export function setOccurrencesStep(text: string, group: string, type: string): s
   if (listSteps(text).some((s) => s.id === id)) return text;
   return insertEntries(
     text,
-    `[[steps]]\ngroup = ${quote(group)}\nfunction = "render_occurrences"\ninputs = [${quote(stepIdFor(group, "download"))}]`,
+    `[[steps]]\ngroup = ${quote(group)}\nfunction = "render_occurrences"\ncommand = ${quote(DATALIB_STEP)}\ninputs = [${quote(stepIdFor(group, "download"))}]`,
   );
 }
 
@@ -1112,7 +1220,7 @@ export function buildQmdSteps(group: string): { id: string; body: string }[] {
   const keywordId = `${group}/keyword_index`;
   const block = (fn: string, inputs: string[]) => ({
     id: `${group}/${fn}`,
-    body: `[[steps]]\ngroup = ${quote(group)}\nfunction = ${quote(fn)}\ninputs = [${inputs.map(quote).join(", ")}]`,
+    body: `[[steps]]\ngroup = ${quote(group)}\nfunction = ${quote(fn)}\ncommand = ${quote(DATALIB_STEP)}\ninputs = [${inputs.map(quote).join(", ")}]`,
   });
   return [block("keyword_index", [stepIdFor(group, "render")]), block("embed", [keywordId])];
 }
@@ -1380,7 +1488,7 @@ export function patchSource(
   opts: { entry: CatalogEntry; group: string; values: FieldValues; renders?: boolean },
 ): string {
   const { entry, group, values } = opts;
-  const renders = entry.rendersDocuments === false || opts.renders !== false;
+  const renders = writesRenderStep(entry, opts.renders);
   let next = text;
   for (const phase of ["download", "render"] as const) {
     if (phase === "render" && !renders) continue;

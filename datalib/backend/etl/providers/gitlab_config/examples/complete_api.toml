@@ -10,6 +10,7 @@ type = "gitlab"
 [[steps]]
 group = "gitlab"
 function = "ingest"
+command = "datalib-step"
 
 # When to give up on rate limits. The download always backs off and
 # retries; these only decide when to stop.
@@ -35,6 +36,7 @@ merge_requests = [        # only these MRs, as `namespace/project!IID` or a gitl
 [[steps]]
 group = "gitlab"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["gitlab/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -42,9 +44,11 @@ inputs = ["gitlab/ingest"]
 [[steps]]
 group = "gitlab"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["gitlab/render_markdown"]
 
 [[steps]]
 group = "gitlab"
 function = "embed"
+command = "datalib-step"
 inputs = ["gitlab/keyword_index"]

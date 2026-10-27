@@ -9,6 +9,7 @@ type = "email"
 [[steps]]
 group = "email"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.jmap]
 hostname = "api.fastmail.com"
@@ -16,4 +17,5 @@ hostname = "api.fastmail.com"
 [[steps]]
 group = "email"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["email/ingest"]

@@ -30,9 +30,10 @@ kinds of entry. `[[groups]]` is what a person sees as one thing: an
 `[[steps]]` is the pipeline: each step names its `group` and the
 `function` it performs there and the `inputs` it reads; its id is
 composed as `<group>/<function>` — the one tree it writes — and is
-never written. A step with no `command` is a built-in one (the
-functions `ingest`, `render_markdown`, `keyword_index`, `embed`,
-`grid_index`, `qmd_aggregator` and `embedding_map`, run by `datalib-step`); a custom step names a shell `command`. `[[applets]]` is the app surface —
+never written. Every step names the program it runs in `command`.
+Datalib's own steps write `command = "datalib-step"` (the functions
+`ingest`, `render_markdown`, `keyword_index`, `embed`, `grid_index`,
+`qmd_aggregator` and `embedding_map`); a custom step names its own. `[[applets]]` is the app surface —
 long-lived servers that contribute card components and the endpoints
 behind them, filed under a group but declaring no inputs because they
 read what steps wrote. This guide is about groups and steps; for
@@ -59,6 +60,7 @@ type = "slack"
 [[steps]]
 group = "slack"
 function = "ingest"
+command = "datalib-step"
 # A sub-table ends the table it sits in, so `params` goes after this
 # step's plain keys — and the next entry starts with its own [[…]].
 # The one table under it names how the data is reached: `api` is the
@@ -68,6 +70,7 @@ function = "ingest"
 [[steps]]
 group = "slack"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["slack/ingest"]
 
 # The source's own part of free-text search: its keyword index, then
@@ -76,11 +79,13 @@ inputs = ["slack/ingest"]
 [[steps]]
 group = "slack"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["slack/render_markdown"]
 
 [[steps]]
 group = "slack"
 function = "embed"
+command = "datalib-step"
 inputs = ["slack/keyword_index"]
 
 # The shared fan-in steps. Add a source's render step id to
@@ -93,11 +98,13 @@ id = "unified_document_index"
 [[steps]]
 group = "unified_document_index"
 function = "grid_index"
+command = "datalib-step"
 inputs = ["slack/render_markdown"]
 
 [[steps]]
 group = "unified_document_index"
 function = "qmd_aggregator"
+command = "datalib-step"
 inputs = ["slack/keyword_index", "slack/embed"]
 ```
 
@@ -181,18 +188,18 @@ after writing one. The same goes for an index group still named
 A step may name a `command`: an ordinary command line, for a step that
 is not one of the built-in functions. If the user's request needs a
 new program (a custom fetcher, a converter, …), write it and install
-it into **`~/.datalib/bin`** — either the binary itself or a symlink
-to wherever it lives:
+it into the library's **`system/bin/`** — either the binary itself or a
+symlink to wherever it lives:
 
 ```sh
-mkdir -p ~/.datalib/bin
-ln -sf /path/to/my-fetcher ~/.datalib/bin/my-fetcher
+mkdir -p <data_root>/system/bin
+ln -sf /path/to/my-fetcher <data_root>/system/bin/my-fetcher
 ```
 
-`~/.datalib/bin` is prepended to `PATH` whenever the UI runs the
-pipeline, so a bare `command = "my-fetcher --out ."` resolves. The same
-applies to an `[[applets]]` command, so one install location covers both
-kinds of entry. Keep step commands non-interactive; they run headless
+`<data_root>/system/bin` is on `PATH` whenever the pipeline runs, after
+datalib's own binaries, so a bare `command = "my-fetcher --out ."`
+resolves. The same applies to an `[[applets]]` command, so one install
+location covers both kinds of entry. Keep step commands non-interactive; they run headless
 with their output captured into the run's log (the Manage tab shows it).
 
 Steps run with the data root as their working directory and write the

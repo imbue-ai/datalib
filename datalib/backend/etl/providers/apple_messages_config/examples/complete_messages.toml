@@ -9,6 +9,7 @@ type = "apple_messages"
 [[steps]]
 group = "apple_messages"
 function = "ingest"
+command = "datalib-step"
 
 # Which tables and columns to mirror. Globs: `*` and `?` only.
 [steps.params]
@@ -33,6 +34,7 @@ path = "~/Library/Messages"
 [[steps]]
 group = "apple_messages"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["apple_messages/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -40,9 +42,11 @@ inputs = ["apple_messages/ingest"]
 [[steps]]
 group = "apple_messages"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["apple_messages/render_markdown"]
 
 [[steps]]
 group = "apple_messages"
 function = "embed"
+command = "datalib-step"
 inputs = ["apple_messages/keyword_index"]

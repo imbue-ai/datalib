@@ -8,6 +8,7 @@ type = "pdf"
 [[steps]]
 group = "pdf"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.fswalk]
 path = "~/Documents/papers"
@@ -15,4 +16,5 @@ path = "~/Documents/papers"
 [[steps]]
 group = "pdf"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["pdf/ingest"]

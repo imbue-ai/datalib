@@ -15,22 +15,26 @@ type = "claude"
 [[steps]]
 group = "claude_chats"
 function = "ingest"
+command = "datalib-step"
 [steps.params]
 api = {}
 
 [[steps]]
 group = "claude_chats"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["claude_chats/ingest"]
 
 [[steps]]
 group = "claude_chats"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["claude_chats/render_markdown"]
 
 [[steps]]
 group = "claude_chats"
 function = "embed"
+command = "datalib-step"
 inputs = ["claude_chats/keyword_index"]
 
 [[groups]]
@@ -39,11 +43,13 @@ id = "unified_document_index"
 [[steps]]
 group = "unified_document_index"
 function = "grid_index"
+command = "datalib-step"
 inputs = ["claude_chats/render_markdown"]
 
 [[steps]]
 group = "unified_document_index"
 function = "qmd_aggregator"
+command = "datalib-step"
 inputs = ["claude_chats/keyword_index", "claude_chats/embed"]
 
 # The app's own surface: `unified_document_index` serves the grid, the document

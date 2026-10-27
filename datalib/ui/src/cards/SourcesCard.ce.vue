@@ -12,6 +12,7 @@ import { quantityText, renderQuantity } from "./cellRenderers";
 import TableGrid from "./TableGrid.ce.vue";
 import SourceWizard from "@/components/SourceWizard.vue";
 import ConfirmDialog from "@/components/ConfirmDialog.vue";
+import PackagesDialog from "@/components/PackagesDialog.vue";
 import { SOURCES_HELP, useSourcesCard, type Row } from "./sourcesCardModel";
 import { formatRelative, formatStamp } from "@/config/timeFormat";
 import { density } from "@/density";
@@ -59,6 +60,12 @@ const {
   closeWizard,
   onWizardSubmit,
   asking,
+  packagesOpen,
+  addPackageEntry,
+  updatePackageEntry,
+  removePackageEntry,
+  retryPackage,
+  failedPackages,
 } = useSourcesCard(props.ctx);
 
 /// What the header says when no action of this card has anything to
@@ -182,6 +189,9 @@ const rowHeight = computed(() => Math.round(28 + 8 * density.value));
       >
         {{ syncAll.label }}
       </button>
+      <button class="sx-btn" :disabled="configBlocked" @click="packagesOpen = true">
+        Packages
+      </button>
       <button class="sx-btn sx-btn-primary" :disabled="configBlocked" @click="openAdd">
         Add source
       </button>
@@ -215,6 +225,17 @@ const rowHeight = computed(() => Math.round(28 + 8 * density.value));
         >.
       </span>
       <button class="sx-btn" @click="openConfig">Show the config</button>
+    </div>
+
+    <div v-for="p in failedPackages" :key="p.id" class="sx-strip sx-strip-bad">
+      <span class="sx-strip-text">
+        <b>Couldn't fetch the {{ p.manifest?.name ?? p.id }} package</b> this library lists:
+        {{ p.error }}.
+        <template v-if="p.used_by.length">
+          {{ p.used_by.join(", ") }} won't sync until it's here; everything else still does.
+        </template>
+      </span>
+      <button class="sx-btn" @click="retryPackage(p)">Try again</button>
     </div>
 
     <div class="sx-grid">
@@ -265,8 +286,17 @@ const rowHeight = computed(() => Math.round(28 + 8 * density.value));
         :key="wizardKey"
         :taken-ids="takenIds"
         :editing="editing"
+        :add-package="addPackageEntry"
         @close="closeWizard"
         @submit="onWizardSubmit"
+      />
+      <PackagesDialog
+        v-if="packagesOpen"
+        :add-package="addPackageEntry"
+        :update-package="updatePackageEntry"
+        :remove-package="removePackageEntry"
+        :retry="retryPackage"
+        @close="packagesOpen = false"
       />
       <ConfirmDialog
         v-if="asking"

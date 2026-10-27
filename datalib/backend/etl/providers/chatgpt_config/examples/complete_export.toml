@@ -12,6 +12,7 @@ type = "chatgpt"
 [[steps]]
 group = "chatgpt"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.export]
 path = "~/Downloads/chatgpt-export.zip"  # the .zip, or the folder it was unzipped into
@@ -19,6 +20,7 @@ path = "~/Downloads/chatgpt-export.zip"  # the .zip, or the folder it was unzipp
 [[steps]]
 group = "chatgpt"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["chatgpt/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -26,9 +28,11 @@ inputs = ["chatgpt/ingest"]
 [[steps]]
 group = "chatgpt"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["chatgpt/render_markdown"]
 
 [[steps]]
 group = "chatgpt"
 function = "embed"
+command = "datalib-step"
 inputs = ["chatgpt/keyword_index"]
