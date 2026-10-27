@@ -262,16 +262,18 @@ original RFC 5322 `.eml`, stored whole in `blobs.sqlite`.
 
 | you have | it is in the mirror as |
 |---|---|
-| a message id from the Gmail API or a Gmail URL (`18f2a3b4c5d6e7f8`) | `emails.id`, in lowercase hex, zero-padded to 16 digits |
-| a thread id from the Gmail API or a Gmail URL (hex) | `emails.payload ->> '$._source.gmailThreadId'` |
+| a message id from the Gmail API or a Gmail URL (`18f2a3b4c5d6e7f8`) | `emails.gmail_message_id`, as the API spells it; also `emails.id`, in lowercase hex, zero-padded to 16 digits |
+| a thread id from the Gmail API or a Gmail URL (hex) | `emails.gmail_thread_id` |
 | the same thread id in decimal (as Takeout's `X-GM-THRID`) | `emails.thread_id`, `threads.id` |
 | a label id (`INBOX`, `Label_7`) | `mailboxes.id` = `gmail:<account id>:<label id>` |
 | a `Message-ID:` header | `emails.message_id`, without the angle brackets |
 
 `emails.thread_id` is **decimal** so that a Gmail API mirror and a
 Takeout import of the same account agree. Joining it against a hex id
-finds nothing. `printf('%x', CAST(thread_id AS INTEGER))` turns it back
-into the hex the API and Gmail's URLs use.
+finds nothing; join on `gmail_thread_id` instead. The `gmail_*`
+columns and `label_ids` are set only on a message the Gmail API has
+answered for, so they are NULL for Fastmail, for an mbox, and for a
+message a Takeout seeded until the next sync asks Gmail for its labels.
 
 **Getting the message.** Join `email_blobs` on the email, then
 `cas_objects` in `blobs.sqlite` on its `blake3`. The row's
@@ -297,6 +299,12 @@ keyword in `email_keywords` (also `payload -> '$.keywords'`):
 | `CATEGORY_*`, your own labels | a mailbox with no role |
 | muted | not kept |
 
+For Gmail, `emails.label_ids` puts them back together: every label id
+the message carries, as the API spells them, `UNREAD`, `STARRED` and
+`IMPORTANT` included, as a sorted JSON array (`["INBOX","UNREAD"]`).
+`EXISTS (SELECT 1 FROM json_each(label_ids) WHERE value = 'INBOX')`
+asks whether a message is in the inbox.
+
 **Traps.**
 
 - **`received_at` is not Gmail's receipt time.** For Gmail and mbox it
@@ -305,9 +313,15 @@ keyword in `email_keywords` (also `payload -> '$.keywords'`):
   value. For JMAP it is when the server received the message. Either
   way it keeps the sender's UTC offset, so **text order is not time
   order**: compare and sort with `datetime(received_at)`.
-- **`threads.email_count` counts the messages mirrored**, not the size
-  of the thread in Gmail. With `only_extract_labels` set, a thread's
-  other messages may sit in labels the mirror never lists.
+- **A label filter keeps whole threads.** With `only_extract_labels`
+  set, a message the filter keeps brings every other message of its
+  thread, whatever its labels or age, so a conversation whose start was
+  archived out of the inbox is all there. A thread none of whose
+  messages the filter keeps any more goes. A source with
+  `whole_threads = false` keeps only the matching messages; then
+  `threads.email_count` (what the mirror holds) can be less than
+  `threads.upstream_email_count` (what the service has), and that is a
+  thread held in part.
 - **`emails.blob_id` is not the CAS key for JMAP** (it is JMAP's own
   blob id). Always go through `email_blobs.blake3`.
 
@@ -345,9 +359,10 @@ One row per conversation that has a message in the mirror.
 | column | what it holds |
 |---|---|
 | `id` | the thread id, as `emails.thread_id` spells it |
-| `payload` | `{"id", "emailIds"}`: the ids of the emails held for it, oldest first |
+| `payload` | `{"id", "emailIds"}`: the ids of the emails held for it, oldest first; with `upstreamEmailCount` where that is known |
 | `account_id` | the account it belongs to |
 | `email_count` | how many emails the mirror holds for it |
+| `upstream_email_count` | how many messages the service (or the mbox input) has in it, filter or not; NULL with no label filter, when every thread is whole, and on Gmail and Fastmail until the first walk of the account (below) has finished |
 
 ### `emails`
 
@@ -371,6 +386,9 @@ One row per message.
 | `to_json` | the `To:` addresses, the same way |
 | `cc_json` | the `Cc:` addresses, the same way (there is no Bcc column) |
 | `has_attachment` | 1 if the message has an attachment |
+| `gmail_message_id` | Gmail only: the message id as the API and Gmail's URLs spell it |
+| `gmail_thread_id` | Gmail only: the thread id in the same hex |
+| `label_ids` | Gmail only: its label ids as a sorted JSON array (see "Labels") |
 
 ### `email_mailboxes`
 
@@ -425,7 +443,21 @@ discovering what is in it.
 
 | column | what it holds |
 |---|---|
-| `scope` | a JMAP mailbox id, a Gmail label id, or `*` |
+| `scope` | a JMAP mailbox id, a Gmail label id, `*`, or `#threads` for `thread_members` |
+
+### `thread_members`
+
+Every message in the account, mirrored or not, and the thread it is
+in (Gmail and Fastmail, under a label filter). One walk of the whole
+account fills it, and the changes each sync reads keep it current;
+`listed_whole` has `#threads` once that walk has finished. It is how the
+rest of a kept thread is found, and what `threads.upstream_email_count`
+counts.
+
+| column | what it holds |
+|---|---|
+| `id` | the message's id as the service spells it, as in `listed_messages` |
+| `thread_id` | its `threads.id` |
 
 ## Slack (`slack`)
 
