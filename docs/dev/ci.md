@@ -80,8 +80,9 @@ which Dependabot cannot (`.github/dependabot.yml` says why). Every
 Monday it runs `cargo update` through crate_universe
 (`CARGO_BAZEL_REPIN=full bazel build --nobuild //...`), repins
 `MODULE.bazel.lock`, and opens or rewrites one PR from
-`bot/cargo-update`. GITHUB_TOKEN opens that PR, and nothing it does
-starts a `pull_request` run, so the workflow dispatches `test.yml` on
+`bot/cargo-update`. GITHUB_TOKEN opens that PR, and GitHub holds the
+`pull_request` run of such a PR for a maintainer's approval
+(`action_required`, no jobs), so the workflow dispatches `test.yml` on
 the branch itself; the dispatch's checks carry the names the merge
 ruleset requires. Dispatch it by hand to pick up a fixed advisory
 before Monday.

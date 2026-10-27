@@ -11,9 +11,10 @@
 # variable as unset again (the lock keeps its value), and the third
 # proves the result is stable.
 #
-# The PR is opened with GITHUB_TOKEN, and nothing GITHUB_TOKEN does
-# starts a `pull_request` run, so the last step dispatches `test.yml`
-# on the branch. Its checks land on the PR's head commit under the
+# The PR is opened with GITHUB_TOKEN, and GitHub holds the
+# `pull_request` run of such a PR until a maintainer approves it (it
+# shows as `action_required` with no jobs), so the last step dispatches
+# `test.yml` on the branch. Its checks land on the PR's head commit under the
 # names the merge ruleset requires. A dispatch builds the branch head
 # rather than its merge into main; the branch is cut from main by the
 # same run, so the two are the same tree until main moves.
@@ -190,7 +191,7 @@ jobs:
 
           $(cat "${RUNNER_TEMP}/changes.md")
 
-          Opened by \`.github/workflows/cargo-update.yml\` ([this run](${RUN_URL})), which rebuilds \`${BRANCH}\` from \`main\` every Monday and force-pushes it: don't push work here. CI runs as a \`workflow_dispatch\` of \`test.yml\` on the branch, because a PR this workflow opens starts no \`pull_request\` run; to re-run CI after merging \`main\` in by hand, push as yourself or dispatch \`test.yml\` on \`${BRANCH}\`.
+          Opened by \`.github/workflows/cargo-update.yml\` ([this run](${RUN_URL})), which rebuilds \`${BRANCH}\` from \`main\` every Monday and force-pushes it: don't push work here. CI runs as a \`workflow_dispatch\` of \`test.yml\` on the branch, because GitHub holds the \`pull_request\` run of a PR this workflow opens for approval (it shows as awaiting approval; there is no need to approve it); to re-run CI after merging \`main\` in by hand, push as yourself or dispatch \`test.yml\` on \`${BRANCH}\`.
           EOF
 
           if [[ -n "${pr}" ]]; then
