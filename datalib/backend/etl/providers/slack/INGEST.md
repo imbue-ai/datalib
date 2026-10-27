@@ -48,7 +48,7 @@ a file download is retried, rate-limited and replayed like an API call.
 | `conversations.history`     | Each channel's uncovered stretches + refresh window |
 | `conversations.replies`     | The replies of each thread the store owes |
 | `search.messages`           | Replies posted since the last search, to roots history will not read again |
-| `client.counts`             | How far the account has read, and which DMs have something new |
+| `client.counts`             | How far the account has read, and which conversations have something new |
 | `saved.list`                | The account's "Saved for later" items    |
 | `bookmarks.list`            | A conversation's header bookmarks        |
 
@@ -116,28 +116,44 @@ A DM is titled after its counterparts — `@Jean-Luc Picard`,
 it is not split back into people, because a Slack handle may itself
 contain dashes.
 
-### Which DMs a run walks
+### Which conversations a run walks
 
-A workspace a few years old lists thousands of DMs, and most have
-been quiet for a long time. Asking each one's history whether it has
-anything new costs a rate-limited call apiece, every run. So with
-`dms = true` and no `dm_conversations`, a DM is walked only when
-`client.counts` (already called for the read states, below) shows it
-**open in the account's sidebar, with a newest message that what we
-hold does not reach**: newer than what is covered, or with a gap
-under it, and not older than `since` (`shows_activity` in
-`ingest/mod.rs`). Every other DM costs no request and no progress
-line. Its threads and files still owed are fetched as usual, and the
-reply search still covers it, so a new reply on an old root is found
-whether or not the reply moved the DM's newest message.
+Asking a conversation's history whether it has anything new costs a
+rate-limited call apiece, one after another, every run: 126 quiet
+channels took 80 seconds. So a run first asks `client.counts` (already
+called for the read states, below), which names the newest message of
+every conversation open in the account's sidebar in one call. A
+conversation it names is walked only when that message is one what we
+hold does not reach: newer than what is covered, or with a gap under
+it, and not older than `since` (`to_walk` in `ingest/mod.rs`). Every
+other one costs no request for new messages and no progress line. Its
+threads and files still owed are fetched as usual, its [refresh
+window](#top-level-messages-inside-the-refresh-window-and-only-there) is
+re-read when one is due, and the reply search still covers it, so a new
+reply on an old root is found whether or not the reply moved the
+conversation's newest message.
 
-Nothing better is on offer. Checked against the live API:
+What a conversation `client.counts` does not name depends on what it is:
 
+- **A channel** is walked as before. Every channel the account is a
+  member of is in the sidebar, so this is a channel mirrored through
+  `all_channels` or `channels` that the account has not joined.
+- **A DM** is treated as quiet, and walked not at all, not even its
+  refresh window. A workspace a few years old lists thousands of DMs,
+  and `client.counts` names only the ones open in the sidebar.
+
+Checked against the live API:
+
+- `client.counts` named all 126 channels an account was a member of,
+  each with a `latest`. In 23 of 25 sampled, it was the newest message
+  `conversations.history` returned; in the other two that message was a
+  join or leave notice, which `latest` skips. Such a notice is picked
+  up by the next walk of the channel or its next refresh.
 - `conversations.list` gives a DM no `latest`. Its `updated` is not
   activity: of 45 DMs sampled, a dozen had messages newer than
   `updated`, by up to 626 days.
-- `client.counts` names the newest message exactly, but only for the
-  conversations open in the sidebar (26 of several hundred).
+- `client.counts` names only the DMs open in the sidebar (26 of several
+  hundred).
 - Search cannot prove a DM empty: `is:dm` and `in:<#D…>` both missed
   one of five DMs with messages that week.
 
@@ -147,7 +163,7 @@ of inactivity, so a DM that had messages inside `since` and has since
 been closed is not walked until it is open again. That matters most
 with a wide `since` on a first sync. A DM named in `dm_conversations`
 is walked whatever its state, and a run whose `client.counts` call
-fails walks every DM, as before.
+fails walks every conversation, as before.
 
 A DM left out is not covered: nothing claims its history was read.
 The first run that finds it open owes it whole, from `since`, and a
@@ -185,7 +201,7 @@ nothing to remember in between.
 
 | Kind | Wanted | Held | Owed |
 |---|---|---|---|
-| a channel's history | everything from `since` on | the `coverage` spans of scope `history:<channel>` | the gaps (a DM's, only while it [shows activity](#which-dms-a-run-walks)) |
+| a channel's history | everything from `since` on | the `coverage` spans of scope `history:<channel>` | the gaps reaching down to what `client.counts` says is its newest message ([which conversations a run walks](#which-conversations-a-run-walks)) |
 | a thread's replies | each stored root's `latest_reply` | `held_version` in the thread's sidecar | a root with replies whose thread is not held at that version |
 | reply time, searched | everything from `since` to half an hour ago | the `coverage` spans of scope `replies:<channel>` | the gaps |
 | a file's bytes | an edge in `slack_attachments`, written with its message | the edge's `blake3`, and the fetch that landed it | an edge with no `blake3`, when `media` is on |
@@ -200,11 +216,13 @@ are over top-level messages only; a reply's `ts` never moves them. The
 newest message stored is never read as "fetched up to here".
 
 The range wanted has no top. A walk covers up to the newest message it
-saw, not up to "now", so every run asks each channel for what is newer
-than that (one request when there is nothing; a DM, only when it
-[shows activity](#which-dms-a-run-walks)), and a message that only
-becomes visible late is not skipped. A channel with no messages has no
-span, and is asked from `since` each run.
+saw, not up to "now", so a run asks a channel for what is newer than
+that, and a message that only becomes visible late is not skipped. It
+does so only when `client.counts` says there is something newer, or
+says nothing ([which conversations a run
+walks](#which-conversations-a-run-walks)). A channel with no messages
+has no span; it is asked from `since` each run that `client.counts`
+does not name it.
 
 A span's ends are `ts`es padded to one width (`ts_key`), so they sort as
 instants do. The TNG fixtures' stardate `ts`es have an eleventh digit.
@@ -297,8 +315,13 @@ and that is worth knowing before you rely on it.
 
 ### Top-level messages: inside the refresh window, and only there
 
-`refresh_window_days` makes every run re-read the last N days of what
-each channel has covered. A top-level message we hold in that range that
+`refresh_window_days` makes a run re-read the last N days of what each
+conversation has covered, at most once every `refresh_every_minutes`
+(60 unless set; `0` re-reads on every run). The last re-read of each
+conversation that finished is stamped in the store (`sync_scope_state`,
+scope `slack:sweep:refresh:<channel>`), so one cut off or failed part
+way is due again on the next run. An app that syncs every few minutes
+pays for the window once an hour rather than every time. A top-level message we hold in that range that
 the re-read did not return has been deleted upstream, so we delete our
 copy. History is strictly ordered, so each page lists a stretch whole,
 and what it lacks there is deleted in that page's transaction.
@@ -320,10 +343,13 @@ caught, or to `0` to turn the pass off:
 ```toml
 [steps.params.api]
 refresh_window_days = 7
+refresh_every_minutes = 360
 ```
 
-The window costs one extra pass over that many days of every channel, per
-run, so it trades API calls against how quickly a deletion is spotted.
+The window costs one extra pass over that many days of every channel each
+time it is due, so `refresh_window_days` and `refresh_every_minutes`
+trade API calls against how far back, and how soon, a deletion is
+spotted.
 Nothing older than the window is ever looked at again — a message deleted
 from last year stays in our copy indefinitely.
 
@@ -367,7 +393,7 @@ what is owed is computed from the config a run has now.
 | `since` later | Nothing. What is stored stays; nothing here deletes it. |
 | `media` off → on | Every edge without bytes is owed, and fetched from its stored message. No channel is walked again. |
 | `common.blob_size_limit_bytes` raised | The edges skipped for their size are still without bytes, so they are fetched. |
-| a new channel, or `dms` on | The conversation has no coverage, so it is walked from `since` (a DM once it shows activity; see [Which DMs a run walks](#which-dms-a-run-walks)). |
+| a new channel, or `dms` on | The conversation has no coverage, so it is walked from `since` once `client.counts` shows a message in range, or names nothing (see [Which conversations a run walks](#which-conversations-a-run-walks)). |
 
 Turning `dms` on also needs a fresh `conversations.list`: the cached
 sweep was taken under the narrower `types` and holds no DM rows at all.
@@ -451,7 +477,7 @@ otherwise), leaves that table as it was, and does not stop the sync.
 - **`channel_read_states`**, from one `client.counts` call: each
   conversation's `last_read`, `latest`, `has_unreads` and
   `mention_count`. Its `latest` also decides which DMs are walked
-  ([Which DMs a run walks](#which-dms-a-run-walks)). **All of it is volatile**: the content payload is just
+  ([Which conversations a run walks](#which-conversations-a-run-walks)). **All of it is volatile**: the content payload is just
   `{"id": …}`, and the state lives in the `volatile_payload` column of
   `channel_read_states_bookkeeping`. Reading a channel is not a change to
   it, so it must not show in `dolt_diff_channel_read_states` or wake the

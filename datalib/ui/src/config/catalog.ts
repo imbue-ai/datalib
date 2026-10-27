@@ -380,6 +380,14 @@ export const CATALOG: CatalogEntry[] = [
           "Re-queries the trailing N days of channels that already have history, for edits, " +
           "reactions and deletions. Not a range bound. Empty is 30; 0 turns it off.",
       },
+      {
+        kind: "int",
+        target: "api.refresh_every_minutes",
+        label: "Re-query that window every (minutes)",
+        help:
+          "How long after the last re-query a sync re-queries a conversation's window again. " +
+          "New messages are fetched on every sync either way. Empty is 60; 0 re-queries every sync.",
+      },
     ],
   },
   {

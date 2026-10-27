@@ -6,7 +6,8 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::Parser;
 use datalib_etl_slack::ingest::{
-    self as slack, db_path_for, FetchOptions, RawDb, DEFAULT_REFRESH_WINDOW_DAYS, DEFAULT_SINCE,
+    self as slack, db_path_for, FetchOptions, RawDb, DEFAULT_REFRESH_EVERY_MINUTES,
+    DEFAULT_REFRESH_WINDOW_DAYS, DEFAULT_SINCE,
 };
 use datalib_obs::{init as init_obs, ObsArgs};
 use tracing::{info, info_span, Instrument};
@@ -37,6 +38,12 @@ struct Args {
     /// 0 to skip the refresh pass.
     #[arg(long, default_value_t = DEFAULT_REFRESH_WINDOW_DAYS)]
     refresh_window_days: i64,
+
+    /// Re-read a conversation's refresh window only when this many
+    /// minutes have passed since its last re-read. 0 re-reads it every
+    /// run.
+    #[arg(long, default_value_t = DEFAULT_REFRESH_EVERY_MINUTES)]
+    refresh_every_minutes: i64,
 
     /// Skip channels the bot/user isn't a member of. The Slack API
     /// returns them in `conversations.list` either way; this filter
@@ -92,6 +99,7 @@ async fn main() -> Result<()> {
         channels,
         since: args.since.clone(),
         refresh_window_days: args.refresh_window_days,
+        refresh_every_minutes: args.refresh_every_minutes,
         members_only: args.members_only,
         media: args.media,
         dms: args.dms,
