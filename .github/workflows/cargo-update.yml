@@ -79,12 +79,12 @@ jobs:
               awk -v crate="$1" '$0 == "name = \"" crate "\"" {f=1; next}
                   f && /^version = / {gsub(/"/, "", $3); print $3; exit}' datalib/backend/Cargo.lock
           }
-          held=()
+          pins=""
           for crate in ${HELD_CRATES}; do
-              held+=("${crate}=$(held_version "${crate}")")
+              pins+=" ${crate}=$(held_version "${crate}")"
           done
           CARGO_BAZEL_REPIN=full bazel build --nobuild //...
-          for pin in "${held[@]}"; do
+          for pin in ${pins}; do
               echo "Holding ${pin}"
               CARGO_BAZEL_REPIN="${pin}" bazel build --nobuild //...
           done
