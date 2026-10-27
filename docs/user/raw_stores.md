@@ -262,18 +262,19 @@ original RFC 5322 `.eml`, stored whole in `blobs.sqlite`.
 
 | you have | it is in the mirror as |
 |---|---|
-| a message id from the Gmail API or a Gmail URL (`18f2a3b4c5d6e7f8`) | `emails.gmail_message_id`, as the API spells it; also `emails.id`, in lowercase hex, zero-padded to 16 digits |
-| a thread id from the Gmail API or a Gmail URL (hex) | `emails.gmail_thread_id` |
-| the same thread id in decimal (as Takeout's `X-GM-THRID`) | `emails.thread_id`, `threads.id` |
+| a message id from the Gmail API or a Gmail URL (`18f2a3b4c5d6e7f8`) | `emails.id`, in lowercase hex zero-padded to 16 digits |
+| a thread id from the Gmail API or a Gmail URL | `emails.thread_id`, `threads.id`, in the same padded hex |
+| a message or thread id in decimal (Takeout's `From ` line or `X-GM-THRID`) | the same number in hex: `printf('%016x', <decimal>)` |
 | a label id (`INBOX`, `Label_7`) | `mailboxes.id` = `gmail:<account id>:<label id>` |
 | a `Message-ID:` header | `emails.message_id`, without the angle brackets |
 
-`emails.thread_id` is **decimal** so that a Gmail API mirror and a
-Takeout import of the same account agree. Joining it against a hex id
-finds nothing; join on `gmail_thread_id` instead. The `gmail_*`
-columns and `label_ids` are set only on a message the Gmail API has
-answered for, so they are NULL for Fastmail, for an mbox, and for a
-message a Takeout seeded until the next sync asks Gmail for its labels.
+A Gmail id is padded so that the text sorts as the number does; the
+API spells an id from Gmail's first months with only 15 digits, and the
+mirror adds the leading zero. `listed_messages.id` and
+`thread_members.id` keep the API's own spelling. `label_ids` is set
+only on a message the Gmail API has answered for, so it is NULL for
+Fastmail, for an mbox, and for a message a Takeout seeded until the
+next sync asks Gmail for its labels.
 
 **Getting the message.** Join `email_blobs` on the email, then
 `cas_objects` in `blobs.sqlite` on its `blake3`. The row's
@@ -332,7 +333,7 @@ One row per mail account the source mirrors.
 | column | what it holds |
 |---|---|
 | `id` | JMAP's account id; for Gmail the configured `account_id`, by default the address Gmail reports; for mbox the configured `account_id` |
-| `payload` | the account object (JMAP's; for Gmail `{id, name, email, isPersonal, _source}`) |
+| `payload` | the account object (JMAP's; for Gmail `{id, name, email, isPersonal, _source}`, where `_source` names the API it came from) |
 | `name` | its display name |
 | `email_address` | the address it signs in as: Gmail's, a JMAP server's sign-in name on the personal account when that is an address, mbox's configured one; NULL when none is known |
 | `is_personal` | 1 for the person's own account, 0 for a shared one |
@@ -371,9 +372,9 @@ One row per message.
 | column | what it holds |
 |---|---|
 | `id` | the message's id (see "Which id is which") |
-| `payload` | the envelope: `id`, `blobId`, `threadId`, `mailboxIds`, `keywords`, `size`, `hasAttachment`, `receivedAt`, `sentAt`, `subject`, `from`, `to`, `cc`, `messageId`, `inReplyTo`, `references`; for Gmail also `_source` with `gmailMessageId` and `gmailThreadId` in hex |
+| `payload` | the envelope: `id`, `blobId`, `threadId`, `mailboxIds`, `keywords`, `size`, `hasAttachment`, `receivedAt`, `sentAt`, `subject`, `from`, `to`, `cc`, `messageId`, `inReplyTo`, `references`; for a message the Gmail API answered for, also `_source: {"via": "gmail.googleapis.com"}` |
 | `account_id` | the account it belongs to |
-| `thread_id` | its thread (decimal for Gmail) |
+| `thread_id` | its thread: Gmail's thread id in the same padded hex as `id`; JMAP's own thread id; for an mbox message with no `X-GM-THRID`, its own `id` |
 | `blob_id` | the id of its `.eml`: blake3 of the bytes for Gmail and mbox, JMAP's own blob id for JMAP |
 | `message_id` | its `Message-ID:`, without angle brackets |
 | `in_reply_to` | its `In-Reply-To:`, without angle brackets |
@@ -386,8 +387,6 @@ One row per message.
 | `to_json` | the `To:` addresses, the same way |
 | `cc_json` | the `Cc:` addresses, the same way (there is no Bcc column) |
 | `has_attachment` | 1 if the message has an attachment |
-| `gmail_message_id` | Gmail only: the message id as the API and Gmail's URLs spell it |
-| `gmail_thread_id` | Gmail only: the thread id in the same hex |
 | `label_ids` | Gmail only: its label ids as a sorted JSON array (see "Labels") |
 
 ### `email_mailboxes`

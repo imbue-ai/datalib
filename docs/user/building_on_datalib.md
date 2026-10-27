@@ -400,12 +400,14 @@ that is fixed, after editing, wait until `datalib-dag status` shows no
 open request (or stop them) before syncing again. `datalib-dag --check
 <data_root>/config.toml` checks an edit without running anything.
 
-**`full_resync` stays on until you take it out.** On an `email`
-source's `jmap` or `gmail` table, `full_resync = true` makes a run
-forget its change token and list the account again. Nothing turns it
-back off, so every run does that until you remove it: set it, sync
-once, and delete the line. For Gmail, messages already held are not
-fetched again; for JMAP, every email is fetched again.
+**Starting a source over is a reset, not a setting.** When a mail
+service stops honouring the download's change token (Gmail's
+`historyId` has aged out, or a JMAP server answers
+`cannotCalculateChanges`), the next run lists the account again by
+itself. To start over on purpose, reset the source's ingest step: the
+app's Reset, `POST /api/reset`, or `datalib-dag --reset <source>/ingest
+--sync <source>/ingest` with no app up. That empties the store and
+downloads everything again.
 
 ## Your app's own writes
 
