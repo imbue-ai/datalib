@@ -556,6 +556,8 @@ export default defineConfig({
         // A chip's clicks in that frame: a right-click's auxclick and the
         // menu drawn over the frame.
         /chip-menu\.spec\.ts/,
+        // A message header's layout: line-clamp and sticky positioning.
+        /chat-header-layout\.spec\.ts/,
         // /data_sources — the sources card's Pipeline table, and the
         // commit-history grid it opens in a modal.
         /data-sources-grid\.spec\.ts/,

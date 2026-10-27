@@ -526,8 +526,12 @@ code.hljs {
   margin: -0.5rem -0.75rem 0.15rem;
   padding: 0.3rem 0.75rem 0.25rem;
 }
+/* `--datalib-hover` is a translucent tint; laid over the card colour it
+   matches the selected card and still hides what scrolls beneath. */
 .chat-body > .msg.msg--long.selected > h2:has(> .msg-author, > a.chip) {
-  background: var(--datalib-hover, #f0f0f0);
+  background:
+    linear-gradient(var(--datalib-hover, #f0f0f0), var(--datalib-hover, #f0f0f0)),
+    var(--datalib-card-bg, #fafafa);
 }
 /* Only while it is actually pinned: an edge and a shadow, so the line
    of text passing beneath the bar reads as passing beneath it rather
@@ -713,8 +717,9 @@ code.hljs {
 .chat-body .msg h2 > a.chip {
   font-weight: 600;
 }
-/* The recipients line is a paragraph of its own under the header. */
-.chat-body p:has(> .msg-recipients:only-child) {
+/* The recipients line is a paragraph of its own under the header. A
+   linked chip keeps chip.css's colour, which is set for its pale fill. */
+.chat-body p:has(> .msg-recipients:first-child) {
   margin: 0;
 }
 .chat-body .msg-recipients {
@@ -724,8 +729,45 @@ code.hljs {
   margin: 0 0 0.3rem;
 }
 .chat-body .msg-recipients .msg-recipient,
-.chat-body .msg-recipients a.chip {
+.chat-body .msg-recipients a.chip:not(.handle-resolved) {
   color: var(--datalib-fg, inherit);
+}
+/* A list longer than two lines folds to two, beside a button saying how
+   many people it names (`foldRecipients` in chatSections.js). */
+.chat-body p:has(> .msg-recipients--folded),
+.chat-body p:has(> .msg-recipients--open) {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  margin: 0 0 0.3rem;
+}
+.chat-body p > .msg-recipients--folded,
+.chat-body p > .msg-recipients--open {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+.chat-body .msg-recipients--folded {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+.chat-body button.msg-recipients-toggle {
+  flex: none;
+  font: inherit;
+  font-size: 0.75rem;
+  line-height: 1.3;
+  padding: 0 0.5rem;
+  color: var(--datalib-muted, #94a3b8);
+  background: transparent;
+  border: 1px solid var(--datalib-border, #d8d8d8);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.chat-body button.msg-recipients-toggle:hover {
+  color: inherit;
 }
 .chat-body .msg-ts {
   font-size: 0.75rem;
@@ -8983,7 +9025,7 @@ Captain’s Log, Stardate 41986.0 Addendum filed after review by Starfleet Comma
 </div>
 </section>
 <section class="preview-source" id="src-zz-synthetic">
-<h2 class="preview-source-name">zz-synthetic <span class="preview-count">4 documents</span></h2>
+<h2 class="preview-source-name">zz-synthetic <span class="preview-count">5 documents</span></h2>
 <div class="preview-doc">
 <h3 class="preview-name">zz-synthetic/samples/render_markdown/sample-edges/all.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="sample-edges">Edge cases <a class="source-link" href="https://example.invalid/chat/sample-edges" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -9157,6 +9199,55 @@ Captain’s Log, Stardate 41986.0 Addendum filed after review by Starfleet Comma
 <div id="m-s4-reply" data-section-uuid="s4-reply" class="msg msg--claude">
 <h2><span class="msg-author">Geordi La Forge</span> <time class="msg-ts" datetime="2369-05-14T16:12:00+00:00" title="2369-05-14 16:12:00 UTC">Wed May 14th, 2369 at 16:12</time></h2>
 <p>Line 60 is the one. Thanks — I'll pull that conduit at the next maintenance window.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">zz-synthetic/samples/render_markdown/sample-roster/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="sample-roster">Duty roster <a class="source-link" href="https://example.invalid/chat/sample-roster" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-s5-roster" data-section-uuid="s5-roster" class="msg msg--claude">
+<h2><a href="mailto:riker@enterprise.org" title="Will Riker &lt;riker@enterprise.org&gt;" class="chip" data-handle="email:riker@enterprise.org">Will Riker</a> <time class="msg-ts" datetime="2369-05-14T16:10:00+00:00" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time></h2>
+<p><span class="msg-recipients"><span class="msg-recipients-role">To</span> <a href="mailto:jeanluc.picard@enterprise.org" title="Jean-Luc Picard &lt;jeanluc.picard@enterprise.org&gt;" class="chip" data-handle="email:jeanluc.picard@enterprise.org">Jean-Luc Picard</a>, <a href="mailto:deanna.troi@enterprise.org" title="Deanna Troi &lt;deanna.troi@enterprise.org&gt;" class="chip" data-handle="email:deanna.troi@enterprise.org">Deanna Troi</a>, <a href="mailto:data@enterprise.org" title="Data &lt;data@enterprise.org&gt;" class="chip" data-handle="email:data@enterprise.org">Data</a>, <a href="mailto:geordi.la.forge@enterprise.org" title="Geordi La Forge &lt;geordi.la.forge@enterprise.org&gt;" class="chip" data-handle="email:geordi.la.forge@enterprise.org">Geordi La Forge</a>, <a href="mailto:worf@enterprise.org" title="Worf &lt;worf@enterprise.org&gt;" class="chip" data-handle="email:worf@enterprise.org">Worf</a>, <a href="mailto:beverly.crusher@enterprise.org" title="Beverly Crusher &lt;beverly.crusher@enterprise.org&gt;" class="chip" data-handle="email:beverly.crusher@enterprise.org">Beverly Crusher</a>, <a href="mailto:wesley.crusher@enterprise.org" title="Wesley Crusher &lt;wesley.crusher@enterprise.org&gt;" class="chip" data-handle="email:wesley.crusher@enterprise.org">Wesley Crusher</a>, <a href="mailto:tasha.yar@enterprise.org" title="Tasha Yar &lt;tasha.yar@enterprise.org&gt;" class="chip" data-handle="email:tasha.yar@enterprise.org">Tasha Yar</a>, <a href="mailto:miles.obrien@enterprise.org" title="Miles O'Brien &lt;miles.obrien@enterprise.org&gt;" class="chip" data-handle="email:miles.obrien@enterprise.org">Miles O'Brien</a>, <a href="mailto:keiko.obrien@enterprise.org" title="Keiko O'Brien &lt;keiko.obrien@enterprise.org&gt;" class="chip" data-handle="email:keiko.obrien@enterprise.org">Keiko O'Brien</a>, <a href="mailto:guinan@enterprise.org" title="Guinan &lt;guinan@enterprise.org&gt;" class="chip" data-handle="email:guinan@enterprise.org">Guinan</a>, <a href="mailto:reginald.barclay@enterprise.org" title="Reginald Barclay &lt;reginald.barclay@enterprise.org&gt;" class="chip" data-handle="email:reginald.barclay@enterprise.org">Reginald Barclay</a>, <a href="mailto:ro.laren@enterprise.org" title="Ro Laren &lt;ro.laren@enterprise.org&gt;" class="chip" data-handle="email:ro.laren@enterprise.org">Ro Laren</a>, <a href="mailto:alyssa.ogawa@enterprise.org" title="Alyssa Ogawa &lt;alyssa.ogawa@enterprise.org&gt;" class="chip" data-handle="email:alyssa.ogawa@enterprise.org">Alyssa Ogawa</a>, <a href="mailto:sito.jaxa@enterprise.org" title="Sito Jaxa &lt;sito.jaxa@enterprise.org&gt;" class="chip" data-handle="email:sito.jaxa@enterprise.org">Sito Jaxa</a>, <a href="mailto:robin.lefler@enterprise.org" title="Robin Lefler &lt;robin.lefler@enterprise.org&gt;" class="chip" data-handle="email:robin.lefler@enterprise.org">Robin Lefler</a>, <a href="mailto:sonya.gomez@enterprise.org" title="Sonya Gomez &lt;sonya.gomez@enterprise.org&gt;" class="chip" data-handle="email:sonya.gomez@enterprise.org">Sonya Gomez</a>, <a href="mailto:simon.tarses@enterprise.org" title="Simon Tarses &lt;simon.tarses@enterprise.org&gt;" class="chip" data-handle="email:simon.tarses@enterprise.org">Simon Tarses</a>, <a href="mailto:taurik@enterprise.org" title="Taurik &lt;taurik@enterprise.org&gt;" class="chip" data-handle="email:taurik@enterprise.org">Taurik</a>, <a href="mailto:nella.daren@enterprise.org" title="Nella Daren &lt;nella.daren@enterprise.org&gt;" class="chip" data-handle="email:nella.daren@enterprise.org">Nella Daren</a>, <a href="mailto:katherine.pulaski@enterprise.org" title="Katherine Pulaski &lt;katherine.pulaski@enterprise.org&gt;" class="chip" data-handle="email:katherine.pulaski@enterprise.org">Katherine Pulaski</a>, <a href="mailto:lwaxana.troi@enterprise.org" title="Lwaxana Troi &lt;lwaxana.troi@enterprise.org&gt;" class="chip" data-handle="email:lwaxana.troi@enterprise.org">Lwaxana Troi</a>, <a href="mailto:alexander.rozhenko@enterprise.org" title="Alexander Rozhenko &lt;alexander.rozhenko@enterprise.org&gt;" class="chip" data-handle="email:alexander.rozhenko@enterprise.org">Alexander Rozhenko</a>, <a href="mailto:leland.shelby@enterprise.org" title="Leland Shelby &lt;leland.shelby@enterprise.org&gt;" class="chip" data-handle="email:leland.shelby@enterprise.org">Leland Shelby</a>, <a href="mailto:edward.jellico@enterprise.org" title="Edward Jellico &lt;edward.jellico@enterprise.org&gt;" class="chip" data-handle="email:edward.jellico@enterprise.org">Edward Jellico</a>, <a href="mailto:elizabeth.shelby@enterprise.org" title="Elizabeth Shelby &lt;elizabeth.shelby@enterprise.org&gt;" class="chip" data-handle="email:elizabeth.shelby@enterprise.org">Elizabeth Shelby</a>, <a href="mailto:sam.lavelle@enterprise.org" title="Sam Lavelle &lt;sam.lavelle@enterprise.org&gt;" class="chip" data-handle="email:sam.lavelle@enterprise.org">Sam Lavelle</a>, <a href="mailto:daniel.kwan@enterprise.org" title="Daniel Kwan &lt;daniel.kwan@enterprise.org&gt;" class="chip" data-handle="email:daniel.kwan@enterprise.org">Daniel Kwan</a>, <a href="mailto:marla.aster@enterprise.org" title="Marla Aster &lt;marla.aster@enterprise.org&gt;" class="chip" data-handle="email:marla.aster@enterprise.org">Marla Aster</a>, <a href="mailto:jeremy.aster@enterprise.org" title="Jeremy Aster &lt;jeremy.aster@enterprise.org&gt;" class="chip" data-handle="email:jeremy.aster@enterprise.org">Jeremy Aster</a>, <a href="mailto:mendon@enterprise.org" title="Mendon &lt;mendon@enterprise.org&gt;" class="chip" data-handle="email:mendon@enterprise.org">Mendon</a>, <a href="mailto:sariel.rager@enterprise.org" title="Sariel Rager &lt;sariel.rager@enterprise.org&gt;" class="chip" data-handle="email:sariel.rager@enterprise.org">Sariel Rager</a>, <a href="mailto:tom.riker@enterprise.org" title="Tom Riker &lt;tom.riker@enterprise.org&gt;" class="chip" data-handle="email:tom.riker@enterprise.org">Tom Riker</a>; <span class="msg-recipients-role">Cc</span> <a href="mailto:hester.dealt@enterprise.org" title="Hester Dealt &lt;hester.dealt@enterprise.org&gt;" class="chip" data-handle="email:hester.dealt@enterprise.org">Hester Dealt</a>, <a href="mailto:selar@enterprise.org" title="Selar &lt;selar@enterprise.org&gt;" class="chip" data-handle="email:selar@enterprise.org">Selar</a>, <a href="mailto:kurn@enterprise.org" title="Kurn &lt;kurn@enterprise.org&gt;" class="chip" data-handle="email:kurn@enterprise.org">Kurn</a></span></p>
+<p>Updated duty roster for the Argolis survey, deck by deck.</p>
+<ol>
+<li>Jean-Luc Picard — deck 1, alpha shift</li>
+<li>Deanna Troi — deck 2, beta shift</li>
+<li>Data — deck 3, gamma shift</li>
+<li>Geordi La Forge — deck 4, alpha shift</li>
+<li>Worf — deck 5, beta shift</li>
+<li>Beverly Crusher — deck 6, gamma shift</li>
+<li>Wesley Crusher — deck 7, alpha shift</li>
+<li>Tasha Yar — deck 8, beta shift</li>
+<li>Miles O'Brien — deck 9, gamma shift</li>
+<li>Keiko O'Brien — deck 10, alpha shift</li>
+<li>Guinan — deck 11, beta shift</li>
+<li>Reginald Barclay — deck 12, gamma shift</li>
+<li>Ro Laren — deck 1, alpha shift</li>
+<li>Alyssa Ogawa — deck 2, beta shift</li>
+<li>Sito Jaxa — deck 3, gamma shift</li>
+<li>Robin Lefler — deck 4, alpha shift</li>
+<li>Sonya Gomez — deck 5, beta shift</li>
+<li>Simon Tarses — deck 6, gamma shift</li>
+<li>Taurik — deck 7, alpha shift</li>
+<li>Nella Daren — deck 8, beta shift</li>
+<li>Katherine Pulaski — deck 9, gamma shift</li>
+<li>Lwaxana Troi — deck 10, alpha shift</li>
+<li>Alexander Rozhenko — deck 11, beta shift</li>
+<li>Leland Shelby — deck 12, gamma shift</li>
+<li>Edward Jellico — deck 1, alpha shift</li>
+<li>Elizabeth Shelby — deck 2, beta shift</li>
+<li>Sam Lavelle — deck 3, gamma shift</li>
+<li>Daniel Kwan — deck 4, alpha shift</li>
+<li>Marla Aster — deck 5, beta shift</li>
+<li>Jeremy Aster — deck 6, gamma shift</li>
+<li>Mendon — deck 7, alpha shift</li>
+<li>Sariel Rager — deck 8, beta shift</li>
+<li>Tom Riker — deck 9, gamma shift</li>
+<li>Hester Dealt — deck 10, alpha shift</li>
+<li>Selar — deck 11, beta shift</li>
+<li>Kurn — deck 12, gamma shift</li>
+</ol>
+<p>Report any conflicts to me before 0800.</p>
 </div>
 </div>
 </div>
@@ -9412,10 +9503,39 @@ function nextItem(el) {
 }
 
 /**
+ * Fold a recipients line longer than two lines to two, with a button
+ * after it that says how many people it names.
+ * @param {HTMLElement} line
+ */
+function foldRecipients(line) {
+  if (line.dataset.foldChecked) return;
+  line.dataset.foldChecked = "1";
+  line.classList.add("msg-recipients--folded");
+  // Chips drawn later are a little wider than the links measured here,
+  // so a line that just fits may wrap to a third; it then shows whole.
+  if (line.scrollHeight <= line.clientHeight + 1) {
+    line.classList.remove("msg-recipients--folded");
+    return;
+  }
+  const count = line.querySelectorAll(".msg-recipient, a.chip").length;
+  const toggle = line.ownerDocument.createElement("button");
+  toggle.type = "button";
+  toggle.className = "msg-recipients-toggle";
+  toggle.textContent = `Show all ${count}`;
+  toggle.addEventListener("click", () => {
+    const folded = line.classList.toggle("msg-recipients--folded");
+    line.classList.toggle("msg-recipients--open", !folded);
+    toggle.textContent = folded ? `Show all ${count}` : "Show fewer";
+  });
+  line.after(toggle);
+}
+
+/**
  * Clamp messages that are too tall to scroll past comfortably, and give
  * them a sticky header carrying "jump to the start of this message" and
  * "jump to the next one" — so being deep inside a wall of text is never
- * a place you have to scroll your way out of.
+ * a place you have to scroll your way out of. A recipients line too
+ * long for its header folds first.
  *
  * Idempotent: re-running over an already-decorated body does nothing.
  * @param {HTMLElement} root
@@ -9444,6 +9564,12 @@ export function decorateLongMessages(root, opts = {}) {
     ro.observe(root);
     root.__chatWidthObserver = ro;
     return;
+  }
+
+  // Before the messages are measured, so a folded list is not what
+  // makes one long.
+  for (const line of root.querySelectorAll(".msg > p > .msg-recipients:first-child")) {
+    foldRecipients(line);
   }
 
   for (const el of root.querySelectorAll(":scope > .msg[data-section-uuid]")) {

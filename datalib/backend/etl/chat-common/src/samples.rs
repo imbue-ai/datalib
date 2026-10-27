@@ -20,7 +20,7 @@ use datalib_time::RecordStampPrecision;
 use crate::render::{render_all, RenderProfile, TextFormat, ENTITY_KIND_CONVERSATION};
 use crate::types::{
     AuthorKind, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
-    NormalizedReaction,
+    NormalizedReaction, Recipient, RecipientRole,
 };
 
 /// 2369-04-15 08:30:00 UTC, the fixture corpus's era.
@@ -45,6 +45,7 @@ pub fn sample_chats() -> Vec<NormalizedChat> {
         assistant_turn_with_tools(),
         group_chat(),
         long_message(),
+        crew_wide_email(),
         edge_cases(),
     ]
 }
@@ -313,6 +314,86 @@ fn long_message() -> NormalizedChat {
     )
 }
 
+/// A long email to most of the ship: its header pins as you read, and
+/// its recipients line is longer than the header it sits under. The
+/// layout spec (`ui/tests/e2e/chat-header-layout.spec.ts`) reads this
+/// one by its section id.
+fn crew_wide_email() -> NormalizedChat {
+    const CREW: [&str; 36] = [
+        "Jean-Luc Picard",
+        "Deanna Troi",
+        "Data",
+        "Geordi La Forge",
+        "Worf",
+        "Beverly Crusher",
+        "Wesley Crusher",
+        "Tasha Yar",
+        "Miles O'Brien",
+        "Keiko O'Brien",
+        "Guinan",
+        "Reginald Barclay",
+        "Ro Laren",
+        "Alyssa Ogawa",
+        "Sito Jaxa",
+        "Robin Lefler",
+        "Sonya Gomez",
+        "Simon Tarses",
+        "Taurik",
+        "Nella Daren",
+        "Katherine Pulaski",
+        "Lwaxana Troi",
+        "Alexander Rozhenko",
+        "Leland Shelby",
+        "Edward Jellico",
+        "Elizabeth Shelby",
+        "Sam Lavelle",
+        "Daniel Kwan",
+        "Marla Aster",
+        "Jeremy Aster",
+        "Mendon",
+        "Sariel Rager",
+        "Tom Riker",
+        "Hester Dealt",
+        "Selar",
+        "Kurn",
+    ];
+    let address = |name: &str| {
+        let local: String = name
+            .to_lowercase()
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == ' ')
+            .collect();
+        format!("{}@enterprise.org", local.replace(' ', "."))
+    };
+    let recipient = |role, name: &str| Recipient {
+        role,
+        display: name.to_string(),
+        handle: datalib_handle::Handle::email(&address(name)),
+        drawn: true,
+    };
+
+    let mut body = String::from("Updated duty roster for the Argolis survey, deck by deck.\n");
+    for (i, name) in CREW.iter().enumerate() {
+        body.push_str(&format!(
+            "\n{n}. {name} — deck {deck}, {shift} shift",
+            n = i + 1,
+            deck = 1 + i % 12,
+            shift = ["alpha", "beta", "gamma"][i % 3],
+        ));
+    }
+    body.push_str("\n\nReport any conflicts to me before 0800.");
+
+    let mut email = text("s5-roster", "Will Riker", T0, &body);
+    email.author_handle = datalib_handle::Handle::email("riker@enterprise.org");
+    email.recipients = CREW[..33]
+        .iter()
+        .map(|n| recipient(RecipientRole::To, n))
+        .chain(CREW[33..].iter().map(|n| recipient(RecipientRole::Cc, n)))
+        .collect();
+
+    chat("sample-roster", "Duty roster", vec![email])
+}
+
 /// The shapes that have broken this renderer before: no timestamp at
 /// all, an author whose name is markup, a fenced code block, a long
 /// unbroken token.
@@ -404,6 +485,10 @@ mod tests {
                 .iter()
                 .any(|i| i.text.as_deref().is_some_and(|t| t.lines().count() > 100)),
             "a message too tall for the pane",
+        );
+        assert!(
+            items.iter().any(|i| i.recipients.len() > 30),
+            "a recipients line longer than its header",
         );
     }
 
