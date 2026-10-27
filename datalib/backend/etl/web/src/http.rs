@@ -107,6 +107,8 @@ pub enum HttpService {
     /// no credential, the URL itself is signed, so every request goes
     /// out plain.
     Yolink,
+    /// Zoom's REST API (`api.zoom.us`).
+    Zoom,
     /// Fixture-synthesis tests only.
     #[strum(serialize = "test_provider")]
     Test,

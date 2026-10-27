@@ -1916,7 +1916,8 @@ export function setLatchkeyOAuthClient(service: string, client: string): Promise
 export type PastedCredential =
   | { kind: "headers"; headers: string[] }
   | { kind: "basic"; username: string; password: string }
-  | { kind: "directory"; path: string };
+  | { kind: "directory"; path: string }
+  | { kind: "values"; values: string[] };
 
 /// Store a pasted credential with `latchkey auth set`. An empty account
 /// lets latchkey choose, which replaces the one it holds if it holds one.

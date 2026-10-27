@@ -144,6 +144,7 @@ welcome.
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#sms-backup-and-restore"><img src="datalib/ui/src/assets/sms.svg" width="40" height="40" alt=""><br><b>SMS Backup &amp; Restore</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#whatsapp-backups"><img src="datalib/ui/src/assets/whatsapp.svg" width="40" height="40" alt=""><br><b>WhatsApp backups</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#yolink"><img src="datalib/ui/src/assets/yolink.png" width="40" height="40" alt=""><br><b>YoLink</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#zoom"><img src="datalib/ui/src/assets/zoom.svg" width="40" height="40" alt=""><br><b>Zoom</b></a></td>
   </tr>
 </table>
 

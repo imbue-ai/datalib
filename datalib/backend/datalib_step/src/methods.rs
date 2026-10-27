@@ -51,6 +51,7 @@ pub fn ingest_methods(source_type: SourceType) -> &'static [IngestMethod] {
         }
         SourceType::Whatsapp => datalib_etl_whatsapp_config::WhatsappConfig::METHODS,
         SourceType::Yolink => datalib_etl_yolink_config::YolinkConfig::METHODS,
+        SourceType::Zoom => datalib_etl_zoom_config::ZoomConfig::METHODS,
     }
 }
 

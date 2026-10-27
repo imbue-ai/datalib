@@ -114,6 +114,7 @@ pub fn source_docs(t: SourceType) -> SourceDocs {
         T::Yolink => {
             docs::<datalib_etl_yolink_config::YolinkConfig>(datalib_etl_yolink_config::EXAMPLES)
         }
+        T::Zoom => docs::<datalib_etl_zoom_config::ZoomConfig>(datalib_etl_zoom_config::EXAMPLES),
     }
 }
 

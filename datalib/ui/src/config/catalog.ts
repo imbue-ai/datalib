@@ -1172,6 +1172,93 @@ export const CATALOG: CatalogEntry[] = [
       },
     ],
   },
+  {
+    type: "zoom",
+    method: "api",
+    label: "Zoom",
+    blurb: "Copy your meetings: who came and the AI Companion's summaries.",
+    keywords: ["zoom", "meetings", "recordings", "summaries", "calls", "video"],
+    kind: "api",
+    icon: "zoom",
+    defaultName: "zoom",
+    nameHint: "Work Zoom",
+    wizard: true,
+    intro:
+      "Each meeting becomes a document you can read and search: when, who came and the AI " +
+      "Companion's summary. Transcripts and recordings stay in Zoom.",
+    before: {
+      text: "Signing in needs a Zoom admin.",
+      needs: [
+        "A Zoom account admin, or a role allowed to create apps: signing in creates a " +
+          "Server-to-Server OAuth app in your Zoom account, with every admin scope it offers",
+        "A paid Zoom plan, for cloud recordings, reports and who attended",
+      ],
+    },
+    credentialService: "zoom",
+    credentialConnectWarning:
+      "This creates an app in your Zoom account that can read every user's meetings and " +
+      "recordings. Only a Zoom admin can create one.",
+    credentialPaste: {
+      help:
+        "From a Server-to-Server OAuth app you created in the Zoom App Marketplace: its " +
+        "Account ID, Client ID and Client Secret. It needs the scopes to read users, " +
+        "recordings, past meetings, reports and meeting summaries.",
+    },
+    canProbe: true,
+    sections: [
+      { heading: "Whose meetings?", fields: ["api.user"] },
+      {
+        heading: "How far back?",
+        answers: [
+          { label: "Everything Zoom still keeps" },
+          { label: "From a date I choose", fields: ["api.since"] },
+        ],
+      },
+      {
+        heading: "What to copy",
+        fields: ["api.participants", "api.summaries"],
+      },
+    ],
+    fields: [
+      {
+        kind: "text",
+        latchkey: true,
+        target: "latchkey_settings.account",
+        label: "Zoom sign-in",
+        help: "Which stored Zoom sign-in to use. Leave it empty if only one is stored.",
+      },
+      {
+        kind: "text",
+        target: "api.user",
+        label: "Zoom user",
+        help:
+          "The email of the person whose meetings to copy. The sign-in is for the whole Zoom " +
+          "account, so it has to be told whose; leave it empty on an account with one user.",
+      },
+      {
+        kind: "date",
+        target: "api.since",
+        label: "First day",
+        help: "Choose an earlier date later to bring in older meetings.",
+      },
+      {
+        kind: "bool",
+        target: "api.participants",
+        label: "Who attended",
+        default: true,
+        help: "Also lists meetings that were not recorded. Zoom keeps who attended for 15 months.",
+      },
+      { kind: "bool", target: "api.summaries", label: "AI Companion summaries", default: true },
+      {
+        kind: "int",
+        target: "api.refresh_days",
+        label: "Days listed again each sync",
+        help:
+          "`api.refresh_days`: the newest days every sync asks Zoom about again, for " +
+          "summaries added or edited after a meeting ended. Empty means 30.",
+      },
+    ],
+  },
   // ── the `contacts` variants ───────────────────────────────────────
   //
   // Like `calendar`: one type, an entry per way in, keyed on its method

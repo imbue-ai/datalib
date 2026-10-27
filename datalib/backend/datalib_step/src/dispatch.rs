@@ -376,6 +376,12 @@ pub fn plan(
             datalib_etl_fsindex_config::FsindexRenderConfig,
             datalib_etl_fsindex
         ),
+        SourceType::Zoom => arm!(
+            datalib_etl_zoom_config::ZoomConfig,
+            datalib_etl_zoom_config::ZoomRenderConfig,
+            datalib_etl_zoom,
+            datalib_etl_zoom_render
+        ),
     })
 }
 
@@ -418,6 +424,7 @@ pub async fn migrate(step_type: &str, raw_dir: &Path) -> Result<()> {
         SourceType::ApplePhotos => datalib_etl_apple_photos::processor::migrate(raw_dir).await,
         SourceType::GoogleDrive => datalib_etl_google_drive::processor::migrate(raw_dir).await,
         SourceType::Fsindex => datalib_etl_fsindex::processor::migrate(raw_dir).await,
+        SourceType::Zoom => datalib_etl_zoom::processor::migrate(raw_dir).await,
     }
 }
 

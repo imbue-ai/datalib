@@ -41,6 +41,22 @@ describe("credentialShape", () => {
     expect(pastedCredential(shape, "", "")).toBeNull();
   });
 
+  it("reads several set-nocurl values as a box each, in latchkey's order", () => {
+    const shape = credentialShape(
+      "latchkey auth set-nocurl zoom <account-id> <client-id> <client-secret>",
+    );
+    expect(shape).toEqual({
+      kind: "values",
+      labels: ["account-id", "client-id", "client-secret"],
+      secretLabel: "credentials",
+    });
+    expect(pastedCredential(shape, "", "", [" acct ", "client", "secret"])).toEqual({
+      kind: "values",
+      values: ["acct", "client", "secret"],
+    });
+    expect(pastedCredential(shape, "", "", ["acct", "", "secret"])).toBeNull();
+  });
+
   it("puts the secret where latchkey's placeholder is", () => {
     const shape = credentialShape('latchkey auth set gitlab -H "PRIVATE-TOKEN: <token>"');
     expect(pastedCredential(shape, "", "glpat-1")).toEqual({
