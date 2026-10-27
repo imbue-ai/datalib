@@ -370,6 +370,17 @@ filter no longer keeps, and count a message the filter drops toward
 its thread; `jmap_mbox.rs` and `mbox.rs`'s own tests do the same for an
 mbox.
 
+**Most tests call a download function directly**, with options they
+build by hand, so they do not see how a config becomes those options
+or how a run is sealed. `Mirror::sync` in `support.rs` closes that gap:
+it runs the real `datalib-step` binary on a source's `[steps.params]`,
+as the runner does, answered from the same playback fixtures, and
+returns the summary the run recorded in `sync_runs`. The whole-thread
+tests use it, and so do the live Gmail tests
+(`bazel run :gmail_live`), which run the step with no playback against
+whichever account latchkey holds. A new test that turns on a setting
+should go through it.
+
 ## The raw store's shape
 
 One schema regardless of where the data came from — mbox and JMAP both

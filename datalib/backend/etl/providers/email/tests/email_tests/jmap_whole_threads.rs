@@ -2,9 +2,11 @@
 //! conversation filed outside the admitted mailboxes is listed from the
 //! thread index and fetched with the reply the filter keeps; a thread no
 //! kept email is in any more goes whole; and with `whole_threads = false`
-//! the thread row says how many emails it has upstream.
+//! the thread row says how many emails it has upstream. Each run is the
+//! real `datalib-step` ingest, answered from playback fixtures.
 
-use datalib_etl_email::ingest::{FetchOptions, FetchSummary, RawDb};
+use datalib_etl_email::ingest::RawDb;
+use serde_json::{json, Value};
 
 use crate::jmap_tape::{Account, Tape, HOST};
 use crate::support::Mirror;
@@ -33,7 +35,7 @@ async fn the_rest_of_a_kept_emails_thread_is_mirrored() {
     let tape = Tape::new(&m.playback);
     serve(&tape, &account());
     let run = run(&m, true).await.expect("first run");
-    assert_eq!(run.listed_from_threads, 1, "{run:?}");
+    assert_eq!(run["listed_from_threads"], 1, "{run}");
     assert_eq!(emails(&m).await, ["M1", "M2"]);
     assert_eq!(threads(&m).await, [(2, Some(2))]);
 }
@@ -63,19 +65,19 @@ async fn a_thread_the_filter_no_longer_keeps_goes_whole() {
     serve(&tape, &a);
     tape.email_changes("email-1", &[], &["M2"], &[], "email-2", false);
     let run = run(&m, true).await.expect("second run");
-    assert_eq!(run.emails_destroyed, 2, "{run:?}");
+    assert_eq!(run["emails_destroyed"], 2, "{run}");
     assert!(emails(&m).await.is_empty());
     assert!(threads(&m).await.is_empty());
 }
 
-async fn run(m: &Mirror, whole_threads: bool) -> anyhow::Result<FetchSummary> {
-    m.run(|db| {
-        let mut opts = FetchOptions::new(db);
-        opts.hostname = HOST.to_string();
-        opts.only_mailbox_labels = vec!["Inbox".to_string()];
-        opts.whole_threads = whole_threads;
-        datalib_etl_email::ingest::fetch(opts)
-    })
+/// One sync of the real ingest step, configured as a Fastmail source
+/// filtered to the Inbox.
+async fn run(m: &Mirror, whole_threads: bool) -> anyhow::Result<Value> {
+    m.sync(json!({
+        "jmap": { "hostname": HOST },
+        "only_extract_labels": ["Inbox"],
+        "whole_threads": whole_threads,
+    }))
     .await
 }
 
