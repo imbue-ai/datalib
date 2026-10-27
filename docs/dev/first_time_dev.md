@@ -183,8 +183,8 @@ readable without a token — they're what tells an agent how to get one.
 Ingestion is a DAG of subprocess steps orchestrated by `datalib-dag`
 (`//datalib/backend/dag:datalib_dag_bin`), which reads the data root's
 `config.toml` (the `[[groups]]` + `[[steps]]` format) and runs each step
-as a subprocess. A step with no `command` is built in: it runs
-`datalib-step` (`//datalib/backend/datalib_step:datalib_step`), which
+as a subprocess. Datalib's own steps write `command = "datalib-step"`
+(`//datalib/backend/datalib_step:datalib_step`), which
 reads its function and its group's type from the environment — `ingest`
 brings a source's data into its raw store, `render_markdown` renders
 markdown + its store, and `grid_index` loads every render store into

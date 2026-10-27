@@ -9,6 +9,7 @@ type = "apple_photos"
 [[steps]]
 group = "apple_photos"
 function = "ingest"
+command = "datalib-step"
 
 # Which tables and columns to mirror. Globs: `*` and `?` only.
 [steps.params]
@@ -41,4 +42,5 @@ path = "~/Pictures/Photos Library.photoslibrary"
 [[steps]]
 group = "apple_photos"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["apple_photos/ingest"]

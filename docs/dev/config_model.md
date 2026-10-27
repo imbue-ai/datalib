@@ -19,12 +19,14 @@ type = "slack"             # what is mirrored — makes this a source
 [[steps]]
 group = "work-slack"
 function = "ingest"        # id composes to work-slack/ingest
+command = "datalib-step"
 [steps.params.api]         # the method: Slack's own API
 channels = ["chat-qi"]
 
 [[steps]]
 group = "work-slack"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["work-slack/ingest"]
 
 [[groups]]
@@ -33,6 +35,7 @@ id = "unified_document_index"       # no type: it mirrors nothing
 [[steps]]
 group = "unified_document_index"
 function = "grid_index"
+command = "datalib-step"
 inputs = ["work-slack/render_markdown"]
 
 [[applets]]
@@ -50,12 +53,13 @@ fingerprinted — so editing either re-runs nothing.
 **A step** is `(group, function)`. The loader composes its id as
 `<group>/<function>`; it is never written, and nothing downstream
 splits it. That id is the tree the step writes, the key its state is
-kept under, and what another step's `inputs` name. A step with no
-`command` runs the built-in `datalib-step`, which reads its function
-and its group's `type` from the environment, so it has to be under a
-group. A custom step names a `command` and any function word it likes,
-or sits outside any group with a verbatim `id` — the one place a step
-id is written.
+kept under, and what another step's `inputs` name. Every step names
+the program it runs in `command`. Datalib's own steps run
+`datalib-step`, the step program it ships, which reads its function and
+its group's `type` from the environment, so such a step has to be under
+a group. Another program may take any function word it likes, or sit
+outside any group with a verbatim `id` — the one place a step id is
+written.
 
 **An applet** is a server the http gateway spawns on demand. Its `id`
 is the mount prefix and a JavaScript identifier, unique on its own and
@@ -85,6 +89,11 @@ The loop stops the group's steps if they run, deletes `<root>/<group>/`
 and forgets the group's steps in its record, without waiting for a sync
 to end (`datalib/backend/dag/README.md` §"Resets and purges"); without that, a group re-added under the
 same id and definition would read as up to date and write nothing.
+
+A fourth table, `[[packages]]`, lists the packages the library uses,
+each pinned by its manifest's hash. A step or applet runs one of a
+package's programs by its path under the data root, in its `command`;
+`packages.md` is the rest.
 
 `configs/dag_example.toml` is the commented, complete version;
 `docs/user/config_examples/` has the shapes people start from.
@@ -289,7 +298,7 @@ file runs.
 | any entry | it does not deserialize: an unknown key, a wrong type, both `id` and `group` |
 | a lock | its name is not one segment, it has no slots, or it is declared twice |
 | a group | its id is not one segment, is `system`, or is a duplicate; it is a `diff` group with no `source`, or whose `source` names no group, a typeless group or another `diff` group; it carries `source` without being a `diff` group |
-| a step | its function is not one segment; its group is undeclared; it has no `command` and no group; its `command` is the retired `datalib-step download\|render\|grid_index\|qmd_index …` shape; it is a built-in `qmd_index`, the shape from before `qmd_aggregator` (the message names `datalib-migrate-config`); its id is under `system`, duplicated, or nested with another; its `command` is empty or has unbalanced quoting; it holds a lock no `[[locks]]` entry declares; an input names itself; under a `diff` group it is not `render_markdown`, `keyword_index` or `embed`, or it is the render and has inputs and the first is not `<source>/ingest` |
+| a step | its function is not one segment; its group is undeclared; it runs `datalib-step` and has no group; its `command` is the retired `datalib-step download\|render\|grid_index\|qmd_index …` shape; it is a built-in `qmd_index`, the shape from before `qmd_aggregator` (the message names `datalib-migrate-config`); its id is under `system`, duplicated, or nested with another; its `command` is empty or has unbalanced quoting; it holds a lock no `[[locks]]` entry declares; an input names itself; under a `diff` group it is not `render_markdown`, `keyword_index` or `embed`, or it is the render and has inputs and the first is not `<source>/ingest` |
 | a step (blocked: fix elsewhere) | its group or an input was itself dropped; an input names no step; it sits on a cycle or downstream of one |
 | an applet | its id is not a JS identifier, is `user`, or is a duplicate; its `command` is empty |
 
@@ -469,12 +478,12 @@ and refuse an edit that does not read back as what was asked for.
 
 `datalib-migrate-config` (`datalib/backend/migrate_config/`) is the
 one place an earlier config shape is understood: `datalib-step
-download …` command lines become groups and command-less steps,
-retired type words become the current ones, and `sync` /
+download …` command lines become groups and steps whose command is
+`datalib-step`, retired type words become the current ones, and `sync` /
 `common.input_path` / `common.raw_path` become method tables with
 their own `path` (`convert.rs`). The rewrite is value-level, so comments do not
 survive. The loader and `datalib-step` recognize the old shapes only
-well enough to name the tool. Four rewrites are made without asking,
+well enough to name the tool. Five rewrites are made without asking,
 all text edits that keep comments, and each refuses a result that would
 drop an entry the original ran, other than one it exists to take out. `datalib-http` makes them in this order
 (`http/src/config_upgrade.rs`), at boot, on any change to the file, and
@@ -512,8 +521,13 @@ the next would put the first back:
    of numbers, which the keyword index already finds, so the wizard
    never offers the step (`embedAllowed` in
    `ui/src/config/sourceSteps.ts`). This rewrite is the only one of the
-   four that is meant to take an entry out; it still refuses a result
+   five that is meant to take an entry out; it still refuses a result
    that loses any other entry.
+5. The step commands (`upgrade_step_commands`, `step_commands.rs`):
+   a step that writes no `command` was read as `datalib-step`, the
+   shape from before every step named its program. The rewrite writes
+   `command = "datalib-step"` on the line after its `function`. The
+   loader still reads a step without one the same way.
 
 A source may not take `unified_index`, `unified_document_index` or
 `unified_time_series_index` as its id

@@ -9,6 +9,7 @@ type = "chatgpt"
 [[steps]]
 group = "chatgpt"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.export]
 path = "~/Downloads/chatgpt-export.zip"
@@ -16,4 +17,5 @@ path = "~/Downloads/chatgpt-export.zip"
 [[steps]]
 group = "chatgpt"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["chatgpt/ingest"]

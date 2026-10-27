@@ -8,6 +8,7 @@ type = "linkedin"
 [[steps]]
 group = "linkedin"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.export]
 path = "~/Downloads/linkedin-export"
@@ -15,4 +16,5 @@ path = "~/Downloads/linkedin-export"
 [[steps]]
 group = "linkedin"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["linkedin/ingest"]

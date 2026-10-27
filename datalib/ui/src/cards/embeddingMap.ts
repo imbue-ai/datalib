@@ -236,6 +236,7 @@ export function stepStanza(hasAggregator: boolean): string {
 [[steps]]
 group = "unified_document_index"
 function = "embedding_map"
+command = "datalib-step"
 inputs = [${inputs}]
 `;
 }

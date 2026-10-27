@@ -9,6 +9,7 @@ type = "linear"
 [[steps]]
 group = "linear"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.api]
 
@@ -17,4 +18,5 @@ function = "ingest"
 [[steps]]
 group = "linear"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["linear/ingest"]

@@ -38,7 +38,7 @@ const embedToggle = (page: Page) => toggle(page, "Embed it for search by meaning
 /// The `inputs` one fan-in declares, read out of the config text.
 function fanInInputs(config: string, fn: string): string[] {
   const table = new RegExp(
-    `\\[\\[steps\\]\\]\\ngroup = "unified_document_index"\\nfunction = "${fn}"\\ninputs = \\[([^\\]]*)\\]`,
+    `\\[\\[steps\\]\\]\\ngroup = "unified_document_index"\\nfunction = "${fn}"\\n(?:command = "[^"]*"\\n)?inputs = \\[([^\\]]*)\\]`,
   ).exec(config);
   if (!table) throw new Error(`no unified_document_index/${fn} step in the config`);
   return table[1]
@@ -206,7 +206,7 @@ test("a step's Edit opens its source, and Rendering brings a hand-removed render
   const text = await editor.inputValue();
   const without = text
     .replace(
-      /\n\[\[steps\]\]\ngroup = "fetch-only"\nfunction = "render_markdown"\ninputs = \["fetch-only\/ingest"\]\n/,
+      /\n\[\[steps\]\]\ngroup = "fetch-only"\nfunction = "render_markdown"\ncommand = "datalib-step"\ninputs = \["fetch-only\/ingest"\]\n/,
       "\n",
     )
     .replace(/"fetch-only\/render_markdown"(,\s*)?/g, "");
@@ -366,10 +366,10 @@ test("free-text search is a choice, and only the qmd steps feel it", async ({ pa
     expect.arrayContaining(["rows-only/keyword_index", "rows-only/embed"]),
   );
   expect(saved).toContain(
-    'group = "rows-only"\nfunction = "keyword_index"\ninputs = ["rows-only/render_markdown"]',
+    'group = "rows-only"\nfunction = "keyword_index"\ncommand = "datalib-step"\ninputs = ["rows-only/render_markdown"]',
   );
   expect(saved).toContain(
-    'group = "rows-only"\nfunction = "embed"\ninputs = ["rows-only/keyword_index"]',
+    'group = "rows-only"\nfunction = "embed"\ncommand = "datalib-step"\ninputs = ["rows-only/keyword_index"]',
   );
   // Added once, however many times the source is saved: in the grid
   // index and as the keyword index's input.

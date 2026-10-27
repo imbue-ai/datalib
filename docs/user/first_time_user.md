@@ -257,22 +257,26 @@ type = "claude"
 [[steps]]
 group = "claude"
 function = "ingest"
+command = "datalib-step"
 [steps.params]
 api = {}
 
 [[steps]]
 group = "claude"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["claude/ingest"]
 
 [[steps]]
 group = "claude"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["claude/render_markdown"]
 
 [[steps]]
 group = "claude"
 function = "embed"
+command = "datalib-step"
 inputs = ["claude/keyword_index"]
 
 [[groups]]
@@ -281,11 +285,13 @@ id = "unified_document_index"
 [[steps]]
 group = "unified_document_index"
 function = "grid_index"
+command = "datalib-step"
 inputs = ["claude/render_markdown"]
 
 [[steps]]
 group = "unified_document_index"
 function = "qmd_aggregator"
+command = "datalib-step"
 inputs = ["claude/keyword_index", "claude/embed"]
 
 [[applets]]

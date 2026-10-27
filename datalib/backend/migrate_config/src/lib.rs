@@ -17,14 +17,17 @@
 //! applet become `unified_document_index`; then `time_series_steps.rs`:
 //! a source with time series gets its `render_time_series` step and the
 //! config its time-series index; then `time_series_embeds.rs`: a
-//! time-series source loses its `embed` step. Those last four rewrites
-//! are also the ones `datalib-http` makes by itself (`upgrade_qmd_steps`,
-//! `upgrade_document_index`, `upgrade_time_series_steps`,
-//! `upgrade_time_series_embeds`).
+//! time-series source loses its `embed` step; then `step_commands.rs`: a
+//! step of datalib's own names `datalib-step` as its `command`. Those
+//! last five rewrites are also the ones `datalib-http` makes by itself
+//! (`upgrade_qmd_steps`, `upgrade_document_index`,
+//! `upgrade_time_series_steps`, `upgrade_time_series_embeds`,
+//! `upgrade_step_commands`).
 
 pub mod convert;
 pub mod document_index;
 pub mod qmd_steps;
+pub mod step_commands;
 pub mod time_series_embeds;
 pub mod time_series_steps;
 
@@ -59,6 +62,9 @@ pub fn detect(text: &str) -> Result<LegacyFormat> {
     if time_series_embeds::is_retired(text)? {
         return Ok(LegacyFormat::TimeSeriesEmbed);
     }
+    if step_commands::is_retired(text)? {
+        return Ok(LegacyFormat::ImplicitStepCommand);
+    }
     bail!("this config is already in the current shape — there is nothing to migrate")
 }
 
@@ -67,7 +73,8 @@ pub fn convert(text: &str) -> Result<String> {
         LegacyFormat::QmdIndex
         | LegacyFormat::UnifiedIndex
         | LegacyFormat::NoTimeSeries
-        | LegacyFormat::TimeSeriesEmbed => text.to_string(),
+        | LegacyFormat::TimeSeriesEmbed
+        | LegacyFormat::ImplicitStepCommand => text.to_string(),
         _ => convert::rewrite(text)?,
     };
     let out = qmd_steps::rewrite(&out)?;
@@ -78,6 +85,7 @@ pub fn convert(text: &str) -> Result<String> {
         out
     };
     let out = time_series_embeds::rewrite(&out)?;
+    let out = step_commands::rewrite(&out)?;
     // The conversion is value-level, so anything the loader would refuse in
     // the result surfaces here rather than on the next run. Report what the
     // runner rejected and let the message speak.
@@ -145,6 +153,18 @@ pub fn upgrade_time_series_embeds(text: &str) -> Result<Option<String>> {
     let out = time_series_embeds::rewrite(text)?;
     let gone: Vec<String> = gone.iter().map(|id| format!("step {id}")).collect();
     refuse_a_loss_but(text, &out, str::to_string, &gone)?;
+    Ok(Some(out))
+}
+
+/// Write `command = "datalib-step"` on every step that leaves it out
+/// (`step_commands.rs`). Refused, as [`upgrade_qmd_steps`] is, when the
+/// result would not load every entry the original did.
+pub fn upgrade_step_commands(text: &str) -> Result<Option<String>> {
+    if !step_commands::is_retired(text).unwrap_or(false) {
+        return Ok(None);
+    }
+    let out = step_commands::rewrite(text)?;
+    refuse_a_loss(text, &out, str::to_string)?;
     Ok(Some(out))
 }
 
@@ -596,7 +616,7 @@ inputs = ["slack/render_markdown"]
         );
         assert!(!out.contains("id = \"slack/raw\""), "{out}");
         assert!(
-            !out.contains("datalib-step"),
+            !out.contains("datalib-step "),
             "the provider word leaves: {out}"
         );
         // …and the method table with it, under its current name.
@@ -626,12 +646,12 @@ inputs = ["slack/render_markdown"]
     }
 
     /// The grouped-with-commands shape rewrites the same way: the groups
-    /// are kept as declared, the functions are renamed, and the commands
-    /// go.
+    /// are kept as declared, the functions are renamed, and each command
+    /// loses its subcommand.
     #[test]
     fn a_grouped_config_with_subcommands_loses_them_and_renames_its_functions() {
         let out = convert(GROUPED_WITH_COMMANDS).unwrap();
-        assert!(!out.contains("datalib-step"), "{out}");
+        assert!(!out.contains("datalib-step "), "{out}");
         assert!(
             !out.contains("\"raw\"") && !out.contains("rendered_md"),
             "{out}"
@@ -646,7 +666,12 @@ inputs = ["slack/render_markdown"]
         assert_eq!(cfg.groups.len(), 2);
         assert_eq!(cfg.groups[0].name.as_deref(), Some("Work Slack"));
         assert_eq!(cfg.groups[0].r#type.as_deref(), Some("slack"));
-        assert!(cfg.steps.iter().all(|s| s.command.is_none()), "{out}");
+        assert!(
+            cfg.steps
+                .iter()
+                .all(|s| s.command.as_deref() == Some("datalib-step")),
+            "{out}"
+        );
     }
 
     /// The old wizard named only the render step when the name box was
@@ -754,12 +779,15 @@ inputs = ["mail/render_markdown"]
         assert!(err.contains(&format!("step {extra}")), "{err}");
     }
 
-    /// The server runs both unattended rewrites in turn; the second
-    /// renames what the first wrote, and then has nothing left to do.
+    /// The server runs the unattended rewrites in turn; each one after the
+    /// first carries on from what the one before wrote, and then has
+    /// nothing left to do.
     #[test]
     fn the_unattended_upgrades_chain_to_the_current_shape() {
         let out = upgrade_qmd_steps(SHARED_QMD_INDEX).unwrap().unwrap();
         let out = upgrade_document_index(&out).unwrap().unwrap();
+        let out = upgrade_step_commands(&out).unwrap().unwrap();
+        assert_eq!(upgrade_step_commands(&out).unwrap(), None);
         let check = datalib_dag::config::check_text(&out);
         assert!(check.is_clean(), "{:?}\n{out}", check.diagnostics);
         assert!(check

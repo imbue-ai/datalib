@@ -9,10 +9,12 @@ type = "claude_code"
 [[steps]]
 group = "claude_code"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.sessions]
 
 [[steps]]
 group = "claude_code"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["claude_code/ingest"]

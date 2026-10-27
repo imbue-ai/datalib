@@ -8,6 +8,7 @@ type = "linear"
 [[steps]]
 group = "linear"
 function = "ingest"
+command = "datalib-step"
 
 # When to give up on failed requests. The download retries and backs off
 # on its own; these only decide when to stop.
@@ -32,4 +33,5 @@ projects = ["Warp core refit"]  # by name, as Linear shows it
 [[steps]]
 group = "linear"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["linear/ingest"]

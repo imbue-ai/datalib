@@ -52,6 +52,7 @@ name = "Document Index"
 [[steps]]
 group = "unified_document_index"
 function = "grid_index"
+command = "datalib-step"
 inputs = [
   "airvisual/render_markdown",
   "apple_messages/render_markdown",
@@ -100,6 +101,7 @@ inputs = [
 [[steps]]
 group = "unified_document_index"
 function = "qmd_aggregator"
+command = "datalib-step"
 inputs = [
   "airvisual/keyword_index",
   "apple_messages/keyword_index",
@@ -187,6 +189,7 @@ name = "Time Series Index"
 [[steps]]
 group = "unified_time_series_index"
 function = "time_series_index"
+command = "datalib-step"
 inputs = [
   "airvisual/render_time_series",
   "garmin/render_time_series",
@@ -211,6 +214,7 @@ type = "airvisual"
 [[steps]]
 group = "airvisual"
 function = "ingest"
+command = "datalib-step"
 
 # One entry per monitor. Every `YYYYMM_AirVisual_values.txt` under `path`
 # is read, the `archive*/` folders too.
@@ -230,6 +234,7 @@ path = "~/Downloads/airvisual-export/ten-forward"
 [[steps]]
 group = "airvisual"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["airvisual/ingest"]
 
 # The readings as time series, for the charts. Add this step to
@@ -237,6 +242,7 @@ inputs = ["airvisual/ingest"]
 [[steps]]
 group = "airvisual"
 function = "render_time_series"
+command = "datalib-step"
 inputs = ["airvisual/ingest"]
 
 # Keyword (BM25) search over the page. Add it to
@@ -245,6 +251,7 @@ inputs = ["airvisual/ingest"]
 [[steps]]
 group = "airvisual"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["airvisual/render_markdown"]
 
 # --- apple_messages by `messages` ---------------------------------------
@@ -260,6 +267,7 @@ type = "apple_messages"
 [[steps]]
 group = "apple_messages"
 function = "ingest"
+command = "datalib-step"
 
 # Which tables and columns to mirror. Globs: `*` and `?` only.
 [steps.params]
@@ -284,6 +292,7 @@ path = "~/Library/Messages"
 [[steps]]
 group = "apple_messages"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["apple_messages/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -291,11 +300,13 @@ inputs = ["apple_messages/ingest"]
 [[steps]]
 group = "apple_messages"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["apple_messages/render_markdown"]
 
 [[steps]]
 group = "apple_messages"
 function = "embed"
+command = "datalib-step"
 inputs = ["apple_messages/keyword_index"]
 
 # --- apple_photos by `library` ------------------------------------------
@@ -311,6 +322,7 @@ type = "apple_photos"
 [[steps]]
 group = "apple_photos"
 function = "ingest"
+command = "datalib-step"
 
 # Which tables and columns to mirror. Globs: `*` and `?` only.
 [steps.params]
@@ -343,6 +355,7 @@ path = "~/Pictures/Photos Library.photoslibrary"
 [[steps]]
 group = "apple_photos"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["apple_photos/ingest"]
 
 # --- beeper by `texts` --------------------------------------------------
@@ -357,6 +370,7 @@ type = "beeper"
 [[steps]]
 group = "beeper"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.texts]
 path = "~/Library/Application Support/BeeperTexts"  # the app's data directory; this is
@@ -367,6 +381,7 @@ media = true         # copy the app's cached media into blobs; false keeps the
 [[steps]]
 group = "beeper"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["beeper/ingest"]
 
 [steps.params]
@@ -380,11 +395,13 @@ networks = ["signal", "googlechat"]  # which networks to render; omit for every 
 [[steps]]
 group = "beeper"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["beeper/render_markdown"]
 
 [[steps]]
 group = "beeper"
 function = "embed"
+command = "datalib-step"
 inputs = ["beeper/keyword_index"]
 
 # --- calendar by `google` -----------------------------------------------
@@ -400,6 +417,7 @@ type = "calendar"
 [[steps]]
 group = "calendar-google"
 function = "ingest"
+command = "datalib-step"
 
 # When to give up on a failing server. The download always backs off and
 # retries; these only decide when to stop.
@@ -430,6 +448,7 @@ until = "+21d"  # last day mirrored, included, the same way; omit for no end. Wi
 [[steps]]
 group = "calendar-google"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["calendar-google/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -437,11 +456,13 @@ inputs = ["calendar-google/ingest"]
 [[steps]]
 group = "calendar-google"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["calendar-google/render_markdown"]
 
 [[steps]]
 group = "calendar-google"
 function = "embed"
+command = "datalib-step"
 inputs = ["calendar-google/keyword_index"]
 
 # Every occurrence of every event in a window of days around now, one row
@@ -451,6 +472,7 @@ inputs = ["calendar-google/keyword_index"]
 [[steps]]
 group = "calendar-google"
 function = "render_occurrences"
+command = "datalib-step"
 inputs = ["calendar-google/ingest"]
 
 [steps.params]
@@ -470,6 +492,7 @@ type = "calendar"
 [[steps]]
 group = "calendar-fastmail"
 function = "ingest"
+command = "datalib-step"
 
 # When to give up on a failing server. The download always backs off and
 # retries; these only decide when to stop.
@@ -501,6 +524,7 @@ until = "2026-12-31"  # last day mirrored, included; omit for no end. With eithe
 [[steps]]
 group = "calendar-fastmail"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["calendar-fastmail/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -508,11 +532,13 @@ inputs = ["calendar-fastmail/ingest"]
 [[steps]]
 group = "calendar-fastmail"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["calendar-fastmail/render_markdown"]
 
 [[steps]]
 group = "calendar-fastmail"
 function = "embed"
+command = "datalib-step"
 inputs = ["calendar-fastmail/keyword_index"]
 
 # Every occurrence of every event in a window of days around now, one row
@@ -522,6 +548,7 @@ inputs = ["calendar-fastmail/keyword_index"]
 [[steps]]
 group = "calendar-fastmail"
 function = "render_occurrences"
+command = "datalib-step"
 inputs = ["calendar-fastmail/ingest"]
 
 [steps.params]
@@ -540,6 +567,7 @@ type = "calendar"
 [[steps]]
 group = "calendar-caldav"
 function = "ingest"
+command = "datalib-step"
 
 # When to give up on a failing server. The download always backs off and
 # retries; these only decide when to stop.
@@ -572,6 +600,7 @@ until = "2026-12-31"  # last day mirrored, included; omit for no end. With eithe
 [[steps]]
 group = "calendar-caldav"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["calendar-caldav/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -579,11 +608,13 @@ inputs = ["calendar-caldav/ingest"]
 [[steps]]
 group = "calendar-caldav"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["calendar-caldav/render_markdown"]
 
 [[steps]]
 group = "calendar-caldav"
 function = "embed"
+command = "datalib-step"
 inputs = ["calendar-caldav/keyword_index"]
 
 # Every occurrence of every event in a window of days around now, one row
@@ -593,6 +624,7 @@ inputs = ["calendar-caldav/keyword_index"]
 [[steps]]
 group = "calendar-caldav"
 function = "render_occurrences"
+command = "datalib-step"
 inputs = ["calendar-caldav/ingest"]
 
 [steps.params]
@@ -613,6 +645,7 @@ type = "calendar"
 [[steps]]
 group = "calendar-calendly"
 function = "ingest"
+command = "datalib-step"
 
 # When to give up on a failing server. The download always backs off and
 # retries; these only decide when to stop.
@@ -640,6 +673,7 @@ until = "+21d"        # last day mirrored, included, the same way; omit for no e
 [[steps]]
 group = "calendar-calendly"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["calendar-calendly/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -647,11 +681,13 @@ inputs = ["calendar-calendly/ingest"]
 [[steps]]
 group = "calendar-calendly"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["calendar-calendly/render_markdown"]
 
 [[steps]]
 group = "calendar-calendly"
 function = "embed"
+command = "datalib-step"
 inputs = ["calendar-calendly/keyword_index"]
 
 # Every meeting in a window of days around now, one row each, in
@@ -661,6 +697,7 @@ inputs = ["calendar-calendly/keyword_index"]
 [[steps]]
 group = "calendar-calendly"
 function = "render_occurrences"
+command = "datalib-step"
 inputs = ["calendar-calendly/ingest"]
 
 [steps.params]
@@ -679,6 +716,7 @@ type = "calendar"
 [[steps]]
 group = "calendar-ics"
 function = "ingest"
+command = "datalib-step"
 
 # A JSONL copy of every row written, under ingest/events/, for debugging.
 # Nothing reads it and it grows every run.
@@ -691,6 +729,7 @@ path = "~/Downloads/calendar-export"  # the folder; each `.ics` file in it is on
 [[steps]]
 group = "calendar-ics"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["calendar-ics/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -698,11 +737,13 @@ inputs = ["calendar-ics/ingest"]
 [[steps]]
 group = "calendar-ics"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["calendar-ics/render_markdown"]
 
 [[steps]]
 group = "calendar-ics"
 function = "embed"
+command = "datalib-step"
 inputs = ["calendar-ics/keyword_index"]
 
 # Every occurrence of every event in a window of days around now, one row
@@ -712,6 +753,7 @@ inputs = ["calendar-ics/keyword_index"]
 [[steps]]
 group = "calendar-ics"
 function = "render_occurrences"
+command = "datalib-step"
 inputs = ["calendar-ics/ingest"]
 
 [steps.params]
@@ -731,6 +773,7 @@ type = "chatgpt"
 [[steps]]
 group = "chatgpt-api"
 function = "ingest"
+command = "datalib-step"
 
 # When to give up on rate limits. The download always honours a 429's
 # Retry-After and backs off; these only decide when to stop.
@@ -766,6 +809,7 @@ path = "~/Downloads/chatgpt-export.zip"
 [[steps]]
 group = "chatgpt-api"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["chatgpt-api/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -773,11 +817,13 @@ inputs = ["chatgpt-api/ingest"]
 [[steps]]
 group = "chatgpt-api"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["chatgpt-api/render_markdown"]
 
 [[steps]]
 group = "chatgpt-api"
 function = "embed"
+command = "datalib-step"
 inputs = ["chatgpt-api/keyword_index"]
 
 # --- chatgpt by `export` ------------------------------------------------
@@ -796,6 +842,7 @@ type = "chatgpt"
 [[steps]]
 group = "chatgpt-export"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.export]
 path = "~/Downloads/chatgpt-export.zip"  # the .zip, or the folder it was unzipped into
@@ -803,6 +850,7 @@ path = "~/Downloads/chatgpt-export.zip"  # the .zip, or the folder it was unzipp
 [[steps]]
 group = "chatgpt-export"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["chatgpt-export/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -810,11 +858,13 @@ inputs = ["chatgpt-export/ingest"]
 [[steps]]
 group = "chatgpt-export"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["chatgpt-export/render_markdown"]
 
 [[steps]]
 group = "chatgpt-export"
 function = "embed"
+command = "datalib-step"
 inputs = ["chatgpt-export/keyword_index"]
 
 # --- claude by `api` ----------------------------------------------------
@@ -830,6 +880,7 @@ type = "claude"
 [[steps]]
 group = "claude-api"
 function = "ingest"
+command = "datalib-step"
 
 # When to give up on rate limits. The download always backs off and
 # retries; these only decide when to stop.
@@ -860,6 +911,7 @@ project_uuids = [                     # only these projects, by id or pasted lin
 [[steps]]
 group = "claude-api"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["claude-api/ingest"]
 
 [steps.params]
@@ -871,11 +923,13 @@ max_project_doc_bytes = 131072  # cut a project knowledge document's text at thi
 [[steps]]
 group = "claude-api"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["claude-api/render_markdown"]
 
 [[steps]]
 group = "claude-api"
 function = "embed"
+command = "datalib-step"
 inputs = ["claude-api/keyword_index"]
 
 # --- claude by `export` -------------------------------------------------
@@ -891,6 +945,7 @@ type = "claude"
 [[steps]]
 group = "claude-export"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.export]
 path = "~/Downloads/claude-export"  # the folder holding `conversations.json`
@@ -898,6 +953,7 @@ path = "~/Downloads/claude-export"  # the folder holding `conversations.json`
 [[steps]]
 group = "claude-export"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["claude-export/ingest"]
 
 [steps.params]
@@ -909,11 +965,13 @@ max_project_doc_bytes = 131072  # cut a project knowledge document's text at thi
 [[steps]]
 group = "claude-export"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["claude-export/render_markdown"]
 
 [[steps]]
 group = "claude-export"
 function = "embed"
+command = "datalib-step"
 inputs = ["claude-export/keyword_index"]
 
 # --- claude_code by `sessions` ------------------------------------------
@@ -929,6 +987,7 @@ type = "claude_code"
 [[steps]]
 group = "claude_code"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.sessions]
 path = "~/Downloads/claude-code-backup/projects"  # a copy of another machine's
@@ -938,6 +997,7 @@ path = "~/Downloads/claude-code-backup/projects"  # a copy of another machine's
 [[steps]]
 group = "claude_code"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["claude_code/ingest"]
 
 # How much of one tool result reaches the page. The raw store keeps all of
@@ -951,11 +1011,13 @@ max_tool_result_bytes = 16384  # the default
 [[steps]]
 group = "claude_code"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["claude_code/render_markdown"]
 
 [[steps]]
 group = "claude_code"
 function = "embed"
+command = "datalib-step"
 inputs = ["claude_code/keyword_index"]
 
 # --- codex by `sessions` ------------------------------------------------
@@ -971,6 +1033,7 @@ type = "codex"
 [[steps]]
 group = "codex"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.sessions]
 path = "~/Downloads/codex-backup"  # a copy of another machine's Codex home, the folder
@@ -980,6 +1043,7 @@ path = "~/Downloads/codex-backup"  # a copy of another machine's Codex home, the
 [[steps]]
 group = "codex"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["codex/ingest"]
 
 # How much of one tool output reaches the page. The raw store keeps all of
@@ -993,11 +1057,13 @@ max_tool_result_bytes = 16384  # the default
 [[steps]]
 group = "codex"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["codex/render_markdown"]
 
 [[steps]]
 group = "codex"
 function = "embed"
+command = "datalib-step"
 inputs = ["codex/keyword_index"]
 
 # --- contacts by `fastmail` ---------------------------------------------
@@ -1013,6 +1079,7 @@ type = "contacts"
 [[steps]]
 group = "contacts-fastmail"
 function = "ingest"
+command = "datalib-step"
 
 # When to give up on a failing server. The download always backs off and
 # retries; these only decide when to stop.
@@ -1039,6 +1106,7 @@ addressbooks = ["Enterprise Crew"]  # names as the server shows them, matched ex
 [[steps]]
 group = "contacts-fastmail"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["contacts-fastmail/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -1046,11 +1114,13 @@ inputs = ["contacts-fastmail/ingest"]
 [[steps]]
 group = "contacts-fastmail"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["contacts-fastmail/render_markdown"]
 
 [[steps]]
 group = "contacts-fastmail"
 function = "embed"
+command = "datalib-step"
 inputs = ["contacts-fastmail/keyword_index"]
 
 # --- contacts by `carddav` ----------------------------------------------
@@ -1065,6 +1135,7 @@ type = "contacts"
 [[steps]]
 group = "contacts-carddav"
 function = "ingest"
+command = "datalib-step"
 
 # When to give up on a failing server. The download always backs off and
 # retries; these only decide when to stop.
@@ -1092,6 +1163,7 @@ addressbooks = ["Enterprise Crew"]  # names as the server shows them, matched ex
 [[steps]]
 group = "contacts-carddav"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["contacts-carddav/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -1099,11 +1171,13 @@ inputs = ["contacts-carddav/ingest"]
 [[steps]]
 group = "contacts-carddav"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["contacts-carddav/render_markdown"]
 
 [[steps]]
 group = "contacts-carddav"
 function = "embed"
+command = "datalib-step"
 inputs = ["contacts-carddav/keyword_index"]
 
 # --- contacts by `vcf` --------------------------------------------------
@@ -1118,6 +1192,7 @@ type = "contacts"
 [[steps]]
 group = "contacts-vcf"
 function = "ingest"
+command = "datalib-step"
 
 # A JSONL copy of every row written, under ingest/events/, for debugging.
 # Nothing reads it and it grows every run.
@@ -1133,6 +1208,7 @@ path = "~/Downloads/contacts-export"
 [[steps]]
 group = "contacts-vcf"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["contacts-vcf/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -1140,11 +1216,13 @@ inputs = ["contacts-vcf/ingest"]
 [[steps]]
 group = "contacts-vcf"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["contacts-vcf/render_markdown"]
 
 [[steps]]
 group = "contacts-vcf"
 function = "embed"
+command = "datalib-step"
 inputs = ["contacts-vcf/keyword_index"]
 
 # --- email by `jmap` ----------------------------------------------------
@@ -1159,6 +1237,7 @@ type = "email"
 [[steps]]
 group = "email-jmap"
 function = "ingest"
+command = "datalib-step"
 
 # Mirror only mail under these mailboxes. Labels are full paths and match
 # exactly: `Work` does not take in `Work/Projects`, so list nested ones.
@@ -1190,6 +1269,7 @@ blob_download_concurrency = 8  # .eml files downloaded at once; default 8, 1 is 
 [[steps]]
 group = "email-jmap"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["email-jmap/ingest"]
 
 [steps.params]
@@ -1202,11 +1282,13 @@ only_render_labels = ["Inbox"]  # render only threads with a message under these
 [[steps]]
 group = "email-jmap"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["email-jmap/render_markdown"]
 
 [[steps]]
 group = "email-jmap"
 function = "embed"
+command = "datalib-step"
 inputs = ["email-jmap/keyword_index"]
 
 # --- email by `gmail` ---------------------------------------------------
@@ -1221,6 +1303,7 @@ type = "email"
 [[steps]]
 group = "email-gmail"
 function = "ingest"
+command = "datalib-step"
 
 # Mirror only mail under these labels. Labels are full paths and match
 # exactly: `Work` does not take in `Work/Projects`, so list nested ones.
@@ -1271,6 +1354,7 @@ path = "~/Takeout/Mail"
 [[steps]]
 group = "email-gmail"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["email-gmail/ingest"]
 
 [steps.params]
@@ -1283,11 +1367,13 @@ only_render_labels = ["Inbox"]  # render only threads with a message under these
 [[steps]]
 group = "email-gmail"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["email-gmail/render_markdown"]
 
 [[steps]]
 group = "email-gmail"
 function = "embed"
+command = "datalib-step"
 inputs = ["email-gmail/keyword_index"]
 
 # --- email by `mbox` ----------------------------------------------------
@@ -1304,6 +1390,7 @@ type = "email"
 [[steps]]
 group = "email-mbox"
 function = "ingest"
+command = "datalib-step"
 
 # Mirror only messages carrying these Gmail labels (the `X-Gmail-Labels`
 # header). Labels are full paths and match exactly: `Work` does not take
@@ -1323,6 +1410,7 @@ is_personal = true                    # a personal (not work) account; default t
 [[steps]]
 group = "email-mbox"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["email-mbox/ingest"]
 
 [steps.params]
@@ -1335,11 +1423,13 @@ only_render_labels = ["Inbox"]  # render only threads with a message under these
 [[steps]]
 group = "email-mbox"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["email-mbox/render_markdown"]
 
 [[steps]]
 group = "email-mbox"
 function = "embed"
+command = "datalib-step"
 inputs = ["email-mbox/keyword_index"]
 
 # --- facebook by `export` -----------------------------------------------
@@ -1355,6 +1445,7 @@ type = "facebook"
 [[steps]]
 group = "facebook"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.export]
 path = "~/Downloads/facebook-export"  # the folder the export's zips were unzipped into
@@ -1362,6 +1453,7 @@ path = "~/Downloads/facebook-export"  # the folder the export's zips were unzipp
 [[steps]]
 group = "facebook"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["facebook/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -1369,11 +1461,13 @@ inputs = ["facebook/ingest"]
 [[steps]]
 group = "facebook"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["facebook/render_markdown"]
 
 [[steps]]
 group = "facebook"
 function = "embed"
+command = "datalib-step"
 inputs = ["facebook/keyword_index"]
 
 # --- fsindex by `fswalk` ------------------------------------------------
@@ -1388,6 +1482,7 @@ type = "fsindex"
 [[steps]]
 group = "fsindex"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params]
 stamp = false  # true writes `.fsindex.toml` UUID breadcrumbs into each directory
@@ -1401,6 +1496,7 @@ path = "~/Documents/starfleet"  # the tree to scan; `~` is your home folder
 [[steps]]
 group = "fsindex"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["fsindex/ingest"]
 
 # --- garmin by `api` ----------------------------------------------------
@@ -1416,6 +1512,7 @@ type = "garmin"
 [[steps]]
 group = "garmin"
 function = "ingest"
+command = "datalib-step"
 
 # When to give up on rate limits. The download always backs off and
 # retries; these only decide when to stop.
@@ -1451,6 +1548,7 @@ wellness_files = false     # each day's wellness FIT bundle (one zip a day, sens
 [[steps]]
 group = "garmin"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["garmin/ingest"]
 
 # Its numbers as time series, for charts and the time-series index: add
@@ -1458,6 +1556,7 @@ inputs = ["garmin/ingest"]
 [[steps]]
 group = "garmin"
 function = "render_time_series"
+command = "datalib-step"
 inputs = ["garmin/ingest"]
 
 # Free-text search by keyword (BM25). Add it to
@@ -1465,6 +1564,7 @@ inputs = ["garmin/ingest"]
 [[steps]]
 group = "garmin"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["garmin/render_markdown"]
 
 # --- github by `api` ----------------------------------------------------
@@ -1480,6 +1580,7 @@ type = "github"
 [[steps]]
 group = "github"
 function = "ingest"
+command = "datalib-step"
 
 # When to give up on rate limits. The download always backs off and
 # retries; these only decide when to stop.
@@ -1505,6 +1606,7 @@ pull_requests = [         # only these PRs, as `owner/repo#NUM` or a github.com 
 [[steps]]
 group = "github"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["github/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -1512,11 +1614,13 @@ inputs = ["github/ingest"]
 [[steps]]
 group = "github"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["github/render_markdown"]
 
 [[steps]]
 group = "github"
 function = "embed"
+command = "datalib-step"
 inputs = ["github/keyword_index"]
 
 # --- gitlab by `api` ----------------------------------------------------
@@ -1533,6 +1637,7 @@ type = "gitlab"
 [[steps]]
 group = "gitlab"
 function = "ingest"
+command = "datalib-step"
 
 # When to give up on rate limits. The download always backs off and
 # retries; these only decide when to stop.
@@ -1558,6 +1663,7 @@ merge_requests = [        # only these MRs, as `namespace/project!IID` or a gitl
 [[steps]]
 group = "gitlab"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["gitlab/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -1565,11 +1671,13 @@ inputs = ["gitlab/ingest"]
 [[steps]]
 group = "gitlab"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["gitlab/render_markdown"]
 
 [[steps]]
 group = "gitlab"
 function = "embed"
+command = "datalib-step"
 inputs = ["gitlab/keyword_index"]
 
 # --- google_drive by `api` ----------------------------------------------
@@ -1586,6 +1694,7 @@ type = "google_drive"
 [[steps]]
 group = "google_drive"
 function = "ingest"
+command = "datalib-step"
 
 # When to give up on rate limits. The download always backs off and
 # retries; these only decide when to stop.
@@ -1620,6 +1729,7 @@ file_ids = [               # only these files, as a bare id or a pasted docs.goo
 [[steps]]
 group = "google_drive"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["google_drive/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -1627,11 +1737,13 @@ inputs = ["google_drive/ingest"]
 [[steps]]
 group = "google_drive"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["google_drive/render_markdown"]
 
 [[steps]]
 group = "google_drive"
 function = "embed"
+command = "datalib-step"
 inputs = ["google_drive/keyword_index"]
 
 # --- google_takeout by `export` -----------------------------------------
@@ -1646,6 +1758,7 @@ type = "google_takeout"
 [[steps]]
 group = "google_takeout"
 function = "ingest"
+command = "datalib-step"
 
 # Each Takeout is a complete snapshot of the products you ticked: a record a
 # newer export no longer holds leaves the mirror on the next sync. A product
@@ -1669,6 +1782,7 @@ youtube_subscriptions = true       # the channels you subscribe to
 [[steps]]
 group = "google_takeout"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["google_takeout/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -1676,11 +1790,13 @@ inputs = ["google_takeout/ingest"]
 [[steps]]
 group = "google_takeout"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["google_takeout/render_markdown"]
 
 [[steps]]
 group = "google_takeout"
 function = "embed"
+command = "datalib-step"
 inputs = ["google_takeout/keyword_index"]
 
 # --- lightroom by `catalog` ---------------------------------------------
@@ -1695,6 +1811,7 @@ type = "lightroom"
 [[steps]]
 group = "lightroom-catalog"
 function = "ingest"
+command = "datalib-step"
 
 # Which tables and columns to mirror. Globs: `*` and `?` only.
 [steps.params]
@@ -1726,6 +1843,7 @@ path = "~/Pictures/Lightroom/Enterprise.lrcat"
 [[steps]]
 group = "lightroom-catalog"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["lightroom-catalog/ingest"]
 
 # --- lightroom by `backups` ---------------------------------------------
@@ -1740,6 +1858,7 @@ type = "lightroom"
 [[steps]]
 group = "lightroom-backups"
 function = "ingest"
+command = "datalib-step"
 
 # Which tables and columns to mirror. Globs: `*` and `?` only.
 [steps.params]
@@ -1774,6 +1893,7 @@ path = "~/Pictures/Lightroom/Backups"
 [[steps]]
 group = "lightroom-backups"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["lightroom-backups/ingest"]
 
 # --- linear by `api` ----------------------------------------------------
@@ -1788,6 +1908,7 @@ type = "linear"
 [[steps]]
 group = "linear"
 function = "ingest"
+command = "datalib-step"
 
 # When to give up on failed requests. The download retries and backs off
 # on its own; these only decide when to stop.
@@ -1812,6 +1933,7 @@ projects = ["Warp core refit"]  # by name, as Linear shows it
 [[steps]]
 group = "linear"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["linear/ingest"]
 
 # --- linkedin by `export` -----------------------------------------------
@@ -1827,6 +1949,7 @@ type = "linkedin"
 [[steps]]
 group = "linkedin"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.export]
 path = "~/Downloads/linkedin-export"  # the unzipped export: the folder of CSVs
@@ -1834,6 +1957,7 @@ path = "~/Downloads/linkedin-export"  # the unzipped export: the folder of CSVs
 [[steps]]
 group = "linkedin"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["linkedin/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -1841,11 +1965,13 @@ inputs = ["linkedin/ingest"]
 [[steps]]
 group = "linkedin"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["linkedin/render_markdown"]
 
 [[steps]]
 group = "linkedin"
 function = "embed"
+command = "datalib-step"
 inputs = ["linkedin/keyword_index"]
 
 # --- media by `fswalk` --------------------------------------------------
@@ -1861,6 +1987,7 @@ type = "media"
 [[steps]]
 group = "media"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params]
 ignore = ["**/.Trash/**", "**/Thumbnails/**"]  # gitignore-style patterns left out of the
@@ -1881,6 +2008,7 @@ path = "~/Music"  # the folder to scan
 [[steps]]
 group = "media"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["media/ingest"]
 
 # --- notion by `api` ----------------------------------------------------
@@ -1896,6 +2024,7 @@ type = "notion"
 [[steps]]
 group = "notion"
 function = "ingest"
+command = "datalib-step"
 
 # When to give up on rate limits. The download always honours a 429's
 # Retry-After and backs off; these only decide when to stop.
@@ -1926,6 +2055,7 @@ attachments = true       # files attached to pages; default true
 [[steps]]
 group = "notion"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["notion/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -1933,11 +2063,13 @@ inputs = ["notion/ingest"]
 [[steps]]
 group = "notion"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["notion/render_markdown"]
 
 [[steps]]
 group = "notion"
 function = "embed"
+command = "datalib-step"
 inputs = ["notion/keyword_index"]
 
 # --- pdf by `fswalk` ----------------------------------------------------
@@ -1953,6 +2085,7 @@ type = "pdf"
 [[steps]]
 group = "pdf"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params]
 ignore = ["drafts/**", "**/.Trash/**"]  # gitignore-style patterns to skip, on top of any
@@ -1973,6 +2106,7 @@ path = "~/Documents/papers"  # the folder to scan, and everything under it
 [[steps]]
 group = "pdf"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["pdf/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -1980,11 +2114,13 @@ inputs = ["pdf/ingest"]
 [[steps]]
 group = "pdf"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["pdf/render_markdown"]
 
 [[steps]]
 group = "pdf"
 function = "embed"
+command = "datalib-step"
 inputs = ["pdf/keyword_index"]
 
 # --- perseus by `github` ------------------------------------------------
@@ -2000,6 +2136,7 @@ type = "perseus"
 [[steps]]
 group = "perseus"
 function = "ingest"
+command = "datalib-step"
 
 # A JSONL copy of every row written, under ingest/events/, for debugging.
 # Nothing reads it and it grows every run.
@@ -2018,6 +2155,7 @@ files = [
 [[steps]]
 group = "perseus"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["perseus/ingest"]
 
 [steps.params]
@@ -2035,11 +2173,13 @@ alignment_pairs = [["perseus-grc2", "perseus-eng4"]]
 [[steps]]
 group = "perseus"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["perseus/render_markdown"]
 
 [[steps]]
 group = "perseus"
 function = "embed"
+command = "datalib-step"
 inputs = ["perseus/keyword_index"]
 
 # --- signal by `backup` -------------------------------------------------
@@ -2056,6 +2196,7 @@ type = "signal"
 [[steps]]
 group = "signal"
 function = "ingest"
+command = "datalib-step"
 
 # A JSONL copy of every row written, under ingest/events/, for debugging.
 # Nothing reads it and it grows every run.
@@ -2070,6 +2211,7 @@ aep_env_var = "SIGNAL_BACKUP_PASSPHRASE_PICARD"  # env var holding the passphras
 [[steps]]
 group = "signal"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["signal/ingest"]
 
 [steps.params]
@@ -2080,11 +2222,13 @@ period = "month"  # span of each rendered doc: month (default), day, year or all
 [[steps]]
 group = "signal"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["signal/render_markdown"]
 
 [[steps]]
 group = "signal"
 function = "embed"
+command = "datalib-step"
 inputs = ["signal/keyword_index"]
 
 # --- slack by `api` -----------------------------------------------------
@@ -2099,6 +2243,7 @@ type = "slack"
 [[steps]]
 group = "slack"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.common]
 blob_size_limit_bytes = "1 MB"  # skip an attachment larger than this; unset is no limit
@@ -2136,6 +2281,7 @@ refresh_window_days = 30       # re-walk this many trailing days for edits, reac
 [[steps]]
 group = "slack"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["slack/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -2143,11 +2289,13 @@ inputs = ["slack/ingest"]
 [[steps]]
 group = "slack"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["slack/render_markdown"]
 
 [[steps]]
 group = "slack"
 function = "embed"
+command = "datalib-step"
 inputs = ["slack/keyword_index"]
 
 # --- sms_backup_restore by `backup` -------------------------------------
@@ -2162,6 +2310,7 @@ type = "sms_backup_restore"
 [[steps]]
 group = "sms_backup_restore"
 function = "ingest"
+command = "datalib-step"
 
 # A JSONL copy of every row written, under ingest/events/, for debugging.
 # Nothing reads it and it grows every run.
@@ -2176,6 +2325,7 @@ path = "~/Downloads/sms-backup"
 [[steps]]
 group = "sms_backup_restore"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["sms_backup_restore/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -2183,11 +2333,13 @@ inputs = ["sms_backup_restore/ingest"]
 [[steps]]
 group = "sms_backup_restore"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["sms_backup_restore/render_markdown"]
 
 [[steps]]
 group = "sms_backup_restore"
 function = "embed"
+command = "datalib-step"
 inputs = ["sms_backup_restore/keyword_index"]
 
 # --- todoist by `api` ---------------------------------------------------
@@ -2203,6 +2355,7 @@ type = "todoist"
 [[steps]]
 group = "todoist"
 function = "ingest"
+command = "datalib-step"
 
 # When to give up on failed requests. The download retries and backs off
 # on its own; these only decide when to stop.
@@ -2227,6 +2380,7 @@ completed_since = "2024-01-01"
 [[steps]]
 group = "todoist"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["todoist/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -2234,11 +2388,13 @@ inputs = ["todoist/ingest"]
 [[steps]]
 group = "todoist"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["todoist/render_markdown"]
 
 [[steps]]
 group = "todoist"
 function = "embed"
+command = "datalib-step"
 inputs = ["todoist/keyword_index"]
 
 # --- whatsapp by `backup` -----------------------------------------------
@@ -2254,6 +2410,7 @@ type = "whatsapp"
 [[steps]]
 group = "whatsapp"
 function = "ingest"
+command = "datalib-step"
 
 # The decrypted database is mirrored table for table; these pick the tables.
 [steps.params]
@@ -2273,6 +2430,7 @@ key_env_var = "WHATSAPP_ENTERPRISE_PHONE_KEY"  # the variable holding the key as
 [[steps]]
 group = "whatsapp"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["whatsapp/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -2280,11 +2438,13 @@ inputs = ["whatsapp/ingest"]
 [[steps]]
 group = "whatsapp"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["whatsapp/render_markdown"]
 
 [[steps]]
 group = "whatsapp"
 function = "embed"
+command = "datalib-step"
 inputs = ["whatsapp/keyword_index"]
 
 # --- yolink by `api` ----------------------------------------------------
@@ -2301,6 +2461,7 @@ type = "yolink"
 [[steps]]
 group = "yolink"
 function = "ingest"
+command = "datalib-step"
 
 # When to give up on failed requests. The download retries and backs off
 # on its own; these only decide when to stop.
@@ -2337,6 +2498,7 @@ device_udid = "ffeeddccbbaa99887766554433221100"
 [[steps]]
 group = "yolink"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["yolink/ingest"]
 
 # Its numbers as time series, for charts and the time-series index: add
@@ -2344,6 +2506,7 @@ inputs = ["yolink/ingest"]
 [[steps]]
 group = "yolink"
 function = "render_time_series"
+command = "datalib-step"
 inputs = ["yolink/ingest"]
 
 # Free-text search by keyword (BM25). Add it to
@@ -2352,4 +2515,5 @@ inputs = ["yolink/ingest"]
 [[steps]]
 group = "yolink"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["yolink/render_markdown"]

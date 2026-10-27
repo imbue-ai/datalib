@@ -9,6 +9,7 @@ type = "chatgpt"
 [[steps]]
 group = "chatgpt"
 function = "ingest"
+command = "datalib-step"
 
 # When to give up on rate limits. The download always honours a 429's
 # Retry-After and backs off; these only decide when to stop.
@@ -44,6 +45,7 @@ path = "~/Downloads/chatgpt-export.zip"
 [[steps]]
 group = "chatgpt"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["chatgpt/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -51,9 +53,11 @@ inputs = ["chatgpt/ingest"]
 [[steps]]
 group = "chatgpt"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["chatgpt/render_markdown"]
 
 [[steps]]
 group = "chatgpt"
 function = "embed"
+command = "datalib-step"
 inputs = ["chatgpt/keyword_index"]

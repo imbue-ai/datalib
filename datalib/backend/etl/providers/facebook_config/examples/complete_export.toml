@@ -9,6 +9,7 @@ type = "facebook"
 [[steps]]
 group = "facebook"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.export]
 path = "~/Downloads/facebook-export"  # the folder the export's zips were unzipped into
@@ -16,6 +17,7 @@ path = "~/Downloads/facebook-export"  # the folder the export's zips were unzipp
 [[steps]]
 group = "facebook"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["facebook/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -23,9 +25,11 @@ inputs = ["facebook/ingest"]
 [[steps]]
 group = "facebook"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["facebook/render_markdown"]
 
 [[steps]]
 group = "facebook"
 function = "embed"
+command = "datalib-step"
 inputs = ["facebook/keyword_index"]

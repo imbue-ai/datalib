@@ -337,7 +337,7 @@ async fn migrate_on_launch(cfg: &HostConfig, store: &Store) {
     let runner = host::step_env(
         &checked.cfg,
         cfg.binary_dir.as_deref(),
-        &extra_path(),
+        &extra_path(&root),
         &now,
         &run_id,
     )
@@ -442,11 +442,11 @@ pub fn load_config(root: &Path) -> Result<ConfigCheck, String> {
     Ok(checked)
 }
 
-/// Where the loop's steps find `datalib-step` and a person's own tools.
-fn extra_path() -> Vec<PathBuf> {
-    // `~/.datalib/bin`, whether or not it exists yet: an agent may make
-    // it between runs, and a missing entry costs nothing.
-    crate::user_bin_dir().into_iter().collect()
+/// Where the loop's steps find the library's own programs, whether or not
+/// the directory exists yet: an agent may make it between runs, and a
+/// missing entry costs nothing.
+fn extra_path(root: &Path) -> Vec<PathBuf> {
+    vec![root.join(datalib_runtime::layout::BIN_DIR_REL)]
 }
 
 /// One tick with nothing open, so a step turned off or on while the loop
@@ -489,7 +489,7 @@ async fn serve_period(cfg: &HostConfig, store: &Store) {
     let env = match host::step_env(
         &checked.cfg,
         cfg.binary_dir.as_deref(),
-        &extra_path(),
+        &extra_path(&root),
         &now,
         &run_id,
     ) {

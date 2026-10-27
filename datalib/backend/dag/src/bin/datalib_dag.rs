@@ -296,7 +296,13 @@ async fn main() -> Result<()> {
     let host::StepEnv {
         vars: child_env,
         log_filter,
-    } = host::step_env(&cfg, binary_dir.as_deref(), &[], &now, &run_id)?;
+    } = host::step_env(
+        &cfg,
+        binary_dir.as_deref(),
+        &[data_root.join(datalib_runtime::layout::BIN_DIR_REL)],
+        &now,
+        &run_id,
+    )?;
 
     // stderr stays the stream; the store is the record. Both, not
     // either: the stream is what a terminal or a tee sees as it happens,
@@ -434,7 +440,7 @@ fn check_params(
     binary_dir: Option<&Path>,
 ) -> usize {
     let has_builtin = checked.cfg.steps.iter().any(|s| {
-        s.command.is_none() && matches!(s.function.as_deref(), Some("ingest" | "render_markdown"))
+        s.runs_datalib_step() && matches!(s.function.as_deref(), Some("ingest" | "render_markdown"))
     });
     if !has_builtin {
         return 0;

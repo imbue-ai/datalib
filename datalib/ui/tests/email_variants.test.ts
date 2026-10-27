@@ -54,7 +54,7 @@ describe("writing a step", () => {
     // is the key that makes the table exist and is Gmail's own default.
     expect(toml).toContain("[steps.params.gmail]");
     expect(toml).toContain('user_id = "me"');
-    expect(toml).not.toContain("command");
+    expect(toml).toContain('command = "datalib-step"');
     expect(toml).not.toContain("jmap");
   });
 
@@ -126,7 +126,7 @@ describe("writing a step", () => {
         inputs: ["mail/ingest"],
         values: seedFieldValues(entry),
       });
-      expect(toml).not.toContain("command");
+      expect(toml).toContain('command = "datalib-step"');
       expect(toml).toContain(`outlink_format = "${outlink}"`);
       // The download-mode params must not leak onto the render step:
       // `EmailRenderConfig` is deny_unknown_fields, so one would make

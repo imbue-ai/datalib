@@ -1,0 +1,21 @@
+# The example package (docs/dev/packages.md). `scripts/pack_datalib_package.py`
+# packs `build/<target>/` into one archive per target and writes this file
+# with an `[artifacts]` table naming them, ready to publish.
+schema = 1
+name = "Hello"
+version = "0.1.0"
+description = "Writes a greeting and its settings into the library."
+homepage = "https://github.com/imbue-ai/datalib/tree/main/datalib/backend/packages/example/hello"
+step_protocol = 1
+
+[[sources]]
+type = "hello"
+commands = { ingest = "bin/hello-ingest" }
+
+[sources.wizard]
+label = "Hello"
+blurb = "Writes a greeting and its settings."
+nameHint = "Hello test"
+defaultName = "hello"
+sections = [{ heading = "What to say", fields = ["greeting"] }]
+fields = [{ kind = "text", target = "greeting", label = "Greeting", required = true }]

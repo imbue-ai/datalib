@@ -9,10 +9,12 @@ type = "beeper"
 [[steps]]
 group = "beeper"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.texts]
 
 [[steps]]
 group = "beeper"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["beeper/ingest"]

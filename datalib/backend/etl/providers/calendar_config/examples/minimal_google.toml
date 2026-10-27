@@ -9,12 +9,14 @@ type = "calendar"
 [[steps]]
 group = "calendar"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.google]
 
 [[steps]]
 group = "calendar"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["calendar/ingest"]
 
 # Every occurrence of every event from 30 days back to 400 ahead, one row
@@ -22,4 +24,5 @@ inputs = ["calendar/ingest"]
 [[steps]]
 group = "calendar"
 function = "render_occurrences"
+command = "datalib-step"
 inputs = ["calendar/ingest"]

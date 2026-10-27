@@ -9,6 +9,7 @@ type = "google_drive"
 [[steps]]
 group = "google_drive"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.api]
 
@@ -17,4 +18,5 @@ function = "ingest"
 [[steps]]
 group = "google_drive"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["google_drive/ingest"]

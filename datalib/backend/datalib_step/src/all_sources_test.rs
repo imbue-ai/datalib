@@ -123,15 +123,15 @@ fn generate() -> String {
          # the search index's aggregator reads every source's keyword index and\n\
          # embeddings, and keeps the search index to the sources it names.\n\
          [[groups]]\nid = \"{DOCUMENT_INDEX}\"\nname = \"Document Index\"\n\n\
-         [[steps]]\ngroup = \"{DOCUMENT_INDEX}\"\nfunction = \"grid_index\"\n{}\n\
-         [[steps]]\ngroup = \"{DOCUMENT_INDEX}\"\nfunction = \"qmd_aggregator\"\n{}\n\
+         [[steps]]\ngroup = \"{DOCUMENT_INDEX}\"\nfunction = \"grid_index\"\ncommand = \"datalib-step\"\n{}\n\
+         [[steps]]\ngroup = \"{DOCUMENT_INDEX}\"\nfunction = \"qmd_aggregator\"\ncommand = \"datalib-step\"\n{}\n\
          # The app's search, grid and document view.\n\
          [[applets]]\ngroup = \"{DOCUMENT_INDEX}\"\nid = \"{DOCUMENT_INDEX}\"\n\
          command = \"datalib-applet {DOCUMENT_INDEX}\"\n\n\
          # The time-series index reads every source's time series, without copying\n\
          # the points, for the charts.\n\
          [[groups]]\nid = \"{TIME_SERIES_INDEX}\"\nname = \"Time Series Index\"\n\n\
-         [[steps]]\ngroup = \"{TIME_SERIES_INDEX}\"\nfunction = \"time_series_index\"\n{}\n\
+         [[steps]]\ngroup = \"{TIME_SERIES_INDEX}\"\nfunction = \"time_series_index\"\ncommand = \"datalib-step\"\n{}\n\
          [[applets]]\ngroup = \"{TIME_SERIES_INDEX}\"\nid = \"{TIME_SERIES_INDEX}\"\n\
          command = \"datalib-applet {TIME_SERIES_INDEX}\"\n",
         inputs(&sources, &["render_markdown"]),

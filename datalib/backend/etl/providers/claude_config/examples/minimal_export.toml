@@ -8,6 +8,7 @@ type = "claude"
 [[steps]]
 group = "claude"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.export]
 path = "~/Downloads/claude-export"
@@ -15,4 +16,5 @@ path = "~/Downloads/claude-export"
 [[steps]]
 group = "claude"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["claude/ingest"]

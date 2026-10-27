@@ -9,6 +9,7 @@ type = "linkedin"
 [[steps]]
 group = "linkedin"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.export]
 path = "~/Downloads/linkedin-export"  # the unzipped export: the folder of CSVs
@@ -16,6 +17,7 @@ path = "~/Downloads/linkedin-export"  # the unzipped export: the folder of CSVs
 [[steps]]
 group = "linkedin"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["linkedin/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -23,9 +25,11 @@ inputs = ["linkedin/ingest"]
 [[steps]]
 group = "linkedin"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["linkedin/render_markdown"]
 
 [[steps]]
 group = "linkedin"
 function = "embed"
+command = "datalib-step"
 inputs = ["linkedin/keyword_index"]
