@@ -124,6 +124,9 @@ number. What that costs:
 | `github` | a login, lowercased (an app's ends in `[bot]`) | `Handle::github` | `datalib:handle/github/<login>` |
 | `gitlab` | `<host>/<username>`, both lowercased: a self-hosted GitLab is a namespace of its own | `Handle::gitlab` | `datalib:handle/gitlab/<host>/<username>` |
 | `notion` | a Notion user id, a lowercase dashed UUID, for a user Notion gives no address for | `Handle::notion_user` | `datalib:handle/notion/<id>` |
+| `whatsapp` | the digits of a linked id (`…@lid`) the backup maps to no number | `Handle::whatsapp_lid` | `datalib:handle/whatsapp/<digits>` |
+| `me` | `self`: the person whose library this is, wherever a source shows them under a stand-in | `Handle::me` | `datalib:handle/me/self` |
+| `ai_model` | a model's id, lowercased (`claude-opus-4-7`) | `Handle::ai_model` | `datalib:handle/ai_model/<id>` |
 
 A Facebook export names people and never numbers them, so a
 `facebook:name/` handle is a name: two people of one name are one
@@ -210,7 +213,7 @@ What each source has today:
 |---|---|---|
 | email | the From address | To, Cc and Bcc (the sender's copy) as recipients; an `@` or `+` mention, a `mailto:` link in the fresh part of an HTML body |
 | Slack | `slack:<team>/<user>` | a `<@U…>` mention in a body; each reaction's user; the profile's email, in the source contact |
-| WhatsApp | the sender's number, a linked id (`…@lid`) through `jid_map` | each reaction's sender |
+| WhatsApp | the sender's number, a linked id (`…@lid`) through `jid_map`, else the linked id itself (`whatsapp:<digits>`, labelled "WhatsApp user …" and its last four digits when nothing names it) | each reaction's sender |
 | Signal | the number, else the account id (ACI); a recipient known by PNI alone has none | a mention (a `mentionAci` body range), by number else ACI, written `@Name` in place of its `U+FFFC`; number and ACI together, in the source contact; one known by ACI alone reads as the dashed ACI. The ACI is read by its one path in the stored frame, and one that will not read is a problem on the recipient (`aci`, `CoercionFailed`), not a silent loss |
 | Messages | the number or Apple ID address | each tapback's |
 | Google Chat and Voice | the address or number | |
@@ -224,12 +227,17 @@ What each source has today:
 | GitHub, GitLab | a change request's or a comment's author, by login (GitLab's on the host the merge request's address is on) | |
 | Notion | a comment's author, and a page's last editor, by the address the users table gives, else by user id | |
 
-The AI chats write no handles.
-Where a source renders the owner's side as "Me" (WhatsApp, Signal,
-Messages, SMS backup, Google Voice, Claude Code, Codex), "Me" has no
-handle. Where it does
-not (email, Slack, Google Chat), the owner's own messages carry their
-address or user id like anyone else's.
+An AI chat's answers (Claude, ChatGPT, Claude Code, Codex) are by their
+model, `ai_model:<id>`, where the record names one.
+Where a source shows the owner's side under a stand-in (WhatsApp,
+Signal, Messages, SMS backup, Google Voice and the AI chats, as
+`AuthorKind::Account`), chat-common writes it "Me", by `me:self` where
+the source has no handle of its own for them: one chip for the owner
+across every source. `me:self` is not among a conversation's
+participants, since the owner is in every conversation they wrote in,
+so `with:me:self`, like `from:me:self`, finds the messages they wrote. Where a
+source has no stand-in (email, Slack, Google Chat), the owner's own
+messages carry their address or user id like anyone else's.
 
 ## In a document
 
@@ -426,7 +434,7 @@ is a 409 with the store's words; a handle that does not parse is a
 The config entry is `[[applets]] id = "datalib_contacts"` with
 `command = "datalib-applet datalib_contacts"`; the gateway passes the
 data root in the environment. A new root's starter config
-(`scaffold_toml` in `datalib-http`) writes it, filed under
+(`datalib_dag::starter::STARTER_CONFIG`) writes it, filed under
 `unified_document_index`; a config written before that has to add it by hand.
 
 ### Fields, and editing a contact through a draft

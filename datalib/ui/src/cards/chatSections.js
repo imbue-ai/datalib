@@ -155,10 +155,39 @@ function nextItem(el) {
 }
 
 /**
+ * Fold a recipients line longer than two lines to two, with a button
+ * after it that says how many people it names.
+ * @param {HTMLElement} line
+ */
+function foldRecipients(line) {
+  if (line.dataset.foldChecked) return;
+  line.dataset.foldChecked = "1";
+  line.classList.add("msg-recipients--folded");
+  // Chips drawn later are a little wider than the links measured here,
+  // so a line that just fits may wrap to a third; it then shows whole.
+  if (line.scrollHeight <= line.clientHeight + 1) {
+    line.classList.remove("msg-recipients--folded");
+    return;
+  }
+  const count = line.querySelectorAll(".msg-recipient, a.chip").length;
+  const toggle = line.ownerDocument.createElement("button");
+  toggle.type = "button";
+  toggle.className = "msg-recipients-toggle";
+  toggle.textContent = `Show all ${count}`;
+  toggle.addEventListener("click", () => {
+    const folded = line.classList.toggle("msg-recipients--folded");
+    line.classList.toggle("msg-recipients--open", !folded);
+    toggle.textContent = folded ? `Show all ${count}` : "Show fewer";
+  });
+  line.after(toggle);
+}
+
+/**
  * Clamp messages that are too tall to scroll past comfortably, and give
  * them a sticky header carrying "jump to the start of this message" and
  * "jump to the next one" — so being deep inside a wall of text is never
- * a place you have to scroll your way out of.
+ * a place you have to scroll your way out of. A recipients line too
+ * long for its header folds first.
  *
  * Idempotent: re-running over an already-decorated body does nothing.
  * @param {HTMLElement} root
@@ -187,6 +216,12 @@ export function decorateLongMessages(root, opts = {}) {
     ro.observe(root);
     root.__chatWidthObserver = ro;
     return;
+  }
+
+  // Before the messages are measured, so a folded list is not what
+  // makes one long.
+  for (const line of root.querySelectorAll(".msg > p > .msg-recipients:first-child")) {
+    foldRecipients(line);
   }
 
   for (const el of root.querySelectorAll(":scope > .msg[data-section-uuid]")) {

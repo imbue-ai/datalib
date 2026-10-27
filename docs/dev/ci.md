@@ -75,6 +75,19 @@ the prod docker image with its doc test (`datalib/docker/doc_test.sh`,
 assemble the assets are scripts under `scripts/release/`, run by
 `bazel test //...` before any tag runs them — `release_steps.md`.
 
+**`cargo-update.yml`** keeps `datalib/backend/Cargo.lock` current,
+which Dependabot cannot (`.github/dependabot.yml` says why). Every
+Monday it runs `cargo update` with the 7-day burn-in
+(`first_time_dev.md` § "Version policy"; cargo's unstable
+`-Zmin-publish-age`), holds `libsqlite3-sys` for the doltlite patch,
+repins `MODULE.bazel.lock`, and opens or rewrites one PR from
+`bot/cargo-update`. GITHUB_TOKEN opens that PR, and GitHub holds the
+`pull_request` run of such a PR for a maintainer's approval
+(`action_required`, no jobs), so the workflow dispatches `test.yml` on
+the branch itself; the dispatch's checks carry the names the merge
+ruleset requires. Dispatch it by hand to pick up a fixed advisory
+before Monday.
+
 **Neither image build pulls from Docker Hub.** Anonymous Docker Hub
 pulls are rate-limited per IP, and a GitHub-hosted runner shares its IP
 with other people's jobs, so the quota can be spent before a run starts

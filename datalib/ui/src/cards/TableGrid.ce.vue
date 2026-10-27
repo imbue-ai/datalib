@@ -12,6 +12,7 @@
 // is the one layer that takes an element rather than looking a
 // selector up on `document`, which cannot see into a shadow root.
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { timeView } from "@/config/timeView";
 import { SlickVanillaGridBundle } from "@slickgrid-universal/vanilla-bundle";
 import type {
   Column,
@@ -113,6 +114,9 @@ type Grid = SlickVanillaGridBundle<T> & {
   slickGrid: NonNullable<SlickVanillaGridBundle<T>["slickGrid"]>;
 };
 let bundle: Grid | null = null;
+
+// The clock's zone or format changed: every date on screen, drawn again.
+watch(timeView, () => bundle?.slickGrid.invalidate());
 
 /// The tree's parent link, the grid's name for it, and whether each
 /// row is folded. The grid mutates the rows it is given (it hangs its
@@ -530,6 +534,15 @@ function writePath(item: unknown, field: string, value: unknown) {
   if (target && typeof target === "object") (target as Record<string, unknown>)[last] = value;
 }
 
+/// A chip is a link whose href names something in this app, never to be
+/// followed. In the desktop app, following one dropped every request in
+/// flight: the loads of the card a double-click on the chip had opened.
+function onClick(e: SlickEventData) {
+  if (chipElAt(e.getNativeEvent<MouseEvent>()?.target)) {
+    e.getNativeEvent<MouseEvent>()?.preventDefault();
+  }
+}
+
 /// A part of a cell that names a field of its own (`data-field`, as the
 /// badges after a name do) answers a double-click as that field, and
 /// the cell's in-place edit does not open.
@@ -619,6 +632,7 @@ function createGrid() {
   hoverWholeRow(b.slickGrid);
   b.slickGrid.onBeforeEditCell.subscribe(onBeforeEditCell);
   b.slickGrid.onCellChange.subscribe(onCellChange);
+  b.slickGrid.onClick.subscribe(onClick);
   b.slickGrid.onDblClick.subscribe(onDblClick);
   b.slickGrid.onSort.subscribe(onSort);
   b.instances?.eventPubSubService?.subscribe<TreeToggleStateChange>(

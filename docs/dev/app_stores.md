@@ -7,6 +7,10 @@
 <data_root>/<group>/render_time_series/time_series.doltlite_db
                                                   a source's time series and their points,
                                                   as encoded chunks (`docs/dev/time_series.md`)
+<data_root>/<group>/render_occurrences/occurrences.doltlite_db
+                                                  a calendar's occurrences in a window of
+                                                  days, one row each, replaced whole by each
+                                                  run (`calendar_render/src/occurrences/`)
 <data_root>/unified_document_index/grid_index/db.doltlite_db   grid_rows / markdowns / edges / problems /
                                                   source_contacts (who each handle is, per source)
 <data_root>/unified_document_index/grid_index/search_terms.sqlite every id, handle, title, label and name each

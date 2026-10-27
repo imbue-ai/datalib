@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 
 use crate::support::{
     gmail_get_url, gmail_history_url, gmail_list_url, gmail_message, inbox_label, put_gmail,
-    put_gmail_account, Mirror,
+    put_gmail_account, Mirror, GMAIL,
 };
 
 const PICARD: &str = "18c9f2a1b2c3d801";
@@ -60,11 +60,15 @@ async fn a_label_change_on_a_mirrored_message_lands() {
             "historyId": "9002",
         }),
     );
-    let mut relabeled = gmail_message(PICARD, &["INBOX", "Label_7"], PICARD);
-    relabeled["threadId"] = json!(PICARD);
-    put_gmail(&m.playback, &gmail_get_url(PICARD), &relabeled);
+    // The store holds the message, so only its labels are asked for.
+    put_gmail(
+        &m.playback,
+        &format!("{GMAIL}/messages/{PICARD}?format=MINIMAL"),
+        &json!({ "id": PICARD, "threadId": PICARD, "labelIds": ["INBOX", "Label_7"] }),
+    );
     let second = run(&m).await;
     assert_eq!(second.emails_upserted, 1, "{second:?}");
+    assert_eq!(second.relabeled_one_by_one, 1, "{second:?}");
     assert_eq!(
         filed(&m, PICARD).await,
         [

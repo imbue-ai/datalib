@@ -333,7 +333,9 @@ version exists but is too new, pin the previous patch and revisit next week.
 The pins live in `MODULE.bazel`, `.bazelversion` and
 `datalib/ui/package.json`. Other deps follow standard semver caret
 ranges; `cargo update` and `pnpm update` are safe within those ranges
-(`Cargo.lock` and `pnpm-lock.yaml` are committed).
+(`Cargo.lock` and `pnpm-lock.yaml` are committed). The backend's
+`Cargo.lock` is moved weekly by `.github/workflows/cargo-update.yml`,
+which applies the same 7-day burn-in.
 
 ## What Bazel does not own
 

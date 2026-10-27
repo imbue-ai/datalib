@@ -75,7 +75,9 @@ impl Phase {
     fn of_function(function: Option<&str>) -> Self {
         match function {
             Some("ingest") => Phase::Ingest,
-            Some("render_markdown") | Some("render_time_series") => Phase::Render,
+            Some("render_markdown") | Some("render_time_series") | Some("render_occurrences") => {
+                Phase::Render
+            }
             Some("grid_index")
             | Some("time_series_index")
             | Some("qmd_aggregator")
@@ -600,6 +602,7 @@ fn child_label(step: &WrittenStep) -> String {
         Some("ingest") => "Ingest",
         Some("render_markdown") => "Render markdown",
         Some("render_time_series") => "Render time series",
+        Some("render_occurrences") => "Render occurrences",
         Some("time_series_index") => "Time series index",
         Some("grid_index") => "Grid index",
         Some("qmd_aggregator") => "QMD aggregator",

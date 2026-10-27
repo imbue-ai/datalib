@@ -96,7 +96,7 @@ async fn main() -> Result<()> {
     let sync_only = trimmed(sync_only);
     let reset = trimmed(reset);
 
-    let (checked, data_root) = config::load_graded(&config_path)?;
+    let (checked, data_root) = load_config(&config_path)?;
 
     // Say what is wrong before doing anything, whether or not we are
     // about to run. Printed to stderr so a `--check` used in a pipeline
@@ -614,11 +614,18 @@ fn exit_code(outcome: Option<RequestOutcome>, dropped_entries: usize) -> i32 {
 }
 
 async fn run_verb(verb: Verb) -> Result<()> {
-    let (checked, data_root) = config::load_graded(verb.config())?;
+    let config_path = match &verb {
+        Verb::Init { data_root } => return init(data_root),
+        Verb::Status { config, .. }
+        | Verb::Stop { config, .. }
+        | Verb::TurnOff { config, .. }
+        | Verb::TurnOn { config, .. } => config,
+    };
+    let (checked, data_root) = load_config(config_path)?;
     if checked.is_fatal() {
         bail!(
             "{} is not a config: nothing in it could be read",
-            verb.config().display()
+            config_path.display()
         );
     }
     let store = Store::open(&data_root).await?;
@@ -654,6 +661,7 @@ async fn run_verb(verb: Verb) -> Result<()> {
                 }
             }
         }
+        Verb::Init { .. } => unreachable!("init returned above"),
         Verb::TurnOn { step, .. } => match store.turned_off().await?.get(step) {
             None => vec![format!("{step} was not off")],
             Some(who) => {
@@ -666,6 +674,42 @@ async fn run_verb(verb: Verb) -> Result<()> {
     #[allow(clippy::disallowed_macros)]
     for line in said {
         println!("{line}");
+    }
+    Ok(())
+}
+
+/// A config that is not there is most often a root not set up yet, so
+/// the error names the command that sets one up.
+fn load_config(path: &Path) -> Result<(config::ConfigCheck, std::path::PathBuf)> {
+    if !path.exists() {
+        let root = match (path.file_name(), path.parent()) {
+            (Some(name), Some(dir)) if name == config::CONFIG_FILE_NAME => {
+                dir.display().to_string()
+            }
+            _ => "<data_root>".to_string(),
+        };
+        bail!(
+            "{} does not exist. `datalib-dag init {root}` writes a starter config there.",
+            path.display()
+        );
+    }
+    config::load_graded(path)
+}
+
+#[allow(clippy::disallowed_macros)]
+fn init(data_root: &Path) -> Result<()> {
+    let path = config::root_config_path(data_root);
+    if datalib_dag::starter::write_starter_config(data_root)
+        .with_context(|| format!("write {}", path.display()))?
+    {
+        println!(
+            "wrote the starter config, with no sources yet: {}\n\
+             add one with `datalib-step examples <type> --append {}`",
+            path.display(),
+            path.display()
+        );
+    } else {
+        println!("{} already exists; left as it is", path.display());
     }
     Ok(())
 }

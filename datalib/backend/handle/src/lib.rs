@@ -59,6 +59,16 @@ pub enum HandleKind {
     /// A Notion user by their id, for one Notion gives no address for (a
     /// bot, or a person whose address it withholds).
     Notion,
+    /// A WhatsApp account by its linked id (the digits of an `…@lid` JID),
+    /// for one the backup maps to no phone number.
+    Whatsapp,
+    /// The person whose library this is, wherever a source shows their
+    /// own messages under a stand-in ("Me", "User", "Human"): one handle,
+    /// `me:self`, for every source.
+    Me,
+    /// An AI model by the id its source gives it (`claude-opus-4-7`,
+    /// `gpt-5.2-codex`), the author of what it answered.
+    AiModel,
 }
 
 impl HandleKind {
@@ -149,12 +159,36 @@ impl Handle {
 
     /// A WhatsApp JID. A person's JID is their phone number at
     /// `s.whatsapp.net`, so it becomes a `tel:` handle; a group
-    /// (`@g.us`), a linked-device id (`@lid`) or anything else is not a
-    /// phone number and has no handle yet.
+    /// (`@g.us`), a linked id (`@lid`, see [`Handle::whatsapp_lid`]) or
+    /// anything else is not a phone number.
     pub fn whatsapp_jid(jid: &str) -> Option<Self> {
         let number = jid.strip_suffix("@s.whatsapp.net")?;
         let number = number.split_once(':').map_or(number, |(n, _device)| n);
         Self::tel(&format!("+{number}"))
+    }
+
+    /// A WhatsApp linked id, `<digits>@lid` (a device suffix dropped):
+    /// the one name WhatsApp gives some accounts. Where the backup maps it
+    /// to a number, the number's `tel:` handle is the person's instead.
+    pub fn whatsapp_lid(jid: &str) -> Option<Self> {
+        let id = jid.trim().strip_suffix("@lid")?;
+        let id = id.split_once(':').map_or(id, |(n, _device)| n);
+        (!id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()))
+            .then(|| Self::of(HandleKind::Whatsapp, id))
+    }
+
+    /// The person whose library this is: [`HandleKind::Me`].
+    pub fn me() -> Self {
+        Self::of(HandleKind::Me, "self")
+    }
+
+    /// An AI model by its id, trimmed and lowercased. An id holding
+    /// whitespace or a control character is a sentence, not an id.
+    pub fn ai_model(id: &str) -> Option<Self> {
+        let id = id.trim().to_lowercase();
+        let well_formed =
+            !id.is_empty() && !id.chars().any(|c| c.is_whitespace() || c.is_control());
+        well_formed.then(|| Self::of(HandleKind::AiModel, &id))
     }
 
     /// A Slack user, which is only unique within its workspace.
@@ -300,6 +334,9 @@ impl Handle {
                 Self::gitlab(host, username)
             }
             HandleKind::Notion => Self::notion_user(value),
+            HandleKind::Whatsapp => Self::whatsapp_lid(&format!("{value}@lid")),
+            HandleKind::Me => (value == "self").then(Self::me),
+            HandleKind::AiModel => Self::ai_model(value),
         }
     }
 
@@ -347,7 +384,10 @@ impl Handle {
             | HandleKind::Google
             | HandleKind::Github
             | HandleKind::Gitlab
-            | HandleKind::Notion => {
+            | HandleKind::Notion
+            | HandleKind::Whatsapp
+            | HandleKind::Me
+            | HandleKind::AiModel => {
                 format!(
                     "datalib:handle/{}/{}",
                     self.kind().as_str(),
@@ -409,9 +449,12 @@ impl Handle {
             | HandleKind::Google
             | HandleKind::Github
             | HandleKind::Gitlab
-            | HandleKind::Notion => {
+            | HandleKind::Notion
+            | HandleKind::Whatsapp
+            | HandleKind::AiModel => {
                 format!("{shown} ({})", self.as_str())
             }
+            HandleKind::Me => shown.to_string(),
         }
     }
 
@@ -675,6 +718,34 @@ mod tests {
         assert_eq!(Handle::whatsapp_jid("123456789012345@lid"), None);
     }
 
+    /// A sender WhatsApp knows only by a linked id, with no number the
+    /// backup maps it to, was no handle at all: no chip, nothing to link.
+    #[test]
+    fn a_whatsapp_linked_id_is_a_handle_of_its_own() {
+        let lid = Handle::whatsapp_lid("100000000000108@lid").unwrap();
+        assert_eq!(lid.as_str(), "whatsapp:100000000000108");
+        assert_eq!(Handle::whatsapp_lid("100000000000108:3@lid"), Some(lid));
+        assert_eq!(Handle::whatsapp_lid("15550123456@s.whatsapp.net"), None);
+        assert_eq!(Handle::whatsapp_lid("bridge-crew@g.us"), None);
+        assert_eq!(Handle::whatsapp_lid("@lid"), None);
+        assert_eq!(Handle::whatsapp_lid("12ab@lid"), None);
+    }
+
+    /// "Me" and a model's name were plain text: no chip to draw, nothing
+    /// a contact could be linked to.
+    #[test]
+    fn me_and_an_ai_model_are_handles() {
+        assert_eq!(Handle::me().as_str(), "me:self");
+        assert_eq!(Handle::parse("me:self"), Some(Handle::me()));
+        assert_eq!(Handle::parse("me:you"), None);
+        let model = Handle::ai_model(" Claude-Opus-4-7 ").unwrap();
+        assert_eq!(model.as_str(), "ai_model:claude-opus-4-7");
+        assert_eq!(Handle::parse("ai_model:claude-opus-4-7"), Some(model));
+        assert_eq!(Handle::ai_model("an answer"), None);
+        assert_eq!(Handle::ai_model(""), None);
+        assert_eq!(Handle::me().describe("Me"), "Me");
+    }
+
     #[test]
     fn slack_is_scoped_to_its_workspace() {
         assert_eq!(
@@ -807,6 +878,15 @@ mod tests {
             (
                 Handle::notion_user("00000001-1701-4D00-8000-000000000001").unwrap(),
                 "datalib:handle/notion/00000001-1701-4d00-8000-000000000001",
+            ),
+            (
+                Handle::whatsapp_lid("100000000000108@lid").unwrap(),
+                "datalib:handle/whatsapp/100000000000108",
+            ),
+            (Handle::me(), "datalib:handle/me/self"),
+            (
+                Handle::ai_model("claude-opus-4-7").unwrap(),
+                "datalib:handle/ai_model/claude-opus-4-7",
             ),
         ] {
             assert_eq!(h.to_uri(), uri);

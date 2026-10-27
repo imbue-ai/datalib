@@ -13,7 +13,9 @@ empty directory to a first sync, each with its command, and
 ingest methods) and `datalib-step help <function>` (what a step does
 and how to run it) from there. `datalib-step help agent` prints this
 guide, which a release also carries beside its binaries as
-`docs/agent_user.md`. Every binary's `--help` ends with examples.
+`docs/agent_user.md`, with the two guides for building on the data
+(`help raw-stores`, `help apps`) beside it. Every binary's `--help`
+ends with examples.
 
 The human-facing guides are worth reading first, and worth pointing the
 user at: the [first-time user guide](user/first_time_user.md) is the
@@ -69,7 +71,8 @@ definition — the constants both sides read — is
 Ten binaries ship in a release: `datalib-dag` (the sync runner),
 `datalib-step` (the built-in step commands), `datalib-http` (API
 server + web UI), `datalib-applet` (the applet host, spawned on demand
-by the http gateway), `latchkey-curl-router` +
+by the http gateway; `datalib-applet search` is the search box from the
+command line), `latchkey-curl-router` +
 `curl-impersonate` (Cloudflare-safe HTTP for downloaders),
 `datalib-doltlite` (the shell for reading and exporting the stores —
 see "Reading the mirrored data" below), `datalib-fsindex` (the
@@ -92,6 +95,10 @@ Top-level keys (`data_root`, `binary_dir`) go above the first `[[…]]`
 header, and a step's `params` sub-tables come after its plain keys — a
 `[…]` header ends the table it appears in.
 
+- **From the CLI alone:** `datalib-dag init <data_root>` writes the
+  starter `config.toml` (the index steps and their applets, no
+  sources) and nothing else; `datalib-step examples <type> --append
+  <data_root>/config.toml` adds a source (below).
 - **Complete commented example:**
   [`configs/dag_example.toml`](../configs/dag_example.toml).
 - **Every source, every option**:
@@ -99,7 +106,8 @@ header, and a step's `params` sub-tables come after its plain keys — a
   — one commented group per way into each source, with its steps and
   every option set, and the index groups reading them all. It is
   generated from the complete stanzas `datalib-step examples <type>`
-  prints, so it is always one that loads. A `config.toml` in the retired
+  prints, so it is always one that loads. A release ships both files
+  beside this guide, at the same paths under its directory. A `config.toml` in the retired
   shape (steps naming a `datalib-step download …` command) is refused;
   rewrite it once with `datalib-migrate-config <data_root> --force`.
 - **Credentials**: web-API sources authenticate through
@@ -108,6 +116,17 @@ header, and a step's `params` sub-tables come after its plain keys — a
   [`docs/user/getting_your_data.md`](user/getting_your_data.md).
   On auth failure, sync events include a `hint` with the exact
   `latchkey auth set …` recipe for that provider.
+- **How far back (and ahead)**: every source that can mirror part of
+  its history takes `since` in its method table (`[steps.params.api]`,
+  `[steps.params.gmail]`, `[steps.params.google]`, …), and a calendar
+  and Garmin also take `until`. Each is a day (`"2026-09-01"`), an
+  RFC 3339 instant, or an offset from the run's start (`"-30d"`,
+  `"+21d"`; units `h`, `d`, `w`), so `since = "-30d"` keeps the last
+  month without a daily edit. A record an offset slides past stays in
+  the mirror, except in a windowed calendar, which drops events the
+  window no longer reaches. An earlier `since` backfills on the next
+  run. Each source's default and what the window bounds:
+  [`config_model.md` §"Time windows"](dev/config_model.md#time-windows-since-and-until).
 - The web UI's **Manage** tab scaffolds and validates the config
   (`GET /api/config/scaffold`, `PUT /api/config` validates before
   writing).
@@ -134,11 +153,25 @@ were dropped or some step's params would be refused.
 
 `datalib-step examples <type>` prints each source's config stanzas:
 for every way into the source, a minimal one (the least that syncs) and
-a complete one (every option set, each with a comment). Its page also
-says how to give the group an id of your own and which index inputs to
-add it to. `datalib-step help <type> <method>` lists every option with
-its type, default and meaning. Both are read from the source's own
-config crate, and a test loads and plans every stanza.
+a complete one (every option set, each with a comment). With
+`--append <config>` it adds the minimal one to the config instead,
+above the index groups, and puts the source's steps in the `inputs` of
+the index steps that read them (`grid_index`, and the time-series
+index, which it adds when a time-series source is the first). A
+source reached more than one way names the method (`--method gmail`),
+and `--id` gives the group an id of its own, for a second account. It
+refuses an id the config already has, and a result `datalib-dag
+--check` would refuse, writing nothing; the previous file is kept as
+`config.toml.bak`. Its page says how to do the same by hand.
+`datalib-step help <type> <method>` lists every option with its type,
+default and meaning. Both are read from the source's own config crate,
+and a test loads and plans every stanza.
+
+```sh
+datalib-dag init ~/datalib
+datalib-step examples slack --append ~/datalib/config.toml
+datalib-step examples email --append ~/datalib/config.toml --method gmail --id work-mail
+```
 
 Useful flags: `--sync <step-id>` (repeatable; runs the named steps and
 everything downstream of them, and nothing else — pending work in other
@@ -221,12 +254,12 @@ Manage screen's Status column reads directly:
 
 ```sh
 sqlite3 <data_root>/system/supervisor.sqlite \
-  'select step, state, state_detail, turned_off_by, request from steps'
+  'select step, state, state_detail, turned_off_by, requests from steps'
 ```
 
 `state` is `running`, `waiting` (on what: `state_detail`), `off`,
-`blocked`, `failed`, or at rest (`idle`, `stale`, `fresh`); `request` is
-the open request it is being run for. Each request and each step turned
+`blocked`, `failed`, or at rest (`idle`, `stale`, `fresh`); `requests` is
+the open requests it is being run for, a JSON list of their ids. Each request and each step turned
 off records who did it, so the screen shows "turned off by claude" or
 "Stop the sync of Work Slack, started by claude". **Don't turn on or stop
 what a person started without saying so.**
@@ -280,8 +313,34 @@ is not null` lists the steps that failed. Every table and column is in
 
 ## Reading the mirrored data
 
+If you are building an app that reads this data instead of calling the
+services (when to sync, how fresh the mirror is, deriving your own data
+as a step, when to ask the service after all), read [building on
+datalib](user/building_on_datalib.md) (`datalib-step help apps`).
+
 Pick the surface that fits the question:
 
+- **The search box, from the command line** — `datalib-applet search
+  <data_root> '<query>'` answers a search exactly as the app's search
+  box does, with no server and no token, and prints the JSON
+  `/search` would (below): the query language, `--tab`, `--limit`,
+  `--offset`, `--sort` and `--within` are the same. Page with
+  `--offset` set to the answer's `next_offset`. It reads only, so it is
+  safe beside a running sync or app.
+
+  ```sh
+  datalib-applet search ~/datalib 'from:picard after:2026-10-01 is:document' --limit 20
+  datalib-applet search ~/datalib 'warp core' --tab words
+  ```
+
+  It exits 1, with each reason on stderr, when the answer is not the
+  search you asked for: a query it refused (`refused`), an error, a
+  free-text search qmd could not answer, or free text on a root with no
+  search index yet (a source's words are searchable once its
+  `keyword_index` step has run). An empty answer with exit 0 means
+  nothing matched. Free text without `--tab` starts qmd and loads its
+  models, which takes 10–20 seconds on a large root; `--tab words` and
+  `--tab fields` take well under a second.
 - **SQL over everything** — the `grid_rows` union table in
   `unified_document_index/grid_index/db.doltlite_db`: one row per
   message/document/entity across all sources, with `provider`, `kind`,
@@ -325,16 +384,39 @@ Pick the surface that fits the question:
   [`docs/dev/doltlite.md`](dev/doltlite.md).
 - **Markdown** — `<group>/render_markdown/` holds human-readable QMD
   markdown per conversation/document. Read files directly, or serve
-  them via `GET /applet/unified_document_index/chat/{markdown_uuid}`. The raw per-source
-  doltlite stores under `<group>/ingest/` keep full wire fidelity when the
-  rendered form isn't enough. An attachment or a person's photo a page
-  links as `/data/<group>/<function>/blob/<hash>` is a row of that step's
+  them via `GET /applet/unified_document_index/chat/{markdown_uuid}`.
+- **Raw stores** — the per-source doltlite stores under
+  `<group>/ingest/` keep what the service sent, when the rendered form
+  isn't enough: Slack's and Google Calendar's JSON, Gmail's original
+  message. [Reading the raw stores](user/raw_stores.md) (`datalib-step
+  help raw-stores`) is the map: how to open one (`payload` is JSONB, so
+  `json(payload)`), how to read one commit and follow changes, and
+  each table and column, with the ids that trip people up. An
+  attachment or a person's photo a page links as
+  `/data/<group>/<function>/blob/<hash>` is a row of that step's
   `blobs.sqlite`: fetch the path from `datalib-http` with the token, or
   read the row (`SELECT bytes FROM cas_objects WHERE blake3 = '<hash>'`).
+- **A calendar's occurrences** — what Google's
+  `events.list?singleEvents=true` returns: a `calendar` source's
+  `render_occurrences` step writes every occurrence of every event in a
+  window of days around its last run (30 back, 400 ahead by default) to
+  `<group>/render_occurrences/occurrences.doltlite_db`, one row each,
+  with Google's instance ids and moved and cancelled dates applied:
+
+  ```sh
+  datalib-doltlite -readonly calendar/render_occurrences/occurrences.doltlite_db \
+    "SELECT start_time, title FROM occurrences
+      WHERE start_utc < '2026-11-02T00:00:00Z' AND end_utc > '2026-10-26T00:00:00Z'
+      ORDER BY start_utc;"
+  ```
+
+  `occurrences_window` says which days the rows cover, and `unlisted`
+  names any event whose occurrences could not be worked out.
+  The columns: `datalib/backend/etl/providers/calendar_render/src/occurrences/README.md`.
 - **Semantic search** — the qmd index:
 
   ```sh
-  rt=$(echo ~/.cache/datalib/runtime/*/)   # the fetched runtime; /opt/datalib/runtime in the image
+  rt=$(echo ${XDG_CACHE_HOME:-~/.cache}/datalib/runtime/*/)   # the fetched runtime; /opt/datalib/runtime in the image
   INDEX_PATH=<data_root>/unified_document_index/qmd_aggregator/qmd/index.sqlite \
       "$rt/node/bin/node" "$rt"/qmd/*/node_modules/@tobilu/qmd/dist/cli/qmd.js query "that thing about the boat"
   ```
@@ -468,7 +550,9 @@ document.
 - **Every step reads `waiting for disk space`**: the data root's disk
   went under the config's `[disk_space]` pause line (10 GB unless the
   config moves it), so the loop stopped what ran and starts nothing
-  until the disk is back to the resume line (15 GB). Free space, or
+  until the disk is back to the resume line (15 GB). A one-shot
+  `datalib-dag` that seems to hang after its `run_plan` line is this:
+  each held step logs `waiting for disk space: …` once. Free space, or
   lower the lines; the open syncs carry on by themselves.
 - **A step that silently stopped running**: check `diagnostics` on
   `GET /api/config`, or `--check`. A config with one unusable entry

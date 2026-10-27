@@ -16,7 +16,7 @@
 
 [package]
 name = "datalib-crates"
-version = "0.44.0"
+version = "0.46.0"
 edition = "2021"
 rust-version = "1.83"
 publish = false
@@ -41,7 +41,6 @@ candle-nn = "0.11"
 candle-transformers = "0.11"
 cbc = { version = "0.2", features = ["block-padding"] }
 chrono = { version = "0.4", features = ["serde"] }
-chrono-tz = "0.10"
 cipher = { version = "0.5", features = ["block-padding"] }
 clap = { version = "4.5", features = ["derive", "env"] }
 csv = "1"
@@ -59,6 +58,10 @@ hmac = "0.13"
 htmd = "0.5"
 ignore = "0.4"
 indicatif = "0.18"
+# Named zones come only from the tz database bundled in `jiff-tzdb`, never
+# the host's (`datalib/backend/time/src/zone.rs`); `cargo update -p
+# jiff-tzdb` takes a newer IANA release.
+jiff = { version = "0.2", default-features = false, features = ["std", "tzdb-bundle-always"] }
 kamadak-exif = "0.6"
 libc = "0.2"
 lofty = "0.25"
@@ -110,9 +113,10 @@ similar = "2"
 # annotation in MODULE.bazel links doltlite in place of the bundled
 # amalgamation, and `sqlite-unbundled` would add a dynamic libsqlite3
 # that minimal Linux hosts lack. `tls-none`: we only open local files.
-# That annotation's patch is made against libsqlite3-sys 0.30.1, and
-# sqlx accepts anything up to 0.37: after a bare `cargo update`, run
-# `cargo update -p libsqlite3-sys --precise 0.30.1`.
+# That annotation's patch is made against libsqlite3-sys 0.37.0, and
+# sqlx accepts anything up to 0.37: a 0.37.x release can move the
+# lines the patch expects, so `.github/workflows/cargo-update.yml`
+# leaves it alone and a move is a hand bump.
 sqlx = { version = "0.9", default-features = false, features = [
     "chrono",
     "macros",
@@ -123,7 +127,7 @@ sqlx = { version = "0.9", default-features = false, features = [
 ] }
 strum = { version = "0.28", features = ["derive"] }
 subtle = "2.6"
-syn = { version = "2", features = ["full"] }
+syn = { version = "3", features = ["full"] }
 # Only `system`: the step runner reads the memory its steps hold.
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 tar = "0.4"
@@ -131,7 +135,7 @@ tempfile = "3"
 thiserror = "2.0"
 # No `http`: the perseus embedder fetches tokenizer.json itself and
 # loads it from the file.
-tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
+tokenizers = { version = "0.23", default-features = false, features = ["onig"] }
 tokio = { version = "1", features = [
     "fs",
     "io-util",

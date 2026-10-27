@@ -19,6 +19,9 @@ const KINDS = new Set([
   "github",
   "gitlab",
   "notion",
+  "whatsapp",
+  "me",
+  "ai_model",
 ]);
 
 /** The handle (`email:…`, `tel:…`, `slack:T/U`) a URI names, or null
@@ -57,6 +60,16 @@ export function handleFromUri(href) {
     if (kind === "linkedin") return linkedinHandle(value);
     if (kind === "github") return githubHandle(value);
     if (kind === "gitlab") return gitlabHandle(value);
+    // The library's own person (`Handle::me`).
+    if (kind === "me") return value === "self" ? "me:self" : null;
+    if (kind === "ai_model") {
+      // A model's id (`Handle::ai_model`): no whitespace, lowercase.
+      return value !== "" && !/\s/.test(value) ? `ai_model:${value.toLowerCase()}` : null;
+    }
+    if (kind === "whatsapp") {
+      // A linked id's digits (`Handle::whatsapp_lid`).
+      return /^\d+$/.test(value) ? `whatsapp:${value}` : null;
+    }
     if (kind === "signal_aci" || kind === "notion") {
       // A Signal account id or a Notion user id: a UUID, spelled
       // lowercase with dashes (`Handle::signal_aci`, `Handle::notion_user`).
@@ -94,7 +107,15 @@ export function uriFromHandle(handle) {
   if (kind === "signal_aci") return `datalib:handle/signal_aci/${value}`;
   if (kind === "facebook") return `datalib:handle/facebook/${percentEncode(value)}`;
   if (kind === "linkedin") return `https://www.linkedin.com/in/${percentEncode(value)}`;
-  if (kind === "google" || kind === "github" || kind === "gitlab" || kind === "notion") {
+  if (
+    kind === "google" ||
+    kind === "github" ||
+    kind === "gitlab" ||
+    kind === "notion" ||
+    kind === "whatsapp" ||
+    kind === "me" ||
+    kind === "ai_model"
+  ) {
     return `datalib:handle/${kind}/${percentEncode(value)}`;
   }
   return null;

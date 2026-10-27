@@ -203,7 +203,10 @@ impl Medium {
             | HandleKind::Google
             | HandleKind::Github
             | HandleKind::Gitlab
-            | HandleKind::Notion => Medium::Other,
+            | HandleKind::Notion
+            | HandleKind::Whatsapp
+            | HandleKind::Me
+            | HandleKind::AiModel => Medium::Other,
         }
     }
 }

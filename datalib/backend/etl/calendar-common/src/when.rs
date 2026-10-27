@@ -4,6 +4,7 @@
 //! they are kept apart until something needs the instant.
 
 use chrono::{DateTime, Duration, FixedOffset, NaiveDate, NaiveDateTime, TimeZone, Utc};
+use datalib_time::NamedZone;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EventTime {
@@ -85,10 +86,10 @@ impl EventTime {
     ) -> Option<Self> {
         if let Some(dt) = date_time {
             let at = DateTime::parse_from_rfc3339(dt).ok()?;
-            let named = zone.and_then(|z| Some((z, z.parse::<chrono_tz::Tz>().ok()?)));
+            let named = zone.and_then(|z| Some((z, NamedZone::get(z)?)));
             let (local, offset_seconds, name) = match named {
                 Some((name, tz)) => {
-                    let there = at.with_timezone(&tz).fixed_offset();
+                    let there = tz.at(&at);
                     (
                         there.naive_local(),
                         there.offset().local_minus_utc(),
@@ -203,49 +204,14 @@ impl EventTime {
     }
 }
 
-/// An event's span in one line. An all-day end is exclusive (RFC 5545
-/// §3.6.1), so a one-day event ends the next day and shows as one date.
-pub fn display_range(start: &EventTime, end: Option<&EventTime>) -> String {
-    match (start, end) {
-        (EventTime::Date(s), Some(EventTime::Date(e))) => {
-            let last = *e - Duration::days(1);
-            if last <= *s {
-                format!("{} (all day)", fmt_date(*s))
-            } else {
-                format!("{} – {} (all day)", fmt_date(*s), fmt_date(last))
-            }
-        }
-        (EventTime::Date(s), _) => format!("{} (all day)", fmt_date(*s)),
-        (EventTime::At { local: s, zone: sz }, Some(EventTime::At { local: e, zone: ez }))
-            if s.date() == e.date() && zone_label(sz) == zone_label(ez) =>
-        {
-            format!(
-                "{}, {}–{} ({})",
-                fmt_date(s.date()),
-                s.format("%H:%M"),
-                e.format("%H:%M"),
-                zone_label(sz)
-            )
-        }
-        (s, Some(e)) => format!("{} → {}", s.display(), e.display()),
-        (s, None) => s.display(),
-    }
-}
-
 fn in_named_zone(local: &NaiveDateTime, name: &str) -> Result<DateTime<FixedOffset>, Unresolved> {
-    let tz: chrono_tz::Tz = name
-        .parse()
-        .map_err(|_| Unresolved::UnknownZone(name.to_string()))?;
+    let tz = NamedZone::get(name).ok_or_else(|| Unresolved::UnknownZone(name.to_string()))?;
     // A time in the spring-forward gap does not exist; RFC 5545 §3.3.5
     // reads it as the same span after the gap, which one hour covers for
     // every zone that has one.
-    tz.from_local_datetime(local)
+    tz.from_local(local)
         .earliest()
-        .or_else(|| {
-            tz.from_local_datetime(&(*local + Duration::hours(1)))
-                .earliest()
-        })
-        .map(|t| t.fixed_offset())
+        .or_else(|| tz.from_local(&(*local + Duration::hours(1))).earliest())
         .ok_or_else(|| Unresolved::UnknownZone(name.to_string()))
 }
 
@@ -291,6 +257,18 @@ mod tests {
             "2026-07-06T09:00:00-07:00"
         );
         assert_eq!(summer.key(None), "20260706T160000Z");
+    }
+
+    /// British Columbia stayed at -07:00 from 2026 on (tzdata 2026b).
+    /// chrono-tz 0.10.4's older database fell back to -08:00 on 1 Nov, an
+    /// hour off Google and Fastmail for every Vancouver event.
+    #[test]
+    fn vancouver_stays_at_minus_seven_after_november_2026() {
+        let t = at("20261118T113000", Some("America/Vancouver"));
+        assert_eq!(
+            t.instant(None).unwrap().at.to_rfc3339(),
+            "2026-11-18T11:30:00-07:00"
+        );
     }
 
     #[test]
@@ -371,28 +349,6 @@ mod tests {
         assert_eq!(
             d,
             EventTime::Date(NaiveDate::from_ymd_opt(2026, 7, 13).unwrap())
-        );
-    }
-
-    #[test]
-    fn ranges_read_naturally() {
-        let d = |v| EventTime::from_ical(v, None).unwrap();
-        assert_eq!(
-            display_range(&d("20260713"), Some(&d("20260718"))),
-            "Mon 13 Jul 2026 – Fri 17 Jul 2026 (all day)"
-        );
-        assert_eq!(
-            display_range(&d("20260202"), Some(&d("20260203"))),
-            "Mon 2 Feb 2026 (all day)"
-        );
-        let la = Some("America/Los_Angeles");
-        assert_eq!(
-            display_range(&at("20260918T190000", la), Some(&at("20260918T220000", la))),
-            "Fri 18 Sep 2026, 19:00–22:00 (America/Los_Angeles)"
-        );
-        assert_eq!(
-            display_range(&at("20260922T143000Z", None), None),
-            "Tue 22 Sep 2026, 14:30 (UTC)"
         );
     }
 }

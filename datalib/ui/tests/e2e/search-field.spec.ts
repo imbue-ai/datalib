@@ -146,3 +146,13 @@ test("a Tab while the values are on their way takes the first of them", async ({
   await field(page).press("Tab");
   await expect(field(page)).toHaveAttribute("data-query", "source_id:slack ");
 });
+
+/// A date menu's search, `after:… before:…`, was plain text in the field,
+/// where every other date in the app is a chip.
+test("a date typed for a date key is drawn as a date chip", async ({ page }) => {
+  await page.goto(GRID);
+  await typeInto(field(page), "");
+  await field(page).pressSequentially("after:2026-01-05 ");
+  await expect(field(page)).toHaveAttribute("data-query", "after:2026-01-05 ");
+  await expect(field(page).locator("time.date-chip")).toHaveText("Mon, Jan 5, 2026");
+});

@@ -17,6 +17,7 @@ import { STATUS_GLYPHS, STEP_GLYPHS, glyphSvg } from "@/config/glyphs";
 import { ownRange, sparkline, windowDelta, type Sample } from "@/config/sparkline";
 import { formatDuration, formatRelative, formatStamp } from "@/config/timeFormat";
 import { formatBytes } from "@/config/bytes";
+import { fittingDateCell, parseStamp } from "./dates";
 
 /// The fields of one type among the specs. A `timestamp` cell reads "5
 /// minutes ago", so it goes stale on its own and the host repaints it
@@ -257,6 +258,18 @@ export function renderTimestamp(iso: string | null | undefined): HTMLElement {
   span.textContent = formatRelative(iso, Date.now());
   // The exact stamp, for when "7 days ago" isn't the answer you needed.
   span.title = formatStamp(iso);
+  return span;
+}
+
+/** A moment the record names (when it was created, modified) as the
+ *  date chip a document draws, in the clock's zone and format; a value
+ *  the chip cannot read keeps its own text. */
+export function renderDateTime(iso: string | null | undefined): HTMLElement {
+  if (!iso) return none();
+  if (parseStamp(iso)) return fittingDateCell(iso);
+  const span = document.createElement("span");
+  span.textContent = formatStamp(iso);
+  span.title = iso;
   return span;
 }
 

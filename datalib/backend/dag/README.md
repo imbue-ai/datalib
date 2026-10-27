@@ -225,7 +225,8 @@ A resume line under the pause line refuses the config, and
 `pause_below_bytes = 0` turns the floor off. While the steps are held:
 
 - **nothing starts**, and every step that is due reads `waiting for disk
-  space` (rule 9);
+  space` (rule 9) and says so once on its log, the only place a one-shot
+  `datalib-dag` shows it;
 - **everything running is stopped**, as a stop is: SIGINT, then a
   checkpoint and an exit. That is neither a failure nor a run (rule 4),
   so the step runs again once there is room, and each stopped step's log
@@ -452,8 +453,9 @@ and the fix is on the group's line. The five warnings: a group nothing
 is filed under; a `name` written on a grouped step, whose label comes
 from the group; an applet filed under a group that does not exist; a
 `keyword_index` that `qmd_aggregator` does not read; and a built-in
-step's `common.always_clear_before_ingest` or linkedin's
-`export.fetch_photos`, which no longer do anything (`datalib-step`
+step's `common.always_clear_before_ingest`, linkedin's
+`export.fetch_photos` or email's `gmail.request_concurrency`, which no
+longer do anything (`datalib-step`
 drops them before parsing, so the step still runs). The Manage screen's System row counts the warnings and shows
 their words on hover. The retired
 shapes — `datalib-step download|render|grid_index|qmd_index` on a

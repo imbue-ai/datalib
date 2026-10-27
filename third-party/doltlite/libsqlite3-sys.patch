@@ -31,9 +31,9 @@
 +    }
 +}
  
- /// Tells whether we're building for Windows. This is more suitable than a plain
- /// `cfg!(windows)`, since the latter does not properly handle cross-compilation
-@@ -37,6 +63,8 @@
+ #[cfg(all(feature = "loadable_extension", feature = "preupdate_hook"))]
+ compile_error!("feature \"loadable_extension\" and feature \"preupdate_hook\" cannot be enabled at the same time");
+@@ -40,6 +66,8 @@
  }
  
  fn main() {
@@ -42,7 +42,7 @@
      let out_dir = env::var("OUT_DIR").unwrap();
      let out_path = Path::new(&out_dir).join("bindgen.rs");
      if cfg!(feature = "in_gecko") {
-@@ -64,6 +92,20 @@
+@@ -67,6 +95,20 @@
              );
          }
          build_linked::main(&out_dir, &out_path);

@@ -1,7 +1,7 @@
 //! Two date-time parsers used by the Takeout walkers.
 
 use chrono::{NaiveDateTime, TimeZone};
-use datalib_time::IsoOffsetTimestamp;
+use datalib_time::{IsoOffsetTimestamp, NamedZone};
 
 /// The offset east of UTC, in minutes, of the zone Google names at the
 /// end of a Takeout timestamp. Google writes the short name the account's
@@ -128,29 +128,27 @@ pub fn parse_mdl_grid(s: &str) -> Option<String> {
 
 /// The zone a page names in words rather than letters (`Pacific Time`),
 /// as the place whose clock it is. A name that is not one place's is
-/// left out, as the abbreviations two zones share are. The place's
-/// daylight-time rules run only as far as the tz database's years; a
-/// date past them is read in standard time.
-fn zone_named(name: &str) -> Option<chrono_tz::Tz> {
-    use chrono_tz::Tz;
-    Some(match name {
-        "Pacific Time" => Tz::America__Los_Angeles,
-        "Mountain Time" => Tz::America__Denver,
-        "Central Time" => Tz::America__Chicago,
-        "Eastern Time" => Tz::America__New_York,
-        "Alaska Time" => Tz::America__Anchorage,
-        "Atlantic Time" => Tz::America__Halifax,
-        "Newfoundland Time" => Tz::America__St_Johns,
-        "Hawaii-Aleutian Standard Time" => Tz::Pacific__Honolulu,
-        "Greenwich Mean Time" | "Coordinated Universal Time" => Tz::UTC,
-        "Central European Time" => Tz::Europe__Paris,
-        "Eastern European Time" => Tz::Europe__Athens,
-        "Western European Time" => Tz::Europe__Lisbon,
-        "British Time" => Tz::Europe__London,
-        "Australian Eastern Time" => Tz::Australia__Sydney,
-        "Japan Standard Time" => Tz::Asia__Tokyo,
+/// left out, as the abbreviations two zones share are.
+fn zone_named(name: &str) -> Option<NamedZone> {
+    let iana = match name {
+        "Pacific Time" => "America/Los_Angeles",
+        "Mountain Time" => "America/Denver",
+        "Central Time" => "America/Chicago",
+        "Eastern Time" => "America/New_York",
+        "Alaska Time" => "America/Anchorage",
+        "Atlantic Time" => "America/Halifax",
+        "Newfoundland Time" => "America/St_Johns",
+        "Hawaii-Aleutian Standard Time" => "Pacific/Honolulu",
+        "Greenwich Mean Time" | "Coordinated Universal Time" => "UTC",
+        "Central European Time" => "Europe/Paris",
+        "Eastern European Time" => "Europe/Athens",
+        "Western European Time" => "Europe/Lisbon",
+        "British Time" => "Europe/London",
+        "Australian Eastern Time" => "Australia/Sydney",
+        "Japan Standard Time" => "Asia/Tokyo",
         _ => return None,
-    })
+    };
+    NamedZone::get(iana)
 }
 
 /// A Play Books entry's date: `Last modified on`, then `Mar 12, 2024,
@@ -171,8 +169,8 @@ pub fn parse_play_books_stamp(s: &str) -> Option<String> {
     };
     let naive = rest.iter().find_map(|l| parse(l))?;
     if let Some(tz) = zone_named(zone) {
-        let dt = tz.from_local_datetime(&naive).single()?;
-        return Some(IsoOffsetTimestamp::from(dt.fixed_offset()).to_rfc3339());
+        let dt = tz.from_local(&naive).single()?;
+        return Some(IsoOffsetTimestamp::from(dt).to_rfc3339());
     }
     finalize(naive, tz_abbrev_offset_minutes(zone)?)
 }

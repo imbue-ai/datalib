@@ -15,7 +15,7 @@ use datalib_etl_render::inputs::{keys_reading, Bucket, Buckets, Input, RawRange}
 use datalib_schema::providers::Provider;
 
 use super::parse::Parsed;
-use super::{google, ics, ids};
+use super::{calendly, google, ics, ids};
 
 /// Bump when the rendered layout changes enough that every event needs
 /// re-rendering: 2 when a Google time started showing in its own zone;
@@ -168,6 +168,18 @@ pub fn normalize_all(parsed: &Parsed, source_id: &str) -> Vec<NormalizedEvent> {
             &info(id),
         ));
     }
+    let owner = parsed
+        .account
+        .as_ref()
+        .and_then(|a| a.principal_href.as_deref());
+    for e in &parsed.calendly {
+        out.extend(calendly::normalize(
+            source_id,
+            e,
+            &info(&e.calendar_id),
+            owner,
+        ));
+    }
     out
 }
 
@@ -180,6 +192,7 @@ fn source_label(account: Option<&LoadedAccount>) -> &'static str {
     let url = a.server_url.as_deref().unwrap_or("");
     match a.method.as_str() {
         "google" => "Google Calendar",
+        "calendly" => "Calendly",
         "caldav" if url.contains("fastmail.com") => "Fastmail Calendar",
         "caldav" if url.contains("icloud.com") => "iCloud Calendar",
         _ => "Calendar",

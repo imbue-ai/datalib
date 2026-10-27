@@ -96,6 +96,7 @@ function groupedName(
   if (!group.name) return defaultName(id);
   if (phase === "ingest") return group.name;
   if (fn === "render_time_series") return `${group.name} (render time series)`;
+  if (fn === "render_occurrences") return `${group.name} (render occurrences)`;
   if (phase === "render") return `${group.name} (render markdown)`;
   if (fn === "keyword_index") return `${group.name} (keyword index)`;
   if (fn === "embed") return `${group.name} (embeddings)`;
@@ -109,6 +110,7 @@ const PHASE_BY_FUNCTION: Record<string, StepPhase> = {
   ingest: "ingest",
   render_markdown: "render",
   render_time_series: "render",
+  render_occurrences: "render",
   grid_index: "index",
   time_series_index: "index",
   qmd_aggregator: "index",
@@ -435,12 +437,16 @@ export function producerOf(
 /// The two steps a source is made of, as the config has them.
 export type SourceSteps = { ingest?: ConfiguredStep; render?: ConfiguredStep };
 
-/// A group's ingest and render steps, by phase.
+/// A group's ingest and render steps, by phase. A source may have more
+/// than one render (`render_time_series`, `render_occurrences`); the
+/// one the wizard edits is its markdown render.
 export function sourceStepsOf(groupId: string, all: ConfiguredStep[]): SourceSteps {
   const under = all.filter((s) => s.kind === "step" && s.group === groupId);
   return {
     ingest: under.find((s) => s.phase === "ingest"),
-    render: under.find((s) => s.phase === "render"),
+    render:
+      under.find((s) => s.function === "render_markdown") ??
+      under.find((s) => s.phase === "render"),
   };
 }
 
@@ -1145,6 +1151,24 @@ export function setTimeSeriesStep(
       `command = ${quote(`datalib-applet ${TIME_SERIES_GROUP}`)}\n`;
   }
   return wireIntoFanIns(next, id, "time_series_index");
+}
+
+/// The source types whose events have occurrences. Mirrors
+/// `datalib_step::source_type::SourceType::renders_occurrences`;
+/// hand-kept in step with it.
+export const OCCURRENCE_TYPES = ["calendar"];
+
+/// Give a source of a type with occurrences its `render_occurrences`
+/// step, which lists every occurrence in a window of days. Nothing
+/// reads it but the person or the agent who asks, so it joins no index.
+export function setOccurrencesStep(text: string, group: string, type: string): string {
+  if (!OCCURRENCE_TYPES.includes(type)) return text;
+  const id = `${group}/render_occurrences`;
+  if (listSteps(text).some((s) => s.id === id)) return text;
+  return insertEntries(
+    text,
+    `[[steps]]\ngroup = ${quote(group)}\nfunction = "render_occurrences"\ninputs = [${quote(stepIdFor(group, "download"))}]`,
+  );
 }
 
 /// A source's own qmd steps, as `[[steps]]` blocks: its keyword index,

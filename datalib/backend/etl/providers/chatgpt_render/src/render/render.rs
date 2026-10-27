@@ -20,6 +20,7 @@ use datalib_etl_chat_common::{render_batched_at, TextFormat};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{escape_md_block, escape_md_inline, md_code_block};
 use datalib_etl_render::sources::{sources_list, Source};
+use datalib_handle::Handle;
 
 use super::ids;
 use super::parse::{
@@ -53,7 +54,8 @@ use serde_json::Value;
 ///     listed after the text.
 /// v13: a message is keyed within its conversation, since a branched
 ///     conversation repeats the original's message ids.
-pub const RENDER_VERSION: u32 = 13;
+/// v14: an answer's author is its model's chip (`ai_model:` handle).
+pub const RENDER_VERSION: u32 = 14;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -184,6 +186,10 @@ fn build_chat(
             (_, None) => AuthorKind::Unknown,
             _ => AuthorKind::Named,
         };
+        let author_handle = match kind_label {
+            "LLM Response" | "LLM Thinking" => m.model_slug.as_deref().and_then(Handle::ai_model),
+            _ => None,
+        };
 
         let mut parts = parts_by_msg
             .get(m.message_id.as_str())
@@ -209,7 +215,7 @@ fn build_chat(
         let msg_id = ids::message(source_id, &conv_id, &m.message_id, ms);
         items.push(NormalizedChatItem {
             message_uuid: msg_id.uuid.clone(),
-            author_handle: None,
+            author_handle,
             author_kind,
             author_display,
             date_ms: ms,

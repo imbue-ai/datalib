@@ -6,6 +6,7 @@
 import type { KeyValues, SearchKeySpec } from "@/api";
 import { uriFromEntity } from "@/cards/chipLinks";
 import { handleKind } from "@/cards/contacts";
+import { parseStamp } from "@/cards/dates";
 
 export type Word = {
   /** The word as typed: `[from, to)` of the query. */
@@ -188,6 +189,18 @@ export function chipFor(values: KeyValues, value: string): ChipRef | null {
 }
 
 /** The words of `query` drawn as chips, each with what it names. */
+/** The words whose value is a date a date chip can draw: a key that takes
+ *  dates (`after:`, `before:`), and a value that reads as a day or an
+ *  instant with its offset. Anything else is text, being typed. */
+export function dateWords(query: string, keys: SearchKeySpec[]): Word[] {
+  return words(query).filter(
+    (w) =>
+      w.key !== null &&
+      keyNamed(keys, w.key)?.values.kind === "stamp" &&
+      parseStamp(w.value) !== null,
+  );
+}
+
 export function chipWords(query: string, keys: SearchKeySpec[]): { word: Word; chip: ChipRef }[] {
   const out: { word: Word; chip: ChipRef }[] = [];
   for (const w of words(query)) {

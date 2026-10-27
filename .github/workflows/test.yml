@@ -143,9 +143,10 @@ jobs:
   # workspace — the lockfile crate_universe resolves every Bazel crate
   # from, Bazel-only crates included — and the desktop shell). The
   # policies are datalib/backend/deny.toml and datalib/tauri/deny.toml;
-  # a RustSec advisory against anything in either lock fails this job,
-  # and the fix is a hand repin (tools/repin_cargo.sh for the backend;
-  # Dependabot only covers the tauri lock, see .github/dependabot.yml).
+  # a RustSec advisory against anything in either lock fails this job.
+  # Dependabot covers the tauri lock and `cargo-update.yml` the backend
+  # one, each weekly; to fix an advisory sooner, dispatch that workflow
+  # or repin by hand (tools/repin_cargo.sh).
   #
   # cargo-deny is a prebuilt release binary, pinned by version and
   # sha256 rather than installed through a third-party action or a
@@ -325,7 +326,7 @@ jobs:
           else
             echo "no ingested_tng_test outputs at ${zip} — it did not run here, or passed"
           fi
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure() && hashFiles('ingested-tng/outputs.zip') != ''
         with:
           name: ingested-tng-outputs
@@ -362,7 +363,7 @@ jobs:
           tar -C artifact -czf "artifact/datalib-x86_64-unknown-linux-gnu.tar.gz" "${stage}"
           ls -la artifact
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: success()
         with:
           name: datalib-x86_64-unknown-linux-gnu
@@ -516,7 +517,7 @@ jobs:
           else
             echo "no e2e outputs at ${zip} — the suite did not run, or passed"
           fi
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure() && hashFiles('e2e-report/playwright-report.zip') != ''
         with:
           name: e2e-playwright-report
@@ -544,7 +545,7 @@ jobs:
           else
             echo "no e2e log at ${log} — the suite did not run"
           fi
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() && hashFiles('e2e-report/test.log') != '' }}
         with:
           name: e2e-test-log

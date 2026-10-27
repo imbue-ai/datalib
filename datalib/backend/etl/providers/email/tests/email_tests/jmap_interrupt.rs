@@ -35,6 +35,7 @@ pub const MIRRORED: &[&str] = &[
     "email_blobs",
     "listed_messages",
     "listed_whole",
+    "thread_members",
     "sync_scope_state",
 ];
 

@@ -4,6 +4,7 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
+use datalib_etl_files::fingerprint_cache::{self, FingerprintCache};
 use datalib_etl_web::http::LatchkeySettings;
 
 use datalib_etl_email_config::{EmailConfig, EmailGmailApi, EmailLiveMode, EmailSync, MboxSync};
@@ -18,7 +19,8 @@ pub async fn migrate(raw_dir: &std::path::Path) -> anyhow::Result<()> {
 }
 
 /// Ingest wave: a live table (`jmap`, `gmail`) selects a server
-/// mode; `mbox` reads the `.mbox` at its `path`.
+/// mode; `mbox` reads the `.mbox` at its `path`, or beside `gmail` is
+/// the Takeout that mode starts from.
 pub fn plan_ingest(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     if config.outlink_format.is_some() || !config.only_render_labels.is_empty() {
@@ -32,10 +34,13 @@ pub fn plan_ingest(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dyn 
     let latchkey = config.latchkey_settings.clone();
 
     // Live-server modes are mutually exclusive (`live_mode` enforces
-    // that, and `validate` refuses one beside `mbox`).
+    // that, and `validate` refuses `jmap` beside `mbox`).
     let mode = match config.live_mode()? {
         Some(EmailLiveMode::Jmap(sync)) => Some(ExtractMode::Jmap(sync.clone())),
-        Some(EmailLiveMode::GmailApi(gmail)) => Some(ExtractMode::GmailApi(gmail.clone())),
+        Some(EmailLiveMode::GmailApi(gmail)) => Some(ExtractMode::GmailApi {
+            gmail: gmail.clone(),
+            takeout: config.takeout(),
+        }),
         // Planning never touches the filesystem — `datalib-dag --check`
         // and the schema tests run where the data is not — so whether the
         // path really is an mbox is checked when the download runs.
@@ -54,6 +59,7 @@ pub fn plan_ingest(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dyn 
             blob_size_limit_bytes,
             latchkey,
             only_extract_labels: config.only_extract_labels.clone(),
+            whole_threads: config.whole_threads(),
         }));
     }
     Ok(procs)
@@ -63,8 +69,12 @@ pub fn plan_ingest(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dyn 
 enum ExtractMode {
     /// Live JMAP server sync.
     Jmap(EmailSync),
-    /// Gmail REST API sync.
-    GmailApi(EmailGmailApi),
+    /// Gmail REST API sync, starting from a Google Takeout when one is
+    /// named.
+    GmailApi {
+        gmail: EmailGmailApi,
+        takeout: Option<PathBuf>,
+    },
     /// File-backed `.mbox` ingest (e.g. a Google Takeout export).
     Mbox {
         input_path: PathBuf,
@@ -86,6 +96,9 @@ pub struct EmailIngest {
     /// Full mailbox label paths to limit extraction to (empty = every
     /// mailbox). Applies to both JMAP and mbox modes.
     only_extract_labels: Vec<String>,
+    /// Keep the rest of the thread of a message `only_extract_labels`
+    /// keeps. Every mode.
+    whole_threads: bool,
 }
 
 #[async_trait]
@@ -115,8 +128,8 @@ impl DataProcessor for EmailIngest {
                         hostname: sync.hostname.clone(),
                         latchkey: self.latchkey.clone(),
                         account_id: sync.account_id.clone(),
-                        full_resync: sync.full_resync,
                         only_mailbox_labels: self.only_extract_labels.clone(),
+                        whole_threads: self.whole_threads,
                         blob_size_limit_bytes: self.blob_size_limit_bytes,
                         blob_download_concurrency: sync.blob_download_concurrency,
                         blob_flush_count: None,
@@ -135,13 +148,38 @@ impl DataProcessor for EmailIngest {
                         s.blobs_errored,
                     )
                 }
-                ExtractMode::GmailApi(gmail) => {
+                ExtractMode::GmailApi { gmail, takeout } => {
+                    if let Some(path) = takeout
+                        .as_ref()
+                        .filter(|p| !ingest::mbox::is_mbox_input(p))
+                    {
+                        return Err(anyhow!(
+                            "`mbox.path` is {} — expected a Google Takeout: its .zip or .tgz, \
+                             the folder holding its parts, or an .mbox from it",
+                            path.display()
+                        ));
+                    }
+                    let since = match gmail.since.as_deref() {
+                        Some(s) => Some(
+                            datalib_time::TimeBound::parse(s)?
+                                .instant(&datalib_time::parse_strict(ctx.now)?),
+                        ),
+                        None => None,
+                    };
+                    let cache = match takeout {
+                        Some(_) => Some(host_fingerprints().await?),
+                        None => None,
+                    };
                     let s = ingest::gmail_api::fetch(ingest::gmail_api::FetchOptions {
                         db,
                         sealer: Some(sealer),
                         config: gmail.clone(),
                         latchkey: self.latchkey.clone(),
+                        takeout: takeout.clone(),
+                        cache,
                         only_labels: self.only_extract_labels.clone(),
+                        whole_threads: self.whole_threads,
+                        since,
                         blob_size_limit_bytes: self.blob_size_limit_bytes,
                         flush_batch: None,
                         progress: ctx.progress.clone(),
@@ -149,12 +187,17 @@ impl DataProcessor for EmailIngest {
                     })
                     .await?;
                     format!(
-                        "mailboxes={} emails={} destroyed={} \
+                        "mailboxes={} emails={} destroyed={} takeout_seeded={} \
+                         takeout_unchanged={} relabeled(walks={} one_by_one={}) \
                          blobs(stored={} skipped={} oversize={}) filtered={} \
                          quota_units={} walked=[{}] budget_exhausted={}",
                         s.mailboxes_upserted,
                         s.emails_upserted,
                         s.emails_destroyed,
+                        s.takeout.as_ref().map_or(0, |t| t.seeded),
+                        s.takeout.as_ref().is_some_and(|t| t.unchanged),
+                        s.relabeled_from_walks,
+                        s.relabeled_one_by_one,
                         s.blobs_stored,
                         s.blobs_skipped,
                         s.blobs_oversize,
@@ -168,9 +211,10 @@ impl DataProcessor for EmailIngest {
                     input_path,
                     account_config,
                 } => {
-                    if !is_mbox_input(input_path) {
+                    if !ingest::mbox::is_mbox_input(input_path) {
                         return Err(anyhow!(
-                            "`mbox.path` is {} — expected a .mbox file, or a directory holding one",
+                            "`mbox.path` is {} — expected a .mbox file or a folder holding one, \
+                             or a Google Takeout's .zip or .tgz or the folder holding its parts",
                             input_path.display()
                         ));
                     }
@@ -184,10 +228,15 @@ impl DataProcessor for EmailIngest {
                             is_personal: account_config.is_personal,
                         },
                         only_labels: self.only_extract_labels.clone(),
+                        whole_threads: self.whole_threads,
+                        cache: Some(host_fingerprints().await?),
                         progress: ctx.progress.clone(),
                         control: ctx.control.clone(),
                     })
                     .await?;
+                    if s.unchanged {
+                        return Ok("mbox unchanged since it was last read".to_string());
+                    }
                     format!(
                         "mailboxes={} threads={} emails={} removed={} blobs(stored={} skipped={}) parse_errors={}",
                         s.mailboxes_upserted,
@@ -205,15 +254,6 @@ impl DataProcessor for EmailIngest {
     }
 }
 
-fn is_mbox_input(input: &PathBuf) -> bool {
-    if input.is_file() {
-        return input.extension().and_then(|s| s.to_str()) == Some("mbox");
-    }
-    let Ok(entries) = std::fs::read_dir(input) else {
-        return false;
-    };
-    entries.flatten().any(|e| {
-        let p = e.path();
-        p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("mbox")
-    })
+async fn host_fingerprints() -> Result<FingerprintCache> {
+    FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await
 }

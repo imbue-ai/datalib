@@ -292,8 +292,8 @@ fn target_end(target: &str) -> Option<usize> {
 /// keeps its address.
 fn without_tags(line: &str) -> String {
     const BREAKS: &[&str] = &[
-        "br", "p", "div", "li", "tr", "td", "th", "h1", "h2", "h3", "h4", "h5", "h6", "summary",
-        "details",
+        "br", "p", "div", "li", "tr", "td", "th", "dt", "dd", "h1", "h2", "h3", "h4", "h5", "h6",
+        "summary", "details",
     ];
     let mut out = String::with_capacity(line.len());
     let mut rest = line;
@@ -309,10 +309,38 @@ fn without_tags(line: &str) -> String {
             out.push(' ');
         }
         // A tag the line cut off — qmd's snippets end mid-word — goes too.
-        rest = after.find('>').map_or("", |close| &after[close + 1..]);
+        let tag_end = after.find('>');
+        rest = tag_end.map_or("", |close| &after[close + 1..]);
+        // A date reads as the instant it names, which the viewer shows in
+        // the reader's zone; the words are the render's, in the source's.
+        if let Some(stamp) = tag_end
+            .filter(|_| name == "time")
+            .and_then(|close| attribute(&after[..close], "datetime"))
+            .filter(|stamp| stamp.contains('T'))
+        {
+            out.push_str(stamp);
+            rest = rest
+                .find("</time>")
+                .map_or(rest, |end| &rest[end + "</time>".len()..]);
+            continue;
+        }
+        // The `↗` out to the original (`message::source_link`) is a mark
+        // to click, not a word.
+        if tag_end.is_some_and(|close| after[..close].contains("class=\"source-link\"")) {
+            rest = rest
+                .find("</a>")
+                .map_or(rest, |end| &rest[end + "</a>".len()..]);
+        }
     }
     out.push_str(rest);
     out
+}
+
+/// The value of `name="…"` inside a tag's text.
+fn attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    let at = tag.find(&format!(" {name}=\""))? + name.len() + 3;
+    let len = tag[at..].find('"')?;
+    Some(&tag[at..at + len])
 }
 
 fn tag_name(after_lt: &str) -> Option<&str> {
@@ -477,6 +505,28 @@ mod tests {
         assert_eq!(
             text("> > quoted\n## When\n#bridge #4 - Deck 12"),
             "quoted When #bridge #4 - Deck 12"
+        );
+    }
+
+    /// Every Meaning snippet of a chat message read "… 15:11 ↗ Set a course".
+    #[test]
+    fn the_source_link_mark_goes() {
+        let md = "Riker · <time>15:11</time> <a class=\"source-link\" href=\"https://e.invalid\" \
+                  target=\"_blank\" rel=\"noopener noreferrer\">↗</a> Set a course.";
+        assert_eq!(text(md), "Riker · 15:11 Set a course.");
+    }
+
+    /// A calendar result's snippet read "Fri Sep 18th, 2026 at 19:00", the
+    /// render's words in the event's zone, beside chips in the reader's.
+    #[test]
+    fn a_time_reads_as_its_instant_and_a_day_as_written() {
+        let md = "<span class=\"time-range\"><time datetime=\"2026-09-18T19:00:00-07:00\" \
+                  title=\"x\">Fri Sep 18th, 2026 at 19:00</time> – <time \
+                  datetime=\"2026-09-18T22:00:00-07:00\">22:00</time></span> \
+                  <time datetime=\"2364-04-11\">Sat Apr 11th, 2364</time>";
+        assert_eq!(
+            text(md),
+            "2026-09-18T19:00:00-07:00 – 2026-09-18T22:00:00-07:00 Sat Apr 11th, 2364"
         );
     }
 

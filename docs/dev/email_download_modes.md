@@ -9,6 +9,7 @@ relative to it), `email_render/` and `email_config/`.
 | JMAP | `[steps.params.jmap]` | Fastmail, Stalwart, any RFC 8620+8621 server |
 | Gmail API | `[steps.params.gmail]` | a Gmail / Google Workspace account |
 | mbox | `[steps.params.mbox] path = …` | a Google Takeout export |
+| Gmail API from a Takeout | both tables, in one step | a Gmail account with a Takeout of it to start from (§3, "Starting from a Takeout") |
 
 Render reads only the raw store, so it is mode-agnostic and needs no
 changes when a mode is added. See
@@ -20,7 +21,8 @@ the JMAP mode can use — is in [`fastmail.md`](fastmail.md).
 
 Two of the three have a wizard form: **Gmail** and **Fastmail** are
 separate entries in `datalib/ui/src/config/catalog.ts`, each writing the
-table that selects its mode. They are not one form with a mode dropdown
+table that selects its mode; the Gmail form also asks whether to start
+from a Takeout, and writes `mbox.path` beside `gmail` when it does. They are not one form with a mode dropdown
 — they authenticate against different latchkey services and want
 different words on screen — and `variantKey` is what tells two entries
 of one step type apart. The mbox mode, and a JMAP server other than
@@ -47,6 +49,9 @@ table in `src/ingest/labels.rs` is where they are reconciled.
   way for a JMAP `parentId` tree and a flat Gmail label list, so
   `only_extract_labels` / `only_render_labels` mean the same thing in
   every mode.
+- `whole_threads` (on by default) keeps every message of a thread a
+  message the filter keeps is in, in every mode, and each thread counts
+  what upstream has for it (INGEST.md §"Whole threads").
 - The `↗` outlink for Gmail is built from `Message-ID` (`gmail_outlink`
   in the `email_render` crate), which every mode supplies.
 
@@ -138,9 +143,15 @@ list at all fails the run.
 does not change the Inbox's row. The email raw store's ladder rung 1
 took them out of stores written before.
 
-**Thread ids.** Gmail's API `threadId` is hex; Takeout's `X-GM-THRID`
-header is the same 64-bit number in decimal. `normalize_thread_id`
-converts to decimal so one conversation stays one thread.
+**Thread ids.** A Gmail thread id is keyed the way a message id is:
+the API's `threadId` is hex, Takeout's `X-GM-THRID` header is the same
+64-bit number in decimal, and both become the same 16-digit
+zero-padded hex (`GmailId::key`), so one conversation stays one thread
+and every Gmail id in the store is spelled one way. The API drops the
+leading zero, which only an id from Gmail's first months in 2004 has.
+An mbox message with no `X-GM-THRID` is a thread of its own, keyed by
+its email id; JMAP keeps its own `threadId`. The email raw store's
+ladder rung 7 rewrote the decimal thread ids of stores written before.
 
 ## 3. The Gmail API mode
 
@@ -211,10 +222,10 @@ same namespacing discipline as the JMAP path's `jmap:` keys. A run:
    although it is held.
    A `history.list` 404 means the cursor aged out of Google's retention
    window (documented as "typically at least one week"). That is not an
-   error: with no cursor to replay from — that, a first run, or
-   `full_resync` — the run stores the `historyId` the profile reported
+   error: with no cursor to replay from — that, or a first run — the
+   run stores the `historyId` the profile reported
    before any walk, and forgets which labels were listed whole. What is
-   already held is not fetched again, at 20 units a message; so a label
+   already held is not fetched again, at 60 units a message; so a label
    change made while no cursor was replaying is not seen.
 2. **Walks `messages.list`** over each configured label (or the whole
    account) that has no `listed_whole` row, listing each page's ids. A
@@ -225,10 +236,33 @@ same namespacing discipline as the JMAP path's `jmap:` keys. A run:
    reported. `history.list` only names what *changed*, and mail that
    already sat under a newly configured label did not, so a widened
    `only_extract_labels` is a label with no row, and is walked.
+   With `since`, a walk asks only for mail after it (`q=after:<epoch
+   seconds>`, which Gmail reads as that instant; a date there would be
+   midnight Pacific). Such a walk says nothing of older mail, so it
+   deletes nothing it did not name, and the mirror keeps what a sliding
+   `since` leaves behind. Where each scope's last whole walk began is
+   `gmail:<account>:listed_since:<scope>` in `sync_scope_state` (no row:
+   from the first message, as every store before `since` was), written
+   before the scope is recorded as listed whole. A `since` earlier than
+   that walks the scope again, which lists the older mail and makes it
+   owed. A later one walks nothing, and so does not cancel what an
+   earlier, wider walk already listed: the fetch goes newest first, so
+   the window's mail comes first. The delta follows the whole mailbox,
+   so an old message that is relabeled is fetched again whatever its
+   age, and Gmail takes no `until`.
+   Under a label filter, one more walk, of the whole account whatever
+   `since` says, records the thread of every message
+   (`thread_members`) without listing any. With `whole_threads` (the
+   default), every member of a thread a kept message is in is then
+   listed too, older than `since` or not, so the start of a
+   conversation that was archived out of the inbox is fetched with the
+   rest (INGEST.md §"Whole threads").
 3. **Fetches what is owed** with `messages.get?format=RAW`, newest id
    first: a listed message not held at its listed `historyId`, and one
    held with no `.eml` stored that now fits under
-   `blob_size_limit_bytes`. The loop is the shared `owed::drain`: one
+   `blob_size_limit_bytes`. A message whose `.eml` the store already
+   holds — a relabel, or a Takeout's — is owed only its labels, and
+   costs a third as much: below. The loop is the shared `owed::drain`: one
    `messages.get` per request, and a flush of 200 messages, or 32 MB of
    their raw bytes if that comes first, written as the `.eml` bytes
    into the CAS and then the email rows, thread rows, `.eml` edges and
@@ -238,8 +272,10 @@ same namespacing discipline as the JMAP path's `jmap:` keys. A run:
    `listed_messages:<id>` row in `problems` and its attempts counted.
 
 Labels are reconciled every run, walk or not: `labels.list` is always
-the whole set. Ingest stamps `_source: { via, gmailMessageId,
-gmailThreadId }` into the envelope payload as provenance.
+the whole set. Ingest stamps `_source: { via }` into the envelope
+payload as provenance, and the row keeps the message's labels as Gmail
+spells them in `label_ids`. Its `id` and `thread_id` are Gmail's own
+ids already (§2), so the row needs no other column for them.
 
 A thread row is the ids of the emails held for that thread, written in
 the transaction that writes or deletes one of them — so relabeling one
@@ -250,14 +286,21 @@ no email is ever without its thread row.
 
 Quota-limited rather than byte-limited:
 
-- 6000 quota units per user per minute; `messages.get` costs 20 ⇒ **~300
-  messages/minute**, regardless of message size.
+- 6000 quota units per user per minute. `messages.get` costs 60 with
+  `format=RAW`, which carries the message, ⇒ **~100 messages/minute**,
+  regardless of message size; 20 with `format=MINIMAL`, which carries
+  the labels and thread and nothing else ([Google's table](https://developers.google.com/workspace/gmail/api/reference/quota)).
 - The daily project ceiling (80M units) is not the binding constraint —
   the per-minute cap holds one account to ~8.6M units/day. Google bills
   for usage past the daily threshold from 2026-05-01.
 
 `QuotaThrottle` is a leaky bucket priced in **units**, not requests, so a
-mixed workload meters accurately. It is the first line, not the last:
+mixed workload meters accurately. It holds ten seconds of its rate, so
+no minute spends more than the ceiling and a sixth: at the default
+5000, under Google's 6000. (A bucket holding a whole minute let a
+run's first minute spend nearly twice the ceiling; measured, the rate
+limit that followed cut the ceiling to half for the rest of the run.)
+It is the first line, not the last:
 Google is the authority on the limit, and the code is built to bump
 into it and keep going, the way the Slack provider does.
 
@@ -286,8 +329,9 @@ into it and keep going, the way the Slack provider does.
   run fetches what is still owed. Only with nothing mirrored at all does
   the run fail outright.
 
-A 100k-message mailbox is still ~6 hours of backfill; the run is
-expected to take that long. `message_budget` stops a run early with a
+A 100k-message mailbox is ~17 hours of backfill; the run is expected
+to take that long, or to start from a Takeout (below), which takes the
+time down to that of the mail newer than the Takeout. `message_budget` stops a run early with a
 partial result and is kept for experiments and the live test, which uses
 it to prove a partial run walks forward; the wizard does not offer it.
 
@@ -295,9 +339,94 @@ it to prove a partial run walks forward; the wizard does not offer it.
 round trips, not quota units, and quota is what binds — so it would add
 multipart encoding for no throughput.
 
-**Threads are grouped, not fetched.** `threads.get` costs 40 units
-against `messages.get`'s 20, and grouping by `threadId` gives the same
-membership for free.
+**A message whose bytes are held is asked for its labels alone.** A
+Gmail message's bytes never change; only its labels do. So a listed
+message the store holds an `.eml` for is written again from those
+bytes and its labels, which come from one of two places
+(`MessagesGet::relabel`):
+
+- **A walk of every label**, when that is cheaper: one `messages.list`
+  per label, 5 units a page of 500 ids, and a message no walk names
+  carries no label. `label_walk_pays` prices the walk at one page per
+  label plus the account's size times ten labels a message over 500,
+  against 20 units a message. A walk that fails part-way is not used,
+  since a label it missed would read as one the message lacks.
+- **`messages.get?format=MINIMAL`** otherwise: a relabel or two in an
+  ordinary sync.
+
+Measured on a 27.5k-message account with 32 labels: walking every
+label took 197 pages (985 units, under a minute), and for 150 messages
+sampled at random the walks' labels matched `labelIds` from
+`messages.get` exactly, system labels (`UNREAD`, `CATEGORY_*`, `SPAM`,
+`TRASH`) included.
+
+**Threads are grouped, not fetched.** `threads.get` costs 40 units,
+even with `format=MINIMAL`, against `messages.get`'s 20, and grouping
+by `threadId` gives the same membership for free: `messages.list` and
+`history.list` name each message's thread, which is all whole threads
+and a thread's count need.
+
+### Starting from a Takeout
+
+A Gmail source may name a Takeout of the same account beside its
+`gmail` table — the `.zip` or `.tgz` as Google sent it, the folder
+holding every part of one export, or, unpacked, the `.mbox` or the
+Takeout's `Mail` folder — the way a
+Lightroom source names its backups beside its catalog
+([`config_model.md`](config_model.md) §"Where the data comes from"):
+
+```toml
+[steps.params.gmail]
+
+[steps.params.mbox]
+path = "~/Takeout/Mail"
+```
+
+The Takeout supplies the messages; Gmail says which exist and how
+they are labelled. Each run, after `labels.list` and before anything
+is listed, `mbox::seed` reads the Takeout and adds a message only when
+the store holds no row for it and, once a walk has listed everything
+the source admits, Gmail still lists it. It updates and deletes
+nothing. The API part then runs as above: the first walk of the
+account lists every message, deletes the seeded rows it did not name
+(a whole-account walk deletes every email row of the account it did
+not name, listed or not), and each seeded message is owed only its
+labels.
+
+What makes it work is that the two meet on the same rows (§2): a
+Takeout message's id is Gmail's, from its `From ` line, and its
+`X-GM-THRID` is the API's `threadId` in decimal, keyed the same way. Checked against the
+live API on one account: Takeout's bytes are what `format=RAW` returns,
+plus the two headers Takeout adds (`X-GM-THRID`, `X-Gmail-Labels`) and
+the mbox's blank separator line; the mbox reader also turns CRLF line
+ends into LF. So a seeded `.eml` hashes differently from the API's, and
+the store keeps the Takeout's.
+
+Measured on that account (27.5k messages, a Takeout of 25,020 four
+months old): the first sync read the Takeout in 42 seconds, gave 24,983
+messages their labels from the walks, deleted the 37 Gmail no longer
+has, and downloaded only the 2,570 newer ones, for 155k units in all;
+downloading every message would have cost 1.65M. The next sync read
+the Takeout again, added nothing, and took 7 seconds.
+
+Beside `gmail`, the mbox's account fields (`account_id`, …) are
+refused: the mail is filed under the account Gmail signs in as, since
+an mbox run under another account would retire the API's rows. A
+message with no Gmail id on its `From ` line is not this account's
+Takeout and is left out, with a `skipped:takeout` row naming the file.
+JMAP beside an mbox is refused: its ids are its own, so a Takeout
+would double the mailbox rather than seed it.
+
+A Takeout that was read through cleanly, by a run that was not
+stopped, is not read again while its files hash the same and the
+account and `only_extract_labels` are unchanged: the `email/takeout_seed`
+stamp in `ingested_files`, as the mbox mode keeps its own (the
+provider's `INGEST.md`, "mbox"). Skipping it loses nothing, since a
+second read of the same Takeout could only add what the store does not
+hold and Gmail still lists, and a message the store stopped holding
+since was deleted because Gmail no longer lists it. A new Takeout put
+in its place, or a changed label filter, is read again whole. Deleting
+the Takeout or dropping `mbox` from the step deletes nothing.
 
 ## 4. Traps in the Gmail API
 
@@ -305,10 +434,19 @@ Each of these fails silently: a single run passes.
 
 - **Filter server-side.** `only_extract_labels` narrows
   `messages.list?labelIds=`; checking it after `messages.get` would pay
-  20 units for every message in the account to keep a handful. A
+  60 units for every message in the account to keep a handful. A
   configured name that matches no label is a download problem; when
   *none* match, the run fails, because an empty `labelIds` means
   "everything".
+- **Check a fetched message against label ids, not names.** The
+  configured labels are resolved to Gmail's ids once
+  (`LabelIndex::ids_for_names`, which takes a path or an id), and the
+  check after `messages.get` compares those ids with the message's
+  `labelIds`. A build that compared the configured strings with the
+  labels' paths dropped every message of a filter written as ids
+  (`INBOX` against `Inbox`), and since a dropped message loses its
+  listing, never asked for them again; raw-store rung 5 has every
+  Gmail store walk its labels once more to list them.
 - **Repeated `labelIds` intersect.** `only_extract_labels` means
   "carrying **any** of these", and `messages.list` cannot express a
   union: asking for three labels at once returns the messages carrying

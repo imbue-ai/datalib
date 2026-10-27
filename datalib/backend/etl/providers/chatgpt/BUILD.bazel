@@ -14,6 +14,14 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
+# The same TNG account laid out as a ChatGPT data export, in the shape a
+# real one has: conversations split into parts the manifest lists, files
+# as `file_<id>.dat`.
+filegroup(
+    name = "tng_export_fixture",
+    srcs = glob(["tests/fixtures/chatgpt_export/**"]),
+)
+
 rust_library(
     name = "datalib_etl_chatgpt",
     srcs = glob(
@@ -29,6 +37,7 @@ rust_library(
     ],
     deps = [
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/files:datalib_etl_files",
         "//datalib/backend/etl/web:datalib_etl_web",
         "//datalib/backend/etl/providers/chatgpt_config:datalib_etl_chatgpt_config",
         "//datalib/backend/probe:datalib_probe",
@@ -42,6 +51,7 @@ rust_library(
         "@datalib_crates//:thiserror",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
+        "@datalib_crates//:zip",
     ],
 )
 
@@ -69,10 +79,12 @@ rust_test(
     args = ["--skip", "live::"],
     crate_root = "tests/chatgpt_tests/main.rs",
     data = glob(["tests/chatgpt_tests/snapshots/*.snap"], allow_empty = True) + [
+        ":tng_export_fixture",
         ":tng_fixture",
     ],
     edition = "2021",
     env = {
+        "CHATGPT_EXPORT_FIXTURE_DIR": "datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_export",
         "CHATGPT_FIXTURE_DIR": "datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api",
         "INSTA_WORKSPACE_ROOT": ".",
     },
@@ -81,6 +93,7 @@ rust_test(
         "//datalib/backend/etl/providers/chatgpt_render:datalib_etl_chatgpt_render",
         "//datalib/backend/etl/render:datalib_etl_render",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/files:datalib_etl_files",
         "//datalib/backend/etl/web:datalib_etl_web",
         ":datalib_etl_chatgpt",
         "//datalib/backend/problems:datalib_problems",
@@ -91,6 +104,7 @@ rust_test(
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
+        "@datalib_crates//:zip",
     ],
 )
 
@@ -103,7 +117,10 @@ rust_test(
     env = {
         "CHATGPT_FIXTURE_DIR": "datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api",
     },
-    deps = ["@datalib_crates//:tempfile"],
+    deps = [
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:toml",
+    ],
 )
 
 # `bazel run //...:foo.update` siblings that re-run the insta-using
@@ -112,8 +129,12 @@ insta_update(
     name = "chatgpt_tests.update",
     test = ":chatgpt_tests",
     test_args = ["--skip", "live::"],
-    extra_data = [":tng_fixture"],
+    extra_data = [
+        ":tng_export_fixture",
+        ":tng_fixture",
+    ],
     extra_env = {
+        "CHATGPT_EXPORT_FIXTURE_DIR": "datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_export",
         "CHATGPT_FIXTURE_DIR": "datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api",
     },
 )

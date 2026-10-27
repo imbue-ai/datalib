@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { newestAnswer } from "../src/live";
 
 function deferred<T>() {
@@ -67,5 +67,34 @@ describe("newestAnswer", () => {
     fetches[2].resolve("alone");
     await settled();
     expect(kept).toEqual(["after", "alone"]);
+  });
+});
+
+describe("newestAnswer with spacing", () => {
+  /// A fetch that answers in a millisecond kept pace with the migrate
+  /// pass's frames, so the page still asked for `/api/config` about 80
+  /// times on one launch of the TNG root.
+  it("asks at most once per spacing however fast the frames come", async () => {
+    vi.useFakeTimers();
+    try {
+      let fetches = 0;
+      const ask = newestAnswer(
+        async () => {
+          fetches += 1;
+          await new Promise((r) => setTimeout(r, 1));
+        },
+        () => {},
+        { spacing: 250 },
+      );
+      for (let t = 0; t < 1000; t += 5) {
+        ask();
+        await vi.advanceTimersByTimeAsync(5);
+      }
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(fetches).toBeGreaterThanOrEqual(4);
+      expect(fetches).toBeLessThanOrEqual(5);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -91,8 +91,9 @@ describe("chatUuidFromHref", () => {
 });
 
 describe("rewriteIdButtonsForCopy", () => {
-  /** A selection copied across a 🆔 keeps the 🆔, as a `datalib://`
-   *  link to its section, or to the document for the page title's. */
+  /** A selection copied across a 🆔 keeps the 🆔 and its uuid, as a
+   *  `datalib://` link to its section, or to the document for the page
+   *  title's. */
   it("turns each copied 🆔 button into a link to what it names", () => {
     const root = document.createElement("div");
     root.innerHTML =
@@ -105,8 +106,8 @@ describe("rewriteIdButtonsForCopy", () => {
       a.textContent,
     ]);
     expect(links).toEqual([
-      ["datalib://chat/doc-1", "🆔"],
-      ["datalib://chat/doc-1?msg=sec-2", "🆔"],
+      ["datalib://chat/doc-1", "🆔 doc-1"],
+      ["datalib://chat/doc-1?msg=sec-2", "🆔 sec-2"],
     ]);
     expect(rewriteIdButtonsForCopy(root, "doc-1")).toBe(false);
   });
@@ -132,7 +133,7 @@ describe("rewriteIdButtonsForCopy", () => {
     root.remove();
 
     expect(prevented).toBe(true);
-    expect(data["text/html"]).toContain('<a href="datalib://chat/doc-1?msg=sec-2">🆔</a>');
+    expect(data["text/html"]).toContain('<a href="datalib://chat/doc-1?msg=sec-2">🆔 sec-2</a>');
     expect(data["text/html"]).not.toContain("<button");
   });
 });

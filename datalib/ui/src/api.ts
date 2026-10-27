@@ -494,11 +494,45 @@ export function fetchAccounts(signal?: AbortSignal): Promise<AccountsMap> {
 /// same body, like a walk of the data root (`…/refresh`).
 type GetOptions = { toast?: boolean; method?: "GET" | "POST" };
 
+type Answer = { ok: boolean; status: number; body: string };
+
+/// GETs asked in one task share one request: the cards a live frame
+/// reaches, or a card's sections mounting together, all ask in the same
+/// task, and each used to send its own. Cleared once the task is over,
+/// so a later ask, which may follow a change, always goes out.
+const askedThisTask = new Map<string, Promise<Answer>>();
+
+function sharedGet(url: string): Promise<Answer> {
+  let answer = askedThisTask.get(url);
+  if (!answer) {
+    answer = fetch(url).then(async (r) => ({ ok: r.ok, status: r.status, body: await r.text() }));
+    askedThisTask.set(url, answer);
+    queueMicrotask(() => askedThisTask.delete(url));
+  }
+  return answer;
+}
+
 async function getJson<T>(
   url: string,
   signal?: AbortSignal,
   { toast = true, method = "GET" }: GetOptions = {},
 ): Promise<T> {
+  // A caller that can abort keeps its own request.
+  if (method === "GET" && !signal) {
+    let a: Answer;
+    try {
+      a = await sharedGet(url);
+    } catch (e) {
+      if (toast) pushToast(`${url}: ${(e as Error).message}`);
+      throw e;
+    }
+    if (!a.ok) {
+      const err = new ApiError(url, a.status, errorDetail(a.body));
+      if (toast) pushToast(err.message);
+      throw err;
+    }
+    return JSON.parse(a.body) as T;
+  }
   let r: Response;
   try {
     r = await fetch(url, { signal, method });
@@ -1710,7 +1744,6 @@ export async function putLib(
 // null when none has been kept yet.
 export async function fetchUiState(name: string): Promise<unknown> {
   const r = await fetch(`/api/ui/state/${encodeURIComponent(name)}`);
-  if (r.status === 404) return null;
   if (!r.ok) throw new Error(`GET /api/ui/state/${name} → ${r.status}`);
   return (await r.json()) as unknown;
 }

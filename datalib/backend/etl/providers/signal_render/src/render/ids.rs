@@ -1,9 +1,8 @@
-//! Signal entity ids. A backup's `chat_id`, `author_id` and
-//! `recipient_id` are autoincrements local to that backup file, and the
-//! backup carries no identifier for the account that made it, so the
-//! ids are scoped to the configured source. A recipient's e164 or ACI
-//! would be a better key, but `recipients.identifier` is nullable, and
-//! a scope that is sometimes there re-keys every row the day it appears.
+//! Signal entity ids, minted from the raw store's keys
+//! (`datalib_etl_signal::ingest::keys`): who a chat is with and who wrote
+//! a message, never the numbers one backup gave them, so a phone switch
+//! keeps every id. The backup carries no identifier for the account that
+//! made it, so the ids are scoped to the configured source.
 
 use datalib_id::{composite_key, IdNamespace, Identity, Minter};
 use datalib_time::RecordStampPrecision;

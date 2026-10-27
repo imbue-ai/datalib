@@ -5,7 +5,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-84b7-85ef-23cb38507f8b ===
 {
   "edges": [],
-  "render_version": 13,
+  "render_version": 14,
   "rows": [
     {
       "account": "data@enterprise.starfleet.test",
@@ -40,7 +40,7 @@ expression: docs_bundle(&docs)
       "qmd_path": "chatgpt_api/render_markdown/00000000-0000-84b7-85ef-23cb38507f8b/all.md",
       "source_label": "ChatGPT",
       "source_url": "https://chatgpt.com/c/68fa0001-fake-7000-8000-positronic0001",
-      "supplied_terms": "[[\"participant\",\"System\"],[\"participant\",\"gpt-5\"]]",
+      "supplied_terms": "[[\"participant\",\"System\"],[\"participant\",\"ai_model:gpt-5\"]]",
       "touched_at": "2370-10-24T08:05:00+00:00",
       "upstream_account": null,
       "upstream_entity_kind": "conversation",
@@ -89,8 +89,8 @@ expression: docs_bundle(&docs)
     },
     {
       "account": "data@enterprise.starfleet.test",
-      "author": "User",
-      "author_handle": null,
+      "author": "Me",
+      "author_handle": "me:self",
       "byte_size": 114,
       "channel": null,
       "contact": null,
@@ -130,7 +130,7 @@ expression: docs_bundle(&docs)
     {
       "account": "data@enterprise.starfleet.test",
       "author": "gpt-5",
-      "author_handle": null,
+      "author_handle": "ai_model:gpt-5",
       "byte_size": 597,
       "channel": null,
       "contact": null,
@@ -169,8 +169,8 @@ expression: docs_bundle(&docs)
     },
     {
       "account": "data@enterprise.starfleet.test",
-      "author": "User",
-      "author_handle": null,
+      "author": "Me",
+      "author_handle": "me:self",
       "byte_size": 54,
       "channel": null,
       "contact": null,
@@ -212,7 +212,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-869c-aa85-d9b7911f2b27 ===
 {
   "edges": [],
-  "render_version": 13,
+  "render_version": 14,
   "rows": [
     {
       "account": "data@enterprise.starfleet.test",
@@ -247,7 +247,7 @@ expression: docs_bundle(&docs)
       "qmd_path": "chatgpt_api/render_markdown/00000000-0000-869c-aa85-d9b7911f2b27/all.md",
       "source_label": "ChatGPT",
       "source_url": "https://chatgpt.com/c/68fa0005-fake-7000-8000-positronic0005",
-      "supplied_terms": "[[\"participant\",\"Tool\"],[\"participant\",\"gpt-5\"]]",
+      "supplied_terms": "[[\"participant\",\"Tool\"],[\"participant\",\"ai_model:gpt-5\"]]",
       "touched_at": "2370-10-28T08:05:05+00:00",
       "upstream_account": null,
       "upstream_entity_kind": "conversation",
@@ -256,8 +256,8 @@ expression: docs_bundle(&docs)
     },
     {
       "account": "data@enterprise.starfleet.test",
-      "author": "User",
-      "author_handle": null,
+      "author": "Me",
+      "author_handle": "me:self",
       "byte_size": 101,
       "channel": null,
       "contact": null,
@@ -297,7 +297,7 @@ expression: docs_bundle(&docs)
     {
       "account": "data@enterprise.starfleet.test",
       "author": "gpt-5",
-      "author_handle": null,
+      "author_handle": "ai_model:gpt-5",
       "byte_size": 53,
       "channel": null,
       "contact": null,
@@ -337,7 +337,7 @@ expression: docs_bundle(&docs)
     {
       "account": "data@enterprise.starfleet.test",
       "author": "gpt-5",
-      "author_handle": null,
+      "author_handle": "ai_model:gpt-5",
       "byte_size": 21,
       "channel": null,
       "contact": null,
@@ -377,7 +377,7 @@ expression: docs_bundle(&docs)
     {
       "account": "data@enterprise.starfleet.test",
       "author": "gpt-5",
-      "author_handle": null,
+      "author_handle": "ai_model:gpt-5",
       "byte_size": 231,
       "channel": null,
       "contact": null,
@@ -416,8 +416,8 @@ expression: docs_bundle(&docs)
     },
     {
       "account": "data@enterprise.starfleet.test",
-      "author": "User",
-      "author_handle": null,
+      "author": "Me",
+      "author_handle": "me:self",
       "byte_size": 77,
       "channel": null,
       "contact": null,
@@ -457,7 +457,7 @@ expression: docs_bundle(&docs)
     {
       "account": "data@enterprise.starfleet.test",
       "author": "gpt-5",
-      "author_handle": null,
+      "author_handle": "ai_model:gpt-5",
       "byte_size": 114,
       "channel": null,
       "contact": null,
@@ -537,7 +537,7 @@ expression: docs_bundle(&docs)
     {
       "account": "data@enterprise.starfleet.test",
       "author": "gpt-5",
-      "author_handle": null,
+      "author_handle": "ai_model:gpt-5",
       "byte_size": 46,
       "channel": null,
       "contact": null,
@@ -576,8 +576,8 @@ expression: docs_bundle(&docs)
     },
     {
       "account": "data@enterprise.starfleet.test",
-      "author": "User",
-      "author_handle": null,
+      "author": "Me",
+      "author_handle": "me:self",
       "byte_size": 55,
       "channel": null,
       "contact": null,
@@ -657,7 +657,7 @@ expression: docs_bundle(&docs)
     {
       "account": "data@enterprise.starfleet.test",
       "author": "gpt-5",
-      "author_handle": null,
+      "author_handle": "ai_model:gpt-5",
       "byte_size": 116,
       "channel": null,
       "contact": null,
@@ -696,8 +696,8 @@ expression: docs_bundle(&docs)
     },
     {
       "account": "data@enterprise.starfleet.test",
-      "author": "User",
-      "author_handle": null,
+      "author": "Me",
+      "author_handle": "me:self",
       "byte_size": 53,
       "channel": null,
       "contact": null,
@@ -777,7 +777,7 @@ expression: docs_bundle(&docs)
     {
       "account": "data@enterprise.starfleet.test",
       "author": "gpt-5",
-      "author_handle": null,
+      "author_handle": "ai_model:gpt-5",
       "byte_size": 32,
       "channel": null,
       "contact": null,
@@ -817,7 +817,7 @@ expression: docs_bundle(&docs)
     {
       "account": "data@enterprise.starfleet.test",
       "author": "gpt-5",
-      "author_handle": null,
+      "author_handle": "ai_model:gpt-5",
       "byte_size": 56,
       "channel": null,
       "contact": null,
@@ -856,8 +856,8 @@ expression: docs_bundle(&docs)
     },
     {
       "account": "data@enterprise.starfleet.test",
-      "author": "User",
-      "author_handle": null,
+      "author": "Me",
+      "author_handle": "me:self",
       "byte_size": 100,
       "channel": null,
       "contact": null,
@@ -897,7 +897,7 @@ expression: docs_bundle(&docs)
     {
       "account": "data@enterprise.starfleet.test",
       "author": "gpt-5",
-      "author_handle": null,
+      "author_handle": "ai_model:gpt-5",
       "byte_size": 244,
       "channel": null,
       "contact": null,
@@ -939,7 +939,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-86dd-be81-c87daeff7764 ===
 {
   "edges": [],
-  "render_version": 13,
+  "render_version": 14,
   "rows": [
     {
       "account": "data@enterprise.starfleet.test",
@@ -974,7 +974,7 @@ expression: docs_bundle(&docs)
       "qmd_path": "chatgpt_api/render_markdown/00000000-0000-86dd-be81-c87daeff7764/all.md",
       "source_label": "ChatGPT",
       "source_url": "https://chatgpt.com/c/68fa0004-fake-7000-8000-positronic0004",
-      "supplied_terms": "[[\"participant\",\"gpt-5\"]]",
+      "supplied_terms": "[[\"participant\",\"ai_model:gpt-5\"]]",
       "touched_at": "2370-10-27T08:01:00+00:00",
       "upstream_account": null,
       "upstream_entity_kind": "conversation",
@@ -983,8 +983,8 @@ expression: docs_bundle(&docs)
     },
     {
       "account": "data@enterprise.starfleet.test",
-      "author": "User",
-      "author_handle": null,
+      "author": "Me",
+      "author_handle": "me:self",
       "byte_size": 35,
       "channel": null,
       "contact": null,
@@ -1024,7 +1024,7 @@ expression: docs_bundle(&docs)
     {
       "account": "data@enterprise.starfleet.test",
       "author": "gpt-5",
-      "author_handle": null,
+      "author_handle": "ai_model:gpt-5",
       "byte_size": 603,
       "channel": null,
       "contact": null,
@@ -1066,7 +1066,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-888f-8dff-2bdaf3aa5faa ===
 {
   "edges": [],
-  "render_version": 13,
+  "render_version": 14,
   "rows": [
     {
       "account": "data@enterprise.starfleet.test",
@@ -1101,7 +1101,7 @@ expression: docs_bundle(&docs)
       "qmd_path": "chatgpt_api/render_markdown/00000000-0000-888f-8dff-2bdaf3aa5faa/all.md",
       "source_label": "ChatGPT",
       "source_url": "https://chatgpt.com/c/68fa0003-fake-7000-8000-positronic0003",
-      "supplied_terms": "[[\"participant\",\"gpt-5\"]]",
+      "supplied_terms": "[[\"participant\",\"ai_model:gpt-5\"]]",
       "touched_at": "2370-10-26T08:05:00+00:00",
       "upstream_account": null,
       "upstream_entity_kind": "conversation",
@@ -1110,8 +1110,8 @@ expression: docs_bundle(&docs)
     },
     {
       "account": "data@enterprise.starfleet.test",
-      "author": "User",
-      "author_handle": null,
+      "author": "Me",
+      "author_handle": "me:self",
       "byte_size": 1061,
       "channel": null,
       "contact": null,
@@ -1151,7 +1151,7 @@ expression: docs_bundle(&docs)
     {
       "account": "data@enterprise.starfleet.test",
       "author": "gpt-5",
-      "author_handle": null,
+      "author_handle": "ai_model:gpt-5",
       "byte_size": 458,
       "channel": null,
       "contact": null,
@@ -1193,7 +1193,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-893e-9200-2f457298a582 ===
 {
   "edges": [],
-  "render_version": 13,
+  "render_version": 14,
   "rows": [
     {
       "account": "data@enterprise.starfleet.test",
@@ -1228,7 +1228,7 @@ expression: docs_bundle(&docs)
       "qmd_path": "chatgpt_api/render_markdown/00000000-0000-893e-9200-2f457298a582/all.md",
       "source_label": "ChatGPT",
       "source_url": "https://chatgpt.com/c/68fa0002-fake-7000-8000-positronic0002",
-      "supplied_terms": "[[\"participant\",\"gpt-5\"]]",
+      "supplied_terms": "[[\"participant\",\"ai_model:gpt-5\"]]",
       "touched_at": "2370-10-25T08:05:20+00:00",
       "upstream_account": null,
       "upstream_entity_kind": "conversation",
@@ -1237,8 +1237,8 @@ expression: docs_bundle(&docs)
     },
     {
       "account": "data@enterprise.starfleet.test",
-      "author": "User",
-      "author_handle": null,
+      "author": "Me",
+      "author_handle": "me:self",
       "byte_size": 81,
       "channel": null,
       "contact": null,
@@ -1278,7 +1278,7 @@ expression: docs_bundle(&docs)
     {
       "account": "data@enterprise.starfleet.test",
       "author": "gpt-5",
-      "author_handle": null,
+      "author_handle": "ai_model:gpt-5",
       "byte_size": 143,
       "channel": null,
       "contact": null,
@@ -1318,7 +1318,7 @@ expression: docs_bundle(&docs)
     {
       "account": "data@enterprise.starfleet.test",
       "author": "gpt-5",
-      "author_handle": null,
+      "author_handle": "ai_model:gpt-5",
       "byte_size": 181,
       "channel": null,
       "contact": null,

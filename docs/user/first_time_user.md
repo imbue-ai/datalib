@@ -55,6 +55,11 @@ download of about 100 MB, once per release. You do not need `node`,
 `npm` or `npx` installed. The `latchkey` command does not fetch it
 itself, so step 1 fetches it by hand with `datalib-step pull-runtime`;
 that is also how to fetch it ahead of time for an offline laptop.
+Every install on the machine shares that one directory, and it holds
+one release's runtime at a time: fetching a new release's removes the
+one an older install runs on. To try a release beside another, give it
+a cache of its own by setting `XDG_CACHE_HOME` (it then fetches into
+`$XDG_CACHE_HOME/datalib/runtime`) for every command of that install.
 
 ## 1. Install the tools and make a data root (here it's `~/datalib`)
 
@@ -72,7 +77,10 @@ unpacks it into `~/.local/lib/datalib` and links the tools into
 - `datalib-http` — the app: a local web server with the UI built in.
 - `datalib-dag` and `datalib-step` — the sync pipeline, which the app
   runs for you and which you can also run from the terminal.
-- `datalib-applet` — serves the search grid inside the app.
+- `datalib-applet` — serves the search grid inside the app, and
+  searches from the terminal with no app running:
+  `datalib-applet search ~/datalib 'from:picard warp core'` prints what
+  the search box would find, as JSON.
 - `datalib-doltlite` — the shell for reading and exporting your stores
   (step 8).
 - `datalib-migrate-config` — rewrites a config file from an older
@@ -297,7 +305,17 @@ next one.
 You normally don't write this by hand. The app's first-run screen
 writes the index steps and the applet for an empty folder, and the
 **Data sources** card's **Add source** button fills in a source (next
-step).
+step). From a terminal, two commands do the same:
+
+```bash
+datalib-dag init ~/datalib
+datalib-step examples slack --append ~/datalib/config.toml
+```
+
+The first writes the starter config and nothing else. The second adds
+a source's smallest working config and puts it in the index steps'
+`inputs`; a source with more than one way in names it
+(`--method gmail`), and `--id` names a second account's group.
 If you'd rather hand-edit, copy
 [**configs/dag_example.toml**](https://github.com/imbue-ai/datalib/blob/main/configs/dag_example.toml),
 a complete commented example.
@@ -567,14 +585,19 @@ are already in open formats you can read with no datalib at all:
 just explore in place — `datalib-doltlite -readonly <file>` drops you
 in a REPL. Pass `-readonly` whenever you are only looking: anything a
 writable session commits is overwritten by your next sync, and a
-transaction it leaves open stalls that sync. If you prefer a
-GUI, a build of DB Browser for SQLite patched to open doltlite files is
-at <https://github.com/thadd3us/sqlitebrowser/releases> (macOS). In the
-desktop app, **Browse** on a source's download row opens its raw store
+transaction it leaves open stalls that sync. 
+
+If you prefer a GUI, you have two options:
+
+1. The Dolt team makes [the Dolt Workbench](https://github.com/dolthub/dolt-workbench),
+   an open source database workbench with version control features.
+2. A build of DB Browser for SQLite patched to open doltlite files is
+   at <https://github.com/thadd3us/sqlitebrowser/releases> (macOS).
+
+In the desktop app, **Browse** on a source's download row opens its raw store
 read-only for you — in that DB Browser when it is installed, otherwise
-in `datalib-doltlite` in Terminal. More
-recipes, including the commit history and per-sync diffs, are in
-[`docs/dev/doltlite.md`](../dev/doltlite.md).
+in `datalib-doltlite` in Terminal. More recipes, including the commit history 
+and per-sync diffs, are in [`docs/dev/doltlite.md`](../dev/doltlite.md).
 
 ## 9. Feedback
 

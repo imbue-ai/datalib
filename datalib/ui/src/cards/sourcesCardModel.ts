@@ -35,6 +35,7 @@ import {
   removedWith,
   setQmdSteps,
   setTimeSeriesStep,
+  setOccurrencesStep,
   qmdIndexingOf,
   type QmdIndexing,
   unwireFromFanIns,
@@ -781,6 +782,7 @@ export function useSourcesCard(ctx: CardCtx) {
       next = setQmdSteps(next, payload.id, "none");
     }
     next = setTimeSeriesStep(next, payload.id, payload.entry.type, payload.entry.package);
+    next = setOccurrencesStep(next, payload.id, payload.entry.type);
     // A package source's applets come with it, and leave with its group.
     const pkg = payload.entry.package;
     if (!current && pkg) next = addSourceApplets(next, payload.id, pkg.id, pkg.applets);

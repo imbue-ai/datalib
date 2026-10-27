@@ -21,7 +21,9 @@ pub struct AccountRow {
     pub id_and_payload: WirePayload,
 }
 
-/// `recipients` — one row per Signal recipient (peer / group).
+/// `recipients` — one row per Signal recipient (peer / group), keyed by
+/// [`keys::recipient_key`](super::keys::recipient_key). The payload is
+/// the frame as the backup wrote it, its own numbering included.
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "recipients")]
 pub struct RecipientRow {
@@ -30,7 +32,8 @@ pub struct RecipientRow {
     pub display_name: Option<String>,
 }
 
-/// `chats` — one row per Signal chat (DM or group thread).
+/// `chats` — one row per Signal chat (DM or group thread), keyed like
+/// its recipient.
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "chats")]
 pub struct ChatRow {
@@ -153,7 +156,9 @@ pub async fn snapshot_fingerprint(
     Ok(parts.join(":"))
 }
 
-/// Recipe for the synthesized [`ChatItemRow`] primary key.
+/// Recipe for the synthesized [`ChatItemRow`] primary key, over the
+/// chat's and the author's [`keys`](super::keys), never the backup's own
+/// numbers for them.
 pub fn chat_item_id_recipe(chat_id: &str, author_id: &str, date_sent: i64) -> String {
     format!("{chat_id}#{author_id}#{date_sent}")
 }

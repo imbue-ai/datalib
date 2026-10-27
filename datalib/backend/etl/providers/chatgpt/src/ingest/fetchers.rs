@@ -1,8 +1,9 @@
 //! What each loop fetches and how a flush of it is stored, one
 //! [`Fetcher`] per kind: a conversation's detail, an attachment's bytes.
-//! Each is one request per record; the loop (`datalib_etl_web::owed`) owns
-//! the stop, the failure budget, the flush and what each outcome means
-//! for the record's sidecar.
+//! Each is one request per record, or none for a file the run's export
+//! holds; the loop (`datalib_etl_web::owed`) owns the stop, the failure
+//! budget, the flush and what each outcome means for the record's
+//! sidecar.
 
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -156,7 +157,8 @@ impl Attachments<'_> {
     /// One edge's bytes, by the two-hop dance: the file's metadata through
     /// the API, then the signed URL it names, which Azure serves to any
     /// client (the chatgpt cookie is refused there). Bytes the CAS already
-    /// holds for the file, under any conversation, cost no request.
+    /// holds for the file, under any conversation, or the export holds,
+    /// cost no request.
     async fn one(&self, key: &str) -> Result<Outcome<Blob>, BatchError> {
         let ctx = self.0;
         let (Some(conv_id), Some((_, file_id))) = (
@@ -183,6 +185,12 @@ impl Attachments<'_> {
             // with the refetch, or will.
             return Ok(Outcome::Gone);
         };
+        if let Some(export) = ctx.export {
+            if let Some(bytes) = export.file(file_id).map_err(BatchError::Abort)? {
+                ctx.counts.blobs_from_export.fetch_add(1, Ordering::Relaxed);
+                return Ok(Outcome::Got(Blob::Fetched(bytes, file.mime)));
+            }
+        }
         let meta = match ctx
             .client
             .get(&format!("/backend-api/files/{file_id}/download"))

@@ -14,6 +14,7 @@ pub mod session;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
@@ -36,7 +37,7 @@ pub use db::{block_on_load_all, db_path_for, LoadedRaw, RawDb};
 use api::call;
 use datalib_etl::doltlite_raw as dr;
 use db::{refresh_email_joins, write_eml_edges_in_tx};
-use listed::{Named, WHOLE_ACCOUNT};
+use listed::{Keeps, Named, WHOLE_ACCOUNT};
 use schema_raw::{AccountRow, EmailRow, EmlBlobRow, MailboxRow, MAILBOX_VOLATILE_PATHS};
 
 async fn upsert_account(
@@ -44,8 +45,10 @@ async fn upsert_account(
     now: &IsoOffsetTimestamp,
     id: &str,
     payload: &Value,
+    address: Option<String>,
 ) -> Result<()> {
-    let row = AccountRow::from_jmap_payload(id, payload)?;
+    let mut row = AccountRow::from_jmap_payload(id, payload)?;
+    row.email_address = address.or(row.email_address);
     let mut tx = db.pool().begin().await.context("begin account tx")?;
     bulk_upsert_in_tx(&mut tx, std::slice::from_ref(&row), now).await?;
     tx.commit().await.context("commit account tx")?;
@@ -218,9 +221,6 @@ pub struct FetchOptions {
     pub sealer: Option<datalib_etl::raw_store::Sealer>,
     pub hostname: String,
     pub account_id: Option<String>,
-    /// Skip the stored state tokens: list every mailbox and every email
-    /// again, and fetch every email again.
-    pub full_resync: bool,
     /// When non-empty, restrict the sync to mailboxes whose full label
     /// path (POSIX-like, e.g. `Work/Projects`; see
     /// [`crate::mailbox_labels`]) exactly matches one of these. Empty =
@@ -229,6 +229,9 @@ pub struct FetchOptions {
     /// narrowed to them server-side; `Email/changes` is account-wide, so
     /// an email it names is checked against them once fetched.
     pub only_mailbox_labels: Vec<String>,
+    /// Keep the rest of the thread of an email `only_mailbox_labels`
+    /// keeps, whatever its mailboxes.
+    pub whole_threads: bool,
     /// Skip downloading any blob whose advertised size exceeds this.
     /// `None` = no limit.
     pub blob_size_limit_bytes: Option<u64>,
@@ -256,8 +259,8 @@ impl FetchOptions {
             sealer: None,
             hostname: String::new(),
             account_id: None,
-            full_resync: false,
             only_mailbox_labels: Vec::new(),
+            whole_threads: true,
             blob_size_limit_bytes: None,
             blob_download_concurrency: None,
             blob_flush_count: None,
@@ -283,6 +286,11 @@ pub struct FetchSummary {
     pub blobs_skipped: usize,
     pub blobs_errored: usize,
     pub blobs_oversize: usize,
+    /// Emails listed because a kept email shares their thread, under
+    /// `whole_threads`.
+    pub listed_from_threads: usize,
+    /// Threads whose count of upstream emails changed.
+    pub threads_recounted: usize,
 }
 
 /// The config key a [`datalib_etl::download_problems::DownloadProblem`]
@@ -297,8 +305,12 @@ const PHASES: u64 = 4;
 const M_MAILBOX_GET: &str = "Mailbox/get";
 const M_EMAIL_CHANGES: &str = "Email/changes";
 const M_EMAIL_QUERY: &str = "Email/query";
+const M_THREAD_INDEX: &str = "Email/query threads";
 const M_EMAIL_GET: &str = "Email/get";
 const M_EML_DOWNLOAD: &str = "eml_download";
+
+/// Emails whose `threadId` one `Email/get` of the thread index asks for.
+const THREAD_ID_BATCH: usize = 250;
 
 /// `Email/get` batches in a row that may fail before the phase stops.
 const GET_FAILURE_BUDGET: usize = 3;
@@ -351,8 +363,8 @@ async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
         &json!({
             "hostname": opts.hostname,
             "account_id": account_id,
-            "full_resync": opts.full_resync,
             "only_mailbox_labels": opts.only_mailbox_labels,
+            "whole_threads": opts.whole_threads,
         }),
     )
     .await?;
@@ -396,11 +408,18 @@ async fn run_sync(
         .find(|(k, _)| k == account_id)
         .map(|(_, v)| v.clone())
         .unwrap_or_else(|| json!({}));
-    upsert_account(db, &now, account_id, &account_payload).await?;
+    upsert_account(
+        db,
+        &now,
+        account_id,
+        &account_payload,
+        session.account_address(account_id),
+    )
+    .await?;
 
     // ── mailboxes ───────────────────────────────────────────────────
     bar.doing("mailboxes");
-    let listed = sync_mailboxes(db, &now, session, account_id, opts, &mut summary).await;
+    let listed = sync_mailboxes(db, &now, session, account_id, &mut summary).await;
     // The mailboxes an earlier listing stored still file the mail; with
     // none stored there is nothing to file it under.
     let stored = !db.mailbox_names(account_id).await?.is_empty();
@@ -444,12 +463,14 @@ async fn run_sync(
 
     // ── emails ──────────────────────────────────────────────────────
     bar.doing("emails");
+    let keeps: Option<Vec<String>> = mailbox_filter.as_ref().map(|f| f.iter().cloned().collect());
     let listing = EmailListing {
         db,
         now: &now,
         session,
         account_id,
         opts,
+        indexing: keeps.is_some(),
     };
     let replayed = listing.replay_changes(&mut summary).await;
     let listed_any = listed::lists_any(db.pool()).await?;
@@ -459,9 +480,52 @@ async fn run_sync(
         .await;
     let listed_any = listed::lists_any(db.pool()).await?;
     or_a_listing_problem(enumerated, M_EMAIL_QUERY, listed_any, opts, found)?;
+    if listing.indexing {
+        let indexed = listing.walk_thread_index().await;
+        or_a_listing_problem(indexed, M_THREAD_INDEX, true, opts, found)?;
+    }
+    let whole_threads = keeps.as_deref().filter(|_| opts.whole_threads);
     listing
-        .fetch_owed(mailbox_filter.as_ref(), bar, found, &mut summary)
+        .list_kept_threads(whole_threads, &mut summary)
         .await?;
+    listing
+        .fetch_owed(
+            mailbox_filter.as_ref(),
+            whole_threads,
+            bar,
+            found,
+            &mut summary,
+        )
+        .await?;
+    // What this fetch kept may keep more threads.
+    if listing
+        .list_kept_threads(whole_threads, &mut summary)
+        .await?
+        > 0
+    {
+        listing
+            .fetch_owed(
+                mailbox_filter.as_ref(),
+                whole_threads,
+                bar,
+                found,
+                &mut summary,
+            )
+            .await?;
+    }
+    if !opts.control.stop.requested() {
+        if let Some(keeps) = whole_threads {
+            summary.emails_destroyed += listed::drop_unkept_threads(
+                db.pool(),
+                &now,
+                account_id,
+                Keeps::Mailboxes(keeps),
+                listed::same_id,
+            )
+            .await?;
+        }
+        summary.threads_recounted = listed::recount_threads(db.pool(), &now).await?;
+    }
     bar.did(1);
 
     // ── blobs ───────────────────────────────────────────────────────
@@ -512,16 +576,9 @@ async fn sync_mailboxes(
     now: &IsoOffsetTimestamp,
     session: &Session,
     account_id: &str,
-    opts: &FetchOptions,
     summary: &mut FetchSummary,
 ) -> Result<()> {
-    let stored = if opts.full_resync {
-        None
-    } else {
-        db.load_state(account_id, "Mailbox").await?
-    };
-
-    if let Some(since) = stored {
+    if let Some(since) = db.load_state(account_id, "Mailbox").await? {
         match incremental_mailboxes(db, now, session, account_id, &since, summary).await {
             Ok(()) => return Ok(()),
             Err(e) => warn!(
@@ -632,6 +689,8 @@ struct EmailListing<'a> {
     session: &'a Session,
     account_id: &'a str,
     opts: &'a FetchOptions,
+    /// Whether `thread_members` is kept: under a label filter.
+    indexing: bool,
 }
 
 impl EmailListing<'_> {
@@ -649,16 +708,11 @@ impl EmailListing<'_> {
     /// advances. Whether a named email has been fetched yet is not asked
     /// here, so the state never waits on a fetch.
     ///
-    /// With no state to replay from (a first run, `full_resync`, or a
-    /// state the server can no longer calculate changes from) the delta
-    /// starts over from the account's state now.
+    /// With no state to replay from (a first run, or a state the server
+    /// can no longer calculate changes from) the delta starts over from
+    /// the account's state now.
     async fn replay_changes(&self, summary: &mut FetchSummary) -> Result<()> {
-        let stored = if self.opts.full_resync {
-            None
-        } else {
-            self.db.load_state(self.account_id, "Email").await?
-        };
-        let Some(mut since) = stored else {
+        let Some(mut since) = self.db.load_state(self.account_id, "Email").await? else {
             return self.start_over().await;
         };
         loop {
@@ -698,6 +752,9 @@ impl EmailListing<'_> {
             listed::list_in_tx(&mut tx, &named, Some(&new_state), Named::Changed).await?;
             summary.emails_destroyed +=
                 listed::forget_in_tx(&mut tx, self.now, &destroyed, listed::same_id).await?;
+            if self.indexing {
+                listed::unmember_in_tx(&mut tx, &destroyed).await?;
+            }
             listed::save_token_in_tx(&mut tx, &self.token_scope(), &new_state).await?;
             tx.commit().await.context("commit changes tx")?;
             if let Some(sealer) = &self.opts.sealer {
@@ -740,9 +797,15 @@ impl EmailListing<'_> {
     ) -> Result<()> {
         let admitted: BTreeSet<String> = match mailbox_filter {
             None => [WHOLE_ACCOUNT.to_string()].into(),
-            Some(ids) => ids.clone(),
+            Some(ids) => ids
+                .iter()
+                .cloned()
+                .chain([listed::THREAD_INDEX.to_string()])
+                .collect(),
         };
-        let scopes = listed::scopes_owed(self.db.pool(), &admitted).await?;
+        let mut scopes = listed::scopes_owed(self.db.pool(), &admitted).await?;
+        // Walked on its own, by `walk_thread_index`.
+        scopes.retain(|scope| scope != listed::THREAD_INDEX);
         // Without a state there is no delta to say what changes after
         // the walk; the next run starts over and enumerates then.
         let Some(state) = self.db.load_state(self.account_id, "Email").await? else {
@@ -775,17 +838,7 @@ impl EmailListing<'_> {
             if self.stopping() {
                 return Ok(());
             }
-            let mut args = json!({
-                "accountId": self.account_id,
-                "sort": [{"property": "receivedAt", "isAscending": false}],
-                "limit": EMAIL_QUERY_PAGE,
-                "position": position,
-                "calculateTotal": true,
-            });
-            if !filter.is_null() {
-                args["filter"] = filter.clone();
-            }
-            let resp = call(self.session, "Email/query", args).await?;
+            let resp = self.query_page(&filter, position).await?;
 
             let page_state = resp
                 .get("queryState")
@@ -826,19 +879,117 @@ impl EmailListing<'_> {
             self.now,
             &scopes,
             whole_account.then_some(&named),
+            None,
             listed::same_id,
         )
         .await?;
         Ok(())
     }
 
+    /// One page of `Email/query` over what `filter` admits (`Null` for
+    /// the whole account), newest first.
+    async fn query_page(&self, filter: &Value, position: usize) -> Result<Value> {
+        let mut args = json!({
+            "accountId": self.account_id,
+            "sort": [{"property": "receivedAt", "isAscending": false}],
+            "limit": EMAIL_QUERY_PAGE,
+            "position": position,
+            "calculateTotal": true,
+        });
+        if !filter.is_null() {
+            args["filter"] = filter.clone();
+        }
+        call(self.session, "Email/query", args).await
+    }
+
+    /// Record the thread of every email in the account
+    /// (`thread_members`), unless a walk already has: `Email/query`
+    /// pages of the whole account, and an `Email/get` of their
+    /// `threadId`s. Only a walk that reaches its end records the index
+    /// as whole and drops the members it did not name.
+    async fn walk_thread_index(&self) -> Result<()> {
+        let pool = self.db.pool();
+        if listed::thread_index_is_whole(pool).await? {
+            return Ok(());
+        }
+        let mut position: usize = 0;
+        let mut query_state: Option<String> = None;
+        let mut named: BTreeSet<String> = BTreeSet::new();
+        loop {
+            if self.stopping() {
+                return Ok(());
+            }
+            let resp = self.query_page(&Value::Null, position).await?;
+            let page_state = resp
+                .get("queryState")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            if query_state.is_some() && page_state.is_some() && query_state != page_state {
+                position = 0;
+                query_state = page_state;
+                continue;
+            }
+            query_state = query_state.or(page_state);
+            let ids = string_array(&resp, "ids");
+            if ids.is_empty() {
+                break;
+            }
+            let mut members = Vec::with_capacity(ids.len());
+            for chunk in ids.chunks(THREAD_ID_BATCH) {
+                let got = call(
+                    self.session,
+                    "Email/get",
+                    json!({"accountId": self.account_id, "ids": chunk, "properties": ["threadId"]}),
+                )
+                .await?;
+                members.extend(jmap_list(&got).iter().filter_map(member_of));
+            }
+            let mut tx = pool.begin().await.context("begin thread index tx")?;
+            listed::member_in_tx(&mut tx, &members).await?;
+            tx.commit().await.context("commit thread index tx")?;
+            position += ids.len();
+            named.extend(ids);
+            let total = resp.get("total").and_then(|v| v.as_u64());
+            if total.is_some_and(|total| position as u64 >= total) {
+                break;
+            }
+        }
+        listed::close_thread_index(pool, &named).await?;
+        Ok(())
+    }
+
+    /// Under `whole_threads`, list the rest of every thread a kept email
+    /// is in, at the state. Returns how many it listed.
+    async fn list_kept_threads(
+        &self,
+        whole_threads: Option<&[String]>,
+        summary: &mut FetchSummary,
+    ) -> Result<u64> {
+        let Some(keeps) = whole_threads.filter(|_| !self.stopping()) else {
+            return Ok(0);
+        };
+        let stamp = self.db.load_state(self.account_id, "Email").await?;
+        let n = listed::list_kept_threads(
+            self.db.pool(),
+            self.account_id,
+            Keeps::Mailboxes(keeps),
+            stamp.as_deref(),
+        )
+        .await?;
+        summary.listed_from_threads += n as usize;
+        Ok(n)
+    }
+
     /// Fetch, with `Email/get`, every listed email the store does not
     /// hold at its listed stamp: `owed::drain`, fifty to a batch. An
     /// email the server no longer has, or that a label filter keeps out,
     /// is gone: its listing, its row and whatever was held for it go.
+    /// Under `whole_threads` the filter keeps every email of a thread
+    /// one it admits is in.
     async fn fetch_owed(
         &self,
         mailbox_filter: Option<&BTreeSet<String>>,
+        whole_threads: Option<&[String]>,
         bar: &RunBar,
         found: &RunProblems,
         summary: &mut FetchSummary,
@@ -850,10 +1001,20 @@ impl EmailListing<'_> {
         }
         bar.expect(owed.len() as u64);
         bar.doing("fetching emails");
+        let kept_threads = match whole_threads {
+            Some(keeps) => Some(Mutex::new(
+                listed::kept_threads(pool, self.account_id, Keeps::Mailboxes(keeps)).await?,
+            )),
+            None => None,
+        };
         let f = EmailGet {
             session: self.session,
             account_id: self.account_id,
             mailbox_filter,
+            kept_threads,
+            indexing: self.indexing,
+            members: Mutex::new(Vec::new()),
+            not_found: Mutex::new(Vec::new()),
             now: self.now,
             bar,
             destroyed: AtomicUsize::new(0),
@@ -883,6 +1044,14 @@ struct EmailGet<'a> {
     session: &'a Session,
     account_id: &'a str,
     mailbox_filter: Option<&'a BTreeSet<String>>,
+    /// Under `whole_threads`, the threads an email the filter admits is
+    /// in: held, or fetched this run.
+    kept_threads: Option<Mutex<HashSet<String>>>,
+    /// Whether `thread_members` is kept; what the answers since the last
+    /// write said of it.
+    indexing: bool,
+    members: Mutex<Vec<(String, String)>>,
+    not_found: Mutex<Vec<String>>,
     now: &'a IsoOffsetTimestamp,
     bar: &'a RunBar,
     destroyed: AtomicUsize,
@@ -898,7 +1067,20 @@ impl Fetcher<EmailRow> for EmailGet<'_> {
         let resp = email_get(self.session, self.account_id, &ids).await;
         self.bar.did(ids.len() as u64);
         match resp {
-            Ok(resp) => Ok(answered(self.account_id, self.mailbox_filter, batch, &resp)),
+            Ok(resp) => {
+                if self.indexing {
+                    let members: Vec<(String, String)> =
+                        jmap_list(&resp).iter().filter_map(member_of).collect();
+                    self.members.lock().expect("members").extend(members);
+                    let gone = string_array(&resp, "notFound");
+                    self.not_found.lock().expect("not found").extend(gone);
+                }
+                let keep = Keep {
+                    mailbox_filter: self.mailbox_filter,
+                    kept_threads: self.kept_threads.as_ref(),
+                };
+                Ok(answered(self.account_id, &keep, batch, &resp))
+            }
             Err(e) if api::is_terminal(&e) => Err(BatchError::Terminal(e)),
             Err(e) => Err(BatchError::Batch(e)),
         }
@@ -912,16 +1094,43 @@ impl Fetcher<EmailRow> for EmailGet<'_> {
         let (got, gone) = got_and_gone(batch);
         let n = listed::write_batch_in_tx(tx, self.now, got, &gone, listed::same_id).await?;
         self.destroyed.fetch_add(n, Ordering::Relaxed);
+        if self.indexing {
+            let members = std::mem::take(&mut *self.members.lock().expect("members"));
+            listed::member_in_tx(tx, &members).await?;
+            let not_found = std::mem::take(&mut *self.not_found.lock().expect("not found"));
+            listed::unmember_in_tx(tx, &not_found).await?;
+        }
         Ok(())
     }
 }
 
+/// `(email, thread)` from an `Email/get` envelope.
+fn member_of(envelope: &Value) -> Option<(String, String)> {
+    let id = envelope.get("id")?.as_str()?;
+    let thread = envelope.get("threadId")?.as_str()?;
+    Some((id.to_string(), thread.to_string()))
+}
+
+/// What the label filter keeps of an `Email/get` answer.
+struct Keep<'a> {
+    mailbox_filter: Option<&'a BTreeSet<String>>,
+    kept_threads: Option<&'a Mutex<HashSet<String>>>,
+}
+
+impl Keep<'_> {
+    fn admits(&self, row: &EmailRow) -> bool {
+        self.mailbox_filter
+            .is_none_or(|f| row.mailbox_ids().iter().any(|m| f.contains(m)))
+    }
+}
+
 /// What one `Email/get` says about each email `asked` for: an envelope
-/// filed under an admitted mailbox is the email, one filed elsewhere or
-/// named in `notFound` is gone, and the rest is left unanswered.
+/// filed under an admitted mailbox, or under `whole_threads` in a kept
+/// thread, is the email; one filed elsewhere or named in `notFound` is
+/// gone, and the rest is left unanswered.
 fn answered(
     account_id: &str,
-    mailbox_filter: Option<&BTreeSet<String>>,
+    keep: &Keep<'_>,
     asked: Vec<Listed>,
     resp: &Value,
 ) -> Vec<Fetched<EmailRow>> {
@@ -931,16 +1140,27 @@ fn answered(
         .filter_map(|envelope| EmailRow::from_jmap_envelope(account_id, envelope))
         .map(|row| (row.id().to_string(), row))
         .collect();
+    let mut kept_threads = keep
+        .kept_threads
+        .map(|kept| kept.lock().expect("kept threads"));
+    if let Some(kept) = kept_threads.as_mut() {
+        kept.extend(
+            rows.values()
+                .filter(|row| keep.admits(row))
+                .map(|row| row.thread_id.clone()),
+        );
+    }
+    let kept = |row: &EmailRow| {
+        keep.admits(row)
+            || kept_threads
+                .as_ref()
+                .is_some_and(|kept| kept.contains(&row.thread_id))
+    };
     asked
         .into_iter()
         .filter_map(|listed| {
             let outcome = match rows.remove(&listed.key) {
-                Some(row)
-                    if mailbox_filter
-                        .is_none_or(|f| row.mailbox_ids().iter().any(|m| f.contains(m))) =>
-                {
-                    Outcome::Got(row)
-                }
+                Some(row) if kept(&row) => Outcome::Got(row),
                 Some(_) => Outcome::Gone,
                 None if not_found.contains(&listed.key) => Outcome::Gone,
                 None => return None,

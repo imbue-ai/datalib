@@ -328,6 +328,16 @@ function openedFrom(box: BoxNode, id: string): Set<string> {
   return out;
 }
 
+// A "New card" left before anything was picked in it: the tab `left`,
+// once another is selected, if it is still the gallery. It closes, where
+// it used to stay behind as an empty tab.
+export function withoutLeftGallery(root: BoxNode, left: string | null): BoxNode {
+  if (left === null || left === root.selected) return root;
+  const tab = root.children.find((c) => c.id === left);
+  const untouched = tab?.kind === "card" && !tab.pinned && tab.source.trim() === "galleryView()";
+  return untouched ? (remove(root, left) as BoxNode) : root;
+}
+
 // Close `id`. In a tabs container that takes what it opened with it;
 // elsewhere what it opened is re-pointed at its own opener. A container
 // left empty goes too; the outermost one is left empty for the caller.

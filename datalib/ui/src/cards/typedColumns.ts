@@ -26,6 +26,7 @@ import {
   WIDTH,
   renderBadges,
   renderChips,
+  renderDateTime,
   quantityText,
   renderIdentity,
   renderQuantity,
@@ -33,7 +34,7 @@ import {
   renderTimeseries,
   renderTimestamp,
 } from "./cellRenderers";
-import { compareStamps, formatStamp } from "@/config/timeFormat";
+import { compareStamps } from "@/config/timeFormat";
 import { formatBytes } from "@/config/bytes";
 
 export type SlickColumnOptions<T> = {
@@ -493,10 +494,7 @@ export function typedColumns<T extends Record<string, unknown>>(
           };
         case "datetime":
           return {
-            formatter: (_r, _c, value) => ({
-              text: typeof value === "string" && value ? formatStamp(value) : "",
-              toolTip: text(value),
-            }),
+            formatter: (_r, _c, value) => renderDateTime(value as string | null),
             sortComparer: (a, b, dir) => compareStamps(a as string, b as string) * (dir ?? 1),
           };
         case "timeseries":

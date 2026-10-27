@@ -7,9 +7,11 @@
 # also has to repin MODULE.bazel.lock (`bazelisk build --nobuild //...`;
 # not `bazel mod deps`, which aborts on protobuf's lockfile-less
 # crate_universe use) — which Dependabot cannot do, so every such PR
-# fails at analysis. Those two are bumped by hand (tools/repin_cargo.sh;
-# AGENTS.md § "Python deps"). The tauri Cargo.lock is outside Bazel and
-# stays.
+# fails at analysis. The backend's Cargo.lock is bumped instead by
+# .github/workflows/cargo-update.yml, in the same Monday batch, which
+# runs Bazel and opens one PR from bot/cargo-update; requirements.txt is
+# bumped by hand (AGENTS.md § "Python deps"). The tauri Cargo.lock is
+# outside Bazel and stays.
 #
 # Actions are pinned to full commit SHAs (a tag can be moved; a SHA
 # cannot), and Dependabot keeps the SHA and the `# vN` comment in step.

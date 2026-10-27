@@ -75,7 +75,7 @@ rust_binary(
     edition = "2021",
     # Must match [package].version in datalib/backend/Cargo.toml;
     # //datalib/backend:version_consistency_test asserts that.
-    version = "0.44.0",
+    version = "0.46.0",
     # Stamp STABLE_GIT_DESCRIBE into `datalib-dag --version` (release.yml
     # smoke-tests that the published tarball reports the tag). `stamp = -1`
     # defers to the --stamp flag (on under --config=release); day-to-day
@@ -173,7 +173,10 @@ rust_test(
 # out to it by name through PATH.
 rust_test(
     name = "manual_e2e_live_sync_golden",
-    srcs = ["tests/manual_e2e_live_sync_golden.rs"],
+    srcs = [
+        "tests/manual_e2e_live_sync_golden.rs",
+        "tests/manual_e2e_occurrences.rs",
+    ],
     crate_root = "tests/manual_e2e_live_sync_golden.rs",
     # The staged binary dir, not the two targets: it holds datalib-dag and
     # datalib-step side by side under their public names, which is what lets
@@ -203,6 +206,7 @@ rust_test(
         "//datalib/backend/qmd_indexer:datalib_qmd_indexer",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",
+        "@datalib_crates//:chrono",
         "@datalib_crates//:insta",
         "@datalib_crates//:runfiles",
         "@datalib_crates//:serde_json",

@@ -46,7 +46,9 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// v20: an attachment its source's blob store holds is linked at its
 /// `/data/…` address rather than copied beside the page.
 /// v21: so is a person's photo.
-pub const LAYOUT_VERSION: u32 = 21;
+/// v22: the account's own messages are "Me", a chip of the `me:self`
+/// handle, whatever stand-in the source used ("User", "Human").
+pub const LAYOUT_VERSION: u32 = 22;
 
 /// What every chat-common provider declares through
 /// `RenderProcessor::render_params`, merged with its own knobs: the
@@ -251,6 +253,34 @@ impl<'a> ChatRenderer<'a> {
     }
 }
 
+/// A chat's `<h1>`: a provider-supplied `title`, else the chat's name.
+/// The source is the icon every surface draws beside a title; a prefix
+/// of its name read twice where the name holds it already ("WhatsApp ·
+/// WhatsApp user …0108").
+fn chat_heading(chat: &NormalizedChat) -> String {
+    chat.title.clone().unwrap_or_else(|| chat.display.clone())
+}
+
+/// The account's own messages and reactions, under whatever stand-in
+/// the source gives them ("Me", "User", "Human"), as one person: "Me",
+/// by the `me:self` handle where the source has none of its own.
+fn the_account_as_me(doc: &mut NormalizedDoc) {
+    for item in &mut doc.items {
+        if item.author_kind == AuthorKind::Account {
+            item.author_display = "Me".to_string();
+            item.author_handle
+                .get_or_insert_with(datalib_handle::Handle::me);
+        }
+        for r in &mut item.reactions {
+            if r.reactor_kind == AuthorKind::Account {
+                r.reactor_display = "Me".to_string();
+                r.reactor_handle
+                    .get_or_insert_with(datalib_handle::Handle::me);
+            }
+        }
+    }
+}
+
 /// Render one document; `(items, reactions)` rendered. Always: the
 /// store writes what it is handed, and doltlite's content-addressed
 /// tables carry no diff for a document that came out the same.
@@ -268,19 +298,11 @@ fn render_one(
 
     // Point each attachment at its bytes. Mutates a local copy of `doc` —
     // the same chat may be re-rendered into another bucket later.
-    let resolved_doc = link_attachments(doc, &page_dir, blobs);
+    let mut resolved_doc = link_attachments(doc, &page_dir, blobs);
+    the_account_as_me(&mut resolved_doc);
     let doc = &resolved_doc;
 
-    // A provider-supplied `title` takes the `<h1>`; otherwise derive the
-    // familiar "{source_label} · {display}" heading.
-    let chat_title = match &chat.title {
-        Some(t) => t.clone(),
-        None => format!(
-            "{label} · {disp}",
-            label = profile.source_label,
-            disp = chat.display
-        ),
-    };
+    let chat_title = chat_heading(chat);
     let sections = render_markdown(profile, chat, doc, &chat_title);
     fs::write(&md_path, join(&sections)).with_context(|| format!("write {}", md_path.display()))?;
 
@@ -1078,7 +1100,12 @@ fn participants(doc: &NormalizedDoc, kept: &std::collections::HashSet<&str>) -> 
     let person = |handle: Option<&datalib_handle::Handle>, shown: &str, kind: AuthorKind| match kind
     {
         AuthorKind::Named => person_term(handle, shown),
-        AuthorKind::Account | AuthorKind::Unknown => person_term(handle, ""),
+        // `me:self` is in every conversation the account wrote in, so it
+        // tells none apart; a handle the source has for the account does.
+        AuthorKind::Account | AuthorKind::Unknown => person_term(
+            handle.filter(|h| h.kind() != datalib_handle::HandleKind::Me),
+            "",
+        ),
     };
     let mut out: Vec<String> = Vec::new();
     for item in doc
@@ -1404,6 +1431,7 @@ mod tests {
         me.reactions[0].reaction_uuid = "77777777-7777-7777-7777-777777777777".into();
         me.reactions[0].reactor_display = "Unknown".into();
         me.reactions[0].reactor_kind = AuthorKind::Unknown;
+        me.author_handle = Some(datalib_handle::Handle::me());
         let mut me_by_handle = me.clone();
         me_by_handle.message_uuid = "88888888-8888-8888-8888-888888888888".into();
         me_by_handle.author_handle = datalib_handle::Handle::tel("+15550100001");
@@ -2225,30 +2253,15 @@ mod tests {
         );
     }
 
+    /// A chat with no title of its own is headed by its name alone, not
+    /// "WhatsApp · WhatsApp user …0108"; a provider's title wins.
     #[test]
-    fn title_override_replaces_derived_heading() {
-        let profile = RenderProfile {
-            provider: Provider::Test,
-            source_label: "Test".to_string(),
-            chat_kind: "Test Chat".to_string(),
-            message_kind: "Test Message".to_string(),
-            reaction_kind: "Test Reaction".to_string(),
-            chat_entity_kind: ENTITY_KIND_CONVERSATION,
-            stamp_precision: RecordStampPrecision::Seconds,
-            render_version: 1,
-            text_format: TextFormat::Markdown,
-        };
+    fn a_chat_is_headed_by_its_title_else_its_name() {
         let mut chat = mk_chat();
+        chat.display = "WhatsApp user …0108".to_string();
+        assert_eq!(chat_heading(&chat), "WhatsApp user …0108");
         chat.title = Some("#bridge: Make it so.".to_string());
-
-        // render_one builds the title; render_markdown takes it as a param,
-        // so exercise the heading logic via render_one's formatting here by
-        // re-deriving the same way render_one does.
-        let chat_title = match &chat.title {
-            Some(t) => t.clone(),
-            None => format!("{} · {}", profile.source_label, chat.display),
-        };
-        assert_eq!(chat_title, "#bridge: Make it so.");
+        assert_eq!(chat_heading(&chat), "#bridge: Make it so.");
     }
 
     /// An unbucketed chat's title read "Bridge Crew (all)" (#902); a

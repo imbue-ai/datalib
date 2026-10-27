@@ -40,10 +40,15 @@ import {
   canLinkHandles,
   chipCell,
   contactCell,
+  contactHandles,
+  contactLook,
   contactsById,
   handleValue,
   people,
 } from "@/cards/contacts";
+import { dateCell } from "@/cards/dates";
+import { timeView, type TimeView } from "@/config/timeView";
+import { watch } from "vue";
 import { entities, entityCell } from "@/cards/entities";
 import { fieldChipMenu, toggleNegate, type FieldMenuId } from "./chipMenu";
 import {
@@ -52,6 +57,7 @@ import {
   chipWords,
   CONTACT,
   completingAt,
+  dateWords,
   keyNamed,
   termValue,
   words,
@@ -167,8 +173,13 @@ function answerOf(chip: ChipRef): unknown {
       return entities.lookup(chip.uri);
     case "person":
       return people.lookup(chip.handle);
-    case "contact":
-      return contactsById.lookup(chip.id);
+    case "contact": {
+      // Its name and photo: the photo can come from a handle's answer.
+      const contact = contactsById.lookup(chip.id);
+      if (!contact) return undefined;
+      const look = contactLook("", contact);
+      return `${look.text}\n${look.photo ?? ""}`;
+    }
   }
 }
 
@@ -217,18 +228,52 @@ class ChipWidget extends WidgetType {
   }
 }
 
+/// A date typed as a date key's value, drawn as the app draws every
+/// date. Its clicks are a chip's here; it has no menu of its own.
+class DateWidget extends WidgetType {
+  constructor(
+    readonly value: string,
+    readonly selected: boolean,
+    readonly view: TimeView,
+  ) {
+    super();
+  }
+  eq(other: DateWidget): boolean {
+    return (
+      other.value === this.value && other.selected === this.selected && other.view === this.view
+    );
+  }
+  toDOM(view: EditorView): HTMLElement {
+    const el = dateCell(this.value);
+    el.draggable = false;
+    if (this.selected) el.classList.add("cm-chip-selected");
+    el.addEventListener("mousedown", (e) => onChipMouse(view, el, e));
+    return el;
+  }
+}
+
 function chipDecorations(state: EditorState): DecorationSet {
   const editing = state.field(editingField);
   const sel = state.selection.main;
-  const ranges = chipWords(state.doc.toString(), state.field(keysField))
-    .filter(({ word }) => !editing || word.to < editing.from || word.from > editing.to)
-    .map(({ word, chip }) => {
-      const selected = !sel.empty && sel.from <= word.valueFrom && sel.to >= word.to;
-      return Decoration.replace({
-        widget: new ChipWidget(chip, word.value, answerOf(chip), selected),
-      }).range(word.valueFrom, word.to);
-    });
-  return Decoration.set(ranges);
+  const query = state.doc.toString();
+  const keys = state.field(keysField);
+  const shown = (word: Word) => !editing || word.to < editing.from || word.from > editing.to;
+  const selected = (word: Word) => !sel.empty && sel.from <= word.valueFrom && sel.to >= word.to;
+  const chipRanges = chipWords(query, keys)
+    .filter(({ word }) => shown(word))
+    .map(({ word, chip }) =>
+      Decoration.replace({
+        widget: new ChipWidget(chip, word.value, answerOf(chip), selected(word)),
+      }).range(word.valueFrom, word.to),
+    );
+  const dateRanges = dateWords(query, keys)
+    .filter(shown)
+    .map((word) =>
+      Decoration.replace({
+        widget: new DateWidget(word.value, selected(word), timeView.value),
+      }).range(word.valueFrom, word.to),
+    );
+  return Decoration.set([...chipRanges, ...dateRanges], true);
 }
 
 const chips = ViewPlugin.fromClass(
@@ -239,7 +284,11 @@ const chips = ViewPlugin.fromClass(
       this.decorations = chipDecorations(view.state);
       const answered = (keys: ReadonlySet<string>) => {
         const shown = chipWords(view.state.doc.toString(), view.state.field(keysField));
-        if (shown.some(({ chip }) => keys.has(chipKey(chip)))) {
+        const drawsFrom = (chip: ChipRef) => [
+          chipKey(chip),
+          ...(chip.kind === "contact" ? contactHandles(chip.id) : []),
+        ];
+        if (shown.some(({ chip }) => drawsFrom(chip).some((k) => keys.has(k)))) {
           view.dispatch({ effects: redraw.of(null) });
         }
       };
@@ -247,6 +296,7 @@ const chips = ViewPlugin.fromClass(
         entities.subscribe(answered),
         people.subscribe(answered),
         contactsById.subscribe(answered),
+        watch(timeView, () => view.dispatch({ effects: redraw.of(null) })),
       ];
     }
     update(u: ViewUpdate) {

@@ -8,7 +8,9 @@ network: the download step walks files the user exported themselves.
 
 ## Zipped exports
 
-`src/ingest/unpack.rs`. When `export.path` holds archive parts directly
+`src/ingest/unpack.rs`, over the parts and entries
+`datalib_etl_files::archive` reads (the `email` source reads a Gmail
+Takeout's parts with it too). When `export.path` holds archive parts directly
 (`takeout-<stamp>-<n>-<nnn>.zip`, `.tgz` or `.tar.gz`), they are the
 export, and anything else in the folder, an unpacked `Takeout/`
 included, is ignored. Parts of two exports in one folder are refused:
@@ -105,9 +107,8 @@ gives it, so render can say what it leaves out:
   entries whose parts are `div`s named by class. An entry's date is
   three lines, `Last modified on`, the date and the zone in words
   (`Pacific Time`), read as that place's clock
-  (`time::parse_play_books_stamp`); the tz database's daylight rules run
-  out in the 2100s, so the fixture's 2364 dates are in winter. The book
-  itself (a PDF or EPUB beside the page) is left out.
+  (`time::parse_play_books_stamp`), with that place's daylight rules
+  however far ahead the date is. The book itself (a PDF or EPUB beside the page) is left out.
 
 ## What no feed reads is a problem row
 

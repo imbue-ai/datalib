@@ -9,10 +9,13 @@
 
 pub mod api;
 pub mod db;
+pub mod export;
+mod export_archive;
 mod fetchers;
 pub mod schema_raw;
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -35,6 +38,7 @@ use tracing::{info, info_span, instrument, Instrument};
 
 pub use api::{ChatGPTClient, ChatGPTError};
 pub use db::{db_path_for, Conversation, FileRef, LoadedConversation, LoadedRaw, RawDb};
+use export::ExportFiles;
 use fetchers::{Attachments, Conversations};
 use schema_raw::{MeRow, ATTACHMENTS, CONVERSATIONS, CONVERSATION_VOLATILE_PATHS};
 
@@ -84,6 +88,10 @@ pub struct FetchOptions {
     /// The run-pinned `--now`, which stamps the `me` row; `None`
     /// samples the clock.
     pub now: Option<String>,
+    /// A data export of this account (`export.path`), asked for a
+    /// file's bytes before chatgpt.com. Its conversations are the export
+    /// step's to read (`export::Reading::FillGaps`).
+    pub export: Option<PathBuf>,
     pub progress: datalib_etl::progress::Progress,
     /// Cross-provider knobs (the checkpoint cadence, the stop flag).
     pub control: datalib_etl::control::DownloadControl,
@@ -103,6 +111,7 @@ impl FetchOptions {
             since: None,
             conv_uuids: Vec::new(),
             now: None,
+            export: None,
             progress: datalib_etl::progress::Progress::noop(),
             control: datalib_etl::control::DownloadControl::default(),
         }
@@ -111,8 +120,9 @@ impl FetchOptions {
 
 #[derive(Debug, Default, Serialize)]
 pub struct FetchSummary {
+    /// Conversations fetched from chatgpt.com.
     pub fetched: usize,
-    /// Listed, in scope, and already held at the version listed.
+    /// Listed, in scope, and already held at or after the version listed.
     pub skipped: usize,
     /// Listed items ignored because their `update_time` predates the
     /// configured `since`. Items behind an early-stopped listing walk
@@ -124,7 +134,10 @@ pub struct FetchSummary {
     /// Conversations a *complete* listing did not name — deleted upstream.
     /// Always 0 when the listing walk stopped early.
     pub pruned: usize,
+    /// Files fetched from chatgpt.com.
     pub new_blobs: usize,
+    /// Files whose bytes came from the export.
+    pub blobs_from_export: usize,
     /// Edges satisfied from bytes the CAS already held.
     pub skipped_blobs: usize,
     pub failed_blobs: usize,
@@ -150,7 +163,9 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         "limit": opts.limit,
         "since": opts.since,
         "conv_uuids": opts.conv_uuids,
+        "export": opts.export,
     });
+    let export = opts.export.as_deref().map(ExportFiles::open).transpose()?;
     let run = DownloadRun::start(db.pool(), &run_config).await?;
     let held = db.load_me().await?;
     let client = ChatGPTClient::with_latchkey(opts.latchkey.clone())
@@ -165,6 +180,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         db: &db,
         opts: &opts,
         found: &found,
+        export: export.as_ref(),
         files: Mutex::new(HashMap::new()),
         config_problems: Mutex::new(Vec::new()),
         counts: Counts::default(),
@@ -175,6 +191,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
     summary.network_seconds = client.network_seconds();
     summary.new_blobs = ctx.counts.new_blobs.load(Ordering::Relaxed);
     summary.skipped_blobs = ctx.counts.skipped_blobs.load(Ordering::Relaxed);
+    summary.blobs_from_export = ctx.counts.blobs_from_export.load(Ordering::Relaxed);
     run.finish(&result, &summary).await;
     result?;
     Ok(summary)
@@ -185,6 +202,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
 pub(crate) struct Counts {
     pub new_blobs: AtomicUsize,
     pub skipped_blobs: AtomicUsize,
+    pub blobs_from_export: AtomicUsize,
 }
 
 /// What the listing and every loop of one run share.
@@ -193,6 +211,7 @@ pub(crate) struct Ctx<'a> {
     pub db: &'a RawDb,
     pub opts: &'a FetchOptions,
     pub found: &'a RunProblems,
+    pub export: Option<&'a ExportFiles>,
     /// Per conversation fetched this run, the files it names: what the
     /// attachment loop asks for without reading the row back.
     pub files: Mutex<HashMap<String, Vec<FileRef>>>,
@@ -463,6 +482,9 @@ async fn phases(ctx: &Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
         .me()
         .await
         .map_err(|e| anyhow::anyhow!("fetch /me: {e}"))?;
+    if let Some(export) = ctx.export {
+        export.check_account(&me)?;
+    }
     upsert_me(ctx, &me).await?;
     info!(
         event = "chatgpt_me",
@@ -496,9 +518,9 @@ async fn phases(ctx: &Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
     Ok(())
 }
 
-/// Of `listed`, what `table` does not hold at the version listed: the
-/// records never fetched first, then the stale, so a run cut short
-/// spent its budget on new work.
+/// Of `listed`, what `table` does not hold at or after the version
+/// listed: the records never fetched first, then the stale, so a run cut
+/// short spent its budget on new work.
 async fn owed_missing_first(
     pool: &sqlx::SqlitePool,
     table: &str,
@@ -507,9 +529,21 @@ async fn owed_missing_first(
     let held = owed::held_versions(pool, table, listed.iter().map(|l| l.key.as_str())).await?;
     let (missing, stale): (Vec<Listed>, Vec<Listed>) = listed
         .into_iter()
-        .filter(|l| !held.get(&l.key).is_some_and(|h| h.satisfies(&l.version)))
+        .filter(|l| !held.get(&l.key).is_some_and(|h| current(h, &l.version)))
         .partition(|l| !held.get(&l.key).is_some_and(|h| h.fetched));
     Ok(missing.into_iter().chain(stale).collect())
+}
+
+/// Whether what is held is no older than the version listed. The
+/// listing's `update_time` can trail the detail's, and a conversation
+/// held from its detail (an export, `conv_uuids`) is held at the
+/// detail's, so the two are compared as instants (INGEST.md, "The
+/// listing can trail the detail").
+fn current(held: &owed::Held, listed: &Option<String>) -> bool {
+    let secs = |v: &Option<String>| v.as_deref()?.parse::<i64>().ok();
+    held.satisfies(listed)
+        || (held.fetched
+            && matches!((secs(&held.version), secs(listed)), (Some(h), Some(l)) if h >= l))
 }
 
 async fn upsert_me(ctx: &Ctx<'_>, payload: &Value) -> Result<()> {

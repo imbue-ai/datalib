@@ -46,6 +46,11 @@ ignore = [
 multiple-versions = "warn"
 wildcards = "deny"
 allow-wildcard-paths = true
+# A crate that embeds the tz database goes stale with its last release;
+# chrono-tz's put Vancouver an hour off from November 2026. Named zones
+# come from `datalib_time::NamedZone` (jiff-tzdb, checked weekly by
+# .github/workflows/tzdata.yml).
+deny = [{ crate = "chrono-tz", reason = "stale embedded tz data; use datalib_time::NamedZone" }]
 
 [sources]
 unknown-registry = "deny"

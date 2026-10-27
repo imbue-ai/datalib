@@ -215,12 +215,12 @@ fn render_smoke_produces_thread_dir_with_md_and_rows() {
     );
     // The outlink is built from mailboxes, never from a flag.
     assert!(
-        md.contains("https://app.fastmail.com/mail/Inbox/E2.T1"),
+        md.contains("https://app.fastmail.com/mail/Inbox/T1.E2"),
         "fastmail outlink for the flagged email: {md}"
     );
-    // Fastmail outlink: /mail/<mailbox>/<emailId>.<threadId>.
+    // Fastmail outlink: /mail/<mailbox>/<threadId>.<emailId>.
     assert!(
-        md.contains("https://app.fastmail.com/mail/Inbox/E1.T1"),
+        md.contains("https://app.fastmail.com/mail/Inbox/T1.E1"),
         "fastmail outlink for root email: {md}"
     );
 
@@ -231,12 +231,12 @@ fn render_smoke_produces_thread_dir_with_md_and_rows() {
     let rows = &doc.rows;
     assert_eq!(
         rows[0].source_url.as_deref(),
-        Some("https://app.fastmail.com/mail/Inbox/E1.T1"),
+        Some("https://app.fastmail.com/mail/Inbox/T1.E1"),
         "thread row outlink"
     );
     assert_eq!(
         rows[1].source_url.as_deref(),
-        Some("https://app.fastmail.com/mail/Inbox/E1.T1"),
+        Some("https://app.fastmail.com/mail/Inbox/T1.E1"),
         "root email row outlink"
     );
 

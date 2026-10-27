@@ -124,6 +124,7 @@ impl Tape {
             "apiUrl": "https://jmap.example.test/jmap/api/",
             "downloadUrl": "https://jmap.example.test/jmap/download/{accountId}/{blobId}/{name}?type={type}",
             "uploadUrl": "https://jmap.example.test/jmap/upload/{accountId}/",
+            "username": "t@example.test",
             "primaryAccounts": { "urn:ietf:params:jmap:mail": ACCOUNT },
             "accounts": { ACCOUNT: { "name": "t@example.test", "isPersonal": true } },
         });
@@ -184,6 +185,16 @@ impl Tape {
         }
     }
 
+    /// As [`Tape::serve`], with the states an earlier run stored, which
+    /// are `a`'s, too old for either `/changes` to replay: the run lists
+    /// the account again.
+    pub fn serve_aged_out(&self, a: &Account) {
+        self.serve(a);
+        let expired = "cannotCalculateChanges";
+        self.method_error("Mailbox/changes", changes_args(&a.mailbox_state), expired);
+        self.method_error("Email/changes", changes_args(&a.email_state), expired);
+    }
+
     /// The `Email/query` pages for `a`'s emails under `in_mailboxes`, or
     /// for all of them.
     pub fn query(&self, a: &Account, in_mailboxes: &[&str]) {
@@ -211,6 +222,27 @@ impl Tape {
                 json!({ "ids": page, "queryState": "q-1", "total": ids.len() }),
             );
             position += page.len();
+        }
+    }
+
+    /// The walk of the whole account a label filter keeps the thread
+    /// index with: the unfiltered `Email/query` pages, and an `Email/get`
+    /// of each page's `threadId`s.
+    pub fn index(&self, a: &Account) {
+        self.query(a, &[]);
+        let ids = a.ids();
+        for page in ids.chunks(self.query_page) {
+            for chunk in page.chunks(250) {
+                let list: Vec<Value> = chunk
+                    .iter()
+                    .map(|id| json!({ "id": id, "threadId": a.emails[id].thread }))
+                    .collect();
+                self.call(
+                    "Email/get",
+                    json!({ "accountId": ACCOUNT, "ids": chunk, "properties": ["threadId"] }),
+                    json!({ "state": a.email_state, "list": list, "notFound": [] }),
+                );
+            }
         }
     }
 

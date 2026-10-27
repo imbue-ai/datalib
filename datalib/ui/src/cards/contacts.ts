@@ -65,7 +65,10 @@ export type HandleKind =
   | "google"
   | "github"
   | "gitlab"
-  | "notion";
+  | "notion"
+  | "whatsapp"
+  | "me"
+  | "ai_model";
 
 export function handleKind(handle: string): HandleKind | null {
   const kind = handle.slice(0, handle.indexOf(":"));
@@ -78,7 +81,10 @@ export function handleKind(handle: string): HandleKind | null {
     kind === "google" ||
     kind === "github" ||
     kind === "gitlab" ||
-    kind === "notion"
+    kind === "notion" ||
+    kind === "whatsapp" ||
+    kind === "me" ||
+    kind === "ai_model"
     ? kind
     : null;
 }
@@ -98,6 +104,9 @@ const KIND_ICON: Record<HandleKind, string> = {
   github: "github",
   gitlab: "gitlab",
   notion: "notion",
+  whatsapp: "whatsapp",
+  me: "contacts",
+  ai_model: "system",
 };
 
 export function handleIcon(handle: string): string | null {
@@ -577,12 +586,30 @@ export function contactLook(shown: string, contact: NormalizedContact | undefine
     classes: ["handle-chip", "handle-resolved", "contact-chip"],
     initial: [...name.trim()][0]?.toUpperCase() ?? "?",
     icon: null,
-    photo: contact?.photo_url ?? null,
+    photo: contact ? contactPhoto(contact) : null,
     title: [
       group ? `${name} (a group)` : name,
       ...(handles.length > 0 ? [`Linked: ${handles.join(", ")}`] : []),
     ].join("\n"),
   };
+}
+
+/** A contact's photo: its own, else the first its handles' records
+ *  have, which is the face their chips show. */
+function contactPhoto(contact: NormalizedContact): string | null {
+  if (contact.photo_url) return contact.photo_url;
+  for (const h of contact.handles) {
+    const who = h.handle ? people.lookup(h.handle) : undefined;
+    const photo = who ? photoOf(who) : null;
+    if (photo) return photo;
+  }
+  return null;
+}
+
+/** The handles a contact's chip draws from beside the contact itself:
+ *  an answer for any of them can change its photo. */
+export function contactHandles(id: string): string[] {
+  return (contactsById.get(id)?.handles ?? []).flatMap((h) => (h.handle ? [h.handle] : []));
 }
 
 /** A chip for one of your contacts, by its id. */
@@ -738,6 +765,43 @@ export function chipCell(
   a.dataset.shownAs = shownAs;
   drawChip(a, chipLook(handle, shownAs, who ?? { mine: null, sourceContacts: [] }, canLink));
   return a;
+}
+
+/** A conversation titled by the people it is named after: one person's
+ *  chip, or for several one pill with their photos side by side and each
+ *  name a chip of its own, so each still opens, links and copies alone. */
+export function peopleTitle(named: { handle: string; shownAs: string }[]): HTMLElement {
+  const canLink = canLinkHandles();
+  const drawn = named.map(({ handle, shownAs }) => ({
+    handle,
+    shownAs,
+    who: people.lookup(handle) ?? NOBODY,
+  }));
+  if (drawn.length === 1) {
+    const [p] = drawn;
+    return chipCell(p!.handle, p!.shownAs, p!.who, canLink);
+  }
+  const group = document.createElement("span");
+  group.className = "chip-group";
+  const faces = document.createElement("span");
+  faces.className = "chip-group-faces";
+  faces.setAttribute("aria-hidden", "true");
+  group.append(faces);
+  drawn.forEach(({ handle, shownAs, who }, i) => {
+    const look = chipLook(handle, shownAs, who, canLink);
+    faces.append(chipLead(document, look) ?? chipLead(document, { ...look, initial: "?" })!);
+    if (i > 0) {
+      const sep = document.createElement("span");
+      sep.className = "chip-group-sep";
+      sep.textContent = ", ";
+      group.append(sep);
+    }
+    const name = chipCell(handle, shownAs, who, canLink);
+    drawChip(name, { ...look, photo: null, initial: null, icon: null });
+    name.classList.add("chip-bare");
+    group.append(name);
+  });
+  return group;
 }
 
 /** A chip that shows the identifier rather than the person, for a list of

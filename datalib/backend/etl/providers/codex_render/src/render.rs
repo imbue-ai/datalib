@@ -19,6 +19,7 @@ use datalib_etl_chat_common::types::{
 use datalib_etl_chat_common::{render_changed, RenderTarget};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{Inputs, RawRange};
+use datalib_handle::Handle;
 use serde_json::Value;
 
 use datalib_etl_codex::ingest::parse::is_typed_message;
@@ -33,7 +34,8 @@ use crate::ids;
 
 /// v3: the account's own messages are "Me", as every chat source writes
 ///     them.
-pub const RENDER_VERSION: u32 = 3;
+/// v4: an answer's author is its model's chip (`ai_model:` handle).
+pub const RENDER_VERSION: u32 = 4;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -307,6 +309,7 @@ fn response_item(
     typed: &HashSet<&str>,
     max_bytes: usize,
 ) -> Option<NormalizedChatItem> {
+    let model_handle = model.and_then(Handle::ai_model);
     let model = model.unwrap_or("Codex");
     match str_of(p, "type")? {
         "message" => {
@@ -340,6 +343,7 @@ fn response_item(
             }
             Some(NormalizedChatItem {
                 author_kind,
+                author_handle: (label == "LLM Response").then_some(model_handle).flatten(),
                 ..item(
                     ids::record(source_id, tid, line_no, ms),
                     author.to_string(),
@@ -356,14 +360,17 @@ fn response_item(
                 return None;
             }
             let quoted = format!("> {}", thought.trim_end().replace('\n', "\n> "));
-            Some(item(
-                ids::record(source_id, tid, line_no, ms),
-                model.to_string(),
-                ms,
-                details("Thinking", &quoted),
-                "LLM Thinking",
-                true,
-            ))
+            Some(NormalizedChatItem {
+                author_handle: model_handle,
+                ..item(
+                    ids::record(source_id, tid, line_no, ms),
+                    model.to_string(),
+                    ms,
+                    details("Thinking", &quoted),
+                    "LLM Thinking",
+                    true,
+                )
+            })
         }
         "function_call" => {
             let name = str_of(p, "name").unwrap_or("tool");

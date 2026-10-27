@@ -7,7 +7,7 @@ use datalib_etl::blob_cas::blake3_hex;
 
 use super::super::envelope::{self, GmailId, TransportFacts};
 use super::super::labels::{self, LabelMap};
-use super::super::schema_raw::EmailRow;
+use super::super::schema_raw::{EmailRow, GMAIL_API_VIA};
 use super::super::K_ONLY_EXTRACT_LABELS;
 use super::api::{GmailMessage, Label};
 use datalib_etl::download_problems;
@@ -26,6 +26,18 @@ impl LabelIndex {
         Self {
             by_id: labels.into_iter().map(|l| (l.id.clone(), l)).collect(),
         }
+    }
+
+    pub fn ids(&self) -> impl Iterator<Item = &str> {
+        self.by_id.keys().map(String::as_str)
+    }
+
+    pub fn len(&self) -> usize {
+        self.by_id.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_id.is_empty()
     }
 
     pub fn name(&self, id: &str) -> String {
@@ -156,8 +168,10 @@ impl LabelIndex {
     }
 
     /// A configured name is matched against the canonical path for a
-    /// system label (`inbox`, not `INBOX`) and the raw name for a user
-    /// label, or the raw name either way.
+    /// system label (`Inbox`, not `INBOX`) and the raw name for a user
+    /// label, or the raw name either way; failing those, against Gmail's
+    /// id for a label (`Label_7`), which is what the API and the stored
+    /// mailbox ids show.
     pub fn id_for_name(&self, name: &str) -> Option<String> {
         self.by_id
             .values()
@@ -169,6 +183,7 @@ impl LabelIndex {
                 };
                 canonical == name || l.name == name
             })
+            .or_else(|| self.by_id.get(name))
             .map(|l| l.id.clone())
     }
 
@@ -214,21 +229,14 @@ pub struct MailboxPlan {
     pub moves: Vec<(String, Option<String>)>,
 }
 
-pub fn normalize_thread_id(gmail_thread_id: &str) -> String {
-    match u64::from_str_radix(gmail_thread_id, 16) {
-        Ok(n) => n.to_string(),
-        Err(_) => gmail_thread_id.to_string(),
-    }
-}
-
 /// What one ingested message contributes.
 pub struct Ingested {
     pub row: EmailRow,
     pub email_id: String,
     pub blob_id: String,
     pub raw: Vec<u8>,
-    /// Canonical label paths, for the extract-time label filter.
-    pub label_paths: Vec<String>,
+    /// Gmail's label ids, for the fetch-time label filter.
+    pub label_ids: Vec<String>,
 }
 
 pub fn ingest(account_id: &str, index: &LabelIndex, msg: &GmailMessage) -> Result<Ingested> {
@@ -239,7 +247,7 @@ pub fn ingest(account_id: &str, index: &LabelIndex, msg: &GmailMessage) -> Resul
     let gmail_id = GmailId::from_api(&msg.id)
         .ok_or_else(|| anyhow::anyhow!("Gmail message id {:?} is not hex", msg.id))?;
     let email_id = envelope::email_id(Some(gmail_id), &parsed, &blob_id);
-    let thread_id = normalize_thread_id(&msg.thread_id);
+    let thread_id = GmailId::key_of_api(&msg.thread_id);
     let (mailbox_ids, keywords) = index.resolve(account_id, &msg.label_ids);
 
     let facts = TransportFacts {
@@ -265,14 +273,10 @@ pub fn ingest(account_id: &str, index: &LabelIndex, msg: &GmailMessage) -> Resul
             );
         }
         // Provenance, mirroring what the claude provider stamps: which
-        // transport produced this row, and the ids only this one knows.
+        // transport produced this row.
         obj.insert(
             "_source".into(),
-            serde_json::json!({
-                "via": "gmail.googleapis.com",
-                "gmailMessageId": msg.id,
-                "gmailThreadId": msg.thread_id,
-            }),
+            serde_json::json!({ "via": GMAIL_API_VIA }),
         );
     }
 
@@ -284,7 +288,7 @@ pub fn ingest(account_id: &str, index: &LabelIndex, msg: &GmailMessage) -> Resul
         email_id,
         blob_id,
         raw: msg.raw.clone(),
-        label_paths: index.label_paths(&msg.label_ids),
+        label_ids: msg.label_ids.clone(),
     })
 }
 
@@ -464,6 +468,22 @@ mod tests {
             idx.ids_for_names(&["INBOX".into()]).unwrap().resolved,
             vec!["INBOX"]
         );
+        // A user label by Google's id for it.
+        assert_eq!(
+            idx.ids_for_names(&["Label_7".into()]).unwrap().resolved,
+            vec!["Label_7"]
+        );
+    }
+
+    /// A user label whose name is another label's id is that label, not
+    /// the one the id names.
+    #[test]
+    fn a_name_wins_over_an_id_spelled_the_same() {
+        let idx = LabelIndex::new(vec![
+            label("Label_1", "Label_2", false),
+            label("Label_2", "Travel", false),
+        ]);
+        assert_eq!(idx.id_for_name("Label_2").as_deref(), Some("Label_1"));
     }
 
     /// One typo costs that label, not the run: the labels that do
@@ -513,27 +533,6 @@ mod tests {
             mailboxes,
             vec![labels::gmail_mailbox_id("acct", "Label_999")]
         );
-    }
-
-    /// Hex (API) and decimal (Takeout `X-GM-THRID`) are the same number;
-    /// storing both spellings would split one conversation in two.
-    #[test]
-    fn normalizes_hex_thread_ids_to_takeouts_decimal() {
-        assert_eq!(
-            normalize_thread_id("18c9f2a1b2c3d4e5"),
-            "1786225503531947237"
-        );
-        // Pin the relationship, not just the literal: the decimal must be
-        // the same 64-bit number the hex spells.
-        assert_eq!(
-            normalize_thread_id("18c9f2a1b2c3d4e5")
-                .parse::<u64>()
-                .unwrap(),
-            0x18c9f2a1b2c3d4e5,
-        );
-        assert_eq!(normalize_thread_id("1"), "1");
-        // Not hex: leave it alone rather than mangling it.
-        assert_eq!(normalize_thread_id("thread-xyz"), "thread-xyz");
     }
 
     /// Epoch milliseconds carry no source offset, so the convention is an

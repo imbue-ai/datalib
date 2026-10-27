@@ -744,10 +744,22 @@ command = "/bin/true"
     );
     const chip = nameCell(page, "group:named").locator('a.chip[data-entity="datalib:group/named"]');
     await expect(chip).toHaveText("Named PDFs");
+    // Each click of the double-click is cancelled, so the chip's href is
+    // never followed: in the desktop app, following it cancelled the
+    // loads of the card the double-click opened.
+    await page.evaluate(() => {
+      const w = window as Window & { chipClicks?: boolean[] };
+      w.chipClicks = [];
+      window.addEventListener("click", (e) => w.chipClicks!.push(e.defaultPrevented));
+    });
     await chip.dblclick();
     const dash = shownCards(page).filter({ has: page.locator(".sd") });
     await expect(dash.locator('.sd-group a.chip[data-entity="datalib:group/named"]')).toBeVisible();
     await expect(page.locator(".tg-grid input.editor-text")).toHaveCount(0);
+    const clicks = await page.evaluate(
+      () => (window as Window & { chipClicks?: boolean[] }).chipClicks,
+    );
+    expect(clicks).toEqual([true, true]);
   });
 
   // A source that syncs once and fails from then on: Last synced

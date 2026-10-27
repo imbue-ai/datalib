@@ -48,9 +48,9 @@ export function chatUuidFromHref(href: string): string | null {
   return m ? m[1] : null;
 }
 
-/** A copied 🆔 button (`chatSections.js`) becomes the same 🆔 as a
- *  `datalib://` link to what it names: the document, or the section
- *  within it. */
+/** A copied 🆔 button (`chatSections.js`) becomes the 🆔 and the uuid
+ *  it names, so a plain-text paste keeps the id, as a `datalib://` link
+ *  to the document, or the section within it. */
 export function rewriteIdButtonsForCopy(
   fragment: DocumentFragment | Element,
   markdownUuid: string,
@@ -58,8 +58,9 @@ export function rewriteIdButtonsForCopy(
   const buttons = Array.from(fragment.querySelectorAll<HTMLElement>("button.copy-uuid[data-uuid]"));
   for (const btn of buttons) {
     const a = btn.ownerDocument.createElement("a");
-    a.href = chatDeeplink(markdownUuid, btn.dataset.uuid ?? "");
-    a.textContent = btn.textContent;
+    const uuid = btn.dataset.uuid ?? "";
+    a.href = chatDeeplink(markdownUuid, uuid);
+    a.textContent = `${btn.textContent} ${uuid}`;
     btn.replaceWith(a);
   }
   return buttons.length > 0;

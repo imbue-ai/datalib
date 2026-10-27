@@ -3,12 +3,17 @@
 //! `history.list` or a `messages.list` walk says which messages exist
 //! and which changed; `super::listed` keeps that apart from what has
 //! been fetched, and `messages.get` is asked for whatever the store owes.
+//! A walk of the whole account and `history.list` also say which thread
+//! every message is in (`thread_members`): that is how a label filter
+//! keeps whole threads, and how many messages each thread has.
 
 pub mod api;
 pub mod ingest;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -21,6 +26,7 @@ use datalib_etl::download_run::DownloadRun;
 use datalib_etl::progress::{Progress, RunBar};
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_web::http::LatchkeySettings;
 use datalib_etl_web::owed::{self, BatchError, Fetched, Fetcher, Listed, Outcome};
 use datalib_time::IsoOffsetTimestamp;
@@ -33,9 +39,11 @@ use datalib_etl_email_config::EmailGmailApi;
 
 use super::db::{write_eml_edges_in_tx, RawDb};
 use super::envelope::GmailId;
-use super::listed::{self, Named, WHOLE_ACCOUNT};
-use super::schema_raw::{EmailRow, EmlBlobRow};
-use api::{Client, QuotaThrottle};
+use super::labels;
+use super::listed::{self, Keeps, Named, WHOLE_ACCOUNT};
+use super::mbox;
+use super::schema_raw::{EmailRow, EmlBlobRow, GMAIL_API_VIA};
+use api::{Client, GmailMessage, QuotaThrottle};
 use ingest::{Ingested, LabelIndex};
 
 /// `messages.list` page size. Google's maximum is 500; ids are tiny, so
@@ -65,9 +73,21 @@ pub struct FetchOptions {
     /// both a work and a personal account, which is the case this setting
     /// was introduced for.
     pub latchkey: LatchkeySettings,
-    /// When non-empty, only ingest messages carrying at least one label
-    /// whose canonical path exactly matches one of these.
+    /// A Google Takeout of this account to start from: its messages land
+    /// before the API is asked, so the API sends their labels and not
+    /// the messages again ([`mbox::seed`]).
+    pub takeout: Option<PathBuf>,
+    /// The host's file fingerprints, which say whether the Takeout
+    /// changed since its last clean read. `None` reads it every run.
+    pub cache: Option<FingerprintCache>,
+    /// When non-empty, only ingest messages carrying at least one of
+    /// these labels, each named by its path (`Inbox`, `Work/Projects`) or
+    /// by Gmail's id for it (`INBOX`, `Label_7`).
     pub only_labels: Vec<String>,
+    /// Keep the rest of the thread of a message `only_labels` keeps.
+    pub whole_threads: bool,
+    /// The window's start on this run: a walk lists only mail after it.
+    pub since: Option<IsoOffsetTimestamp>,
     pub blob_size_limit_bytes: Option<u64>,
     /// Messages written in one transaction. `None` is [`FLUSH_BATCH`].
     pub flush_batch: Option<usize>,
@@ -84,7 +104,11 @@ impl FetchOptions {
             sealer: None,
             config: EmailGmailApi::default(),
             latchkey: LatchkeySettings::default(),
+            takeout: None,
+            cache: None,
             only_labels: Vec::new(),
+            whole_threads: true,
+            since: None,
             blob_size_limit_bytes: None,
             flush_batch: None,
             progress: Progress::noop(),
@@ -103,6 +127,18 @@ pub struct FetchSummary {
     pub emails_refiled: usize,
     pub emails_upserted: usize,
     pub emails_destroyed: usize,
+    /// What reading the Takeout added, when the source names one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub takeout: Option<mbox::SeedSummary>,
+    /// Messages whose bytes the store held, so only their labels were
+    /// asked for: from walking every label, or one `messages.get` each.
+    pub relabeled_from_walks: usize,
+    pub relabeled_one_by_one: usize,
+    /// Threads whose count of Gmail's messages changed.
+    pub threads_recounted: usize,
+    /// Messages listed because a kept message shares their thread,
+    /// under `whole_threads`.
+    pub listed_from_threads: usize,
     pub blobs_stored: usize,
     pub blobs_skipped: usize,
     pub blobs_oversize: usize,
@@ -140,6 +176,25 @@ fn state_scope(account_id: &str) -> String {
     format!("gmail:{account_id}:historyId")
 }
 
+/// Where a scope's last whole walk started, when it had a `since`. No
+/// row is a walk from the account's first message.
+fn listed_since_scope(account_id: &str, scope: &str) -> String {
+    format!("gmail:{account_id}:listed_since:{scope}")
+}
+
+/// Whether a scope walked whole from `listed_from` (`None`: from the
+/// first message) leaves part of the window that starts at `since`
+/// (`None`: everything) unlisted, so widening it is a walk.
+fn window_widened(listed_from: Option<&str>, since: Option<&IsoOffsetTimestamp>) -> bool {
+    match (listed_from, since) {
+        (None, _) => false,
+        (Some(_), None) => true,
+        (Some(from), Some(since)) => {
+            datalib_time::parse_strict(from).map_or(true, |from| since.inner() < from.inner())
+        }
+    }
+}
+
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
     let sealer = opts.sealer.clone();
@@ -162,9 +217,10 @@ async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
         &json!({
             "user_id": opts.config.user_id(),
             "account": opts.latchkey.account(),
-            "full_resync": opts.config.full_resync,
             "only_extract_labels": opts.only_labels,
+            "since": opts.since,
             "message_budget": opts.config.message_budget,
+            "whole_threads": opts.whole_threads,
         }),
     )
     .await?;
@@ -213,8 +269,9 @@ async fn run_sync(db: &RawDb, opts: &FetchOptions, found: &RunProblems) -> Resul
             "name": display_name,
             "email": email_address,
             "isPersonal": true,
-            "_source": { "via": "gmail.googleapis.com" },
+            "_source": { "via": GMAIL_API_VIA },
         }),
+        None,
     )
     .await?;
 
@@ -245,7 +302,7 @@ async fn run_sync(db: &RawDb, opts: &FetchOptions, found: &RunProblems) -> Resul
 
     // Turn `only_extract_labels` into Gmail label ids so a walk is
     // narrowed server-side. Doing it client-side would mean paying
-    // `messages.get`'s 20 quota units for every message in the account
+    // `messages.get`'s 60 quota units for every message in the account
     // to keep a handful — see `api::list_messages`.
     let resolved = index.ids_for_names(&opts.only_labels)?;
     let filter_label_ids = resolved.resolved;
@@ -261,6 +318,22 @@ async fn run_sync(db: &RawDb, opts: &FetchOptions, found: &RunProblems) -> Resul
         );
     }
 
+    if let Some(path) = &opts.takeout {
+        summary.takeout = Some(
+            seed_from_takeout(
+                db,
+                opts,
+                found,
+                path,
+                &account_id,
+                &filter_label_ids,
+                // A Takeout files mail under the labels' paths.
+                index.label_paths(&filter_label_ids),
+            )
+            .await?,
+        );
+    }
+
     let mut run = Run {
         db,
         opts,
@@ -269,6 +342,9 @@ async fn run_sync(db: &RawDb, opts: &FetchOptions, found: &RunProblems) -> Resul
         account_id: &account_id,
         user_id: &user_id,
         client: &client,
+        messages_total: profile.messages_total,
+        whole_threads: opts.whole_threads && !filter_label_ids.is_empty(),
+        indexing: !filter_label_ids.is_empty(),
         now: &now,
         // Nothing fixed to seed it with: the bar stays at 0/0 until the
         // owed query says how much there is to fetch.
@@ -314,6 +390,13 @@ struct Run<'a> {
     account_id: &'a str,
     user_id: &'a str,
     client: &'a Client,
+    /// `users.getProfile`'s count, which prices a walk of every label.
+    messages_total: Option<u64>,
+    /// `whole_threads`, under a label filter: without one every message
+    /// is mirrored anyway.
+    whole_threads: bool,
+    /// Whether `thread_members` is kept: under a label filter.
+    indexing: bool,
     now: &'a IsoOffsetTimestamp,
     /// The run's one progress bar. Announcing a total is what turns the
     /// Manage screen's activity cell from a bare count into "N queued"
@@ -346,7 +429,44 @@ impl Run<'_> {
         }
         self.walk_unlisted_scopes(throttle, filter_label_ids, summary)
             .await?;
-        self.fetch_owed(throttle, summary).await
+        self.list_kept_threads(filter_label_ids, summary).await?;
+        self.fetch_owed(throttle, filter_label_ids, summary).await?;
+        // What this fetch kept may keep more threads.
+        if self.list_kept_threads(filter_label_ids, summary).await? > 0 {
+            self.fetch_owed(throttle, filter_label_ids, summary).await?;
+        }
+        if self.whole_threads && !summary.stopped_early() {
+            summary.emails_destroyed += listed::drop_unkept_threads(
+                self.db.pool(),
+                self.now,
+                self.account_id,
+                Keeps::GmailLabels(filter_label_ids),
+                email_id_of,
+            )
+            .await?;
+        }
+        if !summary.interrupted {
+            summary.threads_recounted = listed::recount_threads(self.db.pool(), self.now).await?;
+        }
+        Ok(())
+    }
+
+    /// Under `whole_threads`, list the rest of every thread a kept
+    /// message is in, at the cursor. Returns how many it listed.
+    async fn list_kept_threads(
+        &self,
+        filter_label_ids: &[String],
+        summary: &mut FetchSummary,
+    ) -> Result<u64> {
+        if !self.whole_threads || summary.stopped_early() {
+            return Ok(0);
+        }
+        let pool = self.db.pool();
+        let stamp = self.db.load_scope(&state_scope(self.account_id)).await?;
+        let keeps = Keeps::GmailLabels(filter_label_ids);
+        let n = listed::list_kept_threads(pool, self.account_id, keeps, stamp.as_deref()).await?;
+        summary.listed_from_threads += n as usize;
+        Ok(n)
     }
 
     /// Replay `history.list` from the stored `historyId`. Its pages are
@@ -356,20 +476,15 @@ impl Run<'_> {
     /// message has been fetched is not asked here, so the cursor never
     /// waits on a fetch.
     ///
-    /// `false` when there is nothing to replay from: no cursor,
-    /// `full_resync`, or a cursor older than Google keeps history for.
+    /// `false` when there is nothing to replay from: no cursor, or a
+    /// cursor older than Google keeps history for.
     async fn replay_history(
         &self,
         throttle: &mut QuotaThrottle,
         summary: &mut FetchSummary,
     ) -> Result<bool> {
         let scope = state_scope(self.account_id);
-        let stored = if self.opts.config.full_resync {
-            None
-        } else {
-            self.db.load_scope(&scope).await?
-        };
-        let Some(cursor) = stored else {
+        let Some(cursor) = self.db.load_scope(&scope).await? else {
             return Ok(false);
         };
         throttle.acquire(api::UNITS_HISTORY_LIST).await;
@@ -402,6 +517,10 @@ impl Run<'_> {
         );
         let mut tx = self.db.pool().begin().await.context("begin history tx")?;
         listed::list_in_tx(&mut tx, &changes.named, Some(history_id), Named::Changed).await?;
+        if self.indexing {
+            listed::member_in_tx(&mut tx, &members(&changes.members)).await?;
+            listed::unmember_in_tx(&mut tx, &changes.deleted).await?;
+        }
         summary.emails_destroyed +=
             listed::forget_in_tx(&mut tx, self.now, &changes.deleted, email_id_of).await?;
         listed::save_token_in_tx(&mut tx, &scope, history_id).await?;
@@ -411,34 +530,32 @@ impl Run<'_> {
 
     /// Walk `messages.list` over every configured label (or the account)
     /// no walk has listed whole: a first run, a start over, a label the
-    /// filter newly admits. Each page lists its ids; a message already
-    /// listed is left as it is. A walk starts again every run until it
-    /// reaches its end, and only then is its scope recorded as listed
-    /// whole and, when it covered the whole account, what it did not
-    /// name deleted.
+    /// filter newly admits, a scope an earlier `since` now reaches back
+    /// past. With `since`, a walk lists only mail after it. Each page
+    /// lists its ids; a message already listed is left as it is. A walk
+    /// starts again every run until it reaches its end, and only then is
+    /// its scope recorded as listed whole and, when it covered the whole
+    /// account with no window, what it did not name deleted.
     async fn walk_unlisted_scopes(
         &mut self,
         throttle: &mut QuotaThrottle,
         filter_label_ids: &[String],
         summary: &mut FetchSummary,
     ) -> Result<()> {
-        // `only_extract_labels` means "carrying **any** of these", and
-        // `messages.list` cannot say that in one request: repeated
-        // `labelIds` intersect. So one walk per label.
-        let admitted: BTreeSet<String> = if filter_label_ids.is_empty() {
-            [WHOLE_ACCOUNT.to_string()].into()
-        } else {
-            filter_label_ids.iter().cloned().collect()
-        };
-        let scopes = listed::scopes_owed(self.db.pool(), &admitted).await?;
+        let scopes = self.scopes_to_walk(filter_label_ids).await?;
+        let after = self.opts.since.as_ref().map(|t| t.inner().timestamp());
         let stamp = self.db.load_scope(&state_scope(self.account_id)).await?;
         for scope in scopes {
             if summary.stopped_early() {
                 return Ok(());
             }
-            let label_id = (scope != WHOLE_ACCOUNT).then_some(scope.as_str());
-            let label =
-                label_id.map_or_else(|| WHOLE_ACCOUNT.to_string(), |id| self.index.name(id));
+            let indexing = scope == listed::THREAD_INDEX;
+            let label_id = (scope != WHOLE_ACCOUNT && !indexing).then_some(scope.as_str());
+            let label = match label_id {
+                _ if indexing => "threads".to_string(),
+                Some(id) => self.index.name(id),
+                None => WHOLE_ACCOUNT.to_string(),
+            };
             self.bar.doing(&label);
             let mut named: BTreeSet<String> = BTreeSet::new();
             let mut token: Option<String> = None;
@@ -455,6 +572,8 @@ impl Run<'_> {
                     token.as_deref(),
                     LIST_PAGE_SIZE,
                     label_id,
+                    // A kept message's thread reaches back past `since`.
+                    after.filter(|_| !indexing),
                 )
                 .await
                 {
@@ -466,7 +585,8 @@ impl Run<'_> {
                     // With nothing listed there is nothing to keep going
                     // for.
                     Err(e)
-                        if api::is_terminal(&e) || !listed::lists_any(self.db.pool()).await? =>
+                        if api::is_terminal(&e)
+                            || (!indexing && !listed::lists_any(self.db.pool()).await?) =>
                     {
                         return Err(e.context(format!("messages.list {label}")));
                     }
@@ -481,7 +601,11 @@ impl Run<'_> {
                 };
                 pages += 1;
                 let mut tx = self.db.pool().begin().await.context("begin listing tx")?;
-                listed::list_in_tx(&mut tx, &page.ids, stamp.as_deref(), Named::Exists).await?;
+                if indexing {
+                    listed::member_in_tx(&mut tx, &members(&page.members)).await?;
+                } else {
+                    listed::list_in_tx(&mut tx, &page.ids, stamp.as_deref(), Named::Exists).await?;
+                }
                 tx.commit().await.context("commit listing tx")?;
                 if let Some(sealer) = &self.opts.sealer {
                     sealer.wrote(page.ids.len() as u64).await;
@@ -495,11 +619,25 @@ impl Run<'_> {
             if !reached_the_end {
                 continue;
             }
+            if indexing {
+                listed::close_thread_index(self.db.pool(), &named).await?;
+                continue;
+            }
+            // Recorded before the scope is listed whole, so a run cut off
+            // between the two walks it again rather than reading it as
+            // listed from the first message.
+            self.record_listed_since(&scope).await?;
+            // A walk of the whole account also says which seeded messages
+            // Gmail no longer has: they were never listed, so only their
+            // rows can name them. A window's walk says nothing of the mail
+            // before it, which the mirror keeps.
+            let whole = label_id.is_none() && after.is_none();
             summary.emails_destroyed += listed::close_enumeration(
                 self.db.pool(),
                 self.now,
                 std::slice::from_ref(&scope),
-                label_id.is_none().then_some(&named),
+                whole.then_some(&named),
+                whole.then_some(self.account_id),
                 email_id_of,
             )
             .await?;
@@ -515,6 +653,47 @@ impl Run<'_> {
         Ok(())
     }
 
+    /// The admitted scopes no walk has listed whole, and those listed
+    /// whole from a later start than `since` now asks for.
+    async fn scopes_to_walk(&self, filter_label_ids: &[String]) -> Result<Vec<String>> {
+        let admitted = admitted(filter_label_ids);
+        let unlisted = listed::scopes_owed(self.db.pool(), &wanted(filter_label_ids)).await?;
+        let mut scopes = Vec::new();
+        for scope in admitted {
+            let listed_from = self
+                .db
+                .load_scope(&listed_since_scope(self.account_id, &scope))
+                .await?;
+            if unlisted.contains(&scope)
+                || window_widened(listed_from.as_deref(), self.opts.since.as_ref())
+            {
+                scopes.push(scope);
+            }
+        }
+        // Last, so a run cut short has listed the mail it fetches.
+        scopes.extend(
+            unlisted
+                .into_iter()
+                .filter(|scope| scope == listed::THREAD_INDEX),
+        );
+        Ok(scopes)
+    }
+
+    async fn record_listed_since(&self, scope: &str) -> Result<()> {
+        let key = listed_since_scope(self.account_id, scope);
+        match &self.opts.since {
+            Some(since) => self.db.save_scope(&key, &since.to_rfc3339()).await,
+            None => {
+                sqlx::query("DELETE FROM sync_scope_state WHERE scope = ?")
+                    .bind(&key)
+                    .execute(self.db.pool())
+                    .await
+                    .with_context(|| format!("forget {key}"))?;
+                Ok(())
+            }
+        }
+    }
+
     /// Fetch, with `messages.get`, every listed message the store owes,
     /// newest first, until the work or the budget runs out:
     /// `owed::drain`, one `messages.get` per request, `flush_batch` to a
@@ -525,6 +704,7 @@ impl Run<'_> {
     async fn fetch_owed(
         &mut self,
         throttle: &mut QuotaThrottle,
+        filter_label_ids: &[String],
         summary: &mut FetchSummary,
     ) -> Result<()> {
         if summary.stopped_early() {
@@ -537,6 +717,7 @@ impl Run<'_> {
             held_without_bytes(pool, self.opts.blob_size_limit_bytes).await?,
         );
         if let Some(budget) = self.opts.config.message_budget {
+            let budget = budget.saturating_sub(summary.emails_upserted);
             if owed.len() > budget {
                 summary.budget_exhausted = true;
                 info!(
@@ -551,15 +732,38 @@ impl Run<'_> {
         if owed.is_empty() {
             return Ok(());
         }
+        let held_bytes = held_bytes(pool).await?;
+        let relabeling: HashSet<String> = owed
+            .iter()
+            .filter(|l| held_bytes.contains_key(&email_id_of(&l.key)))
+            .map(|l| l.key.clone())
+            .collect();
         info!(
             event = "gmail_owed",
             account = %self.account_id,
             count = owed.len(),
+            labels_only = relabeling.len(),
             "fetching the messages the store owes",
         );
+        let membership = if label_walk_pays(relabeling.len(), self.index.len(), self.messages_total)
+        {
+            self.walk_every_label(throttle, &relabeling, summary).await
+        } else {
+            None
+        };
+        // Not `stopped_early`: the budget is spent by the fetch below.
+        if summary.interrupted {
+            return Ok(());
+        }
         self.bar.expect(owed.len() as u64);
         self.bar.doing("fetching");
 
+        let kept_threads = if self.whole_threads {
+            listed::kept_threads(pool, self.account_id, Keeps::GmailLabels(filter_label_ids))
+                .await?
+        } else {
+            HashSet::new()
+        };
         let f = MessagesGet {
             db: self.db,
             index: self.index,
@@ -567,18 +771,26 @@ impl Run<'_> {
             user_id: self.user_id,
             client: self.client,
             throttle: tokio::sync::Mutex::new(throttle),
+            held_bytes,
+            membership,
             stop: &self.opts.control.stop,
             cap: self.opts.blob_size_limit_bytes,
             // Belt-and-braces client-side label check. A walk is narrowed
             // server-side, but `history.list` names every message in the
             // account.
-            only_labels: self.opts.only_labels.iter().map(String::as_str).collect(),
+            only_label_ids: filter_label_ids.iter().map(String::as_str).collect(),
+            whole_threads: self.whole_threads,
+            kept_threads: Mutex::new(kept_threads),
+            not_found: Mutex::new(Vec::new()),
+            indexing: self.indexing,
             now: self.now,
             bar: &self.bar,
             filtered: AtomicUsize::new(0),
             blobs_stored: AtomicUsize::new(0),
             blobs_oversize: AtomicUsize::new(0),
             destroyed: AtomicUsize::new(0),
+            relabeled_from_walks: AtomicUsize::new(0),
+            relabeled_one_by_one: AtomicUsize::new(0),
         };
         let l = owed::Loop {
             pool,
@@ -600,6 +812,8 @@ impl Run<'_> {
         summary.messages_filtered += f.filtered.load(Ordering::Relaxed);
         summary.blobs_stored += f.blobs_stored.load(Ordering::Relaxed);
         summary.blobs_oversize += f.blobs_oversize.load(Ordering::Relaxed);
+        summary.relabeled_from_walks += f.relabeled_from_walks.load(Ordering::Relaxed);
+        summary.relabeled_one_by_one += f.relabeled_one_by_one.load(Ordering::Relaxed);
         summary.interrupted |= drained.left > 0 && self.stopping();
         // With nothing mirrored there is nothing a partial run keeps.
         if let Some(said) = drained.terminal {
@@ -609,6 +823,187 @@ impl Run<'_> {
         }
         Ok(())
     }
+
+    /// Every label of `wanted`'s messages, from one `messages.list` walk
+    /// per label: a message no walk names carries none. `None` when a
+    /// walk did not reach its end, since a label it missed would read as
+    /// one the message lacks; the fetch then asks message by message.
+    async fn walk_every_label(
+        &mut self,
+        throttle: &mut QuotaThrottle,
+        wanted: &HashSet<String>,
+        summary: &mut FetchSummary,
+    ) -> Option<HashMap<String, Vec<String>>> {
+        let mut membership: HashMap<String, Vec<String>> = HashMap::new();
+        for label_id in self.index.ids() {
+            self.bar
+                .doing(&format!("labels: {}", self.index.name(label_id)));
+            let mut token: Option<String> = None;
+            loop {
+                if self.stopping() {
+                    summary.interrupted = true;
+                    return None;
+                }
+                throttle.acquire(api::UNITS_MESSAGES_LIST).await;
+                let page = match api::list_messages(
+                    self.user_id,
+                    self.client,
+                    token.as_deref(),
+                    LIST_PAGE_SIZE,
+                    Some(label_id),
+                    None,
+                )
+                .await
+                {
+                    Ok(page) => page,
+                    Err(e) => {
+                        warn!(
+                            event = "gmail_label_walk_failed",
+                            label = %self.index.name(label_id),
+                            error = %format!("{e:#}"),
+                            "a label walk failed; asking for each message's labels instead",
+                        );
+                        return None;
+                    }
+                };
+                for id in page.ids.into_iter().filter(|id| wanted.contains(id)) {
+                    membership.entry(id).or_default().push(label_id.to_string());
+                }
+                match page.next_page_token {
+                    Some(t) => token = Some(t),
+                    None => break,
+                }
+            }
+        }
+        info!(
+            event = "gmail_label_walks",
+            labels = self.index.len(),
+            relabeling = wanted.len(),
+            "walked every label for the labels of the messages already held",
+        );
+        Some(membership)
+    }
+}
+
+/// Whether walking every label costs less than asking each message
+/// for its labels. A walk is a 5-unit page per 500 messages of each
+/// label, so its pages are at most one per label plus the account's
+/// size times its labels per message over 500; ten labels a message is
+/// the bound taken here. One message at a time is 20 units each.
+fn label_walk_pays(relabeling: usize, labels: usize, messages_total: Option<u64>) -> bool {
+    const LABELS_PER_MESSAGE: u64 = 10;
+    let pages = labels as u64
+        + messages_total.unwrap_or(0) * LABELS_PER_MESSAGE / u64::from(LIST_PAGE_SIZE);
+    let walk = pages * u64::from(api::UNITS_MESSAGES_LIST);
+    relabeling as u64 * u64::from(api::UNITS_MESSAGES_GET_MINIMAL) > walk
+}
+
+/// The scopes walked: [`admitted`]'s, and under a label filter the
+/// thread index. Without one every thread is held whole.
+fn wanted(filter_label_ids: &[String]) -> BTreeSet<String> {
+    let mut scopes = admitted(filter_label_ids);
+    if !filter_label_ids.is_empty() {
+        scopes.insert(listed::THREAD_INDEX.to_string());
+    }
+    scopes
+}
+
+/// `(message, thread)` as `thread_members` keys them: the thread by the
+/// `threads` row's id.
+fn members(gmail: &[(String, String)]) -> Vec<(String, String)> {
+    gmail
+        .iter()
+        .map(|(id, thread)| (id.clone(), GmailId::key_of_api(thread)))
+        .collect()
+}
+
+/// The scopes a walk lists: `only_extract_labels` means "carrying
+/// **any** of these", and `messages.list` cannot say that in one
+/// request, since repeated `labelIds` intersect. So one per label, or
+/// the whole account.
+fn admitted(filter_label_ids: &[String]) -> BTreeSet<String> {
+    if filter_label_ids.is_empty() {
+        [WHOLE_ACCOUNT.to_string()].into()
+    } else {
+        filter_label_ids.iter().cloned().collect()
+    }
+}
+
+/// Read the Takeout into the store before the API is asked: what the
+/// store holds stays as it is, and once a listing has covered what the
+/// source admits, a message it does not name is gone upstream and is
+/// not brought back.
+async fn seed_from_takeout(
+    db: &RawDb,
+    opts: &FetchOptions,
+    found: &RunProblems,
+    path: &std::path::Path,
+    account_id: &str,
+    filter_label_ids: &[String],
+    only_labels: Vec<String>,
+) -> Result<mbox::SeedSummary> {
+    let pool = db.pool();
+    let held: HashSet<String> = sqlx::query_scalar("SELECT id FROM emails")
+        .fetch_all(pool)
+        .await
+        .context("select the emails held")?
+        .into_iter()
+        .collect();
+    let listed = if listed::scopes_owed(pool, &wanted(filter_label_ids))
+        .await?
+        .iter()
+        .all(|scope| scope == listed::THREAD_INDEX)
+    {
+        let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM listed_messages")
+            .fetch_all(pool)
+            .await
+            .context("select the listed messages")?;
+        Some(ids.iter().map(|id| email_id_of(id)).collect())
+    } else {
+        None
+    };
+    let prefix = labels::gmail_mailbox_prefix(account_id);
+    let real_ids = db
+        .mailbox_names(account_id)
+        .await?
+        .into_iter()
+        .filter(|(id, _)| id.starts_with(&prefix))
+        .map(|(id, name)| (name, id))
+        .collect();
+    mbox::seed(
+        mbox::Seed {
+            db,
+            input_path: path.to_path_buf(),
+            account_id: account_id.to_string(),
+            real_ids,
+            held,
+            listed,
+            only_labels,
+            cache: opts.cache.as_ref(),
+            sealer: opts.sealer.as_ref(),
+            progress: opts.progress.clone(),
+            stop: opts.control.stop.clone(),
+        },
+        found,
+    )
+    .await
+}
+
+/// Every email whose `.eml` the store holds, with its hash and its
+/// thread: what a message needs besides its labels to be written again.
+async fn held_bytes(pool: &sqlx::SqlitePool) -> Result<HashMap<String, (String, String)>> {
+    let rows: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT e.id, b.blake3, e.thread_id FROM emails e
+         JOIN email_blobs b ON b.blob_id = e.blob_id AND b.email_id = e.id
+         WHERE b.blake3 IS NOT NULL",
+    )
+    .fetch_all(pool)
+    .await
+    .context("select the emails held with their bytes")?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, blake3, thread)| (id, (blake3, thread)))
+        .collect())
 }
 
 /// The fetcher: one `messages.get` per request; a flush's bytes into
@@ -620,58 +1015,148 @@ struct MessagesGet<'a> {
     user_id: &'a str,
     client: &'a Client,
     throttle: tokio::sync::Mutex<&'a mut QuotaThrottle>,
+    /// Email id → the `.eml`'s hash and the thread, for every message
+    /// whose bytes the store already holds: only its labels are owed.
+    held_bytes: HashMap<String, (String, String)>,
+    /// Gmail id → label ids, when every label was walked this run.
+    membership: Option<HashMap<String, Vec<String>>>,
     stop: &'a StopFlag,
     cap: Option<u64>,
-    only_labels: BTreeSet<&'a str>,
+    only_label_ids: BTreeSet<&'a str>,
+    whole_threads: bool,
+    /// Under `whole_threads`, the threads (by the `threads` row's id) a
+    /// message the filter keeps is in: held, or fetched this run.
+    kept_threads: Mutex<HashSet<String>>,
+    /// Gmail ids Gmail answered 404 for: in no thread any more.
+    not_found: Mutex<Vec<String>>,
+    indexing: bool,
     now: &'a IsoOffsetTimestamp,
     bar: &'a RunBar,
     filtered: AtomicUsize,
     blobs_stored: AtomicUsize,
     blobs_oversize: AtomicUsize,
     destroyed: AtomicUsize,
+    relabeled_from_walks: AtomicUsize,
+    relabeled_one_by_one: AtomicUsize,
 }
 
-/// A fetched message: its row, its `.eml` edge, and the bytes for the
-/// CAS, or why they were left out when over the cap.
+/// A fetched message: its row, its `.eml` edge, and its bytes.
 struct Stored {
     row: EmailRow,
     eml: EmlBlobRow,
-    bytes: Result<Vec<u8>, String>,
+    body: Body,
+}
+
+/// What a fetched message's `.eml` comes to.
+enum Body {
+    /// Bytes for the CAS.
+    New(Vec<u8>),
+    /// The store holds them and their edge already.
+    Held,
+    /// Left out, and why: over the cap.
+    OverCap(String),
 }
 
 impl MessagesGet<'_> {
     /// What a fetched message comes to: gone when it carries none of
-    /// the configured labels; else its row, with its bytes when they fit
+    /// the configured labels and, under `whole_threads`, no kept message
+    /// shares its thread; else its row, with its bytes when they fit
     /// under the cap and a warning on its `.eml` when not.
-    fn keep(&self, ingested: Ingested) -> Outcome<Stored> {
-        if !self.only_labels.is_empty()
-            && !ingested
-                .label_paths
-                .iter()
-                .any(|p| self.only_labels.contains(p.as_str()))
-        {
+    fn keep(&self, ingested: Ingested, held: bool) -> Outcome<Stored> {
+        if !self.keeps(&ingested) {
             self.filtered.fetch_add(1, Ordering::Relaxed);
             return Outcome::Gone;
         }
         let eml = EmlBlobRow::new(&ingested.email_id, &ingested.blob_id);
-        let bytes = match self.cap.filter(|cap| ingested.raw.len() as u64 > *cap) {
+        let body = match self.cap.filter(|cap| ingested.raw.len() as u64 > *cap) {
+            _ if held => Body::Held,
             Some(cap) => {
                 self.blobs_oversize.fetch_add(1, Ordering::Relaxed);
-                Err(format!(
+                Body::OverCap(format!(
                     "the .eml is {} bytes, over blob_size_limit_bytes ({cap})",
                     ingested.raw.len()
                 ))
             }
             None => {
                 self.blobs_stored.fetch_add(1, Ordering::Relaxed);
-                Ok(ingested.raw)
+                Body::New(ingested.raw)
             }
         };
         Outcome::Got(Stored {
             row: ingested.row,
             eml,
-            bytes,
+            body,
         })
+    }
+
+    fn keeps(&self, ingested: &Ingested) -> bool {
+        if self.only_label_ids.is_empty() {
+            return true;
+        }
+        let matches = ingested
+            .label_ids
+            .iter()
+            .any(|id| self.only_label_ids.contains(id.as_str()));
+        if !self.whole_threads {
+            return matches;
+        }
+        let mut kept = self.kept_threads.lock().expect("kept threads");
+        if matches {
+            kept.insert(ingested.row.thread_id.clone());
+        }
+        matches || kept.contains(&ingested.row.thread_id)
+    }
+
+    /// A message whose bytes the store holds: its labels from the walks
+    /// when every label was walked, else from a `messages.get` that
+    /// leaves the message out. `None` when the CAS no longer has the
+    /// bytes, so the message is fetched whole.
+    async fn relabel(&self, id: &str, blake3: &str, thread: &str) -> Result<Option<GmailMessage>> {
+        let Some(object) = self.db.cas().get(blake3).await? else {
+            return Ok(None);
+        };
+        let mut msg = match &self.membership {
+            Some(membership) => {
+                self.relabeled_from_walks.fetch_add(1, Ordering::Relaxed);
+                GmailMessage {
+                    id: id.to_string(),
+                    thread_id: thread.to_string(),
+                    label_ids: membership.get(id).cloned().unwrap_or_default(),
+                    history_id: None,
+                    internal_date_ms: None,
+                    size_estimate: None,
+                    raw: Vec::new(),
+                }
+            }
+            None => {
+                self.throttle
+                    .lock()
+                    .await
+                    .acquire(api::UNITS_MESSAGES_GET_MINIMAL)
+                    .await;
+                self.relabeled_one_by_one.fetch_add(1, Ordering::Relaxed);
+                api::get_message_minimal(self.user_id, self.client, id).await?
+            }
+        };
+        msg.raw = object.bytes;
+        Ok(Some(msg))
+    }
+
+    async fn get(&self, id: &str) -> Result<(GmailMessage, bool)> {
+        if let Some((blake3, thread)) = self.held_bytes.get(&email_id_of(id)) {
+            if let Some(msg) = self.relabel(id, blake3, thread).await? {
+                return Ok((msg, true));
+            }
+        }
+        self.throttle
+            .lock()
+            .await
+            .acquire(api::UNITS_MESSAGES_GET_RAW)
+            .await;
+        Ok((
+            api::get_message_raw(self.user_id, self.client, id).await?,
+            false,
+        ))
     }
 }
 
@@ -683,21 +1168,20 @@ impl Fetcher<Stored> for MessagesGet<'_> {
     ) -> std::result::Result<Vec<Fetched<Stored>>, BatchError> {
         let mut answers = Vec::with_capacity(batch.len());
         for listed in batch {
-            self.throttle
-                .lock()
-                .await
-                .acquire(api::UNITS_MESSAGES_GET)
-                .await;
-            let got = api::get_message_raw(self.user_id, self.client, &listed.key).await;
+            let got = self.get(&listed.key).await;
             self.bar.did(1);
             let outcome = match got {
-                Ok(msg) => match ingest::ingest(self.account_id, self.index, &msg) {
-                    Ok(ingested) => self.keep(ingested),
+                Ok((msg, held)) => match ingest::ingest(self.account_id, self.index, &msg) {
+                    Ok(ingested) => self.keep(ingested, held),
                     Err(e) => Outcome::Failed(format!("{e}")),
                 },
                 // Deleted since it was listed: normal on a busy mailbox,
                 // and nothing to come back for.
-                Err(e) if is_not_found(&e) => Outcome::Gone,
+                Err(e) if is_not_found(&e) => {
+                    let mut gone = self.not_found.lock().expect("not found");
+                    gone.push(listed.key.clone());
+                    Outcome::Gone
+                }
                 // A cancel that lands mid-backoff arrives here as an
                 // error, and it is not one.
                 Err(e) if self.stop.requested() => return Err(BatchError::Batch(e)),
@@ -711,8 +1195,9 @@ impl Fetcher<Stored> for MessagesGet<'_> {
 
     /// The flush's bytes into the CAS; then the email rows, their joins
     /// and threads, and the messages that are gone
-    /// (`listed::write_batch_in_tx`); then the `.eml` edges, whose
-    /// sidecar is this fetcher's to stamp, the listing's being the loop's.
+    /// (`listed::write_batch_in_tx`), and the thread each message is in;
+    /// then the `.eml` edges, whose sidecar is this fetcher's to stamp,
+    /// the listing's being the loop's.
     async fn store(
         &self,
         tx: &mut Transaction<'static, Sqlite>,
@@ -721,29 +1206,38 @@ impl Fetcher<Stored> for MessagesGet<'_> {
         let mut got = Vec::new();
         let mut gone = Vec::new();
         let mut edges = Vec::new();
+        let mut members = Vec::new();
         for f in batch {
             match &f.outcome {
                 Outcome::Got(s) | Outcome::Unusable(s, ..) => {
                     got.push(s.row.clone());
                     edges.push(s);
+                    members.push((f.listed.key.clone(), s.row.thread_id.clone()));
                 }
                 Outcome::Gone => gone.push(f.listed.key.clone()),
                 Outcome::Failed(_) | Outcome::Skipped(..) => {}
             }
         }
+        edges.retain(|s| !matches!(s.body, Body::Held));
         let inserts: Vec<CasInsert<'_, &str>> = edges
             .iter()
-            .filter_map(|s| {
-                Some(CasInsert {
+            .filter_map(|s| match &s.body {
+                Body::New(bytes) => Some(CasInsert {
                     id: s.eml.id.as_str(),
-                    bytes: s.bytes.as_ref().ok()?,
+                    bytes,
                     content_type: Some("message/rfc822"),
-                })
+                }),
+                Body::Held | Body::OverCap(_) => None,
             })
             .collect();
         let stored = self.db.cas().put_many(inserts).await?;
         let n = listed::write_batch_in_tx(tx, self.now, got, &gone, email_id_of).await?;
         self.destroyed.fetch_add(n, Ordering::Relaxed);
+        let not_found = std::mem::take(&mut *self.not_found.lock().expect("not found"));
+        if self.indexing {
+            listed::member_in_tx(tx, &members).await?;
+            listed::unmember_in_tx(tx, &not_found).await?;
+        }
 
         let rows: Vec<EmlBlobRow> = edges
             .iter()
@@ -759,7 +1253,7 @@ impl Fetcher<Stored> for MessagesGet<'_> {
             .map(|r| r.id.as_str());
         bulk_upsert_bookkeeping(tx, EmlBlobRow::TABLE, landed, self.now).await?;
         for s in &edges {
-            if let Err(why) = &s.bytes {
+            if let Body::OverCap(why) = &s.body {
                 dr::record_object_skipped(
                     tx,
                     EmlBlobRow::TABLE,
@@ -774,14 +1268,17 @@ impl Fetcher<Stored> for MessagesGet<'_> {
     }
 
     fn weight(&self, s: &Stored) -> usize {
-        s.bytes.as_ref().map_or(0, Vec::len)
+        match &s.body {
+            Body::New(bytes) => bytes.len(),
+            Body::Held | Body::OverCap(_) => 0,
+        }
     }
 }
 
 /// How the `emails` row for a Gmail message is keyed: `GmailId`'s key,
 /// the one `ingest::ingest` mints.
 fn email_id_of(gmail_id: &str) -> String {
-    GmailId::from_api(gmail_id).map_or_else(|| gmail_id.to_string(), GmailId::key)
+    GmailId::key_of_api(gmail_id)
 }
 
 /// [`email_id_of`] in SQL: Gmail's hex id, zero-padded to sixteen.
@@ -823,6 +1320,8 @@ struct Changes {
     /// Added or relabeled: either way the message is to be fetched.
     named: Vec<String>,
     deleted: Vec<String>,
+    /// `(message, thread)` for the named, in Gmail's hex.
+    members: Vec<(String, String)>,
     history_id: Option<String>,
 }
 
@@ -844,6 +1343,7 @@ async fn collect_history(
         out.named.extend(page.added);
         out.named.extend(page.relabeled);
         out.deleted.extend(page.deleted);
+        out.members.extend(page.members);
         if let Some(h) = page.history_id {
             out.history_id = Some(h);
         }
@@ -879,6 +1379,29 @@ mod tests {
         assert_ne!(state_scope("a@x"), state_scope("b@x"));
         // Must not collide with the JMAP path's keys in the same table.
         assert!(state_scope("a@x").starts_with("gmail:"));
+    }
+
+    /// Widening is a walk exactly when the new start is earlier than
+    /// where the last whole walk began; a store from before `since`
+    /// existed has no record, which reads as listed from the first
+    /// message, so an upgrade walks nothing.
+    #[test]
+    fn a_scope_is_walked_again_when_the_window_reaches_back_past_it() {
+        let at = |s: &str| datalib_time::parse_strict(s).unwrap();
+        let sept = "2026-09-01T00:00:00+00:00";
+        assert!(!window_widened(None, None));
+        assert!(!window_widened(None, Some(&at(sept))));
+        assert!(window_widened(Some(sept), None));
+        assert!(window_widened(
+            Some(sept),
+            Some(&at("2026-08-01T00:00:00Z"))
+        ));
+        assert!(!window_widened(Some(sept), Some(&at(sept))));
+        assert!(!window_widened(
+            Some(sept),
+            Some(&at("2026-10-01T00:00:00Z"))
+        ));
+        assert!(window_widened(Some("garbled"), Some(&at(sept))));
     }
 
     /// A 404 has to be recognized through anyhow's context chain — it

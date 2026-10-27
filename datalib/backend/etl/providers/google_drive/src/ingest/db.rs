@@ -33,13 +33,12 @@ pub struct Split<R> {
 pub struct Part {
     pub name: String,
     pub body: Body,
-    pub content_type: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub enum Body {
-    Fetched(Vec<u8>),
-    /// Bytes the CAS already holds, under this hash.
+    /// Bytes the CAS holds, under this hash: fetched by this capture and
+    /// written as they arrived, or held from an earlier capture.
     Held(String),
     /// An export Google declined to make.
     Declined,
@@ -53,18 +52,6 @@ pub struct Capture {
     pub comments: Vec<Split<CommentRow>>,
     pub row: Split<CaptureRow>,
     pub parts: Vec<Part>,
-}
-
-impl Capture {
-    pub fn bytes(&self) -> usize {
-        self.parts
-            .iter()
-            .map(|p| match &p.body {
-                Body::Fetched(bytes) => bytes.len(),
-                Body::Held(_) | Body::Declined => 0,
-            })
-            .sum()
-    }
 }
 
 /// The image parts of every stored capture of some files, by file and by
@@ -107,42 +94,23 @@ impl RawDb {
     }
 }
 
-/// Write `captures` in `tx`: their bytes into the CAS first, in one
-/// `put_many` that commits on its own, then every row naming them.
+/// Write `captures` in `tx`: every row naming their parts, whose bytes
+/// the CAS already holds.
 pub async fn store_captures(
     tx: &mut Transaction<'static, Sqlite>,
-    cas: &BlobCas,
     captures: &[&Capture],
 ) -> Result<()> {
-    let edge_id = |c: &Capture, p: &Part| format!("{}#{}", c.row.row.id, p.name);
-    let inserts: Vec<CasInsert<'_, String>> = captures
-        .iter()
-        .flat_map(|c| c.parts.iter().map(move |p| (c, p)))
-        .filter_map(|(c, p)| match &p.body {
-            Body::Fetched(bytes) => Some(CasInsert {
-                id: edge_id(c, p),
-                bytes,
-                content_type: p.content_type.as_deref(),
-            }),
-            Body::Held(_) | Body::Declined => None,
-        })
-        .collect();
-    let stored = cas.put_many(inserts).await?;
     let edges: Vec<CapturePartRow> = captures
         .iter()
         .flat_map(|c| c.parts.iter().map(move |p| (c, p)))
-        .map(|(c, p)| {
-            let id = edge_id(c, p);
-            CapturePartRow {
-                blake3: match &p.body {
-                    Body::Fetched(_) => stored.get(&id).cloned(),
-                    Body::Held(blake3) => Some(blake3.clone()),
-                    Body::Declined => None,
-                },
-                id,
-                capture_id: c.row.row.id.clone(),
-                part: p.name.clone(),
-            }
+        .map(|(c, p)| CapturePartRow {
+            id: format!("{}#{}", c.row.row.id, p.name),
+            capture_id: c.row.row.id.clone(),
+            part: p.name.clone(),
+            blake3: match &p.body {
+                Body::Held(blake3) => Some(blake3.clone()),
+                Body::Declined => None,
+            },
         })
         .collect();
 

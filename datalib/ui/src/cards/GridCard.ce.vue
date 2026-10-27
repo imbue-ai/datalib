@@ -19,6 +19,7 @@
 // Double-clicking a row opens that document as a standalone
 // single-column page in a new tab.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
+import { timeView } from "@/config/timeView";
 // The grid is the framework-agnostic bundle, not the Vue wrapper: a
 // card is a custom element, and the wrapper finds its container by a
 // selector on `document`, which cannot see into a shadow root. The
@@ -47,10 +48,14 @@ import { entities, entityCopyText } from "./entities";
 import {
   canLinkHandles,
   chipCell,
+  contactsById,
   handleKind,
   copyText as copyHandleText,
+  nameOf,
   people,
 } from "./contacts";
+import { CONTACT } from "@/search/queryText";
+import { dateText, datesInText, parseStamp } from "./dates";
 import {
   CHIP_SELECTOR,
   chipCardSource,
@@ -135,7 +140,7 @@ import {
 import { searchFailure, type SearchFailure } from "./searchFailure";
 import { DEFAULT_QUERY, PLAIN_HINT, searchPlaceholder } from "./searchDefaults";
 import SearchList from "./SearchList.ce.vue";
-import { freeText, pickedSource, setSource } from "./search";
+import { freeText, pickedSource, searchTitle, setSource } from "./search";
 import SearchField from "@/search/SearchField.vue";
 import { iconUrl } from "@/config/icons";
 import { lastSearchView, rememberSearchView, type SearchViewId } from "./searchViewPref";
@@ -227,10 +232,33 @@ the one you picked last.</p>
 );
 
 // An unnamed card's name tracks the live query, not just the factory
-// argument — searching from inside the card renames it.
+// argument — searching from inside the card renames it — and calls a
+// person in it by their name once it is known, and a date as its chip.
+function shownValue(value: string): string | null {
+  const stamp = parseStamp(value);
+  if (stamp) return dateText(stamp);
+  if (value.startsWith(CONTACT)) {
+    const contact = contactsById.lookup(value.slice(CONTACT.length));
+    return contact ? nameOf(contact) : null;
+  }
+  if (!handleKind(value)) return null;
+  const who = people.lookup(value);
+  const record = who?.mine ?? who?.sourceContacts[0];
+  return record ? nameOf(record) : null;
+}
+const namesAnswered = ref(0);
+const stopTitlePeople = people.subscribe(() => namesAnswered.value++);
+const stopTitleContacts = contactsById.subscribe(() => namesAnswered.value++);
+onBeforeUnmount(() => {
+  stopTitlePeople();
+  stopTitleContacts();
+});
 watch(
-  query,
-  (q) => props.ctx.setTitle(props.name ?? (q && q !== DEFAULT_QUERY ? `Search: ${q}` : "Search")),
+  [query, namesAnswered],
+  ([q]) =>
+    props.ctx.setTitle(
+      props.name ?? (q && q !== DEFAULT_QUERY ? searchTitle(q, shownValue) : "Search"),
+    ),
   { immediate: true },
 );
 const rows = shallowRef<Row[]>([]);
@@ -444,6 +472,9 @@ type Grid = SlickVanillaGridBundle<Row> & {
   slickGrid: NonNullable<SlickVanillaGridBundle<Row>["slickGrid"]>;
 };
 let vueGrid: Grid | null = null;
+
+// The clock's zone or format changed: every date on screen, drawn again.
+watch(timeView, () => vueGrid?.slickGrid.invalidate());
 let groupingPlugin: SlickDraggableGrouping | null = null;
 /// The element the grid is built in — the resizer measures it, and
 /// the grid's own stylesheet goes into the root it sits in.
@@ -1510,7 +1541,7 @@ const columnOverrides: Record<string, Partial<Column<Row>>> = {
     formatter: (_r, _c, value) => {
       const div = document.createElement("div");
       div.className = "datalib-clamp-2";
-      div.textContent = value == null ? "" : String(value);
+      div.textContent = value == null ? "" : datesInText(String(value));
       return div;
     },
   },

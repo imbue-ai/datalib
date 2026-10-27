@@ -93,6 +93,9 @@ pub enum SourceType {
     Signal,
     Slack,
     SmsBackupRestore,
+    /// Todoist, over its API: projects, sections, tasks open and
+    /// completed, and their comments.
+    Todoist,
     Whatsapp,
     Yolink,
 }
@@ -127,6 +130,7 @@ impl SourceType {
                 | SourceType::Linear
                 | SourceType::Notion
                 | SourceType::Slack
+                | SourceType::Todoist
         )
     }
 
@@ -137,6 +141,12 @@ impl SourceType {
             self,
             SourceType::Garmin | SourceType::Yolink | SourceType::Airvisual
         )
+    }
+
+    /// Whether this type's events have occurrences, which its
+    /// `render_occurrences` step lists (`crate::occurrences`).
+    pub const fn renders_occurrences(self) -> bool {
+        matches!(self, SourceType::Calendar)
     }
 
     /// The raw table whose rows are this source's items, for a type
