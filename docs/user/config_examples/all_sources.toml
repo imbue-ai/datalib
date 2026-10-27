@@ -2277,6 +2277,8 @@ dm_conversations = ["D024BE7LH", "https://enterprise.slack.com/archives/G0ABC12D
                                # sidebar with new messages
 refresh_window_days = 30       # re-walk this many trailing days for edits, reactions
                                # and deletions; default 30, 0 turns it off
+refresh_every_minutes = 60     # re-walk that window at most this often; default 60,
+                               # 0 re-walks it on every sync
 
 [[steps]]
 group = "slack"

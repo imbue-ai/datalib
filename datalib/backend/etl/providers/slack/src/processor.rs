@@ -96,6 +96,10 @@ impl DataProcessor for SlackIngest {
                     .sync
                     .refresh_window_days
                     .unwrap_or(ingest::DEFAULT_REFRESH_WINDOW_DAYS),
+                refresh_every_minutes: self
+                    .sync
+                    .refresh_every_minutes
+                    .unwrap_or(ingest::DEFAULT_REFRESH_EVERY_MINUTES),
                 members_only: !self.sync.all_channels && self.sync.channels.is_none(),
                 media: self.sync.media,
                 dms: self.sync.dms,

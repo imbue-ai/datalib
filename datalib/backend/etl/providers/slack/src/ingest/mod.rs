@@ -8,7 +8,7 @@ mod reply_search;
 pub mod schema_raw;
 pub mod shapes;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
@@ -45,6 +45,9 @@ use shapes::{
 
 pub const DEFAULT_SINCE: &str = "2024-01-01";
 pub const DEFAULT_REFRESH_WINDOW_DAYS: i64 = 30;
+/// How long after a conversation's refresh window was last re-read
+/// whole before a run reads it again.
+pub const DEFAULT_REFRESH_EVERY_MINUTES: i64 = 60;
 
 /// Max age of a successful channel/user list sweep before we refetch.
 /// Slack `conversations.list` is Tier-2 rate-limited (~20 req/min), so
@@ -727,17 +730,50 @@ fn stretches(since: &str, refresh_from: Option<&str>, held: &[Span]) -> Vec<Stre
     out
 }
 
-/// Whether a DM is worth a history call this run. `client.counts` puts
-/// its newest message at `latest`, or leaves it out (`None`) when it is
-/// closed in the sidebar; it is walked when a stretch it `owes` reaches
-/// down to that message. Nothing is covered for a DM left out, so the
-/// run that finds it open again owes it whole.
-fn shows_activity(latest: Option<&str>, owes: &[Stretch]) -> bool {
-    let Some(latest) = latest.map(ts_key) else {
-        return false;
-    };
+/// What `client.counts` says of a conversation's newest message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Newest<'a> {
+    /// Nothing: `client.counts` failed, the conversation is a channel it
+    /// does not list, or a DM named in `dm_conversations`.
+    Unknown,
+    /// A DM `client.counts` leaves out, being closed in the sidebar.
+    Closed,
+    At(&'a str),
+}
+
+/// Whether a stretch a conversation `owes` reaches down to its newest
+/// message, `latest`.
+fn shows_activity(latest: &str, owes: &[Stretch]) -> bool {
+    let latest = ts_key(latest);
     owes.iter()
+        .filter(|s| !s.reread)
         .any(|s| s.span.lo < latest || (s.inclusive && s.span.lo == latest))
+}
+
+/// What a run walks of one conversation: its [`stretches`], less the
+/// ones `client.counts` shows hold nothing new. A conversation whose
+/// newest message is already covered costs no request, except its
+/// re-read when `refresh_from` says one is due. A closed DM costs
+/// none: nothing is covered for it, so the run that finds it open again
+/// owes it whole.
+fn to_walk(since: &str, refresh_from: Option<&str>, held: &[Span], newest: Newest) -> Vec<Stretch> {
+    let all = stretches(since, refresh_from, held);
+    match newest {
+        Newest::Unknown => all,
+        Newest::Closed => Vec::new(),
+        Newest::At(latest) if shows_activity(latest, &all) => all,
+        Newest::At(_) => all.into_iter().filter(|s| s.reread).collect(),
+    }
+}
+
+/// Whether a conversation's refresh window is due a re-read, `age`
+/// after the last one finished (`None`: never).
+fn refresh_due(age: Option<chrono::Duration>, every: chrono::Duration) -> bool {
+    every <= chrono::Duration::zero() || age.is_none_or(|age| age >= every)
+}
+
+fn refresh_sweep_key(channel_id: &str) -> String {
+    format!("refresh:{channel_id}")
 }
 
 /// The part of `stretch` one page settles. History is newest first, so
@@ -1183,6 +1219,9 @@ pub struct FetchOptions {
     pub channels: Option<Vec<String>>,
     pub since: String,
     pub refresh_window_days: i64,
+    /// Minutes before a conversation's refresh window is re-read again;
+    /// `0` re-reads it every run.
+    pub refresh_every_minutes: i64,
     pub members_only: bool,
     pub media: bool,
     /// Mirror direct messages (1:1 and group). Off by default — see
@@ -1216,6 +1255,7 @@ impl FetchOptions {
             channels: None,
             since: DEFAULT_SINCE.to_string(),
             refresh_window_days: DEFAULT_REFRESH_WINDOW_DAYS,
+            refresh_every_minutes: DEFAULT_REFRESH_EVERY_MINUTES,
             members_only: true,
             media: true,
             dms: false,
@@ -1270,6 +1310,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         "channels": opts.channels,
         "since": opts.since,
         "refresh_window_days": opts.refresh_window_days,
+        "refresh_every_minutes": opts.refresh_every_minutes,
         "members_only": opts.members_only,
         "media": opts.media,
         "dms": opts.dms,
@@ -1399,27 +1440,6 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             }
             grand.account = account;
         }
-        // Most DMs in a workspace a few years old are long quiet, and
-        // each would cost a rate-limited history call to learn it. A DM
-        // named in `dm_conversations` was asked for by name, and without
-        // `client.counts` nothing says which DMs are quiet: those are
-        // walked.
-        let mut idle = vec![false; targets.len()];
-        if let (Some(open), None) = (&open_latest, &opts.dm_conversations) {
-            let dms = targets.len() - plan.dm_targets..targets.len();
-            for i in dms.clone() {
-                let cid = &targets[i].0;
-                let held = coverage::held(db.pool(), &db::history_scope(cid)).await?;
-                let owes = stretches(&since, None, &held);
-                idle[i] = !shows_activity(open.get(cid).map(String::as_str), &owes);
-            }
-            info!(
-                event = "slack_idle_dms_skipped",
-                dms = dms.len(),
-                idle = idle.iter().filter(|i| **i).count(),
-                "left out the DMs with nothing new since what is held"
-            );
-        }
         if opts.search_replies && !opts.control.stop.requested() {
             let top = ts_key(&datetime_to_slack_ts(&(now - SEARCH_LAG)));
             let search = ReplySearch {
@@ -1445,10 +1465,70 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             t_setup.elapsed().as_millis() as u64
         ));
 
+        // What every channel owes, from the store: the stretches of
+        // history not covered (and the refresh window's, when due), the
+        // threads not held at their latest reply, the files without
+        // bytes. A run that was cut off left exactly that, so nothing is
+        // carried over from it. A conversation `client.counts` shows
+        // quiet walks no history but still gets the threads and files
+        // it owes.
+        let refresh_every = chrono::Duration::minutes(opts.refresh_every_minutes);
+        let first_dm = targets.len() - plan.dm_targets;
+        let mut frontier = Frontier::default();
+        let mut refreshing = vec![false; targets.len()];
+        let mut quiet = vec![false; targets.len()];
+        for (target, (cid, _)) in targets.iter().enumerate() {
+            // A DM named in `dm_conversations` was asked for by name, and
+            // without `client.counts` nothing says which are quiet:
+            // those are walked.
+            let newest = match (&open_latest, target >= first_dm) {
+                (None, _) => Newest::Unknown,
+                (Some(_), true) if opts.dm_conversations.is_some() => Newest::Unknown,
+                (Some(open), is_dm) => match open.get(cid) {
+                    Some(latest) => Newest::At(latest),
+                    None if is_dm => Newest::Closed,
+                    None => Newest::Unknown,
+                },
+            };
+            let due = refresh_due(
+                db.manifest_sweep_age(&refresh_sweep_key(cid), &now).await?,
+                refresh_every,
+            );
+            let held = coverage::held(db.pool(), &db::history_scope(cid)).await?;
+            let walks = to_walk(
+                &since,
+                refresh_from.as_deref().filter(|_| due),
+                &held,
+                newest,
+            );
+            refreshing[target] = walks.iter().any(|w| w.reread);
+            quiet[target] = matches!(newest, Newest::At(_)) && walks.iter().all(|w| w.reread);
+            frontier
+                .walks
+                .extend(walks.into_iter().map(|stretch| Walk::new(target, stretch)));
+            for thread in owed::owed(db.pool(), THREADS, db.threads_listed(cid).await?).await? {
+                frontier.threads.push(thread_reach(&thread), thread);
+            }
+            if opts.media {
+                for file in db.files_listed(&team_id, cid).await? {
+                    frontier.files.push(file_reach(&file), file);
+                }
+            }
+        }
+
+        let walking: BTreeSet<usize> = frontier.walks.iter().map(|w| w.target).collect();
+        info!(
+            event = "slack_walks_planned",
+            conversations = targets.len(),
+            walking = walking.len(),
+            quiet = quiet.iter().filter(|q| **q).count(),
+            refreshing = refreshing.iter().filter(|r| **r).count(),
+            "left out the history with nothing new since what is held"
+        );
+
         // Seeded with one tick per channel, so the bar reads as
         // something before the first channel has listed anything.
-        let walking = idle.iter().filter(|idle| !**idle).count();
-        let bar = RunBar::new(&opts.progress, walking as u64);
+        let bar = RunBar::new(&opts.progress, walking.len() as u64);
         let mirror = Mirror {
             db: &db,
             team_id: &team_id,
@@ -1460,36 +1540,14 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             sealer: opts.sealer.as_ref(),
             blake3_by_file: &blake3_by_file,
         };
-        // What every channel owes, from the store: the stretches of
-        // history not covered (and the refresh window's), the threads
-        // not held at their latest reply, the files without bytes. A
-        // run that was cut off left exactly that, so nothing is carried
-        // over from it. An idle DM walks no history but still gets the
-        // threads and files it owes.
-        let mut frontier = Frontier::default();
-        for (target, (cid, _)) in targets.iter().enumerate() {
-            if !idle[target] {
-                let held = coverage::held(db.pool(), &db::history_scope(cid)).await?;
-                frontier.walks.extend(
-                    stretches(&since, refresh_from.as_deref(), &held)
-                        .into_iter()
-                        .map(|stretch| Walk::new(target, stretch)),
-                );
-            }
-            for thread in owed::owed(db.pool(), THREADS, db.threads_listed(cid).await?).await? {
-                frontier.threads.push(thread_reach(&thread), thread);
-            }
-            if opts.media {
-                for file in db.files_listed(&team_id, cid).await? {
-                    frontier.files.push(file_reach(&file), file);
-                }
-            }
-        }
-
         let mut totals = Totals::default();
         let mut messages_in = vec![0usize; targets.len()];
         let mut failed = vec![false; targets.len()];
-        let mut walked = 0usize;
+        // A conversation `client.counts` shows quiet has answered for its
+        // history as surely as one walked.
+        let mut walked = (0..targets.len())
+            .filter(|t| quiet[*t] && !walking.contains(t))
+            .count();
         loop {
             // Asked to stop: end here rather than make a request the
             // transport would refuse.
@@ -1551,6 +1609,10 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                         );
                         bar.did(1);
                         walked += usize::from(!failed[target]);
+                        if refreshing[target] && !failed[target] {
+                            db.record_manifest_sweep(&refresh_sweep_key(cid), &now)
+                                .await?;
+                        }
                     }
                 }
             }
@@ -1571,7 +1633,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             found.silent((held == 0).then(|| SilentEntry {
                 name: "channels".to_string(),
                 detail: format!(
-                    "{walked} channel(s) walked and none holds a message since {}. \
+                    "{walked} channel(s) read and none holds a message since {}. \
                      If this workspace has messages, check `since` and `channels`.",
                     opts.since
                 ),
@@ -1770,28 +1832,40 @@ mod tests {
         assert_eq!(settled(&below, Some(&top), &[], true), Some(below.clone()));
     }
 
-    // ── DM scoping ───────────────────────────────────────────────────
+    // ── Which conversations are walked ───────────────────────────────
+
+    fn planned_walk(refresh_from: Option<&str>, held: &[Span], newest: Newest) -> Vec<Stretch> {
+        to_walk(
+            &ts_key(SINCE),
+            refresh_from.map(ts_key).as_deref(),
+            held,
+            newest,
+        )
+    }
+
+    fn walks(held: &[Span], latest: Option<&str>) -> bool {
+        let newest = latest.map_or(Newest::Closed, Newest::At);
+        !planned_walk(None, held, newest).is_empty()
+    }
 
     /// #1374: a DM closed in the sidebar, or open with nothing since
     /// `since`, costs no history call.
     #[test]
     fn a_dm_closed_or_quiet_since_since_is_idle() {
-        let never_walked = planned(None, &[]);
-        assert!(!shows_activity(None, &never_walked));
-        assert!(!shows_activity(Some("1700000000.000000"), &never_walked));
+        assert!(!walks(&[], None));
+        assert!(!walks(&[], Some("1700000000.000000")));
         // An open DM that never held a message.
-        assert!(!shows_activity(Some("0000000000.000000"), &never_walked));
-        assert!(shows_activity(Some(SINCE), &never_walked));
-        assert!(shows_activity(Some("1735689600.000100"), &never_walked));
+        assert!(!walks(&[], Some("0000000000.000000")));
+        assert!(walks(&[], Some(SINCE)));
+        assert!(walks(&[], Some("1735689600.000100")));
     }
 
     #[test]
     fn a_dm_walked_up_to_its_newest_message_is_idle_until_a_newer_one() {
         let held = [span(SINCE, "1735689600.000100")];
-        let owes = planned(None, &held);
-        assert!(!shows_activity(Some("1735689600.000100"), &owes));
-        assert!(shows_activity(Some("1735689600.000200"), &owes));
-        assert!(!shows_activity(None, &owes));
+        assert!(!walks(&held, Some("1735689600.000100")));
+        assert!(walks(&held, Some("1735689600.000200")));
+        assert!(!walks(&held, None));
     }
 
     /// A walk cut off, or a `since` moved earlier, leaves a gap under
@@ -1799,9 +1873,56 @@ mod tests {
     #[test]
     fn a_dm_with_a_gap_under_its_newest_message_is_walked() {
         let cut_off = [span("1735689600.000050", "1735689600.000100")];
-        assert!(shows_activity(
-            Some("1735689600.000100"),
-            &planned(None, &cut_off)
+        assert!(walks(&cut_off, Some("1735689600.000100")));
+    }
+
+    /// #1423: every channel cost a history call each run, so a routine
+    /// sync of 126 quiet channels took 80 s. A channel `client.counts`
+    /// shows with nothing newer than what is held walks nothing; one it
+    /// does not list is walked as before.
+    #[test]
+    fn a_channel_counts_shows_quiet_is_not_walked_and_an_unlisted_one_is() {
+        let held = [span(SINCE, "1735689600.000100")];
+        assert!(planned_walk(None, &held, Newest::At("1735689600.000100")).is_empty());
+        assert_eq!(
+            planned_walk(None, &held, Newest::Unknown),
+            [gap("1735689600.000100", END_OF_TIME, false)]
+        );
+    }
+
+    /// A quiet conversation still re-reads its window when one is due,
+    /// and only that: the open top above its newest message is not asked.
+    #[test]
+    fn a_quiet_conversation_due_a_refresh_rereads_only_its_window() {
+        let held = [span(SINCE, "1735689600.000300")];
+        let window = Some("1735000000.000000");
+        let quiet = planned_walk(window, &held, Newest::At("1735689600.000300"));
+        assert_eq!(quiet.len(), 1);
+        assert!(quiet[0].reread);
+        // A newer message brings the open top back alongside it.
+        assert_eq!(
+            planned_walk(window, &held, Newest::At("1735689600.000400")).len(),
+            2
+        );
+        // A closed DM is not refreshed: it is not walked at all.
+        assert!(planned_walk(window, &held, Newest::Closed).is_empty());
+    }
+
+    #[test]
+    fn a_refresh_is_due_once_the_last_one_is_old_enough() {
+        let hour = chrono::Duration::hours(1);
+        assert!(refresh_due(None, hour));
+        assert!(!refresh_due(Some(chrono::Duration::minutes(59)), hour));
+        assert!(refresh_due(Some(hour), hour));
+        // `0` re-reads every run, and a clock set back reads as recent.
+        assert!(refresh_due(
+            Some(chrono::Duration::zero()),
+            chrono::Duration::zero()
+        ));
+        assert!(!refresh_due(Some(chrono::Duration::minutes(-5)), hour));
+        assert!(refresh_due(
+            Some(chrono::Duration::minutes(-5)),
+            chrono::Duration::zero()
         ));
     }
 

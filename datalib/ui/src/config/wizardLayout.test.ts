@@ -62,7 +62,11 @@ describe("every wizard's sections", () => {
 describe("layoutOf", () => {
   it("puts a field no section names in Advanced options, under its own label", () => {
     const advanced = layoutOf(entry("slack"), true).advanced;
-    expect(advanced.map((r) => r.heading)).toEqual(["Copy until", "Edit-catcher window (days)"]);
+    expect(advanced.map((r) => r.heading)).toEqual([
+      "Copy until",
+      "Edit-catcher window (days)",
+      "Re-query that window every (minutes)",
+    ]);
     expect(advanced.every((r) => r.solo)).toBe(true);
   });
 

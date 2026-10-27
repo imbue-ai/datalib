@@ -51,6 +51,13 @@ opens a new one. `datalib-dag status
 <data_root>/config.toml` lists the open requests, if you would rather
 not add one.
 
+When picking how often: a routine Slack sync asks for history only in
+the conversations with something new (Slack's own sidebar says which),
+so it costs about what happened. Once an hour it also re-reads each
+conversation's last `refresh_window_days` for edits and deletions,
+which costs about one request per channel, one after another: a minute
+or so for a hundred channels. `refresh_every_minutes` sets that hour.
+
 ## Waiting, not waiting, and stopping
 
 `datalib-dag --sync` waits until its request is done and exits with
@@ -419,9 +426,11 @@ write and wait for it, or read that one item from the service.
 
 Even then, a few writes take longer to show:
 
-- **A Slack reply to an older thread.** Each sync re-reads the last
-  `refresh_window_days` of each conversation, and a reply under a root
-  in that window shows on the next sync. A reply under an older root is
+- **A Slack reply, an edit or a deletion.** A sync re-reads the last
+  `refresh_window_days` of each conversation when it has not done so
+  for `refresh_every_minutes` (60 by default), so an edit or a deletion
+  in that window shows on the first sync after that, and so does a
+  reply under a root in it. A reply under an older root is
   found only through Slack's search, which the download asks up to half
   an hour before now: it shows on the first sync more than half an hour
   later, if the search finds it at all.

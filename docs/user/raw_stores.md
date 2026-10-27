@@ -525,8 +525,9 @@ message (Slack reopens a DM when a message arrives, and closes it after a
 while); channels the account is not in,
 unless it sets `all_channels`; files, when it sets `media = false`;
 Slack Lists. A message deleted in Slack is dropped from the mirror only
-inside the last `refresh_window_days` (30 by default); older deletions
-are never noticed. A deleted reply is noticed the next time someone
+inside the last `refresh_window_days` (30 by default), the next time
+that window is re-read (at most once every `refresh_every_minutes`, 60
+by default); older deletions are never noticed. A deleted reply is noticed the next time someone
 replies in that thread.
 
 **Set aside from the payload** (in `volatile_payload`): a user's

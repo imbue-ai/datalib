@@ -62,6 +62,12 @@ pub struct SlackApiSync {
     /// `since`. Unset is 30 days; `0` skips the pass.
     #[serde(default)]
     pub refresh_window_days: Option<i64>,
+    /// How many minutes after a conversation's refresh window was last
+    /// re-read before a run re-reads it again, so a source synced often
+    /// does not re-walk every channel each time. Unset is 60; `0`
+    /// re-reads it on every run.
+    #[serde(default)]
+    pub refresh_every_minutes: Option<i64>,
     /// Channel names to mirror, without the `#`. Unset means every
     /// channel the account is a member of (or every channel it can see,
     /// with `all_channels`).
@@ -103,6 +109,7 @@ impl Default for SlackApiSync {
     fn default() -> Self {
         Self {
             refresh_window_days: None,
+            refresh_every_minutes: None,
             channels: None,
             since: None,
             all_channels: false,
@@ -124,6 +131,11 @@ impl SlackApiSync {
     pub fn validate(&self) -> anyhow::Result<()> {
         datalib_time::TimeWindow::check("api", self.since.as_deref(), None)
             .map_err(anyhow::Error::msg)?;
+        datalib_source_common::not_negative(
+            "api.refresh_every_minutes",
+            self.refresh_every_minutes,
+        )
+        .map_err(anyhow::Error::msg)?;
         if !self.dms {
             if let Some(convs) = &self.dm_conversations {
                 if !convs.is_empty() {
