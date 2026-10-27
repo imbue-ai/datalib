@@ -200,7 +200,8 @@ pub async fn run_cli(
             for cause in &chain {
                 eprintln!("error: {cause}");
             }
-            let gateway = std::env::var_os("LATCHKEY_GATEWAY").is_some_and(|g| !g.is_empty());
+            let gateway =
+                std::env::var_os(datalib_env::LATCHKEY_GATEWAY).is_some_and(|g| !g.is_empty());
             let failure = datalib_probe::issue::Failure::from_text(chain.join("\n"), gateway);
             println!("{}", serde_json::json!({ "failure": failure }));
             std::process::exit(1)

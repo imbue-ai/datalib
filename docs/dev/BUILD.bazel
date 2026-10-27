@@ -1,0 +1,3 @@
+# The step protocol doc is a test input: `//datalib/backend/env` checks
+# that its variable table and the runner agree.
+exports_files(["step_protocol.md"])

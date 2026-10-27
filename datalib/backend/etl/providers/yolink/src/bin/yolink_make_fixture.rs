@@ -75,7 +75,7 @@ fn main() -> Result<()> {
     // The last is a courtesy for hand invocation; the fixture pipeline
     // always passes one, so the store never records build time.
     let now = now
-        .or_else(|| std::env::var("DATALIB_DAG_NOW").ok())
+        .or_else(|| std::env::var(datalib_env::DATALIB_DAG_NOW).ok())
         .unwrap_or_else(|| datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339());
 
     let spec: Spec = serde_json::from_str(

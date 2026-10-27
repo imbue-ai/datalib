@@ -1,0 +1,21 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# The names of the environment variables processes hand each other. No
+# dependencies and Bazel-only, like `parent_watch`, so every binary can
+# link it for the price of nothing.
+rust_library(
+    name = "datalib_env",
+    srcs = ["src/lib.rs"],
+    crate_name = "datalib_env",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+)
+
+rust_test(
+    name = "env_unittests",
+    size = "small",
+    crate = ":datalib_env",
+    data = ["//docs/dev:step_protocol.md"],
+    edition = "2021",
+    deps = ["@datalib_crates//:runfiles"],
+)

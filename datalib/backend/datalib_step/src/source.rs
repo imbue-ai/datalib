@@ -5,18 +5,17 @@ use anyhow::{Context, Result};
 
 use crate::function::Function;
 
-/// Mirrors `datalib_dag::subprocess::ENV_*`; spelled out here because
-/// `datalib-step` reads them as its contract with any runner, not as an
-/// implementation detail of this one.
-pub const STEP_ID_ENV: &str = "DATALIB_DAG_STEP";
-pub const GROUP_ENV: &str = "DATALIB_DAG_GROUP";
-pub const GROUP_TYPE_ENV: &str = "DATALIB_DAG_GROUP_TYPE";
-pub const FUNCTION_ENV: &str = "DATALIB_DAG_FUNCTION";
-pub const INPUTS_ENV: &str = "DATALIB_DAG_INPUTS";
+/// The runner's side of these names is `datalib_dag::subprocess::ENV_*`;
+/// both spell them through `datalib_env`, so neither can drift.
+pub const STEP_ID_ENV: &str = datalib_env::DATALIB_DAG_STEP;
+pub const GROUP_ENV: &str = datalib_env::DATALIB_DAG_GROUP;
+pub const GROUP_TYPE_ENV: &str = datalib_env::DATALIB_DAG_GROUP_TYPE;
+pub const FUNCTION_ENV: &str = datalib_env::DATALIB_DAG_FUNCTION;
+pub const INPUTS_ENV: &str = datalib_env::DATALIB_DAG_INPUTS;
 /// Under a diff group only: the group whose raw store the diff compares,
 /// and its `type`, which is the renderer this step runs.
-pub const SOURCE_GROUP_ENV: &str = "DATALIB_DAG_SOURCE_GROUP";
-pub const SOURCE_GROUP_TYPE_ENV: &str = "DATALIB_DAG_SOURCE_GROUP_TYPE";
+pub const SOURCE_GROUP_ENV: &str = datalib_env::DATALIB_DAG_SOURCE_GROUP;
+pub const SOURCE_GROUP_TYPE_ENV: &str = datalib_env::DATALIB_DAG_SOURCE_GROUP_TYPE;
 /// The group `type` that means "render what changed in another group's
 /// raw store" — `datalib_dag::config::DIFF_GROUP_TYPE`, spelled here as
 /// this binary's side of the contract.

@@ -109,6 +109,8 @@ its id, which arrives in the environment.
 | `DATALIB_DAG_ATTEMPT` | which attempt this is, starting at `1`; a retry counts up |
 | `DATALIB_DAG_GROUP` | the group it is filed under (`weather`); unset for a step outside any group |
 | `DATALIB_DAG_GROUP_TYPE` | the group's `type`, when it declares one |
+| `DATALIB_DAG_SOURCE_GROUP` | under a diff group only (`type = "diff"`): the group its `source` names, whose raw store the step compares at two commits |
+| `DATALIB_DAG_SOURCE_GROUP_TYPE` | under a diff group only: that source group's `type`, which picks the renderer |
 | `DATALIB_DAG_FUNCTION` | what this step does within its group (`ingest`); unset for a step outside any group |
 | `DATALIB_DAG_DATA_ROOT` | absolute path of the data root (== cwd) |
 | `DATALIB_DAG_INPUTS` | resolved input artifacts, `\n`-separated, relative to the data root |

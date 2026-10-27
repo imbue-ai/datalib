@@ -53,7 +53,7 @@ use tabs::SearchTab;
 
 /// The step protocol's data-root variable, which the gateway sets for every
 /// applet it starts.
-const DATA_ROOT_ENV: &str = "DATALIB_DAG_DATA_ROOT";
+const DATA_ROOT_ENV: &str = datalib_env::DATALIB_DAG_DATA_ROOT;
 
 /// Everything the handlers need, cloned per request.
 #[derive(Clone)]

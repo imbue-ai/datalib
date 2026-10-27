@@ -745,8 +745,12 @@ upstream (block types, MIME types), free-form display text
 | how a handle was linked | `LinkedHow` | `contacts/src/lib.rs` (`datalib_contacts`) |
 | what a contact's field says | `FieldKind` | `contacts/src/lib.rs` (`datalib_contacts`) |
 
-The TypeScript side mirrors these as string-literal unions in
-`datalib/ui/src/api.ts`, hand-kept — change both halves together.
+The TypeScript side gets the ones the UI switches on as string-literal
+unions in `datalib/ui/src/generated/enums.ts`, written from the Rust by
+`bazel run //datalib/backend/http:ui_enums.update`; a test in
+`datalib_http` fails when it drifts. Add an enum to that generator
+rather than hand-writing a union in `api.ts`. The environment variables
+one process sets for another live once, in `datalib/backend/env`.
 
 ## A `deps` entry you don't use is a build error
 

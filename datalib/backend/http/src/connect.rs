@@ -35,7 +35,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 /// register`, `auth set`, `auth clear` — is refused outright. The same
 /// rule `datalib_etl_web::latchkey` applies, restated here because this
 /// crate links no ETL code.
-const GATEWAY_ENV_VAR: &str = "LATCHKEY_GATEWAY";
+const GATEWAY_ENV_VAR: &str = datalib_env::LATCHKEY_GATEWAY;
 
 /// The gateway's URL, when this process is pointed at one.
 pub(crate) fn latchkey_gateway() -> Option<String> {
@@ -357,7 +357,7 @@ pub struct ServiceRegistration {
 /// How one browser-login attempt is going. The UI switches on these
 /// words, and the poll endpoint reaps an attempt as soon as it is no
 /// longer [`ConnectState::Running`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, strum::VariantArray)]
 #[serde(rename_all = "snake_case")]
 pub enum ConnectState {
     /// `latchkey auth browser` is still running.
@@ -388,7 +388,7 @@ pub struct ConnectStatus {
 
 /// What a running browser login is doing, so the wizard can say what
 /// it is waiting on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, strum::VariantArray)]
 #[serde(rename_all = "snake_case")]
 pub enum ConnectPhase {
     /// Registering the service, finding a browser.

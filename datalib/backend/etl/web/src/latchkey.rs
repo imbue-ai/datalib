@@ -12,7 +12,7 @@ const ROUTER_BIN: &str = "latchkey-curl-router";
 /// Where we publish the resolved router curl for the `latchkey` CLI.
 const CURL_ENV_VAR: &str = "LATCHKEY_CURL";
 /// Set by latchkey's callers to route every request through a gateway.
-const GATEWAY_ENV_VAR: &str = "LATCHKEY_GATEWAY";
+const GATEWAY_ENV_VAR: &str = datalib_env::LATCHKEY_GATEWAY;
 /// A developer's explicit override, consulted after `LATCHKEY_CURL`.
 const ROUTER_ENV_VAR: &str = "DATALIB_CURL_ROUTER";
 /// Where `//third-party/latchkey-curl-shims` puts the router under

@@ -5,6 +5,7 @@
 !*/
 !*.ts
 !*.vue
+src/generated/
 node_modules/
 dist/
 playwright-report/

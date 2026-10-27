@@ -29,6 +29,7 @@ rust_library(
         "//datalib/backend/flock:datalib_flock",
         "//datalib/backend/metrics:datalib_metrics",
         "//datalib/backend/parent_watch:datalib_parent_watch",
+        "//datalib/backend/env:datalib_env",
         "//datalib/backend/runs:datalib_runs",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/source_common:datalib_source_common",

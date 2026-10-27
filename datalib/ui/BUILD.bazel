@@ -18,6 +18,9 @@ exports_files([
     # Generated from the provider config crates; see
     # //datalib/backend/datalib_step:ingest_methods.update.
     "src/config/ingestMethods.json",
+    # Generated from the Rust enums; see
+    # //datalib/backend/http:ui_enums.update.
+    "src/generated/enums.ts",
 ])
 
 npm_link_all_packages(name = "node_modules")
@@ -448,6 +451,8 @@ copy_to_bin(
             "*.ts",
         ],
         allow_empty = False,
+        # Written by a Rust test that compares it byte for byte.
+        exclude = ["src/generated/**"],
     ) + [
         ".prettierrc",
         "package.json",
