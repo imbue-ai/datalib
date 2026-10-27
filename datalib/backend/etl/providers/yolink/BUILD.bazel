@@ -129,6 +129,7 @@ rust_binary(
     visibility = ["//visibility:public"],
     deps = [
         ":datalib_etl_yolink",
+        "//datalib/backend/env:datalib_env",
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",

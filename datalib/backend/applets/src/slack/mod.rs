@@ -306,9 +306,9 @@ pub fn serve(port: u16, params: &serde_json::Value) -> Result<()> {
     let tree = str_param(params, "tree")
         .context("params.tree is required: which render_markdown tree this instance reads")?;
     let workspace = str_param(params, "workspace")
-        // `DATALIB_APPLET_ID` is what the gateway calls this instance,
-        // so it is the right fallback label.
-        .or_else(|| std::env::var("DATALIB_APPLET_ID").ok())
+        // The applet id is what the gateway calls this instance, so it
+        // is the right fallback label.
+        .or_else(|| std::env::var(datalib_env::DATALIB_APPLET_ID).ok())
         .unwrap_or_else(|| "slack".to_string());
     let tree_path = std::path::PathBuf::from(&tree);
 
