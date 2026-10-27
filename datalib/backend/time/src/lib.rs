@@ -27,7 +27,9 @@ use std::fmt;
 use std::str::FromStr;
 
 mod window;
+mod zone;
 pub use window::{TimeBound, TimeWindow, WindowError};
+pub use zone::NamedZone;
 
 /// An RFC 3339 timestamp that carries an **explicit** UTC offset.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

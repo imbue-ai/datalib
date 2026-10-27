@@ -4,6 +4,7 @@
 //! they are kept apart until something needs the instant.
 
 use chrono::{DateTime, Duration, FixedOffset, NaiveDate, NaiveDateTime, TimeZone, Utc};
+use datalib_time::NamedZone;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EventTime {
@@ -85,10 +86,10 @@ impl EventTime {
     ) -> Option<Self> {
         if let Some(dt) = date_time {
             let at = DateTime::parse_from_rfc3339(dt).ok()?;
-            let named = zone.and_then(|z| Some((z, z.parse::<chrono_tz::Tz>().ok()?)));
+            let named = zone.and_then(|z| Some((z, NamedZone::get(z)?)));
             let (local, offset_seconds, name) = match named {
                 Some((name, tz)) => {
-                    let there = at.with_timezone(&tz).fixed_offset();
+                    let there = tz.at(&at);
                     (
                         there.naive_local(),
                         there.offset().local_minus_utc(),
@@ -204,19 +205,13 @@ impl EventTime {
 }
 
 fn in_named_zone(local: &NaiveDateTime, name: &str) -> Result<DateTime<FixedOffset>, Unresolved> {
-    let tz: chrono_tz::Tz = name
-        .parse()
-        .map_err(|_| Unresolved::UnknownZone(name.to_string()))?;
+    let tz = NamedZone::get(name).ok_or_else(|| Unresolved::UnknownZone(name.to_string()))?;
     // A time in the spring-forward gap does not exist; RFC 5545 §3.3.5
     // reads it as the same span after the gap, which one hour covers for
     // every zone that has one.
-    tz.from_local_datetime(local)
+    tz.from_local(local)
         .earliest()
-        .or_else(|| {
-            tz.from_local_datetime(&(*local + Duration::hours(1)))
-                .earliest()
-        })
-        .map(|t| t.fixed_offset())
+        .or_else(|| tz.from_local(&(*local + Duration::hours(1))).earliest())
         .ok_or_else(|| Unresolved::UnknownZone(name.to_string()))
 }
 
@@ -262,6 +257,18 @@ mod tests {
             "2026-07-06T09:00:00-07:00"
         );
         assert_eq!(summer.key(None), "20260706T160000Z");
+    }
+
+    /// British Columbia stayed at -07:00 from 2026 on (tzdata 2026b).
+    /// chrono-tz 0.10.4's older database fell back to -08:00 on 1 Nov, an
+    /// hour off Google and Fastmail for every Vancouver event.
+    #[test]
+    fn vancouver_stays_at_minus_seven_after_november_2026() {
+        let t = at("20261118T113000", Some("America/Vancouver"));
+        assert_eq!(
+            t.instant(None).unwrap().at.to_rfc3339(),
+            "2026-11-18T11:30:00-07:00"
+        );
     }
 
     #[test]

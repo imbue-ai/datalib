@@ -200,6 +200,18 @@ py_test(
     main = "check_tool_crates_test.py",
 )
 
+# The parsing behind .github/workflows/tzdata.yml, which needs the network.
+py_test(
+    name = "check_tzdata_current_test",
+    size = "small",
+    srcs = [
+        "check_tzdata_current.py",
+        "check_tzdata_current_test.py",
+    ],
+    imports = ["."],
+    main = "check_tzdata_current_test.py",
+)
+
 # The qmd model pins (repo, revision, file, sha256) live in the build's
 # fetch rule and in the Rust table the shipped binaries verify against.
 py_test(

@@ -60,10 +60,16 @@ id too — both are the upstream kind `event`.
 `EventTime` keeps a time the way its source wrote it and resolves the
 instant only when asked (`when.rs`):
 
-- A `TZID` is looked up in the IANA database (`chrono-tz`). A name it
-  does not know — an Outlook zone, a typo — is not guessed: the start
-  is nulled on the grid row and a `problems` row says why; the page
-  still shows the wall-clock time and the name.
+- A `TZID` is looked up in the IANA time zone database through
+  `datalib_time::NamedZone`, which reads the copy bundled into the
+  binary (`jiff-tzdb`) and never the host's. A mac, a Linux container
+  with no `/usr/share/zoneinfo` and Windows then agree, and the rules
+  are as current as the `jiff-tzdb` in `Cargo.lock`. When IANA moves a
+  zone's clocks (British Columbia kept -07:00 from November 2026), run
+  `cargo update -p jiff-tzdb` in `datalib/backend` and build, which
+  repins `MODULE.bazel.lock`. A name the database does not know — an
+  Outlook zone, a typo — is not guessed: the start is nulled on the
+  grid row and a `problems` row says why; the page still shows the wall-clock time and the name.
 - A floating time (no zone) is read in the calendar's own zone, else as
   UTC with a `problems` row recording the guess.
 - An all-day date is its midnight UTC. `after:2026-09-13` then finds an
