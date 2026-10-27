@@ -9,6 +9,7 @@ type = "lightroom"
 [[steps]]
 group = "lightroom"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.catalog]
 path = "~/Pictures/Lightroom/Enterprise.lrcat"
@@ -19,4 +20,5 @@ path = "~/Pictures/Lightroom/Enterprise.lrcat"
 [[steps]]
 group = "lightroom"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["lightroom/ingest"]

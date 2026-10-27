@@ -10,10 +10,12 @@ type = "gitlab"
 [[steps]]
 group = "gitlab"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.api]
 
 [[steps]]
 group = "gitlab"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["gitlab/ingest"]

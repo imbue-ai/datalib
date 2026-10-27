@@ -9,10 +9,12 @@ type = "slack"
 [[steps]]
 group = "slack"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.api]
 
 [[steps]]
 group = "slack"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["slack/ingest"]

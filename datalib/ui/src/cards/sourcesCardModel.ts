@@ -785,7 +785,7 @@ export function useSourcesCard(ctx: CardCtx) {
     next = setOccurrencesStep(next, payload.id, payload.entry.type);
     // A package source's applets come with it, and leave with its group.
     const pkg = payload.entry.package;
-    if (!current && pkg) next = addSourceApplets(next, payload.id, pkg.id, pkg.applets);
+    if (!current && pkg) next = addSourceApplets(next, payload.id, pkg.dir, pkg.applets);
 
     // Banners are for a person, so they say the name; the id is what the
     // config and the disk use.

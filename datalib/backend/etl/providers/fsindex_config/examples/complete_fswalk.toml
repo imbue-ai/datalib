@@ -8,6 +8,7 @@ type = "fsindex"
 [[steps]]
 group = "fsindex"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params]
 stamp = false  # true writes `.fsindex.toml` UUID breadcrumbs into each directory
@@ -21,4 +22,5 @@ path = "~/Documents/starfleet"  # the tree to scan; `~` is your home folder
 [[steps]]
 group = "fsindex"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["fsindex/ingest"]

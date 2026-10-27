@@ -21,7 +21,7 @@ pub struct Problem {
 pub fn problems(cfg: &DagConfig, data_root: &Path) -> Vec<Problem> {
     cfg.steps
         .iter()
-        .filter(|s| s.command.is_none())
+        .filter(|s| s.runs_datalib_step())
         .filter_map(|step| {
             plan_step(cfg, step, data_root)
                 .err()

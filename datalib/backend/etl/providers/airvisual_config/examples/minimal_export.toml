@@ -9,6 +9,7 @@ type = "airvisual"
 [[steps]]
 group = "airvisual"
 function = "ingest"
+command = "datalib-step"
 
 [[steps.params.export.devices]]
 path = "/Volumes/airvisual"
@@ -16,6 +17,7 @@ path = "/Volumes/airvisual"
 [[steps]]
 group = "airvisual"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["airvisual/ingest"]
 
 # The readings as time series, for the charts. Add this step to
@@ -23,4 +25,5 @@ inputs = ["airvisual/ingest"]
 [[steps]]
 group = "airvisual"
 function = "render_time_series"
+command = "datalib-step"
 inputs = ["airvisual/ingest"]

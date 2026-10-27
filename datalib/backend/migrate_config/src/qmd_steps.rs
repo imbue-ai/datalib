@@ -22,6 +22,7 @@ use std::ops::Range;
 use anyhow::{Context as _, Result};
 use serde::Deserialize;
 
+use datalib_dag::config::names_datalib_step;
 use datalib_dag::config_array::edit_string_array;
 use datalib_dag::config_order::sort_config;
 
@@ -58,7 +59,7 @@ impl StepView {
     }
 
     fn is_builtin(&self, function: &str) -> bool {
-        self.command.is_none() && self.function() == Some(function)
+        names_datalib_step(self.command.as_deref()) && self.function() == Some(function)
     }
 
     fn inputs(&self) -> &[String] {

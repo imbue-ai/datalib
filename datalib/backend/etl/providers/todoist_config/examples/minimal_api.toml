@@ -10,6 +10,7 @@ type = "todoist"
 [[steps]]
 group = "todoist"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.api]
 
@@ -17,4 +18,5 @@ function = "ingest"
 [[steps]]
 group = "todoist"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["todoist/ingest"]

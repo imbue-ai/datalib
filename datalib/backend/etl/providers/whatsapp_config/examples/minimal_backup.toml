@@ -9,6 +9,7 @@ type = "whatsapp"
 [[steps]]
 group = "whatsapp"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.backup]
 path = "~/Downloads/whatsapp-backup"  # holds Databases/msgstore.db.crypt15 and Media/
@@ -16,4 +17,5 @@ path = "~/Downloads/whatsapp-backup"  # holds Databases/msgstore.db.crypt15 and 
 [[steps]]
 group = "whatsapp"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["whatsapp/ingest"]

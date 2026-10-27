@@ -8,6 +8,7 @@ type = "google_takeout"
 [[steps]]
 group = "google_takeout"
 function = "ingest"
+command = "datalib-step"
 
 # Each Takeout is a complete snapshot of the products you ticked: a record a
 # newer export no longer holds leaves the mirror on the next sync. A product
@@ -31,6 +32,7 @@ youtube_subscriptions = true       # the channels you subscribe to
 [[steps]]
 group = "google_takeout"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["google_takeout/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -38,9 +40,11 @@ inputs = ["google_takeout/ingest"]
 [[steps]]
 group = "google_takeout"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["google_takeout/render_markdown"]
 
 [[steps]]
 group = "google_takeout"
 function = "embed"
+command = "datalib-step"
 inputs = ["google_takeout/keyword_index"]

@@ -8,6 +8,7 @@ type = "media"
 [[steps]]
 group = "media"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.fswalk]
 path = "~/Music"
@@ -18,4 +19,5 @@ path = "~/Music"
 [[steps]]
 group = "media"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["media/ingest"]

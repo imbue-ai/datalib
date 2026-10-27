@@ -31,7 +31,6 @@ pub fn bare_programs(checked: &ConfigCheck) -> BTreeSet<String> {
         .cfg
         .applets
         .iter()
-        .filter(|a| a.package.is_none())
         .filter_map(|a| shlex::split(&a.command)?.into_iter().next());
     steps
         .chain(applets)

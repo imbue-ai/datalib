@@ -10,12 +10,14 @@ type = "garmin"
 [[steps]]
 group = "garmin"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.api]
 
 [[steps]]
 group = "garmin"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["garmin/ingest"]
 
 # Its numbers as time series, for charts and the time-series index: add
@@ -23,4 +25,5 @@ inputs = ["garmin/ingest"]
 [[steps]]
 group = "garmin"
 function = "render_time_series"
+command = "datalib-step"
 inputs = ["garmin/ingest"]

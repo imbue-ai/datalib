@@ -9,6 +9,7 @@ type = "sms_backup_restore"
 [[steps]]
 group = "sms_backup_restore"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.backup]
 path = "~/Downloads/sms-backup"
@@ -16,4 +17,5 @@ path = "~/Downloads/sms-backup"
 [[steps]]
 group = "sms_backup_restore"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["sms_backup_restore/ingest"]

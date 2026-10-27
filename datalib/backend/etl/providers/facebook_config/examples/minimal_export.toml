@@ -9,6 +9,7 @@ type = "facebook"
 [[steps]]
 group = "facebook"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.export]
 path = "~/Downloads/facebook-export"
@@ -16,4 +17,5 @@ path = "~/Downloads/facebook-export"
 [[steps]]
 group = "facebook"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["facebook/ingest"]

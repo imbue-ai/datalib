@@ -9,6 +9,7 @@ type = "garmin"
 [[steps]]
 group = "garmin"
 function = "ingest"
+command = "datalib-step"
 
 # When to give up on rate limits. The download always backs off and
 # retries; these only decide when to stop.
@@ -44,6 +45,7 @@ wellness_files = false     # each day's wellness FIT bundle (one zip a day, sens
 [[steps]]
 group = "garmin"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["garmin/ingest"]
 
 # Its numbers as time series, for charts and the time-series index: add
@@ -51,6 +53,7 @@ inputs = ["garmin/ingest"]
 [[steps]]
 group = "garmin"
 function = "render_time_series"
+command = "datalib-step"
 inputs = ["garmin/ingest"]
 
 # Free-text search by keyword (BM25). Add it to
@@ -58,4 +61,5 @@ inputs = ["garmin/ingest"]
 [[steps]]
 group = "garmin"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["garmin/render_markdown"]

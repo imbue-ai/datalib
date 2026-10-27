@@ -12,12 +12,15 @@ import {
 } from "@/api";
 import { setPackageEntries, type CatalogEntry } from "./catalog";
 import {
+  inPackage,
   listGroups,
   listPackages,
   listSteps,
+  packageDir,
   removeSteps,
   slugify,
   suggestId,
+  type ConfiguredStep,
 } from "./sourceSteps";
 import { quote } from "./tomlText";
 import { setIn } from "./tomlPatch";
@@ -25,10 +28,12 @@ import { setIn } from "./tomlPatch";
 /// The catalog entries of every package unpacked here. A package still
 /// being fetched adds nothing yet: its form is in its manifest.
 export function catalogEntriesFrom(res: PackagesResponse): CatalogEntry[] {
-  return res.packages.flatMap((p) => (p.manifest ? entriesOfManifest(p.id, p.manifest) : []));
+  return res.packages.flatMap((p) =>
+    p.manifest ? entriesOfManifest(p.id, p.sha256, p.manifest) : [],
+  );
 }
 
-export function entriesOfManifest(id: string, m: PackageManifest): CatalogEntry[] {
+export function entriesOfManifest(id: string, sha256: string, m: PackageManifest): CatalogEntry[] {
   return m.sources.map((s) => {
     const wizard = s.wizard as Partial<CatalogEntry>;
     const label = typeof wizard.label === "string" ? wizard.label : s.type;
@@ -48,6 +53,7 @@ export function entriesOfManifest(id: string, m: PackageManifest): CatalogEntry[
         id,
         name: m.name,
         version: m.version,
+        dir: packageDir(sha256),
         commands: s.commands,
         applets: s.applets ?? [],
       },
@@ -87,13 +93,14 @@ export function addPackage(
 }
 
 /// `text` with an `[[applets]]` entry for each of `applets`, filed under
-/// source `group` and running package `pkg`. Its id is the source's id
-/// and the applet's, made a JavaScript identifier, unless that is taken;
-/// `params.source` tells it which source it serves.
+/// source `group` and running its command inside the package unpacked at
+/// `dir`. Its id is the source's id and the applet's, made a JavaScript
+/// identifier, unless that is taken; `params.source` tells it which
+/// source it serves.
 export function addSourceApplets(
   text: string,
   group: string,
-  pkg: string,
+  dir: string,
   applets: PackageApplet[],
 ): string {
   const taken = new Set(
@@ -106,18 +113,17 @@ export function addSourceApplets(
     const base = `${group}_${a.id}`.replace(/[^A-Za-z0-9_]/g, "_").replace(/^(?=\d)/, "_");
     const appletId = suggestId(taken, base, base).replace(/-/g, "_");
     taken.add(appletId);
-    next = `${next.replace(/\s*$/, "")}\n\n${appletBlock(appletId, group, pkg, a)}\n`;
+    next = `${next.replace(/\s*$/, "")}\n\n${appletBlock(appletId, group, dir, a)}\n`;
   }
   return next;
 }
 
-function appletBlock(id: string, group: string, pkg: string, a: PackageApplet): string {
+function appletBlock(id: string, group: string, dir: string, a: PackageApplet): string {
   const lines = [
     "[[applets]]",
     `id = ${quote(id)}`,
     `group = ${quote(group)}`,
-    `package = ${quote(pkg)}`,
-    `command = ${quote(a.command)}`,
+    `command = ${quote(inPackage(dir, a.command))}`,
     "[applets.params]",
     `source = ${quote(group)}`,
   ];
@@ -148,28 +154,70 @@ function firstTableStart(text: string): number | null {
 }
 
 /// `text` with package `id` pinned to the looked-up manifest instead, and
-/// each of its sources' applets brought in line with the new version's:
-/// one it no longer has goes, a new one is added. An applet is matched by
-/// its command, since the config may hold it under another id; a kept one
-/// keeps its entry as it is.
+/// every step and applet that ran the old version running the new one:
+/// a step the command the new manifest has for its function, an applet
+/// the same program in the new directory. Each source's applets are
+/// brought in line with the new version's: one it no longer has goes, a
+/// new one is added. An applet is matched by its command inside the
+/// package, since the config may hold it under another id; a kept one
+/// keeps its entry as it is but for that directory.
 export function updatePackage(text: string, id: string, lookup: PackageLookup): string {
-  const index = listPackages(text).findIndex((p) => p.id === id);
+  const packages = listPackages(text);
+  const index = packages.findIndex((p) => p.id === id);
   if (index < 0) throw new Error(`No package ${id} in the config.`);
+  const oldDir = packageDir(packages[index]!.sha256);
+  const newDir = packageDir(lookup.sha256);
+  const insideOld = (s: ConfiguredStep) => (s.command ?? "").trimStart().slice(oldDir.length + 1);
   const ref = { array: "packages", index };
   let next = setIn(text, ref, ["url"], quote(lookup.url));
   next = setIn(next, ref, ["sha256"], quote(lookup.sha256));
+
+  const entries = listSteps(text);
+  const typeOf = (group: string | null) => listGroups(text).find((g) => g.id === group)?.type;
+  const sourceOf = (group: string | null) =>
+    lookup.manifest.sources.find((s) => s.type === typeOf(group));
+  const indexIn = (kind: ConfiguredStep["kind"]) => {
+    const all = entries.filter((s) => s.kind === kind);
+    return (s: ConfiguredStep) => all.indexOf(s);
+  };
+  const stepIndex = indexIn("step");
+  const appletIndex = indexIn("applet");
+  const gone: ConfiguredStep[] = [];
+  for (const s of entries.filter((e) => e.package === id)) {
+    if (s.kind === "step") {
+      const command = sourceOf(s.group)?.commands[s.function ?? ""];
+      const value = command ? inPackage(newDir, command) : inPackage(newDir, insideOld(s));
+      next = setIn(next, { array: "steps", index: stepIndex(s) }, ["command"], quote(value));
+    } else if ((sourceOf(s.group)?.applets ?? []).some((a) => a.command === insideOld(s))) {
+      const value = inPackage(newDir, insideOld(s));
+      next = setIn(next, { array: "applets", index: appletIndex(s) }, ["command"], quote(value));
+    } else {
+      gone.push(s);
+    }
+  }
+  if (gone.length)
+    next = removeSteps(
+      next,
+      gone.map((s) => findEntry(next, s)),
+    );
   for (const group of sourcesUsing(next, id)) {
-    const type = listGroups(next).find((g) => g.id === group)?.type;
-    const wanted = lookup.manifest.sources.find((s) => s.type === type)?.applets ?? [];
+    const wanted = sourceOf(group)?.applets ?? [];
     const have = listSteps(next).filter(
       (s) => s.kind === "applet" && s.package === id && s.group === group,
     );
-    const gone = have.filter((s) => !wanted.some((a) => a.command === s.command));
-    if (gone.length) next = removeSteps(next, gone);
-    const added = wanted.filter((a) => !have.some((s) => s.command === a.command));
-    next = addSourceApplets(next, group, id, added);
+    const added = wanted.filter(
+      (a) => !have.some((s) => s.command?.trimStart() === inPackage(newDir, a.command)),
+    );
+    next = addSourceApplets(next, group, newDir, added);
   }
   return next;
+}
+
+/// `s`, an entry listed from an earlier text, as `text` has it now.
+function findEntry(text: string, s: ConfiguredStep): ConfiguredStep {
+  const found = listSteps(text).find((e) => e.kind === s.kind && e.id === s.id);
+  if (!found) throw new Error(`No ${s.kind} ${s.id} in the config.`);
+  return found;
 }
 
 /// The groups whose steps run a package's programs. A package they use

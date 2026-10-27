@@ -263,7 +263,9 @@ describe("buildSource", () => {
       renders: false,
     });
     expect(out.groupBody).toBeNull();
-    expect(out.stepsBody).toContain('function = "render_markdown"\ninputs = ["photos/ingest"]');
+    expect(out.stepsBody).toContain(
+      'function = "render_markdown"\ncommand = "datalib-step"\ninputs = ["photos/ingest"]',
+    );
     expect(out.renderId).toBe("photos/render_markdown");
   });
 
@@ -325,9 +327,9 @@ describe("buildStep", () => {
     const body = fetch({ "api.channels": ["general", "random"], "api.since": "" });
     expect(body).toContain('group = "slack"');
     expect(body).toContain('function = "ingest"');
-    // No command: a built-in step is `datalib-step`, and the loader
-    // supplies that from the absence.
-    expect(body).not.toContain("command");
+    // A built-in step says it runs `datalib-step`, which reads its
+    // function and its group's type from the environment.
+    expect(body).toContain('function = "ingest"\ncommand = "datalib-step"');
     expect(body).toContain('channels = ["general", "random"]');
     expect(body).not.toContain("inputs =");
     expect(body).not.toContain("id =");
@@ -346,8 +348,7 @@ describe("buildStep", () => {
       values: {},
     });
     expect(body).toContain('group = "slack"');
-    expect(body).toContain('function = "render_markdown"');
-    expect(body).not.toContain("command");
+    expect(body).toContain('function = "render_markdown"\ncommand = "datalib-step"');
     expect(body).toContain('inputs = ["slack/ingest"]');
   });
 

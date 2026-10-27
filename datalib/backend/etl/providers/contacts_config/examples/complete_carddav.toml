@@ -8,6 +8,7 @@ type = "contacts"
 [[steps]]
 group = "contacts"
 function = "ingest"
+command = "datalib-step"
 
 # When to give up on a failing server. The download always backs off and
 # retries; these only decide when to stop.
@@ -35,6 +36,7 @@ addressbooks = ["Enterprise Crew"]  # names as the server shows them, matched ex
 [[steps]]
 group = "contacts"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["contacts/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -42,9 +44,11 @@ inputs = ["contacts/ingest"]
 [[steps]]
 group = "contacts"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["contacts/render_markdown"]
 
 [[steps]]
 group = "contacts"
 function = "embed"
+command = "datalib-step"
 inputs = ["contacts/keyword_index"]

@@ -9,6 +9,7 @@ type = "airvisual"
 [[steps]]
 group = "airvisual"
 function = "ingest"
+command = "datalib-step"
 
 # One entry per monitor. Every `YYYYMM_AirVisual_values.txt` under `path`
 # is read, the `archive*/` folders too.
@@ -28,6 +29,7 @@ path = "~/Downloads/airvisual-export/ten-forward"
 [[steps]]
 group = "airvisual"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["airvisual/ingest"]
 
 # The readings as time series, for the charts. Add this step to
@@ -35,6 +37,7 @@ inputs = ["airvisual/ingest"]
 [[steps]]
 group = "airvisual"
 function = "render_time_series"
+command = "datalib-step"
 inputs = ["airvisual/ingest"]
 
 # Keyword (BM25) search over the page. Add it to
@@ -43,4 +46,5 @@ inputs = ["airvisual/ingest"]
 [[steps]]
 group = "airvisual"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["airvisual/render_markdown"]

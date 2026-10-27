@@ -8,6 +8,7 @@ type = "beeper"
 [[steps]]
 group = "beeper"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.texts]
 path = "~/Library/Application Support/BeeperTexts"  # the app's data directory; this is
@@ -18,6 +19,7 @@ media = true         # copy the app's cached media into blobs; false keeps the
 [[steps]]
 group = "beeper"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["beeper/ingest"]
 
 [steps.params]
@@ -31,9 +33,11 @@ networks = ["signal", "googlechat"]  # which networks to render; omit for every 
 [[steps]]
 group = "beeper"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["beeper/render_markdown"]
 
 [[steps]]
 group = "beeper"
 function = "embed"
+command = "datalib-step"
 inputs = ["beeper/keyword_index"]

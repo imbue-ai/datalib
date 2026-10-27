@@ -238,17 +238,19 @@ export type CatalogEntry = {
   sections?: Section[];
   fields?: Field[];
   /// Set on an entry a package added (docs/dev/packages.md): its steps
-  /// name the package and run its commands instead of `datalib-step`.
+  /// run the package's programs instead of `datalib-step`.
   package?: PackageOrigin;
 };
 
-/// Which package an entry came from, the command each of its steps runs,
-/// by function (`ingest`, `render_markdown`, `render_time_series`), and
-/// the applets a source of it gets.
+/// Which package an entry came from, where it is unpacked relative to the
+/// data root, the command each of its steps runs inside it, by function
+/// (`ingest`, `render_markdown`, `render_time_series`), and the applets a
+/// source of it gets.
 export type PackageOrigin = {
   id: string;
   name: string;
   version: string;
+  dir: string;
   commands: Record<string, string>;
   applets: PackageApplet[];
 };

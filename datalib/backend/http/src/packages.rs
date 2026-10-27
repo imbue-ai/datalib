@@ -71,15 +71,17 @@ pub async fn list(State(s): State<AppState>) -> Json<PackagesResponse> {
                 (PackageState::Fetching, None)
             }
         };
+        let inside = format!("{}/", p.dir_rel());
+        let runs_it = |command: &str| command.trim_start().starts_with(&inside);
         let mut used_by: Vec<String> = cfg
             .steps
             .iter()
-            .filter(|st| st.package.as_deref() == Some(p.id.as_str()))
+            .filter(|st| st.command.as_deref().is_some_and(runs_it))
             .map(|st| st.group.clone().unwrap_or_else(|| st.id.clone()))
             .chain(
                 cfg.applets
                     .iter()
-                    .filter(|a| a.package.as_deref() == Some(p.id.as_str()))
+                    .filter(|a| runs_it(&a.command))
                     .map(|a| a.id.clone()),
             )
             .collect();

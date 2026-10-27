@@ -440,7 +440,7 @@ fn check_params(
     binary_dir: Option<&Path>,
 ) -> usize {
     let has_builtin = checked.cfg.steps.iter().any(|s| {
-        s.command.is_none() && matches!(s.function.as_deref(), Some("ingest" | "render_markdown"))
+        s.runs_datalib_step() && matches!(s.function.as_deref(), Some("ingest" | "render_markdown"))
     });
     if !has_builtin {
         return 0;

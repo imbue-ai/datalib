@@ -16,12 +16,15 @@ import {
   buildSource,
   listPackages,
   listSteps,
+  packageDir,
   setTimeSeriesStep,
   type ConfiguredStep,
 } from "./sourceSteps";
 
 const SHA = "a".repeat(64);
 const SHA2 = "b".repeat(64);
+const DIR = packageDir(SHA);
+const DIR2 = packageDir(SHA2);
 
 const MANIFEST: PackageManifest = {
   schema: 1,
@@ -92,7 +95,7 @@ describe("addPackage", () => {
 /// `text` with a Weather source `sfo` added the way the wizard adds one:
 /// the group, its steps, and the applets the source brings.
 function withSource(text: string, manifest = MANIFEST): string {
-  const entry = entriesOfManifest("weather", manifest)[0];
+  const entry = entriesOfManifest("weather", SHA, manifest)[0];
   const src = buildSource({
     entry,
     group: "sfo",
@@ -101,7 +104,7 @@ function withSource(text: string, manifest = MANIFEST): string {
     withGroup: true,
   });
   const next = `${text}\n${src.groupBody}\n\n${src.stepsBody}\n`;
-  return addSourceApplets(next, "sfo", "weather", entry.package!.applets);
+  return addSourceApplets(next, "sfo", entry.package!.dir, entry.package!.applets);
 }
 
 const appletsOf = (text: string) =>
@@ -112,13 +115,13 @@ const appletsOf = (text: string) =>
 describe("a source's applets", () => {
   it("come with the source, filed under it, told which source they serve", () => {
     const text = withSource(addPackage(CONFIG, { id: "weather", source: "x", lookup: lookup() }));
-    expect(appletsOf(text)).toEqual([["sfo_view", "sfo", "weather", "bin/weather-view"]]);
+    expect(appletsOf(text)).toEqual([["sfo_view", "sfo", "weather", `${DIR}/bin/weather-view`]]);
     expect(text).toContain('[applets.params]\nsource = "sfo"');
   });
 
   it("get an identifier for an id, and a second source its own", () => {
-    const once = addSourceApplets(CONFIG, "my-sfo", "weather", MANIFEST.sources[0].applets);
-    const twice = addSourceApplets(once, "my-sfo", "weather", MANIFEST.sources[0].applets);
+    const once = addSourceApplets(CONFIG, "my-sfo", DIR, MANIFEST.sources[0].applets);
+    const twice = addSourceApplets(once, "my-sfo", DIR, MANIFEST.sources[0].applets);
     expect(appletsOf(twice).map(([id]) => id)).toEqual(["my_sfo_view", "my_sfo_view_2"]);
   });
 });
@@ -140,13 +143,28 @@ describe("updatePackage and removePackage", () => {
       ],
     };
     const next = updatePackage(withSource(added), "weather", lookup(SHA2, v2));
-    expect(appletsOf(next)).toEqual([["sfo_chart", "sfo", "weather", "bin/weather-chart"]]);
+    expect(appletsOf(next)).toEqual([["sfo_chart", "sfo", "weather", `${DIR2}/bin/weather-chart`]]);
   });
 
-  it("an update keeps an applet the new version still has, as it is", () => {
+  it("an update runs the new version, and keeps an applet it still has as it is", () => {
     const edited = withSource(added).replace('source = "sfo"', 'source = "sfo"\nzoom = 2');
     const next = updatePackage(edited, "weather", lookup(SHA2));
-    expect(next.replace(SHA2, SHA)).toBe(edited);
+    expect(listSteps(next).map((s) => s.command)).toEqual([
+      null,
+      `${DIR2}/bin/fetch-weather`,
+      `${DIR2}/bin/weather-view`,
+    ]);
+    expect(next.replace(SHA2, SHA).replaceAll(DIR2, DIR)).toBe(edited);
+  });
+
+  it("an update runs the command the new version has for each function", () => {
+    const v2 = {
+      ...MANIFEST,
+      sources: [{ ...MANIFEST.sources[0], commands: { ingest: "bin/weather ingest" } }],
+    };
+    const next = updatePackage(withSource(added), "weather", lookup(SHA2, v2));
+    const ingest = listSteps(next).find((s) => s.id === "sfo/ingest");
+    expect(ingest).toMatchObject({ package: "weather", command: `${DIR2}/bin/weather ingest` });
   });
 
   it("removing takes only the pin", () => {
@@ -161,7 +179,8 @@ describe("updatePackage and removePackage", () => {
 });
 
 describe("a package source", () => {
-  const entry = entriesOfManifest("weather", MANIFEST)[0];
+  const entry = entriesOfManifest("weather", SHA, MANIFEST)[0];
+  const pinned = addPackage("", { id: "weather", source: "x", lookup: lookup() });
 
   it("is a catalog entry drawn by the package's own form", () => {
     expect(entry).toMatchObject({
@@ -170,11 +189,11 @@ describe("a package source", () => {
       kind: "package",
       wizard: true,
       rendersDocuments: false,
-      package: { id: "weather", version: "1.2.0" },
+      package: { id: "weather", version: "1.2.0", dir: DIR },
     });
   });
 
-  it("writes steps that name the package and run its command", () => {
+  it("writes steps that run the package's command from its directory", () => {
     const src = buildSource({
       entry,
       group: "sfo",
@@ -183,14 +202,15 @@ describe("a package source", () => {
       withGroup: true,
     });
     expect(src.renderId).toBeNull();
-    const [step] = listSteps(`${src.groupBody}\n\n${src.stepsBody}`);
+    const [step] = listSteps(`${pinned}\n${src.groupBody}\n\n${src.stepsBody}`);
     expect(step).toMatchObject({ id: "sfo/ingest", package: "weather", type: "weather" });
-    expect(src.stepsBody).toContain('command = "bin/fetch-weather"');
+    expect(src.stepsBody).toContain(`command = "${DIR}/bin/fetch-weather"`);
+    expect(src.stepsBody).not.toContain("package =");
     expect(step.params).toEqual({ station: "KSFO" });
   });
 
   it("gets a time-series step running the package's program, wired into the index", () => {
-    const ts = entriesOfManifest("weather", {
+    const ts = entriesOfManifest("weather", SHA, {
       ...MANIFEST,
       sources: [
         {
@@ -199,9 +219,9 @@ describe("a package source", () => {
         },
       ],
     })[0];
-    const text = setTimeSeriesStep(CONFIG, "sfo", "weather", ts.package);
+    const text = setTimeSeriesStep(`${pinned}\n${CONFIG}`, "sfo", "weather", ts.package);
     const step = listSteps(text).find((s) => s.id === "sfo/render_time_series");
-    expect(step).toMatchObject({ package: "weather", command: "bin/weather-ts" });
+    expect(step).toMatchObject({ package: "weather", command: `${DIR}/bin/weather-ts` });
     const index = listSteps(text).find(
       (s) => s.id === "unified_time_series_index/time_series_index",
     );

@@ -8,6 +8,7 @@ type = "email"
 [[steps]]
 group = "email"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.mbox]
 path = "~/Downloads/email-export"
@@ -15,4 +16,5 @@ path = "~/Downloads/email-export"
 [[steps]]
 group = "email"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["email/ingest"]

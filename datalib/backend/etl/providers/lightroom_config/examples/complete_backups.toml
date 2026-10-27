@@ -8,6 +8,7 @@ type = "lightroom"
 [[steps]]
 group = "lightroom"
 function = "ingest"
+command = "datalib-step"
 
 # Which tables and columns to mirror. Globs: `*` and `?` only.
 [steps.params]
@@ -42,4 +43,5 @@ path = "~/Pictures/Lightroom/Backups"
 [[steps]]
 group = "lightroom"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["lightroom/ingest"]

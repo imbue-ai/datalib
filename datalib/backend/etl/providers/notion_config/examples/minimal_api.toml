@@ -10,10 +10,12 @@ type = "notion"
 [[steps]]
 group = "notion"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.api]
 
 [[steps]]
 group = "notion"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["notion/ingest"]

@@ -40,7 +40,7 @@ fn has_builtin_params(text: &str) -> bool {
         .steps
         .iter()
         .any(|s| {
-            s.command.is_none()
+            s.runs_datalib_step()
                 && matches!(s.function.as_deref(), Some("ingest" | "render_markdown"))
         })
 }

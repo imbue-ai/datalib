@@ -88,9 +88,11 @@ fn base_command(
     secret: &str,
 ) -> anyhow::Result<Command> {
     let argv = split_command(&entry.id, &entry.command)?;
-    let program = match &entry.package_dir {
-        Some(dir) => data_root.join(datalib_dag::config::package_program(dir, &argv[0])?),
-        None => PathBuf::from(&argv[0]),
+    // A relative path with a `/` in it (a package's program) is relative
+    // to the data root, as a step's is.
+    let program = match Path::new(&argv[0]) {
+        p if argv[0].contains('/') && p.is_relative() => data_root.join(p),
+        p => p.to_path_buf(),
     };
     let mut cmd = Command::new(program);
     cmd.args(&argv[1..]);
@@ -1339,8 +1341,6 @@ mod tests {
             id: "mem".into(),
             group: None,
             command: format!("/bin/sh -c {}", shlex::try_quote(&script).unwrap()),
-            package: None,
-            package_dir: None,
             params: None,
             env: BTreeMap::new(),
         };

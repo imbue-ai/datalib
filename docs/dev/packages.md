@@ -14,8 +14,8 @@ brings its packages along, and a library opened on another machine
 fetches the build for that machine.
 
 The code: `datalib/backend/packages/` (the manifest, the lookup, the
-fetch), `http/src/packages.rs` (the routes), `[[packages]]` and the
-`package` key in `datalib/backend/dag/src/config.rs`, and in the UI
+fetch), `http/src/packages.rs` (the routes), `[[packages]]` in
+`datalib/backend/dag/src/config.rs`, and in the UI
 `config/packages.ts`, `components/PackageReview.vue` and
 `components/PackagesDialog.vue`. The example package is
 `datalib/backend/packages/example/hello/`.
@@ -123,8 +123,7 @@ sha256 = "…"   # the manifest's
 [[steps]]
 group = "sfo"
 function = "ingest"
-package = "weather"
-command = "bin/fetch-weather"
+command = "system/packages/3f9a1c2e3f9a1c2e/bin/fetch-weather"
 ```
 
 - `source` is what the person typed, and what "Check for update" looks
@@ -133,11 +132,14 @@ command = "bin/fetch-weather"
   not the expiring download link GitHub then redirects to. `sha256` is the manifest's hash. The
   manifest names each archive's hash, so the manifest's hash pins every
   byte the package unpacks.
-- A step or applet with `package` runs `<data root>/system/packages/<the
-  first 16 hex digits of sha256>/<first word of command>`. The loader
-  refuses a `package` that names no `[[packages]]` entry, and a program
-  path that is absolute or contains `..`
-  (`datalib_dag::config::package_program`).
+- A package is unpacked in `system/packages/<the first 16 hex digits of
+  sha256>/`. A step or applet runs one of its programs by that path in
+  its `command`, followed by the manifest's command for it. A relative
+  path with a `/` is relative to the data root, as for any step
+  (`step_protocol.md` §"The config entry"), so this is not a
+  rule of its own. The loader refuses a command whose program is in a
+  directory under `system/packages/` that no `[[packages]]` entry pins
+  (`datalib/backend/dag/src/config.rs`, `unlisted_package`).
 - The pin is part of the step's argv, so it is part of the step's
   fingerprint: updating a package makes its steps run again on the next
   sync.
@@ -180,10 +182,10 @@ writer has to match them exactly:
    encoding"). A time-series store the index cannot read fails
    `time_series_index` for every source, not only that one.
 
-A built-in render step also gets something a package's does not: the
-launch's migrate and compact passes skip a step with a `command`
-(`datalib/backend/dag/src/config.rs`, `spec_of`), so a package's stores
-are never migrated in place.
+A render step that runs `datalib-step` also gets something a package's
+does not: the launch's migrate and compact passes run only steps whose
+program is `datalib-step` (`datalib/backend/dag/src/config.rs`,
+`spec_of`), so a package's stores are never migrated in place.
 
 The Hello package (`github:qi-imbue/datalib-hello`) writes both stores
 from a separate repo, with a copy of these formats kept in its own
@@ -216,13 +218,15 @@ machine, or a config edited by hand. A failed fetch is shown above the
 Sources table with the sources that wait on it; nothing else stops.
 
 An update is the same review, then the same fetch, then a new `url` and
-`sha256` on the entry. Each source's applets follow the new version: one
-it no longer has is removed, a new one is added, and one it still has
-(matched by `command`) is left as the config has it. A source's steps
-are not changed by an update: a function the new version adds reaches a
-source when it is added again. Removing a package removes its entry.
-Removal is refused while a source's steps still run the package; remove
-the source first, which takes its applets with it. The unpacked directory stays until the
+`sha256` on the entry. Every step that ran the old directory gets the
+new version's command for its function, under the new directory. Each
+source's applets follow the new version: one it no longer has is
+removed, a new one is added, and one it still has (matched by its
+program) moves to the new directory and is otherwise left as the config
+has it. A function the new version adds reaches a source when it is
+added again. Removing a package removes its entry. Removal is refused
+while a step still runs one of the package's programs; remove the
+source first, which takes its applets with it. The unpacked directory stays until the
 library is cleaned up by hand.
 
 ## Where it is in the UI

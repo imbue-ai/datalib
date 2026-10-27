@@ -205,9 +205,10 @@ datalib/
                    stages every shipped binary under its public
                    `datalib-*` name in one directory (`:dist`); build
                    that whenever you need to actually run a pipeline.
-    datalib_step/  `datalib-step`: the built-in step program. A step
-                   with no `command` runs it; it reads its function and
-                   its group's type from the environment.
+    datalib_step/  `datalib-step`: the step program datalib ships. A
+                   step runs it with `command = "datalib-step"`; it
+                   reads its function and its group's type from the
+                   environment.
     etl/           shared ingest machinery (raw stores, blob CAS, render
                    cursors) — the download side, and where a
                    downloader's dependencies stop.
@@ -310,8 +311,9 @@ entry is one thing on the Manage screen (a source is a group with a
 `type`; the unified document index is a group without one); a `[[steps]]` entry is
 `group` + `function`, its id composed as `<group>/<function>` — the one
 tree it writes; `inputs` name steps by that id and are the edges; an
-`[[applets]]` entry is a server the gateway spawns. A built-in step has
-no `command` and runs `datalib-step`.
+`[[applets]]` entry is a server the gateway spawns. Every step names
+the program it runs in `command`; datalib's own steps run
+`datalib-step`.
 
 Each source has an `ingest` step and (most) a `render_markdown` step, and
 `grid_index` under `unified_document_index` reads every render tree its `inputs`

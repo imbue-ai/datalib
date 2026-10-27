@@ -9,10 +9,12 @@ type = "github"
 [[steps]]
 group = "github"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.api]
 
 [[steps]]
 group = "github"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["github/ingest"]

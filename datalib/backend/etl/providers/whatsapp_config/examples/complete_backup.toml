@@ -9,6 +9,7 @@ type = "whatsapp"
 [[steps]]
 group = "whatsapp"
 function = "ingest"
+command = "datalib-step"
 
 # The decrypted database is mirrored table for table; these pick the tables.
 [steps.params]
@@ -28,6 +29,7 @@ key_env_var = "WHATSAPP_ENTERPRISE_PHONE_KEY"  # the variable holding the key as
 [[steps]]
 group = "whatsapp"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["whatsapp/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -35,9 +37,11 @@ inputs = ["whatsapp/ingest"]
 [[steps]]
 group = "whatsapp"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["whatsapp/render_markdown"]
 
 [[steps]]
 group = "whatsapp"
 function = "embed"
+command = "datalib-step"
 inputs = ["whatsapp/keyword_index"]

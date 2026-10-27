@@ -59,9 +59,11 @@ export type ConfiguredStep = {
   /// `datalib-applet` for an applet; null for anything else, which is a
   /// legitimate config with no catalog entry.
   type: string | null;
-  /// The `[[packages]]` entry whose program it runs, if any.
+  /// The `[[packages]]` entry whose program it runs, if any: the one
+  /// whose directory its command's program is in (`packageOfCommand`).
   package: string | null;
-  /// The `command` it declares; null for a built-in step.
+  /// The `command` it declares; null when it declares none, which the
+  /// loader reads as `datalib-step` (`isDatalibStep`).
   command: string | null;
   /// The ids this step declares as inputs.
   inputs: string[];
@@ -214,9 +216,47 @@ export type ConfiguredPackage = {
   end: number;
 };
 
+/// The program every built-in step runs. It reads its function and its
+/// group's type from the environment, so it takes no arguments.
+export const DATALIB_STEP = "datalib-step";
+
+/// Whether a step's `command` runs `datalib-step`. A step with no
+/// command does too: the loader reads one written before commands were
+/// spelled out that way.
+export function isDatalibStep(command: string | null | undefined): boolean {
+  if (command === null || command === undefined) return true;
+  const program = command.trim().split(/\s+/)[0] ?? "";
+  return program === DATALIB_STEP || program.endsWith(`/${DATALIB_STEP}`);
+}
+
+/// Where the package pinned at `sha256` is unpacked, relative to the data
+/// root. Mirrors `datalib_runtime::layout::package_dir_rel`.
+export function packageDir(sha256: string): string {
+  return `system/packages/${sha256.slice(0, 16)}`;
+}
+
+/// A package's command, as a step or applet runs it from the data root:
+/// its program, a path inside the package, joined to the package's
+/// directory.
+export function inPackage(dir: string, command: string): string {
+  return `${dir}/${command.trimStart()}`;
+}
+
+/// The `[[packages]]` entry whose directory `command`'s program is in.
+export function packageOfCommand(
+  command: string | null,
+  packages: ConfiguredPackage[],
+): string | null {
+  const program = command?.trim().split(/\s+/)[0] ?? "";
+  return packages.find((p) => program.startsWith(`${packageDir(p.sha256)}/`))?.id ?? null;
+}
+
 /// The `[[packages]]` entries a config declares, in file order.
 export function listPackages(text: string): ConfiguredPackage[] {
-  const { ast, root } = parseConfig(text);
+  return packagesOf(parseConfig(text));
+}
+
+function packagesOf({ ast, root }: ParsedConfig): ConfiguredPackage[] {
   const raw = root.packages;
   if (!Array.isArray(raw)) return [];
   const at = ranges(ast, "packages");
@@ -247,6 +287,7 @@ export function listSteps(text: string): ConfiguredStep[] {
   const parsed = parseConfig(text);
   const { ast, root } = parsed;
   const groupsById = new Map(groupsOf(parsed).map((g) => [g.id, g]));
+  const packages = packagesOf(parsed);
 
   const steps: ConfiguredStep[] = [];
 
@@ -259,7 +300,6 @@ export function listSteps(text: string): ConfiguredStep[] {
         function?: unknown;
         name?: unknown;
         command?: unknown;
-        package?: unknown;
         inputs?: unknown;
         params?: unknown;
       } | null;
@@ -297,7 +337,10 @@ export function listSteps(text: string): ConfiguredStep[] {
         // The group's type is the only place a step's provider is
         // written; a step outside any group has none.
         type: groupEntry?.type ?? null,
-        package: typeof step?.package === "string" ? step.package : null,
+        package: packageOfCommand(
+          typeof step?.command === "string" ? step.command : null,
+          packages,
+        ),
         command: typeof step?.command === "string" ? step.command : null,
         inputs: (Array.isArray(step?.inputs) ? (step!.inputs as unknown[]) : []).filter(
           (v): v is string => typeof v === "string",
@@ -320,7 +363,6 @@ export function listSteps(text: string): ConfiguredStep[] {
         id?: unknown;
         group?: unknown;
         command?: unknown;
-        package?: unknown;
       } | null;
       const id = typeof applet?.id === "string" ? applet.id : `applet ${i + 1}`;
       const [start, end] = appletRanges.get(i) ?? [0, 0];
@@ -338,7 +380,10 @@ export function listSteps(text: string): ConfiguredStep[] {
         // The word after `datalib-applet`, when it is one — the same
         // shape as a step's provider word, and what names the applet.
         type: appletType(typeof applet?.command === "string" ? applet.command : ""),
-        package: typeof applet?.package === "string" ? applet.package : null,
+        package: packageOfCommand(
+          typeof applet?.command === "string" ? applet.command : null,
+          packages,
+        ),
         command: typeof applet?.command === "string" ? applet.command : null,
         inputs: [],
         params: {},
@@ -849,9 +894,9 @@ function descriptionLine(description: string): string | null {
 }
 
 /// One step, as a `[[steps]]` block. No name: a grouped step's label
-/// comes from its group and its function. No command either: a built-in
-/// step is `datalib-step`, which reads the function and the group's type
-/// from the environment.
+/// comes from its group and its function. A built-in step runs
+/// `datalib-step`, which reads the function and the group's type from the
+/// environment; a package source's step runs the package's program.
 export function buildStep(opts: {
   entry: CatalogEntry;
   group: string;
@@ -865,32 +910,30 @@ export function buildStep(opts: {
     group,
     phase,
     inputs: opts.inputs,
-    package: entry.package && command ? { id: entry.package.id, command } : undefined,
+    command: entry.package && command ? inPackage(entry.package.dir, command) : undefined,
     params: paramsToml(entry, values, phase),
   });
 }
 
-/// The `[[steps]]` block itself: group, function, inputs, then a
-/// params body already rendered as TOML. What `buildStep` writes once
+/// The `[[steps]]` block itself: group, function, command, inputs, then
+/// a params body already rendered as TOML. What `buildStep` writes once
 /// it has turned form values into that body — the one place the shape of
 /// a step is spelled out.
 export function stepToml(opts: {
   group: string;
   phase: FieldPhase;
   inputs?: string[];
-  /// A package source's step: the package and the command it runs.
-  package?: { id: string; command: string };
+  /// What it runs; `datalib-step` when absent.
+  command?: string;
   params?: string;
 }): string {
   const inputs = opts.inputs ?? [];
   const inputsLine = inputs.length ? `\ninputs = [${inputs.map(quote).join(", ")}]` : "";
-  const packageLines = opts.package
-    ? `\npackage = ${quote(opts.package.id)}\ncommand = ${quote(opts.package.command)}`
-    : "";
   const params = opts.params ?? "";
   const block = `[[steps]]
 group = ${quote(opts.group)}
-function = ${quote(functionOf(opts.phase))}${packageLines}${inputsLine}${params ? `\n${params}` : ""}`;
+function = ${quote(functionOf(opts.phase))}
+command = ${quote(opts.command ?? DATALIB_STEP)}${inputsLine}${params ? `\n${params}` : ""}`;
   return block.trimEnd();
 }
 
@@ -1135,18 +1178,17 @@ export function setTimeSeriesStep(
   const id = `${group}/render_time_series`;
   let next = text;
   if (!listSteps(next).some((s) => s.id === id)) {
-    const packageLines =
-      pkg && command ? `\npackage = ${quote(pkg.id)}\ncommand = ${quote(command)}` : "";
+    const program = pkg && command ? inPackage(pkg.dir, command) : DATALIB_STEP;
     next = insertEntries(
       next,
-      `[[steps]]\ngroup = ${quote(group)}\nfunction = "render_time_series"${packageLines}\ninputs = [${quote(stepIdFor(group, "download"))}]`,
+      `[[steps]]\ngroup = ${quote(group)}\nfunction = "render_time_series"\ncommand = ${quote(program)}\ninputs = [${quote(stepIdFor(group, "download"))}]`,
     );
   }
   if (!listSteps(next).some((s) => fanInFunctionOf(s) === "time_series_index")) {
     next =
       `${next.replace(/\s*$/, "")}\n\n[[groups]]\nid = ${quote(TIME_SERIES_GROUP)}\n` +
       `name = "Time Series Index"\n\n[[steps]]\ngroup = ${quote(TIME_SERIES_GROUP)}\n` +
-      `function = "time_series_index"\ninputs = []\n\n[[applets]]\n` +
+      `function = "time_series_index"\ncommand = ${quote(DATALIB_STEP)}\ninputs = []\n\n[[applets]]\n` +
       `group = ${quote(TIME_SERIES_GROUP)}\nid = ${quote(TIME_SERIES_GROUP)}\n` +
       `command = ${quote(`datalib-applet ${TIME_SERIES_GROUP}`)}\n`;
   }
@@ -1167,7 +1209,7 @@ export function setOccurrencesStep(text: string, group: string, type: string): s
   if (listSteps(text).some((s) => s.id === id)) return text;
   return insertEntries(
     text,
-    `[[steps]]\ngroup = ${quote(group)}\nfunction = "render_occurrences"\ninputs = [${quote(stepIdFor(group, "download"))}]`,
+    `[[steps]]\ngroup = ${quote(group)}\nfunction = "render_occurrences"\ncommand = ${quote(DATALIB_STEP)}\ninputs = [${quote(stepIdFor(group, "download"))}]`,
   );
 }
 
@@ -1178,7 +1220,7 @@ export function buildQmdSteps(group: string): { id: string; body: string }[] {
   const keywordId = `${group}/keyword_index`;
   const block = (fn: string, inputs: string[]) => ({
     id: `${group}/${fn}`,
-    body: `[[steps]]\ngroup = ${quote(group)}\nfunction = ${quote(fn)}\ninputs = [${inputs.map(quote).join(", ")}]`,
+    body: `[[steps]]\ngroup = ${quote(group)}\nfunction = ${quote(fn)}\ncommand = ${quote(DATALIB_STEP)}\ninputs = [${inputs.map(quote).join(", ")}]`,
   });
   return [block("keyword_index", [stepIdFor(group, "render")]), block("embed", [keywordId])];
 }
