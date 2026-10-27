@@ -143,8 +143,8 @@ async fn a_thread_the_filter_no_longer_keeps_goes_whole() {
     assert!(h.thread_counts().await.is_empty());
 }
 
-/// Gmail's ids in the API's hex, and its labels as it spells them, with
-/// `UNREAD` and `STARRED` back among them.
+/// Gmail's ids in the API's hex, the thread's as the message's, and its
+/// labels as it spells them, with `UNREAD` and `STARRED` back among them.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_email_carries_gmails_ids_and_labels() {
     let h = Harness::new();
@@ -154,19 +154,14 @@ async fn an_email_carries_gmails_ids_and_labels() {
         &message(REPLY, &["INBOX", "UNREAD", "STARRED"]),
     );
     h.run(None).await;
-    let rows: Vec<(String, String, String, String)> =
+    let rows: Vec<(String, String, String)> =
         h.0.read(|db| async move {
-            sqlx::query_as(
-                "SELECT gmail_message_id, gmail_thread_id, label_ids, thread_id
-                 FROM emails ORDER BY id",
-            )
-            .fetch_all(db.pool())
-            .await
-            .unwrap()
+            sqlx::query_as("SELECT id, thread_id, label_ids FROM emails ORDER BY id")
+                .fetch_all(db.pool())
+                .await
+                .unwrap()
         })
         .await;
-    // The decimal a Takeout writes, which `thread_id` keeps.
-    let thread = u64::from_str_radix(HAIL, 16).unwrap().to_string();
     assert_eq!(
         rows,
         [
@@ -174,13 +169,11 @@ async fn an_email_carries_gmails_ids_and_labels() {
                 HAIL.to_string(),
                 HAIL.to_string(),
                 r#"["Label_7"]"#.to_string(),
-                thread.clone(),
             ),
             (
                 REPLY.to_string(),
                 HAIL.to_string(),
                 r#"["INBOX","STARRED","UNREAD"]"#.to_string(),
-                thread,
             ),
         ]
     );

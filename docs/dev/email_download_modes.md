@@ -143,9 +143,15 @@ list at all fails the run.
 does not change the Inbox's row. The email raw store's ladder rung 1
 took them out of stores written before.
 
-**Thread ids.** Gmail's API `threadId` is hex; Takeout's `X-GM-THRID`
-header is the same 64-bit number in decimal. `normalize_thread_id`
-converts to decimal so one conversation stays one thread.
+**Thread ids.** A Gmail thread id is keyed the way a message id is:
+the API's `threadId` is hex, Takeout's `X-GM-THRID` header is the same
+64-bit number in decimal, and both become the same 16-digit
+zero-padded hex (`GmailId::key`), so one conversation stays one thread
+and every Gmail id in the store is spelled one way. The API drops the
+leading zero, which only an id from Gmail's first months in 2004 has.
+An mbox message with no `X-GM-THRID` is a thread of its own, keyed by
+its email id; JMAP keeps its own `threadId`. The email raw store's
+ladder rung 7 rewrote the decimal thread ids of stores written before.
 
 ## 3. The Gmail API mode
 
@@ -266,10 +272,10 @@ same namespacing discipline as the JMAP path's `jmap:` keys. A run:
    `listed_messages:<id>` row in `problems` and its attempts counted.
 
 Labels are reconciled every run, walk or not: `labels.list` is always
-the whole set. Ingest stamps `_source: { via, gmailMessageId,
-gmailThreadId }` into the envelope payload as provenance, and the row
-promotes them to `gmail_message_id` and `gmail_thread_id`, with its
-labels as Gmail spells them in `label_ids`.
+the whole set. Ingest stamps `_source: { via }` into the envelope
+payload as provenance, and the row keeps the message's labels as Gmail
+spells them in `label_ids`. Its `id` and `thread_id` are Gmail's own
+ids already (§2), so the row needs no other column for them.
 
 A thread row is the ids of the emails held for that thread, written in
 the transaction that writes or deletes one of them — so relabeling one
@@ -389,7 +395,7 @@ labels.
 
 What makes it work is that the two meet on the same rows (§2): a
 Takeout message's id is Gmail's, from its `From ` line, and its
-`X-GM-THRID` is the API's `threadId` in decimal. Checked against the
+`X-GM-THRID` is the API's `threadId` in decimal, keyed the same way. Checked against the
 live API on one account: Takeout's bytes are what `format=RAW` returns,
 plus the two headers Takeout adds (`X-GM-THRID`, `X-Gmail-Labels`) and
 the mbox's blank separator line; the mbox reader also turns CRLF line
