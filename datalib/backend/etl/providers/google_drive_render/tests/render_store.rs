@@ -96,19 +96,25 @@ async fn a_doc_in_the_store_renders_with_its_image_and_its_thread() {
     let store_path = dir.path().join("ingest").join("entities.doltlite_db");
     std::fs::create_dir_all(store_path.parent().unwrap()).unwrap();
     let db = RawDb::open(&store_path).await.unwrap();
+    let put = |bytes: Vec<u8>, content_type: &'static str| {
+        let cas = db.cas().clone();
+        async move { Body::Held(cas.put(&bytes, Some(content_type)).await.unwrap()) }
+    };
     let doc = capture(
         DOC,
         store::DOC_MIME,
         vec![
             Part {
                 name: PART_NATIVE.to_string(),
-                body: Body::Fetched(gzip(native().to_string().as_bytes()).unwrap()),
-                content_type: Some("application/gzip".to_string()),
+                body: put(
+                    gzip(native().to_string().as_bytes()).unwrap(),
+                    "application/gzip",
+                )
+                .await,
             },
             Part {
                 name: image_part(IMAGE_POINTER),
-                body: Body::Fetched(PNG.to_vec()),
-                content_type: Some("image/png".to_string()),
+                body: put(PNG.to_vec(), "image/png").await,
             },
         ],
         vec![(
@@ -126,9 +132,7 @@ async fn a_doc_in_the_store_renders_with_its_image_and_its_thread() {
         Vec::new(),
     );
     let mut tx = db.pool().begin().await.unwrap();
-    store_captures(&mut tx, db.cas(), &[&doc, &sheet])
-        .await
-        .unwrap();
+    store_captures(&mut tx, &[&doc, &sheet]).await.unwrap();
     tx.commit().await.unwrap();
     commit_run(db.pool(), "test fixture").await.unwrap();
     db.close().await;

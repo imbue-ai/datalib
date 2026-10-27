@@ -219,7 +219,10 @@ pub trait Fetcher<T: Send>: Sync {
     /// held, gone, failed and skipped, and commits. Bytes for a blob CAS
     /// go in here first, one `put_many` for the flush: the CAS is its own
     /// file and commits itself, so the bytes are there before the rows
-    /// that name them, and a kill between leaves only unnamed bytes.
+    /// that name them, and a kill between leaves only unnamed bytes. A
+    /// record too big to hold until its flush puts its bytes as `fetch`
+    /// gets them instead, from a task of its own (`google_drive`'s
+    /// `Captures::stash`).
     async fn store(
         &self,
         tx: &mut Transaction<'static, Sqlite>,

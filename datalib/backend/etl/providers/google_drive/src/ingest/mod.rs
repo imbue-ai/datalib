@@ -191,7 +191,7 @@ async fn walk_files(
                 batch: 1,
                 concurrency: 4,
                 flush: 8,
-                flush_bytes: 64 << 20,
+                flush_bytes: 0,
                 failures_in_a_row: 10,
             },
             owed,
@@ -511,11 +511,7 @@ impl Fetcher<Capture> for Captures<'_> {
                 _ => None,
             })
             .collect();
-        db::store_captures(tx, self.db.cas(), &captures).await
-    }
-
-    fn weight(&self, content: &Capture) -> usize {
-        content.bytes()
+        db::store_captures(tx, &captures).await
     }
 }
 
@@ -567,15 +563,19 @@ impl Captures<'_> {
             .with_context(|| format!("parse the native JSON of {id}"))?;
         let links = shape::take_image_links(&mut native);
         let native_revision_id = shape::native_revision_id(&native);
+        let gzipped = shape::gzip(&serde_json::to_vec(&native)?)?;
+        drop((native, native_bytes));
         let mut parts = vec![Part {
             name: PART_NATIVE.to_string(),
-            body: Body::Fetched(shape::gzip(&serde_json::to_vec(&native)?)?),
-            content_type: Some(NATIVE_CONTENT_TYPE.to_string()),
+            body: Body::Held(
+                self.stash(gzipped, Some(NATIVE_CONTENT_TYPE.to_string()))
+                    .await?,
+            ),
         }];
 
         // Google signs an image link afresh on every read, so the link
         // cannot say whether we hold the image; the revision can.
-        let mut by_url: HashMap<&str, (Vec<u8>, Option<String>)> = HashMap::new();
+        let mut by_url: HashMap<&str, String> = HashMap::new();
         for (pointer, url) in &links {
             let name = image_part(pointer);
             let held = native_revision_id
@@ -586,22 +586,19 @@ impl Captures<'_> {
                 parts.push(Part {
                     name,
                     body: Body::Held(blake3.to_string()),
-                    content_type: None,
                 });
                 continue;
             }
             if !by_url.contains_key(url.as_str()) {
-                let image = api::get_image(url)
+                let (bytes, content_type) = api::get_image(url)
                     .await
                     .with_context(|| format!("image at {pointer}"))?;
                 self.images.fetch_add(1, Ordering::Relaxed);
-                by_url.insert(url, image);
+                by_url.insert(url, self.stash(bytes, content_type).await?);
             }
-            let (bytes, content_type) = by_url[url.as_str()].clone();
             parts.push(Part {
                 name,
-                body: Body::Fetched(bytes),
-                content_type,
+                body: Body::Held(by_url[url.as_str()].clone()),
             });
         }
 
@@ -619,7 +616,7 @@ impl Captures<'_> {
             let body = match got {
                 Ok(bytes) => {
                     self.exports_done.fetch_add(1, Ordering::Relaxed);
-                    Body::Fetched(bytes)
+                    Body::Held(self.stash(bytes, Some(mime.to_string())).await?)
                 }
                 Err(e) if api::is_export_too_large(&e) => {
                     self.exports_declined.fetch_add(1, Ordering::Relaxed);
@@ -636,7 +633,6 @@ impl Captures<'_> {
             parts.push(Part {
                 name: export_part(ext),
                 body,
-                content_type: Some(mime.to_string()),
             });
         }
 
@@ -672,6 +668,18 @@ impl Captures<'_> {
             None => Outcome::Got(capture),
             Some(why) => Outcome::Unusable(capture, datalib_problems::Reason::FetchFailed, why),
         })
+    }
+
+    /// Put fetched bytes in the CAS now and keep their hash, so a capture
+    /// never holds a whole file's images at once (one Doc's ran to 334 MB).
+    /// The write runs as a task of its own: the drain stops polling this
+    /// fetch while it writes a flush, and a fetch holding the CAS's one
+    /// connection then would deadlock that flush.
+    async fn stash(&self, bytes: Vec<u8>, content_type: Option<String>) -> Result<String> {
+        let cas = self.db.cas().clone();
+        tokio::spawn(async move { cas.put(&bytes, content_type.as_deref()).await })
+            .await
+            .context("write a fetched part to the CAS")?
     }
 }
 
