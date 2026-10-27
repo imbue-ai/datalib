@@ -39,6 +39,9 @@ pub fn plan_ingest(
             calendars: calendars.to_vec(),
             window: window.parse()?,
         },
+        CalendarMethod::Calendly { window } => Method::Calendly {
+            window: window.parse()?,
+        },
         CalendarMethod::Ics(path) => Method::Ics { path: path.path() },
     };
     Ok(vec![Box::new(CalendarIngest {
@@ -57,6 +60,9 @@ enum Method {
     Caldav {
         server_url: String,
         calendars: Vec<String>,
+        window: TimeWindow,
+    },
+    Calendly {
         window: TimeWindow,
     },
     Ics {
@@ -85,6 +91,9 @@ impl CalendarIngest {
                 "method": "caldav", "server_url": server_url, "calendars": calendars,
                 "window": window
             }),
+            Method::Calendly { .. } => {
+                serde_json::json!({"method": "calendly", "window": window})
+            }
             Method::Ics { path } => serde_json::json!({"method": "ics", "path": path}),
         }
     }
@@ -98,7 +107,9 @@ impl DataProcessor for CalendarIngest {
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let window = match &self.method {
-            Method::Google { window, .. } | Method::Caldav { window, .. } => {
+            Method::Google { window, .. }
+            | Method::Caldav { window, .. }
+            | Method::Calendly { window } => {
                 ingest::Window::resolve(*window, &datalib_time::parse_strict(ctx.now)?)?
             }
             Method::Ics { .. } => None,
@@ -131,6 +142,17 @@ impl DataProcessor for CalendarIngest {
                         db,
                         server_url: server_url.clone(),
                         calendars: calendars.clone(),
+                        window,
+                        latchkey: self.latchkey.clone(),
+                        progress: ctx.progress.clone(),
+                        control: ctx.control.clone(),
+                        sealer: Some(sealer),
+                    })
+                    .await
+                }
+                Method::Calendly { .. } => {
+                    ingest::calendly::fetch(ingest::calendly::FetchOptions {
+                        db,
                         window,
                         latchkey: self.latchkey.clone(),
                         progress: ctx.progress.clone(),

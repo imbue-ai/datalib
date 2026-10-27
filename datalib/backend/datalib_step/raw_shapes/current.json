@@ -45,7 +45,7 @@
     ]
   },
   "calendar": {
-    "schema_hash": "c73ed0319312725efa874bef7dad353f755e2a0961152f54e8b0ea58a6e5985b",
+    "schema_hash": "c1be6cfa0a2d9d892cc40061a84908d0bb085cf24e4d654edd521e96b540d404",
     "schema_version": 1,
     "shared_schema_version": 1,
     "sql": [
@@ -53,6 +53,11 @@
       "CREATE TABLE accounts_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE calendars( id TEXT PRIMARY KEY, account_id TEXT NOT NULL, href TEXT NULL, display_name TEXT NULL, description TEXT NULL, color TEXT NULL, time_zone TEXT NULL, sync_token TEXT NULL)",
       "CREATE TABLE calendars_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
+      "CREATE TABLE calendly_events( id TEXT PRIMARY KEY, payload TEXT NULL, calendar_id TEXT NOT NULL, start_time TEXT NULL, status TEXT NULL, listing_hash TEXT NULL)",
+      "CREATE TABLE calendly_events_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
+      "CREATE INDEX calendly_events_by_calendar ON calendly_events(calendar_id)",
+      "CREATE TABLE calendly_invitees( id TEXT PRIMARY KEY, payload TEXT NULL)",
+      "CREATE TABLE calendly_invitees_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE dav_resources( id TEXT PRIMARY KEY, collection TEXT NOT NULL, href TEXT NOT NULL, etag TEXT NULL)",
       "CREATE TABLE dav_resources_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX dav_resources_by_collection ON dav_resources(collection)",

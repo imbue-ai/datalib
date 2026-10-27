@@ -37,6 +37,10 @@
       "reach": "origin"
     },
     {
+      "path": "calendly",
+      "reach": "origin"
+    },
+    {
       "path": "ics",
       "reach": "local"
     }

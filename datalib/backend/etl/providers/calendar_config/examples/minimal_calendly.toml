@@ -1,0 +1,20 @@
+# The meetings booked with you on Calendly, through Calendly's API,
+# signed in through latchkey's `calendly` service with a personal access
+# token (`latchkey auth set calendly -H "Authorization: Bearer <token>"`).
+# An empty `calendly` table mirrors every meeting, with its invitees and
+# their answers to the booking questions.
+[[groups]]
+id = "calendar"
+name = "Calendly"
+type = "calendar"
+
+[[steps]]
+group = "calendar"
+function = "ingest"
+
+[steps.params.calendly]
+
+[[steps]]
+group = "calendar"
+function = "render_markdown"
+inputs = ["calendar/ingest"]

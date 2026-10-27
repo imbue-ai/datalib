@@ -57,6 +57,7 @@ const CATALOG: &[Entry] = &[
         "Calendar (CalDAV)",
         Some("calendar"),
     ),
+    e("calendar", Some("calendly"), "Calendly", Some("calendar")),
     e(
         "calendar",
         Some("ics"),
