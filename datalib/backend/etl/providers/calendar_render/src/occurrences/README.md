@@ -57,7 +57,7 @@ calendar nobody touches for a week keeps last week's window. Read
 
 `unlisted`: an event whose occurrences could not be worked out, with
 why — a `TZID` the zone database does not know, a rule part this build
-cannot read (a `FREQ` RFC 5545 does not have), no start. Nothing is
+does not follow (`BYWEEKNO`, a sub-daily `FREQ`), no start. Nothing is
 guessed; the Manage row counts them as warnings.
 
 `occurrences_window`: one row, `from_utc` and `until_utc`.
@@ -65,7 +65,7 @@ guessed; the Manage row counts them as warnings.
 ## What the listing does
 
 `calendar-common`'s `occurrences.rs` runs one series forward and
-`recur.rs` follows its `RRULE`, by Stalwart's `calcard` crate; this directory reads the raw rows and
+`recur.rs` follows its `RRULE`; this directory reads the raw rows and
 names what comes out. The traps it handles, each with a test:
 
 - **The series' own zone.** A rule runs on the wall clock of the zone

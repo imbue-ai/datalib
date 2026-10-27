@@ -26,21 +26,17 @@ the fixture's byte-identical convergence. The rule on the series page is
 the whole truth about them. Listing them is the `render_occurrences`
 step's job, in a store of its own that does depend on today
 (`calendar_render/src/occurrences/README.md`); `occurrences.rs` here
-runs a series forward and `recur.rs` follows its `RRULE`. `recur.rs` is
-the one file that names [`calcard`](https://github.com/stalwartlabs/calcard),
-which does the rule arithmetic; zones, `UNTIL` and the dates a series no
-longer has stay ours, because calcard's own expansion has no window and
-matches a changed occurrence by its `SEQUENCE` as well as its date.
+runs a series forward and `recur.rs` follows its `RRULE`, refusing by
+name a part it does not follow (`BYWEEKNO`, a sub-daily `FREQ`).
 
-**0.3.14 is the last calcard we can take.** Its repository was archived
-and its development moved into Stalwart's server repository, where it is
-`AGPL-3.0-only OR LicenseRef-SEL` and unpublished; `deny.toml` refuses
-anything copyleft, so a later release under that license fails the
-build rather than coming in. We asked whether it will be published
-permissively again
-[on Stalwart's support portal](https://support.stalw.art/t/calcard-will-it-be-published-to-crates-io-under-a-permissive-license-again/2054).
-Until then a bug in calcard's rule arithmetic is ours to work around
-here, and swapping the engine is a change to `recur.rs` alone.
+**The rule arithmetic is ours, not a library's.** Stalwart's `calcard`
+was tried and dropped: the last permissively licensed release (0.3.14,
+its repository since archived) cannot be built without `chrono-tz`,
+whose stale zone data `deny.toml` bans, and its successor lives in
+Stalwart's server under the AGPL. Whether it will be published
+permissively again is asked
+[on Stalwart's support portal](https://support.stalw.art/t/calcard-will-it-be-published-to-crates-io-under-a-permissive-license-again/2054);
+swapping the engine is a change to `recur.rs` alone.
 
 **A changed occurrence is a document** because it carries information
 the rule does not: a new time, a new room, a different agenda, different

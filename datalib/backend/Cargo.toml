@@ -36,10 +36,6 @@ async-trait = "0.1"
 axum = "0.8"
 base64 = "0.23"
 blake3 = { version = "1", default-features = false, features = ["mmap", "pure", "rayon", "std"] }
-# iCalendar parsing, time zones (VTIMEZONE, Windows names) and RRULE
-# expansion; linked only by calendar-common, whose README says why 0.3.14
-# is the last version we can take.
-calcard = { version = "0.3", default-features = false }
 candle-core = "0.11"
 candle-nn = "0.11"
 candle-transformers = "0.11"

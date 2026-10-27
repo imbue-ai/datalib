@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Duration, FixedOffset, NaiveDate, NaiveDateTime, TimeZone, Utc};
+use datalib_time::NamedZone;
 
 use crate::recur::{Rule, Until};
 use crate::when::{EventTime, Zone};
@@ -87,15 +88,8 @@ pub fn expand(
         }
         Ok(())
     };
-    // Two days past the window on the series' own clock, which no
-    // offset reaches past.
-    let stop = start_zone.local_at(window.until) + Duration::days(2);
-    let all_day = series.start.is_all_day();
     for rule in &rules {
-        let starts = rule
-            .starts(first, all_day, stop)
-            .map_err(Unexpandable::Rule)?;
-        for local in starts {
+        for local in rule.starts(first) {
             if !start_zone.within_until(local, rule.until.as_ref()) {
                 break;
             }
@@ -169,21 +163,18 @@ fn sort_key(at: DateTime<Utc>, start: &EventTime) -> String {
 /// The clock a series runs on: the zone its first start is written in.
 enum Clock {
     Date,
-    Named(chrono_tz::Tz, String),
+    Named(NamedZone, String),
     /// Google's times: a named zone, written with the offset there.
-    GoogleNamed(chrono_tz::Tz, String),
+    GoogleNamed(NamedZone, String),
     Fixed(i32),
     Utc,
     /// Floating, run on the calendar's zone where it has one.
-    Floating(Option<chrono_tz::Tz>),
+    Floating(Option<NamedZone>),
 }
 
 impl Clock {
     fn of(t: &EventTime, calendar_zone: Option<&str>) -> Result<Clock, Unexpandable> {
-        let tz = |n: &str| {
-            n.parse::<chrono_tz::Tz>()
-                .map_err(|_| Unexpandable::Zone(n.to_string()))
-        };
+        let tz = |n: &str| NamedZone::get(n).ok_or_else(|| Unexpandable::Zone(n.to_string()));
         Ok(match t {
             EventTime::Date(_) => Clock::Date,
             EventTime::At { zone, .. } => match zone {
@@ -200,7 +191,7 @@ impl Clock {
                     name: None,
                 } => Clock::Fixed(*offset_seconds),
                 Zone::Utc => Clock::Utc,
-                Zone::Floating => Clock::Floating(calendar_zone.and_then(|z| z.parse().ok())),
+                Zone::Floating => Clock::Floating(calendar_zone.and_then(NamedZone::get)),
             },
         })
     }
@@ -219,7 +210,7 @@ impl Clock {
             Clock::Date => return EventTime::Date(local.date()),
             Clock::Named(_, n) => Zone::Named(n.clone()),
             Clock::GoogleNamed(tz, n) => {
-                let at = resolve(tz, local).fixed_offset();
+                let at = resolve(tz, local);
                 return EventTime::At {
                     local: at.naive_local(),
                     zone: Zone::Fixed {
@@ -265,14 +256,11 @@ impl Clock {
 
 /// A local time in `tz`; one in the spring-forward gap moves past it,
 /// as `EventTime::instant` reads it (RFC 5545 §3.3.5).
-fn resolve(tz: &chrono_tz::Tz, local: NaiveDateTime) -> DateTime<chrono_tz::Tz> {
-    tz.from_local_datetime(&local)
+fn resolve(tz: &NamedZone, local: NaiveDateTime) -> DateTime<FixedOffset> {
+    tz.from_local(&local)
         .earliest()
-        .or_else(|| {
-            tz.from_local_datetime(&(local + Duration::hours(1)))
-                .earliest()
-        })
-        .unwrap_or_else(|| tz.from_utc_datetime(&local))
+        .or_else(|| tz.from_local(&(local + Duration::hours(1))).earliest())
+        .unwrap_or_else(|| local.and_utc().fixed_offset())
 }
 
 /// How long each occurrence lasts. On the series' own clock when the
@@ -324,9 +312,9 @@ impl Length {
                     Zone::Fixed {
                         name: Some(n),
                         offset_seconds,
-                    } => match n.parse::<chrono_tz::Tz>() {
-                        Ok(tz) => Clock::GoogleNamed(tz, n.clone()).time_at(local),
-                        Err(_) => Clock::Fixed(*offset_seconds).time_at(local),
+                    } => match NamedZone::get(n) {
+                        Some(tz) => Clock::GoogleNamed(tz, n.clone()).time_at(local),
+                        None => Clock::Fixed(*offset_seconds).time_at(local),
                     },
                     zone => EventTime::At {
                         local,
@@ -367,7 +355,7 @@ impl Clock {
     fn local_at(&self, at: DateTime<Utc>) -> NaiveDateTime {
         match self {
             Clock::Named(tz, _) | Clock::GoogleNamed(tz, _) | Clock::Floating(Some(tz)) => {
-                at.with_timezone(tz).naive_local()
+                tz.at(&at).naive_local()
             }
             Clock::Fixed(o) => FixedOffset::east_opt(*o)
                 .map_or_else(|| at.naive_utc(), |z| at.with_timezone(&z).naive_local()),
@@ -436,9 +424,10 @@ mod tests {
     fn starts(occ: &[Occurrence], zone: Option<&str>) -> Vec<String> {
         occ.iter()
             .map(|o| {
-                instant_of(&o.start, zone)
+                let at = instant_of(&o.start, zone).unwrap();
+                NamedZone::get(zone.unwrap_or("UTC"))
                     .unwrap()
-                    .with_timezone(&zone.unwrap_or("UTC").parse::<chrono_tz::Tz>().unwrap())
+                    .at(&at)
                     .to_rfc3339()
             })
             .collect()
