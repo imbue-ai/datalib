@@ -161,7 +161,8 @@ pub async fn close_thread_index(pool: &SqlitePool, named: &BTreeSet<String>) -> 
 #[derive(Debug, Clone, Copy)]
 pub enum Keeps<'a> {
     /// The Gmail API: it carries one of these label ids
-    /// (`emails.label_ids`). Its listing is keyed by `gmail_message_id`.
+    /// (`emails.label_ids`). Its listing is keyed by its id as the API
+    /// spells it, without the key's zero padding.
     GmailLabels(&'a [String]),
     /// JMAP: it is filed under one of these mailboxes. Its listing is
     /// keyed by its own id.
@@ -191,7 +192,7 @@ impl Keeps<'_> {
     /// Email `e`'s key in `listed_messages`; NULL where it has none.
     fn listing_key_sql(&self) -> &'static str {
         match self {
-            Keeps::GmailLabels(_) => "e.gmail_message_id",
+            Keeps::GmailLabels(_) => "ltrim(e.id, '0')",
             Keeps::Mailboxes(_) => "e.id",
         }
     }
@@ -200,7 +201,7 @@ impl Keeps<'_> {
     /// answered for yet (a Takeout's) has no `label_ids`.
     fn known_sql(&self) -> &'static str {
         match self {
-            Keeps::GmailLabels(_) => "e.label_ids IS NOT NULL AND e.gmail_message_id IS NOT NULL",
+            Keeps::GmailLabels(_) => "e.label_ids IS NOT NULL",
             Keeps::Mailboxes(_) => "1",
         }
     }
@@ -782,14 +783,12 @@ pub async fn migrate_relist_gmail_scopes(conn: &mut SqliteConnection) -> Result<
     Ok(())
 }
 
-/// Gmail's own ids and labels go on each email the API answered for,
-/// read from what its row already holds; a thread gets a column for how
-/// many messages Gmail has in it, and the thread index its table, which
-/// the next Gmail run fills with one walk of the account.
-pub async fn migrate_gmail_ids_and_thread_counts(conn: &mut SqliteConnection) -> Result<()> {
+/// Gmail's labels go on each email the API answered for, read from what
+/// its row already holds; a thread gets a column for how many messages
+/// Gmail has in it, and the thread index its table, which the next Gmail
+/// run fills with one walk of the account.
+pub async fn migrate_gmail_labels_and_thread_counts(conn: &mut SqliteConnection) -> Result<()> {
     for (table, column, decl) in [
-        ("emails", "gmail_message_id", "TEXT NULL"),
-        ("emails", "gmail_thread_id", "TEXT NULL"),
         ("emails", "label_ids", "TEXT NULL"),
         ("threads", "upstream_email_count", "INTEGER NULL"),
     ] {
@@ -823,16 +822,79 @@ pub async fn migrate_gmail_ids_and_thread_counts(conn: &mut SqliteConnection) ->
         let Some(row) = EmailRow::from_jmap_envelope(&account_id, &envelope) else {
             continue;
         };
-        sqlx::query(
-            "UPDATE emails SET gmail_message_id = ?, gmail_thread_id = ?, label_ids = ?
-             WHERE id = ?",
+        sqlx::query("UPDATE emails SET label_ids = ? WHERE id = ?")
+            .bind(&row.label_ids)
+            .bind(&id)
+            .execute(&mut *conn)
+            .await?;
+    }
+    Ok(())
+}
+
+/// Builds before this rung stored a Gmail thread id in decimal, the way a
+/// Takeout's `X-GM-THRID` spells it, and so kept the API's spelling of
+/// the message and thread ids in columns of their own. Now a thread id is
+/// keyed as a message id is (`envelope::GmailId::key`), and those columns
+/// say nothing `id` and `thread_id` do not. A JMAP store's thread ids are
+/// its server's, and stay. So does a thread id an mbox minted from the
+/// email's own id, which is the email's id and so not a Gmail thread's.
+pub async fn migrate_gmail_thread_ids_to_hex(conn: &mut SqliteConnection) -> Result<()> {
+    for column in ["gmail_message_id", "gmail_thread_id"] {
+        let has: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('emails') WHERE name = ?)",
         )
-        .bind(&row.gmail_message_id)
-        .bind(&row.gmail_thread_id)
-        .bind(&row.label_ids)
-        .bind(&id)
-        .execute(&mut *conn)
+        .bind(column)
+        .fetch_one(&mut *conn)
         .await?;
+        if has {
+            // Audited: the names are the literals above.
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "ALTER TABLE emails DROP COLUMN {column}"
+            )))
+            .execute(&mut *conn)
+            .await?;
+        }
+    }
+    sqlx::query(
+        "UPDATE emails SET payload = jsonb_remove(payload,
+            '$._source.gmailMessageId', '$._source.gmailThreadId')
+         WHERE payload ->> '$._source.via' = ?",
+    )
+    .bind(super::schema_raw::GMAIL_API_VIA)
+    .execute(&mut *conn)
+    .await?;
+
+    let jmap: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sync_scope_state')
+            AND EXISTS(SELECT 1 FROM sync_scope_state WHERE scope LIKE 'jmap:%')",
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    if jmap {
+        return Ok(());
+    }
+    // A decimal is digits that read back as themselves, so neither a
+    // leading zero nor a number past SQLite's integers; every Gmail id is
+    // under 2^63, which `printf`'s `%x` spells in full.
+    for sql in [
+        "UPDATE threads_bookkeeping SET id = printf('%016x', CAST(id AS INTEGER))
+         WHERE id NOT GLOB '*[^0-9]*' AND CAST(CAST(id AS INTEGER) AS TEXT) = id
+           AND EXISTS (SELECT 1 FROM emails e WHERE e.thread_id = threads_bookkeeping.id
+                       AND e.id != e.thread_id)",
+        "UPDATE threads SET id = printf('%016x', CAST(id AS INTEGER)),
+            payload = jsonb_set(payload, '$.id', printf('%016x', CAST(id AS INTEGER)))
+         WHERE id NOT GLOB '*[^0-9]*' AND CAST(CAST(id AS INTEGER) AS TEXT) = id
+           AND EXISTS (SELECT 1 FROM emails e WHERE e.thread_id = threads.id
+                       AND e.id != e.thread_id)",
+        "UPDATE emails SET thread_id = printf('%016x', CAST(thread_id AS INTEGER)),
+            payload = jsonb_set(payload, '$.threadId', printf('%016x', CAST(thread_id AS INTEGER)))
+         WHERE thread_id != id AND thread_id NOT GLOB '*[^0-9]*'
+           AND CAST(CAST(thread_id AS INTEGER) AS TEXT) = thread_id",
+        "UPDATE thread_members SET thread_id = printf('%016x', CAST(thread_id AS INTEGER))
+         WHERE thread_id NOT GLOB '*[^0-9]*'
+           AND CAST(CAST(thread_id AS INTEGER) AS TEXT) = thread_id",
+    ] {
+        sqlx::query(sql).execute(&mut *conn).await?;
     }
     Ok(())
 }
@@ -1057,11 +1119,11 @@ mod tests {
         }
     }
 
-    /// The sixth rung puts Gmail's ids and labels on an email the API
-    /// answered for, read from its payload, and leaves an mbox email's
-    /// columns empty; the thread index is there to be walked.
+    /// The sixth rung puts Gmail's labels on an email the API answered
+    /// for, read from its payload, and leaves an mbox email's empty; the
+    /// thread index is there to be walked.
     #[tokio::test]
-    async fn the_sixth_rung_reads_gmails_ids_and_labels_off_each_email() {
+    async fn the_sixth_rung_reads_gmails_labels_off_each_email() {
         let d = tempfile::tempdir().unwrap();
         let path = d.path().join("g.doltlite_db");
         {
@@ -1069,8 +1131,6 @@ mod tests {
             let ddl: Vec<&str> = ddl.iter().map(String::as_str).collect();
             let pool = dr::open(&path, &ddl).await.unwrap();
             for sql in [
-                "ALTER TABLE emails DROP COLUMN gmail_message_id",
-                "ALTER TABLE emails DROP COLUMN gmail_thread_id",
                 "ALTER TABLE emails DROP COLUMN label_ids",
                 "ALTER TABLE threads DROP COLUMN upstream_email_count",
                 "DROP TABLE thread_members",
@@ -1105,19 +1165,161 @@ mod tests {
         assert_eq!(
             strings(
                 &db,
-                "SELECT id || '=' || coalesce(gmail_message_id, '-') || '/'
-                    || coalesce(gmail_thread_id, '-') || '/' || coalesce(label_ids, '-')
-                 FROM emails ORDER BY id"
+                "SELECT id || '=' || coalesce(label_ids, '-') FROM emails ORDER BY id"
             )
             .await,
             [
-                r#"18c9f2a1b2c3d901=18c9f2a1b2c3d901/18c9f2a1b2c3d901/["INBOX","STARRED","UNREAD"]"#,
-                "picard@enterprise.test=-/-/-",
+                r#"18c9f2a1b2c3d901=["INBOX","STARRED","UNREAD"]"#,
+                "picard@enterprise.test=-",
             ]
         );
         assert!(strings(&db, "SELECT id FROM thread_members")
             .await
             .is_empty());
         db.close().await;
+    }
+
+    /// The seventh rung spells a Gmail thread id in hex, as the API and
+    /// the message ids do, wherever a thread is named (an email, its
+    /// payload, the thread row and its sidecar, the thread index), and
+    /// drops the columns that spelled Gmail's ids a second way. An mbox
+    /// thread named for its one email, and a JMAP store, stay as they are.
+    #[tokio::test]
+    async fn the_seventh_rung_spells_gmail_thread_ids_in_hex() {
+        let d = tempfile::tempdir().unwrap();
+        let open_at_six = |path: std::path::PathBuf, rows: &'static [&'static str]| async move {
+            let ddl = full_ddl();
+            let ddl: Vec<&str> = ddl.iter().map(String::as_str).collect();
+            let pool = dr::open(&path, &ddl).await.unwrap();
+            for sql in [
+                "ALTER TABLE emails ADD COLUMN gmail_message_id TEXT NULL",
+                "ALTER TABLE emails ADD COLUMN gmail_thread_id TEXT NULL",
+                "UPDATE _datalib_meta SET value = '6' WHERE key = 'schema_version'",
+            ]
+            .iter()
+            .chain(rows)
+            {
+                sqlx::query(sqlx::AssertSqlSafe(sql.to_string()))
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+            }
+            dr::commit_run(&pool, "the sixth rung's rows")
+                .await
+                .unwrap();
+            pool.close().await;
+            RawDb::open(&path)
+                .await
+                .expect("the seventh rung carries it")
+        };
+
+        let gmail = open_at_six(
+            d.path().join("g.doltlite_db"),
+            &[
+                // From the API, then from a Takeout, then an mbox email
+                // with no `X-GM-THRID`, whose thread is its own id.
+                "INSERT INTO emails (id, payload, account_id, thread_id, blob_id,
+                    gmail_message_id, gmail_thread_id) VALUES
+                    ('18c9f2a1b2c3d901', jsonb('{\"id\": \"18c9f2a1b2c3d901\",
+                        \"threadId\": \"1786225503531948289\",
+                        \"_source\": {\"via\": \"gmail.googleapis.com\",
+                            \"gmailMessageId\": \"18c9f2a1b2c3d901\",
+                            \"gmailThreadId\": \"18c9f2a1b2c3d901\"}}'),
+                     'g@example.test', '1786225503531948289', 'B1',
+                     '18c9f2a1b2c3d901', '18c9f2a1b2c3d901'),
+                    ('19b8d627a801a2b0', jsonb('{\"id\": \"19b8d627a801a2b0\",
+                        \"threadId\": \"1853466712473707184\"}'),
+                     'g@example.test', '1853466712473707184', 'B2', NULL, NULL),
+                    ('1701', jsonb('{\"id\": \"1701\", \"threadId\": \"1701\"}'),
+                     'g@example.test', '1701', 'B3', NULL, NULL)",
+                "INSERT INTO threads (id, payload, account_id, email_count) VALUES
+                    ('1786225503531948289', jsonb('{\"id\": \"1786225503531948289\"}'),
+                     'g@example.test', 1),
+                    ('1853466712473707184', jsonb('{\"id\": \"1853466712473707184\"}'),
+                     'g@example.test', 1),
+                    ('1701', jsonb('{\"id\": \"1701\"}'), 'g@example.test', 1)",
+                "INSERT INTO threads_bookkeeping (id, attempt_count) VALUES
+                    ('1786225503531948289', 0), ('1701', 0)",
+                // A thread the store holds nothing of.
+                "INSERT INTO thread_members (id, thread_id) VALUES
+                    ('18c9f2a1b2c3d901', '1786225503531948289'),
+                    ('18c9f2a1b2c3d9ff', '1786225503531948543')",
+                "INSERT INTO sync_scope_state (scope, last_seen_at_utc) VALUES
+                    ('gmail:g@example.test:historyId', '7')",
+            ],
+        )
+        .await;
+        assert_eq!(
+            strings(
+                &gmail,
+                "SELECT id || '>' || thread_id || '/' || (payload ->> '$.threadId') || '/'
+                    || coalesce(json(payload -> '$._source'), '-')
+                 FROM emails ORDER BY id"
+            )
+            .await,
+            [
+                "1701>1701/1701/-",
+                r#"18c9f2a1b2c3d901>18c9f2a1b2c3d901/18c9f2a1b2c3d901/{"via":"gmail.googleapis.com"}"#,
+                "19b8d627a801a2b0>19b8d627a801a2b0/19b8d627a801a2b0/-",
+            ]
+        );
+        assert_eq!(
+            strings(
+                &gmail,
+                "SELECT id || '/' || (payload ->> '$.id') FROM threads ORDER BY id"
+            )
+            .await,
+            [
+                "1701/1701",
+                "18c9f2a1b2c3d901/18c9f2a1b2c3d901",
+                "19b8d627a801a2b0/19b8d627a801a2b0"
+            ]
+        );
+        assert_eq!(
+            strings(&gmail, "SELECT id FROM threads_bookkeeping ORDER BY id").await,
+            ["1701", "18c9f2a1b2c3d901"]
+        );
+        assert_eq!(
+            strings(
+                &gmail,
+                "SELECT id || '>' || thread_id FROM thread_members ORDER BY id"
+            )
+            .await,
+            [
+                "18c9f2a1b2c3d901>18c9f2a1b2c3d901",
+                "18c9f2a1b2c3d9ff>18c9f2a1b2c3d9ff"
+            ]
+        );
+        assert!(strings(
+            &gmail,
+            "SELECT name FROM pragma_table_info('emails') WHERE name LIKE 'gmail_%'"
+        )
+        .await
+        .is_empty());
+        gmail.close().await;
+
+        let jmap = open_at_six(
+            d.path().join("j.doltlite_db"),
+            &[
+                "INSERT INTO emails (id, payload, account_id, thread_id, blob_id) VALUES
+                    ('b', jsonb('{\"id\": \"b\", \"threadId\": \"7\"}'), 'A1', '7', 'B1')",
+                "INSERT INTO threads (id, payload, account_id, email_count) VALUES
+                    ('7', jsonb('{\"id\": \"7\"}'), 'A1', 1)",
+                "INSERT INTO thread_members (id, thread_id) VALUES ('b', '7')",
+                "INSERT INTO sync_scope_state (scope, last_seen_at_utc) VALUES
+                    ('jmap:A1:state:Email', 'email-7')",
+            ],
+        )
+        .await;
+        assert_eq!(
+            strings(
+                &jmap,
+                "SELECT e.thread_id || '/' || t.id || '/' || m.thread_id
+                 FROM emails e, threads t, thread_members m"
+            )
+            .await,
+            ["7/7/7"]
+        );
+        jmap.close().await;
     }
 }

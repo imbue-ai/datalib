@@ -15,9 +15,10 @@ use datalib_etl_email_render::render::parse::{open, EmailStore, EmailThreadBucke
 use datalib_etl_email_render::render::render::{render_store, OutlinkFormat, PageEnd};
 use datalib_etl_render::pages::PageSize;
 
-/// `X-GM-THRID` of the fixture's three-message briefing thread: the Gmail
-/// id of its first message, as Gmail assigns it.
-const BRIEFING_THREAD: &str = "1853466712473707184";
+/// The fixture's three-message briefing thread, keyed in hex from the
+/// decimal its `X-GM-THRID` says, `1853466712473707184`: the Gmail id of
+/// its first message, as Gmail assigns it.
+const BRIEFING_THREAD: &str = "19b8d627a801a2b0";
 
 fn thread_uuid(account_id: &str, thread_id: &str) -> String {
     ids::thread("star-trek-mbox", account_id, thread_id).uuid
@@ -457,7 +458,7 @@ async fn star_trek_mbox_renders_through_render_all() {
 
     // Risa promo thread prefers the HTML body — `**jewel of the
     // Alpha Quadrant**` appears in the htmd output.
-    let risa_tuid = thread_uuid("enterprise", "1853553534566507187");
+    let risa_tuid = thread_uuid("enterprise", "19b9251e8001a2b3");
     let risa_md = std::fs::read_to_string(dir_for(&risa_tuid).join("all.md")).unwrap();
     assert!(
         risa_md.contains("jewel of the Alpha Quadrant"),
@@ -468,7 +469,7 @@ async fn star_trek_mbox_renders_through_render_all() {
     // `<img src="cid:…">`: the renderer must rewrite the cid to the part's
     // address. Regression test for the Fastmail case where the inline
     // image is absent from `attachments` but present in the .eml MIME tree.
-    let bridge_tuid = thread_uuid("enterprise", "1853647906406507188");
+    let bridge_tuid = thread_uuid("enterprise", "19b97af32801a2b4");
     let bridge_dir = dir_for(&bridge_tuid);
     let bridge_md = std::fs::read_to_string(bridge_dir.join("all.md")).unwrap();
     assert!(!bridge_dir.join("blobs").exists(), "a blobs/ was written");

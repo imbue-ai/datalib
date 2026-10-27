@@ -919,7 +919,7 @@ fn wanted(filter_label_ids: &[String]) -> BTreeSet<String> {
 fn members(gmail: &[(String, String)]) -> Vec<(String, String)> {
     gmail
         .iter()
-        .map(|(id, thread)| (id.clone(), ingest::normalize_thread_id(thread)))
+        .map(|(id, thread)| (id.clone(), GmailId::key_of_api(thread)))
         .collect()
 }
 
@@ -1126,7 +1126,7 @@ impl MessagesGet<'_> {
                 self.relabeled_from_walks.fetch_add(1, Ordering::Relaxed);
                 GmailMessage {
                     id: id.to_string(),
-                    thread_id: ingest::gmail_thread_id(thread).unwrap_or_else(|| id.to_string()),
+                    thread_id: thread.to_string(),
                     label_ids: membership.get(id).cloned().unwrap_or_default(),
                     history_id: None,
                     internal_date_ms: None,
@@ -1284,7 +1284,7 @@ impl Fetcher<Stored> for MessagesGet<'_> {
 /// How the `emails` row for a Gmail message is keyed: `GmailId`'s key,
 /// the one `ingest::ingest` mints.
 fn email_id_of(gmail_id: &str) -> String {
-    GmailId::from_api(gmail_id).map_or_else(|| gmail_id.to_string(), GmailId::key)
+    GmailId::key_of_api(gmail_id)
 }
 
 /// [`email_id_of`] in SQL: Gmail's hex id, zero-padded to sixteen.
