@@ -49,6 +49,9 @@ table in `src/ingest/labels.rs` is where they are reconciled.
   way for a JMAP `parentId` tree and a flat Gmail label list, so
   `only_extract_labels` / `only_render_labels` mean the same thing in
   every mode.
+- `whole_threads` (on by default) keeps every message of a thread a
+  message the filter keeps is in, in every mode, and each thread counts
+  what upstream has for it (INGEST.md §"Whole threads").
 - The `↗` outlink for Gmail is built from `Message-ID` (`gmail_outlink`
   in the `email_render` crate), which every mode supplies.
 
@@ -241,6 +244,13 @@ same namespacing discipline as the JMAP path's `jmap:` keys. A run:
    the window's mail comes first. The delta follows the whole mailbox,
    so an old message that is relabeled is fetched again whatever its
    age, and Gmail takes no `until`.
+   Under a label filter, one more walk, of the whole account whatever
+   `since` says, records the thread of every message
+   (`thread_members`) without listing any. With `whole_threads` (the
+   default), every member of a thread a kept message is in is then
+   listed too, older than `since` or not, so the start of a
+   conversation that was archived out of the inbox is fetched with the
+   rest (INGEST.md §"Whole threads").
 3. **Fetches what is owed** with `messages.get?format=RAW`, newest id
    first: a listed message not held at its listed `historyId`, and one
    held with no `.eml` stored that now fits under
@@ -257,7 +267,9 @@ same namespacing discipline as the JMAP path's `jmap:` keys. A run:
 
 Labels are reconciled every run, walk or not: `labels.list` is always
 the whole set. Ingest stamps `_source: { via, gmailMessageId,
-gmailThreadId }` into the envelope payload as provenance.
+gmailThreadId }` into the envelope payload as provenance, and the row
+promotes them to `gmail_message_id` and `gmail_thread_id`, with its
+labels as Gmail spells them in `label_ids`.
 
 A thread row is the ids of the emails held for that thread, written in
 the transaction that writes or deletes one of them — so relabeling one
@@ -342,9 +354,11 @@ sampled at random the walks' labels matched `labelIds` from
 `messages.get` exactly, system labels (`UNREAD`, `CATEGORY_*`, `SPAM`,
 `TRASH`) included.
 
-**Threads are grouped, not fetched.** `threads.get` costs 40 units
-against `messages.get`'s 20, and grouping by `threadId` gives the same
-membership for free.
+**Threads are grouped, not fetched.** `threads.get` costs 40 units,
+even with `format=MINIMAL`, against `messages.get`'s 20, and grouping
+by `threadId` gives the same membership for free: `messages.list` and
+`history.list` name each message's thread, which is all whole threads
+and a thread's count need.
 
 ### Starting from a Takeout
 

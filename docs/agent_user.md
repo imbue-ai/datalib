@@ -95,6 +95,10 @@ Top-level keys (`data_root`, `binary_dir`) go above the first `[[…]]`
 header, and a step's `params` sub-tables come after its plain keys — a
 `[…]` header ends the table it appears in.
 
+- **From the CLI alone:** `datalib-dag init <data_root>` writes the
+  starter `config.toml` (the index steps and their applets, no
+  sources) and nothing else; `datalib-step examples <type> --append
+  <data_root>/config.toml` adds a source (below).
 - **Complete commented example:**
   [`configs/dag_example.toml`](../configs/dag_example.toml).
 - **Every source, every option**:
@@ -102,7 +106,8 @@ header, and a step's `params` sub-tables come after its plain keys — a
   — one commented group per way into each source, with its steps and
   every option set, and the index groups reading them all. It is
   generated from the complete stanzas `datalib-step examples <type>`
-  prints, so it is always one that loads. A `config.toml` in the retired
+  prints, so it is always one that loads. A release ships both files
+  beside this guide, at the same paths under its directory. A `config.toml` in the retired
   shape (steps naming a `datalib-step download …` command) is refused;
   rewrite it once with `datalib-migrate-config <data_root> --force`.
 - **Credentials**: web-API sources authenticate through
@@ -148,11 +153,25 @@ were dropped or some step's params would be refused.
 
 `datalib-step examples <type>` prints each source's config stanzas:
 for every way into the source, a minimal one (the least that syncs) and
-a complete one (every option set, each with a comment). Its page also
-says how to give the group an id of your own and which index inputs to
-add it to. `datalib-step help <type> <method>` lists every option with
-its type, default and meaning. Both are read from the source's own
-config crate, and a test loads and plans every stanza.
+a complete one (every option set, each with a comment). With
+`--append <config>` it adds the minimal one to the config instead,
+above the index groups, and puts the source's steps in the `inputs` of
+the index steps that read them (`grid_index`, and the time-series
+index, which it adds when a time-series source is the first). A
+source reached more than one way names the method (`--method gmail`),
+and `--id` gives the group an id of its own, for a second account. It
+refuses an id the config already has, and a result `datalib-dag
+--check` would refuse, writing nothing; the previous file is kept as
+`config.toml.bak`. Its page says how to do the same by hand.
+`datalib-step help <type> <method>` lists every option with its type,
+default and meaning. Both are read from the source's own config crate,
+and a test loads and plans every stanza.
+
+```sh
+datalib-dag init ~/datalib
+datalib-step examples slack --append ~/datalib/config.toml
+datalib-step examples email --append ~/datalib/config.toml --method gmail --id work-mail
+```
 
 Useful flags: `--sync <step-id>` (repeatable; runs the named steps and
 everything downstream of them, and nothing else — pending work in other

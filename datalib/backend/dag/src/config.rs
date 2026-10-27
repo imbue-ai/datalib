@@ -588,7 +588,9 @@ pub fn load_graded(path: &Path) -> Result<(ConfigCheck, PathBuf)> {
     Ok((checked, root))
 }
 
-fn data_root_of(path: &Path, cfg: &DagConfig) -> PathBuf {
+/// Where a config at `path` keeps its data: its `data_root`, else its own
+/// directory.
+pub fn data_root_of(path: &Path, cfg: &DagConfig) -> PathBuf {
     match &cfg.data_root {
         Some(p) => expand_tilde(p),
         None => {

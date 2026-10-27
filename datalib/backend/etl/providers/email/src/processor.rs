@@ -59,6 +59,7 @@ pub fn plan_ingest(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dyn 
             blob_size_limit_bytes,
             latchkey,
             only_extract_labels: config.only_extract_labels.clone(),
+            whole_threads: config.whole_threads(),
         }));
     }
     Ok(procs)
@@ -95,6 +96,9 @@ pub struct EmailIngest {
     /// Full mailbox label paths to limit extraction to (empty = every
     /// mailbox). Applies to both JMAP and mbox modes.
     only_extract_labels: Vec<String>,
+    /// Keep the rest of the thread of a message `only_extract_labels`
+    /// keeps. Every mode.
+    whole_threads: bool,
 }
 
 #[async_trait]
@@ -126,6 +130,7 @@ impl DataProcessor for EmailIngest {
                         account_id: sync.account_id.clone(),
                         full_resync: sync.full_resync,
                         only_mailbox_labels: self.only_extract_labels.clone(),
+                        whole_threads: self.whole_threads,
                         blob_size_limit_bytes: self.blob_size_limit_bytes,
                         blob_download_concurrency: sync.blob_download_concurrency,
                         blob_flush_count: None,
@@ -174,6 +179,7 @@ impl DataProcessor for EmailIngest {
                         takeout: takeout.clone(),
                         cache,
                         only_labels: self.only_extract_labels.clone(),
+                        whole_threads: self.whole_threads,
                         since,
                         blob_size_limit_bytes: self.blob_size_limit_bytes,
                         flush_batch: None,
@@ -223,6 +229,7 @@ impl DataProcessor for EmailIngest {
                             is_personal: account_config.is_personal,
                         },
                         only_labels: self.only_extract_labels.clone(),
+                        whole_threads: self.whole_threads,
                         cache: Some(host_fingerprints().await?),
                         progress: ctx.progress.clone(),
                         control: ctx.control.clone(),

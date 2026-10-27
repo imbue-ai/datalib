@@ -7,7 +7,7 @@ use datalib_etl::blob_cas::blake3_hex;
 
 use super::super::envelope::{self, GmailId, TransportFacts};
 use super::super::labels::{self, LabelMap};
-use super::super::schema_raw::EmailRow;
+use super::super::schema_raw::{EmailRow, GMAIL_API_VIA};
 use super::super::K_ONLY_EXTRACT_LABELS;
 use super::api::{GmailMessage, Label};
 use datalib_etl::download_problems;
@@ -290,7 +290,7 @@ pub fn ingest(account_id: &str, index: &LabelIndex, msg: &GmailMessage) -> Resul
         obj.insert(
             "_source".into(),
             serde_json::json!({
-                "via": "gmail.googleapis.com",
+                "via": GMAIL_API_VIA,
                 "gmailMessageId": msg.id,
                 "gmailThreadId": msg.thread_id,
             }),
