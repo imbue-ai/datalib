@@ -47,7 +47,7 @@ use mail_parser::{Address, MessageParser, MimeHeaders, PartType};
 /// v13: Bcc on the recipients line, and an `@` mention drawn as a chip.
 /// v14: attachments and inline images are linked inside the stored
 ///     `.eml`, and no `blobs/` is written beside the page.
-pub const RENDER_VERSION: u32 = 14;
+pub const RENDER_VERSION: u32 = 15;
 
 /// Which webmail to build each email's `↗` outlink for. Mirrors
 /// `datalib_core::config::EmailOutlink`; the orchestrator maps the
@@ -90,7 +90,7 @@ fn gmail_outlink(message_id: &str) -> Option<String> {
 
 fn fastmail_outlink(mailbox: &str, email_id: &str, thread_id: &str) -> String {
     format!(
-        "https://app.fastmail.com/mail/{}/{email_id}.{thread_id}",
+        "https://app.fastmail.com/mail/{}/{thread_id}.{email_id}",
         percent_encode(mailbox)
     )
 }
@@ -1089,15 +1089,15 @@ mod tests {
     }
 
     #[test]
-    fn fastmail_outlink_is_mailbox_email_thread() {
+    fn fastmail_outlink_is_mailbox_thread_email() {
         assert_eq!(
             fastmail_outlink("Inbox", "Em1", "Th1"),
-            "https://app.fastmail.com/mail/Inbox/Em1.Th1"
+            "https://app.fastmail.com/mail/Inbox/Th1.Em1"
         );
         // mailbox names are path-encoded
         assert_eq!(
             fastmail_outlink("Sent Items", "E", "T"),
-            "https://app.fastmail.com/mail/Sent%20Items/E.T"
+            "https://app.fastmail.com/mail/Sent%20Items/T.E"
         );
     }
 
