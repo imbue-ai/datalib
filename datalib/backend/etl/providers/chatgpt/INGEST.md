@@ -1,8 +1,8 @@
 # ChatGPT: download
 
 The `chatgpt` source mirrors a chatgpt.com account's conversations into
-a raw doltlite store. It has two ingest methods, and an ingest step names
-exactly one:
+a raw doltlite store. It has two ingest methods; an ingest step names
+one, or both (§"An export and the API together"):
 
 | table                     | reads                                         | signs in |
 |---------------------------|-----------------------------------------------|----------|
@@ -46,6 +46,7 @@ authenticate as when more than one is stored for the service
 | `me`                  | account                    | `email`, `name`                                     |
 | `conversations`       | conversation               | `title`, `update_time`                              |
 | `chatgpt_attachments` | (conversation, attachment) | `conversation_id`, `file_id`, `blake3`              |
+| `ingested_files`      | file of the export, as last read whole | `scope`, `rel_path`, `blake3` (`file_checkpoint`) |
 
 `payload` is the endpoint's JSON response, stored as JSONB, with two
 changes, both because an unchanged conversation has to serialize
@@ -123,7 +124,7 @@ request and requires the store an uninterrupted run leaves.
    detail-fetched (`out_of_scope` in the summary), but rows already
    stored stay — moving `since` further back later lists the newly in
    scope ones as owed. Each is `/backend-api/conversation/{id}`,
-   stored with its edges, 25 to a transaction, sealed as they land.
+   stored with its edges, one to a transaction, sealed as they land.
 5. **Attachments owed**, from the edges the store lists (below).
 
 `conv_uuids` replaces steps 2–4 with exactly the named conversations
@@ -133,12 +134,29 @@ fetched every run since nothing lists them; nothing is pruned.
 ### The version is the update time in whole seconds
 
 The listing endpoint reports `update_time` as an ISO-8601 string; the
-detail endpoint reports the same instant as a Unix-epoch float, and
-that is what the row stores (JSON-encoded, `1710959331.420159`). The
-two never match as text, so the version a conversation is listed and
-held at is `update_time` reduced to whole seconds (`version_of`). One
-that will not parse is kept as written. `since` is compared at the
-same grain.
+detail endpoint reports it as a Unix-epoch float, and that is what the
+row stores (JSON-encoded, `1710959331.420159`). The two never match as
+text, so the version a conversation is listed and held at is
+`update_time` reduced to whole seconds (`version_of`). One that will
+not parse is kept as written. `since` is compared at the same grain.
+
+### The listing can trail the detail
+
+For most conversations the two name the same instant. For some the
+listing's is earlier: it is about the time of the newest message,
+while the detail's moves on with a later write, such as the title
+ChatGPT names a new chat with seconds after its first answer.
+Measured on a real account of 582 conversations, 99 were listed
+between one second and about two days before their detail's
+`update_time`, and none after it.
+
+So a conversation counts as up to date when it is held at the version
+listed *or later*, the two compared as whole seconds
+(`owed_missing_first`). A listing run holds a conversation at the
+version listed; one held from its detail (`conv_uuids`, an export) is
+held at the detail's, and an exact match would fetch every one of the
+lagging ones again for nothing. A conversation that changes gets a new
+message, which moves the listing's time past anything held before.
 
 ### Attachments
 
@@ -225,16 +243,15 @@ The root is the folder holding the shallowest `export_manifest.json`
 `conversations.json`; so a zip of the unzipped folder reads too
 ([`src/ingest/export_archive.rs`](src/ingest/export_archive.rs)). The
 ingest ([`src/ingest/export.rs`](src/ingest/export.rs)) writes the rows
-the API walk writes and holds them at the versions the API would list
-them at, and makes no request, so no rate limit applies:
+the API walk writes, and makes no request, so no rate limit applies:
 
 - **Conversations.** Every part the manifest lists is read; a listed
   part the export lacks fails the run, since read as a smaller export
   it would prune what that part holds. Each conversation is stored as a
   detail fetch would be (`parse_conversation`, volatile fields and all)
-  and held at its `update_time` in whole seconds. One the store already
-  holds at that version is not written again, so reading an unchanged
-  export commits nothing.
+  and held at its `update_time` in whole seconds: the detail's, which
+  the listing can trail (above). One the store already holds at that
+  version is not written again.
 - **What an export leaves out.** Its conversations carry the user's and
   the assistant's messages and nothing else: no tool messages (code
   output, a file read, a generated image's step), no system prompt, and
@@ -254,7 +271,8 @@ them at, and makes no request, so no rate limit applies:
   in an older export) anywhere under the root; the name and MIME type
   render shows come from the message, as for the API. A file the export
   does not have stays owed, counted in one `phase:attachments` row: an
-  `api` run fetches it. A generated file (an image, a diff) is in the
+  `api` run fetches it (beside `api`, no row: the API run that follows
+  does). A generated file (an image, a diff) is in the
   export with a `library_files.json` row, but the tool message that
   named it is not, so nothing names it and it is not stored.
 - **Deletions.** The export is a complete snapshot, so a stored
@@ -263,24 +281,70 @@ them at, and makes no request, so no rate limit applies:
   a shape this reader does not know, not an empty account: they delete
   nothing and are a `phase:conversations.json` row.
 
-Every run reads the whole export again; only what changed is written.
+**An export unchanged since it was last read is not read again.**
+`fsscan` fingerprints the zip, or every file of the folder, and the
+`ingested_files` table (`file_checkpoint`, scope `chatgpt:export`)
+holds what they were when the last read finished; a run that finds them
+the same is skipped (`export unchanged since it was last read`). The
+stamp is written only after the whole export, attachments included, is
+read, so a run cut off partway reads it all again. The same bytes
+downloaded again are no change.
 
-### Seeding from an export, then keeping it fresh with the API
+A source that only ever reads exports takes a newer one by pointing
+`path` at it. Never turn an `api` step into an `export`-only one: the
+export's prune deletes every conversation made after it was taken. Put
+the export beside `api` instead (next).
 
-The way past the API's rate limit on a large account: ingest an export
-first, then swap the ingest step's `export` table for `api`. Both write
-the same rows at the same versions, so the first API run owes only the
-conversations that moved since the export was taken, and no attachment
-the export held (`tests/chatgpt_tests/export_then_api.rs`). Identity
-survives the swap: render mints a conversation's uuid from its
-ChatGPT id under the group id, and neither changes.
+### An export and the API together
 
-The swap is one-way. Read an export into a store the API has since
-filled, and its prune deletes every conversation made after the
-export was taken; the step refuses a config naming both tables for
-that reason. A source that only ever reads exports takes a newer one
-by pointing `path` at it; to read one into a store the API has been
-filling, start a new source from it.
+The way past the API's rate limit on a large account: an ingest step
+that names both tables seeds the store from the export, then runs the
+API download over it (`plan_ingest`, in that order).
+
+```toml
+[steps.params.api]
+[steps.params.export]
+path = "~/Downloads/chatgpt-export.zip"
+```
+
+1. **The export fills gaps** (`Reading::FillGaps`). It writes the
+   conversations the store has never held, and only those: one the
+   store holds stays as it was stored, whichever is newer, because the
+   API copy carries tool steps the export's lacks and the API decides
+   what is current. It deletes nothing. Its files land as above. Like
+   any export read, it is skipped while the export is unchanged, so on
+   most syncs this phase costs a fingerprint check.
+2. **The API runs as it does alone** (§"One run"), and finds every
+   conversation the export wrote already held: it is held at the
+   detail's time, which is at or after the listed one (§"The listing
+   can trail the detail"). It fetches what moved since the export was
+   taken, and takes an owed file's bytes from the export's
+   `file_<id>.dat` before asking `/backend-api/files/{id}/download`
+   (`blobs_from_export` in its summary): a conversation fetched live
+   can name a file only its tool messages show. An export of another
+   account than `/me` fails the run.
+
+What follows from the order:
+
+- **`since` scopes only the API.** The export seeds every conversation
+  it holds; the API keeps those updated since `since` fresh.
+- **Only a complete listing deletes**, in the API phase. A conversation
+  deleted on chatgpt.com goes, and stays gone while the export is
+  unchanged. A *changed* export that still holds it (an older one, or
+  one taken before the deletion) writes it again, and the next
+  complete listing deletes it again; with `since` set no listing is
+  complete, and it stays until one is.
+- **A conversation stored from the export lacks its tool steps** until
+  it next changes and the API fetches it whole.
+
+So the first sync fetches only the conversations that moved since the
+export was taken, and no file the export holds, and later ones do not
+read the export at all (`tests/chatgpt_tests/export_then_api.rs`).
+Identity is the same either way: render mints a conversation's uuid
+from its ChatGPT id under the group id. A store already filled by an
+`export`-only step takes an `api` table beside it the same way, and
+from then on only the listing prunes; swapping `export` for `api`
+works too.
 
 ## Auth + Cloudflare
 
@@ -435,10 +499,15 @@ data export in the real one's shape (`export_manifest.json`, two
 `conversations-NNN.json` parts, `file_<id>.dat`, `library_files.json`,
 tool and system messages left out), the Bazel `tng_export_fixture`.
 `export_then_api` zips it and reads the zip: an API run over the
-store it seeds fetches only what moved, and its pages hold every
-message the API's do but the tool steps. The export reader's own cases
-(a shrinking export, a file it lacks, another account's export, an
-unchanged one read again) are unit tests in `src/ingest/export.rs`, and
+store it seeds, or one step naming both, fetches only what moved and no
+file the export holds, and the next sync does not read the export; with
+`since`, the export still seeds everything; a conversation the listing
+drops stays gone though the export has it; and the export's pages hold
+every message the API's do but the tool steps. The export reader's own
+cases (a shrinking export, a file it lacks, another account's export,
+an unchanged one not read again, gaps filled beside `api`) are unit
+tests in `src/ingest/export.rs`, `plan_ingest`'s order is in
+`src/processor.rs`, and
 the zip and folder layouts are in `src/ingest/export_archive.rs`.
 
 The `live` module downloads one real conversation and snapshots it.

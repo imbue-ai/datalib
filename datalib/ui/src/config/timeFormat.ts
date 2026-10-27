@@ -7,67 +7,46 @@
 // an absolute one makes you do arithmetic for; the exact instant is the
 // occasional need, so it gets the gesture.
 
-/// The absolute form, in the viewer's own locale, on a 24-hour clock.
-const STAMP_FMT = new Intl.DateTimeFormat(undefined, {
-  year: "numeric",
-  month: "short",
-  day: "numeric",
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit",
-  hourCycle: "h23",
-});
+import { formatAt, parseInstant, timeView, wallClock } from "./timeView";
 
-/// Render an exact stamp. Returns the input unchanged when it isn't a
-/// date we can parse — a stamp we can't read is still worth showing
-/// verbatim rather than replacing with a shrug.
-export function formatStamp(iso: string | null): string {
+/// The absolute form, `Apr 15, 2026, 12:05:33`, in the zone and format
+/// the status bar's clock sets (`timeView.ts`).
+///
+/// Returns the input unchanged when it isn't a date we can parse — a
+/// stamp we can't read is still worth showing verbatim rather than
+/// replacing with a shrug.
+export function formatStamp(iso: string | null, view = timeView.value): string {
   if (!iso) return "—";
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? iso : STAMP_FMT.format(d);
+  const at = parseInstant(iso);
+  return at ? formatAt(at, view, { day: "medium", clock: true, seconds: true }) : iso;
 }
 
 /// The day and the minute, `Sun, Sep 28 @ 08:59`, for a picker that
 /// lists many stamps under one relative label: "3 days ago" six times
 /// over tells the entries apart only with this beside it.
-const SHORT_DAY_FMT = new Intl.DateTimeFormat(undefined, {
-  weekday: "short",
-  month: "short",
-  day: "numeric",
-});
-const SHORT_TIME_FMT = new Intl.DateTimeFormat(undefined, {
-  hour: "2-digit",
-  minute: "2-digit",
-  hourCycle: "h23",
-});
-
-export function formatShortStamp(iso: string | null): string {
+export function formatShortStamp(iso: string | null, view = timeView.value): string {
   if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return `${SHORT_DAY_FMT.format(d)} @ ${SHORT_TIME_FMT.format(d)}`;
+  const at = parseInstant(iso);
+  if (!at) return iso;
+  return `${formatAt(at, view, { day: "noYear" })} @ ${formatAt(at, view, { clock: true })}`;
 }
 
 /// The whole stamp to the millisecond, `2026-09-22 14:07:47.190`, in the
-/// viewer's own zone: a step's own tracing lines are stamped in UTC and
-/// the runner's in local time, and showing the digits as written would
-/// interleave two clocks. Digits and separators only,
-/// so it sorts as text and a column can clip it from the left down to
-/// the time of day.
-export function formatDateTime(iso: string | null): string {
+/// view's zone: a step's own tracing lines are stamped in UTC and the
+/// runner's in local time, and showing the digits as written would
+/// interleave two clocks. Digits and separators only, on a 24-hour clock
+/// whatever the view's, so it sorts as text and a column can clip it from
+/// the left down to the time of day.
+export function formatDateTime(iso: string | null, view = timeView.value): string {
   if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${timeOfDay(d)}`;
+  const at = parseInstant(iso);
+  if (!at) return iso;
+  const w = wallClock(at, view.zone);
+  const ms = String(((at.ms % 1000) + 1000) % 1000).padStart(3, "0");
+  return `${w.year}-${p2(w.month)}-${p2(w.day)} ${p2(w.hour)}:${p2(w.minute)}:${p2(w.second)}.${ms}`;
 }
 
 const p2 = (n: number) => String(n).padStart(2, "0");
-
-function timeOfDay(d: Date): string {
-  return `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}.${String(
-    d.getMilliseconds(),
-  ).padStart(3, "0")}`;
-}
 
 /// Order two stamps by the instant they name.
 ///
@@ -150,18 +129,11 @@ export function formatRelative(iso: string | null, now: number): string {
   return "seconds ago";
 }
 
-const CLOCK_FMT = new Intl.DateTimeFormat(undefined, {
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit",
-  hourCycle: "h23",
-});
-
 /// The time of day to the second, `09:38:33`, for an axis over one run:
 /// a run is minutes long far more often than it crosses a midnight.
-export function formatClock(ms: number): string {
-  const d = new Date(ms);
-  return Number.isNaN(d.getTime()) ? "" : CLOCK_FMT.format(d);
+export function formatClock(ms: number, view = timeView.value): string {
+  if (Number.isNaN(new Date(ms).getTime())) return "";
+  return formatAt({ ms, offsetMin: null }, view, { clock: true, seconds: true });
 }
 
 /// A span of seconds the way an estimate reads: `52 sec`, `25 min`,

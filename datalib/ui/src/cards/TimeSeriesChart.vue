@@ -8,6 +8,7 @@
 // chart shares is `plot/`.
 import { computed, ref, watch } from "vue";
 import uPlot from "uplot";
+import { timeView } from "@/config/timeView";
 import {
   columnsOf,
   displayUnit,
@@ -249,6 +250,8 @@ const { plot, resetZoom } = usePlot(box, {
     JSON.stringify([
       drawn.value.map((d) => [d.listed.time_series_id, props.colorOf(d.listed.time_series_id)]),
       quantities.value,
+      // The time axis is labelled in the clock's zone.
+      timeView.value,
     ]),
   data,
   options,

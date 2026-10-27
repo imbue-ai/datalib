@@ -47,6 +47,8 @@ import {
   people,
 } from "@/cards/contacts";
 import { dateCell } from "@/cards/dates";
+import { timeView, type TimeView } from "@/config/timeView";
+import { watch } from "vue";
 import { entities, entityCell } from "@/cards/entities";
 import { fieldChipMenu, toggleNegate, type FieldMenuId } from "./chipMenu";
 import {
@@ -232,11 +234,14 @@ class DateWidget extends WidgetType {
   constructor(
     readonly value: string,
     readonly selected: boolean,
+    readonly view: TimeView,
   ) {
     super();
   }
   eq(other: DateWidget): boolean {
-    return other.value === this.value && other.selected === this.selected;
+    return (
+      other.value === this.value && other.selected === this.selected && other.view === this.view
+    );
   }
   toDOM(view: EditorView): HTMLElement {
     const el = dateCell(this.value);
@@ -264,10 +269,9 @@ function chipDecorations(state: EditorState): DecorationSet {
   const dateRanges = dateWords(query, keys)
     .filter(shown)
     .map((word) =>
-      Decoration.replace({ widget: new DateWidget(word.value, selected(word)) }).range(
-        word.valueFrom,
-        word.to,
-      ),
+      Decoration.replace({
+        widget: new DateWidget(word.value, selected(word), timeView.value),
+      }).range(word.valueFrom, word.to),
     );
   return Decoration.set([...chipRanges, ...dateRanges], true);
 }
@@ -292,6 +296,7 @@ const chips = ViewPlugin.fromClass(
         entities.subscribe(answered),
         people.subscribe(answered),
         contactsById.subscribe(answered),
+        watch(timeView, () => view.dispatch({ effects: redraw.of(null) })),
       ];
     }
     update(u: ViewUpdate) {

@@ -13,6 +13,7 @@ import {
   buildGroup,
   buildSource,
   buildStep,
+  chosenAnswer,
   describeGroup,
   fieldIsActive,
   listGroups,
@@ -36,7 +37,7 @@ import {
   unwireFromFanIns,
   wireIntoFanIns,
 } from "../src/config/sourceSteps";
-import { CATALOG, catalogFor } from "../src/config/catalog";
+import { CATALOG, catalogFor, catalogForStep } from "../src/config/catalog";
 
 const SLACK = catalogFor("slack")!;
 const CLAUDE = catalogFor("claude")!;
@@ -989,7 +990,12 @@ describe("the ChatGPT descriptor", () => {
       },
     });
     const targets = (CHATGPT.fields ?? []).map((f) => f.target);
-    expect(targets).toEqual(["latchkey_settings.account", "api.since", "api.conv_uuids"]);
+    expect(targets).toEqual([
+      "latchkey_settings.account",
+      "export.path",
+      "api.since",
+      "api.conv_uuids",
+    ]);
   });
 
   it("writes an api table even with nothing filled in", () => {
@@ -1010,6 +1016,47 @@ describe("the ChatGPT descriptor", () => {
     });
     const [ingest] = listSteps(stepsBody);
     expect(paramsAreRepresentable(ingest, CHATGPT)).toEqual({ ok: true });
+  });
+
+  /// An export beside the API is how a large account is copied without
+  /// the rate limit, so it is on the API form: answered, it writes an
+  /// `export` table beside `api`, and the form reopens on that answer.
+  it("writes an export beside the api, and reopens on that answer", () => {
+    const values = seedFieldValues(CHATGPT);
+    values["export.path"] = "~/Downloads/chatgpt-export.zip";
+    expect(paramsObject(CHATGPT, values, "download")).toEqual({
+      api: {},
+      export: { path: "~/Downloads/chatgpt-export.zip" },
+    });
+    const { stepsBody } = buildSource({
+      entry: CHATGPT,
+      group: "chatgpt",
+      name: "",
+      values,
+      withGroup: false,
+    });
+    const [ingest] = listSteps(stepsBody);
+    expect(paramsAreRepresentable(ingest, CHATGPT)).toEqual({ ok: true });
+
+    const section = CHATGPT.sections!.find((s) => s.heading === "Start from an export?")!;
+    const answers = section.answers!.map((answer) => ({
+      answer,
+      fields: (answer.fields ?? []).map((t) => CHATGPT.fields!.find((f) => f.target === t)!),
+    }));
+    expect(chosenAnswer(answers, values)).toBe(1);
+    expect(chosenAnswer(answers, seedFieldValues(CHATGPT))).toBe(0);
+  });
+
+  /// A source with both tables is the API seeded from an export, not an
+  /// export source: it was labelled "ChatGPT (export)" and opened the
+  /// export-only form, which could not show its `api` settings.
+  it("is the entry for a step with both tables", () => {
+    const both = { api: { since: "2026-05-01" }, export: { path: "x.zip" } };
+    expect(catalogForStep("chatgpt", both)?.label).toBe("ChatGPT");
+    expect(catalogForStep("chatgpt", { api: {} })?.label).toBe("ChatGPT");
+    expect(catalogForStep("chatgpt", { export: { path: "x.zip" } })?.label).toBe(
+      "ChatGPT (export)",
+    );
   });
 });
 

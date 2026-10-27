@@ -29,9 +29,10 @@ pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
 ];
 
 /// Two ways in, one raw store: `api` walks chatgpt.com, `export` reads
-/// an unpacked data export off disk. Exactly one is set; an `ingest` step
-/// with neither is refused (`IngestMethods` below), and one with both by
-/// [`ChatgptConfig::validate`].
+/// a data export off disk. An `ingest` step with neither is refused
+/// (`IngestMethods` below). With both, the export fills in what the store
+/// has never held, then the API run decides the rest, and only its
+/// listing prunes.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ChatgptConfig {
@@ -46,8 +47,10 @@ pub struct ChatgptConfig {
     #[serde(default)]
     pub api: Option<ChatgptApiSync>,
     /// A ChatGPT data export: the `.zip` as it downloaded, or the folder
-    /// it was unzipped into. Ingested as a whole snapshot: what the
-    /// export no longer has is pruned from the store.
+    /// it was unzipped into. Alone, it is ingested as a whole snapshot:
+    /// what the export no longer has is pruned from the store. Beside
+    /// `api`, it seeds what the store has never held and prunes nothing.
+    /// Either way it is read again only once its bytes change.
     #[serde(default)]
     pub export: Option<LocalPath>,
 }
@@ -57,13 +60,9 @@ impl ChatgptConfig {
         self.latchkey_settings
             .validate()
             .map_err(anyhow::Error::msg)?;
-        if self.api.is_some() && self.export.is_some() {
-            anyhow::bail!(
-                "chatgpt sets both `api` and `export` — pick one. To seed a store from an \
-                 export and then keep it fresh from the API, see the provider's INGEST.md."
-            );
-        }
         if let Some(api) = &self.api {
+            datalib_time::TimeWindow::check("api", api.since.as_deref(), None)
+                .map_err(anyhow::Error::msg)?;
             not_negative("api.max_pages", api.max_pages).map_err(anyhow::Error::msg)?;
             not_negative("api.limit", api.limit).map_err(anyhow::Error::msg)?;
             if let Some(s) = api.sleep_between {
@@ -80,11 +79,12 @@ impl ChatgptConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ChatgptApiSync {
-    /// Only sync conversations whose `update_time` is at or after this
-    /// instant (RFC 3339 or `YYYY-MM-DD`, assumed UTC). Older
-    /// conversations are never detail-fetched, and the listing walk
-    /// stops early once it pages past the cutoff (the listing is
-    /// newest-updated-first). Moving the date further back later
+    /// Only sync conversations whose `update_time` is at or after this:
+    /// a day (`YYYY-MM-DD`, the run's own midnight), an RFC 3339 instant, or an
+    /// offset from the run's start (`-30d`). Older conversations are
+    /// never detail-fetched, and the listing walk stops early once it
+    /// pages past the cutoff (the listing is newest-updated-first). One
+    /// already mirrored stays. Moving the start further back later
     /// backfills on the next run. Unset syncs everything.
     #[serde(default)]
     pub since: Option<String>,
@@ -154,15 +154,14 @@ mod tests {
         }
     }
 
-    /// One store, two ways to fill it, and a config that names both
-    /// would run a live download and then prune it to the export's
-    /// snapshot. Refused at validate, with the alternative named.
+    /// An export beside `api` seeds what the API keeps fresh, so a step
+    /// may name both.
     #[test]
-    fn api_and_export_together_are_refused() {
+    fn api_and_export_together_are_one_step() {
         let c: ChatgptConfig =
             toml::from_str("api = {}\n[export]\npath = \"~/chatgpt-export\"\n").unwrap();
-        let err = c.validate().unwrap_err().to_string();
-        assert!(err.contains("both"), "{err}");
+        c.validate().unwrap();
+        assert!(c.api.is_some() && c.export.is_some());
         let export_only: ChatgptConfig =
             toml::from_str("[export]\npath = \"~/chatgpt-export\"\n").unwrap();
         export_only.validate().unwrap();
@@ -187,5 +186,22 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("api.limit"));
+    }
+
+    /// `api.since` takes the shared window grammar, and a typo is
+    /// refused at load with the key named; `until` is not a key here.
+    #[test]
+    fn since_takes_the_window_grammar() {
+        let load = |since: &str| {
+            toml::from_str::<ChatgptConfig>(&format!("[api]\nsince = {since:?}\n"))
+                .unwrap()
+                .validate()
+        };
+        for ok in ["2024-03-20", "2024-03-20T18:28:51+02:00", "-30d"] {
+            load(ok).unwrap_or_else(|e| panic!("{ok}: {e}"));
+        }
+        let err = load("last month").unwrap_err().to_string();
+        assert!(err.contains("`api.since`"), "{err}");
+        assert!(toml::from_str::<ChatgptConfig>("[api]\nuntil = \"+1d\"\n").is_err());
     }
 }

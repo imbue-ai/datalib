@@ -43,6 +43,7 @@ import {
   type ChipHost,
 } from "./chipActions";
 import { decorateDates, rewriteDatesForCopy } from "./dates";
+import { timeView } from "@/config/timeView";
 import { decorateEntities, entities } from "./entities";
 import HandlePopover from "./HandlePopover.ce.vue";
 import { renderDocument } from "./renderDocument";
@@ -561,6 +562,10 @@ watch(
 watch(html, async () => {
   await nextTick();
   paint();
+});
+// The clock's zone or format changed: the same dates, read anew.
+watch(timeView, () => {
+  if (body.value) decorateDates(body.value);
 });
 watch(
   () => props.selectedSectionUuid,

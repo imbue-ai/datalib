@@ -22,8 +22,9 @@ maximum_sequential_failed_requests = 50        # the default
 account = "enterprise"
 
 [steps.params.api]
-since = "2025-01-01"                  # only conversations updated on or after this (YYYY-MM-DD
-                                      # or RFC 3339); move it back to backfill; unset is all
+since = "2025-01-01"                  # only conversations updated on or after this (a day,
+                                      # RFC 3339, or "-30d" from the sync); move it back to
+                                      # backfill; unset is all
 refresh_most_recent_n_chat_count = 3  # fetch the 3 most recently updated conversations
                                       # again every run; unset fetches only what changed
 conv_uuids = [                        # only these conversations, by id or pasted link;

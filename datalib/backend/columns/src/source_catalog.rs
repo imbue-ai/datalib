@@ -25,7 +25,7 @@ const CATALOG: &[Entry] = &[
     e("claude", Some("api"), "Claude", Some("claude")),
     e("claude", Some("export"), "Claude (export)", Some("claude")),
     e("claude_code", None, "Claude Code", Some("claude_code")),
-    e("chatgpt", None, "ChatGPT", Some("chatgpt")),
+    e("chatgpt", Some("api"), "ChatGPT", Some("chatgpt")),
     e(
         "chatgpt",
         Some("export"),
@@ -187,6 +187,12 @@ mod tests {
             "Claude (export)"
         );
         assert_eq!(source_type("chatgpt", &json!({"api": {}})).label, "ChatGPT");
+        // The API seeded from an export is the API source, not the export.
+        assert_eq!(
+            source_type("chatgpt", &json!({"api": {}, "export": {"path": "x"}})).label,
+            "ChatGPT"
+        );
+        assert_eq!(source_type("chatgpt", &json!({})).label, "ChatGPT");
         assert_eq!(
             source_type("chatgpt", &json!({"export": {"path": "x"}})).label,
             "ChatGPT (export)"

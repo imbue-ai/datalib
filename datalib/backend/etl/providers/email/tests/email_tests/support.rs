@@ -145,6 +145,18 @@ pub fn put_gmail_response(playback: &Path, url: &str, response: &HttpResponse) {
     .expect("write fixture");
 }
 
+/// `history.list` from `start` answering as Google does once the cursor
+/// is older than it keeps history for.
+pub fn put_gmail_history_expired(playback: &Path, start: &str) {
+    let expired = HttpResponse {
+        status: 404,
+        headers: Default::default(),
+        body: b"{}".to_vec(),
+        duration_ms: 0,
+    };
+    put_gmail_response(playback, &gmail_history_url(start), &expired);
+}
+
 /// `t@example.test`'s profile at `history_id`, and its `labels`.
 pub fn put_gmail_account(playback: &Path, history_id: &str, labels: Value) {
     put_gmail(
@@ -179,6 +191,20 @@ pub fn gmail_list_url(label_ids: &[&str]) -> String {
 
 pub fn gmail_get_url(id: &str) -> String {
     format!("{GMAIL}/messages/{id}?format=RAW")
+}
+
+/// The walk of every message in the account, as one page: each of
+/// `messages` (`messages.get` answers) with its thread.
+pub fn put_gmail_all_mail(playback: &Path, messages: &[Value]) {
+    let listed: Vec<Value> = messages
+        .iter()
+        .map(|m| json!({ "id": m["id"], "threadId": m["threadId"] }))
+        .collect();
+    put_gmail(
+        playback,
+        &gmail_list_url(&[]),
+        &json!({ "messages": listed }),
+    );
 }
 
 /// One `messages.get` answer: a plain message under `label_ids`, its own

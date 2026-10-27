@@ -10,8 +10,8 @@ use datalib_etl_email::ingest::{FetchOptions, FetchSummary, RawDb};
 use crate::jmap_tape::{mailbox_get_args, query_args, status, Account, Tape, HOST};
 use crate::support::Mirror;
 
-/// A full re-list whose `Mailbox/get` fails keeps the mailboxes an
-/// earlier run stored and still mirrors the mail.
+/// A re-list whose `Mailbox/get` fails keeps the mailboxes an earlier
+/// run stored and still mirrors the mail.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_mailbox_listing_that_fails_is_a_row_and_the_run_goes_on() {
     let m = Mirror::new();
@@ -19,7 +19,7 @@ async fn a_mailbox_listing_that_fails_is_a_row_and_the_run_goes_on() {
     tape.serve(&Account::new(&[("MB1", "Inbox")], &[("M1", &["MB1"])]));
     run(&m, |_| {}).await.expect("first run");
 
-    tape.serve(&Account::new(
+    tape.serve_aged_out(&Account::new(
         &[("MB1", "Inbox")],
         &[("M1", &["MB1"]), ("M2", &["MB1"])],
     ));
@@ -31,7 +31,7 @@ async fn a_mailbox_listing_that_fails_is_a_row_and_the_run_goes_on() {
     assert_eq!(problems(&m).await, [row("listing:Mailbox/get", "error")]);
     assert_eq!(mailboxes(&m).await, ["MB1"]);
 
-    tape.serve(&Account::new(
+    tape.serve_aged_out(&Account::new(
         &[("MB1", "Inbox")],
         &[("M1", &["MB1"]), ("M2", &["MB1"])],
     ));
@@ -55,6 +55,10 @@ async fn an_email_listing_that_fails_deletes_nothing() {
     ));
     run(&m, |_| {}).await.expect("first run");
 
+    tape.serve_aged_out(&Account::new(
+        &[("MB1", "Inbox")],
+        &[("M1", &["MB1"]), ("M2", &["MB1"])],
+    ));
     tape.refuse("Email/query", query_args(0, &[]), 400);
     run(&m, |_| {})
         .await
@@ -168,7 +172,6 @@ async fn bodies_are_written_and_sealed_as_they_land() {
     m.run_sealing(|db, sealer| {
         let mut opts = FetchOptions::new(db);
         opts.hostname = HOST.to_string();
-        opts.full_resync = true;
         opts.sealer = Some(sealer);
         opts.blob_download_concurrency = Some(1);
         opts.blob_flush_count = Some(1);
@@ -244,7 +247,9 @@ async fn an_oversize_eml_is_a_skip_not_a_failure() {
 async fn an_unmatched_label_row_goes_when_the_filter_does() {
     let m = Mirror::new();
     let tape = Tape::new(&m.playback);
-    tape.serve(&Account::new(&[("MB1", "Inbox")], &[("M1", &["MB1"])]));
+    let a = Account::new(&[("MB1", "Inbox")], &[("M1", &["MB1"])]);
+    tape.serve(&a);
+    tape.index(&a);
     run(&m, |o| o.only_mailbox_labels = vec!["Starbase".into()])
         .await
         .expect("first run");
@@ -259,13 +264,11 @@ async fn an_unmatched_label_row_goes_when_the_filter_does() {
 
 // ── helpers ─────────────────────────────────────────────────────────
 
-/// A full re-list, as the tests above mostly want, unless `tweak` says
-/// otherwise.
+/// A run of the download, as `tweak` sets it up.
 async fn run(m: &Mirror, tweak: impl FnOnce(&mut FetchOptions)) -> anyhow::Result<FetchSummary> {
     m.run(|db| {
         let mut opts = FetchOptions::new(db);
         opts.hostname = HOST.to_string();
-        opts.full_resync = true;
         tweak(&mut opts);
         datalib_etl_email::ingest::fetch(opts)
     })

@@ -19,7 +19,7 @@ use serde_json::json;
 
 use crate::support::{
     gmail_get_url, gmail_list_url, gmail_message, inbox_label, put_gmail, put_gmail_account,
-    Mirror, Recorder,
+    put_gmail_history_expired, Mirror, Recorder,
 };
 
 const IDS: [&str; 3] = ["18c9f2a1b2c3d401", "18c9f2a1b2c3d402", "18c9f2a1b2c3d403"];
@@ -69,11 +69,11 @@ async fn a_walk_that_fetches_nothing_leaves_nothing_queued() {
         .await
         .expect("first gmail fetch");
 
+    put_gmail_history_expired(&m.playback, "1000");
     let recorder = Recorder::default();
     let summary = m
         .run(|db| {
             let mut opts = FetchOptions::new(db);
-            opts.config.full_resync = true;
             opts.progress = Progress::new(Arc::new(recorder.clone()));
             gmail_api::fetch(opts)
         })

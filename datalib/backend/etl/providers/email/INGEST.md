@@ -49,8 +49,8 @@ bazelisk run //datalib/backend/etl/providers/email:jmap_ingest -- \
 The store is `<out>/entities.doltlite_db`. Subsequent runs are
 incremental — the state token from `Email/changes` is persisted
 per-account in `sync_scope_state`, so only created / updated /
-destroyed emails since the last run get touched. `--full-resync` lists
-the account again and fetches every email again.
+destroyed emails since the last run get touched. To list and fetch the
+account again from nothing, reset the step (`datalib-dag --reset`).
 
 To restrict to specific mailboxes, name them by their full label path
 (`Work/Projects`), the way `only_extract_labels` does in a config:
@@ -118,7 +118,7 @@ A run does three things with emails, in this order:
    `newState`, what it names as destroyed is deleted, and the state
    token (`jmap:<account_id>:state:Email` in `sync_scope_state`)
    advances. The token never waits on a fetch. With no token to replay
-   from — a first run, `--full-resync`, or `cannotCalculateChanges` —
+   from — a first run, or `cannotCalculateChanges` —
    the run asks for the account's state now, saves it, forgets which
    scopes were listed whole, and lists every email again so that all of
    them are owed. No other error does this: an `Email/changes` that
@@ -153,6 +153,64 @@ prior state either way.
 
 A mailbox a full `Mailbox/get` does not list comes off every email and
 its row goes, the same as one `Mailbox/changes` reports destroyed.
+
+## Whole threads
+
+Under a label filter, every mode keeps whole threads by default
+(`whole_threads`, a sibling of `only_extract_labels`, on unless set to
+false): a message the filter keeps brings every other message of its
+thread, whatever its labels or mailboxes. Archiving takes `INBOX` off
+the start of a conversation, so the filter alone would mirror only its
+newest messages.
+
+The two API modes share one mechanism (`listed.rs`):
+
+- **Which thread each message is in** is `thread_members`: a row per
+  message in the account, mirrored or not, with its thread. One walk
+  of the whole account fills it, recorded as the scope `#threads` in
+  `listed_whole` once it reaches its end, when it also deletes every
+  member it did not name. Gmail walks `messages.list`, whose pages name
+  each message's `threadId` (5 quota units a page of 500), and
+  `history.list` keeps it current, naming each message with its
+  thread. JMAP walks `Email/query` and asks `Email/get` for each page's
+  `threadId`s, and every later `Email/get` says the thread of what it
+  fetched; `Email/changes` takes destroyed emails out. A start over
+  walks it again. Gmail's `threads.get` is never asked: it costs 40
+  units a thread.
+- **The rest of a kept thread is listed**, at the current token: every
+  member of a thread holding an email the filter keeps (Gmail: by
+  `emails.label_ids`; JMAP: by its mailboxes) that is not listed
+  already. It is then owed and fetched like any other message, and
+  kept whatever its labels, and on Gmail whatever its age: the walk
+  that fills `thread_members` is not narrowed to `since`, so a kept
+  message's thread reaches back past it. This happens before the fetch
+  and again after it, when that fetch kept new threads.
+- **A thread the filter no longer keeps goes whole**: after the fetch,
+  a thread none of whose emails the filter keeps loses every email,
+  unless one of them is still owed, since its labels may be what keeps
+  the thread.
+- **The thread's count** is `threads.upstream_email_count`: its
+  members, once the walk is whole, and NULL before (and with no label
+  filter, when every thread is whole). With `whole_threads = false`,
+  `email_count < upstream_email_count` is a thread held in part. A
+  thread whose count the index changed is written again at the end of
+  the run.
+
+**mbox** reads every message of the input whenever it reads it, so it
+needs no index. A message whose thread (`X-GM-THRID`) a kept message
+was already met in is kept as it is read. One met before any kept
+message of its thread is remembered by its email id, and once the
+whole input is read, if any of those turned out to be in a kept thread,
+the input is read once more for them alone: a Takeout's parts are
+streamed, so there is no seeking back. A thread's count is how many
+messages the input holds for it. `whole_threads` is one of the settings
+the "unchanged since the last read" stamp covers, so changing it reads
+the input again. An mbox with no `X-GM-THRID` has a thread per message,
+so nothing changes.
+
+Turning `whole_threads` off keeps what it mirrored until those messages
+change (JMAP, Gmail) or for good (mbox, which never deletes for the
+filter), as narrowing `only_extract_labels` does.
 
 A store written before these tables existed is carried over by two
 rungs of the migration ladder (`listed::migrate_from_cursors`, then
@@ -224,6 +282,11 @@ with nothing listed to go on with.
   up ends the fetch with one `phase:messages.get` row, and the run
   still succeeds, so what it fetched is kept; the next run fetches what
   is still owed. With nothing mirrored at all, the run fails instead.
+- The walk of the whole account that fills `thread_members` is a
+  `listing:messages.list threads` row when it fails (JMAP's is a
+  `listing:Email/query threads` row). The run goes on,
+  and the next run walks it again; until a walk reaches its end, no
+  thread's count changes.
 - A Takeout the source starts from
   ([`email_download_modes.md`](/docs/dev/email_download_modes.md)
   §"Starting from a Takeout") reports a file it cannot read as a
@@ -231,23 +294,38 @@ with nothing listed to go on with.
   no Gmail id as one `skipped:takeout` row per file. Neither stops the
   API part: what the Takeout did not supply is fetched whole.
 
-**mbox.** Every run reads every `.mbox` under the input, and keeps no
-record of what it read before. The folder is the unit of completeness:
-two files can hold one message and rows are keyed by the message, so
+**mbox.** The input is a `.mbox` file or a folder holding some, or a
+Takeout as Google sent it: one `.zip`/`.tgz`, or the folder holding
+every part of one export (`datalib_etl_files::archive`). A folder of
+parts is that Takeout, and anything else in it, an unpacked copy
+included, is passed over, as the `google_takeout` source does. A part's
+`.mbox` entries are read straight out of it, never unpacked to disk,
+and each is named `<part>/<entry>` in a problem row.
+
+A run reads every `.mbox` or none. It reads none when the input's
+files (the `.mbox` files, or the parts) hash to what the last clean
+read saw, through the host's fingerprint cache, and the settings it
+reads them with (`path`, the account fields, `only_extract_labels`)
+are the same: the `email/mbox_read` stamp in `ingested_files`
+(`datalib_etl_files::read_stamp`). A run that read every file without a
+problem and was not stopped writes that stamp; any other leaves the old
+one, so the next run reads everything again.
+
+The folder is the unit of completeness: two files can hold one message and rows are keyed by the message, so
 only a clean read of every file says what left the input. A run that
 gets one stores what it read and deletes every email no file holds,
 every name-keyed label no message carries (when no label filter is
 set), and everything filed under an account other than the configured
 one: its emails, threads and name-keyed labels, then its row. That is
 how a changed `account_id` (configured, or made from the input's name)
-moves the mail. A changed `only_extract_labels` needs nothing more:
-the next run reads everything anyway, and the prune counts every
-message it met, filtered or not, so narrowing the filter deletes
-nothing.
+moves the mail. A changed `only_extract_labels` changes the stamp, so
+the next run reads everything, and the prune counts every message it
+met, filtered or not, so narrowing the filter deletes nothing.
 
 A file that will not open, whose read fails part-way, or that holds no
 message at all (0 bytes, or not one `From ` line) is a
-`listing:mbox <file>` row. An mbox has no envelope that could say "no
+`listing:mbox <file>` row. A part that will not read is a
+`listing:files` row, since the files past the failure were never seen. An mbox has no envelope that could say "no
 messages", so an empty file is never read as an emptied mailbox;
 deleting the file is what drops the messages only it held. Messages
 that will not parse are one `skipped:mbox:` row per file, naming it,
@@ -258,9 +336,10 @@ problem is present, or the walk of the folder missed an entry
 reads every message, an `only_extract_labels` entry that no message
 carries becomes a `config:` row.
 
-Every run rewrites each email's `_bookkeeping` stamp, so a sync of an
-unchanged folder still commits; the `.eml` bytes and their edges are
-written only for an `.eml` the store does not hold yet.
+A run that reads rewrites each email's `_bookkeeping` stamp, so it
+commits even when nothing in the files moved (a widened label filter);
+the `.eml` bytes and their edges are written only for an `.eml` the
+store does not hold yet. A run that skips the read writes nothing.
 
 ## Rate limits
 
@@ -285,6 +364,11 @@ mbox mode end to end over `tests/fixtures/mbox/star_trek.mbox`.
 `gmail_takeout_seed.rs` starts a Gmail mirror from a Takeout: no seeded
 message is fetched whole, a message Gmail no longer has goes and stays
 gone, and a relabel asks for labels alone.
+`gmail_whole_threads.rs` and `jmap_whole_threads.rs` keep the start
+of a thread whose newest message the filter keeps, drop a thread the
+filter no longer keeps, and count a message the filter drops toward
+its thread; `jmap_mbox.rs` and `mbox.rs`'s own tests do the same for an
+mbox.
 
 ## The raw store's shape
 
@@ -312,6 +396,21 @@ headers, the `.eml`'s blob ref). The payload is the JMAP `Email/get` envelope
 columns exist for indexing and cheap projection; the `mailboxIds` / `keywords`
 join inputs are read back out of the payload.
 
+### Gmail's own ids and labels
+
+For Gmail, `id` and `thread_id` are Gmail's message and thread ids,
+spelled one way whether the API or a Takeout named them: lowercase hex
+zero-padded to 16 digits (`envelope::GmailId::key`). Gmail's web URLs
+and the API spell the same hex without the padding, which only an id
+from Gmail's first months has. A row the Gmail API answered for also
+carries `label_ids`, Gmail's label ids as a sorted JSON array
+(`["INBOX","UNREAD"]`). The labels are read back from the row's
+mailboxes and keywords, so `UNREAD` (no `$seen`), `STARRED` and
+`IMPORTANT` are among them. It is NULL for JMAP and mbox rows, and for
+a Takeout's until Gmail sends its labels. Rung 6 of the ladder fills it
+on a store from before; rung 7 rewrites the decimal thread ids older
+builds stored (the spelling of a Takeout's `X-GM-THRID`) in hex.
+
 ### The `.eml` hash lives on `email_blobs`, not on `emails`
 
 That column has a second writer — the blob-download pass backfills it after
@@ -326,7 +425,8 @@ hash.
 |---|---|
 | `accounts`, `mailboxes`, `threads`, `emails` | payload-shaped entity tables, each with a paired `<table>_bookkeeping` sidecar; a mailbox's counts live in the sidecar's `volatile_payload` |
 | `listed_messages` | JMAP and Gmail API modes: a row per message upstream named, with the token that last named it as changed; its `_bookkeeping` sidecar counts the fetches and holds, in `held_version`, the token the email was fetched for |
-| `listed_whole` | JMAP and Gmail API modes: the mailboxes or labels (or `*`) an enumeration has listed to its end |
+| `listed_whole` | JMAP and Gmail API modes: the mailboxes or labels (or `*`) an enumeration has listed to its end, and `#threads` for a whole `thread_members` |
+| `thread_members` | JMAP and Gmail API modes under a label filter: a row per message in the account, keyed by upstream's id, naming its `threads` row; see "Whole threads" |
 | `email_mailboxes`, `email_keywords` | N:M join tables with a synthesized `id` PK, refreshed delete-then-insert per email upsert; no sidecars. Indexed on `email_id`, which that delete and render's load both look up by, and on the other side (`mailbox_id`, `keyword`) |
 | `email_blobs` | CAS edge carrying the `.eml` `blake3`, NULL until the bytes land |
 | `ingested_files` | unused: the shared per-file cursor table, declared but written by no mode |
