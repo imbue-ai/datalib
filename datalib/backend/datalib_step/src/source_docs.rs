@@ -108,6 +108,9 @@ pub fn source_docs(t: SourceType) -> SourceDocs {
                 datalib_etl_sms_backup_restore_config::EXAMPLES,
             )
         }
+        T::Todoist => {
+            docs::<datalib_etl_todoist_config::TodoistConfig>(datalib_etl_todoist_config::EXAMPLES)
+        }
         T::Whatsapp => docs::<datalib_etl_whatsapp_config::WhatsappConfig>(
             datalib_etl_whatsapp_config::EXAMPLES,
         ),

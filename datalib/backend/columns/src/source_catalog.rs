@@ -109,6 +109,7 @@ const CATALOG: &[Entry] = &[
     e("airvisual", None, "IQAir AirVisual", Some("airvisual")),
     e("lightroom", None, "Lightroom", Some("lightroom")),
     e("linear", None, "Linear", Some("linear")),
+    e("todoist", None, "Todoist", Some("todoist")),
     e("apple_photos", None, "Apple Photos", Some("apple_photos")),
     e(
         "apple_messages",

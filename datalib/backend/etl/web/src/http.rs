@@ -103,6 +103,8 @@ pub enum HttpService {
     /// curl TLS fingerprint, confirmed against a live workspace.
     Notion,
     Slack,
+    /// Todoist's API v1 (`api.todoist.com`).
+    Todoist,
     /// YoLink's signed-URL CSV downloads (`us.yosmart.com/download/…`):
     /// no credential, the URL itself is signed, so every request goes
     /// out plain.
