@@ -7,6 +7,7 @@ use std::time::Duration;
 use serde_json::Value;
 
 use datalib_etl::events;
+use datalib_etl::upstream::Upstream;
 use datalib_etl_web::http::{
     default_retryability, latchkey_curl_classified, percent_encode, HttpError, HttpMethod,
     HttpRequest, HttpResponse, HttpService, LatchkeySettings, Retryability,
@@ -31,7 +32,10 @@ pub enum TodoistError {
     Unauthorized(String),
     /// The shared retry guard gave up on the service.
     #[error("{0}")]
-    GaveUp(String),
+    GaveUp(String, Option<Upstream>),
+    /// The request never got an answer to judge.
+    #[error(transparent)]
+    Transport(HttpError),
     /// About this one request.
     #[error("{0}")]
     Permanent(String),
@@ -40,7 +44,16 @@ pub enum TodoistError {
 impl TodoistError {
     /// Going on would only fail every request left.
     pub fn ends_the_run(&self) -> bool {
-        matches!(self, Self::Unauthorized(_) | Self::GaveUp(_))
+        matches!(self, Self::Unauthorized(_) | Self::GaveUp(..))
+    }
+
+    pub fn upstream(&self) -> Option<Upstream> {
+        match self {
+            Self::Unauthorized(_) => Some(Upstream::CredentialRefused),
+            Self::GaveUp(_, why) => *why,
+            Self::Transport(e) => e.upstream(),
+            Self::Permanent(_) => None,
+        }
     }
 }
 
@@ -133,8 +146,8 @@ fn transport_error(e: HttpError, url: &str) -> TodoistError {
         HttpError::Curl { exit: 1, .. } | HttpError::Spawn { .. } => {
             TodoistError::Unauthorized(format!("{url}: {e}{SIGN_IN}"))
         }
-        HttpError::GaveUp { .. } => TodoistError::GaveUp(e.to_string()),
-        other => TodoistError::Permanent(other.to_string()),
+        HttpError::GaveUp { .. } => TodoistError::GaveUp(e.to_string(), e.upstream()),
+        other => TodoistError::Transport(other),
     }
 }
 
@@ -213,6 +226,7 @@ mod tests {
             ),
         );
         assert!(e.ends_the_run());
+        assert_eq!(e.upstream(), Some(Upstream::CredentialRefused));
         assert!(e.to_string().contains("AUTH_INVALID_TOKEN"), "{e}");
         assert!(
             e.to_string().contains("latchkey auth browser todoist"),
@@ -228,6 +242,7 @@ mod tests {
             "u",
         );
         assert!(missing.ends_the_run());
+        assert_eq!(missing.upstream(), Some(Upstream::CredentialRefused));
         let bad = status_error("u", &resp(400, r#"{"error": "Invalid argument value"}"#));
         assert!(!bad.ends_the_run());
     }

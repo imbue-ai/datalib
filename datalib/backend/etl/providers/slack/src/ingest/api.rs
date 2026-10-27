@@ -8,6 +8,7 @@ use serde_json::Value;
 use tracing::instrument;
 
 use datalib_etl::events;
+use datalib_etl::upstream::Upstream;
 use datalib_etl_web::http::{
     default_retryability, latchkey_curl_classified, parse_retry_after, HttpError, HttpRequest,
     HttpResponse, HttpService, LatchkeySettings, Retryability,
@@ -19,7 +20,7 @@ pub const LATCHKEY_FILE_TIMEOUT: Duration = Duration::from_secs(600);
 #[derive(thiserror::Error, Debug)]
 pub enum SlackError {
     #[error("{0}")]
-    Permanent(String),
+    Permanent(String, #[source] Option<Upstream>),
     /// Slack answered, and said this credential may not call `method`:
     /// the token is the wrong kind, lacks the scope, or the method does
     /// not exist for it. Asking again will not help; a different token
@@ -33,6 +34,15 @@ pub enum SlackError {
 }
 
 const REFUSAL_CODES: &[&str] = &["not_allowed_token_type", "missing_scope", "unknown_method"];
+
+/// Slack's `error` codes for a token it will not take at all.
+const SIGNED_OUT_CODES: &[&str] = &[
+    "not_authed",
+    "invalid_auth",
+    "account_inactive",
+    "token_revoked",
+    "token_expired",
+];
 
 /// Slack-specific retry classifier. Slack signals a rate limit either as a
 /// plain HTTP 429 (newer Web API tiers — covered by the default classifier)
@@ -98,22 +108,28 @@ async fn call_slack_once(
     let resp = latchkey_curl_classified(&req, slack_retryability)
         .await
         .map_err(|e: HttpError| match e {
-            HttpError::PlaybackMiss(msg) => SlackError::Permanent(format!("{method}: {msg}")),
+            HttpError::PlaybackMiss(msg) => SlackError::Permanent(format!("{method}: {msg}"), None),
             HttpError::Interrupted { .. } => SlackError::Interrupted(format!("{method}: {e}")),
-            _ => SlackError::Permanent(format!("{method}: {e}")),
+            _ => SlackError::Permanent(format!("{method}: {e}"), e.upstream()),
         })?;
 
     if resp.status != 200 {
-        return Err(SlackError::Permanent(format!(
-            "{method}: HTTP {} body={:?}",
-            resp.status,
-            resp.body_str().chars().take(200).collect::<String>()
-        )));
+        return Err(SlackError::Permanent(
+            format!(
+                "{method}: HTTP {} body={:?}",
+                resp.status,
+                resp.body_str().chars().take(200).collect::<String>()
+            ),
+            Upstream::of_status(resp.status),
+        ));
     }
     let body = resp.body_str();
     let data: Value = serde_json::from_str(&body).map_err(|e| {
         let preview: String = body.chars().take(200).collect();
-        SlackError::Permanent(format!("{}: invalid JSON: {:?} ({})", method, preview, e))
+        SlackError::Permanent(
+            format!("{}: invalid JSON: {:?} ({})", method, preview, e),
+            None,
+        )
     })?;
     let ok = data.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
     if !ok {
@@ -130,10 +146,13 @@ async fn call_slack_once(
                 error: err.to_string(),
             });
         }
-        return Err(SlackError::Permanent(format!(
-            "{}: ok=false error={:?}",
-            method, err
-        )));
+        let signed_out = SIGNED_OUT_CODES
+            .contains(&err)
+            .then_some(Upstream::CredentialRefused);
+        return Err(SlackError::Permanent(
+            format!("{}: ok=false error={:?}", method, err),
+            signed_out,
+        ));
     }
     Ok(data)
 }

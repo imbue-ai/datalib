@@ -6,6 +6,7 @@
 use anyhow::{anyhow, bail, Result};
 use serde_json::Value;
 
+use datalib_etl::upstream::Upstream;
 use datalib_etl_chatgpt_config::ChatgptConfig;
 use datalib_probe::{
     sort_newest_first, OnProgress, ProbeAccount, ProbeAsk, ProbeItem, ProbeItemKind, ProbeList,
@@ -57,7 +58,9 @@ async fn list_conversations(
         let page = client
             .list_conversations_page(offset, PAGE_SIZE, false)
             .await
-            .map_err(|e| anyhow!("list conversations at offset {offset}: {e}"))?;
+            .map_err(|e| {
+                anyhow::Error::new(e).context(format!("list conversations at offset {offset}"))
+            })?;
         let page_items: Vec<Value> = page
             .get("items")
             .and_then(Value::as_array)
@@ -149,27 +152,22 @@ fn update_time_iso(v: &Value) -> Option<String> {
 /// with latchkey, or its access token missing or expired — gets a
 /// pointer at the fix; anything else passes through unembellished.
 fn credential_hint(e: ChatGPTError) -> anyhow::Error {
-    let s = e.to_string();
     // Cloudflare's challenge is a 403 too, and no credential gets past
     // it: a sign-in recipe would send the person after the wrong fix.
-    if s.contains(r#"cf-mitigated=Some("challenge")"#) {
-        return anyhow!("chatgpt.com's bot protection blocked the request: {s}");
+    if e.to_string().contains(r#"cf-mitigated=Some("challenge")"#) {
+        return anyhow::Error::new(e).context("chatgpt.com's bot protection blocked the request");
     }
-    let setup_problem = s.contains("No service matches URL")
-        || s.to_ascii_lowercase().contains("no credentials")
-        || s.contains("HTTP 401")
-        || s.contains("HTTP 403");
-    if !setup_problem {
-        return anyhow!("fetch /me: {s}");
+    if e.upstream() != Some(Upstream::CredentialRefused) {
+        return anyhow::Error::new(e).context("fetch /me");
     }
     let lk = datalib_etl_web::latchkey::latchkey_cli_hint();
-    anyhow!(
-        "chatgpt.com credentials are not set up: {s}\n\
+    anyhow::Error::new(e).context(format!(
+        "chatgpt.com credentials are not set up.\n\
          Sign in through latchkey, which captures the access token itself:\n  \
          {lk} auth browser chatgpt\n\
          If that says the service has no browser login, see the ChatGPT section of\n\
          docs/user/getting_your_data.md for the one-time registration."
-    )
+    ))
 }
 
 #[cfg(test)]
@@ -256,12 +254,21 @@ mod tests {
 
     #[test]
     fn a_403_names_the_browser_login() {
-        let hint = credential_hint(ChatGPTError::Permanent(
-            "GET /backend-api/me -> HTTP 403".into(),
-        ))
-        .to_string();
+        let hint = format!(
+            "{:#}",
+            credential_hint(ChatGPTError::Permanent(
+                "GET /backend-api/me -> HTTP 403".into(),
+                Some(Upstream::CredentialRefused),
+            ))
+        );
         assert!(hint.contains("auth browser chatgpt"), "{hint}");
-        let plain = credential_hint(ChatGPTError::Permanent("timed out".into())).to_string();
+        let plain = format!(
+            "{:#}",
+            credential_hint(ChatGPTError::Permanent(
+                "timed out".into(),
+                Some(Upstream::Unavailable)
+            ))
+        );
         assert!(!plain.contains("auth browser"), "{plain}");
     }
 
@@ -269,10 +276,13 @@ mod tests {
     /// sign-in recipe would send the person after the wrong fix.
     #[test]
     fn a_cloudflare_challenge_gets_no_sign_in_recipe() {
-        let hint = credential_hint(ChatGPTError::Permanent(
-            r#"GET /backend-api/me -> HTTP 403 cf-mitigated=Some("challenge") body="""#.into(),
-        ))
-        .to_string();
+        let hint = format!(
+            "{:#}",
+            credential_hint(ChatGPTError::Permanent(
+                r#"GET /backend-api/me -> HTTP 403 cf-mitigated=Some("challenge") body="""#.into(),
+                Some(Upstream::CredentialRefused),
+            ))
+        );
         assert!(hint.contains("bot protection"), "{hint}");
         assert!(!hint.contains("auth browser"), "{hint}");
     }

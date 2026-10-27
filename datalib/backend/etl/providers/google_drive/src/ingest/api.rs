@@ -10,6 +10,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 
+use datalib_etl::upstream::Upstream;
 use datalib_etl_google_drive_config::{ExportFormat, FileKind};
 use datalib_etl_web::http::{
     default_retryability, latchkey_curl_classified, percent_encode, HttpError, HttpRequest,
@@ -199,7 +200,7 @@ pub enum ApiError {
     /// send it (no sign-in), the credential was refused, a scope was not
     /// granted, or the API is off for the OAuth project.
     #[error("{0}")]
-    Service(String),
+    Service(String, #[source] Upstream),
     /// Google declined to export a file this large (10 MB).
     #[error("{0}")]
     ExportTooLarge(String),
@@ -217,7 +218,7 @@ pub enum ApiError {
 }
 
 pub fn is_service(e: &anyhow::Error) -> bool {
-    matches!(e.downcast_ref::<ApiError>(), Some(ApiError::Service(_)))
+    matches!(e.downcast_ref::<ApiError>(), Some(ApiError::Service(..)))
 }
 
 pub fn is_not_found(e: &anyhow::Error) -> bool {
@@ -319,9 +320,10 @@ fn retryability(resp: &HttpResponse) -> Retryability {
 /// (DNS, a refused connection, a timeout) have codes of their own.
 fn transport_error(e: HttpError, url: &str) -> ApiError {
     match e {
-        HttpError::Curl { exit: 1, .. } | HttpError::Spawn { .. } => {
-            ApiError::Service(format!("GET {url}: {e}{}", sign_in_hint(url)))
-        }
+        HttpError::Curl { exit: 1, .. } | HttpError::Spawn { .. } => ApiError::Service(
+            format!("GET {url}: {e}{}", sign_in_hint(url)),
+            Upstream::CredentialRefused,
+        ),
         other => ApiError::Request(other.to_string()),
     }
 }
@@ -347,7 +349,10 @@ pub fn status_error(url: &str, resp: &HttpResponse) -> ApiError {
             .iter()
             .any(|reason| body.contains(reason)));
     if service_wide {
-        ApiError::Service(format!("{said}{}", sign_in_hint(url)))
+        ApiError::Service(
+            format!("{said}{}", sign_in_hint(url)),
+            Upstream::CredentialRefused,
+        )
     } else if resp.status == 403 && body.contains("exportSizeLimitExceeded") {
         ApiError::ExportTooLarge(said)
     } else if resp.status == 403 && body.contains("cannotExportFile") {
@@ -423,7 +428,7 @@ mod tests {
             },
             &native_url(FileKind::Spreadsheet, "x", true),
         );
-        assert!(matches!(e, ApiError::Service(_)), "{e}");
+        assert!(matches!(e, ApiError::Service(..)), "{e}");
         assert!(e.to_string().contains("google-sheets"), "{e}");
     }
 
@@ -446,11 +451,11 @@ mod tests {
         let url = native_url(FileKind::Document, "x", true);
         assert!(matches!(
             status_error(&url, &resp(401, "{}")),
-            ApiError::Service(_)
+            ApiError::Service(..)
         ));
         let scope = r#"{"error":{"code":403,"message":"Request had insufficient authentication scopes.","details":[{"reason":"ACCESS_TOKEN_SCOPE_INSUFFICIENT"}]}}"#;
         let e = status_error(&url, &resp(403, scope));
-        assert!(matches!(e, ApiError::Service(_)), "{e}");
+        assert!(matches!(e, ApiError::Service(..)), "{e}");
         assert!(e.to_string().contains("google-docs"), "{e}");
         let big = r#"{"error":{"code":403,"message":"This file is too large to be exported.","errors":[{"reason":"exportSizeLimitExceeded"}]}}"#;
         assert!(matches!(

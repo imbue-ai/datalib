@@ -22,6 +22,7 @@ use datalib_etl::download_problems::RunProblem;
 use datalib_etl::download_run::DownloadRun;
 use datalib_etl::raw_store::{Batch, Sealer};
 use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl::upstream::Upstream;
 use datalib_etl_todoist_config::TodoistSync;
 use datalib_etl_web::coverage::{self, Span};
 use datalib_etl_web::http::LatchkeySettings;
@@ -150,7 +151,12 @@ impl Ctx<'_> {
                 Ok(answer) => answer,
                 Err(_) if self.stopped() => return Ok(()),
                 Err(e) if e.ends_the_run() => return Err(RunEnded(e).into()),
-                Err(e) => anyhow::bail!("Todoist's /sync failed, so nothing was updated: {e}"),
+                Err(e) => {
+                    return Err(Upstream::error(
+                        e.upstream(),
+                        format!("Todoist's /sync failed, so nothing was updated: {e}"),
+                    ))
+                }
             };
             let full = answer.get("full_sync").and_then(Value::as_bool) == Some(true);
             self.store_sync(&answer, s).await?;
@@ -373,7 +379,10 @@ async fn phases(ctx: &mut Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
         },
     };
     if s.syncs == 0 {
-        anyhow::bail!("Todoist refused the run before anything came: {}", ended.0);
+        return Err(Upstream::error(
+            ended.0.upstream(),
+            format!("Todoist refused the run before anything came: {}", ended.0),
+        ));
     }
     let name = match &ended.0 {
         TodoistError::Unauthorized(_) => "credential",

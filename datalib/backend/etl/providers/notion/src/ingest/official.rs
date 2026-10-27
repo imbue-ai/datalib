@@ -14,6 +14,7 @@ use std::time::Duration;
 use serde_json::Value;
 
 use datalib_etl::events;
+use datalib_etl::upstream::Upstream;
 use datalib_etl_web::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
 
 pub const BASE: &str = "https://api.notion.com/v1";
@@ -35,6 +36,9 @@ pub enum NotionOfficialError {
     /// this one would give up too.
     #[error("{0}")]
     GaveUp(String),
+    /// The request never got an answer to judge.
+    #[error("{0}")]
+    Transport(String, #[source] Option<Upstream>),
     #[error("{0}")]
     Permanent(String),
 }
@@ -120,7 +124,7 @@ impl NotionOfficialClient {
             HttpError::GaveUp { .. } => {
                 NotionOfficialError::GaveUp(format!("{method} {path}: {e}"))
             }
-            e => NotionOfficialError::Permanent(format!("{method} {path}: {e}")),
+            e => NotionOfficialError::Transport(format!("{method} {path}: {e}"), e.upstream()),
         })?;
         self.network_ms
             .fetch_add(resp.duration_ms, Ordering::Relaxed);

@@ -361,7 +361,7 @@ impl Attachments<'_> {
             Ok(resp) if matches!(resp.status, 404 | 410) => Ok(Outcome::Gone),
             Ok(resp) => Ok(Outcome::Failed(format!("HTTP {}", resp.status))),
             Err(e @ HttpError::GaveUp { .. }) => Err(NotionOfficialError::GaveUp(e.to_string())),
-            Err(e) => Err(NotionOfficialError::Permanent(e.to_string())),
+            Err(e) => Err(NotionOfficialError::Transport(e.to_string(), e.upstream())),
         }
     }
 

@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 use std::process::Stdio;
 use std::time::Duration;
 
+use datalib_etl::upstream::Upstream;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
@@ -241,14 +242,14 @@ impl HttpResponse {
     }
 }
 
-#[derive(thiserror::Error, Debug)]
+/// Display and `source` are written by hand rather than derived: the
+/// source is the [`Upstream`] the failure means, which no field holds.
+#[derive(Debug)]
 pub enum HttpError {
-    #[error("{service}: spawn latchkey failed: {message}")]
     Spawn {
         service: HttpService,
         message: String,
     },
-    #[error("{service}: latchkey curl timed out after {timeout_ms}ms ({url})")]
     Timeout {
         service: HttpService,
         url: String,
@@ -257,38 +258,123 @@ pub enum HttpError {
     /// `latchkey curl` exited non-zero. This is a transport-level failure
     /// (DNS, TLS, allowlist) — *not* a non-2xx HTTP status. For HTTP
     /// errors, inspect `HttpResponse::status` on the Ok path.
-    #[error("{service}: latchkey curl exit {exit} ({url}): {stderr}")]
     Curl {
         service: HttpService,
         url: String,
         exit: i32,
         stderr: String,
     },
-    #[error("{service}: malformed response from latchkey curl ({url}): {message}")]
     Malformed {
         service: HttpService,
         url: String,
         message: String,
     },
-    #[error("playback miss: {0}")]
     PlaybackMiss(String),
-    #[error("playback fixture invalid: {0}")]
     PlaybackInvalid(String),
     /// The shared retry loop respected rate limits / backed off but the
     /// orchestrator's give-up policy ([`crate::retry::RetryGuard`]) tripped
     /// before the request ever succeeded. Terminal — the caller should
     /// surface it as a hard error for this source.
-    #[error("{service}: gave up retrying ({url}): {reason}")]
     GaveUp {
         service: HttpService,
         url: String,
         reason: String,
+        /// The status of the last attempt, when it got an answer.
+        last_status: Option<u16>,
     },
     /// The step was asked to stop while this request waited to retry.
     /// Terminal for the unit of work that made the request, the same as
     /// `GaveUp`; the fetch loop's next check of the stop flag ends the run.
-    #[error("{service}: interrupted while waiting to retry ({url})")]
-    Interrupted { service: HttpService, url: String },
+    Interrupted {
+        service: HttpService,
+        url: String,
+    },
+}
+
+impl HttpError {
+    /// What this failure says about the service. A timeout and the curl
+    /// exits for a connection that never completed (7 could not connect,
+    /// 28 timeout, 35 TLS, 56 receive) are the service not answering,
+    /// which is also what the retry loop retries.
+    pub fn upstream(&self) -> Option<Upstream> {
+        match self {
+            HttpError::Timeout { .. } => Some(Upstream::Unavailable),
+            HttpError::Curl { exit, .. } if matches!(*exit, 7 | 28 | 35 | 56) => {
+                Some(Upstream::Unavailable)
+            }
+            HttpError::Curl { stderr, .. } if latchkey_had_no_credential(stderr) => {
+                Some(Upstream::CredentialRefused)
+            }
+            HttpError::GaveUp {
+                last_status: Some(429),
+                ..
+            } => Some(Upstream::RateLimited),
+            _ => None,
+        }
+    }
+}
+
+/// latchkey's own refusals to send (its `errorMessages.js`): no service
+/// for the URL, none stored for it, or one past its expiry. It exits 1
+/// for these and for every other error of its own, gateway transport
+/// failures included, so the exit code alone says nothing.
+fn latchkey_had_no_credential(stderr: &str) -> bool {
+    stderr.contains("Error: No service matches URL")
+        || stderr.contains("Error: No credentials found for")
+        || (stderr.contains("Error: Credentials for ") && stderr.contains(" are expired."))
+}
+
+impl std::fmt::Display for HttpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HttpError::Spawn { service, message } => {
+                write!(f, "{service}: spawn latchkey failed: {message}")
+            }
+            HttpError::Timeout {
+                service,
+                url,
+                timeout_ms,
+            } => write!(
+                f,
+                "{service}: latchkey curl timed out after {timeout_ms}ms ({url})"
+            ),
+            HttpError::Curl {
+                service,
+                url,
+                exit,
+                stderr,
+            } => write!(f, "{service}: latchkey curl exit {exit} ({url}): {stderr}"),
+            HttpError::Malformed {
+                service,
+                url,
+                message,
+            } => write!(
+                f,
+                "{service}: malformed response from latchkey curl ({url}): {message}"
+            ),
+            HttpError::PlaybackMiss(m) => write!(f, "playback miss: {m}"),
+            HttpError::PlaybackInvalid(m) => write!(f, "playback fixture invalid: {m}"),
+            HttpError::GaveUp {
+                service,
+                url,
+                reason,
+                ..
+            } => write!(f, "{service}: gave up retrying ({url}): {reason}"),
+            HttpError::Interrupted { service, url } => {
+                write!(f, "{service}: interrupted while waiting to retry ({url})")
+            }
+        }
+    }
+}
+
+impl std::error::Error for HttpError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self.upstream()? {
+            Upstream::CredentialRefused => Some(&Upstream::CredentialRefused),
+            Upstream::RateLimited => Some(&Upstream::RateLimited),
+            Upstream::Unavailable => Some(&Upstream::Unavailable),
+        }
+    }
 }
 
 /// A single `Retry-After` wait is capped here so one pathological header
@@ -432,11 +518,9 @@ where
                 Retryability::Accept => None,
                 Retryability::Retry { retry_after } => Some(retry_after),
             },
-            // Transient transport failures: retry without a server-specified
-            // delay. (7 couldn't connect, 28 timeout, 35 TLS, 56 recv error.)
-            Err(HttpError::Timeout { .. }) => Some(None),
-            Err(HttpError::Curl { exit, .. }) if matches!(*exit, 7 | 28 | 35 | 56) => Some(None),
-            // Spawn / Malformed / Playback* / GaveUp: terminal, return as-is.
+            // The service did not answer: retry without a server-specified
+            // delay. Everything else is terminal and returned as-is.
+            Err(e) if e.upstream() == Some(Upstream::Unavailable) => Some(None),
             Err(_) => None,
         };
 
@@ -457,6 +541,7 @@ where
                 service: req.service,
                 url: req.url.clone(),
                 reason: format!("{reason}; last attempt: {detail}"),
+                last_status: outcome.as_ref().ok().map(|resp| resp.status),
             });
         }
 
@@ -763,6 +848,38 @@ fn canonical_url(url: &str) -> String {
 mod tests {
     use super::*;
     use crate::playback::{self, Playback};
+
+    /// latchkey exits 1 for every error of its own, so only its refusal
+    /// to send counts as a credential problem. A gateway that could not
+    /// be reached is not one, though it exits 1 the same way.
+    #[test]
+    fn only_latchkeys_refusals_to_send_are_a_refused_credential() {
+        let curl = |stderr: &str| HttpError::Curl {
+            service: HttpService::Slack,
+            url: "https://slack.com/api/auth.test".into(),
+            exit: 1,
+            stderr: stderr.into(),
+        };
+        for refused in [
+            "Error: No service matches URL: https://slack.com/api/auth.test",
+            "Error: No credentials found for slack.\nRun 'latchkey auth browser slack' first.",
+            "Error: Credentials for slack are expired.\nRun 'latchkey auth browser slack'.",
+        ] {
+            assert_eq!(
+                curl(refused).upstream(),
+                Some(Upstream::CredentialRefused),
+                "{refused}"
+            );
+        }
+        assert_eq!(curl("Error: Upstream request failed.").upstream(), None);
+        let unreachable = HttpError::Curl {
+            service: HttpService::Slack,
+            url: "https://slack.com/api/auth.test".into(),
+            exit: 7,
+            stderr: "curl: (7) Failed to connect".into(),
+        };
+        assert_eq!(unreachable.upstream(), Some(Upstream::Unavailable));
+    }
 
     fn with_via_desktop_prefix<T>(prefix: Option<&str>, body: impl FnOnce() -> T) -> T {
         static GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());

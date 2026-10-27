@@ -1280,7 +1280,7 @@ async fn store_edges<R: BulkUpsertable + Sync>(
 
 fn is_auth(e: &anyhow::Error) -> bool {
     e.downcast_ref::<GarminError>()
-        .is_some_and(|g| matches!(g, GarminError::Auth(_)))
+        .is_some_and(|g| matches!(g, GarminError::Auth(..)))
 }
 
 /// Garmin's "no data for that day" comes in several spellings.

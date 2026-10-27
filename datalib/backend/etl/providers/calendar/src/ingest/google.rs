@@ -14,6 +14,7 @@ use datalib_etl::doltlite_raw as dr;
 use datalib_etl::progress::Progress;
 use datalib_etl::raw_store::Sealer;
 use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl::upstream::Upstream;
 use datalib_etl_web::http::{
     default_retryability, latchkey_curl_classified, percent_encode, HttpRequest, HttpResponse,
     HttpService, LatchkeySettings, Retryability,
@@ -420,12 +421,12 @@ fn api_error(url: &str, resp: &HttpResponse) -> anyhow::Error {
         .unwrap_or_else(|| body.chars().take(300).collect());
     match resp.status {
         410 => Gone(format!("GET {url}: 410: {message}")).into(),
-        401 | 403 => anyhow::anyhow!(
+        401 | 403 => anyhow::Error::new(Upstream::CredentialRefused).context(format!(
             "GET {url}: {}: {message}. Log in with `latchkey auth browser google-calendar` \
              and approve every scope it asks for.",
             resp.status
-        ),
-        s => anyhow::anyhow!("GET {url}: {s}: {message}"),
+        )),
+        s => Upstream::error(Upstream::of_status(s), format!("GET {url}: {s}: {message}")),
     }
 }
 

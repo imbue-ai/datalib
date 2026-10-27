@@ -6,6 +6,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use datalib_etl::upstream::Upstream;
 use datalib_etl_web::http::{latchkey_curl, HttpRequest, HttpService, LatchkeySettings};
 
 /// JMAP capability URIs we list in every `using:` array. Mail is the
@@ -45,7 +46,7 @@ impl Session {
             let req = HttpRequest::get(HttpService::Jmap, &url)
                 .latchkey(latchkey.clone())
                 .timeout(Duration::from_secs(30));
-            let resp = latchkey_curl(&req).await.map_err(|e| anyhow!("{e}"))?;
+            let resp = latchkey_curl(&req).await?;
             if (300..400).contains(&resp.status) {
                 let loc = resp.header("location").ok_or_else(|| {
                     anyhow!(
@@ -57,10 +58,13 @@ impl Session {
                 continue;
             }
             if !(200..300).contains(&resp.status) {
-                return Err(anyhow!(
-                    "JMAP session discovery {url} returned HTTP {}: {}",
-                    resp.status,
-                    resp.body_str(),
+                return Err(Upstream::error(
+                    Upstream::of_status(resp.status),
+                    format!(
+                        "JMAP session discovery {url} returned HTTP {}: {}",
+                        resp.status,
+                        resp.body_str(),
+                    ),
                 ));
             }
             let raw: Value =

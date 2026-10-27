@@ -214,7 +214,9 @@ impl Ctx<'_> {
                 Ok(resp) => resp,
                 Err(_) if self.stop().requested() => return Ok(()),
                 Err(e) if e.ends_the_run() => return Err(run_over(e)),
-                Err(e) if cursor.is_none() => return Err(anyhow::anyhow!("notion search: {e}")),
+                Err(e) if cursor.is_none() => {
+                    return Err(anyhow::Error::new(e).context("notion search"))
+                }
                 Err(e) => {
                     self.found.listing(
                         "search",

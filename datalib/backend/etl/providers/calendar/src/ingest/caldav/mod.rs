@@ -198,7 +198,7 @@ pub(crate) async fn reach(
     summary.requests += 1;
     let listing = dav::list_members(&found.home_url, dav::BODY_LIST_CALENDARS, lk)
         .await
-        .map_err(|e| anyhow::anyhow!("list calendars: {e}"))?;
+        .map_err(|e| anyhow::Error::new(e).context("list calendars"))?;
     let calendars = calendars_in(&account_id, &found.home_url, &listing);
     Ok(Reached {
         found,
@@ -230,7 +230,7 @@ async fn discover(
     summary.requests += 1;
     let ms = dav::propfind(&principal_url, "0", dav::BODY_PRINCIPAL, lk)
         .await
-        .map_err(|e| anyhow::anyhow!("propfind calendar-home-set: {e}"))?;
+        .map_err(|e| anyhow::Error::new(e).context("propfind calendar-home-set"))?;
     let home = ms
         .responses
         .iter()

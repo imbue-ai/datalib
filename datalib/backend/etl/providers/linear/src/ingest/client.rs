@@ -29,6 +29,9 @@ pub enum LinearError {
     /// The shared retry guard gave up on the service.
     #[error("{0}")]
     GaveUp(String),
+    /// The request never got an answer to judge.
+    #[error(transparent)]
+    Transport(HttpError),
     #[error("{0}")]
     Permanent(String),
 }
@@ -196,7 +199,7 @@ impl LinearClient {
             .timeout(TIMEOUT);
         let resp = latchkey_curl(&req).await.map_err(|e: HttpError| match e {
             HttpError::GaveUp { .. } => LinearError::GaveUp(e.to_string()),
-            e => LinearError::Permanent(e.to_string()),
+            e => LinearError::Transport(e),
         })?;
         self.requests.fetch_add(1, Ordering::Relaxed);
         let text = resp.body_str();
