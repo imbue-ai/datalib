@@ -312,6 +312,27 @@ pub struct CalendlySync {
 
 pub type CalendarRenderConfig = datalib_source_common::BareRenderConfig;
 
+/// The `render_occurrences` step's params: which days it lists every
+/// occurrence of, counted from the day the run is on (UTC).
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CalendarOccurrencesConfig {
+    /// Days before today to list.
+    #[serde(default = "default_days_back")]
+    pub days_back: u32,
+    /// Days after today to list.
+    #[serde(default = "default_days_ahead")]
+    pub days_ahead: u32,
+}
+
+fn default_days_back() -> u32 {
+    30
+}
+
+fn default_days_ahead() -> u32 {
+    400
+}
+
 impl datalib_source_common::IngestMethods for CalendarConfig {
     const METHODS: &'static [datalib_source_common::IngestMethod] = &[
         datalib_source_common::IngestMethod::origin("google"),

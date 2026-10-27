@@ -33,6 +33,7 @@ import {
   removedWith,
   setQmdSteps,
   setTimeSeriesStep,
+  setOccurrencesStep,
   qmdIndexingOf,
   unwireFromFanIns,
   wireIntoFanIns,
@@ -1583,5 +1584,36 @@ function = "ingest"
     const added = setTimeSeriesStep(WATCH, "riker", "garmin");
     const gone = unwireFromFanIns(added, "riker/render_time_series");
     expect(inputsOf(gone, "unified_time_series_index/time_series_index")).toEqual([]);
+  });
+});
+
+describe("a calendar source's occurrences step", () => {
+  const CAL = `[[groups]]
+id = "bridge"
+type = "calendar"
+
+[[steps]]
+group = "bridge"
+function = "ingest"
+`;
+
+  it("adds the step reading the source's download, once", () => {
+    const added = setOccurrencesStep(CAL, "bridge", "calendar");
+    const step = listSteps(added).find((s) => s.id === "bridge/render_occurrences");
+    expect(step?.inputs).toEqual(["bridge/ingest"]);
+    expect(step?.phase).toBe("render");
+    expect(setOccurrencesStep(added, "bridge", "calendar")).toBe(added);
+  });
+
+  it("leaves a source of another type alone", () => {
+    expect(setOccurrencesStep(PAIR, "slack", "slack")).toBe(PAIR);
+  });
+
+  /// The wizard edits a source's render step; written first, the
+  /// occurrences step must not be taken for it.
+  it("is not the render step the wizard edits", () => {
+    const first = setOccurrencesStep(CAL, "bridge", "calendar");
+    const both = `${first}\n[[steps]]\ngroup = "bridge"\nfunction = "render_markdown"\ninputs = ["bridge/ingest"]\n`;
+    expect(sourceStepsOf("bridge", listSteps(both)).render?.function).toBe("render_markdown");
   });
 });

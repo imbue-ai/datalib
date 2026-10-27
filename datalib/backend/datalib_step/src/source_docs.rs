@@ -440,8 +440,16 @@ mod tests {
                             "{name}: holds the method it is named for, not only {holds:?}"
                         ),
                     }
-                    for needed in ["render_markdown", "render_time_series"] {
-                        let wanted = needed == "render_markdown" || t.renders_time_series();
+                    for needed in [
+                        "render_markdown",
+                        "render_time_series",
+                        "render_occurrences",
+                    ] {
+                        let wanted = match needed {
+                            "render_time_series" => t.renders_time_series(),
+                            "render_occurrences" => t.renders_occurrences(),
+                            _ => true,
+                        };
                         if wanted && !loaded.functions.iter().any(|f| f == needed) {
                             missing.push(format!("{name}: declares no `{needed}` step"));
                         }

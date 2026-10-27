@@ -24,13 +24,25 @@ text. Every other event has none and renders without the section.
 | An occurrence that was cancelled (`EXDATE`, a cancelled override) | none — a line on the series page | — |
 | An occurrence the rule produces and nobody touched | none | — |
 
-**Unchanged occurrences are never written out.** A weekly meeting with
+**Unchanged occurrences are never documents.** A weekly meeting with
 no end date has infinitely many, and even a bounded window ("the next
 year") would make the render depend on *today*: the same raw store would
 render differently tomorrow, re-render every series every day, and fail
 the fixture's byte-identical convergence. The rule on the series page is
-the whole truth about them; expanding it is a query-time job (a
-calendar view in the UI), not a stored one.
+the whole truth about them. Listing them is the `render_occurrences`
+step's job, in a store of its own that does depend on today
+(`calendar_render/src/occurrences/README.md`); `occurrences.rs` here
+runs a series forward and `recur.rs` follows its `RRULE`, refusing by
+name a part it does not follow (`BYWEEKNO`, a sub-daily `FREQ`).
+
+**The rule arithmetic is ours, not a library's.** Stalwart's `calcard`
+was tried and dropped: the last permissively licensed release (0.3.14,
+its repository since archived) cannot be built without `chrono-tz`,
+whose stale zone data `deny.toml` bans, and its successor lives in
+Stalwart's server under the AGPL. Whether it will be published
+permissively again is asked
+[on Stalwart's support portal](https://support.stalw.art/t/calcard-will-it-be-published-to-crates-io-under-a-permissive-license-again/2054);
+swapping the engine is a change to `recur.rs` alone.
 
 **A changed occurrence is a document** because it carries information
 the rule does not: a new time, a new room, a different agenda, different

@@ -21,6 +21,7 @@ mod ingest;
 mod introspect;
 mod methods;
 mod migrate;
+mod occurrences;
 mod probe;
 mod published;
 mod qmd_index;
@@ -679,6 +680,9 @@ async fn run_function(
             embedding_map::run(data_root, now, emitter).await
         }
         Function::RenderTimeSeries => time_series::run_render(&env, data_root, emitter).await,
+        Function::RenderOccurrences => {
+            occurrences::run(&env, data_root, now, params, emitter).await
+        }
         Function::TimeSeriesIndex => {
             anyhow::ensure!(
                 env.step == time_series::index_rel(),

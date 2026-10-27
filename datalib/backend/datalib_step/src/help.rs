@@ -183,6 +183,10 @@ fn examples_intro(t: SourceType) -> Vec<String> {
     let time_series = if t.renders_time_series() {
         " `render_time_series` does the same for its numbers over time, for the charts \
          and the time-series index."
+    } else if t.renders_occurrences() {
+        " `render_occurrences` lists every occurrence of every event in a window of days \
+         around now, one row each, the way Google's `singleEvents=true` does: \
+         `<id>/render_occurrences/occurrences.doltlite_db`, table `occurrences`."
     } else {
         ""
     };
@@ -494,6 +498,7 @@ fn example_step_id(f: Function) -> String {
             "slack"
         }
         Function::RenderTimeSeries => "garmin",
+        Function::RenderOccurrences => "calendar",
         Function::GridIndex | Function::QmdAggregator | Function::EmbeddingMap => {
             datalib_runtime::layout::UNIFIED_DOCUMENT_INDEX_DIR
         }

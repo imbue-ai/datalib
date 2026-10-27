@@ -45,6 +45,9 @@ pub enum StoreKind {
     Render,
     /// A source's time series (`<group>/render_time_series`).
     TimeSeries,
+    /// A calendar source's occurrences in a window of time
+    /// (`<group>/render_occurrences`).
+    Occurrences,
     /// Every source's time series rows, pointing at their stores
     /// (`unified_time_series_index/time_series_index`).
     TimeSeriesIndex,

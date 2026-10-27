@@ -18,3 +18,10 @@ function = "ingest"
 group = "calendar"
 function = "render_markdown"
 inputs = ["calendar/ingest"]
+
+# Every meeting from 30 days back to 400 ahead, one row each, beside the
+# other calendars' occurrences.
+[[steps]]
+group = "calendar"
+function = "render_occurrences"
+inputs = ["calendar/ingest"]

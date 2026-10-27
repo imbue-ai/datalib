@@ -143,6 +143,12 @@ impl SourceType {
         )
     }
 
+    /// Whether this type's events have occurrences, which its
+    /// `render_occurrences` step lists (`crate::occurrences`).
+    pub const fn renders_occurrences(self) -> bool {
+        matches!(self, SourceType::Calendar)
+    }
+
     /// The raw table whose rows are this source's items, for a type
     /// that renders no documents to count them in. The storage report
     /// already counts every table, so the number costs nothing. `None`

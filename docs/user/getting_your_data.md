@@ -94,8 +94,12 @@ happens, whichever way the calendar was reached. A recurring event is
 one page that says how it repeats, which dates were cancelled, and
 which were moved or edited; each moved or edited date gets a page of
 its own, linked both ways with the series. The dates a series simply
-repeats on are not written out: there can be infinitely many of them,
-and the rule on the series page is what they are.
+repeats on are not pages: there can be infinitely many of them, and
+the rule on the series page is what they are. To ask what is on the
+calendar on given days, the `render_occurrences` step lists every
+occurrence of every event in a window of days around its last run
+(30 back and 400 ahead unless its `days_back` and `days_ahead` say
+otherwise), one row each, the way Google's own calendar lists them.
 
 - **A CalDAV server.** Put it in `caldav.server_url` — the host alone
   is usually enough, since discovery tries `/.well-known/caldav`. The

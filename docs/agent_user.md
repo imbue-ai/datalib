@@ -396,6 +396,23 @@ Pick the surface that fits the question:
   `/data/<group>/<function>/blob/<hash>` is a row of that step's
   `blobs.sqlite`: fetch the path from `datalib-http` with the token, or
   read the row (`SELECT bytes FROM cas_objects WHERE blake3 = '<hash>'`).
+- **A calendar's occurrences** — what Google's
+  `events.list?singleEvents=true` returns: a `calendar` source's
+  `render_occurrences` step writes every occurrence of every event in a
+  window of days around its last run (30 back, 400 ahead by default) to
+  `<group>/render_occurrences/occurrences.doltlite_db`, one row each,
+  with Google's instance ids and moved and cancelled dates applied:
+
+  ```sh
+  datalib-doltlite -readonly calendar/render_occurrences/occurrences.doltlite_db \
+    "SELECT start_time, title FROM occurrences
+      WHERE start_utc < '2026-11-02T00:00:00Z' AND end_utc > '2026-10-26T00:00:00Z'
+      ORDER BY start_utc;"
+  ```
+
+  `occurrences_window` says which days the rows cover, and `unlisted`
+  names any event whose occurrences could not be worked out.
+  The columns: `datalib/backend/etl/providers/calendar_render/src/occurrences/README.md`.
 - **Semantic search** — the qmd index:
 
   ```sh
