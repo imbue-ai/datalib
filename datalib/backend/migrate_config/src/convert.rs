@@ -27,6 +27,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{bail, Context as _, Result};
+use datalib_dag::config::names_datalib_step;
 use serde::{Deserialize, Serialize};
 
 /// The file as the retired shape wrote it. Every entry key is optional
@@ -129,6 +130,8 @@ pub enum Retired {
     NoTimeSeries,
     /// A time-series source with an `embed` step (`time_series_embeds.rs`).
     TimeSeriesEmbed,
+    /// A step of datalib's own with no `command` (`step_commands.rs`).
+    ImplicitStepCommand,
 }
 
 /// Which retired shape this config is in, or `None` when it is already
@@ -144,7 +147,7 @@ pub fn retired_shape(text: &str) -> Result<Option<Retired>> {
         .iter()
         .any(|g| g.r#type.as_deref().is_some_and(|t| rename_type(t) != t));
     let retired_params = cfg.steps.iter().any(|s| {
-        s.command.is_none()
+        names_datalib_step(s.command.as_deref())
             && s.params.as_ref().is_some_and(|p| {
                 (s.function.as_deref() == Some("ingest") && has_retired_param_keys(p))
                     || has_raw_path(p)
@@ -504,7 +507,7 @@ pub fn rewrite(text: &str) -> Result<String> {
             // A command-less step is `datalib-step`'s, and its params are
             // the provider's to reshape; a custom step's are its own
             // program's.
-            if step.command.is_none() {
+            if names_datalib_step(step.command.as_deref()) {
                 if let Some(toml::Value::Table(t)) = params.as_mut() {
                     strip_raw_path(t);
                     if step.function.as_deref() == Some("ingest") {

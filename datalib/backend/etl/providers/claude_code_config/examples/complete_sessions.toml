@@ -9,6 +9,7 @@ type = "claude_code"
 [[steps]]
 group = "claude_code"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.sessions]
 path = "~/Downloads/claude-code-backup/projects"  # a copy of another machine's
@@ -18,6 +19,7 @@ path = "~/Downloads/claude-code-backup/projects"  # a copy of another machine's
 [[steps]]
 group = "claude_code"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["claude_code/ingest"]
 
 # How much of one tool result reaches the page. The raw store keeps all of
@@ -31,9 +33,11 @@ max_tool_result_bytes = 16384  # the default
 [[steps]]
 group = "claude_code"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["claude_code/render_markdown"]
 
 [[steps]]
 group = "claude_code"
 function = "embed"
+command = "datalib-step"
 inputs = ["claude_code/keyword_index"]

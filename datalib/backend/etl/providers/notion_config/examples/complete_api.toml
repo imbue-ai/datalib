@@ -9,6 +9,7 @@ type = "notion"
 [[steps]]
 group = "notion"
 function = "ingest"
+command = "datalib-step"
 
 # When to give up on rate limits. The download always honours a 429's
 # Retry-After and backs off; these only decide when to stop.
@@ -39,6 +40,7 @@ attachments = true       # files attached to pages; default true
 [[steps]]
 group = "notion"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["notion/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -46,9 +48,11 @@ inputs = ["notion/ingest"]
 [[steps]]
 group = "notion"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["notion/render_markdown"]
 
 [[steps]]
 group = "notion"
 function = "embed"
+command = "datalib-step"
 inputs = ["notion/keyword_index"]

@@ -9,6 +9,7 @@ type = "apple_messages"
 [[steps]]
 group = "apple_messages"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.messages]
 path = "~/Library/Messages"
@@ -16,4 +17,5 @@ path = "~/Library/Messages"
 [[steps]]
 group = "apple_messages"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["apple_messages/ingest"]

@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 use std::ops::Range;
 
 use anyhow::{Context as _, Result};
-use datalib_dag::config::TIME_SERIES_SOURCE_TYPES;
+use datalib_dag::config::{names_datalib_step, TIME_SERIES_SOURCE_TYPES};
 use datalib_dag::config_array::edit_string_array;
 use datalib_dag::config_order::entry_ranges;
 use serde::Deserialize;
@@ -49,7 +49,7 @@ impl StepView {
     /// `groups`.
     fn embed_under(&self, groups: &BTreeSet<&str>) -> Option<String> {
         let group = self.group.as_deref()?;
-        (self.command.is_none()
+        (names_datalib_step(self.command.as_deref())
             && self.function.as_deref() == Some(EMBED)
             && groups.contains(group))
         .then(|| format!("{group}/{EMBED}"))
@@ -130,8 +130,10 @@ fn is_one_of(entry: &str, ids: &BTreeSet<String>) -> bool {
         return false;
     };
     let key = |k: &str| step.get(k).and_then(toml::Value::as_str);
-    match (key("group"), key("function"), key("command")) {
-        (Some(group), Some(function), None) => ids.contains(&format!("{group}/{function}")),
+    match (key("group"), key("function")) {
+        (Some(group), Some(function)) if names_datalib_step(key("command")) => {
+            ids.contains(&format!("{group}/{function}"))
+        }
         _ => false,
     }
 }

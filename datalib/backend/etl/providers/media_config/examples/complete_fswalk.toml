@@ -9,6 +9,7 @@ type = "media"
 [[steps]]
 group = "media"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params]
 ignore = ["**/.Trash/**", "**/Thumbnails/**"]  # gitignore-style patterns left out of the
@@ -29,4 +30,5 @@ path = "~/Music"  # the folder to scan
 [[steps]]
 group = "media"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["media/ingest"]

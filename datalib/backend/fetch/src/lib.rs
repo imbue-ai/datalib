@@ -1,15 +1,17 @@
 //! Pinned first-use fetches. The caller knows the sha256 before the
 //! bytes are fetched; a download that hashes wrong is refused and
-//! nothing of it is kept. Three users: qmd's GGUF models
-//! (`datalib_qmd_models`), the perseus embedder's model files, and the
-//! Node runtime a release tarball names in its manifest ([`runtime`]).
+//! nothing of it is kept. Users: qmd's GGUF models
+//! (`datalib_qmd_models`), the perseus embedder's model files, the
+//! Node runtime a release tarball names in its manifest ([`runtime`]),
+//! and packages (`datalib_packages`), whose manifest is the one document
+//! fetched unpinned ([`get_unpinned`]) so its hash can be shown and pinned.
 
 pub mod runtime;
 
 use std::fs;
 use std::io::{Read, Write};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -18,6 +20,7 @@ use sha2::{Digest, Sha256};
 
 const CHUNK: usize = 1 << 20;
 const ATTEMPTS: u32 = 6;
+const MAX_REDIRECTS: usize = 10;
 
 pub use runtime::{enable_runtime_fetch, ensure_runtime, ReleaseRuntimeFetcher};
 
@@ -55,13 +58,13 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// GET `url` to `<dest>.partial`, hashing as it streams; rename into
-/// place only on a matching digest. `tag` prefixes the status lines
-/// (`[qmd-models]`, `[runtime]`). HuggingFace has answered a cold fetch
-/// with 429 before, so a retryable status backs off and tries again
-/// rather than failing the sync on the first refusal.
-pub fn download_verified(tag: &str, url: &str, want: &str, dest: &Path) -> Result<()> {
-    let client = reqwest::blocking::Client::builder()
+fn client() -> Result<reqwest::blocking::Client> {
+    client_with(reqwest::redirect::Policy::default())
+}
+
+fn client_with(redirects: reqwest::redirect::Policy) -> Result<reqwest::blocking::Client> {
+    reqwest::blocking::Client::builder()
+        .redirect(redirects)
         .tls_backend_preconfigured(tls_config())
         .connect_timeout(Duration::from_secs(30))
         // The whole-request timeout would cap a multi-GB download; a
@@ -70,7 +73,74 @@ pub fn download_verified(tag: &str, url: &str, want: &str, dest: &Path) -> Resul
         .timeout(None)
         .user_agent(concat!("datalib/", env!("CARGO_PKG_VERSION")))
         .build()
-        .context("build http client")?;
+        .context("build http client")
+}
+
+/// A small document fetched before its hash was known.
+pub struct Unpinned {
+    pub bytes: Vec<u8>,
+    pub sha256: String,
+    /// Where the bytes came from after the redirects that stay on the
+    /// requested host: GitHub's `releases/latest/download/…` gives the
+    /// tagged release's URL, not the expiring CDN link it then sends to.
+    pub final_url: String,
+}
+
+/// GET a small document whose hash is not known yet — a package manifest
+/// being looked up — refusing one over `limit` bytes. A caller that goes
+/// on to trust the bytes pins the hash this returns.
+pub fn get_unpinned(url: &str, limit: u64) -> Result<Unpinned> {
+    let hops = Arc::new(Mutex::new(Vec::new()));
+    let seen = hops.clone();
+    let policy = reqwest::redirect::Policy::custom(move |attempt| {
+        if attempt.previous().len() > MAX_REDIRECTS {
+            return attempt.error("too many redirects");
+        }
+        seen.lock().unwrap().push(attempt.url().clone());
+        attempt.follow()
+    });
+    let requested = reqwest::Url::parse(url).with_context(|| format!("parse {url}"))?;
+    let resp = client_with(policy)?
+        .get(requested.clone())
+        .send()
+        .with_context(|| format!("GET {url}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        bail!("{url}: HTTP {status}");
+    }
+    let final_url = last_on_host(&requested, &hops.lock().unwrap()).to_string();
+    let mut body = Vec::new();
+    resp.take(limit + 1)
+        .read_to_end(&mut body)
+        .with_context(|| format!("read {url}"))?;
+    if body.len() as u64 > limit {
+        bail!("{url}: larger than {limit} bytes");
+    }
+    Ok(Unpinned {
+        sha256: sha256_bytes(&body),
+        bytes: body,
+        final_url,
+    })
+}
+
+fn last_on_host<'a>(requested: &'a reqwest::Url, hops: &'a [reqwest::Url]) -> &'a reqwest::Url {
+    hops.iter()
+        .take_while(|u| u.host_str() == requested.host_str())
+        .last()
+        .unwrap_or(requested)
+}
+
+pub fn sha256_bytes(bytes: &[u8]) -> String {
+    hex(&Sha256::digest(bytes))
+}
+
+/// GET `url` to `<dest>.partial`, hashing as it streams; rename into
+/// place only on a matching digest. `tag` prefixes the status lines
+/// (`[qmd-models]`, `[runtime]`). HuggingFace has answered a cold fetch
+/// with 429 before, so a retryable status backs off and tries again
+/// rather than failing the sync on the first refusal.
+pub fn download_verified(tag: &str, url: &str, want: &str, dest: &Path) -> Result<()> {
+    let client = client()?;
     let mut delay = Duration::from_secs(2);
     for attempt in 1..=ATTEMPTS {
         match fetch_once(&client, url, want, dest) {
@@ -187,6 +257,21 @@ mod tests {
         let path = dir.path().join("f");
         fs::write(&path, b"hello").unwrap();
         assert_eq!(sha256_file(&path).unwrap(), HELLO_SHA);
+    }
+
+    /// GitHub's `latest` link redirects to the tagged release on
+    /// github.com and then to an expiring CDN URL; a package pins the
+    /// tagged one.
+    #[test]
+    fn final_url_stops_where_the_redirects_leave_the_host() {
+        let url = |s: &str| reqwest::Url::parse(s).unwrap();
+        let requested = url("https://github.com/a/b/releases/latest/download/m.toml");
+        let hops = [
+            url("https://github.com/a/b/releases/download/v1/m.toml"),
+            url("https://release-assets.githubusercontent.com/x?sig=1"),
+        ];
+        assert_eq!(last_on_host(&requested, &hops), &hops[0]);
+        assert_eq!(last_on_host(&requested, &[]), &requested);
     }
 
     #[test]

@@ -6,7 +6,7 @@
 // A save goes through the backend's own loader, so a rejection comes
 // back as the loader's message rather than a broken root; a reload
 // never overwrites unsaved text.
-import { onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useApi } from "@/cards/cardApi";
 import { subscribeLive } from "@/live";
 import { isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
@@ -21,6 +21,7 @@ const path = ref("");
 const dirty = ref(false);
 const busy = ref(false);
 const cardEl = ref<HTMLElement | null>(null);
+const gutterEl = ref<HTMLElement | null>(null);
 const banner = ref<{ ok: boolean; text: string } | null>(null);
 const canReveal = isDesktopApp();
 const revealLabel = revealActionLabel();
@@ -53,6 +54,18 @@ async function load() {
   } catch (e) {
     banner.value = { ok: false, text: (e as Error).message };
   }
+}
+
+// The loader's messages name a line ("line 12: …"), so the editor
+// numbers them. Lines don't wrap, so one number is one line of text.
+const lineNumbers = computed(() => {
+  const count = text.value.split("\n").length;
+  return Array.from({ length: count }, (_, i) => i + 1).join("\n");
+});
+const gutterWidth = computed(() => `${String(text.value.split("\n").length).length + 1}ch`);
+
+function syncGutter(e: Event) {
+  if (gutterEl.value) gutterEl.value.scrollTop = (e.target as HTMLTextAreaElement).scrollTop;
 }
 
 function onEdit() {
@@ -123,7 +136,19 @@ onBeforeUnmount(() => {
         {{ revealLabel }}
       </button>
     </p>
-    <textarea v-model="text" class="m2-editor cfg-editor" spellcheck="false" @input="onEdit" />
+    <div class="cfg-editor">
+      <pre ref="gutterEl" class="cfg-gutter" :style="{ width: gutterWidth }" aria-hidden="true">{{
+        lineNumbers
+      }}</pre>
+      <textarea
+        v-model="text"
+        class="m2-editor cfg-text"
+        wrap="off"
+        spellcheck="false"
+        @input="onEdit"
+        @scroll="syncGutter"
+      />
+    </div>
     <div class="cfg-actions">
       <button class="cfg-btn" :disabled="!dirty || busy" @click="save">Save</button>
       <button class="cfg-btn muted" :disabled="!dirty || busy" @click="discard">
@@ -164,17 +189,48 @@ onBeforeUnmount(() => {
 .cfg-editor {
   flex: 1 1 auto;
   min-height: 0;
-  width: 100%;
-  padding: 10px 12px;
+  display: flex;
   border: 1px solid var(--datalib-border);
   border-radius: var(--datalib-radius);
   background: var(--datalib-input-bg);
-  color: var(--datalib-fg);
+  overflow: hidden;
+}
+.cfg-gutter,
+.cfg-text {
+  margin: 0;
+  padding: 10px 12px;
   font-family: var(--datalib-mono);
   font-size: 12.5px;
   line-height: 1.55;
+  box-sizing: content-box;
+}
+.cfg-gutter {
+  flex: none;
+  /* Room for the text's horizontal scrollbar, so the last number can
+     scroll level with the last line. */
+  padding-right: 8px;
+  padding-left: 8px;
+  padding-bottom: 30px;
+  overflow: hidden;
+  border-right: 1px solid var(--datalib-border);
+  color: var(--datalib-muted);
+  text-align: right;
+  user-select: none;
+}
+.cfg-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--datalib-fg);
+  white-space: pre;
+  overflow: auto;
   resize: none;
   box-sizing: border-box;
+}
+.cfg-editor:focus-within {
+  border-color: var(--datalib-accent);
 }
 .cfg-actions {
   display: flex;

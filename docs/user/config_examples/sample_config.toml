@@ -22,11 +22,13 @@ id = "unified_document_index"
 [[steps]]
 group = "unified_document_index"
 function = "grid_index"
+command = "datalib-step"
 inputs = ["gmail-takeout/render_markdown", "slack/render_markdown", "claude-api/render_markdown"]
 
 [[steps]]
 group = "unified_document_index"
 function = "qmd_aggregator"
+command = "datalib-step"
 inputs = ["gmail-takeout/keyword_index", "gmail-takeout/embed", "slack/keyword_index", "slack/embed", "claude-api/keyword_index", "claude-api/embed"]
 
 # Google Takeout Gmail export. The `mbox` table is the method: it puts
@@ -40,22 +42,26 @@ type = "email"
 [[steps]]
 group = "gmail-takeout"
 function = "ingest"
+command = "datalib-step"
 [steps.params.mbox]
 path = "~/backups/Takeout/Mail/All mail Including Spam and Trash.mbox"
 
 [[steps]]
 group = "gmail-takeout"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["gmail-takeout/ingest"]
 
 [[steps]]
 group = "gmail-takeout"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["gmail-takeout/render_markdown"]
 
 [[steps]]
 group = "gmail-takeout"
 function = "embed"
+command = "datalib-step"
 inputs = ["gmail-takeout/keyword_index"]
 
 # Slack workspace mirror. Credentials come from `latchkey` at runtime
@@ -70,6 +76,7 @@ type = "slack"
 [[steps]]
 group = "slack"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.common]
 blob_size_limit_bytes = "1 MB"  # skip larger file uploads
@@ -96,16 +103,19 @@ channels = ["project-data-liberation"]
 [[steps]]
 group = "slack"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["slack/ingest"]
 
 [[steps]]
 group = "slack"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["slack/render_markdown"]
 
 [[steps]]
 group = "slack"
 function = "embed"
+command = "datalib-step"
 inputs = ["slack/keyword_index"]
 
 # Anthropic / claude.ai conversation mirror. Credentials come from
@@ -120,6 +130,7 @@ type = "claude"
 [[steps]]
 group = "claude-api"
 function = "ingest"
+command = "datalib-step"
 [steps.params.api]
 # refresh_most_recent_n_chat_count = 3   # force-refetch top-N by updated_at
 # since = "2025-01-01"      # only sync conversations updated at/after this
@@ -129,16 +140,19 @@ function = "ingest"
 [[steps]]
 group = "claude-api"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["claude-api/ingest"]
 
 [[steps]]
 group = "claude-api"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["claude-api/render_markdown"]
 
 [[steps]]
 group = "claude-api"
 function = "embed"
+command = "datalib-step"
 inputs = ["claude-api/keyword_index"]
 
 # The app's own surface: `unified_document_index` serves the grid, the document

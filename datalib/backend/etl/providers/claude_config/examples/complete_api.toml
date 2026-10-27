@@ -9,6 +9,7 @@ type = "claude"
 [[steps]]
 group = "claude"
 function = "ingest"
+command = "datalib-step"
 
 # When to give up on rate limits. The download always backs off and
 # retries; these only decide when to stop.
@@ -39,6 +40,7 @@ project_uuids = [                     # only these projects, by id or pasted lin
 [[steps]]
 group = "claude"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["claude/ingest"]
 
 [steps.params]
@@ -50,9 +52,11 @@ max_project_doc_bytes = 131072  # cut a project knowledge document's text at thi
 [[steps]]
 group = "claude"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["claude/render_markdown"]
 
 [[steps]]
 group = "claude"
 function = "embed"
+command = "datalib-step"
 inputs = ["claude/keyword_index"]

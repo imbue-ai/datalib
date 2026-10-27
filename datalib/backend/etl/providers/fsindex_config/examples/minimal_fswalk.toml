@@ -9,6 +9,7 @@ type = "fsindex"
 [[steps]]
 group = "fsindex"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.fswalk]
 path = "~/Documents/starfleet"
@@ -18,4 +19,5 @@ path = "~/Documents/starfleet"
 [[steps]]
 group = "fsindex"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["fsindex/ingest"]

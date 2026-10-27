@@ -10,6 +10,7 @@ type = "google_drive"
 [[steps]]
 group = "google_drive"
 function = "ingest"
+command = "datalib-step"
 
 # When to give up on rate limits. The download always backs off and
 # retries; these only decide when to stop.
@@ -44,6 +45,7 @@ file_ids = [               # only these files, as a bare id or a pasted docs.goo
 [[steps]]
 group = "google_drive"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["google_drive/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
@@ -51,9 +53,11 @@ inputs = ["google_drive/ingest"]
 [[steps]]
 group = "google_drive"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["google_drive/render_markdown"]
 
 [[steps]]
 group = "google_drive"
 function = "embed"
+command = "datalib-step"
 inputs = ["google_drive/keyword_index"]

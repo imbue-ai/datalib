@@ -10,6 +10,7 @@ type = "yolink"
 [[steps]]
 group = "yolink"
 function = "ingest"
+command = "datalib-step"
 
 # When to give up on failed requests. The download retries and backs off
 # on its own; these only decide when to stop.
@@ -46,6 +47,7 @@ device_udid = "ffeeddccbbaa99887766554433221100"
 [[steps]]
 group = "yolink"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["yolink/ingest"]
 
 # Its numbers as time series, for charts and the time-series index: add
@@ -53,6 +55,7 @@ inputs = ["yolink/ingest"]
 [[steps]]
 group = "yolink"
 function = "render_time_series"
+command = "datalib-step"
 inputs = ["yolink/ingest"]
 
 # Free-text search by keyword (BM25). Add it to
@@ -61,4 +64,5 @@ inputs = ["yolink/ingest"]
 [[steps]]
 group = "yolink"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["yolink/render_markdown"]

@@ -10,10 +10,12 @@ type = "contacts"
 [[steps]]
 group = "contacts"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.fastmail]
 
 [[steps]]
 group = "contacts"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["contacts/ingest"]

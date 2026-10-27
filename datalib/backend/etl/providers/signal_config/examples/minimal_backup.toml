@@ -12,6 +12,7 @@ type = "signal"
 [[steps]]
 group = "signal"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.backup]
 path = "~/Downloads/signal-backup"
@@ -19,4 +20,5 @@ path = "~/Downloads/signal-backup"
 [[steps]]
 group = "signal"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["signal/ingest"]

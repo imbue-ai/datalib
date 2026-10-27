@@ -9,6 +9,7 @@ type = "codex"
 [[steps]]
 group = "codex"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.sessions]
 path = "~/Downloads/codex-backup"  # a copy of another machine's Codex home, the folder
@@ -18,6 +19,7 @@ path = "~/Downloads/codex-backup"  # a copy of another machine's Codex home, the
 [[steps]]
 group = "codex"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["codex/ingest"]
 
 # How much of one tool output reaches the page. The raw store keeps all of
@@ -31,9 +33,11 @@ max_tool_result_bytes = 16384  # the default
 [[steps]]
 group = "codex"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["codex/render_markdown"]
 
 [[steps]]
 group = "codex"
 function = "embed"
+command = "datalib-step"
 inputs = ["codex/keyword_index"]

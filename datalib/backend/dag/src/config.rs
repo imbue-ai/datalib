@@ -50,6 +50,10 @@ pub struct DagConfig {
     /// a request for its prefix arrives. Empty is normal.
     #[serde(default)]
     pub applets: Vec<AppletEntry>,
+    /// Packages this root uses: programs from outside datalib that its
+    /// steps and applets run (`docs/dev/packages.md`).
+    #[serde(default)]
+    pub packages: Vec<PackageEntry>,
     /// Named locks steps hold, beside the ones every config has
     /// (`supervisor::locks::defaults`).
     #[serde(default)]
@@ -336,6 +340,48 @@ pub struct GroupEntry {
 /// runs the `source` group's renderer under it.
 pub const DIFF_GROUP_TYPE: &str = "diff";
 
+/// One `[[packages]]` entry: a package this root uses, pinned to one
+/// manifest and unpacked under [`PackageEntry::dir_rel`]. A step or applet
+/// runs one of its programs by naming the program's path there in its
+/// `command`. `docs/dev/packages.md` is the format and the install.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackageEntry {
+    /// What steps and applets name it by. One path segment.
+    pub id: String,
+    /// What a person typed to add it (`github:owner/repo`), looked up
+    /// again to offer an update. Never read by the runner.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// The manifest this entry is pinned to.
+    pub url: String,
+    /// The manifest's sha256, which pins every byte the package unpacks:
+    /// the manifest names each archive's own sha256.
+    pub sha256: String,
+}
+
+impl PackageEntry {
+    /// Its unpacked directory, relative to the data root.
+    pub fn dir_rel(&self) -> String {
+        datalib_runtime::layout::package_dir_rel(&self.sha256)
+    }
+}
+
+/// Why `command` cannot run: its program is in a package directory no
+/// `[[packages]]` entry pins, so nothing unpacks it there.
+fn unlisted_package(command: &str, packages: &BTreeMap<&str, String>) -> Option<String> {
+    let argv0 = command.split_whitespace().next()?;
+    let rest = argv0.strip_prefix(datalib_runtime::layout::PACKAGES_DIR_REL)?;
+    let dir = rest.strip_prefix('/')?.split('/').next()?;
+    let dir = format!("{}/{dir}", datalib_runtime::layout::PACKAGES_DIR_REL);
+    (!packages.values().any(|d| *d == dir)).then(|| {
+        format!(
+            "its program is in {dir}/, which no `[[packages]]` entry pins, so nothing puts \
+             it there"
+        )
+    })
+}
+
 /// One applet instance. Deliberately a subset of [`StepEntry`]: an applet
 /// declares no `inputs` because it is not scheduled and owns no artifacts.
 /// There is no `title` either — the label the gallery shows is written by
@@ -353,8 +399,8 @@ pub struct AppletEntry {
     /// nothing else reads it.
     #[serde(default)]
     pub group: Option<String>,
-    /// The command to run, split shell-style, resolved the same way a step's
-    /// is (`binary_dir`, then `PATH`).
+    /// The command to run, split shell-style, resolved the same way a
+    /// step's is.
     pub command: String,
     /// Arbitrary applet parameters, forwarded verbatim as the JSON in the
     /// applet's `--params-file`.
@@ -398,12 +444,15 @@ pub struct StepEntry {
     /// A directory staged by hand is the `path` of a method table in
     /// `params` instead, and is not an artifact the DAG knows about.
     pub inputs: Vec<String>,
-    /// The command to run, split shell-style into an argv. `None` means the
-    /// built-in `datalib-step`, which reads its function and its group's
-    /// type from the environment — so a step with no command needs a group.
-    /// The child's cwd is `data_root`, so a relative multi-component argv[0]
-    /// resolves against the data root; use a bare name or an absolute path
-    /// for binaries elsewhere.
+    /// The command to run, split shell-style into an argv. A bare program
+    /// name is looked up in `binary_dir`, then the library's `system/bin`,
+    /// then `PATH`; a relative path with a `/` in it is relative to the
+    /// data root, the child's working directory, which is how a step runs
+    /// a package's program. `datalib-step`, the step program datalib
+    /// ships, reads its function and its group's type from the
+    /// environment, so its steps write it with no arguments and need a
+    /// group. `None` is read as `datalib-step`: configs written before
+    /// every step named its program left it out.
     pub command: Option<String>,
     /// Arbitrary step parameters, forwarded verbatim as the JSON in the
     /// step's `--params-file`.
@@ -503,6 +552,22 @@ impl TryFrom<StepTable> for StepEntry {
             reads: t.reads,
         })
     }
+}
+
+impl StepEntry {
+    /// Whether it runs `datalib-step`. The runner still does more for that
+    /// program than for any other: the launch's migrate and compact
+    /// passes, the qmd locks and unpinned reads its functions default to,
+    /// and the params check against its sources' schemas.
+    pub fn runs_datalib_step(&self) -> bool {
+        names_datalib_step(self.command.as_deref())
+    }
+}
+
+/// Whether a step's `command`, as written, runs `datalib-step`: it names
+/// that program, or it is left out.
+pub fn names_datalib_step(command: Option<&str>) -> bool {
+    command.is_none_or(|c| c.split_whitespace().next().is_some_and(is_datalib_step))
 }
 
 /// The id a `[[steps]]` table would get, read off the raw TOML so a step
@@ -772,8 +837,14 @@ fn expand_tilde(p: &Path) -> PathBuf {
 pub const RESERVED_APPLET_ID: &str = "user";
 
 pub fn validate_applets(cfg: &DagConfig) -> Result<()> {
+    let package_dirs: BTreeMap<&str, String> = cfg
+        .packages
+        .iter()
+        .map(|p| (p.id.as_str(), p.dir_rel()))
+        .collect();
     let (_, diags) = accept_applets(
         candidates(&cfg.applets, EntryRef::applet, |a| Some(a.id.clone())),
+        &package_dirs,
         None,
     );
     if let Some(d) = diags.first() {
@@ -867,6 +938,8 @@ struct RawConfig {
     #[serde(default)]
     applets: Vec<toml::Spanned<toml::Value>>,
     #[serde(default)]
+    packages: Vec<toml::Spanned<toml::Value>>,
+    #[serde(default)]
     locks: Vec<toml::Spanned<toml::Value>>,
     #[serde(default)]
     checkpoint_cadence: Option<CheckpointCadence>,
@@ -932,6 +1005,7 @@ fn candidates<T: Clone>(
 /// Every entry on its way in, plus which groups anything *wrote* under.
 struct Candidates {
     locks: Vec<Candidate<LockEntry>>,
+    packages: Vec<Candidate<PackageEntry>>,
     groups: Vec<Candidate<GroupEntry>>,
     steps: Vec<Candidate<StepEntry>>,
     applets: Vec<Candidate<AppletEntry>>,
@@ -949,6 +1023,7 @@ fn cfg_candidates(cfg: &DagConfig) -> Candidates {
     named.extend(cfg.applets.iter().filter_map(|a| a.group.clone()));
     Candidates {
         locks: candidates(&cfg.locks, EntryRef::lock, |l| Some(l.name.clone())),
+        packages: candidates(&cfg.packages, EntryRef::package, |p| Some(p.id.clone())),
         groups: candidates(&cfg.groups, EntryRef::group, |g| Some(g.id.clone())),
         steps: candidates(&cfg.steps, EntryRef::step, |e| Some(e.id.clone())),
         applets: candidates(&cfg.applets, EntryRef::applet, |a| Some(a.id.clone())),
@@ -959,6 +1034,7 @@ fn cfg_candidates(cfg: &DagConfig) -> Candidates {
 /// What survived the entry rules, and what each problem cost.
 struct Accepted {
     locks: Vec<LockEntry>,
+    packages: Vec<PackageEntry>,
     /// Every lock a step may hold: the defaults, resized or joined by
     /// what the config declares.
     lock_specs: Vec<crate::supervisor::locks::LockSpec>,
@@ -983,11 +1059,25 @@ fn accept_entries(c: Candidates, text: Option<&str>) -> Accepted {
         .collect();
     diags.extend(group_diags);
 
+    let (packages, package_diags) = accept_packages(c.packages, text);
+    diags.extend(package_diags);
+    let package_dirs: BTreeMap<&str, String> = packages
+        .iter()
+        .map(|p| (p.id.as_str(), p.dir_rel()))
+        .collect();
+
     let by_id: BTreeMap<&str, &GroupEntry> = groups.iter().map(|g| (g.id.as_str(), g)).collect();
-    let (steps, step_diags) = accept_steps(c.steps, &by_id, &dropped_groups, &lock_specs, text);
+    let (steps, step_diags) = accept_steps(
+        c.steps,
+        &by_id,
+        &dropped_groups,
+        &lock_specs,
+        &package_dirs,
+        text,
+    );
     diags.extend(step_diags);
 
-    let (applets, applet_diags) = accept_applets(c.applets, text);
+    let (applets, applet_diags) = accept_applets(c.applets, &package_dirs, text);
     diags.extend(applet_diags);
     for a in &applets {
         if let Some(g) = &a.group {
@@ -1008,12 +1098,64 @@ fn accept_entries(c: Candidates, text: Option<&str>) -> Accepted {
 
     Accepted {
         locks,
+        packages,
         lock_specs,
         groups,
         steps,
         applets,
         diagnostics: diags,
     }
+}
+
+/// The package rules: an id is one path segment, unique, the earlier entry
+/// keeping a contested one; the pin is a whole sha256.
+fn accept_packages(
+    candidates: Vec<Candidate<PackageEntry>>,
+    text: Option<&str>,
+) -> (Vec<PackageEntry>, Vec<Diagnostic>) {
+    let mut accepted = Vec::with_capacity(candidates.len());
+    let mut diags = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    for c in candidates {
+        let id = c.entry.id.clone();
+        if !valid_id_segment(&id) {
+            diags.push(c.diag(
+                Severity::Rejected,
+                text,
+                Some("id"),
+                format!("id {id:?} is not usable: {SEGMENT_RULE}"),
+            ));
+            continue;
+        }
+        let sha = &c.entry.sha256;
+        if sha.len() != 64
+            || !sha
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            diags.push(c.diag(
+                Severity::Rejected,
+                text,
+                Some("sha256"),
+                format!("sha256 {sha:?} is not a sha256: 64 lowercase hex digits"),
+            ));
+            continue;
+        }
+        if !seen.insert(id.clone()) {
+            diags.push(
+                c.diag(
+                    Severity::Rejected,
+                    text,
+                    Some("id"),
+                    format!("duplicate id {id:?}"),
+                )
+                .with_help("the earlier entry keeps this id; give this one another"),
+            );
+            continue;
+        }
+        accepted.push(c.entry);
+    }
+    (accepted, diags)
 }
 
 /// The group rules. An id is one directory name, so it is one segment and
@@ -1228,6 +1370,7 @@ fn accept_steps(
     groups: &BTreeMap<&str, &GroupEntry>,
     dropped_groups: &BTreeSet<String>,
     locks: &[crate::supervisor::locks::LockSpec],
+    packages: &BTreeMap<&str, String>,
     text: Option<&str>,
 ) -> (Vec<(StepEntry, StepSpec)>, Vec<Diagnostic>) {
     let mut accepted: Vec<(StepEntry, StepSpec)> = Vec::with_capacity(candidates.len());
@@ -1360,14 +1503,17 @@ fn accept_steps(
                     ));
                     continue;
                 }
-                if c.entry.command.is_none() {
+                // The retired `datalib-step <subcommand>` shape gets its own
+                // message below.
+                let retired = c.entry.command.as_deref().and_then(retired_subcommand);
+                if c.entry.runs_datalib_step() && retired.is_none() {
                     diags.push(
                         c.diag(
                             Severity::Rejected,
                             text,
                             Some("id"),
-                            "a step with no `command` runs `datalib-step`, which takes the \
-                             provider from its group's `type` and the tree it writes from \
+                            "a step that runs `datalib-step` gets the provider from its \
+                             group's `type` and the tree it writes from \
                              `<group>/<function>` — so it has to be declared under a group",
                         )
                         .with_help(
@@ -1496,7 +1642,7 @@ fn accept_steps(
                 .with_help("name the group instead, in its `[[groups]]` entry"),
             );
         }
-        if c.entry.command.is_none() {
+        if c.entry.runs_datalib_step() {
             for (path, why) in INERT_PARAM_PATHS {
                 if inert_path_is_written(c.entry.params.as_ref(), path) {
                     let d = Diagnostic::new(Severity::Warning, format!("`{path}` {why}"))
@@ -1514,6 +1660,15 @@ fn accept_steps(
             }
         }
 
+        if let Some(why) = c
+            .entry
+            .command
+            .as_deref()
+            .and_then(|command| unlisted_package(command, packages))
+        {
+            diags.push(c.diag(Severity::Rejected, text, Some("command"), why));
+            continue;
+        }
         let spec = match spec_of(&c.entry, group_type, source_group) {
             Ok(spec) => spec,
             Err(e) => {
@@ -1675,7 +1830,7 @@ fn params_key_span(
 }
 
 fn is_builtin(e: &StepEntry, function: &str) -> bool {
-    e.command.is_none() && e.function.as_deref() == Some(function)
+    e.runs_datalib_step() && e.function.as_deref() == Some(function)
 }
 
 /// Every step a built-in `qmd_aggregator` reads, or `None` in a config
@@ -1708,8 +1863,8 @@ fn id_list<'a>(ids: impl Iterator<Item = &'a str>) -> String {
     all.join(", ")
 }
 
-/// The program a step runs when it writes no `command`. Resolved like any
-/// other bare name: `binary_dir`, then `PATH`.
+/// The step program datalib ships, and what a step that writes no
+/// `command` runs. Resolved like any other bare name.
 pub const BUILTIN_STEP_PROGRAM: &str = "datalib-step";
 
 /// Built-in steps that read their inputs off disk rather than at a pinned
@@ -1795,20 +1950,20 @@ fn spec_of(
     }
     let mut spec = StepSpec::new(&e.id, StepRun::Subprocess { argv, env, params });
     spec.code_version = e.code_version.clone();
-    spec.migrates = e.command.is_none();
-    spec.compacts = e.command.is_none();
+    spec.migrates = e.runs_datalib_step();
+    spec.compacts = e.runs_datalib_step();
     spec.group = e.group.clone();
     spec.group_type = group_type.map(str::to_string);
     spec.function = e.function.clone();
     spec.reads_pinned = match e.reads {
         Some(reads) => reads == Reads::Pinned,
-        None => e.command.is_some() || !reads_unpinned(group_type, e.function.as_deref()),
+        None => !e.runs_datalib_step() || !reads_unpinned(group_type, e.function.as_deref()),
     };
-    spec.locks = match (&e.locks, &e.command) {
-        (Some(locks), _) => Some(locks.held()),
-        (None, None) => builtin_lock(e.function.as_deref())
+    spec.locks = match &e.locks {
+        Some(locks) => Some(locks.held()),
+        None if e.runs_datalib_step() => builtin_lock(e.function.as_deref())
             .map(|lock| vec![(lock.to_string(), crate::supervisor::locks::Hold::Shared)]),
-        (None, Some(_)) => None,
+        None => None,
     };
     for i in &e.inputs {
         spec.inputs.push(crate::ArtifactPath::parse(i)?);
@@ -1825,6 +1980,7 @@ fn spec_of(
 /// Step ids are deliberately not consulted — an applet writes no artifacts.
 fn accept_applets(
     candidates: Vec<Candidate<AppletEntry>>,
+    packages: &BTreeMap<&str, String>,
     text: Option<&str>,
 ) -> (Vec<AppletEntry>, Vec<Diagnostic>) {
     let mut accepted = Vec::with_capacity(candidates.len());
@@ -1873,6 +2029,10 @@ fn accept_applets(
         }
         if c.entry.command.trim().is_empty() {
             diags.push(c.diag(Severity::Rejected, text, Some("command"), "empty command"));
+            continue;
+        }
+        if let Some(why) = unlisted_package(&c.entry.command, packages) {
+            diags.push(c.diag(Severity::Rejected, text, Some("command"), why));
             continue;
         }
         accepted.push(c.entry);
@@ -2042,10 +2202,19 @@ fn entries_of(text: &str) -> Entries {
             named.extend(v.get("group").and_then(v_str));
         },
     );
+    let packages = deserialize_each(
+        text,
+        raw.packages,
+        EntryRef::package,
+        id_key,
+        &mut diags,
+        |_, _| {},
+    );
 
     let accepted = accept_entries(
         Candidates {
             locks,
+            packages,
             groups,
             steps,
             applets,
@@ -2082,6 +2251,7 @@ fn entries_of(text: &str) -> Entries {
             groups: accepted.groups,
             steps,
             applets: accepted.applets,
+            packages: accepted.packages,
             locks: accepted.locks,
             checkpoint_cadence: raw.checkpoint_cadence,
             run_history: raw.run_history,
@@ -2219,6 +2389,7 @@ impl DagConfig {
             groups: Vec::new(),
             steps: Vec::new(),
             applets: Vec::new(),
+            packages: Vec::new(),
             locks: Vec::new(),
             checkpoint_cadence: None,
             run_history: None,
@@ -4398,5 +4569,94 @@ inputs = ["slack-diff/keyword_index", "slack-diff/embed"]
             assert_eq!(json, format!("\"{}\"", v.as_str()), "{v:?}");
             assert_eq!(Reads::parse(v.as_str()), Some(v));
         }
+    }
+
+    const PACKAGE_SHA: &str = "3f9a1c2e3f9a1c2e3f9a1c2e3f9a1c2e3f9a1c2e3f9a1c2e3f9a1c2e3f9a1c2e";
+
+    fn with_package(step: &str) -> String {
+        format!(
+            "[[packages]]\nid = \"weather\"\nurl = \"https://h/datalib-package.toml\"\n\
+             sha256 = \"{PACKAGE_SHA}\"\n\n[[groups]]\nid = \"sfo\"\ntype = \"weather\"\n\n\
+             [[steps]]\ngroup = \"sfo\"\nfunction = \"ingest\"\n{step}\n"
+        )
+    }
+
+    const PACKAGE_DIR: &str = "system/packages/3f9a1c2e3f9a1c2e";
+
+    fn argv_of(check: &ConfigCheck, id: &str) -> Vec<String> {
+        let spec = check.graph.steps.iter().find(|s| s.id == id).unwrap();
+        let StepRun::Subprocess { argv, .. } = &spec.run else {
+            panic!("{:?}", spec.run)
+        };
+        argv.clone()
+    }
+
+    /// A package's program is named by its path under the data root, like
+    /// any other relative path: the pin is in that path, so an update
+    /// changes argv and the step re-runs.
+    #[test]
+    fn a_package_step_runs_the_path_its_command_names() {
+        let check = check_text(&with_package(&format!(
+            "command = \"{PACKAGE_DIR}/bin/fetch-weather --station KSFO\""
+        )));
+        assert!(check.nothing_dropped(), "{:?}", check.diagnostics);
+        assert_eq!(
+            argv_of(&check, "sfo/ingest")[..3],
+            [
+                format!("{PACKAGE_DIR}/bin/fetch-weather"),
+                "--station".to_string(),
+                "KSFO".to_string()
+            ]
+        );
+        assert!(!check.cfg.steps[0].runs_datalib_step());
+        assert!(!check.graph.steps[0].migrates);
+    }
+
+    #[test]
+    fn a_command_in_a_package_no_entry_pins_is_dropped() {
+        let other = "system/packages/0000000000000000/bin/fetch-weather";
+        for text in [
+            with_package(&format!("command = \"{other}\"")),
+            format!(
+                "{}\n[[applets]]\nid = \"chart\"\ncommand = \"{other}\"\n",
+                with_package("command = \"datalib-step\"")
+            ),
+        ] {
+            let check = check_text(&text);
+            assert_eq!(check.dropped(), 1, "{text}");
+            assert!(
+                check
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.message.contains("no `[[packages]]` entry pins")),
+                "{:?}",
+                check.diagnostics
+            );
+        }
+    }
+
+    /// `command = "datalib-step"` and no `command` are one step: the second
+    /// is how a config written before every step named its program reads.
+    #[test]
+    fn datalib_step_written_or_left_out_is_the_same_step() {
+        let written = check_text(&with_package("command = \"datalib-step\""));
+        let left_out = check_text(&with_package(""));
+        for check in [&written, &left_out] {
+            assert!(check.nothing_dropped(), "{:?}", check.diagnostics);
+            assert!(check.cfg.steps[0].runs_datalib_step());
+            assert!(check.graph.steps[0].migrates && check.graph.steps[0].compacts);
+            assert_eq!(argv_of(check, "sfo/ingest"), [BUILTIN_STEP_PROGRAM]);
+        }
+    }
+
+    #[test]
+    fn a_package_pin_must_be_a_sha256() {
+        let text = with_package("").replace(PACKAGE_SHA, "abc");
+        let check = check_text(&text);
+        assert!(check.cfg.packages.is_empty());
+        assert!(check
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("not a sha256")));
     }
 }

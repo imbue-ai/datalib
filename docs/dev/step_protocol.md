@@ -38,10 +38,13 @@ outside any group is also legal — `id = "weather/ingest"` written
 verbatim, no `group` or `function` — and is the shape for a one-off
 executable that belongs to no source.
 
-A step with no `command` at all is a built-in one: it runs
-`datalib-step`, which takes the function and the group's `type` from
-the environment below. That is the shape every source's own steps
-have, and it is only legal under a group.
+`command = "datalib-step"` runs the step program datalib ships, which
+takes the function and the group's `type` from the environment below.
+That is the shape every source's own steps have, and it is only legal
+under a group. A step with no `command` at all is read as that one:
+configs written before every step named its program left it out, and
+the app writes it in when it next reads one
+(`config_model.md` §"The retired shapes").
 
 Sub-tables like `[steps.params]` must come after the step's plain keys:
 in TOML a table header ends the table it appears in, so everything
@@ -52,8 +55,16 @@ backslash escapes work; there is **no** variable expansion, globbing,
 or piping — wrap in `sh -c '…'` if you need real shell). The first
 word resolves via `PATH`, with the runner's `--binary-dir` (default:
 the directory `datalib-dag` itself lives in; also settable as
-`binary_dir` in the config, above the first `[[steps]]`) prepended —
-which is how `datalib-step` is found without an absolute path.
+`binary_dir` in the config, above the first `[[steps]]`) first and the
+library's own `<data_root>/system/bin/` second, both ahead of the
+inherited `PATH`. The first is how `datalib-step` is found without an
+absolute path; the second is where a library's own programs go, so
+they travel with it. (They used to go in `~/.datalib/bin`, shared by
+every library; a launch copies any program the config still runs from
+there into `system/bin/`, `http/src/library_bin.rs`.) A first word
+that is a relative path with a `/` in it is relative to the data root,
+the step's working directory; that is how a step runs a package's
+program, `system/packages/<pin>/bin/…` (`packages.md`).
 
 ## What your command receives
 
@@ -546,7 +557,7 @@ step decides, and answers in its outcome line:
 ```
 
 Only `datalib-step`'s own steps take the verb today (the loader sets
-`StepSpec::migrates` for a step with no `command`). An ingest step opens
+`StepSpec::migrates` for a step whose program is `datalib-step`). An ingest step opens
 its raw store with the provider's migration ladder and closes it: every
 rung, the additive DDL and an old blob store's conversion run, and each
 is sealed to `main`. A render step and the grid index compare their

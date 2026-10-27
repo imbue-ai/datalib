@@ -9,6 +9,7 @@ type = "perseus"
 [[steps]]
 group = "perseus"
 function = "ingest"
+command = "datalib-step"
 
 # A JSONL copy of every row written, under ingest/events/, for debugging.
 # Nothing reads it and it grows every run.
@@ -27,6 +28,7 @@ files = [
 [[steps]]
 group = "perseus"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["perseus/ingest"]
 
 [steps.params]
@@ -44,9 +46,11 @@ alignment_pairs = [["perseus-grc2", "perseus-eng4"]]
 [[steps]]
 group = "perseus"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["perseus/render_markdown"]
 
 [[steps]]
 group = "perseus"
 function = "embed"
+command = "datalib-step"
 inputs = ["perseus/keyword_index"]

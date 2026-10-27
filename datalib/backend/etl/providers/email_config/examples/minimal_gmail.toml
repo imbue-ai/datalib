@@ -8,10 +8,12 @@ type = "email"
 [[steps]]
 group = "email"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.gmail]
 
 [[steps]]
 group = "email"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["email/ingest"]

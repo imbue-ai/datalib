@@ -9,10 +9,12 @@ type = "perseus"
 [[steps]]
 group = "perseus"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.github]
 
 [[steps]]
 group = "perseus"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["perseus/ingest"]

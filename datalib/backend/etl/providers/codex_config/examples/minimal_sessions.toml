@@ -9,10 +9,12 @@ type = "codex"
 [[steps]]
 group = "codex"
 function = "ingest"
+command = "datalib-step"
 
 [steps.params.sessions]
 
 [[steps]]
 group = "codex"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["codex/ingest"]

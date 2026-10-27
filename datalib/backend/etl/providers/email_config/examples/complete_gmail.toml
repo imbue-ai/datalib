@@ -8,6 +8,7 @@ type = "email"
 [[steps]]
 group = "email"
 function = "ingest"
+command = "datalib-step"
 
 # Mirror only mail under these labels. Labels are full paths and match
 # exactly: `Work` does not take in `Work/Projects`, so list nested ones.
@@ -58,6 +59,7 @@ path = "~/Takeout/Mail"
 [[steps]]
 group = "email"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["email/ingest"]
 
 [steps.params]
@@ -70,9 +72,11 @@ only_render_labels = ["Inbox"]  # render only threads with a message under these
 [[steps]]
 group = "email"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["email/render_markdown"]
 
 [[steps]]
 group = "email"
 function = "embed"
+command = "datalib-step"
 inputs = ["email/keyword_index"]

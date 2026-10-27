@@ -19,8 +19,8 @@ pub const STARTER_CONFIG: &str = r##"# ── the unified document index ──�
 # Every source feeds these two — the grid reads its rendered markdown,
 # the qmd aggregator its search steps. A step's id is
 # `<group>/<function>`, the tree it writes, and `inputs` names the
-# steps it reads by that id. A step with no `command` is one of
-# datalib's own.
+# steps it reads by that id. `command` is the program a step runs;
+# `datalib-step` is the one datalib ships.
 #
 # Sources go above this block: a [[groups]] entry with a `type`, then
 # its steps. The file then reads in the order data flows, each step
@@ -37,11 +37,13 @@ name = "Document Index"
 [[steps]]
 group = "unified_document_index"
 function = "grid_index"
+command = "datalib-step"
 inputs = []
 
 [[steps]]
 group = "unified_document_index"
 function = "qmd_aggregator"
+command = "datalib-step"
 inputs = []
 
 # The applet that serves the grid: the app has no search, no document
