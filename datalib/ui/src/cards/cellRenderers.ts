@@ -17,7 +17,7 @@ import { STATUS_GLYPHS, STEP_GLYPHS, glyphSvg } from "@/config/glyphs";
 import { ownRange, sparkline, windowDelta, type Sample } from "@/config/sparkline";
 import { formatDuration, formatRelative, formatStamp } from "@/config/timeFormat";
 import { formatBytes } from "@/config/bytes";
-import { dateCell, parseStamp } from "./dates";
+import { fittingDateCell, parseStamp } from "./dates";
 
 /// The fields of one type among the specs. A `timestamp` cell reads "5
 /// minutes ago", so it goes stale on its own and the host repaints it
@@ -266,7 +266,7 @@ export function renderTimestamp(iso: string | null | undefined): HTMLElement {
  *  the chip cannot read keeps its own text. */
 export function renderDateTime(iso: string | null | undefined): HTMLElement {
   if (!iso) return none();
-  if (parseStamp(iso)) return dateCell(iso);
+  if (parseStamp(iso)) return fittingDateCell(iso);
   const span = document.createElement("span");
   span.textContent = formatStamp(iso);
   span.title = iso;

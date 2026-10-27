@@ -191,7 +191,7 @@ describe("a date cell", () => {
     const before = timeView.value;
     try {
       timeView.value = { zone: { kind: "named", name: "Asia/Tokyo" }, days: "iso", hours: "h23" };
-      const cell = draw("2026-04-15T10:05:00+00:00");
+      const cell = draw("2026-04-15T10:05:00+00:00").querySelector("time")!;
       expect(cell.matches("time.chip.date-chip")).toBe(true);
       expect(cell.getAttribute("datetime")).toBe("2026-04-15T10:05:00+00:00");
       expect(cell.textContent).toBe("2026-04-15 19:05");

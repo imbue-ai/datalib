@@ -16,6 +16,7 @@ use datalib_etl_chat_common::types::{
 use datalib_etl_chat_common::{render_changed, RenderTarget};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{Inputs, RawRange};
+use datalib_handle::Handle;
 use serde_json::Value;
 
 use datalib_etl_claude_code::ingest::parse::{human_text, transcript_id};
@@ -32,7 +33,8 @@ use crate::ids;
 ///     (`datalib_id`'s v8 layout).
 /// v4: the account's own messages are "Me", as every chat source writes
 ///     them.
-pub const RENDER_VERSION: u32 = 4;
+/// v5: an answer's author is its model's chip (`ai_model:` handle).
+pub const RENDER_VERSION: u32 = 5;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -353,13 +355,13 @@ fn assistant_items(
     max_bytes: usize,
     out: &mut Vec<NormalizedChatItem>,
 ) {
-    let model = v
+    let named = v
         .get("message")
         .and_then(|m| m.get("model"))
         .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .unwrap_or("Assistant")
-        .to_string();
+        .filter(|s| !s.is_empty());
+    let model_handle = named.and_then(Handle::ai_model);
+    let model = named.unwrap_or("Assistant").to_string();
     let mut text_parts: Vec<String> = Vec::new();
     for (i, b) in blocks_of(v).into_iter().enumerate() {
         let block_ms = ms.map(|m| m + i as i64);
@@ -374,14 +376,17 @@ fn assistant_items(
                     continue;
                 };
                 let quoted = format!("> {}", thought.trim_end().replace('\n', "\n> "));
-                out.push(item(
-                    ids::thinking_block(source_id, uuid, i, block_ms),
-                    model.clone(),
-                    block_ms,
-                    details("Thinking", &quoted),
-                    "LLM Thinking",
-                    true,
-                ));
+                out.push(NormalizedChatItem {
+                    author_handle: model_handle.clone(),
+                    ..item(
+                        ids::thinking_block(source_id, uuid, i, block_ms),
+                        model.clone(),
+                        block_ms,
+                        details("Thinking", &quoted),
+                        "LLM Thinking",
+                        true,
+                    )
+                });
             }
             Some("tool_use") => {
                 let name = str_of(b, "name").unwrap_or("tool");
@@ -410,14 +415,17 @@ fn assistant_items(
         return;
     }
     let ms = ms.map(|m| m + blocks_of(v).len() as i64);
-    out.push(item(
-        ids::record(source_id, uuid, ms),
-        model,
-        ms,
-        text,
-        "LLM Response",
-        false,
-    ));
+    out.push(NormalizedChatItem {
+        author_handle: model_handle,
+        ..item(
+            ids::record(source_id, uuid, ms),
+            model,
+            ms,
+            text,
+            "LLM Response",
+            false,
+        )
+    });
 }
 
 /// Hook output and stop reasons. Only the ones that say something:

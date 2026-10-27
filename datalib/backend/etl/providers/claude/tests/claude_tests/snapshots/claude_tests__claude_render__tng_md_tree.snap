@@ -23,7 +23,7 @@ item_count: 13
 
 <div id="m-0b7611f3-3d00-8fe7-8b3d-6f240ae07699" data-section-uuid="0b7611f3-3d00-8fe7-8b3d-6f240ae07699" class="msg msg--claude">
 
-## <span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-05-02T10:00:00+00:00" title="2369-05-02 10:00:00 UTC">Fri May 2nd, 2369 at 10:00</time>
+## [Me](datalib:handle/me/self "Me") <time class="msg-ts" datetime="2369-05-02T10:00:00+00:00" title="2369-05-02 10:00:00 UTC">Fri May 2nd, 2369 at 10:00</time>
 
 Look up the three most recent holodeck malfunctions aboard the Enterprise and cite your sources.
 
@@ -31,7 +31,7 @@ Look up the three most recent holodeck malfunctions aboard the Enterprise and ci
 
 <div id="m-0b7611f3-6410-866e-83cc-8d75f0ccdbab" data-section-uuid="0b7611f3-6410-866e-83cc-8d75f0ccdbab" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:00:10+00:00" title="2369-05-02 10:00:10 UTC">Fri May 2nd, 2369 at 10:00</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-05-02T10:00:10+00:00" title="2369-05-02 10:00:10 UTC">Fri May 2nd, 2369 at 10:00</time>
 
 <details><summary>Thinking</summary>
 
@@ -46,7 +46,7 @@ Look up the three most recent holodeck malfunctions aboard the Enterprise and ci
 
 <div id="m-0b7611f3-6be0-8e1a-b30d-a620370913f0" data-section-uuid="0b7611f3-6be0-8e1a-b30d-a620370913f0" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:00:12+00:00" title="2369-05-02 10:00:12 UTC">Fri May 2nd, 2369 at 10:00</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-05-02T10:00:12+00:00" title="2369-05-02 10:00:12 UTC">Fri May 2nd, 2369 at 10:00</time>
 
 <details><summary>Tool use: web_search — Searching the web</summary>
 
@@ -61,7 +61,7 @@ Look up the three most recent holodeck malfunctions aboard the Enterprise and ci
 
 <div id="m-0b7611f3-6be0-8333-8e70-8a1c139fd11b" data-section-uuid="0b7611f3-6be0-8333-8e70-8a1c139fd11b" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:00:12+00:00" title="2369-05-02 10:00:12 UTC">Fri May 2nd, 2369 at 10:00</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-05-02T10:00:12+00:00" title="2369-05-02 10:00:12 UTC">Fri May 2nd, 2369 at 10:00</time>
 
 <details><summary>Tool result: web_search</summary>
 
@@ -76,7 +76,7 @@ Look up the three most recent holodeck malfunctions aboard the Enterprise and ci
 
 <div id="m-0b7611f3-b230-8c74-a33b-1a4c569adc8f" data-section-uuid="0b7611f3-b230-8c74-a33b-1a4c569adc8f" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:00:30+00:00" title="2369-05-02 10:00:30 UTC">Fri May 2nd, 2369 at 10:00</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-05-02T10:00:30+00:00" title="2369-05-02 10:00:30 UTC">Fri May 2nd, 2369 at 10:00</time>
 
 The three most recent were the Moriarty incident, the Fistful of Datas program and the Robin Hood program.
 
@@ -90,7 +90,7 @@ The three most recent were the Moriarty incident, the Fistful of Datas program a
 
 <div id="m-0b7611f5-11c0-8c84-a4da-152e1778bb09" data-section-uuid="0b7611f5-11c0-8c84-a4da-152e1778bb09" class="msg msg--claude">
 
-## <span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-05-02T10:02:00+00:00" title="2369-05-02 10:02:00 UTC">Fri May 2nd, 2369 at 10:02</time>
+## [Me](datalib:handle/me/self "Me") <time class="msg-ts" datetime="2369-05-02T10:02:00+00:00" title="2369-05-02 10:02:00 UTC">Fri May 2nd, 2369 at 10:02</time>
 
 Look up the four most recent holodeck malfunctions aboard the Enterprise and cite your sources.
 
@@ -98,7 +98,7 @@ Look up the four most recent holodeck malfunctions aboard the Enterprise and cit
 
 <div id="m-0b7611f5-38d0-84fd-873a-05cd97691792" data-section-uuid="0b7611f5-38d0-84fd-873a-05cd97691792" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:02:10+00:00" title="2369-05-02 10:02:10 UTC">Fri May 2nd, 2369 at 10:02</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-05-02T10:02:10+00:00" title="2369-05-02 10:02:10 UTC">Fri May 2nd, 2369 at 10:02</time>
 
 <details><summary>Thinking</summary>
 
@@ -113,7 +113,7 @@ Look up the four most recent holodeck malfunctions aboard the Enterprise and cit
 
 <div id="m-0b7611f5-40a0-8602-a165-d0bc9f222227" data-section-uuid="0b7611f5-40a0-8602-a165-d0bc9f222227" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:02:12+00:00" title="2369-05-02 10:02:12 UTC">Fri May 2nd, 2369 at 10:02</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-05-02T10:02:12+00:00" title="2369-05-02 10:02:12 UTC">Fri May 2nd, 2369 at 10:02</time>
 
 <details><summary>Tool use: web_search — Searching the web</summary>
 
@@ -128,7 +128,7 @@ Look up the four most recent holodeck malfunctions aboard the Enterprise and cit
 
 <div id="m-0b7611f5-40a0-8ce8-a1c7-e277dde57e1b" data-section-uuid="0b7611f5-40a0-8ce8-a1c7-e277dde57e1b" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:02:12+00:00" title="2369-05-02 10:02:12 UTC">Fri May 2nd, 2369 at 10:02</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-05-02T10:02:12+00:00" title="2369-05-02 10:02:12 UTC">Fri May 2nd, 2369 at 10:02</time>
 
 <details><summary>Tool result: web_search</summary>
 
@@ -143,7 +143,7 @@ Look up the four most recent holodeck malfunctions aboard the Enterprise and cit
 
 <div id="m-0b7611f5-ae00-8f22-a627-360db3feeb13" data-section-uuid="0b7611f5-ae00-8f22-a627-360db3feeb13" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:02:40+00:00" title="2369-05-02 10:02:40 UTC">Fri May 2nd, 2369 at 10:02</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-05-02T10:02:40+00:00" title="2369-05-02 10:02:40 UTC">Fri May 2nd, 2369 at 10:02</time>
 
 Four are on record; the most recent was the Moriarty incident.
 
@@ -156,7 +156,7 @@ Four are on record; the most recent was the Moriarty incident.
 
 <div id="m-0b7611f5-fc20-826f-9831-9692292ea4a8" data-section-uuid="0b7611f5-fc20-826f-9831-9692292ea4a8" class="msg msg--claude">
 
-## <span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-05-02T10:03:00+00:00" title="2369-05-02 10:03:00 UTC">Fri May 2nd, 2369 at 10:03</time>
+## [Me](datalib:handle/me/self "Me") <time class="msg-ts" datetime="2369-05-02T10:03:00+00:00" title="2369-05-02 10:03:00 UTC">Fri May 2nd, 2369 at 10:03</time>
 
 Plot how long each malfunction lasted and send me the chart.
 
@@ -164,7 +164,7 @@ Plot how long each malfunction lasted and send me the chart.
 
 <div id="m-0b7611f6-0fa8-8bbc-b8d5-7c60548511de" data-section-uuid="0b7611f6-0fa8-8bbc-b8d5-7c60548511de" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:03:05+00:00" title="2369-05-02 10:03:05 UTC">Fri May 2nd, 2369 at 10:03</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-05-02T10:03:05+00:00" title="2369-05-02 10:03:05 UTC">Fri May 2nd, 2369 at 10:03</time>
 
 <details><summary>Thinking</summary>
 
@@ -179,7 +179,7 @@ Plot how long each malfunction lasted and send me the chart.
 
 <div id="m-0b7611f6-2330-871f-b3bb-ce23a4ced182" data-section-uuid="0b7611f6-2330-871f-b3bb-ce23a4ced182" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:03:10+00:00" title="2369-05-02 10:03:10 UTC">Fri May 2nd, 2369 at 10:03</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-05-02T10:03:10+00:00" title="2369-05-02 10:03:10 UTC">Fri May 2nd, 2369 at 10:03</time>
 
 <details><summary>Tool use: Write — Created a file</summary>
 
@@ -196,7 +196,7 @@ plt.savefig('holodeck_chart.png')
 
 <div id="m-0b7611f6-2718-895a-a994-85e04d238114" data-section-uuid="0b7611f6-2718-895a-a994-85e04d238114" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:03:11+00:00" title="2369-05-02 10:03:11 UTC">Fri May 2nd, 2369 at 10:03</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-05-02T10:03:11+00:00" title="2369-05-02 10:03:11 UTC">Fri May 2nd, 2369 at 10:03</time>
 
 <details><summary>Tool result: Write</summary>
 
@@ -210,7 +210,7 @@ File created successfully at: holodeck_chart.py
 
 <div id="m-0b7611f6-4a40-8a5c-8b3d-397c846c0938" data-section-uuid="0b7611f6-4a40-8a5c-8b3d-397c846c0938" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:03:20+00:00" title="2369-05-02 10:03:20 UTC">Fri May 2nd, 2369 at 10:03</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-05-02T10:03:20+00:00" title="2369-05-02 10:03:20 UTC">Fri May 2nd, 2369 at 10:03</time>
 
 <details><summary>Tool use: Bash — Ran a command</summary>
 
@@ -225,7 +225,7 @@ python3 holodeck_chart.py
 
 <div id="m-0b7611f6-7150-87e2-91ff-af02b55e4f1b" data-section-uuid="0b7611f6-7150-87e2-91ff-af02b55e4f1b" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:03:30+00:00" title="2369-05-02 10:03:30 UTC">Fri May 2nd, 2369 at 10:03</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-05-02T10:03:30+00:00" title="2369-05-02 10:03:30 UTC">Fri May 2nd, 2369 at 10:03</time>
 
 <details><summary>Tool result: Bash</summary>
 
@@ -239,7 +239,7 @@ python3 holodeck_chart.py
 
 <div id="m-0b7611f6-9860-8116-b04b-d80152806c08" data-section-uuid="0b7611f6-9860-8116-b04b-d80152806c08" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:03:40+00:00" title="2369-05-02 10:03:40 UTC">Fri May 2nd, 2369 at 10:03</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-05-02T10:03:40+00:00" title="2369-05-02 10:03:40 UTC">Fri May 2nd, 2369 at 10:03</time>
 
 <details><summary>Tool use: SendUserFile — Shared files</summary>
 
@@ -258,7 +258,7 @@ python3 holodeck_chart.py
 
 <div id="m-0b7611f6-9c48-8ba8-b723-964537117866" data-section-uuid="0b7611f6-9c48-8ba8-b723-964537117866" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:03:41+00:00" title="2369-05-02 10:03:41 UTC">Fri May 2nd, 2369 at 10:03</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-05-02T10:03:41+00:00" title="2369-05-02 10:03:41 UTC">Fri May 2nd, 2369 at 10:03</time>
 
 <details><summary>Tool result: SendUserFile</summary>
 
@@ -274,7 +274,7 @@ Sent 1 file.
 
 <div id="m-0b7611f6-bf70-817b-b650-a050ac6355c0" data-section-uuid="0b7611f6-bf70-817b-b650-a050ac6355c0" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:03:50+00:00" title="2369-05-02 10:03:50 UTC">Fri May 2nd, 2369 at 10:03</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-05-02T10:03:50+00:00" title="2369-05-02 10:03:50 UTC">Fri May 2nd, 2369 at 10:03</time>
 
 Here is the chart, and the script that drew it.
 
@@ -284,7 +284,7 @@ Here is the chart, and the script that drew it.
 
 <div id="m-0b7611f7-d0e0-8b65-96d6-14d670429405" data-section-uuid="0b7611f7-d0e0-8b65-96d6-14d670429405" class="msg msg--claude">
 
-## <span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-05-02T10:05:00+00:00" title="2369-05-02 10:05:00 UTC">Fri May 2nd, 2369 at 10:05</time>
+## [Me](datalib:handle/me/self "Me") <time class="msg-ts" datetime="2369-05-02T10:05:00+00:00" title="2369-05-02 10:05:00 UTC">Fri May 2nd, 2369 at 10:05</time>
 
 Here is the away team report and two photos from the holodeck. What do they show?
 
@@ -301,7 +301,7 @@ Here is the away team report and two photos from the holodeck. What do they show
 
 <div id="m-0b7611f7-e468-8c50-ba92-cb796e2cd8ef" data-section-uuid="0b7611f7-e468-8c50-ba92-cb796e2cd8ef" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:05:05+00:00" title="2369-05-02 10:05:05 UTC">Fri May 2nd, 2369 at 10:05</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-05-02T10:05:05+00:00" title="2369-05-02 10:05:05 UTC">Fri May 2nd, 2369 at 10:05</time>
 
 <details><summary>Thinking</summary>
 
@@ -316,7 +316,7 @@ Here is the away team report and two photos from the holodeck. What do they show
 
 <div id="m-0b7611f7-f7f0-804c-9a96-bf9a1da24b4f" data-section-uuid="0b7611f7-f7f0-804c-9a96-bf9a1da24b4f" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:05:10+00:00" title="2369-05-02 10:05:10 UTC">Fri May 2nd, 2369 at 10:05</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-05-02T10:05:10+00:00" title="2369-05-02 10:05:10 UTC">Fri May 2nd, 2369 at 10:05</time>
 
 <details><summary>Tool use: Read — Read a file</summary>
 
@@ -327,7 +327,7 @@ Read `/mnt/user-data/uploads/Away Team Report.pdf`
 
 <div id="m-0b7611f7-fbd8-8790-bbe0-d6e5653ebe87" data-section-uuid="0b7611f7-fbd8-8790-bbe0-d6e5653ebe87" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:05:11+00:00" title="2369-05-02 10:05:11 UTC">Fri May 2nd, 2369 at 10:05</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-05-02T10:05:11+00:00" title="2369-05-02 10:05:11 UTC">Fri May 2nd, 2369 at 10:05</time>
 
 <details><summary>Tool result: Read</summary>
 
@@ -343,7 +343,7 @@ All crew accounted for.
 
 <div id="m-0b7611f8-4610-84f9-91e4-10a3ca360578" data-section-uuid="0b7611f8-4610-84f9-91e4-10a3ca360578" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:05:30+00:00" title="2369-05-02 10:05:30 UTC">Fri May 2nd, 2369 at 10:05</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-05-02T10:05:30+00:00" title="2369-05-02 10:05:30 UTC">Fri May 2nd, 2369 at 10:05</time>
 
 The report says all crew are accounted for; the photos show the holodeck arch and Sherwood Forest.
 
@@ -353,7 +353,7 @@ The report says all crew are accounted for; the photos show the holodeck arch an
 
 <div id="m-0b7611f8-bb40-8113-886b-a60954adcabe" data-section-uuid="0b7611f8-bb40-8113-886b-a60954adcabe" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:06:00+00:00" title="2369-05-02 10:06:00 UTC">Fri May 2nd, 2369 at 10:06</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-05-02T10:06:00+00:00" title="2369-05-02 10:06:00 UTC">Fri May 2nd, 2369 at 10:06</time>
 
 A second look: the arch is the holodeck's exit, and the forest is the Robin Hood program.
 
@@ -426,7 +426,7 @@ item_count: 2
 
 <div id="m-0b75c4b3-d900-834f-9ccd-cd06aca1f1fc" data-section-uuid="0b75c4b3-d900-834f-9ccd-cd06aca1f1fc" class="msg msg--claude">
 
-## <span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-17T10:00:00+00:00" title="2369-04-17 10:00:00 UTC">Thu Apr 17th, 2369 at 10:00</time>
+## [Me](datalib:handle/me/self "Me") <time class="msg-ts" datetime="2369-04-17T10:00:00+00:00" title="2369-04-17 10:00:00 UTC">Thu Apr 17th, 2369 at 10:00</time>
 
 Computer, what stardate is it?
 
@@ -434,7 +434,7 @@ Computer, what stardate is it?
 
 <div id="m-0b75c4b3-d900-8d40-884b-e9cdda2faccb" data-section-uuid="0b75c4b3-d900-8d40-884b-e9cdda2faccb" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-17T10:00:00+00:00" title="2369-04-17 10:00:00 UTC">Thu Apr 17th, 2369 at 10:00</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-04-17T10:00:00+00:00" title="2369-04-17 10:00:00 UTC">Thu Apr 17th, 2369 at 10:00</time>
 
 Stardate 47988.1. The chronometer is on ship's time.
 
@@ -460,7 +460,7 @@ item_count: 4
 
 <div id="m-0b75b540-c500-844a-b73a-e6dbe1ab76d7" data-section-uuid="0b75b540-c500-844a-b73a-e6dbe1ab76d7" class="msg msg--claude">
 
-## <span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-14T10:00:00+00:00" title="2369-04-14 10:00:00 UTC">Mon Apr 14th, 2369 at 10:00</time>
+## [Me](datalib:handle/me/self "Me") <time class="msg-ts" datetime="2369-04-14T10:00:00+00:00" title="2369-04-14 10:00:00 UTC">Mon Apr 14th, 2369 at 10:00</time>
 
 Look up the Klingon greeting "nuqneH" and propose a respectful opening line for a diplomatic dispatch to Chancellor K'mpec.
 
@@ -468,7 +468,7 @@ Look up the Klingon greeting "nuqneH" and propose a respectful opening line for 
 
 <div id="m-0b75b541-3a30-89b3-8db9-add265c34f05" data-section-uuid="0b75b541-3a30-89b3-8db9-add265c34f05" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-14T10:00:30+00:00" title="2369-04-14 10:00:30 UTC">Mon Apr 14th, 2369 at 10:00</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-04-14T10:00:30+00:00" title="2369-04-14 10:00:30 UTC">Mon Apr 14th, 2369 at 10:00</time>
 
 <details><summary>Thinking</summary>
 
@@ -483,7 +483,7 @@ Look up the Klingon greeting "nuqneH" and propose a respectful opening line for 
 
 <div id="m-0b75b541-4200-8abc-b9a3-3edad069d109" data-section-uuid="0b75b541-4200-8abc-b9a3-3edad069d109" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-14T10:00:32+00:00" title="2369-04-14 10:00:32 UTC">Mon Apr 14th, 2369 at 10:00</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-04-14T10:00:32+00:00" title="2369-04-14 10:00:32 UTC">Mon Apr 14th, 2369 at 10:00</time>
 
 <details><summary>Tool use: web_fetch — Fetching: Klingon language reference</summary>
 
@@ -500,7 +500,7 @@ Look up the Klingon greeting "nuqneH" and propose a respectful opening line for 
 
 <div id="m-0b75b541-af60-8133-840a-94a11a820014" data-section-uuid="0b75b541-af60-8133-840a-94a11a820014" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-14T10:01:00+00:00" title="2369-04-14 10:01:00 UTC">Mon Apr 14th, 2369 at 10:01</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-04-14T10:01:00+00:00" title="2369-04-14 10:01:00 UTC">Mon Apr 14th, 2369 at 10:01</time>
 
 For a dispatch to Chancellor K'mpec, open with "qaleghneS, Chancellor — nuqneH?" ("I am honored to see you — what do you want?"). The honorific softens the bluntness of nuqneH; together they read as warm-but-direct, which Klingons respect.
 
@@ -511,7 +511,7 @@ For a dispatch to Chancellor K'mpec, open with "qaleghneS, Chancellor — nuqneH
 
 <div id="m-0b75b541-af60-82f7-81e2-1e2ddb2e59d8" data-section-uuid="0b75b541-af60-82f7-81e2-1e2ddb2e59d8" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-14T10:01:00+00:00" title="2369-04-14 10:01:00 UTC">Mon Apr 14th, 2369 at 10:01</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-04-14T10:01:00+00:00" title="2369-04-14 10:01:00 UTC">Mon Apr 14th, 2369 at 10:01</time>
 
 <details><summary>Tool result: web_fetch</summary>
 
@@ -536,7 +536,7 @@ For a dispatch to Chancellor K'mpec, open with "qaleghneS, Chancellor — nuqneH
 
 <div id="m-0b75b542-99c0-8ce5-a073-36e7fde35cde" data-section-uuid="0b75b542-99c0-8ce5-a073-36e7fde35cde" class="msg msg--claude">
 
-## <span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-14T10:02:00+00:00" title="2369-04-14 10:02:00 UTC">Mon Apr 14th, 2369 at 10:02</time>
+## [Me](datalib:handle/me/self "Me") <time class="msg-ts" datetime="2369-04-14T10:02:00+00:00" title="2369-04-14 10:02:00 UTC">Mon Apr 14th, 2369 at 10:02</time>
 
 Perfect. Make it so.
 
@@ -561,7 +561,7 @@ item_count: 6
 
 <div id="m-0b75c9a3-4680-8f18-9b74-f1de68268d1d" data-section-uuid="0b75c9a3-4680-8f18-9b74-f1de68268d1d" class="msg msg--claude">
 
-## <span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-18T09:00:00+00:00" title="2369-04-18 09:00:00 UTC">Fri Apr 18th, 2369 at 09:00</time>
+## [Me](datalib:handle/me/self "Me") <time class="msg-ts" datetime="2369-04-18T09:00:00+00:00" title="2369-04-18 09:00:00 UTC">Fri Apr 18th, 2369 at 09:00</time>
 
 Geordi, how far can we push the warp field before the nacelles complain?
 
@@ -572,7 +572,7 @@ Geordi, how far can we push the warp field before the nacelles complain?
 
 <div id="m-0b75c9a3-5a08-8fec-97d8-d163ce521717" data-section-uuid="0b75c9a3-5a08-8fec-97d8-d163ce521717" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:00:05+00:00" title="2369-04-18 09:00:05 UTC">Fri Apr 18th, 2369 at 09:00</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-04-18T09:00:05+00:00" title="2369-04-18 09:00:05 UTC">Fri Apr 18th, 2369 at 09:00</time>
 
 <details><summary>Tool use: web_search — Searching the web</summary>
 
@@ -587,7 +587,7 @@ Geordi, how far can we push the warp field before the nacelles complain?
 
 <div id="m-0b75c9a3-65c0-88ab-a3e5-89b60c21f729" data-section-uuid="0b75c9a3-65c0-88ab-a3e5-89b60c21f729" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:00:08+00:00" title="2369-04-18 09:00:08 UTC">Fri Apr 18th, 2369 at 09:00</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-04-18T09:00:08+00:00" title="2369-04-18 09:00:08 UTC">Fri Apr 18th, 2369 at 09:00</time>
 
 <details><summary>Tool result: web_search</summary>
 
@@ -602,7 +602,7 @@ Geordi, how far can we push the warp field before the nacelles complain?
 
 <div id="m-0b75c9a3-94a0-89c6-b27b-e588f8d0b997" data-section-uuid="0b75c9a3-94a0-89c6-b27b-e588f8d0b997" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:00:20+00:00" title="2369-04-18 09:00:20 UTC">Fri Apr 18th, 2369 at 09:00</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-04-18T09:00:20+00:00" title="2369-04-18 09:00:20 UTC">Fri Apr 18th, 2369 at 09:00</time>
 
 Sustained warp 9.2 is the rated ceiling; the nacelles tolerate 9.6 for about twelve hours before the coils need a full recalibration.
 
@@ -619,7 +619,7 @@ Sustained warp 9.2 is the rated ceiling; the nacelles tolerate 9.6 for about twe
 
 <div id="m-0b75c9a4-30e0-8bd1-a2ad-d47516561b38" data-section-uuid="0b75c9a4-30e0-8bd1-a2ad-d47516561b38" class="msg msg--claude">
 
-## <span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-18T09:01:00+00:00" title="2369-04-18 09:01:00 UTC">Fri Apr 18th, 2369 at 09:01</time>
+## [Me](datalib:handle/me/self "Me") <time class="msg-ts" datetime="2369-04-18T09:01:00+00:00" title="2369-04-18 09:01:00 UTC">Fri Apr 18th, 2369 at 09:01</time>
 
 Give me the coil efficiencies as a table.
 
@@ -627,7 +627,7 @@ Give me the coil efficiencies as a table.
 
 <div id="m-0b75c9a4-57f0-882c-9555-81a83be27d89" data-section-uuid="0b75c9a4-57f0-882c-9555-81a83be27d89" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:01:10+00:00" title="2369-04-18 09:01:10 UTC">Fri Apr 18th, 2369 at 09:01</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-04-18T09:01:10+00:00" title="2369-04-18 09:01:10 UTC">Fri Apr 18th, 2369 at 09:01</time>
 
 This answer was left behind when the question was edited.
 
@@ -637,7 +637,7 @@ This answer was left behind when the question was edited.
 
 <div id="m-0b75c9a5-1b40-8e11-8da0-3daa248fd980" data-section-uuid="0b75c9a5-1b40-8e11-8da0-3daa248fd980" class="msg msg--claude">
 
-## <span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-18T09:02:00+00:00" title="2369-04-18 09:02:00 UTC">Fri Apr 18th, 2369 at 09:02</time>
+## [Me](datalib:handle/me/self "Me") <time class="msg-ts" datetime="2369-04-18T09:02:00+00:00" title="2369-04-18 09:02:00 UTC">Fri Apr 18th, 2369 at 09:02</time>
 
 Write me a script that checks these coil readings.
 
@@ -653,7 +653,7 @@ Write me a script that checks these coil readings.
 
 <div id="m-0b75c9a5-2ec8-8b5f-a673-dfcdde1f92c4" data-section-uuid="0b75c9a5-2ec8-8b5f-a673-dfcdde1f92c4" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:02:05+00:00" title="2369-04-18 09:02:05 UTC">Fri Apr 18th, 2369 at 09:02</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-04-18T09:02:05+00:00" title="2369-04-18 09:02:05 UTC">Fri Apr 18th, 2369 at 09:02</time>
 
 <details><summary>Tool use: artifacts — Creating the coil check</summary>
 
@@ -676,7 +676,7 @@ def ok(efficiency):
 
 <div id="m-0b75c9a5-32b0-807a-8fb8-7d339dddae0f" data-section-uuid="0b75c9a5-32b0-807a-8fb8-7d339dddae0f" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:02:06+00:00" title="2369-04-18 09:02:06 UTC">Fri Apr 18th, 2369 at 09:02</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-04-18T09:02:06+00:00" title="2369-04-18 09:02:06 UTC">Fri Apr 18th, 2369 at 09:02</time>
 
 <details><summary>Tool result: artifacts</summary>
 
@@ -690,7 +690,7 @@ OK
 
 <div id="m-0b75c9a5-4250-8473-95f1-58b02b56f728" data-section-uuid="0b75c9a5-4250-8473-95f1-58b02b56f728" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:02:10+00:00" title="2369-04-18 09:02:10 UTC">Fri Apr 18th, 2369 at 09:02</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-04-18T09:02:10+00:00" title="2369-04-18 09:02:10 UTC">Fri Apr 18th, 2369 at 09:02</time>
 
 <details><summary>Tool use: artifacts — Raising the threshold</summary>
 
@@ -713,7 +713,7 @@ with:
 
 <div id="m-0b75c9a5-55d8-894e-b80c-32b4e60f024c" data-section-uuid="0b75c9a5-55d8-894e-b80c-32b4e60f024c" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:02:15+00:00" title="2369-04-18 09:02:15 UTC">Fri Apr 18th, 2369 at 09:02</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-04-18T09:02:15+00:00" title="2369-04-18 09:02:15 UTC">Fri Apr 18th, 2369 at 09:02</time>
 
 <details><summary>Tool use: create_file — Writing the report</summary>
 
@@ -730,7 +730,7 @@ Coil 2 is below threshold.
 
 <div id="m-0b75c9a5-6960-848b-9646-55c304cdc6b6" data-section-uuid="0b75c9a5-6960-848b-9646-55c304cdc6b6" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:02:20+00:00" title="2369-04-18 09:02:20 UTC">Fri Apr 18th, 2369 at 09:02</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-04-18T09:02:20+00:00" title="2369-04-18 09:02:20 UTC">Fri Apr 18th, 2369 at 09:02</time>
 
 <details><summary>Tool use: bash_tool — Running the check</summary>
 
@@ -745,7 +745,7 @@ python3 coil_check.py --coil 2
 
 <div id="m-0b75c9a5-7ce8-84c5-85b2-0f9acb783056" data-section-uuid="0b75c9a5-7ce8-84c5-85b2-0f9acb783056" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:02:25+00:00" title="2369-04-18 09:02:25 UTC">Fri Apr 18th, 2369 at 09:02</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-04-18T09:02:25+00:00" title="2369-04-18 09:02:25 UTC">Fri Apr 18th, 2369 at 09:02</time>
 
 <details><summary>Tool result: bash_tool</summary>
 
@@ -761,7 +761,7 @@ coil 2: 97.1% (below 98.0%)
 
 <div id="m-0b75c9a5-9070-8696-9347-ca9d80ad72ef" data-section-uuid="0b75c9a5-9070-8696-9347-ca9d80ad72ef" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:02:30+00:00" title="2369-04-18 09:02:30 UTC">Fri Apr 18th, 2369 at 09:02</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-04-18T09:02:30+00:00" title="2369-04-18 09:02:30 UTC">Fri Apr 18th, 2369 at 09:02</time>
 
 Coil 2 is under threshold; schedule it for recalibration.
 
@@ -786,7 +786,7 @@ item_count: 2
 
 <div id="m-0b75bf56-8e80-873d-9a5d-3ddfc58937d2" data-section-uuid="0b75bf56-8e80-873d-9a5d-3ddfc58937d2" class="msg msg--claude">
 
-## <span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-16T09:00:00+00:00" title="2369-04-16 09:00:00 UTC">Wed Apr 16th, 2369 at 09:00</time>
+## [Me](datalib:handle/me/self "Me") <time class="msg-ts" datetime="2369-04-16T09:00:00+00:00" title="2369-04-16 09:00:00 UTC">Wed Apr 16th, 2369 at 09:00</time>
 
 Look up the Borg adaptive-shield signature 7-of-9-alpha and tell me if we have a counter on file.
 
@@ -797,7 +797,7 @@ Look up the Borg adaptive-shield signature 7-of-9-alpha and tell me if we have a
 
 <div id="m-0b75bf56-b590-8b25-9363-cf22e1614c34" data-section-uuid="0b75bf56-b590-8b25-9363-cf22e1614c34" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-16T09:00:10+00:00" title="2369-04-16 09:00:10 UTC">Wed Apr 16th, 2369 at 09:00</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-04-16T09:00:10+00:00" title="2369-04-16 09:00:10 UTC">Wed Apr 16th, 2369 at 09:00</time>
 
 <details><summary>Tool use: starfleet_db_query — Querying Starfleet tactical DB</summary>
 
@@ -813,7 +813,7 @@ Look up the Borg adaptive-shield signature 7-of-9-alpha and tell me if we have a
 
 <div id="m-0b75bf57-03b0-8ae2-8e8d-933c699552d0" data-section-uuid="0b75bf57-03b0-8ae2-8e8d-933c699552d0" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-16T09:00:30+00:00" title="2369-04-16 09:00:30 UTC">Wed Apr 16th, 2369 at 09:00</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-04-16T09:00:30+00:00" title="2369-04-16 09:00:30 UTC">Wed Apr 16th, 2369 at 09:00</time>
 
 <details><summary>Tool use: starfleet_db_query — Retrying via backup relay</summary>
 
@@ -832,7 +832,7 @@ Look up the Borg adaptive-shield signature 7-of-9-alpha and tell me if we have a
 
 <div id="m-0b75bf57-ee10-8817-80c1-39e86d09a4c8" data-section-uuid="0b75bf57-ee10-8817-80c1-39e86d09a4c8" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-16T09:01:30+00:00" title="2369-04-16 09:01:30 UTC">Wed Apr 16th, 2369 at 09:01</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-04-16T09:01:30+00:00" title="2369-04-16 09:01:30 UTC">Wed Apr 16th, 2369 at 09:01</time>
 
 Yes — we have a counter on file. Rotating phaser modulation at 257.4 MHz (±0.6) gives roughly two effective rounds before the Borg re-adapt. Recommend pre-loading the rotation pattern before engagement.
 
@@ -843,7 +843,7 @@ Yes — we have a counter on file. Rotating phaser modulation at 257.4 MHz (±0.
 
 <div id="m-0b75bf57-ee10-858a-8e3e-f9340282d61b" data-section-uuid="0b75bf57-ee10-858a-8e3e-f9340282d61b" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-16T09:01:30+00:00" title="2369-04-16 09:01:30 UTC">Wed Apr 16th, 2369 at 09:01</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-04-16T09:01:30+00:00" title="2369-04-16 09:01:30 UTC">Wed Apr 16th, 2369 at 09:01</time>
 
 <details><summary>Tool result: starfleet_db_query (error)</summary>
 
@@ -856,7 +856,7 @@ ERROR: connection to tactical-db.sf.test refused (subspace relay 4 offline)
 
 <div id="m-0b75bf57-ee10-8544-980b-3dc7c47ea618" data-section-uuid="0b75bf57-ee10-8544-980b-3dc7c47ea618" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-16T09:01:30+00:00" title="2369-04-16 09:01:30 UTC">Wed Apr 16th, 2369 at 09:01</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-04-16T09:01:30+00:00" title="2369-04-16 09:01:30 UTC">Wed Apr 16th, 2369 at 09:01</time>
 
 <details><summary>Tool result: starfleet_db_query</summary>
 
@@ -889,7 +889,7 @@ item_count: 2
 
 <div id="m-0b75ba14-bb40-877f-bf26-28fc93d65eef" data-section-uuid="0b75ba14-bb40-877f-bf26-28fc93d65eef" class="msg msg--claude">
 
-## <span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-15T08:30:00+00:00" title="2369-04-15 08:30:00 UTC">Tue Apr 15th, 2369 at 08:30</time>
+## [Me](datalib:handle/me/self "Me") <time class="msg-ts" datetime="2369-04-15T08:30:00+00:00" title="2369-04-15 08:30:00 UTC">Tue Apr 15th, 2369 at 08:30</time>
 
 What's wrong with this medical-tricorder readout?
 
@@ -899,7 +899,7 @@ What's wrong with this medical-tricorder readout?
 
 <div id="m-0b75ba15-6b08-8219-b2c7-ab8a5d6bab33" data-section-uuid="0b75ba15-6b08-8219-b2c7-ab8a5d6bab33" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-15T08:30:45+00:00" title="2369-04-15 08:30:45 UTC">Tue Apr 15th, 2369 at 08:30</time>
+## [claude-opus-4-7](datalib:handle/ai_model/claude-opus-4-7 "claude-opus-4-7") <time class="msg-ts" datetime="2369-04-15T08:30:45+00:00" title="2369-04-15 08:30:45 UTC">Tue Apr 15th, 2369 at 08:30</time>
 
 The readout shows elevated isoboramine (62 ng/mL; reference 35–40) and depressed serotonin uptake. Consistent with early-stage Vulcan neuro-pressure deficit. Recommend mind-meld therapy at 24h intervals.
 

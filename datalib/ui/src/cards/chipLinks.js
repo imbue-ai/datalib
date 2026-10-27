@@ -20,6 +20,8 @@ const KINDS = new Set([
   "gitlab",
   "notion",
   "whatsapp",
+  "me",
+  "ai_model",
 ]);
 
 /** The handle (`email:…`, `tel:…`, `slack:T/U`) a URI names, or null
@@ -58,6 +60,12 @@ export function handleFromUri(href) {
     if (kind === "linkedin") return linkedinHandle(value);
     if (kind === "github") return githubHandle(value);
     if (kind === "gitlab") return gitlabHandle(value);
+    // The library's own person (`Handle::me`).
+    if (kind === "me") return value === "self" ? "me:self" : null;
+    if (kind === "ai_model") {
+      // A model's id (`Handle::ai_model`): no whitespace, lowercase.
+      return value !== "" && !/\s/.test(value) ? `ai_model:${value.toLowerCase()}` : null;
+    }
     if (kind === "whatsapp") {
       // A linked id's digits (`Handle::whatsapp_lid`).
       return /^\d+$/.test(value) ? `whatsapp:${value}` : null;
@@ -104,7 +112,9 @@ export function uriFromHandle(handle) {
     kind === "github" ||
     kind === "gitlab" ||
     kind === "notion" ||
-    kind === "whatsapp"
+    kind === "whatsapp" ||
+    kind === "me" ||
+    kind === "ai_model"
   ) {
     return `datalib:handle/${kind}/${percentEncode(value)}`;
   }

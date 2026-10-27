@@ -204,7 +204,9 @@ impl Medium {
             | HandleKind::Github
             | HandleKind::Gitlab
             | HandleKind::Notion
-            | HandleKind::Whatsapp => Medium::Other,
+            | HandleKind::Whatsapp
+            | HandleKind::Me
+            | HandleKind::AiModel => Medium::Other,
         }
     }
 }

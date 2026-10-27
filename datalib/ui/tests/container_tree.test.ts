@@ -24,6 +24,7 @@ import {
   tabShowing,
   unwrap,
   withPins,
+  withoutLeftGallery,
   wrap,
   type BoxNode,
   type TreeNode,
@@ -122,6 +123,19 @@ describe("changing the tree", () => {
     root = remove(root, "ta") as BoxNode;
     expect(ids(root)).toEqual(["dash", "sandbox"]);
     expect(root.selected).toBe("sandbox");
+  });
+
+  /// A "+ New card" left without picking a card stayed in the sidebar
+  /// as an empty tab.
+  it("a New card left for another tab closes, and one used stays", () => {
+    const gallery = makeCard("g", "galleryView()");
+    const root = { ...makeBox("root", "tabs", [makeCard("a", "x()"), gallery]), selected: "a" };
+    expect(ids(withoutLeftGallery(root, "g"))).toEqual(["a"]);
+    const used = { ...root, children: [root.children[0], { ...gallery, source: "searchView()" }] };
+    expect(ids(withoutLeftGallery(used as BoxNode, "g"))).toEqual(["a", "g"]);
+    const pinned = { ...root, children: [root.children[0], { ...gallery, pinned: true }] };
+    expect(ids(withoutLeftGallery(pinned as BoxNode, "g"))).toEqual(["a", "g"]);
+    expect(ids(withoutLeftGallery({ ...root, selected: "g" }, "g"))).toEqual(["a", "g"]);
   });
 
   it("a container its last card leaves goes too", () => {

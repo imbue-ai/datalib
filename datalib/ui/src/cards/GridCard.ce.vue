@@ -55,7 +55,7 @@ import {
   people,
 } from "./contacts";
 import { CONTACT } from "@/search/queryText";
-import { dateText, parseStamp } from "./dates";
+import { dateText, datesInText, parseStamp } from "./dates";
 import {
   CHIP_SELECTOR,
   chipCardSource,
@@ -1541,7 +1541,7 @@ const columnOverrides: Record<string, Partial<Column<Row>>> = {
     formatter: (_r, _c, value) => {
       const div = document.createElement("div");
       div.className = "datalib-clamp-2";
-      div.textContent = value == null ? "" : String(value);
+      div.textContent = value == null ? "" : datesInText(String(value));
       return div;
     },
   },

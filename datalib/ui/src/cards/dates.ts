@@ -72,6 +72,17 @@ export function dateText(s: Stamp, view = timeView.value): string {
   return formatAt(s, view, { day: "short", clock: true });
 }
 
+const INSTANT_IN_TEXT = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})/g;
+
+/** Text read out of a render (a snippet, a row's preview), where each
+ *  date is the instant its `<time>` named: shown as a chip says it. */
+export function datesInText(text: string, view = timeView.value): string {
+  return text.replace(INSTANT_IN_TEXT, (stamp) => {
+    const s = parseStamp(stamp);
+    return s ? dateText(s, view) : stamp;
+  });
+}
+
 /** The hover: the whole instant to the second in the view's zone, the
  *  same in UTC, the clock the source wrote it in where that is neither,
  *  and how long ago. A day says which day and how long ago. */
@@ -169,6 +180,31 @@ export function dateCell(datetime: string, now = Date.now()): HTMLElement {
   if (s) drawChip(el, dateLook(s, now));
   else el.textContent = datetime;
   return el;
+}
+
+/** What a date falls back to where there is no room for `dateText`:
+ *  its day and clock as numbers, then its day. */
+export function shortDateTexts(s: Stamp, view = timeView.value): [string, string] {
+  const iso: TimeView = { ...view, days: "iso" };
+  if (s.kind === "day") {
+    const day = formatDay(s.year, s.month, s.day, iso, "short");
+    return [day, day];
+  }
+  return [formatAt(s, iso, { day: "short", clock: true }), formatAt(s, iso, { day: "short" })];
+}
+
+/** A date chip for a table's cell, which falls back to `shortDateTexts`
+ *  as its column narrows: `.date-fit` in chip.css picks the form by the
+ *  cell's width, so a column dragged narrower needs no redraw. The text
+ *  stays the whole date, for a copy and a screen reader. */
+export function fittingDateCell(datetime: string, now = Date.now()): HTMLElement {
+  const chip = dateCell(datetime, now);
+  const s = parseStamp(datetime);
+  if (s) [chip.dataset.compact, chip.dataset.day] = shortDateTexts(s);
+  const fit = document.createElement("span");
+  fit.className = "date-fit";
+  fit.append(chip);
+  return fit;
 }
 
 /** A copy from the document: each date chip becomes a plain `<time>`
