@@ -18,6 +18,7 @@ use datalib_etl_calendar_common::occurrences::{self, Occurrence, Series, Window}
 use datalib_etl_calendar_common::when::Zone;
 use datalib_etl_calendar_common::EventTime;
 use datalib_etl_render::inputs::RawRange;
+use datalib_time::NamedZone;
 use serde_json::{json, Value};
 
 use crate::render::parse::{self, Parsed};
@@ -202,12 +203,13 @@ fn google_calendar(
         };
         let end = google::time_at(v, "end");
         let row = |occ: &Occurrence, instance: Option<(String, &str, &EventTime)>| {
-            let payload = match &instance {
+            let mut payload = match &instance {
                 Some((instance_id, series_id, original)) => {
                     google_instance(v, instance_id, series_id, original, occ)
                 }
                 None => v.clone(),
             };
+            on_calendar_clock(&mut payload, zone);
             let original = match &instance {
                 Some((_, _, original)) => Some(time_text(original, zone)),
                 None => google::time_at(v, "originalStartTime").map(|t| time_text(&t, zone)),
@@ -300,6 +302,31 @@ fn google_time(t: &EventTime, zone: Option<Value>) -> Value {
         v["timeZone"] = zone;
     }
     v
+}
+
+/// Google writes every `dateTime` in the calendar's offset and names the
+/// event's own zone beside it, in what it stores and in what
+/// `singleEvents=true` lists. A time already on that clock keeps its
+/// spelling.
+fn on_calendar_clock(payload: &mut Value, calendar_zone: Option<&str>) {
+    let Some(tz) = calendar_zone.and_then(NamedZone::get) else {
+        return;
+    };
+    for key in ["start", "end", "originalStartTime"] {
+        let Some(slot) = payload.pointer_mut(&format!("/{key}/dateTime")) else {
+            continue;
+        };
+        let Some(at) = slot
+            .as_str()
+            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+        else {
+            continue;
+        };
+        let there = tz.at(&at);
+        if there.offset() != at.offset() {
+            *slot = json!(there.to_rfc3339_opts(SecondsFormat::Secs, false));
+        }
+    }
 }
 
 fn ics_object(obj: &LoadedIcsObject, zone: Option<&str>, window: &Window, out: &mut Listed) {

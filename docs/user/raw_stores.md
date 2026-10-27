@@ -15,7 +15,8 @@ Come here when you need a field the render dropped, an upstream id to
 call the service with, or the original bytes.
 
 This guide covers Gmail and the other mail sources (`email`), Slack
-(`slack`) and calendars (`calendar`). For any other source,
+(`slack`) and calendars (`calendar`), and the store that lists a
+calendar's occurrences one per date. For any other source,
 `.schema` in the shell below lists its tables; their meanings are not
 written down here yet. A test (`raw_stores_doc_test.rs` in
 `datalib/backend/datalib_step`) checks every table and column this
@@ -672,9 +673,10 @@ with `singleEvents=false`, so a series is one resource with its
 row of its own naming the series in `recurring_event_id`. A cancelled
 occurrence is kept, with `status` `cancelled`: it is how the series
 says that date is off. A cancelled one-off event or series is deleted
-from the mirror, occurrences and all. Turning a series into dates is
-left to the reader. An `ics_objects` row holds a series and its changed
-occurrences together, as CalDAV stores them.
+from the mirror, occurrences and all. An `ics_objects` row holds a
+series and its changed occurrences together, as CalDAV stores them.
+For one row per date, read the `render_occurrences` step's store
+instead (§ "A calendar's occurrences" below).
 
 **Google's `etag` and `updated` are not in `payload`.** Google moves
 them on hundreds of events at once with nothing else changed, so they
@@ -786,3 +788,73 @@ listing to its end.
 |---|---|
 | `collection` | the `calendars.id` |
 | `href` | the object's URL path |
+
+## A calendar's occurrences
+
+The raw store keeps a repeating event as one series. A `calendar`
+source's `render_occurrences` step turns that into what Google's
+`events.list?singleEvents=true` answers: one row per occurrence, with
+moved, changed and cancelled dates applied. It lists every occurrence
+that overlaps a window of whole days around its last run (30 back and
+400 ahead by default, set by the step's `days_back` and `days_ahead`),
+and replaces what it held each time it runs. It runs when `ingest`
+stores something new, so the window of a calendar nobody has touched
+for a week is a week old: read `occurrences_window` before trusting a
+missing row, and ask the service for dates outside it.
+
+It is a store of its own, `<group>/render_occurrences/occurrences.doltlite_db`,
+opened like a raw store but not one: nothing is kept in it that the
+raw store does not hold.
+
+**Two clocks.** `payload`, for Google, is written the way Google's API
+writes it: every `dateTime` in `start`, `end` and `originalStartTime` is
+in the **calendar's** zone (`calendars.time_zone`), with the zone the
+event was made in named beside it in `timeZone`. A London meeting on a
+Vienna calendar is `{"dateTime": "2026-10-28T15:00:00+01:00",
+"timeZone": "Europe/London"}`. The `start_time`, `end_time` and
+`original_start_time` columns are in the **event's** own zone, the same
+meeting's `2026-10-28T14:00:00+00:00`. Both name the same instant; sort
+and compare on `start_utc` and `end_utc`.
+
+### `occurrences`
+
+One row per occurrence.
+
+| column | what it holds |
+|---|---|
+| `id` | `<calendar_id>#<instance_id>`, the key |
+| `calendar_id` | the calendar, as the raw store's `calendars.id` |
+| `instance_id` | Calendly: the meeting's Calendly uuid. Google: Google's own id — `<series id>_20261022T160000Z`, or `<series id>_20261224` for an all-day one, the original start in UTC; a one-off event's own id. CalDAV and `.ics`: the `UID`, and for an occurrence of a series `<UID>_<its original start>` spelled the same way |
+| `series_id` | the series it belongs to (Google's `recurringEventId`, the iCalendar `UID`); null for a one-off event |
+| `original_start_time` | where the rule put it, before any move, in the event's zone; null for a one-off |
+| `start_time`, `end_time` | in the event's own zone: RFC 3339 with the offset that zone has that day (`2026-11-02T10:00:00-08:00`), or `YYYY-MM-DD` for an all-day event, whose end is the day after its last, as Google writes it |
+| `start_utc`, `end_utc` | the same instants in UTC, to sort and to compare a window against. An all-day event begins at midnight in the calendar's zone |
+| `all_day` | 1 for an all-day event |
+| `time_zone` | the IANA zone the event is written in, else the calendar's |
+| `status` | `confirmed` or `tentative`; `confirmed` when the event does not say. Cancelled occurrences are not listed |
+| `title` | its summary; a changed occurrence with none takes its series' |
+| `event_row` | the raw store's row it was read from (`google_events.id`, `ics_objects.id`) |
+| `payload` | Google: the occurrence as `singleEvents=true` returns it, times in the calendar's zone — the series' resource under the occurrence's id and times, without `recurrence`, `updated` and `etag` included; a changed occurrence's own resource. CalDAV and `.ics`: `{"ics": "<the VEVENT>"}`, the series' own for a date its rule gives. Calendly: the scheduled event, with its `invitees` |
+
+### `occurrences_window`
+
+The days the rows cover. One row.
+
+| column | what it holds |
+|---|---|
+| `id` | always 1 |
+| `from_utc` | midnight UTC `days_back` days before the run's day |
+| `until_utc` | the end of the day `days_ahead` days after it |
+
+### `unlisted`
+
+An event whose occurrences could not be worked out, and why: a `TZID`
+the zone database does not know, a rule part this build does not follow
+(`BYWEEKNO`, a sub-daily `FREQ`), no start. Nothing is guessed; the
+Manage row counts them as warnings.
+
+| column | what it holds |
+|---|---|
+| `event_row` | the raw store's row |
+| `calendar_id` | its calendar |
+| `reason` | why, in a sentence |

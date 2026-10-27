@@ -411,8 +411,11 @@ Pick the surface that fits the question:
   ```
 
   `occurrences_window` says which days the rows cover, and `unlisted`
-  names any event whose occurrences could not be worked out.
-  The columns: `datalib/backend/etl/providers/calendar_render/src/occurrences/README.md`.
+  names any event whose occurrences could not be worked out. A Google
+  `payload` has its times in the calendar's zone, as Google's API does;
+  `start_time` is in the event's own. The columns:
+  [Reading the raw stores](user/raw_stores.md) § "A calendar's
+  occurrences".
 - **Semantic search** — the qmd index:
 
   ```sh

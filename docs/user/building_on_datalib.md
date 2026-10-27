@@ -314,8 +314,10 @@ question reaches outside that:
   A run with `message_budget` stops early on purpose.
 - **Calendar**: with `since` or `until` set, only events with an
   occurrence in that window, and an event a relative window moves past is
-  dropped from the mirror. Repeating events are stored as series, not
-  dates.
+  dropped from the mirror. Repeating events are stored as series; the
+  `render_occurrences` step lists their dates, but only inside its
+  `occurrences_window` ([raw_stores.md](raw_stores.md) § "A calendar's
+  occurrences").
 - **Anything sent a moment ago**: see "Your app's own writes" below.
 
 ## What the mirror knows it is missing: problems
