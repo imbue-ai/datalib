@@ -43,7 +43,7 @@ calendar nobody touches for a week keeps last week's window. Read
 |---|---|
 | `id` | `<calendar_id>#<instance_id>`, the key |
 | `calendar_id` | the calendar, as the raw store's `calendars.id` |
-| `instance_id` | Google: Google's own id — `<series id>_20261022T160000Z`, or `<series id>_20261224` for an all-day one, the original start in UTC; a one-off event's own id. CalDAV and `.ics`: the `UID`, and for an occurrence of a series `<UID>_<its original start>` spelled the same way |
+| `instance_id` | Calendly: the meeting's Calendly uuid. Google: Google's own id — `<series id>_20261022T160000Z`, or `<series id>_20261224` for an all-day one, the original start in UTC; a one-off event's own id. CalDAV and `.ics`: the `UID`, and for an occurrence of a series `<UID>_<its original start>` spelled the same way |
 | `series_id` | the series it belongs to (Google's `recurringEventId`, the iCalendar `UID`); null for a one-off event |
 | `original_start_time` | where the rule put it, before any move; null for a one-off |
 | `start_time`, `end_time` | as the event has them: RFC 3339 with the offset its own zone has that day (`2026-11-02T10:00:00-08:00`), or `YYYY-MM-DD` for an all-day event, whose end is the day after its last, as Google writes it |
@@ -53,7 +53,7 @@ calendar nobody touches for a week keeps last week's window. Read
 | `status` | `confirmed` or `tentative`; `confirmed` when the event does not say. Cancelled occurrences are not listed |
 | `title` | its summary; a changed occurrence with none takes its series' |
 | `event_row` | the raw store's row it was read from (`google_events.id`, `ics_objects.id`) |
-| `payload` | Google: the occurrence as `singleEvents=true` returns it — the series' resource under the occurrence's id and times, without `recurrence`, `updated` and `etag` included; a changed occurrence's own resource. CalDAV and `.ics`: `{"ics": "<the VEVENT>"}`, the series' own for a date its rule gives |
+| `payload` | Google: the occurrence as `singleEvents=true` returns it — the series' resource under the occurrence's id and times, without `recurrence`, `updated` and `etag` included; a changed occurrence's own resource. CalDAV and `.ics`: `{"ics": "<the VEVENT>"}`, the series' own for a date its rule gives. Calendly: the scheduled event, with its `invitees` |
 
 `unlisted`: an event whose occurrences could not be worked out, with
 why — a `TZID` the zone database does not know, a rule part this build

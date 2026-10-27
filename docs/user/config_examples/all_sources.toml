@@ -654,6 +654,19 @@ group = "calendar-calendly"
 function = "embed"
 inputs = ["calendar-calendly/keyword_index"]
 
+# Every meeting in a window of days around now, one row each, in
+# render_occurrences/occurrences.doltlite_db, the way the other calendar
+# methods list their occurrences. The window moves when the step runs,
+# which is when ingest has stored something new.
+[[steps]]
+group = "calendar-calendly"
+function = "render_occurrences"
+inputs = ["calendar-calendly/ingest"]
+
+[steps.params]
+days_back = 30    # the default
+days_ahead = 400  # the default
+
 # --- calendar by `ics` --------------------------------------------------
 
 # A folder of `.ics` files on disk (Google Takeout's `Calendar/`, an

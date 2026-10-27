@@ -13,8 +13,9 @@ use std::path::Path;
 use anyhow::Result;
 use chrono::{DateTime, SecondsFormat, Utc};
 use datalib_etl_calendar::ical::{self, Component};
-use datalib_etl_calendar::ingest::db::{LoadedGoogleEvent, LoadedIcsObject};
+use datalib_etl_calendar::ingest::db::{LoadedCalendlyEvent, LoadedGoogleEvent, LoadedIcsObject};
 use datalib_etl_calendar_common::occurrences::{self, Occurrence, Series, Window};
+use datalib_etl_calendar_common::when::Zone;
 use datalib_etl_calendar_common::EventTime;
 use datalib_etl_render::inputs::RawRange;
 use serde_json::{json, Value};
@@ -106,6 +107,9 @@ pub fn list(parsed: &Parsed, window: &Window) -> Listed {
     }
     for obj in &parsed.ics {
         ics_object(obj, zone_of(&obj.calendar_id), window, &mut out);
+    }
+    for e in &parsed.calendly {
+        calendly_event(e, window, &mut out);
     }
     out.rows.sort_by(|a, b| {
         (&a.start_utc, &a.calendar_id, &a.instance_id).cmp(&(
@@ -401,6 +405,61 @@ fn ics_object(obj: &LoadedIcsObject, zone: Option<&str>, window: &Window, out: &
                 }
             }
             Err(why) => out.unlisted.push(unlisted(why.to_string())),
+        }
+    }
+}
+
+/// A meeting booked on Calendly: a one-off, under its Calendly uuid,
+/// its payload the scheduled event with its invitees.
+fn calendly_event(e: &LoadedCalendlyEvent, window: &Window, out: &mut Listed) {
+    let v = &e.event;
+    if google::str_of(v, "status") == Some("canceled") {
+        return;
+    }
+    let at = |key: &str| {
+        let t = DateTime::parse_from_rfc3339(google::str_of(v, key)?).ok()?;
+        Some(EventTime::At {
+            local: t.naive_utc(),
+            zone: Zone::Utc,
+        })
+    };
+    let Some(start) = at("start_time") else {
+        out.unlisted.push(Unlisted {
+            calendar_id: e.calendar_id.clone(),
+            event_row: e.id.clone(),
+            reason: "no start_time".into(),
+        });
+        return;
+    };
+    let end = at("end_time");
+    let instance_id = google::str_of(v, "uri")
+        .and_then(datalib_etl_calendar::ingest::schema_raw::calendly_uuid)
+        .unwrap_or(&e.id);
+    let mut payload = v.clone();
+    if let Some(invitees) = &e.invitees {
+        payload["invitees"] = json!(invitees);
+    }
+    let one = Series {
+        start: &start,
+        end: end.as_ref(),
+        rules: &[],
+        rdates: &[],
+        removed: &[],
+    };
+    if let Ok(occs) = occurrences::expand(&one, window, None) {
+        for occ in &occs {
+            out.rows.push(occurrence_row(
+                &e.calendar_id,
+                instance_id,
+                None,
+                None,
+                occ,
+                None,
+                Some("confirmed"),
+                google::text(v, "name"),
+                &e.id,
+                payload.to_string(),
+            ));
         }
     }
 }

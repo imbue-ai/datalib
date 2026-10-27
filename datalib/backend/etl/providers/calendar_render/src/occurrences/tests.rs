@@ -1,5 +1,5 @@
 use chrono::NaiveDate;
-use datalib_etl_calendar::ingest::db::LoadedCalendar;
+use datalib_etl_calendar::ingest::db::{LoadedCalendar, LoadedCalendlyEvent};
 use serde_json::json;
 
 use super::*;
@@ -439,4 +439,38 @@ fn google_stops_a_rule_that_never_ends_at_730_occurrences() {
         "RRULE:FREQ=WEEKLY;COUNT=3"
     );
     assert_eq!(google_bounded("FREQ=MONTHLY"), "FREQ=MONTHLY;COUNT=730");
+}
+
+/// A meeting booked on Calendly is a one-off under its Calendly uuid; a
+/// cancelled one is not listed.
+#[test]
+fn a_calendly_meeting_is_listed_under_its_uuid() {
+    let meeting = |uuid: &str, status: &str, start: &str| LoadedCalendlyEvent {
+        id: format!("PICARD#{uuid}"),
+        calendar_id: "PICARD".into(),
+        event: json!({
+            "uri": format!("https://api.calendly.com/scheduled_events/{uuid}"),
+            "name": "Counseling session", "status": status,
+            "start_time": start, "end_time": "2026-11-02T17:30:00.000000Z"
+        }),
+        invitees: Some(vec![
+            json!({"email": "barclay@enterprise.test", "status": "active"}),
+        ]),
+    };
+    let parsed = Parsed {
+        calendly: vec![
+            meeting("EV1", "active", "2026-11-02T17:00:00.000000Z"),
+            meeting("EV2", "canceled", "2026-11-02T17:00:00.000000Z"),
+        ],
+        ..Parsed::default()
+    };
+    let listed = list(&parsed, &window("2026-11-01", "2026-11-03"));
+    assert_eq!(ids(&listed), ["EV1"]);
+    let r = &listed.rows[0];
+    assert_eq!(r.start_time, "2026-11-02T17:00:00+00:00");
+    assert_eq!(r.end_utc, "2026-11-02T17:30:00Z");
+    assert_eq!(r.series_id, None);
+    assert_eq!(r.title.as_deref(), Some("Counseling session"));
+    let payload: Value = serde_json::from_str(&r.payload).unwrap();
+    assert_eq!(payload["invitees"][0]["email"], "barclay@enterprise.test");
 }
