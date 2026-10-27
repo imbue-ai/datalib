@@ -56,7 +56,9 @@ use datalib_schema::providers::Provider;
 ///     so it opens in that workspace, not the browser's current one.
 /// v14: emoji shortcodes are Slack's own names, skin tones included, and
 ///     code keeps its shortcodes as typed.
-pub const RENDER_VERSION: u32 = 14;
+/// v15: the account's own profile is marked as the account, so search
+///     reads its handles as `me`.
+pub const RENDER_VERSION: u32 = 15;
 
 #[derive(Debug, Default)]
 pub struct RenderSummary {
@@ -360,8 +362,12 @@ fn build_chat(
         }],
         // Each author's profile, read the way their label was.
         contacts: authors_of(bucket)
-            .filter_map(|uid| bucket.inputs.lookup("users", &shared.users).get(uid))
-            .filter_map(|u| u.contact(source_id))
+            .filter_map(|uid| {
+                let user = bucket.inputs.lookup("users", &shared.users).get(uid)?;
+                let mut contact = user.contact(source_id)?;
+                contact.account = Some(uid) == self_user_id;
+                Some(contact)
+            })
             .collect(),
         inputs: bucket.inputs.declared(),
     }

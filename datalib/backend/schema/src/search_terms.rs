@@ -236,7 +236,7 @@ pub fn search_terms_of(row: &SearchTermSource) -> Vec<SearchTerm> {
 /// built under another shape is rebuilt whole, so change it whenever
 /// either changes. A kind a render starts to supply needs no change: it
 /// reaches the file through the diff of `grid_rows`, as its rows change.
-pub const TERMS_SHAPE: &str = "5";
+pub const TERMS_SHAPE: &str = "6";
 
 /// The search terms file's tables, dictionary-encoded: each grid row once in
 /// `rows`, each distinct value once in `vals`, and a term is three
@@ -261,6 +261,9 @@ pub const TERMS_DDL: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS names (handle TEXT NOT NULL, name TEXT NOT NULL, \
      PRIMARY KEY (handle, name)) WITHOUT ROWID",
     "CREATE INDEX IF NOT EXISTS names_by_name ON names (name COLLATE NOCASE)",
+    // Each handle a source says is its account's own, so `me` finds them.
+    "CREATE TABLE IF NOT EXISTS account_handles (handle TEXT NOT NULL, \
+     source_id TEXT NOT NULL, PRIMARY KEY (handle, source_id)) WITHOUT ROWID",
 ];
 
 /// The `terms_meta` key naming the grid index commit the terms reflect.

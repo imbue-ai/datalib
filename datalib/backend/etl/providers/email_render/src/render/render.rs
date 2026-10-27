@@ -7,6 +7,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use super::ids;
 use super::parse::{EmailStore, EmailThreadBucket, Shared};
 use anyhow::{Context, Result};
+use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact};
 use datalib_etl::blob_cas::{blake3_hex, BlobBundle, Described};
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::normalize::iso_to_ms;
@@ -47,7 +48,9 @@ use mail_parser::{Address, MessageParser, MimeHeaders, PartType};
 /// v13: Bcc on the recipients line, and an `@` mention drawn as a chip.
 /// v14: attachments and inline images are linked inside the stored
 ///     `.eml`, and no `blobs/` is written beside the page.
-pub const RENDER_VERSION: u32 = 15;
+/// v16: the account's own address is a source contact marked as the
+///     account, so search reads it as `me`.
+pub const RENDER_VERSION: u32 = 16;
 
 /// Which webmail to build each email's `↗` outlink for. Mirrors
 /// `datalib_core::config::EmailOutlink`; the orchestrator maps the
@@ -389,6 +392,17 @@ fn account_label_from_payload(id: &str, payload: &serde_json::Value) -> Option<S
     datalib_etl_chat_common::account_label(id, s("emailAddress").or_else(|| s("email")), s("name"))
 }
 
+/// The account's address as a source contact marked as the account, so
+/// a thread the owner wrote in or was sent carries it. A label that is
+/// not an address (a JMAP name that is not one, a bare id) gives none.
+fn account_contact(source_id: &str, label: Option<&String>) -> Option<NormalizedContact> {
+    let handle = Handle::email(label?)?;
+    let mut contact = NormalizedContact::new(source_id, handle.as_str(), ContactKind::Person);
+    contact.handles = vec![ContactHandle::of(handle)];
+    contact.account = true;
+    Some(contact)
+}
+
 fn build_chat(
     source_id: &str,
     bucket: &EmailThreadBucket,
@@ -608,7 +622,9 @@ fn build_chat(
     let thread_source_url = items.first().and_then(|i| i.source_url.clone());
     let mut chat = NormalizedChat {
         named_after: Vec::new(),
-        contacts: Vec::new(),
+        contacts: account_contact(source_id, account_label.get(account_id))
+            .into_iter()
+            .collect(),
         inputs: Vec::new(),
         path_prefix: None,
         id: tuid.clone(),
@@ -1179,8 +1195,24 @@ mod render_params_tests {
 
 #[cfg(test)]
 mod account_label_tests {
-    use super::account_label_from_payload;
+    use super::{account_contact, account_label_from_payload};
     use serde_json::json;
+
+    /// The mailbox's address is the account's own handle, and a label
+    /// that is only a name or an id names no handle at all.
+    #[test]
+    fn the_account_is_its_address_and_nothing_else() {
+        let picard = account_contact("mail", Some(&"Picard@Enterprise.org".to_string())).unwrap();
+        assert!(picard.account);
+        let handles: Vec<&str> = picard
+            .handles
+            .iter()
+            .filter_map(|h| h.handle.as_ref().map(|h| h.as_str()))
+            .collect();
+        assert_eq!(handles, ["email:picard@enterprise.org"]);
+        assert_eq!(account_contact("mail", Some(&"Takeout".to_string())), None);
+        assert_eq!(account_contact("mail", None), None);
+    }
 
     /// The three shapes the `accounts` table holds. The JMAP one is the
     /// trap: it has no `id` (the id is the session map's key) and its

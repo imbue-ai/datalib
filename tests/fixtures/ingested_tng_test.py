@@ -1170,6 +1170,24 @@ class IngestedTngPipelineTest(unittest.TestCase):
             ],
             "the people the index knows by Picard's address",
         )
+        # Whose account each source is: the user Slack's `auth.test` names,
+        # with the address on his profile, and the mailbox's address. The
+        # search reads these handles as `me` (docs/dev/contacts.md).
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT DISTINCT c.source_id || '|' || h.handle "
+                "FROM source_contact_handles h JOIN source_contacts c "
+                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
+                "WHERE json_extract(c.contact_json, '$.account') = 1 ORDER BY 1;",
+            ),
+            [
+                "slack|email:picard@enterprise.starfleet",
+                "slack|slack:T_NCC1701D/U_PICARD",
+                "tng_email|email:picard@enterprise.starfleet",
+            ],
+            "the handles each source marks as its account's own",
+        )
         # One number written two ways — the address book's with dashes (a
         # vCard 4 `tel:` URI, read as its number), the SMS backup's and
         # Google Voice's bare digits — is one handle, so a link made

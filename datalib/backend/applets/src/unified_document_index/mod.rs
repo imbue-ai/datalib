@@ -410,7 +410,7 @@ async fn answer_search(s: &Index, p: SearchParams) -> SearchResponse {
     if let Some(why) = refusal(&s.root, &parsed) {
         return refused(why);
     }
-    let (parsed, q) = match with_contacts(&s.root, &q, parsed).await {
+    let (parsed, q) = match with_people(&s.root, &q, parsed).await {
         Ok(read) => read,
         Err(why) => return refused(why),
     };
@@ -570,7 +570,7 @@ async fn groups_handler(
         out.refused.push(why);
         return Json(out);
     }
-    let (parsed, q) = match with_contacts(&s.root, &q, parsed).await {
+    let (parsed, q) = match with_people(&s.root, &q, parsed).await {
         Ok(read) => read,
         Err(why) => {
             out.refused.push(why);
@@ -1246,14 +1246,48 @@ pub fn refusal(root: &std::path::Path, parsed: &ParsedQuery) -> Option<String> {
     })
 }
 
+/// `parsed` with each `me` and `contact:` value given the handles it
+/// reaches, and the key its results are cached under: the query and
+/// those handles, so a search after they change is a new search.
+pub async fn with_people(
+    root: &std::path::Path,
+    q: &str,
+    parsed: ParsedQuery,
+) -> Result<(ParsedQuery, String), String> {
+    let (parsed, key) = with_me(root, q, parsed).await?;
+    with_contacts(root, &key, parsed).await
+}
+
+/// Each `me` value given the owner's handles: `me:self`, the stand-in
+/// sources write for them, and every handle a source says is its
+/// account's own. Refused when the search terms file predates them.
+async fn with_me(
+    root: &std::path::Path,
+    q: &str,
+    parsed: ParsedQuery,
+) -> Result<(ParsedQuery, String), String> {
+    if !parsed.names_me() {
+        return Ok((parsed, q.to_string()));
+    }
+    let accounts = search_terms::account_handles(root)
+        .await
+        .map_err(|e| format!("read the account's handles: {e:#}"))?
+        .ok_or_else(|| {
+            "`me` reads the account's handles, which the next sync of the index writes".to_string()
+        })?;
+    let mine: Vec<String> = std::iter::once(datalib_handle::Handle::me().as_str().to_string())
+        .chain(accounts)
+        .collect();
+    let key = format!("{q}\u{1f}me={}", mine.join(","));
+    Ok((parsed.with_me_handles(&mine), key))
+}
+
 /// `parsed` with each `contact:` value given the handles its contact
 /// reaches, read from the contacts store now (a detached read: the
-/// `datalib_contacts` applet stays its one writer), and the key its
-/// results are cached under: the query and those handles, so a search
-/// after a link is made or undone is a new search. Refused, saying why,
+/// `datalib_contacts` applet stays its one writer). Refused, saying why,
 /// when the query names a contact and the root has no contacts store, or
 /// the store has no such contact.
-pub async fn with_contacts(
+async fn with_contacts(
     root: &std::path::Path,
     q: &str,
     parsed: ParsedQuery,
@@ -1341,7 +1375,7 @@ async fn search_values(
     Query(p): Query<columns::ValuesParams>,
 ) -> Result<Json<Vec<datalib_columns::ValueSuggestion>>, (StatusCode, String)> {
     if let Some(key) = datalib_unified_document_index::terms_keys::key(&p.key) {
-        let (narrowed, _) = with_contacts(&s.root, &p.q, parse_query(&p.q))
+        let (narrowed, _) = with_people(&s.root, &p.q, parse_query(&p.q))
             .await
             .map_err(|why| (StatusCode::BAD_REQUEST, why))?;
         let failed = |e: String| {
@@ -1813,6 +1847,40 @@ mod tests {
             ],
         )
         .await;
+    }
+
+    /// A terms file written before it held the account's handles refuses
+    /// `me` by name, where it would otherwise fail on a missing table or
+    /// quietly find only the stand-in "Me".
+    #[tokio::test]
+    async fn me_on_a_terms_file_without_the_accounts_handles_says_so() {
+        let tmp = tempfile::tempdir().unwrap();
+        mail(tmp.path()).await;
+        sync_terms(tmp.path()).await;
+        let path = datalib_runtime::layout::search_terms_db(tmp.path());
+        use sqlx::{ConnectOptions, Connection};
+        let mut conn = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(datalib_runtime::plain_sqlite::uri(&path))
+            .connect()
+            .await
+            .unwrap();
+        sqlx::query("DROP TABLE account_handles")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        conn.close().await.unwrap();
+        let s = index_over(tmp.path()).await;
+        let r = search(&s, "from:me", None, 10, None).await;
+        assert!(r.rows.is_empty());
+        assert!(
+            r.refused.iter().any(|why| why.contains("`me`")),
+            "{:?}",
+            r.refused
+        );
+        assert!(search(&s, "from:ann", None, 10, None)
+            .await
+            .refused
+            .is_empty());
     }
 
     /// Each person key reads the search terms in its role: a handle by its
