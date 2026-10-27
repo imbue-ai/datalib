@@ -6,95 +6,18 @@
 
 use std::collections::BTreeSet;
 use std::fs::File;
-use std::io::{BufReader, Read};
-use std::path::{Component, Path, PathBuf};
+use std::io::Read;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use datalib_etl::stop::StopFlag;
+use datalib_etl_files::archive;
 use datalib_etl_files::fsscan::{self, FileScanCursor, ScannedFile};
 
 use super::SyncFlags;
 
 /// The parts each feed last finished reading, keyed `<feed>/<part file name>`.
 pub const SCOPE: &str = "google_takeout/archives";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Kind {
-    Zip,
-    Tgz,
-}
-
-const EXTENSIONS: &[(&str, Kind)] = &[
-    (".zip", Kind::Zip),
-    (".tgz", Kind::Tgz),
-    (".tar.gz", Kind::Tgz),
-];
-
-pub fn kind_of(name: &str) -> Option<Kind> {
-    let lower = name.to_ascii_lowercase();
-    EXTENSIONS
-        .iter()
-        .find(|(ext, _)| lower.ends_with(ext))
-        .map(|&(_, kind)| kind)
-}
-
-/// The export a part belongs to. Google names the parts
-/// `takeout-<stamp>-<n>-<nnn>.zip`, and older exports
-/// `takeout-<stamp>-<nnn>.zip`: the name less its numbered tail.
-fn export_of(name: &str) -> &str {
-    let lower = name.to_ascii_lowercase();
-    let ext = EXTENSIONS
-        .iter()
-        .find(|(ext, _)| lower.ends_with(ext))
-        .map_or(0, |(ext, _)| ext.len());
-    let mut stem = &name[..name.len() - ext];
-    while let Some((head, tail)) = stem.rsplit_once('-') {
-        if tail.is_empty() || !tail.bytes().all(|b| b.is_ascii_digit()) {
-            break;
-        }
-        stem = head;
-    }
-    stem
-}
-
-/// The archive parts among a folder's file names, sorted; empty when there
-/// are none. Parts of two exports would be two snapshots read as one, so
-/// that is refused. A dot-file is skipped: macOS leaves a `._<name>` twin
-/// of every file it copies to a drive that cannot hold its metadata.
-pub fn parts_of_one_export(names: &[String]) -> Result<Vec<String>> {
-    let mut parts: Vec<String> = names
-        .iter()
-        .filter(|n| !n.starts_with('.') && kind_of(n).is_some())
-        .cloned()
-        .collect();
-    parts.sort();
-    let exports: BTreeSet<&str> = parts.iter().map(|n| export_of(n)).collect();
-    if exports.len() > 1 {
-        bail!(
-            "the folder holds the parts of {} Takeout exports ({}); keep one export per folder",
-            exports.len(),
-            exports.into_iter().collect::<Vec<_>>().join(", ")
-        );
-    }
-    Ok(parts)
-}
-
-/// The archive parts directly in `dir`, or none when it is not a folder.
-pub fn parts_in(dir: &Path) -> Result<Vec<String>> {
-    if !dir.is_dir() {
-        return Ok(Vec::new());
-    }
-    let mut names = Vec::new();
-    for entry in std::fs::read_dir(dir).with_context(|| format!("list {}", dir.display()))? {
-        let entry = entry.with_context(|| format!("list {}", dir.display()))?;
-        if entry.file_type()?.is_file() {
-            if let Some(name) = entry.file_name().to_str() {
-                names.push(name.to_string());
-            }
-        }
-    }
-    parts_of_one_export(&names)
-}
 
 /// A feed, as far as unpacking goes: the switch that turns it on and the
 /// folder under `Takeout/` it reads.
@@ -222,14 +145,7 @@ pub fn entry_rel(name: &str) -> Option<String> {
         .strip_prefix("./")
         .unwrap_or(name)
         .strip_prefix("Takeout/")?;
-    let mut parts = Vec::new();
-    for c in Path::new(rest).components() {
-        match c {
-            Component::Normal(p) => parts.push(p.to_str()?),
-            _ => return None,
-        }
-    }
-    (!parts.is_empty()).then(|| parts.join("/"))
+    archive::safe_rel(rest)
 }
 
 pub const STOPPED: &str = "stopped while unpacking the export; nothing was read";
@@ -257,13 +173,7 @@ pub fn unpack(
         done: Unpacked::default(),
     };
     for part in parts {
-        let name = part.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        let file = File::open(part).with_context(|| format!("open {}", part.display()))?;
-        match kind_of(name) {
-            Some(Kind::Zip) => out.zip(part, file)?,
-            Some(Kind::Tgz) => out.tgz(part, file)?,
-            None => bail!("{} is not a .zip or a .tgz", part.display()),
-        }
+        archive::for_each_entry(part, |e| out.entry(part, e.name, e.size, e.bytes))?;
     }
     Ok(out.done)
 }
@@ -276,55 +186,16 @@ struct Unpacker<'a> {
 }
 
 impl Unpacker<'_> {
-    fn zip(&mut self, part: &Path, file: File) -> Result<()> {
-        let mut archive = zip::ZipArchive::new(BufReader::new(file))
-            .with_context(|| format!("{} is not a readable zip", part.display()))?;
-        for i in 0..archive.len() {
-            let mut entry = archive
-                .by_index(i)
-                .with_context(|| format!("read entry {i} of {}", part.display()))?;
-            if entry.is_dir() {
-                continue;
-            }
-            let name = entry
-                .name()
-                .with_context(|| format!("name of entry {i} in {}", part.display()))?
-                .to_string();
-            let size = i64::try_from(entry.size()).unwrap_or(i64::MAX);
-            self.entry(part, &name, size, &mut entry)?;
-        }
-        Ok(())
-    }
-
-    fn tgz(&mut self, part: &Path, file: File) -> Result<()> {
-        let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(BufReader::new(file)));
-        let entries = archive
-            .entries()
-            .with_context(|| format!("{} is not a readable .tgz", part.display()))?;
-        for entry in entries {
-            let mut entry = entry.with_context(|| format!("read {}", part.display()))?;
-            if !entry.header().entry_type().is_file() {
-                continue;
-            }
-            let name = entry
-                .path()
-                .with_context(|| format!("read an entry's name in {}", part.display()))?
-                .to_string_lossy()
-                .into_owned();
-            let size = i64::try_from(entry.header().size().unwrap_or(0)).unwrap_or(i64::MAX);
-            self.entry(part, &name, size, &mut entry)?;
-        }
-        Ok(())
-    }
-
-    fn entry(&mut self, part: &Path, name: &str, size: i64, bytes: &mut dyn Read) -> Result<()> {
+    fn entry(&mut self, part: &Path, name: &str, size: u64, bytes: &mut dyn Read) -> Result<()> {
         if self.stop.requested() {
             bail!(STOPPED);
         }
         let Some(rel) = entry_rel(name) else {
             return Ok(());
         };
-        self.done.listed.push((rel.clone(), size));
+        self.done
+            .listed
+            .push((rel.clone(), i64::try_from(size).unwrap_or(i64::MAX)));
         if !admits(self.sync, &rel) {
             return Ok(());
         }
@@ -343,54 +214,6 @@ impl Unpacker<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn names(v: &[&str]) -> Vec<String> {
-        v.iter().map(|s| s.to_string()).collect()
-    }
-
-    #[test]
-    fn parts_are_grouped_by_the_export_google_named_them_for() {
-        assert_eq!(
-            export_of("takeout-23640301T090000Z-1-001.zip"),
-            "takeout-23640301T090000Z"
-        );
-        assert_eq!(
-            export_of("takeout-23630101T000000Z-003.tgz"),
-            "takeout-23630101T000000Z"
-        );
-        assert_eq!(
-            export_of("Takeout-23630101T000000Z-1-001.TAR.GZ"),
-            "Takeout-23630101T000000Z"
-        );
-        let parts = parts_of_one_export(&names(&[
-            "takeout-23640301T090000Z-2-001.zip",
-            "takeout-23640301T090000Z-1-001.zip",
-            "._takeout-23640301T090000Z-1-001.zip",
-            "notes.txt",
-        ]))
-        .unwrap();
-        assert_eq!(
-            parts,
-            names(&[
-                "takeout-23640301T090000Z-1-001.zip",
-                "takeout-23640301T090000Z-2-001.zip"
-            ])
-        );
-        assert!(parts_of_one_export(&names(&["notes.txt"]))
-            .unwrap()
-            .is_empty());
-    }
-
-    #[test]
-    fn parts_of_two_exports_are_refused() {
-        let err = parts_of_one_export(&names(&[
-            "takeout-23640301T090000Z-1-001.zip",
-            "takeout-23631231T000000Z-1-001.zip",
-        ]))
-        .unwrap_err()
-        .to_string();
-        assert!(err.contains("2 Takeout exports"), "{err}");
-    }
 
     #[test]
     fn only_entries_under_takeout_that_stay_inside_it_land() {

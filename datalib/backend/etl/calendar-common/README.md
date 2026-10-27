@@ -3,10 +3,16 @@
 A calendar provider turns what its upstream sent into
 `NormalizedEvent`s; this crate turns each one into a markdown page, a
 `grid_rows` row and the `edges` that link it to its relatives. The one
-provider is `calendar`, which has four ways in — Google's API,
-Fastmail over CalDAV, any other CalDAV server, and `.ics` files — and
-two raw shapes (iCalendar text and Google's JSON). Both normalize here,
-so an event reads the same whichever way it arrived.
+provider is `calendar`, which has five ways in — Google's API,
+Fastmail over CalDAV, any other CalDAV server, Calendly's API and
+`.ics` files — and three raw shapes (iCalendar text, Google's JSON and
+Calendly's JSON). All three normalize here, so an event reads the same
+whichever way it arrived.
+
+An event booked through a form (Calendly) also carries what each guest
+answered on it, `GuestAnswers`: a "Booking answers" section on the
+page, one heading per guest, and the answers in the grid's search
+text. Every other event has none and renders without the section.
 
 ## One document per what, exactly
 
@@ -18,13 +24,25 @@ so an event reads the same whichever way it arrived.
 | An occurrence that was cancelled (`EXDATE`, a cancelled override) | none — a line on the series page | — |
 | An occurrence the rule produces and nobody touched | none | — |
 
-**Unchanged occurrences are never written out.** A weekly meeting with
+**Unchanged occurrences are never documents.** A weekly meeting with
 no end date has infinitely many, and even a bounded window ("the next
 year") would make the render depend on *today*: the same raw store would
 render differently tomorrow, re-render every series every day, and fail
 the fixture's byte-identical convergence. The rule on the series page is
-the whole truth about them; expanding it is a query-time job (a
-calendar view in the UI), not a stored one.
+the whole truth about them. Listing them is the `render_occurrences`
+step's job, in a store of its own that does depend on today
+(`calendar_render/src/occurrences/README.md`); `occurrences.rs` here
+runs a series forward and `recur.rs` follows its `RRULE`, refusing by
+name a part it does not follow (`BYWEEKNO`, a sub-daily `FREQ`).
+
+**The rule arithmetic is ours, not a library's.** Stalwart's `calcard`
+was tried and dropped: the last permissively licensed release (0.3.14,
+its repository since archived) cannot be built without `chrono-tz`,
+whose stale zone data `deny.toml` bans, and its successor lives in
+Stalwart's server under the AGPL. Whether it will be published
+permissively again is asked
+[on Stalwart's support portal](https://support.stalw.art/t/calcard-will-it-be-published-to-crates-io-under-a-permissive-license-again/2054);
+swapping the engine is a change to `recur.rs` alone.
 
 **A changed occurrence is a document** because it carries information
 the rule does not: a new time, a new room, a different agenda, different
@@ -60,10 +78,16 @@ id too — both are the upstream kind `event`.
 `EventTime` keeps a time the way its source wrote it and resolves the
 instant only when asked (`when.rs`):
 
-- A `TZID` is looked up in the IANA database (`chrono-tz`). A name it
-  does not know — an Outlook zone, a typo — is not guessed: the start
-  is nulled on the grid row and a `problems` row says why; the page
-  still shows the wall-clock time and the name.
+- A `TZID` is looked up in the IANA time zone database through
+  `datalib_time::NamedZone`, which reads the copy bundled into the
+  binary (`jiff-tzdb`) and never the host's. A mac, a Linux container
+  with no `/usr/share/zoneinfo` and Windows then agree, and the rules
+  are as current as the `jiff-tzdb` in `Cargo.lock`. When IANA moves a
+  zone's clocks (British Columbia kept -07:00 from November 2026), run
+  `cargo update -p jiff-tzdb` in `datalib/backend` and build, which
+  repins `MODULE.bazel.lock`. A name the database does not know — an
+  Outlook zone, a typo — is not guessed: the start is nulled on the
+  grid row and a `problems` row says why; the page still shows the wall-clock time and the name.
 - A floating time (no zone) is read in the calendar's own zone, else as
   UTC with a `problems` row recording the guess.
 - An all-day date is its midnight UTC. `after:2026-09-13` then finds an

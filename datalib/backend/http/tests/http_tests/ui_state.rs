@@ -35,8 +35,10 @@ async fn a_put_document_comes_back_after_a_restart() {
     let tmp = tempfile::tempdir().unwrap();
     let app = router(state(tmp.path()).await);
 
-    let (status, _) = call(&app, "GET", "/api/ui/state/layout", "").await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
+    // Nothing kept yet is `null`, not a 404 the browser logs as a failure.
+    let (status, body) = call(&app, "GET", "/api/ui/state/layout", "").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, "null");
 
     let doc = r#"{"kind":"box","children":[]}"#;
     let (status, _) = call(&app, "PUT", "/api/ui/state/layout", doc).await;

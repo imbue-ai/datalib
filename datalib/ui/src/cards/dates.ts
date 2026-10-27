@@ -1,10 +1,26 @@
 // A date drawn as a chip (docs/dev/chips.md § "A date"): every
-// `<time datetime>` a render writes, shown in the viewer's own zone by
-// the one formatter here, with the precise instant on hover, a copy that
+// `<time datetime>` a render writes, shown in the zone and format the
+// status bar's clock sets (`config/timeView.ts`) by the one formatter here, with the precise instant on hover, a copy that
 // keeps the instant, and a menu that searches around it. The rules are
 // pure; `decorateDates` is the one function that touches the DOM.
 
 import { formatRelative } from "@/config/timeFormat";
+import {
+  LOCAL,
+  UTC,
+  WRITTEN,
+  dayBounds,
+  formatAt,
+  formatDay,
+  offsetAt,
+  offsetText,
+  readsAsMachine,
+  timeView,
+  wallClock,
+  zoneName,
+  type TimeView,
+  type Wall,
+} from "@/config/timeView";
 import { filterToken } from "@/grid/query";
 import { drawChip, type ChipLook } from "./contacts";
 
@@ -45,86 +61,54 @@ function dayMs(s: Extract<Stamp, { kind: "day" }>): number {
 
 const p2 = (n: number) => String(n).padStart(2, "0");
 
-/** `zone` is an IANA zone for tests; the viewer's own zone otherwise. */
-function fmt(zone: string | undefined, opts: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
-  return new Intl.DateTimeFormat(undefined, { ...opts, timeZone: zone });
+function wallText(w: Wall): string {
+  return `${w.year}-${p2(w.month)}-${p2(w.day)} ` + `${p2(w.hour)}:${p2(w.minute)}:${p2(w.second)}`;
 }
-
-const SHORT_DAY: Intl.DateTimeFormatOptions = {
-  weekday: "short",
-  year: "numeric",
-  month: "short",
-  day: "numeric",
-};
-const LONG_DAY: Intl.DateTimeFormatOptions = {
-  weekday: "long",
-  year: "numeric",
-  month: "long",
-  day: "numeric",
-};
-const CLOCK: Intl.DateTimeFormatOptions = { hour: "2-digit", minute: "2-digit", hourCycle: "h23" };
 
 /** The text a date chip shows: `Tue, Apr 15, 2369, 12:05` in the
- *  viewer's zone, or `Tue, Mar 18, 2369` for a day. */
-export function dateText(s: Stamp, zone?: string): string {
-  if (s.kind === "day") return fmt("UTC", SHORT_DAY).format(dayMs(s));
-  return fmt(zone, { ...SHORT_DAY, ...CLOCK }).format(s.ms);
+ *  view's zone, or `Tue, Mar 18, 2369` for a day. */
+export function dateText(s: Stamp, view = timeView.value): string {
+  if (s.kind === "day") return formatDay(s.year, s.month, s.day, view, "short");
+  return formatAt(s, view, { day: "short", clock: true });
 }
 
-/** The zone's short name at that instant, `GMT+2` or `PDT`. */
-function zoneName(ms: number, zone: string | undefined): string {
-  const parts = fmt(zone, { timeZoneName: "short" }).formatToParts(ms);
-  return parts.find((p) => p.type === "timeZoneName")?.value ?? "";
+const INSTANT_IN_TEXT = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})/g;
+
+/** Text read out of a render (a snippet, a row's preview), where each
+ *  date is the instant its `<time>` named: shown as a chip says it. */
+export function datesInText(text: string, view = timeView.value): string {
+  return text.replace(INSTANT_IN_TEXT, (stamp) => {
+    const s = parseStamp(stamp);
+    return s ? dateText(s, view) : stamp;
+  });
 }
 
-/** The wall clock an offset reads at an instant: `2369-04-15 08:05:00`. */
-function wallClock(ms: number, offsetMin: number): string {
-  const d = new Date(ms + offsetMin * 60_000);
-  return (
-    `${d.getUTCFullYear()}-${p2(d.getUTCMonth() + 1)}-${p2(d.getUTCDate())} ` +
-    `${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}:${p2(d.getUTCSeconds())}`
-  );
-}
-
-function offsetText(min: number): string {
-  const a = Math.abs(min);
-  return `${min < 0 ? "-" : "+"}${p2(Math.floor(a / 60))}:${p2(a % 60)}`;
-}
-
-/** The viewer zone's offset from UTC at an instant, in minutes. */
-function zoneOffsetMin(ms: number, zone: string | undefined): number {
-  const parts = fmt(zone, {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(ms);
-  const n = (t: string) => +(parts.find((p) => p.type === t)?.value ?? 0);
-  const asUtc = Date.UTC(n("year"), n("month") - 1, n("day"), n("hour"), n("minute"), n("second"));
-  return Math.round((asUtc - Math.floor(ms / 1000) * 1000) / 60_000);
-}
-
-/** The hover: the whole instant to the second in the viewer's zone, the
+/** The hover: the whole instant to the second in the view's zone, the
  *  same in UTC, the clock the source wrote it in where that is neither,
  *  and how long ago. A day says which day and how long ago. */
-export function dateTitle(s: Stamp, now: number, zone?: string): string {
+export function dateTitle(s: Stamp, now: number, view = timeView.value): string {
   if (s.kind === "day") {
     const iso = `${s.year}-${p2(s.month)}-${p2(s.day)}`;
     const ago = formatRelative(new Date(dayMs(s)).toISOString(), now);
-    return [fmt("UTC", LONG_DAY).format(dayMs(s)), `${iso} · ${ago}`].join("\n");
+    return [
+      formatDay(s.year, s.month, s.day, { ...view, days: "locale" }, "long"),
+      `${iso} · ${ago}`,
+    ].join("\n");
   }
-  const here = fmt(zone, {
-    ...LONG_DAY,
-    ...CLOCK,
-    second: "2-digit",
-    timeZoneName: "short",
-  }).format(s.ms);
-  const lines = [here, `${wallClock(s.ms, 0)} UTC`];
-  if (s.offsetMin !== 0 && s.offsetMin !== zoneOffsetMin(s.ms, zone)) {
-    lines.push(`${wallClock(s.ms, s.offsetMin)} ${offsetText(s.offsetMin)} as written`);
+  const here = formatAt(
+    s,
+    { ...view, days: "locale" },
+    {
+      day: "long",
+      clock: true,
+      seconds: true,
+      zoneName: true,
+    },
+  );
+  const lines = [here, `${wallText(wallClock(s, UTC))} UTC`];
+  const shown = offsetAt(s, view.zone);
+  if (s.offsetMin !== 0 && s.offsetMin !== shown) {
+    lines.push(`${wallText(wallClock(s, WRITTEN))} ${offsetText(s.offsetMin)} as written`);
   }
   lines.push(formatRelative(new Date(s.ms).toISOString(), now));
   return lines.join("\n");
@@ -132,8 +116,8 @@ export function dateTitle(s: Stamp, now: number, zone?: string): string {
 
 /** How a date chip looks. `classes` keeps the element's own (`msg-ts`
  *  in a message header) through `drawChip`'s base class. */
-export function dateLook(s: Stamp, now: number, zone?: string): ChipLook {
-  const text = dateText(s, zone);
+export function dateLook(s: Stamp, now: number, view = timeView.value): ChipLook {
+  const text = dateText(s, view);
   return {
     text,
     ariaLabel: text,
@@ -141,42 +125,48 @@ export function dateLook(s: Stamp, now: number, zone?: string): ChipLook {
     initial: null,
     icon: null,
     photo: null,
-    title: dateTitle(s, now, zone),
+    title: dateTitle(s, now, view),
   };
 }
 
 /** A date as copied text: what it shows, with the zone that reading is
  *  in, so a paste anywhere means the same instant. A day is its text. */
-export function dateCopyText(s: Stamp, zone?: string): string {
-  const text = dateText(s, zone);
-  return s.kind === "day" ? text : `${text} ${zoneName(s.ms, zone)}`;
+export function dateCopyText(s: Stamp, view = timeView.value): string {
+  const text = dateText(s, view);
+  return s.kind === "day" ? text : `${text} ${zoneName(s, view.zone)}`;
 }
 
-/** The viewer's day a stamp falls on, `YYYY-MM-DD`, and the day after. */
-function daysAround(s: Stamp, zone: string | undefined): [string, string] {
-  const ms = s.kind === "day" ? dayMs(s) : s.ms;
-  const z = s.kind === "day" ? "UTC" : zone;
-  const parts = fmt(z, { year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(ms);
-  const n = (t: string) => +(parts.find((p) => p.type === t)?.value ?? 0);
-  const next = new Date(Date.UTC(n("year"), n("month") - 1, n("day") + 1));
+/** A calendar day, `YYYY-MM-DD`, and the day after. */
+function dayAndNext(year: number, month: number, day: number): [string, string] {
+  const next = new Date(Date.UTC(year, month - 1, day + 1));
   return [
-    `${n("year")}-${p2(n("month"))}-${p2(n("day"))}`,
+    `${year}-${p2(month)}-${p2(day)}`,
     `${next.getUTCFullYear()}-${p2(next.getUTCMonth() + 1)}-${p2(next.getUTCDate())}`,
   ];
 }
 
-/** The search for everything on the stamp's day. A bare day in `after:`
- *  and `before:` is midnight on this machine, the viewer's zone. */
-export function dayQuery(s: Stamp, zone?: string): string {
-  const [day, next] = daysAround(s, zone);
-  return `${filterToken("after", day, false)} ${filterToken("before", next, false)}`;
+/** The search for everything on the stamp's day in the view's zone. The
+ *  search reads a bare day in `after:` and `before:` as midnight on the
+ *  machine that runs it, so a day there is written bare only when the
+ *  view reads instants as this machine does; otherwise its two midnights
+ *  are written out with their offsets. */
+export function dayQuery(s: Stamp, view = timeView.value): string {
+  const [from, to] = dayRange(s, view);
+  return `${filterToken("after", from, false)} ${filterToken("before", to, false)}`;
+}
+
+function dayRange(s: Stamp, view: TimeView): [string, string] {
+  if (s.kind === "day") return dayAndNext(s.year, s.month, s.day);
+  if (!readsAsMachine(view)) return dayBounds(s, view.zone);
+  const w = wallClock(s, LOCAL);
+  return dayAndNext(w.year, w.month, w.day);
 }
 
 /** The search for everything before or after the stamp: the instant
  *  itself, or for a day, before it starts or after it ends. */
 export function sideQuery(datetime: string, s: Stamp, side: "before" | "after"): string {
   if (s.kind === "instant") return filterToken(side, datetime.trim(), false);
-  const [day, next] = daysAround(s, "UTC");
+  const [day, next] = dayAndNext(s.year, s.month, s.day);
   return filterToken(side, side === "before" ? day : next, false);
 }
 
@@ -190,6 +180,31 @@ export function dateCell(datetime: string, now = Date.now()): HTMLElement {
   if (s) drawChip(el, dateLook(s, now));
   else el.textContent = datetime;
   return el;
+}
+
+/** What a date falls back to where there is no room for `dateText`:
+ *  its day and clock as numbers, then its day. */
+export function shortDateTexts(s: Stamp, view = timeView.value): [string, string] {
+  const iso: TimeView = { ...view, days: "iso" };
+  if (s.kind === "day") {
+    const day = formatDay(s.year, s.month, s.day, iso, "short");
+    return [day, day];
+  }
+  return [formatAt(s, iso, { day: "short", clock: true }), formatAt(s, iso, { day: "short" })];
+}
+
+/** A date chip for a table's cell, which falls back to `shortDateTexts`
+ *  as its column narrows: `.date-fit` in chip.css picks the form by the
+ *  cell's width, so a column dragged narrower needs no redraw. The text
+ *  stays the whole date, for a copy and a screen reader. */
+export function fittingDateCell(datetime: string, now = Date.now()): HTMLElement {
+  const chip = dateCell(datetime, now);
+  const s = parseStamp(datetime);
+  if (s) [chip.dataset.compact, chip.dataset.day] = shortDateTexts(s);
+  const fit = document.createElement("span");
+  fit.className = "date-fit";
+  fit.append(chip);
+  return fit;
 }
 
 /** A copy from the document: each date chip becomes a plain `<time>`
@@ -214,10 +229,10 @@ export type DateMenuEntry = { id: DateMenuId; label: string; separator?: boolean
 
 /** A date chip's menu: copy it as shown or as written, then search on
  *  its day, before it or after it. */
-export function dateMenu(datetime: string, s: Stamp, zone?: string): DateMenuEntry[] {
-  const day = s.kind === "day" ? dateText(s) : fmt(zone, SHORT_DAY).format(s.ms);
+export function dateMenu(datetime: string, s: Stamp, view = timeView.value): DateMenuEntry[] {
+  const day = s.kind === "day" ? dateText(s, view) : formatAt(s, view, { day: "short" });
   return [
-    { id: "copy-name", label: `Copy “${dateCopyText(s, zone)}”` },
+    { id: "copy-name", label: `Copy “${dateCopyText(s, view)}”` },
     { id: "copy-id", label: `Copy ${datetime.trim()}` },
     { id: "search", label: `Everything on ${day}`, separator: true },
     { id: "before", label: "Everything before this" },
@@ -226,34 +241,35 @@ export function dateMenu(datetime: string, s: Stamp, zone?: string): DateMenuEnt
 }
 
 /** What the end of a span (`<span class="time-range">`, an event's
- *  start and end) shows when it falls on its start's day in the viewer's
+ *  start and end) shows when it falls on its start's day in the view's
  *  zone: its clock alone. Null when it shows its own day. */
-export function rangeEndText(start: Stamp, end: Stamp, zone?: string): string | null {
+export function rangeEndText(start: Stamp, end: Stamp, view = timeView.value): string | null {
   if (start.kind !== "instant" || end.kind !== "instant") return null;
-  if (daysAround(start, zone)[0] !== daysAround(end, zone)[0]) return null;
-  return fmt(zone, CLOCK).format(end.ms);
+  const [a, b] = [wallClock(start, view.zone), wallClock(end, view.zone)];
+  if (a.year !== b.year || a.month !== b.month || a.day !== b.day) return null;
+  return formatAt(end, view, { clock: true });
 }
 
 /** Draw every `<time datetime>` under `root` as a date chip. A stamp the
  *  viewer cannot read keeps the render's own text and hover. */
-export function decorateDates(root: HTMLElement, now = Date.now(), zone?: string): void {
+export function decorateDates(root: HTMLElement, now = Date.now(), view = timeView.value): void {
   for (const el of Array.from(root.querySelectorAll<HTMLElement>("time[datetime]"))) {
     const s = parseStamp(el.getAttribute("datetime") ?? "");
     if (!s) continue;
     el.classList.add("chip");
     el.draggable = true;
-    const look = dateLook(s, now, zone);
-    const text = spanEndText(el, s, zone);
+    const look = dateLook(s, now, view);
+    const text = spanEndText(el, s, view);
     drawChip(el, text ? { ...look, text, ariaLabel: look.text } : look);
   }
 }
 
 /** The end of a span's clock-only text, where `el` is that end. */
-function spanEndText(el: HTMLElement, end: Stamp, zone: string | undefined): string | null {
+function spanEndText(el: HTMLElement, end: Stamp, view: TimeView): string | null {
   const span = el.parentElement;
   if (!span?.classList.contains("time-range")) return null;
   const times = span.querySelectorAll<HTMLElement>(":scope > time[datetime]");
   if (times.length !== 2 || times[1] !== el) return null;
   const start = parseStamp(times[0]!.getAttribute("datetime") ?? "");
-  return start ? rangeEndText(start, end, zone) : null;
+  return start ? rangeEndText(start, end, view) : null;
 }

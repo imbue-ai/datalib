@@ -19,6 +19,7 @@
 // Double-clicking a row opens that document as a standalone
 // single-column page in a new tab.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
+import { timeView } from "@/config/timeView";
 // The grid is the framework-agnostic bundle, not the Vue wrapper: a
 // card is a custom element, and the wrapper finds its container by a
 // selector on `document`, which cannot see into a shadow root. The
@@ -54,7 +55,7 @@ import {
   people,
 } from "./contacts";
 import { CONTACT } from "@/search/queryText";
-import { dateText, parseStamp } from "./dates";
+import { dateText, datesInText, parseStamp } from "./dates";
 import {
   CHIP_SELECTOR,
   chipCardSource,
@@ -471,6 +472,9 @@ type Grid = SlickVanillaGridBundle<Row> & {
   slickGrid: NonNullable<SlickVanillaGridBundle<Row>["slickGrid"]>;
 };
 let vueGrid: Grid | null = null;
+
+// The clock's zone or format changed: every date on screen, drawn again.
+watch(timeView, () => vueGrid?.slickGrid.invalidate());
 let groupingPlugin: SlickDraggableGrouping | null = null;
 /// The element the grid is built in — the resizer measures it, and
 /// the grid's own stylesheet goes into the root it sits in.
@@ -1537,7 +1541,7 @@ const columnOverrides: Record<string, Partial<Column<Row>>> = {
     formatter: (_r, _c, value) => {
       const div = document.createElement("div");
       div.className = "datalib-clamp-2";
-      div.textContent = value == null ? "" : String(value);
+      div.textContent = value == null ? "" : datesInText(String(value));
       return div;
     },
   },

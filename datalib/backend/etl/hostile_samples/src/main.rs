@@ -20,7 +20,8 @@ use anyhow::{bail, Context, Result};
 use datalib_contact_schema::{ContactKind, Detail, NormalizedContact};
 use datalib_etl::progress::Progress;
 use datalib_etl_calendar_common::types::{
-    Attendee, EventLink, EventShape, NormalizedEvent, OccurrenceRef, Person,
+    Attendee, EventLink, EventShape, GuestAnswers, NormalizedEvent, OccurrenceRef, Person,
+    QuestionAnswer,
 };
 use datalib_etl_calendar_common::{CalendarRenderProfile, EventTime};
 use datalib_etl_chat_common::render::ENTITY_KIND_CONVERSATION;
@@ -398,6 +399,16 @@ fn calendar(scratch: &Path) -> Result<Vec<Document>> {
             label: f.hostile("event link label"),
             url: "https://x.test/join".into(),
         }],
+        answers: vec![GuestAnswers {
+            person: Person {
+                name: Some(f.hostile("booking guest name")),
+                email: None,
+            },
+            answers: vec![QuestionAnswer {
+                question: f.hostile("booking question"),
+                answer: f.hostile("booking answer"),
+            }],
+        }],
         source_url: None,
         created: Some(f.hostile("event created")),
         modified_at: Some("2026-09-02T16:00:00+00:00".into()),
@@ -431,6 +442,9 @@ fn calendar(scratch: &Path) -> Result<Vec<Document>> {
         "organizer name",
         "attendee name",
         "event link label",
+        "booking guest name",
+        "booking question",
+        "booking answer",
     ];
     Ok(read_docs(&paths, &out, "calendar-common")?
         .into_iter()

@@ -76,6 +76,13 @@ conversations_bookkeeping
     volatile_payload
     tz_offset
     held_version
+ingested_files
+    scope
+    rel_path
+    blake3
+    size_bytes
+    last_finished_at_utc
+    tz_offset
 me
     id
     payload
@@ -218,6 +225,34 @@ calendars
     time_zone
     sync_token
 calendars_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+    held_version
+calendly_events
+    id
+    payload
+    calendar_id
+    start_time
+    status
+    listing_hash
+calendly_events_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+    held_version
+calendly_invitees
+    id
+    payload
+calendly_invitees_bookkeeping
     id
     fetched_at_utc
     attempt_count
@@ -425,6 +460,7 @@ emails
     to_json
     cc_json
     has_attachment
+    label_ids
 emails_bookkeeping
     id
     fetched_at_utc
@@ -472,11 +508,15 @@ mailboxes_bookkeeping
     volatile_payload
     tz_offset
     held_version
+thread_members
+    id
+    thread_id
 threads
     id
     payload
     account_id
     email_count
+    upstream_email_count
 threads_bookkeeping
     id
     fetched_at_utc

@@ -98,8 +98,9 @@ same id and definition would read as up to date and write nothing.
 - Step ids are unique and never nested: two steps under one tree would
   be two writers on one doltlite file.
 - The built-in functions are the directory names: `ingest`,
-  `render_markdown`, `render_time_series`, `keyword_index`, `embed`,
-  `grid_index`, `qmd_aggregator`, `embedding_map`, `time_series_index`
+  `render_markdown`, `render_time_series`, `render_occurrences`,
+  `keyword_index`, `embed`, `grid_index`, `qmd_aggregator`,
+  `embedding_map`, `time_series_index`
   (`datalib_step/src/function.rs`, tested against the layout constants
   the render and index crates use). `grid_index`, `qmd_aggregator` and
   `embedding_map` write `unified_document_index/<function>`, and
@@ -111,6 +112,13 @@ same id and definition would read as up to date and write nothing.
   its `render_markdown`, reading its ingest, and the
   `time_series_index` names every such step in its `inputs`.
   `docs/dev/time_series.md` is the design.
+- A `calendar` source may have a `render_occurrences` step beside its
+  `render_markdown`, reading its ingest: every occurrence of every event
+  in a window of days around the run's now, one row each, the way
+  Google's `singleEvents=true` lists them. Its params are `days_back`
+  (30) and `days_ahead` (400). Nothing reads it but whoever asks, so it
+  joins no index. The rows and their columns:
+  `datalib/backend/etl/providers/calendar_render/src/occurrences/README.md`.
 - The qmd steps are the exception to "a step writes its own tree": a
   source's `keyword_index` and `embed`, and `qmd_aggregator`, all write
   the one qmd index file in `unified_document_index/qmd_aggregator`, the
@@ -135,8 +143,8 @@ its own `path`. There is no global vocabulary — each provider's
 
 | type | methods |
 |---|---|
-| chatgpt, garmin, github, gitlab, google_drive, linear, notion, slack, yolink | `api` |
-| claude | `api`, `export` |
+| garmin, github, gitlab, google_drive, linear, notion, slack, todoist, yolink | `api` |
+| chatgpt, claude | `api`, `export` |
 | contacts | `carddav`, `vcf` |
 | email | `jmap`, `gmail`, `mbox` |
 | calendar | `google`, `fastmail`, `caldav`, `ics` |
@@ -153,16 +161,62 @@ A method is *held* when its path is written and its value is neither
 `null` nor `false`: a table counts by presence (`api = {}` is a
 complete selection). A provider with more than one table refuses a step
 naming two (its config's `validate`, e.g. `claude_config`'s), so a
-store is filled one way. Two pairs are the exception, each a past and
-a present of one thing, so a step may name both and the present lands
-on top: `lightroom`'s `backups` folder and its `catalog`, and email's
+store is filled one way. Three pairs are the exception, each a past
+and a present of one thing, so a step may name both and the present
+lands on top: `lightroom`'s `backups` folder and its `catalog`; email's
 `mbox` beside `gmail`, a Takeout of the account the API starts from
-(`email_download_modes.md` §"Starting from a Takeout").
+(`email_download_modes.md` §"Starting from a Takeout"); and
+`chatgpt`'s `export` beside `api`, which fills in the conversations
+the store has never held before the API runs (the provider's
+`INGEST.md` §"An export and the API together").
 
 Knobs that apply whatever the method (email's `only_extract_labels`,
 the `common.*` envelope) stay at the top level of `params`. Render
 knobs go on the render step, whose config is strict: download-shaped
 params on a `render_markdown` step are refused.
+
+## Time windows: `since` and `until`
+
+A method that can mirror only part of a source's history takes
+`since`, the oldest thing to mirror; a calendar and Garmin, whose days
+run forward, also take `until`. Both are keys of the method table, and
+every one reads the same grammar, `datalib_time::TimeBound`
+(`datalib/backend/time/src/window.rs`):
+
+| written | means |
+|---|---|
+| `2026-09-01` | that day; where an instant is wanted, its midnight in the run's offset (the machine's local one), so an hour off across a daylight-saving change |
+| `2026-09-01T09:00:00-07:00` | that instant (RFC 3339, offset required); where a day is wanted, its date in its own offset |
+| `-30d`, `+21d`, `-12h`, `-2w` | that far from the run's `now` (`DATALIB_DAG_NOW`), sign required, in hours, days or weeks |
+
+A day or an offset is resolved once, at the start of each run, by the
+source's processor, which hands its download an absolute value; so a
+relative window slides forward run by run. A config's `validate` reads
+every bound and refuses an `until` before its `since` wherever neither
+the run's clock nor its offset is needed to tell, so `datalib-dag
+--check` names the key; a day against an offset or an instant is
+checked when a run resolves them. A method that cannot
+honor `until` has no such key, and naming one is refused as an unknown
+field.
+
+| method | keys, and unset | what the window bounds | a record the window leaves behind |
+|---|---|---|---|
+| slack `api` | `since`: 2024-01-01 | a message's time | stays |
+| claude `api`, chatgpt `api` | `since`: everything | a conversation's last update | stays |
+| email `gmail` | `since`: everything | `after:` on the listing walk | stays |
+| garmin `api` | `since`: a year before the first run, recorded; `until`: today | days | stays |
+| calendar `google`, `fastmail`, `caldav` | `since`, `until`: no bound | events with any part inside | **dropped**: a windowed calendar is listed whole every run, and an event the listing no longer names goes (`calendar/INGEST.md` §"A window") |
+
+An earlier `since` backfills on the next run everywhere: each source
+owes what its listing now names and its store does not hold
+(`data_architecture_ingestion.md` §"What is left to fetch"). YoLink's
+per-device `start` predates the grammar and still takes a day only.
+
+The window is a key of each method rather than one range under
+`[steps.params.common]`: `common` is per step too, so it would save no
+typing, and two places to say one thing would need a rule for which
+wins. Kept per method, what a source cannot honor is a missing key,
+which the schema and the field reference already say.
 
 ## Examples and the field reference
 
@@ -266,6 +320,8 @@ fingerprint, so changing it re-runs the group.
 - `ingest` or `render_markdown` under a group with no `type`;
 - `render_time_series` under a group with no `type`, or of a type with
   no time series;
+- `render_occurrences` under a group whose type is not `calendar`, or
+  with a param other than `days_back` and `days_ahead`;
 - a `type` it has no provider for — a retired spelling (`*_api`,
   `*_backup`, `claude_export`, `carddav`) names `datalib-migrate-config`;
 - params still carrying `sync`, `common.input_path`, `common.raw_path`,

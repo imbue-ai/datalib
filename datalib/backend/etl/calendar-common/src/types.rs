@@ -34,6 +34,9 @@ pub struct NormalizedEvent {
     pub attendees: Vec<Attendee>,
     /// A video call, an attachment, a link the event carries.
     pub links: Vec<EventLink>,
+    /// What each guest answered on the booking form, where the event
+    /// was booked through one (Calendly).
+    pub answers: Vec<GuestAnswers>,
     /// The event's page on the service, where it has one.
     pub source_url: Option<String>,
     /// When the event was put on the calendar, as the source wrote it.
@@ -114,6 +117,20 @@ pub struct Attendee {
     pub optional: bool,
     /// A room or other resource rather than a person.
     pub resource: bool,
+}
+
+/// One guest's answers to a booking form's questions, in the form's
+/// order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuestAnswers {
+    pub person: Person,
+    pub answers: Vec<QuestionAnswer>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuestionAnswer {
+    pub question: String,
+    pub answer: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

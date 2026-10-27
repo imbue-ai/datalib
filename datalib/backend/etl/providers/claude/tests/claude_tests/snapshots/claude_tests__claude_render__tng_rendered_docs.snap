@@ -5,7 +5,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-8305-8a74-7d4a860e0d82 ===
 {
   "edges": [],
-  "render_version": 10,
+  "render_version": 11,
   "rows": [
     {
       "account": "jlpicard@enterprise.starfleet.test",
@@ -40,7 +40,7 @@ expression: docs_bundle(&docs)
       "qmd_path": "claude_export/render_markdown/00000000-0000-8305-8a74-7d4a860e0d82/all.md",
       "source_label": "Claude",
       "source_url": "https://claude.ai/chat/c0000008-1701-4d00-8000-00000000c008",
-      "supplied_terms": "[[\"participant\",\"claude-opus-4-7\"]]",
+      "supplied_terms": "[[\"participant\",\"ai_model:claude-opus-4-7\"]]",
       "touched_at": "2369-05-02T10:06:00+00:00",
       "upstream_account": null,
       "upstream_entity_kind": "conversation",
@@ -49,8 +49,8 @@ expression: docs_bundle(&docs)
     },
     {
       "account": "jlpicard@enterprise.starfleet.test",
-      "author": "Human",
-      "author_handle": null,
+      "author": "Me",
+      "author_handle": "me:self",
       "byte_size": 96,
       "channel": null,
       "contact": null,
@@ -90,7 +90,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 77,
       "channel": null,
       "contact": null,
@@ -130,7 +130,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 144,
       "channel": null,
       "contact": null,
@@ -170,7 +170,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 219,
       "channel": null,
       "contact": null,
@@ -210,7 +210,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 207,
       "channel": null,
       "contact": null,
@@ -249,8 +249,8 @@ expression: docs_bundle(&docs)
     },
     {
       "account": "jlpicard@enterprise.starfleet.test",
-      "author": "Human",
-      "author_handle": null,
+      "author": "Me",
+      "author_handle": "me:self",
       "byte_size": 95,
       "channel": null,
       "contact": null,
@@ -290,7 +290,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 74,
       "channel": null,
       "contact": null,
@@ -330,7 +330,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 149,
       "channel": null,
       "contact": null,
@@ -370,7 +370,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 219,
       "channel": null,
       "contact": null,
@@ -410,7 +410,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 233,
       "channel": null,
       "contact": null,
@@ -449,8 +449,8 @@ expression: docs_bundle(&docs)
     },
     {
       "account": "jlpicard@enterprise.starfleet.test",
-      "author": "Human",
-      "author_handle": null,
+      "author": "Me",
+      "author_handle": "me:self",
       "byte_size": 60,
       "channel": null,
       "contact": null,
@@ -490,7 +490,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 91,
       "channel": null,
       "contact": null,
@@ -530,7 +530,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 255,
       "channel": null,
       "contact": null,
@@ -570,7 +570,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 115,
       "channel": null,
       "contact": null,
@@ -610,7 +610,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 128,
       "channel": null,
       "contact": null,
@@ -650,7 +650,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 78,
       "channel": null,
       "contact": null,
@@ -690,7 +690,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 210,
       "channel": null,
       "contact": null,
@@ -730,7 +730,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 87,
       "channel": null,
       "contact": null,
@@ -770,7 +770,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 47,
       "channel": null,
       "contact": null,
@@ -809,8 +809,8 @@ expression: docs_bundle(&docs)
     },
     {
       "account": "jlpicard@enterprise.starfleet.test",
-      "author": "Human",
-      "author_handle": null,
+      "author": "Me",
+      "author_handle": "me:self",
       "byte_size": 81,
       "channel": null,
       "contact": null,
@@ -850,7 +850,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 74,
       "channel": null,
       "contact": null,
@@ -890,7 +890,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 121,
       "channel": null,
       "contact": null,
@@ -930,7 +930,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 90,
       "channel": null,
       "contact": null,
@@ -970,7 +970,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 98,
       "channel": null,
       "contact": null,
@@ -1010,7 +1010,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 89,
       "channel": null,
       "contact": null,
@@ -1052,7 +1052,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-83ab-b990-357eea87eda5 ===
 {
   "edges": [],
-  "render_version": 10,
+  "render_version": 11,
   "rows": [
     {
       "account": "jlpicard@enterprise.starfleet.test",
@@ -1219,7 +1219,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-84d9-a07c-75bb3c93c654 ===
 {
   "edges": [],
-  "render_version": 10,
+  "render_version": 11,
   "rows": [
     {
       "account": "jlpicard@enterprise.starfleet.test",
@@ -1254,7 +1254,7 @@ expression: docs_bundle(&docs)
       "qmd_path": "claude_export/render_markdown/00000000-0000-84d9-a07c-75bb3c93c654/all.md",
       "source_label": "Claude",
       "source_url": "https://claude.ai/chat/c0000006-1701-4d00-8000-00000000c006",
-      "supplied_terms": "[[\"participant\",\"claude-opus-4-7\"]]",
+      "supplied_terms": "[[\"participant\",\"ai_model:claude-opus-4-7\"]]",
       "touched_at": "2369-04-17T10:00:00+00:00",
       "upstream_account": null,
       "upstream_entity_kind": "conversation",
@@ -1263,8 +1263,8 @@ expression: docs_bundle(&docs)
     },
     {
       "account": "jlpicard@enterprise.starfleet.test",
-      "author": "Human",
-      "author_handle": null,
+      "author": "Me",
+      "author_handle": "me:self",
       "byte_size": 30,
       "channel": null,
       "contact": null,
@@ -1304,7 +1304,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 52,
       "channel": null,
       "contact": null,
@@ -1346,7 +1346,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-856b-944c-412bf8dca640 ===
 {
   "edges": [],
-  "render_version": 10,
+  "render_version": 11,
   "rows": [
     {
       "account": "jlpicard@enterprise.starfleet.test",
@@ -1381,7 +1381,7 @@ expression: docs_bundle(&docs)
       "qmd_path": "claude_export/render_markdown/00000000-0000-856b-944c-412bf8dca640/all.md",
       "source_label": "Claude",
       "source_url": "https://claude.ai/chat/c0000003-1701-4d00-8000-00000000c003",
-      "supplied_terms": "[[\"participant\",\"claude-opus-4-7\"]]",
+      "supplied_terms": "[[\"participant\",\"ai_model:claude-opus-4-7\"]]",
       "touched_at": "2369-04-14T10:02:00+00:00",
       "upstream_account": null,
       "upstream_entity_kind": "conversation",
@@ -1390,8 +1390,8 @@ expression: docs_bundle(&docs)
     },
     {
       "account": "jlpicard@enterprise.starfleet.test",
-      "author": "Human",
-      "author_handle": null,
+      "author": "Me",
+      "author_handle": "me:self",
       "byte_size": 123,
       "channel": null,
       "contact": null,
@@ -1431,7 +1431,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 243,
       "channel": null,
       "contact": null,
@@ -1471,7 +1471,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 175,
       "channel": null,
       "contact": null,
@@ -1511,7 +1511,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 243,
       "channel": null,
       "contact": null,
@@ -1551,7 +1551,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 495,
       "channel": null,
       "contact": null,
@@ -1590,8 +1590,8 @@ expression: docs_bundle(&docs)
     },
     {
       "account": "jlpicard@enterprise.starfleet.test",
-      "author": "Human",
-      "author_handle": null,
+      "author": "Me",
+      "author_handle": "me:self",
       "byte_size": 20,
       "channel": null,
       "contact": null,
@@ -1633,7 +1633,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-8731-b6c5-2d66a2c4265c ===
 {
   "edges": [],
-  "render_version": 10,
+  "render_version": 11,
   "rows": [
     {
       "account": "jlpicard@enterprise.starfleet.test",
@@ -1668,7 +1668,7 @@ expression: docs_bundle(&docs)
       "qmd_path": "claude_export/render_markdown/00000000-0000-8731-b6c5-2d66a2c4265c/all.md",
       "source_label": "Claude",
       "source_url": "https://claude.ai/chat/c0000007-1701-4d00-8000-00000000c007",
-      "supplied_terms": "[[\"participant\",\"claude-opus-4-7\"]]",
+      "supplied_terms": "[[\"participant\",\"ai_model:claude-opus-4-7\"]]",
       "touched_at": "2369-04-18T09:02:30+00:00",
       "upstream_account": null,
       "upstream_entity_kind": "conversation",
@@ -1677,8 +1677,8 @@ expression: docs_bundle(&docs)
     },
     {
       "account": "jlpicard@enterprise.starfleet.test",
-      "author": "Human",
-      "author_handle": null,
+      "author": "Me",
+      "author_handle": "me:self",
       "byte_size": 72,
       "channel": null,
       "contact": null,
@@ -1718,7 +1718,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 149,
       "channel": null,
       "contact": null,
@@ -1758,7 +1758,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 248,
       "channel": null,
       "contact": null,
@@ -1798,7 +1798,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 407,
       "channel": null,
       "contact": null,
@@ -1837,8 +1837,8 @@ expression: docs_bundle(&docs)
     },
     {
       "account": "jlpicard@enterprise.starfleet.test",
-      "author": "Human",
-      "author_handle": null,
+      "author": "Me",
+      "author_handle": "me:self",
       "byte_size": 41,
       "channel": null,
       "contact": null,
@@ -1878,7 +1878,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 57,
       "channel": null,
       "contact": null,
@@ -1917,8 +1917,8 @@ expression: docs_bundle(&docs)
     },
     {
       "account": "jlpicard@enterprise.starfleet.test",
-      "author": "Human",
-      "author_handle": null,
+      "author": "Me",
+      "author_handle": "me:self",
       "byte_size": 114,
       "channel": null,
       "contact": null,
@@ -1958,7 +1958,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 297,
       "channel": null,
       "contact": null,
@@ -1998,7 +1998,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 74,
       "channel": null,
       "contact": null,
@@ -2038,7 +2038,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 162,
       "channel": null,
       "contact": null,
@@ -2078,7 +2078,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 229,
       "channel": null,
       "contact": null,
@@ -2118,7 +2118,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 160,
       "channel": null,
       "contact": null,
@@ -2158,7 +2158,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 99,
       "channel": null,
       "contact": null,
@@ -2198,7 +2198,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 57,
       "channel": null,
       "contact": null,
@@ -2240,7 +2240,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-882d-b21e-5e54f3f20dbb ===
 {
   "edges": [],
-  "render_version": 10,
+  "render_version": 11,
   "rows": [
     {
       "account": "jlpicard@enterprise.starfleet.test",
@@ -2275,7 +2275,7 @@ expression: docs_bundle(&docs)
       "qmd_path": "claude_export/render_markdown/00000000-0000-882d-b21e-5e54f3f20dbb/all.md",
       "source_label": "Claude",
       "source_url": "https://claude.ai/chat/c0000005-1701-4d00-8000-00000000c005",
-      "supplied_terms": "[[\"participant\",\"claude-opus-4-7\"]]",
+      "supplied_terms": "[[\"participant\",\"ai_model:claude-opus-4-7\"]]",
       "touched_at": "2369-04-16T09:01:30+00:00",
       "upstream_account": null,
       "upstream_entity_kind": "conversation",
@@ -2284,8 +2284,8 @@ expression: docs_bundle(&docs)
     },
     {
       "account": "jlpicard@enterprise.starfleet.test",
-      "author": "Human",
-      "author_handle": null,
+      "author": "Me",
+      "author_handle": "me:self",
       "byte_size": 97,
       "channel": null,
       "contact": null,
@@ -2325,7 +2325,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 186,
       "channel": null,
       "contact": null,
@@ -2365,7 +2365,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 204,
       "channel": null,
       "contact": null,
@@ -2405,7 +2405,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 205,
       "channel": null,
       "contact": null,
@@ -2445,7 +2445,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 163,
       "channel": null,
       "contact": null,
@@ -2485,7 +2485,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 222,
       "channel": null,
       "contact": null,
@@ -2527,7 +2527,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-8b06-828d-f59d39f6190d ===
 {
   "edges": [],
-  "render_version": 10,
+  "render_version": 11,
   "rows": [
     {
       "account": "bcrusher@enterprise.starfleet.test",
@@ -2562,7 +2562,7 @@ expression: docs_bundle(&docs)
       "qmd_path": "claude_export/render_markdown/00000000-0000-8b06-828d-f59d39f6190d/all.md",
       "source_label": "Claude",
       "source_url": "https://claude.ai/chat/c0000004-1701-4d00-8000-00000000c004",
-      "supplied_terms": "[[\"participant\",\"claude-opus-4-7\"]]",
+      "supplied_terms": "[[\"participant\",\"ai_model:claude-opus-4-7\"]]",
       "touched_at": "2369-04-15T08:30:45+00:00",
       "upstream_account": null,
       "upstream_entity_kind": "conversation",
@@ -2571,8 +2571,8 @@ expression: docs_bundle(&docs)
     },
     {
       "account": "bcrusher@enterprise.starfleet.test",
-      "author": "Human",
-      "author_handle": null,
+      "author": "Me",
+      "author_handle": "me:self",
       "byte_size": 49,
       "channel": null,
       "contact": null,
@@ -2612,7 +2612,7 @@ expression: docs_bundle(&docs)
     {
       "account": "bcrusher@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "author_handle": null,
+      "author_handle": "ai_model:claude-opus-4-7",
       "byte_size": 205,
       "channel": null,
       "contact": null,
@@ -2654,7 +2654,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-8da1-84c9-7ed998e5bd85 ===
 {
   "edges": [],
-  "render_version": 10,
+  "render_version": 11,
   "rows": [
     {
       "account": "jlpicard@enterprise.starfleet.test",

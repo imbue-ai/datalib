@@ -78,7 +78,10 @@ rust_test(
     crate = ":datalib_etl_email",
     edition = "2021",
     deps = [
+        "@datalib_crates//:flate2",
+        "@datalib_crates//:tar",
         "@datalib_crates//:tempfile",
+        "@datalib_crates//:zip",
     ],
 )
 
@@ -92,9 +95,11 @@ rust_test(
     crate_root = "tests/email_tests/main.rs",
     data = glob(["tests/email_tests/snapshots/*.snap"], allow_empty = True) + [
         ":fixtures",
+        "//datalib/backend/datalib_step",
     ],
     edition = "2021",
     env = {
+        "DATALIB_STEP_BIN": "$(rootpath //datalib/backend/datalib_step)",
         "INSTA_WORKSPACE_ROOT": ".",
         "JMAP_FIXTURE_DIR": "datalib/backend/etl/providers/email/tests/fixtures",
     },
@@ -104,14 +109,17 @@ rust_test(
         "//datalib/backend/etl/providers/email_render:datalib_etl_email_render",
         "//datalib/backend/etl/render:datalib_etl_render",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/files:datalib_etl_files",
         "//datalib/backend/etl/web:datalib_etl_web",
         "//datalib/backend/obs:datalib_obs",
+        "//datalib/backend/time:datalib_time",
         ":datalib_etl_email",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
+        "@datalib_crates//:zip",
     ],
 )
 
@@ -126,5 +134,7 @@ insta_update(
 # shell's `LATCHKEY_CURL` and reach the host keyring.
 live_run(
     name = "gmail_live",
+    extra_data = ["//datalib/backend/datalib_step"],
+    extra_env = {"DATALIB_STEP_BIN": "$(rootpath //datalib/backend/datalib_step)"},
     test = ":email_tests",
 )

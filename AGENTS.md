@@ -270,7 +270,8 @@ datalib/
     unified_document_index/ the grid index, the qmd index, the query language over
                    them. Linked by datalib-step and datalib-applet —
                    never by datalib-http or datalib-dag.
-    applets/       `datalib-applet`: the applet host.
+    applets/       `datalib-applet`: the applet host, and `datalib-applet
+                   search`, the search box with no server.
     history/       a doltlite store's commit log; its one first-party dep
                    is `pin`, so datalib-http can serve it without
                    linking `etl`.
@@ -365,7 +366,7 @@ The measurement that checks it:
 bazelisk query 'kind(".*_test", rdeps(//..., //datalib/backend/schema:datalib_schema))'
 ```
 
-82 at the last count. If that number climbs, something took a dependency
+84 at the last count. If that number climbs, something took a dependency
 it should not have.
 
 ## The grid_rows union table

@@ -1,5 +1,6 @@
-//! A full Fastmail (JMAP) re-list is the one moment the mirror can see
-//! what was destroyed while no cursor was replaying: a mailbox the full
+//! A Fastmail (JMAP) state the server can no longer replay from lists
+//! the account again, and that is the one moment the mirror can see what
+//! was destroyed while no state was replaying: a mailbox the full
 //! `Mailbox/get` does not name comes off every email and goes, and an
 //! email the finished, unfiltered `Email/query` does not name goes.
 
@@ -9,18 +10,18 @@ use crate::jmap_tape::{Account, Tape, ACCOUNT, HOST};
 use crate::support::Mirror;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_full_resync_drops_what_upstream_destroyed() {
+async fn a_start_over_drops_what_upstream_destroyed() {
     let m = Mirror::new();
-    write_run(
-        &m.playback,
+    let tape = Tape::new(&m.playback);
+    tape.serve(&Account::new(
         &[("MB1", "Inbox"), ("MB2", "Work")],
         &[("M1", &["MB1", "MB2"]), ("M2", &["MB2"])],
-    );
+    ));
     let first = run(&m).await;
     assert_eq!(first.emails_upserted, 2, "{first:?}");
 
     // `Work` was destroyed, and `M2` with it; `M1` is only in the Inbox.
-    write_run(&m.playback, &[("MB1", "Inbox")], &[("M1", &["MB1"])]);
+    tape.serve_aged_out(&Account::new(&[("MB1", "Inbox")], &[("M1", &["MB1"])]));
     let second = run(&m).await;
     assert_eq!(second.mailboxes_destroyed, 1, "{second:?}");
     assert_eq!(second.emails_destroyed, 1, "{second:?}");
@@ -50,13 +51,8 @@ async fn run(m: &Mirror) -> FetchSummary {
     m.run(|db| {
         let mut opts = FetchOptions::new(db);
         opts.hostname = HOST.to_string();
-        opts.full_resync = true;
         datalib_etl_email::ingest::fetch(opts)
     })
     .await
     .expect("jmap fetch under playback")
-}
-
-fn write_run(out: &std::path::Path, mailboxes: &[(&str, &str)], emails: &[(&str, &[&str])]) {
-    Tape::new(out).serve(&Account::new(mailboxes, emails));
 }

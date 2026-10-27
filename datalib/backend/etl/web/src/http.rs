@@ -76,6 +76,9 @@ impl HttpMethod {
 pub enum HttpService {
     /// Calendars over CalDAV (Fastmail, iCloud, Nextcloud, …).
     Caldav,
+    /// Calendly's REST API (`api.calendly.com`), the `calendar` source's
+    /// `calendly` mode.
+    Calendly,
     /// Contacts over CardDAV. Named for the protocol because that is
     /// what latchkey registers.
     Carddav,
@@ -103,6 +106,8 @@ pub enum HttpService {
     /// curl TLS fingerprint, confirmed against a live workspace.
     Notion,
     Slack,
+    /// Todoist's API v1 (`api.todoist.com`).
+    Todoist,
     /// YoLink's signed-URL CSV downloads (`us.yosmart.com/download/…`):
     /// no credential, the URL itself is signed, so every request goes
     /// out plain.

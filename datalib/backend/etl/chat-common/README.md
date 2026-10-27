@@ -114,7 +114,10 @@ the account's own messages, "Unknown" for a sender the source does not
 name, a heading on a page whose sections have no author. Say so with
 the item's `author_kind` (a reaction's `reactor_kind`): `Account` or
 `Unknown` rather than `Named`. The label is still drawn, but it is not
-a participant; only a handle behind it is.
+a participant; only a handle behind it is. Whatever stand-in the source
+uses for the account, chat-common writes "Me", by the `me:self` handle
+where the source gave none, which is not a participant either
+(`the_account_as_me`).
 
 Decide `is_aside` from what the item *is* upstream, not from its
 `kind_label`. ChatGPT files `system` messages under the same "Tool

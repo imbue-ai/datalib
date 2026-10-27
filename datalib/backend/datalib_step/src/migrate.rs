@@ -43,6 +43,12 @@ pub async fn run(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<V
             ask_for_a_rerun_if(env, emitter, &store, &shape).await?;
             Ok(Vec::new())
         }
+        Function::RenderOccurrences => {
+            let store = datalib_etl::layout::render_occurrences_db(data_root, &env.group);
+            let shape = datalib_etl_calendar_render::occurrences::store::schema_hash();
+            ask_for_a_rerun_if(env, emitter, &store, &shape).await?;
+            Ok(Vec::new())
+        }
         // The qmd index is qmd's, and the map is redrawn from it.
         Function::QmdAggregator
         | Function::KeywordIndex

@@ -41,7 +41,6 @@ candle-nn = "0.11"
 candle-transformers = "0.11"
 cbc = { version = "0.2", features = ["block-padding"] }
 chrono = { version = "0.4", features = ["serde"] }
-chrono-tz = "0.10"
 cipher = { version = "0.5", features = ["block-padding"] }
 clap = { version = "4.5", features = ["derive", "env"] }
 csv = "1"
@@ -59,6 +58,10 @@ hmac = "0.13"
 htmd = "0.5"
 ignore = "0.4"
 indicatif = "0.18"
+# Named zones come only from the tz database bundled in `jiff-tzdb`, never
+# the host's (`datalib/backend/time/src/zone.rs`); `cargo update -p
+# jiff-tzdb` takes a newer IANA release.
+jiff = { version = "0.2", default-features = false, features = ["std", "tzdb-bundle-always"] }
 kamadak-exif = "0.6"
 libc = "0.2"
 lofty = "0.25"

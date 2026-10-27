@@ -22,14 +22,24 @@ maximum_sequential_failed_requests = 50        # the default
 account = "picard"
 
 [steps.params.api]
-since = "2025-01-01"   # only conversations updated at or after this (YYYY-MM-DD or
-                       # RFC 3339, UTC); move it back later to backfill; default: all
+since = "2025-01-01"   # only conversations updated at or after this (a day, RFC 3339,
+                       # or "-30d" from the sync); move it back later to backfill;
+                       # default: all
 max_pages = 20         # stop listing after this many pages (100 conversations each);
                        # default: no cap
 limit = 100            # fetch at most this many conversations per run; default: no cap
 sleep_between = 0.5    # seconds to wait between requests (0 to 3600); default: none
 conv_uuids = ["https://chatgpt.com/c/abc123de-f456-7890-abcd-ef0123456789"]
                        # only these conversations, by id or pasted link; omit for all
+
+# Start from a data export of this same account: the `.zip`, or the
+# folder it was unzipped into. It fills in every conversation the store
+# does not have yet, so they and their files are not downloaded; the API
+# then fetches what moved since, newer than `since` if set. Only the API's
+# listing deletes. The export is read again only when it changes. Omit
+# the table to download every conversation.
+[steps.params.export]
+path = "~/Downloads/chatgpt-export.zip"
 
 [[steps]]
 group = "chatgpt"

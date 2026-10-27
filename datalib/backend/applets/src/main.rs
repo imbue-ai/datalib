@@ -13,20 +13,32 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use datalib_cli_help::Example;
 
-const EXAMPLES: &[Example] = &[Example {
-    what: "serve the search applet on a port the OS picks, as the gateway does",
-    command: "datalib-applet unified_document_index --port 0 --params-file params.json",
-}];
+const EXAMPLES: &[Example] = &[
+    Example {
+        what: "serve the search applet on a port the OS picks, as the gateway does",
+        command: "datalib-applet unified_document_index --port 0 --params-file params.json",
+    },
+    Example {
+        what: "search a data root as the app's search box does, and print the answer as JSON",
+        command: "datalib-applet search ~/datalib 'from:picard after:2026-10-01' --limit 20",
+    },
+    Example {
+        what: "the same search's next page, by the words of the documents",
+        command: "datalib-applet search ~/datalib 'warp core' --tab words --offset 20",
+    },
+];
 
 #[derive(Parser)]
 #[command(
     name = "datalib-applet",
     bin_name = "datalib-applet",
-    about = "Applet host for the datalib app",
-    long_about = "Applet host for the datalib app. datalib-http's gateway starts one \
-                  for each [[applets]] entry in the config and reads the port it \
-                  prints. You do not run it yourself except to work on an applet \
-                  (docs/dev/applets.md).",
+    about = "Applet host for the datalib app, and its search from the command line",
+    long_about = "Applet host for the datalib app, and its search from the command line. \
+                  `datalib-applet search <data_root> '<query>'` answers as the app's \
+                  search box does, as JSON, with no server. The other commands are \
+                  applets: datalib-http's gateway starts one for each [[applets]] entry \
+                  in the config and reads the port it prints, and you run one yourself \
+                  only to work on it (docs/dev/applets.md).",
     after_help = datalib_cli_help::render(EXAMPLES)
 )]
 struct Cli {
@@ -68,6 +80,47 @@ enum Which {
     /// resolve a document's handles for its chips.
     #[command(name = "datalib_contacts")]
     DatalibContacts,
+    /// Search a data root the way the app's search box does, with no
+    /// server, and print the answer `/search` would give, as JSON.
+    Search(SearchArgs),
+}
+
+/// `/search`'s parameters as flags, read the same way.
+#[derive(clap::Args)]
+struct SearchArgs {
+    /// The data root: the directory holding `config.toml`.
+    data_root: PathBuf,
+    /// What you would type in the search box: `field:value` terms and
+    /// free text. `''` lists every row.
+    query: String,
+    /// Which answer to free text: `fields`, `words` or `meaning`. None is
+    /// the search box's own: identifiers from the search terms, the rest
+    /// from qmd's hybrid query.
+    #[arg(long, value_parser = parse_tab)]
+    tab: Option<unified_document_index::tabs::SearchTab>,
+    /// Rows in this page.
+    #[arg(long)]
+    limit: Option<usize>,
+    /// Where this page starts: the `next_offset` of the page before.
+    #[arg(long)]
+    offset: Option<usize>,
+    /// Grid columns and directions, `created_at:desc,author`.
+    #[arg(long)]
+    sort: Option<String>,
+    /// One group's rows, as `[[column, value], …]`.
+    #[arg(long)]
+    within: Option<String>,
+}
+
+fn parse_tab(s: &str) -> Result<unified_document_index::tabs::SearchTab, String> {
+    use strum::VariantArray;
+    s.parse().map_err(|_| {
+        let tabs: Vec<&str> = unified_document_index::tabs::SearchTab::VARIANTS
+            .iter()
+            .map(|t| t.as_str())
+            .collect();
+        format!("one of {}", tabs.join(", "))
+    })
 }
 
 pub fn announce_port(port: u16) {
@@ -88,11 +141,14 @@ fn main() {
         eprintln!("datalib-applet: {e}");
         std::process::exit(2);
     }
+    let cli = Cli::parse();
     // JSON on stderr, which the gateway unwraps the way the runner
     // unwraps a step's, so each line is stored at its own level. No
     // OTLP: its exporter needs a runtime this process builds later.
+    // A search run by hand says on stderr only what went wrong.
+    let quiet = matches!(cli.applet, Which::Search(_)).then(|| "warn".to_string());
     let obs = datalib_obs::ObsArgs {
-        log_level: std::env::var("RUST_LOG").ok(),
+        log_level: std::env::var("RUST_LOG").ok().or(quiet),
         ..Default::default()
     };
     let _obs = match datalib_obs::init(&obs, "datalib-applet") {
@@ -105,14 +161,13 @@ fn main() {
     // The unified_document_index applet runs qmd; from a release tarball that
     // ships no `runtime/`, the first search fetches the manifest's.
     datalib_fetch::enable_runtime_fetch();
-    if let Err(e) = run() {
+    if let Err(e) = run(cli) {
         tracing::error!(error = %format!("{e:#}"), "the applet stopped");
         std::process::exit(1);
     }
 }
 
-fn run() -> Result<()> {
-    let cli = Cli::parse();
+fn run(cli: Cli) -> Result<()> {
     let params: serde_json::Value = match &cli.params_file {
         Some(path) => {
             let text = std::fs::read_to_string(path)
@@ -150,7 +205,40 @@ fn run() -> Result<()> {
             let port = cli.port.context("-p <port> is required")?;
             datalib_contacts::serve(port)
         }
+        Which::Search(args) => search(args),
     }
+}
+
+/// Prints the answer on stdout, and exits 1 with each reason on stderr
+/// when the search was not answered as asked, so a script cannot take an
+/// empty answer for "nothing matched".
+fn search(args: SearchArgs) -> Result<()> {
+    use std::io::Write;
+    let params = unified_document_index::SearchParams {
+        q: Some(args.query),
+        limit: args.limit,
+        offset: args.offset,
+        sort: args.sort,
+        through: None,
+        within: args.within,
+        tab: args.tab,
+    };
+    let unanswered = match unified_document_index::search_once(args.data_root, params) {
+        Ok(answer) => {
+            let mut out = std::io::stdout().lock();
+            serde_json::to_writer(&mut out, &answer).context("write the answer")?;
+            writeln!(out).context("write the answer")?;
+            unified_document_index::unanswered(&answer)
+        }
+        Err(e) => vec![format!("{e:#}")],
+    };
+    for why in &unanswered {
+        eprintln!("datalib-applet search: {why}");
+    }
+    if !unanswered.is_empty() {
+        std::process::exit(1);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

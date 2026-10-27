@@ -28,6 +28,12 @@ pub async fn version(env: &StepEnv, data_root: &Path) -> Result<Option<String>> 
         Function::RenderTimeSeries | Function::TimeSeriesIndex => {
             head_commit_at_path(&time_series_store(env, data_root)).await
         }
+        Function::RenderOccurrences => {
+            head_commit_at_path(&datalib_etl::layout::render_occurrences_db(
+                data_root, &env.group,
+            ))
+            .await
+        }
         Function::QmdAggregator
         | Function::KeywordIndex
         | Function::Embed

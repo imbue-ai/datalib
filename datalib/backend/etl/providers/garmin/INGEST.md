@@ -52,7 +52,9 @@ Six phases, in this order. Every date walk is bounded below by
 `garmin:default_since` so later runs start there too) and above by
 `api.until` or the run's local date, whichever is earlier; a past
 `until` fixes the window, so a mirror of a finished stretch stops
-growing.
+growing. Either may be an offset (`since = "-90d"`), which the
+processor turns into a date in the run's own offset each run; days it
+slides past stay stored.
 
 **No walk keeps a cursor.** What a run fetches is what the window lists
 less what the store already holds, worked out from the store each run

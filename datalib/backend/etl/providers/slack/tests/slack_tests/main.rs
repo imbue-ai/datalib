@@ -9,6 +9,7 @@ mod every_cut;
 mod fixture_pipeline;
 mod history_prune;
 mod history_walk;
+mod idle_dms;
 mod interrupt;
 mod newest_first;
 mod playback_roundtrip;

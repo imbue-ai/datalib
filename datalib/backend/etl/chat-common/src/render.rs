@@ -46,7 +46,9 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// v20: an attachment its source's blob store holds is linked at its
 /// `/data/…` address rather than copied beside the page.
 /// v21: so is a person's photo.
-pub const LAYOUT_VERSION: u32 = 21;
+/// v22: the account's own messages are "Me", a chip of the `me:self`
+/// handle, whatever stand-in the source used ("User", "Human").
+pub const LAYOUT_VERSION: u32 = 22;
 
 /// What every chat-common provider declares through
 /// `RenderProcessor::render_params`, merged with its own knobs: the
@@ -259,6 +261,26 @@ fn chat_heading(chat: &NormalizedChat) -> String {
     chat.title.clone().unwrap_or_else(|| chat.display.clone())
 }
 
+/// The account's own messages and reactions, under whatever stand-in
+/// the source gives them ("Me", "User", "Human"), as one person: "Me",
+/// by the `me:self` handle where the source has none of its own.
+fn the_account_as_me(doc: &mut NormalizedDoc) {
+    for item in &mut doc.items {
+        if item.author_kind == AuthorKind::Account {
+            item.author_display = "Me".to_string();
+            item.author_handle
+                .get_or_insert_with(datalib_handle::Handle::me);
+        }
+        for r in &mut item.reactions {
+            if r.reactor_kind == AuthorKind::Account {
+                r.reactor_display = "Me".to_string();
+                r.reactor_handle
+                    .get_or_insert_with(datalib_handle::Handle::me);
+            }
+        }
+    }
+}
+
 /// Render one document; `(items, reactions)` rendered. Always: the
 /// store writes what it is handed, and doltlite's content-addressed
 /// tables carry no diff for a document that came out the same.
@@ -276,7 +298,8 @@ fn render_one(
 
     // Point each attachment at its bytes. Mutates a local copy of `doc` —
     // the same chat may be re-rendered into another bucket later.
-    let resolved_doc = link_attachments(doc, &page_dir, blobs);
+    let mut resolved_doc = link_attachments(doc, &page_dir, blobs);
+    the_account_as_me(&mut resolved_doc);
     let doc = &resolved_doc;
 
     let chat_title = chat_heading(chat);
@@ -1077,7 +1100,12 @@ fn participants(doc: &NormalizedDoc, kept: &std::collections::HashSet<&str>) -> 
     let person = |handle: Option<&datalib_handle::Handle>, shown: &str, kind: AuthorKind| match kind
     {
         AuthorKind::Named => person_term(handle, shown),
-        AuthorKind::Account | AuthorKind::Unknown => person_term(handle, ""),
+        // `me:self` is in every conversation the account wrote in, so it
+        // tells none apart; a handle the source has for the account does.
+        AuthorKind::Account | AuthorKind::Unknown => person_term(
+            handle.filter(|h| h.kind() != datalib_handle::HandleKind::Me),
+            "",
+        ),
     };
     let mut out: Vec<String> = Vec::new();
     for item in doc
@@ -1403,6 +1431,7 @@ mod tests {
         me.reactions[0].reaction_uuid = "77777777-7777-7777-7777-777777777777".into();
         me.reactions[0].reactor_display = "Unknown".into();
         me.reactions[0].reactor_kind = AuthorKind::Unknown;
+        me.author_handle = Some(datalib_handle::Handle::me());
         let mut me_by_handle = me.clone();
         me_by_handle.message_uuid = "88888888-8888-8888-8888-888888888888".into();
         me_by_handle.author_handle = datalib_handle::Handle::tel("+15550100001");

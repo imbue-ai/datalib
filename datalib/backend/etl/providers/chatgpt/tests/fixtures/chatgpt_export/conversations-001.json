@@ -1,0 +1,517 @@
+[
+  {
+    "conversation_id": "68fa0004-fake-7000-8000-positronic0004",
+    "conversation_template_id": null,
+    "create_time": 12648643200.0,
+    "current_node": "msg-fake-risa-0002",
+    "default_model_slug": "gpt-5",
+    "id": "68fa0004-fake-7000-8000-positronic0004",
+    "is_archived": false,
+    "is_do_not_remember": null,
+    "is_read_only": null,
+    "is_starred": null,
+    "is_study_mode": false,
+    "mapping": {
+      "client-created-root": {
+        "id": "client-created-root",
+        "message": null,
+        "parent": null
+      },
+      "msg-fake-risa-0001": {
+        "id": "msg-fake-risa-0001",
+        "message": {
+          "author": {
+            "name": null,
+            "role": "user"
+          },
+          "content": {
+            "content_type": "text",
+            "parts": [
+              "What is Holodeck Cave on Risa like?"
+            ]
+          },
+          "create_time": 12648643200.0,
+          "id": "msg-fake-risa-0001",
+          "metadata": {}
+        },
+        "parent": "client-created-root"
+      },
+      "msg-fake-risa-0002": {
+        "id": "msg-fake-risa-0002",
+        "message": {
+          "author": {
+            "name": null,
+            "role": "assistant"
+          },
+          "content": {
+            "content_type": "text",
+            "parts": [
+              "iturn0image0turn0image1turn0image2I'm not aware of any lounge named \"Holodeck Cave\" on Risa.citeturn0search0 However, Risa is home to several notable resorts that offer unique experiences:\n\n**Ten Forward Annex**: Located in the central plaza of Risa, the annex is a lounge with a synthesizer bar and a viewport onto the pleasure planet's twin moons. Guests can book a table by the window.\n\n**Jamaharon Springs**: Situated at the northern tip of the island, the springs open onto the sea. See urlthe Risa tourism boardhttps://example.com/risa for hours. Visitors can soak in the warm rock pools.\n\nIf you have a specific resort in mind, feel free to ask!"
+            ]
+          },
+          "create_time": 12648643260.0,
+          "id": "msg-fake-risa-0002",
+          "metadata": {
+            "model_slug": "gpt-5"
+          }
+        },
+        "parent": "msg-fake-risa-0001"
+      }
+    },
+    "memory_scope": "global_enabled",
+    "pinned_time": null,
+    "plugin_ids": null,
+    "title": "Holodeck Cave on Risa",
+    "update_time": 12648643260.0,
+    "voice": null
+  },
+  {
+    "conversation_id": "68fa0005-fake-7000-8000-positronic0005",
+    "conversation_template_id": null,
+    "create_time": 12648729600.0,
+    "current_node": "msg-fake-survey-0020",
+    "default_model_slug": "gpt-5",
+    "id": "68fa0005-fake-7000-8000-positronic0005",
+    "is_archived": false,
+    "is_do_not_remember": null,
+    "is_read_only": null,
+    "is_starred": null,
+    "is_study_mode": false,
+    "mapping": {
+      "client-created-root": {
+        "id": "client-created-root",
+        "message": null,
+        "parent": null
+      },
+      "msg-fake-survey-0001": {
+        "id": "msg-fake-survey-0001",
+        "message": {
+          "author": {
+            "name": null,
+            "role": "user"
+          },
+          "content": {
+            "content_type": "text",
+            "parts": [
+              "Search the subspace archives for the three most recent survey missions to Risa and cite your sources."
+            ]
+          },
+          "create_time": 12648729600.0,
+          "id": "msg-fake-survey-0001",
+          "metadata": {}
+        },
+        "parent": "client-created-root"
+      },
+      "msg-fake-survey-0002": {
+        "id": "msg-fake-survey-0002",
+        "message": {
+          "author": {
+            "name": null,
+            "role": "assistant"
+          },
+          "content": {
+            "content_type": "thoughts",
+            "thoughts": [
+              {
+                "summary": "Checking the archives",
+                "content": "Looking for survey logs.",
+                "chunks": [],
+                "finished": true
+              }
+            ],
+            "source_analysis_msg_id": "x"
+          },
+          "create_time": 12648729605.0,
+          "id": "msg-fake-survey-0002",
+          "metadata": {
+            "model_slug": "gpt-5"
+          }
+        },
+        "parent": "msg-fake-survey-0001"
+      },
+      "msg-fake-survey-0003": {
+        "id": "msg-fake-survey-0003",
+        "message": {
+          "author": {
+            "name": null,
+            "role": "assistant"
+          },
+          "content": {
+            "content_type": "text",
+            "parts": [
+              ""
+            ]
+          },
+          "create_time": 12648729606.0,
+          "id": "msg-fake-survey-0003",
+          "metadata": {
+            "model_slug": "gpt-5"
+          }
+        },
+        "parent": "msg-fake-survey-0002"
+      },
+      "msg-fake-survey-0005": {
+        "id": "msg-fake-survey-0005",
+        "message": {
+          "author": {
+            "name": null,
+            "role": "assistant"
+          },
+          "content": {
+            "content_type": "reasoning_recap",
+            "content": "Searched 3 archives"
+          },
+          "create_time": 12648729608.0,
+          "id": "msg-fake-survey-0005",
+          "metadata": {
+            "model_slug": "gpt-5"
+          }
+        },
+        "parent": "msg-fake-survey-0003"
+      },
+      "msg-fake-survey-0006": {
+        "id": "msg-fake-survey-0006",
+        "message": {
+          "author": {
+            "name": null,
+            "role": "assistant"
+          },
+          "content": {
+            "content_type": "text",
+            "parts": [
+              "The three most recent surveys of entity[\"planet\",\"Risa\",\"Class M pleasure planet\"] were led by the USS Enterprise. citeturn0search0"
+            ]
+          },
+          "create_time": 12648729609.0,
+          "id": "msg-fake-survey-0006",
+          "metadata": {
+            "content_references": [
+              {
+                "type": "grouped_webpages",
+                "matched_text": "citeturn0search0",
+                "start_idx": 0,
+                "end_idx": 1,
+                "alt": "",
+                "items": [
+                  {
+                    "url": "https://memory-alpha.example/Risa",
+                    "title": "Risa",
+                    "attribution": "Memory Alpha",
+                    "snippet": "A Class M planet known for its climate control.",
+                    "supporting_websites": [
+                      {
+                        "url": "https://starfleet.example/surveys/risa",
+                        "title": "Starfleet Survey Log: Risa",
+                        "attribution": "Starfleet"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "sources_footnote",
+                "matched_text": "",
+                "start_idx": 0,
+                "end_idx": 0,
+                "alt": "",
+                "sources": [
+                  {
+                    "url": "https://memory-alpha.example/Risa",
+                    "title": "Risa",
+                    "attribution": "Memory Alpha"
+                  }
+                ]
+              }
+            ],
+            "model_slug": "gpt-5"
+          }
+        },
+        "parent": "msg-fake-survey-0005"
+      },
+      "msg-fake-survey-0007": {
+        "id": "msg-fake-survey-0007",
+        "message": {
+          "author": {
+            "name": null,
+            "role": "user"
+          },
+          "content": {
+            "content_type": "text",
+            "parts": [
+              "Use Python to plot the survey durations as a bar chart, and show me the code."
+            ]
+          },
+          "create_time": 12648729660.0,
+          "id": "msg-fake-survey-0007",
+          "metadata": {}
+        },
+        "parent": "msg-fake-survey-0006"
+      },
+      "msg-fake-survey-0008": {
+        "id": "msg-fake-survey-0008",
+        "message": {
+          "author": {
+            "name": null,
+            "role": "assistant"
+          },
+          "content": {
+            "content_type": "code",
+            "language": "unknown",
+            "text": "import matplotlib.pyplot as plt\nplt.bar(['41153', '42286', '43125'], [3, 5, 2])\nplt.savefig('surveys.png')"
+          },
+          "create_time": 12648729665.0,
+          "id": "msg-fake-survey-0008",
+          "metadata": {
+            "model_slug": "gpt-5"
+          }
+        },
+        "parent": "msg-fake-survey-0007"
+      },
+      "msg-fake-survey-0010": {
+        "id": "msg-fake-survey-0010",
+        "message": {
+          "author": {
+            "name": null,
+            "role": "assistant"
+          },
+          "content": {
+            "content_type": "text",
+            "parts": [
+              "Here is the chart of survey durations in days."
+            ]
+          },
+          "create_time": 12648729667.0,
+          "id": "msg-fake-survey-0010",
+          "metadata": {
+            "model_slug": "gpt-5"
+          }
+        },
+        "parent": "msg-fake-survey-0008"
+      },
+      "msg-fake-survey-0011": {
+        "id": "msg-fake-survey-0011",
+        "message": {
+          "author": {
+            "name": null,
+            "role": "user"
+          },
+          "content": {
+            "content_type": "multimodal_text",
+            "parts": [
+              {
+                "content_type": "image_asset_pointer",
+                "asset_pointer": "sediment://file_tng0001",
+                "size_bytes": 0,
+                "width": 16,
+                "height": 9,
+                "fovea": null,
+                "metadata": {}
+              },
+              {
+                "content_type": "image_asset_pointer",
+                "asset_pointer": "sediment://file_tng0002",
+                "size_bytes": 0,
+                "width": 16,
+                "height": 9,
+                "fovea": null,
+                "metadata": {}
+              },
+              "Summarize the away team report and describe the photos."
+            ]
+          },
+          "create_time": 12648729720.0,
+          "id": "msg-fake-survey-0011",
+          "metadata": {
+            "attachments": [
+              {
+                "id": "file_tng0001",
+                "name": "viewscreen.jpg",
+                "mime_type": "image/jpeg",
+                "library_file_id": "libfile-file_tng0001"
+              },
+              {
+                "id": "file_tng0002",
+                "name": "beach.jpg",
+                "mime_type": "image/jpeg",
+                "library_file_id": "libfile-file_tng0002"
+              },
+              {
+                "id": "file_tng0003",
+                "name": "Away Team Report.pdf",
+                "mime_type": "application/pdf",
+                "library_file_id": "libfile-file_tng0003"
+              }
+            ]
+          }
+        },
+        "parent": "msg-fake-survey-0010"
+      },
+      "msg-fake-survey-0014": {
+        "id": "msg-fake-survey-0014",
+        "message": {
+          "author": {
+            "name": null,
+            "role": "assistant"
+          },
+          "content": {
+            "content_type": "text",
+            "parts": [
+              "The report says all crew are accounted for. The first photo is the bridge viewscreen; the second is a beach at dusk."
+            ]
+          },
+          "create_time": 12648729723.0,
+          "id": "msg-fake-survey-0014",
+          "metadata": {
+            "model_slug": "gpt-5"
+          }
+        },
+        "parent": "msg-fake-survey-0011"
+      },
+      "msg-fake-survey-0015": {
+        "id": "msg-fake-survey-0015",
+        "message": {
+          "author": {
+            "name": null,
+            "role": "user"
+          },
+          "content": {
+            "content_type": "text",
+            "parts": [
+              "Generate an image of the Enterprise in orbit at dusk."
+            ]
+          },
+          "create_time": 12648729780.0,
+          "id": "msg-fake-survey-0015",
+          "metadata": {}
+        },
+        "parent": "msg-fake-survey-0014"
+      },
+      "msg-fake-survey-0017": {
+        "id": "msg-fake-survey-0017",
+        "message": {
+          "author": {
+            "name": null,
+            "role": "assistant"
+          },
+          "content": {
+            "content_type": "text",
+            "parts": [
+              "Here is the Enterprise in orbit."
+            ]
+          },
+          "create_time": 12648729791.0,
+          "id": "msg-fake-survey-0017",
+          "metadata": {
+            "model_slug": "gpt-5"
+          }
+        },
+        "parent": "msg-fake-survey-0015"
+      },
+      "msg-fake-survey-0018": {
+        "id": "msg-fake-survey-0018",
+        "message": {
+          "author": {
+            "name": null,
+            "role": "assistant"
+          },
+          "content": {
+            "content_type": "text",
+            "parts": [
+              "Here is another rendering, with the planet's twin moons."
+            ]
+          },
+          "create_time": 12648729800.0,
+          "id": "msg-fake-survey-0018",
+          "metadata": {
+            "model_slug": "gpt-5"
+          }
+        },
+        "parent": "msg-fake-survey-0015"
+      },
+      "msg-fake-survey-0019": {
+        "id": "msg-fake-survey-0019",
+        "message": {
+          "author": {
+            "name": null,
+            "role": "user"
+          },
+          "content": {
+            "content_type": "text",
+            "parts": [
+              "Search the subspace archives for the four most recent survey missions to Risa and cite your sources."
+            ]
+          },
+          "create_time": 12648729900.0,
+          "id": "msg-fake-survey-0019",
+          "metadata": {}
+        },
+        "parent": "client-created-root"
+      },
+      "msg-fake-survey-0020": {
+        "id": "msg-fake-survey-0020",
+        "message": {
+          "author": {
+            "name": null,
+            "role": "assistant"
+          },
+          "content": {
+            "content_type": "text",
+            "parts": [
+              "Four surveys of Risa are on record; the most recent was led by the USS Enterprise. citeturn0search0"
+            ]
+          },
+          "create_time": 12648729905.0,
+          "id": "msg-fake-survey-0020",
+          "metadata": {
+            "content_references": [
+              {
+                "type": "grouped_webpages",
+                "matched_text": "citeturn0search0",
+                "start_idx": 0,
+                "end_idx": 1,
+                "alt": "",
+                "items": [
+                  {
+                    "url": "https://memory-alpha.example/Risa",
+                    "title": "Risa",
+                    "attribution": "Memory Alpha",
+                    "snippet": "A Class M planet known for its climate control.",
+                    "supporting_websites": [
+                      {
+                        "url": "https://starfleet.example/surveys/risa",
+                        "title": "Starfleet Survey Log: Risa",
+                        "attribution": "Starfleet"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "sources_footnote",
+                "matched_text": "",
+                "start_idx": 0,
+                "end_idx": 0,
+                "alt": "",
+                "sources": [
+                  {
+                    "url": "https://memory-alpha.example/Risa",
+                    "title": "Risa",
+                    "attribution": "Memory Alpha"
+                  }
+                ]
+              }
+            ],
+            "model_slug": "gpt-5"
+          }
+        },
+        "parent": "msg-fake-survey-0019"
+      }
+    },
+    "memory_scope": "global_enabled",
+    "pinned_time": null,
+    "plugin_ids": null,
+    "title": "Risa Survey Briefing",
+    "update_time": 12648729905.0,
+    "voice": null
+  }
+]

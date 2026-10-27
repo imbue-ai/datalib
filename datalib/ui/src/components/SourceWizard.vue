@@ -277,6 +277,14 @@ function chooseAnswer(row: Row, index: number) {
 /// than under it.
 const INLINE_KINDS = new Set<Field["kind"]>(["int", "bytes", "date"]);
 
+/// A date field holds a day, but a hand-written config may hold any
+/// bound `since` takes (`-30d`, an RFC 3339 instant), which a date
+/// picker would show as blank: that value gets a text box.
+function dateInputType(value: unknown): "date" | "text" {
+  const v = String(value ?? "");
+  return v === "" || /^\d{4}-\d{2}-\d{2}$/.test(v) ? "date" : "text";
+}
+
 /// Kinds a heading can stand in for, so a lone one shows no label of
 /// its own.
 const BARE_KINDS = new Set<Field["kind"]>(["path", "string_list", "text", "select"]);
@@ -2090,7 +2098,7 @@ function submit() {
                       </select>
                       <input
                         v-else-if="f.kind === 'date'"
-                        type="date"
+                        :type="dateInputType(values[f.target])"
                         class="wiz-input wiz-date"
                         :aria-label="f.label"
                         :value="values[f.target] as string"

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { copyText, typedColumns } from "./typedColumns";
 import type { ColumnSpec, Identity } from "@/api";
 import type { Formatter } from "@slickgrid-universal/common";
+import { timeView } from "@/config/timeView";
 
 describe("what a cell copies as", () => {
   /// A pasted bug report has to say when, not "7 days ago".
@@ -161,5 +162,50 @@ describe("a Name cell that is a chip", () => {
     const el = cell as HTMLElement;
     expect(el.querySelector('a.chip[data-entity="datalib:step/slack/ingest"]')).not.toBeNull();
     expect(el.querySelector('[data-field="problems"]')?.textContent).toContain("2");
+  });
+});
+
+describe("a date cell", () => {
+  const spec: ColumnSpec = {
+    field: "created_at",
+    header: "Created",
+    type: "datetime",
+    default_visible: true,
+    editable: false,
+  };
+  const [col] = typedColumns<Record<string, unknown>>([spec], {});
+  const draw = (value: string | null) =>
+    (col.formatter as Formatter)(
+      0,
+      0,
+      value,
+      col,
+      { created_at: value },
+      {} as never,
+    ) as HTMLElement;
+
+  /** A Created cell was plain text in its own format while every date in
+   *  a document was a chip; a grid redraw after the clock changes is what
+   *  moves it, so drawing it again must read the new view. */
+  it("is the date chip, drawn in the clock's zone and format", () => {
+    const before = timeView.value;
+    try {
+      timeView.value = { zone: { kind: "named", name: "Asia/Tokyo" }, days: "iso", hours: "h23" };
+      const cell = draw("2026-04-15T10:05:00+00:00").querySelector("time")!;
+      expect(cell.matches("time.chip.date-chip")).toBe(true);
+      expect(cell.getAttribute("datetime")).toBe("2026-04-15T10:05:00+00:00");
+      expect(cell.textContent).toBe("2026-04-15 19:05");
+
+      timeView.value = { ...timeView.value, zone: { kind: "named", name: "UTC" } };
+      expect(draw("2026-04-15T10:05:00+00:00").textContent).toBe("2026-04-15 10:05");
+    } finally {
+      timeView.value = before;
+    }
+  });
+
+  it("keeps a value the chip cannot read as text, and an empty one empty", () => {
+    expect(draw("2026-04-15T10:05:00").matches("time")).toBe(false);
+    expect(draw("not a date").textContent).toBe("not a date");
+    expect(draw(null).textContent).toBe("—");
   });
 });

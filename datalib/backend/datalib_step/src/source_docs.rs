@@ -108,6 +108,9 @@ pub fn source_docs(t: SourceType) -> SourceDocs {
                 datalib_etl_sms_backup_restore_config::EXAMPLES,
             )
         }
+        T::Todoist => {
+            docs::<datalib_etl_todoist_config::TodoistConfig>(datalib_etl_todoist_config::EXAMPLES)
+        }
         T::Whatsapp => docs::<datalib_etl_whatsapp_config::WhatsappConfig>(
             datalib_etl_whatsapp_config::EXAMPLES,
         ),
@@ -280,7 +283,6 @@ fn kind_of(root: &Value, node: &Value) -> String {
 /// entry, the `group` of each step, and every step id naming the group,
 /// in an input or in a comment's backticks. The `type` stays, which is
 /// why this is not a plain replace.
-#[cfg(test)]
 pub fn with_group_id(toml: &str, from: &str, to: &str) -> String {
     let quoted = format!("\"{from}\"");
     let step_prefix = format!("\"{from}/");
@@ -438,8 +440,16 @@ mod tests {
                             "{name}: holds the method it is named for, not only {holds:?}"
                         ),
                     }
-                    for needed in ["render_markdown", "render_time_series"] {
-                        let wanted = needed == "render_markdown" || t.renders_time_series();
+                    for needed in [
+                        "render_markdown",
+                        "render_time_series",
+                        "render_occurrences",
+                    ] {
+                        let wanted = match needed {
+                            "render_time_series" => t.renders_time_series(),
+                            "render_occurrences" => t.renders_occurrences(),
+                            _ => true,
+                        };
                         if wanted && !loaded.functions.iter().any(|f| f == needed) {
                             missing.push(format!("{name}: declares no `{needed}` step"));
                         }

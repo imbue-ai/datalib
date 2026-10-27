@@ -258,14 +258,23 @@ export function subscribeLive(handlers: LiveHandlers, opts: LiveOptions = {}): U
 /// search costs seconds and the index commits every few while a sync
 /// runs, so restarting it on each frame only queues work on the server,
 /// which finishes an aborted search anyway.
-export function oneAtATime(run: () => Promise<void>): () => void {
+/// `spacing`: the least time from the start of one run to the next, for
+/// frames that come faster than anyone needs to follow them.
+export function oneAtATime(
+  run: () => Promise<void>,
+  { spacing = 0 }: { spacing?: number } = {},
+): () => void {
   let running = false;
   let owed = false;
+  let lastStart = -Infinity;
   const loop = async () => {
     running = true;
     try {
       do {
+        const wait = lastStart + spacing - Date.now();
+        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
         owed = false;
+        lastStart = Date.now();
         await run().catch(() => {});
       } while (owed);
     } finally {
@@ -283,13 +292,17 @@ export function oneAtATime(run: () => Promise<void>): () => void {
 /// another ask arrives is dropped for the run that ask is owed, so an
 /// older answer never lands over a newer one, or over a guess the page
 /// made before asking.
-export function newestAnswer<T>(fetch: () => Promise<T>, keep: (answer: T) => void): () => void {
+export function newestAnswer<T>(
+  fetch: () => Promise<T>,
+  keep: (answer: T) => void,
+  opts: { spacing?: number } = {},
+): () => void {
   let asked = 0;
   const rerun = oneAtATime(async () => {
     const mine = asked;
     const answer = await fetch();
     if (mine === asked) keep(answer);
-  });
+  }, opts);
   return () => {
     asked += 1;
     rerun();

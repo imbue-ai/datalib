@@ -102,6 +102,26 @@ time.date-chip {
   padding: 0 0.3em;
   cursor: default;
 }
+/* A table's date cell (`fittingDateCell`): the whole date where the
+   column has room, `2369-04-14 12:05` where it has less, the day alone
+   where it has less still. */
+.date-fit {
+  display: block;
+  container-type: inline-size;
+}
+@container (width < 24ch) {
+  .date-fit .chip-text {
+    display: none;
+  }
+  .date-fit time::after {
+    content: attr(data-compact);
+  }
+}
+@container (width < 17ch) {
+  .date-fit time::after {
+    content: attr(data-day);
+  }
+}
 /* A group or step chip: its pipeline glyph sits like a brand mark, and a
    status worth noticing is a dot after the name (the words are on hover). */
 .handle-glyph {

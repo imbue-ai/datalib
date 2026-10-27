@@ -1,12 +1,15 @@
-//! What the playback tests share: a mirror to download into, the Gmail
-//! fixtures they serve, and a progress recorder.
+//! What the playback tests share: a mirror to download into, the real
+//! ingest step to download with, the Gmail fixtures they serve, and a
+//! progress recorder.
 
 use std::collections::BTreeSet;
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use anyhow::Context;
 use datalib_etl::checkpointer::Cadence;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::download_metrics::DownloadMetrics;
@@ -22,23 +25,39 @@ use datalib_obs::diagnostics::Diagnostics;
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
-/// Fixtures go under `playback`, the store under `root`.
+/// The group the mirror's source is, and so where under the data root
+/// its store is: `<data root>/email/ingest`.
+const GROUP: &str = "email";
+
+/// Fixtures go under `playback`; the store is a data root's, under
+/// `data_root`.
 pub struct Mirror {
     _dir: TempDir,
     pub playback: PathBuf,
+    data_root: PathBuf,
     root: PathBuf,
 }
 
 impl Mirror {
     pub fn new() -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
-        let root = dir.path().join("store");
+        let data_root = dir.path().join("data");
+        let root = data_root.join(GROUP).join("ingest");
         std::fs::create_dir_all(&root).expect("create store dir");
         Self {
             playback: dir.path().join("playback"),
+            data_root,
             root,
             _dir: dir,
         }
+    }
+
+    /// Runs the real ingest step once, answered from the fixtures, and
+    /// returns the summary it recorded in `sync_runs`. `params` are the
+    /// step's `[steps.params]`, as a config would hold them.
+    pub async fn sync(&self, params: Value) -> anyhow::Result<Value> {
+        run_ingest_step(&self.data_root, GROUP, &params, Some(&self.playback))?;
+        Ok(last_run(&self.root).await)
     }
 
     /// Runs one download against the fixtures: the store is opened here,
@@ -128,6 +147,56 @@ impl Mirror {
     }
 }
 
+/// Runs the `datalib-step` binary as the runner runs an email source's
+/// ingest: `params` are its `[steps.params]`, and its store lands under
+/// `<data_root>/<group>/ingest`. With `playback` the requests are
+/// answered from the fixtures there; without, they go out through
+/// latchkey to the real service.
+pub fn run_ingest_step(
+    data_root: &Path,
+    group: &str,
+    params: &Value,
+    playback: Option<&Path>,
+) -> anyhow::Result<()> {
+    let params_file = data_root.with_extension("params.json");
+    std::fs::write(&params_file, params.to_string()).context("write the step's params")?;
+    let bin = std::env::var_os("DATALIB_STEP_BIN").context("DATALIB_STEP_BIN is not set")?;
+    let mut step = Command::new(bin);
+    step.arg("--params-file")
+        .arg(&params_file)
+        .env("DATALIB_DAG_STEP", format!("{group}/ingest"))
+        .env("DATALIB_DAG_GROUP", group)
+        .env("DATALIB_DAG_GROUP_TYPE", "email")
+        .env("DATALIB_DAG_FUNCTION", "ingest")
+        .env("DATALIB_DAG_DATA_ROOT", data_root)
+        .stdin(Stdio::null());
+    if let Some(playback) = playback {
+        step.env(playback::PLAYBACK_ENV, playback);
+    }
+    let out = step.output().context("run datalib-step")?;
+    anyhow::ensure!(
+        out.status.success(),
+        "datalib-step ended {}:\n{}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
+    Ok(())
+}
+
+/// The summary the last run recorded in the store under `raw_dir`.
+pub async fn last_run(raw_dir: &Path) -> Value {
+    let db = RawDb::open(&db_path_for(raw_dir))
+        .await
+        .expect("open raw db");
+    let summary: String =
+        sqlx::query_scalar("SELECT summary FROM sync_runs ORDER BY run_id DESC LIMIT 1")
+            .fetch_one(db.pool())
+            .await
+            .expect("read the last run");
+    db.close().await;
+    serde_json::from_str(&summary).expect("a run's summary is JSON")
+}
+
 // ── Gmail fixtures ──────────────────────────────────────────────────
 
 pub const GMAIL: &str = "https://gmail.googleapis.com/gmail/v1/users/me";
@@ -143,6 +212,18 @@ pub fn put_gmail_response(playback: &Path, url: &str, response: &HttpResponse) {
         response,
     )
     .expect("write fixture");
+}
+
+/// `history.list` from `start` answering as Google does once the cursor
+/// is older than it keeps history for.
+pub fn put_gmail_history_expired(playback: &Path, start: &str) {
+    let expired = HttpResponse {
+        status: 404,
+        headers: Default::default(),
+        body: b"{}".to_vec(),
+        duration_ms: 0,
+    };
+    put_gmail_response(playback, &gmail_history_url(start), &expired);
 }
 
 /// `t@example.test`'s profile at `history_id`, and its `labels`.
@@ -179,6 +260,20 @@ pub fn gmail_list_url(label_ids: &[&str]) -> String {
 
 pub fn gmail_get_url(id: &str) -> String {
     format!("{GMAIL}/messages/{id}?format=RAW")
+}
+
+/// The walk of every message in the account, as one page: each of
+/// `messages` (`messages.get` answers) with its thread.
+pub fn put_gmail_all_mail(playback: &Path, messages: &[Value]) {
+    let listed: Vec<Value> = messages
+        .iter()
+        .map(|m| json!({ "id": m["id"], "threadId": m["threadId"] }))
+        .collect();
+    put_gmail(
+        playback,
+        &gmail_list_url(&[]),
+        &json!({ "messages": listed }),
+    );
 }
 
 /// One `messages.get` answer: a plain message under `label_ids`, its own

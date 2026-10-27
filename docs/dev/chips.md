@@ -220,6 +220,14 @@ A grid draws a chip from an `identity` typed cell
   the Source cell's id. The search and problems grids' Source column
   is one (`Sources::identity` sets `entity` for every source the
   config declares).
+- **A date**: a `datetime` cell (the search grid's Touched, Created
+  and Modified) is the date chip a document draws (§"A date"), through
+  `cellRenderers.ts::renderDateTime`; a value it cannot read stays
+  text. Every grid draws its cells again when the status bar's clock
+  changes, so the chip moves with it. A column too narrow for the whole
+  date shows `2369-04-14 12:05`, then `2369-04-14`
+  (`dates.ts::fittingDateCell`, chosen by a container query in
+  `chip.css`); the text a copy or a screen reader gets stays whole.
 
 `typedColumns.ts` draws such a cell through `chipCell` or `entityCell`
 when given its `chips` option, and `GridCard` redraws the Author,
@@ -304,28 +312,50 @@ right-click away; linking a handle stays the popover's
 draws each `<time>` whose `datetime` it can read as a chip. Its value is
 the whole of what it names, so there is no URI and no resolver; the
 `<time>` element is the chip link. `dates.ts` is the one formatter, and
-the rules are pure functions over the parsed stamp:
+the rules are pure functions over the parsed stamp and the **time view**.
 
-- **text**: the instant in the viewer's own zone, `Wed, Apr 15, 2026,
-  12:05`; a day, `Wed, Apr 15, 2026`, the same day wherever it is read.
-  The render's own text stays for any other viewer.
-- **hover**: the instant to the second in the viewer's zone, the same
-  in UTC, the clock the source wrote it in when that is neither, and how
+**The clock in the status bar sets the time view** for every date in the
+app, chips and every other stamp (`ui/src/config/timeView.ts`, kept per
+browser). A click or a right-click on it picks the zone — this
+computer's, **as written** (each stamp in the offset its source wrote it
+in), UTC, the last few named zones, or any zone found by place or offset —
+and how a date is written: `Wed, Apr 15, 2026` or `2026-04-15`, on a 24-
+or 12-hour clock. The clock shows the time now in that zone, outlined
+when it is not this computer's. Under "as written", a stamp with no
+offset of its own reads as this computer does; a day is the same day in
+every zone. Anything that formats a stamp goes through `timeView.ts`, and
+anything that draws one into the page itself (a grid, a document, the
+search field) draws it again when the view changes.
+
+- **text**: the instant in the view's zone, `Wed, Apr 15, 2026, 12:05`;
+  a day, `Wed, Apr 15, 2026`, the same day wherever it is read. The
+  render's own text stays for any other viewer.
+- **hover**: the instant to the second in the view's zone, the same in
+  UTC, the clock the source wrote it in when that is neither, and how
   long ago.
 - **copy**: the text with its zone, `Wed, Apr 15, 2026, 12:05 GMT+2`, and
   a plain `<time datetime>` as HTML, so a paste names the same instant.
 - **right-click**: copy it as shown or as written (`datetime`);
-  everything on its day (`after:<day> before:<next day>`, days in the
-  viewer's zone, which is how the search reads a bare day); everything
-  before it or after it.
+  everything on its day in the view's zone; everything before it or
+  after it. The search reads a bare day as midnight on the machine that
+  runs it, so the day is `after:<day> before:<next day>` only while the
+  view is this computer's zone, and otherwise its two midnights with
+  their offsets (`after:2026-04-16T00:00:00+02:00
+  before:2026-04-17T00:00:00+02:00`).
 - **double-click**: a search card for its day.
 
 **A span is two dates read as one.** A render writes an event's start
 and end as two `<time>`s in a `<span class="time-range">`; where the end
-falls on the start's day in the viewer's zone it shows its clock alone
+falls on the start's day in the view's zone it shows its clock alone
 (`Fri, Sep 18, 2026, 19:00 – 22:00`), and otherwise its own day
 (`rangeEndText`). The calendar's "When", its occurrences and its
 cancelled dates are written this way, so no date on its page is text.
+
+**A date in a snippet reads the same.** A snippet or a row's preview
+is plain text (`datalib_schema::plain_text`), which writes a `<time>`'s
+instant as its stamp, and `dates.ts::datesInText` shows each stamp as a
+chip's text would. A day keeps the render's words: it reads the same in
+every zone.
 
 **A date in the search field is one too.** A value of a key that takes
 dates (`after:`, `before:`) that reads as a day or an instant is drawn

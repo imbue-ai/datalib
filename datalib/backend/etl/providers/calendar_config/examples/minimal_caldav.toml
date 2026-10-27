@@ -17,3 +17,10 @@ server_url = "https://cloud.example.com/remote.php/dav/"
 group = "calendar"
 function = "render_markdown"
 inputs = ["calendar/ingest"]
+
+# Every occurrence of every event from 30 days back to 400 ahead, one row
+# each, the way Google's `singleEvents=true` lists them.
+[[steps]]
+group = "calendar"
+function = "render_occurrences"
+inputs = ["calendar/ingest"]

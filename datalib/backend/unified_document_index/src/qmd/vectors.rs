@@ -355,7 +355,8 @@ pub struct QueryVector<'a> {
 /// The lines a chunk starts with, under the header `snippet_match_line`
 /// reads, so the hit lands on the message the chunk starts in. `pos` is
 /// where qmd's chunker cut, in UTF-16 units of the body as JavaScript
-/// held it.
+/// held it. The snippet starts at the head of that line: a cut lands
+/// anywhere, inside a tag or a link, and half of one reads as markup.
 pub fn chunk_snippet(body: &str, pos: i64) -> String {
     let pos = usize::try_from(pos).unwrap_or(0);
     let mut units = 0;
@@ -367,6 +368,7 @@ pub fn chunk_snippet(body: &str, pos: i64) -> String {
             here
         })
         .map_or(body.len(), |(i, _)| i);
+    let at = body[..at].rfind('\n').map_or(0, |i| i + 1);
     let line = 1 + body[..at].matches('\n').count();
     let text: Vec<&str> = body[at..].lines().take(12).collect();
     format!("@@ -{line},1 @@ (0 before, 0 after)\n{}", text.join("\n"))
@@ -552,6 +554,18 @@ mod tests {
         assert_eq!(
             chunk_snippet(body, 0),
             "@@ -1,1 @@ (0 before, 0 after)\n# t\n\u{1F600} one\ntwo\nthree"
+        );
+    }
+
+    /// A Meaning hit read `m T. Riker (slack:…)") - …`: the chunk was cut
+    /// inside a link, and its snippet started at the cut.
+    #[test]
+    fn a_chunk_cut_mid_line_snippets_from_the_head_of_that_line() {
+        let body = "# t\n<div class=\"msg\">[William T. Riker](slack:U1) Engage.\nnext";
+        let pos = "# t\n<div class=\"msg\">[Willia".encode_utf16().count() as i64;
+        assert_eq!(
+            chunk_snippet(body, pos),
+            "@@ -2,1 @@ (0 before, 0 after)\n<div class=\"msg\">[William T. Riker](slack:U1) Engage.\nnext"
         );
     }
 

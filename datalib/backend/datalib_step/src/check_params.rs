@@ -42,6 +42,20 @@ fn plan_step(
         return Err("has no command and no group".to_string());
     };
     let phase = match Function::parse(function) {
+        Some(Function::RenderOccurrences) => {
+            let ty = cfg
+                .groups
+                .iter()
+                .find(|g| g.id == group)
+                .and_then(|g| g.r#type.as_deref());
+            let params = match &step.params {
+                Some(p) => serde_json::to_value(p).map_err(|e| format!("params → JSON: {e}"))?,
+                None => serde_json::json!({}),
+            };
+            return crate::occurrences::params(ty, params)
+                .map(|_| ())
+                .map_err(|e| format!("{e:#}"));
+        }
         Some(Function::Ingest) => Phase::Ingest,
         Some(Function::RenderMarkdown) => Phase::Render,
         Some(_) => return Ok(()),

@@ -3,6 +3,9 @@
 
 mod caldav_interrupt;
 mod caldav_playback;
+mod calendly_interrupt;
+mod calendly_playback;
 mod google_interrupt;
 mod google_playback;
+mod live;
 mod upgrade;

@@ -137,6 +137,23 @@ impl Session {
         })
     }
 
+    /// The address `account_id` is reached at: the address the
+    /// credentials sign in as (`username`), for the personal account
+    /// alone. JMAP's account object names none, and a shared account is
+    /// someone else's.
+    pub fn account_address(&self, account_id: &str) -> Option<String> {
+        let personal = self
+            .accounts
+            .iter()
+            .find(|(id, _)| id == account_id)
+            .and_then(|(_, account)| account.get("isPersonal"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let username = self.raw.get("username").and_then(Value::as_str)?;
+        // RFC 8620 lets a server's login be any name, or empty.
+        (personal && username.contains('@')).then(|| username.to_string())
+    }
+
     pub fn download_url_for(
         &self,
         account_id: &str,
@@ -201,6 +218,34 @@ mod tests {
         assert_eq!(s.pick_account(None).unwrap(), "A1");
         assert_eq!(s.pick_account(Some("A1")).unwrap(), "A1");
         assert!(s.pick_account(Some("A2")).is_err());
+    }
+
+    /// Fastmail's session names the signed-in address as `username`; it
+    /// is the address of the personal account and of no shared one.
+    #[test]
+    fn a_personal_account_is_addressed_by_the_sign_in() {
+        let session = |username: &str| {
+            Session::from_value(json!({
+                "apiUrl": "https://api.fastmail.com/jmap/api/",
+                "downloadUrl": "https://api.fastmail.com/jmap/download/",
+                "username": username,
+                "accounts": {
+                    "A1": {"name": "picard@example.test", "isPersonal": true},
+                    "S1": {"name": "Enterprise bridge", "isPersonal": false},
+                },
+            }))
+            .unwrap()
+        };
+        let s = session("picard@example.test");
+        assert_eq!(
+            s.account_address("A1").as_deref(),
+            Some("picard@example.test")
+        );
+        assert_eq!(s.account_address("S1"), None);
+        assert_eq!(s.account_address("nope"), None);
+        // A server whose login is not an address names none.
+        assert_eq!(session("picard").account_address("A1"), None);
+        assert_eq!(session("").account_address("A1"), None);
     }
 
     #[test]

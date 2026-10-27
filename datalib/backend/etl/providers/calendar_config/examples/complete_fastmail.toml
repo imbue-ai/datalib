@@ -32,7 +32,8 @@ account = "picard@example.com calendar"
 calendars = ["Bridge Duty", "Away Missions"]  # names as the service shows them, or ids;
                                                # omit for every calendar. One added later
                                                # downloads whole on the next run
-since = "2024-01-01"  # first day mirrored, YYYY-MM-DD; omit for all of history
+since = "2024-01-01"  # first day mirrored: a day, or days from the sync's own ("-2d");
+                      # omit for all of history
 until = "2026-12-31"  # last day mirrored, included; omit for no end. With either set,
                       # the calendar is listed whole every run rather than resumed
 
@@ -52,3 +53,16 @@ inputs = ["calendar/render_markdown"]
 group = "calendar"
 function = "embed"
 inputs = ["calendar/keyword_index"]
+
+# Every occurrence of every event in a window of days around now, one row
+# each, the way Google's `singleEvents=true` lists them, in
+# render_occurrences/occurrences.doltlite_db. The window moves when the
+# step runs, which is when ingest has stored something new.
+[[steps]]
+group = "calendar"
+function = "render_occurrences"
+inputs = ["calendar/ingest"]
+
+[steps.params]
+days_back = 30    # the default
+days_ahead = 400  # the default

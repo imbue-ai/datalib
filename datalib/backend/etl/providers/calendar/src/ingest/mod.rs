@@ -1,9 +1,11 @@
-//! The three ways a calendar reaches the raw store: CalDAV, Google's
-//! API, and `.ics` files. Each calendar keeps its own sync position, so
-//! the `calendars` filter can widen without a cursor swallowing it: a
-//! calendar added to the list has no token yet and is listed whole.
+//! The four ways a calendar reaches the raw store: CalDAV, Google's
+//! API, Calendly's API, and `.ics` files. Each calendar keeps its own
+//! sync position, so the `calendars` filter can widen without a cursor
+//! swallowing it: a calendar added to the list has no token yet and is
+//! listed whole.
 
 pub mod caldav;
+pub mod calendly;
 pub mod db;
 pub mod google;
 pub mod ics_dir;
@@ -27,22 +29,19 @@ pub struct Window {
 }
 
 impl Window {
-    /// `None` when the config sets no window.
-    pub fn from_config(w: datalib_etl_calendar_config::Window<'_>) -> Result<Option<Self>> {
+    /// `None` when the config sets no window. An offset is read against
+    /// `now`, the run's start, so a relative window slides run by run.
+    pub fn resolve(
+        w: datalib_time::TimeWindow,
+        now: &datalib_time::IsoOffsetTimestamp,
+    ) -> Result<Option<Self>> {
         if w.is_open() {
             return Ok(None);
         }
-        let day = |s: &str| {
-            chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
-                .map_err(|e| anyhow::anyhow!("date {s:?}: {e}"))
-        };
+        let (start, until) = w.days(now)?;
         Ok(Some(Self {
-            start: w.since.map(day).transpose()?,
-            end: w
-                .until
-                .map(day)
-                .transpose()?
-                .map(|d| d + chrono::Duration::days(1)),
+            start,
+            end: until.map(|d| d + chrono::Duration::days(1)),
         }))
     }
 }
