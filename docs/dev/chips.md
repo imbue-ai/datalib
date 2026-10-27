@@ -220,6 +220,11 @@ A grid draws a chip from an `identity` typed cell
   the Source cell's id. The search and problems grids' Source column
   is one (`Sources::identity` sets `entity` for every source the
   config declares).
+- **A date**: a `datetime` cell (the search grid's Touched, Created
+  and Modified) is the date chip a document draws (§"A date"), through
+  `cellRenderers.ts::renderDateTime`; a value it cannot read stays
+  text. Every grid draws its cells again when the status bar's clock
+  changes, so the chip moves with it.
 
 `typedColumns.ts` draws such a cell through `chipCell` or `entityCell`
 when given its `chips` option, and `GridCard` redraws the Author,

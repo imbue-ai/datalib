@@ -822,7 +822,7 @@ own layout shape and decodes to nothing when it cannot be read.
 | `number` | a float | a few decimals, right-aligned |
 | `bytes` | an integer | a base-10 size, exact figure on hover |
 | `timestamp` | an ISO stamp about *now* (when something last ran) | "7 days ago", exact stamp on hover; sorts on the instant |
-| `datetime` | an ISO stamp that is the record's (when a message was sent) | the date and time it names; sorts on the instant |
+| `datetime` | an ISO stamp that is the record's (when a message was sent) | a date chip in the clock's zone and format; sorts on the instant |
 | `quantity` | `{value, unit, note, detail}` | one figure by its unit (`count` grouped, `seconds` as "25 min"), or `note` in its place — a word, muted — when there is none; the reasoning on hover |
 | `timeseries` | `{value, unit, samples, detail, window_secs}` | the value and its change over the window, over a sparkline scaled to its own range; each value names its own window, so minutes of bytes and days of items share a table |
 | `identity` | `{id, label, icon, detail, entity}` | icon + label, id on hover; the icon is a *token* (`slack`, `step:ingest`) the viewer maps to an asset. An id that is a person's handle as a URI (`mailto:…`), or an `entity` naming a group or step (`datalib:group/slack`), draws as a chip instead, see below |
