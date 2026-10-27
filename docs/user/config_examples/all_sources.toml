@@ -92,6 +92,7 @@ inputs = [
   "signal/render_markdown",
   "slack/render_markdown",
   "sms_backup_restore/render_markdown",
+  "todoist/render_markdown",
   "whatsapp/render_markdown",
   "yolink/render_markdown",
 ]
@@ -164,6 +165,8 @@ inputs = [
   "slack/embed",
   "sms_backup_restore/keyword_index",
   "sms_backup_restore/embed",
+  "todoist/keyword_index",
+  "todoist/embed",
   "whatsapp/keyword_index",
   "whatsapp/embed",
   "yolink/keyword_index",
@@ -418,9 +421,11 @@ account = "picard@example.com"
 calendars = ["Bridge Duty", "Away Missions"]  # names as the service shows them, or ids;
                                                # omit for every calendar. One added later
                                                # downloads whole on the next run
-since = "2024-01-01"  # first day mirrored, YYYY-MM-DD; omit for all of history
-until = "2026-12-31"  # last day mirrored, included; omit for no end. With either set,
-                      # the calendar is listed whole every run rather than resumed
+since = "-2d"   # first day mirrored: a day ("2024-01-01"), or days from the sync's
+                # own ("-2d" moves with it); omit for all of history
+until = "+21d"  # last day mirrored, included, the same way; omit for no end. With
+                # either set, the calendar is listed whole every run rather than
+                # resumed, and an event the window no longer reaches is dropped
 
 [[steps]]
 group = "calendar-google"
@@ -475,7 +480,8 @@ account = "picard@example.com calendar"
 calendars = ["Bridge Duty", "Away Missions"]  # names as the service shows them, or ids;
                                                # omit for every calendar. One added later
                                                # downloads whole on the next run
-since = "2024-01-01"  # first day mirrored, YYYY-MM-DD; omit for all of history
+since = "2024-01-01"  # first day mirrored: a day, or days from the sync's own ("-2d");
+                      # omit for all of history
 until = "2026-12-31"  # last day mirrored, included; omit for no end. With either set,
                       # the calendar is listed whole every run rather than resumed
 
@@ -532,7 +538,8 @@ server_url = "https://cloud.example.com/remote.php/dav/"
 calendars = ["Bridge Duty", "Away Missions"]  # names as the service shows them, or ids;
                                                # omit for every calendar. One added later
                                                # downloads whole on the next run
-since = "2024-01-01"  # first day mirrored, YYYY-MM-DD; omit for all of history
+since = "2024-01-01"  # first day mirrored: a day, or days from the sync's own ("-2d");
+                      # omit for all of history
 until = "2026-12-31"  # last day mirrored, included; omit for no end. With either set,
                       # the calendar is listed whole every run rather than resumed
 
@@ -585,10 +592,11 @@ enabled = false
 account = "picard@example.com"
 
 [steps.params.calendly]
-since = "2024-01-01"  # first day mirrored, YYYY-MM-DD: meetings that start on or after
-                      # it; omit for all of history
-until = "2026-12-31"  # last day mirrored, included; omit for no end. A meeting that
-                      # leaves the range is dropped from the copy
+since = "2024-01-01"  # first day mirrored: a day, or days from the sync's own ("-30d"
+                      # moves with it). Meetings that start on or after it; omit for
+                      # all of history
+until = "+21d"        # last day mirrored, included, the same way; omit for no end. A
+                      # meeting that leaves the range is dropped from the copy
 
 [[steps]]
 group = "calendar-calendly"
@@ -671,14 +679,24 @@ maximum_sequential_failed_requests = 50        # the default
 account = "picard"
 
 [steps.params.api]
-since = "2025-01-01"   # only conversations updated at or after this (YYYY-MM-DD or
-                       # RFC 3339, UTC); move it back later to backfill; default: all
+since = "2025-01-01"   # only conversations updated at or after this (a day, RFC 3339,
+                       # or "-30d" from the sync); move it back later to backfill;
+                       # default: all
 max_pages = 20         # stop listing after this many pages (100 conversations each);
                        # default: no cap
 limit = 100            # fetch at most this many conversations per run; default: no cap
 sleep_between = 0.5    # seconds to wait between requests (0 to 3600); default: none
 conv_uuids = ["https://chatgpt.com/c/abc123de-f456-7890-abcd-ef0123456789"]
                        # only these conversations, by id or pasted link; omit for all
+
+# Start from a data export of this same account: the `.zip`, or the
+# folder it was unzipped into. It fills in every conversation the store
+# does not have yet, so they and their files are not downloaded; the API
+# then fetches what moved since, newer than `since` if set. Only the API's
+# listing deletes. The export is read again only when it changes. Omit
+# the table to download every conversation.
+[steps.params.export]
+path = "~/Downloads/chatgpt-export.zip"
 
 [[steps]]
 group = "chatgpt-api"
@@ -702,8 +720,9 @@ inputs = ["chatgpt-api/keyword_index"]
 # A ChatGPT data export on disk, zipped or not, with every option set, and
 # searchable. No sign-in. The export is a complete snapshot: a
 # conversation a newer export no longer holds leaves the mirror. To keep
-# it current afterwards, swap `export` for `api` (the chatgpt INGEST.md,
-# "Seeding from an export"): the API then fetches only what moved.
+# it current afterwards, add an `api` table beside this one (the chatgpt
+# INGEST.md, "An export and the API together"): the API then fetches only
+# what moved, and the export no longer prunes.
 [[groups]]
 id = "chatgpt-export"
 name = "ChatGPT export"
@@ -759,8 +778,9 @@ maximum_sequential_failed_requests = 50        # the default
 account = "enterprise"
 
 [steps.params.api]
-since = "2025-01-01"                  # only conversations updated on or after this (YYYY-MM-DD
-                                      # or RFC 3339); move it back to backfill; unset is all
+since = "2025-01-01"                  # only conversations updated on or after this (a day,
+                                      # RFC 3339, or "-30d" from the sync); move it back to
+                                      # backfill; unset is all
 refresh_most_recent_n_chat_count = 3  # fetch the 3 most recently updated conversations
                                       # again every run; unset fetches only what changed
 conv_uuids = [                        # only these conversations, by id or pasted link;
@@ -1080,6 +1100,7 @@ function = "ingest"
 # Several labels add up. The default, [], mirrors everything.
 [steps.params]
 only_extract_labels = ["Inbox", "Starfleet/Reports"]
+whole_threads = true  # also keep the rest of the thread of a message the labels keep; default true
 
 [steps.params.common]
 blob_size_limit_bytes = "25 MB"  # skip a message (its .eml, attachments and all) larger
@@ -1099,8 +1120,6 @@ account = "picard@example.com"
 [steps.params.jmap]
 hostname = "api.fastmail.com"  # the JMAP server; its session is at https://<hostname>/.well-known/jmap
 account_id = "u1701d"          # which JMAP account; default the session's primary mail account
-full_resync = false            # list and fetch every email again, ignoring the saved
-                               # change state; default false
 blob_download_concurrency = 8  # .eml files downloaded at once; default 8, 1 is one at a time
 
 [[steps]]
@@ -1144,6 +1163,7 @@ function = "ingest"
 # default, [], mirrors everything.
 [steps.params]
 only_extract_labels = ["Inbox", "Starfleet/Reports"]
+whole_threads = true  # also keep the rest of the thread of a message the labels keep; default true
 
 [steps.params.common]
 blob_size_limit_bytes = "25 MB"  # skip a message (its .eml, attachments and all) larger
@@ -1165,16 +1185,18 @@ user_id = "me"                        # Gmail's userId; the default `me` is the 
 account_id = "picard@example.com"     # id of the account row; default the address Gmail reports
 display_name = "Jean-Luc Picard"      # the account row's name; default its account_id
 email_address = "picard@example.com"  # the account row's address; default the one Gmail reports
-full_resync = false                   # walk every label again this run (messages already held
-                                      # are not fetched again); default false
-request_concurrency = 8               # message fetches in flight; default 8
+since = "-30d"                        # oldest mail to mirror: a day, an RFC 3339 instant, or
+                                      # an offset from the sync; older mail it slides past
+                                      # stays; default: the whole mailbox
 quota_units_per_minute = 5000         # ceiling on Gmail quota spent a minute (Google allows
-                                      # 6000); default 5000, lowered on its own when rate-limited
+                                      # 6000, and a message costs 60); default 5000, lowered on
+                                      # its own when rate-limited
 message_budget = 20000                # stop after this many messages and finish the rest next
                                       # run; unset (the default) has no limit
 
-# Start from a Google Takeout of this same account: the `.mbox`, or the
-# Takeout's Mail folder. Its messages are not downloaded again; Gmail
+# Start from a Google Takeout of this same account: the folder holding
+# its .zip or .tgz parts as Google sent them, or unpacked, the `.mbox` or
+# the Takeout's Mail folder. Its messages are not downloaded again; Gmail
 # sends their labels and the mail newer than the Takeout. Only `path`
 # is read here; the account is the one Gmail signs in as. Omit the
 # table to download every message.
@@ -1223,10 +1245,11 @@ function = "ingest"
 # in `Work/Projects`. Several labels add up. The default, [], is all.
 [steps.params]
 only_extract_labels = ["Inbox", "Starfleet/Reports"]
+whole_threads = true  # also keep the rest of the thread of a message the labels keep; default true
 
 # Everything but `path` names the account row the mailbox is filed under.
 [steps.params.mbox]
-path = "~/Downloads/email-export/All mail Including Spam and Trash.mbox"  # the file, or a folder holding one
+path = "~/Downloads/email-export/All mail Including Spam and Trash.mbox"  # the file, a folder holding one, or a Takeout's .zip or folder of parts
 account_id = "picard_gmail"           # the account's id; default made from the file's name
 display_name = "Picard's Gmail"       # the account's name; default its account_id
 email_address = "picard@example.com"  # the account's address; unset by default
@@ -1343,7 +1366,8 @@ account = "picard@example.com"
 # Quote the dates: a bare 2024-01-01 is a TOML date, not the string
 # this source checks.
 [steps.params.api]
-since = "2024-01-01"       # earliest day to mirror; default a year before the first run.
+since = "2024-01-01"       # earliest day to mirror, or days from the sync's own ("-90d");
+                           # default a year before the first run.
                            # Move it earlier to backfill
 until = "2025-12-31"       # last day to mirror; default today. A past day fixes the
                            # window, so the mirror stops growing: omit it to keep up
@@ -2031,13 +2055,16 @@ enabled = false
 account = "enterprise"
 
 [steps.params.api]
-since = "2025-01-01"           # oldest message (YYYY-MM-DD or RFC 3339); default 2024-01-01
+since = "2025-01-01"           # oldest message: a day, an RFC 3339 instant, or an offset
+                               # from the sync ("-30d"); default 2024-01-01
 channels = ["bridge", "engineering"]  # by name, without `#`; omit for every channel you are in
 all_channels = false           # also channels you can see but are not in (ignored with `channels`)
 media = true                   # download attachments into blobs
 dms = true                     # direct messages, 1:1 and group: off unless set
 dm_conversations = ["D024BE7LH", "https://enterprise.slack.com/archives/G0ABC12DE"]
-                               # only these DMs, by id or pasted link; needs `dms = true`
+                               # only these DMs, by id or pasted link; needs `dms = true`.
+                               # Unset, a DM is read only while it is open in Slack's
+                               # sidebar with new messages
 refresh_window_days = 30       # re-walk this many trailing days for edits, reactions
                                # and deletions; default 30, 0 turns it off
 
@@ -2097,6 +2124,57 @@ inputs = ["sms_backup_restore/render_markdown"]
 group = "sms_backup_restore"
 function = "embed"
 inputs = ["sms_backup_restore/keyword_index"]
+
+# --- todoist by `api` ---------------------------------------------------
+
+# Your Todoist over its API, signed in through latchkey
+# (`latchkey auth browser todoist`, or paste the API token from
+# Settings → Integrations → Developer), with every option set.
+[[groups]]
+id = "todoist"
+name = "Todoist"
+type = "todoist"
+
+[[steps]]
+group = "todoist"
+function = "ingest"
+
+# When to give up on failed requests. The download retries and backs off
+# on its own; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "picard@enterprise.test"
+
+# Open tasks always come. Completed ones come too unless `completed` is
+# false; `completed_since` stops the first run's read of them at a date
+# rather than at the day the account joined Todoist.
+[steps.params.api]
+completed = true
+completed_since = "2024-01-01"
+
+# One document per project: its sections, its tasks and their comments,
+# completed tasks folded under each section. No options.
+[[steps]]
+group = "todoist"
+function = "render_markdown"
+inputs = ["todoist/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "todoist"
+function = "keyword_index"
+inputs = ["todoist/render_markdown"]
+
+[[steps]]
+group = "todoist"
+function = "embed"
+inputs = ["todoist/keyword_index"]
 
 # --- whatsapp by `backup` -----------------------------------------------
 

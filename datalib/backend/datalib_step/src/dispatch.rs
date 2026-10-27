@@ -344,6 +344,12 @@ pub fn plan(
             datalib_etl_sms_backup_restore,
             datalib_etl_sms_backup_restore_render
         ),
+        SourceType::Todoist => arm!(
+            datalib_etl_todoist_config::TodoistConfig,
+            datalib_etl_todoist_config::TodoistRenderConfig,
+            datalib_etl_todoist,
+            datalib_etl_todoist_render
+        ),
         SourceType::Lightroom => ingest_only!(
             datalib_etl_lightroom_config::LightroomConfig,
             datalib_etl_lightroom_config::LightroomRenderConfig,
@@ -412,6 +418,7 @@ pub async fn migrate(step_type: &str, raw_dir: &Path) -> Result<()> {
         SourceType::SmsBackupRestore => {
             datalib_etl_sms_backup_restore::processor::migrate(raw_dir).await
         }
+        SourceType::Todoist => datalib_etl_todoist::processor::migrate(raw_dir).await,
         SourceType::Lightroom => datalib_etl_lightroom::processor::migrate(raw_dir).await,
         SourceType::Linear => datalib_etl_linear::processor::migrate(raw_dir).await,
         SourceType::AppleMessages => datalib_etl_apple_messages::processor::migrate(raw_dir).await,
@@ -483,6 +490,21 @@ mod tests {
             )
             .unwrap();
         }
+    }
+
+    /// `gmail.request_concurrency` was never read; a config that set it
+    /// still syncs.
+    #[test]
+    fn a_retired_gmail_request_concurrency_still_plans() {
+        let td = tempfile::tempdir().unwrap();
+        plan(
+            "email",
+            Phase::Ingest,
+            "email",
+            raw_dir(td.path(), "email", Phase::Ingest),
+            serde_json::json!({"gmail": {"request_concurrency": 16}}),
+        )
+        .unwrap();
     }
 
     #[test]

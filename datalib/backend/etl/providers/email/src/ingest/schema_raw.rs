@@ -12,6 +12,8 @@ use datalib_etl::doltlite_raw::{self as dr, Migration, WirePayload};
 use datalib_etl_macros::{CasEdgeRow, RawTable};
 use serde_json::Value;
 
+use super::labels;
+
 /// Entity tables — what `dolt diff` should see across re-fetches.
 /// Each gets a paired `<table>_bookkeeping` sidecar. `email_blobs` is
 /// here too: the shared CAS-edge flush
@@ -64,7 +66,12 @@ impl AccountRow {
                 .get("name")
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
-            email_address: None,
+            // A JMAP account names no address; Gmail's row says `email`,
+            // the way the render reads it.
+            email_address: ["emailAddress", "email"]
+                .iter()
+                .find_map(|key| payload.get(*key).and_then(|v| v.as_str()))
+                .map(str::to_string),
             is_personal: payload
                 .get("isPersonal")
                 .and_then(|v| v.as_bool())
@@ -161,12 +168,19 @@ impl MailboxRow {
 /// id, which is random relative to the download's order, so every
 /// checkpoint kept about one page of it per thread written. The few
 /// per-account reads scan the table instead.
+///
+/// `email_count` counts the emails held; `upstream_email_count` is how
+/// many messages upstream has in the thread, by the thread index
+/// (`listed::THREAD_INDEX`) or, for an mbox, the files, so a thread held
+/// in part shows as fewer. NULL with no label filter, and until the
+/// index is whole.
 #[derive(Debug, Clone, RawTable)]
 #[raw_table(table = "threads")]
 pub struct ThreadRow {
     pub id_and_payload: WirePayload,
     pub account_id: String,
     pub email_count: Option<i64>,
+    pub upstream_email_count: Option<i64>,
 }
 
 impl ThreadRow {
@@ -182,13 +196,18 @@ impl ThreadRow {
             },
             account_id: account_id.to_string(),
             email_count,
+            upstream_email_count: payload.get("upstreamEmailCount").and_then(Value::as_i64),
         })
     }
 }
 
 /// `emails` — one row per email. Payload-shaped: the `id`/`payload`
 /// pair (payload = JMAP `Email/get` envelope, envelope-only) plus
-/// promoted metadata columns.
+/// promoted metadata columns. For Gmail, `id` and `thread_id` are
+/// Gmail's own ids, keyed by [`super::envelope::GmailId::key`] whether
+/// the API or a Takeout named them. `label_ids` is set only for a message
+/// Gmail's API answered for: its label ids as a sorted JSON array
+/// ([`labels::gmail_label_ids`]).
 #[derive(Debug, Clone, RawTable)]
 #[raw_table(
     table = "emails",
@@ -211,7 +230,11 @@ pub struct EmailRow {
     pub to_json: Option<String>,
     pub cc_json: Option<String>,
     pub has_attachment: Option<i64>,
+    pub label_ids: Option<String>,
 }
+
+/// What `_source.via` says of a row the Gmail API answered for.
+pub const GMAIL_API_VIA: &str = "gmail.googleapis.com";
 
 impl EmailRow {
     /// Promote metadata columns from a JMAP `Email/get` envelope (or a
@@ -262,6 +285,19 @@ impl EmailRow {
             .get("hasAttachment")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        let gmail = envelope
+            .get("_source")
+            .filter(|s| s.get("via").and_then(Value::as_str) == Some(GMAIL_API_VIA));
+        let label_ids = gmail
+            .and_then(|_| {
+                let keywords = object_keys(envelope.get("keywords"));
+                labels::gmail_label_ids(
+                    account_id,
+                    object_keys(envelope.get("mailboxIds")),
+                    &keywords,
+                )
+            })
+            .map(|ids| Value::from(ids).to_string());
         Some(Self {
             id_and_payload: WirePayload {
                 id,
@@ -281,6 +317,7 @@ impl EmailRow {
             to_json,
             cc_json,
             has_attachment: Some(has_attachment as i64),
+            label_ids,
         })
     }
 
@@ -307,6 +344,12 @@ impl EmailRow {
             .map(|m| m.keys().cloned().collect())
             .unwrap_or_default()
     }
+}
+
+fn object_keys(v: Option<&Value>) -> Vec<&str> {
+    v.and_then(Value::as_object)
+        .map(|m| m.keys().map(String::as_str).collect())
+        .unwrap_or_default()
 }
 
 fn first_str(v: Option<&Value>) -> Option<String> {
@@ -442,6 +485,21 @@ pub const LADDER: &[Migration] = &[
                 Ok(())
             })
         },
+    },
+    Migration {
+        version: 5,
+        name: "a Gmail store walks its labels again for what the label filter dropped",
+        apply: |conn| Box::pin(super::listed::migrate_relist_gmail_scopes(conn)),
+    },
+    Migration {
+        version: 6,
+        name: "Gmail's labels on each email, and its message count on each thread",
+        apply: |conn| Box::pin(super::listed::migrate_gmail_labels_and_thread_counts(conn)),
+    },
+    Migration {
+        version: 7,
+        name: "a Gmail thread id is Gmail's hex, as a message id is",
+        apply: |conn| Box::pin(super::listed::migrate_gmail_thread_ids_to_hex(conn)),
     },
 ];
 

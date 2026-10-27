@@ -286,6 +286,7 @@ rust_binary(
     deps = [
         ":datalib_http",
         "//datalib/backend/cli_help:datalib_cli_help",
+        "//datalib/backend/dag:datalib_dag",
         "//datalib/backend/fetch:datalib_fetch",
         "//datalib/backend/parent_watch:datalib_parent_watch",
         "@datalib_crates//:anyhow",

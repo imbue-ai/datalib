@@ -116,9 +116,11 @@ pub enum CalendarMethod<'a> {
     Ics(&'a LocalPath),
 }
 
-/// The stretch of days a source mirrors, `YYYY-MM-DD`, both ends
-/// included; either end may be open. An event is in it when any of it
-/// falls inside — a series is, when an occurrence does.
+/// The stretch of days a source mirrors, both ends included; either end
+/// may be open. Each end is a day, an RFC 3339 instant (its own date) or
+/// an offset from the run's day (`datalib_time::TimeBound`). An event is
+/// in it when any of it falls inside — a series is, when an occurrence
+/// does.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Window<'a> {
     pub since: Option<&'a str>,
@@ -130,31 +132,15 @@ impl Window<'_> {
         self.since.is_none() && self.until.is_none()
     }
 
+    pub fn parse(&self) -> anyhow::Result<datalib_time::TimeWindow> {
+        Ok(datalib_time::TimeWindow::parse(self.since, self.until)?)
+    }
+
     fn validate(&self, table: &str) -> anyhow::Result<()> {
-        for (key, v) in [("since", self.since), ("until", self.until)] {
-            if let Some(v) = v {
-                if !is_yyyy_mm_dd(v) {
-                    anyhow::bail!("`{table}.{key}` must be a date, YYYY-MM-DD; got {v:?}");
-                }
-            }
-        }
-        if let (Some(s), Some(u)) = (self.since, self.until) {
-            if s > u {
-                anyhow::bail!("`{table}.until` ({u}) is before `{table}.since` ({s})");
-            }
-        }
+        datalib_time::TimeWindow::check(table, self.since, self.until)
+            .map_err(anyhow::Error::msg)?;
         Ok(())
     }
-}
-
-fn is_yyyy_mm_dd(s: &str) -> bool {
-    let b = s.as_bytes();
-    b.len() == 10
-        && b[4] == b'-'
-        && b[7] == b'-'
-        && b.iter()
-            .enumerate()
-            .all(|(i, c)| i == 4 || i == 7 || c.is_ascii_digit())
 }
 
 impl CalendarConfig {
@@ -259,13 +245,15 @@ pub struct CalendarSelection {
     /// whole on the next run.
     #[serde(default)]
     pub calendars: Vec<String>,
-    /// The first day to mirror, `YYYY-MM-DD`. With `until`, a window:
-    /// only events with some part inside it are mirrored, and only the
+    /// The first day to mirror: `YYYY-MM-DD`, an RFC 3339 instant, or an
+    /// offset from the run's day (`-2d`). With `until`, a window: only
+    /// events with some part inside it are mirrored, and only the
     /// changed occurrences of a series that fall inside it. A windowed
-    /// calendar is listed whole every run rather than resumed.
+    /// calendar is listed whole every run rather than resumed, and an
+    /// event the window no longer reaches is dropped.
     #[serde(default)]
     pub since: Option<String>,
-    /// The last day to mirror, `YYYY-MM-DD`, included.
+    /// The last day to mirror, included, in the same forms (`+21d`).
     #[serde(default)]
     pub until: Option<String>,
 }
@@ -293,12 +281,14 @@ pub struct CaldavSync {
     /// later downloads it whole on the next run.
     #[serde(default)]
     pub calendars: Vec<String>,
-    /// The first day to mirror, `YYYY-MM-DD`. With `until`, a window:
-    /// only events with some part inside it are mirrored. A windowed
-    /// calendar is listed whole every run rather than resumed.
+    /// The first day to mirror: `YYYY-MM-DD`, an RFC 3339 instant, or an
+    /// offset from the run's day (`-2d`). With `until`, a window: only
+    /// events with some part inside it are mirrored. A windowed calendar
+    /// is listed whole every run rather than resumed, and an event the
+    /// window no longer reaches is dropped.
     #[serde(default)]
     pub since: Option<String>,
-    /// The last day to mirror, `YYYY-MM-DD`, included.
+    /// The last day to mirror, included, in the same forms (`+21d`).
     #[serde(default)]
     pub until: Option<String>,
 }
@@ -308,13 +298,14 @@ pub struct CaldavSync {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CalendlySync {
-    /// The first day to mirror, `YYYY-MM-DD`. Only meetings that start
-    /// on or after it are mirrored, and a meeting that leaves the range
-    /// is dropped from the copy. Every run lists the range whole.
+    /// The first day to mirror: `YYYY-MM-DD`, an RFC 3339 instant, or an
+    /// offset from the run's day (`-30d`). Only meetings that start on
+    /// or after it are mirrored, and a meeting that leaves the range is
+    /// dropped from the copy. Every run lists the range whole.
     #[serde(default)]
     pub since: Option<String>,
-    /// The last day to mirror, `YYYY-MM-DD`, included: meetings that
-    /// start on it or before.
+    /// The last day to mirror, included, in the same forms (`+21d`):
+    /// meetings that start on it or before.
     #[serde(default)]
     pub until: Option<String>,
 }
@@ -368,7 +359,7 @@ mod tests {
     }
 
     #[test]
-    fn a_window_is_two_dates_in_order() {
+    fn a_window_is_two_bounds_in_order() {
         let google = |since: &str, until: &str| {
             parse(serde_json::json!({"google": {"since": since, "until": until}}))
         };
@@ -381,6 +372,8 @@ mod tests {
         assert!(!window.is_open());
         assert!(google("2025-11-30", "2025-11-01").validate().is_err());
         assert!(google("Nov 1", "2025-11-30").validate().is_err());
+        assert!(google("-2d", "+21d").validate().is_ok());
+        assert!(google("+21d", "-2d").validate().is_err());
         let open = parse(serde_json::json!({"fastmail": {"since": "2025-11-01"}}));
         open.validate().unwrap();
     }

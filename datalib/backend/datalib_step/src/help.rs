@@ -16,6 +16,20 @@ use crate::source_type::SourceType;
 
 const AGENT_GUIDE: &str = include_str!("../../../../docs/agent_user.md");
 const AGENT_GUIDE_PATH: &str = "docs/agent_user.md";
+pub const RAW_STORES: &str = include_str!("../../../../docs/user/raw_stores.md");
+const BUILDING_ON_DATALIB: &str = include_str!("../../../../docs/user/building_on_datalib.md");
+
+/// The guides printed whole, by topic word: `(word, text, path in the repo)`.
+/// A release writes each beside the binaries (`scripts/release/stage_tarball.sh`).
+const GUIDES: &[(&str, &str, &str)] = &[
+    ("agent", AGENT_GUIDE, AGENT_GUIDE_PATH),
+    ("raw-stores", RAW_STORES, "docs/user/raw_stores.md"),
+    (
+        "apps",
+        BUILDING_ON_DATALIB,
+        "docs/user/building_on_datalib.md",
+    ),
+];
 const GETTING_YOUR_DATA: &str = include_str!("../../../../docs/user/getting_your_data.md");
 const GETTING_YOUR_DATA_PATH: &str = "docs/user/getting_your_data.md";
 const REPO: &str = "https://github.com/imbue-ai/datalib";
@@ -30,23 +44,29 @@ struct SetupStep {
 const SETUP: &[SetupStep] = &[
     SetupStep {
         say: "Make a data root: one directory holding config.toml and everything synced \
-              into it. Start from the commented example config (`configs/dag_example.toml` \
-              in the repo), or run `datalib-http <data_root> --init` once, which writes a \
-              starter config with the index steps and no sources.",
-        commands: &[],
+              into it. `datalib-dag init` writes a starter config with the index steps and \
+              no sources, and nothing else. The commented example config, \
+              `configs/dag_example.toml`, is in the repo and beside the binaries in a release.",
+        commands: &[Example {
+            what: "start a data root",
+            command: "datalib-dag init ~/datalib",
+        }],
     },
     SetupStep {
         say: "Add a source: a [[groups]] entry with its `type`, and its steps. The source's \
-              page says what it mirrors, how it signs in and which ingest methods it has; \
-              its examples are stanzas to append, and how to wire one in.",
+              page says what it mirrors, how it signs in and which ingest methods it has. \
+              `examples --append` adds its least config and puts its steps in the index \
+              steps' `inputs`; name the method with `--method` when it has more than one, \
+              and give it an id of its own with `--id` to add a second account. Then set \
+              its options in the config; `examples` without `--append` shows every one.",
         commands: &[
             Example {
                 what: "what the Slack source needs",
                 command: "datalib-step help slack",
             },
             Example {
-                what: "config stanzas for Slack",
-                command: "datalib-step examples slack",
+                what: "add Slack to the config",
+                command: "datalib-step examples slack --append ~/datalib/config.toml",
             },
         ],
     },
@@ -65,7 +85,8 @@ const SETUP: &[SetupStep] = &[
     },
     SetupStep {
         say: "Check the sign-in: ask the service which account the credentials reach. \
-              Writes nothing.",
+              Writes nothing. A source with more than one way in names it: \
+              `datalib-step probe email --method gmail`.",
         commands: &[Example {
             what: "check the sign-in",
             command: "datalib-step probe slack",
@@ -79,27 +100,35 @@ const SETUP: &[SetupStep] = &[
         }],
     },
     SetupStep {
-        say: "Read what came in: `datalib-doltlite -readonly \
+        say: "Read what came in. Search it as the app's search box does, with no server, \
+              and get JSON back: `datalib-applet search <data_root> 'from:picard \
+              after:2026-10-01'` (`''` lists every row; `datalib-applet search --help` has \
+              the flags). For SQL, `datalib-doltlite -readonly \
               <data_root>/unified_document_index/grid_index/db.doltlite_db \"SELECT provider, \
-              count(*) FROM grid_rows GROUP BY 1\"` (stock sqlite3 cannot open it), or serve \
-              the app with `datalib-http <data_root>`. `datalib-step help agent` has the rest.",
+              count(*) FROM grid_rows GROUP BY 1\"` (stock sqlite3 cannot open it). Or serve \
+              the app with `datalib-http <data_root>`. `datalib-step help agent` has the \
+              rest, the search's query language included.",
         commands: &[],
     },
 ];
 
 pub fn page(topic: &[String], commands: &[String], git_ref: &str) -> Result<String, String> {
     let base = format!("{REPO}/blob/{git_ref}");
+    if let [word] = topic {
+        if let Some((_, text, path)) = GUIDES.iter().find(|(w, ..)| w == word) {
+            return Ok(absolute_links(text, path, &base));
+        }
+    }
     let source = topic.first().and_then(|w| SourceType::parse(w));
     match (topic, source) {
         ([], _) => Ok(overview(commands)),
-        ([word], _) if word == "agent" => Ok(absolute_links(AGENT_GUIDE, AGENT_GUIDE_PATH, &base)),
         ([_], Some(t)) => Ok(source_page(t, &base)),
         ([_, method], Some(t)) => Ok(method_page(t, known_method(t, method)?)),
         ([word], None) => match Function::parse(word) {
             Some(f) => Ok(function_page(f)),
             None => Err(format!(
                 "no help on {word:?}. Try `datalib-step help` for the topics: \
-                 `agent`, a source type, a function or a command."
+                 `agent`, `raw-stores`, `apps`, a source type, a function or a command."
             )),
         },
         _ => Err(format!(
@@ -200,11 +229,17 @@ fn examples_intro(t: SourceType) -> Vec<String> {
              it is. `name` is free text the app shows, and can be anything."
         ),
         format!(
+            "`datalib-step examples {t} --append <config>` appends the minimal stanza for \
+             you, with `--method` to pick one and `--id` to rename its group, and does the \
+             wiring below; it refuses an id the config already has, and a result \
+             `datalib-dag --check` would refuse."
+        ),
+        format!(
             "A source's documents reach the grid and search only through the index groups, \
-             which name the steps they read. After appending, add `<id>/render_markdown` to \
-             the `inputs` of `unified_document_index/grid_index`, and if the stanza has \
-             `keyword_index` and `embed` steps, add both to the `inputs` of \
-             `unified_document_index/qmd_aggregator`.{}",
+             which name the steps they read. After appending by hand, add \
+             `<id>/render_markdown` to the `inputs` of `unified_document_index/grid_index`, \
+             and if the stanza has `keyword_index` and `embed` steps, add both to the \
+             `inputs` of `unified_document_index/qmd_aggregator`.{}",
             if t.renders_time_series() {
                 " Add `<id>/render_time_series` to the `inputs` of \
                  `unified_time_series_index/time_series_index`."
@@ -246,6 +281,14 @@ fn overview(commands: &[String]) -> String {
              troubleshooting",
         ),
         (
+            "datalib-step help raw-stores",
+            "what each source's raw store holds, and how to read and follow it",
+        ),
+        (
+            "datalib-step help apps",
+            "building an app on datalib: syncing, freshness, a step of your own",
+        ),
+        (
             "datalib-step help <type>",
             "one source: what it mirrors, how it signs in, its ingest methods",
         ),
@@ -279,7 +322,10 @@ fn overview(commands: &[String]) -> String {
     }
     out.push_str("\nCommands:\n");
     out.push_str(&wrap(&commands.join(", "), 2, 2));
-    out.push_str("\nThe agent guide also ships beside the binaries, as docs/agent_user.md.");
+    out.push_str(
+        "\nThe guides also ship beside the binaries, as docs/agent_user.md, \
+         docs/raw_stores.md and docs/building_on_datalib.md.",
+    );
     out
 }
 
@@ -591,13 +637,19 @@ mod tests {
         );
     }
 
-    /// The guide is read outside the repo: from a tarball, or printed in a
+    /// A guide is read outside the repo: from a tarball, or printed in a
     /// terminal. A relative link there leads nowhere.
     #[test]
-    fn the_agent_guide_has_no_relative_link_left() {
-        let page = page(&["agent".into()], &commands(), "abc123").unwrap();
-        assert!(page.contains("# datalib — agent user guide"));
-        assert_eq!(relative_links(&page), Vec::<String>::new());
+    fn no_guide_has_a_relative_link_left() {
+        for (word, title) in [
+            ("agent", "# datalib — agent user guide"),
+            ("raw-stores", "# Reading the raw stores"),
+            ("apps", "# Building an app on datalib"),
+        ] {
+            let page = page(&[word.into()], &commands(), "abc123").unwrap();
+            assert!(page.starts_with(title), "{word}");
+            assert_eq!(relative_links(&page), Vec::<String>::new(), "{word}");
+        }
     }
 
     #[test]

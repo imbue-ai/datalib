@@ -12,6 +12,7 @@
 // is the one layer that takes an element rather than looking a
 // selector up on `document`, which cannot see into a shadow root.
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { timeView } from "@/config/timeView";
 import { SlickVanillaGridBundle } from "@slickgrid-universal/vanilla-bundle";
 import type {
   Column,
@@ -113,6 +114,9 @@ type Grid = SlickVanillaGridBundle<T> & {
   slickGrid: NonNullable<SlickVanillaGridBundle<T>["slickGrid"]>;
 };
 let bundle: Grid | null = null;
+
+// The clock's zone or format changed: every date on screen, drawn again.
+watch(timeView, () => bundle?.slickGrid.invalidate());
 
 /// The tree's parent link, the grid's name for it, and whether each
 /// row is folded. The grid mutates the rows it is given (it hangs its

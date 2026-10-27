@@ -18,6 +18,7 @@ pub mod memory;
 pub mod run_state;
 pub mod runs_sink;
 pub mod scheduler;
+pub mod starter;
 pub mod step;
 pub mod subprocess;
 pub mod supervisor;

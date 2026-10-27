@@ -43,7 +43,7 @@ plus the URLs its credential is good for and how to get one.
 
 | kind | examples | where it comes from |
 |---|---|---|
-| **built-in** | `slack`, `google-gmail`, `google-calendar`, `github`, `fastmail`, `fastmail-dav`, `linear`, `notion` | ships inside latchkey |
+| **built-in** | `slack`, `google-gmail`, `google-calendar`, `github`, `fastmail`, `fastmail-dav`, `linear`, `notion`, `todoist` | ships inside latchkey |
 | **plugin** | `garmin` | a package under `<latchkey dir>/plugins/<name>/`. datalib vendors the ones it needs (`third-party/latchkey-garmin/`) and installs them on the first sign-in (`http/src/plugins.rs`); a copy without datalib's stamp is the person's own and is never touched. |
 | **registered** | `claude-ai`, `chatgpt` | `latchkey services register`, run by the wizard on the first sign-in from the catalog entry's `credentialRegister`. latchkey refuses to re-register a name it already holds, so a registration someone made by hand stays theirs. |
 
@@ -121,7 +121,7 @@ login. `latchkey services info` says which, as
 
 | | browser login (`auth browser`) | pasted credential (`auth set`, `auth set-nocurl`) |
 |---|---|---|
-| **detects the login account** (Slack, Gmail, Fastmail, GitHub, Garmin, Linear) | The service names the account: the login asks who you signed in as (an email, a workspace user) and stores the credential under that. `--account X` is accepted only when X is already stored, which refreshes it. A new name is refused before any browser opens. | Stored under the name you give. |
+| **detects the login account** (Slack, Gmail, Fastmail, GitHub, Garmin, Linear, Todoist) | The service names the account: the login asks who you signed in as (an email, a workspace user) and stores the credential under that. `--account X` is accepted only when X is already stored, which refreshes it. A new name is refused before any browser opens. | Stored under the name you give. |
 | **does not** (every registered service, so Claude and ChatGPT; `openrouter`, `ngrok`) | You name it: `--account X` stores under X, a new name included. With none, the default account. | Stored under the name you give. |
 
 The flag describes a browser login, so it means nothing for a service

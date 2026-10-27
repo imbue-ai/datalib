@@ -28,10 +28,11 @@ enabled = false
 account = "picard@example.com"
 
 [steps.params.calendly]
-since = "2024-01-01"  # first day mirrored, YYYY-MM-DD: meetings that start on or after
-                      # it; omit for all of history
-until = "2026-12-31"  # last day mirrored, included; omit for no end. A meeting that
-                      # leaves the range is dropped from the copy
+since = "2024-01-01"  # first day mirrored: a day, or days from the sync's own ("-30d"
+                      # moves with it). Meetings that start on or after it; omit for
+                      # all of history
+until = "+21d"        # last day mirrored, included, the same way; omit for no end. A
+                      # meeting that leaves the range is dropped from the copy
 
 [[steps]]
 group = "calendar"

@@ -26,6 +26,9 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
+mod window;
+pub use window::{TimeBound, TimeWindow, WindowError};
+
 /// An RFC 3339 timestamp that carries an **explicit** UTC offset.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct IsoOffsetTimestamp(DateTime<FixedOffset>);

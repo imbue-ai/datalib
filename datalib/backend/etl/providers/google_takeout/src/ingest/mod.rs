@@ -153,7 +153,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 }
 
 async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
-    let parts = unpack::parts_in(&opts.input_path)?;
+    let parts = datalib_etl_files::archive::parts_in(&opts.input_path)?;
     if parts.is_empty() {
         let (summary, scan) = read_tree(&opts, &opts.input_path, &found).await?;
         let files = scan.files.iter().map(|f| (f.rel.as_str(), f.size));

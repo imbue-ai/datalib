@@ -1,8 +1,9 @@
 # A ChatGPT data export on disk, zipped or not, with every option set, and
 # searchable. No sign-in. The export is a complete snapshot: a
 # conversation a newer export no longer holds leaves the mirror. To keep
-# it current afterwards, swap `export` for `api` (the chatgpt INGEST.md,
-# "Seeding from an export"): the API then fetches only what moved.
+# it current afterwards, add an `api` table beside this one (the chatgpt
+# INGEST.md, "An export and the API together"): the API then fetches only
+# what moved, and the export no longer prunes.
 [[groups]]
 id = "chatgpt"
 name = "ChatGPT export"

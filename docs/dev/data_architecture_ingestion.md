@@ -411,6 +411,7 @@ therefore what it can see:
 | `google_drive` | — | nothing: a backup, so a file that leaves the listing keeps its rows and captures |
 | `yolink` | — | nothing; append-only telemetry |
 | `linear` | — | nothing: an archived record is listed with its `archivedAt`, and one Linear deletes outright stays as last fetched |
+| `todoist` | — | nothing: `/sync` sends a deleted record with `is_deleted: true`, which is stored as sent, and render leaves it out |
 | `notion`, `beeper` | — | not wired (rework; poorly supported) |
 
 **The hard part is not the deletion, it is establishing the
@@ -603,7 +604,8 @@ how it lists, how it fetches a batch and how it stores one; how a stop,
 a failure, a skip or a give-up is handled is in `owed.rs`, once.
 
 The one position kept is upstream's own **delta token** (JMAP `state`,
-Gmail `historyId`, RFC 6578 `sync-token`, Google's `syncToken`),
+Gmail `historyId`, RFC 6578 `sync-token`, Google's `syncToken`,
+Todoist's `sync_token`),
 written in the transaction that stores the page it covers, and a
 **sweep marker** that only schedules when to list again (Slack's
 channel list, claude's orgs and project docs).
@@ -612,9 +614,10 @@ channel list, claude's orgs and project docs).
 |---|---|---|---|
 | slack | channels, threads (by `latest_reply`), file edges | `messages`, `threads`, `slack_attachments` sidecars | each channel's history; each conversation's searched reply time |
 | github, gitlab | `listed_change_requests`, from each scope's search | the PR / MR sidecar, at `updated_at` | each scope's `updated_at` |
-| email (JMAP, Gmail) | `listed_messages`, from the delta or an enumeration | `emails` sidecar, then the `.eml` edge | — |
+| email (JMAP, Gmail) | `listed_messages`, from the delta or an enumeration; under a label filter, also the rest of each kept thread, from `thread_members` | `emails` sidecar, then the `.eml` edge | — |
 | notion | search results are the `pages` rows | `page_markdown`, `page_comments`, attachment edges | the search's `last_edited_time` |
 | linear | each walked connection's pages are the rows | each table's sidecar, at `updatedAt` | each connection's `updatedAt`, per selection |
+| todoist | `/sync` sends only what changed since its token, which is kept in `sync_state`; completed tasks, each page | `completed_items` sidecar, at `updated_at` | completion time, from the account's `joined_at` |
 | garmin | days, activities, files | each table's sidecar | activity dates |
 | contacts, calendar (DAV) | `dav_resources`, at each href's etag | `dav_resources` sidecar | — |
 | calendar (Google) | the events page is the content | — | — |
@@ -689,7 +692,7 @@ leaves an on-disk superset, and nothing deletes it.
 |---|---|
 | slack | An earlier `since` is a gap below the spans held; `media` turned on makes every stored file edge without bytes owed |
 | github, gitlab | A wider `refresh_window_days` is a gap below each scope's `coverage` |
-| email (JMAP, Gmail) | An admitted mailbox or label with no `listed_whole` row is enumerated until an enumeration of it finishes; a raised `blob_size_limit_bytes` makes a held message with no `.eml` owed |
+| email (JMAP, Gmail) | An admitted mailbox or label with no `listed_whole` row is enumerated until an enumeration of it finishes, and so, on Gmail, is one whose last walk began after the `since` now set; a raised `blob_size_limit_bytes` makes a held message with no `.eml` owed; `whole_threads` turned on lists the rest of every kept thread |
 | garmin | An earlier `since` leaves days with no row and dates with no `coverage`, and the next run fetches exactly those |
 | notion | A wider `refresh_window_days` lowers where the search stops |
 | yolink | An earlier `devices[].start` is a gap below the spans the device holds |

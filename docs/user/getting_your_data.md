@@ -108,9 +108,12 @@ and the rule on the series page is what they are.
 
 A `calendars` list of names narrows a server to those calendars; leave
 it out for all of them. Adding a calendar to the list later downloads
-it whole. `since` and `until` (`YYYY-MM-DD`) narrow it to a stretch of
-days: only events with some part in it, and only the changed dates of a
-series that fall in it. A windowed calendar is listed whole every run.
+it whole. `since` and `until` narrow it to a stretch of days: only
+events with some part in it, and only the changed dates of a series
+that fall in it. Each is a day (`"2026-09-01"`) or an offset from the
+day of the sync (`since = "-2d"`, `until = "+21d"`), which moves with
+it. A windowed calendar is listed whole every run, and an event the
+window no longer reaches leaves the mirror.
 
 ## Calendly
 
@@ -130,17 +133,18 @@ personal access token (**Integrations** → **API & Webhooks** →
 latchkey auth set calendly -H "Authorization: Bearer $(pbpaste)"
 ```
 
-The `calendly` table needs nothing else. `since` and `until`
-(`YYYY-MM-DD`) narrow it to the meetings that start in that stretch of
-days; a meeting that leaves it is dropped from the copy. Every sync
+The `calendly` table needs nothing else. `since` and `until` narrow it
+to the meetings that start in that stretch of days, each a day or an
+offset from the day of the sync as for [Calendar (CalDAV)](#calendar-caldav);
+a meeting that leaves it is dropped from the copy. Every sync
 lists the meetings whole, and reads a meeting's invitees again only
 when the meeting has changed.
 `datalib/backend/etl/providers/calendar/INGEST.md` has the details.
 
 ## ChatGPT
 
-`type = "chatgpt"` — web API through latchkey (`api`), or an unpacked
-data export (`export`). Mirrors your conversations.
+`type = "chatgpt"` — web API through latchkey (`api`), a data export
+(`export`), or both. Mirrors your conversations.
 
 A one-time registration, then a browser login. ChatGPT uses a bearer
 access token rather than a cookie, and latchkey can go and fetch it
@@ -210,12 +214,20 @@ rate-limits a large account's first sync: each run gets as far as the
 limit lets it and the next picks up the rest. To skip that wait, ask
 for a data export in ChatGPT's Settings → Data controls → Export data
 and give the source an `export` table whose `path` is the downloaded
-`.zip` (no need to unzip it). It needs no sign-in and brings the
-attached files too, though not the tool steps (code output, file
-reads, image generation) the API shows. Once it has synced, swap
-`export` for `api`, and the API fetches only what changed after the
-export was taken. Don't swap back: an export is a complete snapshot,
-so reading an older one drops every conversation it predates.
+`.zip` (no need to unzip it). On its own it needs no sign-in, and it
+brings the attached files too, though not the tool steps (code
+output, file reads, image generation) the API shows.
+
+Better, give one source both an `api` table and the `export` table:
+in the wizard, the ChatGPT form's **Start from an export?** question.
+The first sync fills in every conversation from the export, with its
+files, then the API downloads only what changed after the export was
+taken; later syncs skip the export until you point it at a new one.
+`since` then limits only what the API keeps fresh. Only the API's
+listing deletes a conversation, so an export getting older never costs
+you one. Don't later drop the `api` table and keep `export`: an export
+alone is a complete snapshot, and reading an older one drops every
+conversation it predates.
 
 ## Claude
 
@@ -304,8 +316,12 @@ messages and their attachments. [Gmail](#gmail) and
 other two routes into the same source.
 
 **A Takeout `.mbox`.** Google Takeout's **Mail** product is a single
-`.mbox` file; see [Google Takeout](#google-takeout) for requesting and
-unpacking one. Point an `mbox` table's `path` at it. No credentials.
+`.mbox` file; see [Google Takeout](#google-takeout) for requesting one.
+Point an `mbox` table's `path` at the folder holding the export's
+`.zip` or `.tgz` parts as Google sent them (no need to unpack them), or,
+unpacked, at the `.mbox`. No credentials. A sync reads the Takeout only
+when it, or the settings, changed since the last sync that read it
+through.
 
 **Another JMAP server.** Any RFC 8620/8621 server works the way
 Fastmail does: register its host as a latchkey service, store the
@@ -436,9 +452,10 @@ latchkey reaches Garmin through its Garmin plugin, which the Add a
 source dialog installs into `~/.latchkey/plugins/garmin` the first time
 you sign in there. Sign in with the browser, or import a token folder
 the `garth` Python tool wrote (`~/.garth`). The sign-in lasts about a
-year. `since` says how far back to mirror. The
-first sync makes one request per metric per day since `since`, so a
-long history takes a while; later syncs re-read only the trailing week.
+year. `since` says how far back to mirror: a day (`"2024-01-01"`), or
+an offset from the day of the sync (`"-90d"`). The first sync makes one
+request per metric per day since `since`, so a long history takes a
+while; later syncs re-read only the trailing week.
 
 ## GitHub
 
@@ -487,15 +504,22 @@ Gmail's own change history, so deletions and label changes show up as
 events. Throughput is capped by Google's quota at roughly 100 messages
 a minute, so a large mailbox backfills over several runs. With a Takeout
 of the same account, the first sync downloads only what is newer than
-it: put the Takeout's `Mail` folder beside the `gmail` table,
+it: put the folder holding the Takeout's `.zip` or `.tgz` parts (or,
+unpacked, its `Mail` folder) beside the `gmail` table,
 
 ```toml
 [steps.params.mbox]
-path = "~/Takeout/Mail"
+path = "~/Downloads/gmail-takeout"
 ```
 
 or answer "Start from a Takeout?" in the Gmail form. The Takeout alone
 is the no-credentials route — see [Email](#email-mbox-or-jmap).
+
+To mirror only recent mail, set `since` in the `gmail` table: a day
+(`"2026-09-01"`) or an offset from the sync (`"-30d"`). The first sync
+then lists only the mail after it, which takes minutes where a whole
+mailbox takes hours. Mail older than a sliding `since` stays mirrored,
+and an earlier `since` brings the older mail in on the next sync.
 
 ### Your own Google OAuth client
 
@@ -882,6 +906,10 @@ Built into latchkey — no manual export:
 latchkey auth browser slack
 ```
 
+`since` in the `api` table is the oldest message to mirror: a day
+(`"2025-01-01"`) or an offset from the sync (`"-30d"`); unset is
+2024-01-01. Messages older than a sliding `since` stay mirrored.
+
 ## SMS Backup and Restore
 
 `type = "sms_backup_restore"` — the app's XML export on disk
@@ -911,6 +939,34 @@ adb pull /sdcard/SMSBackupRestore ~/backups/SMSBackupRestore
 the source's `backup.path` at that directory — it walks every `*.xml`
 inside, so keeping multiple dated backups there is fine; re-ingesting a
 newer export deduplicates against what's already there.
+
+## Todoist
+
+`type = "todoist"` — Todoist's API through latchkey (`api`). Copies
+your projects, sections, labels, open tasks and their comments, and the
+tasks you have completed. Each project becomes one document: its
+comments, then each section's open tasks with their subtasks and
+comments, then the section's completed tasks, folded.
+
+Sign in once in the browser; latchkey reads your API token from
+Todoist's settings for you:
+
+```sh
+latchkey auth browser todoist
+```
+
+Or copy the API token yourself (**Settings** → **Integrations** →
+**Developer**) to your clipboard and store it:
+
+```sh
+latchkey auth set todoist -H "Authorization: Bearer $(pbpaste)"
+```
+
+An empty `api` table copies everything. Completed tasks are read back
+to the day you joined Todoist, a quarter at a time; set
+`completed_since = "YYYY-MM-DD"` to stop sooner, or `completed = false`
+to leave them out. Each sync after the first reads only what changed.
+`datalib/backend/etl/providers/todoist/INGEST.md` has the details.
 
 ## WhatsApp backups
 

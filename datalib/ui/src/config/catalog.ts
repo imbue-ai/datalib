@@ -288,7 +288,9 @@ export const CATALOG: CatalogEntry[] = [
           },
           {
             label: "All my direct messages",
-            help: "One-to-one and group conversations.",
+            help:
+              "One-to-one and group conversations. Only the ones open in Slack's sidebar with " +
+              "new messages are read on each sync; a closed one is read when it reopens.",
             sets: { "api.dms": true },
           },
           {
@@ -473,6 +475,9 @@ export const CATALOG: CatalogEntry[] = [
 
   {
     type: "chatgpt",
+    // Before the export entry: a step with an `api` table beside its
+    // `export` is this one, the API seeded from the export.
+    variantKey: "api",
     method: "api",
     label: "ChatGPT",
     blurb: "Copy your ChatGPT conversations.",
@@ -515,6 +520,20 @@ export const CATALOG: CatalogEntry[] = [
           { label: "Only conversations updated since a date I choose", fields: ["api.since"] },
         ],
       },
+      {
+        heading: "Start from an export?",
+        answers: [
+          { label: "No, download every conversation" },
+          {
+            label: "Yes, read a ChatGPT data export first",
+            help:
+              "Copies every conversation the export holds without asking chatgpt.com, so only " +
+              "what changed after it is downloaded. Ask for one in ChatGPT's Settings → Data " +
+              "controls → Export data.",
+            fields: ["export.path"],
+          },
+        ],
+      },
     ],
     fields: [
       {
@@ -523,6 +542,17 @@ export const CATALOG: CatalogEntry[] = [
         target: "latchkey_settings.account",
         label: "ChatGPT account",
         help: NAME_IT_HELP,
+      },
+      {
+        kind: "path",
+        picks: "file",
+        pickTitle: "Choose the ChatGPT export .zip",
+        extensions: ["zip"],
+        target: "export.path",
+        label: "Export file",
+        help:
+          "The .zip as it downloaded, ~/Downloads/chatgpt-export.zip say, or the folder you " +
+          "unzipped it into. A newer export can replace it at any time.",
       },
       {
         kind: "date",
@@ -625,6 +655,51 @@ export const CATALOG: CatalogEntry[] = [
       },
     ],
   },
+  {
+    type: "todoist",
+    method: "api",
+    label: "Todoist",
+    blurb: "Copy your Todoist projects, tasks and comments.",
+    keywords: ["todoist", "tasks", "todo", "to-do", "projects"],
+    kind: "api",
+    icon: "todoist",
+    defaultName: "todoist",
+    nameHint: "Personal Todoist",
+    wizard: true,
+    intro:
+      "Each project becomes a document you can read and search: its sections, its tasks " +
+      "and their comments.",
+    credentialService: "todoist",
+    credentialPaste: {
+      help: "The API token is in Todoist under Settings → Integrations → Developer.",
+    },
+    canProbe: true,
+    sections: [
+      {
+        heading: "Completed tasks?",
+        answers: [
+          {
+            label: "Copy them too",
+            help: "The first sync reads back to the day you joined, a quarter at a time.",
+            sets: { "api.completed": true },
+          },
+          { label: "Only open tasks", sets: { "api.completed": false } },
+        ],
+      },
+    ],
+    fields: [
+      { kind: "bool", target: "api.completed", label: "Copy completed tasks", default: true },
+      {
+        kind: "date",
+        target: "api.completed_since",
+        label: "Completed since",
+        requires: "api.completed",
+        help:
+          "How far back the first sync reads completed tasks. Empty reads back to the day " +
+          "the account joined Todoist.",
+      },
+    ],
+  },
 
   // ── the two `email` variants ──────────────────────────────────────
   //
@@ -663,6 +738,13 @@ export const CATALOG: CatalogEntry[] = [
         ],
       },
       {
+        heading: "How far back?",
+        answers: [
+          { label: "Everything" },
+          { label: "Only mail since a date I choose", fields: ["gmail.since"] },
+        ],
+      },
+      {
         heading: "Start from a Takeout?",
         answers: [
           { label: "No, download every message" },
@@ -692,12 +774,22 @@ export const CATALOG: CatalogEntry[] = [
           "include its children. A label added later brings in its mail on the next sync.",
       },
       {
+        kind: "date",
+        target: "gmail.since",
+        label: "Start date",
+        help:
+          "The first sync lists only mail from this day on, so it takes minutes rather than " +
+          "hours. Choosing an earlier date later brings in the older mail on the next sync.",
+      },
+      {
         kind: "path",
         picks: "dir",
-        pickTitle: "Choose the Mail folder of your Google Takeout",
+        pickTitle: "Choose the folder holding your Google Takeout",
         target: "mbox.path",
-        label: "Takeout Mail folder",
+        label: "Takeout folder",
         help:
+          "The folder holding the Takeout's .zip or .tgz files as Google sent them, every part, " +
+          "or the Mail folder of an unzipped one. " +
           "Messages in the Takeout are not downloaded again, so the first sync takes minutes " +
           "rather than hours. Mail newer than the Takeout, and every message's labels, still " +
           "come from Gmail.",

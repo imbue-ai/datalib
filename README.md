@@ -143,6 +143,7 @@ welcome.
   <tr>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#signal-backups"><img src="datalib/ui/src/assets/signal.svg" width="40" height="40" alt=""><br><b>Signal backups</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#sms-backup-and-restore"><img src="datalib/ui/src/assets/sms.svg" width="40" height="40" alt=""><br><b>SMS Backup &amp; Restore</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#todoist"><img src="datalib/ui/src/assets/todoist.svg" width="40" height="40" alt=""><br><b>Todoist</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#whatsapp-backups"><img src="datalib/ui/src/assets/whatsapp.svg" width="40" height="40" alt=""><br><b>WhatsApp backups</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#yolink"><img src="datalib/ui/src/assets/yolink.png" width="40" height="40" alt=""><br><b>YoLink</b></a></td>
   </tr>
@@ -245,6 +246,9 @@ A mirror you can't leave is just another silo, so the exits are plain:
 
 - **Markdown** — `<source id>/render_markdown/` is ordinary `.md` files, one
   per conversation or document. Nothing to export.
+- **Search** — `datalib-applet search <data_root> '<query>'` answers as
+  the app's search box does, as JSON, with no server: for scripts and
+  agents.
 - **SQL** — `datalib-doltlite` ships with the tools and is a `sqlite3`
   shell that understands the versioned format. One pipe writes a plain
   SQLite file for any tool that wants one:

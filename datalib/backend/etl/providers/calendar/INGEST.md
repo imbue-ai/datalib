@@ -55,6 +55,14 @@ listing from a sync token — Google refuses `syncToken` beside
 so a windowed calendar is listed whole every run, whatever the listing
 no longer names is dropped, and the calendar's token is cleared.
 
+Either end may be an offset from the run's day (`since = "-2d"`,
+`until = "+21d"`), which the processor turns into dates in the run's
+own offset each run (`Window::resolve`). Such a window slides, and
+since what the listing no longer names is dropped, the store holds the
+window as it stands on the last run: an event that has slid out of it
+goes, the same as one deleted upstream. The listing cannot tell the
+two apart without expanding each stored series' recurrence.
+
 - **Google**: `singleEvents=false` with `timeMin`/`timeMax` returns
   every series with an occurrence in the window (one from 2016 that
   still recurs, say), every one-off in it, and only the changed

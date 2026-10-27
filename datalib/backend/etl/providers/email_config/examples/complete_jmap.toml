@@ -14,6 +14,7 @@ function = "ingest"
 # Several labels add up. The default, [], mirrors everything.
 [steps.params]
 only_extract_labels = ["Inbox", "Starfleet/Reports"]
+whole_threads = true  # also keep the rest of the thread of a message the labels keep; default true
 
 [steps.params.common]
 blob_size_limit_bytes = "25 MB"  # skip a message (its .eml, attachments and all) larger
@@ -33,8 +34,6 @@ account = "picard@example.com"
 [steps.params.jmap]
 hostname = "api.fastmail.com"  # the JMAP server; its session is at https://<hostname>/.well-known/jmap
 account_id = "u1701d"          # which JMAP account; default the session's primary mail account
-full_resync = false            # list and fetch every email again, ignoring the saved
-                               # change state; default false
 blob_download_concurrency = 8  # .eml files downloaded at once; default 8, 1 is one at a time
 
 [[steps]]

@@ -15,9 +15,12 @@ rust_library(
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:blake3",
+        "@datalib_crates//:flate2",
         "@datalib_crates//:ignore",
         "@datalib_crates//:sqlx",
+        "@datalib_crates//:tar",
         "@datalib_crates//:tracing",
+        "@datalib_crates//:zip",
     ],
 )
 
