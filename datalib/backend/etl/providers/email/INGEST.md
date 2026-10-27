@@ -49,8 +49,8 @@ bazelisk run //datalib/backend/etl/providers/email:jmap_ingest -- \
 The store is `<out>/entities.doltlite_db`. Subsequent runs are
 incremental — the state token from `Email/changes` is persisted
 per-account in `sync_scope_state`, so only created / updated /
-destroyed emails since the last run get touched. `--full-resync` lists
-the account again and fetches every email again.
+destroyed emails since the last run get touched. To list and fetch the
+account again from nothing, reset the step (`datalib-dag --reset`).
 
 To restrict to specific mailboxes, name them by their full label path
 (`Work/Projects`), the way `only_extract_labels` does in a config:
@@ -118,7 +118,7 @@ A run does three things with emails, in this order:
    `newState`, what it names as destroyed is deleted, and the state
    token (`jmap:<account_id>:state:Email` in `sync_scope_state`)
    advances. The token never waits on a fetch. With no token to replay
-   from — a first run, `--full-resync`, or `cannotCalculateChanges` —
+   from — a first run, or `cannotCalculateChanges` —
    the run asks for the account's state now, saves it, forgets which
    scopes were listed whole, and lists every email again so that all of
    them are owed. No other error does this: an `Email/changes` that
@@ -398,14 +398,18 @@ join inputs are read back out of the payload.
 
 ### Gmail's own ids and labels
 
-A row the Gmail API answered for also carries `gmail_message_id` and
-`gmail_thread_id`, the ids as the API and Gmail's web URLs spell them
-(hex; `thread_id` keeps the decimal a Takeout writes), and `label_ids`,
-Gmail's label ids as a sorted JSON array (`["INBOX","UNREAD"]`). The
-labels are read back from the row's mailboxes and keywords, so `UNREAD`
-(no `$seen`), `STARRED` and `IMPORTANT` are among them. All three are
-NULL for JMAP and mbox rows, and for a Takeout's until Gmail sends its
-labels. Rung 6 of the ladder fills them on a store from before.
+For Gmail, `id` and `thread_id` are Gmail's message and thread ids,
+spelled one way whether the API or a Takeout named them: lowercase hex
+zero-padded to 16 digits (`envelope::GmailId::key`). Gmail's web URLs
+and the API spell the same hex without the padding, which only an id
+from Gmail's first months has. A row the Gmail API answered for also
+carries `label_ids`, Gmail's label ids as a sorted JSON array
+(`["INBOX","UNREAD"]`). The labels are read back from the row's
+mailboxes and keywords, so `UNREAD` (no `$seen`), `STARRED` and
+`IMPORTANT` are among them. It is NULL for JMAP and mbox rows, and for
+a Takeout's until Gmail sends its labels. Rung 6 of the ladder fills it
+on a store from before; rung 7 rewrites the decimal thread ids older
+builds stored (the spelling of a Takeout's `X-GM-THRID`) in hex.
 
 ### The `.eml` hash lives on `email_blobs`, not on `emails`
 

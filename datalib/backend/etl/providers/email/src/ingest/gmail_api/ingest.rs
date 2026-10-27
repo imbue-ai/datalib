@@ -229,19 +229,6 @@ pub struct MailboxPlan {
     pub moves: Vec<(String, Option<String>)>,
 }
 
-pub fn normalize_thread_id(gmail_thread_id: &str) -> String {
-    match u64::from_str_radix(gmail_thread_id, 16) {
-        Ok(n) => n.to_string(),
-        Err(_) => gmail_thread_id.to_string(),
-    }
-}
-
-/// [`normalize_thread_id`] the other way: the API's spelling of a thread
-/// id a row stores in decimal.
-pub fn gmail_thread_id(stored: &str) -> Option<String> {
-    stored.parse::<u64>().ok().map(|n| format!("{n:x}"))
-}
-
 /// What one ingested message contributes.
 pub struct Ingested {
     pub row: EmailRow,
@@ -260,7 +247,7 @@ pub fn ingest(account_id: &str, index: &LabelIndex, msg: &GmailMessage) -> Resul
     let gmail_id = GmailId::from_api(&msg.id)
         .ok_or_else(|| anyhow::anyhow!("Gmail message id {:?} is not hex", msg.id))?;
     let email_id = envelope::email_id(Some(gmail_id), &parsed, &blob_id);
-    let thread_id = normalize_thread_id(&msg.thread_id);
+    let thread_id = GmailId::key_of_api(&msg.thread_id);
     let (mailbox_ids, keywords) = index.resolve(account_id, &msg.label_ids);
 
     let facts = TransportFacts {
@@ -286,14 +273,10 @@ pub fn ingest(account_id: &str, index: &LabelIndex, msg: &GmailMessage) -> Resul
             );
         }
         // Provenance, mirroring what the claude provider stamps: which
-        // transport produced this row, and the ids only this one knows.
+        // transport produced this row.
         obj.insert(
             "_source".into(),
-            serde_json::json!({
-                "via": GMAIL_API_VIA,
-                "gmailMessageId": msg.id,
-                "gmailThreadId": msg.thread_id,
-            }),
+            serde_json::json!({ "via": GMAIL_API_VIA }),
         );
     }
 
@@ -550,40 +533,6 @@ mod tests {
             mailboxes,
             vec![labels::gmail_mailbox_id("acct", "Label_999")]
         );
-    }
-
-    /// A message relabeled from the label walks is written with the
-    /// thread its row stores; spelled wrong, it would read as a thread
-    /// of its own.
-    #[test]
-    fn spells_a_stored_thread_id_back_the_way_the_api_does() {
-        let api = "19b8d627a801a2b0";
-        assert_eq!(
-            gmail_thread_id(&normalize_thread_id(api)).as_deref(),
-            Some(api)
-        );
-        assert_eq!(gmail_thread_id("not-a-number"), None);
-    }
-
-    /// Hex (API) and decimal (Takeout `X-GM-THRID`) are the same number;
-    /// storing both spellings would split one conversation in two.
-    #[test]
-    fn normalizes_hex_thread_ids_to_takeouts_decimal() {
-        assert_eq!(
-            normalize_thread_id("18c9f2a1b2c3d4e5"),
-            "1786225503531947237"
-        );
-        // Pin the relationship, not just the literal: the decimal must be
-        // the same 64-bit number the hex spells.
-        assert_eq!(
-            normalize_thread_id("18c9f2a1b2c3d4e5")
-                .parse::<u64>()
-                .unwrap(),
-            0x18c9f2a1b2c3d4e5,
-        );
-        assert_eq!(normalize_thread_id("1"), "1");
-        // Not hex: leave it alone rather than mangling it.
-        assert_eq!(normalize_thread_id("thread-xyz"), "thread-xyz");
     }
 
     /// Epoch milliseconds carry no source offset, so the convention is an

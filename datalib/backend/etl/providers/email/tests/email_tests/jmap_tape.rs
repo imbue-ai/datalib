@@ -185,6 +185,16 @@ impl Tape {
         }
     }
 
+    /// As [`Tape::serve`], with the states an earlier run stored, which
+    /// are `a`'s, too old for either `/changes` to replay: the run lists
+    /// the account again.
+    pub fn serve_aged_out(&self, a: &Account) {
+        self.serve(a);
+        let expired = "cannotCalculateChanges";
+        self.method_error("Mailbox/changes", changes_args(&a.mailbox_state), expired);
+        self.method_error("Email/changes", changes_args(&a.email_state), expired);
+    }
+
     /// The `Email/query` pages for `a`'s emails under `in_mailboxes`, or
     /// for all of them.
     pub fn query(&self, a: &Account, in_mailboxes: &[&str]) {

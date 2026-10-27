@@ -28,10 +28,6 @@ struct Args {
     #[arg(long, env = "JMAP_ACCOUNT_ID")]
     account_id: Option<String>,
 
-    /// Force full enumeration even if a state token is present.
-    #[arg(long, default_value_t = false)]
-    full_resync: bool,
-
     /// Restrict the sync to mailboxes whose full label path matches one
     /// of these (comma-separated, POSIX-like e.g. `Work/Projects`).
     /// Empty = every mailbox the account exposes.
@@ -63,7 +59,6 @@ async fn main() -> Result<()> {
         db: db.clone(),
         hostname: args.hostname.clone(),
         account_id: args.account_id.clone(),
-        full_resync: args.full_resync,
         only_mailbox_labels: args.only_mailbox_labels.clone(),
         blob_size_limit_bytes: args.blob_size_limit_bytes,
         blob_download_concurrency: args.blob_download_concurrency,

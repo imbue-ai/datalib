@@ -34,8 +34,6 @@ account = "picard@example.com"
 [steps.params.jmap]
 hostname = "api.fastmail.com"  # the JMAP server; its session is at https://<hostname>/.well-known/jmap
 account_id = "u1701d"          # which JMAP account; default the session's primary mail account
-full_resync = false            # list and fetch every email again on every run while true,
-                               # ignoring the saved change state; default false
 blob_download_concurrency = 8  # .eml files downloaded at once; default 8, 1 is one at a time
 
 [[steps]]

@@ -1189,6 +1189,7 @@ impl Accumulator {
             .header("X-GM-THRID")
             .and_then(header_text)
             .filter(|s| !s.is_empty())
+            .map(|s| GmailId::from_takeout(&s).map_or(s, GmailId::key))
             .unwrap_or_else(|| email_id.clone());
 
         // Labels → mailbox ids + JMAP keyword set.
@@ -1832,7 +1833,7 @@ mod tests {
             .unwrap();
         // Gmail's id from the `From ` line (1111 = 0x457), not the Message-Id.
         assert_eq!(picard.id, "0000000000000457");
-        assert_eq!(picard.thread_id, "1111");
+        assert_eq!(picard.thread_id, "0000000000000457");
         // .eml is in CAS keyed by emails.blob_id. The path goes
         // emails.blob_id → email_blobs.blake3 → cas_objects.bytes.
         let blake3: Option<String> =
@@ -2089,7 +2090,10 @@ mod tests {
         assert_eq!(second.emails_removed, 1);
         assert_eq!(
             stored(&db_path).await,
-            (vec!["0000000000000457".into()], vec!["1111".into()])
+            (
+                vec!["0000000000000457".into()],
+                vec!["0000000000000457".into()]
+            )
         );
 
         std::fs::remove_file(dir.path().join("a.mbox")).unwrap();
@@ -2112,7 +2116,10 @@ mod tests {
         assert_eq!(second.emails_removed, 1);
         assert_eq!(
             stored(&db_path).await,
-            (vec!["0000000000000457".into()], vec!["1111".into()])
+            (
+                vec!["0000000000000457".into()],
+                vec!["0000000000000457".into()]
+            )
         );
         drop(dir);
     }

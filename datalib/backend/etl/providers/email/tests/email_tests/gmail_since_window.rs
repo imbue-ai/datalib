@@ -15,7 +15,7 @@ use serde_json::json;
 
 use crate::support::{
     gmail_get_url, gmail_history_url, gmail_list_url, gmail_message, inbox_label, put_gmail,
-    put_gmail_account, Mirror,
+    put_gmail_account, put_gmail_history_expired, Mirror,
 };
 
 const SEPTEMBER: &str = "2026-09-01T00:00:00+00:00";
@@ -28,20 +28,20 @@ const IN_JULY: &str = "18c9f2a1b2c3d703";
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_window_lists_its_stretch_and_an_earlier_start_backfills() {
     let h = Harness::new();
-    let first = h.run(Some(SEPTEMBER), false).await;
+    let first = h.run(Some(SEPTEMBER)).await;
     assert_eq!(first.walked, vec!["*".to_string()]);
     assert_eq!(h.mirrored().await, ids(&[IN_SEPTEMBER]));
 
-    let again = h.run(Some(SEPTEMBER), false).await;
+    let again = h.run(Some(SEPTEMBER)).await;
     assert!(again.walked.is_empty(), "{again:?}");
     assert_eq!(again.quota_units_spent, 4, "{again:?}");
 
-    let widened = h.run(Some(AUGUST), false).await;
+    let widened = h.run(Some(AUGUST)).await;
     assert_eq!(widened.walked, vec!["*".to_string()], "{widened:?}");
     assert_eq!(widened.emails_upserted, 1, "{widened:?}");
     assert_eq!(h.mirrored().await, ids(&[IN_SEPTEMBER, IN_AUGUST]));
 
-    let narrowed = h.run(Some(SEPTEMBER), false).await;
+    let narrowed = h.run(Some(SEPTEMBER)).await;
     assert!(narrowed.walked.is_empty(), "{narrowed:?}");
     assert_eq!(
         h.mirrored().await,
@@ -49,7 +49,7 @@ async fn a_window_lists_its_stretch_and_an_earlier_start_backfills() {
         "a narrower window keeps what is mirrored"
     );
 
-    let unwindowed = h.run(None, false).await;
+    let unwindowed = h.run(None).await;
     assert_eq!(unwindowed.walked, vec!["*".to_string()], "{unwindowed:?}");
     assert_eq!(h.mirrored().await, ids(&[IN_SEPTEMBER, IN_AUGUST, IN_JULY]));
 }
@@ -57,10 +57,11 @@ async fn a_window_lists_its_stretch_and_an_earlier_start_backfills() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_windowed_walk_deletes_nothing_before_the_window() {
     let h = Harness::new();
-    h.run(None, false).await;
+    h.run(None).await;
     assert_eq!(h.mirrored().await, ids(&[IN_SEPTEMBER, IN_AUGUST, IN_JULY]));
 
-    let rewalked = h.run(Some(SEPTEMBER), true).await;
+    h.lose_the_cursor();
+    let rewalked = h.run(Some(SEPTEMBER)).await;
     assert_eq!(rewalked.walked, vec!["*".to_string()], "{rewalked:?}");
     assert_eq!(rewalked.emails_destroyed, 0, "{rewalked:?}");
     assert_eq!(h.mirrored().await, ids(&[IN_SEPTEMBER, IN_AUGUST, IN_JULY]));
@@ -87,17 +88,20 @@ impl Harness {
         Self(m)
     }
 
-    async fn run(&self, since: Option<&str>, full_resync: bool) -> FetchSummary {
+    async fn run(&self, since: Option<&str>) -> FetchSummary {
         let since: Option<IsoOffsetTimestamp> = since.map(|s| s.parse().unwrap());
         self.0
             .run(|db| {
                 let mut opts = FetchOptions::new(db);
                 opts.since = since;
-                opts.config.full_resync = full_resync;
                 gmail_api::fetch(opts)
             })
             .await
             .expect("gmail fetch under playback")
+    }
+
+    fn lose_the_cursor(&self) {
+        put_gmail_history_expired(&self.0.playback, "1000");
     }
 
     async fn mirrored(&self) -> BTreeSet<String> {

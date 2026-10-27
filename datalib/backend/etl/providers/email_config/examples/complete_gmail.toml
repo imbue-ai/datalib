@@ -40,8 +40,6 @@ email_address = "picard@example.com"  # the account row's address; default the o
 since = "-30d"                        # oldest mail to mirror: a day, an RFC 3339 instant, or
                                       # an offset from the sync; older mail it slides past
                                       # stays; default: the whole mailbox
-full_resync = false                   # walk every label again on every run while true (messages
-                                      # already held are not fetched again); default false
 quota_units_per_minute = 5000         # ceiling on Gmail quota spent a minute (Google allows
                                       # 6000, and a message costs 60); default 5000, lowered on
                                       # its own when rate-limited

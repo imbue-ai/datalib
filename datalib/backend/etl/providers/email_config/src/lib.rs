@@ -201,12 +201,6 @@ pub struct EmailSync {
     /// JMAP account id. Defaults to the session's mail primary account.
     #[serde(default)]
     pub account_id: Option<String>,
-    /// List the account again with `Email/query` and fetch every email
-    /// again, even if a `changes` state token is stored. Every run does
-    /// this while it is set, so set it for one sync and take it out.
-    /// Defaults to false (incremental).
-    #[serde(default)]
-    pub full_resync: bool,
     /// How many `.eml` blob downloads to run concurrently in the
     /// end-of-sync blob phase. JMAP has no bulk-download method — each
     /// `.eml` is one HTTP GET against the substituted `downloadUrl` — so
@@ -323,12 +317,6 @@ pub struct EmailGmailApi {
     /// has no `until`: the mailbox is followed forward from the walk.
     #[serde(default)]
     pub since: Option<String>,
-    /// Discard the stored `historyId` cursor and walk every configured
-    /// label again. Messages already mirrored are not fetched again.
-    /// Every run does this while it is set, so set it for one sync and
-    /// take it out.
-    #[serde(default)]
-    pub full_resync: bool,
     /// Client-side ceiling on Gmail API quota units spent per minute.
     /// Google allows one user 6000 a minute and prices a `messages.get`
     /// that carries the message at 60 (its quota table), so the mail

@@ -179,8 +179,8 @@
     ]
   },
   "email": {
-    "schema_hash": "3fbd91c913fb01c06645e8f92c1decfb06007f52be1b48107ab3471d1f614c28",
-    "schema_version": 6,
+    "schema_hash": "4bad296846f9492c56d7f4774752f95f9180d0c661fb07e77074348e28b49215",
+    "schema_version": 7,
     "shared_schema_version": 1,
     "sql": [
       "CREATE TABLE accounts( id TEXT PRIMARY KEY, payload TEXT NULL, name TEXT NULL, email_address TEXT NULL, is_personal INTEGER NULL, is_read_only INTEGER NULL)",
@@ -195,7 +195,7 @@
       "CREATE TABLE email_mailboxes( id TEXT PRIMARY KEY, email_id TEXT NOT NULL, mailbox_id TEXT NOT NULL)",
       "CREATE INDEX email_mailboxes_by_email ON email_mailboxes(email_id)",
       "CREATE INDEX email_mailboxes_by_mailbox ON email_mailboxes(mailbox_id)",
-      "CREATE TABLE emails( id TEXT PRIMARY KEY, payload TEXT NULL, account_id TEXT NOT NULL, thread_id TEXT NOT NULL, blob_id TEXT NOT NULL, message_id TEXT NULL, in_reply_to TEXT NULL, references_header TEXT NULL, received_at TEXT NULL, sent_at TEXT NULL, size INTEGER NULL, subject TEXT NULL, from_json TEXT NULL, to_json TEXT NULL, cc_json TEXT NULL, has_attachment INTEGER NULL, gmail_message_id TEXT NULL, gmail_thread_id TEXT NULL, label_ids TEXT NULL)",
+      "CREATE TABLE emails( id TEXT PRIMARY KEY, payload TEXT NULL, account_id TEXT NOT NULL, thread_id TEXT NOT NULL, blob_id TEXT NOT NULL, message_id TEXT NULL, in_reply_to TEXT NULL, references_header TEXT NULL, received_at TEXT NULL, sent_at TEXT NULL, size INTEGER NULL, subject TEXT NULL, from_json TEXT NULL, to_json TEXT NULL, cc_json TEXT NULL, has_attachment INTEGER NULL, label_ids TEXT NULL)",
       "CREATE TABLE emails_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX emails_by_account_received ON emails(account_id, received_at)",
       "CREATE INDEX emails_by_thread ON emails(thread_id)",
