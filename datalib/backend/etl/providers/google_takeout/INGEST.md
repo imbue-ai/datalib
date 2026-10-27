@@ -107,9 +107,8 @@ gives it, so render can say what it leaves out:
   entries whose parts are `div`s named by class. An entry's date is
   three lines, `Last modified on`, the date and the zone in words
   (`Pacific Time`), read as that place's clock
-  (`time::parse_play_books_stamp`); the tz database's daylight rules run
-  out in the 2100s, so the fixture's 2364 dates are in winter. The book
-  itself (a PDF or EPUB beside the page) is left out.
+  (`time::parse_play_books_stamp`), with that place's daylight rules
+  however far ahead the date is. The book itself (a PDF or EPUB beside the page) is left out.
 
 ## What no feed reads is a problem row
 
