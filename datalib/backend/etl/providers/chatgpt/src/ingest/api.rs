@@ -14,6 +14,7 @@ use tokio::sync::OnceCell;
 use tracing::{info, instrument};
 
 use datalib_etl::events;
+use datalib_etl::upstream::Upstream;
 use datalib_etl_web::http::{
     latchkey_curl, HttpError, HttpRequest, HttpResponse, HttpService, LatchkeySettings,
 };
@@ -44,9 +45,28 @@ pub enum ChatGPTError {
     /// Surfaced distinctly from `Permanent` so the caller can stop fetching
     /// cleanly and the user resumes later via the incremental-skip path.
     #[error("rate-limited on {path}; gave up retrying: {reason}")]
-    RateLimited { path: String, reason: String },
+    RateLimited {
+        path: String,
+        reason: String,
+        #[source]
+        upstream: Option<Upstream>,
+    },
     #[error("{0}")]
-    Permanent(String),
+    Permanent(String, #[source] Option<Upstream>),
+}
+
+impl ChatGPTError {
+    pub fn upstream(&self) -> Option<Upstream> {
+        match self {
+            ChatGPTError::RateLimited { upstream, .. } | ChatGPTError::Permanent(_, upstream) => {
+                *upstream
+            }
+        }
+    }
+
+    fn permanent(message: String) -> Self {
+        ChatGPTError::Permanent(message, None)
+    }
 }
 
 /// Requests go out from `&self`, so the fetch loop's `Fetcher` can hold
@@ -166,7 +186,10 @@ impl ChatGPTClient {
                 if let Some(why) = why {
                     message.push_str(&format!("; signing in again did not help: {why}"));
                 }
-                Err(ChatGPTError::Permanent(message))
+                Err(ChatGPTError::Permanent(
+                    message,
+                    Upstream::of_status(resp.status),
+                ))
             }
         }
     }
@@ -180,12 +203,16 @@ impl ChatGPTClient {
         // bound — is handled centrally in the shared chokepoint. When it
         // gives up, surface `RateLimited` (not `Permanent`) so the caller
         // stops cleanly and the user resumes later.
-        let resp = latchkey_curl(&req).await.map_err(|e: HttpError| match e {
-            HttpError::GaveUp { reason, .. } => ChatGPTError::RateLimited {
-                path: path.to_string(),
-                reason,
-            },
-            other => ChatGPTError::Permanent(format!("GET {path}: {other}")),
+        let resp = latchkey_curl(&req).await.map_err(|e: HttpError| {
+            let upstream = e.upstream();
+            match e {
+                HttpError::GaveUp { reason, .. } => ChatGPTError::RateLimited {
+                    path: path.to_string(),
+                    reason,
+                    upstream,
+                },
+                other => ChatGPTError::Permanent(format!("GET {path}: {other}"), upstream),
+            }
         })?;
         self.count(resp.duration_ms);
         Ok(resp)
@@ -231,10 +258,10 @@ impl ChatGPTClient {
     pub async fn me(&self) -> Result<Value, ChatGPTError> {
         let me = self.get(ME).await?;
         let id = account_id(&me)
-            .ok_or_else(|| ChatGPTError::Permanent(format!("{ME} response missing id")))?;
+            .ok_or_else(|| ChatGPTError::permanent(format!("{ME} response missing id")))?;
         let held = self.account.get_or_init(|| id.to_string());
         if held != id {
-            return Err(ChatGPTError::Permanent(format!(
+            return Err(ChatGPTError::permanent(format!(
                 "latchkey's chatgpt credential signs in as account {id:?}, but this source holds \
                  {held:?}; sign in to that account again, or add a new source for this one"
             )));
@@ -271,7 +298,7 @@ fn json_body(path: &str, resp: &HttpResponse) -> Result<Option<Value>, ChatGPTEr
     let body = resp.body_str();
     serde_json::from_str(&body).map(Some).map_err(|e| {
         let preview: String = body.chars().take(200).collect();
-        ChatGPTError::Permanent(format!(
+        ChatGPTError::permanent(format!(
             "GET {path}: 200 but non-JSON body: {e}; body[:200]={preview:?}"
         ))
     })

@@ -154,6 +154,32 @@ transactions. And don't touch the SQLite mirrors: a truncate-and-refill
 inside one transaction produces the same tree as before when the
 source has not changed, and the commit stores nothing new.
 
+### Say what a refusal means where you read it
+
+When a step fails, `datalib-step` tells the runner what kind of failure
+it was, and the kind decides two things: whether the runner tries again
+soon, and whether the Manage screen shows how to sign in. It decides by
+type, never by the words of the message. The type it looks for is
+`datalib_etl::upstream::Upstream`, anywhere in the error's cause chain:
+
+| `Upstream` | the run reports | means |
+|---|---|---|
+| `CredentialRefused` | `auth` | the service would not take the credential, or latchkey would not send one |
+| `RateLimited` | `rate_limited` | the service is limiting how often we may ask |
+| `Unavailable` | `transient` | the service did not answer |
+
+An error with none of these is `data`. The transport's own failures
+already carry one (`HttpError::upstream`), so wrapping an `HttpError`
+as a `#[source]` or `#[error(transparent)]` passes it on. A status your
+code judges is yours to mark. Mark it where you decide what the status
+means: the 401 on a sign-in check, or the 403 that is really a quota
+(Gmail's `dailyLimitExceeded`). `Upstream::of_status` is the plain HTTP
+reading, for a service whose statuses mean nothing more. Two habits
+lose the marker. One is rebuilding an error as text,
+`anyhow!("listing: {e}")`; use `.context("listing")` instead. The other
+is storing a failure as a `String` and raising it later; keep its
+`Upstream` beside it and raise it with `Upstream::error`.
+
 ### Every provider documents itself, in the same place
 
 A provider's documentation lives beside its code, under a name that is

@@ -19,6 +19,7 @@ use thiserror::Error;
 use crate::http::{
     latchkey_curl, HttpError, HttpMethod, HttpRequest, HttpResponse, HttpService, LatchkeySettings,
 };
+use datalib_etl::upstream::Upstream;
 
 /// How many redirects one request follows. RFC 6764's `.well-known`
 /// hop is the common one; a chain longer than this is a loop.
@@ -40,6 +41,8 @@ pub enum DavError {
         /// The condition a WebDAV error body names (RFC 4918 §16), such
         /// as RFC 6578's `valid-sync-token`.
         precondition: Option<String>,
+        #[source]
+        upstream: Option<Upstream>,
     },
     #[error("{service} malformed response from {url}: {message}")]
     Malformed {
@@ -57,7 +60,12 @@ pub enum DavError {
          is wrong, revoked, or not the kind this server takes: DAV usually wants an app \
          password, not an API token."
     )]
-    CredentialRefused { service: HttpService, tried: String },
+    CredentialRefused {
+        service: HttpService,
+        tried: String,
+        #[source]
+        upstream: Upstream,
+    },
     #[error(
         "no {service} request reached the server — tried {tried}. Each failed before an \
          answer came back; the error with each URL says why (latchkey refusing to send one, \
@@ -217,6 +225,7 @@ async fn request<P: DavProps>(
                 status: resp.status,
                 url,
                 precondition: precondition(&resp.body_str()),
+                upstream: Upstream::of_status(resp.status),
             });
         }
         return parse_multistatus(&resp.body_str()).map_err(|e| DavError::Malformed {
@@ -362,7 +371,11 @@ fn no_principal(service: HttpService, misses: &[(String, Option<DavError>)]) -> 
             .iter()
             .all(|(_, e)| matches!(e, Some(DavError::Transport { .. })));
     if refused {
-        DavError::CredentialRefused { service, tried }
+        DavError::CredentialRefused {
+            service,
+            tried,
+            upstream: Upstream::CredentialRefused,
+        }
     } else if unreached {
         DavError::Unreached { service, tried }
     } else {
@@ -556,6 +569,7 @@ mod tests {
             status,
             url: url.into(),
             precondition: None,
+            upstream: Upstream::of_status(status),
         })
     }
 

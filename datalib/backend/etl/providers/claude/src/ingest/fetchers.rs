@@ -32,7 +32,7 @@ fn ended<T>(ctx: &Ctx<'_>, e: ClaudeError) -> Result<T, BatchError> {
         return Err(BatchError::Batch(e.into()));
     }
     match e {
-        ClaudeError::RateLimited(_) => Err(BatchError::Terminal(e.into())),
+        ClaudeError::RateLimited(..) => Err(BatchError::Terminal(e.into())),
         e => Err(BatchError::Abort(e.into())),
     }
 }
@@ -68,10 +68,12 @@ impl Fetcher<Vec<Value>> for Docs<'_> {
                 Ok(docs) => Outcome::Got(docs),
                 // The credential may not read this project's docs. A
                 // warning on the listing, asked again next run.
-                Err(ClaudeError::Forbidden(msg)) if !ctx.stop().requested() => {
+                Err(ClaudeError::Forbidden(msg, _)) if !ctx.stop().requested() => {
                     Outcome::Skipped(Reason::Forbidden, msg)
                 }
-                Err(ClaudeError::Permanent(msg)) if !ctx.stop().requested() => Outcome::Failed(msg),
+                Err(ClaudeError::Permanent(msg, _)) if !ctx.stop().requested() => {
+                    Outcome::Failed(msg)
+                }
                 Err(e) => ended(ctx, e)?,
             };
             out.push(Fetched { listed, outcome });
@@ -139,7 +141,7 @@ impl Fetcher<Conversation> for Conversations<'_> {
                         .fetch_add(retries as usize, Ordering::Relaxed);
                     match e {
                         _ if ctx.stop().requested() => return Err(BatchError::Batch(e.into())),
-                        ClaudeError::RateLimited(_) => return Err(BatchError::Terminal(e.into())),
+                        ClaudeError::RateLimited(..) => return Err(BatchError::Terminal(e.into())),
                         e => Outcome::Failed(e.to_string()),
                     }
                 }

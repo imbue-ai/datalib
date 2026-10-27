@@ -18,6 +18,7 @@ use datalib_etl::progress::Progress;
 use datalib_etl::raw_store::Sealer;
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
+use datalib_etl::upstream::Upstream;
 use datalib_etl_web::http::{
     default_retryability, latchkey_curl_classified, percent_encode, HttpError, HttpRequest,
     HttpResponse, HttpService, LatchkeySettings, Retryability,
@@ -481,14 +482,13 @@ fn api_error(url: &str, resp: &HttpResponse) -> anyhow::Error {
         })
         .unwrap_or_else(|| body.chars().take(300).collect());
     match resp.status {
-        401 | 403 => Refused(format!(
+        401 | 403 => anyhow::Error::new(Upstream::CredentialRefused).context(Refused(format!(
             "GET {url}: {}: {message}. Store a Calendly personal access token with \
              `latchkey auth set calendly -H \"Authorization: Bearer <token>\"`; it needs the \
              `users:read` and `scheduled_events:read` scopes.",
             resp.status
-        ))
-        .into(),
-        s => anyhow::anyhow!("GET {url}: {s}: {message}"),
+        ))),
+        s => Upstream::error(Upstream::of_status(s), format!("GET {url}: {s}: {message}")),
     }
 }
 

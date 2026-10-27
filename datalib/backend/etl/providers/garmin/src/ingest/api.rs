@@ -9,6 +9,7 @@ use anyhow::{anyhow, bail, Result};
 use serde_json::Value;
 
 use datalib_etl::events;
+use datalib_etl::upstream::Upstream;
 use datalib_etl_web::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
 
 pub const TIMEOUT: Duration = Duration::from_secs(120);
@@ -44,9 +45,10 @@ pub enum GarminError {
     /// 401/403: Garmin refused the credential latchkey sent; or latchkey
     /// would not send one at all, which every later request would share.
     #[error("unauthorized: {0}")]
-    Auth(String),
-    #[error("{0}")]
-    Permanent(String),
+    Auth(String, #[source] Upstream),
+    /// The request never got an answer to judge.
+    #[error(transparent)]
+    Transport(HttpError),
 }
 
 /// One response, with "there is nothing for that day" folded to `None`.
@@ -106,10 +108,10 @@ impl GarminClient {
                 Ok(Fetched::Some(value))
             }
             204 | 404 => Ok(Fetched::Nothing),
-            401 | 403 => Err(GarminError::Auth(format!(
-                "GET {path} -> HTTP {status}: {}",
-                preview(&body)
-            ))
+            401 | 403 => Err(GarminError::Auth(
+                format!("GET {path} -> HTTP {status}: {}", preview(&body)),
+                Upstream::CredentialRefused,
+            )
             .into()),
             _ => bail!("GET {path} -> HTTP {status}: {}", preview(&body)),
         }
@@ -122,10 +124,10 @@ impl GarminClient {
         match status {
             200 => Ok(Fetched::Some(body)),
             204 | 404 => Ok(Fetched::Nothing),
-            401 | 403 => Err(GarminError::Auth(format!(
-                "GET {path} -> HTTP {status}: {}",
-                preview(&body)
-            ))
+            401 | 403 => Err(GarminError::Auth(
+                format!("GET {path} -> HTTP {status}: {}", preview(&body)),
+                Upstream::CredentialRefused,
+            )
             .into()),
             _ => bail!("GET {path} -> HTTP {status}: {}", preview(&body)),
         }
@@ -138,9 +140,9 @@ impl GarminClient {
 fn transport_error(e: HttpError, path: &str) -> GarminError {
     match e {
         HttpError::Curl { exit: 1, .. } | HttpError::Spawn { .. } => {
-            GarminError::Auth(format!("GET {path}: {e}"))
+            GarminError::Auth(format!("GET {path}: {e}"), Upstream::CredentialRefused)
         }
-        other => GarminError::Permanent(other.to_string()),
+        other => GarminError::Transport(other),
     }
 }
 
@@ -167,12 +169,14 @@ mod tests {
     #[test]
     fn a_request_latchkey_will_not_send_is_an_auth_failure() {
         let e = transport_error(curl_exit(1), "/hrv-service/hrv/2369-04-14");
-        assert!(matches!(e, GarminError::Auth(_)), "{e}");
+        assert!(matches!(e, GarminError::Auth(..)), "{e}");
     }
 
     #[test]
     fn a_network_failure_is_not_an_auth_failure() {
         let e = transport_error(curl_exit(7), "/hrv-service/hrv/2369-04-14");
-        assert!(matches!(e, GarminError::Permanent(_)), "{e}");
+        assert!(matches!(e, GarminError::Transport(_)), "{e}");
+        let e = anyhow::Error::new(e);
+        assert_eq!(Upstream::in_chain(&e), Some(Upstream::Unavailable), "{e:#}");
     }
 }

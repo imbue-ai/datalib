@@ -34,7 +34,7 @@ fn not_fetched<T>(ctx: &Ctx<'_>, e: ChatGPTError) -> Result<Outcome<T>, BatchErr
     }
     match e {
         ChatGPTError::RateLimited { .. } => Err(BatchError::Terminal(e.into())),
-        ChatGPTError::Permanent(msg) => Ok(Outcome::Failed(msg)),
+        ChatGPTError::Permanent(msg, _) => Ok(Outcome::Failed(msg)),
     }
 }
 
@@ -201,7 +201,7 @@ impl Attachments<'_> {
             Err(e @ ChatGPTError::RateLimited { .. }) => {
                 return Err(BatchError::Terminal(e.into()))
             }
-            Err(ChatGPTError::Permanent(msg))
+            Err(ChatGPTError::Permanent(msg, _))
                 if msg.contains("HTTP 404") || msg.contains("HTTP 410") =>
             {
                 return Ok(gone(format!("file metadata: {msg}")));

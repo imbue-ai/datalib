@@ -10,6 +10,7 @@ use serde_json::Value;
 use tokio::time::Instant;
 use tracing::{debug, warn};
 
+use datalib_etl::upstream::Upstream;
 use datalib_etl_web::http::{
     default_retryability, latchkey_curl_classified, parse_retry_after, percent_encode, HttpError,
     HttpRequest, HttpResponse, HttpService, LatchkeySettings, Retryability,
@@ -258,10 +259,12 @@ fn api_error(url: &str, resp: &HttpResponse) -> anyhow::Error {
         return anyhow::Error::new(GmailApiError::NotFound);
     }
     if resp.status == 403 && resp.body_str().contains("dailyLimitExceeded") {
-        return anyhow::Error::new(GmailApiError::DailyQuota(format!(
-            "Gmail API {url} → HTTP 403: the project's daily quota is spent. It resets at \
-             midnight Pacific time; the next run resumes where this one stopped."
-        )));
+        return anyhow::Error::new(Upstream::RateLimited).context(GmailApiError::DailyQuota(
+            format!(
+                "Gmail API {url} → HTTP 403: the project's daily quota is spent. It resets at \
+                 midnight Pacific time; the next run resumes where this one stopped."
+            ),
+        ));
     }
     if resp.status == 401 || resp.status == 403 {
         let body = resp.body_str();
@@ -273,18 +276,23 @@ fn api_error(url: &str, resp: &HttpResponse) -> anyhow::Error {
             url,
             "the Gmail API refused the credential"
         );
-        return anyhow::Error::new(GmailApiError::Refused(format!(
-            "Gmail API {url} → HTTP {}: {body}\n\
+        return anyhow::Error::new(Upstream::CredentialRefused).context(GmailApiError::Refused(
+            format!(
+                "Gmail API {url} → HTTP {}: {body}\n\
              If this says ACCESS_TOKEN_SCOPE_INSUFFICIENT, re-run \
              `latchkey auth browser google-gmail` and approve every scope. \
              If it says the credential is missing, run that command for the first time.",
-            resp.status,
-        )));
+                resp.status,
+            ),
+        ));
     }
-    anyhow!(
-        "Gmail API {url} → HTTP {}: {}",
-        resp.status,
-        resp.body_str()
+    Upstream::error(
+        Upstream::of_status(resp.status),
+        format!(
+            "Gmail API {url} → HTTP {}: {}",
+            resp.status,
+            resp.body_str()
+        ),
     )
 }
 

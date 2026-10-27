@@ -25,6 +25,7 @@ use datalib_etl::download_problems::RunProblem;
 use datalib_etl::download_run::DownloadRun;
 use datalib_etl::raw_store::{Batch, Sealer};
 use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl::upstream::Upstream;
 use datalib_etl_linear_config::LinearSync;
 use datalib_etl_web::coverage::{self, Span};
 use datalib_etl_web::http::LatchkeySettings;
@@ -416,7 +417,7 @@ impl Ctx<'_> {
                         continue;
                     };
                     let page = client::read_page(&json!({ "h": h }), &["h"])
-                        .map_err(|e| anyhow::anyhow!("an issue's history: {e}"))?;
+                        .map_err(|e| anyhow::Error::new(e).context("an issue's history"))?;
                     if let (true, Some(cursor), Some(id)) =
                         (page.has_next, page.end_cursor, id_of(issue))
                     {
@@ -563,10 +564,12 @@ async fn phases(ctx: &mut Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
     };
     let nothing_yet = s.workspace == 0 && s.listed == 0;
     if nothing_yet && matches!(ended.0, LinearError::Unauthorized(_)) {
-        anyhow::bail!(
-            "Linear refused the credential: {}. Sign in again with \
+        return Err(
+            anyhow::Error::new(Upstream::CredentialRefused).context(format!(
+                "Linear refused the credential: {}. Sign in again with \
              `latchkey auth browser linear`.",
-            ended.0
+                ended.0
+            )),
         );
     }
     let problem = match &ended.0 {

@@ -10,6 +10,7 @@ use serde_json::Value;
 use tracing::instrument;
 
 use datalib_etl::events;
+use datalib_etl::upstream::Upstream;
 use datalib_etl_web::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
 
 pub const BASE: &str = "https://claude.ai/api";
@@ -19,14 +20,27 @@ pub const CLAUDE_ORIGIN: &str = "https://claude.ai";
 #[derive(thiserror::Error, Debug)]
 pub enum ClaudeError {
     #[error("forbidden: {0}")]
-    Forbidden(String),
+    Forbidden(String, #[source] Upstream),
     /// The shared retry loop's give-up policy tripped on a rate limit or
     /// an outage; every request after it is refused the same way, so the
     /// caller stops.
     #[error("gave up retrying: {0}")]
-    RateLimited(String),
+    RateLimited(String, #[source] Option<Upstream>),
     #[error("{0}")]
-    Permanent(String),
+    Permanent(String, #[source] Option<Upstream>),
+}
+
+impl ClaudeError {
+    pub fn upstream(&self) -> Option<Upstream> {
+        match self {
+            ClaudeError::Forbidden(_, why) => Some(*why),
+            ClaudeError::RateLimited(_, why) | ClaudeError::Permanent(_, why) => *why,
+        }
+    }
+
+    fn permanent(message: String) -> Self {
+        ClaudeError::Permanent(message, None)
+    }
 }
 
 /// Requests go out from `&self`, so the fetch loop's `Fetcher` can hold
@@ -86,21 +100,27 @@ impl ClaudeClient {
         if resp.status == 403 {
             // Cloudflare's bot wall is a 403 too; its marker is what tells
             // a block from a credential that may not do this.
-            return Err(ClaudeError::Forbidden(format!(
-                "GET {path} -> HTTP 403 cf-mitigated={:?}",
-                resp.header("cf-mitigated")
-            )));
+            return Err(ClaudeError::Forbidden(
+                format!(
+                    "GET {path} -> HTTP 403 cf-mitigated={:?}",
+                    resp.header("cf-mitigated")
+                ),
+                Upstream::CredentialRefused,
+            ));
         }
         if resp.status != 200 {
-            return Err(ClaudeError::Permanent(format!(
-                "GET {path} -> HTTP {}: {:?}",
-                resp.status,
-                body.chars().take(300).collect::<String>()
-            )));
+            return Err(ClaudeError::Permanent(
+                format!(
+                    "GET {path} -> HTTP {}: {:?}",
+                    resp.status,
+                    body.chars().take(300).collect::<String>()
+                ),
+                Upstream::of_status(resp.status),
+            ));
         }
         let value: Value = serde_json::from_str(&body).map_err(|e| {
             let preview: String = body.chars().take(200).collect();
-            ClaudeError::Permanent(format!(
+            ClaudeError::permanent(format!(
                 "GET {path}: invalid JSON: {e}; body[:200]={preview:?}"
             ))
         })?;
@@ -116,7 +136,7 @@ impl ClaudeClient {
         let v = self.get("/organizations").await?;
         v.as_array()
             .cloned()
-            .ok_or_else(|| ClaudeError::Permanent("/organizations: expected array".to_string()))
+            .ok_or_else(|| ClaudeError::permanent("/organizations: expected array".to_string()))
     }
 
     pub async fn list_conversations(&self, org_uuid: &str) -> Result<Vec<Value>, ClaudeError> {
@@ -124,7 +144,7 @@ impl ClaudeClient {
             .get(&format!("/organizations/{org_uuid}/chat_conversations"))
             .await?;
         v.as_array().cloned().ok_or_else(|| {
-            ClaudeError::Permanent(format!(
+            ClaudeError::permanent(format!(
                 "/organizations/{org_uuid}/chat_conversations: expected array"
             ))
         })
@@ -138,7 +158,7 @@ impl ClaudeClient {
             .get(&format!("/organizations/{org_uuid}/projects"))
             .await?;
         v.as_array().cloned().ok_or_else(|| {
-            ClaudeError::Permanent(format!(
+            ClaudeError::permanent(format!(
                 "/organizations/{org_uuid}/projects: expected array"
             ))
         })
@@ -157,7 +177,7 @@ impl ClaudeClient {
         let v = self.get(&path).await?;
         v.as_array()
             .cloned()
-            .ok_or_else(|| ClaudeError::Permanent(format!("{path}: expected array")))
+            .ok_or_else(|| ClaudeError::permanent(format!("{path}: expected array")))
     }
 
     pub async fn get_conversation(
@@ -175,7 +195,7 @@ impl ClaudeClient {
 
 fn map_transport_error(e: HttpError) -> ClaudeError {
     match e {
-        HttpError::GaveUp { .. } => ClaudeError::RateLimited(e.to_string()),
-        other => ClaudeError::Permanent(other.to_string()),
+        HttpError::GaveUp { .. } => ClaudeError::RateLimited(e.to_string(), e.upstream()),
+        other => ClaudeError::Permanent(other.to_string(), other.upstream()),
     }
 }

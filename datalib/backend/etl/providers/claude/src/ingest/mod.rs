@@ -34,6 +34,7 @@ use datalib_etl::download_run::DownloadRun;
 use datalib_etl::progress::RunBar;
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
+use datalib_etl::upstream::Upstream;
 use datalib_etl_web::http::LatchkeySettings;
 use datalib_etl_web::owed::{self, Fetcher, Held, Listed, Loop};
 use datalib_time::IsoOffsetTimestamp;
@@ -517,11 +518,11 @@ impl Ctx<'_> {
             {
                 Ok(l) => l,
                 Err(_) if self.stop().requested() => return Ok(false),
-                Err(ClaudeError::RateLimited(reason)) => {
+                Err(ClaudeError::RateLimited(reason, _)) => {
                     self.give_up("projects", &reason);
                     return Ok(true);
                 }
-                Err(ClaudeError::Forbidden(_)) => {
+                Err(ClaudeError::Forbidden(..)) => {
                     info!(
                         event = "claude_projects_forbidden",
                         org = %org_name,
@@ -752,8 +753,8 @@ impl Ctx<'_> {
                     return Ok(SingleOutcome::Fetched);
                 }
                 Err(_) if self.stop().requested() => return Ok(SingleOutcome::Stopped),
-                Err(ClaudeError::RateLimited(reason)) => return Ok(SingleOutcome::Cut(reason)),
-                Err(ClaudeError::Forbidden(_)) => {
+                Err(ClaudeError::RateLimited(reason, _)) => return Ok(SingleOutcome::Cut(reason)),
+                Err(ClaudeError::Forbidden(..)) => {
                     warn!(
                         event = "claude_fetch_single_forbidden",
                         uuid = conv_uuid,
@@ -767,7 +768,7 @@ impl Ctx<'_> {
                     refused.push(org_name);
                     continue;
                 }
-                Err(ClaudeError::Permanent(msg)) if msg.contains("HTTP 404") => {
+                Err(ClaudeError::Permanent(msg, _)) if msg.contains("HTTP 404") => {
                     info!(
                         event = "claude_fetch_single_not_in_org",
                         uuid = conv_uuid,
@@ -810,7 +811,7 @@ impl Ctx<'_> {
         // org listed.
         let mut every_org_listed = true;
         let mut refused: Option<ClaudeError> = None;
-        let mut failed: Option<String> = None;
+        let mut failed: Option<ClaudeError> = None;
         for org in orgs {
             let Some((org_uuid, org_name)) = org_identity(org) else {
                 continue;
@@ -824,11 +825,11 @@ impl Ctx<'_> {
                 Ok(l) => l,
                 Err(_) if self.stop().requested() => return Ok(false),
                 // Nothing is pruned on a run that listed nothing whole.
-                Err(ClaudeError::RateLimited(reason)) => {
+                Err(ClaudeError::RateLimited(reason, _)) => {
                     self.give_up("conversations", &reason);
                     return Ok(true);
                 }
-                Err(e @ ClaudeError::Forbidden(_)) => {
+                Err(e @ ClaudeError::Forbidden(..)) => {
                     info!(
                         event = "claude_org_forbidden",
                         org = %org_name,
@@ -850,7 +851,7 @@ impl Ctx<'_> {
                         format!("org {org_name:?}: {e}"),
                     );
                     every_org_listed = false;
-                    failed = Some(e.to_string());
+                    failed = Some(e);
                     continue;
                 }
             };
@@ -874,7 +875,9 @@ impl Ctx<'_> {
                     )
                 }
                 (Some(e), _) => {
-                    anyhow::bail!("no org's conversations could be listed; the last: {e}")
+                    return Err(
+                        anyhow::Error::new(e).context("no org's conversations could be listed")
+                    )
                 }
                 (None, None) => {}
             }
@@ -1092,28 +1095,23 @@ fn with_bag_sorted(payload: &Value, field: &str) -> Value {
     out
 }
 
-/// Wrap the preflight's failure in setup instructions when it looks
-/// like latchkey can't authenticate to claude.ai at all: the service
-/// was never registered ("No service matches URL"), or the sessionKey
-/// cookie is missing/expired (401/403). Anything else (network,
-/// claude.ai outage) passes through unembellished.
+/// Wrap the preflight's failure in setup instructions when latchkey
+/// can't authenticate to claude.ai at all: the service was never
+/// registered, or the sessionKey cookie is missing or expired. Anything
+/// else (network, claude.ai outage) passes through unembellished. The
+/// failure stays the cause, so whatever it means for the run goes with it.
 pub fn credential_hint(e: ClaudeError) -> anyhow::Error {
-    let s = e.to_string();
     // Cloudflare's challenge is a 403 too, and no credential gets past
     // it: a sign-in recipe would send the person after the wrong fix.
-    if s.contains(r#"cf-mitigated=Some("challenge")"#) {
-        return anyhow::anyhow!("claude.ai's bot protection blocked the request: {s}");
+    if e.to_string().contains(r#"cf-mitigated=Some("challenge")"#) {
+        return anyhow::Error::new(e).context("claude.ai's bot protection blocked the request");
     }
-    let setup_problem = s.contains("No service matches URL")
-        || s.to_ascii_lowercase().contains("no credentials")
-        || s.contains("HTTP 401")
-        || s.contains("HTTP 403");
-    if !setup_problem {
-        return anyhow::anyhow!("list orgs: {s}");
+    if e.upstream() != Some(Upstream::CredentialRefused) {
+        return anyhow::Error::new(e).context("list orgs");
     }
     let lk = datalib_etl_web::latchkey::latchkey_cli_hint();
-    anyhow::anyhow!(
-        "claude.ai credentials are not set up: {s}\n\
+    anyhow::Error::new(e).context(format!(
+        "claude.ai credentials are not set up.\n\
          The credential is the `sessionKey` cookie. Copy the one your\n\
          browser already has:\n\
          1. Register the service (once):\n\
@@ -1147,7 +1145,7 @@ pub fn credential_hint(e: ClaudeError) -> anyhow::Error {
          normally use kept evicting each other, logging both out repeatedly.\n\
          Prefer the paste above until that is understood.\n\
          See docs/user/getting_your_data.md for the full walkthrough."
-    )
+    ))
 }
 
 /// Whether a targeted `conv_uuids` fetch found its conversation.
@@ -1225,7 +1223,7 @@ pub(crate) async fn get_conversation_with_403_retry(
                     retries: attempt as u32,
                 });
             }
-            Err(ClaudeError::Forbidden(msg)) => {
+            Err(ClaudeError::Forbidden(msg, why)) => {
                 info!(
                     event = "claude_fetch_403_transient",
                     uuid = conv_uuid,
@@ -1233,7 +1231,7 @@ pub(crate) async fn get_conversation_with_403_retry(
                     error = %msg,
                     "403 on a detail fetch; retrying in case it is transient",
                 );
-                last_err = Some(ClaudeError::Forbidden(msg));
+                last_err = Some(ClaudeError::Forbidden(msg, why));
             }
             Err(other) => {
                 return Err((other, attempt as u32));
@@ -1393,7 +1391,13 @@ mod tests {
     /// perfectly good browser key does not fix it.
     #[test]
     fn auth_hint_names_the_single_quote_trap_and_offers_a_shape_check() {
-        let hint = credential_hint(ClaudeError::Forbidden("HTTP 403".into())).to_string();
+        let hint = format!(
+            "{:#}",
+            credential_hint(ClaudeError::Forbidden(
+                "HTTP 403".into(),
+                Upstream::CredentialRefused
+            ))
+        );
         assert!(
             hint.contains("SINGLE quotes"),
             "hint must name the quoting trap; got:\n{hint}"
@@ -1419,19 +1423,27 @@ mod tests {
     /// sends you off fixing something that isn't broken.
     #[test]
     fn auth_hint_passes_through_non_setup_failures() {
-        let hint =
-            credential_hint(ClaudeError::Permanent("HTTP 502 bad gateway".into())).to_string();
-        assert_eq!(hint, "list orgs: HTTP 502 bad gateway");
+        let e = credential_hint(ClaudeError::Permanent(
+            "HTTP 502 bad gateway".into(),
+            Some(Upstream::Unavailable),
+        ));
+        assert_eq!(
+            format!("{e:#}"),
+            "list orgs: HTTP 502 bad gateway: the service did not answer"
+        );
     }
 
     /// Cloudflare's challenge is a 403 that no credential gets past; the
     /// sign-in recipe would send the person after the wrong fix.
     #[test]
     fn a_cloudflare_challenge_gets_no_sign_in_recipe() {
-        let hint = credential_hint(ClaudeError::Forbidden(
-            r#"GET /account -> HTTP 403 cf-mitigated=Some("challenge")"#.into(),
-        ))
-        .to_string();
+        let hint = format!(
+            "{:#}",
+            credential_hint(ClaudeError::Forbidden(
+                r#"GET /account -> HTTP 403 cf-mitigated=Some("challenge")"#.into(),
+                Upstream::CredentialRefused,
+            ))
+        );
         assert!(hint.contains("bot protection"), "{hint}");
         assert!(!hint.contains("sessionKey"), "{hint}");
     }

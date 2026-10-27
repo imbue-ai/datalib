@@ -28,6 +28,7 @@ use datalib_etl::download_problems::DownloadProblem;
 use datalib_etl::download_run::DownloadRun;
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
+use datalib_etl::upstream::Upstream;
 use datalib_etl_web::http::LatchkeySettings;
 use datalib_etl_web::owed::{self, Fetcher, Listed, Loop};
 use datalib_time::IsoOffsetTimestamp;
@@ -323,7 +324,7 @@ impl Ctx<'_> {
                     self.found.gave_up(format!("conversations: {detail}"));
                     return Ok(true);
                 }
-                Err(ChatGPTError::Permanent(msg)) if msg.contains("HTTP 404") => {
+                Err(ChatGPTError::Permanent(msg, _)) if msg.contains("HTTP 404") => {
                     self.config_problems
                         .lock()
                         .unwrap()
@@ -333,7 +334,7 @@ impl Ctx<'_> {
                             format!("chatgpt.com has no conversation with this id: {msg}"),
                         ));
                 }
-                Err(ChatGPTError::Permanent(msg)) => {
+                Err(ChatGPTError::Permanent(msg, _)) => {
                     let mut tx = self.db.pool().begin().await?;
                     dr::record_object_error(&mut tx, CONVERSATIONS, &target, &msg).await?;
                     tx.commit().await?;
@@ -371,14 +372,14 @@ impl Ctx<'_> {
             failed,
             rate_limited,
         } = listing;
-        if let Some(e) = failed {
+        if let Some((e, why)) = failed {
             if self.stop().requested() {
                 return Ok(false);
             }
             // With nothing listed and nothing stored there is nothing to
             // fall back on: the run did nothing at all.
             if items.is_empty() && !self.db.has_any_conversation().await? {
-                return Err(anyhow::anyhow!("list conversations: {e}"));
+                return Err(Upstream::error(why, format!("list conversations: {e}")));
             }
             self.found.listing("conversations", e.clone());
             // Every detail fetch would be refused the same way.
@@ -481,7 +482,7 @@ async fn phases(ctx: &Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
         .client
         .me()
         .await
-        .map_err(|e| anyhow::anyhow!("fetch /me: {e}"))?;
+        .map_err(|e| anyhow::Error::new(e).context("fetch /me"))?;
     if let Some(export) = ctx.export {
         export.check_account(&me)?;
     }
@@ -729,8 +730,9 @@ struct Listing {
     /// permission to look: it reached `total`, or a page's `items` came
     /// back an empty array.
     complete: bool,
-    /// The page that failed and why. The pages before it are kept.
-    failed: Option<String>,
+    /// The page that failed and why, and what that says about the
+    /// service. The pages before it are kept.
+    failed: Option<(String, Option<Upstream>)>,
     /// The page failed because the give-up guard tripped.
     rate_limited: bool,
 }
@@ -753,7 +755,7 @@ impl Listing {
             failed: self.failed.or_else(|| {
                 archived
                     .failed
-                    .map(|e| format!("archived conversations, {e}"))
+                    .map(|(e, why)| (format!("archived conversations, {e}"), why))
             }),
             rate_limited: self.rate_limited || archived.rate_limited,
         }
@@ -786,14 +788,14 @@ async fn list_all_conversations(
             Ok(page) => page,
             Err(e) => {
                 rate_limited = matches!(e, ChatGPTError::RateLimited { .. });
-                failed = Some(format!("page at offset {offset}: {e}"));
+                failed = Some((format!("page at offset {offset}: {e}"), e.upstream()));
                 break;
             }
         };
         let page_items = match page_items(&page) {
             Ok(page_items) => page_items,
             Err(e) => {
-                failed = Some(format!("page at offset {offset}: {e}"));
+                failed = Some((format!("page at offset {offset}: {e}"), None));
                 break;
             }
         };

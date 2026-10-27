@@ -313,7 +313,7 @@ async fn discover(
         latchkey,
     )
     .await
-    .map_err(|e| anyhow::anyhow!("propfind addressbook-home-set: {e}"))?;
+    .map_err(|e| anyhow::Error::new(e).context("propfind addressbook-home-set"))?;
     let home_set_href = ms
         .responses
         .iter()
@@ -333,7 +333,7 @@ async fn list_addressbooks(
     summary.requests += 1;
     let ms = api::list_members(home_set_url, api::BODY_LIST_ADDRESSBOOKS, latchkey)
         .await
-        .map_err(|e| anyhow::anyhow!("propfind list-addressbooks: {e}"))?;
+        .map_err(|e| anyhow::Error::new(e).context("propfind list-addressbooks"))?;
     let mut out = Vec::new();
     for r in ms.responses {
         if !r.props.is_addressbook {

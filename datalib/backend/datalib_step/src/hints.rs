@@ -3,52 +3,40 @@
 use anyhow::Result;
 use datalib_dag::events::Event;
 use datalib_dag::FailureKind;
+use datalib_etl::upstream::Upstream;
 
 use crate::source_type::SourceType;
 
 use crate::events::{Emitter, OutputClaim};
 
-/// Which [`FailureKind`] a failure is, from the text of its cause
-/// chain. The scheduler's retry policy keys off the answer, so this is
-/// the runner's vocabulary rather than a label of our own.
+/// Which [`FailureKind`] a failure is. The scheduler's retry policy keys
+/// off the answer, so this is the runner's vocabulary rather than a label
+/// of our own. It reads types, never the words: whoever judged a refusal
+/// says so with an [`Upstream`] in the chain.
 pub fn classify(e: &anyhow::Error) -> FailureKind {
     if e.chain()
         .any(|c| c.is::<datalib_etl::run_problems::GaveUp>())
     {
         return FailureKind::Incomplete;
     }
-    if e.chain().any(|c| {
-        c.downcast_ref::<std::io::Error>()
-            .is_some_and(|io| io.kind() == std::io::ErrorKind::PermissionDenied)
-    }) {
+    let io_kind = e
+        .chain()
+        .find_map(|c| c.downcast_ref::<std::io::Error>().map(std::io::Error::kind));
+    if io_kind == Some(std::io::ErrorKind::PermissionDenied) {
         return FailureKind::Permission;
     }
-    let s: String = e
-        .chain()
-        .map(|c| c.to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
-    if s.contains("HTTP 401")
-        || s.contains("HTTP 403")
-        || s.contains("Unauthorized")
-        || s.contains("Forbidden")
-        // `cf-mitigated` only when actually set — see sync's note on
-        // the Debug rendering of the absent header.
-        || s.contains("cf-mitigated=Some(")
-        // latchkey's error for a service that was never registered.
-        || s.contains("No service matches URL")
-    {
-        FailureKind::Auth
-    } else if s.contains("HTTP 429") || s.contains("rate limit") || s.contains("rate-limit") {
-        FailureKind::RateLimited
-    } else if s.contains("timed out")
-        || s.contains("connection reset")
-        || s.contains("connection refused")
-        || s.contains("dns error")
-    {
-        FailureKind::Transient
-    } else {
-        FailureKind::Data
+    match Upstream::in_chain(e) {
+        Some(Upstream::CredentialRefused) => return FailureKind::Auth,
+        Some(Upstream::RateLimited) => return FailureKind::RateLimited,
+        Some(Upstream::Unavailable) => return FailureKind::Transient,
+        None => {}
+    }
+    use std::io::ErrorKind::*;
+    match io_kind {
+        Some(TimedOut | ConnectionRefused | ConnectionReset | ConnectionAborted) => {
+            FailureKind::Transient
+        }
+        _ => FailureKind::Data,
     }
 }
 
@@ -323,15 +311,77 @@ mod tests {
     use super::*;
 
     #[test]
-    fn classify_maps_common_failures() {
-        let auth = anyhow::anyhow!("HTTP 403 Forbidden").context("fetch /me");
+    fn classify_reads_the_marker_a_provider_attached() {
+        let auth = anyhow::Error::new(Upstream::CredentialRefused).context("fetch /me");
         assert_eq!(classify(&auth), FailureKind::Auth);
-        let rl = anyhow::anyhow!("HTTP 429 too many requests");
+        let rl = anyhow::Error::new(Upstream::RateLimited);
         assert_eq!(classify(&rl), FailureKind::RateLimited);
-        let tr = anyhow::anyhow!("connection reset by peer");
-        assert_eq!(classify(&tr), FailureKind::Transient);
+        let down = anyhow::Error::new(Upstream::Unavailable);
+        assert_eq!(classify(&down), FailureKind::Transient);
+        let reset = std::io::Error::from(std::io::ErrorKind::ConnectionReset);
+        assert_eq!(classify(&anyhow::Error::new(reset)), FailureKind::Transient);
         let other = anyhow::anyhow!("unparseable row 17");
         assert_eq!(classify(&other), FailureKind::Data);
+    }
+
+    /// The words are never read. Gmail's spent daily quota is a 403 whose
+    /// message says "HTTP 403", and a signed URL's refusal says it too;
+    /// neither is a credential to sign in again for (both were, by text).
+    #[test]
+    fn a_status_in_the_words_is_not_a_classification() {
+        for said in [
+            "Gmail API https://gmail.googleapis.com/x → HTTP 403: the project's daily quota is spent",
+            "every window was refused (HTTP 403); check the device id and its start",
+            "HTTP 401 Unauthorized; rate limit; timed out",
+        ] {
+            assert_eq!(classify(&anyhow::anyhow!("{said}")), FailureKind::Data, "{said}");
+        }
+    }
+
+    /// The transport's own failures carry their meaning to the classifier
+    /// through any provider error that keeps them as a source.
+    #[test]
+    fn the_transports_failures_classify_through_its_source() {
+        use datalib_etl_web::http::{HttpError, HttpService};
+        let timeout = HttpError::Timeout {
+            service: HttpService::Slack,
+            url: "https://slack.com/api/auth.test".into(),
+            timeout_ms: 60_000,
+        };
+        assert_eq!(
+            classify(&anyhow::Error::new(timeout).context("list channels")),
+            FailureKind::Transient
+        );
+        let unregistered = HttpError::Curl {
+            service: HttpService::Claude,
+            url: "https://claude.ai/api/organizations".into(),
+            exit: 1,
+            stderr: "Error: No service matches URL: https://claude.ai/api/organizations".into(),
+        };
+        assert_eq!(
+            classify(&anyhow::Error::new(unregistered)),
+            FailureKind::Auth
+        );
+        let throttled = HttpError::GaveUp {
+            service: HttpService::Slack,
+            url: "https://slack.com/api/conversations.history".into(),
+            reason: "50 failed in a row; last attempt: HTTP 429".into(),
+            last_status: Some(429),
+        };
+        assert_eq!(
+            classify(&anyhow::Error::new(throttled)),
+            FailureKind::RateLimited
+        );
+        let gave_up_on_500s = HttpError::GaveUp {
+            service: HttpService::Slack,
+            url: "https://slack.com/api/conversations.history".into(),
+            reason: "50 failed in a row; last attempt: HTTP 500".into(),
+            last_status: Some(500),
+        };
+        assert_eq!(
+            classify(&anyhow::Error::new(gave_up_on_500s)),
+            FailureKind::Data
+        );
     }
 
     /// macOS refusing a read of a configured path (EPERM, "Operation not

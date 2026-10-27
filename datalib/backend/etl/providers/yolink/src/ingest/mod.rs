@@ -21,6 +21,7 @@ use datalib_etl::download_problems::SilentEntry;
 use datalib_etl::progress::{Progress, RunBar};
 use datalib_etl::raw_store::Sealer;
 use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl::upstream::Upstream;
 use datalib_etl_web::coverage::{self, Span};
 use datalib_etl_web::http::{latchkey_curl, HttpRequest, HttpService};
 use datalib_etl_yolink_config::{YolinkDevice, YolinkSync};
@@ -734,7 +735,17 @@ impl std::fmt::Display for HttpStatus {
     }
 }
 
-impl std::error::Error for HttpStatus {}
+/// A signed URL carries no credential, so a 401 or 403 is the window
+/// refused, never a sign-in to redo.
+impl std::error::Error for HttpStatus {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self.0 {
+            429 => Some(&Upstream::RateLimited),
+            502..=504 => Some(&Upstream::Unavailable),
+            _ => None,
+        }
+    }
+}
 
 // ── tests ───────────────────────────────────────────────────────────
 

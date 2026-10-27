@@ -12,6 +12,7 @@ use std::time::Duration;
 use regex::Regex;
 use serde_json::Value;
 
+use datalib_etl::upstream::Upstream;
 use datalib_etl_web::http::{
     latchkey_curl_classified, HttpError, HttpRequest, HttpResponse, HttpService, LatchkeySettings,
     Retryability,
@@ -30,12 +31,17 @@ pub enum ForgeError {
     /// The shared retry loop spent the source's give-up budget: no
     /// request after this one will fare better.
     #[error("{0}")]
-    GaveUp(String),
+    GaveUp(String, #[source] Option<Upstream>),
+    /// The request never got an answer to judge.
+    #[error(transparent)]
+    Transport(HttpError),
     #[error("{url}: HTTP {status} body={body:?}")]
     Status {
         url: String,
         status: u16,
         body: String,
+        #[source]
+        upstream: Option<Upstream>,
     },
 }
 
@@ -52,7 +58,7 @@ impl ForgeError {
     }
 
     pub fn gave_up(&self) -> bool {
-        matches!(self, ForgeError::GaveUp(_))
+        matches!(self, ForgeError::GaveUp(..))
     }
 
     /// The forge says the thing is not there (any more).
@@ -106,8 +112,8 @@ impl ForgeClient {
         let resp = latchkey_curl_classified(&req, self.classify)
             .await
             .map_err(|e: HttpError| match e {
-                HttpError::GaveUp { .. } => ForgeError::GaveUp(e.to_string()),
-                _ => ForgeError::Permanent(e.to_string()),
+                HttpError::GaveUp { .. } => ForgeError::GaveUp(e.to_string(), e.upstream()),
+                _ => ForgeError::Transport(e),
             })?;
         self.network_ms
             .fetch_add(resp.duration_ms, Ordering::Relaxed);
@@ -140,6 +146,7 @@ impl ForgeClient {
             url: url.to_string(),
             status: resp.status,
             body: body.chars().take(300).collect(),
+            upstream: Upstream::of_status(resp.status),
         })
     }
 

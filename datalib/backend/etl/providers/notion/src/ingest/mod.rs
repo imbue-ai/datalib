@@ -27,6 +27,7 @@ use datalib_etl::download_run::DownloadRun;
 use datalib_etl::raw_store::Sealer;
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
+use datalib_etl::upstream::Upstream;
 use datalib_etl_web::http::LatchkeySettings;
 use datalib_etl_web::owed::{self, Fetcher, Listed, Loop};
 use serde::Serialize;
@@ -471,7 +472,8 @@ async fn phases(ctx: &Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
 
     if let Some(e) = &ended {
         if e.unauthorized && s.listed == 0 {
-            anyhow::bail!("notion: {}", e.reason);
+            return Err(anyhow::Error::new(Upstream::CredentialRefused)
+                .context(format!("notion: {}", e.reason)));
         }
         let problem = e.problem();
         ctx.found.gave_up(problem.detail.clone());
@@ -513,6 +515,7 @@ fn roots_upstream_lacks(
             )),
             NotionOfficialError::Forbidden(d) => Some(DownloadProblem::forbidden("roots", raw, d)),
             NotionOfficialError::Permanent(_)
+            | NotionOfficialError::Transport(..)
             | NotionOfficialError::Unauthorized(_)
             | NotionOfficialError::GaveUp(_) => None,
         })

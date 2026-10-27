@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
+use datalib_etl::upstream::Upstream;
 use datalib_etl_web::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
 
 use super::session::{Session, CAP_CORE, CAP_MAIL};
@@ -43,6 +44,7 @@ pub async fn call(session: &Session, method: &str, args: Value) -> Result<Value>
             what: method.to_string(),
             status: resp.status,
             body: resp.body_str().to_string(),
+            upstream: Upstream::of_status(resp.status),
         }
         .into());
     }
@@ -98,6 +100,8 @@ pub enum JmapError {
         what: String,
         status: u16,
         body: String,
+        #[source]
+        upstream: Option<Upstream>,
     },
     #[error("JMAP {method}: {detail}")]
     Answer { method: String, detail: String },
@@ -160,6 +164,7 @@ pub async fn download_bytes(
             what: format!("download {url}"),
             status: resp.status,
             body: String::new(),
+            upstream: Upstream::of_status(resp.status),
         }
         .into());
     }
