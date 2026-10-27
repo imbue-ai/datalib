@@ -526,8 +526,12 @@ code.hljs {
   margin: -0.5rem -0.75rem 0.15rem;
   padding: 0.3rem 0.75rem 0.25rem;
 }
+/* `--datalib-hover` is a translucent tint; laid over the card colour it
+   matches the selected card and still hides what scrolls beneath. */
 .chat-body > .msg.msg--long.selected > h2:has(> .msg-author, > a.chip) {
-  background: var(--datalib-hover, #f0f0f0);
+  background:
+    linear-gradient(var(--datalib-hover, #f0f0f0), var(--datalib-hover, #f0f0f0)),
+    var(--datalib-card-bg, #fafafa);
 }
 /* Only while it is actually pinned: an edge and a shadow, so the line
    of text passing beneath the bar reads as passing beneath it rather
@@ -713,8 +717,9 @@ code.hljs {
 .chat-body .msg h2 > a.chip {
   font-weight: 600;
 }
-/* The recipients line is a paragraph of its own under the header. */
-.chat-body p:has(> .msg-recipients:only-child) {
+/* The recipients line is a paragraph of its own under the header. A
+   linked chip keeps chip.css's colour, which is set for its pale fill. */
+.chat-body p:has(> .msg-recipients:first-child) {
   margin: 0;
 }
 .chat-body .msg-recipients {
@@ -724,8 +729,45 @@ code.hljs {
   margin: 0 0 0.3rem;
 }
 .chat-body .msg-recipients .msg-recipient,
-.chat-body .msg-recipients a.chip {
+.chat-body .msg-recipients a.chip:not(.handle-resolved) {
   color: var(--datalib-fg, inherit);
+}
+/* A list longer than two lines folds to two, beside a button saying how
+   many people it names (`foldRecipients` in chatSections.js). */
+.chat-body p:has(> .msg-recipients--folded),
+.chat-body p:has(> .msg-recipients--open) {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  margin: 0 0 0.3rem;
+}
+.chat-body p > .msg-recipients--folded,
+.chat-body p > .msg-recipients--open {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+.chat-body .msg-recipients--folded {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+.chat-body button.msg-recipients-toggle {
+  flex: none;
+  font: inherit;
+  font-size: 0.75rem;
+  line-height: 1.3;
+  padding: 0 0.5rem;
+  color: var(--datalib-muted, #94a3b8);
+  background: transparent;
+  border: 1px solid var(--datalib-border, #d8d8d8);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.chat-body button.msg-recipients-toggle:hover {
+  color: inherit;
 }
 .chat-body .msg-ts {
   font-size: 0.75rem;
@@ -2075,10 +2117,39 @@ function nextItem(el) {
 }
 
 /**
+ * Fold a recipients line longer than two lines to two, with a button
+ * after it that says how many people it names.
+ * @param {HTMLElement} line
+ */
+function foldRecipients(line) {
+  if (line.dataset.foldChecked) return;
+  line.dataset.foldChecked = "1";
+  line.classList.add("msg-recipients--folded");
+  // Chips drawn later are a little wider than the links measured here,
+  // so a line that just fits may wrap to a third; it then shows whole.
+  if (line.scrollHeight <= line.clientHeight + 1) {
+    line.classList.remove("msg-recipients--folded");
+    return;
+  }
+  const count = line.querySelectorAll(".msg-recipient, a.chip").length;
+  const toggle = line.ownerDocument.createElement("button");
+  toggle.type = "button";
+  toggle.className = "msg-recipients-toggle";
+  toggle.textContent = `Show all ${count}`;
+  toggle.addEventListener("click", () => {
+    const folded = line.classList.toggle("msg-recipients--folded");
+    line.classList.toggle("msg-recipients--open", !folded);
+    toggle.textContent = folded ? `Show all ${count}` : "Show fewer";
+  });
+  line.after(toggle);
+}
+
+/**
  * Clamp messages that are too tall to scroll past comfortably, and give
  * them a sticky header carrying "jump to the start of this message" and
  * "jump to the next one" — so being deep inside a wall of text is never
- * a place you have to scroll your way out of.
+ * a place you have to scroll your way out of. A recipients line too
+ * long for its header folds first.
  *
  * Idempotent: re-running over an already-decorated body does nothing.
  * @param {HTMLElement} root
@@ -2107,6 +2178,12 @@ export function decorateLongMessages(root, opts = {}) {
     ro.observe(root);
     root.__chatWidthObserver = ro;
     return;
+  }
+
+  // Before the messages are measured, so a folded list is not what
+  // makes one long.
+  for (const line of root.querySelectorAll(".msg > p > .msg-recipients:first-child")) {
+    foldRecipients(line);
   }
 
   for (const el of root.querySelectorAll(":scope > .msg[data-section-uuid]")) {

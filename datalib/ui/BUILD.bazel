@@ -118,6 +118,8 @@ copy_to_bin(
     srcs = [
         "package.json",
         "playwright.config.ts",
+        # Read by chat-header-layout.spec.ts, which needs no backend.
+        "tests/goldens/render_preview.html",
         "tsconfig.json",
     ] + glob(["tests/e2e/**/*"], allow_empty = False),
 )

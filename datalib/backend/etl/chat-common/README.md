@@ -59,7 +59,13 @@ because markdown is not parsed inside a block:
 class="msg-recipient">Deanna Troi</span>; Cc …</span>`. A recipient
 the conversation already names (`Recipient::drawn` false: the number a
 text went to) is left off the line, so every message does not repeat
-it, and is searched and counted all the same.
+it, and is searched and counted all the same. The line is always
+written whole; a list longer than two lines on screen folds to two,
+beside a "Show all N" button (`foldRecipients` in
+`ui/src/cards/chatSections.js`). The `crew_wide_email` sample is one,
+and `ui/tests/e2e/chat-header-layout.spec.ts` checks it there: the
+fold, a linked chip readable on the line, and a long message's pinned
+header hiding the line as it scrolls beneath.
 
 Each document also carries a `NormalizedContact` per handle in it
 (`src/people.rs`): authors with what they wrote, recipients and
