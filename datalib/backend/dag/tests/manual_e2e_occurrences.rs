@@ -3,7 +3,9 @@
 //! the service itself lists for the same window — Google's
 //! `events.list?singleEvents=true`, a CalDAV server's `<expand>` — so a
 //! wrong repeat, a missed change or a time an hour off shows as a diff
-//! in the report rather than waiting for someone to notice.
+//! in the report rather than waiting for someone to notice. And every
+//! calendar source's occurrences are listed one per line, so a change in
+//! what we list — ours or upstream's — is a line in the diff.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -70,6 +72,61 @@ pub fn whole_calendar_sources(cfg_text: &str) -> Vec<(String, String, String)> {
         out.push((id.to_string(), method, account));
     }
     out
+}
+
+/// Every occurrence `stanza` lists, one JSON object a line, by start:
+/// the window first, the events that could not be listed last. The
+/// payload is left out: Google moves `etag` and `updated` on events
+/// nothing else changed.
+pub fn listing(data_root: &Path, stanza: &str) -> String {
+    use sqlx::Row;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build tokio runtime for the occurrences listing");
+    rt.block_on(async {
+        let path = data_root.join(stanza).join("render_occurrences/occurrences.doltlite_db");
+        let pool = super::open_readonly(&path).await;
+        let mut lines = Vec::new();
+        let w = sqlx::query("SELECT from_utc, until_utc FROM occurrences_window")
+            .fetch_one(&pool)
+            .await
+            .expect("read occurrences_window");
+        lines.push(json!({ "window": [w.get::<String, _>("from_utc"), w.get::<String, _>("until_utc")] }));
+        let rows = sqlx::query(
+            "SELECT calendar_id, instance_id, series_id, start_time, end_time, status, all_day, title \
+             FROM occurrences ORDER BY start_utc, calendar_id, instance_id",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("read occurrences");
+        for r in &rows {
+            lines.push(json!({
+                "calendar": r.get::<String, _>("calendar_id"),
+                "id": r.get::<String, _>("instance_id"),
+                "series": r.get::<Option<String>, _>("series_id"),
+                "start": r.get::<String, _>("start_time"),
+                "end": r.get::<Option<String>, _>("end_time"),
+                "status": r.get::<String, _>("status"),
+                "all_day": r.get::<i64, _>("all_day") != 0,
+                "title": r.get::<Option<String>, _>("title"),
+            }));
+        }
+        let unlisted = sqlx::query("SELECT event_row, reason FROM unlisted ORDER BY event_row, reason")
+            .fetch_all(&pool)
+            .await
+            .expect("read unlisted");
+        for r in &unlisted {
+            lines.push(json!({
+                "unlisted": r.get::<String, _>("event_row"),
+                "reason": r.get::<String, _>("reason"),
+            }));
+        }
+        pool.close().await;
+        let mut out = lines.iter().map(Value::to_string).collect::<Vec<_>>().join("\n");
+        out.push('\n');
+        out
+    })
 }
 
 /// The report for one source: what each side lists, and every

@@ -274,9 +274,10 @@ const TABLE_VOLATILE_KEYS: &[(&str, &[&str])] = &[
 /// message content still lands in the golden — through its
 /// `render_markdown` tree.
 ///
-/// The two whole calendars are thousands of events each; what they are
-/// here for is `occurrences_vs_service`, which checks every occurrence
-/// against the service, so their stores are counted too.
+/// The two whole calendars' raw stores are thousands of events each;
+/// what they are here for is their occurrences, which `occurrences.snap`
+/// lists one a line and `occurrences_vs_service` checks against the
+/// service, so their stores are counted too.
 ///
 /// Keyed by stanza (the group id in dag.toml), which is also what names
 /// the snapshot directory. A store not listed is dumped in full.
@@ -586,8 +587,7 @@ fn manual_e2e_live_sync_golden() {
         "system/ (operational history) must NOT be tagged as cache"
     );
 
-    // Snapshot each group's `ingest/`, `render_markdown/` and
-    // `render_occurrences/` trees, mirroring
+    // Snapshot each group's `ingest/` and `render_markdown/` trees, mirroring
     // the on-disk per-group layout. `system/` and the `unified_document_index` group
     // (the aggregate index + qmd) are skipped — see the module header.
     let mut stanzas: Vec<String> = std::fs::read_dir(&data_root)
@@ -601,7 +601,7 @@ fn manual_e2e_live_sync_golden() {
 
     let mut manifest: Vec<String> = Vec::new();
     for stanza in &stanzas {
-        for sub in ["ingest", "render_markdown", "render_occurrences"] {
+        for sub in ["ingest", "render_markdown"] {
             let dir = data_root.join(stanza).join(sub);
             snapshot_tree(&dir, &format!("{stanza}/{sub}"), &mut manifest);
         }
@@ -658,8 +658,21 @@ fn manual_e2e_live_sync_golden() {
         assert_snapshot!("search_terms", search_terms(&data_root));
     });
 
-    // Each calendar mirrored whole, its occurrences beside what the
-    // service lists for the same days (`manual_e2e_occurrences.rs`).
+    // Every calendar's occurrences, one a line, and each calendar
+    // mirrored whole beside what the service lists for the same days
+    // (`manual_e2e_occurrences.rs`).
+    for stanza in stanzas
+        .iter()
+        .filter(|s| data_root.join(s).join("render_occurrences").is_dir())
+    {
+        insta::with_settings!({
+            snapshot_path => snap_base().join(stanza).display().to_string(),
+            prepend_module_to_snapshot => false,
+            description => "render_occurrences, one occurrence a line (JSONL), payload left out",
+        }, {
+            assert_snapshot!("occurrences", manual_e2e_occurrences::listing(&data_root, stanza));
+        });
+    }
     for (stanza, method, account) in manual_e2e_occurrences::whole_calendar_sources(&cfg_out) {
         let report = manual_e2e_occurrences::compare(&data_root, &stanza, &method, &account);
         insta::with_settings!({
