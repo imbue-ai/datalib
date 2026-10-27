@@ -22,6 +22,8 @@ use insta::{assert_json_snapshot, assert_snapshot};
 use serde_json::Value;
 use walkdir::WalkDir;
 
+mod manual_e2e_occurrences;
+
 /// The run's tempdir `data_root`, captured once. Snapshots replace its
 /// volatile absolute prefix (`/var/folders/…/.tmpXXXX/data`) with a stable
 /// `<data_root>` token — preserving the meaningful suffix (which db / rendered
@@ -272,9 +274,19 @@ const TABLE_VOLATILE_KEYS: &[(&str, &[&str])] = &[
 /// message content still lands in the golden — through its
 /// `render_markdown` tree.
 ///
+/// The two whole calendars are thousands of events each; what they are
+/// here for is `occurrences_vs_service`, which checks every occurrence
+/// against the service, so their stores are counted too.
+///
 /// Keyed by stanza (the group id in dag.toml), which is also what names
 /// the snapshot directory. A store not listed is dumped in full.
-const ROW_COUNT_ONLY_STANZAS: &[&str] = &["apple_photos", "lightroom", "whatsapp"];
+const ROW_COUNT_ONLY_STANZAS: &[&str] = &[
+    "apple_photos",
+    "lightroom",
+    "whatsapp",
+    "google_calendar_primary",
+    "fastmail_calendar_team",
+];
 
 /// Tables dumped as a row count inside an otherwise full dump, as
 /// `(stanza, table)`; `"*"` is every stanza. Three reasons a table is
@@ -574,7 +586,8 @@ fn manual_e2e_live_sync_golden() {
         "system/ (operational history) must NOT be tagged as cache"
     );
 
-    // Snapshot each group's `ingest/` and `render_markdown/` trees, mirroring
+    // Snapshot each group's `ingest/`, `render_markdown/` and
+    // `render_occurrences/` trees, mirroring
     // the on-disk per-group layout. `system/` and the `unified_document_index` group
     // (the aggregate index + qmd) are skipped — see the module header.
     let mut stanzas: Vec<String> = std::fs::read_dir(&data_root)
@@ -588,7 +601,7 @@ fn manual_e2e_live_sync_golden() {
 
     let mut manifest: Vec<String> = Vec::new();
     for stanza in &stanzas {
-        for sub in ["ingest", "render_markdown"] {
+        for sub in ["ingest", "render_markdown", "render_occurrences"] {
             let dir = data_root.join(stanza).join(sub);
             snapshot_tree(&dir, &format!("{stanza}/{sub}"), &mut manifest);
         }
@@ -644,6 +657,19 @@ fn manual_e2e_live_sync_golden() {
     }, {
         assert_snapshot!("search_terms", search_terms(&data_root));
     });
+
+    // Each calendar mirrored whole, its occurrences beside what the
+    // service lists for the same days (`manual_e2e_occurrences.rs`).
+    for (stanza, method, account) in manual_e2e_occurrences::whole_calendar_sources(&cfg_out) {
+        let report = manual_e2e_occurrences::compare(&data_root, &stanza, &method, &account);
+        insta::with_settings!({
+            snapshot_path => snap_base().join(&stanza).display().to_string(),
+            prepend_module_to_snapshot => false,
+            description => "render_occurrences beside the service's own listing of the same window",
+        }, {
+            assert_json_snapshot!("occurrences_vs_service", report);
+        });
+    }
 
     // ── The contacts app: links a person made, which nothing rebuilds ──
     //
@@ -1764,12 +1790,12 @@ fn prune_orphan_snapshots(manifest: &[String]) {
         }
         // Snapshot path mirrors the data layout, so only the per-group
         // tree snaps are manifest-keyed — hence pruning only under an
-        // `ingest/` or `render_markdown/` segment.
+        // `ingest/`, `render_markdown/` or `render_occurrences/` segment.
         let rel = p.strip_prefix(&base).unwrap().to_string_lossy().to_string();
         let key = rel.strip_suffix(".snap").unwrap_or(&rel);
         let is_tree_snap = key
             .split('/')
-            .any(|seg| seg == "ingest" || seg == "render_markdown");
+            .any(|seg| matches!(seg, "ingest" | "render_markdown" | "render_occurrences"));
         if is_tree_snap && !keys.contains(key) {
             std::fs::remove_file(p)
                 .unwrap_or_else(|e| panic!("delete orphan snapshot {}: {e}", p.display()));
