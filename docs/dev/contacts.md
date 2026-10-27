@@ -233,8 +233,9 @@ Where a source shows the owner's side under a stand-in (WhatsApp,
 Signal, Messages, SMS backup, Google Voice and the AI chats, as
 `AuthorKind::Account`), chat-common writes it "Me", by `me:self` where
 the source has no handle of its own for them: one chip for the owner
-across every source. `me:self` is not a participant, since the owner
-is in every conversation they wrote in; `from:` finds it. Where a
+across every source. `me:self` is not among a conversation's
+participants, since the owner is in every conversation they wrote in,
+so `with:me:self`, like `from:me:self`, finds the messages they wrote. Where a
 source has no stand-in (email, Slack, Google Chat), the owner's own
 messages carry their address or user id like anyone else's.
 
