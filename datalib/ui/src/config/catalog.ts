@@ -475,6 +475,9 @@ export const CATALOG: CatalogEntry[] = [
 
   {
     type: "chatgpt",
+    // Before the export entry: a step with an `api` table beside its
+    // `export` is this one, the API seeded from the export.
+    variantKey: "api",
     method: "api",
     label: "ChatGPT",
     blurb: "Copy your ChatGPT conversations.",
@@ -517,6 +520,20 @@ export const CATALOG: CatalogEntry[] = [
           { label: "Only conversations updated since a date I choose", fields: ["api.since"] },
         ],
       },
+      {
+        heading: "Start from an export?",
+        answers: [
+          { label: "No, download every conversation" },
+          {
+            label: "Yes, read a ChatGPT data export first",
+            help:
+              "Copies every conversation the export holds without asking chatgpt.com, so only " +
+              "what changed after it is downloaded. Ask for one in ChatGPT's Settings → Data " +
+              "controls → Export data.",
+            fields: ["export.path"],
+          },
+        ],
+      },
     ],
     fields: [
       {
@@ -525,6 +542,17 @@ export const CATALOG: CatalogEntry[] = [
         target: "latchkey_settings.account",
         label: "ChatGPT account",
         help: NAME_IT_HELP,
+      },
+      {
+        kind: "path",
+        picks: "file",
+        pickTitle: "Choose the ChatGPT export .zip",
+        extensions: ["zip"],
+        target: "export.path",
+        label: "Export file",
+        help:
+          "The .zip as it downloaded, ~/Downloads/chatgpt-export.zip say, or the folder you " +
+          "unzipped it into. A newer export can replace it at any time.",
       },
       {
         kind: "date",

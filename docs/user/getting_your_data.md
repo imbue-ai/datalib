@@ -191,7 +191,8 @@ and give the source an `export` table whose `path` is the downloaded
 brings the attached files too, though not the tool steps (code
 output, file reads, image generation) the API shows.
 
-Better, give one source both an `api` table and the `export` table.
+Better, give one source both an `api` table and the `export` table:
+in the wizard, the ChatGPT form's **Start from an export?** question.
 The first sync fills in every conversation from the export, with its
 files, then the API downloads only what changed after the export was
 taken; later syncs skip the export until you point it at a new one.
