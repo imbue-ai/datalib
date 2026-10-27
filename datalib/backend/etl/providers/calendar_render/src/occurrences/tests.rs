@@ -401,3 +401,42 @@ async fn doltlite_raw_commit(pool: &sqlx::SqlitePool) {
         .await
         .unwrap();
 }
+
+/// Measured live: Google stops a rule that never ends after 730
+/// occurrences. A daily series begun in 2020 has none in 2026, while one
+/// with its own `COUNT` or `UNTIL`, or on a CalDAV calendar, runs as
+/// written.
+#[test]
+fn google_stops_a_rule_that_never_ends_at_730_occurrences() {
+    let daily = |id: &str, rule: &str| {
+        json!({
+            "id": id, "status": "confirmed",
+            "start": at("2020-07-21T08:00:00-07:00"), "end": at("2020-07-21T08:15:00-07:00"),
+            "recurrence": [rule]
+        })
+    };
+    let parsed = google(vec![
+        daily("open01", "RRULE:FREQ=DAILY"),
+        daily("until01", "RRULE:FREQ=DAILY;UNTIL=20261231T000000Z"),
+    ]);
+    let listed = list(&parsed, &window("2022-07-19", "2022-07-23"));
+    let open: Vec<&str> = ids(&listed)
+        .into_iter()
+        .filter(|i| i.starts_with("open01"))
+        .collect();
+    assert_eq!(
+        open,
+        ["open01_20220719T150000Z", "open01_20220720T150000Z"],
+        "the 730th is 20 July 2022"
+    );
+    let later = list(&parsed, &window("2026-10-01", "2026-10-03"));
+    assert_eq!(
+        ids(&later),
+        ["until01_20261001T150000Z", "until01_20261002T150000Z"]
+    );
+    assert_eq!(
+        google_bounded("RRULE:FREQ=WEEKLY;COUNT=3"),
+        "RRULE:FREQ=WEEKLY;COUNT=3"
+    );
+    assert_eq!(google_bounded("FREQ=MONTHLY"), "FREQ=MONTHLY;COUNT=730");
+}

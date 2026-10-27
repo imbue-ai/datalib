@@ -118,6 +118,25 @@ pub fn list(parsed: &Parsed, window: &Window) -> Listed {
     out
 }
 
+/// Google expands a rule that never ends (no `COUNT`, no `UNTIL`) to
+/// 730 occurrences from its first start and lists none after them;
+/// measured on daily, weekly and monthly series. A daily meeting begun
+/// in 2020 is over in July 2022 as far as Google's own calendar shows.
+pub const GOOGLE_OPEN_RULE_COUNT: u32 = 730;
+
+/// `rule` as Google runs it: one that never ends is given
+/// [`GOOGLE_OPEN_RULE_COUNT`].
+pub fn google_bounded(rule: &str) -> String {
+    let ends = rule.split(';').any(|part| {
+        let key = part.split('=').next().unwrap_or("").trim();
+        key.eq_ignore_ascii_case("COUNT") || key.eq_ignore_ascii_case("UNTIL")
+    });
+    match ends {
+        true => rule.to_string(),
+        false => format!("{rule};COUNT={GOOGLE_OPEN_RULE_COUNT}"),
+    }
+}
+
 /// Google's id for an occurrence of `series_id` the rule put at
 /// `original`: `<id>_20261022T160000Z`, or `<id>_20261224` for an
 /// all-day one. A series split by "this and following" is
@@ -209,6 +228,7 @@ fn google_calendar(
             )
         };
         let (rules, rdates, exdates) = google::recurrence(v);
+        let rules: Vec<String> = rules.iter().map(|r| google_bounded(r)).collect();
         let recurs = !(rules.is_empty() && rdates.is_empty());
         let mut removed = exdates;
         removed.extend(

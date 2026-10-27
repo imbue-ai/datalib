@@ -85,5 +85,10 @@ names what comes out. The traps it handles, each with a test:
   with an `UNTIL` and starts `<id>_R<start>`; its occurrences, and the
   rows that change them, are `<id>_<start>Z`, without the `_R…`.
 - **All-day series** run on dates and are named by date.
+- **Google stops a rule that never ends after 730 occurrences.** A
+  Google series with neither `COUNT` nor `UNTIL` is given `COUNT=730`,
+  which is what Google's own listing does (measured on daily, weekly
+  and monthly series): a daily meeting begun in 2020 is over in July
+  2022. A CalDAV or `.ics` series runs as RFC 5545 says, forever.
 - **`COUNT` counts the first start**, and the first start is an
   occurrence even when the rule would not give it (RFC 5545).
