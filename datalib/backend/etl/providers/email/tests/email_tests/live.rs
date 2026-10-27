@@ -141,16 +141,21 @@ async fn gmail_live_one_label_roundtrip() {
         "every row in the store should be one this run reported writing",
     );
 
+    // Whole threads: a message is kept for carrying the label, or for
+    // sharing a thread with one that does.
     let mailbox_id = mailbox_id_for(&db, &label).await;
-    let labelled: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM email_mailboxes WHERE mailbox_id = ?")
-            .bind(&mailbox_id)
-            .fetch_one(db.pool())
-            .await
-            .expect("count labelled");
+    let unkept: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM emails e WHERE NOT EXISTS (
+            SELECT 1 FROM emails k JOIN email_mailboxes m ON m.email_id = k.id
+            WHERE k.thread_id = e.thread_id AND m.mailbox_id = ?)",
+    )
+    .bind(&mailbox_id)
+    .fetch_one(db.pool())
+    .await
+    .expect("count the unkept");
     assert_eq!(
-        labelled, email_count,
-        "every mirrored message must carry the label we filtered on",
+        unkept, 0,
+        "every mirrored message must share a thread with one under the label",
     );
 
     // ── every message has its bytes, and they are the bytes claimed ──
