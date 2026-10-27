@@ -87,8 +87,15 @@ pub fn expand(
         }
         Ok(())
     };
+    // Two days past the window on the series' own clock, which no
+    // offset reaches past.
+    let stop = start_zone.local_at(window.until) + Duration::days(2);
+    let all_day = series.start.is_all_day();
     for rule in &rules {
-        for local in rule.starts(first) {
+        let starts = rule
+            .starts(first, all_day, stop)
+            .map_err(Unexpandable::Rule)?;
+        for local in starts {
             if !start_zone.within_until(local, rule.until.as_ref()) {
                 break;
             }
@@ -353,15 +360,19 @@ fn same_kind(a: &EventTime, b: &EventTime) -> bool {
 
 impl Clock {
     fn time_at_instant(&self, at: DateTime<Utc>) -> EventTime {
-        let local = match self {
+        self.time_at(self.local_at(at))
+    }
+
+    /// What this clock reads at `at`.
+    fn local_at(&self, at: DateTime<Utc>) -> NaiveDateTime {
+        match self {
             Clock::Named(tz, _) | Clock::GoogleNamed(tz, _) | Clock::Floating(Some(tz)) => {
                 at.with_timezone(tz).naive_local()
             }
             Clock::Fixed(o) => FixedOffset::east_opt(*o)
                 .map_or_else(|| at.naive_utc(), |z| at.with_timezone(&z).naive_local()),
             Clock::Date | Clock::Utc | Clock::Floating(None) => at.naive_utc(),
-        };
-        self.time_at(local)
+        }
     }
 }
 
@@ -637,7 +648,7 @@ mod tests {
             Err(Unexpandable::Zone("Pacific Standard Time".into()))
         );
         let start = ical("20261001T090000", Some(LA));
-        let rules = ["FREQ=YEARLY;BYWEEKNO=1".to_string()];
+        let rules = ["FREQ=FORTNIGHTLY".to_string()];
         let s = Series {
             start: &start,
             rules: &rules,

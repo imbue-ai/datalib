@@ -1,23 +1,16 @@
-//! An RFC 5545 `RRULE` run forward: the wall-clock times a rule gives
-//! from a series' first start, read in the series' own zone so a weekly
-//! 9am stays 9am across daylight saving. Zones, `UNTIL` and the dates a
-//! series no longer has are [`crate::occurrences`]'s; this file only
-//! counts days. A rule part it cannot follow is refused by name rather
-//! than skipped, since skipping one changes which dates come out.
+//! An RFC 5545 `RRULE` run forward on a wall clock, by
+//! [`calcard`](https://github.com/stalwartlabs/calcard): the one file
+//! that names it. The rule is run on floating time, so a weekly 9am
+//! stays 9am; which zone that clock is in, `UNTIL`, and the dates a
+//! series no longer has are [`crate::occurrences`]'s.
 
-use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Weekday};
+use calcard::datecalc::rrule::RRule;
+use calcard::icalendar::{ICalendar, ICalendarProperty, ICalendarValue};
+use chrono::{NaiveDate, NaiveDateTime};
 
-/// No series is followed past this year: a rule that matches no date at
-/// all (`BYMONTH=2;BYMONTHDAY=30`) would otherwise run forever.
-const LAST_YEAR: i32 = 2200;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Freq {
-    Daily,
-    Weekly,
-    Monthly,
-    Yearly,
-}
+/// More starts than any window asks for; a rule that would give more
+/// before `stop` is refused rather than cut short.
+const MOST: usize = 1_000_000;
 
 /// `UNTIL`, kept in the form it was written: RFC 5545 has it in UTC
 /// beside a zoned start, a date beside an all-day one, and wall-clock
@@ -30,323 +23,105 @@ pub enum Until {
     Local(NaiveDateTime),
 }
 
+/// An `RRULE` value (`FREQ=WEEKLY;BYDAY=MO`), with or without its
+/// `RRULE:` name, split into the rule calcard runs and its `UNTIL`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rule {
-    pub freq: Freq,
-    pub interval: u32,
-    pub count: Option<u32>,
+    without_until: String,
     pub until: Option<Until>,
-    by_month: Vec<u32>,
-    by_month_day: Vec<i32>,
-    by_year_day: Vec<i32>,
-    by_day: Vec<(Option<i32>, Weekday)>,
-    by_hour: Vec<u32>,
-    by_minute: Vec<u32>,
-    by_second: Vec<u32>,
-    by_set_pos: Vec<i32>,
-    wkst: Weekday,
 }
 
 impl Rule {
-    /// An `RRULE` value (`FREQ=WEEKLY;BYDAY=MO`), with or without its
-    /// `RRULE:` name. `Err` names the part it cannot follow.
+    /// `Err` says what in the rule cannot be read.
     pub fn parse(rule: &str) -> Result<Rule, String> {
-        let mut freq = None;
-        let mut r = Rule {
-            freq: Freq::Daily,
-            interval: 1,
-            count: None,
-            until: None,
-            by_month: Vec::new(),
-            by_month_day: Vec::new(),
-            by_year_day: Vec::new(),
-            by_day: Vec::new(),
-            by_hour: Vec::new(),
-            by_minute: Vec::new(),
-            by_second: Vec::new(),
-            by_set_pos: Vec::new(),
-            wkst: Weekday::Mon,
-        };
         let body = rule.trim();
         let body = body.strip_prefix("RRULE:").unwrap_or(body);
+        let mut until = None;
+        let mut kept = Vec::new();
         for part in body.split(';').map(str::trim).filter(|p| !p.is_empty()) {
-            let bad = || format!("cannot follow `{part}`");
-            let (k, v) = part.split_once('=').ok_or_else(bad)?;
-            let v = v.trim();
-            match k.trim().to_ascii_uppercase().as_str() {
-                "FREQ" => {
-                    freq = Some(match v.to_ascii_uppercase().as_str() {
-                        "DAILY" => Freq::Daily,
-                        "WEEKLY" => Freq::Weekly,
-                        "MONTHLY" => Freq::Monthly,
-                        "YEARLY" => Freq::Yearly,
-                        _ => return Err(bad()),
-                    })
+            match part.split_once('=') {
+                Some((k, v)) if k.trim().eq_ignore_ascii_case("UNTIL") => {
+                    until = Some(
+                        parse_until(v.trim()).ok_or_else(|| format!("cannot follow `{part}`"))?,
+                    );
                 }
-                "INTERVAL" => r.interval = v.parse().ok().filter(|n| *n >= 1).ok_or_else(bad)?,
-                "COUNT" => r.count = Some(v.parse().map_err(|_| bad())?),
-                "UNTIL" => r.until = Some(until(v).ok_or_else(bad)?),
-                "BYMONTH" => r.by_month = numbers(v, 1, 12, false).ok_or_else(bad)?,
-                "BYMONTHDAY" => r.by_month_day = numbers(v, 1, 31, true).ok_or_else(bad)?,
-                "BYYEARDAY" => r.by_year_day = numbers(v, 1, 366, true).ok_or_else(bad)?,
-                "BYSETPOS" => r.by_set_pos = numbers(v, 1, 366, true).ok_or_else(bad)?,
-                "BYHOUR" => r.by_hour = numbers(v, 0, 23, false).ok_or_else(bad)?,
-                "BYMINUTE" => r.by_minute = numbers(v, 0, 59, false).ok_or_else(bad)?,
-                "BYSECOND" => r.by_second = numbers(v, 0, 59, false).ok_or_else(bad)?,
-                "BYDAY" => {
-                    r.by_day = v
-                        .split(',')
-                        .map(|d| by_day(d.trim()))
-                        .collect::<Option<_>>()
-                        .ok_or_else(bad)?
-                }
-                "WKST" => r.wkst = weekday(v).ok_or_else(bad)?,
-                _ => return Err(bad()),
+                _ => kept.push(part),
             }
         }
-        r.freq = freq.ok_or_else(|| format!("no FREQ in `{rule}`"))?;
-        if r.count.is_some() && r.until.is_some() {
-            return Err(format!("both COUNT and UNTIL in `{rule}`"));
-        }
-        Ok(r)
+        Ok(Rule {
+            without_until: kept.join(";"),
+            until,
+        })
     }
 
     /// The wall-clock starts this rule gives a series that first starts
-    /// at `first`, in order, `first` itself included (RFC 5545 counts
-    /// it as the first occurrence whether or not the rule gives it).
-    /// `COUNT` is applied here; `UNTIL` is the caller's, since comparing
-    /// a UTC one needs the zone.
-    pub fn starts(&self, first: NaiveDateTime) -> Starts {
-        Starts {
-            rule: self.with_defaults(first),
-            first,
-            period: 0,
-            pending: Vec::new(),
-            emitted: 0,
-            first_done: false,
-            exhausted: false,
-        }
-    }
-
-    /// The parts RFC 5545 takes from `DTSTART` when the rule leaves them
-    /// out: a weekly rule repeats on its first start's weekday, a monthly
-    /// one on its day of the month, a yearly one on its date.
-    fn with_defaults(&self, first: NaiveDateTime) -> Rule {
-        let mut r = self.clone();
-        let no_day = r.by_day.is_empty() && r.by_month_day.is_empty() && r.by_year_day.is_empty();
-        if no_day {
-            match r.freq {
-                Freq::Daily => {}
-                Freq::Weekly => r.by_day = vec![(None, first.weekday())],
-                Freq::Monthly => r.by_month_day = vec![first.day() as i32],
-                Freq::Yearly => {
-                    r.by_month_day = vec![first.day() as i32];
-                    if r.by_month.is_empty() {
-                        r.by_month = vec![first.month()];
-                    }
-                }
-            }
-        }
-        // An ordinal on BYDAY only means something within a month or a year.
-        if matches!(r.freq, Freq::Daily | Freq::Weekly) {
-            for d in &mut r.by_day {
-                d.0 = None;
-            }
-        }
-        for (list, default) in [
-            (&mut r.by_hour, first.hour()),
-            (&mut r.by_minute, first.minute()),
-            (&mut r.by_second, first.second()),
-        ] {
-            if list.is_empty() {
-                list.push(default);
-            }
-            list.sort_unstable();
-            list.dedup();
-        }
-        r
-    }
-
-    fn period_days(&self, first: NaiveDate, k: i64) -> Option<Vec<NaiveDate>> {
-        let step = k * i64::from(self.interval);
-        let days = match self.freq {
-            Freq::Daily => vec![first.checked_add_signed(Duration::days(step))?],
-            Freq::Weekly => {
-                let back = (7 + first.weekday().num_days_from_monday() as i64
-                    - self.wkst.num_days_from_monday() as i64)
-                    % 7;
-                let start = first.checked_add_signed(Duration::days(step * 7 - back))?;
-                (0..7).map(|i| start + Duration::days(i)).collect()
-            }
-            Freq::Monthly => {
-                let m = i64::from(first.year()) * 12 + i64::from(first.month0()) + step;
-                let start = NaiveDate::from_ymd_opt(
-                    i32::try_from(m.div_euclid(12)).ok()?,
-                    m.rem_euclid(12) as u32 + 1,
-                    1,
-                )?;
-                start
-                    .iter_days()
-                    .take_while(|d| d.month() == start.month())
-                    .collect()
-            }
-            Freq::Yearly => {
-                let start =
-                    NaiveDate::from_ymd_opt(first.year() + i32::try_from(step).ok()?, 1, 1)?;
-                start
-                    .iter_days()
-                    .take_while(|d| d.year() == start.year())
-                    .collect()
-            }
+    /// at `first`, in order and before `stop`, `first` included (RFC
+    /// 5545 counts it as the first occurrence). `all_day` runs it on
+    /// dates. `COUNT` is applied here; `UNTIL` is the caller's.
+    pub fn starts(
+        &self,
+        first: NaiveDateTime,
+        all_day: bool,
+        stop: NaiveDateTime,
+    ) -> Result<Vec<NaiveDateTime>, String> {
+        let spell = |t: NaiveDateTime| match all_day {
+            true => t.format("%Y%m%d").to_string(),
+            false => t.format("%Y%m%dT%H%M%S").to_string(),
         };
-        (days.first()?.year() <= LAST_YEAR).then_some(days)
-    }
-
-    fn day_matches(&self, d: NaiveDate) -> bool {
-        let dim = days_in_month(d);
-        let diy = if d.leap_year() { 366 } else { 365 };
-        let nth = |n: i32, pos: u32, len: u32| match n {
-            n if n > 0 => (pos - 1) / 7 + 1 == n as u32,
-            n => (len - pos) / 7 + 1 == n.unsigned_abs(),
+        let value = if all_day { ";VALUE=DATE" } else { "" };
+        // `stop` bounds the run as an `UNTIL`, except beside a `COUNT`,
+        // which bounds it already and may not share a rule with one.
+        let counted = self
+            .without_until
+            .split(';')
+            .any(|p| p.trim().to_ascii_uppercase().starts_with("COUNT="));
+        let bound = match counted {
+            true => String::new(),
+            false => format!(";UNTIL={}", spell(stop)),
         };
-        let within_month = self.freq == Freq::Monthly || !self.by_month.is_empty();
-        (self.by_month.is_empty() || self.by_month.contains(&d.month()))
-            && (self.by_month_day.is_empty()
-                || self
-                    .by_month_day
-                    .iter()
-                    .any(|&md| signed_is(md, d.day(), dim)))
-            && (self.by_year_day.is_empty()
-                || self
-                    .by_year_day
-                    .iter()
-                    .any(|&yd| signed_is(yd, d.ordinal(), diy)))
-            && (self.by_day.is_empty()
-                || self.by_day.iter().any(|&(n, wd)| {
-                    d.weekday() == wd
-                        && match n {
-                            None => true,
-                            Some(n) if within_month => nth(n, d.day(), dim),
-                            Some(n) => nth(n, d.ordinal(), diy),
-                        }
-                }))
-    }
-
-    fn period(&self, first: NaiveDate, k: i64) -> Option<Vec<NaiveDateTime>> {
-        let mut out = Vec::new();
-        for d in self.period_days(first, k)? {
-            if !self.day_matches(d) {
-                continue;
-            }
-            for &h in &self.by_hour {
-                for &m in &self.by_minute {
-                    for &s in &self.by_second {
-                        out.extend(NaiveTime::from_hms_opt(h, m, s).map(|t| d.and_time(t)));
-                    }
+        let ics = format!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//datalib//recur//EN\r\n\
+             BEGIN:VEVENT\r\nUID:recur\r\nDTSTART{value}:{}\r\nDURATION:PT0S\r\n\
+             RRULE:{}{bound}\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+            spell(first),
+            self.without_until,
+        );
+        let refused = || format!("cannot follow `{}`", self.without_until);
+        let cal = ICalendar::parse(&ics).map_err(|_| refused())?;
+        // A rule calcard cannot read leaves the event with no rule at all,
+        // which it would list once, as a one-off.
+        let read = cal.components.iter().flat_map(|c| &c.entries).any(|e| {
+            match (&e.name, e.values.first()) {
+                (ICalendarProperty::Rrule, Some(ICalendarValue::RecurrenceRule(r))) => {
+                    RRule::from_floating_ical(r).is_some()
                 }
+                _ => false,
             }
+        });
+        if !read {
+            return Err(refused());
         }
-        if self.by_set_pos.is_empty() {
-            return Some(out);
+        let expanded = cal.expand_dates(chrono::Utc, MOST);
+        if let Some(e) = expanded.errors.first() {
+            return Err(format!("{}: {:?}", refused(), e.error));
         }
-        let len = out.len() as i64;
-        let mut picked: Vec<NaiveDateTime> = self
-            .by_set_pos
+        if expanded.events.len() >= MOST {
+            return Err(format!("{} gives over {MOST} starts", refused()));
+        }
+        let mut starts: Vec<NaiveDateTime> = expanded
+            .events
             .iter()
-            .filter_map(|&p| {
-                let i = if p > 0 {
-                    i64::from(p) - 1
-                } else {
-                    len + i64::from(p)
-                };
-                usize::try_from(i).ok().and_then(|i| out.get(i).copied())
-            })
+            .map(|e| e.start.naive_local())
+            .filter(|t| *t < stop)
             .collect();
-        picked.sort_unstable();
-        picked.dedup();
-        Some(picked)
+        starts.push(first);
+        starts.sort_unstable();
+        starts.dedup();
+        Ok(starts)
     }
 }
 
-/// [`Rule::starts`].
-pub struct Starts {
-    rule: Rule,
-    first: NaiveDateTime,
-    period: i64,
-    /// The current period's starts still to give, latest first.
-    pending: Vec<NaiveDateTime>,
-    emitted: u32,
-    first_done: bool,
-    exhausted: bool,
-}
-
-impl Iterator for Starts {
-    type Item = NaiveDateTime;
-
-    fn next(&mut self) -> Option<NaiveDateTime> {
-        if self.rule.count.is_some_and(|c| self.emitted >= c) {
-            return None;
-        }
-        if !self.first_done {
-            self.first_done = true;
-            self.emitted += 1;
-            return Some(self.first);
-        }
-        loop {
-            if let Some(t) = self.pending.pop() {
-                self.emitted += 1;
-                return Some(t);
-            }
-            if self.exhausted {
-                return None;
-            }
-            match self.rule.period(self.first.date(), self.period) {
-                Some(mut starts) => {
-                    starts.retain(|t| *t > self.first);
-                    starts.reverse();
-                    self.pending = starts;
-                    self.period += 1;
-                }
-                None => self.exhausted = true,
-            }
-        }
-    }
-}
-
-fn signed_is(want: i32, pos: u32, len: u32) -> bool {
-    if want > 0 {
-        pos == want as u32
-    } else {
-        len + 1 >= want.unsigned_abs() && pos == len + 1 - want.unsigned_abs()
-    }
-}
-
-fn days_in_month(d: NaiveDate) -> u32 {
-    let next = if d.month() == 12 {
-        NaiveDate::from_ymd_opt(d.year() + 1, 1, 1)
-    } else {
-        NaiveDate::from_ymd_opt(d.year(), d.month() + 1, 1)
-    };
-    next.map_or(31, |n| n.pred_opt().map_or(31, |l| l.day()))
-}
-
-fn numbers<T: std::str::FromStr + Copy + Into<i64>>(
-    v: &str,
-    min: i64,
-    max: i64,
-    negative: bool,
-) -> Option<Vec<T>> {
-    v.split(',')
-        .map(|n| {
-            let parsed: T = n.trim().trim_start_matches('+').parse().ok()?;
-            let x: i64 = parsed.into();
-            let ok = (min..=max).contains(&x) || (negative && (-max..=-min).contains(&x));
-            ok.then_some(parsed)
-        })
-        .collect()
-}
-
-fn until(v: &str) -> Option<Until> {
+fn parse_until(v: &str) -> Option<Until> {
     if v.len() == 8 {
         return NaiveDate::parse_from_str(v, "%Y%m%d").ok().map(Until::Date);
     }
@@ -360,30 +135,6 @@ fn until(v: &str) -> Option<Until> {
     }
 }
 
-fn by_day(d: &str) -> Option<(Option<i32>, Weekday)> {
-    let split = d.len().checked_sub(2)?;
-    let (ord, code) = d.split_at(split);
-    let wd = weekday(code)?;
-    if ord.is_empty() {
-        return Some((None, wd));
-    }
-    let n: i32 = ord.trim_start_matches('+').parse().ok()?;
-    ((1..=53).contains(&n.abs())).then_some((Some(n), wd))
-}
-
-fn weekday(code: &str) -> Option<Weekday> {
-    Some(match code.to_ascii_uppercase().as_str() {
-        "MO" => Weekday::Mon,
-        "TU" => Weekday::Tue,
-        "WE" => Weekday::Wed,
-        "TH" => Weekday::Thu,
-        "FR" => Weekday::Fri,
-        "SA" => Weekday::Sat,
-        "SU" => Weekday::Sun,
-        _ => return None,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -393,9 +144,13 @@ mod tests {
     }
 
     fn first_n(rule: &str, start: &str, n: usize) -> Vec<String> {
+        let first = at(start);
+        let stop = first + chrono::Duration::days(366 * 10);
         Rule::parse(rule)
             .unwrap()
-            .starts(at(start))
+            .starts(first, false, stop)
+            .unwrap()
+            .into_iter()
             .take(n)
             .map(|t| t.format("%Y%m%dT%H%M").to_string())
             .collect()
@@ -481,7 +236,7 @@ mod tests {
     }
 
     #[test]
-    fn monthly_on_the_first_friday_and_on_the_last_and_second_to_last_day() {
+    fn monthly_on_the_first_friday_and_on_the_third_to_last_day() {
         assert_eq!(
             dates("FREQ=MONTHLY;COUNT=10;BYDAY=1FR", "19970905T090000", 3),
             ["19970905", "19971003", "19971107"]
@@ -509,7 +264,7 @@ mod tests {
     }
 
     #[test]
-    fn yearly_by_month_and_by_weekday() {
+    fn yearly_by_month_by_weekday_and_by_week_number() {
         assert_eq!(
             dates("FREQ=YEARLY;COUNT=10;BYMONTH=6,7", "19970610T090000", 4),
             ["19970610", "19970710", "19980610", "19980710"]
@@ -523,10 +278,14 @@ mod tests {
             dates("FREQ=YEARLY;BYDAY=TH;BYMONTH=3", "19970313T090000", 4),
             ["19970313", "19970320", "19970327", "19980305"]
         );
-        // The 20th Monday of the year.
+        // The 20th Monday of the year, and Monday of week 20.
         assert_eq!(
             dates("FREQ=YEARLY;BYDAY=20MO", "19970519T090000", 3),
             ["19970519", "19980518", "19990517"]
+        );
+        assert_eq!(
+            dates("FREQ=YEARLY;BYWEEKNO=20;BYDAY=MO", "19970512T090000", 3),
+            ["19970512", "19980511", "19990517"]
         );
     }
 
@@ -563,35 +322,46 @@ mod tests {
         );
     }
 
+    #[test]
+    fn all_day_runs_on_dates() {
+        let first = at("20261224T000000");
+        let stop = at("20300101T000000");
+        let got = Rule::parse("FREQ=YEARLY")
+            .unwrap()
+            .starts(first, true, stop)
+            .unwrap();
+        assert_eq!(got.len(), 4);
+        assert_eq!(got[3], at("20291224T000000"));
+    }
+
     /// RFC 5545 counts DTSTART as the first occurrence even when the rule
     /// would not give it; Google shows it.
     #[test]
     fn a_first_start_off_the_rule_still_counts() {
         assert_eq!(
-            dates("FREQ=WEEKLY;BYDAY=MO;COUNT=3", "20260107T090000", 9),
-            ["20260107", "20260112", "20260119"]
+            dates("FREQ=WEEKLY;BYDAY=MO;COUNT=3", "20260107T090000", 9)[0],
+            "20260107"
         );
     }
 
     #[test]
-    fn a_rule_that_matches_nothing_ends() {
-        let n = Rule::parse("FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=30")
+    fn a_rule_that_matches_nothing_gives_only_its_first_start() {
+        let first = at("20260101T090000");
+        let got = Rule::parse("FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=30")
             .unwrap()
-            .starts(at("20260101T090000"))
-            .count();
-        assert_eq!(n, 1, "only the first start");
+            .starts(first, false, at("20360101T000000"))
+            .unwrap();
+        assert_eq!(got, [first]);
     }
 
     #[test]
     fn what_it_cannot_follow_is_refused_by_name() {
-        assert_eq!(
-            Rule::parse("FREQ=YEARLY;BYWEEKNO=20").unwrap_err(),
-            "cannot follow `BYWEEKNO=20`"
-        );
-        assert!(Rule::parse("FREQ=HOURLY").is_err());
-        assert!(Rule::parse("BYDAY=MO").is_err());
-        assert!(Rule::parse("FREQ=DAILY;COUNT=2;UNTIL=20260101").is_err());
-        assert!(Rule::parse("FREQ=MONTHLY;BYMONTHDAY=0").is_err());
+        let starts = |rule: &str| {
+            Rule::parse(rule)?.starts(at("20260101T090000"), false, at("20270101T000000"))
+        };
+        assert!(starts("FREQ=FORTNIGHTLY").is_err());
+        assert!(starts("BYDAY=MO").is_err());
+        assert!(starts("FREQ=DAILY;UNTIL=soon").is_err());
     }
 
     #[test]

@@ -316,8 +316,8 @@ fn what_cannot_be_listed_is_said() {
                 "DTSTART;TZID=Pacific Standard Time:20261006T090000\r\n",
             ),
             one(
-                "weekno",
-                "DTSTART:20261006T090000Z\r\nRRULE:FREQ=YEARLY;BYWEEKNO=41\r\n",
+                "fortnightly",
+                "DTSTART:20261006T090000Z\r\nRRULE:FREQ=FORTNIGHTLY\r\n",
             ),
         ],
         ..Parsed::default()
@@ -338,7 +338,10 @@ fn what_cannot_be_listed_is_said() {
                 "bridge#outlook",
                 "unknown time zone \"Pacific Standard Time\""
             ),
-            ("bridge#weekno", "repeat rule: cannot follow `BYWEEKNO=41`"),
+            (
+                "bridge#fortnightly",
+                "repeat rule: cannot follow `FREQ=FORTNIGHTLY`"
+            ),
         ]
     );
 }

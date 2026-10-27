@@ -26,7 +26,11 @@ the fixture's byte-identical convergence. The rule on the series page is
 the whole truth about them. Listing them is the `render_occurrences`
 step's job, in a store of its own that does depend on today
 (`calendar_render/src/occurrences/README.md`); `occurrences.rs` here
-runs a series forward and `recur.rs` follows its `RRULE`.
+runs a series forward and `recur.rs` follows its `RRULE`. `recur.rs` is
+the one file that names [`calcard`](https://github.com/stalwartlabs/calcard),
+which does the rule arithmetic; zones, `UNTIL` and the dates a series no
+longer has stay ours, because calcard's own expansion has no window and
+matches a changed occurrence by its `SEQUENCE` as well as its date.
 
 **A changed occurrence is a document** because it carries information
 the rule does not: a new time, a new room, a different agenda, different
