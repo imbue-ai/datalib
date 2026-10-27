@@ -494,6 +494,42 @@ async fn an_image_is_stored_with_the_type_its_response_names() {
     db.close().await;
 }
 
+/// A capture held every image of its file in memory until its flush, and
+/// four Docs with hundreds of MB of images took a download to 1.3 GB.
+/// Each image goes into the CAS as it arrives, so a capture that fails
+/// after its image was fetched has already written it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_image_is_in_the_cas_before_its_capture_is_written() {
+    let d = tempfile::tempdir().unwrap();
+    let t = tape::tape(d.path(), Edition::Before);
+    let (odt, _) = api::export_type(FileKind::Document, ExportFormat::Odf);
+    tape::put(
+        &t,
+        api::req_bytes(&api::export_url(DOC, odt)),
+        tape::bytes(
+            400,
+            br#"{"error": {"code": 400, "message": "Bad Request"}}"#,
+        ),
+    );
+    let store = d.path().join("store");
+    let s = run(&t, &store).await;
+    assert_eq!((s.captured, s.failed), (2, 1), "{s:?}");
+
+    let db = open(&store).await;
+    assert_eq!(
+        scalar(
+            &db,
+            "SELECT COUNT(*) FROM captures WHERE file_id = '1PicardLogSupplemental'"
+        )
+        .await,
+        0,
+        "the Doc's capture failed and stays owed"
+    );
+    let image = datalib_etl::blob_cas::blake3_hex(tape::ENTERPRISE_PNG);
+    assert_eq!(blob(&db, &image).await, tape::ENTERPRISE_PNG);
+    db.close().await;
+}
+
 /// latchkey signs each kind's native API with its own service, so a
 /// refusal on one (no sign-in, a scope not granted) ends that kind and
 /// leaves the others to finish.

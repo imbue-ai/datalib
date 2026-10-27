@@ -77,9 +77,17 @@ its own.
      edit (`capabilities.canDownload = false`): Drive refuses every
      export of that file (`cannotExportFile`).
 
-   A capture is written whole, in one transaction, or not at all. If any
-   request fails, the file stays owed with the error on its sidecar and
-   a `files:<id>` problem. An export Google declines is the one
+   Each part's bytes go into the CAS as soon as they arrive, and the
+   capture keeps only their hashes (`Captures::stash`). A file's images
+   can run to hundreds of MB (one Doc's came to 334 MB in 122 images).
+   Held until the capture was written, they took a download of four such
+   Docs to 1.3 GB.
+
+   A capture's rows are written whole, in one transaction, or not at
+   all. If any request fails, the file stays owed with the error on its
+   sidecar and a `files:<id>` problem; bytes it had already put in the
+   CAS stay there, unnamed, and the next capture that fetches them adds
+   nothing. An export Google declines is the one
    exception, whether as too large (`exportSizeLimitExceeded`, over
    10 MB) or as not allowed (`canDownload = false`, or a
    `cannotExportFile` answer): the capture is kept, its export part has
