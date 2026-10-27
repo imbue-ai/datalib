@@ -8,7 +8,10 @@ import {
   dateMenu,
   dateText,
   dateTitle,
+  datesInText,
   dayQuery,
+  fittingDateCell,
+  shortDateTexts,
   decorateDates,
   parseStamp,
   rangeEndText,
@@ -79,6 +82,42 @@ describe("what a date chip shows", () => {
       "Wed, Apr 15, 2026, 12:05 GMT+2",
     );
     expect(dateCopyText(stamp("2026-04-15"), VIENNA)).toBe("Wed, Apr 15, 2026");
+  });
+});
+
+describe("a date in a narrow column", () => {
+  /// A date column cut the time off: "Mon, Apr 14, 2369, 12…".
+  it("falls back to the day and clock as numbers, then the day", () => {
+    expect(shortDateTexts(stamp("2369-04-14T10:05:00+00:00"), VIENNA)).toEqual([
+      "2369-04-14 12:05",
+      "2369-04-14",
+    ]);
+    expect(shortDateTexts(stamp("2369-04-14"), VIENNA)).toEqual(["2369-04-14", "2369-04-14"]);
+  });
+
+  it("holds the shorter forms beside the whole date, for its width to pick from", () => {
+    const cell = fittingDateCell("2369-04-14T10:05:00+00:00");
+    expect(cell.className).toBe("date-fit");
+    const chip = cell.querySelector<HTMLElement>("time.date-chip")!;
+    expect(chip.getAttribute("datetime")).toBe("2369-04-14T10:05:00+00:00");
+    expect(chip.textContent).toBe(chip.getAttribute("aria-label"));
+    expect(chip.dataset.day).toBe(shortDateTexts(stamp("2369-04-14T10:05:00+00:00"))[1]);
+  });
+});
+
+describe("dates in a snippet", () => {
+  /// A calendar result's snippet read "Fri Sep 18th, 2026 at 19:00", in
+  /// the event's zone, beside chips that said "Sat, Sep 19, 2026, 04:00".
+  it("shows each instant as a chip says it, and leaves other digits alone", () => {
+    expect(
+      datesInText(
+        "Dinner 2026-09-18T19:00:00-07:00 – 2026-09-18T22:00:00-07:00 on deck 10",
+        VIENNA,
+      ),
+    ).toBe("Dinner Sat, Sep 19, 2026, 04:00 – Sat, Sep 19, 2026, 07:00 on deck 10");
+    expect(datesInText("stardate 2369-04-15, 47988.1", VIENNA)).toBe(
+      "stardate 2369-04-15, 47988.1",
+    );
   });
 });
 

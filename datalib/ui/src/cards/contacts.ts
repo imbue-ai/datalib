@@ -66,7 +66,9 @@ export type HandleKind =
   | "github"
   | "gitlab"
   | "notion"
-  | "whatsapp";
+  | "whatsapp"
+  | "me"
+  | "ai_model";
 
 export function handleKind(handle: string): HandleKind | null {
   const kind = handle.slice(0, handle.indexOf(":"));
@@ -80,7 +82,9 @@ export function handleKind(handle: string): HandleKind | null {
     kind === "github" ||
     kind === "gitlab" ||
     kind === "notion" ||
-    kind === "whatsapp"
+    kind === "whatsapp" ||
+    kind === "me" ||
+    kind === "ai_model"
     ? kind
     : null;
 }
@@ -101,6 +105,8 @@ const KIND_ICON: Record<HandleKind, string> = {
   gitlab: "gitlab",
   notion: "notion",
   whatsapp: "whatsapp",
+  me: "contacts",
+  ai_model: "system",
 };
 
 export function handleIcon(handle: string): string | null {

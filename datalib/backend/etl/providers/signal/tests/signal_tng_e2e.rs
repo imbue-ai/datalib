@@ -212,10 +212,11 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
     );
     assert!(md.contains("Make it so."), "Picard's order rendered");
     // Signal renders through `chat-common` now, so a message is the
-    // same `## <span class="msg-author">…` header every chat source
-    // writes rather than the bulleted line this provider used to emit.
+    // same `## …` header every chat source writes rather than the
+    // bulleted line this provider used to emit; the account is the
+    // `me:self` chip.
     assert!(
-        md.contains("<span class=\"msg-author\">Me</span>"),
+        md.contains("## [Me](datalib:handle/me/self \"Me\") "),
         "outgoing author labelled as Me in:\n{md}"
     );
     assert!(

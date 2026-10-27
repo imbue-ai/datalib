@@ -71,6 +71,7 @@ import {
   tabShowing,
   unwrap,
   withPins,
+  withoutLeftGallery,
   wrap,
   type BoxNode,
   type CardNode,
@@ -698,6 +699,13 @@ function markShown(id: string | null) {
   if (id !== null) shownTabs.add(id);
 }
 watch(() => root.value.selected, markShown, { immediate: true });
+watch(
+  () => root.value.selected,
+  (_, was) => {
+    const next = withoutLeftGallery(root.value, was);
+    if (next !== root.value) update(next);
+  },
+);
 watch(root, (tree) => {
   const live = new Set<string>();
   const walk = (n: TreeNode) => {

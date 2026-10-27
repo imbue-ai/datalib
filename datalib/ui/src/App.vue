@@ -53,14 +53,16 @@ watch(
 
 /// Only the newest answer is kept: an older "not ready" landing after a
 /// newer "ready" would put the gate up over a config that is fine. One
-/// fetch at a time: a launch's migrate pass sends an `upgrade_changed`
-/// per step, milliseconds apart.
+/// fetch at a time, at most four a second: a launch's migrate pass sends
+/// two `upgrade_changed` per step, milliseconds apart, and the pill need
+/// not show every one.
 const refresh = newestAnswer(
   () => fetchConfig().catch(() => null),
   (next) => {
     config.value = next;
     checked.value = true;
   },
+  { spacing: 250 },
 );
 
 // Initializing just wrote the config, so drop the gate on the click

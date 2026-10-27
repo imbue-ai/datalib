@@ -122,6 +122,8 @@ pub(crate) fn handle_mark(kind: HandleKind) -> &'static str {
         HandleKind::Gitlab => "gitlab",
         HandleKind::Notion => "notion",
         HandleKind::Whatsapp => "whatsapp",
+        HandleKind::Me => "contacts",
+        HandleKind::AiModel => "system",
     }
 }
 

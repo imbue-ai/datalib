@@ -12,6 +12,7 @@ import { iconUrl } from "@/config/icons";
 import { formatRelative } from "@/config/timeFormat";
 import { documentView } from "./libs/documentView";
 import { markWords } from "./search";
+import { datesInText } from "./dates";
 import { people, peopleTitle } from "./contacts";
 import { handleFromUri } from "./chipLinks";
 
@@ -246,7 +247,9 @@ onBeforeUnmount(() => {
                 <span class="sc-when">{{ when(r.touched_at) }}</span>
               </span>
               <span class="sc-snippet"
-                ><template v-for="(p, i) in markWords(r.snippet, shownQuery ?? '')" :key="i"
+                ><template
+                  v-for="(p, i) in markWords(datesInText(r.snippet), shownQuery ?? '')"
+                  :key="i"
                   ><mark v-if="p.hit">{{ p.text }}</mark
                   ><template v-else>{{ p.text }}</template></template
                 ></span

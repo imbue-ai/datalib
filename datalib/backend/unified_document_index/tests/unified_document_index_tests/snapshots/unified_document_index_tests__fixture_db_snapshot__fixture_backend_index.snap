@@ -24,7 +24,7 @@ expression: snapshot
       "md_path": "chatgpt-api/render_markdown/00000000-0000-8020-9a72-3216b3199332/all.md",
       "modified_at": "2370-10-24T08:05:00+00:00",
       "provider": "chatgpt",
-      "renderer_version": "rust-v1.13",
+      "renderer_version": "rust-v1.14",
       "source_id": "chatgpt-api",
       "title": "Sonnet on a Cat Named Spot"
     },
@@ -180,7 +180,7 @@ expression: snapshot
       "md_path": "claude-api/render_markdown/00000000-0000-8184-b70f-0aace9f02d6c/all.md",
       "modified_at": "2369-04-14T10:02:00+00:00",
       "provider": "claude",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "claude-api",
       "title": "Klingon Diplomatic Greeting Drafting"
     },
@@ -228,7 +228,7 @@ expression: snapshot
       "md_path": "claude-api/render_markdown/00000000-0000-81ce-8161-7a771ae8bff5/all.md",
       "modified_at": "2369-04-18T09:02:30+00:00",
       "provider": "claude",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "claude-api",
       "title": "Warp Field Recalibration"
     },
@@ -516,7 +516,7 @@ expression: snapshot
       "md_path": "claude-code/render_markdown/00000000-0000-83df-8efb-7b99abfef902/all.md",
       "modified_at": "2364-04-11T10:00:58+00:00",
       "provider": "claude_code",
-      "renderer_version": "rust-v1.4",
+      "renderer_version": "rust-v1.5",
       "source_id": "claude-code",
       "title": "Scan the emitter logs since stardate 41153.7 for phase drift events. — subagent of Deflector dish drift"
     },
@@ -744,7 +744,7 @@ expression: snapshot
       "md_path": "codex/render_markdown/00000000-0000-86ab-b7b0-53153bf8d22e/all.md",
       "modified_at": "2364-04-11T10:03:56+00:00",
       "provider": "codex",
-      "renderer_version": "rust-v1.3",
+      "renderer_version": "rust-v1.4",
       "source_id": "codex",
       "title": "Data — sub-agent of The deflector dish drifts 0.3 degrees every hour. Find out why and fix it."
     },
@@ -900,7 +900,7 @@ expression: snapshot
       "md_path": "codex/render_markdown/00000000-0000-8791-bfaa-35b2f6b12135/all.md",
       "modified_at": "2364-04-11T10:03:51+00:00",
       "provider": "codex",
-      "renderer_version": "rust-v1.3",
+      "renderer_version": "rust-v1.4",
       "source_id": "codex",
       "title": "The deflector dish drifts 0.3 degrees every hour. Find out why and fix it."
     },
@@ -1032,7 +1032,7 @@ expression: snapshot
       "md_path": "claude-api/render_markdown/00000000-0000-88a2-ab0d-6718dcb64052/all.md",
       "modified_at": "2369-04-16T09:01:30+00:00",
       "provider": "claude",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "claude-api",
       "title": "Borg Encryption Signature Lookup"
     },
@@ -1152,7 +1152,7 @@ expression: snapshot
       "md_path": "chatgpt-api/render_markdown/00000000-0000-89af-8390-876943e6455b/all.md",
       "modified_at": "2370-10-26T08:05:00+00:00",
       "provider": "chatgpt",
-      "renderer_version": "rust-v1.13",
+      "renderer_version": "rust-v1.14",
       "source_id": "chatgpt-api",
       "title": "I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom?"
     },
@@ -1164,7 +1164,7 @@ expression: snapshot
       "md_path": "claude-api/render_markdown/00000000-0000-89b3-8bed-0eecc97d45ce/all.md",
       "modified_at": "2369-04-15T08:30:45+00:00",
       "provider": "claude",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "claude-api",
       "title": "Tricorder Image Diagnostic"
     },
@@ -1176,7 +1176,7 @@ expression: snapshot
       "md_path": "claude-api/render_markdown/00000000-0000-8a01-8633-71325d50b8d7/all.md",
       "modified_at": null,
       "provider": "claude",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "claude-api",
       "title": "Stellar Cartography"
     },
@@ -1248,7 +1248,7 @@ expression: snapshot
       "md_path": "claude-code/render_markdown/00000000-0000-8a77-bcf1-64f2ad0583fa/all.md",
       "modified_at": "2364-04-11T14:30:35+00:00",
       "provider": "claude_code",
-      "renderer_version": "rust-v1.4",
+      "renderer_version": "rust-v1.5",
       "source_id": "claude-code",
       "title": "Why does the replicator return cold Earl Grey? Screenshot attached."
     },
@@ -1260,7 +1260,7 @@ expression: snapshot
       "md_path": "codex/render_markdown/00000000-0000-8a78-90c5-dbad27c044ff/all.md",
       "modified_at": "2364-04-12T14:31:17+00:00",
       "provider": "codex",
-      "renderer_version": "rust-v1.3",
+      "renderer_version": "rust-v1.4",
       "source_id": "codex",
       "title": "Why does the replicator return cold Earl Grey? Screenshot attached."
     },
@@ -1356,7 +1356,7 @@ expression: snapshot
       "md_path": "claude-code/render_markdown/00000000-0000-8b27-94b8-759d35b8fe6b/all.md",
       "modified_at": "2364-04-11T10:01:59+00:00",
       "provider": "claude_code",
-      "renderer_version": "rust-v1.4",
+      "renderer_version": "rust-v1.5",
       "source_id": "claude-code",
       "title": "Deflector dish drift"
     },
@@ -1440,7 +1440,7 @@ expression: snapshot
       "md_path": "chatgpt-api/render_markdown/00000000-0000-8bd2-8afb-b21d3b87dfa5/all.md",
       "modified_at": "2370-10-27T08:01:00+00:00",
       "provider": "chatgpt",
-      "renderer_version": "rust-v1.13",
+      "renderer_version": "rust-v1.14",
       "source_id": "chatgpt-api",
       "title": "Holodeck Cave on Risa"
     },
@@ -1464,7 +1464,7 @@ expression: snapshot
       "md_path": "codex/render_markdown/00000000-0000-8bef-8ff5-58a96f311ccd/all.md",
       "modified_at": "2364-04-13T09:18:02+00:00",
       "provider": "codex",
-      "renderer_version": "rust-v1.3",
+      "renderer_version": "rust-v1.4",
       "source_id": "codex",
       "title": "Audit the warp core containment logs and tell me what you find."
     },
@@ -1512,7 +1512,7 @@ expression: snapshot
       "md_path": "claude-api/render_markdown/00000000-0000-8c06-8231-9340b6e3de70/all.md",
       "modified_at": "2369-05-02T10:06:00+00:00",
       "provider": "claude",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "claude-api",
       "title": "Holodeck Malfunction Report"
     },
@@ -1584,7 +1584,7 @@ expression: snapshot
       "md_path": "claude-api/render_markdown/00000000-0000-8c45-a404-118e0e422b6b/all.md",
       "modified_at": "2364-03-02T11:30:00+00:00",
       "provider": "claude",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "claude-api",
       "title": "Bridge Operations"
     },
@@ -1776,7 +1776,7 @@ expression: snapshot
       "md_path": "chatgpt-api/render_markdown/00000000-0000-8d7f-8279-1fc2e44e05fd/all.md",
       "modified_at": "2370-10-25T08:05:20+00:00",
       "provider": "chatgpt",
-      "renderer_version": "rust-v1.13",
+      "renderer_version": "rust-v1.14",
       "source_id": "chatgpt-api",
       "title": "Polynomial Fit for Sensor Calibration"
     },
@@ -1800,7 +1800,7 @@ expression: snapshot
       "md_path": "chatgpt-api/render_markdown/00000000-0000-8db7-990a-e9ff89094860/all.md",
       "modified_at": "2370-10-28T08:05:05+00:00",
       "provider": "chatgpt",
-      "renderer_version": "rust-v1.13",
+      "renderer_version": "rust-v1.14",
       "source_id": "chatgpt-api",
       "title": "Risa Survey Briefing"
     },
@@ -1980,7 +1980,7 @@ expression: snapshot
       "md_path": "claude-api/render_markdown/00000000-0000-8fda-8a1d-506771450366/all.md",
       "modified_at": "2369-04-17T10:00:00+00:00",
       "provider": "claude",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "claude-api",
       "title": "Poisoned: a message with an unreadable stamp"
     },
@@ -2628,7 +2628,7 @@ expression: snapshot
       "notion_page_uuid": null,
       "org_name": null,
       "org_uuid": null,
-      "preview_len": 230,
+      "preview_len": 228,
       "project": null,
       "provider": "calendar",
       "qmd_path": "tng_calendar/render_markdown/00000000-0000-81a3-9b5c-946dc4b441a8/index.md",
@@ -4428,7 +4428,7 @@ expression: snapshot
       "notion_page_uuid": null,
       "org_name": null,
       "org_uuid": null,
-      "preview_len": 139,
+      "preview_len": 135,
       "project": null,
       "provider": "calendar",
       "qmd_path": "tng_calendar/render_markdown/00000000-0000-872d-a4f4-3355175938a9/index.md",
@@ -4788,7 +4788,7 @@ expression: snapshot
       "notion_page_uuid": null,
       "org_name": null,
       "org_uuid": null,
-      "preview_len": 108,
+      "preview_len": 104,
       "project": null,
       "provider": "calendar",
       "qmd_path": "tng_calendar/render_markdown/00000000-0000-8899-a213-737545dc9ea2/index.md",
@@ -5118,7 +5118,7 @@ expression: snapshot
       "notion_page_uuid": null,
       "org_name": null,
       "org_uuid": null,
-      "preview_len": 76,
+      "preview_len": 74,
       "project": null,
       "provider": "google_takeout",
       "qmd_path": "google-takeout/render_markdown/00000000-0000-8841-8b6d-116feade3563/2025-02.md",
@@ -5958,7 +5958,7 @@ expression: snapshot
       "notion_page_uuid": null,
       "org_name": null,
       "org_uuid": null,
-      "preview_len": 114,
+      "preview_len": 112,
       "project": null,
       "provider": "facebook",
       "qmd_path": "facebook/render_markdown/00000000-0000-8ba6-97c6-f48500bf8e47/all.md",
@@ -7968,7 +7968,7 @@ expression: snapshot
       "notion_page_uuid": null,
       "org_name": null,
       "org_uuid": null,
-      "preview_len": 76,
+      "preview_len": 74,
       "project": null,
       "provider": "google_takeout",
       "qmd_path": "google-takeout/render_markdown/00000000-0000-8841-8b6d-116feade3563/2025-02.md",
@@ -8088,7 +8088,7 @@ expression: snapshot
       "notion_page_uuid": null,
       "org_name": null,
       "org_uuid": null,
-      "preview_len": 99,
+      "preview_len": 98,
       "project": null,
       "provider": "google_takeout",
       "qmd_path": "google-takeout/render_markdown/00000000-0000-8e5f-8eb1-967f63ffb4eb/2025-03.md",
@@ -12798,7 +12798,7 @@ expression: snapshot
       "notion_page_uuid": null,
       "org_name": null,
       "org_uuid": null,
-      "preview_len": 114,
+      "preview_len": 112,
       "project": null,
       "provider": "facebook",
       "qmd_path": "facebook/render_markdown/00000000-0000-8ba6-97c6-f48500bf8e47/all.md",
@@ -14521,7 +14521,7 @@ expression: snapshot
     },
     {
       "account": "jlpicard@enterprise.starfleet.test",
-      "author": "Human",
+      "author": "Me",
       "byte_size": 123,
       "channel": null,
       "content_hash": "e0930d893f1d9f20",
@@ -14671,7 +14671,7 @@ expression: snapshot
     },
     {
       "account": "jlpicard@enterprise.starfleet.test",
-      "author": "Human",
+      "author": "Me",
       "byte_size": 20,
       "channel": null,
       "content_hash": "01b5e6ab96b8d432",
@@ -15061,7 +15061,7 @@ expression: snapshot
     },
     {
       "account": "00000003-1701-4d00-8000-000000000003",
-      "author": "Human",
+      "author": "Me",
       "byte_size": 49,
       "channel": null,
       "content_hash": "b205d38a07bd38b3",
@@ -15841,7 +15841,7 @@ expression: snapshot
     },
     {
       "account": "jlpicard@enterprise.starfleet.test",
-      "author": "Human",
+      "author": "Me",
       "byte_size": 97,
       "channel": null,
       "content_hash": "a5a9bd51162c6cba",
@@ -16051,7 +16051,7 @@ expression: snapshot
     },
     {
       "account": "jlpicard@enterprise.starfleet.test",
-      "author": "Human",
+      "author": "Me",
       "byte_size": 30,
       "channel": null,
       "content_hash": "5c36862d8318d11c",
@@ -16081,7 +16081,7 @@ expression: snapshot
     },
     {
       "account": "jlpicard@enterprise.starfleet.test",
-      "author": "Human",
+      "author": "Me",
       "byte_size": 72,
       "channel": null,
       "content_hash": "9d8e195f96a19654",
@@ -16201,7 +16201,7 @@ expression: snapshot
     },
     {
       "account": "jlpicard@enterprise.starfleet.test",
-      "author": "Human",
+      "author": "Me",
       "byte_size": 41,
       "channel": null,
       "content_hash": "6980c3a5f89b3b79",
@@ -16261,7 +16261,7 @@ expression: snapshot
     },
     {
       "account": "jlpicard@enterprise.starfleet.test",
-      "author": "Human",
+      "author": "Me",
       "byte_size": 114,
       "channel": null,
       "content_hash": "6b8a142ff56fb0d0",
@@ -16501,7 +16501,7 @@ expression: snapshot
     },
     {
       "account": "jlpicard@enterprise.starfleet.test",
-      "author": "Human",
+      "author": "Me",
       "byte_size": 96,
       "channel": null,
       "content_hash": "6d6214459590930d",
@@ -16651,7 +16651,7 @@ expression: snapshot
     },
     {
       "account": "jlpicard@enterprise.starfleet.test",
-      "author": "Human",
+      "author": "Me",
       "byte_size": 95,
       "channel": null,
       "content_hash": "9c0369d15ec5426f",
@@ -16801,7 +16801,7 @@ expression: snapshot
     },
     {
       "account": "jlpicard@enterprise.starfleet.test",
-      "author": "Human",
+      "author": "Me",
       "byte_size": 60,
       "channel": null,
       "content_hash": "ea85ed471507912c",
@@ -17071,7 +17071,7 @@ expression: snapshot
     },
     {
       "account": "jlpicard@enterprise.starfleet.test",
-      "author": "Human",
+      "author": "Me",
       "byte_size": 81,
       "channel": null,
       "content_hash": "012c17d23bb1f10e",
@@ -18241,7 +18241,7 @@ expression: snapshot
     },
     {
       "account": "data@enterprise.starfleet.test",
-      "author": "User",
+      "author": "Me",
       "byte_size": 114,
       "channel": null,
       "content_hash": "8327c1e9cdc102b0",
@@ -18331,7 +18331,7 @@ expression: snapshot
     },
     {
       "account": "data@enterprise.starfleet.test",
-      "author": "User",
+      "author": "Me",
       "byte_size": 54,
       "channel": null,
       "content_hash": "fba9934ed6ddf8c5",
@@ -18361,7 +18361,7 @@ expression: snapshot
     },
     {
       "account": "data@enterprise.starfleet.test",
-      "author": "User",
+      "author": "Me",
       "byte_size": 81,
       "channel": null,
       "content_hash": "e71c95803009e786",
@@ -18451,7 +18451,7 @@ expression: snapshot
     },
     {
       "account": "data@enterprise.starfleet.test",
-      "author": "User",
+      "author": "Me",
       "byte_size": 1061,
       "channel": null,
       "content_hash": "21ea854a47e4805c",
@@ -18511,7 +18511,7 @@ expression: snapshot
     },
     {
       "account": "data@enterprise.starfleet.test",
-      "author": "User",
+      "author": "Me",
       "byte_size": 35,
       "channel": null,
       "content_hash": "51f7817c5c276981",
@@ -18571,7 +18571,7 @@ expression: snapshot
     },
     {
       "account": "data@enterprise.starfleet.test",
-      "author": "User",
+      "author": "Me",
       "byte_size": 101,
       "channel": null,
       "content_hash": "4567a1d3f507b59c",
@@ -18691,7 +18691,7 @@ expression: snapshot
     },
     {
       "account": "data@enterprise.starfleet.test",
-      "author": "User",
+      "author": "Me",
       "byte_size": 77,
       "channel": null,
       "content_hash": "10d6c85d05d30d42",
@@ -18811,7 +18811,7 @@ expression: snapshot
     },
     {
       "account": "data@enterprise.starfleet.test",
-      "author": "User",
+      "author": "Me",
       "byte_size": 55,
       "channel": null,
       "content_hash": "9f9f0a17d32a133e",
@@ -18901,7 +18901,7 @@ expression: snapshot
     },
     {
       "account": "data@enterprise.starfleet.test",
-      "author": "User",
+      "author": "Me",
       "byte_size": 53,
       "channel": null,
       "content_hash": "26459a63b0cd43c1",
@@ -19021,7 +19021,7 @@ expression: snapshot
     },
     {
       "account": "data@enterprise.starfleet.test",
-      "author": "User",
+      "author": "Me",
       "byte_size": 100,
       "channel": null,
       "content_hash": "cda79f51e5c87c9a",

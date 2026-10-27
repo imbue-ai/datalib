@@ -26,6 +26,7 @@ use datalib_etl_render::html::{
 };
 use datalib_etl_render::inputs::Inputs;
 use datalib_etl_render::sources::Source;
+use datalib_handle::Handle;
 
 use super::ids;
 use super::parse::{
@@ -58,7 +59,8 @@ use datalib_schema::providers::Provider;
 /// v10: the branch the user last saw rather than every edit; cited
 ///     sources listed; pasted text named; `artifacts`, `create_file`,
 ///     `bash_tool` and search results readable rather than JSON.
-pub const RENDER_VERSION: u32 = 10;
+/// v11: an answer's author is its model's chip (`ai_model:` handle).
+pub const RENDER_VERSION: u32 = 11;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -265,6 +267,10 @@ fn build_chat(
             (_, None) => AuthorKind::Unknown,
             _ => AuthorKind::Named,
         };
+        let author_handle = match kind_label {
+            "LLM Response" => filter_nonempty(model.clone()).and_then(|m| Handle::ai_model(&m)),
+            _ => None,
+        };
 
         let mut blocks = blocks_by_msg
             .get(m.message_uuid.as_str())
@@ -347,11 +353,13 @@ fn build_chat(
                 &raw_obj,
                 block_ms,
             );
-            let block_author = filter_nonempty(model.clone()).unwrap_or_else(|| btype.to_string());
+            let block_model = filter_nonempty(model.clone());
+            let block_handle = block_model.as_deref().and_then(Handle::ai_model);
+            let block_author = block_model.unwrap_or_else(|| btype.to_string());
             let body = block_body_md(btype, b.text.as_deref(), &raw_obj);
             items.push(NormalizedChatItem {
                 message_uuid: block_id.uuid.clone(),
-                author_handle: None,
+                author_handle: block_handle,
                 author_kind: AuthorKind::Named,
                 author_display: block_author,
                 date_ms: block_ms,
@@ -388,7 +396,7 @@ fn build_chat(
         };
         items.push(NormalizedChatItem {
             message_uuid: msg_id.uuid.clone(),
-            author_handle: None,
+            author_handle: author_handle.clone(),
             author_kind,
             author_display: author_display.clone(),
             date_ms: msg_ms,

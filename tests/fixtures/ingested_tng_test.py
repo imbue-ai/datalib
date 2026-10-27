@@ -1199,6 +1199,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
             ),
             [
                 "beeper",
+                "chatgpt-api",
+                "claude-api",
+                "claude-code",
+                "codex",
                 "facebook",
                 "google-drive",
                 "google-takeout",
@@ -1297,14 +1301,18 @@ class IngestedTngPipelineTest(unittest.TestCase):
         )
         # A 1:1 chat leaves an incoming reaction's sender empty, as it does
         # a message's: the chat's person reacted. The account's own
-        # reaction names nobody.
+        # reaction is the account's one chip, `me:self`.
         riker_chat = self._markdown("whatsapp", "private word about Commander Data")
         self.assertIn(
             '🖖 [William Riker](tel:+17015550101 "William Riker (+17015550101)")',
             riker_chat,
             "a 1:1 reaction is the chat's person, as a chip",
         )
-        self.assertIn("👍 Me</span>", riker_chat, "the account's own reaction is Me")
+        self.assertIn(
+            '👍 [Me](datalib:handle/me/self "Me")</span>',
+            riker_chat,
+            "the account's own reaction is the Me chip",
+        )
         # A Slack reactor with no profile and no message: in the document
         # all the same, under the id Slack gave, having written nothing.
         self.assertEqual(
