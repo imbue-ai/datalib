@@ -13,7 +13,9 @@ empty directory to a first sync, each with its command, and
 ingest methods) and `datalib-step help <function>` (what a step does
 and how to run it) from there. `datalib-step help agent` prints this
 guide, which a release also carries beside its binaries as
-`docs/agent_user.md`. Every binary's `--help` ends with examples.
+`docs/agent_user.md`, with the two guides for building on the data
+(`help raw-stores`, `help apps`) beside it. Every binary's `--help`
+ends with examples.
 
 The human-facing guides are worth reading first, and worth pointing the
 user at: the [first-time user guide](user/first_time_user.md) is the
@@ -311,6 +313,11 @@ is not null` lists the steps that failed. Every table and column is in
 
 ## Reading the mirrored data
 
+If you are building an app that reads this data instead of calling the
+services (when to sync, how fresh the mirror is, deriving your own data
+as a step, when to ask the service after all), read [building on
+datalib](user/building_on_datalib.md) (`datalib-step help apps`).
+
 Pick the surface that fits the question:
 
 - **The search box, from the command line** — `datalib-applet search
@@ -377,10 +384,16 @@ Pick the surface that fits the question:
   [`docs/dev/doltlite.md`](dev/doltlite.md).
 - **Markdown** — `<group>/render_markdown/` holds human-readable QMD
   markdown per conversation/document. Read files directly, or serve
-  them via `GET /applet/unified_document_index/chat/{markdown_uuid}`. The raw per-source
-  doltlite stores under `<group>/ingest/` keep full wire fidelity when the
-  rendered form isn't enough. An attachment or a person's photo a page
-  links as `/data/<group>/<function>/blob/<hash>` is a row of that step's
+  them via `GET /applet/unified_document_index/chat/{markdown_uuid}`.
+- **Raw stores** — the per-source doltlite stores under
+  `<group>/ingest/` keep what the service sent, when the rendered form
+  isn't enough: Slack's and Google Calendar's JSON, Gmail's original
+  message. [Reading the raw stores](user/raw_stores.md) (`datalib-step
+  help raw-stores`) is the map: how to open one (`payload` is JSONB, so
+  `json(payload)`), how to read one commit and follow changes, and
+  each table and column, with the ids that trip people up. An
+  attachment or a person's photo a page links as
+  `/data/<group>/<function>/blob/<hash>` is a row of that step's
   `blobs.sqlite`: fetch the path from `datalib-http` with the token, or
   read the row (`SELECT bytes FROM cas_objects WHERE blake3 = '<hash>'`).
 - **Semantic search** — the qmd index:
