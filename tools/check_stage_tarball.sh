@@ -7,9 +7,9 @@
 # checks what a release ships: every binary, the launcher, the commit,
 # the manifest naming this triple's runtime asset (the gnu one for a
 # musl triple), the agent guide with its links on the release's commit,
-# and the notices. RELEASE_SHELL picks the bash the script
-# runs under; the macOS variant sets /bin/bash, the 3.2 the mac runner
-# has.
+# the example configs beside it, and the notices. RELEASE_SHELL picks
+# the bash the script runs under; the macOS variant sets /bin/bash, the
+# 3.2 the mac runner has.
 
 # --- begin runfiles.bash initialization v3 ---
 # Copy-pasted from the Bazel Bash runfiles library v3.
@@ -98,6 +98,11 @@ check() { # triple, expected runtime triple, expect cuda line (yes/no)
     grep -q 'github.com/imbue-ai/datalib/blob/0123456789abcdef0123456789abcdef01234567/' "$guide" \
         || { echo "ERROR: the guide's links do not name the release's commit" >&2; exit 1; }
     ! grep -q '/blob/main/' "$guide" || { echo "ERROR: the guide links to main, not the release's commit" >&2; exit 1; }
+
+    for f in configs/dag_example.toml docs/user/config_examples/all_sources.toml; do
+        [[ -f "$dir/$f" && ! -L "$dir/$f" ]] || { echo "ERROR: $f missing from the tarball" >&2; exit 1; }
+        grep -q '^\[\[groups\]\]' "$dir/$f" || { echo "ERROR: $f is not a config" >&2; exit 1; }
+    done
 
     local manifest="$dir/runtime.manifest"
     local cpu="runtime-$runtime_triple.tar.gz"

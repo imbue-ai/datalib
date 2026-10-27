@@ -24,7 +24,7 @@ const EXAMPLES: &[Example] = &[
         command: "datalib-http ~/datalib",
     },
     Example {
-        what: "start a new root on its starter config",
+        what: "serve a new root, writing its starter config first (`datalib-dag init` writes it without a server)",
         command: "datalib-http ~/datalib --init",
     },
     Example {
@@ -69,6 +69,8 @@ struct Args {
     /// Write the starter `config.toml` first, when the root has none, so
     /// the app opens on the Dashboard rather than the first-run screen.
     /// The desktop app passes it for a library it has just created.
+    /// From a script, `datalib-dag init <data_root>` writes the same config
+    /// without starting a server.
     #[arg(long)]
     init: bool,
 }
@@ -120,7 +122,7 @@ async fn main() -> anyhow::Result<()> {
     // Dropped at the very end of `main`: that drop is the final flush.
     let _log = datalib_http::logging::init(&root);
 
-    if args.init && datalib_http::write_starter_config(&root)? {
+    if args.init && datalib_dag::starter::write_starter_config(&root)? {
         tracing::info!("wrote the starter config");
     }
 

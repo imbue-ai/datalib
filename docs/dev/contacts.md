@@ -426,7 +426,7 @@ is a 409 with the store's words; a handle that does not parse is a
 The config entry is `[[applets]] id = "datalib_contacts"` with
 `command = "datalib-applet datalib_contacts"`; the gateway passes the
 data root in the environment. A new root's starter config
-(`scaffold_toml` in `datalib-http`) writes it, filed under
+(`datalib_dag::starter::STARTER_CONFIG`) writes it, filed under
 `unified_document_index`; a config written before that has to add it by hand.
 
 ### Fields, and editing a contact through a draft

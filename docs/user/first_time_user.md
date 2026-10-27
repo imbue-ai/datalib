@@ -305,7 +305,17 @@ next one.
 You normally don't write this by hand. The app's first-run screen
 writes the index steps and the applet for an empty folder, and the
 **Data sources** card's **Add source** button fills in a source (next
-step).
+step). From a terminal, two commands do the same:
+
+```bash
+datalib-dag init ~/datalib
+datalib-step examples slack --append ~/datalib/config.toml
+```
+
+The first writes the starter config and nothing else. The second adds
+a source's smallest working config and puts it in the index steps'
+`inputs`; a source with more than one way in names it
+(`--method gmail`), and `--id` names a second account's group.
 If you'd rather hand-edit, copy
 [**configs/dag_example.toml**](https://github.com/imbue-ai/datalib/blob/main/configs/dag_example.toml),
 a complete commented example.
