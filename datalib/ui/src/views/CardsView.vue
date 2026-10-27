@@ -1,10 +1,11 @@
 <script setup lang="ts">
 // Routed view for the card surface: the containers layout, and the
 // status bar along the bottom — the data root and its size, the log,
-// then the density and the edit toggle flush right.
+// then the clock, the density and the edit toggle flush right.
 import { onBeforeUnmount, onMounted, useTemplateRef } from "vue";
 import ContainersView from "@/views/ContainersView.vue";
 import RootStorageBar from "@/components/RootStorageBar.vue";
+import TimeViewClock from "@/components/TimeViewClock.vue";
 import { editMode } from "@/editMode";
 import { density, larger, smaller } from "@/density";
 import { MAX_STEP, MIN_STEP, STEP, STEPS, onScale, stepIndex } from "@/densityScale";
@@ -38,6 +39,9 @@ onBeforeUnmount(() => {
       >
         Logs
       </button>
+      <!-- The zone and format every date is drawn in, and the time now
+           in that zone. -->
+      <TimeViewClock class="cards-clock" />
       <!-- Density: spacing only — rows, controls, padding — packed close
            or spread out, as the glyphs draw it; text keeps its size. The
            slider between them sets any step directly. -->
@@ -149,10 +153,12 @@ onBeforeUnmount(() => {
   border-color: var(--datalib-accent);
   color: var(--datalib-on-accent);
 }
-/* The toggles sit flush right as a cluster — the first one carries the
-   auto margin. */
-.cards-size {
+/* The clock and the toggles sit flush right as a cluster — the first
+   one carries the auto margin. */
+.cards-clock {
   margin-left: auto;
+}
+.cards-size {
   align-items: center;
 }
 .cards-size button {
