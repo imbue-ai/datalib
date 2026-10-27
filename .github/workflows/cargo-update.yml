@@ -132,10 +132,10 @@ jobs:
           pr="$(gh pr list --head "${BRANCH}" --state open --json number --jq '.[0].number // empty')"
 
           if git diff --quiet; then
-              echo "Every crate is already at its newest compatible version."
+              echo "No crate is behind a version that has been out a week."
               if [[ -n "${pr}" ]]; then
                   gh pr close "${pr}" --delete-branch \
-                    --comment "main already has every update this PR carried ([run](${RUN_URL}))."
+                    --comment "Nothing to update: no crate on main is behind a version that has been out a week ([run](${RUN_URL}))."
               fi
               exit 0
           fi
