@@ -77,9 +77,10 @@ assemble the assets are scripts under `scripts/release/`, run by
 
 **`cargo-update.yml`** keeps `datalib/backend/Cargo.lock` current,
 which Dependabot cannot (`.github/dependabot.yml` says why). Every
-Monday it runs `cargo update` through crate_universe
-(`CARGO_BAZEL_REPIN=full bazel build --nobuild //...`), repins
-`MODULE.bazel.lock`, and opens or rewrites one PR from
+Monday it runs `cargo update` with the 7-day burn-in
+(`first_time_dev.md` § "Version policy"; cargo's unstable
+`-Zmin-publish-age`), holds `libsqlite3-sys` for the doltlite patch,
+repins `MODULE.bazel.lock`, and opens or rewrites one PR from
 `bot/cargo-update`. GITHUB_TOKEN opens that PR, and GitHub holds the
 `pull_request` run of such a PR for a maintainer's approval
 (`action_required`, no jobs), so the workflow dispatches `test.yml` on
