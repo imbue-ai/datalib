@@ -25,6 +25,9 @@ on:
   schedule:
     - cron: "0 2 * * 1"
   workflow_dispatch:
+  # TEMPORARY: lets the workflow run before it is on main. Removed before merge.
+  push:
+    branches: [claude/cargo-update-workflow]
 
 permissions:
   contents: read
