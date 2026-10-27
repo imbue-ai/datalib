@@ -40,9 +40,22 @@ if [[ -z "$image" ]]; then
         --tag "$image" "$repo" >&2
 fi
 
+# `.bazelrc.user` is usually a symlink to a file outside the tree
+# (docs/dev/ci.md §"Locally, you are probably not on the remote cache"),
+# which dangles in the container and `try-import` skips without a word.
+# Mounting the file where the link points gives the container the same
+# BuildBuddy key the host has: the contributor org, never the release
+# one, whose key only CI holds.
+rc_mount=()
+link="$(readlink "$repo/.bazelrc.user" || true)"
+if [[ "$link" == /* && -r "$link" ]]; then
+    rc_mount=(--volume "$(realpath "$link"):$link:ro")
+fi
+
 echo ">>> running the release-step tests in $image" >&2
 exec docker run --rm \
     --volume "$repo:/workspaces/datalib" \
+    ${rc_mount[@]+"${rc_mount[@]}"} \
     --workdir /workspaces/datalib \
     --volume datalib-bazel-output:/root/.cache/bazel \
     --volume datalib-bazel-disk:/root/Library/Caches/bazel-disk-cache \

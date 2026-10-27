@@ -89,7 +89,12 @@ node-llama-cpp is not a faithful test), bind-mounts the working tree
 where `devcontainer.json` does, reuses its named cache volumes, and
 runs the two tests with `bazelisk test` inside. The first run pays for
 the image and a cold Linux build of the shipped binaries — the better
-part of an hour; with the volumes warm, a few minutes. Set
+part of an hour; with the volumes warm, a few minutes. If your
+`.bazelrc.user` is the symlink [`ci.md`](ci.md#locally-you-are-probably-not-on-the-remote-cache)
+sets up, the script mounts its target too, so the container reads and
+writes the contributor BuildBuddy cache your laptop uses; the release
+org stays CI's alone. What it shares is with other Apple-silicon runs
+of this script, not with PR runs, which build on x86_64. Set
 `DATALIB_DEVCONTAINER_IMAGE` to use an image you already have (on an
 x86_64 host, `ghcr.io/imbue-ai/datalib_devcontainer:latest`, the one
 CI runs in).
