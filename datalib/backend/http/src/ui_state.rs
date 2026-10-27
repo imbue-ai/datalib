@@ -3,7 +3,8 @@
 //! library to another machine. The browser's own storage cannot: the
 //! desktop app's server takes a new port each launch, and each port is a
 //! new origin with empty storage. The server never reads inside a
-//! document; the UI owns its shape.
+//! document; the UI owns its shape. A document never written reads as
+//! `null`, so a page's first load is not a list of failed requests.
 
 use axum::body::Bytes;
 use axum::extract::{Path, State};
@@ -41,7 +42,10 @@ pub async fn get_state(
     let path = state_dir(&s.root).join(format!("{name}.json"));
     match std::fs::read(&path) {
         Ok(bytes) => Ok(([(header::CONTENT_TYPE, "application/json")], bytes)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(StatusCode::NOT_FOUND),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok((
+            [(header::CONTENT_TYPE, "application/json")],
+            b"null".to_vec(),
+        )),
         Err(e) => {
             tracing::error!("ui state: read {}: {e}", path.display());
             Err(StatusCode::INTERNAL_SERVER_ERROR)
