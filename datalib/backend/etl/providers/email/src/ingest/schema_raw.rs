@@ -203,10 +203,10 @@ impl ThreadRow {
 
 /// `emails` — one row per email. Payload-shaped: the `id`/`payload`
 /// pair (payload = JMAP `Email/get` envelope, envelope-only) plus
-/// promoted metadata columns. The three `gmail`-ish ones are set only
-/// for a message Gmail's API answered for, and spell it the API's way:
-/// its message and thread ids in hex (`thread_id` is the decimal a
-/// Takeout writes), and its label ids as a sorted JSON array
+/// promoted metadata columns. For Gmail, `id` and `thread_id` are
+/// Gmail's own ids, keyed by [`super::envelope::GmailId::key`] whether
+/// the API or a Takeout named them. `label_ids` is set only for a message
+/// Gmail's API answered for: its label ids as a sorted JSON array
 /// ([`labels::gmail_label_ids`]).
 #[derive(Debug, Clone, RawTable)]
 #[raw_table(
@@ -230,8 +230,6 @@ pub struct EmailRow {
     pub to_json: Option<String>,
     pub cc_json: Option<String>,
     pub has_attachment: Option<i64>,
-    pub gmail_message_id: Option<String>,
-    pub gmail_thread_id: Option<String>,
     pub label_ids: Option<String>,
 }
 
@@ -290,12 +288,6 @@ impl EmailRow {
         let gmail = envelope
             .get("_source")
             .filter(|s| s.get("via").and_then(Value::as_str) == Some(GMAIL_API_VIA));
-        let gmail_str = |key: &str| {
-            gmail
-                .and_then(|s| s.get(key))
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        };
         let label_ids = gmail
             .and_then(|_| {
                 let keywords = object_keys(envelope.get("keywords"));
@@ -325,8 +317,6 @@ impl EmailRow {
             to_json,
             cc_json,
             has_attachment: Some(has_attachment as i64),
-            gmail_message_id: gmail_str("gmailMessageId"),
-            gmail_thread_id: gmail_str("gmailThreadId"),
             label_ids,
         })
     }
@@ -503,8 +493,13 @@ pub const LADDER: &[Migration] = &[
     },
     Migration {
         version: 6,
-        name: "Gmail's ids and labels on each email, and its message count on each thread",
-        apply: |conn| Box::pin(super::listed::migrate_gmail_ids_and_thread_counts(conn)),
+        name: "Gmail's labels on each email, and its message count on each thread",
+        apply: |conn| Box::pin(super::listed::migrate_gmail_labels_and_thread_counts(conn)),
+    },
+    Migration {
+        version: 7,
+        name: "a Gmail thread id is Gmail's hex, as a message id is",
+        apply: |conn| Box::pin(super::listed::migrate_gmail_thread_ids_to_hex(conn)),
     },
 ];
 

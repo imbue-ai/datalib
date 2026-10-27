@@ -41,6 +41,8 @@ mod topo_sort_config;
 mod all_sources_test;
 #[cfg(test)]
 mod config_examples_test;
+#[cfg(test)]
+mod raw_stores_doc_test;
 
 use std::path::{Path, PathBuf};
 
@@ -183,11 +185,12 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     /// How to set datalib up from a shell: the steps, the source types,
-    /// the step functions, and the whole agent guide (`help agent`).
+    /// the step functions, and the guides whole (`help agent`, `help
+    /// raw-stores`, `help apps`).
     Help {
-        /// `agent`, a source type (`slack`) and optionally one of its
-        /// methods (`slack api`), a function (`embed`) or one of these
-        /// commands (`probe`). None: the overview.
+        /// `agent`, `raw-stores` or `apps`, a source type (`slack`) and
+        /// optionally one of its methods (`slack api`), a function
+        /// (`embed`) or one of these commands (`probe`). None: the overview.
         topic: Vec<String>,
     },
     /// One source's config stanzas: for each of its ingest methods, the

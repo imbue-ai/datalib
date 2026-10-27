@@ -432,8 +432,6 @@ emails
     to_json
     cc_json
     has_attachment
-    gmail_message_id
-    gmail_thread_id
     label_ids
 emails_bookkeeping
     id

@@ -9,6 +9,7 @@ import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vu
 import { EMBEDDING_MAP_STEP, type DagStep, type EmbeddingMapResponse, type MapPoint } from "@/api";
 import { subscribeLive, changed } from "@/live";
 import { confirmAction } from "@/desktop";
+import { formatStamp } from "@/config/timeFormat";
 import { useApi } from "./cardApi";
 import { isBrowserClick } from "./chatLink";
 import {
@@ -514,7 +515,7 @@ const summary = computed(() => {
   }
   if (m.unembedded) parts.push(`${m.unembedded.toLocaleString()} not embedded yet`);
   if (m.unplaced) parts.push(`${m.unplaced.toLocaleString()} gone from the index`);
-  if (m.made_at) parts.push(`laid out ${new Date(m.made_at).toLocaleString()}`);
+  if (m.made_at) parts.push(`laid out ${formatStamp(m.made_at)}`);
   return parts.join(" · ");
 });
 

@@ -2,10 +2,10 @@
 # The `build` job's "Stage tarball" step of release.yml, minus the
 # upload: lay out `datalib-<version>-<triple>/` from the binaries bazel
 # built, with the `latchkey` launcher, the commit hash, the manifest of
-# the runtime asset the binaries fetch on first use, the agent guide, the
-# example configs it points at and the third-party notices; then tar it.
-# Writes `datalib-<triple>.tar.gz` and its `.sha256` sidecar into the
-# current directory and prints the tarball's name.
+# the runtime asset the binaries fetch on first use, the guides, the
+# example configs the agent guide points at and the third-party notices;
+# then tar it. Writes `datalib-<triple>.tar.gz` and its `.sha256` sidecar
+# into the current directory and prints the tarball's name.
 #
 #   scripts/release/stage_tarball.sh <ref-name> <triple>
 #
@@ -93,12 +93,14 @@ else
     git -C "$repo_root" rev-parse HEAD > "$stage/git-hash"
 fi
 
-# The agent guide, written by the `datalib-step` it ships beside, so the
-# file and `datalib-step help agent` cannot disagree; its links name the
-# commit just written. A directory, because install.sh links every file
-# at the top into the user's PATH.
+# The guides, written by the `datalib-step` they ship beside, so each
+# file and its `datalib-step help` page cannot disagree; their links name
+# the commit just written. A directory, because install.sh links every
+# file at the top into the user's PATH.
 mkdir -p "$stage/docs"
 "$stage/datalib-step" help agent > "$stage/docs/agent_user.md"
+"$stage/datalib-step" help raw-stores > "$stage/docs/raw_stores.md"
+"$stage/datalib-step" help apps > "$stage/docs/building_on_datalib.md"
 
 # The example configs the guide points at, at their paths in the repo so
 # an agent with no network finds them: the commented one, and every

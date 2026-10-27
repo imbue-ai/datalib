@@ -308,6 +308,7 @@ back by render as the natural key.
 | signal | none — keyed on who a chat is with and who wrote a message (ACI, else PNI, else number; a group by its master key's hash), never the backup's own numbering | messages, on `date_sent` |
 | slack | `team_id` | messages, reactions — the `ts` in the key |
 | sms_backup_restore | none — keyed on the raw row id | messages, calls |
+| todoist | none — Todoist's ids are its own and unique across the service; a comment on a task and one on a project are two kinds | tasks, on `added_at`; comments, on `posted_at` |
 | whatsapp | none — keyed on the chat JID | messages, reactions |
 | yolink | none — keyed on the device's config name; the ids YoLink issues a device are read secrets, and a natural key is stored in the clear | none |
 

@@ -80,9 +80,11 @@ pub fn synthesize(raw: &[u8], msg: &Message<'_>, facts: &TransportFacts) -> Valu
     envelope
 }
 
-/// Gmail's own id for a message. Its top bits are the time Gmail received
-/// the message, so ids sort in arrival order. The API spells it in hex; a
-/// Takeout mbox spells it in decimal on the message's `From ` line.
+/// Gmail's own id for a message or a thread. Its top bits are the time
+/// Gmail received the message (a thread's, its first message), so ids
+/// sort in arrival order. The API spells it in hex; a Takeout mbox spells
+/// it in decimal, on the message's `From ` line and in `X-GM-THRID`.
+/// A store spells both [`GmailId::key`]'s way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GmailId(u64);
 
@@ -95,9 +97,17 @@ impl GmailId {
         decimal.parse().ok().map(Self)
     }
 
-    /// Zero-padded, so the text sorts as the number does.
+    /// Lowercase hex zero-padded to sixteen, so the text sorts as the
+    /// number does. The API drops the leading zero, which only an id from
+    /// Gmail's first months has.
     pub(crate) fn key(self) -> String {
         format!("{:016x}", self.0)
+    }
+
+    /// The key of an id as the API spells it; one that is not hex stays
+    /// as it is.
+    pub(crate) fn key_of_api(api: &str) -> String {
+        Self::from_api(api).map_or_else(|| api.to_string(), Self::key)
     }
 }
 
@@ -245,6 +255,17 @@ Make it so.\r\n";
         let takeout = GmailId::from_takeout("1853466712473707184");
         assert_eq!(api, takeout);
         assert_eq!(email_id(api, &msg, "hash"), "19b8d627a801a2b0");
+    }
+
+    /// A thread's id is keyed as a message's is, so a Takeout's
+    /// `X-GM-THRID` and the API's `threadId` land on one `threads` row.
+    #[test]
+    fn a_thread_id_is_keyed_like_a_message_id() {
+        let takeout = GmailId::from_takeout("1853466712473707184").map(GmailId::key);
+        assert_eq!(takeout.as_deref(), Some("19b8d627a801a2b0"));
+        assert_eq!(GmailId::key_of_api("19b8d627a801a2b0"), "19b8d627a801a2b0");
+        assert_eq!(GmailId::key_of_api("fffffffffffffff"), "0fffffffffffffff");
+        assert_eq!(GmailId::key_of_api("thread-xyz"), "thread-xyz");
     }
 
     /// Keyed by `Message-ID`, two Gmail messages that share one were

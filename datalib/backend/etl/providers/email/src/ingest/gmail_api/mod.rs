@@ -217,7 +217,6 @@ async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
         &json!({
             "user_id": opts.config.user_id(),
             "account": opts.latchkey.account(),
-            "full_resync": opts.config.full_resync,
             "only_extract_labels": opts.only_labels,
             "since": opts.since,
             "message_budget": opts.config.message_budget,
@@ -477,20 +476,15 @@ impl Run<'_> {
     /// message has been fetched is not asked here, so the cursor never
     /// waits on a fetch.
     ///
-    /// `false` when there is nothing to replay from: no cursor,
-    /// `full_resync`, or a cursor older than Google keeps history for.
+    /// `false` when there is nothing to replay from: no cursor, or a
+    /// cursor older than Google keeps history for.
     async fn replay_history(
         &self,
         throttle: &mut QuotaThrottle,
         summary: &mut FetchSummary,
     ) -> Result<bool> {
         let scope = state_scope(self.account_id);
-        let stored = if self.opts.config.full_resync {
-            None
-        } else {
-            self.db.load_scope(&scope).await?
-        };
-        let Some(cursor) = stored else {
+        let Some(cursor) = self.db.load_scope(&scope).await? else {
             return Ok(false);
         };
         throttle.acquire(api::UNITS_HISTORY_LIST).await;
@@ -919,7 +913,7 @@ fn wanted(filter_label_ids: &[String]) -> BTreeSet<String> {
 fn members(gmail: &[(String, String)]) -> Vec<(String, String)> {
     gmail
         .iter()
-        .map(|(id, thread)| (id.clone(), ingest::normalize_thread_id(thread)))
+        .map(|(id, thread)| (id.clone(), GmailId::key_of_api(thread)))
         .collect()
 }
 
@@ -1126,7 +1120,7 @@ impl MessagesGet<'_> {
                 self.relabeled_from_walks.fetch_add(1, Ordering::Relaxed);
                 GmailMessage {
                     id: id.to_string(),
-                    thread_id: ingest::gmail_thread_id(thread).unwrap_or_else(|| id.to_string()),
+                    thread_id: thread.to_string(),
                     label_ids: membership.get(id).cloned().unwrap_or_default(),
                     history_id: None,
                     internal_date_ms: None,
@@ -1284,7 +1278,7 @@ impl Fetcher<Stored> for MessagesGet<'_> {
 /// How the `emails` row for a Gmail message is keyed: `GmailId`'s key,
 /// the one `ingest::ingest` mints.
 fn email_id_of(gmail_id: &str) -> String {
-    GmailId::from_api(gmail_id).map_or_else(|| gmail_id.to_string(), GmailId::key)
+    GmailId::key_of_api(gmail_id)
 }
 
 /// [`email_id_of`] in SQL: Gmail's hex id, zero-padded to sixteen.

@@ -1,0 +1,24 @@
+# Goes red when the tz database our binaries bundle (jiff-tzdb, pinned in
+# datalib/backend/Cargo.lock) is older than IANA's latest release, and says
+# whether a jiff-tzdb with the new data exists yet. Dependabot does not
+# bump that lockfile (dependabot.yml says why), so without this a zone
+# change such as British Columbia's permanent -07:00 goes unnoticed until
+# someone's calendar is an hour off. Weekly, before the Monday triage.
+name: tzdata
+
+on:
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  current:
+    name: bundled tzdata is IANA's latest
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: python3 -I tools/check_tzdata_current.py

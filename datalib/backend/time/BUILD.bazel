@@ -12,6 +12,7 @@ rust_library(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "@datalib_crates//:chrono",
+        "@datalib_crates//:jiff",
         "@datalib_crates//:serde",
         "@datalib_crates//:thiserror",
         "@datalib_crates//:tracing",

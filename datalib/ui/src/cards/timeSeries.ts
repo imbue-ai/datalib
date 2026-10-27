@@ -4,6 +4,8 @@
 // `unified_time_series_index` (docs/dev/applets.md); units are UCUM codes
 // it has already read (docs/dev/time_series.md).
 
+import { UTC, timeView, wallClock } from "@/config/timeView";
+
 export const TIME_SERIES_APPLET = "/applet/unified_time_series_index";
 
 export type TimeKind = "instant" | "day";
@@ -318,27 +320,37 @@ export function extent(values: number[]): [number, number] | null {
 }
 
 /// A date as the chart writes it: the day for a span of days or more,
-/// else the day and the time. Day points are calendar days, so they are
-/// read in UTC, where `toMs` put them.
-export function formatTime(ms: number, kind: TimeKind, spanMs: number): string {
-  const d = new Date(ms);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  if (kind === "day") {
-    return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
-  }
-  const day = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-  return spanMs >= 2 * DAY_MS ? day : `${day} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+/// else the day and the time, in the zone the status bar's clock sets.
+/// Day points are calendar days, so they are read in UTC, where `toMs`
+/// put them.
+export function formatTime(
+  ms: number,
+  kind: TimeKind,
+  spanMs: number,
+  view = timeView.value,
+): string {
+  const w = wallClock({ ms, offsetMin: null }, kind === "day" ? UTC : view.zone);
+  const day = `${w.year}-${p2(w.month)}-${p2(w.day)}`;
+  if (kind === "day" || spanMs >= 2 * DAY_MS) return day;
+  return `${day} ${p2(w.hour)}:${p2(w.minute)}`;
 }
 
 /// A label on the time axis: as [`formatTime`] for the first, but only
 /// the time of day after it when the span is under two days, since
 /// every tick is then on the first one's date or the next.
-export function formatTimeTick(ms: number, kind: TimeKind, spanMs: number, first: boolean): string {
-  if (first || kind === "day" || spanMs >= 2 * DAY_MS) return formatTime(ms, kind, spanMs);
-  const d = new Date(ms);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+export function formatTimeTick(
+  ms: number,
+  kind: TimeKind,
+  spanMs: number,
+  first: boolean,
+  view = timeView.value,
+): string {
+  if (first || kind === "day" || spanMs >= 2 * DAY_MS) return formatTime(ms, kind, spanMs, view);
+  const w = wallClock({ ms, offsetMin: null }, view.zone);
+  return `${p2(w.hour)}:${p2(w.minute)}`;
 }
+
+const p2 = (n: number) => String(n).padStart(2, "0");
 
 /// A value as a tooltip writes it, in its display unit.
 export function formatValue(v: number, unit: Shown): string {

@@ -5,12 +5,13 @@
 //! messages are kept, and the thread row says how many Gmail has. Each
 //! email carries Gmail's ids and labels (#1370).
 //!
-//! Driven through the HTTP playback layer: no credential, no network.
+//! Each run is the real `datalib-step` ingest of a source configured as
+//! a person would configure it, answered from playback fixtures: no
+//! credential, no network.
 
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use datalib_etl_email::ingest::gmail_api::{self, FetchOptions, FetchSummary};
 use serde_json::{json, Value};
 
 use crate::support::{
@@ -30,17 +31,17 @@ const AWAY_TEAM: &str = "Label_7";
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_rest_of_a_kept_messages_thread_is_mirrored() {
     let h = Harness::new();
-    let run = h.run(None).await;
-    assert_eq!(run.walked, ["INBOX"], "{run:?}");
-    assert_eq!(run.listed_from_threads, 1, "{run:?}");
-    assert_eq!(run.emails_upserted, 2, "{run:?}");
+    let run = h.run(json!({})).await;
+    assert_eq!(run["walked"], json!(["INBOX"]), "{run}");
+    assert_eq!(run["listed_from_threads"], 1, "{run}");
+    assert_eq!(run["emails_upserted"], 2, "{run}");
     assert_eq!(h.0.gmail_ids().await, ids(&[HAIL, REPLY]));
     assert_eq!(h.thread_counts().await, [(Some(2), Some(2))]);
 
-    let again = h.run(None).await;
-    assert!(again.walked.is_empty(), "{again:?}");
-    assert_eq!(again.emails_upserted, 0, "{again:?}");
-    assert_eq!(again.quota_units_spent, 4, "{again:?}");
+    let again = h.run(json!({})).await;
+    assert!(again.get("walked").is_none(), "{again}");
+    assert_eq!(again["emails_upserted"], 0, "{again}");
+    assert_eq!(again["quota_units_spent"], 4, "{again}");
 }
 
 /// `since` narrows the inbox's walk, not a kept reply's thread: the
@@ -58,16 +59,8 @@ async fn a_kept_messages_thread_reaches_back_past_since() {
         &format!("{}&q=after%3A{secs}", gmail_list_url(&["INBOX"])),
         &json!({ "messages": [{ "id": REPLY, "threadId": HAIL }] }),
     );
-    let run =
-        h.0.run(|db| {
-            let mut opts = FetchOptions::new(db);
-            opts.only_labels = vec!["Inbox".to_string()];
-            opts.since = Some(since.parse().unwrap());
-            gmail_api::fetch(opts)
-        })
-        .await
-        .expect("gmail fetch under playback");
-    assert_eq!(run.listed_from_threads, 1, "{run:?}");
+    let run = h.run(json!({ "gmail": { "since": since } })).await;
+    assert_eq!(run["listed_from_threads"], 1, "{run}");
     assert_eq!(h.0.gmail_ids().await, ids(&[HAIL, REPLY]));
 }
 
@@ -75,8 +68,8 @@ async fn a_kept_messages_thread_reaches_back_past_since() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn without_whole_threads_a_partial_thread_shows_gmails_count() {
     let h = Harness::new();
-    let run = h.run(Some(false)).await;
-    assert_eq!(run.listed_from_threads, 0, "{run:?}");
+    let run = h.run(json!({ "whole_threads": false })).await;
+    assert_eq!(run["listed_from_threads"], 0, "{run}");
     assert_eq!(h.0.gmail_ids().await, ids(&[REPLY]));
     assert_eq!(h.thread_counts().await, [(Some(1), Some(2))]);
 }
@@ -88,7 +81,7 @@ async fn without_whole_threads_a_partial_thread_shows_gmails_count() {
 async fn a_message_the_filter_drops_still_counts_toward_its_thread() {
     const SENT: &str = "18c9f2a1b2c3d803";
     let h = Harness::new();
-    h.run(Some(false)).await;
+    h.run(json!({ "whole_threads": false })).await;
 
     let p = &h.0.playback;
     put_gmail_account(p, "1001", labels());
@@ -103,9 +96,9 @@ async fn a_message_the_filter_drops_still_counts_toward_its_thread() {
         }),
     );
     put_gmail(p, &gmail_get_url(SENT), &message(SENT, &["SENT"]));
-    let run = h.run(Some(false)).await;
-    assert_eq!(run.messages_filtered, 1, "{run:?}");
-    assert_eq!(run.threads_recounted, 1, "{run:?}");
+    let run = h.run(json!({ "whole_threads": false })).await;
+    assert_eq!(run["messages_filtered"], 1, "{run}");
+    assert_eq!(run["threads_recounted"], 1, "{run}");
     assert_eq!(h.0.gmail_ids().await, ids(&[REPLY]));
     assert_eq!(h.thread_counts().await, [(Some(1), Some(3))]);
 }
@@ -115,7 +108,7 @@ async fn a_message_the_filter_drops_still_counts_toward_its_thread() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_thread_the_filter_no_longer_keeps_goes_whole() {
     let h = Harness::new();
-    h.run(None).await;
+    h.run(json!({})).await;
 
     let p = &h.0.playback;
     put_gmail_account(p, "1001", labels());
@@ -137,14 +130,14 @@ async fn a_thread_the_filter_no_longer_keeps_goes_whole() {
         &gmail_list_url(&[AWAY_TEAM]),
         &json!({ "messages": [{ "id": HAIL }] }),
     );
-    let run = h.run(None).await;
-    assert_eq!(run.emails_destroyed, 2, "{run:?}");
+    let run = h.run(json!({})).await;
+    assert_eq!(run["emails_destroyed"], 2, "{run}");
     assert!(h.0.gmail_ids().await.is_empty());
     assert!(h.thread_counts().await.is_empty());
 }
 
-/// Gmail's ids in the API's hex, and its labels as it spells them, with
-/// `UNREAD` and `STARRED` back among them.
+/// Gmail's ids in the API's hex, the thread's as the message's, and its
+/// labels as it spells them, with `UNREAD` and `STARRED` back among them.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_email_carries_gmails_ids_and_labels() {
     let h = Harness::new();
@@ -153,20 +146,15 @@ async fn an_email_carries_gmails_ids_and_labels() {
         &gmail_get_url(REPLY),
         &message(REPLY, &["INBOX", "UNREAD", "STARRED"]),
     );
-    h.run(None).await;
-    let rows: Vec<(String, String, String, String)> =
+    h.run(json!({})).await;
+    let rows: Vec<(String, String, String)> =
         h.0.read(|db| async move {
-            sqlx::query_as(
-                "SELECT gmail_message_id, gmail_thread_id, label_ids, thread_id
-                 FROM emails ORDER BY id",
-            )
-            .fetch_all(db.pool())
-            .await
-            .unwrap()
+            sqlx::query_as("SELECT id, thread_id, label_ids FROM emails ORDER BY id")
+                .fetch_all(db.pool())
+                .await
+                .unwrap()
         })
         .await;
-    // The decimal a Takeout writes, which `thread_id` keeps.
-    let thread = u64::from_str_radix(HAIL, 16).unwrap().to_string();
     assert_eq!(
         rows,
         [
@@ -174,16 +162,25 @@ async fn an_email_carries_gmails_ids_and_labels() {
                 HAIL.to_string(),
                 HAIL.to_string(),
                 r#"["Label_7"]"#.to_string(),
-                thread.clone(),
             ),
             (
                 REPLY.to_string(),
                 HAIL.to_string(),
                 r#"["INBOX","STARRED","UNREAD"]"#.to_string(),
-                thread,
             ),
         ]
     );
+}
+
+fn merge(into: &mut Value, from: Value) {
+    match (into, from) {
+        (Value::Object(into), Value::Object(from)) => {
+            for (k, v) in from {
+                merge(into.entry(k).or_insert(Value::Null), v);
+            }
+        }
+        (into, from) => *into = from,
+    }
 }
 
 fn ids(v: &[&str]) -> BTreeSet<String> {
@@ -210,16 +207,15 @@ impl Harness {
         Self(m)
     }
 
-    async fn run(&self, whole_threads: Option<bool>) -> FetchSummary {
+    /// One sync of a Gmail source filtered to the Inbox; `params` adds
+    /// to, or overrides, its `[steps.params]`.
+    async fn run(&self, params: Value) -> Value {
+        let mut all = json!({ "only_extract_labels": ["Inbox"], "gmail": {} });
+        merge(&mut all, params);
         self.0
-            .run(|db| {
-                let mut opts = FetchOptions::new(db);
-                opts.only_labels = vec!["Inbox".to_string()];
-                opts.whole_threads = whole_threads.unwrap_or(true);
-                gmail_api::fetch(opts)
-            })
+            .sync(all)
             .await
-            .expect("gmail fetch under playback")
+            .expect("the ingest step under playback")
     }
 
     /// Each thread's `(email_count, upstream_email_count)`.

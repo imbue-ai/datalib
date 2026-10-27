@@ -195,7 +195,8 @@ and give the source an `export` table whose `path` is the downloaded
 brings the attached files too, though not the tool steps (code
 output, file reads, image generation) the API shows.
 
-Better, give one source both an `api` table and the `export` table.
+Better, give one source both an `api` table and the `export` table:
+in the wizard, the ChatGPT form's **Start from an export?** question.
 The first sync fills in every conversation from the export, with its
 files, then the API downloads only what changed after the export was
 taken; later syncs skip the export until you point it at a new one.
@@ -915,6 +916,34 @@ adb pull /sdcard/SMSBackupRestore ~/backups/SMSBackupRestore
 the source's `backup.path` at that directory — it walks every `*.xml`
 inside, so keeping multiple dated backups there is fine; re-ingesting a
 newer export deduplicates against what's already there.
+
+## Todoist
+
+`type = "todoist"` — Todoist's API through latchkey (`api`). Copies
+your projects, sections, labels, open tasks and their comments, and the
+tasks you have completed. Each project becomes one document: its
+comments, then each section's open tasks with their subtasks and
+comments, then the section's completed tasks, folded.
+
+Sign in once in the browser; latchkey reads your API token from
+Todoist's settings for you:
+
+```sh
+latchkey auth browser todoist
+```
+
+Or copy the API token yourself (**Settings** → **Integrations** →
+**Developer**) to your clipboard and store it:
+
+```sh
+latchkey auth set todoist -H "Authorization: Bearer $(pbpaste)"
+```
+
+An empty `api` table copies everything. Completed tasks are read back
+to the day you joined Todoist, a quarter at a time; set
+`completed_since = "YYYY-MM-DD"` to stop sooner, or `completed = false`
+to leave them out. Each sync after the first reads only what changed.
+`datalib/backend/etl/providers/todoist/INGEST.md` has the details.
 
 ## WhatsApp backups
 
