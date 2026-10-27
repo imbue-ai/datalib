@@ -319,7 +319,9 @@ fn without_tags(line: &str) -> String {
             .filter(|stamp| stamp.contains('T'))
         {
             out.push_str(stamp);
-            rest = rest.find("</time>").map_or(rest, |end| &rest[end + "</time>".len()..]);
+            rest = rest
+                .find("</time>")
+                .map_or(rest, |end| &rest[end + "</time>".len()..]);
             continue;
         }
         // The `↗` out to the original (`message::source_link`) is a mark
