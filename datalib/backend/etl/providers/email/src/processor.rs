@@ -128,7 +128,6 @@ impl DataProcessor for EmailIngest {
                         hostname: sync.hostname.clone(),
                         latchkey: self.latchkey.clone(),
                         account_id: sync.account_id.clone(),
-                        full_resync: sync.full_resync,
                         only_mailbox_labels: self.only_extract_labels.clone(),
                         whole_threads: self.whole_threads,
                         blob_size_limit_bytes: self.blob_size_limit_bytes,

@@ -221,9 +221,6 @@ pub struct FetchOptions {
     pub sealer: Option<datalib_etl::raw_store::Sealer>,
     pub hostname: String,
     pub account_id: Option<String>,
-    /// Skip the stored state tokens: list every mailbox and every email
-    /// again, and fetch every email again.
-    pub full_resync: bool,
     /// When non-empty, restrict the sync to mailboxes whose full label
     /// path (POSIX-like, e.g. `Work/Projects`; see
     /// [`crate::mailbox_labels`]) exactly matches one of these. Empty =
@@ -262,7 +259,6 @@ impl FetchOptions {
             sealer: None,
             hostname: String::new(),
             account_id: None,
-            full_resync: false,
             only_mailbox_labels: Vec::new(),
             whole_threads: true,
             blob_size_limit_bytes: None,
@@ -367,7 +363,6 @@ async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
         &json!({
             "hostname": opts.hostname,
             "account_id": account_id,
-            "full_resync": opts.full_resync,
             "only_mailbox_labels": opts.only_mailbox_labels,
             "whole_threads": opts.whole_threads,
         }),
@@ -424,7 +419,7 @@ async fn run_sync(
 
     // ── mailboxes ───────────────────────────────────────────────────
     bar.doing("mailboxes");
-    let listed = sync_mailboxes(db, &now, session, account_id, opts, &mut summary).await;
+    let listed = sync_mailboxes(db, &now, session, account_id, &mut summary).await;
     // The mailboxes an earlier listing stored still file the mail; with
     // none stored there is nothing to file it under.
     let stored = !db.mailbox_names(account_id).await?.is_empty();
@@ -581,16 +576,9 @@ async fn sync_mailboxes(
     now: &IsoOffsetTimestamp,
     session: &Session,
     account_id: &str,
-    opts: &FetchOptions,
     summary: &mut FetchSummary,
 ) -> Result<()> {
-    let stored = if opts.full_resync {
-        None
-    } else {
-        db.load_state(account_id, "Mailbox").await?
-    };
-
-    if let Some(since) = stored {
+    if let Some(since) = db.load_state(account_id, "Mailbox").await? {
         match incremental_mailboxes(db, now, session, account_id, &since, summary).await {
             Ok(()) => return Ok(()),
             Err(e) => warn!(
@@ -720,16 +708,11 @@ impl EmailListing<'_> {
     /// advances. Whether a named email has been fetched yet is not asked
     /// here, so the state never waits on a fetch.
     ///
-    /// With no state to replay from (a first run, `full_resync`, or a
-    /// state the server can no longer calculate changes from) the delta
-    /// starts over from the account's state now.
+    /// With no state to replay from (a first run, or a state the server
+    /// can no longer calculate changes from) the delta starts over from
+    /// the account's state now.
     async fn replay_changes(&self, summary: &mut FetchSummary) -> Result<()> {
-        let stored = if self.opts.full_resync {
-            None
-        } else {
-            self.db.load_state(self.account_id, "Email").await?
-        };
-        let Some(mut since) = stored else {
+        let Some(mut since) = self.db.load_state(self.account_id, "Email").await? else {
             return self.start_over().await;
         };
         loop {

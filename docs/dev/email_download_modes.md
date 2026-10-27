@@ -216,8 +216,8 @@ same namespacing discipline as the JMAP path's `jmap:` keys. A run:
    although it is held.
    A `history.list` 404 means the cursor aged out of Google's retention
    window (documented as "typically at least one week"). That is not an
-   error: with no cursor to replay from — that, a first run, or
-   `full_resync` — the run stores the `historyId` the profile reported
+   error: with no cursor to replay from — that, or a first run — the
+   run stores the `historyId` the profile reported
    before any walk, and forgets which labels were listed whole. What is
    already held is not fetched again, at 60 units a message; so a label
    change made while no cursor was replaying is not seen.

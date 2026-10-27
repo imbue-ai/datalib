@@ -49,8 +49,8 @@ bazelisk run //datalib/backend/etl/providers/email:jmap_ingest -- \
 The store is `<out>/entities.doltlite_db`. Subsequent runs are
 incremental — the state token from `Email/changes` is persisted
 per-account in `sync_scope_state`, so only created / updated /
-destroyed emails since the last run get touched. `--full-resync` lists
-the account again and fetches every email again.
+destroyed emails since the last run get touched. To list and fetch the
+account again from nothing, reset the step (`datalib-dag --reset`).
 
 To restrict to specific mailboxes, name them by their full label path
 (`Work/Projects`), the way `only_extract_labels` does in a config:
@@ -118,7 +118,7 @@ A run does three things with emails, in this order:
    `newState`, what it names as destroyed is deleted, and the state
    token (`jmap:<account_id>:state:Email` in `sync_scope_state`)
    advances. The token never waits on a fetch. With no token to replay
-   from — a first run, `--full-resync`, or `cannotCalculateChanges` —
+   from — a first run, or `cannotCalculateChanges` —
    the run asks for the account's state now, saves it, forgets which
    scopes were listed whole, and lists every email again so that all of
    them are owed. No other error does this: an `Email/changes` that

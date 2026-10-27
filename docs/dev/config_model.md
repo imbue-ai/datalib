@@ -464,7 +464,7 @@ retired type words become the current ones, and `sync` /
 `common.input_path` / `common.raw_path` become method tables with
 their own `path` (`convert.rs`). The rewrite is value-level, so comments do not
 survive. The loader and `datalib-step` recognize the old shapes only
-well enough to name the tool. Four rewrites are made without asking,
+well enough to name the tool. Five rewrites are made without asking,
 all text edits that keep comments, and each refuses a result that would
 drop an entry the original ran, other than one it exists to take out. `datalib-http` makes them in this order
 (`http/src/config_upgrade.rs`), at boot, on any change to the file, and
@@ -502,8 +502,14 @@ the next would put the first back:
    of numbers, which the keyword index already finds, so the wizard
    never offers the step (`embedAllowed` in
    `ui/src/config/sourceSteps.ts`). This rewrite is the only one of the
-   four that is meant to take an entry out; it still refuses a result
+   five that is meant to take an entry out; it still refuses a result
    that loses any other entry.
+5. An email source's `full_resync` (`upgrade_email_full_resync`,
+   `email_full_resync.rs`): the line goes from its `jmap` or `gmail`
+   table, comment and all. A run lists the account again by itself
+   when upstream no longer honours its cursor, and a reset starts a
+   source over. A `full_resync` inside an inline table is left for a
+   person to take out, and the step's params check names it.
 
 A source may not take `unified_index`, `unified_document_index` or
 `unified_time_series_index` as its id
