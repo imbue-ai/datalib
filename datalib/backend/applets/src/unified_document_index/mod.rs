@@ -858,8 +858,8 @@ async fn fields_ranking(s: &Index, parsed: &ParsedQuery) -> Result<TermsRanking,
 }
 
 /// The answer with no tab, which the CLI, the map and a link without a
-/// tab all get: Fields, Words and Meaning, each narrowed by the search's
-/// other terms, fused by reciprocal rank. A search of identifiers alone
+/// tab all get: Words, Meaning and Fields, each narrowed by the search's
+/// other terms, fused by reciprocal rank, one entry a document. A search of identifiers alone
 /// is Fields', whose match is exact; `qmd_vsearch:` is Meaning's.
 async fn fused_ranking(s: &Index, parsed: &ParsedQuery) -> Result<TermsRanking, SearchFailure> {
     if search_terms::identifiers(&parsed.free_text).is_some() {
@@ -873,30 +873,42 @@ async fn fused_ranking(s: &Index, parsed: &ParsedQuery) -> Result<TermsRanking, 
         words_ranking(s, parsed),
         meaning_ranking(s, parsed),
     )?;
-    Ok((fuse(&[words, fields.0, meaning]), fields.1))
+    // Each cut to the depth fused: a rank past it adds next to nothing.
+    let rankings: Vec<Ranking> = [words, meaning, fields.0]
+        .into_iter()
+        .map(|mut r| {
+            r.truncate(QMD_DEPTH);
+            r
+        })
+        .collect();
+    let uuids: Vec<String> = rankings.iter().flatten().map(|(u, _)| u.clone()).collect();
+    let doc_of = s.repo.markdowns_of(&uuids).await.map_err(index)?;
+    Ok((fuse(&rankings, &doc_of), fields.1))
 }
 
-/// Reciprocal rank fusion: a row scores the sum, over the rankings it is
-/// in, of `1 / (K + rank)`, so a row near the top of two rankings beats
-/// one at the top of one. Its words are the first ranking's that showed
-/// any, so put the most readable first.
-fn fuse(rankings: &[Ranking]) -> Ranking {
+/// Reciprocal rank fusion, by document: a document scores the sum, over
+/// the rankings it is in, of `1 / (K + rank)`, its rank in each being its
+/// place among that ranking's documents, so one near the top of two beats
+/// one at the top of one, and a chat that matched on several messages
+/// counts once. It is shown on the row, and with the words, of the first
+/// ranking that found it, so put the most precise first. `doc_of` names
+/// each row's document; a row it does not name is its own.
+fn fuse(rankings: &[Ranking], doc_of: &std::collections::HashMap<String, String>) -> Ranking {
     const K: f64 = 60.0;
     let mut fused: Vec<(String, (f64, String))> = Vec::new();
     let mut at: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     for ranking in rankings {
-        for (rank, (uuid, (_, words))) in ranking.iter().enumerate() {
-            let score = 1.0 / (K + rank as f64 + 1.0);
-            match at.get(uuid.as_str()) {
-                Some(&i) => {
-                    let (_, (total, shown)) = &mut fused[i];
-                    *total += score;
-                    if shown.is_empty() {
-                        shown.clone_from(words);
-                    }
-                }
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for (uuid, (_, words)) in ranking {
+            let doc = doc_of.get(uuid).map_or(uuid.as_str(), String::as_str);
+            if !seen.insert(doc) {
+                continue;
+            }
+            let score = 1.0 / (K + seen.len() as f64);
+            match at.get(doc) {
+                Some(&i) => fused[i].1 .0 += score,
                 None => {
-                    at.insert(uuid, fused.len());
+                    at.insert(doc, fused.len());
                     fused.push((uuid.clone(), (score, words.clone())));
                 }
             }
@@ -2354,23 +2366,34 @@ mod tests {
     /// A hit shows the words it matched; one that matched nothing readable
     /// (front matter, markup) keeps the row's own opening words rather
     /// than blanking the Contents cell.
-    /// A row two rankings agree on outranks the top of either alone, and
-    /// shows the words of the first ranking that had any.
+    /// A chat each ranking found on a different message is one entry,
+    /// placed on the first ranking's message with its words, scored by
+    /// every ranking that found it; repeats within a ranking push no other
+    /// document down (#1438).
     #[test]
-    fn fusion_ranks_agreement_first_and_keeps_the_first_words() {
+    fn fusion_lists_each_document_once_on_the_first_rankings_row() {
         let ranking = |rows: &[(&str, &str)]| -> Ranking {
             rows.iter()
                 .map(|(uuid, words)| (uuid.to_string(), (1.0, words.to_string())))
                 .collect()
         };
-        let fused = fuse(&[
-            ranking(&[("a", "warp"), ("both", "")]),
-            ranking(&[("b", "id: b"), ("both", "title")]),
-        ]);
+        let doc_of: std::collections::HashMap<String, String> = ["m12", "m40", "m3", "m5"]
+            .into_iter()
+            .map(|m| (m.to_string(), "away-team-chat".to_string()))
+            .collect();
+        let fused = fuse(
+            &[
+                ranking(&[("m12", "warp core breach"), ("email", "warp")]),
+                ranking(&[("m40", "a chunk"), ("email", "")]),
+                ranking(&[("m3", ""), ("m5", ""), ("email", "from: riker")]),
+            ],
+            &doc_of,
+        );
         let order: Vec<&str> = fused.iter().map(|(uuid, _)| uuid.as_str()).collect();
-        assert_eq!(order[0], "both", "{order:?}");
-        assert_eq!(fused[0].1 .1, "title");
-        assert_eq!(fused.len(), 3);
+        assert_eq!(order, ["m12", "email"]);
+        assert_eq!(fused[0].1 .1, "warp core breach");
+        assert_eq!(fused[0].1 .0, 3.0 / 61.0);
+        assert_eq!(fused[1].1 .0, 3.0 / 62.0, "second in each ranking");
     }
 
     #[test]

@@ -906,6 +906,33 @@ impl IndexRepo for DoltRepo {
         rows_in(&mut at, uuids).await
     }
 
+    async fn markdowns_of(
+        &self,
+        uuids: &[String],
+    ) -> Result<std::collections::HashMap<String, String>, RepoError> {
+        if uuids.is_empty() {
+            return Ok(Default::default());
+        }
+        let Some(mut at) = self.pinned().await? else {
+            return Ok(Default::default());
+        };
+        let sql = format!(
+            "SELECT uuid, COALESCE(markdown_uuid, uuid) FROM {} \
+             WHERE uuid IN (SELECT value FROM json_each(?))",
+            at.grid_rows
+        );
+        // Audited: `at.grid_rows` is a literal; the uuids are one bound array.
+        match sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(sql))
+            .bind(serde_json::to_string(uuids).unwrap_or_default())
+            .fetch_all(&mut *at.tx)
+            .await
+        {
+            Ok(rows) => Ok(rows.into_iter().collect()),
+            Err(e) if is_missing_table(&e, "grid_rows") => Ok(Default::default()),
+            Err(e) => Err(RepoError::Internal(e.to_string())),
+        }
+    }
+
     async fn chat_meta(&self, markdown_uuid: &str) -> Result<Option<ChatMeta>, RepoError> {
         // Project the per-markdown header fields out of any grid_row
         // that points at this markdown — they're denormalized identically
