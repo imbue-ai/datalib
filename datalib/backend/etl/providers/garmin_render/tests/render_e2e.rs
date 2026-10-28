@@ -10,12 +10,13 @@ use datalib_etl::progress::Progress;
 use datalib_etl_garmin::ingest::{db_path_for, fetch, FetchOptions, RawDb};
 use datalib_etl_garmin::synthesize::GarminSynth;
 use datalib_etl_garmin_config::GarminApi;
+use datalib_etl_garmin_render::render::daily::Family;
 use datalib_etl_garmin_render::render::parse::parse;
 use datalib_etl_garmin_render::render::render::{
-    activity_uuid, daily_log_uuid, document_uuid, listings_uuid, render_all,
+    activity_uuid, daily_log_uuid, document_uuid, listings_uuid, metric_page_uuid, render_all,
 };
 use datalib_etl_garmin_render::render::time_series;
-use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::inputs::RawRange;
 use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::Synthesizer;
@@ -134,7 +135,7 @@ async fn renders_every_document_then_renders_an_unchanged_store_the_same() {
     assert_eq!(device_row.channel.as_deref(), Some("Forerunner 265"));
 
     let page_dir = root.join(SOURCE).join("render_markdown");
-    let md = std::fs::read_to_string(page_dir.join("index.md")).unwrap();
+    let md = std::fs::read_to_string(doc_md_path(&page_dir, &document_uuid(SOURCE))).unwrap();
     assert!(md.contains(">Garmin — Jean-Luc Picard</h1>"), "{md}");
     assert!(md.contains("**77.6 kg**"), "{md}");
     let chart =
@@ -160,7 +161,8 @@ async fn renders_every_document_then_renders_an_unchanged_store_the_same() {
         "commit messages must not reach the page:\n{md}"
     );
 
-    let sleep = std::fs::read_to_string(page_dir.join("sleep.md")).unwrap();
+    let sleep_page = doc_md_path(&page_dir, &metric_page_uuid(SOURCE, Family::Sleep));
+    let sleep = std::fs::read_to_string(sleep_page).unwrap();
     assert!(
         sleep.contains("**<time datetime=\"2369-04-14\">Mon Apr 14th, 2369</time>:** Sleep score 84 · Asleep 7 h 20 min"),
         "{sleep}"
@@ -179,9 +181,10 @@ async fn renders_every_document_then_renders_an_unchanged_store_the_same() {
         "{sleep}"
     );
 
-    let activity_pages: Vec<String> = std::fs::read_dir(page_dir.join("activities"))
-        .unwrap()
-        .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+    let activity_pages: Vec<String> = emitted
+        .iter()
+        .filter(|d| d.rows.iter().any(|r| r.kind == "Garmin Activity"))
+        .map(|d| std::fs::read_to_string(&d.md_path).unwrap())
         .collect();
     let run_chart = chart(time_series::activity_chart(SOURCE, "17010413001"));
     assert_eq!(

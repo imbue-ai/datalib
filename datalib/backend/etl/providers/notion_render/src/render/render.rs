@@ -9,20 +9,20 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
+use datalib_etl::layout::render_markdown_root;
 use datalib_etl::progress::Progress;
 use datalib_etl_render::front_matter::yaml_scalar;
-use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::html::{escape_md_block, escape_md_inline};
 use datalib_etl_render::inputs::{Bucket, Buckets, Lookup};
 use datalib_etl_render::message::{chip_link, stamp_text_html};
 use datalib_etl_render::title::Title;
 use datalib_handle::Handle;
+use datalib_schema::grid_rows::GridRow;
 use datalib_schema::providers::Provider;
-use regex::Regex;
 use serde_json::Value;
 
 use super::enhanced;
@@ -46,42 +46,6 @@ use datalib_etl_render::pages::batches;
 /// v12: a page body is Notion's enhanced markdown turned into CommonMark,
 ///      under the shared title line, with its ids in the front matter.
 pub const RENDER_VERSION: u32 = 12;
-pub const SLUG_MAX_LEN: usize = 60;
-
-static SLUG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[^a-z0-9]+").unwrap());
-
-pub fn slugify(name: &str) -> String {
-    if name.is_empty() {
-        return "untitled".into();
-    }
-    let lower = name.to_lowercase();
-    let s = SLUG_RE.replace_all(&lower, "-");
-    let s = s.trim_matches('-').to_string();
-    if s.is_empty() {
-        return "untitled".into();
-    }
-    let mut s: String = s.chars().take(SLUG_MAX_LEN).collect();
-    s = s.trim_end_matches('-').to_string();
-    if s.is_empty() {
-        "untitled".into()
-    } else {
-        s
-    }
-}
-
-pub fn short_id(uuid_str: &str) -> String {
-    let first = uuid_str.split('-').next().unwrap_or("");
-    let mut s: String = first.chars().take(8).collect();
-    if s.is_empty() {
-        s = "00000000".into();
-    }
-    s
-}
-
-pub fn page_dir_segment(page_id: &str) -> String {
-    page_id.to_string()
-}
-
 pub fn notion_url(page_id: &str) -> String {
     format!("https://www.notion.so/{}", page_id.replace('-', ""))
 }
@@ -109,40 +73,6 @@ pub fn notion_thread_url(
     url
 }
 
-pub fn thread_filename(discussion_id: &str) -> String {
-    format!("{discussion_id}.md")
-}
-
-pub fn pages_subdir(stanza: &str) -> PathBuf {
-    PathBuf::from(stanza)
-        .join(datalib_etl::layout::RENDER_MARKDOWN_DIR)
-        .join("pages")
-}
-
-pub fn page_qmd_path_rel(stanza: &str, page_id: &str) -> String {
-    let seg = page_dir_segment(page_id);
-    pages_subdir(stanza)
-        .join(seg)
-        .join("index.md")
-        .to_string_lossy()
-        .into_owned()
-}
-
-/// Where a discussion's markdown lives, relative to the data root.
-///
-/// This is what the grid row advertises as `qmd_path`, so
-/// [`render_thread`] must write to the directory it names — the fixture
-/// pipeline asserts every row's `qmd_path` equals its markdown's
-/// `md_path`, and a disagreement here means the preview pane 404s.
-pub fn thread_qmd_path_rel(stanza: &str, page_id: &str, discussion_id: &str) -> String {
-    let seg = page_dir_segment(page_id);
-    pages_subdir(stanza)
-        .join(seg)
-        .join("threads")
-        .join(thread_filename(discussion_id))
-        .to_string_lossy()
-        .into_owned()
-}
 /// Rewrite attachment slots to where the bundle says the bytes are.
 ///
 /// The stored markdown references each attachment by slot — the
@@ -371,17 +301,13 @@ fn names_of(v: Option<&Value>) -> String {
         .unwrap_or_default()
 }
 
-fn render_thread(
+fn thread_markdown(
     stanza: &str,
-    disc_id: &str,
     page_title: &str,
     members: &[&Value],
     anchor: Option<&str>,
     author_of: &dyn Fn(&Value) -> Option<Handle>,
-    dir: &Path,
-) -> Result<PathBuf> {
-    fs::create_dir_all(dir)?;
-    let path = dir.join(thread_filename(disc_id));
+) -> String {
     let mut out = format!(
         "---\ntitle: {}\nsource_label: Notion\n---\n\n",
         yaml_scalar(page_title)
@@ -427,8 +353,35 @@ fn render_thread(
         out.push_str(&escape_md_block(&plain(c.get("rich_text"))));
         out.push_str("\n\n</div>\n\n");
     }
-    fs::write(&path, out).with_context(|| format!("write {}", path.display()))?;
-    Ok(path)
+    out
+}
+
+/// Write a document to the file its id names, and point each of its rows
+/// at that file.
+fn file_document(
+    root: &Path,
+    stanza: &str,
+    markdown_uuid: &str,
+    rows: &[GridRow],
+    body: &str,
+) -> Result<(PathBuf, Vec<GridRow>)> {
+    let md_path = doc_md_path(&render_markdown_root(root, stanza), markdown_uuid);
+    let dir = md_path.parent().expect("a document's file has a folder");
+    fs::create_dir_all(dir).with_context(|| format!("mkdir -p {}", dir.display()))?;
+    fs::write(&md_path, body).with_context(|| format!("write {}", md_path.display()))?;
+    let md_rel = md_path
+        .strip_prefix(root)
+        .unwrap_or(&md_path)
+        .to_string_lossy()
+        .into_owned();
+    let rows = rows
+        .iter()
+        .map(|r| GridRow {
+            qmd_path: Some(md_rel.clone()),
+            ..r.clone()
+        })
+        .collect();
+    Ok((md_path, rows))
 }
 
 /// Where a pass reads its pages' attachment bytes: what each page's
@@ -572,8 +525,7 @@ pub fn render_notion(
     blob_bytes: u64,
 ) -> Result<RenderSummary> {
     let mut summary = RenderSummary::default();
-    let pages_root = datalib_etl::layout::render_markdown_root(root, stanza).join("pages");
-    fs::create_dir_all(&pages_root)?;
+    fs::create_dir_all(render_markdown_root(root, stanza))?;
     if parsed.pages.is_empty() && parsed.comments.is_empty() {
         return Ok(summary);
     }
@@ -599,23 +551,13 @@ pub fn render_notion(
                 inputs,
                 ..
             } = doc;
-            let page_dir = pages_root.join(page_dir_segment(page_uuid));
-            let md_path = page_dir.join("index.md");
             let Some(page) = pages_by_id.get(page_uuid.as_str()) else {
                 continue;
             };
-            fs::create_dir_all(&page_dir)?;
             if let Some(ids) = parsed.attachment_ids_by_page.get(page_uuid) {
                 inputs.read_all("notion_attachments", ids.iter().map(String::as_str));
             }
             let bundle = bundles.get(page_uuid).unwrap_or(&empty_bundle);
-            // An older build copied the bytes here; the page links its CAS now.
-            match fs::remove_dir_all(page_dir.join("blobs")) {
-                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                    return Err(e).with_context(|| format!("remove {}/blobs", page_dir.display()));
-                }
-                _ => {}
-            }
             let cx = enhanced::Context {
                 stanza,
                 tree: inputs.lookup("tree", &parsed.tree),
@@ -639,16 +581,16 @@ pub fn render_notion(
                 stanza,
             ));
             out.push_str(&body);
-            fs::write(&md_path, out).with_context(|| format!("write {}", md_path.display()))?;
+            let (md_path, rows) = file_document(root, stanza, markdown_uuid, &doc.rows, &out)?;
 
             on_doc_complete(RenderedMarkdown {
                 markdown_uuid: markdown_uuid.clone(),
                 source_id: String::new(),
                 upstream_cursor: None,
                 bucket_key: Some(page_uuid.clone()),
-                md_path: md_path.clone(),
+                md_path,
                 render_version: RENDER_VERSION,
-                rows: doc.rows.clone(),
+                rows,
                 sections: Vec::new(),
                 edges: Vec::new(),
                 contacts: Vec::new(),
@@ -675,18 +617,13 @@ pub fn render_notion(
         let ThreadDocument {
             discussion_uuid,
             markdown_uuid,
-            page_uuid,
             page_title,
             inputs,
             ..
         } = doc;
-        let thread_path = root.join(thread_qmd_path_rel(stanza, page_uuid, discussion_uuid));
         let Some(members) = by_disc.get(discussion_uuid.as_str()) else {
             continue;
         };
-        let dir = thread_path
-            .parent()
-            .expect("thread_qmd_path_rel always has a parent dir");
         let anchors = inputs.lookup("comment_anchors", &parsed.anchor_text);
         let anchor = doc
             .anchor_block_uuid
@@ -695,23 +632,16 @@ pub fn render_notion(
             .map(String::as_str);
         let emails = inputs.lookup("users", &parsed.user_emails);
         let author_of = |c: &Value| comment_author_handle(c, emails);
-        let p = render_thread(
-            stanza,
-            discussion_uuid,
-            page_title,
-            members,
-            anchor,
-            &author_of,
-            dir,
-        )?;
+        let body = thread_markdown(stanza, page_title, members, anchor, &author_of);
+        let (md_path, rows) = file_document(root, stanza, markdown_uuid, &doc.rows, &body)?;
         on_doc_complete(RenderedMarkdown {
             markdown_uuid: markdown_uuid.clone(),
             source_id: String::new(),
             upstream_cursor: None,
             bucket_key: Some(discussion_uuid.clone()),
-            md_path: p,
+            md_path,
             render_version: RENDER_VERSION,
-            rows: doc.rows.clone(),
+            rows,
             sections: Vec::new(),
             edges: Vec::new(),
             contacts: Vec::new(),
@@ -799,23 +729,22 @@ mod tests {
         )
         .unwrap();
         let out = tempdir().unwrap();
-        let mut paths = Vec::new();
+        let mut pages = Vec::new();
         render_from_store(
             &parsed,
             out.path(),
             "notion",
             &Progress::noop(),
             &mut |md: RenderedMarkdown| {
-                paths.push(md.md_path);
+                if md.rows.iter().any(|r| r.kind == "Notion Page") {
+                    pages.push(md.md_path);
+                }
                 Ok(())
             },
             1,
         )
         .unwrap();
-        let page = paths
-            .iter()
-            .find(|p| p.ends_with("index.md"))
-            .expect("the page rendered");
+        let page = pages.first().expect("the page rendered");
         let md = fs::read_to_string(page).unwrap();
         assert!(
             md.contains("](/data/") && md.contains(&format!("/blob/{blake3})")),
@@ -959,16 +888,11 @@ mod tests {
         assert!(!t.contains("Empty"), "empty properties are omitted: {t}");
     }
 
-    /// A thread's file must land exactly where its grid row says. These
-    /// disagreed once — the row said `threads/`, the writer was handed
-    /// `discussions/` — which the fixture pipeline caught as a
-    /// `qmd_path` mismatch and a user would have seen as a 404 preview.
-    /// `render_notion` now derives the directory from
-    /// `thread_qmd_path_rel`, so this drives the real entry point
-    /// rather than `render_thread` in isolation, which is where the
-    /// earlier version of this test failed to look.
+    /// A page and a thread are each written to the file their id names,
+    /// and every row names that file. The row and the writer once named a
+    /// thread's file apart, and a user saw a 404 preview.
     #[test]
-    fn a_thread_lands_where_its_row_says_it_does() {
+    fn each_document_lands_in_the_file_its_id_and_its_rows_name() {
         let d = tempdir().unwrap();
         let page = "b1d6e000-1701-4d00-8000-000000000001";
         let disc = "d0000001-1701-4d00-8000-000000000001";
@@ -989,13 +913,9 @@ mod tests {
             })],
             ..Default::default()
         };
-        let mut advertised: Vec<String> = Vec::new();
+        let mut emitted: Vec<RenderedMarkdown> = Vec::new();
         let mut on_doc = |md: RenderedMarkdown| {
-            for r in &md.rows {
-                if let Some(q) = &r.qmd_path {
-                    advertised.push(q.clone());
-                }
-            }
+            emitted.push(md);
             Ok(())
         };
         render_notion(
@@ -1008,12 +928,15 @@ mod tests {
             1,
         )
         .unwrap();
-        assert!(!advertised.is_empty(), "expected rows with a qmd_path");
-        for rel in advertised {
-            assert!(
-                d.path().join(&rel).exists(),
-                "row advertises {rel}, but no file is there"
-            );
+        assert_eq!(emitted.len(), 2, "a page and a thread");
+        for md in &emitted {
+            let want = doc_md_path(&render_markdown_root(d.path(), "notion"), &md.markdown_uuid);
+            assert_eq!(md.md_path, want);
+            assert!(want.exists(), "{} was not written", want.display());
+            let rel = want.strip_prefix(d.path()).unwrap().to_string_lossy();
+            for r in &md.rows {
+                assert_eq!(r.qmd_path.as_deref(), Some(&*rel), "row {}", r.uuid);
+            }
         }
     }
 
@@ -1021,21 +944,16 @@ mod tests {
     /// the discussion is about before the first reply.
     #[test]
     fn a_thread_file_opens_with_the_quoted_block() {
-        let d = tempdir().unwrap();
         let c = json!({"id": "c1", "created_time": "2369-04-15T01:00:00.000Z",
                        "display_name": {"resolved_name": "Data"},
                        "rich_text": [{"plain_text": "Recommend recalibration"}]});
-        let p = render_thread(
+        let md = thread_markdown(
             "notion",
-            "d1",
             "Handbook",
             &[&c],
             Some("Warp core alignment"),
             &|_| Handle::email("data@enterprise.test"),
-            d.path(),
-        )
-        .unwrap();
-        let md = fs::read_to_string(p).unwrap();
+        );
         assert!(md.contains("> Warp core alignment"), "{md}");
         assert!(md.find("> Warp core alignment") < md.find("Recommend recalibration"));
         assert!(
@@ -1054,21 +972,10 @@ mod tests {
     fn a_thread_and_properties_in_markup_render_escaped() {
         const MARKUP: &str = "<script>x</script> & co";
         let escaped = "&lt;script&gt;x&lt;/script&gt; &amp; co";
-        let d = tempdir().unwrap();
         let c = json!({"id": "c1", "created_time": "2369-04-15T01:00:00.000Z",
                        "display_name": {"resolved_name": MARKUP},
                        "rich_text": [{"plain_text": MARKUP}]});
-        let p = render_thread(
-            "notion",
-            "d1",
-            "Handbook",
-            &[&c],
-            Some(MARKUP),
-            &|_| None,
-            d.path(),
-        )
-        .unwrap();
-        let md = fs::read_to_string(p).unwrap();
+        let md = thread_markdown("notion", "Handbook", &[&c], Some(MARKUP), &|_| None);
         let (_, body) = md
             .split_once("---\n\n")
             .expect("front matter, then the body");
@@ -1092,23 +999,11 @@ mod tests {
     /// thread that appears to be about nothing.
     #[test]
     fn a_thread_whose_anchor_was_deleted_says_so() {
-        let d = tempdir().unwrap();
         let c = json!({"id": "c1", "created_time": "2369-04-15T01:00:00.000Z",
                        "original_content_deleted": true,
                        "display_name": {"resolved_name": "Data"},
                        "rich_text": [{"plain_text": "hi"}]});
-        let p =
-            render_thread("notion", "d1", "Handbook", &[&c], None, &|_| None, d.path()).unwrap();
-        let md = fs::read_to_string(p).unwrap();
+        let md = thread_markdown("notion", "Handbook", &[&c], None, &|_| None);
         assert!(md.contains("deleted upstream"), "{md}");
-    }
-
-    #[test]
-    fn slugify_and_short_id_shape_the_page_dir() {
-        assert_eq!(
-            slugify("Project Data Liberation ✊"),
-            "project-data-liberation"
-        );
-        assert!(!page_dir_segment("348a550f-af95-80a0-8973-e679d9e1c6c9").is_empty());
     }
 }

@@ -1175,10 +1175,15 @@ const STORE_SCHEMA_PARAM: &str = "_store_schema";
 /// change is rare enough that re-rendering the rest costs little.
 const HANDLE_RULES_PARAM: &str = "_handle_rules";
 
+/// The key `datalib_etl_render::grid_index::DOC_LAYOUT` sits under: where
+/// documents are filed moved, so every source writes its files again.
+const DOC_LAYOUT_PARAM: &str = "_doc_layout";
+
 /// Every processor's params under its id, plus the render store's DDL
-/// hash and the handle rules, so one source's cursor carries all of them
-/// and a change to any one — a processor's knob, the shape of the store,
-/// what a handle normalizes to — re-renders the source.
+/// hash, the handle rules and the document layout, so one source's
+/// cursor carries all of them and a change to any one — a processor's
+/// knob, the shape of the store, what a handle normalizes to, where a
+/// document is filed — re-renders the source.
 pub(crate) fn declared_render_params(processors: &[Box<dyn RenderProcessor>]) -> serde_json::Value {
     processors
         .iter()
@@ -1191,6 +1196,10 @@ pub(crate) fn declared_render_params(processors: &[Box<dyn RenderProcessor>]) ->
             (
                 HANDLE_RULES_PARAM.to_string(),
                 serde_json::Value::from(datalib_handle::RULES_VERSION),
+            ),
+            (
+                DOC_LAYOUT_PARAM.to_string(),
+                serde_json::Value::from(datalib_etl_render::grid_index::DOC_LAYOUT),
             ),
         ])
         .collect::<serde_json::Map<String, serde_json::Value>>()
@@ -1355,8 +1364,10 @@ mod plan_tests {
 
     fn write_doc_in(root: &Path, uuid: &str, bucket_key: Option<&str>) {
         let store = IndexedMarkdownStore::open(root).unwrap();
+        let file = datalib_schema::grid_rows::doc_file_rel(uuid);
         let row = datalib_schema::grid_rows::GridRow::builder()
             .uuid(uuid)
+            .qmd_path(file.clone())
             .provider(datalib_schema::providers::Provider::Test)
             .kind("Test")
             .source_label("Test")
@@ -1376,7 +1387,7 @@ mod plan_tests {
                     source_id: "src".into(),
                     upstream_cursor: None,
                     bucket_key: bucket_key.map(String::from),
-                    md_path: root.join(uuid).join("all.md"),
+                    md_path: root.join(file),
                     render_version: 5,
                     rows: vec![row],
                     sections: Vec::new(),
@@ -1683,8 +1694,10 @@ mod stale_tree_tests {
 
     fn write_doc(root: &Path, chat_uuid: &str, version: u32) {
         let store = IndexedMarkdownStore::open(root).unwrap();
+        let file = datalib_schema::grid_rows::doc_file_rel(chat_uuid);
         let row = GridRow::builder()
             .uuid(chat_uuid)
+            .qmd_path(file.clone())
             .provider(Provider::Test)
             .kind("Test")
             .source_label("Test")
@@ -1704,7 +1717,7 @@ mod stale_tree_tests {
                     source_id: "claude_web".into(),
                     upstream_cursor: None,
                     bucket_key: None,
-                    md_path: root.join(chat_uuid).join("all.md"),
+                    md_path: root.join(file),
                     render_version: version,
                     rows: vec![row],
                     sections: Vec::new(),
@@ -1905,7 +1918,7 @@ mod stale_tree_tests {
             serde_json::Value::String(datalib_etl_render::indexed_markdown::schema_hash())
         );
         assert!(params["stub"].is_object() || params["stub"].is_null());
-        assert_eq!(params.as_object().unwrap().len(), 3);
+        assert_eq!(params.as_object().unwrap().len(), 4);
     }
 
     /// A stored handle is only as current as the rules that minted it

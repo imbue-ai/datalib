@@ -38,11 +38,9 @@ struct Harness {
     raw_dir: PathBuf,
     root: PathBuf,
     /// The *data* root — the prefix `grid_index::apply_one` strips off
-    /// `md_path` to produce the stored path. The real layout is mirrored
-    /// here (`<data_root>/<stanza>/render_markdown/`) rather than flattened,
-    /// so a test can compare a stored `qmd_path` against it.
+    /// `md_path` to produce the stored path, so a test can compare a
+    /// stored `qmd_path` against it.
     data_root: PathBuf,
-    out_dir: PathBuf,
 }
 
 impl Harness {
@@ -50,14 +48,12 @@ impl Harness {
         let tmp = tempfile::tempdir().unwrap();
         let raw_dir = tmp.path().join("raw");
         let data_root = tmp.path().join("data");
-        let out_dir = datalib_etl::layout::render_markdown_root(&data_root, STANZA);
         std::fs::create_dir_all(&raw_dir).unwrap();
         Self {
             root: fixture_dir(),
             _tmp: tmp,
             raw_dir,
             data_root,
-            out_dir,
         }
     }
 
@@ -119,7 +115,7 @@ impl Harness {
         };
         let s = render::render(
             &self.raw_dir,
-            &self.out_dir,
+            &self.data_root,
             STANZA,
             &datalib_etl::progress::Progress::noop(),
             &mut sink,
@@ -568,9 +564,10 @@ async fn render_emits_markdown_with_page_anchors_matching_grid_rows() -> Result<
     Ok(())
 }
 
-/// Regression: `grid_rows.qmd_path` must be the *data-root*-relative
-/// path, byte-equal to what `grid_index::apply_one` stores in
-/// `markdowns.md_path` for the same file.
+/// Regression: each document is written to the file its id names, and
+/// `grid_rows.qmd_path` is that file's *data-root*-relative path,
+/// byte-equal to what `grid_index::apply_one` stores in
+/// `markdowns.md_path`.
 #[tokio::test(flavor = "multi_thread")]
 async fn every_qmd_path_equals_its_markdowns_md_path() -> Result<()> {
     let h = Harness::new();
@@ -582,6 +579,14 @@ async fn every_qmd_path_equals_its_markdowns_md_path() -> Result<()> {
     );
 
     for m in &emitted {
+        assert_eq!(
+            m.md_path,
+            datalib_etl_render::grid_index::doc_md_path(
+                &datalib_etl::layout::render_markdown_root(&h.data_root, STANZA),
+                &m.markdown_uuid,
+            ),
+            "not the file its id names"
+        );
         // Exactly what `apply_one` does to reach `markdowns.md_path`.
         let stored_md_path = m
             .md_path

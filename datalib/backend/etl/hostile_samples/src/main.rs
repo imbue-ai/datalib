@@ -297,7 +297,6 @@ fn chat_common(scratch: &Path) -> Result<Vec<Document>> {
         source_url: None,
         org_uuid: None,
         org_name: None,
-        path_prefix: None,
         buckets: vec![NormalizedDoc {
             period_key: "all".to_string(),
             markdown_uuid: "00000000-0000-8000-8000-0000000000d1".into(),
@@ -533,8 +532,6 @@ fn forge(scratch: &Path) -> Result<Vec<Document>> {
         from_ref_key: "head_ref",
         to_ref_key: "base_ref",
         number_sigil: '#',
-        dir_prefix: "pr-",
-        container_needs_owner: true,
         reviews: true,
         render_version: 1,
     };

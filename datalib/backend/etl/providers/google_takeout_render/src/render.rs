@@ -523,7 +523,6 @@ fn build_voice_chats(source_id: &str, messages: &[(String, Value)]) -> Vec<Norma
             named_after,
             contacts: Vec::new(),
             inputs: inputs.declared(),
-            path_prefix: None,
             id: chat_id.clone(),
             chat_uuid: conversation.uuid,
             display,

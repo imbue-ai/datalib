@@ -68,9 +68,10 @@ async fn gitlab_live_single_mr_snapshot() {
     )
     .expect("render_gitlab failed");
 
-    let qmd_rel =
-        datalib_etl_gitlab_render::render::PROFILE.qmd_path_rel(stanza, &mr.container, mr.number);
-    let qmd_abs = render_root.join(&qmd_rel);
+    let qmd_abs = datalib_etl_render::grid_index::doc_md_path(
+        &datalib_etl::layout::render_markdown_root(&render_root, stanza),
+        &mr.uuid,
+    );
     assert!(
         qmd_abs.exists(),
         "rendered md missing: {}",

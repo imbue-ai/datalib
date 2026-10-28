@@ -11,7 +11,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl_render::front_matter::yaml_scalar;
-use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::html::{escape_md_inline, md_code_span};
 use datalib_etl_render::processor::RenderCtx;
 use datalib_etl_render::title::Title;
@@ -245,7 +245,12 @@ pub fn write_page(
     build_rows: impl FnOnce(&str, &mut Vec<ProblemRow>) -> Vec<GridRow>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<()> {
-    let md_path = datalib_etl::layout::render_markdown_root(root, source_id).join("index.md");
+    let md_path = doc_md_path(
+        &datalib_etl::layout::render_markdown_root(root, source_id),
+        m_uuid,
+    );
+    let dir = md_path.parent().expect("a document's file has a folder");
+    fs::create_dir_all(dir).with_context(|| format!("mkdir -p {}", dir.display()))?;
     fs::write(&md_path, body).with_context(|| format!("write {}", md_path.display()))?;
 
     let md_rel = md_path

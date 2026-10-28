@@ -694,7 +694,11 @@ class RenderContractTest(unittest.TestCase):
         test's runtime is made of."""
         db = source_dir / "render_markdown" / "indexed_markdown.doltlite_db"
         out: dict[str, list[str]] = {}
+        storage: set[str] = set()
         if db.is_file():
+            storage = set(
+                self._rows(db, "SELECT md_path FROM markdowns WHERE kind = 'storage';")
+            )
             selects = []
             for t, cols in self._render_columns(db).items():
                 keep = [c for c in cols if c not in _VOLATILE.get(t, ())]
@@ -709,7 +713,11 @@ class RenderContractTest(unittest.TestCase):
         files = []
         root = source_dir / "render_markdown"
         for p in sorted(root.rglob("*")):
-            if p.is_file() and p.suffix == ".md" and "_datalib" not in p.parts:
+            if (
+                p.is_file()
+                and p.suffix == ".md"
+                and str(p.relative_to(source_dir.parent)) not in storage
+            ):
                 digest = hashlib.sha256(p.read_bytes()).hexdigest()[:16]
                 files.append(f"{p.relative_to(root)} {digest}")
         out["files"] = files

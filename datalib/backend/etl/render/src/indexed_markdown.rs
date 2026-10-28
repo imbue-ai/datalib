@@ -818,10 +818,11 @@ where
     Ok(by_doc)
 }
 
-/// Delete a rendered document's file, and the per-document directory it sat
-/// in once that is empty (`<source>/render_markdown/<uuid>/all.md` is the usual
-/// shape, and leaving the empty parent behind makes a deleted conversation
-/// still look present to anyone listing the tree).
+/// Delete a rendered document's file, and every folder that leaves empty: a
+/// layout change would otherwise leave the old tree behind as folders that
+/// make a moved document still look present to anyone listing it. A file
+/// filed under an older layout may have a `blobs/` folder beside it, from
+/// before images went to the blob store; it goes with the file.
 ///
 /// Best-effort by design: a file already gone is the state we wanted, and a
 /// tree we cannot write is not worth failing a render over once the rows —
@@ -838,8 +839,17 @@ fn unlink_rendered(out_dir: &Path, md_path_rel: &str) {
             return;
         }
     }
-    if let Some(dir) = abs.parent() {
-        let _ = std::fs::remove_dir(dir);
+    if datalib_schema::grid_rows::markdown_uuid_of_path(md_path_rel).is_none() {
+        if let Some(dir) = abs.parent() {
+            let _ = std::fs::remove_dir_all(dir.join("blobs"));
+        }
+    }
+    let mut dir = abs.parent();
+    while let Some(d) = dir.filter(|d| d.starts_with(out_dir) && *d != out_dir) {
+        if std::fs::remove_dir(d).is_err() {
+            break;
+        }
+        dir = d.parent();
     }
 }
 
@@ -1331,7 +1341,7 @@ impl IndexedMarkdownStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datalib_schema::grid_rows::GridRow;
+    use datalib_schema::grid_rows::{doc_file_rel, GridRow};
     use datalib_schema::problems::{Outcome, Problem, Reason, Scope, Stage};
     use datalib_schema::providers::Provider;
 
@@ -1482,6 +1492,7 @@ mod tests {
             .entire_chat(format!("/chat/{markdown_uuid}"))
             .body("hello")
             .markdown_uuid(Some(markdown_uuid.to_string()))
+            .qmd_path(Some(doc_file_rel(markdown_uuid)))
             .created_at(Some("2026-01-01T00:00:00+00:00".to_string()))
             .is_document(true)
             .item_count(Some(3))
@@ -1504,7 +1515,7 @@ mod tests {
             source_id: "src".into(),
             upstream_cursor: None,
             bucket_key: None,
-            md_path: dir.join(format!("{markdown_uuid}.md")),
+            md_path: dir.join(doc_file_rel(markdown_uuid)),
             render_version: 7,
             rows: vec![row(markdown_uuid, markdown_uuid)],
             sections: Vec::new(),
@@ -1742,6 +1753,7 @@ mod tests {
             .entire_chat("/chat/storage-doc")
             .body("src/raw — 1.0 KiB")
             .markdown_uuid(Some("storage-doc".to_string()))
+            .qmd_path(Some(doc_file_rel("storage-doc")))
             .byte_size(Some(1024))
             .item_count(Some(1))
             .is_document(true)
@@ -1959,32 +1971,35 @@ mod tests {
         assert_eq!(s.holdings(None).unwrap(), Holdings::default());
     }
 
-    /// A document that comes back at another path — beeper's
-    /// `<network>/` prefix after a room's network changed — leaves no
-    /// file at the old one: the store's row moves, and a file the row no
-    /// longer names is what `remove_document` exists to prevent.
+    /// A document an older build filed under its old layout — a folder of
+    /// its own, with a `blobs/` folder beside the file — leaves nothing of
+    /// it behind once written where its id files it.
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_document_that_moves_leaves_no_file_behind() {
+    async fn a_document_filed_under_an_old_layout_leaves_nothing_behind() {
         let td = tempfile::tempdir().unwrap();
         let root = td.path();
         let s = store(root);
-        let mut first = doc(root, "md-1", "fp-1");
-        first.md_path = root.join("old").join("md-1.md");
-        std::fs::create_dir_all(first.md_path.parent().unwrap()).unwrap();
-        std::fs::write(&first.md_path, "old").unwrap();
-        s.put_document(root, &first).unwrap();
+        let d = doc(root, "md-1", "fp-1");
+        std::fs::create_dir_all(d.md_path.parent().unwrap()).unwrap();
+        std::fs::write(&d.md_path, "new").unwrap();
+        s.put_document(root, &d).unwrap();
+        let old = root.join("src/render_markdown/md-1");
+        std::fs::create_dir_all(old.join("blobs")).unwrap();
+        std::fs::write(old.join("all.md"), "old").unwrap();
+        std::fs::write(old.join("blobs/photo.png"), "png").unwrap();
+        blocking(
+            sqlx::query("UPDATE markdowns SET md_path = 'src/render_markdown/md-1/all.md'")
+                .execute(&s.pool),
+        )
+        .unwrap();
 
-        let mut moved = doc(root, "md-1", "fp-1");
-        moved.md_path = root.join("new").join("md-1.md");
-        std::fs::create_dir_all(moved.md_path.parent().unwrap()).unwrap();
-        std::fs::write(&moved.md_path, "new").unwrap();
-        s.put_document(root, &moved).unwrap();
-
-        assert!(!first.md_path.exists(), "the old file is gone");
-        assert!(moved.md_path.exists(), "the new one stays");
+        s.put_document(root, &d).unwrap();
+        assert!(!old.exists(), "the old folder and its blobs are gone");
+        assert!(!root.join("src").exists(), "and the folders it alone kept");
+        assert!(d.md_path.exists(), "the new file stays");
         // The same path twice is left alone.
-        s.put_document(root, &moved).unwrap();
-        assert!(moved.md_path.exists());
+        s.put_document(root, &d).unwrap();
+        assert!(d.md_path.exists());
     }
 
     /// Re-rendering replaces a document's rows rather than accumulating
@@ -2122,6 +2137,7 @@ mod tests {
         let s = store(root);
         let mut first = doc(root, "md-1", "fp-1");
         first.bucket_key = Some("mr!17".into());
+        std::fs::create_dir_all(first.md_path.parent().unwrap()).unwrap();
         std::fs::write(&first.md_path, "first").unwrap();
         s.put_document(root, &first).unwrap();
         assert_eq!(

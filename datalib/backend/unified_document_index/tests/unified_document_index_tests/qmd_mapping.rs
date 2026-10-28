@@ -3,13 +3,21 @@
 use std::fs;
 use std::path::Path;
 
-use datalib_schema::grid_rows::GridRow;
-use datalib_unified_document_index::qmd::mapping::norm_path;
+use datalib_schema::grid_rows::{doc_file_rel, GridRow};
 use datalib_unified_document_index::qmd::{GridIndex, GridRowRef, QmdHit};
+
+/// The claude chat, and the github PR thread.
+const CHAT: &str = "c0000001-1701-4d00-8000-00000000c001";
+const THREAD: &str = "aaaaaaaa-bbbb-cccc-dddd-0000000000f1";
+
+/// Where a source files document `id`: the path qmd's hit names.
+fn path_of(source: &str, id: &str) -> String {
+    format!("{source}/render_markdown/{}", doc_file_rel(id))
+}
 
 // Fixture construction
 
-fn row(uuid: &str, kind: &str, qmd_path: &str, provider: &str) -> GridRow {
+fn row(uuid: &str, kind: &str, document: &str, provider: &str) -> GridRow {
     GridRow {
         uuid: uuid.into(),
         provider: provider.into(),
@@ -35,7 +43,7 @@ fn row(uuid: &str, kind: &str, qmd_path: &str, provider: &str) -> GridRow {
         entire_chat: format!("/chat/{uuid}"),
         preview: String::new(),
         content_hash: String::new(),
-        qmd_path: Some(qmd_path.into()),
+        qmd_path: Some(path_of(provider, document)),
         source_url: None,
         git_sha: None,
         upstream_id: None,
@@ -43,7 +51,7 @@ fn row(uuid: &str, kind: &str, qmd_path: &str, provider: &str) -> GridRow {
         upstream_account: None,
         notion_page_uuid: None,
         notion_block_uuid: None,
-        markdown_uuid: Some(uuid.into()),
+        markdown_uuid: Some(document.into()),
         byte_size: None,
         item_count: None,
         diff_status: None,
@@ -69,7 +77,7 @@ impl Rendered {
             .map(|r| GridRowRef {
                 uuid: r.uuid.clone(),
                 kind: r.kind.clone(),
-                qmd_path: r.qmd_path.clone().unwrap_or_default(),
+                markdown_uuid: r.markdown_uuid.clone().unwrap_or_default(),
                 provider: r.provider.clone(),
                 is_document: r.is_document,
             })
@@ -99,13 +107,13 @@ fn write_md(root: &Path, qmd_path: &str, section_uuids: &[&str]) -> Vec<usize> {
         .collect()
 }
 
-/// Synthesize a two-document fixture tree under `root/render_markdown/`:
+/// Synthesize a two-document fixture:
 ///
 ///   * One claude chat doc (Chat row + 2 message rows).
 ///   * One github PR thread doc (3 PR Comment rows).
 fn make_fixture(_root: &Path) -> Rendered {
     let mut r = Rendered::default();
-    let chat = "render_markdown/claude/acct/llm_chats/c001__klingon_diplomacy.md";
+    let chat = CHAT;
     r.push_doc(vec![
         row(
             "c0000001-1701-4d00-8000-00000000c001",
@@ -127,7 +135,7 @@ fn make_fixture(_root: &Path) -> Rendered {
         ),
     ]);
 
-    let pr_thread = "render_markdown/github/enterprise-d/replicator/pr-42__recalibrate-tea/threads/t01__earl-grey.md";
+    let pr_thread = THREAD;
     r.push_doc(vec![
         row(
             "aaaaaaaa-bbbb-cccc-dddd-000000000001",
@@ -151,12 +159,11 @@ fn make_fixture(_root: &Path) -> Rendered {
     r
 }
 
-/// The hits qmd would answer with: each at a document's path, spelled the
-/// way qmd's indexer spells it (lowercased, `[_-]+` collapsed).
+/// The hits qmd would answer with: each at a document's path.
 fn fake_hits(hits: &[(&str, &str)]) -> Vec<QmdHit> {
     hits.iter()
         .map(|(path, snippet)| QmdHit {
-            path: norm_path(path),
+            path: path.to_string(),
             score: 0.9,
             snippet: snippet.to_string(),
             lines: None,
@@ -183,14 +190,14 @@ fn sidecar_walk_builds_grid_index() {
 #[test]
 fn line_resolves_to_single_message_row() {
     // A hit whose diff-header line lands in the second message resolves to
-    // only that row, even though the chat doc has three rows under one
-    // qmd_path — no snippet anchor required.
+    // only that row, even though the chat doc has three rows — no snippet
+    // anchor required.
     let tmp = tempfile::tempdir().unwrap();
     let rendered = make_fixture(tmp.path());
-    let chat = "render_markdown/claude/acct/llm_chats/c001__klingon_diplomacy.md";
+    let chat = path_of("claude", CHAT);
     let anchors = write_md(
         tmp.path(),
-        chat,
+        &chat,
         &[
             "30000001-1701-4d00-8000-000000030001",
             "30000002-1701-4d00-8000-000000030002",
@@ -200,7 +207,7 @@ fn line_resolves_to_single_message_row() {
 
     // `@@ -<second-anchor>,4 @@` → the matched line is on the 2nd message div.
     let snip = format!("@@ -{},4 @@ (0 before, 3 after)\n## Assistant", anchors[1]);
-    let hits = fake_hits(&[(chat, snip.as_str())]);
+    let hits = fake_hits(&[(&chat, snip.as_str())]);
     let rows = idx.rows_for_hits(&hits);
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].uuid, "30000002-1701-4d00-8000-000000030002");
@@ -209,19 +216,16 @@ fn line_resolves_to_single_message_row() {
 
 #[test]
 fn path_fallback_returns_all_rows_for_doc() {
-    // No `m-{uuid}` in the snippet → fall back to every row whose
-    // normalized qmd_path matches the hit's path. The chat doc has 3
-    // rows; all should come back.
+    // No `m-{uuid}` in the snippet → fall back to every row of the
+    // document the hit's path names. The chat doc has 3 rows; all should
+    // come back.
     let tmp = tempfile::tempdir().unwrap();
     let rendered = make_fixture(tmp.path());
     // No real `.md` on disk for this doc → the line can't be pinned, so the
     // whole document surfaces.
     let idx = GridIndex::new(tmp.path(), rendered.grid_rows());
 
-    let hits = fake_hits(&[(
-        "render_markdown/claude/acct/llm_chats/c001__klingon_diplomacy.md",
-        "no anchors here",
-    )]);
+    let hits = fake_hits(&[(&path_of("claude", CHAT), "no anchors here")]);
     let rows = idx.rows_for_hits(&hits);
     let uuids: std::collections::HashSet<&str> = rows.iter().map(|r| r.uuid.as_str()).collect();
     assert_eq!(uuids.len(), 3);
@@ -239,10 +243,7 @@ fn thread_hit_returns_comment_rows_not_container() {
     let rendered = make_fixture(tmp.path());
     let idx = GridIndex::new(tmp.path(), rendered.grid_rows());
 
-    let hits = fake_hits(&[(
-        "render_markdown/github/enterprise-d/replicator/pr-42__recalibrate-tea/threads/t01__earl-grey.md",
-        "water temperature drift",
-    )]);
+    let hits = fake_hits(&[(&path_of("github", THREAD), "water temperature drift")]);
     let rows = idx.rows_for_hits(&hits);
     assert_eq!(rows.len(), 3);
     assert!(rows.iter().all(|r| r.kind != "GitHub PR"));
@@ -258,11 +259,10 @@ fn hits_for_row_reverse_mapping() {
     // hits_for_row is defined in terms of the forward (line-based) mapping.
     let tmp = tempfile::tempdir().unwrap();
     let rendered = make_fixture(tmp.path());
-    let pr_thread =
-        "render_markdown/github/enterprise-d/replicator/pr-42__recalibrate-tea/threads/t01__earl-grey.md";
+    let pr_thread = path_of("github", THREAD);
     let anchors = write_md(
         tmp.path(),
-        pr_thread,
+        &pr_thread,
         &[
             "aaaaaaaa-bbbb-cccc-dddd-000000000001",
             "aaaaaaaa-bbbb-cccc-dddd-000000000002",
@@ -283,16 +283,13 @@ fn hits_for_row_reverse_mapping() {
     let s_diff = format!("@@ -{},4 @@ (0 before, 1 after)\nx", anchors[1]);
     let hits = fake_hits(&[
         // Same doc, line lands in the target (2nd) message → matches.
-        (pr_thread, s_target.as_str()),
+        (&pr_thread, s_target.as_str()),
         // Same doc, line lands in a *different* message → must NOT match.
-        (pr_thread, s_other.as_str()),
+        (&pr_thread, s_other.as_str()),
         // Same doc, no diff header → whole-doc fallback includes the target.
-        (pr_thread, "nothing anchored"),
+        (&pr_thread, "nothing anchored"),
         // Different doc altogether → must NOT match.
-        (
-            "render_markdown/claude/acct/llm_chats/c001__klingon_diplomacy.md",
-            s_diff.as_str(),
-        ),
+        (&path_of("claude", CHAT), s_diff.as_str()),
     ]);
     let back = idx.hits_for_row(&target, &hits);
     assert_eq!(back.len(), 2, "target-line hit + whole-doc fallback");
@@ -301,30 +298,20 @@ fn hits_for_row_reverse_mapping() {
 #[test]
 fn bidirectional_coverage_every_indexed_path_resolves() {
     // Spiritual equivalent of test_every_indexed_doc_maps_to_a_grid_row
-    // + test_every_grid_row_has_an_indexed_doc. The "index" here is the
-    // set of qmd_paths we'd expect qmd to surface — i.e. one per
-    // sidecar — and every grid row's qmd_path must match one of them.
+    // + test_every_grid_row_has_an_indexed_doc: every document's file
+    // resolves to rows, and every row is in a document whose file does.
     let tmp = tempfile::tempdir().unwrap();
     let rendered = make_fixture(tmp.path());
-    let rows_vec = rendered.grid_rows();
-    let idx = GridIndex::new(tmp.path(), rows_vec.clone());
-
-    // The distinct documents the rows point at — what qmd would have
-    // indexed. Derived from the rows rather than from a directory walk,
-    // now that the rows are not published as files.
-    let mut indexed_paths: Vec<String> = rows_vec
+    let idx = GridIndex::new(tmp.path(), rendered.grid_rows());
+    let indexed: std::collections::BTreeSet<String> = rendered
+        .rows
         .iter()
-        .map(|r| r.qmd_path.clone())
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
+        .map(|r| r.qmd_path.clone().unwrap())
         .collect();
-    indexed_paths.sort();
-
-    // (1) Every indexed path resolves to at least one row via the
-    //     path-fallback (empty snippet).
-    for p in &indexed_paths {
+    assert_eq!(indexed.len(), 2, "one file per document");
+    for p in &indexed {
         let hit = QmdHit {
-            path: norm_path(p),
+            path: p.clone(),
             score: 0.0,
             snippet: String::new(),
             lines: None,
@@ -333,18 +320,5 @@ fn bidirectional_coverage_every_indexed_path_resolves() {
         };
         let rows = idx.rows_for_hit(&hit);
         assert!(!rows.is_empty(), "indexed path with no rows: {p}");
-    }
-
-    // (2) Every grid row's qmd_path matches one of the indexed paths
-    //     (after normalization).
-    let norm_indexed: std::collections::HashSet<String> =
-        indexed_paths.iter().map(|p| norm_path(p)).collect();
-    for r in &rows_vec {
-        assert!(
-            norm_indexed.contains(&norm_path(&r.qmd_path)),
-            "row {} has no indexed doc ({})",
-            r.uuid,
-            r.qmd_path
-        );
     }
 }

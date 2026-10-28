@@ -1083,7 +1083,7 @@ impl IndexRepo for DoltRepo {
         };
         // Audited: `at.grid_rows` is a literal; no values.
         let rows = match sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT markdown_uuid, qmd_path, source_id, conversation_name, provider, source_label, \
+            "SELECT markdown_uuid, source_id, conversation_name, provider, source_label, \
                     kind, created_at, account, channel \
                FROM {} \
               WHERE is_document = 1 AND markdown_uuid IS NOT NULL AND qmd_path IS NOT NULL",
@@ -1100,7 +1100,6 @@ impl IndexRepo for DoltRepo {
             .into_iter()
             .map(|r| {
                 let provider: Option<String> = r.try_get("provider").ok().flatten();
-                let qmd_path: String = r.try_get("qmd_path").unwrap_or_default();
                 MapDocRow {
                     markdown_uuid: r.try_get("markdown_uuid").unwrap_or_default(),
                     source_id: r
@@ -1108,7 +1107,6 @@ impl IndexRepo for DoltRepo {
                         .ok()
                         .flatten()
                         .unwrap_or_default(),
-                    qmd_path,
                     title: r.try_get("conversation_name").unwrap_or_default(),
                     provider: provider.unwrap_or_default(),
                     source_label: r.try_get("source_label").unwrap_or_default(),
@@ -1154,60 +1152,20 @@ impl IndexRepo for DoltRepo {
             .map_err(|e| RepoError::Internal(format!("decode markdown_uuid: {e}")))
     }
 
-    async fn matching_qmd_paths(
+    async fn grid_row_refs_for_documents(
         &self,
-        q: &ParsedQuery,
-    ) -> Result<std::collections::HashSet<String>, RepoError> {
-        let (where_sql, params) = build_where(q);
-        let Some(mut at) = self.pinned().await? else {
-            return Ok(Default::default());
-        };
-        let clause = if where_sql.is_empty() {
-            " WHERE qmd_path IS NOT NULL".to_string()
-        } else {
-            format!("{where_sql} AND qmd_path IS NOT NULL")
-        };
-        // Audited: as `matching_documents`.
-        let mut query = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT DISTINCT qmd_path FROM {}{clause}",
-            at.grid_rows
-        )));
-        for p in &params {
-            query = query.bind(p);
-        }
-        let rows = match query.fetch_all(&mut *at.tx).await {
-            Ok(rows) => rows,
-            Err(e) if is_missing_table(&e, "grid_rows") => return Ok(Default::default()),
-            Err(e) => return Err(RepoError::Internal(e.to_string())),
-        };
-        rows.iter()
-            .map(|r| {
-                r.try_get::<String, _>("qmd_path")
-                    .map(|p| crate::qmd::mapping::norm_path(&p))
-            })
-            .collect::<Result<_, _>>()
-            .map_err(|e| RepoError::Internal(format!("decode qmd_path: {e}")))
-    }
-
-    async fn grid_row_refs_for_hits(
-        &self,
-        hit_paths: &[String],
+        markdown_uuids: &[String],
     ) -> Result<Vec<GridRowRef>, RepoError> {
-        use datalib_schema::grid_rows::{qmd_path_key, QMD_PATH_KEY_SQL};
         let Some(mut at) = self.pinned().await? else {
             return Ok(Vec::new());
         };
-        let mut keys: Vec<String> = hit_paths.iter().map(|p| qmd_path_key(p)).collect();
-        keys.sort();
-        keys.dedup();
-        let wanted = serde_json::to_string(&keys)
-            .map_err(|e| RepoError::Internal(format!("encode hit paths: {e}")))?;
-        // Audited: `at.grid_rows` and the key expression are literals; the
-        // keys are bound.
+        let wanted = serde_json::to_string(markdown_uuids)
+            .map_err(|e| RepoError::Internal(format!("encode document ids: {e}")))?;
+        // Audited: `at.grid_rows` is a literal; the ids are bound.
         let rows = match sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT uuid, kind, COALESCE(qmd_path, '') AS qmd_path, provider, is_document \
-             FROM {} WHERE {} IN (SELECT value FROM json_each(?))",
-            at.grid_rows, QMD_PATH_KEY_SQL
+            "SELECT uuid, kind, markdown_uuid, provider, is_document \
+             FROM {} WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
+            at.grid_rows
         )))
         .bind(wanted)
         .fetch_all(&mut *at.tx)
@@ -1217,24 +1175,16 @@ impl IndexRepo for DoltRepo {
             Err(e) if is_missing_table(&e, "grid_rows") => return Ok(Vec::new()),
             Err(e) => return Err(RepoError::Internal(e.to_string())),
         };
-        let mut out: Vec<GridRowRef> = Vec::with_capacity(rows.len());
-        for r in rows {
-            out.push(GridRowRef {
+        Ok(rows
+            .iter()
+            .map(|r| GridRowRef {
                 uuid: r.try_get("uuid").unwrap_or_default(),
                 kind: r.try_get("kind").unwrap_or_default(),
-                qmd_path: r.try_get("qmd_path").unwrap_or_default(),
+                markdown_uuid: r.try_get("markdown_uuid").unwrap_or_default(),
                 provider: r.try_get("provider").unwrap_or_default(),
                 is_document: r.try_get("is_document").unwrap_or(false),
-            });
-        }
-        // The key finds every row a hit could name and a few more; the
-        // exact path keeps the right ones.
-        let named: std::collections::HashSet<String> = hit_paths
-            .iter()
-            .map(|p| crate::qmd::mapping::norm_path(p))
-            .collect();
-        out.retain(|r| named.contains(&crate::qmd::mapping::norm_path(&r.qmd_path)));
-        Ok(out)
+            })
+            .collect())
     }
 
     async fn people_for_handles(

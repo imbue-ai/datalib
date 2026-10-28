@@ -390,8 +390,7 @@ pub fn schema_hash() -> String {
     datalib_store_meta::schema_hash(
         index_ddl()
             .chain(GRID_ROWS_INDEXES.iter().map(|(_table, ddl)| *ddl))
-            .chain(DOCUMENT_LOOKUP_INDEXES.iter().copied())
-            .chain(QMD_HIT_INDEXES.iter().copied()),
+            .chain(DOCUMENT_LOOKUP_INDEXES.iter().copied()),
     )
 }
 
@@ -406,17 +405,11 @@ pub(crate) const DOCUMENT_LOOKUP_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS source_contact_handles_by_handle ON source_contact_handles (handle)",
 ];
 
-/// What a qmd hit is mapped to its rows by
-/// (`datalib_schema::grid_rows::qmd_path_key`). Only the index the search
-/// reads pays for it on each write: nothing maps a hit to a render store.
-const QMD_HIT_INDEXES: &[&str] = &[
-    "CREATE INDEX IF NOT EXISTS grid_rows_by_qmd_path_key ON grid_rows \
-     (replace(replace(lower(qmd_path), '-', ''), '_', ''))",
-];
-
 /// Indexes an older build made and this one no longer reads. Every write
 /// keeps an index current, so one nothing queries is dropped, not left.
 const RETIRED_INDEXES: &[&str] = &[
+    // A hit names its document by id now, found through `grid_rows_by_markdown`.
+    "DROP INDEX IF EXISTS grid_rows_by_qmd_path_key",
     "DROP INDEX IF EXISTS grid_rows_by_source_label",
     // `author:` and `author_handle:` read the search terms, as `from:`.
     "DROP INDEX IF EXISTS grid_rows_by_author",
@@ -472,10 +465,7 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
     // them. Only here: every render store has a `grid_rows` too, and only
     // the index the grid reads wants to pay for these on every write.
     let search = GRID_ROWS_INDEXES.iter().map(|(_table, ddl)| *ddl);
-    for ddl in search
-        .chain(DOCUMENT_LOOKUP_INDEXES.iter().copied())
-        .chain(QMD_HIT_INDEXES.iter().copied())
-    {
+    for ddl in search.chain(DOCUMENT_LOOKUP_INDEXES.iter().copied()) {
         sqlx::query(ddl)
             .execute(pool)
             .await
@@ -649,6 +639,42 @@ pub struct RenderedMarkdown {
     /// document so the rows and the record of what was lost commit together.
     /// Empty when read back from the store, where they are already rows.
     pub problems: Vec<datalib_schema::problems::ProblemRow>,
+}
+
+/// Bumped when [`doc_md_path`] files documents somewhere else; every
+/// source carries it in its render params, so a bump renders them all
+/// again and each moved file's old copy is deleted as its document is
+/// written.
+pub const DOC_LAYOUT: u32 = 1;
+
+/// Where a document's markdown goes: [`doc_file_rel`] under its source's
+/// `render_markdown/`, so a search hit's path names its document.
+///
+/// [`doc_file_rel`]: datalib_schema::grid_rows::doc_file_rel
+pub fn doc_md_path(render_root: &Path, markdown_uuid: &str) -> PathBuf {
+    render_root.join(datalib_schema::grid_rows::doc_file_rel(markdown_uuid))
+}
+
+/// Why a document cannot be indexed where it was written: a file not
+/// named for its id, or a row naming another file. `None` when it can.
+fn misfiled(md: &RenderedMarkdown, qmd_path: &str) -> Option<String> {
+    use datalib_schema::grid_rows::markdown_uuid_of_path;
+    if markdown_uuid_of_path(qmd_path) != Some(md.markdown_uuid.as_str()) {
+        return Some(format!(
+            "document {} is written to {qmd_path}, not to the file its id names \
+             (`datalib_etl_render::grid_index::doc_md_path`)",
+            md.markdown_uuid
+        ));
+    }
+    md.rows
+        .iter()
+        .find(|r| r.qmd_path.as_deref() != Some(qmd_path))
+        .map(|r| {
+            format!(
+                "row {} of document {} names {:?} as its file, not {qmd_path}",
+                r.uuid, md.markdown_uuid, r.qmd_path
+            )
+        })
 }
 
 /// Write one rendered document into the index unconditionally. `out_dir`
@@ -1410,6 +1436,9 @@ async fn apply_markdown(
         return Ok(0);
     }
     let canonical = document_row(&md.rows, &md.markdown_uuid)?;
+    if let Some(why) = misfiled(md, qmd_path) {
+        bail!("{why}");
+    }
 
     sqlx::query("DELETE FROM grid_rows WHERE markdown_uuid = ?")
         .bind(&md.markdown_uuid)
@@ -1905,7 +1934,7 @@ mod write_lock_tests {
     //! and the losers time out. No artificial sleeps — the contention is real,
     //! from the same code path production uses.
     use super::*;
-    use datalib_schema::grid_rows::{content_hash, GridRow};
+    use datalib_schema::grid_rows::{content_hash, doc_file_rel, GridRow};
     use datalib_schema::providers::Provider;
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
@@ -1941,7 +1970,7 @@ mod write_lock_tests {
             entire_chat: format!("/chat/{uuid}"),
             preview: format!("body for {uuid}"),
             content_hash: content_hash(&format!("body for {uuid}")),
-            qmd_path: Some(format!("chats/{uuid}.md")),
+            qmd_path: Some(format!("chats/{}", doc_file_rel(&uuid))),
             source_url: None,
             git_sha: None,
             upstream_id: None,
@@ -1961,7 +1990,7 @@ mod write_lock_tests {
             source_id: "test".into(),
             upstream_cursor: None,
             bucket_key: None,
-            md_path: PathBuf::from(format!("/tmp/{uuid}.md")),
+            md_path: PathBuf::from("/tmp/chats").join(doc_file_rel(&uuid)),
             render_version: 1,
             rows: vec![row],
             sections: Vec::new(),
@@ -2380,35 +2409,6 @@ mod schema_reconcile_tests {
         );
     }
 
-    /// The qmd hit index is on the key the search computes: the same
-    /// expression, and the same value Rust gives for every path.
-    #[tokio::test]
-    async fn the_qmd_path_key_is_alike_in_sql_and_in_rust() {
-        use datalib_schema::grid_rows::{qmd_path_key, QMD_PATH_KEY_SQL};
-        assert!(
-            super::QMD_HIT_INDEXES[0].contains(QMD_PATH_KEY_SQL),
-            "the index is not on the key the search uses"
-        );
-        let dir = tempdir().unwrap();
-        let pool = open_pool(&dir.path().join("grid.doltlite_db")).await;
-        for path in [
-            "Google_Calendar/render_markdown/Week__12/all.md",
-            "slack-work/render_markdown/c-1/x_-_y.md",
-            "notion/render_markdown/Café/Ünïcode.md",
-        ] {
-            // Audited: the expression is a literal.
-            let sql: String = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-                "SELECT {} FROM (SELECT ? AS qmd_path)",
-                QMD_PATH_KEY_SQL
-            )))
-            .bind(path)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-            assert_eq!(sql, qmd_path_key(path), "{path}");
-        }
-    }
-
     /// The table an older build kept each row's supplied terms in, apart
     /// from the row, goes when the index is opened (#1202).
     #[tokio::test]
@@ -2473,11 +2473,12 @@ mod source_cursor_tests {
     use tempfile::tempdir;
 
     use crate::grid_index::{
-        build_grid_index, build_grid_index_for, discover_sources, init_schema, load_source_cursors,
-        RenderedMarkdown,
+        build_grid_index, build_grid_index_for, discover_sources, doc_md_path, init_schema,
+        load_source_cursors, RenderedMarkdown,
     };
     use crate::indexed_markdown::IndexedMarkdownStore;
     use datalib_etl::stop::StopFlag;
+    use datalib_schema::grid_rows::doc_file_rel;
     use datalib_schema::grid_rows::GridRow;
     use datalib_schema::providers::Provider;
 
@@ -2509,6 +2510,10 @@ mod source_cursor_tests {
             .entire_chat(format!("/chat/{uuid}"))
             .body(text)
             .markdown_uuid(Some(uuid.to_string()))
+            .qmd_path(Some(format!(
+                "{source}/render_markdown/{}",
+                doc_file_rel(uuid)
+            )))
             .created_at(Some("2026-01-01T00:00:00+00:00".to_string()))
             .is_document(true)
             .item_count(Some(1))
@@ -2520,7 +2525,7 @@ mod source_cursor_tests {
             // Fingerprint follows the text, the way a renderer's does.
             upstream_cursor: None,
             bucket_key: None,
-            md_path: rendered_root(root, source).join(format!("{uuid}.md")),
+            md_path: doc_md_path(&rendered_root(root, source), uuid),
             render_version: 1,
             rows: vec![row],
             sections: Vec::new(),

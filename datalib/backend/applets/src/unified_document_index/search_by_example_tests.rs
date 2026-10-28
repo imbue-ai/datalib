@@ -86,7 +86,6 @@ fn chat(
         source_url: None,
         org_uuid: None,
         org_name: None,
-        path_prefix: None,
         buckets: vec![NormalizedDoc {
             period_key: "all".into(),
             markdown_uuid: uuid.into(),

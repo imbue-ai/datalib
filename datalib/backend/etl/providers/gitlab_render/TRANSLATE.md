@@ -8,10 +8,6 @@ shape GitHub uses, described in
 crate reads the raw tables into it (`src/render/parse.rs`) and sets the
 GitLab `ForgeProfile` (`src/render/mod.rs`). What differs:
 
-```
-<root>/<source_id>/render_markdown/<namespace>/<project>/mr-<iid>/index.md
-```
-
 - **Front matter** names the MR `project` and `mr_iid`, and its refs
   `source_branch` and `target_branch`.
 - **Title** is `{title} (!{iid})`.

@@ -12,7 +12,7 @@ pub mod time_series;
 pub mod units;
 
 /// Bump when the rendered markdown layout or the grid
-/// row shape changes enough that an existing `index.md` must be
+/// row shape changes enough that an existing page must be
 /// re-rendered. Stamped onto the `markdowns` row AND into the render
 /// cursor's `params` (see [`render::cursor_params`]), so a bump
 /// invalidates the "HEAD unchanged → skip" fast path too. v3: `account`

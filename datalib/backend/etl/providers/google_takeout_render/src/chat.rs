@@ -386,7 +386,6 @@ fn conversation(source_id: &str, space: &str, s: &Space, account: &Account) -> N
             .into_iter()
             .collect(),
         inputs: inputs.declared(),
-        path_prefix: None,
         id: space.to_string(),
         chat_uuid: chat_id.uuid,
         display,

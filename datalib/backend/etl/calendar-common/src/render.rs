@@ -3,12 +3,12 @@
 //! arrives in the [`CalendarRenderProfile`] and the events.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl_render::front_matter::yaml_scalar;
-use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::html::{escape_md_block, escape_md_inline, md_code_span, md_link_dest};
 use datalib_etl_render::inputs::{Bucket, Buckets};
 use datalib_etl_render::message::{chip_link, stamp_text_html};
@@ -82,8 +82,11 @@ fn render_one(
     source_id: &str,
 ) -> Result<RenderedMarkdown> {
     let uuid = &event.event_uuid;
-    let md_path = md_path(out_dir, source_id, uuid);
-    let page_dir = md_path.parent().expect("index.md has a parent");
+    let md_path = doc_md_path(
+        &datalib_etl::layout::render_markdown_root(out_dir, source_id),
+        uuid,
+    );
+    let page_dir = md_path.parent().expect("a document's file has a folder");
     fs::create_dir_all(page_dir).with_context(|| format!("mkdir -p {}", page_dir.display()))?;
 
     let mut problems: Vec<ProblemRow> = event
@@ -114,14 +117,6 @@ fn render_one(
         contacts: Vec::new(),
         problems,
     })
-}
-
-/// One directory per event, named by its uuid, so a retitled or moved
-/// event re-renders in place.
-fn md_path(out_dir: &Path, source_id: &str, uuid: &str) -> PathBuf {
-    datalib_etl::layout::render_markdown_root(out_dir, source_id)
-        .join(uuid)
-        .join("index.md")
 }
 
 fn problem_row(

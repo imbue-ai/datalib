@@ -359,7 +359,6 @@ fn yearly_chat(
         named_after: Vec::new(),
         contacts: owner.contact().into_iter().collect(),
         inputs: inputs.declared(),
-        path_prefix: None,
         id: id.to_string(),
         chat_uuid: feed.uuid,
         display: display.to_string(),

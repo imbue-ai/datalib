@@ -35,7 +35,7 @@ use anyhow::{Context, Result};
 use sqlx::{Row, SqlitePool};
 
 use datalib_columns::Entity;
-use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::message::{entity_link, stamp_text_html};
 use datalib_id::{entity_id_str, IdNamespace};
 use datalib_schema::grid_rows::GridRow;
@@ -51,12 +51,10 @@ use datalib_schema::providers::Provider;
 /// each one describes is in `account` and `conversation_name`.
 pub const SOURCE_LABEL: &str = "Storage";
 
-/// Where the report lands inside the source's render output.
-const REPORT_REL: &str = "_datalib/storage.md";
-
 /// Bumped when the shape of what this emits changes, so an older
 /// report is re-rendered rather than left to disagree with a newer one.
-pub const RENDER_VERSION: u32 = 2;
+/// v3: the report is filed by its id, like every document.
+pub const RENDER_VERSION: u32 = 3;
 
 /// One measured thing.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -402,8 +400,12 @@ pub fn plan(
         .unwrap_or(&subjects[0])
         .uuid(source_id);
 
-    let md_path = data_root.join(rendered_rel).join(REPORT_REL);
-    let qmd_rel = format!("{rendered_rel}/{REPORT_REL}");
+    let md_path = doc_md_path(&data_root.join(rendered_rel), &markdown_uuid);
+    let qmd_rel = md_path
+        .strip_prefix(data_root)
+        .unwrap_or(&md_path)
+        .to_string_lossy()
+        .into_owned();
 
     let measured_at = datalib_time::split_stamp(now);
     let mut rows = Vec::with_capacity(subjects.len());

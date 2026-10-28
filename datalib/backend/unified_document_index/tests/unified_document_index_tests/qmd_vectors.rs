@@ -1,12 +1,12 @@
 //! The document vectors read out of the real qmd index the TNG fixture
-//! builds, and the join the embedding map depends on: each one's path is
-//! a document the grid knows.
+//! builds, and the join the embedding map depends on: each one's path
+//! names a document the grid knows.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use datalib_schema::grid_rows::markdown_uuid_of_path;
 use datalib_unified_document_index::dolt_repo::DoltRepo;
-use datalib_unified_document_index::qmd::mapping::norm_path;
 use datalib_unified_document_index::qmd::vectors::read_document_vectors;
 use datalib_unified_document_index::qmd::QmdIndexReader;
 use datalib_unified_document_index::query::parse_query;
@@ -54,12 +54,12 @@ async fn every_embedded_document_has_one_unit_vector_and_a_grid_row() {
         .await
         .expect("document rows")
         .into_iter()
-        .map(|r| norm_path(&r.qmd_path))
+        .map(|r| r.markdown_uuid)
         .collect();
     let orphans: Vec<&String> = got
         .paths
         .iter()
-        .filter(|p| !documents.contains(&norm_path(p)))
+        .filter(|p| markdown_uuid_of_path(p).is_none_or(|id| !documents.contains(id)))
         .collect();
     assert!(
         orphans.is_empty(),
@@ -91,7 +91,11 @@ async fn matching_documents_follows_the_structured_terms() {
         .await
         .expect("match all");
     for d in &docs {
-        assert!(all.contains(&d.markdown_uuid), "{} unmatched", d.qmd_path);
+        assert!(
+            all.contains(&d.markdown_uuid),
+            "{} unmatched",
+            d.markdown_uuid
+        );
     }
 
     let only = repo
@@ -104,7 +108,7 @@ async fn matching_documents_follows_the_structured_terms() {
             only.contains(&d.markdown_uuid),
             d.source_id == source,
             "{} under source_id:{source}",
-            d.qmd_path
+            d.markdown_uuid
         );
     }
 }

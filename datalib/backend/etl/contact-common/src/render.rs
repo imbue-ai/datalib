@@ -4,12 +4,12 @@
 //! [`ContactRenderProfile`] + the [`ContactDoc`]s.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl_render::front_matter::yaml_scalar;
-use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::html::{escape_attr, escape_md_inline, escape_text};
 use datalib_etl_render::inputs::{Bucket, Buckets};
 use datalib_etl_render::message::chip_link;
@@ -30,8 +30,8 @@ use crate::types::ContactDoc;
 /// chat-common's `RenderProfile`.
 #[derive(Debug, Clone)]
 pub struct ContactRenderProfile {
-    /// On-disk subdir under `render_markdown/<provider>/…`, the markdown's
-    /// `provider:` frontmatter key, and the grid-row `provider` column.
+    /// The markdown's `provider:` frontmatter key, and the grid-row
+    /// `provider` column.
     pub provider: Provider,
     /// The `source_label` column on every grid row (e.g. `"LinkedIn"`,
     /// `"Apple Contacts"`).
@@ -128,9 +128,12 @@ fn render_one(
 ) -> Result<()> {
     let m_uuid = &doc.doc_uuid;
     let contact = &doc.contact;
-    let (md_path, page_dir) = output_paths(out_dir, source_id, doc);
-    fs::create_dir_all(&page_dir).with_context(|| format!("mkdir -p {}", page_dir.display()))?;
-    remove_old_blobs(&page_dir);
+    let md_path = doc_md_path(
+        &datalib_etl::layout::render_markdown_root(out_dir, source_id),
+        m_uuid,
+    );
+    let page_dir = md_path.parent().expect("a document's file has a folder");
+    fs::create_dir_all(page_dir).with_context(|| format!("mkdir -p {}", page_dir.display()))?;
 
     let photo = contact.photo.as_ref().and_then(photo_address);
     let sections = render_markdown(profile, doc, source_id, photo.as_deref());
@@ -186,28 +189,6 @@ fn render_one(
     .with_context(|| format!("on_doc_complete {m_uuid}"))?;
 
     Ok(())
-}
-
-/// The `blobs/` an older build wrote a photo into beside the page; the
-/// page now links the photo where its blob store holds it.
-fn remove_old_blobs(page_dir: &Path) {
-    let blobs_dir = page_dir.join("blobs");
-    if let Err(e) = fs::remove_dir_all(&blobs_dir) {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!(dir = %blobs_dir.display(), error = %e, "contact_common: removing an old blobs/ failed");
-        }
-    }
-}
-
-fn output_paths(out_dir: &Path, source_id: &str, doc: &ContactDoc) -> (PathBuf, PathBuf) {
-    // One directory per contact, keyed by the stable contact UUID — never a
-    // name/group-label slug, so a rename or regrouping re-renders in place.
-    // Display name and group label still live in the frontmatter + grid
-    // row.
-    let page_dir =
-        datalib_etl::layout::render_markdown_root(out_dir, source_id).join(&doc.doc_uuid);
-    let md_path = page_dir.join("index.md");
-    (md_path, page_dir)
 }
 
 fn display_or_id(doc: &ContactDoc) -> &str {
@@ -843,8 +824,7 @@ mod tests {
 
     /// A stored photo is linked at its blob-store address, on the page
     /// and as the contact's URL in the index, and nothing is written
-    /// beside the page: a `blobs/` an older build left there goes. A
-    /// photo no browser draws is still on its page but gives the chip no
+    /// beside the page. A photo no browser draws is still on its page but gives the chip no
     /// URL, and a contact with no photo carries none, so the chip draws
     /// an initial.
     #[test]
@@ -858,13 +838,6 @@ mod tests {
         let mut opaque = mk_contact();
         opaque.doc_uuid = "44444444-4444-4444-4444-444444444444".to_string();
         opaque.contact.photo = Some(stored("application/octet-stream"));
-        let old_blobs = dir
-            .path()
-            .join("linkedin/render_markdown")
-            .join(&with_photo.doc_uuid)
-            .join("blobs");
-        std::fs::create_dir_all(&old_blobs).unwrap();
-        std::fs::write(old_blobs.join("photo.png"), b"an older build's copy").unwrap();
         let mut got: Vec<RenderedMarkdown> = Vec::new();
         let mut sink = |r: RenderedMarkdown| -> Result<()> {
             got.push(r);
@@ -888,7 +861,6 @@ mod tests {
         assert!(page(&got[0]).contains(&format!("]({address})")));
         assert!(page(&got[2]).contains(&format!("]({address})")));
         assert!(!page(&got[1]).contains("contact-photo"));
-        assert!(!old_blobs.exists(), "the old blobs/ is gone");
         for r in &got {
             assert!(!r.md_path.parent().unwrap().join("blobs").exists());
         }

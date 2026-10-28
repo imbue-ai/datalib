@@ -32,7 +32,7 @@ mod serve_tests;
 pub(crate) mod tabs;
 
 use datalib_columns::Identity;
-use datalib_schema::grid_rows::{GridRow, GridRowColumn};
+use datalib_schema::grid_rows::{markdown_uuid_of_path, GridRow, GridRowColumn};
 use datalib_unified_document_index::db::datalib_source_id;
 use datalib_unified_document_index::grid_columns::GridColumn;
 use datalib_unified_document_index::group::Within;
@@ -944,7 +944,7 @@ async fn words_ranking(
     // Narrowed before the cut, as Meaning is: a common word's best
     // thousand documents rarely include the one the other terms ask for.
     let among = if narrows_documents(parsed) {
-        Some(s.repo.matching_qmd_paths(parsed).await.map_err(index)?)
+        Some(s.repo.matching_documents(parsed).await.map_err(index)?)
     } else {
         None
     };
@@ -1021,7 +1021,7 @@ async fn meaning_ranking(
         .map_err(qmd)?;
     let embedded = started.elapsed();
     let among = if narrows_documents(parsed) {
-        Some(s.repo.matching_qmd_paths(parsed).await.map_err(index)?)
+        Some(s.repo.matching_documents(parsed).await.map_err(index)?)
     } else {
         None
     };
@@ -1077,11 +1077,18 @@ async fn rows_of_hits(
     hits: &[datalib_unified_document_index::qmd::QmdHit],
     parsed: &ParsedQuery,
 ) -> anyhow::Result<Vec<(String, (f64, String))>> {
-    let hit_paths: Vec<String> = hits.iter().map(|h| h.path.clone()).collect();
+    let started = std::time::Instant::now();
+    let mut documents: Vec<String> = hits
+        .iter()
+        .filter_map(|h| markdown_uuid_of_path(&h.path).map(String::from))
+        .collect();
+    documents.sort_unstable();
+    documents.dedup();
     let refs = repo
-        .grid_row_refs_for_hits(&hit_paths)
+        .grid_row_refs_for_documents(&documents)
         .await
         .map_err(|e| anyhow::anyhow!("the rows behind qmd's hits: {e}"))?;
+    let fetched = started.elapsed();
     // Each hit lands on the message holding the most of the search's words,
     // of the rows its other terms keep: a hit on a message they drop would
     // lose its document with it.
@@ -1096,6 +1103,8 @@ async fn rows_of_hits(
     } else {
         None
     };
+    let filtered = started.elapsed();
+    let n_refs = refs.len();
     let idx = GridIndex::new((**root).clone(), refs).with_terms(&words);
     let idx = match kept {
         Some(kept) => idx.within(kept),
@@ -1104,14 +1113,22 @@ async fn rows_of_hits(
     // Map hits to grid rows in rank order, keeping only the top hit per
     // markdown document so the result list stays concise — a single chat that
     // matches in several places shows up once, at its best rank. Orphan hits
-    // (a path the grid doesn't know about, e.g. a stale render under an old
-    // layout) resolve to no rows; flag them loudly so their dropped score is
+    // (a document the grid doesn't have, or a file not named for one)
+    // resolve to no rows; flag them loudly so their dropped score is
     // visible.
     // An `is:document` search wants the document a hit is in, not the
     // message it landed on — which the SQL filter would then drop.
     let ranked = idx.ranked_rows_one_per_doc(hits, parsed.documents() == Some(true), |h| {
         tracing::error!(path = %h.path, score = h.score, "a qmd hit resolved to no grid rows");
     });
+    tracing::info!(
+        hits = hits.len(),
+        rows = n_refs,
+        fetch_ms = fetched.as_millis() as u64,
+        filter_ms = (filtered - fetched).as_millis() as u64,
+        land_ms = (started.elapsed() - filtered).as_millis() as u64,
+        "placed a search's hits"
+    );
     Ok(ranked
         .into_iter()
         .map(|(row, hit)| (row.uuid.clone(), (hit.score, display_snippet(&hit.snippet))))
@@ -1711,30 +1728,49 @@ mod tests {
             .markdown_uuid(Some(uuid.to_string()))
     }
 
+    /// `row` as a document of its own, filed where its id files it under
+    /// the source its `qmd_path` names, else `enterprise`.
+    fn own_document(
+        root: &std::path::Path,
+        mut row: datalib_schema::grid_rows::GridRow,
+    ) -> datalib_etl_render::grid_index::RenderedMarkdown {
+        let source = row
+            .qmd_path
+            .as_deref()
+            .and_then(|p| p.split_once('/'))
+            .map_or("enterprise".to_string(), |(s, _)| s.to_string());
+        let rel = format!(
+            "{source}/render_markdown/{}",
+            datalib_schema::grid_rows::doc_file_rel(&row.uuid)
+        );
+        row.qmd_path = Some(rel.clone());
+        datalib_etl_render::grid_index::RenderedMarkdown {
+            markdown_uuid: row.uuid.clone(),
+            source_id: source,
+            upstream_cursor: None,
+            bucket_key: None,
+            md_path: root.join(rel),
+            render_version: 1,
+            rows: vec![row],
+            sections: Vec::new(),
+            edges: Vec::new(),
+            contacts: Vec::new(),
+            problems: Vec::new(),
+        }
+    }
+
     /// Commits each row as a document of its own.
     async fn index_rows(root: &std::path::Path, rows: Vec<datalib_schema::grid_rows::GridRow>) {
-        use datalib_etl_render::grid_index::{apply_one, open_index, RenderedMarkdown, WriteLock};
+        use datalib_etl_render::grid_index::{apply_one, open_index, WriteLock};
 
         let pool = open_index(&datalib_runtime::layout::grid_index_db(root))
             .await
             .unwrap();
         let lock = WriteLock::new(pool.clone());
         for row in rows {
-            let uuid = row.uuid.clone();
-            let md = RenderedMarkdown {
-                markdown_uuid: uuid.to_string(),
-                source_id: "enterprise".into(),
-                upstream_cursor: None,
-                bucket_key: None,
-                md_path: root.join(format!("enterprise/{uuid}.md")),
-                render_version: 1,
-                rows: vec![row],
-                sections: Vec::new(),
-                edges: Vec::new(),
-                contacts: Vec::new(),
-                problems: Vec::new(),
-            };
-            apply_one(&lock, root, &md).await.unwrap();
+            apply_one(&lock, root, &own_document(root, row))
+                .await
+                .unwrap();
         }
         datalib_etl::doltlite_raw::commit_run(&pool, "chats")
             .await
@@ -1870,7 +1906,7 @@ mod tests {
             Vec<(datalib_schema::search_terms::SearchTermKind, &str)>,
         )>,
     ) {
-        use datalib_etl_render::grid_index::{apply_one, open_index, RenderedMarkdown, WriteLock};
+        use datalib_etl_render::grid_index::{apply_one, open_index, WriteLock};
         use datalib_schema::search_terms::SearchTerm;
 
         let pool = open_index(&datalib_runtime::layout::grid_index_db(root))
@@ -1883,21 +1919,9 @@ mod tests {
                     .into_iter()
                     .map(|(kind, value)| SearchTerm::new(kind, value)),
             );
-            let uuid = row.uuid.clone();
-            let md = RenderedMarkdown {
-                markdown_uuid: uuid.to_string(),
-                source_id: "enterprise".into(),
-                upstream_cursor: None,
-                bucket_key: None,
-                md_path: root.join(format!("enterprise/{uuid}.md")),
-                render_version: 1,
-                rows: vec![row],
-                sections: Vec::new(),
-                edges: Vec::new(),
-                contacts: Vec::new(),
-                problems: Vec::new(),
-            };
-            apply_one(&lock, root, &md).await.unwrap();
+            apply_one(&lock, root, &own_document(root, row))
+                .await
+                .unwrap();
         }
         datalib_etl::doltlite_raw::commit_run(&pool, "mail")
             .await

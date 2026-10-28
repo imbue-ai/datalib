@@ -23,16 +23,17 @@ fn page(id: &str, title: &str) -> serde_json::Value {
     })
 }
 
-/// Renders `parsed` with `blobs` as the pages' bytes, one page a batch.
+/// Renders `parsed` with `blobs` as the pages' bytes, one page a batch;
+/// the file each document was written to.
 fn render(
     parsed: &ParsedNotion,
     blobs: &HashMap<String, BlobBundle>,
     root: &std::path::Path,
-) -> Vec<String> {
+) -> Vec<std::path::PathBuf> {
     let mut emitted = Vec::new();
     {
         let mut on_doc = |md: datalib_etl_render::grid_index::RenderedMarkdown| {
-            emitted.push(md.markdown_uuid.clone());
+            emitted.push(md.md_path);
             Ok(())
         };
         render_notion(
@@ -79,21 +80,18 @@ fn an_archived_attachment_is_linked_in_the_blob_store() {
         comments: vec![],
         ..Default::default()
     };
-    render(&parsed, &blobs, d.path());
+    let page = &render(&parsed, &blobs, d.path())[0];
 
-    let dir = fs::read_dir(d.path().join("notion/render_markdown/pages"))
-        .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
-    let md = fs::read_to_string(dir.join("index.md")).unwrap();
+    let md = fs::read_to_string(page).unwrap();
     assert!(
         md.contains(&format!("![shot](/data/notion/ingest/blob/{hash})")),
         "body should link the blob store: {md}"
     );
     assert!(!md.contains(SLOT), "upstream slot should be gone: {md}");
-    assert!(!dir.join("blobs").exists(), "no copy beside the page");
+    assert!(
+        !page.parent().unwrap().join("blobs").exists(),
+        "no copy beside the page"
+    );
 }
 
 /// A slot with no bytes in the CAS keeps its upstream URL. A broken
@@ -110,14 +108,8 @@ fn an_unarchived_attachment_keeps_its_upstream_url() {
         comments: vec![],
         ..Default::default()
     };
-    render(&parsed, &HashMap::new(), d.path());
-    let dir = fs::read_dir(d.path().join("notion/render_markdown/pages"))
-        .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
-    let md = fs::read_to_string(dir.join("index.md")).unwrap();
+    let page = &render(&parsed, &HashMap::new(), d.path())[0];
+    let md = fs::read_to_string(page).unwrap();
     assert!(md.contains(SLOT), "unarchived slot must survive: {md}");
 }
 
@@ -136,13 +128,7 @@ fn a_body_less_page_still_renders() {
         comments: vec![],
         ..Default::default()
     };
-    render(&parsed, &HashMap::new(), d.path());
-    let dir = fs::read_dir(d.path().join("notion/render_markdown/pages"))
-        .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
-    let md = fs::read_to_string(dir.join("index.md")).unwrap();
+    let page = &render(&parsed, &HashMap::new(), d.path())[0];
+    let md = fs::read_to_string(page).unwrap();
     assert!(md.contains("| Status | Active |"), "{md}");
 }

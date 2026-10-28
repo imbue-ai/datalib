@@ -120,15 +120,21 @@ fn copy_tree(from: &Path, to: &Path) {
     }
 }
 
-fn md_of(docs: &[RenderedMarkdown], path_has: &str, ends: &str) -> String {
-    let doc = docs
-        .iter()
-        .find(|d| {
-            let p = d.md_path.to_string_lossy();
-            p.contains(path_has) && p.ends_with(ends)
-        })
-        .unwrap_or_else(|| panic!("no document under {path_has} ending {ends}"));
-    std::fs::read_to_string(&doc.md_path).expect("read rendered markdown")
+/// Whether a document came through the bridge to `network` (its
+/// `source_label`, after `Beeper:`).
+fn bridged(doc: &RenderedMarkdown, network: &str) -> bool {
+    let label = format!("Beeper:{network}");
+    doc.rows.iter().any(|r| r.source_label == label)
+}
+
+/// The markdown of the one document bridged to `network` whose title ends
+/// with `period`, as `(2024-03)`; any of its documents for `""`.
+fn md_of(docs: &[RenderedMarkdown], network: &str, period: &str) -> String {
+    docs.iter()
+        .filter(|d| bridged(d, network))
+        .map(|d| std::fs::read_to_string(&d.md_path).expect("read rendered markdown"))
+        .find(|md| period.is_empty() || md.contains(&format!(" ({period})")))
+        .unwrap_or_else(|| panic!("no {network} document for {period:?}"))
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -162,12 +168,12 @@ async fn each_room_renders_a_document_per_month() -> Result<()> {
     let (summary, docs) = fx.render()?;
     assert_eq!(summary.docs_rendered, 6);
     assert_eq!(summary.blobs_materialized, 2);
-    let slack = md_of(&docs, "/slack/", "2024-03.md");
+    let slack = md_of(&docs, "Slack", "2024-03");
     assert!(
         slack.contains("href=\"https://slack.com/app_redirect?channel=C0BRIDGE&amp;team=T1701D\""),
         "{slack}"
     );
-    let march = md_of(&docs, "/signal/", "2024-03.md");
+    let march = md_of(&docs, "Signal", "2024-03");
     assert!(march.contains("❤️ [Mr. Data](tel:+15551234001"), "{march}");
     assert!(march.contains("🤔 [Mr. Data](tel:+15551234001"), "{march}");
     assert!(march.contains("![iconian-schematic.png]"), "{march}");
@@ -179,7 +185,7 @@ async fn each_room_renders_a_document_per_month() -> Result<()> {
         march.contains("project: \"tng-picard-account-uuid\""),
         "{march}"
     );
-    let riker = md_of(&docs, "/googlechat/", ".md");
+    let riker = md_of(&docs, "Google Chat", "");
     assert!(
         riker.contains("hidden: m.room.create") || riker.contains("hidden: m.bridge"),
         "{riker}"
@@ -267,7 +273,7 @@ async fn a_file_cached_later_is_copied_by_the_next_run() -> Result<()> {
     std::fs::rename(&schematic, &kept)?;
     fx.ingest().await?;
     assert_eq!(fx.render()?.0.blobs_materialized, 1);
-    let march = md_of(&fx.render()?.1, "/signal/", "2024-03.md");
+    let march = md_of(&fx.render()?.1, "Signal", "2024-03");
     assert!(march.contains("iconian-schematic.png"), "{march}");
 
     std::fs::rename(&kept, &schematic)?;
@@ -345,16 +351,16 @@ async fn people_are_written_by_their_handles() -> Result<()> {
     let fx = Fixture::new();
     fx.ingest().await?;
     let (_, docs) = fx.render()?;
-    let slack = md_of(&docs, "/slack/", "2024-03.md");
+    let slack = md_of(&docs, "Slack", "2024-03");
     assert!(
         slack.contains("slack://user?team=T1701D&amp;id=U0WORF")
             || slack.contains("slack://user?team=T1701D&id=U0WORF"),
         "{slack}"
     );
     assert!(slack.contains("id=U0PICARD"), "{slack}");
-    let data = md_of(&docs, "/signal/", "2024-03.md");
+    let data = md_of(&docs, "Signal", "2024-03");
     assert!(data.contains("(tel:+15551234001"), "{data}");
-    let riker = md_of(&docs, "/googlechat/", ".md");
+    let riker = md_of(&docs, "Google Chat", "");
     assert!(riker.contains("(mailto:riker@enterprise.org"), "{riker}");
     Ok(())
 }
@@ -368,14 +374,14 @@ async fn people_are_contacts_with_their_avatars() -> Result<()> {
     let fx = Fixture::new();
     fx.ingest().await?;
     let (_, docs) = fx.render()?;
-    let contact = |doc_path: &str, key: &str| {
+    let contact = |network: &str, key: &str| {
         docs.iter()
-            .filter(|d| d.md_path.to_string_lossy().contains(doc_path))
+            .filter(|d| bridged(d, network))
             .flat_map(|d| d.contacts.iter().map(move |c| (d, c)))
             .find(|(_, c)| c.key == key)
-            .unwrap_or_else(|| panic!("no contact {key} under {doc_path}"))
+            .unwrap_or_else(|| panic!("no contact {key} bridged to {network}"))
     };
-    let (doc, worf) = contact("/slack/", "slack:T1701D/U0WORF");
+    let (doc, worf) = contact("Slack", "slack:T1701D/U0WORF");
     assert_eq!(worf.names, ["Worf"]);
     let url = worf.photo_url.as_deref().expect("Worf's avatar is served");
     let hash = url
@@ -386,15 +392,15 @@ async fn people_are_contacts_with_their_avatars() -> Result<()> {
     assert_eq!(hash.len(), 64, "{url}");
     assert!(!doc.md_path.parent().unwrap().join("blobs").exists());
 
-    let (_, data) = contact("/signal/", "tel:+15551234001");
+    let (_, data) = contact("Signal", "tel:+15551234001");
     assert!(
         data.photo_url.is_some(),
         "Data's on-device avatar is served"
     );
-    let (_, riker) = contact("/googlechat/", "email:riker@enterprise.org");
+    let (_, riker) = contact("Google Chat", "email:riker@enterprise.org");
     assert_eq!(riker.photo_url, None, "Riker has no avatar");
 
-    let data_march = md_of(&docs, "/signal/", "2024-03.md");
+    let data_march = md_of(&docs, "Signal", "2024-03");
     assert!(data_march.contains(">Mr. Data (2024-03)"), "{data_march}");
     Ok(())
 }

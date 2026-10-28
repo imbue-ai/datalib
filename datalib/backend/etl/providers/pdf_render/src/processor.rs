@@ -27,7 +27,6 @@ impl SourceRender for PdfRender {
     }
 
     async fn run(&self, raw_path: &Path, ctx: &RenderCtx<'_>) -> Result<String> {
-        let out_dir = datalib_etl::layout::render_markdown_root(ctx.root, ctx.name);
         // Load first, render second: the document sink borrows `ctx`
         // and is not `Send`, so it must not be alive across an await.
         // `None`, not an empty corpus: a store we could not read must stop
@@ -65,7 +64,7 @@ impl SourceRender for PdfRender {
         );
 
         let mut on_doc = |md| ctx.emit_doc(md);
-        let s = render::render_targets(&to_render, &out_dir, ctx.name, ctx.progress, &mut on_doc)
+        let s = render::render_targets(&to_render, ctx.root, ctx.name, ctx.progress, &mut on_doc)
             .context("pdf render")?;
         // A failed conversion's page is stale rather than gone: its
         // bucket is declared failed, so the page stays, even on a full

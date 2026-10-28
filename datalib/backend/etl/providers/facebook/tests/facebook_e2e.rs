@@ -214,8 +214,8 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
             let paths: Vec<_> = comments.iter().map(|d| &d.md_path).collect();
             panic!("two months of comments are one year's document: {paths:?}")
         };
-        assert_eq!(year.md_path.file_name().unwrap(), "2369.md");
         let md = fs::read_to_string(&year.md_path)?;
+        assert!(md.contains("(2369)"), "the year's document: {md}");
         assert!(md.contains("Guinan's synthehol never disappoints. 🍸"), "{md}");
         assert!(md.contains("*Jean-Luc Picard commented on his own album.*"), "{md}");
 
@@ -276,7 +276,7 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
         assert_eq!(md.matches("](/data/").count(), 2, "the photo and the sticker: {md}");
         assert!(md.find("Engage.") < md.find("Now."), "the older first: {md}");
         assert!(riker.rows.iter().any(|r| r.kind == "Facebook Reaction"));
-        assert_eq!(riker.md_path.file_name().unwrap(), "2369.md");
+        assert!(md.contains("(2369)"), "the year's document: {md}");
 
         // What render could not use is a problem row on the document,
         // at the message's own section, and says what it was by its

@@ -503,7 +503,6 @@ fn one_item_chat(
         named_after: Vec::new(),
         contacts: owner.contact().into_iter().collect(),
         inputs: inputs.declared(),
-        path_prefix: None,
         id: format!("post:{row_id}"),
         chat_uuid: post.uuid.clone(),
         display,

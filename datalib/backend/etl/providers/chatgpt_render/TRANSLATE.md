@@ -2,7 +2,8 @@
 
 Each conversation in a `chatgpt` group's raw store
 ([`../chatgpt/INGEST.md`](../chatgpt/INGEST.md)) becomes one chat-common
-document, `render_markdown/<chat_uuid>/all.md`. The page layout and
+document, filed by its id like every document
+([`grid_rows.md`](../../../../../docs/dev/grid_rows.md) §"`qmd_path` and `source_id`"). The page layout and
 `LAYOUT_VERSION` are in [`chat-common/README.md`](../../chat-common/README.md); how render picks the conversations
 that moved is [`data_architecture_parse_and_render.md` §5](../../../../../docs/dev/data_architecture_parse_and_render.md#5-incrementality-and-deletion).
 

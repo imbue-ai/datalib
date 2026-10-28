@@ -17,7 +17,9 @@ use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use datalib_etl::doltlite_raw::{self, DiffScanSpec};
 use datalib_etl::progress::Progress;
-use datalib_etl_render::grid_index::{build_grid_index, init_schema, RenderedMarkdown};
+use datalib_etl_render::grid_index::{
+    build_grid_index, doc_md_path, init_schema, RenderedMarkdown,
+};
 use datalib_etl_render::indexed_markdown::{blocking, IndexedMarkdownStore};
 use datalib_etl_render::processor::{Input, ReadScope, RenderCtx, RenderProcessor, Unparsed};
 use datalib_schema::edges::EdgeRow;
@@ -324,10 +326,14 @@ impl RenderProcessor for SynthRender {
                 continue;
             };
             let root = datalib_etl::layout::render_markdown_root(ctx.root, ctx.name);
-            let md_path = root.join(format!("{id}.md"));
-            std::fs::create_dir_all(&root)?;
+            let md_path = doc_md_path(&root, &id);
+            std::fs::create_dir_all(md_path.parent().expect("a folder"))?;
             std::fs::write(&md_path, &doc.content)?;
-            ctx.emit_doc(to_rendered(&id, doc, md_path, version))?;
+            let md_rel = md_path
+                .strip_prefix(ctx.root)?
+                .to_string_lossy()
+                .into_owned();
+            ctx.emit_doc(to_rendered(&id, doc, md_path, &md_rel, version))?;
         }
         ctx.consumed(pin.commit());
         Ok(format!("rendered {rendered}"))
@@ -370,7 +376,13 @@ async fn load_model(pool: &SqlitePool) -> Result<Model> {
     Ok(model)
 }
 
-fn to_rendered(id: &str, doc: &Doc, md_path: PathBuf, version: u32) -> RenderedMarkdown {
+fn to_rendered(
+    id: &str,
+    doc: &Doc,
+    md_path: PathBuf,
+    md_rel: &str,
+    version: u32,
+) -> RenderedMarkdown {
     let rows = doc
         .rows
         .iter()
@@ -383,6 +395,7 @@ fn to_rendered(id: &str, doc: &Doc, md_path: PathBuf, version: u32) -> RenderedM
                 .conversation_uuid(id)
                 .entire_chat(format!("/chat/{id}"))
                 .body(text)
+                .qmd_path(Some(md_rel.to_string()))
                 .markdown_uuid(Some(id.to_string()))
                 // The synthetic document's first row stands for it.
                 .is_document(*uuid == doc.rows[0].0)
@@ -644,15 +657,17 @@ fn try_render_store_at(data_root: &Path, commit: Option<&str>) -> Option<StoreVi
     let versions = rendered.iter().map(|d| d.render_version).collect();
     store.close();
     let files = std::fs::read_dir(&root)
-        .map(|rd| {
-            rd.flatten()
-                .filter_map(|e| {
-                    let name = e.file_name().to_string_lossy().into_owned();
-                    name.strip_suffix(".md").map(str::to_string)
-                })
-                .collect()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|shard| std::fs::read_dir(shard.path()).ok())
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            name.strip_suffix(".md").map(str::to_string)
         })
-        .unwrap_or_default();
+        .collect();
     Some((docs_of(&rendered), files, versions))
 }
 

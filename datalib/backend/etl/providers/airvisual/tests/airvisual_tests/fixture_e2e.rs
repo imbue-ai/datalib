@@ -11,7 +11,7 @@ use datalib_etl_airvisual_config::AirvisualDevice;
 use datalib_etl_airvisual_render::render::parse::{inputs, parse};
 use datalib_etl_airvisual_render::render::render::render_all;
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
-use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::inputs::RawRange;
 
 const STANZA: &str = "ship-air";
@@ -165,7 +165,8 @@ async fn the_tng_fixture_ingests_and_renders() {
     assert_eq!(emitted[0].rows.len(), 3);
 
     let page_dir = root.join(STANZA).join("render_markdown");
-    let md = std::fs::read_to_string(page_dir.join("index.md")).unwrap();
+    let page = doc_md_path(&page_dir, &emitted[0].markdown_uuid);
+    let md = std::fs::read_to_string(&page).unwrap();
     assert!(md.contains("### Ten Forward"), "{md}");
     assert!(md.contains("### Sickbay"), "{md}");
     assert!(md.contains("serial `TENFWD10X`"), "{md}");

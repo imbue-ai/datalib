@@ -436,7 +436,6 @@ async fn parse_async(
                 .filter_map(|j| names.contact(j, source_id))
                 .collect(),
             inputs: ch.inputs.declared(),
-            path_prefix: None,
             id: ch.chat_jid.clone(),
             chat_uuid: chat_id.uuid,
             display: ch.display,

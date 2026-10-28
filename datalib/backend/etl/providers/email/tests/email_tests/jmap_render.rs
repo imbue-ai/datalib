@@ -180,9 +180,7 @@ fn render_smoke_produces_thread_dir_with_md_and_rows() {
     let (tmp, completed) = render(&parsed, "fastmail", OutlinkFormat::Fastmail);
     assert_eq!(completed.len(), 1, "one on_doc_complete call");
 
-    // chat-common owns the page-dir layout
-    // (render_markdown/email/<source>/chat-<id>__<slug>__<short>/all.md); find
-    // the single rendered doc by walking rather than hard-coding the slug.
+    // The one rendered doc, found by walking rather than by its path.
     let md_path = find_one(tmp.path(), ".md");
     let page_dir = md_path.parent().unwrap();
 

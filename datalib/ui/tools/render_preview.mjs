@@ -231,12 +231,14 @@ function stripFrontmatter(text) {
  * golden of the *rendered* report needs the same treatment, or it can
  * never be green on both platforms at once.
  *
- * Scoped to the storage documents. Sizes everywhere else — an
- * attachment's `— 384 B` — come from fixture metadata and are stable,
- * and are worth seeing rendered.
+ * Scoped to the storage documents, which alone carry `measured_at` in
+ * their front matter. Sizes everywhere else — an attachment's `— 384 B`
+ * — come from fixture metadata and are stable, and are worth seeing
+ * rendered.
  */
-function redactVolatileSizes(rel, text) {
-  if (!rel.includes("_datalib/storage.md")) return text;
+function redactVolatileSizes(raw, text) {
+  const frontmatter = raw.startsWith("---\n") ? raw.slice(0, raw.indexOf("\n---\n", 4) + 1) : "";
+  if (!frontmatter.includes("\nmeasured_at: ")) return text;
   return text.replace(/\b\d+(\.\d+)? (B|KiB|MiB|GiB)\b/g, "‹size›");
 }
 
@@ -263,15 +265,15 @@ const docs = [...bySource]
       rels.length === 1 ? "" : "s"
     }</span></h2>
 ${rels
-  .map(
-    (rel) => `<div class="preview-doc">
+  .map((rel) => {
+    const raw = readFileSync(join(mdDir, rel), "utf8");
+    return `<div class="preview-doc">
 <h3 class="preview-name">${rel}</h3>
-<div class="chat-body markdown-body">${md.render(
-      redactVolatileSizes(rel, stripFrontmatter(readFileSync(join(mdDir, rel), "utf8"))),
-      { dir: dirname(join(mdDir, rel)) },
-    )}</div>
-</div>`,
-  )
+<div class="chat-body markdown-body">${md.render(redactVolatileSizes(raw, stripFrontmatter(raw)), {
+      dir: dirname(join(mdDir, rel)),
+    })}</div>
+</div>`;
+  })
   .join("\n")}
 </section>`,
   )

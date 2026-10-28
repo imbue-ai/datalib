@@ -623,7 +623,6 @@ fn build_chat(
             .into_iter()
             .collect(),
         inputs: Vec::new(),
-        path_prefix: None,
         id: tuid.clone(),
         chat_uuid: tuid.clone(),
         display: subject.clone(),

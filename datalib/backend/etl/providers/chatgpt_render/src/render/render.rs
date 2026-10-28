@@ -258,7 +258,6 @@ fn build_chat(
             .into_iter()
             .collect(),
         inputs: Vec::new(),
-        path_prefix: None,
         id: chat_uuid.clone(),
         chat_uuid: chat_uuid.clone(),
         display: title.clone(),

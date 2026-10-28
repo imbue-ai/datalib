@@ -39,8 +39,6 @@ pub const PROFILE: ForgeProfile = ForgeProfile {
     from_ref_key: "source_branch",
     to_ref_key: "target_branch",
     number_sigil: '!',
-    dir_prefix: "mr-",
-    container_needs_owner: false,
     reviews: false,
     render_version: RENDER_VERSION,
 };
