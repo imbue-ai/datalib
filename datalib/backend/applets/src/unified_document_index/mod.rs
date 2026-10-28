@@ -122,6 +122,12 @@ pub fn search_once(root: PathBuf, p: SearchParams) -> Result<SearchResponse> {
     })
 }
 
+/// How long a served search waits on qmd to embed its text: under the
+/// gateway's 30 s (`APPLET_READ_TIMEOUT` in datalib-http), so a qmd that
+/// never answers costs this search an error naming it, and the next a
+/// fresh qmd, rather than a bare proxy timeout.
+const EMBED_DEADLINE: std::time::Duration = std::time::Duration::from_secs(20);
+
 /// How long `search_once` waits on qmd's embedder. No gateway's proxy
 /// timeout to stay under, and every one starts it cold, loading its model.
 const ONE_SEARCH_DEADLINE: std::time::Duration = std::time::Duration::from_secs(120);
@@ -151,11 +157,7 @@ pub fn serve(port: u16) -> Result<()> {
         if let Some(models) = link_models(&root) {
             std::thread::spawn(move || provision_models(&models));
         }
-        let state = Index::open(
-            root,
-            datalib_unified_document_index::qmd::daemon::QMD_ANSWER_DEADLINE,
-        )
-        .await?;
+        let state = Index::open(root, EMBED_DEADLINE).await?;
         let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
         let listener = tokio::net::TcpListener::bind(addr)
             .await
@@ -467,10 +469,9 @@ async fn answer_search(s: &Index, p: SearchParams) -> SearchResponse {
     // The names and marks the config gives each source, read per
     // request: a rename lands on the next search, with no re-index.
     let sources = columns::Sources::read(&s.root);
-    let words = link_words(&parsed);
     for row in &mut rows {
         sources.resolve(row);
-        row.link = link_of(row, words.as_deref());
+        row.link = link_of(row);
     }
     SearchResponse {
         columns: columns::columns(),
@@ -494,18 +495,11 @@ async fn answer_search(s: &Index, p: SearchParams) -> SearchResponse {
     }
 }
 
-/// The words a row's link asks its page to find: the free text without
-/// its quotes and exclusions.
-fn link_words(parsed: &ParsedQuery) -> Option<String> {
-    use datalib_unified_document_index::qmd::lex::strip_lex_syntax;
-    Some(strip_lex_syntax(&parsed.free_text)).filter(|w| !w.is_empty())
-}
-
 /// Where opening `row` goes: its page, at the row when it is a section of
-/// the page, at `words` within it.
-fn link_of(row: &SearchRow, words: Option<&str>) -> Option<String> {
+/// the page.
+fn link_of(row: &SearchRow) -> Option<String> {
     let page = row.markdown_uuid.as_deref()?;
-    Some(datalib_uri::Name::doc(page, Some(&row.uuid), words).write())
+    Some(datalib_uri::Name::doc(page, Some(&row.uuid)).write())
 }
 
 /// Why `answer` is not the search that was asked for, one reason a line:
@@ -605,7 +599,7 @@ async fn groups_handler(
                 .map(|g| {
                     let mut sample = g.sample;
                     sources.resolve(&mut sample);
-                    sample.link = link_of(&sample, link_words(&parsed).as_deref());
+                    sample.link = link_of(&sample);
                     GroupOut {
                         values: g.values,
                         count: g.count,
@@ -2240,12 +2234,9 @@ mod tests {
     }
 
     pub(super) async fn index_over(root: &std::path::Path) -> Index {
-        Index::open(
-            root.to_path_buf(),
-            datalib_unified_document_index::qmd::daemon::QMD_ANSWER_DEADLINE,
-        )
-        .await
-        .unwrap()
+        Index::open(root.to_path_buf(), EMBED_DEADLINE)
+            .await
+            .unwrap()
     }
 
     pub(super) async fn search(

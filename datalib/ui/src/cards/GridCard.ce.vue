@@ -1153,6 +1153,7 @@ watch(query, (q, before) => {
 function startSearch(q: string) {
   if (!isSearch || freeText(q) === "") {
     tabsAsked++;
+    tabsInflight?.abort();
     tabs.value = null;
     return runSearch(q);
   }
@@ -1160,14 +1161,19 @@ function startSearch(q: string) {
 }
 
 let tabsAsked = 0;
+/// The tabs' requests for the search last asked: a newer one cancels them,
+/// so the server stops ranking a search nobody is waiting for.
+let tabsInflight: AbortController | null = null;
 /// Ask each tab how many rows it has. A recount, after the index moved,
 /// updates the counts and never changes the open tab.
 async function askTabs(q: string, recount: boolean) {
   const asked = ++tabsAsked;
+  tabsInflight?.abort();
+  const ctrl = (tabsInflight = new AbortController());
   if (!recount) tabs.value = startTabs(q);
   await Promise.all(
     SEARCH_TABS.map(async ({ id }) => {
-      const answer = await tabAnswer(q, id);
+      const answer = await tabAnswer(q, id, ctrl.signal);
       if (asked !== tabsAsked || tabs.value?.q !== q) return;
       const before = tabs.value.open;
       tabs.value = recount
@@ -1178,9 +1184,9 @@ async function askTabs(q: string, recount: boolean) {
   );
 }
 
-async function tabAnswer(q: string, t: SearchTab): Promise<TabAnswer> {
+async function tabAnswer(q: string, t: SearchTab, signal: AbortSignal): Promise<TabAnswer> {
   try {
-    const r = await fetchRows<Row>(url, q, 1, undefined, { toast: false }, { tab: t });
+    const r = await fetchRows<Row>(url, q, 1, signal, { toast: false }, { tab: t });
     const failed =
       r.refused?.[0] ??
       (typeof r.query_echo?.qmd_error === "string" ? r.query_echo.qmd_error : null) ??

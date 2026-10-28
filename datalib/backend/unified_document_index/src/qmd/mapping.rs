@@ -3,20 +3,12 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-/// Which collections a search may draw from. There is one qmd
-/// collection per group, so this is a set of group ids.
-///
-/// [`CollectionScope::All`] is sent as an empty list: one search over
-/// every collection the index holds, best match first. Naming several
-/// would rank each collection apart and interleave the lists by rank, and
-/// leaving the argument out would search only the collections the server
-/// read at startup (`docs/dev/qmd_behaviour.md`, facts 3 and 4).
+/// Which collections a search may draw from: every one, or exactly these.
+/// There is one qmd collection per group, so these are group ids; an empty
+/// list matches nothing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CollectionScope {
     All,
-    /// Exactly these. An empty list means "no collection can match", not
-    /// "all of them": the daemon answers it without asking qmd, which
-    /// reads an empty `collections` argument as every collection.
     Only(Vec<String>),
 }
 
@@ -28,23 +20,9 @@ impl CollectionScope {
             CollectionScope::Only(names) => Some(names),
         }
     }
-
-    /// True when this scope can never match anything, so the search is
-    /// answerable without asking qmd at all.
-    pub fn is_empty(&self) -> bool {
-        matches!(self, CollectionScope::Only(names) if names.is_empty())
-    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum QueryMode {
-    /// Hybrid BM25 + vector + reranker. Default for bare search-bar text.
-    Hybrid,
-    /// Vector-only. Faster, no LLM reranking.
-    Vsearch,
-}
-
-/// One result from a `qmd query` / `qmd vsearch` run.
+/// One document a qmd ranking found: from its keyword index or its vectors.
 #[derive(Debug, Clone)]
 pub struct QmdHit {
     pub path: String,
@@ -121,27 +99,6 @@ fn take_leading_usize(s: &str) -> Option<usize> {
         .collect::<String>()
         .parse()
         .ok()
-}
-
-pub fn parse_qmd_predicate(raw: &str) -> (QueryMode, String) {
-    let trimmed = raw.trim();
-    for (prefix, mode) in [
-        ("qmd_vsearch", QueryMode::Vsearch),
-        ("qmd", QueryMode::Hybrid),
-    ] {
-        if let Some(rest) = trimmed.strip_prefix(prefix) {
-            let rest = rest.trim_start();
-            if let Some(rest) = rest.strip_prefix(':') {
-                let rest = rest.trim_start();
-                if let Some(inner) = rest.strip_prefix('"') {
-                    if let Some(inner) = inner.strip_suffix('"') {
-                        return (mode, inner.to_string());
-                    }
-                }
-            }
-        }
-    }
-    (QueryMode::Hybrid, trimmed.to_string())
 }
 
 /// A search's words as hits are placed by: lowercased runs of letters and
@@ -481,34 +438,6 @@ mod tests {
         // No "before" annotation → fall back to the hunk start.
         assert_eq!(snippet_match_line("@@ -7,4 @@\nx"), Some(7));
     }
-
-    #[test]
-    fn parse_qmd_predicate_recognizes_predicates() {
-        assert_eq!(
-            parse_qmd_predicate("qmd:\"foo bar\""),
-            (QueryMode::Hybrid, "foo bar".to_string())
-        );
-        assert_eq!(
-            parse_qmd_predicate("qmd_vsearch:\"x\""),
-            (QueryMode::Vsearch, "x".to_string())
-        );
-        // Whitespace around the colon is tolerated.
-        assert_eq!(
-            parse_qmd_predicate("qmd : \"hi\""),
-            (QueryMode::Hybrid, "hi".to_string())
-        );
-        // Bare text → hybrid mode, trimmed.
-        assert_eq!(
-            parse_qmd_predicate("  earl grey  "),
-            (QueryMode::Hybrid, "earl grey".to_string())
-        );
-        // Missing quotes → not a predicate.
-        assert_eq!(
-            parse_qmd_predicate("qmd:foo"),
-            (QueryMode::Hybrid, "qmd:foo".to_string())
-        );
-    }
-
     fn write_two_message_doc(root: &std::path::Path, rel: &str) -> Vec<GridRowRef> {
         let body = "---\n\
                     provider: claude\n\

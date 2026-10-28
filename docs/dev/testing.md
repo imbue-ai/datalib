@@ -574,6 +574,12 @@ target that is one message of a page, it also says where the hit on that
 page lands, read from the row's `link`: on the message, how many
 messages off, and whether the snippet shown came from it.
 
+Every query searches the whole library, as the search box does, unless
+it names a source itself; `--scope source` asks each one again narrowed
+to its target's source. A run records how many rows the library held,
+since a larger library is a bigger haystack: compare scores only
+between runs on the same clone.
+
 An eval set built from a real library is that library's data, so it
 never goes in this repo; Thad's lives in the private
 `data_liberation_manual_e2e_test_data` directory, under `search_eval/`.

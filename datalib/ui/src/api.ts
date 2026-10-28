@@ -124,8 +124,8 @@ export type SearchRow = {
   // QMD rank score. Present when the row came from a free-text (qmd)
   // search; omitted for a query of structured terms alone.
   score?: number;
-  // Where opening the row goes: `datalib:doc/<page>#<section>:~:text=<words>`
-  // (`uri.ts`). Absent on a row with no rendered page.
+  // Where opening the row goes: `datalib:doc/<page>#<section>` (`uri.ts`).
+  // Absent on a row with no rendered page.
   link?: string;
 };
 

@@ -443,7 +443,7 @@ Pick the surface that fits the question:
   the rows the other terms leave, so `from:`, `after:` or `source_id:`
   narrow what is ranked rather than what is kept. With no `tab`, the three
   are fused by reciprocal rank, identifiers aside; the command line, the
-  map and the app's links all get that answer. Each row's `link` is where opening it goes, `datalib:doc/<page>#<section>:~:text=<words>`: its page, at the row when it is a message of the page, at the search's words. It answers a page: `limit=` rows from `offset=`, with `total`
+  map and the app's links all get that answer. Each row's `link` is where opening it goes, `datalib:doc/<page>#<section>`: its page, at the row when it is a message of the page. It answers a page: `limit=` rows from `offset=`, with `total`
   and the `next_offset`; `sort=created_at:desc,author` orders by grid
   columns in turn. `GET /applet/unified_document_index/search/groups?q=…&by=kind`
   counts the groups, and `within=[["kind","Chat"]]` on `search` lists
