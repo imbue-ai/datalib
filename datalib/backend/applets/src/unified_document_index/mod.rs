@@ -65,9 +65,9 @@ struct Index {
     /// Embeds a Meaning search's text, so the model loads once; the
     /// vectors themselves are scored here, never by qmd.
     embedder: Arc<datalib_qmd_indexer::QueryEmbedder>,
-    /// The vectors Meaning has read so far, so a search reads only what
-    /// no earlier one did.
-    vectors: Arc<datalib_unified_document_index::qmd::vectors::VectorCache>,
+    /// One read connection to qmd's index, and what Meaning has read
+    /// through it, kept across searches.
+    qmd_index: Arc<datalib_unified_document_index::qmd::HeldIndex>,
     qmd_summary: Arc<SummaryCache>,
     results: Arc<results::ResultCache>,
 }
@@ -83,7 +83,7 @@ impl Index {
             embedder: Arc::new(datalib_qmd_indexer::QueryEmbedder::new(
                 &root, None, deadline,
             )),
-            vectors: Arc::default(),
+            qmd_index: Arc::default(),
             qmd_summary: Arc::new(SummaryCache::default()),
             results: Arc::new(results::ResultCache::default()),
             repo: Arc::new(repo),
@@ -948,12 +948,15 @@ async fn words_ranking(
     } else {
         None
     };
-    let Some(reader) = QmdIndexReader::open(&s.root)
+    let Some(open) = s
+        .qmd_index
+        .open(&s.root)
         .await
         .map_err(|e| SearchFailure::Qmd(format!("open the qmd index: {e}")))?
     else {
         return Err(SearchFailure::NoIndex);
     };
+    let reader = &open.reader;
     let scope = collection_scope(parsed);
     // The documents holding the words as typed come first: BM25 alone
     // ranks a long thread that says the sentence below short ones that
@@ -977,7 +980,6 @@ async fn words_ranking(
         Ok::<_, sqlx::Error>(hits)
     }
     .await;
-    reader.close().await;
     let hits = hits.map_err(|e| SearchFailure::Qmd(format!("qmd's keyword index: {e}")))?;
     rows_of_hits(&s.root, &s.repo, &hits, parsed)
         .await
@@ -1002,12 +1004,15 @@ async fn meaning_ranking(
     if text.trim().is_empty() {
         return Ok(Vec::new());
     }
-    let Some(reader) = QmdIndexReader::open(&s.root)
+    let Some(open) = s
+        .qmd_index
+        .open(&s.root)
         .await
         .map_err(|e| SearchFailure::Qmd(format!("open the qmd index: {e}")))?
     else {
         return Err(SearchFailure::NoIndex);
     };
+    let reader = &open.reader;
     let started = std::time::Instant::now();
     let embedder = s.embedder.clone();
     let query = tokio::task::spawn_blocking(move || embedder.embed(&text))
@@ -1024,7 +1029,7 @@ async fn meaning_ranking(
     let scope = collection_scope(parsed);
     let hits = reader
         .nearest_documents(
-            &s.vectors,
+            &open.vectors,
             &datalib_unified_document_index::qmd::vectors::QueryVector {
                 model: &query.model,
                 vector: &query.vector,
@@ -1034,7 +1039,6 @@ async fn meaning_ranking(
             QMD_DEPTH,
         )
         .await;
-    reader.close().await;
     let hits = hits.map_err(qmd)?;
     tracing::info!(
         embed_ms = embedded.as_millis() as u64,

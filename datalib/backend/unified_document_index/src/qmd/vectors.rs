@@ -193,12 +193,15 @@ fn add_chunk(
     Ok(())
 }
 
-/// The chunks' vectors [`nearest_documents`] has read, by content hash, so
-/// a search reads from the file only the contents no earlier one asked
-/// for. A key is `<content hash>_<seq>` and a model's vector for a content
-/// never changes, so a held vector stays right until a vector is removed
-/// or added in its place; either moves the stamp, and everything held is
-/// dropped.
+/// What [`nearest_documents`] has read through one connection, so a
+/// search reads from the file only what changed since the last: the
+/// active documents, read again when the connection's `data_version` says
+/// another connection committed; and the chunks' vectors by content hash,
+/// read as a search first asks for them. A key is `<content hash>_<seq>`
+/// and a model's vector for a content never changes, so a held vector
+/// stays right until a vector is removed or added in its place; either
+/// moves the stamp, and every vector held is dropped. Belongs to one
+/// connection, since `data_version` counts only for the connection asked.
 #[derive(Default)]
 pub struct VectorCache {
     held: tokio::sync::Mutex<HeldVectors>,
@@ -206,6 +209,10 @@ pub struct VectorCache {
 
 #[derive(Default)]
 struct HeldVectors {
+    /// The connection's `data_version` the documents were read at.
+    version: Option<i64>,
+    /// Every active document's collection, path and content hash.
+    documents: Vec<(String, String, String)>,
     /// `vectors_vec_rowids`' count and largest rowid, and the model.
     stamp: Option<(i64, i64, String)>,
     /// hash → each live chunk's `(pos, vector)`; empty for a content with
@@ -249,38 +256,45 @@ pub async fn nearest_documents(
         bail!("the query's embedding is all zeros");
     }
 
-    let wanted = serde_json::to_string(&collections.unwrap_or_default())?;
-    let documents: Vec<(String, String)> = sqlx::query_as(
-        "SELECT path, hash FROM documents \
-          WHERE active = 1 AND (NOT ?1 OR collection IN (SELECT value FROM json_each(?2)))",
-    )
-    .bind(collections.is_some())
-    .bind(wanted)
-    .fetch_all(pool)
-    .await?;
-    let documents: Vec<(String, String)> = match among {
-        Some(among) => documents
-            .into_iter()
-            .filter(|(path, _)| among.contains(&norm_path(path)))
-            .collect(),
-        None => documents,
-    };
-    let mut hashes: Vec<&str> = documents.iter().map(|(_, h)| h.as_str()).collect();
+    let mut held = cache.held.lock().await;
+    let version: i64 = sqlx::query_scalar("PRAGMA data_version")
+        .fetch_one(pool)
+        .await?;
+    let committed = held.version != Some(version);
+    if committed {
+        held.documents =
+            sqlx::query_as("SELECT collection, path, hash FROM documents WHERE active = 1")
+                .fetch_all(pool)
+                .await?;
+        held.version = Some(version);
+    }
+    if committed
+        || held
+            .stamp
+            .as_ref()
+            .is_none_or(|(_, _, model)| model != query.model)
+    {
+        let (count, last): (i64, i64) =
+            sqlx::query_as("SELECT COUNT(*), COALESCE(MAX(rowid), 0) FROM vectors_vec_rowids")
+                .fetch_one(pool)
+                .await?;
+        let stamp = Some((count, last, query.model.to_string()));
+        if held.stamp != stamp {
+            held.by_hash.clear();
+        }
+        held.stamp = stamp;
+    }
+    let documents: Vec<(String, String)> = held
+        .documents
+        .iter()
+        .filter(|(collection, _, _)| collections.is_none_or(|c| c.contains(collection)))
+        .filter(|(_, path, _)| among.is_none_or(|a| a.contains(&norm_path(path))))
+        .map(|(_, path, hash)| (path.clone(), hash.clone()))
+        .collect();
+    let mut hashes: Vec<String> = documents.iter().map(|(_, h)| h.clone()).collect();
     hashes.sort_unstable();
     hashes.dedup();
-
-    let mut held = cache.held.lock().await;
-    let (count, last): (i64, i64) =
-        sqlx::query_as("SELECT COUNT(*), COALESCE(MAX(rowid), 0) FROM vectors_vec_rowids")
-            .fetch_one(pool)
-            .await?;
-    let stamp = Some((count, last, query.model.to_string()));
-    if held.stamp != stamp {
-        *held = HeldVectors {
-            stamp,
-            by_hash: HashMap::new(),
-        };
-    }
+    let hashes: Vec<&str> = hashes.iter().map(String::as_str).collect();
     let unread: Vec<&str> = hashes
         .iter()
         .copied()
