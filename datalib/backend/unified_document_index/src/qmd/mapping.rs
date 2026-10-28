@@ -125,9 +125,13 @@ fn holds(text: &str, term: &str) -> bool {
 }
 
 /// Which of `starts` (each section's first line, in order) a hit at 1-based
-/// `line` covering `span` lines lands on: among the sections overlapping
-/// the span (every section when `None`), the first holding the most of
-/// `terms`, unless `own` holds as many or none holds any.
+/// `line` covering `span` lines lands on, of the sections `allowed` takes
+/// that overlap the span (every section when `None`, a keyword hit's): the
+/// one holding the most of `terms`, the nearest to `own` of those that tie.
+/// A keyword hit lands only where one of `terms` is, since its document
+/// matched on words someone else may have written. `own` when it holds as
+/// many and is allowed, or when no section qualifies, for the search's
+/// other terms to drop.
 fn best_section(
     lines: &[&str],
     starts: &[(usize, &str)],
@@ -135,37 +139,33 @@ fn best_section(
     line: usize,
     span: Option<usize>,
     terms: &[String],
+    allowed: impl Fn(usize) -> bool,
 ) -> usize {
-    if terms.is_empty() || starts.is_empty() {
+    if starts.is_empty() {
         return own;
     }
-    let lo = line.saturating_sub(1);
-    let hi = span.map_or(usize::MAX, |n| lo + n.max(1));
+    let (lo, hi) = match span {
+        Some(n) => (line.saturating_sub(1), line.saturating_sub(1) + n.max(1)),
+        None => (0, usize::MAX),
+    };
+    let end_of = |i: usize| starts.get(i + 1).map_or(lines.len(), |(s, _)| *s);
     let score = |i: usize| {
-        let end = starts.get(i + 1).map_or(lines.len(), |(s, _)| *s);
-        let text = lines[starts[i].0..end].join("\n").to_lowercase();
+        if terms.is_empty() {
+            return 0;
+        }
+        let text = lines[starts[i].0..end_of(i)].join("\n").to_lowercase();
         terms.iter().filter(|t| holds(&text, t)).count()
     };
-    let overlaps = |i: usize| {
-        let end = starts.get(i + 1).map_or(lines.len(), |(s, _)| *s);
-        starts[i].0 < hi && end > lo
-    };
-    let own_score = score(own);
-    if own_score == terms.len() {
+    if allowed(own) && score(own) == terms.len() {
         return own;
     }
-    let (best, best_score) = (0..starts.len())
-        .filter(|&i| overlaps(i))
+    let needs_a_word = span.is_none() && !terms.is_empty();
+    (0..starts.len())
+        .filter(|&i| allowed(i) && starts[i].0 < hi && end_of(i) > lo)
         .map(|i| (i, score(i)))
-        .fold(
-            (own, own_score),
-            |acc, (i, n)| if n > acc.1 { (i, n) } else { acc },
-        );
-    if best_score > own_score {
-        best
-    } else {
-        own
-    }
+        .filter(|&(_, n)| !needs_a_word || n > 0)
+        .max_by_key(|&(i, n)| (n, std::cmp::Reverse(i.abs_diff(own))))
+        .map_or(own, |(i, _)| i)
 }
 
 /// Indexes a set of `GridRowRef`s for fast hit→rows / row→hits lookup. Holds
@@ -178,6 +178,9 @@ pub struct GridIndex {
     /// The search's words, lowercased: a hit lands on the message within
     /// its span that holds the most of them.
     terms: Vec<String>,
+    /// The rows the search's other terms keep, when it has any: a hit
+    /// lands only on one of them.
+    allowed: Option<HashSet<String>>,
 }
 
 impl GridIndex {
@@ -196,6 +199,7 @@ impl GridIndex {
             by_uuid,
             by_norm_path,
             terms: Vec::new(),
+            allowed: None,
         }
     }
 
@@ -205,6 +209,14 @@ impl GridIndex {
         self.terms = words(free_text);
         self.terms.sort();
         self.terms.dedup();
+        self
+    }
+
+    /// Land each hit only on a row of `allowed`, the rows the search's
+    /// other terms keep, so a document whose hit fell on a message they
+    /// drop is placed on one they keep rather than lost.
+    pub fn within(mut self, allowed: HashSet<String>) -> Self {
+        self.allowed = Some(allowed);
         self
     }
 
@@ -265,7 +277,12 @@ impl GridIndex {
             .filter_map(|(i, raw)| Some((i, parse_section_uuid(raw)?)))
             .collect();
         let own = starts.iter().rposition(|(i, _)| *i < line).unwrap_or(0);
-        let chosen = best_section(&lines, &starts, own, line, hit.lines, &self.terms);
+        let allowed = |i: usize| {
+            self.allowed
+                .as_ref()
+                .is_none_or(|rows| rows.contains(starts[i].1))
+        };
+        let chosen = best_section(&lines, &starts, own, line, hit.lines, &self.terms, allowed);
         starts.get(chosen).map(|(_, uuid)| uuid.to_string())
     }
 
@@ -402,8 +419,38 @@ mod tests {
         let own = starts.iter().rposition(|(i, _)| *i < line).unwrap_or(0);
         let mut terms = words(terms);
         terms.dedup();
-        let at = best_section(&lines, &starts, own, line, span, &terms);
+        let at = best_section(&lines, &starts, own, line, span, &terms, |_| true);
         ["m1", "m2", "m3", "m4"][at]
+    }
+
+    fn landing_within(line: usize, terms: &str, kept: &[&str]) -> &'static str {
+        let lines: Vec<&str> = AWAY_TEAM.lines().collect();
+        let starts: Vec<(usize, &str)> = lines
+            .iter()
+            .enumerate()
+            .filter_map(|(i, raw)| Some((i, parse_section_uuid(raw)?)))
+            .collect();
+        let own = starts.iter().rposition(|(i, _)| *i < line).unwrap_or(0);
+        let terms = words(terms);
+        let at = best_section(&lines, &starts, own, line, None, &terms, |i| {
+            kept.contains(&starts[i].1)
+        });
+        ["m1", "m2", "m3", "m4"][at]
+    }
+
+    /// A hit lands only on a message the search's other terms keep and, for
+    /// a keyword hit, one holding a word of the search: the one holding the
+    /// most, the nearest of those that tie, and its own when none qualifies,
+    /// for those terms to drop.
+    #[test]
+    fn a_hit_lands_on_a_message_the_other_terms_keep() {
+        assert_eq!(landing_within(2, "warp core breach", &["m3", "m4"]), "m3");
+        // Neither kept message holds a word, so the hit stays to be dropped.
+        assert_eq!(landing_within(2, "warp core breach", &["m2", "m4"]), "m1");
+        // A keyword hit on Picard's line may land above it, on Riker's.
+        assert_eq!(landing_within(8, "warp core", &["m1", "m4"]), "m1");
+        assert_eq!(landing_within(2, "", &["m4"]), "m4");
+        assert_eq!(landing_within(2, "warp", &[]), "m1");
     }
 
     /// A hit lands on the message holding the most of the search's words,
@@ -473,6 +520,25 @@ mod tests {
                 "claude",
             ),
         ]
+    }
+
+    /// A hit on a message the search's other terms drop lands on one they
+    /// keep, so the document is not lost with the message.
+    #[test]
+    fn rows_for_hit_lands_within_the_rows_kept() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rel = "render_markdown/claude/acct/org/llm_chats/conv/index.md";
+        let second = "bbbbbbbb-0000-0000-0000-000000000002";
+        let idx = GridIndex::new(tmp.path(), write_two_message_doc(tmp.path(), rel))
+            .within([second.to_string()].into());
+        // Line 7 is inside the first message.
+        let h = hit(
+            "render-markdown/claude/acct/org/llm-chats/conv/index.md",
+            "@@ -7,1 @@ (0 before, 0 after)\n## Human",
+        );
+        let got = idx.rows_for_hit(&h);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].uuid, second);
     }
 
     #[test]

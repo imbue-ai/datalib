@@ -1082,9 +1082,25 @@ async fn rows_of_hits(
         .grid_row_refs_for_hits(&hit_paths)
         .await
         .map_err(|e| anyhow::anyhow!("the rows behind qmd's hits: {e}"))?;
-    // Each hit lands on the message holding the most of the search's words.
+    // Each hit lands on the message holding the most of the search's words,
+    // of the rows its other terms keep: a hit on a message they drop would
+    // lose its document with it.
     let words = datalib_unified_document_index::qmd::lex::strip_lex_syntax(&parsed.free_text);
+    let kept = if narrows_documents(parsed) {
+        let uuids: Vec<String> = refs.iter().map(|r| r.uuid.clone()).collect();
+        let listing = repo
+            .filter_uuids(parsed, &uuids, &[], &[])
+            .await
+            .map_err(|e| anyhow::anyhow!("the rows the search keeps: {e}"))?;
+        Some(listing.uuids.into_iter().collect())
+    } else {
+        None
+    };
     let idx = GridIndex::new((**root).clone(), refs).with_terms(&words);
+    let idx = match kept {
+        Some(kept) => idx.within(kept),
+        None => idx,
+    };
     // Map hits to grid rows in rank order, keeping only the top hit per
     // markdown document so the result list stays concise — a single chat that
     // matches in several places shows up once, at its best rank. Orphan hits
