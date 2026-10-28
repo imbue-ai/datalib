@@ -38,8 +38,10 @@ use datalib_schema::providers::Provider;
 /// v7: a call carries the other side's `tel:` handle, and a text the
 ///     account sent names whom it went to, so both reach `with:`.
 /// v8: a message someone else sent is to the account (`to:me`).
-/// v9: the number the account sent an MMS from is the account's own, so
-///     search reads it as `me`.
+/// v9: an MMS is by the number its `addrs` name as its sender, a group
+///     MMS's included, and one the account sent still shows as "Me"; the
+///     numbers the account sent from are its own, so search reads them as
+///     `me`.
 pub const RENDER_VERSION: u32 = 9;
 
 /// Projection for `BlobBundle::load_many` over the SMS CAS edge: the
@@ -296,23 +298,25 @@ fn build_chats(
     chats
 }
 
+/// The number an MMS records as its sender. Android's
+/// `insert-address-token`, and a number without its country code, name
+/// no one.
+fn mms_sender(v: &Value) -> Option<Handle> {
+    let addrs = v.get("addrs").and_then(Value::as_array)?;
+    let from = addrs
+        .iter()
+        .find(|a| a.get("type").and_then(Value::as_i64) == Some(PDU_FROM))?;
+    Handle::tel(from.get("address")?.as_str()?)
+}
+
 /// The account, by the numbers it sent an MMS from: the sender of an MMS
-/// the account sent is the account. Android's `insert-address-token`,
-/// and a number without its country code, name no one.
+/// the account sent is the account.
 fn account(source_id: &str, rows: &[&Value]) -> Option<NormalizedContact> {
     let mut numbers: Vec<Handle> = Vec::new();
     let sent = rows
         .iter()
         .filter(|v| v.get("is_me").and_then(Value::as_bool) == Some(true));
-    let from = sent
-        .flat_map(|v| {
-            v.get("addrs")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-        })
-        .filter(|a| a.get("type").and_then(Value::as_i64) == Some(PDU_FROM));
-    for number in from.filter_map(|a| Handle::tel(a.get("address")?.as_str()?)) {
+    for number in sent.filter_map(|v| mms_sender(v)) {
         if !numbers.contains(&number) {
             numbers.push(number);
         }
@@ -379,13 +383,20 @@ fn item(source_id: &str, v: &Value) -> NormalizedChatItem {
                 .get("conversation_display")
                 .and_then(Value::as_str)
                 .unwrap_or("Unknown");
-            let (author_handle, author_display) = if is_me {
-                (None, "Me".to_string())
-            } else {
+            let sent_from = mms_sender(v);
+            let address = v.get("address").and_then(Value::as_str).unwrap_or("");
+            let (author_handle, author_display) = match (is_me, Handle::tel(address)) {
+                (true, _) => (sent_from, "Me".to_string()),
+                (false, Some(theirs)) => (Some(theirs), display.to_string()),
                 // A group MMS joins its numbers with `~`, which `tel`
-                // refuses: the backup does not say which one sent it.
-                let address = v.get("address").and_then(Value::as_str).unwrap_or("");
-                (Handle::tel(address), display.to_string())
+                // refuses; its `addrs` say which one sent it.
+                (false, None) => match sent_from {
+                    Some(sender) => {
+                        let shown = sender.value().to_string();
+                        (Some(sender), shown)
+                    }
+                    None => (None, display.to_string()),
+                },
             };
             // SMS body lives in `body`; MMS body in `text`.
             let text = v
@@ -695,6 +706,56 @@ mod tests {
             None,
             "a token and a received MMS"
         );
+    }
+
+    /// `from:<number>` means sent from that number: an MMS is by the
+    /// sender its `addrs` name, the account's own still shown as "Me", and
+    /// a group MMS by the one member who sent it. A plain text records no
+    /// sender number, so the account's is by no number.
+    #[test]
+    fn an_mms_is_by_the_number_it_was_sent_from() {
+        let mms = |id: &str, address: &str, is_me: bool, from: &str| {
+            json!({"id": id, "kind": "mms", "conversation_key": address,
+                   "conversation_display": "Away team", "date": 12600270000000i64,
+                   "is_me": is_me, "address": address, "text": id, "attachments": [],
+                   "addrs": [{"address": from, "type": 137}]})
+        };
+        let messages = vec![
+            mms("mine", "+12025550104", true, "+12025550100"),
+            mms("token", "+12025550104", true, "insert-address-token"),
+            mms("group", "+12025550104~+12025550105", false, "+12025550105"),
+            json!({"id": "text", "kind": "sms", "conversation_key": "+12025550104",
+                   "conversation_display": "Geordi La Forge", "date": 12600270000000i64,
+                   "is_me": true, "address": "+12025550104", "body": "text",
+                   "attachments": []}),
+        ];
+        let chats = build_chats("sms", &with_ids(&messages), &[]);
+        let author = |id: &str| {
+            let item = chats
+                .iter()
+                .flat_map(|c| &c.buckets)
+                .flat_map(|b| &b.items)
+                .find(|i| i.source_ref.as_ref().unwrap().native_id == id)
+                .unwrap();
+            (
+                item.author_handle.as_ref().map(|h| h.as_str().to_string()),
+                item.author_display.clone(),
+                item.author_kind,
+            )
+        };
+        let by = |handle: Option<&str>, shown: &str, kind| {
+            (handle.map(String::from), shown.to_string(), kind)
+        };
+        assert_eq!(
+            author("mine"),
+            by(Some("tel:+12025550100"), "Me", AuthorKind::Account)
+        );
+        assert_eq!(author("token"), by(None, "Me", AuthorKind::Account));
+        assert_eq!(
+            author("group"),
+            by(Some("tel:+12025550105"), "+12025550105", AuthorKind::Named)
+        );
+        assert_eq!(author("text"), by(None, "Me", AuthorKind::Account));
     }
 
     /// A text the account sent is addressed to the thread's other side,

@@ -103,6 +103,12 @@ by that address, or a Google Chat message from it, is yours too.
 
 A quoted `"me"` is the word, not you.
 
+Your number or address is narrower than `me`: `from:+12025550100`
+finds only what a source records as sent from that number, not
+everything you wrote. A phone's backup records the number an MMS was
+sent from, but not a plain text's, so `from:me` finds your texts and
+your number finds only your MMS.
+
 | source | what `me` knows you by | what it cannot find |
 |---|---|---|
 | Email | the mailbox's address | |
