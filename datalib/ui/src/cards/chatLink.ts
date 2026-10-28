@@ -60,7 +60,7 @@ export function rewriteIdButtonsForCopy(
     const a = btn.ownerDocument.createElement("a");
     const uuid = btn.dataset.uuid ?? "";
     const section = uuid === markdownUuid ? null : uuid;
-    a.href = writeDoc({ page: markdownUuid, section, text: null });
+    a.href = writeDoc({ page: markdownUuid, section });
     a.textContent = `${btn.textContent} ${uuid}`;
     btn.replaceWith(a);
   }

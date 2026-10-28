@@ -30,14 +30,12 @@ rust_library(
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
-        "@datalib_crates//:libc",
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sha2",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:strum",
         "@datalib_crates//:tokio",
-        "@datalib_crates//:tracing",
     ],
 )
 
@@ -79,8 +77,6 @@ rust_test(
     edition = "2021",
     env = QMD_FIXTURE_ENV | {
         "INSTA_WORKSPACE_ROOT": ".",
-        # qmd_daemon_scope.rs sets `DATALIB_RUNTIME_DIR` for the process.
-        "RUST_TEST_THREADS": "1",
     },
     deps = [
         ":qmd_fixture",

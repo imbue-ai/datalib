@@ -152,7 +152,6 @@ def rank_of(target: dict[str, Any], rows: list[dict[str, Any]]) -> int | None:
 
 
 DOC = "datalib:doc/"
-TEXT = ":~:text="
 SECTION_RE = re.compile(r'data-section-uuid="([^"]+)"')
 WORD_RE = re.compile(r"[a-z0-9]{4,}")
 
@@ -161,9 +160,8 @@ def section_of(row: dict[str, Any]) -> str:
     """The section a row's link opens at (`datalib:doc/<page>#<section>`),
     else the row itself, for an answer from a build without links."""
     link = row.get("link") or ""
-    if link.startswith(DOC) and "#" in link:
-        section = link.split("#", 1)[1].split(TEXT, 1)[0]
-        return section or row.get("markdown_uuid") or row["uuid"]
+    if link.startswith(DOC):
+        return link.partition("#")[2] or row.get("markdown_uuid") or row["uuid"]
     return row["uuid"]
 
 
@@ -243,14 +241,16 @@ def run(args: argparse.Namespace) -> None:
         # (qmd's daemon, the embedding model); time the warm ones.
         for m in modes:
             search(server.get, "warm up", m, 1)
+        held = corpus(server.get)
         only = set(args.only.split(",")) if args.only else None
         for t in evals["targets"]:
             if only and t["id"] not in only:
                 continue
             for query in t["queries"]:
+                q = scoped(query["q"], t) if args.scope == "source" else query["q"]
                 by_mode = {}
                 for m in modes:
-                    a = search(server.get, query["q"], m, args.depth)
+                    a = search(server.get, q, m, args.depth)
                     a["rank"] = rank_of(t, a.get("rows", []))
                     if a["rank"]:
                         a["landing"] = landing(t, a["rows"][a["rank"] - 1], pages)
@@ -262,6 +262,7 @@ def run(args: argparse.Namespace) -> None:
                         "id": t["id"],
                         "source_id": t.get("source_id"),
                         "q": query["q"],
+                        "asked": q,
                         "style": query.get("style", ""),
                         "modes": by_mode,
                     }
@@ -278,11 +279,28 @@ def run(args: argparse.Namespace) -> None:
         "evals": str(args.evals),
         "depth": args.depth,
         "via": args.http or "applet",
+        "scope": args.scope,
+        "corpus": held,
         "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "results": results,
     }
     Path(args.out).write_text(json.dumps(record, indent=1, ensure_ascii=False) + "\n")
     print(report(record))
+
+
+def scoped(q: str, target: dict[str, Any]) -> str:
+    """`q` narrowed to the target's source, as a person who knew where it was
+    would ask; a query that names a source already is asked as it is."""
+    return q if "source_id:" in q else f"{q} source_id:{target['source_id']}"
+
+
+def corpus(get: Callable[[str], Any]) -> dict[str, int]:
+    """How many rows each source holds: the haystack every query searches,
+    so a score is read beside the corpus it was measured on."""
+    groups = get(
+        "/search/groups?" + urllib.parse.urlencode({"q": "", "by": "source_ref"})
+    )
+    return {g["values"][0] or "": g["count"] for g in groups["groups"]}
 
 
 def fmt_rank(r: int | None) -> str:
@@ -314,6 +332,10 @@ def scores(results: list[dict[str, Any]], mode: str) -> dict[str, float] | None:
     }
 
 
+def corpus_line(held: dict[str, int]) -> str:
+    return f"corpus: {sum(held.values())} rows in {len(held)} sources"
+
+
 def report(record: dict[str, Any]) -> str:
     results = record["results"]
     modes = [m for m in [*MODES, "ui"] if any(m in r["modes"] for r in results)]
@@ -321,7 +343,9 @@ def report(record: dict[str, Any]) -> str:
         (
             f"{len(results)} queries over {len({r['id'] for r in results})} targets, "
             f"top {record['depth']}, via {record['via']}"
+            + (", each narrowed to its target's source" if record.get("scope") else "")
         ),
+        corpus_line(record.get("corpus") or {}),
         "",
         "| answer | n | @1 | @3 | @10 | found | MRR | errors | p50 ms | p90 ms | max ms |",
         "|---|---|---|---|---|---|---|---|---|---|---|",
@@ -491,6 +515,11 @@ def main() -> None:
         "--depth", type=int, default=20, help="rows to read from each answer"
     )
     r.add_argument("--only", help="target ids to run, comma-separated")
+    r.add_argument(
+        "--scope",
+        choices=["source"],
+        help="narrow every query to its target's source, as `source_id:` would",
+    )
     r.add_argument(
         "--applet", default=DEFAULT_APPLET, help="the datalib-applet binary to start"
     )

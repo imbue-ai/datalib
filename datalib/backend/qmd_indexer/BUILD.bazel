@@ -36,8 +36,8 @@ rust_test(
 rust_test(
     name = "qmd_indexer_tests",
     # Two model loads, which CI's CPU-only runners take far longer over
-    # than a mac's GPU; at `small` it timed out at 60 s beside
-    # qmd_facts_test, the other test that loads the model.
+    # than a mac's GPU; at `small` it timed out at 60 s beside another
+    # test that loaded the model.
     size = "medium",
     srcs = ["tests/qmd_indexer_tests.rs"],
     data = [

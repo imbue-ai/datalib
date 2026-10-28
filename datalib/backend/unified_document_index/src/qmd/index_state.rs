@@ -137,10 +137,8 @@ impl QmdIndexReader {
     }
 
     /// The documents qmd's keyword index ranks for `query`, best first by
-    /// BM25, at most `limit`, from `collections` or every one. Read from
-    /// `documents_fts` itself rather than through `qmd mcp`, which takes
-    /// only 20 documents from each collection (`docs/dev/qmd_behaviour.md`,
-    /// fact 7). Each hit's snippet opens with the line where `query.first`
+    /// BM25, at most `limit`, from `collections` or every one, read from
+    /// qmd's `documents_fts` table. Each hit's snippet opens with the line where `query.first`
     /// first appears, in the header `snippet_match_line` reads, so the hit
     /// lands on that message.
     ///

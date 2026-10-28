@@ -2,39 +2,19 @@
   {
     "name": "a page",
     "link": "datalib:doc/00000000-0000-8000-a000-000000000001",
-    "doc": {"page": "00000000-0000-8000-a000-000000000001", "section": null, "text": null}
+    "doc": {"page": "00000000-0000-8000-a000-000000000001", "section": null}
   },
   {
     "name": "a message on a page",
     "link": "datalib:doc/00000000-0000-8000-a000-000000000001#0190a5e1-0000-7000-8000-00000000000c",
     "doc": {
       "page": "00000000-0000-8000-a000-000000000001",
-      "section": "0190a5e1-0000-7000-8000-00000000000c",
-      "text": null
+      "section": "0190a5e1-0000-7000-8000-00000000000c"
     }
-  },
-  {
-    "name": "words inside a message",
-    "link": "datalib:doc/00000000-0000-8000-a000-000000000001#0190a5e1-0000-7000-8000-00000000000c:~:text=warp%20core%20breach",
-    "doc": {
-      "page": "00000000-0000-8000-a000-000000000001",
-      "section": "0190a5e1-0000-7000-8000-00000000000c",
-      "text": "warp core breach"
-    }
-  },
-  {
-    "name": "words on the page itself",
-    "link": "datalib:doc/00000000-0000-8000-a000-000000000001#:~:text=Picard",
-    "doc": {"page": "00000000-0000-8000-a000-000000000001", "section": null, "text": "Picard"}
-  },
-  {
-    "name": "words that need escaping",
-    "link": "datalib:doc/p#m:~:text=Data%20%26%20Worf%3A%20%2350%25%20%23%C3%A9",
-    "doc": {"page": "p", "section": "m", "text": "Data & Worf: #50% #é"}
   },
   {"name": "another scheme", "link": "mailto:riker@enterprise.org", "doc": null},
   {"name": "the old copied-id form", "link": "datalib://chat/abc-123?msg=def-456", "doc": null},
   {"name": "a kind this build does not know", "link": "datalib:ship/enterprise", "doc": null},
   {"name": "no page", "link": "datalib:doc/", "doc": null},
-  {"name": "broken escaping", "link": "datalib:doc/p#m:~:text=50%2", "doc": null}
+  {"name": "a page with a slash", "link": "datalib:doc/a/b", "doc": null}
 ]
