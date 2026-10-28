@@ -5,8 +5,10 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::Result;
+use datalib_contact_schema::NormalizedContact;
 use datalib_etl::blob_cas::CasEdgeRow;
 use datalib_etl::progress::Progress;
+use datalib_etl_chat_common::people::account_contact;
 use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
 use datalib_etl_chat_common::types::{
     AuthorKind, ItemKind, NamedPerson, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
@@ -36,7 +38,9 @@ use datalib_schema::providers::Provider;
 /// v7: a call carries the other side's `tel:` handle, and a text the
 ///     account sent names whom it went to, so both reach `with:`.
 /// v8: a message someone else sent is to the account (`to:me`).
-pub const RENDER_VERSION: u32 = 8;
+/// v9: the number the account sent an MMS from is the account's own, so
+///     search reads it as `me`.
+pub const RENDER_VERSION: u32 = 9;
 
 /// Projection for `BlobBundle::load_many` over the SMS CAS edge: the
 /// `ref_name` ({message_id}/{partname}) is the bundle key; `content_type`
@@ -271,7 +275,7 @@ fn build_chats(
         let conversation = ids::conversation(source_id, &id);
         chats.push(NormalizedChat {
             named_after,
-            contacts: Vec::new(),
+            contacts: account(source_id, &rows).into_iter().collect(),
             inputs: inputs.declared(),
             path_prefix: None,
             id: id.clone(),
@@ -291,6 +295,36 @@ fn build_chats(
     }
     chats
 }
+
+/// The account, by the numbers it sent an MMS from: the sender of an MMS
+/// the account sent is the account. Android's `insert-address-token`,
+/// and a number without its country code, name no one.
+fn account(source_id: &str, rows: &[&Value]) -> Option<NormalizedContact> {
+    let mut numbers: Vec<Handle> = Vec::new();
+    let sent = rows
+        .iter()
+        .filter(|v| v.get("is_me").and_then(Value::as_bool) == Some(true));
+    let from = sent
+        .flat_map(|v| {
+            v.get("addrs")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+        })
+        .filter(|a| a.get("type").and_then(Value::as_i64) == Some(PDU_FROM));
+    for number in from.filter_map(|a| Handle::tel(a.get("address")?.as_str()?)) {
+        if !numbers.contains(&number) {
+            numbers.push(number);
+        }
+    }
+    if numbers.is_empty() {
+        return None;
+    }
+    account_contact(source_id, std::iter::once(Handle::me()).chain(numbers))
+}
+
+/// An MMS `<addr>`'s `type` for its sender (the PDU's `From` header).
+const PDU_FROM: i64 = 137;
 
 fn item(source_id: &str, v: &Value) -> NormalizedChatItem {
     let kind = v.get("kind").and_then(Value::as_str).unwrap_or("sms");
@@ -626,6 +660,41 @@ mod tests {
         };
         assert_eq!(handle_of("intl").as_deref(), Some("tel:+12025550103"));
         assert_eq!(handle_of("local"), None);
+    }
+
+    /// The account is every number it sent an MMS from, tied to its "Me";
+    /// a received MMS's sender is the other side, and the
+    /// `insert-address-token` Android writes for the phone names no one.
+    #[test]
+    fn the_numbers_the_account_sent_from_are_its_own() {
+        let mms = |id: &str, is_me: bool, from: &str| {
+            json!({"id": id, "kind": "mms", "conversation_key": "+12025550101",
+                   "date": 1778277198761i64, "is_me": is_me, "address": "+12025550101",
+                   "text": id, "attachments": [],
+                   "addrs": [{"address": from, "type": 137},
+                             {"address": "+12025550101", "type": 151}]})
+        };
+        let rows = [
+            mms("a", true, "+12025550100"),
+            mms("b", true, "+1 (202) 555-0198"),
+            mms("c", true, "+12025550100"),
+            mms("d", true, "insert-address-token"),
+            mms("e", false, "+12025550101"),
+        ];
+        let rows: Vec<&Value> = rows.iter().collect();
+        let me = account("sms", &rows).expect("the account");
+        assert!(me.account);
+        let handles: Vec<&str> = me
+            .handles
+            .iter()
+            .filter_map(|h| h.handle.as_ref().map(|h| h.as_str()))
+            .collect();
+        assert_eq!(handles, ["me:self", "tel:+12025550100", "tel:+12025550198"]);
+        assert_eq!(
+            account("sms", &rows[3..]),
+            None,
+            "a token and a received MMS"
+        );
     }
 
     /// A text the account sent is addressed to the thread's other side,

@@ -217,7 +217,7 @@ What each source has today:
 | Signal | the number, else the account id (ACI); a recipient known by PNI alone has none | a mention (a `mentionAci` body range), by number else ACI, written `@Name` in place of its `U+FFFC`; number and ACI together, in the source contact; one known by ACI alone reads as the dashed ACI. The ACI is read by its one path in the stored frame, and one that will not read is a problem on the recipient (`aci`, `CoercionFailed`), not a silent loss |
 | Messages | the number or Apple ID address | each tapback's |
 | Google Chat and Voice | the address or number | |
-| SMS backup | the number; a group MMS, which does not say which number sent it, has none; a call by the other side's number | the number or numbers a text the account sent went to, as recipients |
+| SMS backup | the number; a group MMS, which does not say which number sent it, has none; a call by the other side's number | the number or numbers a text the account sent went to, as recipients; every number the account sent an MMS from (its `addrs` entry of `type` 137), as the account, tied to `me:self` |
 | address books | | a card's numbers and addresses, in the source contact |
 | LinkedIn | a message's sender, by `SENDER PROFILE URL`; the account's owner, by their primary address, on every post and comment | a connection's profile and email address, in the source contact |
 | Google Drive | a comment's author, by name; the account's own comments by its address, where the file names the account | a person chip in a Doc, by address |
