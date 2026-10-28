@@ -134,6 +134,23 @@ pub mod fields {
     }
 }
 
+pub mod me {
+    use super::*;
+
+    /// A contact the person said is them: `from:me` reaches every handle
+    /// it does. More than one may be, for a duplicate not merged yet.
+    #[derive(Debug, Clone, PortableTable)]
+    #[portable_table(table = "me", primary_key = "contact_id")]
+    pub struct MeRow {
+        #[col(sql = "TEXT")]
+        pub contact_id: String,
+        #[col(sql = "TEXT")]
+        pub marked_at_utc: String,
+        #[col(sql = "TEXT")]
+        pub tz_offset: String,
+    }
+}
+
 /// Every table, then every index: what the store is opened with.
 pub const DDL: &[&str] = &[
     contacts::DDL[0].1,
@@ -141,6 +158,7 @@ pub const DDL: &[&str] = &[
     members::DDL[0].1,
     photos::DDL[0].1,
     fields::DDL[0].1,
+    me::DDL[0].1,
     handles::INDEXES[0].1,
     fields::INDEXES[0].1,
 ];

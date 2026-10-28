@@ -45,6 +45,9 @@ export type NormalizedContact = {
   /** A photo the app serves, app-relative, where the source has one and
    *  the server can serve it; absent or null otherwise. The chip's lead. */
   photo_url?: string | null;
+  /** The person whose library this is: a source's signed-in account, or
+   *  your contact you marked as you. `from:me` finds its handles. */
+  account?: boolean;
 };
 
 export type ContactSummary = { contact_id: string; name: string; kind: string };
@@ -433,6 +436,14 @@ export async function unlinkHandle(handle: string): Promise<void> {
 export async function setStoppedWorking(handle: string, by: string | null): Promise<void> {
   await post("/stopped_working", { handle, by });
   people.forget(withItsContact(handle, people.get(handle)?.mine?.key));
+}
+
+/** Mark your contact as you, or stop: `from:me` then finds what its
+ *  handles wrote. */
+export async function setMe(contactId: string, me: boolean): Promise<void> {
+  await post("/me", { contact_id: contactId, me });
+  people.revalidate();
+  contactsById.revalidate();
 }
 
 // A merge or a delete moves every handle of a contact, which this page

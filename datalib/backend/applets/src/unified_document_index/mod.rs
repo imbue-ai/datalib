@@ -1339,8 +1339,10 @@ pub async fn with_people(
 }
 
 /// Each `me` value given the owner's handles: `me:self`, the stand-in
-/// sources write for them, and every handle a source says is its
-/// account's own. Refused when the search terms file predates them.
+/// sources write for them, every handle a source says is its account's
+/// own, and every handle of the contacts the person marked as themself,
+/// read from the contacts store now. Refused when the search terms file
+/// predates the accounts' handles.
 async fn with_me(
     root: &std::path::Path,
     q: &str,
@@ -1355,11 +1357,26 @@ async fn with_me(
         .ok_or_else(|| {
             "`me` reads the account's handles, which the next sync of the index writes".to_string()
         })?;
-    let mine: Vec<String> = std::iter::once(datalib_handle::Handle::me().as_str().to_string())
+    let marked = marked_as_me(root)
+        .await
+        .map_err(|e| format!("read the contacts marked as you: {e:#}"))?;
+    let mut mine: Vec<String> = std::iter::once(datalib_handle::Handle::me().as_str().to_string())
         .chain(accounts)
         .collect();
+    let new: Vec<String> = marked.into_iter().filter(|h| !mine.contains(h)).collect();
+    mine.extend(new);
     let key = format!("{q}\u{1f}me={}", mine.join(","));
     Ok((parsed.with_me_handles(&mine), key))
+}
+
+/// None on a root without a contacts app.
+async fn marked_as_me(root: &std::path::Path) -> anyhow::Result<Vec<String>> {
+    let Some(reader) = datalib_contacts::read::ContactsReader::open(root).await? else {
+        return Ok(Vec::new());
+    };
+    let handles = reader.me_handles().await;
+    reader.close().await;
+    Ok(handles?.into_iter().collect())
 }
 
 /// `parsed` with each `contact:` value given the handles its contact
@@ -1927,6 +1944,47 @@ mod tests {
             ],
         )
         .await;
+    }
+
+    /// No source here says who the owner is, so `me` finds nothing until
+    /// the person marks their contact; then it reaches every handle the
+    /// contact holds, at once and with no re-index, and unmarking takes
+    /// it back.
+    #[tokio::test]
+    async fn me_reaches_the_contacts_marked_as_me() {
+        use datalib_contacts::{store_path, ContactKind, Store};
+        let tmp = tempfile::tempdir().unwrap();
+        mail(tmp.path()).await;
+        sync_terms(tmp.path()).await;
+        let s = index_over(tmp.path()).await;
+        let found = |q: &'static str| {
+            let s = s.clone();
+            async move {
+                let r = search(&s, q, None, 10, None).await;
+                assert!(r.refused.is_empty() && r.errors.is_empty(), "{q}: {r:?}");
+                uuids(&r).iter().map(|u| u.to_string()).collect::<Vec<_>>()
+            }
+        };
+        assert!(found("from:me").await.is_empty());
+
+        let store = Store::open(&store_path(tmp.path())).await.unwrap();
+        let ann = store
+            .create(
+                "Ann",
+                ContactKind::Person,
+                &[datalib_handle::Handle::email("ann@example.com").unwrap()],
+            )
+            .await
+            .unwrap();
+        store.set_me(&ann, true).await.unwrap();
+        store.close().await;
+        assert_eq!(found("from:me").await, ["m-1"]);
+        assert_eq!(found("to:me").await, ["m-2"]);
+
+        let store = Store::open(&store_path(tmp.path())).await.unwrap();
+        store.set_me(&ann, false).await.unwrap();
+        store.close().await;
+        assert!(found("from:me").await.is_empty());
     }
 
     /// A terms file written before it held the account's handles refuses

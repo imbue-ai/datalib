@@ -18,7 +18,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use datalib_columns::{ColumnSpec, ColumnType, Identity};
+use datalib_columns::{Chip, ChipKind, ColumnSpec, ColumnType, Identity};
 use datalib_contact_schema::{Medium, NormalizedContact};
 use datalib_contacts::drafts::ContactEdit;
 use datalib_contacts::{ContactKind, Store};
@@ -82,6 +82,7 @@ fn routes(store: Arc<Store>) -> Router {
         .route("/unlink", post(unlink))
         .route("/stopped_working", post(stopped_working))
         .route("/rename", post(rename))
+        .route("/me", post(set_me))
         .route("/contact/{contact_id}/edit", get(edit_of))
         .route(
             "/contact/{contact_id}/draft",
@@ -130,6 +131,7 @@ fn refused(e: anyhow::Error) -> ApiError {
         "merged into itself",
         "already merged",
         "can be merged",
+        "only a person",
     ]
     .iter()
     .any(|m| msg.contains(m));
@@ -198,6 +200,9 @@ async fn list(State(store): AppState) -> Result<Json<serde_json::Value>, ApiErro
 fn contacts_table(contacts: &[NormalizedContact]) -> serde_json::Value {
     let columns = vec![
         ColumnSpec::new("contact_ref", "Contact", ColumnType::Identity),
+        ColumnSpec::new("me", "Me", ColumnType::Chips).describe(
+            "Whether you said the contact is you: `from:me` finds what its handles wrote.",
+        ),
         ColumnSpec::new("email", "Email", ColumnType::Text),
         ColumnSpec::new("phone", "Phone", ColumnType::Text),
         ColumnSpec::new("handles", "Handles", ColumnType::Count)
@@ -232,6 +237,7 @@ fn contacts_table(contacts: &[NormalizedContact]) -> serde_json::Value {
             json!({
                 "key": c.key,
                 "contact_ref": contact_ref,
+                "me": me_chip(c.account),
                 "email": working(Medium::Email).map(|h| h.value.clone()),
                 "phone": working(Medium::Phone).map(|h| h.value.clone()),
                 "handles": c.handles.len(),
@@ -245,6 +251,17 @@ fn contacts_table(contacts: &[NormalizedContact]) -> serde_json::Value {
         })
         .collect();
     json!({ "columns": columns, "rows": rows, "row_key": "key" })
+}
+
+fn me_chip(me: bool) -> Vec<Chip> {
+    if !me {
+        return Vec::new();
+    }
+    vec![Chip {
+        kind: ChipKind::Metric,
+        text: "me".to_string(),
+        title: "You: `from:me` finds what this contact's handles wrote".to_string(),
+    }]
 }
 
 #[derive(Deserialize)]
@@ -436,6 +453,24 @@ async fn rename(
     Ok(Json(json!({ "found": found })))
 }
 
+#[derive(Deserialize)]
+struct MeBody {
+    contact_id: String,
+    me: bool,
+}
+
+/// Mark a contact as the person whose library this is, or unmark it.
+async fn set_me(
+    State(store): AppState,
+    Json(body): Json<MeBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let changed = store
+        .set_me(&body.contact_id, body.me)
+        .await
+        .map_err(refused)?;
+    Ok(Json(json!({ "changed": changed })))
+}
+
 async fn edit_of(
     State(store): AppState,
     Path(contact_id): Path<String>,
@@ -623,6 +658,56 @@ mod tests {
                 assert!(r.get(*f).is_some(), "row lacks {f}: {r}");
             }
         }
+    }
+
+    /// The card's switch: a person marked as me answers as the account and
+    /// wears the chip in the table; a group is refused as the person's to
+    /// fix.
+    #[tokio::test]
+    async fn a_contact_is_marked_as_me_and_the_table_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&datalib_contacts::store_path(dir.path()))
+            .await
+            .unwrap();
+        let picard = store
+            .create("Picard", ContactKind::Person, &[])
+            .await
+            .unwrap();
+        let crew = store
+            .create("Bridge crew", ContactKind::Group, &[])
+            .await
+            .unwrap();
+        let store = Arc::new(store);
+        let app = routes(store.clone());
+
+        let mark = |id: &str, me: bool| json!({"contact_id": id, "me": me});
+        let (status, body) = call(&app, "POST", "/me", mark(&picard, true)).await;
+        assert_eq!((status, &body["changed"]), (StatusCode::OK, &json!(true)));
+        let (_, contact) = call(&app, "GET", &format!("/contact/{picard}"), json!(null)).await;
+        assert_eq!(contact["account"], true);
+        let (_, table) = call(&app, "GET", "/contacts", json!(null)).await;
+        let chips: Vec<serde_json::Value> = table["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["me"].clone())
+            .collect();
+        assert_eq!(chips[0], json!([]), "the crew is not me");
+        assert_eq!(chips[1][0]["text"], "me");
+
+        let (status, body) = call(&app, "POST", "/me", mark(&crew, true)).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        let (status, _) = call(&app, "POST", "/me", mark("no-such", true)).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        let (_, body) = call(&app, "POST", "/me", mark(&picard, false)).await;
+        assert_eq!(body["changed"], true);
+
+        drop(app);
+        Arc::try_unwrap(store)
+            .ok()
+            .expect("the router is gone")
+            .close()
+            .await;
     }
 
     /// The table's right-click: two rows for one person merged into the

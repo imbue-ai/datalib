@@ -98,7 +98,11 @@ that can say which person is you. `me` matches:
 - the "Me" a source shows you as, where it shows you that way (a
   phone's message backup, an AI chat), and, in a phone's backup, the
   recipient of every message someone else sent you;
-- every handle a source says belongs to the account it mirrors.
+- every handle a source says belongs to the account it mirrors;
+- every handle linked to a contact you marked as you: tick *This is
+  me* under *Your contact* on its person card. Link an old address, a
+  second number or your Notion user to that contact and `me` finds
+  them too, from the next search on.
 
 A handle counts in every source once one source has said it is yours.
 If your mailbox is `picard@enterprise.org`, a calendar event organized
@@ -126,7 +130,7 @@ your number finds only your MMS.
 | WhatsApp, Signal, Messages, SMS backup, Google Voice | "Me", as the author of what you sent and the recipient of what you received (texts, and Google Voice's voicemails; not call logs) | your number, where another source names you by it: these backups do not say it, except as below |
 | SMS backup, besides | every number you sent an MMS from, each phone or SIM you used | a number you only ever sent plain texts from, which the backup does not record; one Android wrote as `insert-address-token` |
 | Claude Code, Codex | "Me" | |
-| Notion, calendar and the rest | only an address another source already marks as yours | anything under another name |
+| Notion, calendar and the rest | an address another source already marks as yours, or a handle linked to a contact you marked as you | anything under another name |
 
 Two more limits, whatever the source:
 
@@ -142,7 +146,8 @@ Two more limits, whatever the source:
   you appear only as "Me". Your messages in it are still found.
 
 An address you no longer use, or a handle no source can tell is yours
-(a second phone, an old login), is not `me` yet.
+(a second phone, an old login), is `me` once it is linked to a contact
+you marked as you.
 
 ## When the search says no
 
