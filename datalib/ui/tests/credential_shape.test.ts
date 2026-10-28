@@ -8,6 +8,7 @@ import {
   pasteTarget,
   suggestedAccount,
 } from "../src/config/credentialShape";
+import { catalogFor } from "../src/config/catalog";
 
 describe("credentialShape", () => {
   it("reads an app password as a username and password", () => {
@@ -67,6 +68,21 @@ describe("credentialShape", () => {
     expect(pastedCredential(shape, "", "sk-ant-3")).toEqual({
       kind: "headers",
       headers: ["Cookie: sessionKey=sk-ant-3"],
+    });
+  });
+
+  /// latchkey's Notion example stores the token alone; every Notion
+  /// request then fails on the missing `Notion-Version` header.
+  it("stores Notion's version header beside its token", () => {
+    const notion = catalogFor("notion")!;
+    const shape = credentialShape(
+      'latchkey auth set notion -H "Authorization: Bearer <token>"',
+      notion.credentialPaste?.headers,
+    );
+    const pasted = pastedCredential(shape, "", "ntn_5");
+    expect(pasted).toEqual({
+      kind: "headers",
+      headers: ["Authorization: Bearer ntn_5", expect.stringMatching(/^Notion-Version: \S+$/)],
     });
   });
 

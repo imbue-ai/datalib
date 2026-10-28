@@ -595,7 +595,7 @@ export const CATALOG: CatalogEntry[] = [
     ],
   },
 
-  // Listed for completeness; no form yet.
+  // GitHub and GitLab are listed for completeness; no form yet.
   {
     type: "github",
     method: "api",
@@ -632,8 +632,67 @@ export const CATALOG: CatalogEntry[] = [
     icon: "notion",
     defaultName: "notion",
     nameHint: "Team Notion",
-    wizard: false,
+    wizard: true,
+    intro:
+      "Each page becomes a document you can read and search, with its comments and attached " +
+      "files. Database rows come along as pages.",
     credentialService: "notion",
+    // latchkey's example stores the token alone, but Notion refuses a
+    // request without `Notion-Version`, and the version has to be stored
+    // with the token: one sent beside the stored one joins it and Notion
+    // refuses the pair (notion/INGEST.md). Keep it equal to the version
+    // INGEST.md names.
+    credentialPaste: {
+      headers: ["Authorization: Bearer {secret}", "Notion-Version: 2026-03-11"],
+      help:
+        "Make a personal access token at notion.so/profile/integrations; it starts ntn_. " +
+        "An internal integration works too, but copies only the pages shared with it.",
+    },
+    canProbe: true,
+    sections: [
+      {
+        heading: "Which pages?",
+        answers: [
+          { label: "Every page I can see" },
+          {
+            label: "Only the pages I choose",
+            help:
+              "Each page, every page it links to, and theirs. A database inside one is " +
+              "not copied.",
+            fields: ["api.roots"],
+          },
+        ],
+      },
+      {
+        heading: "Comments and files",
+        fields: ["api.comments", "api.attachments"],
+        advanced: true,
+      },
+    ],
+    fields: [
+      {
+        kind: "string_list",
+        target: "api.roots",
+        label: "Pages",
+        help: "Paste a page's link or its id.",
+      },
+      { kind: "bool", target: "api.comments", label: "Copy comments", default: true },
+      { kind: "bool", target: "api.attachments", label: "Copy attached files", default: true },
+      {
+        kind: "int",
+        target: "api.refresh_window_days",
+        label: "Re-list edits from the last (days)",
+        help:
+          "Whole-workspace copy only: each sync lists pages edited this many days before the " +
+          "newest it has seen, so a page shared with you late is still found. Empty is 0.",
+      },
+      {
+        kind: "int",
+        target: "api.max_pages",
+        label: "Stop after (pages)",
+        help: "A guard against a copy that reaches further than meant. Empty is no limit.",
+      },
+    ],
   },
   {
     type: "linear",

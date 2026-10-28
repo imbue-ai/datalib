@@ -3,5 +3,6 @@
 //! [`datalib_etl_notion_render`].
 
 pub mod ingest;
+pub mod probe;
 pub mod processor;
 pub mod synthesize;

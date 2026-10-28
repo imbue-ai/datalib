@@ -165,4 +165,6 @@ test("each browser-login service names accounts the way the wizard is told", asy
   expect(await naming("claude-ai")).toBe("chosen");
   // Not registered yet: the wizard will register it.
   expect(await naming("chatgpt")).toBe("chosen");
+  // No browser login at all, so a pasted key is stored under the name typed.
+  expect(await naming("notion")).toBe("chosen");
 });
