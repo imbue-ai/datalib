@@ -102,7 +102,9 @@ its rows; a page inside a toggle or a column.
 
 One hop more: every page a root's body links, as a child (`<page>`) or
 a mention (`<mention-page>`), is mirrored too, but not what sits under
-it, and not what it links. A mention is how a person points at a page
+it, and not what it links. A link the tree places as a block or a
+database, or does not place at all, is not followed: Notion refuses
+either as a page, and 8 of the links in 5 real hub pages were such. A mention is how a person points at a page
 that lives elsewhere, and following mentions further reaches most of a
 workspace in a few hops.
 

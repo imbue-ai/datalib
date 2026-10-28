@@ -425,6 +425,7 @@ impl Ctx<'_> {
             .await?
             .into_iter()
             .filter(|id| !root_set.contains(id) && !under.contains(id))
+            .filter(|id| tree.get(id).is_some_and(scope::is_page))
             .collect();
         if linked.is_empty() {
             return Ok(());

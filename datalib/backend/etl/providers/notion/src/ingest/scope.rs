@@ -14,15 +14,19 @@ use super::schema_raw::TreeKind;
 pub fn pages_under(tree: &HashMap<String, TreeRow>, roots: &HashSet<String>) -> HashSet<String> {
     let mut known: HashMap<&str, bool> = HashMap::new();
     tree.iter()
-        .filter(|(_, row)| {
-            matches!(
-                row.kind,
-                Some(TreeKind::Page) | Some(TreeKind::UnmirroredPage)
-            )
-        })
+        .filter(|(_, row)| is_page(row))
         .filter(|(id, _)| reaches_a_root(id, tree, roots, &mut known))
         .map(|(id, _)| id.clone())
         .collect()
+}
+
+/// Whether a `tree` row is a page, mirrored or not. A body's link can
+/// name a block or a database too, and Notion refuses either as a page.
+pub fn is_page(row: &TreeRow) -> bool {
+    matches!(
+        row.kind,
+        Some(TreeKind::Page) | Some(TreeKind::UnmirroredPage)
+    )
 }
 
 fn reaches_a_root<'a>(

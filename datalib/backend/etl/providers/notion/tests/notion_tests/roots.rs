@@ -17,6 +17,9 @@ const DEBRIEF: &str = "1701d000-0000-4000-8000-000000000013";
 const TOGGLE: &str = "1701d000-0000-4000-8000-000000000020";
 const READY_ROOM: &str = "1701d000-0000-4000-8000-000000000021";
 const SICKBAY_CHART: &str = "1701d000-0000-4000-8000-000000000022";
+const CREW: &str = "1701d000-0000-4000-8000-000000000030";
+const CREW_DS: &str = "1701d000-0000-4000-8000-000000000031";
+const UNSEEN: &str = "1701d000-0000-4000-8000-000000000032";
 
 fn hanging_off(id: &str, parent: Value) -> Value {
     let mut p = page(id, EDITED);
@@ -37,8 +40,9 @@ fn mention(id: &str) -> String {
 
 /// The workspace: a database of missions with a row and a page under
 /// it; the bridge, with a page inside a toggle on it and a mention of
-/// sickbay; sickbay's own sub-page, and the holodeck, which nothing
-/// reaches.
+/// sickbay, and links to things that are not pages (its toggle, the crew
+/// database, something the search does not list); sickbay's own
+/// sub-page, and the holodeck, which nothing reaches.
 fn workspace(tape: &std::path::Path) {
     let results = json!([
         {
@@ -56,6 +60,11 @@ fn workspace(tape: &std::path::Path) {
         page(SICKBAY, EDITED),
         under_page(SICKBAY_CHART, SICKBAY),
         page(HOLODECK, EDITED),
+        {
+            "object": "data_source", "id": CREW_DS, "last_edited_time": EDITED,
+            "parent": {"type": "database_id", "database_id": CREW},
+            "database_parent": {"type": "workspace", "workspace": true},
+        },
     ]);
     serve_search(tape, None, results.clone(), None);
     serve(
@@ -64,7 +73,8 @@ fn workspace(tape: &std::path::Path) {
         json!({"object": "block", "id": TOGGLE, "type": "toggle",
                "parent": {"type": "page_id", "page_id": BRIDGE}}),
     );
-    for obj in results.as_array().unwrap().iter().skip(1) {
+    let pages = results.as_array().unwrap().iter();
+    for obj in pages.filter(|o| o["object"] == "page") {
         let id = obj["id"].as_str().unwrap();
         serve(tape, &format!("{BASE}/pages/{id}"), obj.clone());
         serve_comments(tape, id);
@@ -72,7 +82,13 @@ fn workspace(tape: &std::path::Path) {
     serve_body(
         tape,
         BRIDGE,
-        &format!("Senior staff to {}.\n", mention(SICKBAY)),
+        &format!(
+            "Senior staff to {}. See {}, {} and {}.\n",
+            mention(SICKBAY),
+            mention(TOGGLE),
+            mention(CREW),
+            mention(UNSEEN)
+        ),
         false,
     );
     for id in [AWAY_TEAM, DEBRIEF, READY_ROOM, SICKBAY] {
@@ -104,7 +120,7 @@ async fn roots_mirror_what_hangs_under_them_and_what_a_root_links() {
         want,
         "the database's row and its sub-page, the root page and the page \
          in its toggle, and the page it mentions; not what hangs under that \
-         one, and not the holodeck"
+         one, not the links that are no page, and not the holodeck"
     );
     assert_eq!(first.new_pages, 5);
 
