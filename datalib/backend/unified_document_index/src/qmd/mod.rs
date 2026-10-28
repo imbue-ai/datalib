@@ -7,7 +7,7 @@ pub mod mapping;
 pub mod snippet;
 pub mod vectors;
 
-pub use index_state::{DocIndexState, QmdIndexReader, QmdIndexSummary};
+pub use index_state::{DocIndexState, HeldIndex, OpenIndex, QmdIndexReader, QmdIndexSummary};
 pub use mapping::{CollectionScope, GridIndex, GridRowRef, QmdHit};
 pub use snippet::display_snippet;
 

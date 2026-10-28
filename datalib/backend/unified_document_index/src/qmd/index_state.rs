@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use serde::Serialize;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
@@ -34,6 +35,49 @@ pub struct QmdIndexSummary {
     pub documents: u64,
     /// …of which have a complete vector set.
     pub embedded: u64,
+}
+
+/// One read connection to the qmd index and what has been read through
+/// it, kept across searches: a search opening the index afresh paid for
+/// re-reading what the last one had read. Opened again only when the file
+/// at the index's path is another file (a reset replaces it), so what is
+/// held is always about the file being read.
+#[derive(Default)]
+pub struct HeldIndex {
+    held: tokio::sync::Mutex<Option<(u64, Arc<OpenIndex>)>>,
+}
+
+pub struct OpenIndex {
+    pub reader: QmdIndexReader,
+    pub vectors: crate::qmd::vectors::VectorCache,
+}
+
+impl HeldIndex {
+    /// `None` when the root has no qmd index yet.
+    pub async fn open(&self, root: &Path) -> Result<Option<Arc<OpenIndex>>, sqlx::Error> {
+        use std::os::unix::fs::MetadataExt;
+        let Ok(file) = std::fs::metadata(qmd_index_path(root)) else {
+            return Ok(None);
+        };
+        let mut held = self.held.lock().await;
+        if let Some((ino, open)) = held.as_ref() {
+            if *ino == file.ino() {
+                return Ok(Some(open.clone()));
+            }
+        }
+        if let Some((_, gone)) = held.take() {
+            gone.reader.close_shared().await;
+        }
+        let Some(reader) = QmdIndexReader::open(root).await? else {
+            return Ok(None);
+        };
+        let open = Arc::new(OpenIndex {
+            reader,
+            vectors: Default::default(),
+        });
+        *held = Some((file.ino(), open.clone()));
+        Ok(Some(open))
+    }
 }
 
 /// Read-only handle on a data root's qmd index.
@@ -82,6 +126,10 @@ impl QmdIndexReader {
     }
 
     pub async fn close(self) {
+        self.pool.close().await;
+    }
+
+    async fn close_shared(&self) {
         self.pool.close().await;
     }
 
