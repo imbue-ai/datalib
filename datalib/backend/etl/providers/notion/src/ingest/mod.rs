@@ -24,6 +24,7 @@ use std::sync::Mutex;
 use anyhow::Result;
 use datalib_etl::download_problems::{DownloadProblem, RunProblem};
 use datalib_etl::download_run::DownloadRun;
+use datalib_etl::progress::RunBar;
 use datalib_etl::raw_store::Sealer;
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
@@ -213,6 +214,14 @@ pub(crate) struct Ctx<'a> {
     /// will not show (403).
     pub unreadable: Mutex<HashMap<String, NotionOfficialError>>,
     pub counts: Counts,
+    /// One tick per request the run can see waiting: a page object in
+    /// the roots walk, a body, a comment listing, an attachment, an
+    /// anchor, a user. A page of search results is not one, since it is
+    /// known only as it comes.
+    pub bar: RunBar,
+    /// Per loop table, the ticks the listing announced for it ahead of
+    /// the loop, which the loop's owed list counts again.
+    foreseen: Mutex<HashMap<&'static str, u64>>,
 }
 
 impl Ctx<'_> {
@@ -242,6 +251,22 @@ impl Ctx<'_> {
         }
     }
 
+    /// A page stored at a new stamp owes a body, and a comment listing
+    /// when comments are mirrored. Announcing them as the listing goes
+    /// puts a search walk's work in the queue before its loops start.
+    pub fn foresee_pages(&self, pages: u64) {
+        let tables: &[&'static str] = if self.opts.comments {
+            &[PAGE_MARKDOWN, PAGE_COMMENTS]
+        } else {
+            &[PAGE_MARKDOWN]
+        };
+        let mut foreseen = self.foreseen.lock().unwrap();
+        for t in tables {
+            *foreseen.entry(t).or_default() += pages;
+        }
+        self.bar.expect(pages * tables.len() as u64);
+    }
+
     async fn drain<T: Send>(
         &self,
         table: &'static str,
@@ -250,7 +275,10 @@ impl Ctx<'_> {
         flush: usize,
         flush_bytes: usize,
     ) -> Result<owed::Drained> {
-        self.opts.progress.set_message(table);
+        let foreseen = self.foreseen.lock().unwrap().remove(table).unwrap_or(0);
+        self.bar
+            .expect((owed.len() as u64).saturating_sub(foreseen));
+        self.bar.doing(table);
         let l = self.a_loop(table, flush, flush_bytes);
         owed::drain(&l, owed, f).await
     }
@@ -397,9 +425,12 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         signed: Mutex::new(HashMap::new()),
         unreadable: Mutex::new(HashMap::new()),
         counts: Counts::default(),
+        bar: RunBar::new(&opts.progress, 0),
+        foreseen: Mutex::new(HashMap::new()),
     };
     let mut s = FetchSummary::default();
     let mut result = phases(&ctx, &mut s).await;
+    ctx.bar.finish();
     s.official_requests = client.request_count();
     s.empty_bodies = ctx.counts.empty_bodies.load(Ordering::Relaxed);
     s.hole_followups = ctx.counts.hole_followups.load(Ordering::Relaxed);

@@ -77,7 +77,7 @@ impl Fetcher<Body> for Bodies<'_> {
                 outcome: outcome(self.0, answer)?,
                 listed,
             });
-            self.0.opts.progress.inc(1);
+            self.0.bar.did(1);
         }
         Ok(out)
     }
@@ -285,7 +285,7 @@ impl Fetcher<Blob> for Attachments<'_> {
                 outcome: outcome(self.0, answer)?,
                 listed,
             });
-            self.0.opts.progress.inc(1);
+            self.0.bar.did(1);
         }
         Ok(out)
     }
@@ -432,7 +432,7 @@ impl Fetcher<Vec<CommentUpsert>> for Comments<'_> {
                 outcome: outcome(self.0, answer)?,
                 listed,
             });
-            self.0.opts.progress.inc(1);
+            self.0.bar.did(1);
         }
         Ok(out)
     }
@@ -523,7 +523,7 @@ impl Fetcher<Anchor> for Anchors<'_> {
                 outcome: outcome(self.ctx, answer)?,
                 listed,
             });
-            self.ctx.opts.progress.inc(1);
+            self.ctx.bar.did(1);
         }
         Ok(out)
     }
@@ -597,7 +597,7 @@ impl Fetcher<User> for Users<'_> {
                 outcome: outcome(self.0, answer)?,
                 listed,
             });
-            self.0.opts.progress.inc(1);
+            self.0.bar.did(1);
         }
         Ok(out)
     }
