@@ -872,6 +872,7 @@ impl Fetcher<Thread> for Threads<'_> {
                 Err(e) => Outcome::Failed(format!("{e:#}")),
             };
             out.push(Fetched { listed, outcome });
+            self.mirror.bar.did(1);
             self.mirror.bar.doing(&format!(
                 "msgs={} replies={}",
                 self.messages,
@@ -939,10 +940,6 @@ impl Mirror<'_> {
             returned = messages.len(),
             "fetched one page of history"
         );
-        // Announced before it is counted: Slack names no message count
-        // up front, so a page is the first the run knows of the work in
-        // it.
-        self.bar.expect(messages.len() as u64);
         let rows: Vec<MessageInput> = messages
             .iter()
             .filter_map(|m| history_message_input(self.team_id, channel_id, m))
@@ -971,7 +968,6 @@ impl Mirror<'_> {
             .db
             .store_history_page(channel_id, &rows, covered.as_ref(), enumerated.as_ref())
             .await?;
-        self.bar.did(messages.len() as u64);
 
         if short {
             return Err(cut_short(M_HISTORY));
@@ -1045,10 +1041,7 @@ impl Mirror<'_> {
                 .iter()
                 .filter_map(|m| reply_message_input(self.team_id, channel_id, thread_ts, m))
                 .collect();
-            // Announced before it is counted, as a history page is.
             let on_page = page.iter().filter(|m| !m.is_thread_root).count();
-            self.bar.expect(on_page as u64);
-            self.bar.did(on_page as u64);
             replies.fetch_add(on_page, Ordering::Relaxed);
             rows.extend(page);
 
@@ -1065,7 +1058,6 @@ impl Mirror<'_> {
 
     /// `owed` file edges, [`FILE_BATCH`] to a request.
     async fn fetch_files(&self, owed: Vec<Listed>, totals: &mut Totals) -> Result<()> {
-        self.bar.expect(owed.len() as u64);
         let l = owed::Loop {
             pool: self.db.pool(),
             table: SlackAttachmentRow::TABLE,
@@ -1138,22 +1130,34 @@ fn threads_on(rows: &[MessageInput]) -> Vec<Listed> {
 }
 
 /// Queue what storing `rows` left owed: their threads, and with `media`
-/// their files.
+/// their files. Each newly owed one is announced on `bar` here, the
+/// first the run knows of it.
 async fn queue_owed(
     db: &RawDb,
     frontier: &mut Frontier,
+    bar: &RunBar,
     rows: &[MessageInput],
     media: bool,
 ) -> Result<()> {
+    let mut new = 0;
     for thread in owed::owed(db.pool(), THREADS, threads_on(rows)).await? {
-        frontier.threads.push(thread_reach(&thread), thread);
+        new += u64::from(frontier.threads.push(thread_reach(&thread), thread));
     }
     if media {
-        for (ts, file) in db.files_owed_by(rows).await? {
-            frontier.files.push(ts_key(&ts), file);
-        }
+        new += queue_files(frontier, db.files_owed_by(rows).await?);
+    }
+    if new > 0 {
+        bar.expect(new);
     }
     Ok(())
+}
+
+/// Queue file edges, each at its message's `ts`. How many were newly owed.
+fn queue_files(frontier: &mut Frontier, files: Vec<(String, Listed)>) -> u64 {
+    files
+        .into_iter()
+        .map(|(ts, file)| u64::from(frontier.files.push(ts_key(&ts), file)))
+        .sum()
 }
 
 fn history_message_input(team_id: &str, channel_id: &str, m: &Value) -> Option<MessageInput> {
@@ -1475,6 +1479,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         let refresh_every = chrono::Duration::minutes(opts.refresh_every_minutes);
         let first_dm = targets.len() - plan.dm_targets;
         let mut frontier = Frontier::default();
+        let mut owed_before: u64 = 0;
         let mut refreshing = vec![false; targets.len()];
         let mut quiet = vec![false; targets.len()];
         for (target, (cid, _)) in targets.iter().enumerate() {
@@ -1507,11 +1512,11 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                 .walks
                 .extend(walks.into_iter().map(|stretch| Walk::new(target, stretch)));
             for thread in owed::owed(db.pool(), THREADS, db.threads_listed(cid).await?).await? {
-                frontier.threads.push(thread_reach(&thread), thread);
+                owed_before += u64::from(frontier.threads.push(thread_reach(&thread), thread));
             }
             if opts.media {
                 for file in db.files_listed(&team_id, cid).await? {
-                    frontier.files.push(file_reach(&file), file);
+                    owed_before += u64::from(frontier.files.push(file_reach(&file), file));
                 }
             }
         }
@@ -1526,9 +1531,11 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             "left out the history with nothing new since what is held"
         );
 
-        // Seeded with one tick per channel, so the bar reads as
-        // something before the first channel has listed anything.
-        let bar = RunBar::new(&opts.progress, walking.len() as u64);
+        // One tick per conversation walked, thread read and file
+        // fetched, each announced as it is queued. A message is not one:
+        // Slack names no count up front, so it would be done the moment
+        // it was known and never be seen waiting.
+        let bar = RunBar::new(&opts.progress, walking.len() as u64 + owed_before);
         let mirror = Mirror {
             db: &db,
             team_id: &team_id,
@@ -1564,8 +1571,9 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                 Next::Threads(owed) => {
                     let with_files = mirror.fetch_threads(owed, &mut totals).await?;
                     if opts.media {
-                        for (ts, file) in db.files_owed_by(&with_files).await? {
-                            frontier.files.push(ts_key(&ts), file);
+                        let new = queue_files(&mut frontier, db.files_owed_by(&with_files).await?);
+                        if new > 0 {
+                            bar.expect(new);
                         }
                     }
                 }
@@ -1584,7 +1592,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                             totals.messages += page.rows.len();
                             totals.pruned += page.pruned;
                             messages_in[target] += page.rows.len();
-                            queue_owed(&db, &mut frontier, &page.rows, opts.media).await?;
+                            queue_owed(&db, &mut frontier, &bar, &page.rows, opts.media).await?;
                             if page.last {
                                 frontier.walks.remove(i);
                             }
