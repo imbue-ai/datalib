@@ -1084,7 +1084,9 @@ async fn rows_of_hits(
         .grid_row_refs_for_hits(&hit_paths)
         .await
         .map_err(|e| anyhow::anyhow!("the rows behind qmd's hits: {e}"))?;
-    let idx = GridIndex::new((**root).clone(), refs);
+    // Each hit lands on the message holding the most of the search's words.
+    let words = datalib_unified_document_index::qmd::lex::strip_lex_syntax(&parsed.free_text);
+    let idx = GridIndex::new((**root).clone(), refs).with_terms(&words);
     // Map hits to grid rows in rank order, keeping only the top hit per
     // markdown document so the result list stays concise — a single chat that
     // matches in several places shows up once, at its best rank. Orphan hits

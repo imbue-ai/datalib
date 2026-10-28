@@ -79,6 +79,7 @@ import {
   type SearchRow,
   type SearchTab,
 } from "@/api";
+import { parseDoc } from "@/uri";
 import {
   SEARCH_TABS,
   isNew,
@@ -616,13 +617,19 @@ function rowKeyOf(row: Row | undefined): string | null {
 
 /// The document a row opens, and the section in it, or null for a row
 /// with none.
-function documentOf(row: Row): { md: string; anchor: string | null } | null {
-  const link = rowsSpec?.document;
-  if (!link) return null;
-  const md = link.fields.map((f) => row[f]).find((v) => typeof v === "string" && v !== "");
+/// Where a row opens: the `datalib:doc` name in its link field, read as
+/// a page, a section of it and words to find there; else the page and
+/// section its fields name.
+function documentOf(row: Row): { md: string; anchor: string | null; text: string | null } | null {
+  const spec = rowsSpec?.document;
+  if (!spec) return null;
+  const linked = spec.link ? row[spec.link] : null;
+  const name = typeof linked === "string" ? parseDoc(linked) : null;
+  if (name) return { md: name.page, anchor: name.section, text: name.text };
+  const md = spec.fields.map((f) => row[f]).find((v) => typeof v === "string" && v !== "");
   if (typeof md !== "string") return null;
-  const anchor = row[link.anchor];
-  return { md, anchor: typeof anchor === "string" && anchor !== "" ? anchor : null };
+  const anchor = row[spec.anchor];
+  return { md, anchor: typeof anchor === "string" && anchor !== "" ? anchor : null, text: null };
 }
 
 /// The record at a grid row, or null where the row is a group header
@@ -1485,9 +1492,9 @@ onBeforeUnmount(() => unsubscribeLive?.());
 onBeforeUnmount(stopPeople);
 onBeforeUnmount(stopEntities);
 
-function docSource(md: string, anchor: string | null): string {
-  const args = [md, anchor].map((a) => JSON.stringify(a)).join(", ");
-  return `documentView(${args})`;
+function docSource(doc: { md: string; anchor: string | null; text: string | null }): string {
+  const args = [doc.md, doc.anchor, ...(doc.text ? [doc.text] : [])].map((a) => JSON.stringify(a));
+  return `documentView(${args.join(", ")})`;
 }
 
 function openRow(row: Row) {
@@ -1495,7 +1502,7 @@ function openRow(row: Row) {
   // page in a new tab, with the row's section highlighted.
   const doc = documentOf(row);
   if (!doc) return;
-  const href = encodeColumns([{ code: docSource(doc.md, doc.anchor), state: "" }]);
+  const href = encodeColumns([{ code: docSource(doc), state: "" }]);
   window.open(href, "_blank", "noopener");
 }
 
@@ -2211,7 +2218,7 @@ function onSelectedRowsChanged(_e: SlickEventData, args: OnSelectedRowsChangedEv
   if (restoring) return;
   saveState();
   const doc = documentOf(data);
-  if (doc) props.ctx.host.openCards(docSource(doc.md, doc.anchor));
+  if (doc) props.ctx.host.openCards(docSource(doc));
 }
 
 /// A Document cell's link: the row is picked, as a click on the row
@@ -2226,7 +2233,7 @@ function pickAndOpen(data: Row) {
     return;
   }
   const doc = documentOf(data);
-  if (doc) props.ctx.host.openCards(docSource(doc.md, doc.anchor));
+  if (doc) props.ctx.host.openCards(docSource(doc));
 }
 
 /// The chip under a pointer event in a cell, if any.

@@ -41,6 +41,103 @@ export function scrollSectionToTop(el) {
 }
 
 /**
+ * Scroll `el` a third of the way down its scrollport, so a marked word
+ * shows with some of what leads up to it.
+ * @param {HTMLElement} el
+ */
+export function scrollIntoReading(el) {
+  const p = scrollPane(el);
+  if (!p) return;
+  const height = p.isViewport ? el.ownerDocument.defaultView?.innerHeight ?? 0 : p.pane.clientHeight;
+  p.pane.scrollTop += el.getBoundingClientRect().top - p.top - height / 3;
+}
+
+/**
+ * Mark where `text` occurs in `root`: the words as one phrase where they
+ * stand together in one run of text, else each word of three letters or
+ * more. Clears marks a previous call left. What a search result's link
+ * asks a page to find (`datalib:doc/…:~:text=`).
+ * @param {Element} root
+ * @param {string} text
+ * @returns {HTMLElement | null} the first mark, in document order
+ */
+export function markWords(root, text) {
+  clearMarks(root);
+  const phrase = text.trim().toLowerCase().replace(/\s+/g, " ");
+  if (!phrase) return null;
+  const nodes = textNodes(root);
+  let marks = phrase.includes(" ") ? markIn(nodes, [phrase]) : [];
+  if (marks.length === 0) {
+    const words = phrase.split(" ").filter((w) => w.length >= 3);
+    marks = markIn(nodes, words.length > 0 ? words : [phrase]);
+  }
+  return marks[0] ?? null;
+}
+
+/** @param {Element} root */
+function clearMarks(root) {
+  for (const mark of root.querySelectorAll("mark.search-hit")) {
+    mark.replaceWith(...mark.childNodes);
+  }
+  root.normalize();
+}
+
+/**
+ * The text a reader sees under `root`, node by node: not a button's
+ * label, a script or a style.
+ * @param {Element} root
+ * @returns {Text[]}
+ */
+function textNodes(root) {
+  const doc = root.ownerDocument;
+  const walker = doc.createTreeWalker(root, 4 /* NodeFilter.SHOW_TEXT */, {
+    acceptNode: (n) =>
+      n.parentElement?.closest("script, style, button") ? 2 /* REJECT */ : 1 /* ACCEPT */,
+  });
+  /** @type {Text[]} */
+  const out = [];
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) out.push(/** @type {Text} */ (n));
+  return out;
+}
+
+/**
+ * Wrap every occurrence of each needle (lowercase) in a `<mark>`, left to
+ * right, none overlapping.
+ * @param {Text[]} nodes
+ * @param {string[]} needles
+ * @returns {HTMLElement[]}
+ */
+function markIn(nodes, needles) {
+  /** @type {HTMLElement[]} */
+  const marks = [];
+  for (const node of nodes) {
+    const lower = node.data.toLowerCase();
+    /** @type {[number, number][]} */
+    const found = [];
+    for (const needle of needles) {
+      for (let at = lower.indexOf(needle); at !== -1; at = lower.indexOf(needle, at + needle.length)) {
+        found.push([at, at + needle.length]);
+      }
+    }
+    found.sort((a, b) => a[0] - b[0]);
+    let rest = node;
+    let done = 0;
+    for (const [start, end] of found) {
+      if (start < done) continue;
+      const hit = rest.splitText(start - done);
+      rest = hit.splitText(end - start);
+      const mark = node.ownerDocument.createElement("mark");
+      mark.className = "search-hit";
+      hit.replaceWith(mark);
+      mark.append(hit);
+      marks.push(mark);
+      done = end;
+    }
+  }
+  return marks;
+}
+
+/**
  * Open every `<details>` enclosing `el`. A tool step lives inside a
  * collapsed `.tool-group`, so "scroll to it" has nothing to scroll to
  * until the group is open. Walks the whole chain: groups nest.

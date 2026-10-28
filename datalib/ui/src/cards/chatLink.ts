@@ -3,7 +3,7 @@
 // document card decides where each goes. Also the link a copied 🆔
 // button becomes.
 
-import { chatDeeplink } from "@/router/deeplink";
+import { writeDoc } from "@/uri";
 
 // Accepts the three internal-link shapes our renderers emit:
 //   /chat/<uuid>       — bare path (older claude / chatgpt / etc.)
@@ -49,8 +49,8 @@ export function chatUuidFromHref(href: string): string | null {
 }
 
 /** A copied 🆔 button (`chatSections.js`) becomes the 🆔 and the uuid
- *  it names, so a plain-text paste keeps the id, as a `datalib://` link
- *  to the document, or the section within it. */
+ *  it names, so a plain-text paste keeps the id, as a `datalib:doc` name
+ *  for the document, or the section within it. */
 export function rewriteIdButtonsForCopy(
   fragment: DocumentFragment | Element,
   markdownUuid: string,
@@ -59,7 +59,8 @@ export function rewriteIdButtonsForCopy(
   for (const btn of buttons) {
     const a = btn.ownerDocument.createElement("a");
     const uuid = btn.dataset.uuid ?? "";
-    a.href = chatDeeplink(markdownUuid, uuid);
+    const section = uuid === markdownUuid ? null : uuid;
+    a.href = writeDoc({ page: markdownUuid, section, text: null });
     a.textContent = `${btn.textContent} ${uuid}`;
     btn.replaceWith(a);
   }

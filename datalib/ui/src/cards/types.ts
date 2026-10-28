@@ -147,7 +147,11 @@ export type ViewLibs = {
     name?: string;
     placeholder?: string;
   }) => CardRender;
-  documentView: (markdownUuid?: string | null, sectionUuid?: string | null) => CardRender;
+  documentView: (
+    markdownUuid?: string | null,
+    sectionUuid?: string | null,
+    text?: string | null,
+  ) => CardRender;
   // Parameter-less gallery stand-in for documentView: lists every
   // rendered document (the unified_document_index applet's /docs) and, on
   // pick, replaces this card

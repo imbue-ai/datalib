@@ -190,6 +190,6 @@ Microsoft's [Fluent Emoji](https://github.com/microsoft/fluentui-emoji)
   first need by the steps and the search applet (`datalib_qmd_models`),
   the same as the web packaging — the shell passes nothing besides
   `--no-open` and the `--url-file` handshake.
-- There is no `datalib://` deep-link handler; the shell does not link
-  `tauri-plugin-deep-link`. So the `datalib://chat/…` link a 🆔 button
-  becomes in a copied selection opens nothing yet.
+- There is no `datalib:` link handler; the shell does not link
+  `tauri-plugin-deep-link`. So the `datalib:doc/…` name a 🆔 button
+  becomes in a copied selection opens nothing outside the app yet.

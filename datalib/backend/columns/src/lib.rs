@@ -181,12 +181,15 @@ pub enum KeyValues {
     Stamp,
 }
 
-/// The document a row opens: the first of `fields` the row has a value
-/// in, at the section `anchor` names.
+/// The document a row opens: the `datalib:doc` name in its `link` field
+/// where it has one, else the first of `fields` the row has a value in,
+/// at the section `anchor` names.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DocumentLink {
     pub fields: &'static [&'static str],
     pub anchor: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

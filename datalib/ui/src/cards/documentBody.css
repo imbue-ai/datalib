@@ -308,6 +308,13 @@
   outline: 2px solid var(--datalib-accent);
   outline-offset: -1px;
 }
+/* The words a search result's link asked the page to find
+   (`markWords` in chatSections.js). */
+.chat-body mark.search-hit {
+  background: color-mix(in srgb, var(--datalib-accent) 28%, transparent);
+  color: inherit;
+  border-radius: 2px;
+}
 /* Inline span baked by ingest for sub-section edge anchors (today
    only: perseus first-word wrappers). When the span happens to also
    be the source of an outgoing edge, `.edge-source` is added by
