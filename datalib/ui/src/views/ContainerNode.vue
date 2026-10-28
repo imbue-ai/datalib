@@ -3,7 +3,8 @@
 // (a slot its DOM is teleported into, under a header when chrome shows)
 // or a container laying out its children. Recursive; everything that
 // changes the tree goes through the host (containersApi.ts).
-import { computed, inject, nextTick, useTemplateRef, watch } from "vue";
+import { computed, inject, nextTick, onBeforeUnmount, ref, useTemplateRef, watch } from "vue";
+import { cardMeta } from "@/cards/catalog";
 import CardControls from "@/components/CardControls.vue";
 import { growSourceBox, vAutoGrow } from "@/components/autoGrow";
 import { editMode } from "@/editMode";
@@ -33,6 +34,31 @@ const cardHead = computed(
     props.node.kind === "card" &&
     (editMode.value || (chrome.value && props.parentLayout !== "tabs")),
 );
+// A card that draws its own title bar gets the header's buttons floated
+// over that bar's right end, and is told how wide they are
+// (`--datalib-chrome-inset`) so its title stops short of them. In edit
+// mode the header is the source box, drawn as for any card.
+const overBar = computed(
+  () =>
+    cardHead.value &&
+    !editMode.value &&
+    props.node.kind === "card" &&
+    cardMeta(props.node.source)?.titleBar === true,
+);
+const headEl = useTemplateRef<HTMLElement>("headEl");
+const headWidth = ref(0);
+const headSize = new ResizeObserver(([e]) => {
+  headWidth.value = e ? Math.ceil(e.borderBoxSize[0]?.inlineSize ?? 0) : 0;
+});
+watch(headEl, (el, old) => {
+  if (old) headSize.unobserve(old);
+  if (el) headSize.observe(el);
+});
+onBeforeUnmount(() => headSize.disconnect());
+const cardStyle = computed(() =>
+  overBar.value ? { "--datalib-chrome-inset": `${headWidth.value}px` } : {},
+);
+
 // A container's edge is dashed while cards open into it, and a thick
 // solid line once it is solidified (itself or from further out).
 const solid = computed(() => props.node.kind === "box" && api.isSolidified(props.node.id));
@@ -109,11 +135,21 @@ const slotRef = (el: unknown) => api.setSlot(props.node.id, (el as Element | nul
   <div
     v-if="node.kind === 'card'"
     class="ct-card"
-    :class="{ 'is-natural': parentLayout === 'page', 'is-edit': editMode }"
+    :class="{
+      'is-natural': parentLayout === 'page',
+      'is-edit': editMode,
+      'has-over-head': overBar,
+    }"
+    :style="cardStyle"
     :data-card-id="node.id"
     :data-card-source="node.source"
   >
-    <div v-if="cardHead" class="ct-card-head">
+    <div
+      v-if="cardHead"
+      ref="headEl"
+      class="ct-card-head"
+      :class="{ 'ct-card-head--over': overBar }"
+    >
       <textarea
         v-if="editMode"
         v-auto-grow
@@ -125,13 +161,21 @@ const slotRef = (el: unknown) => api.setSlot(props.node.id, (el as Element | nul
         @input="growSourceBox($event.target as HTMLTextAreaElement)"
         @keydown.enter.exact.prevent="api.commitSource(node, $event)"
       />
-      <span v-else class="ct-card-title">{{ api.titleOf(node) }}</span>
+      <span v-else-if="!overBar" class="ct-card-title">{{ api.titleOf(node) }}</span>
+      <!-- Over a card's own bar, whose ⋯ is the card's menu, arranging
+           is drawn as the layout it is. -->
       <button
         class="ct-icon-btn"
         title="arrange this card"
+        aria-label="arrange this card"
         @click="api.openPanel($event, api.panelFor(node.id))"
       >
-        ⋯
+        <svg v-if="overBar" class="ct-arrange" viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="3" y="4" width="7" height="16" rx="1.5" />
+          <rect x="14" y="4" width="7" height="7" rx="1.5" />
+          <rect x="14" y="14" width="7" height="6" rx="1.5" />
+        </svg>
+        <template v-else>⋯</template>
       </button>
       <CardControls :source="node.source" :ctx="api.ctxFor(node)" />
     </div>
@@ -255,6 +299,34 @@ const slotRef = (el: unknown) => api.setSlot(props.node.id, (el as Element | nul
   border-bottom: 1px solid var(--datalib-border-soft);
   background: var(--datalib-bg);
   font-size: var(--datalib-font-size-small);
+}
+.has-over-head {
+  position: relative;
+}
+.ct-card-head--over {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 1;
+  height: 32px;
+  box-sizing: border-box;
+  padding: 0 8px 0 6px;
+  border-bottom: none;
+  background: transparent;
+}
+.ct-card-head--over::before {
+  content: "";
+  width: 1px;
+  height: 16px;
+  background: var(--datalib-border);
+}
+.ct-arrange {
+  display: block;
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
 }
 .ct-card-title {
   flex: 1 1 auto;

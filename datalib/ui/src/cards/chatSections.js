@@ -103,10 +103,12 @@ function addHeaderControl(host, separator, control) {
 
 /**
  * Give every `[data-section-uuid]` a button that copies its uuid, and
- * the page title one that copies the document's.
+ * the page title one that copies the document's — unless the page is
+ * shown under a title bar that has one (`pageTitle: false`).
  * @param {HTMLElement} root
+ * @param {{ pageTitle?: boolean }} [opts]
  */
-export function injectCopyUuidButtons(root) {
+export function injectCopyUuidButtons(root, { pageTitle = true } = {}) {
   const button = (uuid, label) => {
     const btn = root.ownerDocument.createElement("button");
     btn.type = "button";
@@ -135,6 +137,7 @@ export function injectCopyUuidButtons(root) {
     else el.prepend(btn);
   }
 
+  if (!pageTitle) return;
   for (const el of root.querySelectorAll("[data-page-title-uuid]")) {
     // The id sits on the heading itself, or on a block whose heading is
     // a markdown `#` (a contact page's head, whose heading is a chip).

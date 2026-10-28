@@ -38,6 +38,8 @@ const FRAME_CSS = `
 html, body { background: transparent; min-height: 0; }
 html.chat-preview { height: 100%; overflow-y: auto; }
 body { margin: 0; padding: 0 1rem 0.75rem; }
+/* The card's title bar links to the source; the page title's own link would repeat it. */
+.page-title > .source-link { display: none; }
 `;
 
 /** The document the frame starts as; the body is filled in afterwards,

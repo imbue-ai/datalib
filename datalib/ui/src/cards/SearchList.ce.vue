@@ -10,7 +10,7 @@ import type { CardCtx, Teardown } from "./types";
 import { oneAtATime, subscribeLive } from "@/live";
 import { iconUrl } from "@/config/icons";
 import { formatRelative } from "@/config/timeFormat";
-import { documentView } from "./libs/documentView";
+import { documentPreview } from "./libs/documentView";
 import { markWords } from "./search";
 import { datesInText } from "./dates";
 import { people, peopleTitle } from "./contacts";
@@ -130,7 +130,11 @@ function showPreview(row: SearchRow | null) {
   previewRoot ??= previewEl.value.attachShadow({ mode: "open" });
   previewRoot.replaceChildren();
   if (!row?.markdown_uuid) return;
-  const render = documentView(row.markdown_uuid, row.is_document ? null : row.uuid);
+  const render = documentPreview(
+    row.markdown_uuid,
+    row.is_document ? null : row.uuid,
+    titlePeople(row),
+  );
   teardown = render(previewRoot, {
     cardId: `${props.ctx.cardId}:preview`,
     cardType: "documentView",
@@ -269,32 +273,6 @@ onBeforeUnmount(() => {
         </li>
       </ul>
       <section class="sc-preview" aria-label="Preview">
-        <header v-if="picked" class="sc-preview-head">
-          <img
-            v-if="iconUrl(picked.source_ref?.icon)"
-            class="sc-tile"
-            :src="iconUrl(picked.source_ref?.icon)!"
-            alt=""
-          />
-          <strong
-            v-if="titlePeople(picked).length"
-            :ref="(el) => drawTitle(el, picked!)"
-            class="sc-title"
-            :data-answered="peopleAnswered"
-          />
-          <strong v-else class="sc-title">{{ title(picked) }}</strong>
-          <button class="sc-link" :disabled="!picked.markdown_uuid" @click="openPicked">
-            Open as card
-          </button>
-          <a
-            v-if="picked.source_url"
-            class="sc-link"
-            :href="picked.source_url"
-            target="_blank"
-            rel="noopener"
-            >Open at the source</a
-          >
-        </header>
         <p v-if="!picked" class="sc-empty">Pick a result to read it here.</p>
         <div ref="previewEl" class="sc-preview-body" />
       </section>
@@ -435,14 +413,6 @@ onBeforeUnmount(() => {
   min-width: 0;
   display: flex;
   flex-direction: column;
-}
-.sc-preview-head {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px var(--datalib-pad);
-  border-bottom: 1px solid var(--datalib-border-soft);
 }
 .sc-preview-body {
   position: relative;

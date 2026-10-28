@@ -2,6 +2,8 @@
 // Document card: fetches the unified_document_index applet's /chat/{markdownUuid} and renders it via
 // ChatBody. Fully determined by its props (which come from the card
 // source, e.g. `documentView("md-uuid", "section-uuid")`):
+// - a title bar that does not scroll (`DocTitleBar`) offers what the
+//   document does as a whole (`documentMenu.ts`); this card runs it;
 // - navigation (edge clicks, inline /chat/<uuid> links) opens a new
 //   card via ctx.host.openCards — never a bus message;
 // - hovering an edge source advertises the destination on the bus
@@ -34,6 +36,11 @@ import {
 import { chatUuidFromHref, isBrowserClick, type ClickedLink } from "./chatLink";
 import { asElement } from "./docFrame";
 import { openExternal } from "@/externalLinks";
+import { isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
+import { pushToast } from "@/toasts";
+import DocTitleBar from "./DocTitleBar.ce.vue";
+import { sourceSource } from "./cardSources";
+import { documentCopyText, documentTitle, outlinkOf, type DocumentAction } from "./documentMenu";
 import { problemLabel } from "./problems";
 import { TOPIC_EDGE_HOVER, type CardCtx, type EdgeHoverPayload } from "./types";
 
@@ -47,6 +54,11 @@ const props = defineProps<{
   // Section uuid inside the doc to highlight and scroll to. Matches
   // the renderer-emitted `data-section-uuid` attributes.
   sectionUuid: string | null;
+  // Read beside a list rather than as a card of its own
+  // (`documentPreview`): its title bar offers to open it as one.
+  preview?: boolean;
+  // Who the list titles it by, which the title bar draws as chips.
+  people?: { handle: string; shownAs: string }[];
 }>();
 
 function docSource(md: string, anchor: string | null): string {
@@ -423,10 +435,11 @@ async function onCopy() {
 
 function onFeedback() {
   const t = ctxTarget.value;
-  if (!t) {
-    closeCtxMenu();
-    return;
-  }
+  if (t) feedbackOn(t);
+  closeCtxMenu();
+}
+
+function feedbackOn(t: PendingTarget) {
   if (t.kind === "selection" && t.sel) {
     feedbackContext.value = buildContext({
       surface: "preview_selection",
@@ -459,7 +472,47 @@ function onFeedback() {
     feedbackSurfaceLabel.value = "Conversation";
   }
   feedbackOpen.value = true;
-  closeCtxMenu();
+}
+
+// ── The title bar's buttons and menu (`documentMenu.ts`).
+const revealLabel = isDesktopApp() ? revealActionLabel() : null;
+
+async function copy(text: string, what = text) {
+  if (await copyToClipboard(text)) pushToast(`Copied ${what}`, "info");
+  else pushToast("The clipboard refused the copy");
+}
+
+async function onDocAction(id: DocumentAction) {
+  const doc = chat.value;
+  if (!doc) return;
+  const target = outlinkOf(doc, { preview: !!props.preview, revealLabel })?.target ?? null;
+  switch (id) {
+    case "open-card":
+      return openDoc(doc.markdown_uuid, props.sectionUuid);
+    case "open-url":
+      if (target) await openExternal(target);
+      return;
+    case "reveal":
+      // A reveal the app refused still leaves the person the path.
+      if (target && !(await revealInFileManager(target))) await copy(target);
+      return;
+    case "copy-path":
+      if (target) await copy(target);
+      return;
+    case "open-source":
+      if (doc.source_ref) props.ctx.host.openCards(sourceSource({ group: doc.source_ref.id }));
+      return;
+    case "copy-id":
+      return copy(doc.markdown_uuid);
+    case "copy-name":
+      return copy(documentTitle(doc));
+    case "copy-both":
+      return copy(documentCopyText(doc));
+    case "copy-markdown":
+      return copy(doc.body, "the Markdown");
+    case "feedback":
+      return feedbackOn({ kind: "conversation", anchor: cardEl.value, conv: doc.markdown_uuid });
+  }
 }
 
 watch(
@@ -545,110 +598,125 @@ watch(
     :data-markdown-uuid="chat?.markdown_uuid ?? null"
     @contextmenu="onPaneContextMenu"
   >
-    <p v-if="!markdownUuid" class="empty">Select a row to preview the conversation.</p>
-    <p v-else-if="loading && !chat" class="empty">loading…</p>
-    <p v-else-if="error" class="error">error: {{ error }}</p>
-    <template v-else-if="chat">
-      <ul v-if="problems.length || problemErrors.length" class="problems">
-        <li v-for="e in problemErrors" :key="e" class="problem problem-error">
-          <span class="problem-severity">error</span>
-          <span class="problem-text">{{ e }}</span>
-        </li>
-        <li
-          v-for="p in problems"
-          :key="p.problem_uuid"
-          :class="['problem', `problem-${p.severity}`]"
-          :data-problem-uuid="p.problem_uuid"
-          :title="`${p.stage}: ${p.reason}, first seen ${p.first_seen_at_utc}`"
+    <DocTitleBar
+      v-if="chat"
+      :doc="chat"
+      :preview="!!preview"
+      :reveal-label="revealLabel"
+      :people="people ?? []"
+      @act="onDocAction"
+    />
+    <div class="doc-scroll">
+      <p v-if="!markdownUuid" class="empty">Select a row to preview the conversation.</p>
+      <p v-else-if="loading && !chat" class="empty">loading…</p>
+      <p v-else-if="error" class="error">error: {{ error }}</p>
+      <template v-else-if="chat">
+        <ul v-if="problems.length || problemErrors.length" class="problems">
+          <li v-for="e in problemErrors" :key="e" class="problem problem-error">
+            <span class="problem-severity">error</span>
+            <span class="problem-text">{{ e }}</span>
+          </li>
+          <li
+            v-for="p in problems"
+            :key="p.problem_uuid"
+            :class="['problem', `problem-${p.severity}`]"
+            :data-problem-uuid="p.problem_uuid"
+            :title="`${p.stage}: ${p.reason}, first seen ${p.first_seen_at_utc}`"
+          >
+            <span class="problem-severity">{{ p.severity }}</span>
+            <span class="problem-text">
+              <a
+                v-if="p.item_uuid"
+                class="problem-jump"
+                href="#"
+                @click.prevent="onProblemJump(p)"
+                >{{ problemLabel(p) }}</a
+              >
+              <template v-else>{{ problemLabel(p) }}</template>
+              <code v-if="p.sample" class="problem-sample">{{ p.sample }}</code>
+            </span>
+          </li>
+        </ul>
+        <div
+          v-if="remoteUnique.length"
+          class="remote-banner"
+          :class="{ 'remote-banner--pending': remotePending.length }"
         >
-          <span class="problem-severity">{{ p.severity }}</span>
-          <span class="problem-text">
-            <a v-if="p.item_uuid" class="problem-jump" href="#" @click.prevent="onProblemJump(p)">{{
-              problemLabel(p)
-            }}</a>
-            <template v-else>{{ problemLabel(p) }}</template>
-            <code v-if="p.sample" class="problem-sample">{{ p.sample }}</code>
+          <template v-if="remotePending.length">
+            <span class="remote-banner-text">
+              <strong>{{ remotePending.length }}</strong> {{ remoteNoun(remotePending.length) }} not
+              loaded — loading one tells its host you opened this, once.
+            </span>
+            <span class="remote-banner-hosts">
+              <button
+                v-for="h in remoteHosts"
+                :key="h.host"
+                type="button"
+                class="remote-host"
+                :disabled="remoteBusy"
+                :title="`Load everything on ${h.host}, here and in every other document`"
+                @click="allow('host', h.host)"
+              >
+                {{ h.host }}<span v-if="h.count > 1" class="remote-host-count">×{{ h.count }}</span>
+              </button>
+            </span>
+            <span class="remote-banner-actions">
+              <button
+                type="button"
+                class="remote-action remote-load-all"
+                :disabled="remoteBusy"
+                title="Load everything in this document"
+                @click="allow('document', chat.markdown_uuid)"
+              >
+                Load all
+              </button>
+              <button
+                v-if="chat.source_ref"
+                type="button"
+                class="remote-action"
+                :disabled="remoteBusy"
+                :title="`Load remote images in every document from ${chat.source_ref.label} without asking`"
+                @click="allow('source', chat.source_ref.id)"
+              >
+                Always for {{ chat.source_ref.label }}
+              </button>
+            </span>
+          </template>
+          <span v-else class="remote-banner-text">
+            {{ remoteNoun(remoteUnique.length).replace(/^remote/, "Remote") }} loaded.
           </span>
-        </li>
-      </ul>
-      <div
-        v-if="remoteUnique.length"
-        class="remote-banner"
-        :class="{ 'remote-banner--pending': remotePending.length }"
-      >
-        <template v-if="remotePending.length">
-          <span class="remote-banner-text">
-            <strong>{{ remotePending.length }}</strong> {{ remoteNoun(remotePending.length) }} not
-            loaded — loading one tells its host you opened this, once.
+          <span v-if="remoteRules.length" class="remote-banner-rules">
+            <span class="remote-rules-label">Let through by</span>
+            <span v-for="rule in remoteRules" :key="rule.allow_uuid" class="remote-rule">
+              {{ ruleLabel(rule) }}
+              <button
+                type="button"
+                class="remote-rule-forget"
+                :disabled="remoteBusy"
+                :title="`Forget this rule (allowed ${rule.created_at_utc})`"
+                @click="forget(rule)"
+              >
+                ✕
+              </button>
+            </span>
           </span>
-          <span class="remote-banner-hosts">
-            <button
-              v-for="h in remoteHosts"
-              :key="h.host"
-              type="button"
-              class="remote-host"
-              :disabled="remoteBusy"
-              :title="`Load everything on ${h.host}, here and in every other document`"
-              @click="allow('host', h.host)"
+          <span class="remote-banner-links">
+            <a href="#" @click.prevent="openRemoteTable(REMOTE_ALLOW_TABLE, 'Remote media rules')"
+              >all rules</a
             >
-              {{ h.host }}<span v-if="h.count > 1" class="remote-host-count">×{{ h.count }}</span>
-            </button>
-          </span>
-          <span class="remote-banner-actions">
-            <button
-              type="button"
-              class="remote-action remote-load-all"
-              :disabled="remoteBusy"
-              title="Load everything in this document"
-              @click="allow('document', chat.markdown_uuid)"
+            ·
+            <a
+              href="#"
+              @click.prevent="openRemoteTable(REMOTE_FETCHED_TABLE, 'Remote media fetched')"
+              >fetched</a
             >
-              Load all
-            </button>
-            <button
-              v-if="chat.source_ref"
-              type="button"
-              class="remote-action"
-              :disabled="remoteBusy"
-              :title="`Load remote images in every document from ${chat.source_ref.label} without asking`"
-              @click="allow('source', chat.source_ref.id)"
-            >
-              Always for {{ chat.source_ref.label }}
-            </button>
           </span>
-        </template>
-        <span v-else class="remote-banner-text">
-          {{ remoteNoun(remoteUnique.length).replace(/^remote/, "Remote") }} loaded.
-        </span>
-        <span v-if="remoteRules.length" class="remote-banner-rules">
-          <span class="remote-rules-label">Let through by</span>
-          <span v-for="rule in remoteRules" :key="rule.allow_uuid" class="remote-rule">
-            {{ ruleLabel(rule) }}
-            <button
-              type="button"
-              class="remote-rule-forget"
-              :disabled="remoteBusy"
-              :title="`Forget this rule (allowed ${rule.created_at_utc})`"
-              @click="forget(rule)"
-            >
-              ✕
-            </button>
-          </span>
-        </span>
-        <span class="remote-banner-links">
-          <a href="#" @click.prevent="openRemoteTable(REMOTE_ALLOW_TABLE, 'Remote media rules')"
-            >all rules</a
-          >
-          ·
-          <a href="#" @click.prevent="openRemoteTable(REMOTE_FETCHED_TABLE, 'Remote media fetched')"
-            >fetched</a
-          >
-        </span>
-        <span v-if="remoteError" class="remote-banner-error">{{ remoteError }}</span>
-      </div>
-      <ul v-if="docLevelOutgoing.length" class="outgoing-edges">
-        <li v-for="e in docLevelOutgoing" :key="e.edge_uuid">
-          <span class="edge-arrow" aria-hidden="true">→</span>
-          <!-- Producers should set `label` to the human-readable
+          <span v-if="remoteError" class="remote-banner-error">{{ remoteError }}</span>
+        </div>
+        <ul v-if="docLevelOutgoing.length" class="outgoing-edges">
+          <li v-for="e in docLevelOutgoing" :key="e.edge_uuid">
+            <span class="edge-arrow" aria-hidden="true">→</span>
+            <!-- Producers should set `label` to the human-readable
                handle they want shown in the list (perseus labels a
                cross-edition edge with the counterpart edition's short
                id, e.g. "perseus-eng2"). When
@@ -657,41 +725,42 @@ watch(
                are set we show "label (title)" — label first, since
                that's what the producer chose to lead with, with the
                title in parens as supplementary context. -->
-          <a
-            class="edge-source-link"
-            :href="ctx.host.hrefFor(edgeSource(e))"
-            @click="onEdgeLinkClick($event, e)"
-            @mouseenter="onDocLevelHover(e)"
-            @mouseleave="onDocLevelLeave"
-            :title="e.dst_title ?? e.dst_markdown_uuid"
-            >{{ e.label || e.dst_title || e.dst_markdown_uuid }}</a
-          >
-          <span v-if="e.label && e.dst_title && e.label !== e.dst_title" class="edge-dst-title"
-            >({{ e.dst_title }})</span
-          >
-        </li>
-      </ul>
-      <div class="doc-body">
-        <ChatBody
-          :body="chat.body"
-          :markdown-uuid="chat.markdown_uuid"
-          :selected-section-uuid="jumpTo ?? sectionUuid"
-          :outgoing-edges="chat.outgoing_edges"
-          :hover-anchor-uuid="hoverAnchor"
-          @open-edge="onOpenEdge"
-          @hover-edge="onHoverEdge"
-          :remote-accept="remoteAccept"
-          :remote-context="remoteContext"
-          :source-id="chat.source_ref?.id ?? null"
-          @remote-media="remoteRefs = $event"
-          @remote-load="allow('url', $event)"
-          @frame-link="onFrameLink"
-          @frame-contextmenu="onPaneContextMenu"
-          @open-search="onOpenSearch"
-          @open-card="props.ctx.host.openCards($event)"
-        />
-      </div>
-    </template>
+            <a
+              class="edge-source-link"
+              :href="ctx.host.hrefFor(edgeSource(e))"
+              @click="onEdgeLinkClick($event, e)"
+              @mouseenter="onDocLevelHover(e)"
+              @mouseleave="onDocLevelLeave"
+              :title="e.dst_title ?? e.dst_markdown_uuid"
+              >{{ e.label || e.dst_title || e.dst_markdown_uuid }}</a
+            >
+            <span v-if="e.label && e.dst_title && e.label !== e.dst_title" class="edge-dst-title"
+              >({{ e.dst_title }})</span
+            >
+          </li>
+        </ul>
+        <div class="doc-body">
+          <ChatBody
+            :body="chat.body"
+            :markdown-uuid="chat.markdown_uuid"
+            :selected-section-uuid="jumpTo ?? sectionUuid"
+            :outgoing-edges="chat.outgoing_edges"
+            :hover-anchor-uuid="hoverAnchor"
+            @open-edge="onOpenEdge"
+            @hover-edge="onHoverEdge"
+            :remote-accept="remoteAccept"
+            :remote-context="remoteContext"
+            :source-id="chat.source_ref?.id ?? null"
+            @remote-media="remoteRefs = $event"
+            @remote-load="allow('url', $event)"
+            @frame-link="onFrameLink"
+            @frame-contextmenu="onPaneContextMenu"
+            @open-search="onOpenSearch"
+            @open-card="props.ctx.host.openCards($event)"
+          />
+        </div>
+      </template>
+    </div>
     <FeedbackModal
       :open="feedbackOpen"
       :surface-label="feedbackSurfaceLabel"
@@ -718,13 +787,20 @@ watch(
 </template>
 
 <style scoped>
-/* A column: the chrome at its own height, then the body, which scrolls
-   inside its frame and takes what is left — never less than most of the
-   pane, so a long problems list cannot squeeze it away. */
+/* The title bar, which stays, over a column that scrolls: the banners
+   at their own height, then the body, which scrolls inside its frame
+   and takes what is left — never less than most of the pane, so a long
+   problems list cannot squeeze it away. */
 .chat-preview {
   display: flex;
   flex-direction: column;
   height: 100%;
+}
+.doc-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   overflow-y: auto;
   /* No padding at the *top*. A sticky message header stops at the
      scrollport's padding edge, while the content behind it keeps
@@ -737,7 +813,7 @@ watch(
   /* Reading text: never below 14px, whatever the density. */
   font-size: max(14px, calc(var(--datalib-font-size) + 2px));
 }
-.chat-preview > * {
+.doc-scroll > * {
   flex: none;
 }
 .doc-body {
@@ -746,12 +822,12 @@ watch(
   /* The frame pads its own body. */
   margin: 0 -1rem -0.75rem;
 }
-.chat-preview > .empty,
-.chat-preview > .error {
+.doc-scroll > .empty,
+.doc-scroll > .error {
   padding-top: 0.75rem;
 }
-.chat-preview > .problems:first-child,
-.chat-preview > .remote-banner:first-child {
+.doc-scroll > .problems:first-child,
+.doc-scroll > .remote-banner:first-child {
   margin-top: 0.75rem;
 }
 .empty,

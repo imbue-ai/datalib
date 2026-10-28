@@ -152,6 +152,14 @@ localStorage):
 - **Edit mode on**: the bar shows the card's source in the editable box
   described below (Enter re-runs the card).
 
+A card kind that draws its own title bar says so (`titleBar` in
+`BUILTIN_META`; only `documentView` does). With edit mode off, the
+layout then draws no title of its own: it floats its buttons over the
+right end of the card's bar, after a divider, with arranging drawn as a
+layout mark rather than ⋯ (the card's ⋯ is the card's own menu), and
+sets `--datalib-chrome-inset` on the card to their width so the card's
+title stops short of them (`views/ContainerNode.vue`).
+
 The 🤖 agent hand-off button shows in **both** modes, but only on cards
 backed by a user-defined component (the source's callee is an alias in
 the `/api/lib` manifest — builtins live in the app bundle, so there's
@@ -503,7 +511,9 @@ besides components:
   two tabs at the end of the source chips' row, right above what they
   switch: **List and preview** (`cards/SearchList.ce.vue`: the results
   as a list with the typed words marked, and the picked result drawn in
-  place by `documentView` in a shadow root of its own) and **Table**
+  place by `documentPreview` — the document card, whose title bar adds
+  Open as card and titles a contact or a conversation named after its
+  people by their chips — in a shadow root of its own) and **Table**
   (the grid below). A new search opens on the view picked last, in any
   search, kept in the browser (`cards/searchViewPref.ts`), and on the
   list before any was picked; `view` in the card source insists on one,
@@ -555,7 +565,12 @@ besides components:
   (see [`edges.md`](edges.md)); clicking either opens the destination
   via `host.openCards`. The body is drawn in a frame whose policy runs
   no script (`cards/docFrame.ts`). Its links, clicks and selection
-  reach the card as events, and the frame scrolls itself.
+  reach the card as events, and the frame scrolls itself. Above it, a
+  title bar that does not scroll (`cards/DocTitleBar.ce.vue`): the
+  source's mark, the title, the source's own page (↗), the ID, and a ⋯
+  menu — the same one on a right-click of the bar — whose entries are
+  `cards/documentMenu.ts`. The page title inside the body keeps its
+  text but not its own ID button or ↗, which the bar has.
 - `documentPickerView()` — parameter-less gallery stand-in for
   `documentView`: lists every rendered document (`/applet/unified_document_index/docs`) and
   replaces itself with `documentView("<uuid>")` on pick.
