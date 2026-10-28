@@ -156,6 +156,17 @@ pub struct AncestorListed {
     pub is_database: bool,
 }
 
+/// What the store already says of a user without asking Notion: a
+/// people property's whole user object, or a comment's name for its
+/// author.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KnownUser {
+    pub name: String,
+    /// The user object as a people property carries it; `None` when
+    /// only a comment named them.
+    pub payload: Option<String>,
+}
+
 /// One `tree` row as render reads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TreeRow {
@@ -354,6 +365,50 @@ impl RawDb {
             .into_iter()
             .map(|(id, is_database)| AncestorListed { id, is_database })
             .collect())
+    }
+
+    /// Every user the stored pages and comments already name. A
+    /// personal access token may read only its own user, so for anyone
+    /// else this is all there is to know. A people property's object,
+    /// which carries an address too, is preferred to a comment's name.
+    pub async fn users_named_in_store(&self) -> Result<HashMap<String, KnownUser>> {
+        let objects: Vec<(String, String, String)> = sqlx::query_as(
+            "SELECT json_extract(j.value, '$.id'), json_extract(j.value, '$.name'), json(j.value) \
+             FROM pages p, json_tree(p.payload, '$.properties') j \
+             WHERE p.payload IS NOT NULL AND j.type = 'object' \
+               AND json_extract(j.value, '$.object') = 'user' \
+               AND json_extract(j.value, '$.id') IS NOT NULL \
+               AND json_extract(j.value, '$.name') IS NOT NULL \
+             ORDER BY 1, 3",
+        )
+        .fetch_all(self.pool())
+        .await
+        .context("read the users people properties carry")?;
+        let commenters: Vec<(String, String)> = sqlx::query_as(
+            "SELECT json_extract(payload, '$.created_by.id'), \
+                    json_extract(payload, '$.display_name.resolved_name') \
+             FROM comments WHERE payload IS NOT NULL \
+               AND json_extract(payload, '$.created_by.id') IS NOT NULL \
+               AND json_extract(payload, '$.display_name.resolved_name') <> '' \
+             ORDER BY 1, 2",
+        )
+        .fetch_all(self.pool())
+        .await
+        .context("read the names comments give their authors")?;
+        let mut out: HashMap<String, KnownUser> = HashMap::new();
+        for (id, name, payload) in objects {
+            out.entry(id).or_insert(KnownUser {
+                name,
+                payload: Some(payload),
+            });
+        }
+        for (id, name) in commenters {
+            out.entry(id).or_insert(KnownUser {
+                name,
+                payload: None,
+            });
+        }
+        Ok(out)
     }
 
     /// The child pages the stored bodies of `page_ids` link, in the

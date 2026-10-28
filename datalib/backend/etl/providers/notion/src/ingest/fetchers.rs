@@ -17,7 +17,7 @@ use datalib_etl_web::owed::{BatchError, Fetched, Fetcher, Listed, Outcome};
 use serde_json::Value;
 use sqlx::{Sqlite, Transaction};
 
-use super::db::{CommentAnchorUpsert, CommentUpsert, PageMarkdownUpsert, TreeUpsert};
+use super::db::{CommentAnchorUpsert, CommentUpsert, KnownUser, PageMarkdownUpsert, TreeUpsert};
 use super::official::NotionOfficialError;
 use super::schema_raw::{split_edge_key, TreeKind};
 use super::{markdown, run_over, slots, Ctx};
@@ -643,36 +643,30 @@ fn unseen(
     }
 }
 
-/// A user as Notion describes one, or nothing for an id it no longer
-/// has.
+/// A user as Notion describes one, or as much as the store knows of one
+/// Notion will not show.
 pub struct User {
     name: Option<String>,
     payload: Option<String>,
 }
 
-pub(crate) struct Users<'a>(pub(crate) &'a Ctx<'a>);
+pub(crate) struct Users<'a> {
+    pub(crate) ctx: &'a Ctx<'a>,
+    /// What the stored pages and comments already say of each user.
+    pub(crate) known: HashMap<String, KnownUser>,
+}
 
 #[async_trait]
 impl Fetcher<User> for Users<'_> {
     async fn fetch(&self, batch: Vec<Listed>) -> Result<Vec<Fetched<User>>, BatchError> {
         let mut out = Vec::with_capacity(batch.len());
         for listed in batch {
-            let answer = match self.0.client.get_user(&listed.key).await {
-                Ok(u) => Ok(Outcome::Got(User {
-                    name: u.get("name").and_then(Value::as_str).map(String::from),
-                    payload: Some(u.to_string()),
-                })),
-                Err(NotionOfficialError::NotFound(_)) => Ok(Outcome::Got(User {
-                    name: None,
-                    payload: None,
-                })),
-                Err(e) => Err(e),
-            };
+            let answer = self.one(&listed.key).await;
             out.push(Fetched {
-                outcome: outcome(self.0, answer)?,
+                outcome: outcome(self.ctx, answer)?,
                 listed,
             });
-            self.0.bar.did(1);
+            self.ctx.bar.did(1);
         }
         Ok(out)
     }
@@ -684,7 +678,7 @@ impl Fetcher<User> for Users<'_> {
     ) -> Result<()> {
         for f in batch {
             if let Outcome::Got(user) | Outcome::Unusable(user, ..) = &f.outcome {
-                self.0
+                self.ctx
                     .db
                     .store_user(
                         tx,
@@ -693,10 +687,48 @@ impl Fetcher<User> for Users<'_> {
                         user.payload.as_deref(),
                     )
                     .await?;
-                self.0.counts.users_resolved.fetch_add(1, Ordering::Relaxed);
+                self.ctx
+                    .counts
+                    .users_resolved
+                    .fetch_add(1, Ordering::Relaxed);
             }
         }
         Ok(())
+    }
+}
+
+impl Users<'_> {
+    /// One user. A people property already carries the whole user
+    /// object, so one named there costs no request. Otherwise Notion is
+    /// asked; a personal access token may read only its own user, so a
+    /// 403 is the usual answer, and like a 404 it keeps what the store
+    /// knows — a comment's name for its author, or the id alone — so
+    /// the user is asked for once.
+    async fn one(&self, id: &str) -> Result<Outcome<User>, NotionOfficialError> {
+        let known = self.known.get(id);
+        if let Some(KnownUser {
+            name,
+            payload: Some(payload),
+        }) = known
+        {
+            return Ok(Outcome::Got(User {
+                name: Some(name.clone()),
+                payload: Some(payload.clone()),
+            }));
+        }
+        match self.ctx.client.get_user(id).await {
+            Ok(u) => Ok(Outcome::Got(User {
+                name: u.get("name").and_then(Value::as_str).map(String::from),
+                payload: Some(u.to_string()),
+            })),
+            Err(NotionOfficialError::NotFound(_) | NotionOfficialError::Forbidden(_)) => {
+                Ok(Outcome::Got(User {
+                    name: known.map(|k| k.name.clone()),
+                    payload: None,
+                }))
+            }
+            Err(e) => Err(e),
+        }
     }
 }
 

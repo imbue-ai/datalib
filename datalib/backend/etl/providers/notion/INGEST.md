@@ -230,7 +230,7 @@ anything: it was not held, so it is owed, and the next run fetches it.
 | an attachment's bytes | `notion_attachments:<page>#<slot>` | the bytes landing, or the body no longer linking it |
 | a commented block | `comment_anchors:<id>` | the block fetching |
 | a database or block a page sits under | `tree:<id>` | the parent fetching |
-| a user | `users:<id>` | the user fetching |
+| a user, other than with a 403 or a 404 | `users:<id>` | the user fetching |
 | a configured root Notion has not got (404) or will not show (403) | `config:roots:<value>` | the root fetching, or leaving the config |
 | a search page after the first, or `max_pages` cutting the listing short | `listing:search` | a search that reaches what the store covers |
 | twenty-five requests of one loop failing in a row | `phase:<table>` | the loop running its course |
@@ -284,7 +284,7 @@ one as the end of a listing would silently truncate.
 | `page_comments` | one id-only row per page whose comments were listed | the page's `last_edited_time` it was read for |
 | `comments` | one row per comment, with `page_id` and `discussion_id` | — (written with its page's listing) |
 | `comment_anchors` | the text a block-anchored comment hangs off | read once |
-| `users` | display names, resolved one id at a time | read once |
+| `users` | display names: from a people property, `GET /v1/users/{id}`, or a comment's name for its author | read once |
 | `notion_attachments` | CAS edge, `ref_id` = the slot, written with the body | its bytes, once |
 | `tree` | each page, database and block a page sits under: kind, title, parent | read once; a page's with the page, a database's again when search lists it |
 | `coverage` | the stretch of edit times the search has read, scope `search` | — |
@@ -339,13 +339,18 @@ Two things Notion does not hand over with the object that needs them.
 **Comment authors need nothing** — every comment carries
 `display_name.resolved_name`.
 
-**Page authors do.** A page object gives only `created_by.id`, so ids
-seen on pages, people properties and comments are resolved with
-`GET /v1/users/{id}` and cached in `users`. One request per user, once
-ever. It has to work this way: `GET /v1/users` (list all) is not
-available to a personal access token. A user that cannot be read falls
-back to an id prefix rather than failing the page, and is a `users:<id>`
-row until a later run reads it.
+**Page authors do.** A page object gives only `created_by.id`, so every
+user a page, a people property or a comment names gets a `users` row,
+once ever. A people property already carries the whole user object,
+name and address included, so a user named in one costs no request.
+Anyone else is asked for with `GET /v1/users/{id}`. A personal access
+token may read only its own user — `GET /v1/users` (list all) is
+closed to it too — so for everyone else Notion answers 403. That
+answer, like a 404, keeps what the store knows: a comment's name for
+its author, or the id alone, which render shows as an id prefix. The
+row is held, so the user is not asked for again and is no problem. A
+user whose request failed some other way is a `users:<id>` row until a
+later run reads it.
 
 **A comment names a `block_id` and carries no quote of what it is
 about.** So `GET /v1/blocks/{id}` runs for **commented blocks only** —
