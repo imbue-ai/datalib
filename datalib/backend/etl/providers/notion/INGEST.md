@@ -115,6 +115,14 @@ A loop writes a flush of records in one transaction, with what each is
 held at, and seals through the step's sealer, so a run killed anywhere
 leaves a store a later run finishes.
 
+**Progress.** The run's one bar counts requests the run can see waiting:
+each page object a roots walk asks for, and each record a loop owes.
+A page the listing stores at a new stamp announces its body, and its
+comment listing, as it is stored, so the queue grows with the search
+walk and the ETA covers the loops ahead. A page of search results is
+not counted, since its size is unknown until it arrives. Attachments,
+anchors and users join the queue when their loop starts.
+
 **The block tree is not mirrored.** There is no `blocks` table and no
 block renderer. Notion renders the page; we store what it returns.
 

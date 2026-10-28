@@ -186,7 +186,7 @@ impl Ctx<'_> {
         }
         tx.commit().await?;
         self.wrote(rows.len() as u64).await;
-        self.opts.progress.inc(rows.len() as u64);
+        self.foresee_pages(rows.len() as u64);
         Ok(stored)
     }
 
@@ -259,6 +259,8 @@ impl Ctx<'_> {
                 _ => None,
             };
             s.listed += page.rows.len();
+            self.bar
+                .doing(&format!("search: {} pages listed", s.listed));
             let stored = self.store_listed(page.rows, span).await?;
             s.new_pages += stored.new;
             s.upd_pages += stored.updated;
@@ -291,6 +293,7 @@ impl Ctx<'_> {
         s: &mut FetchSummary,
     ) -> Result<Vec<String>> {
         let mut listed: Vec<String> = Vec::new();
+        self.bar.expect(frontier.len() as u64);
         for pid in frontier {
             if self.stop().requested() {
                 break;
@@ -306,8 +309,10 @@ impl Ctx<'_> {
                 );
                 break;
             }
-            self.opts.progress.set_message(pid);
-            match self.client.get_page(pid).await {
+            self.bar.doing(pid);
+            let answer = self.client.get_page(pid).await;
+            self.bar.did(1);
+            match answer {
                 Ok(obj) => {
                     let Some(row) = PageUpsert::from_object(&obj) else {
                         continue;

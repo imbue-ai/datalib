@@ -6,6 +6,7 @@ mod incremental_render;
 mod interrupt;
 mod live;
 mod playback_roundtrip;
+mod progress_countdown;
 mod run_problems;
 mod support;
 mod sync_state;
