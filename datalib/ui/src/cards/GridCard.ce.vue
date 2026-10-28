@@ -82,11 +82,13 @@ import {
 import { parseDoc } from "@/uri";
 import {
   SEARCH_TABS,
+  apiTab,
   isNew,
   startTabs,
   tabAnswered,
   tabPicked,
   tabRecounted,
+  type Answer,
   type TabAnswer,
   type TabsState,
 } from "@/grid/searchTabs";
@@ -218,8 +220,9 @@ props.ctx.setHelp(
     ? `
 <p>Type what you are looking for. Plain words are answered three ways, a small tab each:
 <b>Fields</b> (the ids, people, titles and names a row answers to), <b>Words</b> (the
-words anywhere in a document) and <b>Meaning</b> (documents about the same thing). The
-first to find something opens; a dot on another says it has found something too. Filters narrow the
+words anywhere in a document) and <b>Meaning</b> (documents about the same thing).
+<b>Best</b>, which opens first, merges the three; a dot on another tab says it has found
+something you have not looked at. Filters narrow the
 search: <code>author:worf</code>, <code>before:2371-01-01</code>, <code>-kind:contact</code>.</p>
 <p>The chips under the box say which sources the results come from, and how many each;
 pick one to see only its results. A chip and the tick box write a filter into the search
@@ -275,7 +278,7 @@ const qmd = () => rowsSpec?.free_text === "qmd";
 // within one tick, so an observer can miss the transition entirely).
 const shownQuery = ref<string | null>(null);
 /// The tab whose answer the rows on screen are, beside `shownQuery`.
-const shownTab = ref<SearchTab | null>(null);
+const shownTab = ref<Answer | null>(null);
 const total = ref(0);
 const loading = ref(false);
 const error = ref<SearchFailure | null>(null);
@@ -797,10 +800,10 @@ let win: PagedWindow<Row, number> | null = null;
 /// the bottom, where it opens, with older rows loading above. Rows a
 /// sync adds then land below the ones on screen instead of moving them.
 let shown: { q: string; sort: string | null; tab: SearchTab | null; tail: boolean } | null = null;
-/// Free text's three answers, a tab each; null for a search without it,
-/// which has one answer.
+/// Free text's answers, a tab each; null for a search without it, which
+/// has one answer.
 const tabs = ref<TabsState | null>(null);
-const tab = computed<SearchTab | null>(() => tabs.value?.open ?? null);
+const tab = computed<SearchTab | null>(() => (tabs.value?.open ? apiTab(tabs.value.open) : null));
 /// A selection restored from the URL may be further down the list than
 /// the first page; the grid loads through it. Typing a new search gives
 /// up on it.
@@ -900,7 +903,7 @@ async function runSearch(q: string, refresh = false) {
     qmdError.value = typeof r.query_echo?.qmd_error === "string" ? r.query_echo.qmd_error : null;
     qmdIndexMissing.value = r.query_echo?.qmd_index_missing === true;
     shownQuery.value = q;
-    shownTab.value = t;
+    shownTab.value = tabs.value?.open ?? null;
     if (again) showChanged(true);
     else showNew();
   } catch (e) {
@@ -1037,7 +1040,7 @@ async function runGrouped(q: string, refresh: boolean) {
     qmdError.value = r.qmd_error ?? null;
     qmdIndexMissing.value = r.qmd_index_missing ?? false;
     shownQuery.value = q;
-    shownTab.value = t;
+    shownTab.value = tabs.value?.open ?? null;
     showGroups(again ? "refresh" : "new");
   } catch (e) {
     if ((e as { name?: string }).name === "AbortError") return;
@@ -1148,8 +1151,8 @@ watch(query, (q, before) => {
   saveState();
 });
 
-/// A new search: free text asks every tab, and the first to come back with
-/// rows shows; a search without it has one answer.
+/// A new search: free text shows its best answer and asks every tab how
+/// many rows it has; a search without it has one answer.
 function startSearch(q: string) {
   if (!isSearch || freeText(q) === "") {
     tabsAsked++;
@@ -1170,7 +1173,10 @@ async function askTabs(q: string, recount: boolean) {
   const asked = ++tabsAsked;
   tabsInflight?.abort();
   const ctrl = (tabsInflight = new AbortController());
-  if (!recount) tabs.value = startTabs(q);
+  if (!recount) {
+    tabs.value = startTabs(q);
+    void runSearch(q);
+  }
   await Promise.all(
     SEARCH_TABS.map(async ({ id }) => {
       const answer = await tabAnswer(q, id, ctrl.signal);
@@ -1179,14 +1185,14 @@ async function askTabs(q: string, recount: boolean) {
       tabs.value = recount
         ? tabRecounted(tabs.value, id, answer)
         : tabAnswered(tabs.value, id, answer);
-      if (before === null && tabs.value.open !== null) void runSearch(q);
+      if (tabs.value.open !== null && tabs.value.open !== before) void runSearch(q);
     }),
   );
 }
 
-async function tabAnswer(q: string, t: SearchTab, signal: AbortSignal): Promise<TabAnswer> {
+async function tabAnswer(q: string, t: Answer, signal: AbortSignal): Promise<TabAnswer> {
   try {
-    const r = await fetchRows<Row>(url, q, 1, signal, { toast: false }, { tab: t });
+    const r = await fetchRows<Row>(url, q, 1, signal, { toast: false }, { tab: apiTab(t) });
     const failed =
       r.refused?.[0] ??
       (typeof r.query_echo?.qmd_error === "string" ? r.query_echo.qmd_error : null) ??
@@ -1198,13 +1204,13 @@ async function tabAnswer(q: string, t: SearchTab, signal: AbortSignal): Promise<
   }
 }
 
-function pickTab(t: SearchTab) {
+function pickTab(t: Answer) {
   if (!tabs.value || tabs.value.open === t) return;
   tabs.value = tabPicked(tabs.value, t);
   void runSearch(tabs.value.q);
 }
 
-function tabCount(t: SearchTab): string {
+function tabCount(t: Answer): string {
   const answer = tabs.value?.answers[t];
   if (!answer || answer.status === "pending") return "…";
   if (answer.status === "failed") return "!";

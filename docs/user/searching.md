@@ -18,9 +18,9 @@ datalib-applet search ~/datalib 'warp core -from:riker is:document'
 A query is free text and `key:value` terms, in any order; everything
 must match. Free text looks for words in your documents:
 
-- **With no tab** (what the app's main search does), the words go to
-  the search index, which ranks documents by the words they share with
-  the query and by meaning.
+- **With no tab** (the app's **Best** tab, which a search opens on),
+  the words are answered the three ways below and the answers merged,
+  documents that rank well in more than one first.
 - **`--tab words`** (`tab=words`) matches the words themselves, ranked
   by how well each document matches.
 - **`--tab meaning`** finds the documents closest in meaning, even with

@@ -1,25 +1,33 @@
-// Free text is answered three ways, a tab each. The first tab to come back
-// with rows opens; the others say when they are ready, and nothing on
-// screen moves until the reader picks one.
+// Free text is answered three ways, a tab each, and merged in a fourth,
+// Best, which opens as the search starts. The others say when they are
+// ready, and nothing on screen moves until the reader picks one.
 
 import { test, expect, type Page, type Route } from "@playwright/test";
-import { EVERY_ROW, GRID, SEARCH_ROWS, searchAndSettle, type GridApi } from "./grid-helpers";
+import {
+  EVERY_ROW,
+  GRID,
+  SEARCH_ROWS,
+  searchAndSettle,
+  typeInto,
+  type GridApi,
+} from "./grid-helpers";
 
-type Tab = "fields" | "words" | "meaning";
+type Tab = "best" | "fields" | "words" | "meaning";
 
 const tabButton = (page: Page, tab: Tab) => page.locator(`.answer-tabs [data-tab="${tab}"]`);
 const firstUuid = (page: Page) =>
   page.evaluate(() =>
     (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.uuidAt(0),
   ) as Promise<string | null>;
-const tabOf = (route: Route) => new URL(route.request().url()).searchParams.get("tab");
+const tabOf = (route: Route) =>
+  (new URL(route.request().url()).searchParams.get("tab") ?? "best") as Tab;
 
 /// Hold back every answer for `tabs` until the returned release is called.
 async function hold(page: Page, tabs: Tab[]): Promise<() => void> {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => (release = resolve));
   await page.route("**/applet/unified_document_index/search?**", async (route) => {
-    if (tabs.includes(tabOf(route) as Tab)) await gate;
+    if (tabs.includes(tabOf(route))) await gate;
     await route.fallback();
   });
   return release;
@@ -27,14 +35,14 @@ async function hold(page: Page, tabs: Tab[]): Promise<() => void> {
 
 test.afterEach(({ page }) => page.unrouteAll({ behavior: "ignoreErrors" }));
 
-test("the first tab with rows opens, and the others say when they are ready", async ({ page }) => {
+test("the best answer opens, and the others say when they are ready", async ({ page }) => {
   const release = await hold(page, ["words", "meaning"]);
   await page.goto(EVERY_ROW);
   await expect(page.locator(SEARCH_ROWS).first()).toBeVisible({ timeout: 15_000 });
 
   await searchAndSettle(page, "enterprise");
-  await expect(page.locator(".grid-wrap")).toHaveAttribute("data-shown-tab", "fields");
-  await expect(tabButton(page, "fields")).toHaveClass(/is-on/);
+  await expect(page.locator(".grid-wrap")).toHaveAttribute("data-shown-tab", "best");
+  await expect(tabButton(page, "best")).toHaveClass(/is-on/);
   await expect(tabButton(page, "words")).toHaveClass(/is-pending/);
   await expect(tabButton(page, "meaning")).toHaveClass(/is-pending/);
   const shown = await firstUuid(page);
@@ -44,7 +52,7 @@ test("the first tab with rows opens, and the others say when they are ready", as
   await expect(tabButton(page, "words")).toHaveClass(/is-new/, { timeout: 90_000 });
   await expect(tabButton(page, "meaning")).not.toHaveClass(/is-pending/, { timeout: 90_000 });
   // Their answers arriving moved nothing.
-  await expect(page.locator(".grid-wrap")).toHaveAttribute("data-shown-tab", "fields");
+  await expect(page.locator(".grid-wrap")).toHaveAttribute("data-shown-tab", "best");
   expect(await firstUuid(page)).toBe(shown);
 
   await tabButton(page, "words").click();
@@ -53,19 +61,22 @@ test("the first tab with rows opens, and the others say when they are ready", as
   await expect(tabButton(page, "words")).not.toHaveClass(/is-new/);
 });
 
-test("when the fields find nothing, the first qmd tab with rows opens", async ({ page }) => {
-  await page.route("**/applet/unified_document_index/search?**", async (route) => {
-    if (tabOf(route) !== "fields") return route.fallback();
-    const response = await route.fetch();
-    const body = (await response.json()) as { rows: unknown[]; total: number };
-    await route.fulfill({ response, json: { ...body, rows: [], total: 0, next_offset: null } });
-  });
+test("when the best answer fails, the first tab with rows opens", async ({ page }) => {
   await page.goto(EVERY_ROW);
   await expect(page.locator(SEARCH_ROWS).first()).toBeVisible({ timeout: 15_000 });
+  await page.route("**/applet/unified_document_index/search?**", async (route) => {
+    if (tabOf(route) !== "best") return route.fallback();
+    await route.fulfill({ status: 500, json: { error: "held back by the test" } });
+  });
 
-  await searchAndSettle(page, "enterprise");
-  await expect(page.locator(".grid-wrap")).toHaveAttribute("data-shown-tab", /words|meaning/);
-  await expect(tabButton(page, "fields")).not.toHaveClass(/is-on/);
+  // Best's own rows fail too, so the search never settles on it.
+  await typeInto(page.getByTestId("search-input"), "enterprise");
+  await expect(page.locator(".grid-wrap")).toHaveAttribute(
+    "data-shown-tab",
+    /fields|words|meaning/,
+    { timeout: 90_000 },
+  );
+  await expect(tabButton(page, "best")).toHaveClass(/is-failed/);
 });
 
 /// The source chips wrapped, so a count that grew, or a tab that came in,
