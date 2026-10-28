@@ -180,6 +180,7 @@ pub fn rows_spec() -> RowsSpec {
         document: DocumentLink {
             fields: &["markdown_uuid"],
             anchor: ProblemRowColumn::ItemUuid.as_str(),
+            link: None,
         },
         free_text: free_text_of::<ProblemRow>(),
     }

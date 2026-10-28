@@ -159,6 +159,7 @@ fn fake_hits(hits: &[(&str, &str)]) -> Vec<QmdHit> {
             path: norm_path(path),
             score: 0.9,
             snippet: snippet.to_string(),
+            lines: None,
             docid: "d".into(),
             title: "t".into(),
         })
@@ -326,6 +327,7 @@ fn bidirectional_coverage_every_indexed_path_resolves() {
             path: norm_path(p),
             score: 0.0,
             snippet: String::new(),
+            lines: None,
             docid: String::new(),
             title: String::new(),
         };

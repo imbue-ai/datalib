@@ -147,9 +147,10 @@ export type QueryEcho = {
 export type RowsSpec = {
   // The field that names a row.
   row_key: string;
-  // The document a selected row opens: the first of `fields` the row has
-  // a value in, at the section its `anchor` field names.
-  document: { fields: string[]; anchor: string };
+  // The document a selected row opens: the `datalib:doc` name in its
+  // `link` field where it has one (`uri.ts`), else the first of `fields`
+  // the row has a value in, at the section its `anchor` field names.
+  document: { fields: string[]; anchor: string; link?: string };
   // qmd ranks free text, best first; `like` matches a substring and keeps
   // the rows' order.
   free_text: "qmd" | "like";

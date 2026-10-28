@@ -50,6 +50,9 @@ pub struct QmdHit {
     pub path: String,
     pub score: f64,
     pub snippet: String,
+    /// How many lines from its matched line the hit covers: a Meaning
+    /// chunk's. `None` for a hit on the whole document, as a keyword hit is.
+    pub lines: Option<usize>,
     pub docid: String,
     pub title: String,
 }
@@ -141,6 +144,73 @@ pub fn parse_qmd_predicate(raw: &str) -> (QueryMode, String) {
     (QueryMode::Hybrid, trimmed.to_string())
 }
 
+/// A search's words as hits are placed by: lowercased runs of letters and
+/// digits, two or more long.
+pub fn words(text: &str) -> Vec<String> {
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.chars().count() >= 2)
+        .map(String::from)
+        .collect()
+}
+
+/// Whether lowercased `text` holds `term` as a word, or a word sharing its
+/// first five letters when it has that many: the keyword index stems, so
+/// "imminent" found "imminently". Looked up in place, with no word list.
+fn holds(text: &str, term: &str) -> bool {
+    let stem: String = term.chars().take(5).collect();
+    let whole = stem.len() == term.len();
+    let at_edge = |c: Option<char>| c.is_none_or(|c| !c.is_alphanumeric());
+    text.match_indices(stem.as_str()).any(|(at, _)| {
+        at_edge(text[..at].chars().next_back())
+            && (!whole || at_edge(text[at + stem.len()..].chars().next()))
+    })
+}
+
+/// Which of `starts` (each section's first line, in order) a hit at 1-based
+/// `line` covering `span` lines lands on: among the sections overlapping
+/// the span (every section when `None`), the first holding the most of
+/// `terms`, unless `own` holds as many or none holds any.
+fn best_section(
+    lines: &[&str],
+    starts: &[(usize, &str)],
+    own: usize,
+    line: usize,
+    span: Option<usize>,
+    terms: &[String],
+) -> usize {
+    if terms.is_empty() || starts.is_empty() {
+        return own;
+    }
+    let lo = line.saturating_sub(1);
+    let hi = span.map_or(usize::MAX, |n| lo + n.max(1));
+    let score = |i: usize| {
+        let end = starts.get(i + 1).map_or(lines.len(), |(s, _)| *s);
+        let text = lines[starts[i].0..end].join("\n").to_lowercase();
+        terms.iter().filter(|t| holds(&text, t)).count()
+    };
+    let overlaps = |i: usize| {
+        let end = starts.get(i + 1).map_or(lines.len(), |(s, _)| *s);
+        starts[i].0 < hi && end > lo
+    };
+    let own_score = score(own);
+    if own_score == terms.len() {
+        return own;
+    }
+    let (best, best_score) = (0..starts.len())
+        .filter(|&i| overlaps(i))
+        .map(|i| (i, score(i)))
+        .fold(
+            (own, own_score),
+            |acc, (i, n)| if n > acc.1 { (i, n) } else { acc },
+        );
+    if best_score > own_score {
+        best
+    } else {
+        own
+    }
+}
+
 /// Indexes a set of `GridRowRef`s for fast hit→rows / row→hits lookup. Holds
 /// the data root so a hit can be resolved to the exact message it landed in by
 /// reading the rendered markdown and mapping the hit's line to a section.
@@ -148,6 +218,9 @@ pub struct GridIndex {
     root: PathBuf,
     by_uuid: HashMap<String, GridRowRef>,
     by_norm_path: HashMap<String, Vec<GridRowRef>>,
+    /// The search's words, lowercased: a hit lands on the message within
+    /// its span that holds the most of them.
+    terms: Vec<String>,
 }
 
 impl GridIndex {
@@ -165,7 +238,17 @@ impl GridIndex {
             root: root.into(),
             by_uuid,
             by_norm_path,
+            terms: Vec::new(),
         }
+    }
+
+    /// Land each hit on the message holding the most of `free_text`'s
+    /// words, rather than on the line the hit names.
+    pub fn with_terms(mut self, free_text: &str) -> Self {
+        self.terms = words(free_text);
+        self.terms.sort();
+        self.terms.dedup();
+        self
     }
 
     pub fn rows_for_hit(&self, hit: &QmdHit) -> Vec<GridRowRef> {
@@ -208,31 +291,25 @@ impl GridIndex {
     }
 
     /// Read `<root>/<qmd_path>` and return the `data-section-uuid` of the
-    /// message covering the hit's matched line: the last anchor at or before
-    /// that line, or — when the hit lands above the first message (title /
-    /// front matter) — the first anchor. `None` if the line can't be derived
-    /// or the file can't be read.
+    /// message the hit lands on: of the messages within the hit's span (the
+    /// whole document, or a Meaning chunk's lines), the one holding the most
+    /// of the search's words. Without words, or when its own message holds
+    /// as many, the message covering the matched line: the last anchor at or
+    /// before it, or the first when the hit is above every message (title,
+    /// front matter). `None` if the line can't be derived or the file can't
+    /// be read.
     fn section_for_line(&self, qmd_path: &str, hit: &QmdHit) -> Option<String> {
         let line = snippet_match_line(&hit.snippet)?;
         let text = std::fs::read_to_string(self.root.join(qmd_path)).ok()?;
-        let mut first: Option<String> = None;
-        let mut chosen: Option<String> = None;
-        for (i, raw) in text.lines().enumerate() {
-            let Some(uuid) = parse_section_uuid(raw) else {
-                continue;
-            };
-            if first.is_none() {
-                first = Some(uuid.to_string());
-            }
-            if i < line {
-                chosen = Some(uuid.to_string());
-            } else {
-                // Anchors appear in file order; once we're past the matched
-                // line the enclosing section is settled.
-                break;
-            }
-        }
-        chosen.or(first)
+        let lines: Vec<&str> = text.lines().collect();
+        let starts: Vec<(usize, &str)> = lines
+            .iter()
+            .enumerate()
+            .filter_map(|(i, raw)| Some((i, parse_section_uuid(raw)?)))
+            .collect();
+        let own = starts.iter().rposition(|(i, _)| *i < line).unwrap_or(0);
+        let chosen = best_section(&lines, &starts, own, line, hit.lines, &self.terms);
+        starts.get(chosen).map(|(_, uuid)| uuid.to_string())
     }
 
     /// Aggregate over hits, preserving rank order, deduping by uuid.
@@ -323,6 +400,7 @@ mod tests {
             path: path.to_string(),
             score: 1.0,
             snippet: snippet.to_string(),
+            lines: None,
             docid: String::new(),
             title: String::new(),
         }
@@ -349,6 +427,43 @@ mod tests {
             parse_section_uuid("<div data-section-uuid=\"th-abc-1\">"),
             Some("th-abc-1")
         );
+    }
+
+    /// Four messages, one line of header and one of text each.
+    const AWAY_TEAM: &str = "<div data-section-uuid=\"m1\">\nRiker: the warp core\n\
+        <div data-section-uuid=\"m2\">\nData: shields at forty percent\n\
+        <div data-section-uuid=\"m3\">\nWorf: warp core breach imminent\n\
+        <div data-section-uuid=\"m4\">\nPicard: make it so\n";
+
+    fn landing(line: usize, span: Option<usize>, terms: &str) -> &'static str {
+        let lines: Vec<&str> = AWAY_TEAM.lines().collect();
+        let starts: Vec<(usize, &str)> = lines
+            .iter()
+            .enumerate()
+            .filter_map(|(i, raw)| Some((i, parse_section_uuid(raw)?)))
+            .collect();
+        let own = starts.iter().rposition(|(i, _)| *i < line).unwrap_or(0);
+        let mut terms = words(terms);
+        terms.dedup();
+        let at = best_section(&lines, &starts, own, line, span, &terms);
+        ["m1", "m2", "m3", "m4"][at]
+    }
+
+    /// A hit lands on the message holding the most of the search's words,
+    /// stays on its own when that one holds as many or none holds any, and
+    /// a Meaning hit never leaves its chunk.
+    #[test]
+    fn a_hit_lands_on_the_message_with_the_most_of_the_words() {
+        // The keyword index named Riker's line, where "warp" first appears.
+        assert_eq!(landing(2, None, "warp core breach"), "m3");
+        assert_eq!(landing(2, None, "warp core"), "m1", "a tie keeps its own");
+        assert_eq!(landing(2, None, "tea earl grey"), "m1", "nothing holds any");
+        assert_eq!(landing(2, None, ""), "m1");
+        // A chunk of Data's and Picard's lines cannot land on Worf's.
+        assert_eq!(landing(3, Some(2), "warp core breach"), "m2");
+        assert_eq!(landing(5, Some(4), "warp core breach"), "m3");
+        // Stems: the index found "imminently" for "imminent".
+        assert_eq!(landing(2, None, "imminently"), "m3");
     }
 
     #[test]
@@ -602,6 +717,7 @@ mod tests {
             path: path.to_string(),
             score,
             snippet: snippet.to_string(),
+            lines: None,
             docid: String::new(),
             title: String::new(),
         }

@@ -669,6 +669,7 @@ fn parse_query_response(resp: &serde_json::Value) -> Result<Vec<QmdHit>> {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string(),
+            lines: None,
             docid: d
                 .get("docid")
                 .and_then(|v| v.as_str())
