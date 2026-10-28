@@ -2,7 +2,8 @@
 //! comments listing had no row at all and the search kept a mark opens
 //! under this build holding everything it held, owing exactly what it
 //! had not fetched, and with the mark gone: rung 1 of
-//! `schema_raw::LADDER`.
+//! `schema_raw::LADDER`. Rung 2 then gives each page it held its row in
+//! `tree`.
 
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::doltlite_raw::{self as dr};
@@ -64,6 +65,7 @@ async fn a_store_from_before_the_sidecar_held_anything_opens_holding_what_it_had
     let edge_a = NotionAttachmentRow::pk_recipe(BRIDGE, SLOT_A);
     let edge_b = NotionAttachmentRow::pk_recipe(BRIDGE, SLOT_B);
     let bridge = json!({"id": BRIDGE, "object": "page",
+        "properties": {"Name": {"type": "title", "title": [{"plain_text": "Bridge"}]}},
         "created_by": {"object": "user", "id": PICARD},
         "last_edited_by": {"object": "user", "id": RIKER}});
     sqlx::query("INSERT INTO pages (id, last_edited_time, payload) VALUES (?, ?, jsonb(?))")
@@ -259,7 +261,24 @@ async fn a_store_from_before_the_sidecar_held_anything_opens_holding_what_it_had
             "SELECT value FROM _datalib_meta WHERE key = 'schema_version'"
         )
         .await,
-        ["1"]
+        ["2"]
+    );
+    assert_eq!(
+        strings(
+            pool,
+            "SELECT id || ' ' || kind || ' ' || coalesce(title, '-') FROM tree ORDER BY id"
+        )
+        .await,
+        [format!("{BRIDGE} page Bridge"), format!("{SICKBAY} page -")],
+        "every page the store held has its place, titled where it has a title"
+    );
+    let placed = [BRIDGE, SICKBAY].map(|id| owed::Listed::new(id, None::<String>));
+    assert!(
+        owed::owed(pool, "tree", placed.to_vec())
+            .await
+            .unwrap()
+            .is_empty(),
+        "and is held there, so the ancestry loop does not ask for it"
     );
     db.close().await;
 }

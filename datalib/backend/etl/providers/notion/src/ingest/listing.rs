@@ -17,7 +17,7 @@ use datalib_etl_web::coverage::{self, Span};
 use datalib_etl_web::owed::{self, Held};
 use serde_json::Value;
 
-use super::db::PageUpsert;
+use super::db::{PageUpsert, TreeUpsert};
 use super::official::NotionOfficialError;
 use super::schema_raw::PAGES;
 use super::{run_over, Ctx, FetchSummary};
@@ -82,6 +82,8 @@ enum Ended {
 #[derive(Debug, Default)]
 struct ResultsPage {
     rows: Vec<PageUpsert>,
+    /// The databases the data-source results describe.
+    databases: Vec<TreeUpsert>,
     /// The stamps of every result read, pages and containers alike.
     newest: Option<String>,
     oldest: Option<String>,
@@ -111,8 +113,13 @@ fn read_results(
         if let Some(e) = edited {
             page.oldest = Some(e.to_string());
         }
-        if r.get("object").and_then(Value::as_str) != Some("page") {
-            continue;
+        match r.get("object").and_then(Value::as_str) {
+            Some("page") => {}
+            Some("data_source") => {
+                page.databases.extend(TreeUpsert::from_data_source(r));
+                continue;
+            }
+            _ => continue,
         }
         let Some(row) = PageUpsert::from_object(r) else {
             continue;
@@ -173,14 +180,21 @@ fn not_yet_held(rows: Vec<PageUpsert>, held: &HashMap<String, Held>) -> (Vec<Pag
 }
 
 impl Ctx<'_> {
-    /// Stores the objects of `rows` not held at their stamp, with
-    /// `span` covered, in one transaction.
-    async fn store_listed(&self, rows: Vec<PageUpsert>, span: Option<Span>) -> Result<Stored> {
+    /// Stores the objects of `rows` not held at their stamp, and the
+    /// `databases` the same results described, with `span` covered, in
+    /// one transaction.
+    async fn store_listed(
+        &self,
+        rows: Vec<PageUpsert>,
+        databases: &[TreeUpsert],
+        span: Option<Span>,
+    ) -> Result<Stored> {
         let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
         let held = owed::held_versions(self.db.pool(), PAGES, ids).await?;
         let (rows, stored) = not_yet_held(rows, &held);
         let mut tx = self.db.pool().begin().await?;
         self.db.store_pages(&mut tx, &rows).await?;
+        self.db.store_tree(&mut tx, databases).await?;
         if let Some(span) = span {
             coverage::cover(&mut tx, SEARCH_SCOPE, span).await?;
         }
@@ -261,7 +275,7 @@ impl Ctx<'_> {
             s.listed += page.rows.len();
             self.bar
                 .doing(&format!("search: {} pages listed", s.listed));
-            let stored = self.store_listed(page.rows, span).await?;
+            let stored = self.store_listed(page.rows, &page.databases, span).await?;
             s.new_pages += stored.new;
             s.upd_pages += stored.updated;
             s.skipped_pages += stored.skipped;
@@ -318,7 +332,7 @@ impl Ctx<'_> {
                         continue;
                     };
                     s.listed += 1;
-                    let stored = self.store_listed(vec![row], None).await?;
+                    let stored = self.store_listed(vec![row], &[], None).await?;
                     s.new_pages += stored.new;
                     s.upd_pages += stored.updated;
                     s.skipped_pages += stored.skipped;
@@ -414,14 +428,30 @@ mod tests {
         );
     }
 
-    /// A container in the results is read for its stamp and not listed.
+    /// A data source in the results is read for its stamp and for its
+    /// database's place in the tree, and is not listed as a page.
     #[test]
-    fn containers_are_passed_over() {
-        let ds = serde_json::json!({"object": "data_source", "id": "d", "last_edited_time": T3});
+    fn a_data_source_places_its_database_and_is_not_listed() {
+        let ds = serde_json::json!({
+            "object": "data_source", "id": "d", "last_edited_time": T3,
+            "title": [{"plain_text": "Crew "}, {"plain_text": "manifest"}],
+            "parent": {"type": "database_id", "database_id": "db"},
+            "database_parent": {"type": "page_id", "page_id": "bridge"},
+        });
         let read = read_results(&[ds, page("a", T2)], None, 0, None);
         assert_eq!(read.rows.len(), 1);
         assert_eq!(read.newest.as_deref(), Some(T3));
         assert_eq!(read.oldest.as_deref(), Some(T2));
+        assert_eq!(
+            read.databases,
+            [TreeUpsert {
+                id: "db".into(),
+                kind: crate::ingest::schema_raw::TreeKind::Database,
+                title: Some("Crew manifest".into()),
+                parent_type: Some("page_id".into()),
+                parent_id: Some("bridge".into()),
+            }]
+        );
     }
 
     /// `max_pages` bounds what one run lists, and the span covers only

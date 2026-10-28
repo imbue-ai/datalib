@@ -505,8 +505,8 @@
     ]
   },
   "notion": {
-    "schema_hash": "30aa0d7aa5576a7117422fc308458791674c87c055b11dae1263a1b54df445e4",
-    "schema_version": 1,
+    "schema_hash": "a125c0d98905ed0818432a661703064703bc10e64291fdec7bd7a05c1e8e1d35",
+    "schema_version": 2,
     "shared_schema_version": 1,
     "sql": [
       "CREATE TABLE comment_anchors( id TEXT PRIMARY KEY, page_id TEXT NULL, block_type TEXT NULL, plain_text TEXT NULL)",
@@ -531,6 +531,8 @@
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)",
+      "CREATE TABLE tree( id TEXT PRIMARY KEY, kind TEXT NOT NULL, title TEXT NULL, parent_type TEXT NULL, parent_id TEXT NULL, created_time TEXT NULL)",
+      "CREATE TABLE tree_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE users( id TEXT PRIMARY KEY, name TEXT NULL, payload TEXT NULL)",
       "CREATE TABLE users_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)"
     ]

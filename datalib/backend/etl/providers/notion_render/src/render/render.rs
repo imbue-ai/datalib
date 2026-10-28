@@ -7,7 +7,7 @@
 //! block-type matrix maintained against Notion's evolving block set is
 //! now Notion's problem.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -18,7 +18,7 @@ use datalib_etl::progress::Progress;
 use datalib_etl_render::front_matter::yaml_scalar;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{escape_md_block, escape_md_inline};
-use datalib_etl_render::inputs::{Bucket, Buckets};
+use datalib_etl_render::inputs::{Bucket, Buckets, Lookup};
 use datalib_etl_render::message::{chip_link, stamp_text_html};
 use datalib_handle::Handle;
 use regex::Regex;
@@ -26,7 +26,8 @@ use serde_json::Value;
 
 use super::grid_rows::{comment_author_handle, gather_documents, PageDocument, ThreadDocument};
 use super::parse::{ParsedNotion, ATTACHMENTS_PROJECTION_SQL};
-use datalib_etl_notion::ingest::db::RawDb;
+use datalib_etl_notion::ingest::db::{RawDb, TreeRow};
+use datalib_etl_notion::ingest::schema_raw::TreeKind;
 use datalib_etl_render::pages::batches;
 
 /// v4: ids are minted through `datalib_id` instead of passing Notion's
@@ -39,7 +40,8 @@ use datalib_etl_render::pages::batches;
 /// v9: a comment's time is a `<time>` stamp.
 /// v10: a comment's author is a chip, by their address where Notion gave
 ///      one, and a row carries its author's handle.
-pub const RENDER_VERSION: u32 = 10;
+/// v11: a page opens with the path of pages and databases it sits under.
+pub const RENDER_VERSION: u32 = 11;
 pub const SLUG_MAX_LEN: usize = 60;
 
 static SLUG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[^a-z0-9]+").unwrap());
@@ -175,6 +177,47 @@ fn frontmatter(title: &str, page: &Value) -> String {
     fm.push_str("source_label: Notion\n");
     fm.push_str("---\n\n");
     fm
+}
+
+/// The line above a page naming where it sits, top first: each page,
+/// database and titled block above it, up to the top of what the store
+/// knows. A page this source renders links its document; anything else
+/// links Notion. A column or a toggle is walked through and not shown.
+/// Empty for a page at the top of the workspace.
+fn breadcrumb(page_id: &str, tree: Lookup<'_, HashMap<String, TreeRow>>, stanza: &str) -> String {
+    let mut crumbs: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut next = tree.get(page_id).and_then(parent_of);
+    while let Some(id) = next {
+        if !seen.insert(id.clone()) {
+            break;
+        }
+        let Some(row) = tree.get(&id) else {
+            break;
+        };
+        let title = || escape_md_inline(row.title.as_deref().unwrap_or("Untitled"));
+        match (row.kind, &row.title) {
+            (Some(TreeKind::Page), _) => {
+                let uuid = super::ids::page(stanza, &id, row.created_time.as_deref()).uuid;
+                crumbs.push(format!("[{}](/chat/{uuid})", title()));
+            }
+            (_, Some(_)) => crumbs.push(format!("[{}]({})", title(), notion_url(&id))),
+            (_, None) => {}
+        }
+        next = parent_of(row);
+    }
+    if crumbs.is_empty() {
+        return String::new();
+    }
+    crumbs.reverse();
+    format!("{}\n\n", crumbs.join(" › "))
+}
+
+fn parent_of(row: &TreeRow) -> Option<String> {
+    match row.parent_type.as_deref() {
+        Some("workspace") | None => None,
+        Some(_) => row.parent_id.clone(),
+    }
 }
 
 /// Page properties, for a page whose body is empty.
@@ -565,6 +608,11 @@ pub fn render_notion(
                 body
             };
             let mut out = frontmatter(page_title, page);
+            out.push_str(&breadcrumb(
+                page_uuid,
+                inputs.lookup("tree", &parsed.tree),
+                stanza,
+            ));
             out.push_str(&body);
             fs::write(&md_path, out).with_context(|| format!("write {}", md_path.display()))?;
 
@@ -752,6 +800,94 @@ mod tests {
         assert!(
             !page.parent().unwrap().join("blobs").exists(),
             "no copy beside the page"
+        );
+    }
+
+    fn node(kind: TreeKind, title: Option<&str>, parent: (&str, &str)) -> TreeRow {
+        TreeRow {
+            kind: Some(kind),
+            title: title.map(String::from),
+            parent_type: Some(parent.0.into()),
+            parent_id: Some(parent.1.into()),
+            created_time: None,
+        }
+    }
+
+    /// A row's path climbs its database to the page above, through a
+    /// column that shows nothing, and declares every `tree` row it read,
+    /// so a rename anywhere above re-renders the row.
+    #[test]
+    fn the_path_above_a_row_names_its_database_and_pages() {
+        let tree: HashMap<String, TreeRow> = [
+            (
+                "row",
+                node(TreeKind::Page, Some("Picard"), ("data_source_id", "db")),
+            ),
+            (
+                "db",
+                node(
+                    TreeKind::Database,
+                    Some("Crew [manifest]"),
+                    ("block_id", "col"),
+                ),
+            ),
+            ("col", node(TreeKind::Block, None, ("page_id", "bridge"))),
+            (
+                "bridge",
+                node(TreeKind::Page, Some("Bridge"), ("workspace", "workspace")),
+            ),
+        ]
+        .into_iter()
+        .map(|(id, row)| (id.to_string(), row))
+        .collect();
+        let inputs = datalib_etl_render::inputs::Inputs::default();
+        let line = breadcrumb("row", inputs.lookup("tree", &tree), "notion");
+        let bridge = super::super::ids::page("notion", "bridge", None).uuid;
+        assert_eq!(
+            line,
+            format!(
+                "[Bridge](/chat/{bridge}) › [Crew \\[manifest\\]](https://www.notion.so/db)\n\n"
+            )
+        );
+        let read: Vec<String> = inputs.declared().into_iter().map(|i| i.id).collect();
+        assert_eq!(read, ["bridge", "col", "db", "row"]);
+    }
+
+    /// A page at the top has no path, and one whose parent this
+    /// credential cannot see stops there rather than at a blank crumb.
+    #[test]
+    fn the_path_stops_at_the_top_of_what_is_known() {
+        let tree: HashMap<String, TreeRow> = [
+            (
+                "top",
+                node(TreeKind::Page, Some("Bridge"), ("workspace", "workspace")),
+            ),
+            (
+                "shared",
+                node(TreeKind::Page, Some("Away team"), ("page_id", "hidden")),
+            ),
+            (
+                "hidden",
+                TreeRow {
+                    kind: Some(TreeKind::Block),
+                    title: None,
+                    parent_type: None,
+                    parent_id: None,
+                    created_time: None,
+                },
+            ),
+        ]
+        .into_iter()
+        .map(|(id, row)| (id.to_string(), row))
+        .collect();
+        let inputs = datalib_etl_render::inputs::Inputs::default();
+        assert_eq!(
+            breadcrumb("top", inputs.lookup("tree", &tree), "notion"),
+            ""
+        );
+        assert_eq!(
+            breadcrumb("shared", inputs.lookup("tree", &tree), "notion"),
+            ""
         );
     }
 
