@@ -13,6 +13,7 @@
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::doltlite_raw::{self as dr, Migration};
 use datalib_etl_macros::CasEdgeRow;
+use strum::{EnumString, IntoStaticStr, VariantArray};
 
 pub const PAGES: &str = "pages";
 pub const PAGE_MARKDOWN: &str = "page_markdown";
@@ -21,6 +22,7 @@ pub const COMMENTS: &str = "comments";
 pub const COMMENT_ANCHORS: &str = "comment_anchors";
 pub const USERS: &str = "users";
 pub const ATTACHMENTS: &str = "notion_attachments";
+pub const OUTLINE: &str = "outline";
 
 /// Names of the entity tables, in the order they should be iterated
 /// for full-table operations (truncate, full-DDL composition, etc.).
@@ -32,6 +34,7 @@ pub const DATA_TABLES: &[&str] = &[
     COMMENT_ANCHORS,
     USERS,
     ATTACHMENTS,
+    OUTLINE,
 ];
 
 /// `pages` — one row per Notion page UUID, holding the page *object*:
@@ -147,6 +150,49 @@ pub const COMMENT_ANCHORS_DDL: &str = "CREATE TABLE IF NOT EXISTS comment_anchor
     block_type TEXT NULL,
     plain_text TEXT NULL
 )";
+
+/// `outline` — where each object the credential can see hangs in the
+/// workspace: a page, a database, or a block that holds a page, and the
+/// object it hangs off. Only a roots-mode run fills it, from the search
+/// (a page, and a database from its data source) and, for a block, from
+/// `GET /v1/blocks/{id}`, read once. Roots mode mirrors the pages whose
+/// chain of parents reaches a root (`ingest::scope`).
+///
+/// A page's row is held at its `last_edited_time`; a block's at no
+/// version.
+///
+/// PK choice: the upstream id, dashed. A database row's `parent_id` is
+/// its database's id, not its data source's, as in `pages`.
+pub const OUTLINE_DDL: &str = "CREATE TABLE IF NOT EXISTS outline (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    parent_type TEXT NULL,
+    parent_id TEXT NULL,
+    last_edited_time TEXT NULL
+)";
+
+pub const OUTLINE_PARENT_INDEX_DDL: &str =
+    "CREATE INDEX IF NOT EXISTS outline_parent ON outline(parent_id)";
+
+/// What an `outline` row is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, IntoStaticStr, VariantArray)]
+#[strum(serialize_all = "snake_case")]
+pub enum OutlineKind {
+    Page,
+    Database,
+    Block,
+}
+
+impl OutlineKind {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+
+    /// `None` for a spelling this build does not know.
+    pub fn parse(s: &str) -> Option<Self> {
+        s.parse().ok()
+    }
+}
 
 /// `notion_attachments` — N:M edge between a page and a `cas_objects`
 /// blob, written with the body that names the file.
@@ -336,6 +382,8 @@ pub fn full_ddl() -> Vec<String> {
         COMMENTS_DISCUSSION_INDEX_DDL.to_string(),
         COMMENT_ANCHORS_DDL.to_string(),
         USERS_DDL.to_string(),
+        OUTLINE_DDL.to_string(),
+        OUTLINE_PARENT_INDEX_DDL.to_string(),
         datalib_etl_web::coverage::DDL.to_string(),
     ];
     out.extend(NotionAttachmentRow::all_ddl());
@@ -357,5 +405,13 @@ mod tests {
             split_edge_key("page-1#https://files.notion.so/a.png"),
             Some(("page-1", "https://files.notion.so/a.png"))
         );
+    }
+
+    #[test]
+    fn an_outline_kind_reads_back_as_written() {
+        for kind in OutlineKind::VARIANTS {
+            assert_eq!(OutlineKind::parse(kind.as_str()), Some(*kind));
+        }
+        assert_eq!(OutlineKind::parse("data_source"), None);
     }
 }

@@ -63,11 +63,11 @@ pub struct NotionSync {
     /// listed once more. Zero (or absent) lists only what is newer.
     #[serde(default)]
     pub refresh_window_days: Option<u32>,
-    /// Optional allowlist. Each entry is a page id or a paste-able
-    /// browser URL; the mirror is then that page plus every page its
-    /// body links, and theirs. A database embedded in a page is not
-    /// walked: its rows are mirrored only by the whole-workspace search.
-    /// Empty means the whole workspace.
+    /// Optional allowlist. Each entry is a page or a database, by id or
+    /// paste-able browser URL; the mirror is then what hangs under each
+    /// (child pages at any depth, a database's rows and theirs) and the
+    /// pages a root's body links or mentions. Empty means the whole
+    /// workspace.
     #[serde(default)]
     pub roots: Vec<String>,
     /// Stop after this many pages. A guard against a mis-scoped run,

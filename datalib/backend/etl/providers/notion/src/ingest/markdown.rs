@@ -2,7 +2,7 @@
 //!
 //! `GET /v1/pages/{id}/markdown` returns the page body already rendered,
 //! plus two things the body alone doesn't tell you: whether it is
-//! complete, and which links lead further into the workspace.
+//! complete, and which pages it links.
 //!
 //! **`truncated` covers two different situations and the tell is one
 //! attribute.** A hole always leaves a marker in the text:
@@ -40,10 +40,10 @@ pub struct PageBody {
     pub markdown: String,
     pub truncated: bool,
     pub unresolved: Vec<Unresolved>,
-    /// Child pages linked from the body, in appearance order. A
-    /// `<database>` link is not a child: its rows come back from search
-    /// as pages, and the roots walk does not query a data source.
-    pub child_pages: Vec<String>,
+    /// Pages the body links, as a child (`<page>`) or a mention
+    /// (`<mention-page>`), in appearance order. A `<database>` link is
+    /// not a page.
+    pub linked_pages: Vec<String>,
 }
 
 impl PageBody {
@@ -111,14 +111,19 @@ fn attr<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
 }
 
 fn tags<'a>(md: &'a str, open: &str) -> Vec<&'a str> {
+    tags_at(md, open).into_iter().map(|(_, t)| t).collect()
+}
+
+/// Each tag opening with `open`, and where in `md` it starts.
+fn tags_at<'a>(md: &'a str, open: &str) -> Vec<(usize, &'a str)> {
     let mut out = Vec::new();
-    let mut rest = md;
-    while let Some(i) = rest.find(open) {
-        let tail = &rest[i..];
-        match tail.find('>') {
+    let mut from = 0;
+    while let Some(i) = md[from..].find(open) {
+        let at = from + i;
+        match md[at..].find('>') {
             Some(j) => {
-                out.push(&tail[..=j]);
-                rest = &tail[j + 1..];
+                out.push((at, &md[at..=at + j]));
+                from = at + j + 1;
             }
             None => break,
         }
@@ -159,17 +164,19 @@ pub fn parse(resp: &serde_json::Value) -> PageBody {
         }
     }
 
-    let ids = |open: &str| -> Vec<String> {
-        let mut seen: Vec<String> = Vec::new();
-        for t in tags(&markdown, open) {
-            if let Some(id) = attr(t, "url").and_then(id_in_url) {
-                if !seen.contains(&id) {
-                    seen.push(id);
-                }
+    let mut linked_pages: Vec<String> = Vec::new();
+    let mut links: Vec<(usize, &str)> = ["<page ", "<mention-page "]
+        .into_iter()
+        .flat_map(|open| tags_at(&markdown, open))
+        .collect();
+    links.sort_by_key(|(at, _)| *at);
+    for (_, t) in links {
+        if let Some(id) = attr(t, "url").and_then(id_in_url) {
+            if !linked_pages.contains(&id) {
+                linked_pages.push(id);
             }
         }
-        seen
-    };
+    }
 
     PageBody {
         truncated: resp
@@ -177,7 +184,7 @@ pub fn parse(resp: &serde_json::Value) -> PageBody {
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
         unresolved,
-        child_pages: ids("<page "),
+        linked_pages,
         markdown,
     }
 }
@@ -198,16 +205,22 @@ mod tests {
         assert_eq!(dash_uuid("not-an-id"), "not-an-id");
     }
 
-    /// Real shape: `<page url="https://app.notion.com/p/Title-<hex32>">`.
-    /// A `<database>` link beside it is not a child.
+    /// Real shapes: `<page url="https://app.notion.com/p/Title-<hex32>">`
+    /// and `<mention-page url="https://app.notion.com/p/<hex32>"/>`, read
+    /// in the order they appear. A `<database>` link is not a page.
     #[test]
-    fn child_pages_are_read_from_their_tags() {
+    fn linked_pages_are_read_from_child_and_mention_tags() {
         let body = parse(&json!({"markdown":
-            "intro\n<page url=\"https://app.notion.com/p/Standup-Notes-37ba550faf9580e7a583fc322a3ed287\">Standup Notes</page>\n\
-             <database url=\"https://app.notion.com/p/Tasks-2e2a550faf9580498b0ecee9468fa146\">Tasks</database>\n"}));
+            "Ask <mention-page url=\"https://app.notion.com/p/09f6d8201188490cb91d225cace0d051\"/> first.\n\
+             <page url=\"https://app.notion.com/p/Standup-Notes-37ba550faf9580e7a583fc322a3ed287\">Standup Notes</page>\n\
+             <database url=\"https://app.notion.com/p/Tasks-2e2a550faf9580498b0ecee9468fa146\">Tasks</database>\n\
+             Again: <mention-page url=\"https://app.notion.com/p/09f6d8201188490cb91d225cace0d051\"/>\n"}));
         assert_eq!(
-            body.child_pages,
-            vec!["37ba550f-af95-80e7-a583-fc322a3ed287"]
+            body.linked_pages,
+            vec![
+                "09f6d820-1188-490c-b91d-225cace0d051",
+                "37ba550f-af95-80e7-a583-fc322a3ed287"
+            ]
         );
     }
 
@@ -253,6 +266,6 @@ mod tests {
         assert!(body.markdown.is_empty());
         assert!(!body.truncated);
         assert!(body.unresolved.is_empty());
-        assert!(body.child_pages.is_empty());
+        assert!(body.linked_pages.is_empty());
     }
 }

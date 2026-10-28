@@ -1,12 +1,12 @@
-//! The two producers. In search mode `POST /v1/search`, newest edit
-//! first, lists the workspace; a result is the whole page object, so
-//! the listing's rows are the content, and the stretch of edit times a
-//! walk has read is a `coverage` span. In roots mode the walk is the
-//! enumeration: every page under a root gets its `GET /v1/pages/{id}`
-//! each run, and its children come from its stored body. Either way a
-//! page object lands held at its `last_edited_time`, in one transaction
-//! per page of results, and that stamp is what its body and its
-//! comments are owed against.
+//! The listings. `POST /v1/search`, newest edit first, lists the
+//! workspace, and the stretch of edit times a walk has read is a
+//! `coverage` span. In whole-workspace mode a result is the whole page
+//! object, so the listing's rows are the content. In roots mode the same
+//! walk fills the `outline` instead — where each page and database hangs
+//! — and the pages under a root are fetched one `GET /v1/pages/{id}` at
+//! a time (`roots_round`, and the objects loop in `mod.rs`). Either way
+//! a page object lands held at its `last_edited_time`, and that stamp is
+//! what its body and its comments are owed against.
 
 use std::collections::HashMap;
 
@@ -17,14 +17,36 @@ use datalib_etl_web::coverage::{self, Span};
 use datalib_etl_web::owed::{self, Held};
 use serde_json::Value;
 
-use super::db::PageUpsert;
+use super::db::{OutlineRow, PageUpsert};
 use super::official::NotionOfficialError;
 use super::schema_raw::PAGES;
 use super::{run_over, Ctx, FetchSummary};
 
-/// The `coverage` scope of the search walk. One workspace per source,
-/// so one of them.
+/// The `coverage` scope of the whole-workspace search walk. One
+/// workspace per source, so one of them.
 pub const SEARCH_SCOPE: &str = "search";
+
+/// The `coverage` scope of the walk that fills the outline. Its own, so
+/// a store that changes mode lists what the other mode never wrote.
+pub const OUTLINE_SCOPE: &str = "outline";
+
+/// What a search walk stores.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Listing {
+    /// Every page object, as the mirror's content.
+    Workspace,
+    /// Where each page and database hangs, for roots mode to choose from.
+    Outline,
+}
+
+impl Listing {
+    fn scope(self) -> &'static str {
+        match self {
+            Listing::Workspace => SEARCH_SCOPE,
+            Listing::Outline => OUTLINE_SCOPE,
+        }
+    }
+}
 
 /// A span's ends are Notion stamps (`2026-09-01T00:00:00.000Z`), which
 /// sort as text. These sort below and above every one of them.
@@ -82,6 +104,8 @@ enum Ended {
 #[derive(Debug, Default)]
 struct ResultsPage {
     rows: Vec<PageUpsert>,
+    /// Every page and database read, with where it hangs.
+    outline: Vec<OutlineRow>,
     /// The stamps of every result read, pages and containers alike.
     newest: Option<String>,
     oldest: Option<String>,
@@ -111,6 +135,7 @@ fn read_results(
         if let Some(e) = edited {
             page.oldest = Some(e.to_string());
         }
+        page.outline.extend(OutlineRow::from_search_result(r));
         if r.get("object").and_then(Value::as_str) != Some("page") {
             continue;
         }
@@ -190,19 +215,37 @@ impl Ctx<'_> {
         Ok(stored)
     }
 
-    /// Walks the search newest-first down to where what is held begins,
-    /// storing each page of results as it comes. Fails only when the
-    /// first page of results does; a later page that fails ends the
+    /// Stores where each object of `rows` hangs, with `span` covered,
+    /// in one transaction.
+    async fn store_outlined(&self, rows: Vec<OutlineRow>, span: Option<Span>) -> Result<()> {
+        let mut tx = self.db.pool().begin().await?;
+        self.db.store_outline(&mut tx, &rows).await?;
+        if let Some(span) = span {
+            coverage::cover(&mut tx, OUTLINE_SCOPE, span).await?;
+        }
+        tx.commit().await?;
+        self.wrote(rows.len() as u64).await;
+        Ok(())
+    }
+
+    /// Walks the search newest-first down to where what `listing` holds
+    /// begins, storing each page of results as it comes. Fails only when
+    /// the first page of results does; a later page that fails ends the
     /// walk with what it read, as a `listing:search` row.
-    pub async fn search_walk(&self, s: &mut FetchSummary) -> Result<()> {
-        let held = coverage::held(self.db.pool(), SEARCH_SCOPE).await?;
+    pub async fn search_walk(&self, listing: Listing, s: &mut FetchSummary) -> Result<()> {
+        let held = coverage::held(self.db.pool(), listing.scope()).await?;
         let floor = match self.opts.refresh_window_days {
             0 => None,
             days => refresh_floor(&held, days),
         };
         let stop_at = search_stops_at(&held, self.opts.full_sync, floor.as_deref());
+        let cap = match listing {
+            Listing::Workspace => self.opts.max_pages,
+            Listing::Outline => None,
+        };
         tracing::info!(
             event = "notion_search_pass",
+            listing = ?listing,
             stops_at = stop_at.as_deref().unwrap_or("(the end of the workspace)"),
             "one pass of the search"
         );
@@ -234,8 +277,7 @@ impl Ctx<'_> {
                 .and_then(Value::as_array)
                 .cloned()
                 .unwrap_or_default();
-            let mut page =
-                read_results(&results, stop_at.as_deref(), s.listed, self.opts.max_pages);
+            let mut page = read_results(&results, stop_at.as_deref(), s.listed, cap);
             let has_more = resp
                 .get("has_more")
                 .and_then(Value::as_bool)
@@ -258,13 +300,25 @@ impl Ctx<'_> {
                 (Some(hi), Some(lo), None) => Some(Span::new(lo.as_str(), hi.as_str())),
                 _ => None,
             };
-            s.listed += page.rows.len();
-            self.bar
-                .doing(&format!("search: {} pages listed", s.listed));
-            let stored = self.store_listed(page.rows, span).await?;
-            s.new_pages += stored.new;
-            s.upd_pages += stored.updated;
-            s.skipped_pages += stored.skipped;
+            match listing {
+                Listing::Workspace => {
+                    s.listed += page.rows.len();
+                    self.bar
+                        .doing(&format!("search: {} pages listed", s.listed));
+                    let stored = self.store_listed(page.rows, span).await?;
+                    s.new_pages += stored.new;
+                    s.upd_pages += stored.updated;
+                    s.skipped_pages += stored.skipped;
+                }
+                Listing::Outline => {
+                    s.outlined += page.outline.len();
+                    self.bar.doing(&format!(
+                        "outline: {} pages and databases listed",
+                        s.outlined
+                    ));
+                    self.store_outlined(page.outline, span).await?;
+                }
+            }
             match page.end {
                 Some(Ended::CutShort) => {
                     self.found.listing(
@@ -420,8 +474,38 @@ mod tests {
         let ds = serde_json::json!({"object": "data_source", "id": "d", "last_edited_time": T3});
         let read = read_results(&[ds, page("a", T2)], None, 0, None);
         assert_eq!(read.rows.len(), 1);
+        assert_eq!(
+            read.outline.len(),
+            1,
+            "a data source with no database names nothing"
+        );
         assert_eq!(read.newest.as_deref(), Some(T3));
         assert_eq!(read.oldest.as_deref(), Some(T2));
+    }
+
+    /// The outline places a database by its data source: the database
+    /// a row's parent names, hanging where `database_parent` says.
+    #[test]
+    fn a_data_source_places_its_database() {
+        let ds = serde_json::json!({
+            "object": "data_source", "id": "ds", "last_edited_time": T3,
+            "parent": {"type": "database_id", "database_id": "db"},
+            "database_parent": {"type": "page_id", "page_id": "p"},
+        });
+        let row = serde_json::json!({
+            "object": "page", "id": "r", "last_edited_time": T2,
+            "parent": {"type": "data_source_id", "data_source_id": "ds", "database_id": "db"},
+        });
+        let read = read_results(&[ds, row], None, 0, None);
+        let placed: Vec<(&str, &str, Option<&str>)> = read
+            .outline
+            .iter()
+            .map(|o| (o.id.as_str(), o.kind.as_str(), o.parent_id.as_deref()))
+            .collect();
+        assert_eq!(
+            placed,
+            [("db", "database", Some("p")), ("r", "page", Some("db"))]
+        );
     }
 
     /// `max_pages` bounds what one run lists, and the span covers only

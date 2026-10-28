@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl_notion::ingest::official::{BASE, PAGE_SIZE};
+use datalib_etl_notion::ingest::official::{search_body, BASE, PAGE_SIZE};
 use datalib_etl_notion::ingest::{fetch, FetchOptions, FetchSummary, RawDb};
 use datalib_etl_web::http::{fixture_key, HttpRequest, HttpResponse, HttpService};
 use datalib_etl_web::playback;
@@ -106,6 +106,29 @@ pub fn serve_search(tape: &Path, cursor: Option<&str>, results: Value, next: Opt
         "next_cursor": next,
     });
     write_fixture(tape, &req, &json_response(&resp)).unwrap();
+}
+
+/// The workspace's search, one page of it: each of `ids` a page at
+/// [`EDITED`] hanging off the workspace. Roots mode places its roots by it.
+pub fn serve_outline(tape: &Path, ids: &[&str]) {
+    let results: Vec<Value> = ids.iter().map(|id| page(id, EDITED)).collect();
+    serve_search(tape, None, json!(results), None);
+}
+
+/// The first page of the search, answered with `status`.
+pub fn serve_search_status(tape: &Path, status: u16) {
+    let req = HttpRequest::post_json(
+        HttpService::Notion,
+        format!("{BASE}/search"),
+        search_body(None, false).to_string().into_bytes(),
+    )
+    .header("Accept", "application/json");
+    let resp = HttpResponse {
+        status,
+        body: format!(r#"{{"object":"error","status":{status}}}"#).into_bytes(),
+        ..json_response(&json!({}))
+    };
+    write_fixture(tape, &req, &resp).unwrap();
 }
 
 pub fn serve_status(tape: &Path, url: &str, status: u16) {

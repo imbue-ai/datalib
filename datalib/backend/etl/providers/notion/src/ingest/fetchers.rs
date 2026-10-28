@@ -1,12 +1,13 @@
 //! What each loop fetches and how a flush of it is stored, one
-//! [`Fetcher`] per kind: a page's body, an attachment's bytes, a page's
-//! comments listed whole, a commented block, a user. Each is one request
+//! [`Fetcher`] per kind: in roots mode a page's object and where a block
+//! hangs; then a page's body, an attachment's bytes, a page's comments
+//! listed whole, a commented block, a user. Each is one request
 //! per record; the loop (`datalib_etl_web::owed`) owns the stop, the
 //! failure budget, the flush and what each outcome means for the
 //! record's sidecar.
 
-use std::collections::HashMap;
-use std::sync::atomic::Ordering;
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -16,7 +17,7 @@ use datalib_etl_web::owed::{BatchError, Fetched, Fetcher, Listed, Outcome};
 use serde_json::Value;
 use sqlx::{Sqlite, Transaction};
 
-use super::db::{CommentAnchorUpsert, CommentUpsert, PageMarkdownUpsert};
+use super::db::{CommentAnchorUpsert, CommentUpsert, OutlineRow, PageMarkdownUpsert, PageUpsert};
 use super::official::NotionOfficialError;
 use super::schema_raw::split_edge_key;
 use super::{markdown, run_over, slots, Ctx};
@@ -50,6 +51,115 @@ fn outcome<T>(
         // the record is the next run's.
         Err(e) if ctx.stop().requested() => Err(BatchError::Batch(e.into())),
         Err(e) => Ok(Outcome::Failed(e.to_string())),
+    }
+}
+
+// ── roots mode: page objects and blocks ────────────────────────────────
+
+/// The objects of the pages a roots-mode run mirrors. A page Notion has
+/// not got, or will not show, is gone: the store keeps what it had.
+pub(crate) struct Objects<'a> {
+    pub(crate) ctx: &'a Ctx<'a>,
+    /// The pages the store held an object for before this loop.
+    pub(crate) had: HashSet<String>,
+    pub(crate) new: AtomicUsize,
+    pub(crate) updated: AtomicUsize,
+}
+
+#[async_trait]
+impl Fetcher<PageUpsert> for Objects<'_> {
+    async fn fetch(&self, batch: Vec<Listed>) -> Result<Vec<Fetched<PageUpsert>>, BatchError> {
+        let mut out = Vec::with_capacity(batch.len());
+        for listed in batch {
+            self.ctx.bar.doing(&listed.key);
+            let answer = match self.ctx.client.get_page(&listed.key).await {
+                Ok(obj) => Ok(match PageUpsert::from_object(&obj) {
+                    Some(row) => {
+                        // Its body and comments join the queue before
+                        // this object is counted done, so the queue
+                        // never reads empty with them still to come.
+                        self.ctx.foresee_pages(1);
+                        Outcome::Got(row)
+                    }
+                    None => Outcome::Failed("the page object has no id".into()),
+                }),
+                Err(NotionOfficialError::NotFound(_) | NotionOfficialError::Forbidden(_)) => {
+                    Ok(Outcome::Gone)
+                }
+                Err(e) => Err(e),
+            };
+            out.push(Fetched {
+                outcome: outcome(self.ctx, answer)?,
+                listed,
+            });
+            self.ctx.bar.did(1);
+        }
+        Ok(out)
+    }
+
+    async fn store(
+        &self,
+        tx: &mut Transaction<'static, Sqlite>,
+        batch: &[Fetched<PageUpsert>],
+    ) -> Result<()> {
+        let rows: Vec<PageUpsert> = batch
+            .iter()
+            .filter_map(|f| match &f.outcome {
+                Outcome::Got(row) | Outcome::Unusable(row, ..) => Some(row.clone()),
+                _ => None,
+            })
+            .collect();
+        self.ctx.db.store_pages(tx, &rows).await?;
+        for row in &rows {
+            let count = if self.had.contains(&row.id) {
+                &self.updated
+            } else {
+                &self.new
+            };
+            count.fetch_add(1, Ordering::Relaxed);
+        }
+        Ok(())
+    }
+}
+
+/// Where a block that holds a page hangs. A block Notion would not show
+/// hangs off nothing, and is not asked for again.
+pub(crate) struct Blocks<'a>(pub(crate) &'a Ctx<'a>);
+
+#[async_trait]
+impl Fetcher<OutlineRow> for Blocks<'_> {
+    async fn fetch(&self, batch: Vec<Listed>) -> Result<Vec<Fetched<OutlineRow>>, BatchError> {
+        let mut out = Vec::with_capacity(batch.len());
+        for listed in batch {
+            let answer = match self.0.client.get_block(&listed.key).await {
+                Ok(b) => Ok(Outcome::Got(OutlineRow::block(&listed.key, Some(&b)))),
+                Err(NotionOfficialError::NotFound(_) | NotionOfficialError::Forbidden(_)) => {
+                    Ok(Outcome::Got(OutlineRow::block(&listed.key, None)))
+                }
+                Err(e) => Err(e),
+            };
+            out.push(Fetched {
+                outcome: outcome(self.0, answer)?,
+                listed,
+            });
+            self.0.bar.did(1);
+        }
+        Ok(out)
+    }
+
+    async fn store(
+        &self,
+        tx: &mut Transaction<'static, Sqlite>,
+        batch: &[Fetched<OutlineRow>],
+    ) -> Result<()> {
+        let rows: Vec<OutlineRow> = batch
+            .iter()
+            .filter_map(|f| match &f.outcome {
+                Outcome::Got(row) | Outcome::Unusable(row, ..) => Some(row.clone()),
+                _ => None,
+            })
+            .collect();
+        self.0.db.store_outline(tx, &rows).await
     }
 }
 
@@ -217,11 +327,6 @@ impl Bodies<'_> {
                     }
                     body.markdown.push('\n');
                     body.markdown.push_str(&part.markdown);
-                    for c in part.child_pages {
-                        if !body.child_pages.contains(&c) {
-                            body.child_pages.push(c);
-                        }
-                    }
                     ctx.counts.hole_followups.fetch_add(1, Ordering::Relaxed);
                 }
                 // The block went since the body was read.
@@ -569,7 +674,7 @@ fn block_plain_text(block: &Value) -> Option<String> {
 }
 
 /// A user as Notion describes one, or nothing for an id it no longer
-/// has.
+/// has or will not show.
 pub struct User {
     name: Option<String>,
     payload: Option<String>,
@@ -587,10 +692,14 @@ impl Fetcher<User> for Users<'_> {
                     name: u.get("name").and_then(Value::as_str).map(String::from),
                     payload: Some(u.to_string()),
                 })),
-                Err(NotionOfficialError::NotFound(_)) => Ok(Outcome::Got(User {
-                    name: None,
-                    payload: None,
-                })),
+                // Some users a page names answer 403 to a personal access
+                // token; as with a 404, there is no name to have.
+                Err(NotionOfficialError::NotFound(_) | NotionOfficialError::Forbidden(_)) => {
+                    Ok(Outcome::Got(User {
+                        name: None,
+                        payload: None,
+                    }))
+                }
                 Err(e) => Err(e),
             };
             out.push(Fetched {

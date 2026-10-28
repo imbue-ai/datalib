@@ -85,15 +85,39 @@ containers, and are skipped.
 Do not confuse the covered stretch with `start_cursor` / `next_cursor`,
 which page *within* one walk and do not survive it.
 
-With `api.roots` set, the mirror is those pages and everything under
-them, walked through the `<page>` links in each stored body, round by
-round: the frontier's objects, then the bodies owed, then the children
-those bodies name. The walk is the enumeration: every page under a root
-gets its `GET /v1/pages/{id}` each run, stored held at its stamp, and a
-page whose stamp has not moved is not written again. No span. A
-`<database>` link is not a child: the walk does not query a data source
-for its rows, so a database embedded in a page is mirrored only by the
-whole-workspace search.
+With `api.roots` set — each a page or a database, by id or pasted link —
+the mirror is what hangs under each root, and the pages a root's body
+links. What hangs where comes from the same search, walked the same way
+but stored as the **outline**: one row per page and per database, with
+the object it hangs off, and its own `coverage` scope, `outline`, so a
+steady-state run again reads one page of results. A database is placed
+by its data source, which search returns beside the pages: the data
+source names its database (`parent.database_id`, what a row's parent
+names too) and where that database hangs (`database_parent`). A page or
+a database can also hang off a block — a toggle, a column — and search
+does not say where a block is, so `GET /v1/blocks/{id}` places each one,
+once, round by round up to the page that holds it (158 blocks for 430
+such pages in a measured workspace).
+
+A page is then under a root when its chain of parents reaches the root
+(`ingest::scope`): a child page at any depth, whether or not the root's
+body links it; a database's rows, and what hangs off them; a database
+inside a page, and its rows. One hop more: every page a root's body
+links, as a child (`<page>`) or a mention (`<mention-page>`), is
+mirrored too, but not what hangs under it, and not what it links. A
+mention is how a person points at a page that lives elsewhere, and
+following mentions further reaches most of a workspace in a few hops.
+
+Only those pages enter `pages`: each is fetched with `GET
+/v1/pages/{id}`, owed at the stamp the outline lists it at, so a page
+whose stamp has not moved costs nothing. A page that leaves the roots —
+moved elsewhere, or its root taken out of the config — stays as it was,
+as a deleted one does. A root the outline does not have is asked for as
+a page, so one Notion has not got, or will not show, is a `config:` row.
+
+The first run of a roots source lists the whole workspace into the
+outline: one request per hundred objects, about nine minutes for 53,000
+pages, against the hours their bodies and comments would take.
 
 **Loops.** One request per record, in this order, each over the whole
 store:
@@ -116,7 +140,8 @@ held at, and seals through the step's sealer, so a run killed anywhere
 leaves a store a later run finishes.
 
 **Progress.** The run's one bar counts requests the run can see waiting:
-each page object a roots walk asks for, and each record a loop owes.
+each page object roots mode asks for, each block it places, and each
+record a loop owes.
 A page the listing stores at a new stamp announces its body, and its
 comment listing, as it is stored, so the queue grows with the search
 walk and the ETA covers the loops ahead. A page of search results is
@@ -210,7 +235,8 @@ anything: it was not held, so it is owed, and the next run fetches it.
 
 | what failed | its row | what clears it |
 |---|---|---|
-| a page object, in roots mode | `pages:<id>` | the page fetching; the walk reaches it again next run |
+| a page object, in roots mode | `pages:<id>` | the page fetching; it is owed until held at the stamp the outline lists |
+| a block a page hangs off, in roots mode | `outline:<id>` | the block fetching; until it does, what hangs off it is not under a root |
 | a page's comments listing | `page_comments:<id>` | the listing fetching whole |
 | comments the credential may not read (403: an integration without the read-comments capability) | one `listing:comments`, a warning; comments are not asked for again that run, and no page is marked failed | a run that reads comments, or has none to read |
 | a page's body | `page_markdown:<id>` | the body fetching |
@@ -234,9 +260,11 @@ page, so a page the store holds stays as it was. A body that answers
 404 is held empty at the page's `last_edited_time`, so it is asked for
 again only once the page is edited; comments that answer 404 read as
 none, and the page's stored comments go; a user or a block that answers
-404 keeps an id-only row, held, so it is asked for once. A root that
-answers 404 is a `config:` row, and a child that does is simply not
-listed.
+404 keeps an id-only row, held, so it is asked for once — and so does a
+user that answers 403, which some users a page names do for a personal
+access token. A root that answers 404 is a `config:` row; a page under a
+root that does (its object, in roots mode) is gone, and the store keeps
+what it had.
 
 A request the transport refused because of the stop is not a problem,
 and a stopped run leaves the last run's `listing:` and `config:` rows
@@ -271,8 +299,9 @@ one as the end of a listing would silently truncate.
 | `comments` | one row per comment, with `page_id` and `discussion_id` | — (written with its page's listing) |
 | `comment_anchors` | the text a block-anchored comment hangs off | read once |
 | `users` | display names, resolved one id at a time | read once |
+| `outline` | roots mode only: each page and database, and each block one hangs off, with what it hangs off | a page at its `last_edited_time`; a block read once |
 | `notion_attachments` | CAS edge, `ref_id` = the slot, written with the body | its bytes, once |
-| `coverage` | the stretch of edit times the search has read, scope `search` | — |
+| `coverage` | the stretch of edit times the search has read, scope `search` (or `outline`, in roots mode) | — |
 
 `page_markdown` is its own table so `dolt_diff_page_markdown` means
 exactly "the body changed", separate from "a property changed".
@@ -295,9 +324,10 @@ Two things Notion does not hand over with the object that needs them.
 seen on pages, people properties and comments are resolved with
 `GET /v1/users/{id}` and cached in `users`. One request per user, once
 ever. It has to work this way: `GET /v1/users` (list all) is not
-available to a personal access token. A user that cannot be read falls
-back to an id prefix rather than failing the page, and is a `users:<id>`
-row until a later run reads it.
+available to a personal access token. A user Notion will not show (404
+or 403) keeps an id-only row and renders as an id prefix; one whose
+request failed some other way is a `users:<id>` row until a later run
+reads it.
 
 **A comment names a `block_id` and carries no quote of what it is
 about.** So `GET /v1/blocks/{id}` runs for **commented blocks only** —

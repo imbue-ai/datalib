@@ -17,8 +17,10 @@ use datalib_etl_web::owed::{self, Listed};
 pub use datalib_etl::doltlite_raw::db_path_for;
 
 use super::schema_raw::{
-    full_ddl, NotionAttachmentRow, ATTACHMENTS, COMMENTS, LADDER, PAGES, PAGE_MARKDOWN,
+    full_ddl, NotionAttachmentRow, OutlineKind, ATTACHMENTS, COMMENTS, LADDER, OUTLINE, PAGES,
+    PAGE_MARKDOWN,
 };
+use super::scope::Placed;
 
 datalib_etl::raw_db!(pub RawDb: CasEntityStore, full_ddl(), LADDER);
 
@@ -61,6 +63,71 @@ impl PageUpsert {
 
     pub fn listed(&self) -> Listed {
         Listed::new(self.id.clone(), self.last_edited_time.clone())
+    }
+}
+
+/// One object's place in the workspace, as `outline` stores it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutlineRow {
+    pub id: String,
+    pub kind: OutlineKind,
+    pub parent_type: Option<String>,
+    pub parent_id: Option<String>,
+    pub last_edited_time: Option<String>,
+}
+
+impl OutlineRow {
+    /// A page or a data source from the search. A data source stands for
+    /// its database, which is what a row's parent names; it hangs where
+    /// `database_parent` says. `None` for any other object, or one with
+    /// no id.
+    pub fn from_search_result(r: &Value) -> Option<Self> {
+        let text = |v: Option<&Value>| v.and_then(Value::as_str).map(String::from);
+        let edited = text(r.get("last_edited_time"));
+        match r.get("object").and_then(Value::as_str)? {
+            "page" => Some(Self::placed(
+                text(r.get("id"))?,
+                OutlineKind::Page,
+                r.get("parent"),
+                edited,
+            )),
+            "data_source" => Some(Self::placed(
+                text(r.get("parent").and_then(|p| p.get("database_id")))?,
+                OutlineKind::Database,
+                r.get("database_parent"),
+                edited,
+            )),
+            _ => None,
+        }
+    }
+
+    /// A block from `GET /v1/blocks/{id}`, or `None` for one Notion would
+    /// not show: it hangs off nothing, and is not asked for again.
+    pub fn block(id: &str, block: Option<&Value>) -> Self {
+        Self::placed(
+            id.to_string(),
+            OutlineKind::Block,
+            block.and_then(|b| b.get("parent")),
+            None,
+        )
+    }
+
+    fn placed(
+        id: String,
+        kind: OutlineKind,
+        parent: Option<&Value>,
+        last_edited_time: Option<String>,
+    ) -> Self {
+        Self {
+            id,
+            kind,
+            parent_type: parent
+                .and_then(|p| p.get("type"))
+                .and_then(Value::as_str)
+                .map(String::from),
+            parent_id: parent.and_then(parent_id_of),
+            last_edited_time,
+        }
     }
 }
 
@@ -231,9 +298,9 @@ impl RawDb {
             .collect())
     }
 
-    /// The child pages the stored bodies of `page_ids` link, in the
-    /// order the bodies name them, each once.
-    pub async fn child_pages_of(&self, page_ids: &[String]) -> Result<Vec<String>> {
+    /// The pages the stored bodies of `page_ids` link, as a child or a
+    /// mention, in the order the bodies name them, each once.
+    pub async fn pages_linked_from(&self, page_ids: &[String]) -> Result<Vec<String>> {
         let mut out: Vec<String> = Vec::new();
         for chunk in page_ids.chunks(datalib_etl::bulk::SQL_CHUNK) {
             let mut placeholders = String::new();
@@ -251,7 +318,7 @@ impl RawDb {
             let mut bodies: HashMap<String, String> = q
                 .fetch_all(self.pool())
                 .await
-                .context("read the stored bodies for their children")?
+                .context("read the stored bodies for their links")?
                 .into_iter()
                 .collect();
             for id in chunk {
@@ -259,14 +326,73 @@ impl RawDb {
                     continue;
                 };
                 let body = super::markdown::parse(&serde_json::json!({ "markdown": md }));
-                for child in body.child_pages {
-                    if !out.contains(&child) {
-                        out.push(child);
+                for linked in body.linked_pages {
+                    if !out.contains(&linked) {
+                        out.push(linked);
                     }
                 }
             }
         }
         Ok(out)
+    }
+
+    /// Every object in the outline, by id.
+    pub async fn outline(&self) -> Result<HashMap<String, Placed>> {
+        let rows: Vec<(String, String, Option<String>)> =
+            sqlx::query_as("SELECT id, kind, parent_id FROM outline")
+                .fetch_all(self.pool())
+                .await
+                .context("read the outline")?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(id, kind, parent)| {
+                let kind = OutlineKind::parse(&kind)?;
+                Some((id, Placed { kind, parent }))
+            })
+            .collect())
+    }
+
+    /// Each page of `ids` at the stamp the outline lists it at; a page
+    /// the outline does not have at no version.
+    pub async fn outline_stamps(&self, ids: &[String]) -> Result<Vec<Listed>> {
+        let mut stamps: HashMap<String, Option<String>> = HashMap::new();
+        for chunk in ids.chunks(datalib_etl::bulk::SQL_CHUNK) {
+            let mut placeholders = String::new();
+            datalib_etl::bulk::push_placeholder_list(&mut placeholders, chunk.len());
+            // Audited: the IN-list is a `?,?,?` run sized from the chunk and
+            // every id is bound.
+            let sql =
+                format!("SELECT id, last_edited_time FROM outline WHERE id IN ({placeholders})");
+            let mut q = sqlx::query_as::<_, (String, Option<String>)>(sqlx::AssertSqlSafe(sql));
+            for id in chunk {
+                q = q.bind(id);
+            }
+            stamps.extend(
+                q.fetch_all(self.pool())
+                    .await
+                    .context("read the outline's stamps")?,
+            );
+        }
+        Ok(ids
+            .iter()
+            .map(|id| Listed::new(id.clone(), stamps.get(id).cloned().flatten()))
+            .collect())
+    }
+
+    /// Every block the outline names as a parent, at no version: where
+    /// it hangs has only to be read once.
+    pub async fn blocks_listed(&self) -> Result<Vec<Listed>> {
+        let ids: Vec<String> = sqlx::query_scalar(
+            "SELECT DISTINCT parent_id FROM outline \
+             WHERE parent_type = 'block_id' AND parent_id IS NOT NULL ORDER BY parent_id",
+        )
+        .fetch_all(self.pool())
+        .await
+        .context("list the blocks pages hang off")?;
+        Ok(ids
+            .into_iter()
+            .map(|id| Listed::new(id, None::<String>))
+            .collect())
     }
 
     /// The bytes the CAS holds for a slot under any page, by their
@@ -321,6 +447,35 @@ impl RawDb {
             .await
             .with_context(|| format!("upsert page {}", r.id))?;
             owed::hold(tx, PAGES, &r.id, r.last_edited_time.as_deref()).await?;
+        }
+        Ok(())
+    }
+
+    /// Each object's place, held at its `last_edited_time`.
+    pub async fn store_outline(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        rows: &[OutlineRow],
+    ) -> Result<()> {
+        for r in rows {
+            sqlx::query(
+                "INSERT INTO outline (id, kind, parent_type, parent_id, last_edited_time)
+                 VALUES (?, ?, ?, ?, ?)
+                 ON CONFLICT(id) DO UPDATE SET
+                    kind = excluded.kind,
+                    parent_type = excluded.parent_type,
+                    parent_id = excluded.parent_id,
+                    last_edited_time = excluded.last_edited_time",
+            )
+            .bind(&r.id)
+            .bind(r.kind.as_str())
+            .bind(&r.parent_type)
+            .bind(&r.parent_id)
+            .bind(&r.last_edited_time)
+            .execute(&mut **tx)
+            .await
+            .with_context(|| format!("place {} in the outline", r.id))?;
+            owed::hold(tx, OUTLINE, &r.id, r.last_edited_time.as_deref()).await?;
         }
         Ok(())
     }

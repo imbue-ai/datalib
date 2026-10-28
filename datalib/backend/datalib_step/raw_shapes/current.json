@@ -505,7 +505,7 @@
     ]
   },
   "notion": {
-    "schema_hash": "30aa0d7aa5576a7117422fc308458791674c87c055b11dae1263a1b54df445e4",
+    "schema_hash": "1b3014f7238886a8ed931487f79f1022ac6a476eaa45e4feff99d81697560957",
     "schema_version": 1,
     "shared_schema_version": 1,
     "sql": [
@@ -520,6 +520,9 @@
       "CREATE TABLE notion_attachments_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX notion_attachments_by_page_id ON notion_attachments(page_id)",
       "CREATE INDEX notion_attachments_by_ref_id ON notion_attachments(ref_id, blake3)",
+      "CREATE TABLE outline( id TEXT PRIMARY KEY, kind TEXT NOT NULL, parent_type TEXT NULL, parent_id TEXT NULL, last_edited_time TEXT NULL)",
+      "CREATE TABLE outline_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
+      "CREATE INDEX outline_parent ON outline(parent_id)",
       "CREATE TABLE page_comments(id TEXT PRIMARY KEY)",
       "CREATE TABLE page_comments_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE page_markdown( id TEXT PRIMARY KEY, markdown TEXT NULL, truncated INTEGER NOT NULL DEFAULT 0, unresolved_block_ids TEXT NULL)",

@@ -7,6 +7,7 @@ mod interrupt;
 mod live;
 mod playback_roundtrip;
 mod progress_countdown;
+mod roots;
 mod run_problems;
 mod support;
 mod sync_state;

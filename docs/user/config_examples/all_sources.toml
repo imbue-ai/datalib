@@ -2038,9 +2038,9 @@ maximum_sequential_failed_requests = 50        # the default
 account = "enterprise"
 
 [steps.params.api]
-# Mirror only these pages and every page their bodies link, by page id or
-# pasted link. A database embedded in one is not walked; its rows come only
-# with the whole-workspace mirror. Omit for the whole workspace.
+# Mirror only these pages and databases and what hangs under them (sub-pages
+# at any depth, a database's rows and theirs), plus the pages a root links or
+# mentions; by id or pasted link. Omit for the whole workspace.
 roots = [
   "https://www.notion.so/enterprise/Bridge-Crew-Rota-0123456789abcdef0123456789abcdef",
   "fedcba9876543210fedcba9876543210",

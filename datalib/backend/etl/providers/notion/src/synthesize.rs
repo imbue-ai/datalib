@@ -9,7 +9,7 @@ use datalib_etl_web::http::{HttpRequest, HttpService};
 use datalib_etl_web::synthesize::{json_response, write_fixture, SynthesizeReport, Synthesizer};
 use serde_json::{json, Value};
 
-use crate::ingest::official::{BASE, PAGE_SIZE};
+use crate::ingest::official::{search_body, BASE, PAGE_SIZE};
 use crate::ingest::{
     ENTITY_ANCHOR_BLOCK, ENTITY_COMMENT, ENTITY_MARKDOWN, ENTITY_PAGE, ENTITY_USER,
 };
@@ -70,6 +70,39 @@ impl Synthesizer for NotionSynth {
             count += 1;
         }
         page_ids.sort();
+
+        // POST /search — every page in one page of results, newest edit
+        // first, as the whole-workspace mirror and the roots outline
+        // both start from it.
+        let mut listed: Vec<Value> = pages
+            .iter()
+            .filter(|(id, _)| !id.is_empty())
+            .filter_map(|(_, rec)| rec.get("raw").cloned())
+            .collect();
+        let edited = |v: &Value| {
+            v.get("last_edited_time")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string()
+        };
+        listed.sort_by(|a, b| edited(b).cmp(&edited(a)).then(key_id(a).cmp(&key_id(b))));
+        let search = HttpRequest::post_json(
+            HttpService::Notion,
+            format!("{BASE}/search"),
+            search_body(None, false).to_string().into_bytes(),
+        )
+        .header("Accept", "application/json");
+        write_fixture(
+            out_root,
+            &search,
+            &json_response(&json!({
+                "object": "list",
+                "results": listed,
+                "has_more": false,
+                "next_cursor": Value::Null,
+            })),
+        )?;
+        count += 1;
 
         // /pages/{id}/markdown — one per page. A page with no recorded
         // body still gets a fixture with empty markdown, which is the
@@ -212,7 +245,10 @@ mod tests {
 
         let out = d.path().join("fixtures");
         let report = NotionSynth::new(&api).synthesize(&out).unwrap();
-        assert_eq!(report.fixtures_written, 3, "page + markdown + comments");
+        assert_eq!(
+            report.fixtures_written, 4,
+            "page + search + markdown + comments"
+        );
 
         for url in [
             format!("{BASE}/pages/{pid}"),

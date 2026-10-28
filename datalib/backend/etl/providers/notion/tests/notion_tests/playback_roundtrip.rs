@@ -98,8 +98,8 @@ async fn notion_synth_playback_extract_roundtrip() {
     );
 
     let report = NotionSynth::new(&api).synthesize(&playback).unwrap();
-    // 1 page + 1 markdown + 1 comments + 1 user + 1 anchor block = 5
-    assert_eq!(report.fixtures_written, 5);
+    // 1 page + 1 search + 1 markdown + 1 comments + 1 user + 1 anchor block = 6
+    assert_eq!(report.fixtures_written, 6);
 
     // The test owns the store: one connection for the download and the
     // assertions both, because the file takes one writer at a time.

@@ -43,6 +43,22 @@ pub enum NotionOfficialError {
     Permanent(String),
 }
 
+/// What `POST /v1/search` is sent: newest edit first, a page of
+/// [`PAGE_SIZE`] from `start_cursor`.
+pub fn search_body(start_cursor: Option<&str>, in_trash: bool) -> Value {
+    let mut body = serde_json::json!({
+        "page_size": PAGE_SIZE,
+        "sort": { "timestamp": "last_edited_time", "direction": "descending" },
+    });
+    if in_trash {
+        body["filter"] = serde_json::json!({ "in_trash": true });
+    }
+    if let Some(c) = start_cursor {
+        body["start_cursor"] = Value::String(c.to_string());
+    }
+    body
+}
+
 pub struct NotionOfficialClient {
     requests: AtomicU64,
     network_ms: AtomicU64,
@@ -231,16 +247,7 @@ impl NotionOfficialClient {
         start_cursor: Option<&str>,
         in_trash: bool,
     ) -> Result<Value, NotionOfficialError> {
-        let mut body = serde_json::json!({
-            "page_size": PAGE_SIZE,
-            "sort": { "timestamp": "last_edited_time", "direction": "descending" },
-        });
-        if in_trash {
-            body["filter"] = serde_json::json!({ "in_trash": true });
-        }
-        if let Some(c) = start_cursor {
-            body["start_cursor"] = Value::String(c.to_string());
-        }
+        let body = search_body(start_cursor, in_trash);
         self.request("POST", "/search", Some(&body)).await
     }
 
