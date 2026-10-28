@@ -17,7 +17,7 @@ use datalib_unified_document_index::repo::MapDocRow;
 use datalib_unified_document_index::search::SearchRow;
 use serde::{Deserialize, Serialize};
 
-use super::{columns, qmd_rows, Index};
+use super::{columns, ranked_rows, Index};
 
 /// How many qmd hits a free-text filter lights up. Retrieval is ranked,
 /// so this is "the best matches", not "every document that mentions it".
@@ -117,18 +117,17 @@ pub async fn matches_handler(
     })
 }
 
-/// The documents `q` matches. Free text goes to qmd, as it does on the
-/// grid, with its structured terms applied to the hits; structured
-/// terms alone are a SQL filter over every row. A qmd failure matches
-/// nothing and says why.
+/// The documents `q` matches: free text ranked as the grid ranks it with
+/// no tab, structured terms alone a SQL filter over every row. A failed
+/// search matches nothing and says why.
 async fn matching(s: &Index, q: &str, errors: &mut Vec<String>) -> HashSet<String> {
     let parsed = parse_query(q);
     if let Some(why) = super::refusal(&s.root, &parsed) {
         errors.push(why);
         return HashSet::new();
     }
-    let parsed = match super::with_people(&s.root, q, parsed).await {
-        Ok((parsed, _)) => parsed,
+    let (parsed, q) = match super::with_people(&s.root, q, parsed).await {
+        Ok(read) => read,
         Err(why) => {
             errors.push(why);
             return HashSet::new();
@@ -137,10 +136,10 @@ async fn matching(s: &Index, q: &str, errors: &mut Vec<String>) -> HashSet<Strin
     let found = if parsed.free_text.is_empty() {
         s.repo.matching_documents(&parsed).await
     } else {
-        match qmd_rows(&s.root, &s.repo, &s.qmd, &parsed, FREE_TEXT_HITS).await {
+        match ranked_rows(s, &q, &parsed, FREE_TEXT_HITS).await {
             Ok(rows) => Ok(markdowns(rows)),
             Err(e) => {
-                errors.push(format!("free-text search failed: {e:#}"));
+                errors.push(format!("free-text search failed: {e}"));
                 Ok(HashSet::new())
             }
         }

@@ -143,14 +143,45 @@ impl QmdIndexReader {
     /// fact 7). Each hit's snippet opens with the line where `query.first`
     /// first appears, in the header `snippet_match_line` reads, so the hit
     /// lands on that message.
+    ///
+    /// `among`, when given, keeps only the documents at those
+    /// (`norm_path`ed) paths, before the cut: a search's other terms narrow
+    /// what is ranked, so a match below the first `limit` of every source
+    /// is still found.
     pub async fn keyword_hits(
         &self,
         query: &Fts5Query,
         collections: Option<&[String]>,
+        among: Option<&std::collections::HashSet<String>>,
         limit: usize,
     ) -> Result<Vec<QmdHit>, sqlx::Error> {
         let scoped = collections.is_some();
         let wanted = serde_json::to_string(&collections.unwrap_or_default()).unwrap_or_default();
+        let ids: Option<Vec<i64>> = match among {
+            None => None,
+            Some(among) => {
+                let every: Vec<(i64, String)> = sqlx::query_as(
+                    "SELECT d.id, d.path \
+                       FROM documents_fts JOIN documents d ON d.id = documents_fts.rowid \
+                      WHERE documents_fts MATCH ?1 AND d.active = 1 \
+                        AND (NOT ?2 OR d.collection IN (SELECT value FROM json_each(?3))) \
+                      ORDER BY bm25(documents_fts, 0.0, 2.0, 1.0)",
+                )
+                .bind(&query.expr)
+                .bind(scoped)
+                .bind(&wanted)
+                .fetch_all(&self.pool)
+                .await?;
+                Some(
+                    every
+                        .into_iter()
+                        .filter(|(_, path)| among.contains(&crate::qmd::mapping::norm_path(path)))
+                        .map(|(id, _)| id)
+                        .take(limit)
+                        .collect(),
+                )
+            }
+        };
         // The line is counted in the top hits' bodies only, after the cut:
         // a common word matches tens of thousands of documents. The body
         // is the file as qmd read it, so its lines are the file's.
@@ -162,6 +193,7 @@ impl QmdIndexReader {
                  FROM documents_fts JOIN documents d ON d.id = documents_fts.rowid \
                 WHERE documents_fts MATCH ?1 AND d.active = 1 \
                   AND (NOT ?2 OR d.collection IN (SELECT value FROM json_each(?3))) \
+                  AND (NOT ?6 OR d.id IN (SELECT value FROM json_each(?7))) \
                 ORDER BY rank LIMIT ?4) \
              SELECT h.path, -h.rank, h.snippet, \
                     (SELECT CASE WHEN instr(lower(f.body), lower(?5)) > 0 THEN \
@@ -175,6 +207,8 @@ impl QmdIndexReader {
         .bind(wanted)
         .bind(limit as i64)
         .bind(&query.first)
+        .bind(ids.is_some())
+        .bind(serde_json::to_string(&ids.unwrap_or_default()).unwrap_or_default())
         .fetch_all(&self.pool)
         .await?;
         Ok(rows
@@ -195,12 +229,14 @@ impl QmdIndexReader {
     /// See [`crate::qmd::vectors::nearest_documents`].
     pub async fn nearest_documents(
         &self,
+        cache: &crate::qmd::vectors::VectorCache,
         query: &crate::qmd::vectors::QueryVector<'_>,
         collections: Option<&[String]>,
         among: Option<&std::collections::HashSet<String>>,
         limit: usize,
     ) -> anyhow::Result<Vec<QmdHit>> {
-        crate::qmd::vectors::nearest_documents(&self.pool, query, collections, among, limit).await
+        crate::qmd::vectors::nearest_documents(&self.pool, cache, query, collections, among, limit)
+            .await
     }
 
     pub async fn summary(&self) -> Result<QmdIndexSummary, sqlx::Error> {
@@ -604,9 +640,12 @@ mod tests {
         ));
         let r = keyword_db(td.path(), &docs).await;
         let warp = crate::qmd::lex::fts5_query("warp").unwrap();
-        assert_eq!(r.keyword_hits(&warp, None, 100).await.unwrap().len(), 31);
+        assert_eq!(
+            r.keyword_hits(&warp, None, None, 100).await.unwrap().len(),
+            31
+        );
         let sickbay = r
-            .keyword_hits(&warp, Some(&["sickbay".to_string()]), 100)
+            .keyword_hits(&warp, Some(&["sickbay".to_string()]), None, 100)
             .await
             .unwrap();
         let paths: Vec<&str> = sickbay.iter().map(|h| h.path.as_str()).collect();
@@ -625,7 +664,12 @@ mod tests {
         )
         .await;
         let hits = r
-            .keyword_hits(&crate::qmd::lex::fts5_query("warp").unwrap(), None, 10)
+            .keyword_hits(
+                &crate::qmd::lex::fts5_query("warp").unwrap(),
+                None,
+                None,
+                10,
+            )
             .await
             .unwrap();
         assert_eq!(

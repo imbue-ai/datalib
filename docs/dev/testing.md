@@ -558,6 +558,40 @@ The normalization machinery — the volatile keys the snapshots redact, each
 commented with why — is in the test's source.
 
 
+## Search quality on a real library
+
+`scripts/search_eval.py` scores the search box against an eval set: target
+rows of a library, each with queries a person might type to find it (a
+few remembered words, search keys like `from:` and `after:`, or a
+description in other words). It asks every query once per answer (the
+Fields, Words and Meaning tabs, and the fused answer a search with no
+tab gets), records where the target ranked and how long
+each answer took, and prints hit rates at 1, 3 and 10, the mean
+reciprocal rank and latency percentiles, by query style and by source.
+A row counts as the target when it is in the same document. The `ui`
+line is the tab the app would open: the first to answer with rows.
+
+An eval set built from a real library is that library's data, so it
+never goes in this repo; Thad's lives in the private
+`data_liberation_manual_e2e_test_data` directory, under `search_eval/`.
+Run against a clone of the root (`cp -cR` on APFS costs no disk), so a
+sync does not move the answers between two runs:
+
+```bash
+bazelisk build //datalib/backend:bin
+export DATALIB_RUNTIME_DIR=…            # a staged runtime, for qmd
+python3 scripts/search_eval.py run --root <clone> --evals <evals.json> --out before.json
+python3 scripts/search_eval.py compare before.json after.json   # what moved
+python3 scripts/search_eval.py show after.json --missed words   # what a query found
+python3 scripts/search_eval.py audit-me --root <clone> --name "<owner>"  # where `me` is tagged
+```
+
+By default it starts its own `datalib-applet unified_document_index` and
+times the answers warm, after one query of each kind. `--http <url>` asks
+a running `datalib-http` through its gateway instead, so the times
+include the gateway. A plain `bazelisk build` compiles Rust unoptimized;
+time what ships with an applet built `-c opt` (`--applet <path>`).
+
 ## macOS permissions in the desktop app (by hand)
 
 Whether the app can read a protected folder — `~/Library/Messages`,

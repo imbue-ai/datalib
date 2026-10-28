@@ -708,8 +708,9 @@ pub async fn build_grid_index(
 /// Stack the render stores of exactly `sources` into the index — the
 /// `grid_index` DAG step's whole job. The step passes the groups its
 /// declared inputs name, so a source dropped from the config stops being
-/// read on the next run even while its tree is still on disk — and a
-/// directory that is not in the config is never read at all. A listed
+/// read on the next run even while its tree is still on disk, and its
+/// documents leave the index — and a directory that is not in the config
+/// is never read at all. A listed
 /// source with no store yet is skipped: its render step has not produced
 /// one.
 ///
@@ -812,6 +813,27 @@ pub async fn build_grid_index_for(
             break;
         }
     }
+    if !stop.requested() {
+        let named: HashSet<&str> = sources.iter().map(String::as_str).collect();
+        let mut unnamed: Vec<&str> = indexed
+            .keys()
+            .chain(cursors.keys())
+            .map(String::as_str)
+            .filter(|s| !named.contains(s))
+            .collect();
+        unnamed.sort_unstable();
+        unnamed.dedup();
+        for source in unnamed {
+            let documents = indexed.get(source).map_or(0, HashSet::len);
+            retire_source(&write_lock, source, indexed.get(source)).await?;
+            summary.markdowns_removed += documents;
+            tracing::info!(
+                source,
+                documents,
+                "this source is no longer an input; its documents are out of the index"
+            );
+        }
+    }
     tracing::info!(
         sources = sources.len(),
         not_yet_rendered = pass.not_yet_rendered,
@@ -823,6 +845,57 @@ pub async fn build_grid_index_for(
         "read the render stores"
     );
     Ok(summary)
+}
+
+/// Take a source the graph no longer names out of the index, in one
+/// transaction and one seal: its documents, its problems and its cursor,
+/// so a source added back later is read whole.
+async fn retire_source(
+    write_lock: &WriteLock,
+    source: &str,
+    documents: Option<&HashSet<String>>,
+) -> Result<()> {
+    write_lock
+        .begin_transaction()
+        .await
+        .with_context(|| format!("begin the transaction retiring {source}"))?;
+    let res = async {
+        let mut guard = write_lock.acquire().await?;
+        let conn = guard.conn();
+        for markdown_uuid in documents.into_iter().flatten() {
+            delete_document_rows(conn, markdown_uuid).await?;
+        }
+        replace_source_problems(conn, source, &[]).await?;
+        sqlx::query("DELETE FROM source_cursors WHERE source_id = ?")
+            .bind(source)
+            .execute(&mut **conn)
+            .await
+            .with_context(|| format!("clear {source}'s cursor"))?;
+        anyhow::Ok(())
+    }
+    .await;
+    if let Err(e) = res {
+        let _ = write_lock.rollback_transaction().await;
+        return Err(e);
+    }
+    write_lock
+        .commit_transaction()
+        .await
+        .with_context(|| format!("commit the transaction retiring {source}"))?;
+    let removed = documents.map_or(0, HashSet::len);
+    datalib_etl::doltlite_raw::commit_run(
+        &write_lock.pool,
+        &SealCounts {
+            read: 0,
+            loaded: 0,
+            removed,
+            rows: 0,
+        }
+        .message(source),
+    )
+    .await
+    .with_context(|| format!("seal the index after retiring {source}"))?;
+    Ok(())
 }
 
 fn stopped_before(stop: &StopFlag, source: &str) -> bool {
@@ -2517,6 +2590,47 @@ mod source_cursor_tests {
         );
         build_grid_index(&pool, root, |_| {}, None).await.unwrap();
         assert_eq!(index_row_count(&pool).await, 2);
+    }
+
+    /// A source taken out of the graph leaves the index with its cursor,
+    /// so a renamed source does not show every document twice and one
+    /// added back is read whole.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_source_no_longer_listed_leaves_the_index() {
+        let td = tempdir().unwrap();
+        let root = td.path();
+        let pool = index_pool(root).await;
+        render(root, "kept", &[doc(root, "kept", "md-k", "kept body")]);
+        render(
+            root,
+            "dropped",
+            &[doc(root, "dropped", "md-d", "dropped body")],
+        );
+        let both = ["dropped".to_string(), "kept".to_string()];
+        build_grid_index_for(&pool, root, &both, |_| {}, None, &StopFlag::new())
+            .await
+            .unwrap();
+        assert_eq!(index_row_count(&pool).await, 2);
+
+        let s = build_grid_index_for(
+            &pool,
+            root,
+            &["kept".to_string()],
+            |_| {},
+            None,
+            &StopFlag::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(index_row_count(&pool).await, 1, "only `kept`");
+        assert_eq!(s.markdowns_removed, 1);
+        let cursors = load_source_cursors(&pool).await.unwrap();
+        assert!(!cursors.contains_key("dropped"), "{cursors:?}");
+
+        build_grid_index_for(&pool, root, &both, |_| {}, None, &StopFlag::new())
+            .await
+            .unwrap();
+        assert_eq!(index_row_count(&pool).await, 2, "read whole again");
     }
 
     /// One bucket, several rendered documents, all of them gone when the

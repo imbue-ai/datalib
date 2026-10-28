@@ -454,10 +454,13 @@ Pick the surface that fits the question:
   it shows) and `snippet` naming the match.
   `tab=` picks how free text is answered, each its own list:
   `fields` (the search terms file, any word as the start of one), `words`
-  (every document's text by BM25, from qmd's keyword index) or
-  `meaning` (qmd's vectors alone: the 20 nearest documents across every
-  source, or within one under `source_id:`); with no `tab`, the free text goes to
-  qmd's hybrid query, identifiers aside. It answers a page: `limit=` rows from `offset=`, with `total`
+  (every document's text by BM25, from qmd's keyword index, a document
+  holding the words as typed first) or `meaning` (the 1,000 documents
+  nearest the text by cosine over qmd's vectors). Each is ranked within
+  the rows the other terms leave, so `from:`, `after:` or `source_id:`
+  narrow what is ranked rather than what is kept. With no `tab`, the three
+  are fused by reciprocal rank, identifiers aside; the command line, the
+  map and the app's links all get that answer. It answers a page: `limit=` rows from `offset=`, with `total`
   and the `next_offset`; `sort=created_at:desc,author` orders by grid
   columns in turn. `GET /applet/unified_document_index/search/groups?q=…&by=kind`
   counts the groups, and `within=[["kind","Chat"]]` on `search` lists
