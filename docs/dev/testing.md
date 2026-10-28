@@ -569,7 +569,10 @@ tab gets), records where the target ranked and how long
 each answer took, and prints hit rates at 1, 3 and 10, the mean
 reciprocal rank and latency percentiles, by query style and by source.
 A row counts as the target when it is in the same document. The `ui`
-line is the tab the app would open: the first to answer with rows.
+line is the tab the app would open: the first to answer with rows. For a
+target that is one message of a page, it also says where the hit on that
+page lands, read from the row's `link`: on the message, how many
+messages off, and whether the snippet shown came from it.
 
 An eval set built from a real library is that library's data, so it
 never goes in this repo; Thad's lives in the private

@@ -26,7 +26,7 @@ use sqlx::{ConnectOptions, Connection};
 
 use super::tabs::SearchTab;
 use super::tests::{index_over, search, search_tab, sync_terms, uuids};
-use super::Index;
+use super::{Index, SearchResponse};
 
 /// 2369-04-15 08:30:00 UTC.
 const T0: i64 = 12602794200000;
@@ -662,4 +662,33 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
             r.refused
         );
     }
+}
+
+/// A result opens through its link: a message links to its page at itself
+/// with the search's words, the page's own row to the page alone, and a
+/// search of keys alone asks for no words.
+#[tokio::test]
+async fn a_row_links_to_its_page_at_the_row_with_the_words() {
+    let tmp = tempfile::tempdir().unwrap();
+    render_cast(tmp.path()).await;
+    let s = index_over(tmp.path()).await;
+    let link_of = |r: &SearchResponse, uuid: &str| {
+        let row = r.rows.iter().find(|row| row.uuid == uuid).unwrap();
+        let page = row.markdown_uuid.clone().unwrap();
+        (page, row.link.clone())
+    };
+
+    let r = search_tab(&s, "riker", Some(SearchTab::Fields), None, 50, None).await;
+    let (page, link) = link_of(&r, "riker-email");
+    assert_eq!(
+        link,
+        Some(format!("datalib:doc/{page}#riker-email:~:text=riker"))
+    );
+    let (page, link) = link_of(&r, "riker-thread");
+    assert_eq!(page, "riker-thread", "the thread is its own page");
+    assert_eq!(link, Some(format!("datalib:doc/{page}#:~:text=riker")));
+
+    let r = search(&s, "from:riker", None, 50, None).await;
+    let (page, link) = link_of(&r, "riker-email");
+    assert_eq!(link, Some(format!("datalib:doc/{page}#riker-email")));
 }

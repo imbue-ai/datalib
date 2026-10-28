@@ -1,6 +1,6 @@
 # datalib links: a name for what something is, an address for its bytes
 
-*Mirror of the "Names and addresses" tab of the [datalib links](https://claude.ai/code/artifact/dd31c9e3-8ef9-4185-a85f-0c29a1318117) Claude Doc, which is the source of truth while this plan is under review. Edit the doc and re-mirror this file; don't edit it here. Proposal (2026-10-20); step 1 of §6 landed in PR #1305.*
+*Mirror of the "Names and addresses" tab of the [datalib links](https://claude.ai/code/artifact/dd31c9e3-8ef9-4185-a85f-0c29a1318117) Claude Doc, which is the source of truth while this plan is under review. Edit the doc and re-mirror this file; don't edit it here. Proposal (2026-10-20); step 1 of §6 landed in PR #1305; the `doc` kind and its text target (§3) are being built.*
 
 Copy a message's 🆔 today and paste it into your notes: you get a link like `datalib://chat/1f3a…?msg=9c2e…`, and it opens nothing anywhere. That link is one of ten ways datalib writes a link to something it holds, and the attachments work is about to add more. This doc proposes two forms to replace all of them but card links (§1), before the new ones ship: a `datalib:` **name**, which says what something is, and a `/data/…` **address**, where the server hands out its bytes.
 
@@ -100,6 +100,10 @@ The server knows nothing else: not a source's own tables, not its versioned stor
 **The server picks a handler by kind** in `/data/<group>/<function>/<kind>/…`; `blob` is the only one. How an applet could later answer a kind, and how that shares one pattern with names, is the third tab's §2, "Shared federation".
 
 **A `doc` name points at the page, not the file it is stored in.** Today every page is written when its source syncs, and stored. The same name would also fit a page made only when someone opens it, such as an old email turned into a page from its stored `.eml` at that moment instead of being kept on disk. Readers ask one route for a `doc`, and that route either reads the stored page or makes it. §7 asks what that needs.
+
+**Proposed (2026-10-28): a place inside a message.** A `doc` name can also say where in a message to look, after the message, in the web's text-fragment form: `datalib:doc/<page uuid>#<message uuid>:~:text=<words>`, the words percent-encoded. Opening one scrolls to the message, then to the first place those words appear in it, opening a collapsed tool group or a clamped long message on the way, and marks them. Without `:~:text=` a name means what it does today, and a reader that does not know the part opens the message.
+
+Words, not a character offset, because pages are re-rendered and an offset drifts; the words hold unless the message itself changed. Search results are the first writer: each row carries the `doc` name of where its hit landed, with the words it matched, so a click opens there and the search eval can score the page, the message and the words.
 
 ## 4. Before, after, and what a person notices
 

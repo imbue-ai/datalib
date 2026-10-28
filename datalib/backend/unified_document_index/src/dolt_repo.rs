@@ -355,6 +355,7 @@ fn search_row_from(r: &sqlx::sqlite::SqliteRow) -> SearchRow {
             .ok()
             .flatten(),
         score: None,
+        link: None,
     }
 }
 

@@ -21,6 +21,8 @@ exports_files([
     # Generated from the Rust enums; see
     # //datalib/backend/http:ui_enums.update.
     "src/generated/enums.ts",
+    # The names `uri.ts` and `datalib_uri` both read and write.
+    "tests/uri-fixtures.json",
 ])
 
 npm_link_all_packages(name = "node_modules")
