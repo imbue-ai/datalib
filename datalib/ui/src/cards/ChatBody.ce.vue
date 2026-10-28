@@ -467,7 +467,8 @@ function paint() {
     painted = html.value;
   }
   chartStops.push(mountTimeSeries(el));
-  injectCopyUuidButtons(el);
+  // The document card's title bar has the page's own ID button.
+  injectCopyUuidButtons(el, { pageTitle: false });
   decorateRemoteMedia(el);
   decorateLongMessages(el);
   void redrawHandles();

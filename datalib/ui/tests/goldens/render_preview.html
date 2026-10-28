@@ -1144,13 +1144,20 @@ time.date-chip {
 }
 
 
-/* A column: the chrome at its own height, then the body, which scrolls
-   inside its frame and takes what is left — never less than most of the
-   pane, so a long problems list cannot squeeze it away. */
+/* The title bar, which stays, over a column that scrolls: the banners
+   at their own height, then the body, which scrolls inside its frame
+   and takes what is left — never less than most of the pane, so a long
+   problems list cannot squeeze it away. */
 .chat-preview {
   display: flex;
   flex-direction: column;
   height: 100%;
+}
+.doc-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   overflow-y: auto;
   /* No padding at the *top*. A sticky message header stops at the
      scrollport's padding edge, while the content behind it keeps
@@ -1163,7 +1170,7 @@ time.date-chip {
   /* Reading text: never below 14px, whatever the density. */
   font-size: max(14px, calc(var(--datalib-font-size) + 2px));
 }
-.chat-preview > * {
+.doc-scroll > * {
   flex: none;
 }
 .doc-body {
@@ -1172,12 +1179,12 @@ time.date-chip {
   /* The frame pads its own body. */
   margin: 0 -1rem -0.75rem;
 }
-.chat-preview > .empty,
-.chat-preview > .error {
+.doc-scroll > .empty,
+.doc-scroll > .error {
   padding-top: 0.75rem;
 }
-.chat-preview > .problems:first-child,
-.chat-preview > .remote-banner:first-child {
+.doc-scroll > .problems:first-child,
+.doc-scroll > .remote-banner:first-child {
   margin-top: 0.75rem;
 }
 .empty,
@@ -1464,7 +1471,7 @@ time.date-chip {
   <span>Click a message to select it.</span>
 </div>
 <nav class="preview-jump"><a href="#src-beeper">beeper</a><a href="#src-chatgpt-api">chatgpt-api</a><a href="#src-claude-api">claude-api</a><a href="#src-claude-code">claude-code</a><a href="#src-codex">codex</a><a href="#src-facebook">facebook</a><a href="#src-garmin">garmin</a><a href="#src-github">github</a><a href="#src-gitlab">gitlab</a><a href="#src-google-drive">google-drive</a><a href="#src-google-takeout">google-takeout</a><a href="#src-linkedin">linkedin</a><a href="#src-notion">notion</a><a href="#src-ship-air">ship-air</a><a href="#src-signal">signal</a><a href="#src-slack-diff">slack-diff</a><a href="#src-slack">slack</a><a href="#src-sms-backup-restore">sms-backup-restore</a><a href="#src-tng-calendar">tng_calendar</a><a href="#src-tng-contacts-diff">tng_contacts-diff</a><a href="#src-tng-contacts">tng_contacts</a><a href="#src-tng-email">tng_email</a><a href="#src-tng-pdfs">tng_pdfs</a><a href="#src-whatsapp">whatsapp</a><a href="#src-yolink">yolink</a><a href="#src-zz-synthetic-contacts">zz-synthetic-contacts</a><a href="#src-zz-synthetic">zz-synthetic</a></nav>
-<section class="chat-preview">
+<section class="chat-preview doc-scroll">
 <section class="preview-source" id="src-beeper">
 <h2 class="preview-source-name">beeper <span class="preview-count">7 documents</span></h2>
 <div class="preview-doc">
@@ -9521,10 +9528,12 @@ function addHeaderControl(host, separator, control) {
 
 /**
  * Give every `[data-section-uuid]` a button that copies its uuid, and
- * the page title one that copies the document's.
+ * the page title one that copies the document's — unless the page is
+ * shown under a title bar that has one (`pageTitle: false`).
  * @param {HTMLElement} root
+ * @param {{ pageTitle?: boolean }} [opts]
  */
-export function injectCopyUuidButtons(root) {
+export function injectCopyUuidButtons(root, { pageTitle = true } = {}) {
   const button = (uuid, label) => {
     const btn = root.ownerDocument.createElement("button");
     btn.type = "button";
@@ -9553,6 +9562,7 @@ export function injectCopyUuidButtons(root) {
     else el.prepend(btn);
   }
 
+  if (!pageTitle) return;
   for (const el of root.querySelectorAll("[data-page-title-uuid]")) {
     // The id sits on the heading itself, or on a block whose heading is
     // a markdown `#` (a contact page's head, whose heading is a chip).

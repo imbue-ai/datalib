@@ -7,14 +7,17 @@ import { computed, onMounted, onUnmounted, ref } from "vue";
 
 import { menuPlacement, type MenuItem } from "./chipActions";
 
-const props = defineProps<{ entries: MenuItem[]; x: number; y: number }>();
+// `alignRight`: `x` is where the menu's right edge goes — under a button
+// at the right end of a bar.
+const props = defineProps<{ entries: MenuItem[]; x: number; y: number; alignRight?: boolean }>();
 const emit = defineEmits<{ pick: [id: string]; close: [] }>();
 
 const menu = ref<HTMLElement | null>(null);
 const size = ref({ width: 0, height: 0 });
 
 const style = computed(() => {
-  const { left, top } = menuPlacement({ x: props.x, y: props.y }, size.value, {
+  const x = props.alignRight ? props.x - size.value.width : props.x;
+  const { left, top } = menuPlacement({ x, y: props.y }, size.value, {
     width: window.innerWidth,
     height: window.innerHeight,
   });

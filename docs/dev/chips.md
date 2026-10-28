@@ -457,5 +457,6 @@ A new kind of *handle* is a person and goes through
 
 A system event as a chip ("Worf joined the channel"), which needs each
 provider to carry the handle on its system events; chips for a channel
-or a document; and editing a contact on the person card
+or a document (a document chip's menu is to be the document title bar's,
+`ui/src/cards/documentMenu.ts`); and editing a contact on the person card
 ([`plans/contact_editing.md`](plans/contact_editing.md)).

@@ -294,7 +294,7 @@ const html = `<!doctype html>
   <span>Click a message to select it.</span>
 </div>
 <nav class="preview-jump">${jumpList}</nav>
-<section class="chat-preview">
+<section class="chat-preview doc-scroll">
 ${docs}
 </section>
 <script type="module">${sectionsModule}\n${PREVIEW_SCRIPT}</script>

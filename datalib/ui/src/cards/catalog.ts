@@ -19,6 +19,10 @@ export type CardMeta = {
   // section, rather than a view of the data. The gallery lists these
   // apart, under "Developer tools".
   devTool?: boolean;
+  // Draws its own title bar across its top, so the layout floats its
+  // buttons over that bar's right end instead of drawing a header of its
+  // own (views/ContainerNode.vue).
+  titleBar?: boolean;
 };
 
 type BuiltinMeta = CardMeta & {
@@ -114,6 +118,7 @@ export const BUILTIN_META: Record<keyof ViewLibs, BuiltinMeta> = {
     title: "Document",
     description: "One rendered document.",
     icon: "document",
+    titleBar: true,
   },
   galleryView: {
     title: "New card",
