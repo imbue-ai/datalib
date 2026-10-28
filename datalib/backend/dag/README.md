@@ -581,6 +581,13 @@ has learned it will do. Announcing no total at all is fine and means
 "size unknown"; the sink then publishes no `queued`, which is not the
 same as publishing zero, because zero means finished.
 
+**Count only work the run can see waiting.** Something announced in the
+same breath as it is done — a page's messages, when upstream names no
+count ahead — adds to the pace and never to the queue, so the ETA,
+which is one over the other, reads seconds while the real work is
+hours. Slack counts conversations, threads and files for that reason,
+and leaves messages to its status line.
+
 ## What wakes the loop
 
 Nothing on a timer. **Whoever commits to `system/supervisor.sqlite`
