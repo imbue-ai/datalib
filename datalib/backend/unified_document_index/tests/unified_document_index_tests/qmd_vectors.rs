@@ -108,3 +108,66 @@ async fn matching_documents_follows_the_structured_terms() {
         );
     }
 }
+
+/// A held index answers Meaning from what it read before, until another
+/// connection commits: then it reads the documents again, so one the
+/// keyword step made inactive stops being found.
+#[tokio::test]
+async fn a_held_index_rereads_the_documents_after_another_connection_commits() {
+    use datalib_unified_document_index::qmd::vectors::QueryVector;
+    use datalib_unified_document_index::qmd::{qmd_index_path, HeldIndex};
+    use sqlx::{ConnectOptions, Connection};
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path();
+    materialize_root_with_grid(root);
+    let vectors = read_document_vectors(root).await.unwrap().unwrap();
+    let (path, vector) = (&vectors.paths[0], &vectors.vectors[..vectors.dim]);
+
+    let mut writer = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(qmd_index_path(root))
+        .connect()
+        .await
+        .unwrap();
+    let model: String = sqlx::query_scalar("SELECT model FROM content_vectors LIMIT 1")
+        .fetch_one(&mut writer)
+        .await
+        .unwrap();
+    let held = HeldIndex::default();
+    let open = held.open(root).await.unwrap().unwrap();
+    let nearest = || async {
+        let open = held.open(root).await.unwrap().unwrap();
+        let query = QueryVector {
+            model: &model,
+            vector,
+        };
+        open.reader
+            .nearest_documents(&open.vectors, &query, None, None, 5)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|h| h.path)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        nearest().await.first(),
+        Some(path),
+        "a document is nearest itself"
+    );
+    assert!(
+        Arc::ptr_eq(&open, &held.open(root).await.unwrap().unwrap()),
+        "the index is held, not opened again"
+    );
+
+    sqlx::query("UPDATE documents SET active = 0 WHERE path = ?")
+        .bind(path)
+        .execute(&mut writer)
+        .await
+        .unwrap();
+    writer.close().await.unwrap();
+
+    assert!(
+        !nearest().await.contains(path),
+        "an inactive document is not found"
+    );
+}

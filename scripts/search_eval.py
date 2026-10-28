@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 
 TABS = ["fields", "words", "meaning"]
-MODES = [*TABS, "default"]
+MODES = [*TABS, "fused"]
 DEFAULT_APPLET = "bazel-bin/datalib/backend/bin/datalib-applet"
 
 
@@ -103,7 +103,7 @@ def connect(args: argparse.Namespace, root: Path) -> Applet | Gateway:
 
 def search(get: Callable[[str], Any], q: str, mode: str, depth: int) -> dict[str, Any]:
     params = {"q": q, "limit": str(depth)}
-    if mode != "default":
+    if mode != "fused":
         params["tab"] = mode
     started = time.perf_counter()
     try:
@@ -396,9 +396,21 @@ def report(record: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def load(path: str) -> dict[str, Any]:
+    """A results file, its fused answer under that name: older files call it
+    `default`, and before it existed qmd's hybrid stood in its place."""
+    record = json.loads(Path(path).read_text())
+    for r in record["results"]:
+        modes = r["modes"]
+        for old in ("default", "hybrid"):
+            if old in modes and "fused" not in modes:
+                modes["fused"] = modes.pop(old)
+    return record
+
+
 def compare(args: argparse.Namespace) -> None:
-    before = json.loads(Path(args.before).read_text())
-    after = json.loads(Path(args.after).read_text())
+    before = load(args.before)
+    after = load(args.after)
     old = {(r["id"], r["q"]): r for r in before["results"]}
     print("before:\n" + report(before) + "\n\nafter:\n" + report(after) + "\n")
     print("| target | query | answer | before | after |")
@@ -408,10 +420,7 @@ def compare(args: argparse.Namespace) -> None:
         if not was:
             continue
         for m, a in r["modes"].items():
-            # Before the fused answer, the answer with no tab was qmd's hybrid.
-            b = was["modes"].get(m) or (
-                was["modes"].get("hybrid") if m == "default" else None
-            )
+            b = was["modes"].get(m)
             if b is None or b.get("rank") == a.get("rank"):
                 continue
             print(
@@ -420,7 +429,7 @@ def compare(args: argparse.Namespace) -> None:
 
 
 def show(args: argparse.Namespace) -> None:
-    record = json.loads(Path(args.results).read_text())
+    record = load(args.results)
     for r in record["results"]:
         if args.id and r["id"] not in args.id.split(","):
             continue

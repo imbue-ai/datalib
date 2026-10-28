@@ -2,6 +2,7 @@
 //! so the model loads once per process rather than once per search. qmd
 //! does no retrieval here: the caller scores the index's vectors itself.
 
+use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Stdio};
@@ -37,6 +38,7 @@ struct Live {
     lines: Receiver<String>,
     model: String,
     next_id: u64,
+    recent: Recent,
     // Deleted on drop, so it lives exactly as long as the process using it.
     _script: SdkScript,
 }
@@ -64,7 +66,13 @@ impl QueryEmbedder {
             if guard.is_none() {
                 *guard = Some(self.spawn(deadline)?);
             }
-            ask(guard.as_mut().expect("just started"), text, deadline)
+            let live = guard.as_mut().expect("just started");
+            if let Some(known) = live.recent.get(text) {
+                return Ok(known);
+            }
+            let embedding = ask(live, text, deadline)?;
+            live.recent.put(text, &embedding);
+            Ok(embedding)
         })();
         if res.is_err() {
             if let Some(mut live) = guard.take() {
@@ -113,6 +121,7 @@ impl QueryEmbedder {
             lines,
             model: String::new(),
             next_id: 0,
+            recent: Recent::default(),
             _script: script,
         };
         let ready = next_event(&live.lines, deadline)?;
@@ -175,6 +184,30 @@ fn ask(live: &mut Live, text: &str, deadline: Instant) -> Result<QueryEmbedding>
     }
 }
 
+/// The last few queries' embeddings. One search asks for the same text
+/// more than once (its Meaning tab, the fused answer, the tab a reader
+/// then opens), and each would wait its turn on the one model.
+#[derive(Default)]
+struct Recent(VecDeque<(String, QueryEmbedding)>);
+
+impl Recent {
+    const KEPT: usize = 8;
+
+    fn get(&self, text: &str) -> Option<QueryEmbedding> {
+        self.0
+            .iter()
+            .find(|(t, _)| t == text)
+            .map(|(_, e)| e.clone())
+    }
+
+    fn put(&mut self, text: &str, embedding: &QueryEmbedding) {
+        if self.0.len() == Self::KEPT {
+            self.0.pop_front();
+        }
+        self.0.push_back((text.to_string(), embedding.clone()));
+    }
+}
+
 /// The next JSON line; a line that is not JSON is a dependency writing to
 /// stdout, and is skipped.
 fn next_event(lines: &Receiver<String>, deadline: Instant) -> Result<Value> {
@@ -190,5 +223,32 @@ fn next_event(lines: &Receiver<String>, deadline: Instant) -> Result<Value> {
         if let Ok(v) = serde_json::from_str::<Value>(line.trim()) {
             return Ok(v);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn embedding(x: f32) -> QueryEmbedding {
+        QueryEmbedding {
+            model: "m".into(),
+            vector: vec![x],
+        }
+    }
+
+    /// A search asking twice for one text embeds it once, and an old text
+    /// makes room for a new one.
+    #[test]
+    fn recent_answers_are_kept_until_eight_newer_ones() {
+        let mut recent = Recent::default();
+        recent.put("warp", &embedding(1.0));
+        assert_eq!(recent.get("warp").map(|e| e.vector), Some(vec![1.0]));
+        assert!(recent.get("impulse").is_none());
+        for i in 0..Recent::KEPT {
+            recent.put(&format!("q{i}"), &embedding(i as f32));
+        }
+        assert!(recent.get("warp").is_none());
+        assert!(recent.get("q0").is_some());
     }
 }
