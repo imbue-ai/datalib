@@ -15,7 +15,7 @@ use anyhow::{Context, Result};
 use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact};
 use datalib_etl::doltlite_raw::table_exists;
 use datalib_etl::periodize::Period;
-use datalib_etl_chat_common::types::{AuthorKind, NamedPerson, UpstreamRef};
+use datalib_etl_chat_common::types::{AuthorKind, NamedPerson, Recipient, UpstreamRef};
 use datalib_etl_chat_common::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
     NormalizedReaction,
@@ -545,7 +545,10 @@ fn build_item(
         is_aside: false,
         branch: Vec::new(),
         unread,
-        recipients: Vec::new(),
+        recipients: (key.from_me != 1)
+            .then(Recipient::the_account)
+            .into_iter()
+            .collect(),
         mentions: Vec::new(),
         problems: Vec::new(),
     }

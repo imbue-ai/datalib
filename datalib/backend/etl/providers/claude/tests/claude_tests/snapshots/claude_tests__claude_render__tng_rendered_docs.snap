@@ -5,7 +5,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-8305-8a74-7d4a860e0d82 ===
 {
   "edges": [],
-  "render_version": 11,
+  "render_version": 12,
   "rows": [
     {
       "account": "jlpicard@enterprise.starfleet.test",
@@ -1052,7 +1052,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-83ab-b990-357eea87eda5 ===
 {
   "edges": [],
-  "render_version": 11,
+  "render_version": 12,
   "rows": [
     {
       "account": "jlpicard@enterprise.starfleet.test",
@@ -1219,7 +1219,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-84d9-a07c-75bb3c93c654 ===
 {
   "edges": [],
-  "render_version": 11,
+  "render_version": 12,
   "rows": [
     {
       "account": "jlpicard@enterprise.starfleet.test",
@@ -1346,7 +1346,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-856b-944c-412bf8dca640 ===
 {
   "edges": [],
-  "render_version": 11,
+  "render_version": 12,
   "rows": [
     {
       "account": "jlpicard@enterprise.starfleet.test",
@@ -1633,7 +1633,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-8731-b6c5-2d66a2c4265c ===
 {
   "edges": [],
-  "render_version": 11,
+  "render_version": 12,
   "rows": [
     {
       "account": "jlpicard@enterprise.starfleet.test",
@@ -2240,7 +2240,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-882d-b21e-5e54f3f20dbb ===
 {
   "edges": [],
-  "render_version": 11,
+  "render_version": 12,
   "rows": [
     {
       "account": "jlpicard@enterprise.starfleet.test",
@@ -2527,7 +2527,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-8b06-828d-f59d39f6190d ===
 {
   "edges": [],
-  "render_version": 11,
+  "render_version": 12,
   "rows": [
     {
       "account": "bcrusher@enterprise.starfleet.test",
@@ -2654,7 +2654,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-8da1-84c9-7ed998e5bd85 ===
 {
   "edges": [],
-  "render_version": 11,
+  "render_version": 12,
   "rows": [
     {
       "account": "jlpicard@enterprise.starfleet.test",

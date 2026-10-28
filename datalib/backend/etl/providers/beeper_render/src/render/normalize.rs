@@ -283,6 +283,7 @@ fn contact(source_id: &str, p: &Person, avatars: &Avatars) -> Option<NormalizedC
     c.names = p.names.clone();
     c.handles = p.handles.clone();
     c.photo = p.avatar.as_ref().and_then(|h| avatars.get(h)).cloned();
+    c.account = p.is_self;
     Some(c)
 }
 

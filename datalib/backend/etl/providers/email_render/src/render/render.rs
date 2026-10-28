@@ -7,10 +7,11 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use super::ids;
 use super::parse::{EmailStore, EmailThreadBucket, Shared};
 use anyhow::{Context, Result};
-use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact};
+use datalib_contact_schema::NormalizedContact;
 use datalib_etl::blob_cas::{blake3_hex, BlobBundle, Described};
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::normalize::iso_to_ms;
+use datalib_etl_chat_common::people;
 use datalib_etl_chat_common::render::{Buckets, ChatRenderer, RenderProfile};
 use datalib_etl_chat_common::types::{
     own_stamp_ms, AuthorKind, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc,
@@ -396,11 +397,7 @@ fn account_label_from_payload(id: &str, payload: &serde_json::Value) -> Option<S
 /// a thread the owner wrote in or was sent carries it. A label that is
 /// not an address (a JMAP name that is not one, a bare id) gives none.
 fn account_contact(source_id: &str, label: Option<&String>) -> Option<NormalizedContact> {
-    let handle = Handle::email(label?)?;
-    let mut contact = NormalizedContact::new(source_id, handle.as_str(), ContactKind::Person);
-    contact.handles = vec![ContactHandle::of(handle)];
-    contact.account = true;
-    Some(contact)
+    people::account_contact(source_id, Handle::email(label?))
 }
 
 fn build_chat(

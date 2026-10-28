@@ -1118,10 +1118,17 @@ fn participants(doc: &NormalizedDoc, kept: &std::collections::HashSet<&str>) -> 
             &item.author_display,
             item.author_kind,
         );
-        let recipients = item
-            .recipients
-            .iter()
-            .filter_map(|r| person(r.handle.as_ref(), &r.display, AuthorKind::Named));
+        let recipients = item.recipients.iter().filter_map(|r| {
+            let to_the_account = r
+                .handle
+                .as_ref()
+                .is_some_and(|h| h.kind() == datalib_handle::HandleKind::Me);
+            let kind = match to_the_account {
+                true => AuthorKind::Account,
+                false => AuthorKind::Named,
+            };
+            person(r.handle.as_ref(), &r.display, kind)
+        });
         let mentions = item.mentions.iter().map(|h| h.as_str().to_string());
         let reactors = item.reactions.iter().filter_map(|r| {
             person(
@@ -2574,6 +2581,35 @@ mod tests {
             .collect();
         assert!(terms.contains(&("to".into(), "tel:+12025550103".into())));
         assert!(terms.contains(&("participant".into(), "tel:+12025550103".into())));
+    }
+
+    /// A backup's incoming message is to the account: `to:me` finds it,
+    /// but "Me" is in every conversation, so it names no participant and
+    /// draws no recipients line.
+    #[test]
+    fn a_message_to_the_account_is_searched_as_to_me_and_takes_no_part() {
+        let mut chat = mk_chat();
+        chat.buckets[0].items[0].recipients = vec![crate::types::Recipient::the_account()];
+        let md = join(&render_markdown(
+            &test_profile(),
+            &chat,
+            &chat.buckets[0],
+            "Test",
+        ));
+        assert!(!md.contains("msg-recipients"), "{md}");
+        let terms: Vec<(String, String)> = supplied_terms_of(&chat)
+            .into_iter()
+            .map(|(_, kind, value)| (kind.as_str().to_string(), value))
+            .collect();
+        assert!(
+            terms.contains(&("to".into(), "me:self".into())),
+            "{terms:?}"
+        );
+        assert!(
+            !terms.iter().any(|(kind, value)| kind == "participant"
+                && (value == "me:self" || value == "Me")),
+            "{terms:?}"
+        );
     }
 
     /// A blank line in a name once ended the recipients line and

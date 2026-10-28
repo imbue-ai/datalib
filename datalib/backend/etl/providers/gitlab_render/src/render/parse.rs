@@ -74,7 +74,14 @@ async fn read_everything(
 }
 
 pub fn parse_loaded(source_id: &str, raw: LoadedRaw) -> Parsed {
-    let mut out = Parsed::default();
+    let mut out = Parsed {
+        account: raw.self_identity.as_ref().and_then(|me| {
+            let host = opt_str(me, "web_url")?;
+            let host = host.split_once("://")?.1.split('/').next()?;
+            Handle::gitlab(host, &opt_str(me, "username")?)
+        }),
+        ..Parsed::default()
+    };
 
     for mr in raw.merge_requests {
         let proj = mr.project_full_path;

@@ -31,7 +31,8 @@ use datalib_schema::providers::Provider;
 /// v14: a reaction follows the author's rule (the account's own names
 ///      nobody; an empty sender is the chat's person), and a reactor gets
 ///      their address-book account.
-pub const RENDER_VERSION: u32 = 14;
+/// v15: a message someone else sent is to the account (`to:me`).
+pub const RENDER_VERSION: u32 = 15;
 
 const SOURCE_LABEL: &str = "WhatsApp";
 

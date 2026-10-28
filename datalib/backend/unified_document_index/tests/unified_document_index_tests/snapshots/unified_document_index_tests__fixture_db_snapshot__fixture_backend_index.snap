@@ -24,7 +24,7 @@ expression: snapshot
       "md_path": "chatgpt-api/render_markdown/00000000-0000-8020-9a72-3216b3199332/all.md",
       "modified_at": "2370-10-24T08:05:00+00:00",
       "provider": "chatgpt",
-      "renderer_version": "rust-v1.14",
+      "renderer_version": "rust-v1.15",
       "source_id": "chatgpt-api",
       "title": "Sonnet on a Cat Named Spot"
     },
@@ -36,7 +36,7 @@ expression: snapshot
       "md_path": "linkedin/render_markdown/00000000-0000-8027-9f1f-73b03617467e/all.md",
       "modified_at": "2369-04-10T09:06:30+00:00",
       "provider": "linkedin",
-      "renderer_version": "rust-v1.13",
+      "renderer_version": "rust-v1.14",
       "source_id": "linkedin",
       "title": "Jean-Luc Picard, William Riker"
     },
@@ -96,7 +96,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-80d5-a95b-fe11f630248a/all.md",
       "modified_at": "2369-03-16T09:30:00+00:00",
       "provider": "facebook",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "facebook",
       "title": "Two views of the bridge before alpha shift."
     },
@@ -168,7 +168,7 @@ expression: snapshot
       "md_path": "sms-backup-restore/render_markdown/00000000-0000-85d9-b5a3-420c27c71680/2369-04.md",
       "modified_at": "2369-04-15T11:00:00+00:00",
       "provider": "sms_backup_restore",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "sms-backup-restore",
       "title": "Geordi La Forge"
     },
@@ -180,7 +180,7 @@ expression: snapshot
       "md_path": "claude-api/render_markdown/00000000-0000-8184-b70f-0aace9f02d6c/all.md",
       "modified_at": "2369-04-14T10:02:00+00:00",
       "provider": "claude",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "claude-api",
       "title": "Klingon Diplomatic Greeting Drafting"
     },
@@ -228,7 +228,7 @@ expression: snapshot
       "md_path": "claude-api/render_markdown/00000000-0000-81ce-8161-7a771ae8bff5/all.md",
       "modified_at": "2369-04-18T09:02:30+00:00",
       "provider": "claude",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "claude-api",
       "title": "Warp Field Recalibration"
     },
@@ -264,7 +264,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-84d8-9001-d3718b01d5e1/2369.md",
       "modified_at": "2369-04-12T08:34:20.000+00:00",
       "provider": "facebook",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "facebook",
       "title": "Facebook user · 1000000003"
     },
@@ -276,7 +276,7 @@ expression: snapshot
       "md_path": "beeper/render_markdown/signal/00000000-0000-8b2d-bd38-e68431f325dd/2364-04.md",
       "modified_at": "2364-04-11T00:10:00.000+00:00",
       "provider": "beeper",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "beeper",
       "title": "Bridge crew"
     },
@@ -324,7 +324,7 @@ expression: snapshot
       "md_path": "signal/render_markdown/00000000-0000-8dcb-b58e-bf4dc9fb57a8/2364-04.md",
       "modified_at": "2364-04-11T23:46:40+00:00",
       "provider": "signal",
-      "renderer_version": "rust-v1.13",
+      "renderer_version": "rust-v1.14",
       "source_id": "signal",
       "title": "Bridge Crew"
     },
@@ -336,7 +336,7 @@ expression: snapshot
       "md_path": "sms-backup-restore/render_markdown/00000000-0000-8a32-861f-a85bca667a83/2369-04.md",
       "modified_at": "2369-04-15T10:01:00+00:00",
       "provider": "sms_backup_restore",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "sms-backup-restore",
       "title": "Worf"
     },
@@ -372,7 +372,7 @@ expression: snapshot
       "md_path": "beeper/render_markdown/googlechat/00000000-0000-86c6-9b0f-a87d76d8912c/2024-03.md",
       "modified_at": "2024-03-20T14:10:00.000+00:00",
       "provider": "beeper",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "beeper",
       "title": "William T. Riker"
     },
@@ -384,7 +384,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/00000000-0000-84b4-80af-50ab120b27f4/2026.md",
       "modified_at": "2026-06-04T19:30:00+00:00",
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "google-takeout",
       "title": "Google Maps"
     },
@@ -420,7 +420,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/00000000-0000-8e5f-8eb1-967f63ffb4eb/2025-03.md",
       "modified_at": "2025-03-10T03:00:00+00:00",
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "google-takeout",
       "title": "Ten Forward regulars"
     },
@@ -432,7 +432,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/00000000-0000-885c-86c6-d4a3cb9a45c2/all.md",
       "modified_at": null,
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "google-takeout",
       "title": "Away team favourites"
     },
@@ -444,7 +444,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/00000000-0000-8c4c-ac1c-6428fa2456b3/all.md",
       "modified_at": null,
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "google-takeout",
       "title": "Shore leave"
     },
@@ -480,7 +480,7 @@ expression: snapshot
       "md_path": "signal/render_markdown/00000000-0000-8039-8a5b-241873b9eef9/2364-04.md",
       "modified_at": "2364-04-11T00:09:00+00:00",
       "provider": "signal",
-      "renderer_version": "rust-v1.13",
+      "renderer_version": "rust-v1.14",
       "source_id": "signal",
       "title": "Will Riker"
     },
@@ -504,7 +504,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-8c82-8a32-5b80abc87553/2369.md",
       "modified_at": "2369-04-12T08:08:00.000+00:00",
       "provider": "facebook",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "facebook",
       "title": "William Riker"
     },
@@ -528,7 +528,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-83eb-9997-79540a4520c8/all.md",
       "modified_at": "2369-03-23T15:46:40+00:00",
       "provider": "facebook",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "facebook",
       "title": "Guinan's new menu — try the Saurian brandy."
     },
@@ -540,7 +540,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-8cc5-baf1-845294bad07e/2369.md",
       "modified_at": "2369-04-02T08:05:00+00:00",
       "provider": "facebook",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "facebook",
       "title": "Reactions"
     },
@@ -576,7 +576,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/00000000-0000-8a5c-92c1-f761ed74e325/2364-03.md",
       "modified_at": "2364-03-05T16:00:00+00:00",
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "google-takeout",
       "title": "+12025550147"
     },
@@ -600,7 +600,7 @@ expression: snapshot
       "md_path": "linkedin/render_markdown/00000000-0000-84c5-a0e7-167d60e47f98/all.md",
       "modified_at": "2369-04-12T08:20:30+00:00",
       "provider": "linkedin",
-      "renderer_version": "rust-v1.13",
+      "renderer_version": "rust-v1.14",
       "source_id": "linkedin",
       "title": "Comment: Captain, I must respectfully disagree: the odds are 1 in 4.7 trillion, not \"ast…"
     },
@@ -624,7 +624,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/00000000-0000-886c-849f-4206f438cee1/all.md",
       "modified_at": "2364-01-30T15:20:00+00:00",
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "google-takeout",
       "title": "Tales of the Picard Maneuver"
     },
@@ -636,7 +636,7 @@ expression: snapshot
       "md_path": "sms-backup-restore/render_markdown/00000000-0000-8709-8732-c5f02579e8d6/2369-04.md",
       "modified_at": "2369-04-14T20:30:00+00:00",
       "provider": "sms_backup_restore",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "sms-backup-restore",
       "title": "Deanna Troi"
     },
@@ -672,7 +672,7 @@ expression: snapshot
       "md_path": "google-drive/render_markdown/docs/1PicardLog41153/index.md",
       "modified_at": "2369-04-12T08:00:00.000Z",
       "provider": "google_drive",
-      "renderer_version": "rust-v1.2",
+      "renderer_version": "rust-v1.3",
       "source_id": "google-drive",
       "title": "Captain's log, stardate 41153.7"
     },
@@ -720,7 +720,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/00000000-0000-819a-843b-b8b8c4ffdc90/2364-03.md",
       "modified_at": "2364-03-04T20:00:00+00:00",
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "google-takeout",
       "title": "+12025550190"
     },
@@ -732,7 +732,7 @@ expression: snapshot
       "md_path": "google-drive/render_markdown/docs/1LaForgeEngRoster/index.md",
       "modified_at": "2369-04-13T08:00:00.000Z",
       "provider": "google_drive",
-      "renderer_version": "rust-v1.2",
+      "renderer_version": "rust-v1.3",
       "source_id": "google-drive",
       "title": "Engineering notes"
     },
@@ -756,7 +756,7 @@ expression: snapshot
       "md_path": "whatsapp/render_markdown/00000000-0000-84f0-8faa-a404dacb63b6/2364-04.md",
       "modified_at": "2364-04-11T00:16:00+00:00",
       "provider": "whatsapp",
-      "renderer_version": "rust-v1.14",
+      "renderer_version": "rust-v1.15",
       "source_id": "whatsapp",
       "title": "WhatsApp user …0108"
     },
@@ -816,7 +816,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/00000000-0000-89f3-bd53-77e4883722ea/2364-03.md",
       "modified_at": "2364-03-06T17:02:00+00:00",
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "google-takeout",
       "title": "Group Conversation"
     },
@@ -828,7 +828,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-8709-9b9f-6daf23a20dfe/all.md",
       "modified_at": "2369-04-06T13:06:40+00:00",
       "provider": "facebook",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "facebook",
       "title": "Away team to Risa. Bring the horga'hn, Number One."
     },
@@ -852,7 +852,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-8768-85df-b763ceaebe85/index.md",
       "modified_at": null,
       "provider": "facebook",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "facebook",
       "title": "Beverly Crusher"
     },
@@ -912,7 +912,7 @@ expression: snapshot
       "md_path": "whatsapp/render_markdown/00000000-0000-8a99-9206-1d7e42e1b482/2364-04.md",
       "modified_at": "2364-04-11T00:15:00+00:00",
       "provider": "whatsapp",
-      "renderer_version": "rust-v1.14",
+      "renderer_version": "rust-v1.15",
       "source_id": "whatsapp",
       "title": "Data"
     },
@@ -972,7 +972,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/00000000-0000-88ab-b54c-6183150810df/2026.md",
       "modified_at": "2026-04-05T17:15:00+00:00",
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "google-takeout",
       "title": "Gemini"
     },
@@ -984,7 +984,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/00000000-0000-842f-b9a6-cc14dbeb0fbc/all.md",
       "modified_at": "2364-02-21T06:15:00+00:00",
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "google-takeout",
       "title": "The Art of Diplomacy"
     },
@@ -996,7 +996,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-840e-933b-7e3c0a96ee52/2369.md",
       "modified_at": "2369-04-12T09:23:20.000+00:00",
       "provider": "facebook",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "facebook",
       "title": "Lwaxana Troi"
     },
@@ -1008,7 +1008,7 @@ expression: snapshot
       "md_path": "linkedin/render_markdown/00000000-0000-8878-b482-b77c75689e79/all.md",
       "modified_at": "2369-04-11T15:02:00+00:00",
       "provider": "linkedin",
-      "renderer_version": "rust-v1.13",
+      "renderer_version": "rust-v1.14",
       "source_id": "linkedin",
       "title": "Post: Thrilled to share: the Enterprise has completed its survey of the Mintaka syste…"
     },
@@ -1032,7 +1032,7 @@ expression: snapshot
       "md_path": "claude-api/render_markdown/00000000-0000-88a2-ab0d-6718dcb64052/all.md",
       "modified_at": "2369-04-16T09:01:30+00:00",
       "provider": "claude",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "claude-api",
       "title": "Borg Encryption Signature Lookup"
     },
@@ -1056,7 +1056,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-88f7-a8ca-8020c717b96b/all.md",
       "modified_at": "2369-03-22T12:00:00+00:00",
       "provider": "facebook",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "facebook",
       "title": "Class of 2327: reunion at Boothby's garden. Bring your own trowel."
     },
@@ -1092,7 +1092,7 @@ expression: snapshot
       "md_path": "beeper/render_markdown/signal/00000000-0000-8c53-b909-d898f9ac9d58/2024-03.md",
       "modified_at": "2024-04-02T23:20:00.000+00:00",
       "provider": "beeper",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "beeper",
       "title": "Mr. Data"
     },
@@ -1104,7 +1104,7 @@ expression: snapshot
       "md_path": "beeper/render_markdown/signal/00000000-0000-8594-aca2-4aa5aabd1723/2024-04.md",
       "modified_at": "2024-04-10T19:01:00.000+00:00",
       "provider": "beeper",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "beeper",
       "title": "Dr. Beverly Crusher"
     },
@@ -1116,7 +1116,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/00000000-0000-8841-8b6d-116feade3563/2025-02.md",
       "modified_at": "2025-02-11T11:33:35+00:00",
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "google-takeout",
       "title": "Jean-Luc Picard, William Riker"
     },
@@ -1128,7 +1128,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/00000000-0000-811b-999e-be378270a4c8/2364-03.md",
       "modified_at": "2364-03-02T18:00:00+00:00",
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "google-takeout",
       "title": "Jean-Luc Picard"
     },
@@ -1152,7 +1152,7 @@ expression: snapshot
       "md_path": "chatgpt-api/render_markdown/00000000-0000-89af-8390-876943e6455b/all.md",
       "modified_at": "2370-10-26T08:05:00+00:00",
       "provider": "chatgpt",
-      "renderer_version": "rust-v1.14",
+      "renderer_version": "rust-v1.15",
       "source_id": "chatgpt-api",
       "title": "I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom?"
     },
@@ -1164,7 +1164,7 @@ expression: snapshot
       "md_path": "claude-api/render_markdown/00000000-0000-89b3-8bed-0eecc97d45ce/all.md",
       "modified_at": "2369-04-15T08:30:45+00:00",
       "provider": "claude",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "claude-api",
       "title": "Tricorder Image Diagnostic"
     },
@@ -1176,7 +1176,7 @@ expression: snapshot
       "md_path": "claude-api/render_markdown/00000000-0000-8a01-8633-71325d50b8d7/all.md",
       "modified_at": null,
       "provider": "claude",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "claude-api",
       "title": "Stellar Cartography"
     },
@@ -1212,7 +1212,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-8a3c-a66b-d2616975dbfc/index.md",
       "modified_at": null,
       "provider": "facebook",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "facebook",
       "title": "William Riker"
     },
@@ -1272,7 +1272,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-8a95-8e69-5d9ef0dcdf0c/index.md",
       "modified_at": null,
       "provider": "facebook",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "facebook",
       "title": "Data"
     },
@@ -1284,7 +1284,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/00000000-0000-8841-8b6d-116feade3563/2025-03.md",
       "modified_at": "2025-03-05T21:34:00+00:00",
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "google-takeout",
       "title": "Jean-Luc Picard, William Riker"
     },
@@ -1296,7 +1296,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/00000000-0000-8ee7-a23a-b6a9b64eb3fb/2364-03.md",
       "modified_at": "2364-03-07T15:15:00+00:00",
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "google-takeout",
       "title": "Lieutenant Worf, Son of Mogh, Chief of Security"
     },
@@ -1368,7 +1368,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/00000000-0000-8911-b4f4-e7022a921136/all.md",
       "modified_at": null,
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "google-takeout",
       "title": "Away missions"
     },
@@ -1392,7 +1392,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-8ba6-97c6-f48500bf8e47/all.md",
       "modified_at": "2369-03-18T14:00:00+00:00",
       "provider": "facebook",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "facebook",
       "title": "Happy birthday, Number One. The bridge is yours for the day."
     },
@@ -1416,7 +1416,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-8c30-82a5-bc6ccada3dd3/2369.md",
       "modified_at": "2369-04-12T09:41:00.000+00:00",
       "provider": "facebook",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "facebook",
       "title": "Deanna Troi"
     },
@@ -1428,7 +1428,7 @@ expression: snapshot
       "md_path": "linkedin/render_markdown/00000000-0000-8bbb-8c8b-8ae1dedef5e2/index.md",
       "modified_at": null,
       "provider": "linkedin",
-      "renderer_version": "rust-v1.13",
+      "renderer_version": "rust-v1.14",
       "source_id": "linkedin",
       "title": "Jean-Luc Picard"
     },
@@ -1440,7 +1440,7 @@ expression: snapshot
       "md_path": "chatgpt-api/render_markdown/00000000-0000-8bd2-8afb-b21d3b87dfa5/all.md",
       "modified_at": "2370-10-27T08:01:00+00:00",
       "provider": "chatgpt",
-      "renderer_version": "rust-v1.14",
+      "renderer_version": "rust-v1.15",
       "source_id": "chatgpt-api",
       "title": "Holodeck Cave on Risa"
     },
@@ -1512,7 +1512,7 @@ expression: snapshot
       "md_path": "claude-api/render_markdown/00000000-0000-8c06-8231-9340b6e3de70/all.md",
       "modified_at": "2369-05-02T10:06:00+00:00",
       "provider": "claude",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "claude-api",
       "title": "Holodeck Malfunction Report"
     },
@@ -1524,7 +1524,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-8ef0-a5ad-33a9d1bb3c0b/2369.md",
       "modified_at": "2369-04-12T08:56:00.000+00:00",
       "provider": "facebook",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "facebook",
       "title": "Ten Forward"
     },
@@ -1536,7 +1536,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/00000000-0000-825b-8782-6b584a2e75c1/2026.md",
       "modified_at": "2026-06-06T16:00:00+00:00",
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "google-takeout",
       "title": "YouTube history"
     },
@@ -1548,7 +1548,7 @@ expression: snapshot
       "md_path": "sms-backup-restore/render_markdown/00000000-0000-8c57-9571-2bd28212d376/2369-04.md",
       "modified_at": "2369-04-15T09:03:00+00:00",
       "provider": "sms_backup_restore",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "sms-backup-restore",
       "title": "Jean-Luc Picard"
     },
@@ -1560,7 +1560,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/00000000-0000-8a29-a97a-3aa759a898ef/2364-03.md",
       "modified_at": "2364-03-03T19:00:00+00:00",
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "google-takeout",
       "title": "Wesley Crusher"
     },
@@ -1572,7 +1572,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/00000000-0000-8cce-a52f-e56db2f9fc70/all.md",
       "modified_at": null,
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "google-takeout",
       "title": "YouTube subscriptions"
     },
@@ -1584,7 +1584,7 @@ expression: snapshot
       "md_path": "claude-api/render_markdown/00000000-0000-8c45-a404-118e0e422b6b/all.md",
       "modified_at": "2364-03-02T11:30:00+00:00",
       "provider": "claude",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "claude-api",
       "title": "Bridge Operations"
     },
@@ -1608,7 +1608,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-8c76-a058-06e137cfac2d/all.md",
       "modified_at": "2369-03-20T12:00:00+00:00",
       "provider": "facebook",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "facebook",
       "title": "Jean-Luc Picard added a life event from January 5, 2364: Took command of the En…"
     },
@@ -1620,7 +1620,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/00000000-0000-858d-8592-42d8db3d75d5/2364-03.md",
       "modified_at": "2364-03-05T17:30:00+00:00",
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "google-takeout",
       "title": "Lieutenant Commander Geordi La Forge, Chief Engineer"
     },
@@ -1656,7 +1656,7 @@ expression: snapshot
       "md_path": "whatsapp/render_markdown/00000000-0000-8d08-85b0-d2533cc3a460/2364-04.md",
       "modified_at": "2364-04-11T00:12:00+00:00",
       "provider": "whatsapp",
-      "renderer_version": "rust-v1.14",
+      "renderer_version": "rust-v1.15",
       "source_id": "whatsapp",
       "title": "William Riker"
     },
@@ -1680,7 +1680,7 @@ expression: snapshot
       "md_path": "beeper/render_markdown/signal/00000000-0000-8c53-b909-d898f9ac9d58/2024-04.md",
       "modified_at": "2024-04-02T11:35:00.000+00:00",
       "provider": "beeper",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "beeper",
       "title": "Mr. Data"
     },
@@ -1704,7 +1704,7 @@ expression: snapshot
       "md_path": "whatsapp/render_markdown/00000000-0000-8891-ab80-dd17e867538b/2364-04.md",
       "modified_at": "2364-04-11T00:13:00+00:00",
       "provider": "whatsapp",
-      "renderer_version": "rust-v1.14",
+      "renderer_version": "rust-v1.15",
       "source_id": "whatsapp",
       "title": "Bridge Crew"
     },
@@ -1728,7 +1728,7 @@ expression: snapshot
       "md_path": "linkedin/render_markdown/00000000-0000-8d5b-95c0-1e95e75b6e77/index.md",
       "modified_at": null,
       "provider": "linkedin",
-      "renderer_version": "rust-v1.13",
+      "renderer_version": "rust-v1.14",
       "source_id": "linkedin",
       "title": "William Riker"
     },
@@ -1740,7 +1740,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-8d5b-9ccc-4069d9d92992/all.md",
       "modified_at": "2369-04-01T20:52:00+00:00",
       "provider": "facebook",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "facebook",
       "title": "Ten Forward Nights"
     },
@@ -1752,7 +1752,7 @@ expression: snapshot
       "md_path": "whatsapp/render_markdown/00000000-0000-8b1c-9241-3a10a9e8b6d0/2364-04.md",
       "modified_at": "2364-04-11T00:17:00+00:00",
       "provider": "whatsapp",
-      "renderer_version": "rust-v1.14",
+      "renderer_version": "rust-v1.15",
       "source_id": "whatsapp",
       "title": "Worf"
     },
@@ -1776,7 +1776,7 @@ expression: snapshot
       "md_path": "chatgpt-api/render_markdown/00000000-0000-8d7f-8279-1fc2e44e05fd/all.md",
       "modified_at": "2370-10-25T08:05:20+00:00",
       "provider": "chatgpt",
-      "renderer_version": "rust-v1.14",
+      "renderer_version": "rust-v1.15",
       "source_id": "chatgpt-api",
       "title": "Polynomial Fit for Sensor Calibration"
     },
@@ -1800,7 +1800,7 @@ expression: snapshot
       "md_path": "chatgpt-api/render_markdown/00000000-0000-8db7-990a-e9ff89094860/all.md",
       "modified_at": "2370-10-28T08:05:05+00:00",
       "provider": "chatgpt",
-      "renderer_version": "rust-v1.14",
+      "renderer_version": "rust-v1.15",
       "source_id": "chatgpt-api",
       "title": "Risa Survey Briefing"
     },
@@ -1812,7 +1812,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-8dca-8614-69a1a3d92c28/all.md",
       "modified_at": "2369-03-15T20:00:00+00:00",
       "provider": "facebook",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "facebook",
       "title": "Tea, Earl Grey, hot. ☕ Evening in Ten Forward with the senior staff."
     },
@@ -1824,7 +1824,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-8e1c-8c2e-c30f42ab6c8b/all.md",
       "modified_at": "2369-04-01T21:00:00+00:00",
       "provider": "facebook",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "facebook",
       "title": "Ten Forward Nights"
     },
@@ -1836,7 +1836,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-8b03-b202-0ecc96ba797c/2369.md",
       "modified_at": "2369-04-02T08:00:00+00:00",
       "provider": "facebook",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "facebook",
       "title": "Comments"
     },
@@ -1860,7 +1860,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-84e6-9994-8925c3e28d23/2369.md",
       "modified_at": "2369-04-12T08:17:40.000+00:00",
       "provider": "facebook",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "facebook",
       "title": "Facebook user · 1000000002"
     },
@@ -1884,7 +1884,7 @@ expression: snapshot
       "md_path": "beeper/render_markdown/slack/00000000-0000-8db2-bb39-6c4732048194/2024-03.md",
       "modified_at": "2024-03-21T17:01:00.000+00:00",
       "provider": "beeper",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "beeper",
       "title": "#bridge"
     },
@@ -1908,7 +1908,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-8f0b-a18a-78e2d79f491a/2369.md",
       "modified_at": "2369-04-12T09:06:40.000+00:00",
       "provider": "facebook",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "facebook",
       "title": "Facebook user · 1000000005"
     },
@@ -1920,7 +1920,7 @@ expression: snapshot
       "md_path": "linkedin/render_markdown/00000000-0000-8f36-a408-50d26aa9b0db/index.md",
       "modified_at": null,
       "provider": "linkedin",
-      "renderer_version": "rust-v1.13",
+      "renderer_version": "rust-v1.14",
       "source_id": "linkedin",
       "title": "Data Soong"
     },
@@ -1944,7 +1944,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-8f4d-b0a7-cfeb302ede83/all.md",
       "modified_at": "2369-03-24T19:33:20+00:00",
       "provider": "facebook",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "facebook",
       "title": "Jean-Luc Picard posted in Away Team Photographers."
     },
@@ -1980,7 +1980,7 @@ expression: snapshot
       "md_path": "claude-api/render_markdown/00000000-0000-8fda-8a1d-506771450366/all.md",
       "modified_at": "2369-04-17T10:00:00+00:00",
       "provider": "claude",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "claude-api",
       "title": "Poisoned: a message with an unreadable stamp"
     },
@@ -2076,7 +2076,7 @@ expression: snapshot
       "md_path": "github/render_markdown/enterprise-d/replicator-firmware/pr-42/index.md",
       "modified_at": "2369-04-15T11:30:00Z",
       "provider": "github",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "github",
       "title": "Recalibrate replicator templates for Earl Grey, hot"
     },
@@ -2088,7 +2088,7 @@ expression: snapshot
       "md_path": "gitlab/render_markdown/enterprise-d/holodeck/mr-17/index.md",
       "modified_at": "2369-04-15T11:30:00.000Z",
       "provider": "gitlab",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "gitlab",
       "title": "Add Earl Grey, hot to replicator menu"
     },
@@ -2100,7 +2100,7 @@ expression: snapshot
       "md_path": "gitlab/render_markdown/enterprise-d/holodeck/mr-18/index.md",
       "modified_at": "2369-04-15T14:30:00.000Z",
       "provider": "gitlab",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "gitlab",
       "title": "Holodeck safety interlock regression test"
     },
@@ -2112,7 +2112,7 @@ expression: snapshot
       "md_path": "github/render_markdown/enterprise-d/replicator-firmware/pr-43/index.md",
       "modified_at": "2369-04-15T14:30:00Z",
       "provider": "github",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "github",
       "title": "Add holodeck safety interlock for live phaser fire"
     }

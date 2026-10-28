@@ -101,6 +101,7 @@ mkdir -p "$stage/docs"
 "$stage/datalib-step" help agent > "$stage/docs/agent_user.md"
 "$stage/datalib-step" help raw-stores > "$stage/docs/raw_stores.md"
 "$stage/datalib-step" help apps > "$stage/docs/building_on_datalib.md"
+"$stage/datalib-step" help search > "$stage/docs/searching.md"
 
 # The example configs the guide points at, at their paths in the repo so
 # an agent with no network finds them: the commented one, and every

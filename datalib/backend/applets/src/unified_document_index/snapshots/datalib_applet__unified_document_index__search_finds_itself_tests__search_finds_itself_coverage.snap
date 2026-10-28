@@ -65,8 +65,8 @@ fields: subject
 fields: title
   checked: beeper 25, chatgpt-api 33, claude-api 70, claude-code 29, codex 40, datalib 249, facebook 71, garmin 16, github 10, gitlab 9, google-drive 7, google-takeout 75, linkedin 14, notion 8, ship-air 3, signal 15, slack 35, slack-diff 13, sms-backup-restore 14, tng_calendar 9, tng_contacts 9, tng_contacts-diff 5, tng_email 12, tng_pdfs 9, whatsapp 29, yolink 5
 fields: to
-  checked: sms-backup-restore 3, tng_email 7
-  never: beeper, chatgpt-api, claude-api, claude-code, codex, datalib, facebook, garmin, github, gitlab, google-drive, google-takeout, linkedin, notion, ship-air, signal, slack, slack-diff, tng_calendar, tng_contacts, tng_contacts-diff, tng_pdfs, whatsapp, yolink
+  checked: google-takeout 7, signal 10, sms-backup-restore 7, tng_email 7, whatsapp 13
+  never: beeper, chatgpt-api, claude-api, claude-code, codex, datalib, facebook, garmin, github, gitlab, google-drive, linkedin, notion, ship-air, slack, slack-diff, tng_calendar, tng_contacts, tng_contacts-diff, tng_pdfs, yolink
 item_count:
   checked: beeper 21, chatgpt-api 31, claude-api 44, claude-code 13, codex 17, datalib 211, facebook 66, garmin 9, github 10, gitlab 9, google-drive 7, google-takeout 69, linkedin 13, notion 8, ship-air 1, signal 15, slack 28, slack-diff 9, sms-backup-restore 11, tng_calendar 9, tng_contacts 9, tng_contacts-diff 5, tng_email 12, tng_pdfs 4, whatsapp 23, yolink 1
 kind:
@@ -108,13 +108,13 @@ terms: mention:
   checked: signal 1, slack 1, tng_email 1
   never: beeper, chatgpt-api, claude-api, claude-code, codex, datalib, facebook, garmin, github, gitlab, google-drive, google-takeout, linkedin, notion, ship-air, slack-diff, sms-backup-restore, tng_calendar, tng_contacts, tng_contacts-diff, tng_pdfs, whatsapp, yolink
 terms: recipient:
-  checked: sms-backup-restore 3, tng_email 10
-  never: beeper, chatgpt-api, claude-api, claude-code, codex, datalib, facebook, garmin, github, gitlab, google-drive, google-takeout, linkedin, notion, ship-air, signal, slack, slack-diff, tng_calendar, tng_contacts, tng_contacts-diff, tng_pdfs, whatsapp, yolink
+  checked: google-takeout 7, signal 10, sms-backup-restore 7, tng_email 10, whatsapp 13
+  never: beeper, chatgpt-api, claude-api, claude-code, codex, datalib, facebook, garmin, github, gitlab, google-drive, linkedin, notion, ship-air, slack, slack-diff, tng_calendar, tng_contacts, tng_contacts-diff, tng_pdfs, yolink
 terms: to:
-  checked: sms-backup-restore 3, tng_email 7
-  never: beeper, chatgpt-api, claude-api, claude-code, codex, datalib, facebook, garmin, github, gitlab, google-drive, google-takeout, linkedin, notion, ship-air, signal, slack, slack-diff, tng_calendar, tng_contacts, tng_contacts-diff, tng_pdfs, whatsapp, yolink
+  checked: google-takeout 7, signal 10, sms-backup-restore 7, tng_email 7, whatsapp 13
+  never: beeper, chatgpt-api, claude-api, claude-code, codex, datalib, facebook, garmin, github, gitlab, google-drive, linkedin, notion, ship-air, slack, slack-diff, tng_calendar, tng_contacts, tng_contacts-diff, tng_pdfs, yolink
 terms: with:
-  checked: beeper 41, chatgpt-api 59, claude-api 125, claude-code 40, codex 55, facebook 138, garmin 15, github 20, gitlab 18, google-drive 14, google-takeout 128, linkedin 26, notion 16, ship-air 2, signal 35, slack 67, slack-diff 27, sms-backup-restore 26, tng_calendar 10, tng_contacts 24, tng_contacts-diff 12, tng_email 39, tng_pdfs 7, whatsapp 57, yolink 4
+  checked: beeper 41, chatgpt-api 59, claude-api 125, claude-code 40, codex 55, facebook 138, garmin 15, github 20, gitlab 18, google-drive 14, google-takeout 135, linkedin 26, notion 16, ship-air 2, signal 45, slack 67, slack-diff 27, sms-backup-restore 30, tng_calendar 10, tng_contacts 24, tng_contacts-diff 12, tng_email 39, tng_pdfs 7, whatsapp 70, yolink 4
   never: datalib
 touched_at:
   checked: beeper 25, chatgpt-api 33, claude-api 66, claude-code 29, codex 40, datalib 249, facebook 70, garmin 4, github 10, gitlab 9, google-drive 7, google-takeout 54, linkedin 14, notion 8, ship-air 3, signal 15, slack 35, slack-diff 13, sms-backup-restore 14, tng_calendar 9, tng_contacts 5, tng_contacts-diff 3, tng_email 12, tng_pdfs 5, whatsapp 29, yolink 5

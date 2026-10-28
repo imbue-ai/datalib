@@ -89,7 +89,15 @@ fn pr_pk(repo: &str, num: u32) -> String {
 }
 
 pub fn parse_loaded(source_id: &str, raw: LoadedRaw) -> Parsed {
-    let mut out = Parsed::default();
+    let mut out = Parsed {
+        account: raw
+            .self_identity
+            .as_ref()
+            .and_then(|me| opt_str(me, "login"))
+            .as_deref()
+            .and_then(Handle::github),
+        ..Parsed::default()
+    };
 
     for pr in raw.pull_requests {
         let repo = pr.repo_full_name;

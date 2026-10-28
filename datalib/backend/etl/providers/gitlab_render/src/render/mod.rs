@@ -23,7 +23,9 @@ pub use parse::parse_api_dir;
 /// v6: a comment's time is a `<time>` stamp.
 /// v7: an author with an account is a chip, and the row carries their
 ///     handle.
-pub const RENDER_VERSION: u32 = 7;
+/// v8: a change request the signed-in user took part in marks their
+///     handle as the account's own, so search reads it as `me`.
+pub const RENDER_VERSION: u32 = 8;
 
 pub const PROFILE: ForgeProfile = ForgeProfile {
     provider: Provider::Gitlab,

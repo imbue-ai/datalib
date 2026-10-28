@@ -12,6 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::Result;
+use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact};
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{Bucket, Buckets, Input, RawRange};
@@ -143,6 +144,8 @@ pub struct Parsed {
     pub head: Option<String>,
     /// The buckets to render; `None` renders everything.
     pub render: Option<HashSet<String>>,
+    /// The signed-in user, by the handle their own posts carry.
+    pub account: Option<Handle>,
 }
 
 impl Parsed {
@@ -188,6 +191,27 @@ pub struct RenderSummary {
     pub buckets: Buckets,
 }
 
+/// The signed-in user as a source contact marked as the account, on a
+/// change request they opened or commented on, so search reads their
+/// handle as `me`. `None` on one they took no part in.
+fn account_contact(
+    source_id: &str,
+    account: Option<&Handle>,
+    cr: &ChangeRequest,
+    comments: &[&Comment],
+) -> Option<NormalizedContact> {
+    let account = account?;
+    let authors =
+        std::iter::once(&cr.author_handle).chain(comments.iter().map(|c| &c.author_handle));
+    let took_part = authors.flatten().any(|h| h == account);
+    took_part.then(|| {
+        let mut c = NormalizedContact::new(source_id, account.as_str(), ContactKind::Person);
+        c.handles = vec![ContactHandle::of(account.clone())];
+        c.account = true;
+        c
+    })
+}
+
 pub fn render_all(
     profile: &ForgeProfile,
     parsed: &Parsed,
@@ -226,7 +250,9 @@ pub fn render_all(
             rows,
             sections: Vec::new(),
             edges: Vec::new(),
-            contacts: Vec::new(),
+            contacts: account_contact(stanza, parsed.account.as_ref(), cr, &comments)
+                .into_iter()
+                .collect(),
             problems,
         })?;
         summary.buckets.push(Bucket {

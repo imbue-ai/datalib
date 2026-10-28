@@ -35,7 +35,8 @@ const EXAMPLES: &[Example] = &[
     about = "Applet host for the datalib app, and its search from the command line",
     long_about = "Applet host for the datalib app, and its search from the command line. \
                   `datalib-applet search <data_root> '<query>'` answers as the app's \
-                  search box does, as JSON, with no server. The other commands are \
+                  search box does, as JSON, with no server; `datalib-step help search` \
+                  has its query language. The other commands are \
                   applets: datalib-http's gateway starts one for each [[applets]] entry \
                   in the config and reads the port it prints, and you run one yourself \
                   only to work on it (docs/dev/applets.md).",
@@ -91,7 +92,7 @@ struct SearchArgs {
     /// The data root: the directory holding `config.toml`.
     data_root: PathBuf,
     /// What you would type in the search box: `field:value` terms and
-    /// free text. `''` lists every row.
+    /// free text (`datalib-step help search`). `''` lists every row.
     query: String,
     /// Which answer to free text: `fields`, `words` or `meaning`. None is
     /// the search box's own: identifiers from the search terms, the rest

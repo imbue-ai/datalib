@@ -1149,10 +1149,11 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "every source that rendered must also have measured itself",
         )
         # Who a handle is, as each source that mentions it says: the
-        # rows a chip reads. One address, five sources, one name — Slack's
+        # rows a chip reads. One address, six sources, one name — Slack's
         # through its profile, which ties his Slack user to the address,
-        # Drive's through the comments the account wrote, and the address
-        # book's, whose photo is what his chips draw.
+        # Drive's through the comments the account wrote, Facebook's
+        # through the owner's profile, and the address book's, whose
+        # photo is what his chips draw.
         self.assertEqual(
             self._query(
                 self._index_db,
@@ -1162,6 +1163,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "WHERE h.handle = 'email:picard@enterprise.starfleet' ORDER BY 1;",
             ),
             [
+                "facebook|Jean-Luc Picard",
                 "google-drive|Jean-Luc Picard",
                 "google-takeout|Jean-Luc Picard",
                 "slack|Jean-Luc Picard",
@@ -1171,7 +1173,11 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "the people the index knows by Picard's address",
         )
         # Whose account each source is: the user Slack's `auth.test` names,
-        # with the address on his profile, and the mailbox's address. The
+        # with the address on his profile; the mailbox's address; the
+        # forges' signed-in user; Beeper's own person; Facebook's owner, by
+        # name and address; the address an AI
+        # chat's account names, tied to its "Me"; the address a Takeout's
+        # Chat, a Drive or a LinkedIn export names as its owner. The
         # search reads these handles as `me` (docs/dev/contacts.md).
         self.assertEqual(
             self._query(
@@ -1182,11 +1188,46 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "WHERE json_extract(c.contact_json, '$.account') = 1 ORDER BY 1;",
             ),
             [
+                "beeper|slack:T1701D/U0PICARD",
+                "chatgpt-api|email:data@enterprise.starfleet.test",
+                "chatgpt-api|me:self",
+                "claude-api|email:jlpicard@enterprise.starfleet.test",
+                "claude-api|me:self",
+                "facebook|email:picard@enterprise.starfleet",
+                "facebook|facebook:name/Jean-Luc Picard",
+                "github|github:jlpicard",
+                "gitlab|gitlab:gitlab.com/jlpicard",
+                "google-drive|email:picard@enterprise.starfleet",
+                "google-takeout|email:picard@enterprise.starfleet",
+                "linkedin|email:data@enterprise.starfleet.test",
                 "slack|email:picard@enterprise.starfleet",
                 "slack|slack:T_NCC1701D/U_PICARD",
                 "tng_email|email:picard@enterprise.starfleet",
             ],
             "the handles each source marks as its account's own",
+        )
+        # A phone's backup records no recipient for a message it received;
+        # every one someone else sent is to the account, so `to:me` finds
+        # it, and none the account sent is.
+        to_me = (
+            "FROM grid_rows, json_each(grid_rows.supplied_terms) t "
+            "WHERE json_extract(t.value, '$[0]') = 'to' "
+            "AND json_extract(t.value, '$[1]') = 'me:self'"
+        )
+        self.assertEqual(
+            self._query(
+                self._index_db, f"SELECT DISTINCT source_id {to_me} ORDER BY 1;"
+            ),
+            ["google-takeout", "signal", "sms-backup-restore", "whatsapp"],
+            "the sources whose incoming messages are to the account",
+        )
+        self.assertEqual(
+            self._scalar(
+                self._index_db,
+                f"SELECT count(*) {to_me} AND author_handle = 'me:self';",
+            ),
+            "0",
+            "a message the account sent is not to it",
         )
         # One number written two ways — the address book's with dashes (a
         # vCard 4 `tel:` URI, read as its number), the SMS backup's and
@@ -1222,6 +1263,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "claude-code",
                 "codex",
                 "facebook",
+                "github",
+                "gitlab",
                 "google-drive",
                 "google-takeout",
                 "linkedin",

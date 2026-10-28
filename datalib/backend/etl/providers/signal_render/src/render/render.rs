@@ -36,7 +36,8 @@ use super::parse::{ParsedSignal, ATTACHMENTS_PROJECTION_SQL};
 /// v12: a mention reads as `@Name` rather than `U+FFFC`, and is searched.
 /// v13: chats and messages are keyed by who they are with and who wrote
 ///      them, and an attachment reads its bytes through its stored edge.
-pub const RENDER_VERSION: u32 = 13;
+/// v14: a message someone else sent is to the account (`to:me`).
+pub const RENDER_VERSION: u32 = 14;
 
 const SOURCE_LABEL: &str = "Signal";
 const PROVIDER: Provider = Provider::Signal;

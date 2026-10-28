@@ -34,7 +34,9 @@ use serde_json::Value;
 ///     leaves out their `name/` handle; a post on another page repeating
 ///     its own stamp is no problem.
 /// v11: a post's "Edited" is a `<time>` stamp.
-pub const RENDER_VERSION: u32 = 11;
+/// v12: the owner is marked as the account's own, by their name and the
+///     profile's address, so search reads both as `me`.
+pub const RENDER_VERSION: u32 = 12;
 
 pub const SOURCE_LABEL: &str = "Facebook";
 

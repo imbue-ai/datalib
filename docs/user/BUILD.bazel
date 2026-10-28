@@ -1,11 +1,13 @@
 # The Docker walkthrough is read at test time by //datalib/docker:doc_test,
 # which runs its shell blocks against a published image.
 # getting_your_data.md is compiled into `datalib-step help <type>`, and
-# the two guides for building on datalib into `datalib-step help
-# raw-stores` and `help apps`, which a release writes beside the binaries.
+# the guides for building on datalib and for searching into
+# `datalib-step help raw-stores`, `help apps` and `help search`, which a
+# release writes beside the binaries.
 exports_files([
     "building_on_datalib.md",
     "docker.md",
     "getting_your_data.md",
     "raw_stores.md",
+    "searching.md",
 ])

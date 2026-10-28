@@ -117,7 +117,9 @@ the item's `author_kind` (a reaction's `reactor_kind`): `Account` or
 a participant; only a handle behind it is. Whatever stand-in the source
 uses for the account, chat-common writes "Me", by the `me:self` handle
 where the source gave none, which is not a participant either
-(`the_account_as_me`).
+(`the_account_as_me`). A phone's backup names the account as the
+recipient of each message someone else sent (`Recipient::the_account`,
+not drawn), so `to:me` finds it; that is no participant either.
 
 Decide `is_aside` from what the item *is* upstream, not from its
 `kind_label`. ChatGPT files `system` messages under the same "Tool

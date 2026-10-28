@@ -197,7 +197,7 @@ fn conversation(
     let chat = ids::conversation(&owner.source_id, row_id);
     NormalizedChat {
         named_after: named_after(thread, &participants, owner, &people),
-        contacts: Vec::new(),
+        contacts: owner.contact().into_iter().collect(),
         inputs: inputs.declared(),
         path_prefix: None,
         id: format!("conversation:{row_id}"),
