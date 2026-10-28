@@ -522,6 +522,17 @@ class IngestedTngPipelineTest(unittest.TestCase):
             if s.get("function") == "ingest"
         )
 
+    def _grid_index_inputs(self) -> tuple[str, ...]:
+        """What the config's `grid_index` reads: every source's render.
+        The runner always hands a fan-in all of these, and a source
+        missing from them is one the config dropped, which leaves the
+        index."""
+        config = tomllib.loads((self.workspace / "dag.toml").read_text())
+        (step,) = [
+            s for s in config.get("steps", []) if s.get("function") == "grid_index"
+        ]
+        return tuple(step["inputs"])
+
     @property
     def _index_db(self) -> Path:
         """The grid index the `grid_index` fan-in step writes."""
@@ -2220,12 +2231,12 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self._run_step(
             "claude-api", "render_markdown", "claude", inputs=("claude-api/ingest",)
         )
-        # The fan-in reads the sources its inputs name, as the runner
-        # would hand them over; here, the one source under test.
+        # The fan-in reads every source, as the runner hands them over;
+        # only this one has moved.
         self._run_step(
             "unified_document_index",
             "grid_index",
-            inputs=("claude-api/render_markdown",),
+            inputs=self._grid_index_inputs(),
         )
 
         self.assertEqual(
@@ -2306,7 +2317,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         )
         self._run_step("github", "render_markdown", "github", inputs=("github/ingest",))
         self._run_step(
-            "unified_document_index", "grid_index", inputs=("github/render_markdown",)
+            "unified_document_index", "grid_index", inputs=self._grid_index_inputs()
         )
 
         github_docs_after = set(
