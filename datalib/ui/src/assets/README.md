@@ -6,18 +6,16 @@ the catalogs name (`icon: "gmail"` in `config/catalog.ts`,
 `config/icons.ts` picks every file here up by that name. The repo
 README's source grid uses these same files by path.
 
-**One file serves both themes.** A mark that would vanish on one
-background — a solid black one on the dark theme — flips its own fill:
-
-```svg
-<style>@media (prefers-color-scheme: dark) { path { fill: #ffffff } }</style>
-```
-
-The app follows the system's light or dark setting and has no switch of
-its own, and GitHub's README evaluates the same query, so the mark and
-the page always agree. Don't keep a `_dark` copy anywhere.
-`scripts/lint_repo.py` (check 13) measures every SVG against the light
-and dark backgrounds and fails one that doesn't show up on either.
+**One file serves both themes, in one set of colours.** A mark that
+would vanish on one background — a solid black one on the dark theme —
+gets a white part the way the brand's own logo has one: `notion.svg`
+fills its cube white, `github.svg` sits on a white disc. Don't flip the
+fill under `prefers-color-scheme`: the desktop app's WKWebView draws an
+`<img>` SVG with its light rule when the window opens in dark mode, and
+only picks the dark one up after the appearance changes. Don't keep a
+`_dark` copy anywhere either. `scripts/lint_repo.py` (check 13) refuses
+an SVG that names `prefers-color-scheme`, and measures every SVG against
+the light and dark backgrounds.
 
 ## Where each mark comes from
 
