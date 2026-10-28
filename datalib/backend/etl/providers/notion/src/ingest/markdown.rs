@@ -60,6 +60,23 @@ impl PageBody {
             .filter_map(|u| u.alt.clone().map(|a| (u.block_id.clone(), a)))
             .collect()
     }
+
+    /// The hole `id` is a database: its marker becomes the `<database>`
+    /// link an untruncated body carries, and it is no longer a hole.
+    pub fn link_database(&mut self, id: &str, title: &str) {
+        self.unresolved.retain(|u| u.block_id != id);
+        let marker = tags_at(&self.markdown, "<unknown")
+            .into_iter()
+            .find(|(_, tag)| attr(tag, "url").and_then(id_in_url).as_deref() == Some(id))
+            .map(|(at, tag)| (at, tag.len()));
+        if let Some((at, len)) = marker {
+            let link = format!(
+                "<database url=\"https://app.notion.com/p/{}\">{title}</database>",
+                id.replace('-', "")
+            );
+            self.markdown.replace_range(at..at + len, &link);
+        }
+    }
 }
 
 /// Dash-format a bare 32-hex Notion id. Returns the input unchanged if
@@ -242,6 +259,24 @@ mod tests {
                 "button".to_string()
             )]
         );
+    }
+
+    /// A truncated body's hole can be an inline database, which Notion
+    /// will not return as a page of markdown; its marker is the link an
+    /// untruncated body would have carried.
+    #[test]
+    fn a_database_hole_becomes_a_database_link() {
+        let mut body = parse(&json!({"truncated": true, "markdown":
+            "Duty roster: <unknown url=\"https://app.notion.com/p/x#253a550faf95817babfeee3c8c58dec5\"/>\n\
+             <unknown url=\"https://app.notion.com/p/x#348a550faf95803780d8c19ae5c2c9cd\"/>\n"}));
+        body.link_database("253a550f-af95-817b-abfe-ee3c8c58dec5", "Crew");
+        assert_eq!(
+            body.markdown,
+            "Duty roster: <database url=\"https://app.notion.com/p/253a550faf95817babfeee3c8c58dec5\">Crew</database>\n\
+             <unknown url=\"https://app.notion.com/p/x#348a550faf95803780d8c19ae5c2c9cd\"/>\n"
+        );
+        let holes: Vec<_> = body.fetchable_holes().map(|u| &u.block_id).collect();
+        assert_eq!(holes, vec!["348a550f-af95-8037-80d8-c19ae5c2c9cd"]);
     }
 
     /// An id listed in `unresolved_block_ids` with no marker in the text

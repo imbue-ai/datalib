@@ -367,6 +367,34 @@ impl RawDb {
             .collect())
     }
 
+    /// Every database the tree places, with its title if it has one.
+    pub async fn database_titles(&self) -> Result<HashMap<String, Option<String>>> {
+        let rows: Vec<(String, Option<String>)> =
+            sqlx::query_as("SELECT id, title FROM tree WHERE kind = ?")
+                .bind(TreeKind::Database.as_str())
+                .fetch_all(self.pool())
+                .await
+                .context("list the databases the tree places")?;
+        Ok(rows.into_iter().collect())
+    }
+
+    /// What asking for `ids` as pages left behind, once the tree shows
+    /// they are not pages: the empty `pages` row a failed fetch seeds,
+    /// its sidecar and its problem. A row with an object stays.
+    pub async fn forget_failed_pages(&self, ids: &[&str]) -> Result<()> {
+        let mut tx = self.pool().begin().await?;
+        for id in ids {
+            sqlx::query("DELETE FROM pages WHERE id = ? AND payload IS NULL")
+                .bind(id)
+                .execute(&mut *tx)
+                .await
+                .with_context(|| format!("forget the page stub {id}"))?;
+            owed::forget(&mut tx, PAGES, id).await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     /// Every user the stored pages and comments already name. A
     /// personal access token may read only its own user, so for anyone
     /// else this is all there is to know. A people property's object,
