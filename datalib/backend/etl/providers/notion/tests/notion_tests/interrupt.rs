@@ -39,7 +39,8 @@ const TABLES: &[&str] = &[
     "comment_anchors",
     "users",
     "notion_attachments",
-    "outline",
+    "tree",
+    "listed_pages",
     "coverage",
 ];
 
@@ -50,7 +51,7 @@ const HELD: &[&str] = &[
     "comment_anchors",
     "users",
     "notion_attachments",
-    "outline",
+    "tree",
 ];
 
 async fn dump_held(pool: &sqlx::SqlitePool) -> Result<String> {

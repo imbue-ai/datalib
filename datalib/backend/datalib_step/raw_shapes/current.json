@@ -505,8 +505,8 @@
     ]
   },
   "notion": {
-    "schema_hash": "1b3014f7238886a8ed931487f79f1022ac6a476eaa45e4feff99d81697560957",
-    "schema_version": 1,
+    "schema_hash": "20189a30d548f58583577718876f74ca53a9c812276c283f462a283b70212a21",
+    "schema_version": 2,
     "shared_schema_version": 1,
     "sql": [
       "CREATE TABLE comment_anchors( id TEXT PRIMARY KEY, page_id TEXT NULL, block_type TEXT NULL, plain_text TEXT NULL)",
@@ -516,13 +516,11 @@
       "CREATE INDEX comments_discussion ON comments(discussion_id)",
       "CREATE INDEX comments_page ON comments(page_id)",
       "CREATE TABLE coverage(scope TEXT NOT NULL, lo TEXT NOT NULL, hi TEXT NOT NULL, PRIMARY KEY(scope, lo))",
+      "CREATE TABLE listed_pages( id TEXT PRIMARY KEY, last_edited_time TEXT NULL)",
       "CREATE TABLE notion_attachments( id TEXT PRIMARY KEY, page_id TEXT NOT NULL, ref_id TEXT NOT NULL, blake3 TEXT NULL, CHECK(blake3 IS NULL OR length(blake3) = 64))",
       "CREATE TABLE notion_attachments_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX notion_attachments_by_page_id ON notion_attachments(page_id)",
       "CREATE INDEX notion_attachments_by_ref_id ON notion_attachments(ref_id, blake3)",
-      "CREATE TABLE outline( id TEXT PRIMARY KEY, kind TEXT NOT NULL, parent_type TEXT NULL, parent_id TEXT NULL, last_edited_time TEXT NULL)",
-      "CREATE TABLE outline_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
-      "CREATE INDEX outline_parent ON outline(parent_id)",
       "CREATE TABLE page_comments(id TEXT PRIMARY KEY)",
       "CREATE TABLE page_comments_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE page_markdown( id TEXT PRIMARY KEY, markdown TEXT NULL, truncated INTEGER NOT NULL DEFAULT 0, unresolved_block_ids TEXT NULL)",
@@ -534,6 +532,8 @@
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)",
+      "CREATE TABLE tree( id TEXT PRIMARY KEY, kind TEXT NOT NULL, title TEXT NULL, parent_type TEXT NULL, parent_id TEXT NULL, created_time TEXT NULL)",
+      "CREATE TABLE tree_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE users( id TEXT PRIMARY KEY, name TEXT NULL, payload TEXT NULL)",
       "CREATE TABLE users_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)"
     ]

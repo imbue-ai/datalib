@@ -23,7 +23,7 @@ use crate::support::*;
 async fn a_failed_comments_listing_survives_the_page_being_written_again() {
     let d = tempdir().unwrap();
     let (tape, store) = (d.path().join("tape"), d.path().join("s.doltlite_db"));
-    serve_outline(&tape, &[BRIDGE]);
+    serve_workspace(&tape, &[BRIDGE]);
     serve_object(&tape, BRIDGE, EDITED);
     serve_status(&tape, &format!("{BASE}/pages/{BRIDGE}/markdown"), 404);
     serve_status(&tape, &comments_url(BRIDGE), 500);
@@ -163,7 +163,7 @@ async fn an_anchor_that_did_not_fetch_is_a_problem_until_it_does() {
     let d = tempdir().unwrap();
     let (tape, store) = (d.path().join("tape"), d.path().join("s.doltlite_db"));
     let block = "1701d000-0000-4000-8000-0000000000bb";
-    serve_outline(&tape, &[BRIDGE]);
+    serve_workspace(&tape, &[BRIDGE]);
     serve_object(&tape, BRIDGE, EDITED);
     serve_body(&tape, BRIDGE, "Senior staff, report.\n", false);
     serve_comment_list(&tape, BRIDGE, json!([comment("c1", BRIDGE, Some(block))]));

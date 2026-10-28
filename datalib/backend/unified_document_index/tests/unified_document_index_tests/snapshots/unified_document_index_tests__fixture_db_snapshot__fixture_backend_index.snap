@@ -492,7 +492,7 @@ expression: snapshot
       "md_path": "notion/render_markdown/pages/b1d6e000-1701-4d00-8000-000000000001/threads/d0000001-1701-4d00-8000-000000000001.md",
       "modified_at": "2369-04-15T01:05:00.000Z",
       "provider": "notion",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "notion",
       "title": "Bridge Operations Handbook"
     },
@@ -792,7 +792,7 @@ expression: snapshot
       "md_path": "notion/render_markdown/pages/b1d6e000-1701-4d00-8000-000000000001/threads/d0000001-1701-4d00-8000-000000000002.md",
       "modified_at": "2369-04-15T01:10:00.000Z",
       "provider": "notion",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "notion",
       "title": "Bridge Operations Handbook"
     },
@@ -2040,7 +2040,7 @@ expression: snapshot
       "md_path": "notion/render_markdown/pages/b1d6e000-1701-4d00-8000-000000000003/index.md",
       "modified_at": "2369-04-15T00:02:00.000Z",
       "provider": "notion",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "notion",
       "title": "Incident Log: Stardate 47988.1"
     },
@@ -2052,7 +2052,7 @@ expression: snapshot
       "md_path": "notion/render_markdown/pages/b1d6e000-1701-4d00-8000-000000000001/index.md",
       "modified_at": "2369-04-15T00:02:00.000Z",
       "provider": "notion",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "notion",
       "title": "Bridge Operations Handbook"
     },
@@ -2064,7 +2064,7 @@ expression: snapshot
       "md_path": "notion/render_markdown/pages/b1d6e000-1701-4d00-8000-000000000002/index.md",
       "modified_at": "2369-04-15T00:02:00.000Z",
       "provider": "notion",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "notion",
       "title": "Shift Roster"
     },
@@ -2125,7 +2125,7 @@ expression: snapshot
       "message": "schema: grid index"
     },
     {
-      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=184 markdowns_read=184 markdowns_removed=3 rows_inserted=853"
+      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=184 markdowns_read=184 markdowns_removed=3 rows_inserted=854"
     }
   ],
   "grid_rows": [
@@ -19095,8 +19095,8 @@ expression: snapshot
     },
     {
       "kind": "Table",
-      "members_sha": "sha256:df14054ac4e3234f65b70e02cf5e629033d5794502827372f0bf44d385cff96f",
-      "rows": 188,
+      "members_sha": "sha256:6c41f71ce705f03c5c5d1756a84d3e2060c867e5dc87f512b052d90cb624956e",
+      "rows": 189,
       "source": ""
     }
   ],
@@ -19104,6 +19104,6 @@ expression: snapshot
     "documents_count": 176,
     "dolt_log_count": 3,
     "grid_rows_count": 565,
-    "storage_rows_count": 249
+    "storage_rows_count": 250
   }
 }

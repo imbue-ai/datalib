@@ -1,7 +1,7 @@
 //! What each loop fetches and how a flush of it is stored, one
-//! [`Fetcher`] per kind: in roots mode a page's object and where a block
-//! hangs; then a page's body, an attachment's bytes, a page's comments
-//! listed whole, a commented block, a user. Each is one request
+//! [`Fetcher`] per kind: in roots mode a page's object; a page's body,
+//! an attachment's bytes, a page's comments listed whole, a commented
+//! block, a parent in the tree, a user. Each is one request
 //! per record; the loop (`datalib_etl_web::owed`) owns the stop, the
 //! failure budget, the flush and what each outcome means for the
 //! record's sidecar.
@@ -17,9 +17,11 @@ use datalib_etl_web::owed::{BatchError, Fetched, Fetcher, Listed, Outcome};
 use serde_json::Value;
 use sqlx::{Sqlite, Transaction};
 
-use super::db::{CommentAnchorUpsert, CommentUpsert, OutlineRow, PageMarkdownUpsert, PageUpsert};
+use super::db::{
+    CommentAnchorUpsert, CommentUpsert, KnownUser, PageMarkdownUpsert, PageUpsert, TreeUpsert,
+};
 use super::official::NotionOfficialError;
-use super::schema_raw::split_edge_key;
+use super::schema_raw::{split_edge_key, TreeKind};
 use super::{markdown, run_over, slots, Ctx};
 
 /// Follow-up fetches for subtrees the markdown response was too large to
@@ -54,7 +56,7 @@ fn outcome<T>(
     }
 }
 
-// ── roots mode: page objects and blocks ────────────────────────────────
+// ── roots mode: page objects ───────────────────────────────────────────
 
 /// The objects of the pages a roots-mode run mirrors. A page Notion has
 /// not got, or will not show, is gone: the store keeps what it had.
@@ -119,47 +121,6 @@ impl Fetcher<PageUpsert> for Objects<'_> {
             count.fetch_add(1, Ordering::Relaxed);
         }
         Ok(())
-    }
-}
-
-/// Where a block that holds a page hangs. A block Notion would not show
-/// hangs off nothing, and is not asked for again.
-pub(crate) struct Blocks<'a>(pub(crate) &'a Ctx<'a>);
-
-#[async_trait]
-impl Fetcher<OutlineRow> for Blocks<'_> {
-    async fn fetch(&self, batch: Vec<Listed>) -> Result<Vec<Fetched<OutlineRow>>, BatchError> {
-        let mut out = Vec::with_capacity(batch.len());
-        for listed in batch {
-            let answer = match self.0.client.get_block(&listed.key).await {
-                Ok(b) => Ok(Outcome::Got(OutlineRow::block(&listed.key, Some(&b)))),
-                Err(NotionOfficialError::NotFound(_) | NotionOfficialError::Forbidden(_)) => {
-                    Ok(Outcome::Got(OutlineRow::block(&listed.key, None)))
-                }
-                Err(e) => Err(e),
-            };
-            out.push(Fetched {
-                outcome: outcome(self.0, answer)?,
-                listed,
-            });
-            self.0.bar.did(1);
-        }
-        Ok(out)
-    }
-
-    async fn store(
-        &self,
-        tx: &mut Transaction<'static, Sqlite>,
-        batch: &[Fetched<OutlineRow>],
-    ) -> Result<()> {
-        let rows: Vec<OutlineRow> = batch
-            .iter()
-            .filter_map(|f| match &f.outcome {
-                Outcome::Got(row) | Outcome::Unusable(row, ..) => Some(row.clone()),
-                _ => None,
-            })
-            .collect();
-        self.0.db.store_outline(tx, &rows).await
     }
 }
 
@@ -673,40 +634,104 @@ fn block_plain_text(block: &Value) -> Option<String> {
     (!s.trim().is_empty()).then_some(s)
 }
 
-/// A user as Notion describes one, or nothing for an id it no longer
-/// has or will not show.
+/// A parent a page sits under: a database, or a block (a column, a
+/// toggle, a page this credential cannot list). One Notion will not
+/// show is kept as an id with nothing known of it, so it is asked once.
+pub(crate) struct Ancestors<'a> {
+    pub(crate) ctx: &'a Ctx<'a>,
+    pub(crate) databases: HashSet<String>,
+}
+
+#[async_trait]
+impl Fetcher<TreeUpsert> for Ancestors<'_> {
+    async fn fetch(&self, batch: Vec<Listed>) -> Result<Vec<Fetched<TreeUpsert>>, BatchError> {
+        let mut out = Vec::with_capacity(batch.len());
+        for listed in batch {
+            let id = listed.key.as_str();
+            let answer = if self.databases.contains(id) {
+                self.ctx
+                    .client
+                    .get_database(id)
+                    .await
+                    .map(|db| TreeUpsert::from_database(id, &db))
+                    .or_else(|e| unseen(e, id, TreeKind::Database))
+            } else {
+                self.ctx
+                    .client
+                    .get_block(id)
+                    .await
+                    .map(|b| TreeUpsert::from_block(id, &b))
+                    .or_else(|e| unseen(e, id, TreeKind::Block))
+            };
+            out.push(Fetched {
+                outcome: outcome(self.ctx, answer.map(Outcome::Got))?,
+                listed,
+            });
+            self.ctx.bar.did(1);
+        }
+        Ok(out)
+    }
+
+    async fn store(
+        &self,
+        tx: &mut Transaction<'static, Sqlite>,
+        batch: &[Fetched<TreeUpsert>],
+    ) -> Result<()> {
+        let rows: Vec<TreeUpsert> = batch
+            .iter()
+            .filter_map(|f| match &f.outcome {
+                Outcome::Got(row) | Outcome::Unusable(row, ..) => Some(row.clone()),
+                _ => None,
+            })
+            .collect();
+        self.ctx.db.store_tree(tx, &rows).await?;
+        self.ctx
+            .counts
+            .ancestors_resolved
+            .fetch_add(rows.len(), Ordering::Relaxed);
+        Ok(())
+    }
+}
+
+/// A parent this credential may not see is the top of what it can: a
+/// page shared on its own has a parent that answers 404 or 403.
+fn unseen(
+    e: NotionOfficialError,
+    id: &str,
+    kind: TreeKind,
+) -> Result<TreeUpsert, NotionOfficialError> {
+    match e {
+        NotionOfficialError::NotFound(_) | NotionOfficialError::Forbidden(_) => {
+            Ok(TreeUpsert::unknown(id, kind))
+        }
+        e => Err(e),
+    }
+}
+
+/// A user as Notion describes one, or as much as the store knows of one
+/// Notion will not show.
 pub struct User {
     name: Option<String>,
     payload: Option<String>,
 }
 
-pub(crate) struct Users<'a>(pub(crate) &'a Ctx<'a>);
+pub(crate) struct Users<'a> {
+    pub(crate) ctx: &'a Ctx<'a>,
+    /// What the stored pages and comments already say of each user.
+    pub(crate) known: HashMap<String, KnownUser>,
+}
 
 #[async_trait]
 impl Fetcher<User> for Users<'_> {
     async fn fetch(&self, batch: Vec<Listed>) -> Result<Vec<Fetched<User>>, BatchError> {
         let mut out = Vec::with_capacity(batch.len());
         for listed in batch {
-            let answer = match self.0.client.get_user(&listed.key).await {
-                Ok(u) => Ok(Outcome::Got(User {
-                    name: u.get("name").and_then(Value::as_str).map(String::from),
-                    payload: Some(u.to_string()),
-                })),
-                // Some users a page names answer 403 to a personal access
-                // token; as with a 404, there is no name to have.
-                Err(NotionOfficialError::NotFound(_) | NotionOfficialError::Forbidden(_)) => {
-                    Ok(Outcome::Got(User {
-                        name: None,
-                        payload: None,
-                    }))
-                }
-                Err(e) => Err(e),
-            };
+            let answer = self.one(&listed.key).await;
             out.push(Fetched {
-                outcome: outcome(self.0, answer)?,
+                outcome: outcome(self.ctx, answer)?,
                 listed,
             });
-            self.0.bar.did(1);
+            self.ctx.bar.did(1);
         }
         Ok(out)
     }
@@ -718,7 +743,7 @@ impl Fetcher<User> for Users<'_> {
     ) -> Result<()> {
         for f in batch {
             if let Outcome::Got(user) | Outcome::Unusable(user, ..) = &f.outcome {
-                self.0
+                self.ctx
                     .db
                     .store_user(
                         tx,
@@ -727,10 +752,48 @@ impl Fetcher<User> for Users<'_> {
                         user.payload.as_deref(),
                     )
                     .await?;
-                self.0.counts.users_resolved.fetch_add(1, Ordering::Relaxed);
+                self.ctx
+                    .counts
+                    .users_resolved
+                    .fetch_add(1, Ordering::Relaxed);
             }
         }
         Ok(())
+    }
+}
+
+impl Users<'_> {
+    /// One user. A people property already carries the whole user
+    /// object, so one named there costs no request. Otherwise Notion is
+    /// asked; a personal access token may read only its own user, so a
+    /// 403 is the usual answer, and like a 404 it keeps what the store
+    /// knows — a comment's name for its author, or the id alone — so
+    /// the user is asked for once.
+    async fn one(&self, id: &str) -> Result<Outcome<User>, NotionOfficialError> {
+        let known = self.known.get(id);
+        if let Some(KnownUser {
+            name,
+            payload: Some(payload),
+        }) = known
+        {
+            return Ok(Outcome::Got(User {
+                name: Some(name.clone()),
+                payload: Some(payload.clone()),
+            }));
+        }
+        match self.ctx.client.get_user(id).await {
+            Ok(u) => Ok(Outcome::Got(User {
+                name: u.get("name").and_then(Value::as_str).map(String::from),
+                payload: Some(u.to_string()),
+            })),
+            Err(NotionOfficialError::NotFound(_) | NotionOfficialError::Forbidden(_)) => {
+                Ok(Outcome::Got(User {
+                    name: known.map(|k| k.name.clone()),
+                    payload: None,
+                }))
+            }
+            Err(e) => Err(e),
+        }
     }
 }
 

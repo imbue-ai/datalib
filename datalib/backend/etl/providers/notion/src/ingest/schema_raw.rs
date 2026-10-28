@@ -13,7 +13,6 @@
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::doltlite_raw::{self as dr, Migration};
 use datalib_etl_macros::CasEdgeRow;
-use strum::{EnumString, IntoStaticStr, VariantArray};
 
 pub const PAGES: &str = "pages";
 pub const PAGE_MARKDOWN: &str = "page_markdown";
@@ -22,7 +21,8 @@ pub const COMMENTS: &str = "comments";
 pub const COMMENT_ANCHORS: &str = "comment_anchors";
 pub const USERS: &str = "users";
 pub const ATTACHMENTS: &str = "notion_attachments";
-pub const OUTLINE: &str = "outline";
+pub const TREE: &str = "tree";
+pub const LISTED_PAGES: &str = "listed_pages";
 
 /// Names of the entity tables, in the order they should be iterated
 /// for full-table operations (truncate, full-DDL composition, etc.).
@@ -34,7 +34,7 @@ pub const DATA_TABLES: &[&str] = &[
     COMMENT_ANCHORS,
     USERS,
     ATTACHMENTS,
-    OUTLINE,
+    TREE,
 ];
 
 /// `pages` — one row per Notion page UUID, holding the page *object*:
@@ -151,39 +151,45 @@ pub const COMMENT_ANCHORS_DDL: &str = "CREATE TABLE IF NOT EXISTS comment_anchor
     plain_text TEXT NULL
 )";
 
-/// `outline` — where each object the credential can see hangs in the
-/// workspace: a page, a database, or a block that holds a page, and the
-/// object it hangs off. Only a roots-mode run fills it, from the search
-/// (a page, and a database from its data source) and, for a block, from
-/// `GET /v1/blocks/{id}`, read once. Roots mode mirrors the pages whose
-/// chain of parents reaches a root (`ingest::scope`).
+/// `tree` — where each page sits: one row per page, database and block
+/// that is a page's parent or further up, with its title and its own
+/// parent. Render walks it to put the path above a page.
 ///
-/// A page's row is held at its `last_edited_time`; a block's at no
-/// version.
+/// A page's row is written with the page and changes only when its
+/// title, parent or kind does, so a parent edited without being renamed
+/// re-renders none of the pages under it — which reading `pages` for
+/// the path would. A database comes from the data-source object search
+/// returns, or `GET /v1/databases/{id}`; a block (a column, a toggle, a
+/// page this credential cannot see) from `GET /v1/blocks/{id}`, once.
+/// One Notion answers 404 or 403 for keeps an id-only row.
 ///
-/// PK choice: the upstream id, dashed. A database row's `parent_id` is
-/// its database's id, not its data source's, as in `pages`.
-pub const OUTLINE_DDL: &str = "CREATE TABLE IF NOT EXISTS outline (
+/// PK choice: the Notion id. A database row's `parent_id` is its
+/// database's id, as `pages` stores it.
+pub const TREE_DDL: &str = "CREATE TABLE IF NOT EXISTS tree (
     id TEXT PRIMARY KEY,
     kind TEXT NOT NULL,
+    title TEXT NULL,
     parent_type TEXT NULL,
     parent_id TEXT NULL,
-    last_edited_time TEXT NULL
+    created_time TEXT NULL
 )";
 
-pub const OUTLINE_PARENT_INDEX_DDL: &str =
-    "CREATE INDEX IF NOT EXISTS outline_parent ON outline(parent_id)";
-
-/// What an `outline` row is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, IntoStaticStr, VariantArray)]
+/// What a `tree` row is. Only a `page` is a page this store holds, and
+/// so a document render writes; an `unmirrored_page` is one roots mode
+/// placed from the search and does not mirror; a block may be a page
+/// this credential cannot list.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, strum::IntoStaticStr, strum::VariantArray,
+)]
 #[strum(serialize_all = "snake_case")]
-pub enum OutlineKind {
+pub enum TreeKind {
     Page,
+    UnmirroredPage,
     Database,
     Block,
 }
 
-impl OutlineKind {
+impl TreeKind {
     pub fn as_str(self) -> &'static str {
         self.into()
     }
@@ -193,6 +199,57 @@ impl OutlineKind {
         s.parse().ok()
     }
 }
+
+/// Writes the `tree` row of each page `filter` picks out of `pages`. The
+/// one place a page's title is read in ingest: from its `title`-typed
+/// property.
+pub fn tree_rows_of_pages_sql(filter: &str) -> String {
+    format!(
+        "INSERT INTO tree (id, kind, title, parent_type, parent_id, created_time) \
+         SELECT p.id, 'page', \
+            (SELECT group_concat(json_extract(t.value, '$.plain_text'), '') \
+               FROM json_each(p.payload, '$.properties') pr, json_each(pr.value, '$.title') t \
+              WHERE json_extract(pr.value, '$.type') = 'title'), \
+            p.parent_type, p.parent_id, p.created_time \
+         FROM pages p WHERE p.payload IS NOT NULL AND ({filter}) \
+         ON CONFLICT(id) DO UPDATE SET {TREE_UPDATE}"
+    )
+}
+
+/// Writes the `tree` row of a page roots mode's search listed, from its
+/// object (bound as JSON): an `unmirrored_page`, unless the store holds
+/// the page, whose row stays a `page`. Its title is read as
+/// [`tree_rows_of_pages_sql`] reads it, so a held page's row written
+/// again from the search is unchanged.
+pub const TREE_ROW_OF_LISTED_PAGE_SQL: &str = "INSERT INTO tree \
+        (id, kind, title, parent_type, parent_id, created_time) \
+     VALUES (?, 'unmirrored_page', \
+        (SELECT group_concat(json_extract(t.value, '$.plain_text'), '') \
+           FROM json_each(?, '$.properties') pr, json_each(pr.value, '$.title') t \
+          WHERE json_extract(pr.value, '$.type') = 'title'), \
+        ?, ?, ?) \
+     ON CONFLICT(id) DO UPDATE SET \
+        kind = CASE WHEN tree.kind = 'page' THEN 'page' ELSE excluded.kind END, \
+        title = excluded.title, parent_type = excluded.parent_type, \
+        parent_id = excluded.parent_id, created_time = excluded.created_time";
+
+/// `listed_pages` — every page roots mode's search listed, at the
+/// `last_edited_time` it was listed at: what a page under a root is owed
+/// against. Its own table, not a `tree` column, because `tree` changes
+/// only when a title or a parent does, and render reads it for every
+/// page under a parent.
+///
+/// PK choice: the page's Notion id.
+pub const LISTED_PAGES_DDL: &str = "CREATE TABLE IF NOT EXISTS listed_pages (
+    id TEXT PRIMARY KEY,
+    last_edited_time TEXT NULL
+)";
+
+/// The `ON CONFLICT` half of every `tree` write. Doltlite diffs by
+/// content, so a row written again unchanged names no change for render.
+pub const TREE_UPDATE: &str = "kind = excluded.kind, title = excluded.title, \
+    parent_type = excluded.parent_type, parent_id = excluded.parent_id, \
+    created_time = excluded.created_time";
 
 /// `notion_attachments` — N:M edge between a page and a `cas_objects`
 /// blob, written with the body that names the file.
@@ -222,11 +279,45 @@ pub fn split_edge_key(key: &str) -> Option<(&str, &str)> {
 
 /// The raw store's migration ladder (etl/README.md §"The migration
 /// ladder").
-pub const LADDER: &[Migration] = &[Migration {
-    version: 1,
-    name: "what each table holds is its sidecar's held_version",
-    apply: |conn| Box::pin(held_into_the_sidecar(conn)),
-}];
+pub const LADDER: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "what each table holds is its sidecar's held_version",
+        apply: |conn| Box::pin(held_into_the_sidecar(conn)),
+    },
+    Migration {
+        version: 2,
+        name: "every page held has its row in tree",
+        apply: |conn| Box::pin(pages_into_the_tree(conn)),
+    },
+];
+
+/// Rung 2. A store from before `tree` holds pages whose rows it lacks,
+/// and a search walk past them never lists them again; each gets its
+/// row, held, as storing it now would. Their databases and blocks are
+/// the next run's to fetch.
+async fn pages_into_the_tree(conn: &mut sqlx::SqliteConnection) -> anyhow::Result<()> {
+    for ddl in [TREE_DDL.to_string(), dr::bookkeeping_ddl_for(TREE)] {
+        // Audited: this module's own DDL.
+        sqlx::query(sqlx::AssertSqlSafe(ddl))
+            .execute(&mut *conn)
+            .await?;
+    }
+    // Audited: a constant filter.
+    sqlx::query(sqlx::AssertSqlSafe(tree_rows_of_pages_sql("true")))
+        .execute(&mut *conn)
+        .await?;
+    let (now, offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
+    sqlx::query(
+        "INSERT INTO tree_bookkeeping (id, attempt_count, fetched_at_utc, tz_offset) \
+         SELECT id, 0, ?, ? FROM tree WHERE true ON CONFLICT(id) DO NOTHING",
+    )
+    .bind(&now)
+    .bind(&offset)
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
 
 /// Rung 1. A page object was held by having a payload, a body by a
 /// `source_last_edited_time` column of its own, and a comments listing
@@ -382,8 +473,8 @@ pub fn full_ddl() -> Vec<String> {
         COMMENTS_DISCUSSION_INDEX_DDL.to_string(),
         COMMENT_ANCHORS_DDL.to_string(),
         USERS_DDL.to_string(),
-        OUTLINE_DDL.to_string(),
-        OUTLINE_PARENT_INDEX_DDL.to_string(),
+        TREE_DDL.to_string(),
+        LISTED_PAGES_DDL.to_string(),
         datalib_etl_web::coverage::DDL.to_string(),
     ];
     out.extend(NotionAttachmentRow::all_ddl());
@@ -405,13 +496,5 @@ mod tests {
             split_edge_key("page-1#https://files.notion.so/a.png"),
             Some(("page-1", "https://files.notion.so/a.png"))
         );
-    }
-
-    #[test]
-    fn an_outline_kind_reads_back_as_written() {
-        for kind in OutlineKind::VARIANTS {
-            assert_eq!(OutlineKind::parse(kind.as_str()), Some(*kind));
-        }
-        assert_eq!(OutlineKind::parse("data_source"), None);
     }
 }

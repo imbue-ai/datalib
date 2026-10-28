@@ -17,10 +17,9 @@ use datalib_etl_web::owed::{self, Listed};
 pub use datalib_etl::doltlite_raw::db_path_for;
 
 use super::schema_raw::{
-    full_ddl, NotionAttachmentRow, OutlineKind, ATTACHMENTS, COMMENTS, LADDER, OUTLINE, PAGES,
-    PAGE_MARKDOWN,
+    full_ddl, tree_rows_of_pages_sql, NotionAttachmentRow, TreeKind, ATTACHMENTS, COMMENTS, LADDER,
+    PAGES, PAGE_MARKDOWN, TREE, TREE_ROW_OF_LISTED_PAGE_SQL, TREE_UPDATE,
 };
-use super::scope::Placed;
 
 datalib_etl::raw_db!(pub RawDb: CasEntityStore, full_ddl(), LADDER);
 
@@ -66,69 +65,116 @@ impl PageUpsert {
     }
 }
 
-/// One object's place in the workspace, as `outline` stores it.
+/// One `tree` row for a database or a block. A page's row is written
+/// from its stored object (`tree_rows_of_pages_sql`).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OutlineRow {
+pub struct TreeUpsert {
     pub id: String,
-    pub kind: OutlineKind,
+    pub kind: TreeKind,
+    pub title: Option<String>,
     pub parent_type: Option<String>,
     pub parent_id: Option<String>,
-    pub last_edited_time: Option<String>,
 }
 
-impl OutlineRow {
-    /// A page or a data source from the search. A data source stands for
-    /// its database, which is what a row's parent names; it hangs where
-    /// `database_parent` says. `None` for any other object, or one with
-    /// no id.
-    pub fn from_search_result(r: &Value) -> Option<Self> {
-        let text = |v: Option<&Value>| v.and_then(Value::as_str).map(String::from);
-        let edited = text(r.get("last_edited_time"));
-        match r.get("object").and_then(Value::as_str)? {
-            "page" => Some(Self::placed(
-                text(r.get("id"))?,
-                OutlineKind::Page,
-                r.get("parent"),
-                edited,
-            )),
-            "data_source" => Some(Self::placed(
-                text(r.get("parent").and_then(|p| p.get("database_id")))?,
-                OutlineKind::Database,
-                r.get("database_parent"),
-                edited,
-            )),
-            _ => None,
-        }
+impl TreeUpsert {
+    /// What a data-source object from search says of its database: its
+    /// title, and the database's own parent. `None` for one that names
+    /// no database.
+    pub fn from_data_source(ds: &Value) -> Option<Self> {
+        let id = ds.get("parent")?.get("database_id")?.as_str()?;
+        Some(Self::with_parent(
+            id,
+            TreeKind::Database,
+            plain_title(ds.get("title")),
+            ds.get("database_parent"),
+        ))
     }
 
-    /// A block from `GET /v1/blocks/{id}`, or `None` for one Notion would
-    /// not show: it hangs off nothing, and is not asked for again.
-    pub fn block(id: &str, block: Option<&Value>) -> Self {
-        Self::placed(
-            id.to_string(),
-            OutlineKind::Block,
-            block.and_then(|b| b.get("parent")),
-            None,
+    /// A database object, from `GET /v1/databases/{id}`.
+    pub fn from_database(id: &str, db: &Value) -> Self {
+        Self::with_parent(
+            id,
+            TreeKind::Database,
+            plain_title(db.get("title")),
+            db.get("parent"),
         )
     }
 
-    fn placed(
-        id: String,
-        kind: OutlineKind,
+    /// A block object, from `GET /v1/blocks/{id}`. A child page or a
+    /// child database carries its title; any other block, none.
+    pub fn from_block(id: &str, block: &Value) -> Self {
+        let title = block
+            .get("type")
+            .and_then(Value::as_str)
+            .and_then(|t| block.get(t))
+            .and_then(|b| b.get("title"))
+            .and_then(Value::as_str)
+            .map(String::from);
+        Self::with_parent(id, TreeKind::Block, title, block.get("parent"))
+    }
+
+    /// One Notion would not show: kept so it is not asked for again.
+    pub fn unknown(id: &str, kind: TreeKind) -> Self {
+        Self::with_parent(id, kind, None, None)
+    }
+
+    fn with_parent(
+        id: &str,
+        kind: TreeKind,
+        title: Option<String>,
         parent: Option<&Value>,
-        last_edited_time: Option<String>,
     ) -> Self {
         Self {
-            id,
+            id: id.to_string(),
             kind,
+            title,
             parent_type: parent
                 .and_then(|p| p.get("type"))
                 .and_then(Value::as_str)
                 .map(String::from),
             parent_id: parent.and_then(parent_id_of),
-            last_edited_time,
         }
     }
+}
+
+/// A rich-text array's plain text; `None` when it is empty.
+fn plain_title(rt: Option<&Value>) -> Option<String> {
+    let s: String = rt?
+        .as_array()?
+        .iter()
+        .filter_map(|t| t.get("plain_text").and_then(Value::as_str))
+        .collect();
+    (!s.is_empty()).then_some(s)
+}
+
+/// A parent named in `tree` that the store has no row for yet, and
+/// whether it is a database: the two are fetched from different
+/// endpoints.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AncestorListed {
+    pub id: String,
+    pub is_database: bool,
+}
+
+/// What the store already says of a user without asking Notion: a
+/// people property's whole user object, or a comment's name for its
+/// author.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KnownUser {
+    pub name: String,
+    /// The user object as a people property carries it; `None` when
+    /// only a comment named them.
+    pub payload: Option<String>,
+}
+
+/// One `tree` row as render reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TreeRow {
+    pub kind: Option<TreeKind>,
+    pub title: Option<String>,
+    pub parent_type: Option<String>,
+    pub parent_id: Option<String>,
+    pub created_time: Option<String>,
 }
 
 fn parent_id_of(p: &Value) -> Option<String> {
@@ -227,12 +273,17 @@ pub struct AttachmentRow {
 impl RawDb {
     // ── what each table lists for the next ─────────────────────────────
 
-    /// Every page with an object, at its `last_edited_time`, newest
-    /// first: what a body and a comments listing are owed against.
+    /// Every page with an object, at its `last_edited_time`: what a body
+    /// and a comments listing are owed against. Pages that are not rows
+    /// of a database come first, each kind newest first: a workspace's
+    /// rows are mostly records another tool wrote, outnumber its pages
+    /// many times over, and a run reaching them first left the pages
+    /// people write for days.
     pub async fn pages_listed(&self) -> Result<Vec<Listed>> {
         let rows: Vec<(String, Option<String>)> = sqlx::query_as(
             "SELECT id, last_edited_time FROM pages WHERE payload IS NOT NULL \
-             ORDER BY last_edited_time DESC, id",
+             ORDER BY coalesce(parent_type IN ('data_source_id', 'database_id'), 0), \
+                      last_edited_time DESC, id",
         )
         .fetch_all(self.pool())
         .await
@@ -298,6 +349,68 @@ impl RawDb {
             .collect())
     }
 
+    /// Every parent a `tree` row names, at no version: what the
+    /// ancestry loop owes until each has a row of its own.
+    pub async fn ancestors_listed(&self) -> Result<Vec<AncestorListed>> {
+        let rows: Vec<(String, bool)> = sqlx::query_as(
+            "SELECT parent_id, MAX(parent_type IN ('data_source_id', 'database_id')) FROM tree \
+             WHERE parent_type IN ('page_id', 'block_id', 'data_source_id', 'database_id') \
+               AND parent_id IS NOT NULL \
+             GROUP BY parent_id ORDER BY parent_id",
+        )
+        .fetch_all(self.pool())
+        .await
+        .context("list the parents the tree names")?;
+        Ok(rows
+            .into_iter()
+            .map(|(id, is_database)| AncestorListed { id, is_database })
+            .collect())
+    }
+
+    /// Every user the stored pages and comments already name. A
+    /// personal access token may read only its own user, so for anyone
+    /// else this is all there is to know. A people property's object,
+    /// which carries an address too, is preferred to a comment's name.
+    pub async fn users_named_in_store(&self) -> Result<HashMap<String, KnownUser>> {
+        let objects: Vec<(String, String, String)> = sqlx::query_as(
+            "SELECT json_extract(j.value, '$.id'), json_extract(j.value, '$.name'), json(j.value) \
+             FROM pages p, json_tree(p.payload, '$.properties') j \
+             WHERE p.payload IS NOT NULL AND j.type = 'object' \
+               AND json_extract(j.value, '$.object') = 'user' \
+               AND json_extract(j.value, '$.id') IS NOT NULL \
+               AND json_extract(j.value, '$.name') IS NOT NULL \
+             ORDER BY 1, 3",
+        )
+        .fetch_all(self.pool())
+        .await
+        .context("read the users people properties carry")?;
+        let commenters: Vec<(String, String)> = sqlx::query_as(
+            "SELECT json_extract(payload, '$.created_by.id'), \
+                    json_extract(payload, '$.display_name.resolved_name') \
+             FROM comments WHERE payload IS NOT NULL \
+               AND json_extract(payload, '$.created_by.id') IS NOT NULL \
+               AND json_extract(payload, '$.display_name.resolved_name') <> '' \
+             ORDER BY 1, 2",
+        )
+        .fetch_all(self.pool())
+        .await
+        .context("read the names comments give their authors")?;
+        let mut out: HashMap<String, KnownUser> = HashMap::new();
+        for (id, name, payload) in objects {
+            out.entry(id).or_insert(KnownUser {
+                name,
+                payload: Some(payload),
+            });
+        }
+        for (id, name) in commenters {
+            out.entry(id).or_insert(KnownUser {
+                name,
+                payload: None,
+            });
+        }
+        Ok(out)
+    }
+
     /// The pages the stored bodies of `page_ids` link, as a child or a
     /// mention, in the order the bodies name them, each once.
     pub async fn pages_linked_from(&self, page_ids: &[String]) -> Result<Vec<String>> {
@@ -336,33 +449,18 @@ impl RawDb {
         Ok(out)
     }
 
-    /// Every object in the outline, by id.
-    pub async fn outline(&self) -> Result<HashMap<String, Placed>> {
-        let rows: Vec<(String, String, Option<String>)> =
-            sqlx::query_as("SELECT id, kind, parent_id FROM outline")
-                .fetch_all(self.pool())
-                .await
-                .context("read the outline")?;
-        Ok(rows
-            .into_iter()
-            .filter_map(|(id, kind, parent)| {
-                let kind = OutlineKind::parse(&kind)?;
-                Some((id, Placed { kind, parent }))
-            })
-            .collect())
-    }
-
-    /// Each page of `ids` at the stamp the outline lists it at; a page
-    /// the outline does not have at no version.
-    pub async fn outline_stamps(&self, ids: &[String]) -> Result<Vec<Listed>> {
+    /// Each page of `ids` at the stamp roots mode's search listed it at;
+    /// one it has not listed at no version.
+    pub async fn listed_stamps(&self, ids: &[String]) -> Result<Vec<Listed>> {
         let mut stamps: HashMap<String, Option<String>> = HashMap::new();
         for chunk in ids.chunks(datalib_etl::bulk::SQL_CHUNK) {
             let mut placeholders = String::new();
             datalib_etl::bulk::push_placeholder_list(&mut placeholders, chunk.len());
             // Audited: the IN-list is a `?,?,?` run sized from the chunk and
             // every id is bound.
-            let sql =
-                format!("SELECT id, last_edited_time FROM outline WHERE id IN ({placeholders})");
+            let sql = format!(
+                "SELECT id, last_edited_time FROM listed_pages WHERE id IN ({placeholders})"
+            );
             let mut q = sqlx::query_as::<_, (String, Option<String>)>(sqlx::AssertSqlSafe(sql));
             for id in chunk {
                 q = q.bind(id);
@@ -370,28 +468,12 @@ impl RawDb {
             stamps.extend(
                 q.fetch_all(self.pool())
                     .await
-                    .context("read the outline's stamps")?,
+                    .context("read the listed stamps")?,
             );
         }
         Ok(ids
             .iter()
             .map(|id| Listed::new(id.clone(), stamps.get(id).cloned().flatten()))
-            .collect())
-    }
-
-    /// Every block the outline names as a parent, at no version: where
-    /// it hangs has only to be read once.
-    pub async fn blocks_listed(&self) -> Result<Vec<Listed>> {
-        let ids: Vec<String> = sqlx::query_scalar(
-            "SELECT DISTINCT parent_id FROM outline \
-             WHERE parent_type = 'block_id' AND parent_id IS NOT NULL ORDER BY parent_id",
-        )
-        .fetch_all(self.pool())
-        .await
-        .context("list the blocks pages hang off")?;
-        Ok(ids
-            .into_iter()
-            .map(|id| Listed::new(id, None::<String>))
             .collect())
     }
 
@@ -416,7 +498,8 @@ impl RawDb {
 
     // ── writes, in the transaction the caller holds ────────────────────
 
-    /// Each page object, held at its `last_edited_time`.
+    /// Each page object, held at its `last_edited_time`, and its row in
+    /// `tree`.
     pub async fn store_pages(
         &self,
         tx: &mut Transaction<'_, Sqlite>,
@@ -447,35 +530,69 @@ impl RawDb {
             .await
             .with_context(|| format!("upsert page {}", r.id))?;
             owed::hold(tx, PAGES, &r.id, r.last_edited_time.as_deref()).await?;
+            // Audited: a constant filter, the id bound.
+            sqlx::query(sqlx::AssertSqlSafe(tree_rows_of_pages_sql("p.id = ?")))
+                .bind(&r.id)
+                .execute(&mut **tx)
+                .await
+                .with_context(|| format!("place page {} in the tree", r.id))?;
+            owed::hold(tx, TREE, &r.id, None).await?;
         }
         Ok(())
     }
 
-    /// Each object's place, held at its `last_edited_time`.
-    pub async fn store_outline(
+    /// Pages roots mode's search listed: each one's place in `tree`, and
+    /// the stamp it was listed at in `listed_pages`.
+    pub async fn store_listed_pages(
         &self,
         tx: &mut Transaction<'_, Sqlite>,
-        rows: &[OutlineRow],
+        rows: &[PageUpsert],
     ) -> Result<()> {
         for r in rows {
+            sqlx::query(TREE_ROW_OF_LISTED_PAGE_SQL)
+                .bind(&r.id)
+                .bind(&r.payload)
+                .bind(&r.parent_type)
+                .bind(&r.parent_id)
+                .bind(&r.created_time)
+                .execute(&mut **tx)
+                .await
+                .with_context(|| format!("place listed page {} in the tree", r.id))?;
+            owed::hold(tx, TREE, &r.id, None).await?;
             sqlx::query(
-                "INSERT INTO outline (id, kind, parent_type, parent_id, last_edited_time)
-                 VALUES (?, ?, ?, ?, ?)
-                 ON CONFLICT(id) DO UPDATE SET
-                    kind = excluded.kind,
-                    parent_type = excluded.parent_type,
-                    parent_id = excluded.parent_id,
-                    last_edited_time = excluded.last_edited_time",
+                "INSERT INTO listed_pages (id, last_edited_time) VALUES (?, ?) \
+                 ON CONFLICT(id) DO UPDATE SET last_edited_time = excluded.last_edited_time",
             )
             .bind(&r.id)
-            .bind(r.kind.as_str())
-            .bind(&r.parent_type)
-            .bind(&r.parent_id)
             .bind(&r.last_edited_time)
             .execute(&mut **tx)
             .await
-            .with_context(|| format!("place {} in the outline", r.id))?;
-            owed::hold(tx, OUTLINE, &r.id, r.last_edited_time.as_deref()).await?;
+            .with_context(|| format!("list page {}", r.id))?;
+        }
+        Ok(())
+    }
+
+    /// Databases and blocks a page sits under, held at no version.
+    pub async fn store_tree(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        rows: &[TreeUpsert],
+    ) -> Result<()> {
+        for r in rows {
+            // Audited: `TREE_UPDATE` is a constant; every value is bound.
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "INSERT INTO tree (id, kind, title, parent_type, parent_id) VALUES (?, ?, ?, ?, ?) \
+                 ON CONFLICT(id) DO UPDATE SET {TREE_UPDATE}"
+            )))
+            .bind(&r.id)
+            .bind(r.kind.as_str())
+            .bind(&r.title)
+            .bind(&r.parent_type)
+            .bind(&r.parent_id)
+            .execute(&mut **tx)
+            .await
+            .with_context(|| format!("place {} in the tree", r.id))?;
+            owed::hold(tx, TREE, &r.id, None).await?;
         }
         Ok(())
     }
@@ -751,6 +868,37 @@ impl RawDb {
                 let v: Value = serde_json::from_str(&payload).ok()?;
                 let email = v.get("person")?.get("email")?.as_str()?;
                 Some((id, email.to_string()))
+            })
+            .collect())
+    }
+
+    /// Every `tree` row, by id.
+    pub async fn load_tree(&self) -> Result<HashMap<String, TreeRow>> {
+        type Raw = (
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        );
+        let rows: Vec<Raw> = sqlx::query_as(
+            "SELECT id, kind, title, parent_type, parent_id, created_time FROM tree",
+        )
+        .fetch_all(self.pool())
+        .await
+        .context("select tree")?;
+        Ok(rows
+            .into_iter()
+            .map(|(id, kind, title, parent_type, parent_id, created_time)| {
+                let row = TreeRow {
+                    kind: TreeKind::parse(&kind),
+                    title,
+                    parent_type,
+                    parent_id,
+                    created_time,
+                };
+                (id, row)
             })
             .collect())
     }

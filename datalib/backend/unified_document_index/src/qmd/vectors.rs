@@ -291,28 +291,30 @@ pub async fn nearest_documents(
         held.by_hash.extend(read);
     }
 
-    // hash → (score, pos) of its nearest chunk.
-    let mut best: HashMap<&str, (f32, i64)> = HashMap::new();
+    // hash → (score, pos, where the next chunk starts) of its nearest chunk.
+    let mut best: HashMap<&str, (f32, i64, Option<i64>)> = HashMap::new();
     for &hash in &hashes {
-        for (pos, v) in &held.by_hash[hash] {
+        let chunks = &held.by_hash[hash];
+        for (pos, v) in chunks {
             let (dot, norm2) = dot_and_norm(v, &q);
             if norm2 == 0.0 || !norm2.is_finite() {
                 continue;
             }
             let score = dot / norm2.sqrt();
-            let entry = best.entry(hash).or_insert((f32::MIN, *pos));
+            let entry = best.entry(hash).or_insert((f32::MIN, *pos, None));
             if score > entry.0 {
-                *entry = (score, *pos);
+                let next = chunks.iter().map(|(p, _)| *p).filter(|p| p > pos).min();
+                *entry = (score, *pos, next);
             }
         }
     }
     drop(held);
 
-    let mut ranked: Vec<(&str, &str, f32, i64)> = documents
+    let mut ranked: Vec<(&str, &str, f32, i64, Option<i64>)> = documents
         .iter()
         .filter_map(|(path, hash)| {
-            let &(score, pos) = best.get(hash.as_str())?;
-            Some((path.as_str(), hash.as_str(), score, pos))
+            let &(score, pos, next) = best.get(hash.as_str())?;
+            Some((path.as_str(), hash.as_str(), score, pos, next))
         })
         .collect();
     ranked.sort_by(|a, b| b.2.total_cmp(&a.2).then_with(|| a.0.cmp(b.0)));
@@ -329,13 +331,14 @@ pub async fn nearest_documents(
     .collect();
     Ok(ranked
         .into_iter()
-        .map(|(path, hash, score, pos)| QmdHit {
+        .map(|(path, hash, score, pos, next)| QmdHit {
             path: path.to_string(),
             score: f64::from(score),
             snippet: bodies
                 .get(hash)
                 .map(|body| chunk_snippet(body, pos))
                 .unwrap_or_default(),
+            lines: bodies.get(hash).map(|body| chunk_lines(body, pos, next)),
             docid: String::new(),
             title: String::new(),
         })
@@ -419,20 +422,33 @@ pub struct QueryVector<'a> {
 /// held it. The snippet starts at the head of that line: a cut lands
 /// anywhere, inside a tag or a link, and half of one reads as markup.
 pub fn chunk_snippet(body: &str, pos: i64) -> String {
+    let at = byte_at(body, pos);
+    let at = body[..at].rfind('\n').map_or(0, |i| i + 1);
+    let line = 1 + body[..at].matches('\n').count();
+    let text: Vec<&str> = body[at..].lines().take(12).collect();
+    format!("@@ -{line},1 @@ (0 before, 0 after)\n{}", text.join("\n"))
+}
+
+/// How many lines a chunk spans, from the line it starts on to where the
+/// next chunk starts (the end of the body for the last), at least one.
+pub fn chunk_lines(body: &str, pos: i64, next: Option<i64>) -> usize {
+    let from = byte_at(body, pos);
+    let to = next.map_or(body.len(), |n| byte_at(body, n));
+    body[from..to.max(from)].lines().count().max(1)
+}
+
+/// The byte where UTF-16 unit `pos` falls: qmd's chunker counted in
+/// UTF-16 units of the body as JavaScript held it.
+fn byte_at(body: &str, pos: i64) -> usize {
     let pos = usize::try_from(pos).unwrap_or(0);
     let mut units = 0;
-    let at = body
-        .char_indices()
+    body.char_indices()
         .find(|(_, c)| {
             let here = units >= pos;
             units += c.len_utf16();
             here
         })
-        .map_or(body.len(), |(i, _)| i);
-    let at = body[..at].rfind('\n').map_or(0, |i| i + 1);
-    let line = 1 + body[..at].matches('\n').count();
-    let text: Vec<&str> = body[at..].lines().take(12).collect();
-    format!("@@ -{line},1 @@ (0 before, 0 after)\n{}", text.join("\n"))
+        .map_or(body.len(), |(i, _)| i)
 }
 
 async fn check_version(pool: &SqlitePool) -> Result<()> {
@@ -595,6 +611,16 @@ mod tests {
 
     /// `pos` counts UTF-16 units, as qmd's chunker did in JavaScript: an
     /// emoji before the cut is two of them.
+    /// A chunk spans from its line to where the next chunk starts, or to
+    /// the end of the body for the last.
+    #[test]
+    fn a_chunk_spans_the_lines_to_the_next_chunk() {
+        let body = "one\ntwo\nthree\nfour\n";
+        assert_eq!(chunk_lines(body, 0, Some(8)), 2);
+        assert_eq!(chunk_lines(body, 8, None), 2);
+        assert_eq!(chunk_lines(body, 4, Some(5)), 1);
+    }
+
     #[test]
     fn a_chunk_snippet_starts_on_the_line_the_chunk_starts_on() {
         let body = "# t\n\u{1F600} one\ntwo\nthree";

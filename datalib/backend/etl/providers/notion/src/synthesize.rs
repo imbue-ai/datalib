@@ -72,7 +72,7 @@ impl Synthesizer for NotionSynth {
         page_ids.sort();
 
         // POST /search — every page in one page of results, newest edit
-        // first, as the whole-workspace mirror and the roots outline
+        // first, as the whole-workspace mirror and roots mode
         // both start from it.
         let mut listed: Vec<Value> = pages
             .iter()

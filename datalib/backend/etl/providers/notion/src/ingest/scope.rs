@@ -1,35 +1,33 @@
 //! Which pages a roots-mode run mirrors: those whose chain of parents in
-//! the outline reaches a root. Decided here over values; the run reads
-//! the outline and fetches what this names.
+//! the tree reaches a root. Decided here over values; the run reads the
+//! tree and fetches what this names.
 
 use std::collections::{HashMap, HashSet};
 
-use super::schema_raw::OutlineKind;
+use super::db::TreeRow;
+use super::schema_raw::TreeKind;
 
-/// One object's place in the outline.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Placed {
-    pub kind: OutlineKind,
-    pub parent: Option<String>,
-}
-
-/// The pages of `outline` under one of `roots`, a root page included: a
+/// The pages of `tree` under one of `roots`, a root page included: a
 /// child page at any depth, a database's rows and what hangs off them,
-/// a page inside a block of a page. A chain that leaves the outline, or
+/// a page inside a block of a page. A chain that leaves the tree, or
 /// loops, ends without reaching a root.
-pub fn pages_under(outline: &HashMap<String, Placed>, roots: &HashSet<String>) -> HashSet<String> {
+pub fn pages_under(tree: &HashMap<String, TreeRow>, roots: &HashSet<String>) -> HashSet<String> {
     let mut known: HashMap<&str, bool> = HashMap::new();
-    outline
-        .iter()
-        .filter(|(_, placed)| placed.kind == OutlineKind::Page)
-        .filter(|(id, _)| reaches_a_root(id, outline, roots, &mut known))
+    tree.iter()
+        .filter(|(_, row)| {
+            matches!(
+                row.kind,
+                Some(TreeKind::Page) | Some(TreeKind::UnmirroredPage)
+            )
+        })
+        .filter(|(id, _)| reaches_a_root(id, tree, roots, &mut known))
         .map(|(id, _)| id.clone())
         .collect()
 }
 
 fn reaches_a_root<'a>(
     start: &'a str,
-    outline: &'a HashMap<String, Placed>,
+    tree: &'a HashMap<String, TreeRow>,
     roots: &HashSet<String>,
     known: &mut HashMap<&'a str, bool>,
 ) -> bool {
@@ -48,7 +46,7 @@ fn reaches_a_root<'a>(
             break false;
         }
         chain.push(id);
-        at = outline.get(id).and_then(|p| p.parent.as_deref());
+        at = tree.get(id).and_then(parent_of);
     };
     for id in chain {
         known.insert(id, answer);
@@ -56,63 +54,75 @@ fn reaches_a_root<'a>(
     answer
 }
 
+fn parent_of(row: &TreeRow) -> Option<&str> {
+    match row.parent_type.as_deref() {
+        Some("workspace") | None => None,
+        Some(_) => row.parent_id.as_deref(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn placed(kind: OutlineKind, parent: Option<&str>) -> Placed {
-        Placed {
-            kind,
-            parent: parent.map(String::from),
-        }
-    }
+    use TreeKind::{Block, Database, Page, UnmirroredPage};
 
-    fn outline(rows: &[(&str, OutlineKind, Option<&str>)]) -> HashMap<String, Placed> {
+    fn tree(rows: &[(&str, TreeKind, Option<&str>)]) -> HashMap<String, TreeRow> {
         rows.iter()
-            .map(|(id, kind, parent)| (id.to_string(), placed(*kind, *parent)))
+            .map(|(id, kind, parent)| {
+                let row = TreeRow {
+                    kind: Some(*kind),
+                    title: None,
+                    parent_type: Some(match parent {
+                        Some(_) => "page_id".to_string(),
+                        None => "workspace".to_string(),
+                    }),
+                    parent_id: parent.map(String::from),
+                    created_time: None,
+                };
+                (id.to_string(), row)
+            })
             .collect()
     }
 
-    fn under(o: &HashMap<String, Placed>, roots: &[&str]) -> Vec<String> {
+    fn under(t: &HashMap<String, TreeRow>, roots: &[&str]) -> Vec<String> {
         let roots: HashSet<String> = roots.iter().map(|r| r.to_string()).collect();
-        let mut out: Vec<String> = pages_under(o, &roots).into_iter().collect();
+        let mut out: Vec<String> = pages_under(t, &roots).into_iter().collect();
         out.sort();
         out
     }
-
-    use OutlineKind::{Block, Database, Page};
 
     /// The case that sent this in: a database pasted as a root mirrored
     /// nothing, though its rows and their sub-pages are what was wanted.
     #[test]
     fn a_database_root_brings_its_rows_and_what_hangs_off_them() {
-        let o = outline(&[
-            ("missions", Database, Some("workspace")),
-            ("away-team", Page, Some("missions")),
-            ("debrief", Page, Some("away-team")),
-            ("crew", Database, Some("workspace")),
-            ("picard", Page, Some("crew")),
+        let t = tree(&[
+            ("missions", Database, None),
+            ("away-team", UnmirroredPage, Some("missions")),
+            ("debrief", UnmirroredPage, Some("away-team")),
+            ("crew", Database, None),
+            ("picard", UnmirroredPage, Some("crew")),
         ]);
-        assert_eq!(under(&o, &["missions"]), ["away-team", "debrief"]);
+        assert_eq!(under(&t, &["missions"]), ["away-team", "debrief"]);
     }
 
     /// A child page is found by its parent, whatever the root's body
     /// says, at any depth, and through a block (a toggle, a column) and a
-    /// database inside a page.
+    /// database inside a page; mirrored or not yet.
     #[test]
     fn a_page_root_brings_every_page_under_it() {
-        let o = outline(&[
-            ("bridge", Page, Some("workspace")),
+        let t = tree(&[
+            ("bridge", Page, None),
             ("ops", Page, Some("bridge")),
             ("toggle", Block, Some("bridge")),
             ("column", Block, Some("toggle")),
-            ("helm", Page, Some("column")),
+            ("helm", UnmirroredPage, Some("column")),
             ("logs", Database, Some("ops")),
-            ("stardate-1", Page, Some("logs")),
-            ("sickbay", Page, Some("workspace")),
+            ("stardate-1", UnmirroredPage, Some("logs")),
+            ("sickbay", UnmirroredPage, None),
         ]);
         assert_eq!(
-            under(&o, &["bridge"]),
+            under(&t, &["bridge"]),
             ["bridge", "helm", "ops", "stardate-1"]
         );
     }
@@ -120,30 +130,30 @@ mod tests {
     /// A parent the credential cannot see ends the chain, and so does a
     /// loop, rather than spinning.
     #[test]
-    fn a_chain_that_leaves_the_outline_or_loops_reaches_nothing() {
-        let o = outline(&[
-            ("orphan", Page, Some("unseen")),
+    fn a_chain_that_leaves_the_tree_or_loops_reaches_nothing() {
+        let t = tree(&[
+            ("orphan", UnmirroredPage, Some("unseen")),
             ("a", Page, Some("b")),
             ("b", Page, Some("a")),
             ("loose-block", Block, None),
-            ("in-loose", Page, Some("loose-block")),
+            ("in-loose", UnmirroredPage, Some("loose-block")),
         ]);
-        assert!(under(&o, &["bridge"]).is_empty());
-        assert_eq!(under(&o, &["a"]), ["a", "b"]);
+        assert!(under(&t, &["bridge"]).is_empty());
+        assert_eq!(under(&t, &["a"]), ["a", "b"]);
     }
 
     /// One answer per chain is shared, so siblings deep under one root
     /// and pages outside it are told apart in one pass.
     #[test]
     fn siblings_share_the_answer_for_their_chain() {
-        let o = outline(&[
-            ("root", Page, Some("workspace")),
+        let t = tree(&[
+            ("root", Page, None),
             ("mid", Page, Some("root")),
-            ("leaf-1", Page, Some("mid")),
-            ("leaf-2", Page, Some("mid")),
-            ("other", Page, Some("workspace")),
-            ("other-leaf", Page, Some("other")),
+            ("leaf-1", UnmirroredPage, Some("mid")),
+            ("leaf-2", UnmirroredPage, Some("mid")),
+            ("other", Page, None),
+            ("other-leaf", UnmirroredPage, Some("other")),
         ]);
-        assert_eq!(under(&o, &["mid"]), ["leaf-1", "leaf-2", "mid"]);
+        assert_eq!(under(&t, &["mid"]), ["leaf-1", "leaf-2", "mid"]);
     }
 }

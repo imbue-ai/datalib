@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use datalib_etl_notion::ingest::db::{db_path_for, AttachmentRow, RawDb};
+use datalib_etl_notion::ingest::db::{db_path_for, AttachmentRow, RawDb, TreeRow};
 use datalib_etl_render::inputs::{changed_rows, RawRange};
 use serde_json::Value;
 
@@ -41,6 +41,9 @@ pub struct ParsedNotion {
     /// A comment names its block and carries no quote, so without this
     /// a thread's anchor is an opaque uuid.
     pub anchor_text: HashMap<String, String>,
+    /// Every page, database and block the store places in the tree, by
+    /// id: what the path above a page is walked through.
+    pub tree: HashMap<String, TreeRow>,
     /// `notion_attachments` row ids per page, bytes fetched or not.
     pub attachment_ids_by_page: HashMap<String, Vec<String>>,
     /// The attachment refs whose bytes were fetched, per page: what
@@ -87,6 +90,7 @@ async fn load(db: &RawDb, range: RawRange<'_>) -> Result<ParsedNotion> {
     let user_names = db.load_user_names().await?;
     let user_emails = db.load_user_emails().await?;
     let anchor_text = db.load_comment_anchors().await?;
+    let tree = db.load_tree().await?;
     let mut pages = db.load_pages().await?;
     let mut page_markdown = db.load_page_markdown().await?;
     let comments = db.load_comments().await?;
@@ -134,6 +138,7 @@ async fn load(db: &RawDb, range: RawRange<'_>) -> Result<ParsedNotion> {
         user_names,
         user_emails,
         anchor_text,
+        tree,
         attachment_ids_by_page,
         refs_by_page,
         db_path: None,

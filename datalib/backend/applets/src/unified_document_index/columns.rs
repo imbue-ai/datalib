@@ -140,6 +140,7 @@ pub fn rows_spec() -> RowsSpec {
         document: DocumentLink {
             fields: &["markdown_uuid", "uuid"],
             anchor: "uuid",
+            link: Some("link"),
         },
         free_text: free_text_of::<GridRow>(),
     }

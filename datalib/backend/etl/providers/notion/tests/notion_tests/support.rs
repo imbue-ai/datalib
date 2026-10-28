@@ -109,8 +109,8 @@ pub fn serve_search(tape: &Path, cursor: Option<&str>, results: Value, next: Opt
 }
 
 /// The workspace's search, one page of it: each of `ids` a page at
-/// [`EDITED`] hanging off the workspace. Roots mode places its roots by it.
-pub fn serve_outline(tape: &Path, ids: &[&str]) {
+/// [`EDITED`] at the top of the workspace. Roots mode places pages by it.
+pub fn serve_workspace(tape: &Path, ids: &[&str]) {
     let results: Vec<Value> = ids.iter().map(|id| page(id, EDITED)).collect();
     serve_search(tape, None, json!(results), None);
 }

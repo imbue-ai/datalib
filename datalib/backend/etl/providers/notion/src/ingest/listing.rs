@@ -2,11 +2,12 @@
 //! workspace, and the stretch of edit times a walk has read is a
 //! `coverage` span. In whole-workspace mode a result is the whole page
 //! object, so the listing's rows are the content. In roots mode the same
-//! walk fills the `outline` instead — where each page and database hangs
-//! — and the pages under a root are fetched one `GET /v1/pages/{id}` at
-//! a time (`roots_round`, and the objects loop in `mod.rs`). Either way
-//! a page object lands held at its `last_edited_time`, and that stamp is
-//! what its body and its comments are owed against.
+//! walk places every page and database in `tree` and lists each page's
+//! stamp in `listed_pages`; the pages under a root are then fetched one
+//! `GET /v1/pages/{id}` at a time (the objects loop in `mod.rs`, and
+//! `roots_round` for a root the search does not list). Either way a page
+//! object lands held at its `last_edited_time`, and that stamp is what
+//! its body and its comments are owed against.
 
 use std::collections::HashMap;
 
@@ -17,7 +18,7 @@ use datalib_etl_web::coverage::{self, Span};
 use datalib_etl_web::owed::{self, Held};
 use serde_json::Value;
 
-use super::db::{OutlineRow, PageUpsert};
+use super::db::{PageUpsert, TreeUpsert};
 use super::official::NotionOfficialError;
 use super::schema_raw::PAGES;
 use super::{run_over, Ctx, FetchSummary};
@@ -26,24 +27,25 @@ use super::{run_over, Ctx, FetchSummary};
 /// workspace per source, so one of them.
 pub const SEARCH_SCOPE: &str = "search";
 
-/// The `coverage` scope of the walk that fills the outline. Its own, so
-/// a store that changes mode lists what the other mode never wrote.
-pub const OUTLINE_SCOPE: &str = "outline";
+/// The `coverage` scope of roots mode's walk. Its own, so a store that
+/// changes mode lists what the other mode never wrote.
+pub const ROOTS_SCOPE: &str = "roots";
 
 /// What a search walk stores.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Listing {
     /// Every page object, as the mirror's content.
     Workspace,
-    /// Where each page and database hangs, for roots mode to choose from.
-    Outline,
+    /// Where each page and database sits, and each page's stamp, for
+    /// roots mode to choose from.
+    Roots,
 }
 
 impl Listing {
     fn scope(self) -> &'static str {
         match self {
             Listing::Workspace => SEARCH_SCOPE,
-            Listing::Outline => OUTLINE_SCOPE,
+            Listing::Roots => ROOTS_SCOPE,
         }
     }
 }
@@ -104,8 +106,8 @@ enum Ended {
 #[derive(Debug, Default)]
 struct ResultsPage {
     rows: Vec<PageUpsert>,
-    /// Every page and database read, with where it hangs.
-    outline: Vec<OutlineRow>,
+    /// The databases the data-source results describe.
+    databases: Vec<TreeUpsert>,
     /// The stamps of every result read, pages and containers alike.
     newest: Option<String>,
     oldest: Option<String>,
@@ -135,9 +137,13 @@ fn read_results(
         if let Some(e) = edited {
             page.oldest = Some(e.to_string());
         }
-        page.outline.extend(OutlineRow::from_search_result(r));
-        if r.get("object").and_then(Value::as_str) != Some("page") {
-            continue;
+        match r.get("object").and_then(Value::as_str) {
+            Some("page") => {}
+            Some("data_source") => {
+                page.databases.extend(TreeUpsert::from_data_source(r));
+                continue;
+            }
+            _ => continue,
         }
         let Some(row) = PageUpsert::from_object(r) else {
             continue;
@@ -198,14 +204,21 @@ fn not_yet_held(rows: Vec<PageUpsert>, held: &HashMap<String, Held>) -> (Vec<Pag
 }
 
 impl Ctx<'_> {
-    /// Stores the objects of `rows` not held at their stamp, with
-    /// `span` covered, in one transaction.
-    async fn store_listed(&self, rows: Vec<PageUpsert>, span: Option<Span>) -> Result<Stored> {
+    /// Stores the objects of `rows` not held at their stamp, and the
+    /// `databases` the same results described, with `span` covered, in
+    /// one transaction.
+    async fn store_listed(
+        &self,
+        rows: Vec<PageUpsert>,
+        databases: &[TreeUpsert],
+        span: Option<Span>,
+    ) -> Result<Stored> {
         let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
         let held = owed::held_versions(self.db.pool(), PAGES, ids).await?;
         let (rows, stored) = not_yet_held(rows, &held);
         let mut tx = self.db.pool().begin().await?;
         self.db.store_pages(&mut tx, &rows).await?;
+        self.db.store_tree(&mut tx, databases).await?;
         if let Some(span) = span {
             coverage::cover(&mut tx, SEARCH_SCOPE, span).await?;
         }
@@ -215,16 +228,23 @@ impl Ctx<'_> {
         Ok(stored)
     }
 
-    /// Stores where each object of `rows` hangs, with `span` covered,
-    /// in one transaction.
-    async fn store_outlined(&self, rows: Vec<OutlineRow>, span: Option<Span>) -> Result<()> {
+    /// Places the pages and `databases` of one page of results in the
+    /// tree and lists each page's stamp, with `span` covered, in one
+    /// transaction.
+    async fn store_placed(
+        &self,
+        rows: &[PageUpsert],
+        databases: &[TreeUpsert],
+        span: Option<Span>,
+    ) -> Result<()> {
         let mut tx = self.db.pool().begin().await?;
-        self.db.store_outline(&mut tx, &rows).await?;
+        self.db.store_listed_pages(&mut tx, rows).await?;
+        self.db.store_tree(&mut tx, databases).await?;
         if let Some(span) = span {
-            coverage::cover(&mut tx, OUTLINE_SCOPE, span).await?;
+            coverage::cover(&mut tx, ROOTS_SCOPE, span).await?;
         }
         tx.commit().await?;
-        self.wrote(rows.len() as u64).await;
+        self.wrote((rows.len() + databases.len()) as u64).await;
         Ok(())
     }
 
@@ -241,7 +261,7 @@ impl Ctx<'_> {
         let stop_at = search_stops_at(&held, self.opts.full_sync, floor.as_deref());
         let cap = match listing {
             Listing::Workspace => self.opts.max_pages,
-            Listing::Outline => None,
+            Listing::Roots => None,
         };
         tracing::info!(
             event = "notion_search_pass",
@@ -305,18 +325,16 @@ impl Ctx<'_> {
                     s.listed += page.rows.len();
                     self.bar
                         .doing(&format!("search: {} pages listed", s.listed));
-                    let stored = self.store_listed(page.rows, span).await?;
+                    let stored = self.store_listed(page.rows, &page.databases, span).await?;
                     s.new_pages += stored.new;
                     s.upd_pages += stored.updated;
                     s.skipped_pages += stored.skipped;
                 }
-                Listing::Outline => {
-                    s.outlined += page.outline.len();
-                    self.bar.doing(&format!(
-                        "outline: {} pages and databases listed",
-                        s.outlined
-                    ));
-                    self.store_outlined(page.outline, span).await?;
+                Listing::Roots => {
+                    s.placed += page.rows.len();
+                    self.bar
+                        .doing(&format!("search: {} pages placed", s.placed));
+                    self.store_placed(&page.rows, &page.databases, span).await?;
                 }
             }
             match page.end {
@@ -372,7 +390,7 @@ impl Ctx<'_> {
                         continue;
                     };
                     s.listed += 1;
-                    let stored = self.store_listed(vec![row], None).await?;
+                    let stored = self.store_listed(vec![row], &[], None).await?;
                     s.new_pages += stored.new;
                     s.upd_pages += stored.updated;
                     s.skipped_pages += stored.skipped;
@@ -468,43 +486,29 @@ mod tests {
         );
     }
 
-    /// A container in the results is read for its stamp and not listed.
+    /// A data source in the results is read for its stamp and for its
+    /// database's place in the tree, and is not listed as a page.
     #[test]
-    fn containers_are_passed_over() {
-        let ds = serde_json::json!({"object": "data_source", "id": "d", "last_edited_time": T3});
+    fn a_data_source_places_its_database_and_is_not_listed() {
+        let ds = serde_json::json!({
+            "object": "data_source", "id": "d", "last_edited_time": T3,
+            "title": [{"plain_text": "Crew "}, {"plain_text": "manifest"}],
+            "parent": {"type": "database_id", "database_id": "db"},
+            "database_parent": {"type": "page_id", "page_id": "bridge"},
+        });
         let read = read_results(&[ds, page("a", T2)], None, 0, None);
         assert_eq!(read.rows.len(), 1);
-        assert_eq!(
-            read.outline.len(),
-            1,
-            "a data source with no database names nothing"
-        );
         assert_eq!(read.newest.as_deref(), Some(T3));
         assert_eq!(read.oldest.as_deref(), Some(T2));
-    }
-
-    /// The outline places a database by its data source: the database
-    /// a row's parent names, hanging where `database_parent` says.
-    #[test]
-    fn a_data_source_places_its_database() {
-        let ds = serde_json::json!({
-            "object": "data_source", "id": "ds", "last_edited_time": T3,
-            "parent": {"type": "database_id", "database_id": "db"},
-            "database_parent": {"type": "page_id", "page_id": "p"},
-        });
-        let row = serde_json::json!({
-            "object": "page", "id": "r", "last_edited_time": T2,
-            "parent": {"type": "data_source_id", "data_source_id": "ds", "database_id": "db"},
-        });
-        let read = read_results(&[ds, row], None, 0, None);
-        let placed: Vec<(&str, &str, Option<&str>)> = read
-            .outline
-            .iter()
-            .map(|o| (o.id.as_str(), o.kind.as_str(), o.parent_id.as_deref()))
-            .collect();
         assert_eq!(
-            placed,
-            [("db", "database", Some("p")), ("r", "page", Some("db"))]
+            read.databases,
+            [TreeUpsert {
+                id: "db".into(),
+                kind: crate::ingest::schema_raw::TreeKind::Database,
+                title: Some("Crew manifest".into()),
+                parent_type: Some("page_id".into()),
+                parent_id: Some("bridge".into()),
+            }]
         );
     }
 

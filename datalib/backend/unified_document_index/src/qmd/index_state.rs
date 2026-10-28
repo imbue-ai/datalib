@@ -220,6 +220,7 @@ impl QmdIndexReader {
                     Some(line) => format!("@@ -{line},1 @@ (0 before, 0 after)\n{snippet}"),
                     None => snippet,
                 },
+                lines: None,
                 docid: String::new(),
                 title: String::new(),
             })
