@@ -114,8 +114,25 @@ class MetricsExport(unittest.TestCase):
                     raise
                 time.sleep(0.1)
 
+    def scrape_once_the_root_is_measured(self) -> tuple[str, str]:
+        """The server sizes the data root in the background and reports 0
+        until it has, so a scrape right after start can read 0. Scrape
+        until it is measured; past the deadline, the last scrape, for the
+        assertion to name."""
+        deadline = time.monotonic() + DEADLINE_SECS
+        while True:
+            content_type, text = self.scrape()
+            measured = any(
+                s.name == "datalib_root_bytes" and s.value > 0
+                for f in text_string_to_metric_families(text)
+                for s in f.samples
+            )
+            if measured or time.monotonic() > deadline:
+                return content_type, text
+            time.sleep(0.1)
+
     def test_a_scrape_parses_with_every_series_typed_by_its_name(self) -> None:
-        content_type, text = self.scrape()
+        content_type, text = self.scrape_once_the_root_is_measured()
         self.assertTrue(
             content_type.startswith("text/plain; version=0.0.4"), content_type
         )
