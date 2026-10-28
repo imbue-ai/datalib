@@ -157,4 +157,10 @@ pub struct SearchRow {
     /// a sortable "Score" column.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub score: Option<f64>,
+    /// Where opening the row goes, as a `datalib:doc/…` name: its page, at
+    /// the row when it is a section of it, and for a free-text search the
+    /// words to find there. Filled by the applet; `None` for a row with no
+    /// rendered page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
 }

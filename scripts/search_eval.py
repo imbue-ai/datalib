@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import secrets
 import statistics
 import subprocess
@@ -126,6 +127,7 @@ def search(get: Callable[[str], Any], q: str, mode: str, depth: int) -> dict[str
             "sender": (r.get("sender") or "")[:40],
             "score": r.get("score"),
             "snippet": " ".join((r.get("snippet") or "").split())[:200],
+            "link": r.get("link"),
         }
         for r in answer.get("rows", [])
     ]
@@ -147,6 +149,69 @@ def rank_of(target: dict[str, Any], rows: list[dict[str, Any]]) -> int | None:
         ):
             return i
     return None
+
+
+DOC = "datalib:doc/"
+TEXT = ":~:text="
+SECTION_RE = re.compile(r'data-section-uuid="([^"]+)"')
+WORD_RE = re.compile(r"[a-z0-9]{4,}")
+
+
+def section_of(row: dict[str, Any]) -> str:
+    """The section a row's link opens at (`datalib:doc/<page>#<section>`),
+    else the row itself, for an answer from a build without links."""
+    link = row.get("link") or ""
+    if link.startswith(DOC) and "#" in link:
+        section = link.split("#", 1)[1].split(TEXT, 1)[0]
+        return section or row.get("markdown_uuid") or row["uuid"]
+    return row["uuid"]
+
+
+class Pages:
+    """Each target page's sections in order, and each section's text, read
+    once from the applet's `/chat/<page>`."""
+
+    def __init__(self, get: Callable[[str], Any]):
+        self.get = get
+        self.read: dict[str, tuple[list[str], dict[str, str]]] = {}
+
+    def of(self, page: str) -> tuple[list[str], dict[str, str]]:
+        if page not in self.read:
+            try:
+                body = self.get(f"/chat/{urllib.parse.quote(page)}").get("body", "")
+            except (OSError, ValueError):
+                body = ""
+            marks = list(SECTION_RE.finditer(body))
+            order = [m.group(1) for m in marks]
+            text = {
+                m.group(1): re.sub(
+                    r"<[^>]+>", " ", body[m.end() : nxt.start() if nxt else len(body)]
+                ).lower()
+                for m, nxt in zip(marks, [*marks[1:], None])
+            }
+            self.read[page] = (order, text)
+        return self.read[page]
+
+
+def landing(
+    target: dict[str, Any], row: dict[str, Any], pages: Pages
+) -> dict[str, Any] | None:
+    """Where a hit on the target's page landed, for a target that is a
+    section of its page: on the target section or not, how many sections
+    off, and whether the words shown came from the target section."""
+    if target["uuid"] == target.get("markdown_uuid"):
+        return None
+    order, text = pages.of(target["markdown_uuid"])
+    section = section_of(row)
+    off = (
+        abs(order.index(section) - order.index(target["uuid"]))
+        if section in order and target["uuid"] in order
+        else None
+    )
+    shown = set(WORD_RE.findall(row["snippet"].lower()))
+    there = set(WORD_RE.findall(text.get(target["uuid"], "")))
+    snippet = len(shown & there) / len(shown) >= 0.6 if len(shown) >= 3 else None
+    return {"section": section == target["uuid"], "off": off, "snippet": snippet}
 
 
 def ui_answer(by_tab: dict[str, dict[str, Any]]) -> dict[str, Any]:
@@ -171,6 +236,7 @@ def run(args: argparse.Namespace) -> None:
             raise SystemExit(f"--modes: {m!r} is not one of {', '.join(MODES)}")
     root = Path(args.root).expanduser()
     server = connect(args, root)
+    pages = Pages(server.get)
     results: list[dict[str, Any]] = []
     try:
         # The first answer of each kind pays for loading what it reads
@@ -186,6 +252,8 @@ def run(args: argparse.Namespace) -> None:
                 for m in modes:
                     a = search(server.get, query["q"], m, args.depth)
                     a["rank"] = rank_of(t, a.get("rows", []))
+                    if a["rank"]:
+                        a["landing"] = landing(t, a["rows"][a["rank"] - 1], pages)
                     by_mode[m] = a
                 if all(tab in by_mode for tab in TABS):
                     by_mode["ui"] = ui_answer(by_mode)
@@ -266,6 +334,30 @@ def report(record: dict[str, Any]) -> str:
                 f"{s['any']:.0%} | {s['mrr']:.2f} | {s['errors']} | {s['p50_ms']:.0f} | "
                 f"{s['p90_ms']:.0f} | {s['max_ms']:.0f} |"
             )
+    lines += [
+        "",
+        "where a hit on the page lands, for targets that are a section of a page:",
+        "",
+        "| answer | hits | on the section | within 2 | median off | snippet from it |",
+        "|---|---|---|---|---|---|",
+    ]
+    for m in modes:
+        landed = [
+            r["modes"][m]["landing"]
+            for r in results
+            if r["modes"].get(m, {}).get("landing")
+        ]
+        if not landed:
+            continue
+        offs = [x["off"] for x in landed if x["off"] is not None]
+        judged = [x["snippet"] for x in landed if x["snippet"] is not None]
+        n = len(landed)
+        snippet = f"{sum(judged) / len(judged):.0%} of {len(judged)}" if judged else "-"
+        lines.append(
+            f"| {m} | {n} | {sum(x['section'] for x in landed) / n:.0%} | "
+            f"{sum(1 for o in offs if o <= 2) / n:.0%} | "
+            f"{f'{statistics.median(offs):g}' if offs else '-'} | {snippet} |"
+        )
     for split in ("style", "source_id"):
         lines += ["", f"found in the top 10, by {split}:", ""]
         lines.append("| " + split + " | n | " + " | ".join(modes) + " |")

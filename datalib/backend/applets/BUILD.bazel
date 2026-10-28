@@ -37,6 +37,7 @@ rust_binary(
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/unified_document_index:datalib_unified_document_index",
+        "//datalib/backend/uri:datalib_uri",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:axum",
         "@datalib_crates//:chrono",

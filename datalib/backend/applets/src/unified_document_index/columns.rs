@@ -731,6 +731,7 @@ mod tests {
             diff_status: Some("modified".into()),
             diff_changed_columns: Some("text".into()),
             score: Some(0.5),
+            link: Some("datalib:doc/md-1#m-1".into()),
         };
         Sources::read(Path::new("/nonexistent")).resolve(&mut row);
         let wire = serde_json::to_value(&row).unwrap();
@@ -758,6 +759,7 @@ mod tests {
             "upstream_id",
             "upstream_entity_kind",
             "is_document",
+            "link",
         ];
         let specs = columns();
         for spec in &specs {
