@@ -136,7 +136,13 @@ pub struct Body {
     complete: bool,
 }
 
-pub(crate) struct Bodies<'a>(pub(crate) &'a Ctx<'a>);
+pub(crate) struct Bodies<'a> {
+    pub(crate) ctx: &'a Ctx<'a>,
+    /// The databases the tree places, by id, with their titles: a hole
+    /// that is one of them is linked, not fetched, since Notion answers
+    /// a database asked for as a page with a 400.
+    pub(crate) databases: HashMap<String, Option<String>>,
+}
 
 #[async_trait]
 impl Fetcher<Body> for Bodies<'_> {
@@ -145,10 +151,10 @@ impl Fetcher<Body> for Bodies<'_> {
         for listed in batch {
             let answer = self.one(&listed.key).await;
             out.push(Fetched {
-                outcome: outcome(self.0, answer)?,
+                outcome: outcome(self.ctx, answer)?,
                 listed,
             });
-            self.0.bar.did(1);
+            self.ctx.bar.did(1);
         }
         Ok(out)
     }
@@ -160,7 +166,7 @@ impl Fetcher<Body> for Bodies<'_> {
     ) -> Result<()> {
         for f in batch {
             if let Outcome::Got(body) | Outcome::Unusable(body, ..) = &f.outcome {
-                self.0
+                self.ctx
                     .db
                     .store_body(tx, &body.row, &body.slots, body.complete)
                     .await?;
@@ -180,7 +186,7 @@ impl Bodies<'_> {
     /// an empty body, held: Notion answers it for a page deleted or no
     /// longer shared, and the page is asked again only once it is edited.
     async fn one(&self, pid: &str) -> Result<Outcome<Body>, NotionOfficialError> {
-        let ctx = self.0;
+        let ctx = self.ctx;
         let resp = match ctx.client.get_page_markdown(pid).await {
             Ok(resp) => resp,
             Err(NotionOfficialError::NotFound(_)) => {
@@ -265,8 +271,18 @@ impl Bodies<'_> {
         &self,
         body: &mut markdown::PageBody,
     ) -> Result<Holes, NotionOfficialError> {
-        let ctx = self.0;
+        let ctx = self.ctx;
         let mut holes = Holes::default();
+        let databases: Vec<(String, String)> = body
+            .fetchable_holes()
+            .filter_map(|u| {
+                let title = self.databases.get(&u.block_id)?;
+                Some((u.block_id.clone(), title.clone().unwrap_or_default()))
+            })
+            .collect();
+        for (id, title) in &databases {
+            body.link_database(id, title);
+        }
         let todo: Vec<String> = body
             .fetchable_holes()
             .map(|u| u.block_id.clone())

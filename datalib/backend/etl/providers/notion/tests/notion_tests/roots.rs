@@ -4,7 +4,11 @@
 //! refused as "a database, not a page", and a root page's sub-pages
 //! that its body did not link were never found.
 
+use datalib_etl::doltlite_raw as dr;
+use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_notion::ingest::official::BASE;
+use datalib_etl_notion::ingest::schema_raw::PAGES;
+use datalib_etl_notion::ingest::RawDb;
 use serde_json::{json, Value};
 use tempfile::tempdir;
 
@@ -130,6 +134,94 @@ async fn roots_mirror_what_hangs_under_them_and_what_a_root_links() {
         "the search alone: every page is held at the stamp it lists, and \
          the toggle was placed once"
     );
+}
+
+/// A truncated body whose hole is an inline database asked Notion for
+/// the database as a page of markdown, got a 400, and so was owed
+/// forever and never stored. The hole is now the database's link.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_database_in_a_truncated_body_is_linked_not_fetched() {
+    let d = tempdir().unwrap();
+    let (tape, store) = (d.path().join("tape"), d.path().join("s.doltlite_db"));
+    let crew = CREW.replace('-', "");
+    serve_search(
+        &tape,
+        None,
+        json!([
+            page(BRIDGE, EDITED),
+            {
+                "object": "data_source", "id": CREW_DS, "last_edited_time": EDITED,
+                "title": [{"plain_text": "Crew"}],
+                "parent": {"type": "database_id", "database_id": CREW},
+                "database_parent": {"type": "page_id", "page_id": BRIDGE},
+            },
+        ]),
+        None,
+    );
+    serve_object(&tape, BRIDGE, EDITED);
+    serve_comments(&tape, BRIDGE);
+    serve_body(
+        &tape,
+        BRIDGE,
+        &format!("Duty roster: <unknown url=\"https://app.notion.com/p/x#{crew}\"/>\n"),
+        true,
+    );
+
+    run(&tape, &store, &[BRIDGE]).await.unwrap();
+    assert!(
+        problems(&store).await.is_empty(),
+        "{:?}",
+        problems(&store).await
+    );
+    let db = RawDb::open(&store).await.unwrap();
+    let bodies = db.load_page_markdown().await.unwrap();
+    db.close().await;
+    assert_eq!(
+        bodies,
+        vec![(
+            BRIDGE.to_string(),
+            format!(
+                "Duty roster: <database url=\"https://app.notion.com/p/{crew}\">Crew</database>\n"
+            )
+        )]
+    );
+}
+
+/// A database pasted as a root was once asked for as a page, and the
+/// 400 stood as an error on `pages:<root>` after the build that places
+/// it as a database: nothing asked for that page again to clear it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_database_root_clears_the_page_error_an_older_build_left() {
+    let d = tempdir().unwrap();
+    let (tape, store) = (d.path().join("tape"), d.path().join("s.doltlite_db"));
+    workspace(&tape);
+    let db = RawDb::open(&store).await.unwrap();
+    let mut tx = db.pool().begin().await.unwrap();
+    dr::record_object_error(&mut tx, PAGES, MISSIONS, "HTTP 400: a database, not a page")
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    db.commit_all("as an older build left it").await.unwrap();
+    db.close().await;
+    assert_eq!(
+        problems(&store).await,
+        vec![row(&format!("pages:{MISSIONS}"), "error")]
+    );
+
+    run(&tape, &store, &[MISSIONS]).await.unwrap();
+    assert!(
+        problems(&store).await.is_empty(),
+        "{:?}",
+        problems(&store).await
+    );
+    let db = RawDb::open(&store).await.unwrap();
+    let stub: Option<String> = sqlx::query_scalar("SELECT id FROM pages WHERE id = ?")
+        .bind(MISSIONS)
+        .fetch_optional(db.pool())
+        .await
+        .unwrap();
+    db.close().await;
+    assert_eq!(stub, None, "the empty row the failed fetch seeded goes too");
 }
 
 /// A page moved under a root after the first run is mirrored by the

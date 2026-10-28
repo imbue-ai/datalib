@@ -114,7 +114,9 @@ costs nothing and a steady-state run reads one page of search results.
 A page that leaves the roots — moved elsewhere, or its root taken out of
 the config — stays as it was, as a deleted one does. A root the search
 does not place is asked for as a page, so one Notion has not got, or
-will not show, is a `config:` row.
+will not show, is a `config:` row. A root the tree places as a database
+is never asked for as a page, and a `pages:<root>` error an earlier
+build left from asking is cleared.
 
 The first run of a roots source lists the whole workspace: one request
 per hundred objects, about nine minutes for 53,000 pages, against the
@@ -217,6 +219,11 @@ differs is whether it can be filled.
 `alt` present ⇒ record it and stop. `alt` absent ⇒ fetch and splice.
 Unrepresentable types seen so far: `button`, `alias`, `drive`.
 
+An `alt`-less hole can also be an inline database, which Notion answers
+with a 400 ("is a database, not a page") when asked for as markdown.
+One the tree places as a database is not fetched: its marker becomes the
+`<database url="…">Title</database>` link an untruncated body carries.
+
 Always read `unresolved_block_ids` rather than inferring the hole set
 from the text: an id can be listed with no marker in the body.
 
@@ -244,11 +251,11 @@ anything: it was not held, so it is owed, and the next run fetches it.
 
 | what failed | its row | what clears it |
 |---|---|---|
-| a page object, in roots mode | `pages:<id>` | the page fetching; it is owed until held at the stamp `listed_pages` holds |
+| a page object, in roots mode | `pages:<id>` | the page fetching; it is owed until held at the stamp `listed_pages` holds. For a root the tree places as a database, the next roots run |
 | a page's comments listing | `page_comments:<id>` | the listing fetching whole |
 | comments the credential may not read (403: an integration without the read-comments capability) | one `listing:comments`, a warning; comments are not asked for again that run, and no page is marked failed | a run that reads comments, or has none to read |
 | a page's body | `page_markdown:<id>` | the body fetching |
-| a truncated subtree's follow-up | `page_markdown:<id>`; the body is owed, not stored short | the body fetching whole |
+| a truncated subtree's follow-up | `page_markdown:<id>`; the body is owed, not stored short | the body fetching whole; a hole the tree places as a database is linked, not followed |
 | more subtrees than `MAX_HOLE_FOLLOWUPS` | `page_markdown:<id>`, a warning; the body is stored and held | the page changing so it needs fewer |
 | an attachment's bytes | `notion_attachments:<page>#<slot>` | the bytes landing, or the body no longer linking it |
 | a commented block | `comment_anchors:<id>` | the block fetching |

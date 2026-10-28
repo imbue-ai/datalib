@@ -43,7 +43,9 @@ use fetchers::{
     Ancestors, Anchors, Attachments, Bodies, Comments, CommentsForbidden, Objects, Users,
 };
 use listing::Listing;
-use schema_raw::{ATTACHMENTS, COMMENT_ANCHORS, PAGES, PAGE_COMMENTS, PAGE_MARKDOWN, TREE, USERS};
+use schema_raw::{
+    TreeKind, ATTACHMENTS, COMMENT_ANCHORS, PAGES, PAGE_COMMENTS, PAGE_MARKDOWN, TREE, USERS,
+};
 
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
@@ -298,9 +300,11 @@ impl Ctx<'_> {
     async fn bodies(&self, s: &mut FetchSummary) -> Result<()> {
         let listed = self.db.pages_listed().await?;
         let owed = owed::owed(self.db.pool(), PAGE_MARKDOWN, listed).await?;
-        let drained = self
-            .drain(PAGE_MARKDOWN, owed, &Bodies(self), 50, 32 << 20)
-            .await?;
+        let f = Bodies {
+            ctx: self,
+            databases: self.db.database_titles().await?,
+        };
+        let drained = self.drain(PAGE_MARKDOWN, owed, &f, 50, 32 << 20).await?;
         s.bodies += drained.got;
         s.failed_bodies += drained.failed;
         Ok(())
@@ -401,6 +405,15 @@ impl Ctx<'_> {
         self.search_walk(Listing::Roots, s).await?;
         self.ancestors().await?;
         let tree = self.db.load_tree().await?;
+        let database_roots: Vec<&str> = roots
+            .iter()
+            .filter(|r| {
+                tree.get(*r)
+                    .is_some_and(|t| t.kind == Some(TreeKind::Database))
+            })
+            .map(String::as_str)
+            .collect();
+        self.db.forget_failed_pages(&database_roots).await?;
         let root_set: HashSet<String> = roots.iter().cloned().collect();
         let under = scope::pages_under(&tree, &root_set);
         let unplaced: Vec<String> = roots
