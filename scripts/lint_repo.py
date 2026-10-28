@@ -791,12 +791,13 @@ def _check_pools_never_recycle(root: Path) -> int:
 # things used to drift from it by hand: the Rust catalog the rows are
 # built from and the browser's catalog the wizard reads (each names
 # icons for the same types), the README's source grid, and the dark-theme
-# copies the grid kept for solid-black marks. The copies are gone: a mark
-# that would vanish on one theme flips its own fill under
-# `prefers-color-scheme`. So: every icon a catalog names is a file; the
+# copies the grid kept for solid-black marks. The copies are gone, and a
+# mark may not flip its own fill under `prefers-color-scheme` either: the
+# desktop app's WKWebView draws an `<img>` SVG with its light rule when
+# the window opens dark. So: every icon a catalog names is a file; the
 # two catalogs agree type for type; every SVG shows on each background it
-# is drawn on; the grid uses the app's files, and docs/assets/ never holds
-# a copy of one. The two catalogs also name each source, and those
+# is drawn on, in the one set of colours it has; the grid uses the app's
+# files, and docs/assets/ never holds a copy of one. The two catalogs also name each source, and those
 # names are held to agree the same way.
 _ICON_DIR = "datalib/ui/src/assets"
 _RUST_CATALOG = "datalib/backend/columns/src/source_catalog.rs"
@@ -807,10 +808,7 @@ _RUST_ENTRY = re.compile(
 _TS_FIELD = re.compile(r'^    (type|variantKey|icon|label): "([^"]+)",$')
 _HEX = r"#[0-9A-Fa-f]{6}\b|#[0-9A-Fa-f]{3}\b"
 _SVG_FILL = re.compile(r'\b(?:fill|stroke)="(' + _HEX + r')"')
-_SVG_DARK = re.compile(
-    r"@media\s*\(prefers-color-scheme:\s*dark\)\s*\{(.*?\})\s*\}", re.DOTALL
-)
-_CSS_FILL = re.compile(r"\b(?:fill|stroke):\s*(" + _HEX + ")")
+_SVG_THEMED = re.compile(r"prefers-color-scheme")
 _APP_BG = re.compile(r"--datalib-bg:\s*(#[0-9A-Fa-f]{6});")
 # GitHub's own dark background; its light one is the app's white.
 _GITHUB_DARK_BG = "#0d1117"
@@ -835,16 +833,6 @@ def _luminance(hex_colour: str) -> float:
 def _contrast(a: str, b: str) -> float:
     la, lb = sorted((_luminance(a), _luminance(b)), reverse=True)
     return (la + 0.05) / (lb + 0.05)
-
-
-def _svg_palettes(svg: str) -> tuple[set[str], set[str]]:
-    """The colours an SVG draws with on a light page and on a dark one.
-    A dark-mode rule replaces the attribute colours rather than adding
-    to them, which is how every mark here uses one."""
-    dark_rule = _SVG_DARK.search(svg)
-    light = set(_SVG_FILL.findall(svg))
-    dark = set(_CSS_FILL.findall(dark_rule.group(1))) if dark_rule else light
-    return light, dark
 
 
 _CatalogKey = tuple[str, str | None]
@@ -917,21 +905,27 @@ def _check_icons(root: Path) -> int:
         bad.append("theme.css no longer sets --datalib-bg for a light and a dark theme")
     else:
         backgrounds = [
-            ("the light theme", app_bgs[0], False),
-            ("the app's dark theme", app_bgs[1], True),
-            ("GitHub's dark theme", _GITHUB_DARK_BG, True),
+            ("the light theme", app_bgs[0]),
+            ("the app's dark theme", app_bgs[1]),
+            ("GitHub's dark theme", _GITHUB_DARK_BG),
         ]
         for stem, path in sorted(files.items()):
             if path.suffix != ".svg":
                 continue
-            light, dark = _svg_palettes(path.read_text(encoding="utf-8"))
-            if not light:
+            svg = path.read_text(encoding="utf-8")
+            if _SVG_THEMED.search(svg):
+                bad.append(
+                    f"{path.name} changes colour under prefers-color-scheme, which "
+                    "the desktop app's WKWebView ignores when it opens dark; draw "
+                    "it in colours that read on both themes"
+                )
+            palette = set(_SVG_FILL.findall(svg))
+            if not palette:
                 bad.append(
                     f"{path.name} draws with no #hex fill this check can measure"
                 )
                 continue
-            for name, bg, is_dark in backgrounds:
-                palette = dark if is_dark else light
+            for name, bg in backgrounds:
                 best = max(_contrast(c, bg) for c in palette)
                 if best < _MIN_CONTRAST:
                     bad.append(
