@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl_chat_common::findings::{noted, shape_of, unread_keys};
+use datalib_etl_chat_common::people::account_contact;
 use datalib_etl_chat_common::types::{
     own_stamp_ms, AuthorKind, ItemKind, NamedPerson, NormalizedAttachment, NormalizedChat,
     NormalizedChatItem, NormalizedDoc, NormalizedReaction, UpstreamRef,
@@ -87,6 +88,8 @@ struct Account<'a> {
     starred: HashSet<&'a str>,
     /// Space id → (membership state, starred).
     spaces: HashMap<String, (Option<&'a str>, bool)>,
+    /// The account's own address, which its messages are written under.
+    handle: Option<Handle>,
 }
 
 impl<'a> Account<'a> {
@@ -108,10 +111,15 @@ impl<'a> Account<'a> {
                 spaces.entry(space_of_dir(id)).or_default().1 = true;
             }
         }
+        let handle = rows
+            .iter()
+            .find_map(|(_, u)| u.pointer("/user/email").and_then(Value::as_str))
+            .and_then(Handle::email);
         Self {
             rows,
             starred,
             spaces,
+            handle,
         }
     }
 
@@ -374,7 +382,9 @@ fn conversation(source_id: &str, space: &str, s: &Space, account: &Account) -> N
     let chat_id = ids::space(source_id, space);
     NormalizedChat {
         named_after,
-        contacts: Vec::new(),
+        contacts: account_contact(source_id, account.handle.clone())
+            .into_iter()
+            .collect(),
         inputs: inputs.declared(),
         path_prefix: None,
         id: space.to_string(),

@@ -237,13 +237,14 @@ pub fn sections(t: &Thread) -> Vec<Section> {
 /// Each comment author with a handle, as this file's comments describe
 /// them: the names they showed, how many messages they wrote and when
 /// the newest was — what chat-common's baseline says of a chat's authors.
-pub fn authors(source_id: &str, threads: &[Thread]) -> Vec<NormalizedContact> {
+pub fn authors(source_id: &str, threads: &[Thread], me: Option<&Handle>) -> Vec<NormalizedContact> {
     let mut by_handle: BTreeMap<&str, (NormalizedContact, Option<i64>)> = BTreeMap::new();
     for m in threads.iter().flat_map(|t| &t.messages) {
         let Some(handle) = &m.handle else { continue };
         let (c, last) = by_handle.entry(handle.as_str()).or_insert_with(|| {
             let mut c = NormalizedContact::new(source_id, handle.as_str(), ContactKind::Person);
             c.handles = vec![ContactHandle::of(handle.clone())];
+            c.account = Some(handle) == me;
             (c, None)
         });
         if !c.names.contains(&m.author) {
@@ -462,7 +463,13 @@ mod tests {
     #[test]
     fn each_author_with_a_handle_is_a_source_contact() {
         let me = Handle::email("picard@enterprise.test").unwrap();
-        let contacts = authors("src", &threads("src", &thread_rows(), Some(&me)));
+        let contacts = authors("src", &threads("src", &thread_rows(), Some(&me)), Some(&me));
+        let mine: Vec<&str> = contacts
+            .iter()
+            .filter(|c| c.account)
+            .map(|c| c.key.as_str())
+            .collect();
+        assert_eq!(mine, ["email:picard@enterprise.test"], "the account's own");
         let got: Vec<(String, Vec<String>, u64)> = contacts
             .iter()
             .map(|c| {

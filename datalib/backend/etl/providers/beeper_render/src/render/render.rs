@@ -38,7 +38,9 @@ use super::parse::{DocBucket, ParsedBeeper};
 /// v6: people are written by their handles and are source contacts,
 ///     with their avatars; a chat with no name is called by its people.
 /// v7: an avatar is linked where the blob store holds it.
-pub const RENDER_VERSION: u32 = 7;
+/// v8: the account's own person is marked as the account, so search
+///     reads their handles as `me`.
+pub const RENDER_VERSION: u32 = 8;
 
 #[derive(Debug, Default, Clone)]
 pub struct RenderSummary {

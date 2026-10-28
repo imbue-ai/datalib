@@ -239,9 +239,8 @@ so `with:me:self`, like `from:me:self`, finds the messages they wrote. Where a
 source has no stand-in (email, Slack, Google Chat), the owner's own
 messages carry their address or user id like anyone else's, and the
 source marks its record of the owner as the account
-(`NormalizedContact::account`): Slack the user `auth.test` named, email
-the mailbox's address. `from:me` reaches both (§"Searching for a
-person").
+(`NormalizedContact::account`). `from:me` reaches both (§"Searching
+for a person").
 
 ## In a document
 
@@ -666,9 +665,15 @@ marked `account`, which the search terms file keeps in
 contact, it is read when the search runs and goes into the cache key
 (`with_people` in the applet). A terms file built before that table
 existed refuses `me` by name until the index's next sync rewrites it. A
-quoted `"me"` is the text. Today only Slack and email mark their
-account; a source that knows its owner adds it by setting `account` on
-that record.
+quoted `"me"` is the text.
+
+A source marks its owner by putting a record of them marked `account`
+in `NormalizedChat::contacts` (`chat-common`'s `account_contact`; a
+source that shows its owner as "Me" uses `stand_in_account`, which ties
+`me:self` to the account's address), and chat-common carries it into
+each document where one of its handles appears. Which sources do, and
+what `me` cannot find, is the table in
+[`searching.md`](../user/searching.md) §"`me`"; change it with them.
 
 **Keeping the name out of the markdown is a choice, not a rule.**
 Writing a contact's name into each chip link (its text or its title)

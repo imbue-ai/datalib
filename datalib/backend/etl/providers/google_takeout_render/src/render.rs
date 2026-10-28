@@ -48,7 +48,9 @@ use datalib_schema::providers::Provider;
 ///     thread, previews, reactions and labels, and a space its name; a
 ///     problem row for every field render leaves unread.
 /// v10: a Chat message's "Edited" is a `<time>` stamp.
-pub const RENDER_VERSION: u32 = 10;
+/// v11: Chat marks the account's address as its own, so search reads it
+///     as `me`.
+pub const RENDER_VERSION: u32 = 11;
 
 /// Projection for `BlobBundle::load_many` over the Voice CAS edge: the
 /// `ref_name` (attachment filename) is the bundle key; `content_type`

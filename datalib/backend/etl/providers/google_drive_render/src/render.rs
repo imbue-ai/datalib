@@ -27,7 +27,9 @@ use crate::unsupported;
 
 /// v1: Docs only, with their comment threads.
 /// v2: a Doc's images link the blob store rather than a copy beside it.
-pub const RENDER_VERSION: u32 = 2;
+/// v3: the account's own comments mark its address as the account's, so
+///     search reads it as `me`.
+pub const RENDER_VERSION: u32 = 3;
 
 const SOURCE_LABEL: &str = "Google Drive";
 const KIND_DOC: &str = "Google Doc";
@@ -165,7 +167,7 @@ pub fn render_doc(
         rows,
         sections,
         edges: Vec::new(),
-        contacts: comments::authors(source_id, &threads),
+        contacts: comments::authors(source_id, &threads, file.me.as_ref()),
         problems,
     })
 }

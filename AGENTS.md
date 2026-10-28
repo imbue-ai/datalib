@@ -79,6 +79,7 @@ merge conflict waiting to happen.
 **User-facing**
 
 - [`docs/user/first_time_user.md`](docs/user/first_time_user.md), [`docs/user/getting_your_data.md`](docs/user/getting_your_data.md), [`docs/user/config_examples/`](docs/user/config_examples/).
+- [`docs/user/searching.md`](docs/user/searching.md) — the search's query language, `from:me` and what it covers; compiled into `datalib-step help search`, so a change to the search changes it.
 
 ## Keep a forward path for existing data
 

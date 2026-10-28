@@ -186,9 +186,9 @@ struct Cli {
 enum Cmd {
     /// How to set datalib up from a shell: the steps, the source types,
     /// the step functions, and the guides whole (`help agent`, `help
-    /// raw-stores`, `help apps`).
+    /// raw-stores`, `help apps`, `help search`).
     Help {
-        /// `agent`, `raw-stores` or `apps`, a source type (`slack`) and
+        /// `agent`, `raw-stores`, `apps` or `search`, a source type (`slack`) and
         /// optionally one of its methods (`slack api`), a function
         /// (`embed`) or one of these commands (`probe`). None: the overview.
         topic: Vec<String>,

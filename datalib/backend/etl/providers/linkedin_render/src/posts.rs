@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
+use datalib_etl_chat_common::people::account_contact;
 use datalib_etl_chat_common::render::{render_all as cc_render_all, RenderProfile};
 use datalib_etl_chat_common::types::{
     own_stamp_ms, AuthorKind, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
@@ -241,7 +242,9 @@ fn build_post_chats(
         let comment_payloads: Vec<&Value> = thread.comments.iter().map(|(_, c)| *c).collect();
         chats.push(NormalizedChat {
             named_after: Vec::new(),
-            contacts: Vec::new(),
+            contacts: account_contact(source_id, owner.handle.cloned())
+                .into_iter()
+                .collect(),
             inputs: thread.inputs.declared(),
             path_prefix: None,
             id: format!("posts:{key}"),

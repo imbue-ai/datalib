@@ -12,6 +12,7 @@ use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::branches::{reading_order, TreeNode};
 use datalib_etl_chat_common::normalize::{capitalize, iso_to_ms, json_pretty_sorted};
+use datalib_etl_chat_common::people::stand_in_account;
 use datalib_etl_chat_common::render::{
     render_all as cc_render_all, Buckets, ChatRenderer, RenderProfile, ENTITY_KIND_CONVERSATION,
 };
@@ -60,7 +61,8 @@ use datalib_schema::providers::Provider;
 ///     sources listed; pasted text named; `artifacts`, `create_file`,
 ///     `bash_tool` and search results readable rather than JSON.
 /// v11: an answer's author is its model's chip (`ai_model:` handle).
-pub const RENDER_VERSION: u32 = 11;
+/// v12: the account's address is tied to "Me", so search reads it as `me`.
+pub const RENDER_VERSION: u32 = 12;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -466,7 +468,12 @@ fn build_chat(
             source_ref: None,
             items,
         }],
-        contacts: Vec::new(),
+        contacts: stand_in_account(
+            source_id,
+            parsed.account_label(&conv.account_uuid).as_deref(),
+        )
+        .into_iter()
+        .collect(),
         inputs: inputs.declared(),
     }
 }

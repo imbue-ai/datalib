@@ -7,6 +7,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use datalib_contact_schema::NormalizedContact;
 use datalib_etl::processor::PlanContext;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::ChatRenderer;
@@ -92,6 +93,21 @@ impl Owner {
             account: datalib_etl_chat_common::account_label("", email, name.as_deref()),
             inputs,
         }
+    }
+
+    /// The owner as the account's own source contact: their name's
+    /// handle (`me:self` when the store names nobody) and the profile's
+    /// address, so search reads both as `me`.
+    pub fn contact(&self) -> Option<NormalizedContact> {
+        let shown = match self.name_kind {
+            AuthorKind::Account => Some(Handle::me()),
+            _ => self.handle.clone(),
+        };
+        let address = self.account.as_deref().and_then(Handle::email);
+        datalib_etl_chat_common::people::account_contact(
+            &self.source_id,
+            shown.into_iter().chain(address),
+        )
     }
 
     /// The owner as the author of what they posted, commented or reacted.
