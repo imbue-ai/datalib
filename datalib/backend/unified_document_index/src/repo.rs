@@ -111,6 +111,14 @@ pub trait IndexRepo: Send + Sync {
     /// left out.
     async fn rows_by_uuids(&self, uuids: &[String]) -> Result<Vec<SearchRow>, RepoError>;
 
+    /// The document each of `uuids` is in, by row: `markdown_uuid`, or the
+    /// row's own uuid when it names none. A row the index no longer has is
+    /// left out.
+    async fn markdowns_of(
+        &self,
+        uuids: &[String],
+    ) -> Result<std::collections::HashMap<String, String>, RepoError>;
+
     /// The first `limit` rows `query`'s structured terms match, newest
     /// first.
     async fn search(&self, query: &ParsedQuery, limit: usize) -> Result<Vec<SearchRow>, RepoError> {
