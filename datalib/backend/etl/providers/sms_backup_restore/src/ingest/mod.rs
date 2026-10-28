@@ -88,8 +88,9 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     let changes = scan.changes_since(&prev);
     // Backups are snapshots and several can hold one message, so only a read
     // of every file says which records left the input.
-    let read_all =
-        changes.may_have_dropped_records() || changes.needs_reading().count() == scan.files.len();
+    let read_all = changes.may_have_dropped_records()
+        || changes.needs_reading().count() == scan.files.len()
+        || an_mms_lacks_its_addrs(db.pool()).await?;
     let to_read: Vec<&fsscan::ScannedFile> = if read_all {
         scan.files.iter().collect()
     } else {
@@ -251,6 +252,18 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
 /// Delete the messages and calls no file holds, with their attachment
 /// edges. Only right after reading every file. Returns how
 /// many records went.
+/// An MMS stored before its `addrs` were kept: every file is read again,
+/// once, so a root from before has them too.
+async fn an_mms_lacks_its_addrs(pool: &sqlx::SqlitePool) -> Result<bool> {
+    sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM sms_messages \
+         WHERE kind = 'mms' AND json_extract(payload, '$.addrs') IS NULL)",
+    )
+    .fetch_one(pool)
+    .await
+    .context("look for an MMS stored without its addrs")
+}
+
 async fn prune_unseen(
     tx: &mut Transaction<'_, Sqlite>,
     messages: &[SmsMessageRow],
@@ -383,6 +396,11 @@ fn ingest_mms(
         "readable_date": m.readable_date,
         "contact_name": m.contact_name,
         "attachments": attachment_refs,
+        "addrs": m
+            .addrs
+            .iter()
+            .map(|a| json!({"address": a.address, "type": a.type_}))
+            .collect::<Vec<_>>(),
     });
     rows.push(SmsMessageRow {
         id_and_payload: WirePayload {

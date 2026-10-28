@@ -54,13 +54,16 @@ pub(super) struct Queue {
 
 impl Queue {
     /// Owe `listed` at `reach`, in place of wherever it was owed before:
-    /// a thread listed again with a newer reply moves up.
-    pub fn push(&mut self, reach: String, listed: Listed) {
-        if let Some((was, _)) = self.by_key.remove(&listed.key) {
-            self.order.remove(&(was, listed.key.clone()));
+    /// a thread listed again with a newer reply moves up. Whether it is
+    /// newly owed, as against moved.
+    pub fn push(&mut self, reach: String, listed: Listed) -> bool {
+        let moved = self.by_key.remove(&listed.key);
+        if let Some((was, _)) = &moved {
+            self.order.remove(&(was.clone(), listed.key.clone()));
         }
         self.order.insert((reach.clone(), listed.key.clone()));
         self.by_key.insert(listed.key.clone(), (reach, listed));
+        moved.is_none()
     }
 
     /// Everything owed at `reach` or newer, newest first.
@@ -195,12 +198,13 @@ mod tests {
     #[test]
     fn a_queue_hands_back_newest_first_and_a_record_owed_again_moves() {
         let mut q = Queue::default();
-        q.push("2".into(), listed("a"));
-        q.push("3".into(), listed("b"));
-        q.push("1".into(), listed("c"));
-        q.push("4".into(), listed("a"));
+        assert!(q.push("2".into(), listed("a")));
+        assert!(q.push("3".into(), listed("b")));
+        assert!(q.push("1".into(), listed("c")));
+        assert!(!q.push("4".into(), listed("a")), "moved, not newly owed");
         assert_eq!(keys(&q.take_down_to("2")), ["a", "b"]);
         assert_eq!(keys(&q.take_down_to("")), ["c"]);
         assert!(q.take_down_to("").is_empty());
+        assert!(q.push("2".into(), listed("a")), "owed again once taken");
     }
 }

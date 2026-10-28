@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 
 use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact, Seen};
+use datalib_handle::Handle;
 use datalib_time::IsoOffsetTimestamp;
 
 use crate::types::{NormalizedChatItem, OrphanReactions};
@@ -93,6 +94,31 @@ pub fn baseline_contacts(
             c
         })
         .collect()
+}
+
+/// The account's own record of its owner, by every handle the source
+/// knows them by, marked as the account so the search reads those
+/// handles as `me`. A provider puts it in `NormalizedChat::contacts`, and
+/// a document carries it wherever one of its handles appears. `None` for
+/// no handles.
+pub fn account_contact(
+    source_id: &str,
+    handles: impl IntoIterator<Item = Handle>,
+) -> Option<NormalizedContact> {
+    let handles: Vec<Handle> = handles.into_iter().collect();
+    let mut c = NormalizedContact::new(source_id, handles.first()?.as_str(), ContactKind::Person);
+    c.handles = handles.into_iter().map(ContactHandle::of).collect();
+    c.account = true;
+    Some(c)
+}
+
+/// [`account_contact`] for a source that shows its owner as "Me"
+/// (`AuthorKind::Account`): `me:self` and the address its account label
+/// holds, so a document the owner wrote in ties the two together. `None`
+/// when the label is not an address.
+pub fn stand_in_account(source_id: &str, label: Option<&str>) -> Option<NormalizedContact> {
+    let address = Handle::email(label?)?;
+    account_contact(source_id, [Handle::me(), address])
 }
 
 /// The people a document carries: chat-common's baseline for each author
@@ -255,6 +281,37 @@ mod tests {
         assert_eq!(p.seen.as_ref().unwrap().items, 2);
         let r = got.iter().find(|c| c.key == "slack:T1/U_RIKER").unwrap();
         assert_eq!(r.names, ["Riker"], "no profile: the baseline as it was");
+    }
+
+    /// A source that shows its owner as "Me" ties `me:self` to the
+    /// account's address, so a document the owner wrote in carries both
+    /// as the account; one they did not write in carries neither, and a
+    /// label that is not an address gives no record.
+    #[test]
+    fn a_stand_in_account_ties_me_to_its_address() {
+        let account = stand_in_account("ignored", Some("picard@enterprise.org")).unwrap();
+        assert!(account.account);
+        let me = Handle::me();
+        let got = document_contacts(
+            "claude",
+            &[by(Some(&me), "Me", 1)],
+            &[],
+            std::slice::from_ref(&account),
+        );
+        assert_eq!(got.len(), 1);
+        assert!(got[0].account);
+        assert_eq!(got[0].source_id, "claude");
+        let handles: Vec<&str> = got[0]
+            .handles
+            .iter()
+            .filter_map(|h| h.handle.as_ref().map(|h| h.as_str()))
+            .collect();
+        assert_eq!(handles, ["me:self", "email:picard@enterprise.org"]);
+
+        let riker = Handle::email("riker@enterprise.org").unwrap();
+        let got = document_contacts("claude", &[by(Some(&riker), "Riker", 1)], &[], &[account]);
+        assert!(got.iter().all(|c| !c.account));
+        assert_eq!(stand_in_account("claude", Some("Jean-Luc Picard")), None);
     }
 
     /// Someone who only reacted is in the document too, under the name

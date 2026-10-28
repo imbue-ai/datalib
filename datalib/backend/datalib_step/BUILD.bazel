@@ -18,6 +18,7 @@ rust_binary(
         "//docs/user:building_on_datalib.md",
         "//docs/user:getting_your_data.md",
         "//docs/user:raw_stores.md",
+        "//docs/user:searching.md",
     ],
     crate_name = "datalib_step",
     crate_root = "src/main.rs",

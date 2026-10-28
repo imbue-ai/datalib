@@ -80,7 +80,8 @@ unpacks it into `~/.local/lib/datalib` and links the tools into
 - `datalib-applet` — serves the search grid inside the app, and
   searches from the terminal with no app running:
   `datalib-applet search ~/datalib 'from:picard warp core'` prints what
-  the search box would find, as JSON.
+  the search box would find, as JSON. [Searching your
+  mirror](searching.md) is the query language both take.
 - `datalib-doltlite` — the shell for reading and exporting your stores
   (step 8).
 - `datalib-migrate-config` — rewrites a config file from an older

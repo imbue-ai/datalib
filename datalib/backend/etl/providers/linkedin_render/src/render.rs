@@ -47,7 +47,9 @@ use datalib_schema::providers::Provider;
 ///     and the owner's posts and comments their primary address.
 /// v13: a connection's photo is linked where the blob store holds it,
 ///     and one the store lacks is a `blob_missing` problem.
-pub const RENDER_VERSION: u32 = 13;
+/// v14: the owner's address is marked as the account's own on their
+///     posts, so search reads it as `me`.
+pub const RENDER_VERSION: u32 = 14;
 
 fn profile() -> RenderProfile {
     RenderProfile {

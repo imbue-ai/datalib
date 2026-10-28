@@ -63,6 +63,17 @@ pub struct MmsRecord {
     pub blobs: Vec<MmsBlob>,
     /// Parts whose bytes did not decode, as `(name, why)`.
     pub failed_blobs: Vec<(String, String)>,
+    /// Everyone the message went between, as the phone listed them.
+    pub addrs: Vec<MmsAddr>,
+}
+
+/// One `<addr>` of an `<mms>`: a number (or Android's
+/// `insert-address-token` for the phone's own side) and its role.
+#[derive(Debug, Clone)]
+pub struct MmsAddr {
+    pub address: String,
+    /// The MMS header it came from: 137 from, 151 to, 130 cc, 129 bcc.
+    pub type_: i64,
 }
 
 /// One `<call>` record.
@@ -215,6 +226,13 @@ fn parse_mms_body(reader: &mut Reader<&[u8]>, head: Attrs) -> Result<MmsRecord> 
                     }
                 }
             }
+            Event::Empty(e) | Event::Start(e) if e.name().as_ref() == "addr" => {
+                let a = attrs(&e)?;
+                rec.addrs.push(MmsAddr {
+                    address: a.get("address").cloned().unwrap_or_default(),
+                    type_: int(&a, "type").unwrap_or(0),
+                });
+            }
             Event::End(e) if e.name().as_ref() == "mms" => break,
             Event::Eof => break,
             _ => {}
@@ -262,6 +280,7 @@ fn mms_from_attrs(a: &Attrs) -> MmsRecord {
         text: String::new(),
         blobs: Vec::new(),
         failed_blobs: Vec::new(),
+        addrs: Vec::new(),
     }
 }
 

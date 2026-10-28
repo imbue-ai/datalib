@@ -836,10 +836,15 @@ page, so you would open each page you want mirrored, use the **⋯** menu
 → **Connections** → **Connect to**, and pick it (child pages inherit
 the access). Either way, copy the secret, which starts `ntn_`.
 
-Every request also needs a `Notion-Version` header, and the client
-deliberately sends neither the token nor the version — latchkey injects
-both — so the stored credential must carry the version too. Set both
-headers in one `auth set`:
+In the app, choose **Add source** → **Notion**, name the account, open
+**Paste a key**, paste the secret and press **Save sign-in**. The form
+stores the token and the version header Notion needs together, then
+checks the connection and names the person and workspace it reached.
+
+From a terminal: every request also needs a `Notion-Version` header,
+and the client deliberately sends neither the token nor the version —
+latchkey injects both — so the stored credential must carry the version
+too. Set both headers in one `auth set`:
 
 ```sh
 latchkey auth set notion \

@@ -18,6 +18,7 @@ const AGENT_GUIDE: &str = include_str!("../../../../docs/agent_user.md");
 const AGENT_GUIDE_PATH: &str = "docs/agent_user.md";
 pub const RAW_STORES: &str = include_str!("../../../../docs/user/raw_stores.md");
 const BUILDING_ON_DATALIB: &str = include_str!("../../../../docs/user/building_on_datalib.md");
+const SEARCHING: &str = include_str!("../../../../docs/user/searching.md");
 
 /// The guides printed whole, by topic word: `(word, text, path in the repo)`.
 /// A release writes each beside the binaries (`scripts/release/stage_tarball.sh`).
@@ -29,6 +30,7 @@ const GUIDES: &[(&str, &str, &str)] = &[
         BUILDING_ON_DATALIB,
         "docs/user/building_on_datalib.md",
     ),
+    ("search", SEARCHING, "docs/user/searching.md"),
 ];
 const GETTING_YOUR_DATA: &str = include_str!("../../../../docs/user/getting_your_data.md");
 const GETTING_YOUR_DATA_PATH: &str = "docs/user/getting_your_data.md";
@@ -106,8 +108,8 @@ const SETUP: &[SetupStep] = &[
               the flags). For SQL, `datalib-doltlite -readonly \
               <data_root>/unified_document_index/grid_index/db.doltlite_db \"SELECT provider, \
               count(*) FROM grid_rows GROUP BY 1\"` (stock sqlite3 cannot open it). Or serve \
-              the app with `datalib-http <data_root>`. `datalib-step help agent` has the \
-              rest, the search's query language included.",
+              the app with `datalib-http <data_root>`. `datalib-step help search` has the \
+              search's query language, and `datalib-step help agent` the rest.",
         commands: &[],
     },
 ];
@@ -128,7 +130,8 @@ pub fn page(topic: &[String], commands: &[String], git_ref: &str) -> Result<Stri
             Some(f) => Ok(function_page(f)),
             None => Err(format!(
                 "no help on {word:?}. Try `datalib-step help` for the topics: \
-                 `agent`, `raw-stores`, `apps`, a source type, a function or a command."
+                 `agent`, `raw-stores`, `apps`, `search`, a source type, a function or a \
+                 command."
             )),
         },
         _ => Err(format!(
@@ -293,6 +296,10 @@ fn overview(commands: &[String]) -> String {
             "building an app on datalib: syncing, freshness, a step of your own",
         ),
         (
+            "datalib-step help search",
+            "the search's query language: keys, people, `me`, free text",
+        ),
+        (
             "datalib-step help <type>",
             "one source: what it mirrors, how it signs in, its ingest methods",
         ),
@@ -328,7 +335,7 @@ fn overview(commands: &[String]) -> String {
     out.push_str(&wrap(&commands.join(", "), 2, 2));
     out.push_str(
         "\nThe guides also ship beside the binaries, as docs/agent_user.md, \
-         docs/raw_stores.md and docs/building_on_datalib.md.",
+         docs/raw_stores.md, docs/building_on_datalib.md and docs/searching.md.",
     );
     out
 }
@@ -650,6 +657,7 @@ mod tests {
             ("agent", "# datalib — agent user guide"),
             ("raw-stores", "# Reading the raw stores"),
             ("apps", "# Building an app on datalib"),
+            ("search", "# Searching your mirror"),
         ] {
             let page = page(&[word.into()], &commands(), "abc123").unwrap();
             assert!(page.starts_with(title), "{word}");

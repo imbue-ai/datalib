@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use datalib_etl_chat_common::types::{
     AuthorKind, ItemKind, NamedPerson, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
-    NormalizedDoc, UpstreamRef,
+    NormalizedDoc, Recipient, UpstreamRef,
 };
 use datalib_etl_render::inputs::{Inputs, Lookup};
 
@@ -158,7 +158,10 @@ fn to_item(
         is_aside: false,
         branch: Vec::new(),
         unread: item.unread,
-        recipients: Vec::new(),
+        recipients: (!item.outgoing)
+            .then(Recipient::the_account)
+            .into_iter()
+            .collect(),
         mentions,
         problems: Vec::new(),
     }

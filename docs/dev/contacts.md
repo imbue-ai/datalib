@@ -217,7 +217,7 @@ What each source has today:
 | Signal | the number, else the account id (ACI); a recipient known by PNI alone has none | a mention (a `mentionAci` body range), by number else ACI, written `@Name` in place of its `U+FFFC`; number and ACI together, in the source contact; one known by ACI alone reads as the dashed ACI. The ACI is read by its one path in the stored frame, and one that will not read is a problem on the recipient (`aci`, `CoercionFailed`), not a silent loss |
 | Messages | the number or Apple ID address | each tapback's |
 | Google Chat and Voice | the address or number | |
-| SMS backup | the number; a group MMS, which does not say which number sent it, has none; a call by the other side's number | the number or numbers a text the account sent went to, as recipients |
+| SMS backup | the number; an MMS by the sender its `addrs` name (`type` 137), a group MMS's member included and the account's own number on one it sent, still shown as "Me"; a call by the other side's number | the number or numbers a text the account sent went to, as recipients; every number the account sent an MMS from (its `addrs` entry of `type` 137), as the account, tied to `me:self` |
 | address books | | a card's numbers and addresses, in the source contact |
 | LinkedIn | a message's sender, by `SENDER PROFILE URL`; the account's owner, by their primary address, on every post and comment | a connection's profile and email address, in the source contact |
 | Google Drive | a comment's author, by name; the account's own comments by its address, where the file names the account | a person chip in a Doc, by address |
@@ -235,13 +235,17 @@ Signal, Messages, SMS backup, Google Voice and the AI chats, as
 the source has no handle of its own for them: one chip for the owner
 across every source. `me:self` is not among a conversation's
 participants, since the owner is in every conversation they wrote in,
-so `with:me:self`, like `from:me:self`, finds the messages they wrote. Where a
+so `with:me:self`, like `from:me:self`, finds the messages they wrote. A
+phone's backup (WhatsApp, Signal, Messages, SMS backup, Google Voice's
+texts and voicemails) records no recipient for a message it received,
+so each one someone else sent names `me:self` as its To recipient
+(`Recipient::the_account`, not drawn): `to:me` finds it, and it is no
+participant either. Where a
 source has no stand-in (email, Slack, Google Chat), the owner's own
 messages carry their address or user id like anyone else's, and the
 source marks its record of the owner as the account
-(`NormalizedContact::account`): Slack the user `auth.test` named, email
-the mailbox's address. `from:me` reaches both (§"Searching for a
-person").
+(`NormalizedContact::account`). `from:me` reaches both (§"Searching
+for a person").
 
 ## In a document
 
@@ -666,9 +670,15 @@ marked `account`, which the search terms file keeps in
 contact, it is read when the search runs and goes into the cache key
 (`with_people` in the applet). A terms file built before that table
 existed refuses `me` by name until the index's next sync rewrites it. A
-quoted `"me"` is the text. Today only Slack and email mark their
-account; a source that knows its owner adds it by setting `account` on
-that record.
+quoted `"me"` is the text.
+
+A source marks its owner by putting a record of them marked `account`
+in `NormalizedChat::contacts` (`chat-common`'s `account_contact`; a
+source that shows its owner as "Me" uses `stand_in_account`, which ties
+`me:self` to the account's address), and chat-common carries it into
+each document where one of its handles appears. Which sources do, and
+what `me` cannot find, is the table in
+[`searching.md`](../user/searching.md) §"`me`"; change it with them.
 
 **Keeping the name out of the markdown is a choice, not a rule.**
 Writing a contact's name into each chip link (its text or its title)

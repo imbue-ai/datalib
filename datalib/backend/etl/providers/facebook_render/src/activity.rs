@@ -357,7 +357,7 @@ fn yearly_chat(
     let feed = ids::feed(&owner.source_id, id);
     NormalizedChat {
         named_after: Vec::new(),
-        contacts: Vec::new(),
+        contacts: owner.contact().into_iter().collect(),
         inputs: inputs.declared(),
         path_prefix: None,
         id: id.to_string(),

@@ -5,7 +5,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-84b7-85ef-23cb38507f8b ===
 {
   "edges": [],
-  "render_version": 14,
+  "render_version": 15,
   "rows": [
     {
       "account": "data@enterprise.starfleet.test",
@@ -212,7 +212,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-869c-aa85-d9b7911f2b27 ===
 {
   "edges": [],
-  "render_version": 14,
+  "render_version": 15,
   "rows": [
     {
       "account": "data@enterprise.starfleet.test",
@@ -939,7 +939,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-86dd-be81-c87daeff7764 ===
 {
   "edges": [],
-  "render_version": 14,
+  "render_version": 15,
   "rows": [
     {
       "account": "data@enterprise.starfleet.test",
@@ -1066,7 +1066,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-888f-8dff-2bdaf3aa5faa ===
 {
   "edges": [],
-  "render_version": 14,
+  "render_version": 15,
   "rows": [
     {
       "account": "data@enterprise.starfleet.test",
@@ -1193,7 +1193,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-893e-9200-2f457298a582 ===
 {
   "edges": [],
-  "render_version": 14,
+  "render_version": 15,
   "rows": [
     {
       "account": "data@enterprise.starfleet.test",

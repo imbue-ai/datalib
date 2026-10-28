@@ -127,6 +127,13 @@ pub async fn run(
             let report = datalib_etl_linear::probe::probe(&config, ask, progress).await?;
             Ok(serde_json::to_value(report)?)
         }
+        SourceType::Notion => {
+            let config: datalib_etl_notion_config::NotionConfig =
+                serde_json::from_value(params.clone())
+                    .context("parse the params as a notion download config")?;
+            let report = datalib_etl_notion::probe::probe(&config, ask).await?;
+            Ok(serde_json::to_value(report)?)
+        }
         SourceType::Todoist => {
             let config: datalib_etl_todoist_config::TodoistConfig =
                 serde_json::from_value(params.clone())
@@ -137,7 +144,7 @@ pub async fn run(
         other => anyhow::bail!(
             "no probe for source type `{other}`. Probing means asking a live service what an \
              account can reach; only `calendar`, `contacts`, `email`, `claude`, `chatgpt`, \
-             `garmin`, `linear`, `slack` and `todoist` implement it so far."
+             `garmin`, `linear`, `notion`, `slack` and `todoist` implement it so far."
         ),
     }
 }

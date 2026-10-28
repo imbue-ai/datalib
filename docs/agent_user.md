@@ -424,26 +424,9 @@ Pick the surface that fits the question:
       "$rt/node/bin/node" "$rt"/qmd/*/node_modules/@tobilu/qmd/dist/cli/qmd.js query "that thing about the boat"
   ```
 - **HTTP API** — `datalib-http <data_root>` serves the UI plus:
-  `GET /applet/unified_document_index/search?q=…` (Gmail-flavored query language:
-  `field:value`, `-field:value`, quoted values, `field:*` for the rows
-  with any value there and `-field:*` for the rows with none; fields
-  are `source_id:`, `kind:`, `channel:`, `account:`, `project:`, `convo:`,
-  `notion_page:`, `change:`, and a grid column's id for the rest
-  (`org_name:`, `byte_size:`, `created_at:`, …); `before:`/`after:`;
-  `is:document` for the one row per rendered document and
-  `-is:document` for the rows inside them. A person is found by role
-  through the search terms: `from:` (also `author:`, `author_handle:`),
-  `to:`, `cc:`, `bcc:`, `recipient:` (any of those), `mention:`, and
-  `with:` (also `involves:`, any role), and `label:` an email's labels;
-  a handle (`email:a@b.c`, or `a@b.c`, `+1…`) or a quoted value
-  (`from:"Will Riker"`) matches whole, case-blind, anything else in
-  part; a name also matches every handle a source showed under it, and
-  `contact:<id>` (`with:contact:<id>`) every handle linked to that
-  contact in the contacts app, its members' too for a group. `me`
-  (`from:me after:2026-10-20`) is the person whose library this is:
-  the "Me" a messaging backup shows them as, and every handle a source
-  says is its account's own (the signed-in Slack user, a mailbox's
-  address); a quoted `"me"` is the text. `GET …/search/keys` lists every key and `…/search/values?key=…&typed=…&q=…`
+  `GET /applet/unified_document_index/search?q=…` (the query language,
+  `from:me` included, is [Searching your mirror](user/searching.md),
+  `datalib-step help search`; `GET …/search/keys` lists every key and `…/search/values?key=…&typed=…&q=…`
   the values one takes, most rows first. A key the search does not
   have is refused by name, in `refused`, rather than ignored. Free text
   made only of uuids and handles (an email address, `tel:+…`,

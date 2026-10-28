@@ -9,6 +9,7 @@ use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::branches::{reading_order, TreeNode};
 use datalib_etl_chat_common::normalize::{capitalize, iso_to_ms};
+use datalib_etl_chat_common::people::stand_in_account;
 use datalib_etl_chat_common::render::{
     Buckets, ChatRenderer, RenderProfile, ENTITY_KIND_CONVERSATION,
 };
@@ -55,7 +56,8 @@ use serde_json::Value;
 /// v13: a message is keyed within its conversation, since a branched
 ///     conversation repeats the original's message ids.
 /// v14: an answer's author is its model's chip (`ai_model:` handle).
-pub const RENDER_VERSION: u32 = 14;
+/// v15: the account's address is tied to "Me", so search reads it as `me`.
+pub const RENDER_VERSION: u32 = 15;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -246,9 +248,15 @@ fn build_chat(
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "(untitled)".to_string());
     let chat_uuid = ids::conversation(source_id, &conv_id).uuid;
+    let account = conv
+        .account_id
+        .as_deref()
+        .and_then(|id| parsed.account_label(id));
     NormalizedChat {
         named_after: Vec::new(),
-        contacts: Vec::new(),
+        contacts: stand_in_account(source_id, account.as_deref())
+            .into_iter()
+            .collect(),
         inputs: Vec::new(),
         path_prefix: None,
         id: chat_uuid.clone(),
@@ -256,10 +264,7 @@ fn build_chat(
         display: title.clone(),
         title: Some(title),
         author: None,
-        account: conv
-            .account_id
-            .as_deref()
-            .and_then(|id| parsed.account_label(id)),
+        account,
         project: None,
         // ChatGPT's own conversation id — the round-trip route back
         // to chatgpt.com now that `uuid` is a minted v5.

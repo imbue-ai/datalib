@@ -116,6 +116,21 @@ pub struct Recipient {
     pub drawn: bool,
 }
 
+impl Recipient {
+    /// The account, as the recipient of a message someone else sent in a
+    /// source that shows its owner as "Me" (a phone's backup): it reached
+    /// them, though the source records no recipient, so `to:me` finds
+    /// it. Not drawn, or every message would say "to Me".
+    pub fn the_account() -> Self {
+        Recipient {
+            role: RecipientRole::To,
+            display: "Me".to_string(),
+            handle: Some(datalib_handle::Handle::me()),
+            drawn: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum RecipientRole {
     To,
