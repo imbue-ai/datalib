@@ -103,7 +103,10 @@ pub(crate) fn comment_author_handle(
 
 /// A Notion user as a handle: their address where Notion gave one, else
 /// their id. An address that will not read as one is not an address.
-fn user_handle(uid: &str, emails: Lookup<'_, HashMap<String, String>>) -> Option<Handle> {
+pub(crate) fn user_handle(
+    uid: &str,
+    emails: Lookup<'_, HashMap<String, String>>,
+) -> Option<Handle> {
     emails
         .get(uid)
         .and_then(|e| Handle::email(e))

@@ -60,6 +60,10 @@ pub enum SearchTermKind {
     /// members, by handle where the source has one, else by the name
     /// shown. What the grid's Subject cell draws as chips.
     Subject = 14,
+    /// The row's own id as its source spells it, where that is a uuid (a
+    /// Notion page's, for one): what an id or a link copied from the
+    /// source finds the row by.
+    UpstreamId = 15,
 }
 
 impl SearchTermKind {
@@ -92,7 +96,7 @@ impl SearchTermKind {
     /// labels, and last a name it shows.
     pub fn affinity(self) -> u8 {
         match self {
-            SearchTermKind::Id => 5,
+            SearchTermKind::Id | SearchTermKind::UpstreamId => 5,
             SearchTermKind::From | SearchTermKind::To | SearchTermKind::About => 4,
             SearchTermKind::Cc
             | SearchTermKind::Bcc
@@ -112,6 +116,7 @@ impl SearchTermKind {
             | SearchTermKind::Bcc
             | SearchTermKind::Mention => true,
             SearchTermKind::Id
+            | SearchTermKind::UpstreamId
             | SearchTermKind::Container
             | SearchTermKind::Title
             | SearchTermKind::Name
@@ -131,6 +136,7 @@ pub struct SearchTermSource {
     pub conversation_uuid: String,
     pub markdown_uuid: Option<String>,
     pub notion_page_uuid: Option<String>,
+    pub upstream_id: Option<String>,
     pub author_handle: Option<String>,
     pub conversation_name: Option<String>,
     pub author: Option<String>,
@@ -143,7 +149,7 @@ pub struct SearchTermSource {
 impl SearchTermSource {
     /// The `SELECT` list that reads one from `grid_rows`.
     pub const COLUMNS: &'static str = "uuid, conversation_uuid, markdown_uuid, notion_page_uuid, \
-         author_handle, conversation_name, author, channel, account, touched_at_utc, \
+         upstream_id, author_handle, conversation_name, author, channel, account, touched_at_utc, \
          supplied_terms";
 }
 
@@ -197,7 +203,9 @@ pub fn search_terms_of(row: &SearchTermSource) -> Vec<SearchTerm> {
         row.notion_page_uuid.as_deref(),
     ];
     let names = [row.channel.as_deref(), row.account.as_deref()];
+    let upstream_id = row.upstream_id.as_deref().filter(|id| is_dashed_uuid(id));
     let candidates = std::iter::once((SearchTermKind::Id, Some(row.uuid.as_str())))
+        .chain(std::iter::once((SearchTermKind::UpstreamId, upstream_id)))
         .chain(
             containers
                 .into_iter()
@@ -232,11 +240,22 @@ pub fn search_terms_of(row: &SearchTermSource) -> Vec<SearchTerm> {
     out
 }
 
+/// Only an upstream id shaped like a uuid is a term: the rest are often
+/// keys datalib composed (a period, a path), which the Fields tab would
+/// match by their opening words.
+fn is_dashed_uuid(s: &str) -> bool {
+    s.len() == 36
+        && s.bytes().enumerate().all(|(i, c)| match i {
+            8 | 13 | 18 | 23 => c == b'-',
+            _ => c.is_ascii_hexdigit(),
+        })
+}
+
 /// What [`search_terms_of`] derives and how the file lays it out. A file
 /// built under another shape is rebuilt whole, so change it whenever
 /// either changes. A kind a render starts to supply needs no change: it
 /// reaches the file through the diff of `grid_rows`, as its rows change.
-pub const TERMS_SHAPE: &str = "6";
+pub const TERMS_SHAPE: &str = "7";
 
 /// The search terms file's tables, dictionary-encoded: each grid row once in
 /// `rows`, each distinct value once in `vals`, and a term is three
@@ -337,6 +356,28 @@ mod tests {
         assert!(decode_supplied(r#"[["shoe_size","9"]]"#).is_err());
     }
 
+    /// A Notion page's id as Notion writes it is what a link to the page
+    /// carries; a key datalib composed is no term.
+    #[test]
+    fn an_upstream_id_is_a_term_when_it_is_a_uuid() {
+        let page = SearchTermSource {
+            upstream_id: Some("b1d6e000-1701-4d00-8000-000000000001".into()),
+            ..row()
+        };
+        assert_eq!(
+            pairs(&search_terms_of(&page))[..2],
+            [
+                ("id", "m-1"),
+                ("upstream_id", "b1d6e000-1701-4d00-8000-000000000001")
+            ]
+        );
+        let period = SearchTermSource {
+            upstream_id: Some("2369-04".into()),
+            ..row()
+        };
+        assert_eq!(search_terms_of(&period), search_terms_of(&row()));
+    }
+
     /// A conversation's own row is its conversation and its document: one
     /// id, not three.
     #[test]
@@ -384,6 +425,7 @@ mod tests {
             SearchTermKind::Bcc,
             SearchTermKind::Mention,
             SearchTermKind::Author,
+            SearchTermKind::UpstreamId,
         ]
         .into_iter()
         .map(|k| (k, k.code()))
@@ -402,6 +444,7 @@ mod tests {
                 (SearchTermKind::Bcc, 9),
                 (SearchTermKind::Mention, 10),
                 (SearchTermKind::Author, 11),
+                (SearchTermKind::UpstreamId, 15),
             ]
         );
     }

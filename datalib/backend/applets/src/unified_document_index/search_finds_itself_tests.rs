@@ -423,7 +423,7 @@ async fn every_row_is_found_by_what_it_holds() {
         tally.0 += usize::from(found);
         tally.1 += 1;
         if !found {
-            lost.push(format!("{md} ({source})"));
+            lost.push(format!("{md} ({source}) by {q:?}"));
         }
         coverage.checked("meaning: its opening words", &source);
     }
@@ -438,9 +438,13 @@ async fn every_row_is_found_by_what_it_holds() {
     }
     for (source, (found, asked)) in &meaning {
         if found * 2 < *asked {
+            let lost: Vec<&String> = lost
+                .iter()
+                .filter(|l| l.contains(&format!("({source})")))
+                .collect();
             failures.push(format!(
                 "the Meaning tab found {found} of {source}'s {asked} documents \
-                 by their opening words"
+                 by their opening words; lost {lost:?}"
             ));
         }
     }

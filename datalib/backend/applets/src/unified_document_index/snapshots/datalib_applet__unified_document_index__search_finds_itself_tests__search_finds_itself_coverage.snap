@@ -67,6 +67,9 @@ fields: title
 fields: to
   checked: google-takeout 7, signal 10, sms-backup-restore 7, tng_email 7, whatsapp 13
   never: beeper, chatgpt-api, claude-api, claude-code, codex, datalib, facebook, garmin, github, gitlab, google-drive, linkedin, notion, ship-air, slack, slack-diff, tng_calendar, tng_contacts, tng_contacts-diff, tng_pdfs, yolink
+fields: upstream_id
+  checked: claude-api 39, claude-code 13, codex 4, facebook 24, google-takeout 39, linkedin 3, notion 8, sms-backup-restore 10
+  never: beeper, chatgpt-api, datalib, garmin, github, gitlab, google-drive, ship-air, signal, slack, slack-diff, tng_calendar, tng_contacts, tng_contacts-diff, tng_email, tng_pdfs, whatsapp, yolink
 item_count:
   checked: beeper 21, chatgpt-api 31, claude-api 44, claude-code 13, codex 17, datalib 213, facebook 66, garmin 9, github 10, gitlab 9, google-drive 7, google-takeout 69, linkedin 13, notion 8, ship-air 1, signal 15, slack 28, slack-diff 9, sms-backup-restore 11, tng_calendar 9, tng_contacts 9, tng_contacts-diff 5, tng_email 12, tng_pdfs 4, whatsapp 23, yolink 1
 kind:
