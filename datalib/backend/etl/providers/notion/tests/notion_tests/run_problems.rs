@@ -167,6 +167,60 @@ async fn a_user_that_did_not_fetch_is_retried_every_run() {
     assert!(problems(&store).await.is_empty());
 }
 
+/// A personal access token may read only its own user, so every other
+/// page author came back 403 and stood as a `users:` error row, one per
+/// person, retried each run. A user a people property already describes
+/// is taken from it without a request; one Notion refuses keeps what a
+/// comment says of them, or the id alone, and is not asked again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_user_notion_will_not_show_is_kept_as_what_the_store_knows() {
+    let d = tempdir().unwrap();
+    let (tape, store) = (d.path().join("tape"), d.path().join("s.doltlite_db"));
+    let picard = "1701d000-0000-4000-8000-0000000000a1";
+    let riker = "1701d000-0000-4000-8000-0000000000a2";
+    let worf = "1701d000-0000-4000-8000-0000000000a3";
+    let mut obj = page(BRIDGE, EDITED);
+    obj["created_by"] = json!({"object": "user", "id": riker});
+    obj["properties"] = json!({"Captain": {"type": "people", "people": [{
+        "object": "user", "id": picard, "name": "Jean-Luc Picard", "type": "person",
+        "person": {"email": "picard@enterprise.test"}}]}});
+    serve(&tape, &format!("{BASE}/pages/{BRIDGE}"), obj);
+    serve_body(&tape, BRIDGE, "", false);
+    let mut c = comment("c1", BRIDGE, None);
+    c["created_by"] = json!({"object": "user", "id": worf});
+    c["display_name"] = json!({"type": "user", "resolved_name": "Worf"});
+    serve_comment_list(&tape, BRIDGE, json!([c]));
+    for id in [riker, worf] {
+        serve_status(&tape, &format!("{BASE}/users/{id}"), 403);
+    }
+
+    run(&tape, &store, &[BRIDGE]).await.unwrap();
+    assert!(problems(&store).await.is_empty());
+    let db = RawDb::open(&store).await.unwrap();
+    let names = db.load_user_names().await.unwrap();
+    let emails = db.load_user_emails().await.unwrap();
+    db.close().await;
+    assert_eq!(
+        names.get(picard).map(String::as_str),
+        Some("Jean-Luc Picard")
+    );
+    assert_eq!(
+        emails.get(picard).map(String::as_str),
+        Some("picard@enterprise.test")
+    );
+    assert_eq!(names.get(worf).map(String::as_str), Some("Worf"));
+    assert_eq!(names.get(riker), None);
+
+    for id in [riker, worf] {
+        unserve(&tape, &format!("{BASE}/users/{id}"));
+    }
+    run(&tape, &store, &[BRIDGE]).await.unwrap();
+    assert!(
+        problems(&store).await.is_empty(),
+        "neither refused user was asked for again"
+    );
+}
+
 /// A configured root Notion does not have was only a `pages:` row, which
 /// does not say the config is what needs fixing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

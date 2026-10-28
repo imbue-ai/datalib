@@ -375,7 +375,11 @@ impl Ctx<'_> {
     async fn users(&self) -> Result<()> {
         let listed = self.db.users_listed().await?;
         let owed = owed::owed(self.db.pool(), USERS, listed).await?;
-        self.drain(USERS, owed, &Users(self), 50, 0).await?;
+        let f = Users {
+            ctx: self,
+            known: self.db.users_named_in_store().await?,
+        };
+        self.drain(USERS, owed, &f, 50, 0).await?;
         Ok(())
     }
 
