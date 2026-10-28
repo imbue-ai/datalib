@@ -1,6 +1,7 @@
 //! Render stage: read the raw store written by [`datalib_etl_notion::ingest`] and
 //! emit one document per Notion page, plus one per comment thread.
 
+mod enhanced;
 pub mod grid_rows;
 pub mod ids;
 pub mod parse;

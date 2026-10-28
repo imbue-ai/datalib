@@ -663,7 +663,8 @@ fn roots_upstream_lacks(
         .collect()
 }
 
-fn format_uuid(s: &str) -> String {
+/// A Notion id in its dashed form, whichever form it came in.
+pub fn format_uuid(s: &str) -> String {
     let raw: String = s.chars().filter(|c| *c != '-').collect();
     if raw.len() != 32 {
         return s.into();

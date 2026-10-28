@@ -1,11 +1,10 @@
 //! Emit one document per Notion page and one per comment thread.
 //!
-//! The page body is **not** rendered here. Notion returns it already
-//! rendered as enhanced markdown, and the download step stores it whole;
-//! this writes it out with frontmatter, resolving each attachment slot
-//! to its address in the source's blob store. What used to be a
-//! block-type matrix maintained against Notion's evolving block set is
-//! now Notion's problem.
+//! Notion returns a page body already rendered as its enhanced markdown,
+//! and the download step stores it whole. This resolves each attachment
+//! slot to its address in the source's blob store, turns Notion's
+//! dialect into the CommonMark the viewer reads (`enhanced.rs`), and
+//! writes it out under the front matter and title every document has.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
@@ -20,10 +19,13 @@ use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{escape_md_block, escape_md_inline};
 use datalib_etl_render::inputs::{Bucket, Buckets, Lookup};
 use datalib_etl_render::message::{chip_link, stamp_text_html};
+use datalib_etl_render::title::Title;
 use datalib_handle::Handle;
+use datalib_schema::providers::Provider;
 use regex::Regex;
 use serde_json::Value;
 
+use super::enhanced;
 use super::grid_rows::{comment_author_handle, gather_documents, PageDocument, ThreadDocument};
 use super::parse::{ParsedNotion, ATTACHMENTS_PROJECTION_SQL};
 use datalib_etl_notion::ingest::db::{RawDb, TreeRow};
@@ -41,7 +43,9 @@ use datalib_etl_render::pages::batches;
 /// v10: a comment's author is a chip, by their address where Notion gave
 ///      one, and a row carries its author's handle.
 /// v11: a page opens with the path of pages and databases it sits under.
-pub const RENDER_VERSION: u32 = 11;
+/// v12: a page body is Notion's enhanced markdown turned into CommonMark,
+///      under the shared title line, with its ids in the front matter.
+pub const RENDER_VERSION: u32 = 12;
 pub const SLUG_MAX_LEN: usize = 60;
 
 static SLUG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[^a-z0-9]+").unwrap());
@@ -160,9 +164,14 @@ fn localize_attachments(markdown: &str, bundle: &BlobBundle) -> String {
     out
 }
 
-fn frontmatter(title: &str, page: &Value) -> String {
+/// The front matter and the title line: the page's ids, its times, and
+/// the link back to Notion.
+fn head(title: &str, markdown_uuid: &str, page_id: &str, page: &Value) -> String {
     let mut fm = String::from("---\n");
     fm.push_str(&format!("title: {}\n", yaml_scalar(title)));
+    fm.push_str(&format!("provider: {}\n", Provider::Notion));
+    fm.push_str(&format!("markdown_uuid: {markdown_uuid}\n"));
+    fm.push_str(&format!("page_id: {}\n", yaml_scalar(page_id)));
     for (k, v) in [
         ("created_at", "created_time"),
         ("last_edited_at", "last_edited_time"),
@@ -176,6 +185,16 @@ fn frontmatter(title: &str, page: &Value) -> String {
     }
     fm.push_str("source_label: Notion\n");
     fm.push_str("---\n\n");
+    let url = page.get("url").and_then(|x| x.as_str());
+    fm.push_str(
+        &Title {
+            text: title,
+            markdown_uuid: Some(markdown_uuid),
+            suffix: None,
+            source_url: url,
+        }
+        .render(),
+    );
     fm
 }
 
@@ -597,17 +616,23 @@ pub fn render_notion(
                 }
                 _ => {}
             }
+            let cx = enhanced::Context {
+                stanza,
+                tree: inputs.lookup("tree", &parsed.tree),
+                users: inputs.lookup("users", &parsed.user_names),
+                emails: inputs.lookup("users", &parsed.user_emails),
+            };
             let body = inputs
                 .lookup("page_markdown", &parsed.markdown_by_page)
                 .get(page_uuid)
-                .map(|m| localize_attachments(m, bundle))
+                .map(|m| enhanced::to_markdown(&localize_attachments(m, bundle), &cx))
                 .unwrap_or_default();
             let body = if body.trim().is_empty() {
                 properties_table(page)
             } else {
                 body
             };
-            let mut out = frontmatter(page_title, page);
+            let mut out = head(page_title, markdown_uuid, page_uuid, page);
             out.push_str(&breadcrumb(
                 page_uuid,
                 inputs.lookup("tree", &parsed.tree),

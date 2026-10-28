@@ -1,7 +1,7 @@
 //! The search-bar grammar every grid here shares.
 //!
 //! A query is whitespace-separated tokens. `key:value` is a term, and a
-//! leading `-` negates it. A double-quoted span may hold spaces, colons
+//! leading `-` negates it; a link (`https://…`) is not a term. A double-quoted span may hold spaces, colons
 //! and quotes (`\"` and `\\` escape inside it). Anything else is free
 //! text, kept exactly as typed — quotes and leading `-` included — so a
 //! consumer that forwards it to a search engine can keep its meaning.
@@ -41,7 +41,9 @@ pub fn parse(s: &str) -> Vec<Token> {
                 None => (false, tok.as_str()),
             };
             match split_term(body) {
-                Some((key, value, quoted)) if !key.is_empty() && !value.is_empty() => {
+                Some((key, value, quoted))
+                    if !key.is_empty() && !value.is_empty() && !value.starts_with("//") =>
+                {
                     Token::Term(Term {
                         key: key.to_string(),
                         value,
@@ -256,6 +258,23 @@ mod tests {
                 Token::Free(":x".into()),
                 Token::Free("key:".into()),
                 Token::Free("-foo".into()),
+            ]
+        );
+    }
+
+    /// A pasted link was refused as a key named `https`.
+    #[test]
+    fn a_link_is_free_text() {
+        assert_eq!(
+            parse("https://www.notion.so/Away-Team-1701d00a?pvs=4 from:riker"),
+            vec![
+                Token::Free("https://www.notion.so/Away-Team-1701d00a?pvs=4".into()),
+                Token::Term(Term {
+                    key: "from".into(),
+                    value: "riker".into(),
+                    negate: false,
+                    quoted: false,
+                }),
             ]
         );
     }

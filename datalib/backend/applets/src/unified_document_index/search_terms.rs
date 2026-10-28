@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use datalib_schema::search_terms::{SearchTermKind, META_GRID_COMMIT};
-use datalib_unified_document_index::query::{extract_uuid_suffix, is_uuid_shape};
+use datalib_unified_document_index::query::is_uuid_shape;
 use datalib_unified_document_index::terms_keys::handle_of;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection};
@@ -83,11 +83,36 @@ fn identifier(word: &str) -> Option<String> {
     if word.contains('"') {
         return None;
     }
-    let id = extract_uuid_suffix(word);
-    if is_uuid_shape(id) {
+    uuid_at_end(word).or_else(|| handle_of(word))
+}
+
+/// The uuid a word ends in, dashed and lowercase: a bare one, dashed or
+/// not, or the last part of a slug or a link (`Shift-Roster-<id>`,
+/// `https://…/p/<id>?pvs=4`, `…/chat/<id>`). Notion writes its ids
+/// without dashes; the search terms file holds them dashed.
+fn uuid_at_end(word: &str) -> Option<String> {
+    let word = word.split(['?', '#']).next().unwrap_or(word);
+    let word = word.strip_suffix('/').unwrap_or(word);
+    let ends_in = |len: usize| {
+        let at = word.len().checked_sub(len)?;
+        let cut = at.checked_sub(1).map(|b| word.as_bytes()[b]);
+        matches!(cut, None | Some(b'-' | b'/'))
+            .then(|| word.get(at..))
+            .flatten()
+    };
+    if let Some(id) = ends_in(36).filter(|id| is_uuid_shape(id)) {
         return Some(id.to_lowercase());
     }
-    handle_of(word)
+    let hex = ends_in(32).filter(|h| h.bytes().all(|c| c.is_ascii_hexdigit()))?;
+    let hex = hex.to_lowercase();
+    Some(format!(
+        "{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    ))
 }
 
 /// One term an identifier matched.
@@ -273,8 +298,36 @@ mod tests {
             ])
         );
         assert_eq!(identifiers("ann@example.com budget"), None);
+        assert_eq!(
+            identifiers("xxx00000000-0000-4000-8000-000000000001"),
+            None,
+            "a uuid run into the word before it is not one"
+        );
         assert_eq!(identifiers("\"ann@example.com\""), None);
         assert_eq!(identifiers(""), None);
+    }
+
+    /// Notion's id for a page, and the link a person copies from Notion,
+    /// carry no dashes; they found nothing.
+    #[test]
+    fn an_id_without_dashes_or_inside_a_link_is_an_identifier() {
+        let page = Some(vec!["\"1701d00a-b0a1-4e5f-8c3a-9d2e4f6b7c81\"".to_string()]);
+        for word in [
+            "1701d00ab0a14e5f8c3a9d2e4f6b7c81",
+            "1701D00AB0A14E5F8C3A9D2E4F6B7C81",
+            "https://app.notion.com/p/bridge/Project-Away-Team-1701d00ab0a14e5f8c3a9d2e4f6b7c81",
+            "https://www.notion.so/1701d00ab0a14e5f8c3a9d2e4f6b7c81?pvs=4",
+            "https://www.notion.so/Away-Team-1701d00ab0a14e5f8c3a9d2e4f6b7c81#b10c0001",
+            "https://claude.test/chat/1701d00a-b0a1-4e5f-8c3a-9d2e4f6b7c81/",
+        ] {
+            assert_eq!(includes(identifiers(word)), page, "{word}");
+        }
+        assert_eq!(
+            identifiers("x1701d00ab0a14e5f8c3a9d2e4f6b7c81"),
+            None,
+            "32 hex digits run into the word before them are not an id"
+        );
+        assert_eq!(identifiers("1701d00ab0a14e5f8c3a9d2e4f6b7c8"), None);
     }
 
     #[test]

@@ -30,7 +30,9 @@ must match. Free text looks for words in your documents:
 
 Free text made only of ids and addresses (`picard@enterprise.org`,
 `tel:+12025550101`, a row's uuid) is looked up directly, whatever the
-tab: every row that names it, the ones it is most about first.
+tab: every row that names it, the ones it is most about first. A source's
+own id for a record counts too, where it is a uuid, dashed or not, and so
+does a link that ends in one: paste a Notion page's link to find the page.
 
 A source's words are searchable once its `keyword_index` step has run;
 until then free text finds nothing there and the answer says why.
