@@ -442,11 +442,13 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
         ("from:email:riker@enterprise.org", vec!["riker-email"]),
         // Unquoted, any part of a name or handle, not only the start of a
         // word: the start of his first name, the middle of his last, part
-        // of his address. Quoted, the whole name, case-blind.
+        // of his address. Quoted, its words in order, each whole,
+        // case-blind: his last name alone finds him.
         ("from:will", vec!["riker-email"]),
         ("from:iker", vec!["riker-email"]),
         ("from:enterprise.org", vec!["riker-email"]),
         (r#"from:"william riker""#, vec!["riker-email"]),
+        (r#"from:"Riker""#, vec!["riker-email"]),
         ("to:picard@enterprise.org", vec!["riker-email"]),
         // A name also reaches every handle a source showed under it, so a
         // role whose terms hold only handles finds a person by name.
@@ -537,6 +539,7 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
         ),
         ("label:away", vec!["riker-email"]),
         (r#"label:"Away Missions""#, vec!["riker-email"]),
+        (r#"label:"Away""#, vec!["riker-email"]),
         // A pasted address with no key is looked up as a handle in every
         // role: the thread finds it as a participant. The mailbox's
         // account is a `name` term, not a handle, and plays no part.
@@ -585,8 +588,9 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
 
     // What finds nothing, and why.
     for q in [
-        // Quoted is the whole name, never a part of it.
-        r#"from:"Riker""#,
+        // Quoted is whole words, never part of one.
+        r#"from:"iker""#,
+        r#"from:"Will""#,
         // Nobody wrote a contact's card, and Picard wrote nothing here:
         // his name reaches his handles, but no row is from them.
         "from:picard",
@@ -596,8 +600,8 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
         // A mention holds Data's handle and not his name, and the "Data"
         // written in Riker's email is text, which no key reads.
         "mention:data",
-        // A quoted label is the whole label.
-        r#"label:"Away""#,
+        // A quoted label is whole words of it.
+        r#"label:"Miss""#,
         // Column keys: the whole value, case and all.
         "kind:email",
         "contact:Picard",
@@ -638,8 +642,7 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
         // riker-email and riker-thread hold Picard's mailbox as a name.
         ("picard", vec!["picard-card", "riker-email", "riker-thread"]),
         ("senior", vec!["senior-staff-card"]),
-        // The word in the thread's title, where label:"Away" wanted a
-        // whole label.
+        // The word in the thread's title.
         (r#""Away""#, vec!["riker-email", "riker-thread"]),
         // A handle is one word, so a word inside it starts nothing.
         ("chateau", vec![]),

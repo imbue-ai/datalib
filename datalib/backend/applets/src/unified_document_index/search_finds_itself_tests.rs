@@ -227,6 +227,20 @@ fn rarest_words(texts: &HashMap<String, String>) -> BTreeMap<String, String> {
         .collect()
 }
 
+/// A term's words as the search terms file's full-text index cuts them:
+/// letters and digits, and `@ . - _ + : /` inside a word.
+fn tokens(text: &str) -> Vec<String> {
+    text.to_lowercase()
+        .split(|c: char| !(c.is_alphanumeric() || "@.-_+:/".contains(c)))
+        .filter(|w| !w.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+fn holds_in_order(words: &[String], wanted: &[String]) -> bool {
+    !wanted.is_empty() && words.windows(wanted.len()).any(|w| w == wanted)
+}
+
 fn listed(uuids: &BTreeSet<&str>) -> String {
     let shown: Vec<&str> = uuids.iter().take(5).copied().collect();
     let more = uuids.len().saturating_sub(shown.len());
@@ -272,11 +286,11 @@ async fn every_row_is_found_by_what_it_holds() {
         }
     }
 
-    // A key that reads the search terms, given a value whole, finds
-    // exactly the rows holding it in one of its kinds, case-blind; a
-    // handle-shaped value its handle's rows too (`+1701…` shown as a name
-    // is the `tel:` handle), and a name the rows of every handle seen
-    // under it. A bare value matches in part, which the
+    // A key that reads the search terms, given a value quoted, finds
+    // exactly the rows holding its words in order in one of its kinds,
+    // case-blind; a handle-shaped value its handle's rows (`+1701…` shown
+    // as a name is the `tel:` handle), and a name the rows of every handle
+    // seen under exactly it. A bare value matches in part, which the
     // applet's own tests pin down.
     let terms = terms_of(root.path()).await;
     let names = names_of(root.path()).await;
@@ -298,13 +312,23 @@ async fn every_row_is_found_by_what_it_holds() {
                 .into_iter()
                 .map(|r| r.uuid)
                 .collect();
-            let TermsValue::Exact { values, by_name } = terms_keys::value_of(key, value, true, "*")
-            else {
-                panic!("a quoted value is matched whole: {q}");
+            let how = terms_keys::value_of(key, value, true, "*");
+            let (wanted, by_name) = match &how {
+                TermsValue::Exact { by_name, .. } => (Vec::new(), by_name.as_deref()),
+                TermsValue::Words { text, by_name } => {
+                    (tokens(text), by_name.then_some(text.as_str()))
+                }
+                other => panic!("a quoted value is matched whole or by its words: {q} {other:?}"),
+            };
+            let matches = |v: &str| match &how {
+                TermsValue::Exact { values, .. } => {
+                    values.iter().any(|w| w.eq_ignore_ascii_case(v))
+                }
+                _ => holds_in_order(&tokens(v), &wanted),
             };
             // A name also reaches the handles seen under it.
             let seen_under = |handle: &str| {
-                by_name.as_deref().is_some_and(|name| {
+                by_name.is_some_and(|name| {
                     names
                         .get(handle)
                         .is_some_and(|ns| ns.iter().any(|n| n.eq_ignore_ascii_case(name)))
@@ -312,7 +336,7 @@ async fn every_row_is_found_by_what_it_holds() {
             };
             let expected: BTreeSet<String> = by_value
                 .iter()
-                .filter(|(v, _)| values.iter().any(|w| w.eq_ignore_ascii_case(v)) || seen_under(v))
+                .filter(|(v, _)| matches(v) || seen_under(v))
                 .flat_map(|(_, rows)| rows.iter().cloned())
                 .collect();
             let missing: BTreeSet<&str> = expected.difference(&got).map(String::as_str).collect();

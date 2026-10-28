@@ -77,8 +77,11 @@ The value can be:
 - **An address or number** (`riker@enterprise.org`, `+12025550101`), or
   any handle as datalib writes it (`email:…`, `tel:…`,
   `slack:T…/U…`, `github:jlpicard`): that person exactly.
-- **A quoted name** (`from:"Will Riker"`): that whole name, and every
-  handle a source ever showed under it.
+- **A quoted name** (`from:"Will Riker"`): any name holding those
+  words in that order, each whole (`from:"Riker"` finds "Will Riker
+  <riker@…>", `from:"Rik"` does not), and every handle a source showed
+  under exactly that name. `label:"Away"` likewise finds the label
+  "Away Missions".
 - **A bare word** (`from:riker`): any name or handle holding it, so it
   finds Riker under every spelling a source used, and anyone else whose
   name holds it.

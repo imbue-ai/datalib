@@ -95,12 +95,17 @@ pub enum TermsValue {
     Any,
     /// Any of `values` whole, case-blind: a handle (`datalib_handle`'s
     /// spelling, and as typed, for an author shown under an address a
-    /// source had no handle for), or a quoted value. On a person key a
-    /// quoted name also reaches every handle seen under it (`by_name`).
+    /// source had no handle for), or a quoted value with no words to match.
     Exact {
         values: Vec<String>,
         by_name: Option<String>,
     },
+    /// A value holding `text`'s words in order, each whole, case-blind:
+    /// a quoted value (`from:"Will Riker"` finds "Will Riker <riker@…>").
+    /// On a person key, also every handle seen under exactly that name,
+    /// never under a name merely holding it, which may be a bot's that
+    /// writes on many people's behalf.
+    Words { text: String, by_name: bool },
     /// A value holding `text`, case-blind; on a person key, also every
     /// handle seen under a name holding it.
     Partial { text: String, by_name: bool },
@@ -124,10 +129,10 @@ pub const CONTACT: &str = "contact:";
 pub const ME: &str = "me";
 
 /// How a term's value matches: `*` anything; `me` the owner;
-/// `contact:<id>` that contact; a handle, or a quoted value, whole;
-/// anything else in part (`from:Data` finds "Lt. Cmdr. Data",
-/// `from:"Data"` only "Data"). A name on a person key also finds the
-/// handles that went by it.
+/// `contact:<id>` that contact; a handle whole; a quoted value by its
+/// words (`from:"Data"` finds "Lt. Cmdr. Data" but not "Database");
+/// anything else in part (`from:Data` finds both). A name on a person key
+/// also finds the handles that went by it.
 pub fn value_of(key: &TermsKey, value: &str, quoted: bool, any: &str) -> TermsValue {
     if value == any && !quoted {
         return TermsValue::Any;
@@ -143,6 +148,10 @@ pub fn value_of(key: &TermsKey, value: &str, quoted: bool, any: &str) -> TermsVa
     match handle_of(value).filter(|_| key.person) {
         Some(handle) if handle == value => exact(vec![handle], None),
         Some(handle) => exact(vec![handle, value.to_string()], None),
+        None if quoted && value.chars().any(char::is_alphanumeric) => TermsValue::Words {
+            text: value.to_string(),
+            by_name: key.person,
+        },
         None if quoted => exact(
             vec![value.to_string()],
             key.person.then(|| value.to_string()),
@@ -199,7 +208,7 @@ mod tests {
     }
 
     #[test]
-    fn a_handle_matches_exactly_and_anything_else_in_part() {
+    fn a_handle_matches_exactly_a_quoted_value_by_its_words_and_anything_else_in_part() {
         let from = key("from").unwrap();
         let exact = |v: &[&str], by_name: Option<&str>| TermsValue::Exact {
             values: v.iter().map(|s| s.to_string()).collect(),
@@ -222,7 +231,10 @@ mod tests {
         );
         assert_eq!(
             value_of(from, "Riker", true, "*"),
-            exact(&["Riker"], Some("Riker"))
+            TermsValue::Words {
+                text: "Riker".into(),
+                by_name: true
+            }
         );
         assert_eq!(value_of(from, "*", false, "*"), TermsValue::Any);
         assert_eq!(value_of(from, "*", true, "*"), exact(&["*"], Some("*")));
@@ -234,7 +246,10 @@ mod tests {
         assert_eq!(value_of(from, "Me", false, "*"), TermsValue::Me);
         assert_eq!(
             value_of(from, "me", true, "*"),
-            exact(&["me"], Some("me")),
+            TermsValue::Words {
+                text: "me".into(),
+                by_name: true
+            },
             "a quoted `me` is the text"
         );
         let label = key("label").unwrap();
@@ -246,7 +261,13 @@ mod tests {
             },
             "a label is never a person"
         );
-        assert_eq!(value_of(label, "Work", true, "*"), exact(&["Work"], None));
+        assert_eq!(
+            value_of(label, "Work", true, "*"),
+            TermsValue::Words {
+                text: "Work".into(),
+                by_name: false
+            }
+        );
         assert_eq!(
             value_of(label, "me", false, "*"),
             TermsValue::Partial {
