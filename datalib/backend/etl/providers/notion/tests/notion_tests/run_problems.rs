@@ -21,6 +21,7 @@ use crate::support::*;
 async fn a_body_that_did_not_fetch_is_a_problem_until_it_does() {
     let d = tempdir().unwrap();
     let (tape, store) = (d.path().join("tape"), d.path().join("s.doltlite_db"));
+    serve_workspace(&tape, &[BRIDGE]);
     serve_object(&tape, BRIDGE, EDITED);
     serve_comments(&tape, BRIDGE);
 
@@ -52,6 +53,7 @@ async fn an_attachment_that_did_not_fetch_is_retried_through_its_page() {
     let signed =
         "https://prod-files-secure.s3.us-west-2.amazonaws.com/ws/sickbay.png?X-Amz-Signature=abc";
     let slot = "https://prod-files-secure.s3.us-west-2.amazonaws.com/ws/sickbay.png";
+    serve_workspace(&tape, &[SICKBAY]);
     serve_page(&tape, SICKBAY, EDITED, &format!("![chart]({signed})\n"));
 
     run(&tape, &store, &[SICKBAY]).await.unwrap();
@@ -87,6 +89,7 @@ async fn an_attachment_that_did_not_fetch_is_retried_through_its_page() {
 async fn comments_that_did_not_list_are_a_problem_on_their_own_row_until_they_do() {
     let d = tempdir().unwrap();
     let (tape, store) = (d.path().join("tape"), d.path().join("s.doltlite_db"));
+    serve_workspace(&tape, &[BRIDGE]);
     serve_object(&tape, BRIDGE, EDITED);
     serve_body(&tape, BRIDGE, "Captain's log.\n", false);
 
@@ -114,6 +117,7 @@ async fn a_subtree_that_did_not_fetch_is_a_problem_until_it_does() {
         "<unknown url=\"https://www.notion.so/x#{}\"/>",
         hole.replace('-', "")
     );
+    serve_workspace(&tape, &[HOLODECK]);
     serve_object(&tape, HOLODECK, EDITED);
     serve_body(&tape, HOLODECK, &format!("Program list\n{marker}\n"), true);
     serve_comments(&tape, HOLODECK);
@@ -148,6 +152,7 @@ async fn a_user_that_did_not_fetch_is_retried_every_run() {
     let riker = "1701d000-0000-4000-8000-0000000000bb";
     let mut obj = page(BRIDGE, EDITED);
     obj["created_by"] = json!({"object": "user", "id": riker});
+    serve_workspace(&tape, &[BRIDGE]);
     serve(&tape, &format!("{BASE}/pages/{BRIDGE}"), obj);
     serve_body(&tape, BRIDGE, "", false);
     serve_comments(&tape, BRIDGE);
@@ -184,6 +189,7 @@ async fn a_user_notion_will_not_show_is_kept_as_what_the_store_knows() {
     obj["properties"] = json!({"Captain": {"type": "people", "people": [{
         "object": "user", "id": picard, "name": "Jean-Luc Picard", "type": "person",
         "person": {"email": "picard@enterprise.test"}}]}});
+    serve_workspace(&tape, &[BRIDGE]);
     serve(&tape, &format!("{BASE}/pages/{BRIDGE}"), obj);
     serve_body(&tape, BRIDGE, "", false);
     let mut c = comment("c1", BRIDGE, None);
@@ -222,11 +228,13 @@ async fn a_user_notion_will_not_show_is_kept_as_what_the_store_knows() {
 }
 
 /// A configured root Notion does not have was only a `pages:` row, which
-/// does not say the config is what needs fixing.
+/// does not say the config is what needs fixing. One the search does
+/// not list is asked for as a page, and the 404 is the config's row.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_root_notion_does_not_have_is_a_config_problem() {
     let d = tempdir().unwrap();
     let (tape, store) = (d.path().join("tape"), d.path().join("s.doltlite_db"));
+    serve_workspace(&tape, &[BRIDGE]);
     serve_page(&tape, BRIDGE, EDITED, "");
     serve_status(&tape, &format!("{BASE}/pages/{SICKBAY}"), 404);
 
@@ -299,12 +307,13 @@ async fn a_body_that_will_not_come_is_held_in_search_mode() {
     );
 }
 
-/// The same in roots mode: the page's object answers 404 too, which is
-/// a `config:` row and not a failure, and its stored row stays.
+/// The same in roots mode: a body that answers 404 is held, and the
+/// page, which the search never says is gone, stays as it was.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_body_that_will_not_come_is_held_in_roots_mode() {
     let d = tempdir().unwrap();
     let (tape, store) = (d.path().join("tape"), d.path().join("s.doltlite_db"));
+    serve_workspace(&tape, &[BRIDGE, SICKBAY]);
     serve_object(&tape, BRIDGE, EDITED);
     serve_comments(&tape, BRIDGE);
     serve_status(&tape, &format!("{BASE}/pages/{BRIDGE}/markdown"), 404);
@@ -319,19 +328,18 @@ async fn a_body_that_will_not_come_is_held_in_roots_mode() {
     );
     assert_eq!(owed_bodies(&store).await, vec![SICKBAY.to_string()]);
 
-    serve_status(&tape, &format!("{BASE}/pages/{SICKBAY}"), 404);
     let body = format!("{BASE}/pages/{SICKBAY}/markdown");
     serve_status(&tape, &body, 404);
     run(&tape, &store, &[BRIDGE, SICKBAY]).await.unwrap();
-    assert_eq!(
-        problems(&store).await,
-        vec![row(&format!("config:roots:{SICKBAY}"), "warning")]
-    );
+    assert!(problems(&store).await.is_empty());
     assert!(owed_bodies(&store).await.is_empty());
 
     unserve(&tape, &body);
     let third = run(&tape, &store, &[BRIDGE, SICKBAY]).await.unwrap();
-    assert_eq!(third.official_requests, 2, "the two page objects");
+    assert_eq!(
+        third.official_requests, 1,
+        "the search alone: both pages are held at the stamp it lists"
+    );
     assert_eq!(
         stored_pages(&store).await,
         vec![BRIDGE.to_string(), SICKBAY.to_string()],
@@ -419,7 +427,7 @@ async fn a_retry_guard_that_gives_up_keeps_what_it_fetched() {
 async fn a_credential_refused_from_the_start_fails_the_run() {
     let d = tempdir().unwrap();
     let (tape, store) = (d.path().join("tape"), d.path().join("s.doltlite_db"));
-    serve_status(&tape, &format!("{BASE}/pages/{BRIDGE}"), 401);
+    serve_search_status(&tape, 401);
 
     let err = run(&tape, &store, &[BRIDGE]).await.unwrap_err();
     assert!(format!("{err:#}").contains("401"), "{err:#}");
@@ -431,6 +439,7 @@ async fn a_credential_refused_from_the_start_fails_the_run() {
 async fn a_credential_refused_part_way_keeps_what_it_fetched() {
     let d = tempdir().unwrap();
     let (tape, store) = (d.path().join("tape"), d.path().join("s.doltlite_db"));
+    serve_workspace(&tape, &[BRIDGE, SICKBAY, HOLODECK]);
     serve_page(&tape, BRIDGE, EDITED, "");
     serve_status(&tape, &format!("{BASE}/pages/{SICKBAY}"), 401);
 
@@ -451,6 +460,7 @@ async fn a_credential_refused_part_way_keeps_what_it_fetched() {
 async fn comments_the_credential_may_not_read_are_one_row() {
     let d = tempdir().unwrap();
     let (tape, store) = (d.path().join("tape"), d.path().join("s.doltlite_db"));
+    serve_workspace(&tape, &[BRIDGE, SICKBAY]);
     for id in [BRIDGE, SICKBAY] {
         serve_object(&tape, id, EDITED);
         serve_body(&tape, id, "Captain's log.\n", false);
@@ -459,8 +469,8 @@ async fn comments_the_credential_may_not_read_are_one_row() {
 
     let first = run(&tape, &store, &[BRIDGE, SICKBAY]).await.unwrap();
     assert_eq!(first.new_pages, 2);
-    // Two objects, two bodies, and comments asked once.
-    assert_eq!(first.official_requests, 5);
+    // The search, two objects, two bodies, and comments asked once.
+    assert_eq!(first.official_requests, 6);
     assert_eq!(
         problems(&store).await,
         vec![row("listing:comments", "warning")]
@@ -469,8 +479,8 @@ async fn comments_the_credential_may_not_read_are_one_row() {
     let second = run(&tape, &store, &[BRIDGE, SICKBAY]).await.unwrap();
     assert_eq!(second.skipped_pages, 2);
     assert_eq!(
-        second.official_requests, 3,
-        "the two page objects, and comments asked once"
+        second.official_requests, 2,
+        "the search, and comments asked once"
     );
     assert_eq!(
         problems(&store).await,

@@ -1,12 +1,13 @@
-//! The two producers. In search mode `POST /v1/search`, newest edit
-//! first, lists the workspace; a result is the whole page object, so
-//! the listing's rows are the content, and the stretch of edit times a
-//! walk has read is a `coverage` span. In roots mode the walk is the
-//! enumeration: every page under a root gets its `GET /v1/pages/{id}`
-//! each run, and its children come from its stored body. Either way a
-//! page object lands held at its `last_edited_time`, in one transaction
-//! per page of results, and that stamp is what its body and its
-//! comments are owed against.
+//! The listings. `POST /v1/search`, newest edit first, lists the
+//! workspace, and the stretch of edit times a walk has read is a
+//! `coverage` span. In whole-workspace mode a result is the whole page
+//! object, so the listing's rows are the content. In roots mode the same
+//! walk places every page and database in `tree` and lists each page's
+//! stamp in `listed_pages`; the pages under a root are then fetched one
+//! `GET /v1/pages/{id}` at a time (the objects loop in `mod.rs`, and
+//! `roots_round` for a root the search does not list). Either way a page
+//! object lands held at its `last_edited_time`, and that stamp is what
+//! its body and its comments are owed against.
 
 use std::collections::HashMap;
 
@@ -22,9 +23,32 @@ use super::official::NotionOfficialError;
 use super::schema_raw::PAGES;
 use super::{run_over, Ctx, FetchSummary};
 
-/// The `coverage` scope of the search walk. One workspace per source,
-/// so one of them.
+/// The `coverage` scope of the whole-workspace search walk. One
+/// workspace per source, so one of them.
 pub const SEARCH_SCOPE: &str = "search";
+
+/// The `coverage` scope of roots mode's walk. Its own, so a store that
+/// changes mode lists what the other mode never wrote.
+pub const ROOTS_SCOPE: &str = "roots";
+
+/// What a search walk stores.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Listing {
+    /// Every page object, as the mirror's content.
+    Workspace,
+    /// Where each page and database sits, and each page's stamp, for
+    /// roots mode to choose from.
+    Roots,
+}
+
+impl Listing {
+    fn scope(self) -> &'static str {
+        match self {
+            Listing::Workspace => SEARCH_SCOPE,
+            Listing::Roots => ROOTS_SCOPE,
+        }
+    }
+}
 
 /// A span's ends are Notion stamps (`2026-09-01T00:00:00.000Z`), which
 /// sort as text. These sort below and above every one of them.
@@ -204,19 +228,44 @@ impl Ctx<'_> {
         Ok(stored)
     }
 
-    /// Walks the search newest-first down to where what is held begins,
-    /// storing each page of results as it comes. Fails only when the
-    /// first page of results does; a later page that fails ends the
+    /// Places the pages and `databases` of one page of results in the
+    /// tree and lists each page's stamp, with `span` covered, in one
+    /// transaction.
+    async fn store_placed(
+        &self,
+        rows: &[PageUpsert],
+        databases: &[TreeUpsert],
+        span: Option<Span>,
+    ) -> Result<()> {
+        let mut tx = self.db.pool().begin().await?;
+        self.db.store_listed_pages(&mut tx, rows).await?;
+        self.db.store_tree(&mut tx, databases).await?;
+        if let Some(span) = span {
+            coverage::cover(&mut tx, ROOTS_SCOPE, span).await?;
+        }
+        tx.commit().await?;
+        self.wrote((rows.len() + databases.len()) as u64).await;
+        Ok(())
+    }
+
+    /// Walks the search newest-first down to where what `listing` holds
+    /// begins, storing each page of results as it comes. Fails only when
+    /// the first page of results does; a later page that fails ends the
     /// walk with what it read, as a `listing:search` row.
-    pub async fn search_walk(&self, s: &mut FetchSummary) -> Result<()> {
-        let held = coverage::held(self.db.pool(), SEARCH_SCOPE).await?;
+    pub async fn search_walk(&self, listing: Listing, s: &mut FetchSummary) -> Result<()> {
+        let held = coverage::held(self.db.pool(), listing.scope()).await?;
         let floor = match self.opts.refresh_window_days {
             0 => None,
             days => refresh_floor(&held, days),
         };
         let stop_at = search_stops_at(&held, self.opts.full_sync, floor.as_deref());
+        let cap = match listing {
+            Listing::Workspace => self.opts.max_pages,
+            Listing::Roots => None,
+        };
         tracing::info!(
             event = "notion_search_pass",
+            listing = ?listing,
             stops_at = stop_at.as_deref().unwrap_or("(the end of the workspace)"),
             "one pass of the search"
         );
@@ -248,8 +297,7 @@ impl Ctx<'_> {
                 .and_then(Value::as_array)
                 .cloned()
                 .unwrap_or_default();
-            let mut page =
-                read_results(&results, stop_at.as_deref(), s.listed, self.opts.max_pages);
+            let mut page = read_results(&results, stop_at.as_deref(), s.listed, cap);
             let has_more = resp
                 .get("has_more")
                 .and_then(Value::as_bool)
@@ -272,13 +320,23 @@ impl Ctx<'_> {
                 (Some(hi), Some(lo), None) => Some(Span::new(lo.as_str(), hi.as_str())),
                 _ => None,
             };
-            s.listed += page.rows.len();
-            self.bar
-                .doing(&format!("search: {} pages listed", s.listed));
-            let stored = self.store_listed(page.rows, &page.databases, span).await?;
-            s.new_pages += stored.new;
-            s.upd_pages += stored.updated;
-            s.skipped_pages += stored.skipped;
+            match listing {
+                Listing::Workspace => {
+                    s.listed += page.rows.len();
+                    self.bar
+                        .doing(&format!("search: {} pages listed", s.listed));
+                    let stored = self.store_listed(page.rows, &page.databases, span).await?;
+                    s.new_pages += stored.new;
+                    s.upd_pages += stored.updated;
+                    s.skipped_pages += stored.skipped;
+                }
+                Listing::Roots => {
+                    s.placed += page.rows.len();
+                    self.bar
+                        .doing(&format!("search: {} pages placed", s.placed));
+                    self.store_placed(&page.rows, &page.databases, span).await?;
+                }
+            }
             match page.end {
                 Some(Ended::CutShort) => {
                     self.found.listing(

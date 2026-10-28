@@ -853,6 +853,34 @@ mod tests {
         assert_eq!(read, ["bridge", "col", "db", "row"]);
     }
 
+    /// A page above a root that roots mode placed but does not mirror
+    /// has no document here, so its crumb links Notion.
+    #[test]
+    fn a_page_this_source_does_not_mirror_links_notion() {
+        let tree: HashMap<String, TreeRow> = [
+            (
+                "debrief",
+                node(TreeKind::Page, Some("Debrief"), ("page_id", "wiki")),
+            ),
+            (
+                "wiki",
+                node(
+                    TreeKind::UnmirroredPage,
+                    Some("Wiki"),
+                    ("workspace", "workspace"),
+                ),
+            ),
+        ]
+        .into_iter()
+        .map(|(id, row)| (id.to_string(), row))
+        .collect();
+        let inputs = datalib_etl_render::inputs::Inputs::default();
+        assert_eq!(
+            breadcrumb("debrief", inputs.lookup("tree", &tree), "notion"),
+            "[Wiki](https://www.notion.so/wiki)\n\n"
+        );
+    }
+
     /// A page at the top has no path, and one whose parent this
     /// credential cannot see stops there rather than at a blank crumb.
     #[test]

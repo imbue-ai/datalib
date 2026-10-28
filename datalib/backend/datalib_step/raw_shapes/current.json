@@ -505,7 +505,7 @@
     ]
   },
   "notion": {
-    "schema_hash": "a125c0d98905ed0818432a661703064703bc10e64291fdec7bd7a05c1e8e1d35",
+    "schema_hash": "20189a30d548f58583577718876f74ca53a9c812276c283f462a283b70212a21",
     "schema_version": 2,
     "shared_schema_version": 1,
     "sql": [
@@ -516,6 +516,7 @@
       "CREATE INDEX comments_discussion ON comments(discussion_id)",
       "CREATE INDEX comments_page ON comments(page_id)",
       "CREATE TABLE coverage(scope TEXT NOT NULL, lo TEXT NOT NULL, hi TEXT NOT NULL, PRIMARY KEY(scope, lo))",
+      "CREATE TABLE listed_pages( id TEXT PRIMARY KEY, last_edited_time TEXT NULL)",
       "CREATE TABLE notion_attachments( id TEXT PRIMARY KEY, page_id TEXT NOT NULL, ref_id TEXT NOT NULL, blake3 TEXT NULL, CHECK(blake3 IS NULL OR length(blake3) = 64))",
       "CREATE TABLE notion_attachments_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX notion_attachments_by_page_id ON notion_attachments(page_id)",

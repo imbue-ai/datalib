@@ -18,7 +18,7 @@ pub use datalib_etl::doltlite_raw::db_path_for;
 
 use super::schema_raw::{
     full_ddl, tree_rows_of_pages_sql, NotionAttachmentRow, TreeKind, ATTACHMENTS, COMMENTS, LADDER,
-    PAGES, PAGE_MARKDOWN, TREE, TREE_UPDATE,
+    PAGES, PAGE_MARKDOWN, TREE, TREE_ROW_OF_LISTED_PAGE_SQL, TREE_UPDATE,
 };
 
 datalib_etl::raw_db!(pub RawDb: CasEntityStore, full_ddl(), LADDER);
@@ -411,9 +411,9 @@ impl RawDb {
         Ok(out)
     }
 
-    /// The child pages the stored bodies of `page_ids` link, in the
-    /// order the bodies name them, each once.
-    pub async fn child_pages_of(&self, page_ids: &[String]) -> Result<Vec<String>> {
+    /// The pages the stored bodies of `page_ids` link, as a child or a
+    /// mention, in the order the bodies name them, each once.
+    pub async fn pages_linked_from(&self, page_ids: &[String]) -> Result<Vec<String>> {
         let mut out: Vec<String> = Vec::new();
         for chunk in page_ids.chunks(datalib_etl::bulk::SQL_CHUNK) {
             let mut placeholders = String::new();
@@ -431,7 +431,7 @@ impl RawDb {
             let mut bodies: HashMap<String, String> = q
                 .fetch_all(self.pool())
                 .await
-                .context("read the stored bodies for their children")?
+                .context("read the stored bodies for their links")?
                 .into_iter()
                 .collect();
             for id in chunk {
@@ -439,14 +439,42 @@ impl RawDb {
                     continue;
                 };
                 let body = super::markdown::parse(&serde_json::json!({ "markdown": md }));
-                for child in body.child_pages {
-                    if !out.contains(&child) {
-                        out.push(child);
+                for linked in body.linked_pages {
+                    if !out.contains(&linked) {
+                        out.push(linked);
                     }
                 }
             }
         }
         Ok(out)
+    }
+
+    /// Each page of `ids` at the stamp roots mode's search listed it at;
+    /// one it has not listed at no version.
+    pub async fn listed_stamps(&self, ids: &[String]) -> Result<Vec<Listed>> {
+        let mut stamps: HashMap<String, Option<String>> = HashMap::new();
+        for chunk in ids.chunks(datalib_etl::bulk::SQL_CHUNK) {
+            let mut placeholders = String::new();
+            datalib_etl::bulk::push_placeholder_list(&mut placeholders, chunk.len());
+            // Audited: the IN-list is a `?,?,?` run sized from the chunk and
+            // every id is bound.
+            let sql = format!(
+                "SELECT id, last_edited_time FROM listed_pages WHERE id IN ({placeholders})"
+            );
+            let mut q = sqlx::query_as::<_, (String, Option<String>)>(sqlx::AssertSqlSafe(sql));
+            for id in chunk {
+                q = q.bind(id);
+            }
+            stamps.extend(
+                q.fetch_all(self.pool())
+                    .await
+                    .context("read the listed stamps")?,
+            );
+        }
+        Ok(ids
+            .iter()
+            .map(|id| Listed::new(id.clone(), stamps.get(id).cloned().flatten()))
+            .collect())
     }
 
     /// The bytes the CAS holds for a slot under any page, by their
@@ -509,6 +537,37 @@ impl RawDb {
                 .await
                 .with_context(|| format!("place page {} in the tree", r.id))?;
             owed::hold(tx, TREE, &r.id, None).await?;
+        }
+        Ok(())
+    }
+
+    /// Pages roots mode's search listed: each one's place in `tree`, and
+    /// the stamp it was listed at in `listed_pages`.
+    pub async fn store_listed_pages(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        rows: &[PageUpsert],
+    ) -> Result<()> {
+        for r in rows {
+            sqlx::query(TREE_ROW_OF_LISTED_PAGE_SQL)
+                .bind(&r.id)
+                .bind(&r.payload)
+                .bind(&r.parent_type)
+                .bind(&r.parent_id)
+                .bind(&r.created_time)
+                .execute(&mut **tx)
+                .await
+                .with_context(|| format!("place listed page {} in the tree", r.id))?;
+            owed::hold(tx, TREE, &r.id, None).await?;
+            sqlx::query(
+                "INSERT INTO listed_pages (id, last_edited_time) VALUES (?, ?) \
+                 ON CONFLICT(id) DO UPDATE SET last_edited_time = excluded.last_edited_time",
+            )
+            .bind(&r.id)
+            .bind(&r.last_edited_time)
+            .execute(&mut **tx)
+            .await
+            .with_context(|| format!("list page {}", r.id))?;
         }
         Ok(())
     }

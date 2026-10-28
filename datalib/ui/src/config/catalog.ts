@@ -657,8 +657,9 @@ export const CATALOG: CatalogEntry[] = [
           {
             label: "Only the pages I choose",
             help:
-              "Each page, every page it links to, and theirs. A database inside one is " +
-              "not copied.",
+              "Each page or database and everything inside it: sub-pages at any depth and a " +
+              "database's rows. Pages a chosen page links to or @-mentions come too, but not " +
+              "what is inside them.",
             fields: ["api.roots"],
           },
         ],
@@ -674,7 +675,7 @@ export const CATALOG: CatalogEntry[] = [
         kind: "string_list",
         target: "api.roots",
         label: "Pages",
-        help: "Paste a page's link or its id.",
+        help: "Paste a page's or a database's link, or its id.",
       },
       { kind: "bool", target: "api.comments", label: "Copy comments", default: true },
       { kind: "bool", target: "api.attachments", label: "Copy attached files", default: true },

@@ -4,7 +4,8 @@
 //! kind of work it has: a search of two pages, a body with an
 //! attachment, a truncated body with a follow-up, a body that answers
 //! 404, comments on the page and on a block, a user Notion has and one
-//! it has not. Run from an empty store and from the store an earlier
+//! it has not, and a page inside a block, which roots mode places by
+//! asking for the block. Run from an empty store and from the store an earlier
 //! run left, against a workspace that has moved since; in search mode
 //! and from a root.
 
@@ -38,6 +39,8 @@ const TABLES: &[&str] = &[
     "comment_anchors",
     "users",
     "notion_attachments",
+    "tree",
+    "listed_pages",
     "coverage",
 ];
 
@@ -48,6 +51,7 @@ const HELD: &[&str] = &[
     "comment_anchors",
     "users",
     "notion_attachments",
+    "tree",
 ];
 
 async fn dump_held(pool: &sqlx::SqlitePool) -> Result<String> {
@@ -79,6 +83,8 @@ const RIKER: &str = "1701d000-0000-4000-8000-00000000aa02";
 const DATA: &str = "1701d000-0000-4000-8000-00000000aa03";
 const BLOCK: &str = "1701d000-0000-4000-8000-00000000bb01";
 const HOLE: &str = "1701d000-0000-4000-8000-00000000cc01";
+const TOGGLE: &str = "1701d000-0000-4000-8000-00000000dd01";
+const READY_ROOM: &str = "1701d000-0000-4000-8000-00000000dd02";
 const SLOT: &str = "https://prod-files-secure.s3.us-west-2.amazonaws.com/ws/warp.png";
 
 fn link(id: &str) -> String {
@@ -187,12 +193,30 @@ fn tape(dir: &Path, edition: Edition) -> PathBuf {
     serve_status(&t, &format!("{BASE}/pages/{HOLODECK}/markdown"), 404);
     serve_comments(&t, HOLODECK);
 
+    // The ready room: a page inside a toggle on the bridge, which its
+    // body does not link.
+    let mut ready_room = page(READY_ROOM, T2);
+    ready_room["parent"] = json!({"type": "block_id", "block_id": TOGGLE});
+    serve(
+        &t,
+        &format!("{BASE}/pages/{READY_ROOM}"),
+        ready_room.clone(),
+    );
+    serve_body(&t, READY_ROOM, "Tea, Earl Grey, hot.\n", false);
+    serve_comments(&t, READY_ROOM);
+    serve(
+        &t,
+        &format!("{BASE}/blocks/{TOGGLE}"),
+        json!({"object": "block", "id": TOGGLE, "type": "toggle",
+               "parent": {"type": "page_id", "page_id": BRIDGE}}),
+    );
+
     match edition {
         Edition::Before => {
             serve_search(
                 &t,
                 None,
-                json!([page(BRIDGE, T3), page(SICKBAY, T2)]),
+                json!([page(BRIDGE, T3), ready_room, page(SICKBAY, T2)]),
                 Some("p2"),
             );
         }
@@ -201,7 +225,12 @@ fn tape(dir: &Path, edition: Edition) -> PathBuf {
             serve_search(
                 &t,
                 None,
-                json!([page(TEN_FORWARD, T5), page(BRIDGE, T4), page(SICKBAY, T2)]),
+                json!([
+                    page(TEN_FORWARD, T5),
+                    page(BRIDGE, T4),
+                    ready_room,
+                    page(SICKBAY, T2)
+                ]),
                 Some("p2"),
             );
         }

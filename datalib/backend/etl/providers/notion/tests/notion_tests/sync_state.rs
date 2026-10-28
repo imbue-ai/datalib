@@ -23,6 +23,7 @@ use crate::support::*;
 async fn a_failed_comments_listing_survives_the_page_being_written_again() {
     let d = tempdir().unwrap();
     let (tape, store) = (d.path().join("tape"), d.path().join("s.doltlite_db"));
+    serve_workspace(&tape, &[BRIDGE]);
     serve_object(&tape, BRIDGE, EDITED);
     serve_status(&tape, &format!("{BASE}/pages/{BRIDGE}/markdown"), 404);
     serve_status(&tape, &comments_url(BRIDGE), 500);
@@ -33,9 +34,12 @@ async fn a_failed_comments_listing_survives_the_page_being_written_again() {
         "the failed listing is recorded"
     );
 
-    // Upstream now answers; this run is stopped at the request for the
-    // comments, after the page has been written again (its 404 body is
-    // held from the first run).
+    // Upstream now answers, and the page was edited; this run is stopped
+    // at the request for the comments, after the page has been written
+    // again (its body answers 404 again, and is held).
+    let later = "2026-09-02T00:00:00.000Z";
+    serve_search(&tape, None, json!([page(BRIDGE, later)]), None);
+    serve_object(&tape, BRIDGE, later);
     serve_comment_list(&tape, BRIDGE, json!([comment("c1", BRIDGE, None)]));
     let stop = StopFlag::new();
     let fast = std::time::Duration::from_millis(1);
@@ -48,7 +52,7 @@ async fn a_failed_comments_listing_survives_the_page_being_written_again() {
     );
     let db = RawDb::open(&store).await.unwrap();
     let cut = interrupt::run(
-        Some(2),
+        Some(4),
         How::Stop,
         stop.clone(),
         retry::scope(
@@ -64,7 +68,10 @@ async fn a_failed_comments_listing_survives_the_page_being_written_again() {
         ),
     );
     let ran = playback::scope(&tape, cut).await;
-    assert_eq!(ran.requests, 2, "the page, and the cut at its comments");
+    assert_eq!(
+        ran.requests, 4,
+        "the search, the page, its body, and the cut at its comments"
+    );
     ran.finished
         .unwrap()
         .expect("a stopped run is a shorter run");
@@ -156,6 +163,7 @@ async fn an_anchor_that_did_not_fetch_is_a_problem_until_it_does() {
     let d = tempdir().unwrap();
     let (tape, store) = (d.path().join("tape"), d.path().join("s.doltlite_db"));
     let block = "1701d000-0000-4000-8000-0000000000bb";
+    serve_workspace(&tape, &[BRIDGE]);
     serve_object(&tape, BRIDGE, EDITED);
     serve_body(&tape, BRIDGE, "Senior staff, report.\n", false);
     serve_comment_list(&tape, BRIDGE, json!([comment("c1", BRIDGE, Some(block))]));

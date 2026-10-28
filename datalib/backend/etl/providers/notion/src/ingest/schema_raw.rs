@@ -22,6 +22,7 @@ pub const COMMENT_ANCHORS: &str = "comment_anchors";
 pub const USERS: &str = "users";
 pub const ATTACHMENTS: &str = "notion_attachments";
 pub const TREE: &str = "tree";
+pub const LISTED_PAGES: &str = "listed_pages";
 
 /// Names of the entity tables, in the order they should be iterated
 /// for full-table operations (truncate, full-DDL composition, etc.).
@@ -174,14 +175,16 @@ pub const TREE_DDL: &str = "CREATE TABLE IF NOT EXISTS tree (
 )";
 
 /// What a `tree` row is. Only a `page` is a page this store holds, and
-/// so a document render writes; a block may be a page this credential
-/// cannot list.
+/// so a document render writes; an `unmirrored_page` is one roots mode
+/// placed from the search and does not mirror; a block may be a page
+/// this credential cannot list.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, strum::IntoStaticStr, strum::VariantArray,
 )]
 #[strum(serialize_all = "snake_case")]
 pub enum TreeKind {
     Page,
+    UnmirroredPage,
     Database,
     Block,
 }
@@ -212,6 +215,35 @@ pub fn tree_rows_of_pages_sql(filter: &str) -> String {
          ON CONFLICT(id) DO UPDATE SET {TREE_UPDATE}"
     )
 }
+
+/// Writes the `tree` row of a page roots mode's search listed, from its
+/// object (bound as JSON): an `unmirrored_page`, unless the store holds
+/// the page, whose row stays a `page`. Its title is read as
+/// [`tree_rows_of_pages_sql`] reads it, so a held page's row written
+/// again from the search is unchanged.
+pub const TREE_ROW_OF_LISTED_PAGE_SQL: &str = "INSERT INTO tree \
+        (id, kind, title, parent_type, parent_id, created_time) \
+     VALUES (?, 'unmirrored_page', \
+        (SELECT group_concat(json_extract(t.value, '$.plain_text'), '') \
+           FROM json_each(?, '$.properties') pr, json_each(pr.value, '$.title') t \
+          WHERE json_extract(pr.value, '$.type') = 'title'), \
+        ?, ?, ?) \
+     ON CONFLICT(id) DO UPDATE SET \
+        kind = CASE WHEN tree.kind = 'page' THEN 'page' ELSE excluded.kind END, \
+        title = excluded.title, parent_type = excluded.parent_type, \
+        parent_id = excluded.parent_id, created_time = excluded.created_time";
+
+/// `listed_pages` — every page roots mode's search listed, at the
+/// `last_edited_time` it was listed at: what a page under a root is owed
+/// against. Its own table, not a `tree` column, because `tree` changes
+/// only when a title or a parent does, and render reads it for every
+/// page under a parent.
+///
+/// PK choice: the page's Notion id.
+pub const LISTED_PAGES_DDL: &str = "CREATE TABLE IF NOT EXISTS listed_pages (
+    id TEXT PRIMARY KEY,
+    last_edited_time TEXT NULL
+)";
 
 /// The `ON CONFLICT` half of every `tree` write. Doltlite diffs by
 /// content, so a row written again unchanged names no change for render.
@@ -442,6 +474,7 @@ pub fn full_ddl() -> Vec<String> {
         COMMENT_ANCHORS_DDL.to_string(),
         USERS_DDL.to_string(),
         TREE_DDL.to_string(),
+        LISTED_PAGES_DDL.to_string(),
         datalib_etl_web::coverage::DDL.to_string(),
     ];
     out.extend(NotionAttachmentRow::all_ddl());

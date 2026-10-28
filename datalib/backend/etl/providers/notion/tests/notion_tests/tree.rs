@@ -95,6 +95,8 @@ async fn search_places_a_row_under_its_database_and_the_pages_above() {
 async fn a_database_is_fetched_once_and_a_hidden_parent_is_asked_once() {
     let d = tempdir().unwrap();
     let (tape, store) = (d.path().join("tape"), d.path().join("s.doltlite_db"));
+    // The search lists the row, not its database's data source.
+    serve_search(&tape, None, json!([crew_row(SICKBAY, EDITED)]), None);
     serve(
         &tape,
         &format!("{BASE}/pages/{SICKBAY}"),

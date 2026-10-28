@@ -1,13 +1,13 @@
 //! What each loop fetches and how a flush of it is stored, one
-//! [`Fetcher`] per kind: a page's body, an attachment's bytes, a page's
-//! comments listed whole, a commented block, a parent in the tree, a
-//! user. Each is one request
+//! [`Fetcher`] per kind: in roots mode a page's object; a page's body,
+//! an attachment's bytes, a page's comments listed whole, a commented
+//! block, a parent in the tree, a user. Each is one request
 //! per record; the loop (`datalib_etl_web::owed`) owns the stop, the
 //! failure budget, the flush and what each outcome means for the
 //! record's sidecar.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -17,7 +17,9 @@ use datalib_etl_web::owed::{BatchError, Fetched, Fetcher, Listed, Outcome};
 use serde_json::Value;
 use sqlx::{Sqlite, Transaction};
 
-use super::db::{CommentAnchorUpsert, CommentUpsert, KnownUser, PageMarkdownUpsert, TreeUpsert};
+use super::db::{
+    CommentAnchorUpsert, CommentUpsert, KnownUser, PageMarkdownUpsert, PageUpsert, TreeUpsert,
+};
 use super::official::NotionOfficialError;
 use super::schema_raw::{split_edge_key, TreeKind};
 use super::{markdown, run_over, slots, Ctx};
@@ -51,6 +53,74 @@ fn outcome<T>(
         // the record is the next run's.
         Err(e) if ctx.stop().requested() => Err(BatchError::Batch(e.into())),
         Err(e) => Ok(Outcome::Failed(e.to_string())),
+    }
+}
+
+// ── roots mode: page objects ───────────────────────────────────────────
+
+/// The objects of the pages a roots-mode run mirrors. A page Notion has
+/// not got, or will not show, is gone: the store keeps what it had.
+pub(crate) struct Objects<'a> {
+    pub(crate) ctx: &'a Ctx<'a>,
+    /// The pages the store held an object for before this loop.
+    pub(crate) had: HashSet<String>,
+    pub(crate) new: AtomicUsize,
+    pub(crate) updated: AtomicUsize,
+}
+
+#[async_trait]
+impl Fetcher<PageUpsert> for Objects<'_> {
+    async fn fetch(&self, batch: Vec<Listed>) -> Result<Vec<Fetched<PageUpsert>>, BatchError> {
+        let mut out = Vec::with_capacity(batch.len());
+        for listed in batch {
+            self.ctx.bar.doing(&listed.key);
+            let answer = match self.ctx.client.get_page(&listed.key).await {
+                Ok(obj) => Ok(match PageUpsert::from_object(&obj) {
+                    Some(row) => {
+                        // Its body and comments join the queue before
+                        // this object is counted done, so the queue
+                        // never reads empty with them still to come.
+                        self.ctx.foresee_pages(1);
+                        Outcome::Got(row)
+                    }
+                    None => Outcome::Failed("the page object has no id".into()),
+                }),
+                Err(NotionOfficialError::NotFound(_) | NotionOfficialError::Forbidden(_)) => {
+                    Ok(Outcome::Gone)
+                }
+                Err(e) => Err(e),
+            };
+            out.push(Fetched {
+                outcome: outcome(self.ctx, answer)?,
+                listed,
+            });
+            self.ctx.bar.did(1);
+        }
+        Ok(out)
+    }
+
+    async fn store(
+        &self,
+        tx: &mut Transaction<'static, Sqlite>,
+        batch: &[Fetched<PageUpsert>],
+    ) -> Result<()> {
+        let rows: Vec<PageUpsert> = batch
+            .iter()
+            .filter_map(|f| match &f.outcome {
+                Outcome::Got(row) | Outcome::Unusable(row, ..) => Some(row.clone()),
+                _ => None,
+            })
+            .collect();
+        self.ctx.db.store_pages(tx, &rows).await?;
+        for row in &rows {
+            let count = if self.had.contains(&row.id) {
+                &self.updated
+            } else {
+                &self.new
+            };
+            count.fetch_add(1, Ordering::Relaxed);
+        }
+        Ok(())
     }
 }
 
@@ -218,11 +288,6 @@ impl Bodies<'_> {
                     }
                     body.markdown.push('\n');
                     body.markdown.push_str(&part.markdown);
-                    for c in part.child_pages {
-                        if !body.child_pages.contains(&c) {
-                            body.child_pages.push(c);
-                        }
-                    }
                     ctx.counts.hole_followups.fetch_add(1, Ordering::Relaxed);
                 }
                 // The block went since the body was read.

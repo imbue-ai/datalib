@@ -16,6 +16,7 @@ mod listing;
 pub mod markdown;
 pub mod official;
 pub mod schema_raw;
+pub mod scope;
 pub mod slots;
 
 use std::collections::{HashMap, HashSet};
@@ -38,8 +39,11 @@ use serde_json::json;
 pub use db::{db_path_for, AttachmentRow, RawDb};
 pub use official::{NotionOfficialClient, NotionOfficialError};
 
-use fetchers::{Ancestors, Anchors, Attachments, Bodies, Comments, CommentsForbidden, Users};
-use schema_raw::{ATTACHMENTS, COMMENT_ANCHORS, PAGE_COMMENTS, PAGE_MARKDOWN, TREE, USERS};
+use fetchers::{
+    Ancestors, Anchors, Attachments, Bodies, Comments, CommentsForbidden, Objects, Users,
+};
+use listing::Listing;
+use schema_raw::{ATTACHMENTS, COMMENT_ANCHORS, PAGES, PAGE_COMMENTS, PAGE_MARKDOWN, TREE, USERS};
 
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
@@ -51,8 +55,9 @@ pub struct FetchOptions {
     /// (`datalib/backend/etl/README.md` § "One writer per file, by
     /// construction").
     pub db: RawDb,
-    /// Page IDs (dashed or undashed) to seed the walk. Empty means the
-    /// whole workspace, through search.
+    /// Page or database ids (dashed or undashed), or links: the mirror is
+    /// what sits under them and the pages a root's body links. Empty
+    /// means the whole workspace, through search.
     pub subtree_pages: Vec<String>,
     /// In search mode, list this many days of edits below the newest
     /// the store has looked at, so a page shared late is listed once
@@ -100,8 +105,11 @@ impl FetchOptions {
 
 #[derive(Debug, Default, Clone, Copy, Serialize)]
 pub struct FetchSummary {
-    /// Page objects the listing read this run.
+    /// Page objects the listing read this run; in roots mode, the pages
+    /// the roots reach.
     pub listed: usize,
+    /// In roots mode, the pages the search placed in the tree.
+    pub placed: usize,
     pub new_pages: usize,
     pub upd_pages: usize,
     /// Listed at the stamp the store already holds them at.
@@ -383,34 +391,95 @@ impl Ctx<'_> {
         Ok(())
     }
 
-    /// The configured roots and everything their stored bodies link,
-    /// round by round: the frontier's objects, then the bodies owed, then
-    /// the children those bodies name. With `descend` off, the roots
-    /// alone.
-    async fn roots_walk(
-        &self,
-        roots: &[String],
-        descend: bool,
-        s: &mut FetchSummary,
-    ) -> Result<()> {
-        let mut visited: HashSet<String> = HashSet::new();
-        let mut frontier: Vec<String> = roots.to_vec();
-        while !frontier.is_empty() {
-            frontier.retain(|id| visited.insert(id.clone()));
-            let listed = self.roots_round(&frontier, s).await?;
-            self.bodies(s).await?;
-            if !descend || self.stop().requested() {
-                break;
-            }
-            frontier = self
-                .db
-                .child_pages_of(&listed)
-                .await?
-                .into_iter()
-                .filter(|id| !visited.contains(id))
-                .collect();
+    /// The pages under the roots, and the pages a root's body links: the
+    /// search placing every page and database in the tree, the blocks
+    /// and hidden parents placed after it, the objects of the pages under
+    /// a root, their bodies; then the pages the roots' bodies link, and
+    /// theirs. A root the tree does not have is asked for as a page, so
+    /// one Notion has not got is a `config:` row.
+    async fn roots_mirror(&self, roots: &[String], s: &mut FetchSummary) -> Result<()> {
+        self.search_walk(Listing::Roots, s).await?;
+        self.ancestors().await?;
+        let tree = self.db.load_tree().await?;
+        let root_set: HashSet<String> = roots.iter().cloned().collect();
+        let under = scope::pages_under(&tree, &root_set);
+        let unplaced: Vec<String> = roots
+            .iter()
+            .filter(|r| !tree.contains_key(*r))
+            .cloned()
+            .collect();
+        self.roots_round(&unplaced, s).await?;
+        let mut wanted = self
+            .db
+            .listed_stamps(&under.iter().cloned().collect::<Vec<_>>())
+            .await?;
+        wanted.sort_by(|a, b| b.version.cmp(&a.version).then(a.key.cmp(&b.key)));
+        self.objects(wanted, s).await?;
+        self.bodies(s).await?;
+        if self.stop().requested() {
+            return Ok(());
         }
+        let linked: Vec<String> = self
+            .db
+            .pages_linked_from(roots)
+            .await?
+            .into_iter()
+            .filter(|id| !root_set.contains(id) && !under.contains(id))
+            .filter(|id| tree.get(id).is_some_and(scope::is_page))
+            .collect();
+        if linked.is_empty() {
+            return Ok(());
+        }
+        let linked = self.db.listed_stamps(&linked).await?;
+        self.objects(linked, s).await?;
+        self.bodies(s).await
+    }
+
+    /// The objects of the pages `listed` names, each at the stamp the
+    /// search listed it at, past `max_pages` cut off with a
+    /// `listing:roots` row.
+    async fn objects(&self, mut listed: Vec<Listed>, s: &mut FetchSummary) -> Result<()> {
+        if let Some(m) = self.opts.max_pages {
+            let room = m.saturating_sub(s.listed);
+            if listed.len() > room {
+                listed.truncate(room);
+                self.found.listing(
+                    "roots",
+                    format!(
+                        "the roots reach more than max_pages ({m}) pages, so the rest were \
+                         not looked at"
+                    ),
+                );
+            }
+        }
+        s.listed += listed.len();
+        let keys: Vec<&str> = listed.iter().map(|l| l.key.as_str()).collect();
+        let had: HashSet<String> = owed::held_versions(self.db.pool(), PAGES, keys)
+            .await?
+            .into_iter()
+            .filter(|(_, held)| held.fetched)
+            .map(|(id, _)| id)
+            .collect();
+        let total = listed.len();
+        let owed = owed::owed(self.db.pool(), PAGES, listed).await?;
+        s.skipped_pages += total - owed.len();
+        let f = Objects {
+            ctx: self,
+            had,
+            new: AtomicUsize::new(0),
+            updated: AtomicUsize::new(0),
+        };
+        let drained = self.drain(PAGES, owed, &f, 50, 0).await?;
+        s.new_pages += f.new.load(Ordering::Relaxed);
+        s.upd_pages += f.updated.load(Ordering::Relaxed);
+        s.failed_pages += drained.failed;
         Ok(())
+    }
+
+    /// One page and nothing under it.
+    async fn single_page(&self, id: String, s: &mut FetchSummary) -> Result<()> {
+        self.roots_round(&[id], s).await?;
+        self.bodies(s).await
     }
 }
 
@@ -515,10 +584,10 @@ async fn phases(ctx: &Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
     let mut roots: Vec<(&str, String)> = Vec::new();
     if let Some(single) = opts.page.as_deref() {
         let id = format_uuid(single);
-        phase(&mut ended, ctx.roots_walk(&[id], false, s)).await?;
+        phase(&mut ended, ctx.single_page(id, s)).await?;
         phase(&mut ended, ctx.ancestors()).await?;
     } else if opts.subtree_pages.is_empty() {
-        phase(&mut ended, ctx.search_walk(s)).await?;
+        phase(&mut ended, ctx.search_walk(Listing::Workspace, s)).await?;
         phase(&mut ended, ctx.ancestors()).await?;
         phase(&mut ended, ctx.bodies(s)).await?;
     } else {
@@ -530,7 +599,7 @@ async fn phases(ctx: &Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
                 ids.push(id);
             }
         }
-        phase(&mut ended, ctx.roots_walk(&ids, true, s)).await?;
+        phase(&mut ended, ctx.roots_mirror(&ids, s)).await?;
         phase(&mut ended, ctx.ancestors()).await?;
     }
     if opts.attachments {
