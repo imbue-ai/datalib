@@ -23,7 +23,7 @@
       <part seq="0" ct="text/plain" name="null" chset="106" cd="null" fn="null" cid="&lt;text&gt;" cl="text.txt" ctt_s="null" ctt_t="null" text="Captain&#x27;s log, supplemental." sef_type="0" />
     </parts>
     <addrs>
-      <addr address="insert-address-token" type="137" charset="106" />
+      <addr address="+12025550100" type="137" charset="106" />
       <addr address="+12025550101" type="151" charset="106" />
     </addrs>
   </mms>

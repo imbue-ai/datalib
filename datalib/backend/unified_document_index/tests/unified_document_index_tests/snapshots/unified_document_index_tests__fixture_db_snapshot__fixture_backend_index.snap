@@ -168,7 +168,7 @@ expression: snapshot
       "md_path": "sms-backup-restore/render_markdown/00000000-0000-85d9-b5a3-420c27c71680/2369-04.md",
       "modified_at": "2369-04-15T11:00:00+00:00",
       "provider": "sms_backup_restore",
-      "renderer_version": "rust-v1.8",
+      "renderer_version": "rust-v1.9",
       "source_id": "sms-backup-restore",
       "title": "Geordi La Forge"
     },
@@ -336,7 +336,7 @@ expression: snapshot
       "md_path": "sms-backup-restore/render_markdown/00000000-0000-8a32-861f-a85bca667a83/2369-04.md",
       "modified_at": "2369-04-15T10:01:00+00:00",
       "provider": "sms_backup_restore",
-      "renderer_version": "rust-v1.8",
+      "renderer_version": "rust-v1.9",
       "source_id": "sms-backup-restore",
       "title": "Worf"
     },
@@ -636,7 +636,7 @@ expression: snapshot
       "md_path": "sms-backup-restore/render_markdown/00000000-0000-8709-8732-c5f02579e8d6/2369-04.md",
       "modified_at": "2369-04-14T20:30:00+00:00",
       "provider": "sms_backup_restore",
-      "renderer_version": "rust-v1.8",
+      "renderer_version": "rust-v1.9",
       "source_id": "sms-backup-restore",
       "title": "Deanna Troi"
     },
@@ -1548,7 +1548,7 @@ expression: snapshot
       "md_path": "sms-backup-restore/render_markdown/00000000-0000-8c57-9571-2bd28212d376/2369-04.md",
       "modified_at": "2369-04-15T09:03:00+00:00",
       "provider": "sms_backup_restore",
-      "renderer_version": "rust-v1.8",
+      "renderer_version": "rust-v1.9",
       "source_id": "sms-backup-restore",
       "title": "Jean-Luc Picard"
     },

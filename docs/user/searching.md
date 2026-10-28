@@ -103,6 +103,12 @@ by that address, or a Google Chat message from it, is yours too.
 
 A quoted `"me"` is the word, not you.
 
+Your number or address is narrower than `me`: `from:+12025550100`
+finds only what a source records as sent from that number, not
+everything you wrote. A phone's backup records the number an MMS was
+sent from, but not a plain text's, so `from:me` finds your texts and
+your number finds only your MMS.
+
 | source | what `me` knows you by | what it cannot find |
 |---|---|---|
 | Email | the mailbox's address | |
@@ -114,7 +120,8 @@ A quoted `"me"` is the word, not you.
 | LinkedIn | the owner's main address, on their posts and comments | their messages, which LinkedIn files under their profile link |
 | Facebook | the owner's name and their profile's first address | |
 | Claude, ChatGPT | "Me", and the account's address | |
-| WhatsApp, Signal, Messages, SMS backup, Google Voice | "Me", as the author of what you sent and the recipient of what you received (texts, and Google Voice's voicemails; not call logs) | your number, where another source names you by it: these backups do not say it |
+| WhatsApp, Signal, Messages, SMS backup, Google Voice | "Me", as the author of what you sent and the recipient of what you received (texts, and Google Voice's voicemails; not call logs) | your number, where another source names you by it: these backups do not say it, except as below |
+| SMS backup, besides | every number you sent an MMS from, each phone or SIM you used | a number you only ever sent plain texts from, which the backup does not record; one Android wrote as `insert-address-token` |
 | Claude Code, Codex | "Me" | |
 | Notion, calendar and the rest | only an address another source already marks as yours | anything under another name |
 

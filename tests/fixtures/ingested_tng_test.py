@@ -1177,7 +1177,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # forges' signed-in user; Beeper's own person; Facebook's owner, by
         # name and address; the address an AI
         # chat's account names, tied to its "Me"; the address a Takeout's
-        # Chat, a Drive or a LinkedIn export names as its owner. The
+        # Chat, a Drive or a LinkedIn export names as its owner; the number
+        # an SMS backup's sent MMS came from. The
         # search reads these handles as `me` (docs/dev/contacts.md).
         self.assertEqual(
             self._query(
@@ -1202,6 +1203,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "linkedin|email:data@enterprise.starfleet.test",
                 "slack|email:picard@enterprise.starfleet",
                 "slack|slack:T_NCC1701D/U_PICARD",
+                "sms-backup-restore|me:self",
+                "sms-backup-restore|tel:+12025550100",
                 "tng_email|email:picard@enterprise.starfleet",
             ],
             "the handles each source marks as its account's own",

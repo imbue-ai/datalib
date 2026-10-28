@@ -663,6 +663,53 @@ fn reading_an_unchanged_export_again_commits_nothing() -> Result<()> {
     })
 }
 
+/// An MMS keeps the addresses it went between, the account's own sender
+/// among them; a store whose MMS were kept without them reads its
+/// unchanged export once more, and then no more.
+#[test]
+fn a_store_from_before_addrs_reads_its_export_once_more() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let raw_dir = tmp.path().join("raw");
+    fs::create_dir_all(&raw_dir)?;
+    let cache = tmp.path().join("fpcache.sqlite");
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        let db = RawDb::open(&db_path_for(&raw_dir)).await?;
+        let sent_from = "SELECT json_extract(a.value, '$.address') FROM sms_messages, \
+                         json_each(json_extract(payload, '$.addrs')) a \
+                         WHERE kind = 'mms' AND box_kind = 'sent' \
+                         AND json_extract(a.value, '$.type') = 137";
+        let without = "SELECT count(*) FROM sms_messages \
+                       WHERE kind = 'mms' AND json_extract(payload, '$.addrs') IS NULL";
+
+        fetch_dir(&db, &fixture_root(), &cache).await?;
+        datalib_etl::doltlite_raw::commit_run(db.pool(), "first").await?;
+        let senders: Vec<String> = sqlx::query_scalar(sent_from).fetch_all(db.pool()).await?;
+        assert_eq!(senders, ["+12025550100"]);
+
+        sqlx::query("UPDATE sms_messages SET payload = jsonb_remove(payload, '$.addrs')")
+            .execute(db.pool())
+            .await?;
+        datalib_etl::doltlite_raw::commit_run(db.pool(), "a store from before").await?;
+        let lacking: i64 = sqlx::query_scalar(without).fetch_one(db.pool()).await?;
+        assert!(lacking > 0);
+
+        let again = fetch_dir(&db, &fixture_root(), &cache).await?;
+        assert!(
+            again.mms > 0,
+            "the unchanged export is read again: {again:?}"
+        );
+        datalib_etl::doltlite_raw::commit_run(db.pool(), "again").await?;
+        let lacking: i64 = sqlx::query_scalar(without).fetch_one(db.pool()).await?;
+        assert_eq!(lacking, 0);
+
+        let then = fetch_dir(&db, &fixture_root(), &cache).await?;
+        assert_eq!(then.mms, 0, "and then it is not: {then:?}");
+        db.close().await;
+        Ok(())
+    })
+}
+
 /// A backup that will not open may hold any message, so a run that reads
 /// every other file deletes nothing while it is unread: before, an
 /// unopenable file was a walk error, and once it was not, the prune took
