@@ -13,9 +13,9 @@
 //! owed its export in each `revision_exports` format, fetched once
 //! through the revision's export link (`revision_exports`).
 //!
-//! Each kind drains on its own, because each kind's native API is signed
-//! by its own latchkey service: a missing `google-sheets` sign-in ends
-//! the Sheets and leaves the Docs and Slides to finish.
+//! Each kind drains on its own, side by side, because each kind's native
+//! API is signed by its own latchkey service: a missing `google-sheets`
+//! sign-in ends the Sheets and leaves the Docs and Slides to finish.
 
 pub mod api;
 pub mod db;
@@ -27,6 +27,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use futures::{StreamExt, TryStreamExt};
 use serde_json::Value;
 use sqlx::{Sqlite, Transaction};
 
@@ -44,6 +45,10 @@ use datalib_etl_web::owed::{self, BatchError, Fetcher, Listed, Loop, Outcome};
 pub use db::{db_path_for, RawDb};
 use db::{Body, Capture, HeldImages, Part, RevisionExport, Split};
 use schema_raw::*;
+
+/// One file's images fetched at once. A deck can hold a hundred, at about
+/// half a second each.
+const IMAGES_AT_ONCE: usize = 6;
 
 pub struct FetchOptions {
     /// The store this run writes into, opened and closed by the caller.
@@ -147,6 +152,7 @@ async fn walk_files(
         })
         .collect();
 
+    let mut kinds = Vec::new();
     for kind in opts.api.kinds.iter().copied() {
         if opts.control.stop.requested() {
             break;
@@ -158,8 +164,6 @@ async fn walk_files(
         if owed.is_empty() {
             continue;
         }
-        let info = api::kind_info(kind);
-        opts.progress.set_length(Some(owed.len() as u64));
         let owed_ids: Vec<&str> = owed.iter().map(|l| l.key.as_str()).collect();
         let held = opts.db.held_images(&owed_ids).await?;
         let captures = Captures {
@@ -180,24 +184,31 @@ async fn walk_files(
             images_held: AtomicUsize::new(0),
             revision_listings_disagreed: AtomicUsize::new(0),
         };
-        let drained = owed::drain(
-            &Loop {
-                pool: opts.db.pool(),
-                table: FILES,
-                phase: info.latchkey_service,
-                stop: &opts.control.stop,
-                found,
-                sealer: opts.sealer.as_ref(),
-                batch: 1,
-                concurrency: 4,
-                flush: 8,
-                flush_bytes: 0,
-                failures_in_a_row: 10,
-            },
-            owed,
-            &captures,
-        )
-        .await?;
+        kinds.push((captures, owed));
+    }
+    opts.progress.set_length(Some(summary.owed as u64));
+
+    // The kinds drain side by side, so the slowest file of one kind holds
+    // up no file of another.
+    let drains = kinds.iter().map(|(captures, owed)| async move {
+        let l = Loop {
+            pool: opts.db.pool(),
+            table: FILES,
+            phase: api::kind_info(captures.kind).latchkey_service,
+            stop: &opts.control.stop,
+            found,
+            sealer: opts.sealer.as_ref(),
+            batch: 1,
+            concurrency: 4,
+            flush: 8,
+            flush_bytes: 0,
+            failures_in_a_row: 10,
+        };
+        owed::drain(&l, owed.clone(), captures).await
+    });
+    let drained = futures::future::join_all(drains).await;
+    for ((captures, _), drained) in kinds.iter().zip(drained) {
+        let drained = drained?;
         summary.captured += drained.got;
         summary.failed += drained.failed;
         summary.left += drained.left;
@@ -533,38 +544,23 @@ impl Captures<'_> {
                 .and_then(Value::as_bool)
                 != Some(false)
         };
-        let can_read_revisions = can("canReadRevisions");
-        // Drive's first listing after a quiet spell can leave out a
-        // file's oldest revision, and one made right after has it
-        // (docs/dev/plans/google_drive.md), so a capture lists twice and
-        // keeps both.
-        let revisions = if can_read_revisions {
-            let first = paged(|token| api::revisions_url(id, token), "revisions", lk).await?;
-            let second = paged(|token| api::revisions_url(id, token), "revisions", lk).await?;
-            let (revisions, disagreed) = shape::union_of_listings(&first, &second);
-            if !disagreed.is_empty() {
-                self.revision_listings_disagreed
-                    .fetch_add(1, Ordering::Relaxed);
-                tracing::info!(
-                    file = id,
-                    revisions = %disagreed.join(","),
-                    "two listings of this file's revisions disagreed; keeping every revision either named"
-                );
-            }
-            revisions
-        } else {
-            Vec::new()
-        };
-        let comments = paged(|token| api::comments_url(id, token), "comments", lk).await?;
+        let native_url = api::native_url(self.kind, id, can("canComment"));
+        let (revisions, comments, native_bytes) = tokio::try_join!(
+            self.revisions(id, can("canReadRevisions")),
+            paged(|token| api::comments_url(id, token), "comments", lk),
+            api::get_bytes(&native_url, lk),
+        )?;
 
-        let native_bytes =
-            api::get_bytes(&api::native_url(self.kind, id, can("canComment")), lk).await?;
-        let mut native: Value = serde_json::from_slice(&native_bytes)
+        // A Sheet's native JSON can run to 100 MB, and parsing and packing
+        // it on this thread would stall every other fetch the drain polls.
+        let shape::StrippedNative {
+            links,
+            revision_id: native_revision_id,
+            gzipped,
+        } = tokio::task::spawn_blocking(move || shape::strip_native(&native_bytes))
+            .await
+            .context("strip the native JSON")?
             .with_context(|| format!("parse the native JSON of {id}"))?;
-        let links = shape::take_image_links(&mut native);
-        let native_revision_id = shape::native_revision_id(&native);
-        let gzipped = shape::gzip(&serde_json::to_vec(&native)?)?;
-        drop((native, native_bytes));
         let mut parts = vec![Part {
             name: PART_NATIVE.to_string(),
             body: Body::Held(
@@ -575,30 +571,37 @@ impl Captures<'_> {
 
         // Google signs an image link afresh on every read, so the link
         // cannot say whether we hold the image; the revision can.
-        let mut by_url: HashMap<&str, String> = HashMap::new();
+        let mut wanted: Vec<(String, String)> = Vec::new();
+        let mut seen: HashSet<&str> = HashSet::new();
+        let mut held_at: Vec<(String, Option<&str>)> = Vec::new();
         for (pointer, url) in &links {
             let name = image_part(pointer);
             let held = native_revision_id
                 .as_deref()
                 .and_then(|revision| self.held.get(id, revision, &name));
-            if let Some(blake3) = held {
+            if held.is_some() {
                 self.images_held.fetch_add(1, Ordering::Relaxed);
-                parts.push(Part {
-                    name,
-                    body: Body::Held(blake3.to_string()),
-                });
-                continue;
+            } else if seen.insert(url.as_str()) {
+                wanted.push((pointer.clone(), url.clone()));
             }
-            if !by_url.contains_key(url.as_str()) {
-                let (bytes, content_type) = api::get_image(url)
+            held_at.push((name, held));
+        }
+        let fetched: HashMap<String, String> = futures::stream::iter(wanted)
+            .map(|(pointer, url)| async move {
+                let (bytes, content_type) = api::get_image(&url)
                     .await
                     .with_context(|| format!("image at {pointer}"))?;
                 self.images.fetch_add(1, Ordering::Relaxed);
-                by_url.insert(url, self.stash(bytes, content_type).await?);
-            }
+                anyhow::Ok((url, self.stash(bytes, content_type).await?))
+            })
+            .buffer_unordered(IMAGES_AT_ONCE)
+            .try_collect()
+            .await?;
+        for ((name, held), (_, url)) in held_at.into_iter().zip(&links) {
+            let blake3 = held.map_or_else(|| fetched[url.as_str()].clone(), str::to_string);
             parts.push(Part {
                 name,
-                body: Body::Held(by_url[url.as_str()].clone()),
+                body: Body::Held(blake3),
             });
         }
 
@@ -668,6 +671,30 @@ impl Captures<'_> {
             None => Outcome::Got(capture),
             Some(why) => Outcome::Unusable(capture, datalib_problems::Reason::FetchFailed, why),
         })
+    }
+
+    /// Drive's first listing after a quiet spell can leave out a file's
+    /// oldest revision, and one made right after has it
+    /// (docs/dev/plans/google_drive.md), so a capture lists twice, in
+    /// turn, and keeps both.
+    async fn revisions(&self, id: &str, can_read: bool) -> Result<Vec<Value>> {
+        if !can_read {
+            return Ok(Vec::new());
+        }
+        let lk = self.latchkey;
+        let first = paged(|token| api::revisions_url(id, token), "revisions", lk).await?;
+        let second = paged(|token| api::revisions_url(id, token), "revisions", lk).await?;
+        let (revisions, disagreed) = shape::union_of_listings(&first, &second);
+        if !disagreed.is_empty() {
+            self.revision_listings_disagreed
+                .fetch_add(1, Ordering::Relaxed);
+            tracing::info!(
+                file = id,
+                revisions = %disagreed.join(","),
+                "two listings of this file's revisions disagreed; keeping every revision either named"
+            );
+        }
+        Ok(revisions)
     }
 
     /// Put fetched bytes in the CAS now and keep their hash, so a capture

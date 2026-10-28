@@ -31,7 +31,7 @@ A refusal from one service (latchkey has no sign-in for it, the token
 lacks a scope, or the API is off for the OAuth project) ends that kind
 only. The others still run, and the refused kind is a `phase:` problem
 naming the service to sign in to again. Each kind therefore drains on
-its own.
+its own, and the kinds drain side by side.
 
 ## What one run does
 
@@ -42,8 +42,9 @@ its own.
 2. **Owe.** A file is owed when `files_bookkeeping.held_version` is not
    the `version` the listing names (`owed::owed`). Drive's `version`
    goes up on every change to the file.
-3. **Capture.** Up to four files are fetched at once
-   (`Captures::capture`). Each fetch reads:
+3. **Capture.** Up to four files of each kind are fetched at once
+   (`Captures::capture`). Each fetch reads the first three of these
+   together, then the images:
    - the revision list, paged, unless the account may only comment
      (`capabilities.canReadRevisions = false`), when Drive lists none.
      It is listed twice, and every revision either listing named is
@@ -59,10 +60,10 @@ its own.
      Google's default mode, which leaves them out. The stored JSON's
      `suggestionsViewMode` says which it got (`SUGGESTIONS_INLINE` or
      `PREVIEW_WITHOUT_SUGGESTIONS`);
-   - every image link in it, once per distinct URL, stored with the
-     type its response names. An image a stored capture of the same
-     file already holds at the same place, under a native JSON naming
-     the same `revisionId`, is not fetched again: the new capture's
+   - every image link in it, once per distinct URL, six at a time,
+     stored with the type its response names. An image a stored capture
+     of the same file already holds at the same place, under a native
+     JSON naming the same `revisionId`, is not fetched again: the new capture's
      part names the held blob, and the run counts it in `images_held`.
      Google signs each link afresh on every read, so only the revision
      can say the image is unchanged. Drive moves a file's `version`
