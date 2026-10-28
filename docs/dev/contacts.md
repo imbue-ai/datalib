@@ -237,7 +237,11 @@ across every source. `me:self` is not among a conversation's
 participants, since the owner is in every conversation they wrote in,
 so `with:me:self`, like `from:me:self`, finds the messages they wrote. Where a
 source has no stand-in (email, Slack, Google Chat), the owner's own
-messages carry their address or user id like anyone else's.
+messages carry their address or user id like anyone else's, and the
+source marks its record of the owner as the account
+(`NormalizedContact::account`): Slack the user `auth.test` named, email
+the mailbox's address. `from:me` reaches both (§"Searching for a
+person").
 
 ## In a document
 
@@ -652,6 +656,19 @@ document renders again, qmd re-indexes nothing, and search follows the
 link at once, as chips do. A root without the contacts app refuses
 `contact:` by name ([`plans/search_autocomplete.md`](plans/search_autocomplete.md)
 §"Contacts: expanded when the search runs").
+
+**`me` is the person whose library this is.** On a person key, an
+unquoted `me` (`from:me`, `to:me`, `with:me`) matches `me:self`, the
+stand-in the messaging backups write for the owner, and every handle a
+source says is its account's own: the handles of each source contact
+marked `account`, which the search terms file keeps in
+`account_handles`, written whole on each pass beside `names`. Like a
+contact, it is read when the search runs and goes into the cache key
+(`with_people` in the applet). A terms file built before that table
+existed refuses `me` by name until the index's next sync rewrites it. A
+quoted `"me"` is the text. Today only Slack and email mark their
+account; a source that knows its owner adds it by setting `account` on
+that record.
 
 **Keeping the name out of the markdown is a choice, not a rule.**
 Writing a contact's name into each chip link (its text or its title)

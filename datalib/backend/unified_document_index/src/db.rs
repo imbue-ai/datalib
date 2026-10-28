@@ -185,10 +185,10 @@ fn terms_clause<C>(pk: &str, key: &TermsKey, term: &FilterTerm<C>) -> (String, V
                 bound,
             )
         }
-        // A contact is its handles, read from the contacts store before the
-        // query runs; none read is no row (an empty array), and the applet refuses
-        // a contact it could not read before it gets here.
-        TermsValue::Contact(_) => {
+        // A contact, or the owner, is its handles, read before the query
+        // runs; none read is no row (an empty array), and the applet refuses
+        // one it could not read before it gets here.
+        TermsValue::Contact(_) | TermsValue::Me => {
             let handles = term.handles.as_deref().unwrap_or_default();
             (
                 format!(
@@ -351,6 +351,14 @@ mod tests {
             "{sql}"
         );
         assert_eq!(params, [r#"["email:a@b.c","tel:+1555"]"#]);
+
+        let q = parse_query("from:me").with_me_handles(&["me:self".into(), "email:a@b.c".into()]);
+        let (sql, params) = build_where(&q);
+        assert!(
+            sql.ends_with("WHERE value IN (SELECT value FROM json_each(?))))"),
+            "{sql}"
+        );
+        assert_eq!(params, [r#"["me:self","email:a@b.c"]"#]);
 
         let (sql, params) = build_where(&parse_query("-author:riker"));
         assert!(sql.starts_with(" WHERE uuid NOT IN ("), "{sql}");

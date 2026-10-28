@@ -47,6 +47,11 @@ pub struct NormalizedContact {
     pub modified_at: Option<String>,
     /// How much of this source the person wrote, where it is a chat.
     pub seen: Option<Seen>,
+    /// The person whose account this source is: who signed in, whose
+    /// mailbox it is. The search reads each such contact's handles as
+    /// `me` (`docs/dev/contacts.md` §"Searching for a person").
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub account: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,6 +81,7 @@ impl NormalizedContact {
             created_at: None,
             modified_at: None,
             seen: None,
+            account: false,
         }
     }
 

@@ -65,8 +65,8 @@ pub struct FilterTerm<C: 'static> {
     pub negate: bool,
     /// The value was quoted: a key that matches in part matches it whole.
     pub quoted: bool,
-    /// For a `contact:<id>` value, the handles the contact reaches, read
-    /// from the contacts store when the search runs.
+    /// For a `contact:<id>` or `me` value, the handles it reaches, read
+    /// when the search runs.
     pub handles: Option<Vec<String>>,
 }
 
@@ -206,6 +206,21 @@ impl<C: Column> ParsedQuery<C> {
         self
     }
 
+    /// Whether a term names the owner (`from:me`).
+    pub fn names_me(&self) -> bool {
+        self.terms.iter().any(is_me)
+    }
+
+    /// Each `me` term given the owner's handles.
+    pub fn with_me_handles(mut self, mine: &[String]) -> Self {
+        for t in &mut self.terms {
+            if is_me(t) {
+                t.handles = Some(mine.to_vec());
+            }
+        }
+        self
+    }
+
     /// The first positive `before:` or `after:`, as typed.
     pub fn bound(&self, field: Field<C>) -> Option<&str> {
         self.terms
@@ -220,6 +235,15 @@ impl ParsedQuery<GridRowColumn> {
     /// the rows inside documents.
     pub fn documents(&self) -> Option<bool> {
         self.flag(GridRowColumn::IsDocument)
+    }
+}
+
+fn is_me<C>(t: &FilterTerm<C>) -> bool {
+    match t.field {
+        Field::Terms(key) => {
+            terms_keys::value_of(key, &t.value, t.quoted, ANY_VALUE) == TermsValue::Me
+        }
+        _ => false,
     }
 }
 

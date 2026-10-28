@@ -104,16 +104,17 @@ async fn sync_open(grid: &SqlitePool, terms: &SqlitePool, head: &str) -> Result<
         .context("acquire the search terms file")?;
     let synced = sync_terms(grid, &mut conn, head).await?;
     if synced.plan != "current" {
-        write_names(grid, &mut conn).await?;
+        write_people(grid, &mut conn).await?;
     }
     Ok(synced)
 }
 
 /// Each handle with every name it was seen under: the author a grid row
 /// shows beside its handle, and every name a source's record of a person
-/// (`source_contacts`) gives for each handle it ties to them. Written
-/// whole on each pass that moves the terms: it is a few thousand rows.
-async fn write_names(grid: &SqlitePool, conn: &mut SqliteConnection) -> Result<usize> {
+/// (`source_contacts`) gives for each handle it ties to them; and the
+/// handles of each source's own account. Written whole on each pass that
+/// moves the terms: it is a few thousand rows.
+async fn write_people(grid: &SqlitePool, conn: &mut SqliteConnection) -> Result<()> {
     let authors: Vec<(String, String)> = sqlx::query_as(
         "SELECT DISTINCT author_handle, author FROM grid_rows \
          WHERE author_handle IS NOT NULL AND author_handle != '' \
@@ -130,6 +131,7 @@ async fn write_names(grid: &SqlitePool, conn: &mut SqliteConnection) -> Result<u
     .fetch_all(grid)
     .await
     .context("read the source contacts")?;
+    let accounts = account_handles(&contacts);
     let names = names_seen_under(authors, &contacts);
     let mut tx = sqlx::Connection::begin(&mut *conn).await?;
     sqlx::query("DELETE FROM names").execute(&mut *tx).await?;
@@ -146,11 +148,40 @@ async fn write_names(grid: &SqlitePool, conn: &mut SqliteConnection) -> Result<u
         }
         q.execute(&mut *tx).await.context("write the names")?;
     }
+    sqlx::query("DELETE FROM account_handles")
+        .execute(&mut *tx)
+        .await?;
+    for (handle, source_id) in &accounts {
+        sqlx::query("INSERT INTO account_handles (handle, source_id) VALUES (?, ?)")
+            .bind(handle)
+            .bind(source_id)
+            .execute(&mut *tx)
+            .await
+            .context("write the account handles")?;
+    }
     tx.commit().await?;
-    Ok(names.len())
+    Ok(())
 }
 
-/// The `(handle, name)` pairs [`write_names`] keeps: the grid's authors,
+/// The `(handle, source_id)` pairs [`write_people`] keeps as the
+/// account's own: each handle of a source contact marked as the account
+/// (`NormalizedContact::account`), beside the source that says so.
+pub fn account_handles(
+    contacts: &[(String, String)],
+) -> std::collections::BTreeSet<(String, String)> {
+    contacts
+        .iter()
+        // `account` is written only when true; most records skip the parse.
+        .filter(|(_, json)| json.contains("\"account\""))
+        .filter_map(|(handle, json)| {
+            let contact: datalib_contact_schema::NormalizedContact =
+                serde_json::from_str(json).ok()?;
+            contact.account.then(|| (handle.clone(), contact.source_id))
+        })
+        .collect()
+}
+
+/// The `(handle, name)` pairs [`write_people`] keeps: the grid's authors,
 /// then each source contact's names (`NormalizedContact::names`) for each
 /// of its handles. A record this build cannot read gives no names.
 pub fn names_seen_under(
@@ -464,6 +495,35 @@ mod tests {
     use datalib_schema::grid_rows::GridRow;
     use datalib_schema::providers::Provider;
     use datalib_schema::search_terms::SearchTermKind;
+
+    /// The account's handles are those of the source contacts marked as
+    /// the account, every handle each ties to them; no other record's.
+    #[test]
+    fn the_accounts_handles_are_its_marked_contacts() {
+        use datalib_contact_schema::{ContactKind, NormalizedContact};
+        let mut picard = NormalizedContact::new("slack", "U_PICARD", ContactKind::Person);
+        picard.account = true;
+        let picard = serde_json::to_string(&picard).unwrap();
+        let riker = NormalizedContact::new("slack", "U_RIKER", ContactKind::Person);
+        let riker = serde_json::to_string(&riker).unwrap();
+        let accounts = account_handles(&[
+            ("slack:T/U_PICARD".into(), picard.clone()),
+            ("email:picard@e.org".into(), picard),
+            ("slack:T/U_RIKER".into(), riker),
+            ("email:x@e.org".into(), "{not a contact \"account\"".into()),
+        ]);
+        let pairs: Vec<(&str, &str)> = accounts
+            .iter()
+            .map(|(h, s)| (h.as_str(), s.as_str()))
+            .collect();
+        assert_eq!(
+            pairs,
+            [
+                ("email:picard@e.org", "slack"),
+                ("slack:T/U_PICARD", "slack")
+            ]
+        );
+    }
 
     /// A handle is known by every name it was seen under: what its rows
     /// show as their author, and each name a source's record of the person

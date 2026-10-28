@@ -109,18 +109,31 @@ pub enum TermsValue {
     ///
     /// [`FilterTerm::handles`]: crate::query::FilterTerm::handles
     Contact(String),
+    /// The person whose library this is: `me:self`, and every handle a
+    /// source says is its account's own, read when the search runs
+    /// ([`FilterTerm::handles`]).
+    ///
+    /// [`FilterTerm::handles`]: crate::query::FilterTerm::handles
+    Me,
 }
 
 /// The prefix of a value naming a contact: `from:contact:<id>`.
 pub const CONTACT: &str = "contact:";
 
-/// How a term's value matches: `*` anything; `contact:<id>` that contact;
-/// a handle, or a quoted value, whole; anything else in part (`from:Data`
-/// finds "Lt. Cmdr. Data", `from:"Data"` only "Data"). A name on a person
-/// key also finds the handles that went by it.
+/// The value naming the library's owner: `from:me`.
+pub const ME: &str = "me";
+
+/// How a term's value matches: `*` anything; `me` the owner;
+/// `contact:<id>` that contact; a handle, or a quoted value, whole;
+/// anything else in part (`from:Data` finds "Lt. Cmdr. Data",
+/// `from:"Data"` only "Data"). A name on a person key also finds the
+/// handles that went by it.
 pub fn value_of(key: &TermsKey, value: &str, quoted: bool, any: &str) -> TermsValue {
     if value == any && !quoted {
         return TermsValue::Any;
+    }
+    if key.person && !quoted && value.eq_ignore_ascii_case(ME) {
+        return TermsValue::Me;
     }
     if let Some(id) = value.strip_prefix(CONTACT).filter(|_| key.person) {
         return TermsValue::Contact(id.to_string());
@@ -217,6 +230,13 @@ mod tests {
             value_of(from, "contact:c-1", false, "*"),
             TermsValue::Contact("c-1".into())
         );
+        assert_eq!(value_of(from, "me", false, "*"), TermsValue::Me);
+        assert_eq!(value_of(from, "Me", false, "*"), TermsValue::Me);
+        assert_eq!(
+            value_of(from, "me", true, "*"),
+            exact(&["me"], Some("me")),
+            "a quoted `me` is the text"
+        );
         let label = key("label").unwrap();
         assert_eq!(
             value_of(label, "a@b.c", false, "*"),
@@ -227,6 +247,13 @@ mod tests {
             "a label is never a person"
         );
         assert_eq!(value_of(label, "Work", true, "*"), exact(&["Work"], None));
+        assert_eq!(
+            value_of(label, "me", false, "*"),
+            TermsValue::Partial {
+                text: "me".into(),
+                by_name: false
+            }
+        );
         assert_eq!(
             value_of(label, "contact:c-1", false, "*"),
             TermsValue::Partial {

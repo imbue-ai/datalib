@@ -439,7 +439,11 @@ Pick the surface that fits the question:
   (`from:"Will Riker"`) matches whole, case-blind, anything else in
   part; a name also matches every handle a source showed under it, and
   `contact:<id>` (`with:contact:<id>`) every handle linked to that
-  contact in the contacts app, its members' too for a group. `GET …/search/keys` lists every key and `…/search/values?key=…&typed=…&q=…`
+  contact in the contacts app, its members' too for a group. `me`
+  (`from:me after:2026-10-20`) is the person whose library this is:
+  the "Me" a messaging backup shows them as, and every handle a source
+  says is its account's own (the signed-in Slack user, a mailbox's
+  address); a quoted `"me"` is the text. `GET …/search/keys` lists every key and `…/search/values?key=…&typed=…&q=…`
   the values one takes, most rows first. A key the search does not
   have is refused by name, in `refused`, rather than ignored. Free text
   made only of uuids and handles (an email address, `tel:+…`,

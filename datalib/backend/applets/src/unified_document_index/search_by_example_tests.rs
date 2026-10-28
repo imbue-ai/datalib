@@ -137,12 +137,34 @@ fn riker_email() -> NormalizedChat {
         },
     ];
     item.labels = vec!["Inbox".into(), "Away Missions".into()];
-    chat(
+    let mut thread = chat(
         "riker-thread",
         "Away team roster",
         Some("picard@enterprise.org"),
         item,
-    )
+    );
+    // The mailbox is Picard's, so his address is the account's own.
+    let mut picard =
+        NormalizedContact::new("mail", "email:picard@enterprise.org", ContactKind::Person);
+    picard.handles = vec![ContactHandle::email(None, "picard@enterprise.org")];
+    picard.account = true;
+    thread.contacts = vec![picard];
+    thread
+}
+
+/// Picard texts from his own phone, which shows him as "Me" and names
+/// no number for him.
+fn picard_text() -> NormalizedChat {
+    let mut item = message(
+        "captain-text",
+        "Me",
+        email("unused@example.org"),
+        T0 + 3 * HOUR,
+        "Make it so.",
+    );
+    item.author_handle = None;
+    item.author_kind = AuthorKind::Account;
+    chat("text-thread", "Number One", None, item)
 }
 
 /// Worf asks Data, by an @-mention, for a diagnostic; Q, whom the
@@ -241,6 +263,21 @@ async fn render_cast(root: &Path) -> HashSet<(String, SearchTermKind, String)> {
         &[worf_slack()],
         root,
         "slack",
+        &none,
+        &progress,
+        &mut keep,
+    )
+    .unwrap();
+    datalib_etl_chat_common::render_all(
+        &chat_profile(
+            Provider::AppleMessages,
+            "Messages",
+            "Messages Chat",
+            "Message",
+        ),
+        &[picard_text()],
+        root,
+        "messages",
         &none,
         &progress,
         &mut keep,
@@ -463,11 +500,14 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
         // A group's card is about the group: its members are not its
         // terms, so with:troi above does not find it.
         (r#"with:"Senior Staff""#, vec!["senior-staff-card"]),
-        // Any person at all: every row here has one.
+        // Any person at all: every row here has one but the text chat's
+        // own, whose one person is the owner, who is in every
+        // conversation they wrote in and so takes part in none.
         (
             "with:*",
             vec![
                 "bridge-thread",
+                "captain-text",
                 "picard-card",
                 "q-reaction",
                 "riker-email",
@@ -480,10 +520,20 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
             "-with:picard",
             vec![
                 "bridge-thread",
+                "captain-text",
                 "q-reaction",
                 "senior-staff-card",
+                "text-thread",
                 "worf-slack",
             ],
+        ),
+        // `me` is the owner: the "Me" a source shows them under, and each
+        // handle a source says is its account's own (Picard's mailbox).
+        ("from:me", vec!["captain-text"]),
+        ("to:me", vec!["riker-email"]),
+        (
+            "with:me",
+            vec!["captain-text", "picard-card", "riker-email", "riker-thread"],
         ),
         ("label:away", vec!["riker-email"]),
         (r#"label:"Away Missions""#, vec!["riker-email"]),
@@ -561,6 +611,9 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
         "channel:#bridge",
         // Troi's one role on the email is Cc.
         "with:troi kind:Email -cc:troi",
+        // Nobody mentioned Picard, and a label is never a person.
+        "mention:me",
+        "label:me",
     ] {
         assert_eq!(found(&s, q, None).await, Vec::<String>::new(), "{q}");
     }
