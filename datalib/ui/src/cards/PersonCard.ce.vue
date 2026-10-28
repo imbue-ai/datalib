@@ -26,6 +26,7 @@ import {
   nameOf,
   NOBODY,
   people,
+  setMe,
   suggestedName,
   type NormalizedContact,
 } from "./contacts";
@@ -110,6 +111,10 @@ reload, until <em>Save</em> publishes it or <em>Discard</em> drops it. If
 the contact was changed somewhere else meanwhile, Save says so and marks
 what changed rather than overwriting it. A photo is set or removed at
 once.</p>
+<p><em>This is me</em> says your contact is you: <code>from:me</code>,
+<code>to:me</code> and <code>with:me</code> then find every handle linked
+to it, an old address or a second number included. More than one
+contact can be you, such as a duplicate not merged yet.</p>
 <p>Each source's <em>Copy to …</em> copies what that source says (a number, a
 title, an address) into your contact's draft, one value at a time or all at
 once; you pick where sources disagree. A copied value does not follow its
@@ -278,6 +283,21 @@ async function linkAll(s: PersonSection) {
   }
 }
 
+const marking = ref(false);
+async function toggleMe(ev: Event) {
+  const mine = model.value.mine;
+  if (!mine) return;
+  marking.value = true;
+  error.value = null;
+  try {
+    await setMe(mine.key, (ev.target as HTMLInputElement).checked);
+  } catch (e) {
+    error.value = (e as Error).message;
+  } finally {
+    marking.value = false;
+  }
+}
+
 function linkLabel(s: PersonSection): string {
   const n = linkable(s).length;
   return `Link ${n === 1 ? "its other handle" : `its ${n} other handles`} to ${model.value.title}`;
@@ -376,6 +396,20 @@ const headPhoto = computed(() => {
 
     <section v-if="model.mine" class="person-section person-mine" aria-label="Your contact">
       <h2 class="person-source">Your contact</h2>
+      <label
+        v-if="model.mine.kind === 'person'"
+        class="person-me"
+        title="from:me, to:me and with:me find every handle linked to this contact"
+      >
+        <input
+          type="checkbox"
+          data-testid="contact-is-me"
+          :checked="!!model.mine.account"
+          :disabled="marking"
+          @change="toggleMe"
+        />
+        This is me
+      </label>
       <ul class="person-handles">
         <li v-for="h in model.mine.handles" :key="h.value">
           <span
@@ -581,6 +615,12 @@ const headPhoto = computed(() => {
 }
 .person-error {
   color: var(--datalib-error-fg);
+}
+.person-me {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-bottom: 0.35rem;
 }
 .person-section {
   border-top: 1px solid var(--datalib-border-soft);

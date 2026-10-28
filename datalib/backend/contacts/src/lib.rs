@@ -45,6 +45,7 @@ pub mod schema;
 
 use schema::contacts::ContactRow;
 use schema::handles::HandleRow;
+use schema::me::MeRow;
 use schema::photos::PhotoRow;
 use schema::DDL;
 
@@ -290,11 +291,13 @@ pub struct ContactSummary {
 }
 
 /// A contact as the store answers it, from its `contacts` row, its links
-/// (working first) and when its photo was set, if it has one.
+/// (working first), when its photo was set, if it has one, and whether
+/// the person said it is them, which it answers as `account`.
 fn assemble(
     r: &sqlx::sqlite::SqliteRow,
     links: Vec<ContactHandle>,
     photo_set_at: Option<&str>,
+    me: bool,
 ) -> NormalizedContact {
     let contact_id: String = r.get("contact_id");
     let kind: String = r.get("kind");
@@ -309,6 +312,7 @@ fn assemble(
     contact.modified_at = r.get("updated_at_utc");
     contact.photo_url = photo_set_at.map(|at| photo_url(&contact_id, at));
     contact.handles = links;
+    contact.account = me;
     contact
 }
 
@@ -470,12 +474,22 @@ impl Store {
         .iter()
         .map(|h| stored_link(h.get("handle"), h.get("stopped_working_by")))
         .collect();
-        Ok(Some(assemble(&r, links, photo_set_at.as_deref())))
+        let me: Option<i64> = sqlx::query_scalar("SELECT 1 FROM me WHERE contact_id = ?")
+            .bind(contact_id)
+            .fetch_optional(&self.pool)
+            .await
+            .context("read whether a contact is me")?;
+        Ok(Some(assemble(
+            &r,
+            links,
+            photo_set_at.as_deref(),
+            me.is_some(),
+        )))
     }
 
     /// Every contact, by name, as [`Store::contact`] answers each: what the
     /// contacts app's own table lists. Merged-away contacts are left out.
-    /// Three reads, whatever the count.
+    /// Four reads, whatever the count.
     pub async fn list(&self) -> Result<Vec<NormalizedContact>> {
         let rows = sqlx::query(
             "SELECT contact_id, name, kind, note, created_at_utc, updated_at_utc \
@@ -505,12 +519,19 @@ impl Store {
                 .context("list the contacts with a photo")?
                 .into_iter()
                 .collect();
+        let me: std::collections::HashSet<String> = sqlx::query_scalar("SELECT contact_id FROM me")
+            .fetch_all(&self.pool)
+            .await
+            .context("list the contacts that are me")?
+            .into_iter()
+            .collect();
         Ok(rows
             .iter()
             .map(|r| {
                 let id: String = r.get("contact_id");
                 let set_at = photo_set_at.get(&id).map(String::as_str);
-                assemble(r, links.remove(&id).unwrap_or_default(), set_at)
+                let links = links.remove(&id).unwrap_or_default();
+                assemble(r, links, set_at, me.contains(&id))
             })
             .collect())
     }
@@ -742,6 +763,61 @@ impl Store {
         Ok(true)
     }
 
+    /// Say whether `contact_id` is the person whose library this is, or
+    /// stop saying so. A merged-away contact marks its survivor; a group
+    /// is refused, since its handles are other people's too. Returns
+    /// whether anything changed.
+    pub async fn set_me(&self, contact_id: &str, me: bool) -> Result<bool> {
+        let (now, tz) = IsoOffsetTimestamp::now_local().to_utc_and_offset();
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query(
+            "SELECT c.contact_id, c.name, c.kind FROM contacts c \
+               JOIN contacts asked ON c.contact_id = COALESCE(asked.merged_into, asked.contact_id) \
+              WHERE asked.contact_id = ?",
+        )
+        .bind(contact_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .context("read the contact to mark")?
+        .ok_or_else(|| anyhow::anyhow!("no contact {contact_id}"))?;
+        let (id, name): (String, String) = (row.get("contact_id"), row.get("name"));
+        let kind: String = row.get("kind");
+        if me && ContactKind::parse(&kind) == Some(ContactKind::Group) {
+            bail!("{name:?} is a group: only a person can be you");
+        }
+        let done = if me {
+            let row = MeRow {
+                contact_id: id.clone(),
+                marked_at_utc: now,
+                tz_offset: tz,
+            };
+            let before: Option<i64> = sqlx::query_scalar("SELECT 1 FROM me WHERE contact_id = ?")
+                .bind(&id)
+                .fetch_optional(&mut *tx)
+                .await?;
+            if before.is_none() {
+                bulk_upsert_entity_in_tx(&mut tx, &[row])
+                    .await
+                    .context("mark a contact as me")?;
+            }
+            before.is_none()
+        } else {
+            sqlx::query("DELETE FROM me WHERE contact_id = ?")
+                .bind(&id)
+                .execute(&mut *tx)
+                .await
+                .context("unmark a contact as me")?
+                .rows_affected()
+                > 0
+        };
+        tx.commit().await?;
+        if done {
+            let what = if me { "is me" } else { "is not me" };
+            self.seal(&format!("contacts: {name:?} {what}")).await?;
+        }
+        Ok(done)
+    }
+
     /// Delete a contact: its row, its links, fields, photo, draft and
     /// memberships, and every contact merged into it, which were the same
     /// person. Its handles are nobody's afterwards. The commit before it
@@ -762,6 +838,7 @@ impl Store {
                 "DELETE FROM handles WHERE contact_id = ?1",
                 "DELETE FROM fields WHERE contact_id = ?1",
                 "DELETE FROM photos WHERE contact_id = ?1",
+                "DELETE FROM me WHERE contact_id = ?1",
                 "DELETE FROM members WHERE group_id = ?1 OR member_id = ?1",
                 "DELETE FROM contacts WHERE contact_id = ?1",
             ] {
@@ -781,10 +858,10 @@ impl Store {
     }
 
     /// Merge `from` into `into`, which survives: its links, fields and
-    /// memberships move over, its photo and note fill in where the
-    /// survivor has none, and `from` is kept as a row pointing at `into`
-    /// so an id saved anywhere (a `contact:` search) still reaches the
-    /// person. A contact already merged into `from` now points at `into`,
+    /// memberships move over, and so does its mark as me; its photo and
+    /// note fill in where the survivor has none, and `from` is kept as a
+    /// row pointing at `into` so an id saved anywhere (a `contact:`
+    /// search) still reaches the person. A contact already merged into `from` now points at `into`,
     /// so a chain is never more than one step.
     pub async fn merge(&self, from: &str, into: &str) -> Result<()> {
         if from == into {
@@ -820,6 +897,12 @@ impl Store {
                 "move the photo",
             ),
             ("DELETE FROM photos WHERE contact_id = ?1", "drop the photo"),
+            (
+                "INSERT OR IGNORE INTO me (contact_id, marked_at_utc, tz_offset) \
+                 SELECT ?2, marked_at_utc, tz_offset FROM me WHERE contact_id = ?1",
+                "move the mark that it is me",
+            ),
+            ("DELETE FROM me WHERE contact_id = ?1", "drop the mark"),
             (
                 "INSERT OR IGNORE INTO members (group_id, member_id, added_at_utc, tz_offset) \
                  SELECT group_id, ?2, added_at_utc, tz_offset FROM members WHERE member_id = ?1",
@@ -1059,6 +1142,77 @@ mod tests {
             ],
             "two old spellings of one new handle: the first takes it"
         );
+    }
+
+    /// The mark answers as `account` on the contact and in the list,
+    /// follows a merge to the survivor, refuses a group, and goes with a
+    /// deleted contact.
+    #[tokio::test]
+    async fn a_contact_marked_as_me_answers_as_the_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&store_path(dir.path())).await.unwrap();
+        let picard = store
+            .create(
+                "Jean-Luc Picard",
+                ContactKind::Person,
+                &[email("jlp@e.org")],
+            )
+            .await
+            .unwrap();
+        let old = store
+            .create("J. Picard", ContactKind::Person, &[email("old@e.org")])
+            .await
+            .unwrap();
+        let crew = store
+            .create("Bridge crew", ContactKind::Group, &[])
+            .await
+            .unwrap();
+        let is_me = |id: String| {
+            let store = &store;
+            async move { store.contact(&id).await.unwrap().unwrap().account }
+        };
+
+        assert!(!is_me(picard.clone()).await);
+        assert!(store.set_me(&old, true).await.unwrap());
+        assert!(!store.set_me(&old, true).await.unwrap(), "already marked");
+        assert!(is_me(old.clone()).await);
+        let listed: Vec<(String, bool)> = store
+            .list()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|c| (c.names[0].clone(), c.account))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                ("Bridge crew".to_string(), false),
+                ("J. Picard".to_string(), true),
+                ("Jean-Luc Picard".to_string(), false),
+            ]
+        );
+        let refused = store.set_me(&crew, true).await.unwrap_err();
+        assert!(
+            format!("{refused:#}").contains("only a person"),
+            "{refused:#}"
+        );
+
+        store.merge(&old, &picard).await.unwrap();
+        assert!(is_me(picard.clone()).await, "the mark follows the merge");
+        assert!(
+            store.set_me(&old, false).await.unwrap(),
+            "the merged-away id unmarks its survivor"
+        );
+        assert!(!is_me(picard.clone()).await);
+
+        store.set_me(&picard, true).await.unwrap();
+        store.delete(&picard).await.unwrap();
+        let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM me")
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+        assert_eq!(left, 0, "a deleted contact's mark goes with it");
+        store.close().await;
     }
 
     /// A store from before the ladder (schema version 0), holding links

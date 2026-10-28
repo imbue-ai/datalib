@@ -394,6 +394,7 @@ person's work, so the rules that make it irreplaceable:
 | `members` | `(group_id, member_id)` | `added_at_utc` |
 | `photos` | `contact_id` | `content_type`, `bytes`, `set_at_utc` |
 | `fields` | `field_id`, minted by the card | `contact_id`, `kind` (`FieldKind`), `label`, `value`, `handle`, `position`, `copied_from_source` and `_key` |
+| `me` | `contact_id` | `marked_at_utc`: the person said this contact is them |
 
 Each table is a row struct in `contacts/src/schema.rs`, and its DDL
 and upsert are derived from it (`#[derive(PortableTable)]`).
@@ -425,7 +426,7 @@ is a 409 with the store's words; a handle that does not parse is a
 |---|---|
 | `POST /resolve` | `{handles}` → `{resolved: {<handle>: NormalizedContact}}`, each handle's contact; a handle nobody holds is absent |
 | `GET /search?q=` | contacts whose name contains `q`, for the popover's typeahead |
-| `GET /contacts` | every contact, by name, as a typed table (`columns`, `rows`): the person as a chip by their first working address, else number, else any handle, else as the contact itself (`datalib:contact/<id>`); the first address and number; how many handles; the note; group or person; when it changed. What the contacts app's own table shows |
+| `GET /contacts` | every contact, by name, as a typed table (`columns`, `rows`): the person as a chip by their first working address, else number, else any handle, else as the contact itself (`datalib:contact/<id>`); a "me" chip on a contact marked as you; the first address and number; how many handles; the note; group or person; when it changed. What the contacts app's own table shows |
 | `POST /contacts` | create, with `name`, optional `kind`, and the `handles` to link at once |
 | `GET /contact/{id}` | one contact, working handles first; a merged-away id answers as its survivor |
 | `DELETE /contact/{id}` | delete the contact and every contact merged into it: their links, fields, photo, drafts and memberships. Its handles are nobody's afterwards; the commit before holds it all |
@@ -433,6 +434,7 @@ is a 409 with the store's words; a handle that does not parse is a
 | `POST /link`, `POST /unlink` | one handle to or from a contact |
 | `POST /stopped_working` | `{handle, by}`; `by: null` means it works again |
 | `POST /rename` | `{contact_id, name}`, at once, without a draft |
+| `POST /me` | `{contact_id, me}`: say the contact is you, or stop; answers `{changed}`. A merged-away id marks its survivor, and a group is refused |
 | `GET`, `PUT`, `DELETE /photo/{id}` | the photo as bytes; put one (the body, with its `Content-Type`: png, jpeg, gif or webp, at most 4 MB; the route reads up to the gateway's 8 MB so the store's rule is the one that answers), answering its new `photo_url`; drop it |
 | `GET /contact/{id}/edit` | what the card edits, as published: name, note, fields |
 | `POST`, `GET /contact/{id}/draft` | open the contact's draft (cut it if there is none) / read it: `{base, mine, published, published_commit}` |
@@ -549,7 +551,8 @@ Everything is in `datalib/ui/src/cards/`:
   (`personView`; its rules are `person.ts`). Its heading is the
   person's chip; then your contact when the handle is linked to one,
   which the card edits (§"Fields, and editing a contact through a
-  draft"); then each source's record that holds one of the card's handles, a
+  draft"), with *This is me* to mark the contact as you (§"Searching
+  for a person"); then each source's record that holds one of the card's handles, a
   section per source and never merged, the source the chip was seen in
   first, each saying which handle it was found *via*. Every handle on
   it is a chip showing the identifier (`identifierCell`), pale blue
@@ -563,7 +566,8 @@ Everything is in `datalib/ui/src/cards/`:
   through the index, so it needs no sync and shows an edit made
   anywhere as soon as the `curated` frame arrives. Browse on the app's
   Manage row opens it. A contact with no handle is drawn as a contact
-  chip (`contactCell`, through `contactsById`). Its right-click deletes
+  chip (`contactCell`, through `contactsById`), and one marked as you
+  wears a "me" chip. Its right-click deletes
   the rows it aims at, and merges every other selected row into the one
   clicked, so duplicates are merged by selecting them all and
   right-clicking the one to keep. Your contacts are not in the search grid: the
@@ -666,9 +670,14 @@ unquoted `me` (`from:me`, `to:me`, `with:me`) matches `me:self`, the
 stand-in the messaging backups write for the owner, and every handle a
 source says is its account's own: the handles of each source contact
 marked `account`, which the search terms file keeps in
-`account_handles`, written whole on each pass beside `names`. Like a
-contact, it is read when the search runs and goes into the cache key
-(`with_people` in the applet). A terms file built before that table
+`account_handles`, written whole on each pass beside `names`; and every
+handle of each of your contacts marked as you (*This is me* on its
+card, the store's `me` table), as `contact:` reaches them. Both are
+read when the search runs and go into the cache key (`with_me` in the
+applet), so marking a contact, or linking a handle to one that is
+marked, changes the next search with no re-index. More than one
+contact can be marked, for a duplicate not merged yet; a merge carries
+the mark to the survivor. A terms file built before that table
 existed refuses `me` by name until the index's next sync rewrites it. A
 quoted `"me"` is the text.
 

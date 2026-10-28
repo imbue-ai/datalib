@@ -78,6 +78,30 @@ impl ContactsReader {
         Ok(Some(handles))
     }
 
+    /// Every handle the contacts marked as me reach, as [`Self::handles`]
+    /// reads each. None from a store the applet has not opened since the
+    /// mark existed, which has no `me` table yet.
+    pub async fn me_handles(&self) -> Result<BTreeSet<String>> {
+        let pool = self.reader.pool();
+        let has_table: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'me'")
+                .fetch_optional(pool)
+                .await
+                .context("read whether the store marks anyone as me")?;
+        if has_table.is_none() {
+            return Ok(BTreeSet::new());
+        }
+        let marked: Vec<String> = sqlx::query_scalar("SELECT contact_id FROM me")
+            .fetch_all(pool)
+            .await
+            .context("read the contacts that are me")?;
+        let mut out = BTreeSet::new();
+        for id in marked {
+            out.extend(self.handles(&id).await?.unwrap_or_default());
+        }
+        Ok(out)
+    }
+
     /// Contacts whose name contains `q`, as the store's own search.
     pub async fn search(&self, q: &str, limit: u32) -> Result<Vec<ContactSummary>> {
         search_in(self.reader.pool(), q, limit).await
@@ -206,6 +230,51 @@ mod tests {
             .map(|c| c.name)
             .collect();
         assert_eq!(found, ["Riker and Troi", "Will Riker"]);
+        r.close().await;
+    }
+
+    /// `me` reaches every handle of each contact marked as me, a merged
+    /// one's included; a store written before the mark existed has none.
+    #[tokio::test]
+    async fn me_is_every_handle_of_the_contacts_marked_as_me() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Store::open(&store_path(tmp.path())).await.unwrap();
+        let picard = store
+            .create("Picard", ContactKind::Person, &[email("jlp@e.org")])
+            .await
+            .unwrap();
+        let old = store
+            .create("J. Picard", ContactKind::Person, &[email("old@e.org")])
+            .await
+            .unwrap();
+        let other = store
+            .create("Locutus", ContactKind::Person, &[email("borg@e.org")])
+            .await
+            .unwrap();
+        store.set_me(&picard, true).await.unwrap();
+        store.set_me(&other, true).await.unwrap();
+        store.set_me(&other, false).await.unwrap();
+        store.merge(&old, &picard).await.unwrap();
+        store.close().await;
+
+        let r = ContactsReader::open(tmp.path()).await.unwrap().unwrap();
+        let want: BTreeSet<String> = ["email:jlp@e.org", "email:old@e.org"]
+            .map(String::from)
+            .into();
+        assert_eq!(r.me_handles().await.unwrap(), want);
+        r.close().await;
+
+        let store = Store::open(&store_path(tmp.path())).await.unwrap();
+        sqlx::query("DROP TABLE me")
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        doltlite_raw::commit_run(&store.pool, "a store from before the mark")
+            .await
+            .unwrap();
+        store.close().await;
+        let r = ContactsReader::open(tmp.path()).await.unwrap().unwrap();
+        assert!(r.me_handles().await.unwrap().is_empty());
         r.close().await;
     }
 

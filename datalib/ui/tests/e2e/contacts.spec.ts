@@ -173,6 +173,49 @@ test("a contact picked with @ finds everything that reached its handles", async 
   expect(await total(`with:contact:${id}`)).toBe(byHandle);
 });
 
+/// "This is me" on the person card: the contacts table marks the contact,
+/// and `from:me` finds what its address wrote, which no source says is
+/// the owner's. Data's address, which no other test touches; unmarked at
+/// the end, since the root is shared.
+test("a contact marked as me on its card is who from:me finds", async ({ page, request }) => {
+  const data = "email:data@enterprise.starfleet";
+  const made = await request.post("/applet/datalib_contacts/contacts", {
+    data: { name: "Mr. Data", handles: [data] },
+  });
+  expect(made.ok(), await made.text()).toBeTruthy();
+  const { contact_id: id } = (await made.json()) as { contact_id: string };
+  const total = async (q: string) => {
+    const r = await request.get(
+      `/applet/unified_document_index/search?q=${encodeURIComponent(q)}&limit=1`,
+    );
+    expect(r.ok()).toBeTruthy();
+    const body = (await r.json()) as { total: number; refused?: string[] };
+    expect(body.refused ?? []).toEqual([]);
+    return body.total;
+  };
+  const his = await total(`from:${data}`);
+  expect(his, "the fixture has messages from Data").toBeGreaterThan(0);
+  expect(await total(`from:me from:${data}`)).toBe(0);
+
+  await page.goto(`/${encodeURIComponent(`personView(${JSON.stringify(data)}, {})`)}`);
+  const card = page.locator(".person");
+  const isMe = card.getByTestId("contact-is-me");
+  await expect(isMe).not.toBeChecked({ timeout: 15_000 });
+  await isMe.check();
+  await expect.poll(() => total(`from:me from:${data}`)).toBe(his);
+
+  await page.goto("/contactsView()");
+  const table = page.locator(".contacts-card");
+  await table.getByLabel("Filter contacts").fill("Mr. Data");
+  await expect(table.locator(`.slick-row[data-key="${id}"] [col-id="me"]`)).toContainText("me");
+
+  const off = await request.post("/applet/datalib_contacts/me", {
+    data: { contact_id: id, me: false },
+  });
+  expect(off.ok()).toBeTruthy();
+  expect(await total(`from:me from:${data}`)).toBe(0);
+});
+
 /// Two contacts made for one person by mistake: the one with no handle is
 /// still a chip, selecting both and right-clicking the one to keep merges
 /// the other into it, and Delete takes the survivor away.

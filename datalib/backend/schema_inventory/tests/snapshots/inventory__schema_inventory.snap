@@ -1984,6 +1984,10 @@ handles
     linked_at_utc
     tz_offset
     stopped_working_by
+me
+    contact_id
+    marked_at_utc
+    tz_offset
 members
     group_id
     member_id
