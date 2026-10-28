@@ -162,6 +162,31 @@ fn terms_clause<C>(pk: &str, key: &TermsKey, term: &FilterTerm<C>) -> (String, V
                 bound,
             )
         }
+        // `vals_fts` tokenizes the value as the terms were, so the phrase
+        // is the words in order, each whole.
+        TermsValue::Words { text, by_name } => {
+            let phrase = format!("\"{}\"", text.replace('"', "\"\""));
+            let names = if by_name {
+                format!(
+                    " OR t.val_id IN (SELECT val_id FROM {s}.vals WHERE value IN \
+                     (SELECT handle FROM {s}.names WHERE name = ? COLLATE NOCASE))"
+                )
+            } else {
+                String::new()
+            };
+            let bound = if by_name {
+                vec![phrase, text]
+            } else {
+                vec![phrase]
+            };
+            (
+                format!(
+                    " AND (t.val_id IN (SELECT rowid FROM {s}.vals_fts \
+                     WHERE vals_fts MATCH ?){names})"
+                ),
+                bound,
+            )
+        }
         TermsValue::Partial { text, by_name } => {
             let pattern = like_pattern(&text);
             let names = if by_name {
@@ -319,8 +344,9 @@ mod tests {
     }
 
     /// A person key reads the attached search terms: a handle by its one
-    /// value, anything else in part, `*` any term of its kinds; negated, the
-    /// rows without one.
+    /// value, a quoted name by its words and the handles seen under it,
+    /// anything else in part, `*` any term of its kinds; negated, the rows
+    /// without one.
     #[test]
     fn a_terms_key_is_a_clause_over_the_attached_terms() {
         let (sql, params) = build_where(&parse_query("from:Ann@Example.com"));
@@ -336,12 +362,13 @@ mod tests {
         let (sql, params) = build_where(&parse_query(r#"author:"Data""#));
         assert!(
             sql.ends_with(
-                "WHERE value = ? COLLATE NOCASE OR value IN (SELECT handle FROM \
-                 search_terms.names WHERE name = ? COLLATE NOCASE)))"
+                "AND (t.val_id IN (SELECT rowid FROM search_terms.vals_fts WHERE vals_fts \
+                 MATCH ?) OR t.val_id IN (SELECT val_id FROM search_terms.vals WHERE value IN \
+                 (SELECT handle FROM search_terms.names WHERE name = ? COLLATE NOCASE))))"
             ),
             "{sql}"
         );
-        assert_eq!(params, ["Data", "Data"]);
+        assert_eq!(params, ["\"Data\"", "Data"]);
 
         let mut q = parse_query("with:contact:c-1");
         q.terms[0].handles = Some(vec!["email:a@b.c".into(), "tel:+1555".into()]);
