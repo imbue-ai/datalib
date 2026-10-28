@@ -75,9 +75,9 @@ pub struct FilterTerm<C: 'static> {
 /// `qmd_vsearch:"..."` forces `Vsearch`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FreeTextMode {
-    /// qmd hybrid (BM25 + vector + reranker).
+    /// Every way free text is ranked, fused.
     Hybrid,
-    /// qmd vector-only search.
+    /// By meaning alone.
     Vsearch,
 }
 

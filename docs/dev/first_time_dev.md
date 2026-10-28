@@ -244,7 +244,7 @@ at `<root>/unified_document_index/qmd_aggregator/qmd/index.sqlite` (each collect
 scans `<root>` with the `<group>/render_markdown/**/*.md` mask),
 alongside the per-source `<group>/render_markdown/` trees and
 `unified_document_index/grid_index/db.doltlite_db`. This is what the search bar's
-hybrid / vector queries hit (see `datalib/backend/unified_document_index/src/qmd/`).
+Words and Meaning tabs read (see `datalib/backend/unified_document_index/src/qmd/`).
 
 Design notes:
 

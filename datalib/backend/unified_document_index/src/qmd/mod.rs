@@ -1,5 +1,5 @@
-//! Bridge to qmd: the long-lived `qmd mcp` daemon the grid searches
-//! through, the hit-to-row mapping, and the index's own state.
+//! Bridge to qmd: its index read directly (keywords, vectors, state), the
+//! hit-to-row mapping, and the `qmd mcp` daemon, which no search uses.
 
 pub mod daemon;
 pub mod index_state;

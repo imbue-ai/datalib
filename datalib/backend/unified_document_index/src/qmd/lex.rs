@@ -70,9 +70,39 @@ pub fn fts5_query(s: &str) -> Option<Fts5Query> {
     })
 }
 
+/// Several plain words as one phrase: the documents holding them in the
+/// order typed, which the Words tab ranks above those holding them
+/// anywhere. `None` for one word, or for text with its own phrases or
+/// exclusions, which already says what it wants.
+pub fn fts5_phrase_query(s: &str) -> Option<Fts5Query> {
+    let tokens = tokenize(s);
+    if tokens.len() < 2 || tokens.iter().any(|t| t.contains('"') || t.starts_with('-')) {
+        return None;
+    }
+    let phrase = tokens.join(" ");
+    Some(Fts5Query {
+        expr: format!("{{title body}} : (\"{phrase}\")"),
+        first: tokens[0].clone(),
+    })
+}
+
 #[cfg(test)]
 mod fts5_tests {
     use super::*;
+
+    #[test]
+    fn plain_words_make_one_phrase_and_typed_syntax_makes_none() {
+        assert_eq!(
+            fts5_phrase_query("warp core breach"),
+            Some(Fts5Query {
+                expr: r#"{title body} : ("warp core breach")"#.into(),
+                first: "warp".into(),
+            })
+        );
+        assert_eq!(fts5_phrase_query("warp"), None);
+        assert_eq!(fts5_phrase_query("warp \"core breach\""), None);
+        assert_eq!(fts5_phrase_query("warp -core"), None);
+    }
 
     #[test]
     fn words_are_required_phrases_kept_and_exclusions_negated() {

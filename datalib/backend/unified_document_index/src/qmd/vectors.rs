@@ -193,6 +193,26 @@ fn add_chunk(
     Ok(())
 }
 
+/// The chunks' vectors [`nearest_documents`] has read, by content hash, so
+/// a search reads from the file only the contents no earlier one asked
+/// for. A key is `<content hash>_<seq>` and a model's vector for a content
+/// never changes, so a held vector stays right until a vector is removed
+/// or added in its place; either moves the stamp, and everything held is
+/// dropped.
+#[derive(Default)]
+pub struct VectorCache {
+    held: tokio::sync::Mutex<HeldVectors>,
+}
+
+#[derive(Default)]
+struct HeldVectors {
+    /// `vectors_vec_rowids`' count and largest rowid, and the model.
+    stamp: Option<(i64, i64, String)>,
+    /// hash → each live chunk's `(pos, vector)`; empty for a content with
+    /// none.
+    by_hash: HashMap<String, Vec<(i64, Vec<f32>)>>,
+}
+
 /// The `limit` documents nearest `query` by cosine, each at its nearest
 /// chunk: an exact score of every chunk `query.model` wrote for the
 /// active documents in `collections` (all when `None`) whose path is in
@@ -201,6 +221,7 @@ fn add_chunk(
 /// vector in the file, live or not, to answer.
 pub async fn nearest_documents(
     pool: &SqlitePool,
+    cache: &VectorCache,
     query: &QueryVector<'_>,
     collections: Option<&[String]>,
     among: Option<&HashSet<String>>,
@@ -248,69 +269,44 @@ pub async fn nearest_documents(
     hashes.sort_unstable();
     hashes.dedup();
 
-    // Where each chunk of those contents sits in the vector storage.
-    let chunks: Vec<(String, i64, i64, i64)> = sqlx::query_as(
-        "SELECT cv.hash, cv.pos, r.chunk_id, r.chunk_offset \
-           FROM content_vectors cv \
-           JOIN vectors_vec_rowids r ON r.id = cv.hash || '_' || cv.seq \
-          WHERE cv.model = ?1 AND cv.hash IN (SELECT value FROM json_each(?2))",
-    )
-    .bind(query.model)
-    .bind(serde_json::to_string(&hashes)?)
-    .fetch_all(pool)
-    .await?;
-    let mut in_chunk: HashMap<i64, Vec<(usize, usize)>> = HashMap::new();
-    for (i, (_, _, chunk, offset)) in chunks.iter().enumerate() {
-        in_chunk
-            .entry(*chunk)
-            .or_default()
-            .push((usize::try_from(*offset)?, i));
+    let mut held = cache.held.lock().await;
+    let (count, last): (i64, i64) =
+        sqlx::query_as("SELECT COUNT(*), COALESCE(MAX(rowid), 0) FROM vectors_vec_rowids")
+            .fetch_one(pool)
+            .await?;
+    let stamp = Some((count, last, query.model.to_string()));
+    if held.stamp != stamp {
+        *held = HeldVectors {
+            stamp,
+            by_hash: HashMap::new(),
+        };
     }
-    let storage_chunks: Vec<i64> = in_chunk.keys().copied().collect();
-    let validity: HashMap<i64, Vec<u8>> = sqlx::query_as(
-        "SELECT chunk_id, validity FROM vectors_vec_chunks \
-          WHERE chunk_id IN (SELECT value FROM json_each(?))",
-    )
-    .bind(serde_json::to_string(&storage_chunks)?)
-    .fetch_all(pool)
-    .await?
-    .into_iter()
-    .collect();
+    let unread: Vec<&str> = hashes
+        .iter()
+        .copied()
+        .filter(|h| !held.by_hash.contains_key(*h))
+        .collect();
+    if !unread.is_empty() {
+        let read = read_chunk_vectors(pool, query.model, &unread, dim).await?;
+        held.by_hash.extend(read);
+    }
 
     // hash → (score, pos) of its nearest chunk.
     let mut best: HashMap<&str, (f32, i64)> = HashMap::new();
-    for &storage_chunk in &storage_chunks {
-        let blob: Vec<u8> =
-            sqlx::query_scalar("SELECT vectors FROM vectors_vec_vector_chunks00 WHERE rowid = ?")
-                .bind(storage_chunk)
-                .fetch_one(pool)
-                .await
-                .with_context(|| format!("read vector chunk {storage_chunk}"))?;
-        let bitmap = validity
-            .get(&storage_chunk)
-            .with_context(|| format!("vector chunk {storage_chunk} has no validity bitmap"))?;
-        let floats = floats_of(&blob);
-        for &(offset, i) in &in_chunk[&storage_chunk] {
-            if !is_live(bitmap, offset) {
-                continue;
-            }
-            let v = floats
-                .get(offset * dim..(offset + 1) * dim)
-                .with_context(|| {
-                    format!("slot {offset} is past the end of vector chunk {storage_chunk}")
-                })?;
+    for &hash in &hashes {
+        for (pos, v) in &held.by_hash[hash] {
             let (dot, norm2) = dot_and_norm(v, &q);
             if norm2 == 0.0 || !norm2.is_finite() {
                 continue;
             }
             let score = dot / norm2.sqrt();
-            let (hash, pos, _, _) = &chunks[i];
-            let entry = best.entry(hash.as_str()).or_insert((f32::MIN, *pos));
+            let entry = best.entry(hash).or_insert((f32::MIN, *pos));
             if score > entry.0 {
                 *entry = (score, *pos);
             }
         }
     }
+    drop(held);
 
     let mut ranked: Vec<(&str, &str, f32, i64)> = documents
         .iter()
@@ -344,6 +340,71 @@ pub async fn nearest_documents(
             title: String::new(),
         })
         .collect())
+}
+
+/// Each of `hashes`' live chunks `model` wrote, as `(pos, vector)`; a hash
+/// with none maps to an empty list, so it is not read again.
+async fn read_chunk_vectors(
+    pool: &SqlitePool,
+    model: &str,
+    hashes: &[&str],
+    dim: usize,
+) -> Result<HashMap<String, Vec<(i64, Vec<f32>)>>> {
+    // Where each chunk of those contents sits in the vector storage.
+    let chunks: Vec<(String, i64, i64, i64)> = sqlx::query_as(
+        "SELECT cv.hash, cv.pos, r.chunk_id, r.chunk_offset \
+           FROM content_vectors cv \
+           JOIN vectors_vec_rowids r ON r.id = cv.hash || '_' || cv.seq \
+          WHERE cv.model = ?1 AND cv.hash IN (SELECT value FROM json_each(?2))",
+    )
+    .bind(model)
+    .bind(serde_json::to_string(hashes)?)
+    .fetch_all(pool)
+    .await?;
+    let mut in_chunk: HashMap<i64, Vec<(usize, usize)>> = HashMap::new();
+    for (i, (_, _, chunk, offset)) in chunks.iter().enumerate() {
+        in_chunk
+            .entry(*chunk)
+            .or_default()
+            .push((usize::try_from(*offset)?, i));
+    }
+    let storage_chunks: Vec<i64> = in_chunk.keys().copied().collect();
+    let validity: HashMap<i64, Vec<u8>> = sqlx::query_as(
+        "SELECT chunk_id, validity FROM vectors_vec_chunks \
+          WHERE chunk_id IN (SELECT value FROM json_each(?))",
+    )
+    .bind(serde_json::to_string(&storage_chunks)?)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .collect();
+
+    let mut out: HashMap<String, Vec<(i64, Vec<f32>)>> =
+        hashes.iter().map(|h| (h.to_string(), Vec::new())).collect();
+    for &storage_chunk in &storage_chunks {
+        let blob: Vec<u8> =
+            sqlx::query_scalar("SELECT vectors FROM vectors_vec_vector_chunks00 WHERE rowid = ?")
+                .bind(storage_chunk)
+                .fetch_one(pool)
+                .await
+                .with_context(|| format!("read vector chunk {storage_chunk}"))?;
+        let bitmap = validity
+            .get(&storage_chunk)
+            .with_context(|| format!("vector chunk {storage_chunk} has no validity bitmap"))?;
+        for &(offset, i) in &in_chunk[&storage_chunk] {
+            if !is_live(bitmap, offset) {
+                continue;
+            }
+            let v = vector_at(&blob, offset, dim).with_context(|| {
+                format!("slot {offset} is past the end of vector chunk {storage_chunk}")
+            })?;
+            let (hash, pos, _, _) = &chunks[i];
+            if let Some(held) = out.get_mut(hash) {
+                held.push((*pos, v));
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// A query's embedding and the model that made it.
@@ -420,15 +481,6 @@ pub fn dims_of(create_sql: &str) -> Option<usize> {
 pub fn split_hash_seq(id: &str) -> Option<(&str, u32)> {
     let (hash, seq) = id.rsplit_once('_')?;
     Some((hash, seq.parse().ok()?)).filter(|(h, _)| !h.is_empty())
-}
-
-/// A storage chunk's slots as floats, one after another.
-fn floats_of(blob: &[u8]) -> Vec<f32> {
-    blob.as_chunks::<4>()
-        .0
-        .iter()
-        .map(|b| f32::from_le_bytes(*b))
-        .collect()
 }
 
 /// `(v·q, v·v)`, in one pass. On x86_64 the same loop is compiled a

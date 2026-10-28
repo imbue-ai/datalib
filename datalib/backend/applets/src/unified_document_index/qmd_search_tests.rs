@@ -1,7 +1,7 @@
 //! Free-text searches through the applet's handlers, against the TNG
-//! fixture's grid and qmd indexes and a real `qmd mcp`: the rank order and
-//! paging, the structured terms narrowing qmd's hits, and what a search
-//! says when qmd cannot answer.
+//! fixture's grid and qmd indexes and qmd's real embedder: the rank order
+//! and paging, the structured terms narrowing the ranking, and what a
+//! search says when qmd cannot answer.
 
 use std::collections::HashSet;
 use std::sync::OnceLock;
@@ -115,12 +115,10 @@ async fn structured_terms_narrow_the_ranking_and_a_sort_reorders_it() {
     assert_eq!(uuids(&worst_first), best_first);
 }
 
-/// `source_id:` scopes qmd's retrieval, not only the rows the grid keeps:
-/// given room for one hit, a source whose best hit ranks below another
-/// source's still gets its own. Filtering qmd's global answer instead
-/// would leave nothing.
+/// `source_id:` scopes the ranking, not only the rows the grid keeps: a
+/// source whose hits rank below another source's still answers in full.
 #[tokio::test]
-async fn source_id_scopes_qmd_before_its_limit() {
+async fn source_id_scopes_the_ranking_before_its_cut() {
     let root = fixture_root();
     let s = index_over(root.path()).await;
     let ranked = search(&s, QUERY, None, 1_000, None).await;
@@ -132,16 +130,9 @@ async fn source_id_scopes_qmd_before_its_limit() {
         .expect("the fixture's hits span sources")
         .source_id;
 
-    let parsed = parse_query(&format!("{QUERY} source_id:{other}"));
-    let top = qmd_ranking(&s.root, &s.repo, &s.qmd, &parsed, 1)
-        .await
-        .unwrap();
-    assert_eq!(top.len(), 1, "{top:?}");
-    let row = s.repo.rows_by_uuids(&[top[0].0.clone()]).await.unwrap();
-    assert_eq!(
-        &row[0].source_id, other,
-        "qmd answered for {leader}, unscoped"
-    );
+    let scoped = search(&s, &format!("{QUERY} source_id:{other}"), None, 1, None).await;
+    assert_eq!(scoped.rows.len(), 1, "{:?}", scoped.errors);
+    assert_eq!(&scoped.rows[0].source_id, other);
 }
 
 /// A free-text search groups the rows qmd ranked, and nothing else: the
