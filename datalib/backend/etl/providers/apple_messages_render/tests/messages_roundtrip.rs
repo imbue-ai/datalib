@@ -227,6 +227,26 @@ async fn bodies_tapbacks_and_attachments_render() -> Result<()> {
         "U+FFFC is not text: {:?}",
         picture.preview
     );
+    // Every message someone else sent is to the account (`to:me`); the
+    // account's own are not.
+    let mut mine_and_theirs = (0, 0);
+    for row in &items {
+        let to_me = row
+            .supplied_terms()
+            .unwrap()
+            .iter()
+            .any(|t| t.kind.as_str() == "to" && t.value == "me:self");
+        let sent_by_me = row.author.as_deref() == Some("Me");
+        assert_eq!(to_me, !sent_by_me, "{:?}", row.upstream_id);
+        match sent_by_me {
+            true => mine_and_theirs.0 += 1,
+            false => mine_and_theirs.1 += 1,
+        }
+    }
+    assert!(
+        mine_and_theirs.0 > 0 && mine_and_theirs.1 > 0,
+        "{mine_and_theirs:?}"
+    );
     Ok(())
 }
 

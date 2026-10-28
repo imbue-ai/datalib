@@ -235,7 +235,12 @@ Signal, Messages, SMS backup, Google Voice and the AI chats, as
 the source has no handle of its own for them: one chip for the owner
 across every source. `me:self` is not among a conversation's
 participants, since the owner is in every conversation they wrote in,
-so `with:me:self`, like `from:me:self`, finds the messages they wrote. Where a
+so `with:me:self`, like `from:me:self`, finds the messages they wrote. A
+phone's backup (WhatsApp, Signal, Messages, SMS backup, Google Voice's
+texts and voicemails) records no recipient for a message it received,
+so each one someone else sent names `me:self` as its To recipient
+(`Recipient::the_account`, not drawn): `to:me` finds it, and it is no
+participant either. Where a
 source has no stand-in (email, Slack, Google Chat), the owner's own
 messages carry their address or user id like anyone else's, and the
 source marks its record of the owner as the account

@@ -13,7 +13,7 @@ use datalib_etl_chat_common::changed_chats;
 use datalib_etl_chat_common::render::{Buckets, ChatRenderer, RenderProfile};
 use datalib_etl_chat_common::types::{
     own_stamp_ms, AuthorKind, ItemKind, NamedPerson, NormalizedAttachment, NormalizedChat,
-    NormalizedChatItem, NormalizedDoc, UpstreamRef,
+    NormalizedChatItem, NormalizedDoc, Recipient, UpstreamRef,
 };
 use datalib_etl_chat_common::TextFormat;
 use datalib_etl_chat_common::{render_batched, ChatBlobs};
@@ -49,7 +49,8 @@ use datalib_schema::providers::Provider;
 ///     problem row for every field render leaves unread.
 /// v10: a Chat message's "Edited" is a `<time>` stamp.
 /// v11: Chat marks the account's address as its own, so search reads it
-///     as `me`.
+///     as `me`; a Voice text someone else sent, and a voicemail, is to the
+///     account (`to:me`).
 pub const RENDER_VERSION: u32 = 11;
 
 /// Projection for `BlobBundle::load_many` over the Voice CAS edge: the
@@ -605,7 +606,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                 is_aside: false,
                 branch: Vec::new(),
                 unread: false,
-                recipients: Vec::new(),
+                recipients: (!is_me).then(Recipient::the_account).into_iter().collect(),
                 mentions: Vec::new(),
                 problems: problems.clone(),
             }
@@ -642,7 +643,10 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                 is_aside: false,
                 branch: Vec::new(),
                 unread: false,
-                recipients: Vec::new(),
+                recipients: (kind == "voicemail")
+                    .then(Recipient::the_account)
+                    .into_iter()
+                    .collect(),
                 mentions: Vec::new(),
                 problems: problems.clone(),
             }

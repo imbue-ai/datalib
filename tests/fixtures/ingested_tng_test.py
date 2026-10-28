@@ -1206,6 +1206,29 @@ class IngestedTngPipelineTest(unittest.TestCase):
             ],
             "the handles each source marks as its account's own",
         )
+        # A phone's backup records no recipient for a message it received;
+        # every one someone else sent is to the account, so `to:me` finds
+        # it, and none the account sent is.
+        to_me = (
+            "FROM grid_rows, json_each(grid_rows.supplied_terms) t "
+            "WHERE json_extract(t.value, '$[0]') = 'to' "
+            "AND json_extract(t.value, '$[1]') = 'me:self'"
+        )
+        self.assertEqual(
+            self._query(
+                self._index_db, f"SELECT DISTINCT source_id {to_me} ORDER BY 1;"
+            ),
+            ["google-takeout", "signal", "sms-backup-restore", "whatsapp"],
+            "the sources whose incoming messages are to the account",
+        )
+        self.assertEqual(
+            self._scalar(
+                self._index_db,
+                f"SELECT count(*) {to_me} AND author_handle = 'me:self';",
+            ),
+            "0",
+            "a message the account sent is not to it",
+        )
         # One number written two ways — the address book's with dashes (a
         # vCard 4 `tel:` URI, read as its number), the SMS backup's and
         # Google Voice's bare digits — is one handle, so a link made

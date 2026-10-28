@@ -93,7 +93,8 @@ The value can be:
 that can say which person is you. `me` matches:
 
 - the "Me" a source shows you as, where it shows you that way (a
-  phone's message backup, an AI chat);
+  phone's message backup, an AI chat), and, in a phone's backup, the
+  recipient of every message someone else sent you;
 - every handle a source says belongs to the account it mirrors.
 
 A handle counts in every source once one source has said it is yours.
@@ -113,17 +114,20 @@ A quoted `"me"` is the word, not you.
 | LinkedIn | the owner's main address, on their posts and comments | their messages, which LinkedIn files under their profile link |
 | Facebook | the owner's name and their profile's first address | |
 | Claude, ChatGPT | "Me", and the account's address | |
-| WhatsApp, Signal, Messages, SMS backup, Google Voice | "Me" | `to:me`; and your own number, which datalib does not take from these backups |
+| WhatsApp, Signal, Messages, SMS backup, Google Voice | "Me", as the author of what you sent and the recipient of what you received (texts, and Google Voice's voicemails; not call logs) | your number, where another source names you by it: these backups do not say it |
 | Claude Code, Codex | "Me" | |
 | Notion, calendar and the rest | only an address another source already marks as yours | anything under another name |
 
 Two more limits, whatever the source:
 
-- **`to:me` needs you written as a recipient.** Email lists you in its
-  headers. A chat app's incoming message does not, so `to:me` finds
-  mail and nothing else; `with:me` finds the conversations you were in.
+- **`to:me` needs you as a recipient.** Email lists you in its headers,
+  and a phone's backup received every message in it that you did not
+  send. Slack, Beeper, Google Chat, Messenger and LinkedIn messages
+  name no recipient: a message there reached everyone in the
+  conversation, so use `mention:me`, or `with:me` for the conversations
+  you were in.
 - **"Me" takes part in no conversation.** You are in every conversation
-  you wrote in, so it would tell none apart: `is:document with:me`
+  in your own backup, so it would tell none apart: `is:document with:me`
   lists the email and Slack threads you were in, but not a chat where
   you appear only as "Me". Your messages in it are still found.
 

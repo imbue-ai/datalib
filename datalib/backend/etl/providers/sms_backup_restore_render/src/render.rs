@@ -35,7 +35,8 @@ use datalib_schema::providers::Provider;
 /// v6: a `+1` number without ten digits after the 1 has no handle.
 /// v7: a call carries the other side's `tel:` handle, and a text the
 ///     account sent names whom it went to, so both reach `with:`.
-pub const RENDER_VERSION: u32 = 7;
+/// v8: a message someone else sent is to the account (`to:me`).
+pub const RENDER_VERSION: u32 = 8;
 
 /// Projection for `BlobBundle::load_many` over the SMS CAS edge: the
 /// `ref_name` ({message_id}/{partname}) is the bundle key; `content_type`
@@ -406,7 +407,7 @@ fn item(source_id: &str, v: &Value) -> NormalizedChatItem {
                 recipients: if is_me {
                     sent_to(v, display)
                 } else {
-                    Vec::new()
+                    vec![Recipient::the_account()]
                 },
                 mentions: Vec::new(),
                 problems: Vec::new(),
@@ -669,7 +670,7 @@ mod tests {
             recipients_of("sent"),
             [to("Geordi La Forge", Some("tel:+12025550104"))]
         );
-        assert_eq!(recipients_of("received"), []);
+        assert_eq!(recipients_of("received"), [to("Me", Some("me:self"))]);
         assert_eq!(recipients_of("local"), [to("Geordi La Forge", None)]);
         assert_eq!(
             recipients_of("group"),

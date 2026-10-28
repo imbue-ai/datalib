@@ -20,7 +20,7 @@ use datalib_etl_chat_common::changed_chats;
 use datalib_etl_chat_common::render::{RenderProfile, ENTITY_KIND_CONVERSATION};
 use datalib_etl_chat_common::types::{
     AuthorKind, ItemKind, NamedPerson, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
-    NormalizedDoc, NormalizedReaction, UpstreamRef,
+    NormalizedDoc, NormalizedReaction, Recipient, UpstreamRef,
 };
 use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
@@ -38,7 +38,8 @@ use crate::typedstream::attributed_body_text;
 ///     (`datalib_id`'s v8 layout).
 /// v4: the author span carries the author's handle as `data-handle`.
 /// v5: a `+1` number without ten digits after the 1 has no handle.
-pub const RENDER_VERSION: u32 = 5;
+/// v6: a message someone else sent is to the account (`to:me`).
+pub const RENDER_VERSION: u32 = 6;
 
 pub const STAMP_PRECISION: RecordStampPrecision = RecordStampPrecision::Seconds;
 
@@ -357,7 +358,10 @@ async fn load(
             is_aside: false,
             branch: Vec::new(),
             unread,
-            recipients: Vec::new(),
+            recipients: (from_me == 0)
+                .then(Recipient::the_account)
+                .into_iter()
+                .collect(),
             mentions: Vec::new(),
             problems: Vec::new(),
         });
