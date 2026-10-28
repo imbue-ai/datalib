@@ -133,6 +133,26 @@ pub fn native_revision_id(native: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
+/// A native file as the capture keeps it: its image links taken out, its
+/// revision token, and the rest gzipped.
+pub struct StrippedNative {
+    pub links: Vec<(String, String)>,
+    pub revision_id: Option<String>,
+    pub gzipped: Vec<u8>,
+}
+
+pub fn strip_native(bytes: &[u8]) -> anyhow::Result<StrippedNative> {
+    let mut native: Value = serde_json::from_slice(bytes)?;
+    let links = take_image_links(&mut native);
+    let revision_id = native_revision_id(&native);
+    let gzipped = gzip(&serde_json::to_vec(&native)?)?;
+    Ok(StrippedNative {
+        links,
+        revision_id,
+        gzipped,
+    })
+}
+
 /// `bytes` gzipped. The header's mtime is zero and the level fixed, so
 /// the same input always packs to the same blob.
 pub fn gzip(bytes: &[u8]) -> std::io::Result<Vec<u8>> {
