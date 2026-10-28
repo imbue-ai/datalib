@@ -1,9 +1,10 @@
 //! Notion downloader: mirror pages via the official API.
 //!
-//! A run is a listing and five loops. The listing stores page objects
+//! A run is a listing and six loops. The listing stores page objects
 //! held at their `last_edited_time` (`listing`); each loop then fetches
-//! what the store lists and does not yet hold at that stamp — bodies,
-//! attachment bytes, comments, commented blocks, users — through
+//! what the store lists and does not yet hold at that stamp — the
+//! databases and blocks pages sit under, bodies, attachment bytes,
+//! comments, commented blocks, users — through
 //! `datalib_etl_web::owed`, which owns the stop, the failure budget, the
 //! flush and what each outcome means for a record. Nothing is marked
 //! done: holding the content at the listed stamp is done
@@ -37,8 +38,8 @@ use serde_json::json;
 pub use db::{db_path_for, AttachmentRow, RawDb};
 pub use official::{NotionOfficialClient, NotionOfficialError};
 
-use fetchers::{Anchors, Attachments, Bodies, Comments, CommentsForbidden, Users};
-use schema_raw::{ATTACHMENTS, COMMENT_ANCHORS, PAGE_COMMENTS, PAGE_MARKDOWN, USERS};
+use fetchers::{Ancestors, Anchors, Attachments, Bodies, Comments, CommentsForbidden, Users};
+use schema_raw::{ATTACHMENTS, COMMENT_ANCHORS, PAGE_COMMENTS, PAGE_MARKDOWN, TREE, USERS};
 
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
@@ -126,6 +127,8 @@ pub struct FetchSummary {
     pub users_resolved: usize,
     /// Blocks a comment hangs off, fetched for their anchor text.
     pub anchors_resolved: usize,
+    /// Databases and blocks a page sits under, fetched for its path.
+    pub ancestors_resolved: usize,
     pub new_blobs: usize,
     pub failed_blobs: usize,
     pub official_requests: u64,
@@ -196,6 +199,7 @@ pub(crate) struct Counts {
     pub comments: AtomicUsize,
     pub users_resolved: AtomicUsize,
     pub anchors_resolved: AtomicUsize,
+    pub ancestors_resolved: AtomicUsize,
     pub new_blobs: AtomicUsize,
 }
 
@@ -338,6 +342,36 @@ impl Ctx<'_> {
         Ok(())
     }
 
+    /// Every database and block a page sits under, up to the top of
+    /// what this credential can see, round by round: each one fetched
+    /// names its own parent. One that did not fetch is asked once a run.
+    async fn ancestors(&self) -> Result<()> {
+        let mut asked: HashSet<String> = HashSet::new();
+        loop {
+            let listed = self.db.ancestors_listed().await?;
+            let databases: HashSet<String> = listed
+                .iter()
+                .filter(|a| a.is_database)
+                .map(|a| a.id.clone())
+                .collect();
+            let listed: Vec<Listed> = listed
+                .into_iter()
+                .filter(|a| !asked.contains(&a.id))
+                .map(|a| Listed::new(a.id, None::<String>))
+                .collect();
+            let owed = owed::owed(self.db.pool(), TREE, listed).await?;
+            if owed.is_empty() || self.stop().requested() {
+                return Ok(());
+            }
+            asked.extend(owed.iter().map(|l| l.key.clone()));
+            let f = Ancestors {
+                ctx: self,
+                databases,
+            };
+            self.drain(TREE, owed, &f, 50, 0).await?;
+        }
+    }
+
     async fn users(&self) -> Result<()> {
         let listed = self.db.users_listed().await?;
         let owed = owed::owed(self.db.pool(), USERS, listed).await?;
@@ -438,6 +472,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
     s.comments = ctx.counts.comments.load(Ordering::Relaxed);
     s.users_resolved = ctx.counts.users_resolved.load(Ordering::Relaxed);
     s.anchors_resolved = ctx.counts.anchors_resolved.load(Ordering::Relaxed);
+    s.ancestors_resolved = ctx.counts.ancestors_resolved.load(Ordering::Relaxed);
     s.new_blobs = ctx.counts.new_blobs.load(Ordering::Relaxed);
 
     // A page that would not fetch is tolerated, which is right when one
@@ -467,7 +502,9 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
 }
 
 /// The listing, then the loops, in order; a run that ends early keeps
-/// what it has and leaves one `phase:` row.
+/// what it has and leaves one `phase:` row. The tree comes before the
+/// bodies: it is a few requests per database, and the bodies of a
+/// workspace's rows can take days.
 async fn phases(ctx: &Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
     let opts = ctx.opts;
     let mut ended: Option<RunEnded> = None;
@@ -475,12 +512,11 @@ async fn phases(ctx: &Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
     if let Some(single) = opts.page.as_deref() {
         let id = format_uuid(single);
         phase(&mut ended, ctx.roots_walk(&[id], false, s)).await?;
+        phase(&mut ended, ctx.ancestors()).await?;
     } else if opts.subtree_pages.is_empty() {
-        phase(&mut ended, async {
-            ctx.search_walk(s).await?;
-            ctx.bodies(s).await
-        })
-        .await?;
+        phase(&mut ended, ctx.search_walk(s)).await?;
+        phase(&mut ended, ctx.ancestors()).await?;
+        phase(&mut ended, ctx.bodies(s)).await?;
     } else {
         let mut ids: Vec<String> = Vec::new();
         for raw in &opts.subtree_pages {
@@ -491,6 +527,7 @@ async fn phases(ctx: &Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
             }
         }
         phase(&mut ended, ctx.roots_walk(&ids, true, s)).await?;
+        phase(&mut ended, ctx.ancestors()).await?;
     }
     if opts.attachments {
         phase(&mut ended, ctx.attachments(s)).await?;

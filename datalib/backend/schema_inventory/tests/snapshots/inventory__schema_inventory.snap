@@ -1180,6 +1180,22 @@ pages_bookkeeping
     volatile_payload
     tz_offset
     held_version
+tree
+    id
+    kind
+    title
+    parent_type
+    parent_id
+    created_time
+tree_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+    held_version
 users
     id
     name

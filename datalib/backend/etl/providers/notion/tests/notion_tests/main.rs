@@ -10,4 +10,5 @@ mod progress_countdown;
 mod run_problems;
 mod support;
 mod sync_state;
+mod tree;
 mod upgrade;

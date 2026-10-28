@@ -248,3 +248,60 @@ async fn a_thread_whose_last_comment_went_is_the_drivers_to_name() {
         "nothing left to render under it"
     );
 }
+
+fn titled(id: &str, title: &str, edited: &str, parent: serde_json::Value) -> PageUpsert {
+    PageUpsert {
+        id: id.into(),
+        parent_type: parent["type"].as_str().map(String::from),
+        parent_id: parent["page_id"].as_str().map(String::from),
+        last_edited_time: Some(edited.into()),
+        payload: json!({
+            "id": id, "object": "page", "parent": parent,
+            "properties": {"Name": {"type": "title", "title": [{"plain_text": title}]}},
+        })
+        .to_string(),
+        ..Default::default()
+    }
+}
+
+async fn tree_changed(db: &RawDb, from: &str, to: &str) -> Vec<String> {
+    datalib_etl::doltlite_raw::changed_keys(db.pool(), "tree", from, to)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|k| k.key)
+        .collect()
+}
+
+/// The path above a page reads `tree`, never its parents' `pages` rows.
+/// A parent edited without being renamed must change no `tree` row, or
+/// every page under it would render again on each edit to it; renamed,
+/// its own row is the one change.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_parent_moves_its_tree_row_only_when_renamed() {
+    let d = tempdir().unwrap();
+    let f = d.path().join("notion.doltlite_db");
+    let top = json!({"type": "workspace", "workspace": true});
+    let under_a = json!({"type": "page_id", "page_id": A});
+
+    let db = RawDb::open(&f).await.unwrap();
+    db.upsert_pages(&[
+        titled(A, "Bridge", "2026-09-07T00:00:00.000Z", top.clone()),
+        titled(B, "Ready room", "2026-09-07T00:00:00.000Z", under_a),
+    ])
+    .await
+    .unwrap();
+    let seeded = commit(&db, "seed").await;
+    db.upsert_pages(&[titled(A, "Bridge", "2026-09-08T00:00:00.000Z", top.clone())])
+        .await
+        .unwrap();
+    let edited = commit(&db, "A edited").await;
+    db.upsert_pages(&[titled(A, "Main bridge", "2026-09-09T00:00:00.000Z", top)])
+        .await
+        .unwrap();
+    let renamed = commit(&db, "A renamed").await;
+
+    assert!(tree_changed(&db, &seeded, &edited).await.is_empty());
+    assert_eq!(tree_changed(&db, &edited, &renamed).await, [A]);
+    db.close().await;
+}

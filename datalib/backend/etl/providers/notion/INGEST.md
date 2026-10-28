@@ -33,10 +33,11 @@ tells you.
 
 ## What a run does
 
-A run is a **listing** and five **loops**. The listing stores page
+A run is a **listing** and six **loops**. The listing stores page
 objects; each loop then fetches what the store lists and does not yet
-hold, through `datalib_etl_web::owed`: a page's body, an attachment's
-bytes, a page's comments, a commented block, a user. What a table holds
+hold, through `datalib_etl_web::owed`: the databases and blocks a page
+sits under, a page's body, an attachment's bytes, a page's comments, a
+commented block, a user. What a table holds
 is `held_version` in its `_bookkeeping` sidecar, written in the
 transaction that wrote the content; what is owed is the difference,
 asked of the store each run and never stored. Nothing is marked done
@@ -80,7 +81,8 @@ database rows — 87% of the objects in a measured workspace had a
 `database_id` parent — and they come back as ordinary page objects, so
 the walk lists nothing but `object: "page"` and never queries a data
 source for its rows. The data-source objects search also returns are
-containers, and are skipped.
+not listed: each is read for its database's title and parent, which go
+into `tree` (below) at no cost in requests.
 
 Do not confuse the covered stretch with `start_cursor` / `next_cursor`,
 which page *within* one walk and do not survive it.
@@ -98,17 +100,26 @@ whole-workspace search.
 **Loops.** One request per record, in this order, each over the whole
 store:
 
-1. `GET /v1/pages/{id}/markdown` for every page whose body is not held
-   at the page's `last_edited_time`.
-2. The bytes of every attachment edge without a `blake3`, when
+1. `GET /v1/databases/{id}` or `GET /v1/blocks/{id}` for every parent a
+   `tree` row names that has no row of its own, round by round until
+   the top of what the credential can see (see "Where a page sits").
+2. `GET /v1/pages/{id}/markdown` for every page whose body is not held
+   at the page's `last_edited_time`: pages that are not database rows
+   first, then rows, each newest first. A workspace's rows are mostly
+   records another tool wrote — event sign-ups, form responses, synced
+   contacts — and outnumber its pages many times over; fetched newest
+   first together, the rows came first and the pages people write
+   waited days.
+3. The bytes of every attachment edge without a `blake3`, when
    `api.attachments` is on.
-3. `GET /v1/comments?block_id={page_id}` for every page whose comments
-   are not held at its `last_edited_time`, when `api.comments` is on;
+4. `GET /v1/comments?block_id={page_id}` for every page whose comments
+   are not held at its `last_edited_time`, when `api.comments` is on, in
+   the bodies' order;
    one call (paged) returns the page's whole discussion set, including
    threads anchored to blocks inside it.
-4. `GET /v1/blocks/{id}` for every block a stored comment hangs off that
+5. `GET /v1/blocks/{id}` for every block a stored comment hangs off that
    has no `comment_anchors` row.
-5. `GET /v1/users/{id}` for every user a page or a comment names that
+6. `GET /v1/users/{id}` for every user a page or a comment names that
    has no `users` row.
 
 A loop writes a flush of records in one transaction, with what each is
@@ -218,6 +229,7 @@ anything: it was not held, so it is owed, and the next run fetches it.
 | more subtrees than `MAX_HOLE_FOLLOWUPS` | `page_markdown:<id>`, a warning; the body is stored and held | the page changing so it needs fewer |
 | an attachment's bytes | `notion_attachments:<page>#<slot>` | the bytes landing, or the body no longer linking it |
 | a commented block | `comment_anchors:<id>` | the block fetching |
+| a database or block a page sits under | `tree:<id>` | the parent fetching |
 | a user | `users:<id>` | the user fetching |
 | a configured root Notion has not got (404) or will not show (403) | `config:roots:<value>` | the root fetching, or leaving the config |
 | a search page after the first, or `max_pages` cutting the listing short | `listing:search` | a search that reaches what the store covers |
@@ -234,7 +246,9 @@ page, so a page the store holds stays as it was. A body that answers
 404 is held empty at the page's `last_edited_time`, so it is asked for
 again only once the page is edited; comments that answer 404 read as
 none, and the page's stored comments go; a user or a block that answers
-404 keeps an id-only row, held, so it is asked for once. A root that
+404 keeps an id-only row, held, so it is asked for once. So does a
+parent in `tree` that answers 404 or 403, which is what a page shared
+on its own has above it. A root that
 answers 404 is a `config:` row, and a child that does is simply not
 listed.
 
@@ -272,6 +286,7 @@ one as the end of a listing would silently truncate.
 | `comment_anchors` | the text a block-anchored comment hangs off | read once |
 | `users` | display names, resolved one id at a time | read once |
 | `notion_attachments` | CAS edge, `ref_id` = the slot, written with the body | its bytes, once |
+| `tree` | each page, database and block a page sits under: kind, title, parent | read once; a page's with the page, a database's again when search lists it |
 | `coverage` | the stretch of edit times the search has read, scope `search` | — |
 
 `page_markdown` is its own table so `dolt_diff_page_markdown` means
@@ -283,6 +298,39 @@ stamp a column held into the sidecar, holds every page's comments
 unless its row said they failed, drops a page stub whose object never
 came, and drops the search mark, so the first run lists the workspace
 whole once — listing requests only; nothing held is fetched again.
+Rung 2 gives every page held its `tree` row, since a search walk past
+it would not list it again; its databases and blocks are fetched by the
+next run's first loop.
+
+## Where a page sits
+
+A page document opens with the path above it — `Bridge › Crew
+manifest` for a row of the crew database — so a row of a synced
+database says where it came from. Each page on the path links its
+document; a database or a page this source does not render links
+Notion. `tree` holds what that path is walked through: one row per
+page, database and block, with its kind, title and parent. Its own
+table rather than read from `pages`, because a page's `pages` row
+changes on every edit and a render that read its parents' rows would
+render every page under a parent again each time the parent was
+edited. A `tree` row changes only when a title, a parent or a kind
+does, and doltlite diffs by content, so writing one again unchanged
+names nothing.
+
+Where each row comes from:
+
+- **A page the store holds**: written with the page, its title read from
+  its `title`-typed property.
+- **A database**: from the data-source object search returns for it,
+  when the search walk reads one; otherwise `GET /v1/databases/{id}`,
+  once. A database renamed is seen again only when search lists it.
+- **Anything else** — a column or a toggle a page sits in, a page this
+  credential cannot list: `GET /v1/blocks/{id}`, once. A child page or
+  child database block carries its title; any other block, none, and
+  the path walks through it without showing it.
+
+A database row's `parent_id` is its database's id, though Notion names
+its data source too; the path names the database.
 
 ## People and anchors
 
@@ -313,7 +361,8 @@ A page is one bucket and a comment thread another, each keyed by its
 Notion id. When a bucket renders it declares every raw row it read
 (`render_inputs` in the render store): a page its `pages` row, its
 `page_markdown` row, every `notion_attachments` row — bytes fetched or
-not — and its author's `users` row, found or not; a thread its
+not — its author's `users` row, found or not, and every `tree` row on
+its path, found or not; a thread its
 `comments`, its page (for the title) and its `comment_anchors` block.
 The render step diffs those tables from the commit it last completed
 against and hands render the buckets whose rows moved; render's own

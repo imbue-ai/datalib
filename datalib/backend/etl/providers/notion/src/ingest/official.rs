@@ -211,10 +211,17 @@ impl NotionOfficialClient {
             .await
     }
 
-    /// One block. Used only to recover the text a comment is anchored
-    /// to — the block tree itself is not mirrored.
+    /// One block: the text a comment is anchored to, or a parent a page
+    /// sits under. The block tree itself is not mirrored.
     pub async fn get_block(&self, block_id: &str) -> Result<Value, NotionOfficialError> {
         self.request("GET", &format!("/blocks/{block_id}"), None)
+            .await
+    }
+
+    /// One database: its title and its parent, for the path above its
+    /// rows. Its rows come from search, never from here.
+    pub async fn get_database(&self, database_id: &str) -> Result<Value, NotionOfficialError> {
+        self.request("GET", &format!("/databases/{database_id}"), None)
             .await
     }
 

@@ -1,11 +1,12 @@
 //! What each loop fetches and how a flush of it is stored, one
 //! [`Fetcher`] per kind: a page's body, an attachment's bytes, a page's
-//! comments listed whole, a commented block, a user. Each is one request
+//! comments listed whole, a commented block, a parent in the tree, a
+//! user. Each is one request
 //! per record; the loop (`datalib_etl_web::owed`) owns the stop, the
 //! failure budget, the flush and what each outcome means for the
 //! record's sidecar.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
 
 use anyhow::Result;
@@ -16,9 +17,9 @@ use datalib_etl_web::owed::{BatchError, Fetched, Fetcher, Listed, Outcome};
 use serde_json::Value;
 use sqlx::{Sqlite, Transaction};
 
-use super::db::{CommentAnchorUpsert, CommentUpsert, PageMarkdownUpsert};
+use super::db::{CommentAnchorUpsert, CommentUpsert, PageMarkdownUpsert, TreeUpsert};
 use super::official::NotionOfficialError;
-use super::schema_raw::split_edge_key;
+use super::schema_raw::{split_edge_key, TreeKind};
 use super::{markdown, run_over, slots, Ctx};
 
 /// Follow-up fetches for subtrees the markdown response was too large to
@@ -566,6 +567,80 @@ fn block_plain_text(block: &Value) -> Option<String> {
         .filter_map(|x| x.get("plain_text").and_then(Value::as_str))
         .collect();
     (!s.trim().is_empty()).then_some(s)
+}
+
+/// A parent a page sits under: a database, or a block (a column, a
+/// toggle, a page this credential cannot list). One Notion will not
+/// show is kept as an id with nothing known of it, so it is asked once.
+pub(crate) struct Ancestors<'a> {
+    pub(crate) ctx: &'a Ctx<'a>,
+    pub(crate) databases: HashSet<String>,
+}
+
+#[async_trait]
+impl Fetcher<TreeUpsert> for Ancestors<'_> {
+    async fn fetch(&self, batch: Vec<Listed>) -> Result<Vec<Fetched<TreeUpsert>>, BatchError> {
+        let mut out = Vec::with_capacity(batch.len());
+        for listed in batch {
+            let id = listed.key.as_str();
+            let answer = if self.databases.contains(id) {
+                self.ctx
+                    .client
+                    .get_database(id)
+                    .await
+                    .map(|db| TreeUpsert::from_database(id, &db))
+                    .or_else(|e| unseen(e, id, TreeKind::Database))
+            } else {
+                self.ctx
+                    .client
+                    .get_block(id)
+                    .await
+                    .map(|b| TreeUpsert::from_block(id, &b))
+                    .or_else(|e| unseen(e, id, TreeKind::Block))
+            };
+            out.push(Fetched {
+                outcome: outcome(self.ctx, answer.map(Outcome::Got))?,
+                listed,
+            });
+            self.ctx.bar.did(1);
+        }
+        Ok(out)
+    }
+
+    async fn store(
+        &self,
+        tx: &mut Transaction<'static, Sqlite>,
+        batch: &[Fetched<TreeUpsert>],
+    ) -> Result<()> {
+        let rows: Vec<TreeUpsert> = batch
+            .iter()
+            .filter_map(|f| match &f.outcome {
+                Outcome::Got(row) | Outcome::Unusable(row, ..) => Some(row.clone()),
+                _ => None,
+            })
+            .collect();
+        self.ctx.db.store_tree(tx, &rows).await?;
+        self.ctx
+            .counts
+            .ancestors_resolved
+            .fetch_add(rows.len(), Ordering::Relaxed);
+        Ok(())
+    }
+}
+
+/// A parent this credential may not see is the top of what it can: a
+/// page shared on its own has a parent that answers 404 or 403.
+fn unseen(
+    e: NotionOfficialError,
+    id: &str,
+    kind: TreeKind,
+) -> Result<TreeUpsert, NotionOfficialError> {
+    match e {
+        NotionOfficialError::NotFound(_) | NotionOfficialError::Forbidden(_) => {
+            Ok(TreeUpsert::unknown(id, kind))
+        }
+        e => Err(e),
+    }
 }
 
 /// A user as Notion describes one, or nothing for an id it no longer
