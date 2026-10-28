@@ -520,13 +520,15 @@ besides components:
   sources the results come from, with their counts
   (`/search/groups?by=source_ref`), write and read its `source_id:`
   filter, so a filter that was clicked is the one that could have been
-  typed. Free text has three answers, a
+  typed. Free text has four answers, a
   small tab each at the start of that row (`grid/searchTabs.ts`):
+  **Best** (the other three fused, a search with no `tab=`), then
   **Fields** (the search terms file), **Words** (BM25 over qmd's keyword
-  index) and **Meaning** (qmd's vectors), the search's `tab=`. All
-  three are asked at once; the first to come back with rows opens,
-  a tab that comes back while another is open shows a dot until it is
-  looked at, and only a click changes the tab shown. The list, the
+  index) and **Meaning** (qmd's vectors), the search's `tab=`. All four
+  are asked at once and Best opens as the search starts; if it fails,
+  the first tab with rows opens instead. A tab that comes back while
+  another is open shows a dot until it is looked at, and only a click
+  changes the tab shown. The list, the
   table, its groups and the source chips all show the open tab's
   answer. The toolbar's search box (⌘K)
   opens one. Its table is the grid below, over the search: row click

@@ -1,15 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { isNew, startTabs, tabAnswered, tabPicked, tabRecounted } from "./searchTabs";
+import { apiTab, isNew, startTabs, tabAnswered, tabPicked, tabRecounted } from "./searchTabs";
 
 const ready = (total: number) => ({ status: "ready", total, seen: false }) as const;
 
 describe("search tabs", () => {
-  it("open the first tab that comes back with rows", () => {
-    let s = startTabs("warp");
-    s = tabAnswered(s, "words", ready(0));
-    expect(s.open).toBeNull();
-    s = tabAnswered(s, "meaning", ready(7));
-    expect(s.open).toBe("meaning");
+  it("open on the best answer as the search starts", () => {
+    const s = startTabs("warp");
+    expect(s.open).toBe("best");
+    expect(apiTab(s.open!)).toBeNull();
   });
 
   /// The point of the tabs: an answer arriving never moves what is shown.
@@ -17,17 +15,30 @@ describe("search tabs", () => {
     let s = startTabs("warp");
     s = tabAnswered(s, "fields", ready(3));
     s = tabAnswered(s, "words", ready(200));
-    expect(s.open).toBe("fields");
+    expect(s.open).toBe("best");
     expect(isNew(s, "words")).toBe(true);
-    expect(isNew(s, "fields")).toBe(false);
+    s = tabAnswered(s, "best", ready(210));
+    expect(s.open).toBe("best");
+    expect(isNew(s, "best")).toBe(false);
   });
 
-  it("open the first tab when every one comes back empty", () => {
+  it("stay on the best answer when every one comes back empty", () => {
     let s = startTabs("zzz");
-    for (const tab of ["meaning", "words", "fields"] as const) {
+    for (const tab of ["meaning", "words", "fields", "best"] as const) {
       s = tabAnswered(s, tab, ready(0));
     }
-    expect(s.open).toBe("fields");
+    expect(s.open).toBe("best");
+  });
+
+  /// The merged answer needs every ranking; when it cannot be had, the
+  /// reader still sees the ones that came back.
+  it("open the first tab with rows when the best answer fails", () => {
+    let s = startTabs("warp");
+    s = tabAnswered(s, "words", ready(0));
+    s = tabAnswered(s, "best", { status: "failed", why: "no index" });
+    expect(s.open).toBeNull();
+    s = tabAnswered(s, "meaning", ready(7));
+    expect(s.open).toBe("meaning");
   });
 
   it("stop being new once looked at", () => {
