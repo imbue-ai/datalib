@@ -211,14 +211,14 @@ mod tests {
     #[test]
     fn linked_pages_are_read_from_child_and_mention_tags() {
         let body = parse(&json!({"markdown":
-            "Ask <mention-page url=\"https://app.notion.com/p/09f6d8201188490cb91d225cace0d051\"/> first.\n\
+            "Ask <mention-page url=\"https://app.notion.com/p/1701d000000040008000000000000e01\"/> first.\n\
              <page url=\"https://app.notion.com/p/Standup-Notes-37ba550faf9580e7a583fc322a3ed287\">Standup Notes</page>\n\
              <database url=\"https://app.notion.com/p/Tasks-2e2a550faf9580498b0ecee9468fa146\">Tasks</database>\n\
-             Again: <mention-page url=\"https://app.notion.com/p/09f6d8201188490cb91d225cace0d051\"/>\n"}));
+             Again: <mention-page url=\"https://app.notion.com/p/1701d000000040008000000000000e01\"/>\n"}));
         assert_eq!(
             body.linked_pages,
             vec![
-                "09f6d820-1188-490c-b91d-225cace0d051",
+                "1701d000-0000-4000-8000-000000000e01",
                 "37ba550f-af95-80e7-a583-fc322a3ed287"
             ]
         );
