@@ -617,19 +617,18 @@ function rowKeyOf(row: Row | undefined): string | null {
 
 /// The document a row opens, and the section in it, or null for a row
 /// with none.
-/// Where a row opens: the `datalib:doc` name in its link field, read as
-/// a page, a section of it and words to find there; else the page and
-/// section its fields name.
-function documentOf(row: Row): { md: string; anchor: string | null; text: string | null } | null {
+/// Where a row opens: the `datalib:doc` name in its link field, read as a
+/// page and a section of it; else the page and section its fields name.
+function documentOf(row: Row): { md: string; anchor: string | null } | null {
   const spec = rowsSpec?.document;
   if (!spec) return null;
   const linked = spec.link ? row[spec.link] : null;
   const name = typeof linked === "string" ? parseDoc(linked) : null;
-  if (name) return { md: name.page, anchor: name.section, text: name.text };
+  if (name) return { md: name.page, anchor: name.section };
   const md = spec.fields.map((f) => row[f]).find((v) => typeof v === "string" && v !== "");
   if (typeof md !== "string") return null;
   const anchor = row[spec.anchor];
-  return { md, anchor: typeof anchor === "string" && anchor !== "" ? anchor : null, text: null };
+  return { md, anchor: typeof anchor === "string" && anchor !== "" ? anchor : null };
 }
 
 /// The record at a grid row, or null where the row is a group header
@@ -1492,9 +1491,9 @@ onBeforeUnmount(() => unsubscribeLive?.());
 onBeforeUnmount(stopPeople);
 onBeforeUnmount(stopEntities);
 
-function docSource(doc: { md: string; anchor: string | null; text: string | null }): string {
-  const args = [doc.md, doc.anchor, ...(doc.text ? [doc.text] : [])].map((a) => JSON.stringify(a));
-  return `documentView(${args.join(", ")})`;
+function docSource(doc: { md: string; anchor: string | null }): string {
+  const args = [doc.md, doc.anchor].map((a) => JSON.stringify(a)).join(", ");
+  return `documentView(${args})`;
 }
 
 function openRow(row: Row) {

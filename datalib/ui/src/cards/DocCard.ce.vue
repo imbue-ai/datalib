@@ -47,8 +47,6 @@ const props = defineProps<{
   // Section uuid inside the doc to highlight and scroll to. Matches
   // the renderer-emitted `data-section-uuid` attributes.
   sectionUuid: string | null;
-  // Words to find and mark there: a search result's link's text target.
-  text?: string | null;
 }>();
 
 function docSource(md: string, anchor: string | null): string {
@@ -678,7 +676,6 @@ watch(
           :body="chat.body"
           :markdown-uuid="chat.markdown_uuid"
           :selected-section-uuid="jumpTo ?? sectionUuid"
-          :selected-text="jumpTo ? null : (text ?? null)"
           :outgoing-edges="chat.outgoing_edges"
           :hover-anchor-uuid="hoverAnchor"
           @open-edge="onOpenEdge"

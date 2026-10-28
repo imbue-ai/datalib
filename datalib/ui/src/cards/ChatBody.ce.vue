@@ -60,18 +60,13 @@ import { DOC_FRAME_SRCDOC, asElement, forwardAppKeys, mirrorDensity } from "./do
 import {
   decorateLongMessages,
   injectCopyUuidButtons,
-  markWords,
   openEnclosingDetails,
-  scrollIntoReading,
   scrollSectionToTop,
 } from "./chatSections.js";
 
 const props = defineProps<{
   body: string;
   selectedSectionUuid?: string | null;
-  /** Words to find and mark in the selected section, or across the body
-   *  when none is selected: what a search result's link names. */
-  selectedText?: string | null;
   /**
    * Outgoing edges for the doc we're rendering. ChatBody decorates
    * every `[data-section-uuid]` whose value appears as the
@@ -437,13 +432,7 @@ function applySelection(scroll = true) {
   for (const el of body.value.querySelectorAll(".msg.selected")) {
     el.classList.remove("selected");
   }
-  markWords(body.value, "");
-  const text = props.selectedText ?? "";
-  if (!props.selectedSectionUuid) {
-    const first = markWords(body.value, text);
-    if (first) reveal(first, scroll);
-    return;
-  }
+  if (!props.selectedSectionUuid) return;
   // Attribute-selector lookup avoids the CSS-id escaping minefield —
   // tool_use block ids look like `tu-toolu_01ABC…`, which is a valid
   // HTML id but not a valid bare CSS selector (the digit-prefixed
@@ -458,16 +447,7 @@ function applySelection(scroll = true) {
   // A clamped message shows only its first screenful, so a selection
   // deeper than that would be highlighted where nobody can see it.
   target.closest(".msg--clamped")?.classList.remove("msg--clamped");
-  const first = markWords(target, text);
-  if (first) reveal(first, scroll);
-  else if (scroll) scrollSectionToTop(target);
-}
-
-/// Show a marked word: open what folds it away, and scroll to it.
-function reveal(mark: HTMLElement, scroll: boolean) {
-  openEnclosingDetails(mark);
-  mark.closest(".msg--clamped")?.classList.remove("msg--clamped");
-  if (scroll) scrollIntoReading(mark);
+  if (scroll) scrollSectionToTop(target);
 }
 
 /// Fill the frame and decorate.
@@ -588,7 +568,7 @@ watch(timeView, () => {
   if (body.value) decorateDates(body.value);
 });
 watch(
-  () => [props.selectedSectionUuid, props.selectedText],
+  () => props.selectedSectionUuid,
   async () => {
     // nextTick guards against a parent setting the prop in the same
     // tick that it loads a new conversation: the new body must be painted

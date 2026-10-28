@@ -1,8 +1,7 @@
-// `documentView("md-uuid", "section-uuid", "words")` in card source returns
-// a CardRender for the document card (see cards/DocCard.ce.vue), which
-// renders that doc with the given section highlighted and the words marked
-// in it. A different selection is a different card — the grid opens a
-// fresh column.
+// `documentView("md-uuid", "section-uuid")` in card source returns a
+// CardRender for the document card (see cards/DocCard.ce.vue), which
+// renders that doc with the given section highlighted. A different
+// selection is a different card — the grid opens a fresh column.
 import DocCard from "../DocCard.ce.vue";
 import ChatBody from "../ChatBody.ce.vue";
 import ChipMenu from "../ChipMenu.ce.vue";
@@ -13,7 +12,6 @@ import type { CardRender } from "../types";
 export function documentView(
   markdownUuid?: string | null,
   sectionUuid?: string | null,
-  text?: string | null,
 ): CardRender {
   // The card titles itself in DocCard via ctx.setTitle: "Document"
   // while loading (the uuid means nothing to a human), then the
@@ -23,7 +21,6 @@ export function documentView(
     {
       markdownUuid: markdownUuid ?? null,
       sectionUuid: sectionUuid ?? null,
-      text: text ?? null,
     },
     { styleSources: [ChatBody, ChipMenu, HandlePopover] },
   );
