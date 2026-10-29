@@ -509,7 +509,9 @@ params = {params}
         # The materialized root gets the render tree but not the raw
         # store, so there every source is shaped like a pre-seeded one:
         # a group, render steps with no inputs, no ingest step.
-        root_entries.append(group_block + render_block + render_params_line + series_block)
+        root_entries.append(
+            group_block + render_block + render_params_line + series_block
+        )
 
     def config_texts(
         diffs: dict[str, tuple[str, str]], count: int | None = None

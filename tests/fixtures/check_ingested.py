@@ -102,7 +102,9 @@ def main(argv: list[str]) -> int:
         if series_store.exists()
         else {}
     )
-    wrong += [f"{s}: no time series in the index" for s in with_series if not counted.get(s)]
+    wrong += [
+        f"{s}: no time series in the index" for s in with_series if not counted.get(s)
+    ]
     if wrong:
         print(
             f"{store.name} is missing {len(wrong)} of the {len(declared)} sources "

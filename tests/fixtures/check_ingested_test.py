@@ -32,7 +32,9 @@ class CheckIngestedTest(unittest.TestCase):
             tf.extract(SERIES_INDEX, tmp)
         cls.series_store = tmp / SERIES_INDEX
 
-    def check(self, store: Path, series_store: Path | None = None) -> subprocess.CompletedProcess:
+    def check(
+        self, store: Path, series_store: Path | None = None
+    ) -> subprocess.CompletedProcess:
         return subprocess.run(
             [
                 sys.executable,
