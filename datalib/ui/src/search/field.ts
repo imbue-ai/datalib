@@ -21,8 +21,8 @@ import {
   Prec,
   StateEffect,
   StateField,
+  Transaction,
   type Extension,
-  type Transaction,
 } from "@codemirror/state";
 import {
   Decoration,
@@ -87,8 +87,9 @@ const keysField = StateField.define<SearchKeySpec[]>({
   update: (keys, tr) => tr.effects.find((e) => e.is(setKeys))?.value ?? keys,
 });
 
-/// The word being typed is drawn as text until the cursor leaves it, so
-/// `source_id:sla` does not turn into a chip for a source named "sla".
+/// The word being typed is drawn as text until the cursor leaves it or
+/// the field loses focus, so `source_id:sla` does not turn into a chip
+/// for a source named "sla" while it is typed.
 type Span = { from: number; to: number };
 
 function onlySpace(tr: Transaction): boolean {
@@ -100,8 +101,9 @@ function onlySpace(tr: Transaction): boolean {
   return spaces;
 }
 
-/// A chip opened to be edited, by a double-click or its menu.
-const openWord = StateEffect.define<Span>();
+/// A chip opened to be edited, by a double-click or its menu; null
+/// closes the word being typed.
+const openWord = StateEffect.define<Span | null>();
 
 const editingField = StateField.define<Span | null>({
   create: () => null,
@@ -120,6 +122,10 @@ const editingField = StateField.define<Span | null>({
       return w ? { from: w.from, to: w.to } : null;
     }
     if (!span) return null;
+    // A query written in from outside (a chip's "Everything after
+    // this") is nobody's typing: mapped, the open word would cover all
+    // of it, and no word in it would be drawn as its chip.
+    if (tr.docChanged && tr.annotation(Transaction.userEvent) === undefined) return null;
     const mapped = tr.docChanged
       ? { from: tr.changes.mapPos(span.from, -1), to: tr.changes.mapPos(span.to, 1) }
       : span;
@@ -301,7 +307,7 @@ const chips = ViewPlugin.fromClass(
     }
     update(u: ViewUpdate) {
       const asked = u.transactions.some((t: Transaction) =>
-        t.effects.some((e) => e.is(redraw) || e.is(setKeys)),
+        t.effects.some((e) => e.is(redraw) || e.is(setKeys) || e.is(openWord)),
       );
       if (u.docChanged || u.selectionSet || asked) this.decorations = chipDecorations(u.state);
     }
@@ -620,6 +626,7 @@ export function fieldExtensions(hooks: FieldHooks): Extension[] {
     chips,
     menuField,
     EditorView.focusChangeEffect.of((_state, focusing) => (focusing ? null : showMenu.of(null))),
+    EditorView.focusChangeEffect.of((_state, focusing) => (focusing ? null : openWord.of(null))),
     history(),
     oneLine,
     takeWhenReady,
