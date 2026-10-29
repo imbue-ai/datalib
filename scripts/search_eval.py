@@ -23,8 +23,10 @@ ones the app sees.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import platform
 import re
 import secrets
 import statistics
@@ -40,6 +42,7 @@ from typing import Any
 TABS = ["fields", "words", "meaning"]
 MODES = [*TABS, "fused"]
 DEFAULT_APPLET = "bazel-bin/datalib/backend/bin/datalib-applet"
+REPO = Path(__file__).resolve().parent.parent
 
 
 class Applet:
@@ -282,10 +285,31 @@ def run(args: argparse.Namespace) -> None:
         "scope": args.scope,
         "corpus": held,
         "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "provenance": provenance(args),
         "results": results,
     }
     Path(args.out).write_text(json.dumps(record, indent=1, ensure_ascii=False) + "\n")
     print(report(record))
+
+
+def provenance(args: argparse.Namespace) -> dict[str, Any]:
+    """Where a run came from, so a kept run can be read beside another: the
+    checkout the applet is meant to be built from, the machine (times move
+    with it, and with whatever else it was doing), and which eval set."""
+
+    def git(*a: str) -> str:
+        return subprocess.run(
+            ["git", *a], cwd=REPO, capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+    return {
+        "commit": git("rev-parse", "HEAD"),
+        "dirty": git("status", "--porcelain", "--untracked-files=no") != "",
+        "applet": None if args.http else args.applet,
+        "host": platform.node(),
+        "machine": f"{platform.system()} {platform.machine()}, {os.cpu_count()} cpus",
+        "evals_sha256": hashlib.sha256(Path(args.evals).read_bytes()).hexdigest(),
+    }
 
 
 def scoped(q: str, target: dict[str, Any]) -> str:
@@ -406,6 +430,75 @@ def load(path: str) -> dict[str, Any]:
             if old in modes and "fused" not in modes:
                 modes["fused"] = modes.pop(old)
     return record
+
+
+KEPT_ANSWER_KEYS = ("rank", "ms", "error", "landing", "tab", "total")
+
+
+def keep(args: argparse.Namespace) -> None:
+    """A run, cut to what a history needs: its scores and each query's rank
+    and time per answer, without the rows it found. `report` and `compare`
+    read a kept run as they read a whole one; `show` needs the rows."""
+    record = load(args.results)
+    made = record.get("provenance") or {}
+    commit = args.commit or made.get("commit")
+    if not commit:
+        raise SystemExit(
+            f"{args.results} does not say what it was built from; pass --commit"
+        )
+    kept = {
+        "note": args.note,
+        "at": record["at"],
+        "provenance": {**made, "commit": commit},
+        **{k: record.get(k) for k in ("depth", "via", "scope", "corpus")},
+        "results": [
+            {
+                **{k: r.get(k) for k in ("id", "source_id", "q", "asked", "style")},
+                "modes": {
+                    m: {k: a[k] for k in KEPT_ANSWER_KEYS if k in a}
+                    for m, a in r["modes"].items()
+                },
+            }
+            for r in record["results"]
+        ],
+    }
+    day = record["at"][:10]
+    slug = re.sub(r"[^a-z0-9]+", "-", args.note.lower()).strip("-")[:40]
+    out = Path(args.history) / f"{day}-{commit[:9]}-{slug}.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(kept, indent=1, ensure_ascii=False) + "\n")
+    print(out)
+
+
+def history(args: argparse.Namespace) -> None:
+    """Every kept run, oldest first: found in the top 10, mean reciprocal
+    rank and median time per answer. Scores compare only between runs on
+    the same eval set; a change of set is marked where it happens."""
+    print("| at | commit | note | rows | " + " | ".join(MODES) + " |")
+    print("|---" * (len(MODES) + 4) + "|")
+    evals = None
+    for path in sorted(Path(args.history).glob("*.json")):
+        record = load(str(path))
+        made = record.get("provenance") or {}
+        note = record.get("note", "")
+        if evals is not None and made.get("evals_sha256") != evals:
+            note = f"**new eval set** {note}"
+        evals = made.get("evals_sha256")
+        commit = made.get("commit", "?")[:9] + ("+" if made.get("dirty") else "")
+        cells = []
+        for m in MODES:
+            s = scores(record["results"], m)
+            cells.append(
+                ""
+                if s is None
+                else f"{s['@10']:.0%} · {s['mrr']:.2f} · {s['p50_ms']:.0f} ms"
+            )
+        rows = sum((record.get("corpus") or {}).values())
+        print(
+            f"| {record['at'][:16]} | {commit} | {note} | {rows} | "
+            + " | ".join(cells)
+            + " |"
+        )
 
 
 def compare(args: argparse.Namespace) -> None:
@@ -540,6 +633,17 @@ def main() -> None:
     c.add_argument("before")
     c.add_argument("after")
     c.set_defaults(func=compare)
+    k = sub.add_parser("keep", help="add a run to a history of runs, cut to its scores")
+    k.add_argument("results")
+    k.add_argument("--history", required=True, help="the history's directory")
+    k.add_argument("--note", required=True, help="what this run measured, a few words")
+    k.add_argument(
+        "--commit", help="the datalib commit, for a run that did not record one"
+    )
+    k.set_defaults(func=keep)
+    h = sub.add_parser("history", help="the kept runs, oldest first")
+    h.add_argument("history", help="the history's directory")
+    h.set_defaults(func=history)
     s = sub.add_parser("show", help="print what each query found")
     s.add_argument("results")
     s.add_argument("--id", help="target ids, comma-separated")
