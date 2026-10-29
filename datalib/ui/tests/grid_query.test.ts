@@ -4,6 +4,7 @@ import {
   plainWords,
   quoteValue,
   replaceToken,
+  sameSearch,
   searchDelay,
   tokenValue,
   withToken,
@@ -66,6 +67,17 @@ describe("searchDelay", () => {
   it("does not wait for words nothing ranks", () => {
     expect(searchDelay("warp co", "warp cor", false)).toBe(150);
     expect(searchDelay("warp", "", true)).toBe(150);
+  });
+});
+
+describe("sameSearch", () => {
+  /// Typing the space before the next word ran the whole search again,
+  /// every tab of it, for the same words.
+  it("is blind to spaces at either end, and only there", () => {
+    expect(sameSearch("warp core ", "warp core")).toBe(true);
+    expect(sameSearch(" warp core", "warp core")).toBe(true);
+    expect(sameSearch("warp core b", "warp core")).toBe(false);
+    expect(sameSearch('subject:"a  b"', 'subject:"a b"')).toBe(false);
   });
 });
 

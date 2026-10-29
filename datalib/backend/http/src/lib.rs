@@ -482,10 +482,22 @@ async fn proxy_impl(
         _ => id,
     };
     let registry = s.applets.clone();
+    // Dropped with this handler when the browser gives the request up
+    // (a search typed past): the applet sees its connection close and
+    // stops. The blocking thread below would otherwise wait it out.
+    let hangup = applets::Hangup::default();
+    let _hang_up_if_dropped = applets::HangUpOnDrop(hangup.clone());
     let result = tokio::task::spawn_blocking(move || {
         // A read: the applet is there or it is not. A config change
         // reaches the registry through its writers or the watcher.
-        registry.proxy(&id, &method, &target, content_type.as_deref(), &body)
+        registry.proxy(
+            &id,
+            &method,
+            &target,
+            content_type.as_deref(),
+            &body,
+            &hangup,
+        )
     })
     .await;
     match result {
