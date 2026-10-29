@@ -23,6 +23,7 @@ ones the app sees.
 from __future__ import annotations
 
 import argparse
+import datetime
 import hashlib
 import json
 import os
@@ -463,11 +464,15 @@ def keep(args: argparse.Namespace) -> None:
         ],
     }
     day = record["at"][:10]
-    slug = re.sub(r"[^a-z0-9]+", "-", args.note.lower()).strip("-")[:40]
+    slug = re.sub(r"[^a-z0-9]+", "-", args.note.lower()).strip("-")[:60].strip("-")
     out = Path(args.history) / f"{day}-{commit[:9]}-{slug}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(kept, indent=1, ensure_ascii=False) + "\n")
     print(out)
+
+
+def ran_at(at: str) -> datetime.datetime:
+    return datetime.datetime.strptime(at, "%Y-%m-%dT%H:%M:%S%z")
 
 
 def history(args: argparse.Namespace) -> None:
@@ -477,8 +482,8 @@ def history(args: argparse.Namespace) -> None:
     print("| at | commit | note | rows | " + " | ".join(MODES) + " |")
     print("|---" * (len(MODES) + 4) + "|")
     evals = None
-    for path in sorted(Path(args.history).glob("*.json")):
-        record = load(str(path))
+    kept = [load(str(path)) for path in Path(args.history).glob("*.json")]
+    for record in sorted(kept, key=lambda r: ran_at(r["at"])):
         made = record.get("provenance") or {}
         note = record.get("note", "")
         if evals is not None and made.get("evals_sha256") != evals:
