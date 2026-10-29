@@ -267,6 +267,35 @@ export function millisText(at: Instant, zone: Zone): string {
   return `${w.year}-${p2(w.month)}-${p2(w.day)} ${p2(w.hour)}:${p2(w.minute)}:${p2(w.second)}.${ms}`;
 }
 
+/** An instant as a `datetime-local` input holds it, under `zone`:
+ *  `2026-10-29T09:36:35.546`. */
+export function inputOfInstant(at: Instant, zone: Zone): string {
+  return millisText(at, zone).replace(" ", "T");
+}
+
+const WALL_INPUT = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/;
+
+/** What a `datetime-local` input holds, read as a wall clock under
+ *  `zone`: the instant, with that zone's offset then as its own. Null
+ *  for anything else, or a clock no calendar has (`2026-02-30`). */
+export function instantOfInput(value: string, zone: Zone): Instant | null {
+  const m = WALL_INPUT.exec(value.trim());
+  if (!m) return null;
+  const [year, month, day, hour, minute] = [+m[1]!, +m[2]!, +m[3]!, +m[4]!, +m[5]!];
+  const wall: Wall = { year, month, day, hour, minute, second: +(m[6] ?? 0) };
+  const check = new Date(Date.UTC(year, month - 1, day, hour, minute, wall.second));
+  const real =
+    check.getUTCFullYear() === year &&
+    check.getUTCMonth() === month - 1 &&
+    check.getUTCDate() === day &&
+    check.getUTCHours() === hour &&
+    check.getUTCMinutes() === minute &&
+    check.getUTCSeconds() === wall.second;
+  if (!real) return null;
+  const ms = instantOfWall(wall, zone, null) + +(m[7] ?? "0").padEnd(3, "0");
+  return { ms, offsetMin: offsetAt({ ms, offsetMin: null }, zone) };
+}
+
 /** How far `ms` is from T0, signed, to the millisecond: `+1.250`,
  *  `-4:05.000`, `+2:00:00.000`, `-3d 04:05:06.789`, `+343y 075d
  *  00:23:24.454`. The largest unit that is not zero leads, unpadded; the
