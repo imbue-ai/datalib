@@ -49,7 +49,7 @@ log lines of those levels; <b>size on disk</b> is its tree. Every chart
 shares the run's time axis: hover one and the others read the same
 instant. While the run goes, the charts follow it.</p>
 <p><b>Log</b> at the bottom opens the group's lines from that run, as the
-log card shows them; select a line to open it beside this card. Edit,
+log card shows them; double-click a line to open it beside this card. Edit,
 rename, remove and compare are on the Sources card's row menu.</p>
 `);
 
@@ -599,7 +599,7 @@ onUnmounted(() => {
             :run-id="run.run_id"
             :step="null"
             :initial-query="`group:${group}`"
-            @line-selected="(seq: number) => ctx.host.openCards(logLineSource(seq))"
+            @line-opened="(seq: number) => ctx.host.openCards(logLineSource(seq))"
             @open-card="(source: string) => ctx.host.openCards(source)"
           />
         </div>
