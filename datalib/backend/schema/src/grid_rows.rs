@@ -41,7 +41,7 @@ use serde::{Deserialize, Serialize};
     // The search bar's keys are on the columns they filter.
     search(
         order = "touched_at_utc desc, is_document desc, uuid desc",
-        range = "created_at_utc",
+        range = "touched_at_utc",
         qmd
     )
 )]
@@ -67,16 +67,14 @@ pub struct GridRow {
     /// first message of a thread, a PR's `created_at`, a page's
     /// `created_time`. Synthesized for blocks and messages with no stamp
     /// of their own by bumping microseconds off the parent, so
-    /// within-conversation order stays stable. The global sort key, and
-    /// what `before:`/`after:` filter on.
+    /// within-conversation order stays stable.
     ///
     /// Null means the source has no timestamp — some entities aren't
-    /// event-shaped, and we never fabricate one. Null rows are excluded by
-    /// `before:`/`after:`.
+    /// event-shaped, and we never fabricate one.
     ///
     /// `created_at_utc` and `created_offset` are derived from this at index
-    /// time and live in the DB but not on this struct. The grid sorts and
-    /// filters on `created_at_utc`, where one zone and a fixed width make
+    /// time and live in the DB but not on this struct. The Created column
+    /// sorts on `created_at_utc`, where one zone and a fixed width make
     /// lexical order match chronological order; `created_offset` recovers
     /// the local wall-clock for display. This column itself stays as the
     /// source wrote it — it is the record's stamp — which is why it is
@@ -96,12 +94,13 @@ pub struct GridRow {
     #[derived(name = "modified_at_utc", sql = "VARCHAR(40)")]
     #[derived(name = "modified_offset", sql = "VARCHAR(8)")]
     pub modified_at: Option<String>,
-    /// When the record last changed at its source, as the source wrote
-    /// it: what the grid's newest-first order sorts on. `modified_at`,
-    /// else `created_at`, unless the provider knows better — a calendar
-    /// event's `created_at` is when it happens, often years ahead, so its
-    /// `touched_at` is its edit stamp. Same form and derived twins as
-    /// `created_at`.
+    /// When the record was last active, as the source wrote it: what the
+    /// grid's newest-first order sorts on and what `before:`/`after:`
+    /// filter on. `modified_at`, else `created_at`, unless the provider
+    /// knows better — a calendar event is active when it happens, so its
+    /// `touched_at` is its start, ahead of now for a meeting to come. Same
+    /// form and derived twins as `created_at`; a null row is excluded by
+    /// `before:`/`after:`.
     #[col(sql = "VARCHAR(40)", search, sort_by = "touched_at_utc")]
     #[derived(name = "touched_at_utc", sql = "VARCHAR(40)")]
     #[derived(name = "touched_offset", sql = "VARCHAR(8)")]

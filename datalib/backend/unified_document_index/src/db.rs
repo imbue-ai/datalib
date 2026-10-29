@@ -287,14 +287,14 @@ mod tests {
         }
     }
 
-    /// `before:` and `after:` compare the UTC twin of `created_at`, the
+    /// `before:` and `after:` compare the UTC twin of `touched_at`, the
     /// column the grid sorts by, with the bound normalized to UTC.
     #[test]
     fn before_and_after_bound_the_utc_stamp() {
         let (sql, params) = build_where(&parse_query(
             "after:2025-01-01T00:00:00Z before:2025-02-01T00:00:00Z",
         ));
-        assert_eq!(sql, " WHERE created_at_utc < ? AND created_at_utc > ?");
+        assert_eq!(sql, " WHERE touched_at_utc < ? AND touched_at_utc > ?");
         assert_eq!(params.len(), 2);
         assert!(params[0].starts_with("2025-02-01"), "{params:?}");
         assert!(params[1].starts_with("2025-01-01"), "{params:?}");

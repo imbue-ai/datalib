@@ -45,7 +45,7 @@ until then free text finds nothing there and the answer says why.
 | `-key:value` | rows whose `key` is not `value` |
 | `key:"two words"` | a value with a space in it |
 | `key:*` / `-key:*` | rows with any value there / with none |
-| `before:2026-10-01`, `after:2026-10-01T09:00` | rows dated before or after; a time with no zone is your machine's |
+| `before:2026-10-01`, `after:2026-10-01T09:00` | rows last active before or after then — a thread's last message, a page's last edit, an event's start; a time with no zone is your machine's |
 | `is:document` / `-is:document` | one row per document (a thread, a conversation, a page) / only the rows inside documents |
 
 The keys for what a row is and where it lives are `source_id:` (a

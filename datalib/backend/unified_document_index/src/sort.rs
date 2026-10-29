@@ -3,8 +3,8 @@
 //! none, rows come in the table's own order (`SearchTable::ORDER`), or in
 //! qmd's rank for free text.
 
-use datalib_query::table::{Column, SearchTable};
-use datalib_schema::grid_rows::GridRowColumn;
+use datalib_query::table::{Column, Direction, SearchTable};
+use datalib_schema::grid_rows::{GridRow, GridRowColumn};
 
 /// What one step of an order sorts by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -81,6 +81,30 @@ pub fn order_by<C: Column>(order: &[Sort<C>]) -> Option<String> {
     ))
 }
 
+/// The stamp a grid order runs newest first by, as its `_utc` column:
+/// the order whose head is what is still to come, so the grid can open
+/// below it at now. `None` for any other order, oldest first included,
+/// whose now lies at the far end of the rows. No order is the grid's
+/// own, newest touched first; qmd's rank is no stamp.
+pub fn newest_first_by_date(order: &[Sort]) -> Option<GridRowColumn> {
+    let column = match order.first() {
+        None => {
+            let (column, direction) = GridRow::ORDER[0];
+            (direction == Direction::Desc).then_some(column)?
+        }
+        Some(Sort {
+            by: SortBy::Column(c),
+            descending: true,
+        }) => GridRow::sorts_by(*c),
+        Some(_) => return None,
+    };
+    matches!(
+        column,
+        GridRowColumn::CreatedAtUtc | GridRowColumn::ModifiedAtUtc | GridRowColumn::TouchedAtUtc
+    )
+    .then_some(column)
+}
+
 /// The table's own order, which its indexes are built for.
 pub fn default_order<T: SearchTable>() -> String {
     T::ORDER
@@ -134,6 +158,21 @@ mod tests {
     fn an_order_that_does_not_read_says_why() {
         assert!(grid_order("kind,score:desc").unwrap_err().contains("score"));
         assert!(grid_order("kind,nope").unwrap_err().contains("\"nope\""));
+    }
+
+    /// Only a newest-first order by a date has what is to come at its
+    /// head, so only that one opens at now.
+    #[test]
+    fn only_a_newest_first_date_order_names_its_stamp() {
+        assert_eq!(newest_first_by_date(&[]), Some(GridRowColumn::TouchedAtUtc));
+        let lead = |s: &str| newest_first_by_date(&grid_order(s).unwrap());
+        assert_eq!(
+            lead("modified_at:desc,author"),
+            Some(GridRowColumn::ModifiedAtUtc)
+        );
+        assert_eq!(lead("created_at"), None);
+        assert_eq!(lead("author:desc,created_at:desc"), None);
+        assert_eq!(lead("score:desc"), None);
     }
 
     #[test]
