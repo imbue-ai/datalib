@@ -3,13 +3,13 @@ import { GRID, selectRowByUuid, docBody } from "./grid-helpers";
 
 // A rendered document asks for a chart with `<div data-time-series="…">`
 // and the document view draws it from the time-series applet
-// (docs/dev/time_series.md §"Charts in documents"). The TNG fixture
-// renders the yolink page but builds no time-series store, so this spec
-// answers the applet's two calls itself, with made-up values for the
-// ids the page names: what it checks is that the chart is mounted in
-// the document's frame and draws, that its legend turns lines off and
-// on, and that a zoom asks the applet for the narrower range — not what
-// the store holds.
+// (docs/dev/time_series.md §"Charts in documents"). This spec answers
+// the applet's two calls itself, with made-up values for the ids the
+// TNG yolink page names, so it can leave one chart's time series out of
+// the index and know the range a zoom asks for: what it checks is that
+// the chart is mounted in the document's frame and draws, that its
+// legend turns lines off and on, and that a zoom asks the applet for the
+// narrower range — not what the fixture's store holds.
 
 type Row = { uuid: string; kind: string; source_id: string; markdown_uuid: string | null };
 

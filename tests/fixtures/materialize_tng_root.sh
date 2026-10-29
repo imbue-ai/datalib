@@ -16,10 +16,15 @@
 #                                      three, or the embedding model alone
 #                                      — see the two targets in BUILD.bazel).
 #   unified_document_index/qmd_aggregator/qmd/models -> ../../qmd_models
+#   <stanza>/render_time_series/...    each time-series source's store, and
+#   unified_time_series_index/time_series_index/...  the index over them
+#                                      (from time_series.tar).
 #   config.toml                        { data_root }, every source as a
-#                                      render-only group, the two fan-ins,
-#                                      and the `unified_document_index` applet the
-#                                      grid is served by.
+#                                      render-only group, the fan-ins, and
+#                                      the two applets: `unified_document_index`,
+#                                      which serves the grid, and
+#                                      `unified_time_series_index`, which
+#                                      serves the Time series card.
 #
 # Usage: materialize_tng_root.sh <out-root>
 #
@@ -50,12 +55,14 @@ DB_FILE="$(rlocation _main/tests/fixtures/ingested/backend_index.doltlite_db)"
 TERMS_FILE="$(rlocation _main/tests/fixtures/ingested/backend_search_terms.sqlite)"
 QMD_TAR="$(rlocation _main/tests/fixtures/ingested/qmd.tar)"
 QMD_INDEX_TAR="$(rlocation _main/tests/fixtures/ingested/qmd-index.tar)"
+TIME_SERIES_TAR="$(rlocation _main/tests/fixtures/ingested/time_series.tar)"
 CONFIG_BODY="$(rlocation _main/tests/fixtures/ingested/config_body.toml)"
 [[ -x "$APPLET_BIN" ]]    || { echo "ERROR: datalib_applet not found at $APPLET_BIN" >&2; exit 1; }
 [[ -f "$DB_FILE" ]]       || { echo "ERROR: backend_index.doltlite_db not found at $DB_FILE" >&2; exit 1; }
 [[ -f "$TERMS_FILE" ]]    || { echo "ERROR: backend_search_terms.sqlite not found at $TERMS_FILE" >&2; exit 1; }
 [[ -f "$QMD_TAR" ]]       || { echo "ERROR: qmd.tar not found at $QMD_TAR" >&2; exit 1; }
 [[ -f "$QMD_INDEX_TAR" ]] || { echo "ERROR: qmd-index.tar not found at $QMD_INDEX_TAR" >&2; exit 1; }
+[[ -f "$TIME_SERIES_TAR" ]] || { echo "ERROR: time_series.tar not found at $TIME_SERIES_TAR" >&2; exit 1; }
 [[ -f "$CONFIG_BODY" ]]   || { echo "ERROR: config_body.toml not found at $CONFIG_BODY" >&2; exit 1; }
 
 command -v python3 >/dev/null || { echo "ERROR: python3 not on PATH" >&2; exit 1; }
@@ -68,6 +75,9 @@ mkdir -p "$OUT_ROOT"
 # `<root>/unified_document_index/qmd_aggregator/qmd/`, where the backend's scanners look.
 tar -xf "$QMD_TAR"       -C "$OUT_ROOT" --strip-components=1
 tar -xf "$QMD_INDEX_TAR" -C "$OUT_ROOT" --strip-components=1
+# The index names each source's store by its path under the root and the
+# commit it read, so the stores land where they were written.
+tar -xf "$TIME_SERIES_TAR" -C "$OUT_ROOT" --strip-components=1
 
 # Drop the doltlite file into the `grid_index` step's tree; the backend
 # opens it directly via `<data_root>/unified_document_index/grid_index/db.doltlite_db`.
@@ -107,6 +117,11 @@ chmod u+w "$OUT_ROOT/unified_document_index/grid_index/search_terms.sqlite"
 group = "unified_document_index"
 id = "unified_document_index"
 command = "'$APPLET_BIN' unified_document_index"
+
+[[applets]]
+group = "unified_time_series_index"
+id = "unified_time_series_index"
+command = "'$APPLET_BIN' unified_time_series_index"
 EOF
 } > "$OUT_ROOT/config.toml"
 
