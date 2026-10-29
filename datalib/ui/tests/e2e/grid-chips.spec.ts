@@ -7,7 +7,7 @@ import {
   inDocFrame,
   searchAndSettle,
   searchMenuItem,
-  selectRowByUuid,
+  openRowByUuid,
   stubClipboard,
 } from "./grid-helpers";
 
@@ -124,7 +124,7 @@ test("a storage report's group and step are chips that open their cards", async 
   await page.goto(EVERY_ROW);
   await searchAndSettle(page, "source_id:datalib");
   await gridSettled(page);
-  await selectRowByUuid(page, report!.uuid);
+  await openRowByUuid(page, report!.uuid);
 
   const group = (await inDocFrame(page, 'a.chip[data-entity="datalib:group/slack"]')).first();
   await expect(group).toHaveAttribute("title", /\(slack\)\n.+/, { timeout: 10_000 });

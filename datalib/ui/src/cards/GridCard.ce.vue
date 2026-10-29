@@ -14,10 +14,10 @@
 // switching keeps each one's selection and scroll. The source chips rewrite the query
 // (cards/search.ts) rather than keep state beside it.
 //
-// Selecting a row opens the row's document as a new card via
-// ctx.host.openCards — structural changes never go through the bus.
-// Double-clicking a row opens that document as a standalone
-// single-column page in a new tab.
+// A click only selects a row (grid/rowIdioms.ts). A double-click, Enter
+// or the row menu opens the row's document as a new card via
+// ctx.host.openCards — structural changes never go through the bus —
+// and the menu can open it in a new tab instead.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import { timeView } from "@/config/timeView";
 // The grid is the framework-agnostic bundle, not the Vue wrapper: a
@@ -113,6 +113,7 @@ import {
 import { menuSlots, onAfterMenuShowFit, perOpening } from "@/grid/menu";
 import { newlyPicked } from "@/grid/selection";
 import { copySelectedRowsOnKey } from "@/grid/copyRows";
+import { openRowsOn, selectAllRowsOnKey } from "@/grid/rowIdioms";
 import { markdownsToAsk, widen } from "@/grid/qmdAsk";
 import { searchCoverage, type SearchCoverage } from "@/grid/searchCoverage";
 import { keepActiveOnRecord } from "@/grid/activeCell";
@@ -229,8 +230,10 @@ pick one to see only its results. A chip and the tick box write a filter into th
 box, the same one you could type.</p>
 <p>The two tabs above the results are two ways to see them. <b>List and preview</b> shows
 each result with your words marked, and the picked one to read beside it. <b>Table</b>
-shows the same results with every column, sorting and grouping. A new search opens on
-the one you picked last.</p>
+shows the same results with every column, sorting and grouping: a click selects a row
+(⌘ and Shift add to the selection, ⌘A takes them all), and a double-click, Enter or
+<b>Open document</b> on its right-click menu opens it. A new search opens on the one you
+picked last.</p>
 `
     : null,
 );
@@ -486,8 +489,7 @@ const boxEl = ref<HTMLDivElement | null>(null);
 
 // Suppress state writes (and column-open side effects) while we're
 // applying state from the URL ourselves — otherwise the grid's
-// column/selection events would clobber the state we just read, and
-// restoring a selection would open a duplicate document column.
+// column/selection events would clobber the state we just read.
 let restoring = false;
 
 /// What the URL keeps of the grid's shape: every column in order with
@@ -1508,9 +1510,13 @@ function docSource(doc: { md: string; anchor: string | null }): string {
   return `documentView(${args})`;
 }
 
-function openRow(row: Row) {
-  // Double-click → open this row's doc as a standalone single-column
-  // page in a new tab, with the row's section highlighted.
+function openBeside(row: Row) {
+  const doc = documentOf(row);
+  if (doc) props.ctx.host.openCards(docSource(doc));
+}
+
+/// A standalone single-column page, with the row's section highlighted.
+function openInNewTab(row: Row) {
   const doc = documentOf(row);
   if (!doc) return;
   const href = encodeColumns([{ code: docSource(doc), state: "" }]);
@@ -1872,6 +1878,17 @@ const chipSlots = menuSlots(24, (args) => {
 });
 
 const menuItems: (MenuCommandItem | "divider")[] = [
+  entry(
+    "open",
+    (m) => (m.anchor && documentOf(m.anchor) ? "Open document" : null),
+    (m) => openBeside(m.anchor!),
+  ),
+  entry(
+    "open-tab",
+    (m) => (m.anchor && documentOf(m.anchor) ? "Open in a new tab" : null),
+    (m) => openInNewTab(m.anchor!),
+  ),
+  dividerAfter((m) => m.anchor !== null && documentOf(m.anchor) !== null),
   ...chipSlots.commandItems,
   dividerAfter((m) => m.chip !== null),
   entry(
@@ -1986,8 +2003,8 @@ function gridOptions(): GridOption {
     rowHeight: 52,
     enableTextSelectionOnCells: true,
     // Rows select on click, several with a modifier — so right-click
-    // "Copy UUID(s)" can target several rows, like Lightroom. The
-    // document column follows whichever row was most recently selected.
+    // "Copy UUID(s)" can target several rows, like Lightroom. Selecting
+    // opens nothing (grid/rowIdioms.ts).
     enableCellNavigation: true,
     enableSelection: true,
     multiSelect: true,
@@ -2116,7 +2133,11 @@ function createGrid() {
   const grid = bundle.slickGrid;
   grid.onSelectedRowsChanged.subscribe(onSelectedRowsChanged);
   grid.onClick.subscribe(onClick);
+  // Ahead of `openRowsOn`: a chip or a document link takes its own
+  // double-click.
   grid.onDblClick.subscribe(onDblClick);
+  openRowsOn(grid, rowData, openBeside);
+  selectAllRowsOnKey(grid, rowData);
   grid.onViewportChanged.subscribe(onViewportChanged);
   copySelectedRowsOnKey(grid, rowData, copyCell);
   bundle.instances?.eventPubSubService?.subscribe<GridStateChange>(
@@ -2223,28 +2244,20 @@ function onSelectedRowsChanged(_e: SlickEventData, args: OnSelectedRowsChangedEv
   if (!data) return;
   selectedRow.value = data;
   sel.value = rowKey(data);
-  // `restoring` is true when this is a URL-driven re-selection — the
-  // document column is already in the URL, so don't open a duplicate
-  // (and don't rewrite the state we just read).
-  if (restoring) return;
   saveState();
-  const doc = documentOf(data);
-  if (doc) props.ctx.host.openCards(docSource(doc));
 }
 
-/// A Document cell's link: the row is picked, as a click on the row
-/// picks it, and its document opens beside the grid — again, too, when
-/// the row was already the picked one and its document has been closed.
+/// A Document cell's link: a link opens on one click, so the row is
+/// picked, as a click on the row picks it, and its document opens
+/// beside the grid — again, too, when it has been closed.
 function pickAndOpen(data: Row) {
   if (!vueGrid) return;
   const selected = selectedRows();
   const at = vueGrid.dataView.getRowById(rowKey(data));
   if (at != null && !(selected.length === 1 && rowKey(selected[0]) === rowKey(data))) {
     vueGrid.slickGrid.setSelectedRows([at]);
-    return;
   }
-  const doc = documentOf(data);
-  if (doc) props.ctx.host.openCards(docSource(doc));
+  openBeside(data);
 }
 
 /// The chip under a pointer event in a cell, if any.
@@ -2270,22 +2283,22 @@ function onClick(e: SlickEventData, args: OnClickEventArgs) {
 
 function onDblClick(e: SlickEventData, args: OnDblClickEventArgs) {
   // A document link's first click already opened the document beside
-  // the grid; the second is not a request for a window of it as well.
+  // the grid; the second is not a request to open it again.
   const target = e.getNativeEvent<MouseEvent>()?.target as Element | null | undefined;
-  if (target?.closest?.("a.tg-link")) return;
+  if (target?.closest?.("a.tg-link")) {
+    e.stopImmediatePropagation();
+    return;
+  }
   // Double-click on a chip opens its card: a person's, led by this
   // row's source, or a group's dashboard or a step's log
   // (docs/dev/chips.md § Clicks).
   const el = chipAt(e);
   const chip = el ? chipOf(el) : null;
-  if (chip) {
-    const seenIn = rowData(args.row)?.source_id || null;
-    const source = chipCardSource(chip.ref, seenIn);
-    if (source) props.ctx.host.openCards(source);
-    return;
-  }
-  const data = rowData(args.row);
-  if (data) openRow(data);
+  if (!chip) return;
+  e.stopImmediatePropagation();
+  const seenIn = rowData(args.row)?.source_id || null;
+  const source = chipCardSource(chip.ref, seenIn);
+  if (source) props.ctx.host.openCards(source);
 }
 
 // Any change a USER can make to columns gets reflected in the persisted

@@ -1,9 +1,9 @@
 import { test, expect } from "@playwright/test";
-import { EVERY_ROW, selectRowByUuid, inDocFrame } from "./grid-helpers";
+import { EVERY_ROW, openRowByUuid, inDocFrame } from "./grid-helpers";
 
-// Clicking a grid row opens that row's document as a column on the
+// Opening a grid row opens that row's document as a column on the
 // right with the corresponding section highlighted and scrolled into
-// the visible part of the pane. Clicking two grid rows that map to
+// the visible part of the pane. Opening two grid rows that map to
 // *different* messages of the same conversation must highlight
 // different sections — and each must actually be on screen, not just
 // carry the `.selected` class somewhere below the scrollport.
@@ -32,7 +32,7 @@ async function assertSelectedVisible(page: import("@playwright/test").Page, uuid
   expect(inView, `section ${uuid} must be inside the pane viewport`).toBe(true);
 }
 
-test("row clicks highlight and scroll to the right message", async ({ page, request }) => {
+test("opening rows highlights and scrolls to the right message", async ({ page, request }) => {
   // Use the backend search API to find a conversation with two message
   // rows far apart, so the scroll between them is unambiguous.
   const resp = await request.get("/applet/unified_document_index/search?q=&limit=2000");
@@ -75,10 +75,10 @@ test("row clicks highlight and scroll to the right message", async ({ page, requ
   await page.goto(EVERY_ROW);
   await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
 
-  await selectRowByUuid(page, chosen!.uuidA);
+  await openRowByUuid(page, chosen!.uuidA);
   await assertSelectedVisible(page, chosen!.uuidA);
 
-  await selectRowByUuid(page, chosen!.uuidB);
+  await openRowByUuid(page, chosen!.uuidB);
   await assertSelectedVisible(page, chosen!.uuidB);
   // The previous selection is gone — exactly one selected section.
   // The previous selection is gone from every document frame.
