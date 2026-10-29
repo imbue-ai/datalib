@@ -1,8 +1,9 @@
 <script setup lang="ts">
 // The clock in the status bar: the time now in the zone every date in
-// the app is drawn in, and the menu that changes it — the zone, how a
-// day is written, a 12- or 24-hour clock. A click or a right-click opens
-// it; the setting is `config/timeView.ts`.
+// the app is drawn in, or the T0 every date chip is drawn from, and the
+// menu that changes it — the zone, how a day is written, a 12- or 24-hour
+// clock, clearing T0. A click or a right-click opens it; the setting is
+// `config/timeView.ts`.
 import { computed, nextTick, onMounted, onUnmounted, ref, useTemplateRef } from "vue";
 import {
   LOCAL,
@@ -10,10 +11,12 @@ import {
   WRITTEN,
   allZones,
   formatAt,
+  millisText,
   offsetAt,
   offsetText,
   recentZones,
   searchZones,
+  setT0,
   setZone,
   timeView,
   zoneName,
@@ -44,12 +47,22 @@ function zoneWord(zone: Zone): string {
   return zone.name === "UTC" ? "UTC" : zonePlace(zone.name);
 }
 
-const face = computed(() =>
-  timeView.value.zone.kind === "written"
-    ? "As written"
-    : `${clock.value} ${zoneWord(timeView.value.zone)}`,
-);
+/** T0 to the millisecond in the view's zone, where one is set. */
+const t0Text = computed(() => {
+  const t0 = timeView.value.t0;
+  return t0 ? millisText(t0, timeView.value.zone) : null;
+});
+
+const face = computed(() => {
+  const z = timeView.value.zone;
+  if (t0Text.value)
+    return `T0=${t0Text.value} ${z.kind === "written" ? "as written" : zoneWord(z)}`;
+  return z.kind === "written" ? "As written" : `${clock.value} ${zoneWord(z)}`;
+});
 const faceTitle = computed(() => {
+  if (t0Text.value) {
+    return "Every date is shown as its distance from T0, earlier ones negative. Click to clear T0 or change the zone.";
+  }
   const z = timeView.value.zone;
   const where =
     z.kind === "local"
@@ -94,6 +107,11 @@ function pickZone(zone: Zone) {
   close();
 }
 
+function clearT0() {
+  setT0(null);
+  close();
+}
+
 function pick<K extends "days" | "hours">(key: K, value: TimeView[K]) {
   timeView.value = { ...timeView.value, [key]: value };
   close();
@@ -124,7 +142,7 @@ const sampleOf = (days: DayStyle, hours: HourCycle) =>
     <button
       ref="button"
       class="time-view-clock"
-      :class="{ 'is-elsewhere': timeView.zone.kind !== 'local' }"
+      :class="{ 'is-elsewhere': timeView.zone.kind !== 'local' || !!timeView.t0 }"
       :title="faceTitle"
       aria-haspopup="menu"
       :aria-expanded="open"
@@ -138,6 +156,16 @@ const sampleOf = (days: DayStyle, hours: HourCycle) =>
       </svg>
       <span>{{ face }}</span>
     </button>
+    <button
+      v-if="timeView.t0"
+      class="time-view-clear"
+      title="Clear T0: show every date as a date again"
+      aria-label="Clear T0"
+      data-testid="time-view-clear-t0"
+      @click="clearT0"
+    >
+      ×
+    </button>
     <Teleport v-if="open" to="body">
       <div class="tv-overlay" @click="close" @contextmenu.prevent="close">
         <div
@@ -148,6 +176,20 @@ const sampleOf = (days: DayStyle, hours: HourCycle) =>
           @click.stop
           @contextmenu.stop
         >
+          <div class="tv-heading">T0</div>
+          <div
+            v-if="t0Text"
+            class="tv-item"
+            role="menuitem"
+            data-testid="time-view-menu-clear-t0"
+            @click="clearT0"
+          >
+            <span class="tv-check" />
+            <span class="tv-label">Clear T0</span>
+            <span class="tv-detail">{{ t0Text }}</span>
+          </div>
+          <div v-else class="tv-none">Right-click a date: Use as T0</div>
+          <div class="tv-divider" />
           <div class="tv-heading">Time zone</div>
           <div
             class="tv-item"
@@ -270,8 +312,22 @@ const sampleOf = (days: DayStyle, hours: HourCycle) =>
   padding: 0 8px;
   white-space: nowrap;
 }
-.time-view-clock:hover {
+.time-view-clock:hover,
+.time-view-clear:hover {
   background: var(--datalib-hover);
+}
+/* Beside the clock while T0 is set: one click back to dates. */
+.time-view-clear {
+  flex: 0 0 auto;
+  height: calc(var(--datalib-control-h) - 6px);
+  margin-left: 2px;
+  padding: 0 6px;
+  border: 1px solid var(--datalib-accent);
+  border-radius: var(--datalib-radius);
+  background: var(--datalib-surface);
+  color: var(--datalib-accent);
+  cursor: pointer;
+  font: inherit;
 }
 /* Not this computer's zone: every date on screen reads differently from
    the clock on the wall, so the button says so. */

@@ -13,7 +13,9 @@ export type DayStyle = "locale" | "iso";
 
 export type HourCycle = "h23" | "h12";
 
-export type TimeView = { zone: Zone; days: DayStyle; hours: HourCycle };
+/** `t0`, when set, is the instant every date chip is drawn relative to
+ *  (`sinceT0`) instead of as a date. */
+export type TimeView = { zone: Zone; days: DayStyle; hours: HourCycle; t0?: Instant | null };
 
 export const LOCAL: Zone = { kind: "local" };
 export const WRITTEN: Zone = { kind: "written" };
@@ -253,6 +255,41 @@ export function dayBounds(at: Instant, zone: Zone): [string, string] {
   return [stamp(start), stamp(end)];
 }
 
+/** An instant to the millisecond under `zone`, `2026-09-22 14:07:47.190`,
+ *  for a log: a step's own lines are stamped in UTC and the runner's in
+ *  local time, and showing the digits as written would interleave two
+ *  clocks. Digits and separators only, on a 24-hour clock whatever the
+ *  view's, so it sorts as text and a column can clip it from the left
+ *  down to the time of day. */
+export function millisText(at: Instant, zone: Zone): string {
+  const w = wallClock(at, zone);
+  const ms = String(((at.ms % 1000) + 1000) % 1000).padStart(3, "0");
+  return `${w.year}-${p2(w.month)}-${p2(w.day)} ${p2(w.hour)}:${p2(w.minute)}:${p2(w.second)}.${ms}`;
+}
+
+/** How far `ms` is from T0, signed, to the millisecond: `+1.250`,
+ *  `-4:05.000`, `+2:00:00.000`, `-3d 04:05:06.789`. The largest unit
+ *  that is not zero leads, unpadded; the rest are padded, so a column of
+ *  them lines up when right-justified. */
+export function sinceT0(ms: number, t0: number): string {
+  const d = Math.round(ms - t0);
+  const a = Math.abs(d);
+  const frac = `.${String(a % 1000).padStart(3, "0")}`;
+  const sec = Math.floor(a / 1000) % 60;
+  const min = Math.floor(a / 60_000) % 60;
+  const hour = Math.floor(a / 3_600_000) % 24;
+  const day = Math.floor(a / 86_400_000);
+  const whole = day
+    ? `${day}d ${p2(hour)}:${p2(min)}:${p2(sec)}`
+    : hour
+      ? `${hour}:${p2(min)}:${p2(sec)}`
+      : min
+        ? `${min}:${p2(sec)}`
+        : `${sec}`;
+  const sign = d < 0 ? "-" : d > 0 ? "+" : "";
+  return `${sign}${whole}${frac}`;
+}
+
 /** Whether a view reads every instant as this machine does, which is how
  *  the search reads a bare day. */
 export function readsAsMachine(view: TimeView): boolean {
@@ -314,10 +351,14 @@ export function readStoredView(raw: string | null): TimeView {
         : z?.kind === "named" && typeof z.name === "string" && isValidZone(z.name)
           ? { kind: "named", name: z.name }
           : LOCAL;
+    const t0 = v.t0;
     return {
       zone,
       days: v.days === "iso" ? "iso" : "locale",
       hours: v.hours === "h12" ? "h12" : "h23",
+      ...(t0 && Number.isFinite(t0.ms) && (t0.offsetMin === null || Number.isFinite(t0.offsetMin))
+        ? { t0: { ms: t0.ms, offsetMin: t0.offsetMin } }
+        : {}),
     };
   } catch {
     return DEFAULT_VIEW;
@@ -363,6 +404,11 @@ export const recentZones = ref<string[]>(readStoredRecent(load(RECENT_KEY)));
 export function setZone(zone: Zone) {
   timeView.value = { ...timeView.value, zone };
   recentZones.value = withRecent(recentZones.value, zone);
+}
+
+/** Draw every date chip relative to `at`, or as a date again for null. */
+export function setT0(at: Instant | null) {
+  timeView.value = { ...timeView.value, t0: at };
 }
 
 watch(timeView, (v) => save(VIEW_KEY, v), { deep: true });

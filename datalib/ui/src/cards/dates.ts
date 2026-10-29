@@ -1,8 +1,10 @@
 // A date drawn as a chip (docs/dev/chips.md § "A date"): every
 // `<time datetime>` a render writes, shown in the zone and format the
-// status bar's clock sets (`config/timeView.ts`) by the one formatter here, with the precise instant on hover, a copy that
-// keeps the instant, and a menu that searches around it. The rules are
-// pure; `decorateDates` is the one function that touches the DOM.
+// status bar's clock sets (`config/timeView.ts`) by the one formatter
+// here, or as its distance from T0 while one is set, with the precise
+// instant on hover, a copy that keeps the instant, and a menu that
+// searches around it. The rules are pure; `decorateDates` is the one
+// function that touches the DOM.
 
 import { formatRelative } from "@/config/timeFormat";
 import {
@@ -12,9 +14,11 @@ import {
   dayBounds,
   formatAt,
   formatDay,
+  millisText,
   offsetAt,
   offsetText,
   readsAsMachine,
+  sinceT0,
   timeView,
   wallClock,
   zoneName,
@@ -65,11 +69,19 @@ function wallText(w: Wall): string {
   return `${w.year}-${p2(w.month)}-${p2(w.day)} ` + `${p2(w.hour)}:${p2(w.minute)}:${p2(w.second)}`;
 }
 
-/** The text a date chip shows: `Tue, Apr 15, 2369, 12:05` in the
- *  view's zone, or `Tue, Mar 18, 2369` for a day. */
-export function dateText(s: Stamp, view = timeView.value): string {
+/** A date as a date, whatever T0 is: `Tue, Apr 15, 2369, 12:05` in
+ *  the view's zone, or `Tue, Mar 18, 2369` for a day. */
+export function dateWallText(s: Stamp, view = timeView.value): string {
   if (s.kind === "day") return formatDay(s.year, s.month, s.day, view, "short");
   return formatAt(s, view, { day: "short", clock: true });
+}
+
+/** The text a date chip shows: `dateWallText`, or for an instant while
+ *  a T0 is set, how far it is from T0 (`+1:05.200`). A day has no
+ *  instant to measure, so it stays a day. */
+export function dateText(s: Stamp, view = timeView.value): string {
+  if (s.kind === "instant" && view.t0) return sinceT0(s.ms, view.t0.ms);
+  return dateWallText(s, view);
 }
 
 const INSTANT_IN_TEXT = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})/g;
@@ -115,13 +127,22 @@ export function dateTitle(s: Stamp, now: number, view = timeView.value): string 
 }
 
 /** How a date chip looks. `classes` keeps the element's own (`msg-ts`
- *  in a message header) through `drawChip`'s base class. */
-export function dateLook(s: Stamp, now: number, view = timeView.value): ChipLook {
+ *  in a message header) through `drawChip`'s base class. Short of room
+ *  it ends in "…" on the side `elide` names; from T0 always on the left,
+ *  since the seconds are what tell two of them apart. */
+export function dateLook(
+  s: Stamp,
+  now: number,
+  view = timeView.value,
+  elide: "left" | "right" = "right",
+): ChipLook {
   const text = dateText(s, view);
+  const fromT0 = s.kind === "instant" && !!view.t0;
   return {
+    elide: fromT0 ? "left" : elide,
     text,
     ariaLabel: text,
-    classes: ["handle-chip", "date-chip"],
+    classes: ["handle-chip", "date-chip", ...(fromT0 ? ["date-from-t0"] : [])],
     initial: null,
     icon: null,
     photo: null,
@@ -129,10 +150,11 @@ export function dateLook(s: Stamp, now: number, view = timeView.value): ChipLook
   };
 }
 
-/** A date as copied text: what it shows, with the zone that reading is
- *  in, so a paste anywhere means the same instant. A day is its text. */
+/** A date as copied text: the date, with the zone that reading is in,
+ *  so a paste anywhere means the same instant; never its distance from
+ *  T0, which means nothing outside this page. A day is its text. */
 export function dateCopyText(s: Stamp, view = timeView.value): string {
-  const text = dateText(s, view);
+  const text = dateWallText(s, view);
   return s.kind === "day" ? text : `${text} ${zoneName(s, view.zone)}`;
 }
 
@@ -172,13 +194,31 @@ export function sideQuery(datetime: string, s: Stamp, side: "before" | "after"):
 
 /** A date chip for a surface that draws its own: a `<time>` element
  *  `decorateDates` would have made of the render's. */
-export function dateCell(datetime: string, now = Date.now()): HTMLElement {
+export function dateCell(datetime: string, now = Date.now(), view = timeView.value): HTMLElement {
   const el = document.createElement("time");
   el.setAttribute("datetime", datetime);
   el.className = "chip";
   const s = parseStamp(datetime);
-  if (s) drawChip(el, dateLook(s, now));
+  if (s) drawChip(el, dateLook(s, now, view));
   else el.textContent = datetime;
+  return el;
+}
+
+/** A date chip to the millisecond, `2026-09-22 14:07:47.190` in the
+ *  view's zone, for a log, where the seconds and milliseconds are what
+ *  tell one line from the next: short of room it loses its date, not its
+ *  milliseconds. From T0 it reads as every chip does. */
+export function millisDateCell(
+  datetime: string,
+  now = Date.now(),
+  view = timeView.value,
+): HTMLElement {
+  const el = dateCell(datetime, now, view);
+  const s = parseStamp(datetime);
+  if (s?.kind !== "instant") return el;
+  const look = dateLook(s, now, view, "left");
+  const text = view.t0 ? look.text : millisText(s, view.zone);
+  drawChip(el, { ...look, text, ariaLabel: text });
   return el;
 }
 
@@ -189,6 +229,10 @@ export function shortDateTexts(s: Stamp, view = timeView.value): [string, string
   if (s.kind === "day") {
     const day = formatDay(s.year, s.month, s.day, iso, "short");
     return [day, day];
+  }
+  if (view.t0) {
+    const since = sinceT0(s.ms, view.t0.ms);
+    return [since, since];
   }
   return [formatAt(s, iso, { day: "short", clock: true }), formatAt(s, iso, { day: "short" })];
 }
@@ -224,27 +268,35 @@ export function rewriteDatesForCopy(fragment: DocumentFragment | Element): boole
   return chips.length > 0;
 }
 
-export type DateMenuId = "copy-name" | "copy-id" | "search" | "before" | "after";
+export type DateMenuId =
+  "copy-name" | "copy-id" | "search" | "before" | "after" | "use-t0" | "clear-t0";
 export type DateMenuEntry = { id: DateMenuId; label: string; separator?: boolean };
 
 /** A date chip's menu: copy it as shown or as written, then search on
- *  its day, before it or after it. */
+ *  its day, before it or after it; then, for an instant, draw every
+ *  date from it (T0), and clear a T0 that is set. */
 export function dateMenu(datetime: string, s: Stamp, view = timeView.value): DateMenuEntry[] {
-  const day = s.kind === "day" ? dateText(s, view) : formatAt(s, view, { day: "short" });
-  return [
+  const day = s.kind === "day" ? dateWallText(s, view) : formatAt(s, view, { day: "short" });
+  const entries: DateMenuEntry[] = [
     { id: "copy-name", label: `Copy “${dateCopyText(s, view)}”` },
     { id: "copy-id", label: `Copy ${datetime.trim()}` },
     { id: "search", label: `Everything on ${day}`, separator: true },
     { id: "before", label: "Everything before this" },
     { id: "after", label: "Everything after this" },
   ];
+  const isT0 = s.kind === "instant" && view.t0?.ms === s.ms;
+  if (s.kind === "instant" && !isT0) entries.push({ id: "use-t0", label: "Use as T0" });
+  if (view.t0) entries.push({ id: "clear-t0", label: "Clear T0" });
+  if (entries.length > 5) entries[5] = { ...entries[5]!, separator: true };
+  return entries;
 }
 
 /** What the end of a span (`<span class="time-range">`, an event's
  *  start and end) shows when it falls on its start's day in the view's
- *  zone: its clock alone. Null when it shows its own day. */
+ *  zone: its clock alone. Null when it shows what any chip would: its
+ *  own day, or its distance from T0. */
 export function rangeEndText(start: Stamp, end: Stamp, view = timeView.value): string | null {
-  if (start.kind !== "instant" || end.kind !== "instant") return null;
+  if (start.kind !== "instant" || end.kind !== "instant" || view.t0) return null;
   const [a, b] = [wallClock(start, view.zone), wallClock(end, view.zone)];
   if (a.year !== b.year || a.month !== b.month || a.day !== b.day) return null;
   return formatAt(end, view, { clock: true });

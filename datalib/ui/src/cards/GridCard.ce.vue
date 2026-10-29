@@ -55,7 +55,7 @@ import {
   people,
 } from "./contacts";
 import { CONTACT } from "@/search/queryText";
-import { dateText, datesInText, parseStamp } from "./dates";
+import { dateWallText, datesInText, parseStamp } from "./dates";
 import {
   CHIP_SELECTOR,
   chipCardSource,
@@ -240,7 +240,7 @@ the one you picked last.</p>
 // person in it by their name once it is known, and a date as its chip.
 function shownValue(value: string): string | null {
   const stamp = parseStamp(value);
-  if (stamp) return dateText(stamp);
+  if (stamp) return dateWallText(stamp);
   if (value.startsWith(CONTACT)) {
     const contact = contactsById.lookup(value.slice(CONTACT.length));
     return contact ? nameOf(contact) : null;

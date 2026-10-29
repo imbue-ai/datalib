@@ -10,10 +10,12 @@ import {
   WRITTEN,
   dayBounds,
   formatAt,
+  millisText,
   parseInstant,
   readStoredRecent,
   readStoredView,
   searchZones,
+  sinceT0,
   wallClock,
   withRecent,
   zoneName,
@@ -121,5 +123,39 @@ describe("a stored choice", () => {
     expect(readStoredRecent(JSON.stringify(["Europe/Vienna", "Mars/Olympus", 3]))).toEqual([
       "Europe/Vienna",
     ]);
+  });
+});
+
+describe("a log's stamp", () => {
+  it("is the date and the time of day to the millisecond, one clock for every stamp", () => {
+    const at = (iso: string) => parseInstant(iso)!;
+    expect(millisText(at("2026-09-11T15:10:41.113Z"), named("Europe/Vienna"))).toBe(
+      "2026-09-11 17:10:41.113",
+    );
+    expect(millisText(at("2026-09-11T17:10:41.113+02:00"), UTC)).toBe("2026-09-11 15:10:41.113");
+    expect(millisText(at("2026-09-11T17:10:41.000000+02:00"), WRITTEN)).toBe(
+      "2026-09-11 17:10:41.000",
+    );
+  });
+});
+
+describe("a date from T0", () => {
+  const T0 = Date.parse("2026-10-26T09:21:57.190Z");
+  const after = (ms: number) => sinceT0(T0 + ms, T0);
+
+  it("leads with the largest unit that is not zero, unpadded", () => {
+    expect(after(0)).toBe("0.000");
+    expect(after(1250)).toBe("+1.250");
+    expect(after(12_345)).toBe("+12.345");
+    expect(after(65_200)).toBe("+1:05.200");
+    expect(after(3_600_000)).toBe("+1:00:00.000");
+    expect(after(36_000_000 + 4_000)).toBe("+10:00:04.000");
+    expect(after(3 * 86_400_000 + 4 * 3_600_000 + 5 * 60_000 + 6_789)).toBe("+3d 04:05:06.789");
+  });
+
+  it("is negative before T0", () => {
+    expect(after(-500)).toBe("-0.500");
+    expect(after(-245_000)).toBe("-4:05.000");
+    expect(after(-86_400_000)).toBe("-1d 00:00:00.000");
   });
 });
