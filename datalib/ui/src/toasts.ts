@@ -1,6 +1,7 @@
 // Tiny module-level toast store.
 
 import { reactive } from "vue";
+import { onSessionEnded, sessionEnded } from "./session";
 import { track } from "./telemetry";
 
 export type ToastLevel = "error" | "warn" | "info";
@@ -31,6 +32,7 @@ export function pushToast(
   level: ToastLevel = "error",
   timeoutMs: number | null = level === "error" ? null : 4_000,
 ): number | null {
+  if (sessionEnded()) return null;
   const now = Date.now();
   const key = `${level}|${message}`;
   const last = recent.get(key);
@@ -51,3 +53,16 @@ export function dismissToast(id: number): void {
   const i = toasts.findIndex((t) => t.id === id);
   if (i >= 0) toasts.splice(i, 1);
 }
+
+// Once the server has refused this tab, every request fails the same way
+// and each failure would be a toast of its own. One says why, in place of
+// them all; the server will not take the page's events any more either.
+onSessionEnded(() => {
+  toasts.splice(0, toasts.length, {
+    id: nextId++,
+    level: "error",
+    message:
+      "Datalib was restarted, so this tab can no longer reach it. Open the address it printed when it started, or reopen the app.",
+    timeoutMs: null,
+  });
+});

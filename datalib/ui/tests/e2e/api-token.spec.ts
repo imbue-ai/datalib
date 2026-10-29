@@ -54,3 +54,22 @@ test("?token= mints a session cookie, then the app runs on it", async ({ page, c
   const again = await page.goto(GRID);
   expect(again?.status()).toBe(200);
 });
+
+/// An agent restarted datalib under an open tab, and the new server
+/// refused the tab's old token. The tab reopened its stream the moment
+/// each refusal came back, refetched every card each time and toasted
+/// every failure: 35,000 requests in 25 seconds, and a column of toasts.
+test("a tab the server no longer knows goes quiet and says why", async ({ page }) => {
+  let streams = 0;
+  await page.route("**/api/**", (route) => {
+    if (new URL(route.request().url()).pathname === "/api/sync/stream") streams += 1;
+    return route.fulfill({ status: 401, body: "unauthorized\n" });
+  });
+
+  await page.goto(`/?token=${TOKEN}`);
+
+  await expect(page.locator(".datalib-toast")).toHaveText([
+    /restarted, so this tab can no longer reach it/,
+  ]);
+  expect(streams).toBeLessThanOrEqual(1);
+});

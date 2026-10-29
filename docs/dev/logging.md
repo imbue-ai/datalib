@@ -341,6 +341,12 @@ producer), never a record's contents. Log lines do not go out this way.
   frames held while `el` is off screen and delivered, once each, when
   it is back. Every card that refetches on a frame passes its root
   element.
+- **A tab the server refuses goes quiet.** A tab left open across a
+  restart holds the old token, so each request it makes is a 401 and a
+  request line. The live stream waits longer before each reopen (1 s,
+  doubling to 30 s), the cards refetch once it is back rather than on
+  every try, and the first 401 from `/api/` ends the tab's session
+  (`ui/src/session.ts`): one toast says why, and the stream stays shut.
 - **A step flushes per line** ([`step_protocol.md`](step_protocol.md)
   § "stderr: logging").
 - **Fields, not interpolation.** `job = %id, "claim failed"` is a
