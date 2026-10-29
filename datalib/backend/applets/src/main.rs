@@ -3,6 +3,8 @@
 
 mod datalib_contacts;
 mod gate;
+#[cfg(test)]
+mod hangup_tests;
 mod slack;
 mod unified_document_index;
 mod unified_time_series_index;

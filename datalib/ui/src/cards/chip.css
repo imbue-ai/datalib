@@ -23,6 +23,14 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* `ChipLook.elide = "left"`: the "…" replaces the start of the text. */
+.chip-elide-left {
+  direction: rtl;
+}
+.chip-elide-left > .chip-ltr {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
 .handle-resolved,
 .handle-linkable {
   cursor: pointer;
@@ -121,6 +129,14 @@ time.date-chip {
   .date-fit time::after {
     content: attr(data-day);
   }
+}
+/* From T0 (`sinceT0`) a column of dates is a column of signed numbers:
+   right-justified, so the units line up. */
+.date-fit:has(> time.date-from-t0) {
+  text-align: right;
+}
+time.date-from-t0 {
+  font-variant-numeric: tabular-nums;
 }
 /* A group or step chip: its pipeline glyph sits like a brand mark, and a
    status worth noticing is a dot after the name (the words are on hover). */

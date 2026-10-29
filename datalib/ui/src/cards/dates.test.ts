@@ -10,7 +10,9 @@ import {
   dateTitle,
   datesInText,
   dayQuery,
+  dateCell,
   fittingDateCell,
+  millisDateCell,
   shortDateTexts,
   decorateDates,
   parseStamp,
@@ -184,7 +186,7 @@ describe("the searches a date offers", () => {
     expect(sideQuery("2026-04-15", stamp("2026-04-15"), "after")).toBe("after:2026-04-16");
   });
 
-  it("orders its menu as every chip's: copies, then searches", () => {
+  it("orders its menu as every chip's: copies, then searches, then T0", () => {
     const at = "2026-04-15T10:05:00Z";
     expect(dateMenu(at, stamp(at), VIENNA)).toEqual([
       { id: "copy-name", label: "Copy “Wed, Apr 15, 2026, 12:05 GMT+2”" },
@@ -192,7 +194,12 @@ describe("the searches a date offers", () => {
       { id: "search", label: "Everything on Wed, Apr 15, 2026", separator: true },
       { id: "before", label: "Everything before this" },
       { id: "after", label: "Everything after this" },
+      { id: "use-t0", label: "Use as T0", separator: true },
     ]);
+    // A day names no instant to measure from.
+    expect(dateMenu("2026-04-15", stamp("2026-04-15"), VIENNA).map((e) => e.id)).not.toContain(
+      "use-t0",
+    );
   });
 });
 
@@ -246,5 +253,71 @@ describe("in a document", () => {
     decorateDates(root, NOW);
     expect(rewriteDatesForCopy(root)).toBe(true);
     expect(root.innerHTML).toBe('<p>At <time datetime="2026-04-15">Wed, Apr 15, 2026</time>.</p>');
+  });
+});
+
+describe("from T0", () => {
+  const T0 = "2026-04-15T10:05:00.250Z";
+  const FROM_T0: TimeView = { ...VIENNA, t0: { ms: Date.parse(T0), offsetMin: 0 } };
+
+  it("shows each instant as its distance from T0, and a day as a day", () => {
+    expect(dateText(stamp("2026-04-15T10:06:05.450Z"), FROM_T0)).toBe("+1:05.200");
+    expect(dateText(stamp("2026-04-15T12:05:00.250+02:00"), FROM_T0)).toBe("0.000");
+    expect(dateText(stamp("2026-04-14T10:05:00.250Z"), FROM_T0)).toBe("-1d 00:00:00.000");
+    expect(dateText(stamp("2026-04-15"), FROM_T0)).toBe("Wed, Apr 15, 2026");
+    expect(shortDateTexts(stamp("2026-04-15T10:05:01.250Z"), FROM_T0)).toEqual([
+      "+1.000",
+      "+1.000",
+    ]);
+  });
+
+  /** A distance from T0 means nothing pasted outside this page. */
+  it("still copies and hovers as the date", () => {
+    const at = stamp("2026-04-15T10:06:05Z");
+    expect(dateCopyText(at, FROM_T0)).toBe("Wed, Apr 15, 2026, 12:06 GMT+2");
+    expect(dateTitle(at, NOW, FROM_T0)).toContain("2026-04-15 10:06:05 UTC");
+  });
+
+  it("draws each end of a span from T0", () => {
+    const start = stamp("2026-04-15T10:05:00Z");
+    expect(rangeEndText(start, stamp("2026-04-15T11:00:00Z"), FROM_T0)).toBeNull();
+  });
+
+  it("offers to clear T0, and not to set it again on T0 itself", () => {
+    const ids = (at: string) => dateMenu(at, stamp(at), FROM_T0).map((e) => e.id);
+    expect(ids("2026-04-15T10:06:05Z").slice(5)).toEqual(["use-t0", "clear-t0"]);
+    expect(ids(T0).slice(5)).toEqual(["clear-t0"]);
+    expect(ids("2026-04-15").slice(5)).toEqual(["clear-t0"]);
+  });
+});
+
+describe("a log's date", () => {
+  /** The log's Time column was plain text, with none of a chip's hover,
+   *  copy or menu. */
+  it("is a chip to the millisecond, or from T0", () => {
+    const at = "2026-09-22T12:07:47.190000+00:00";
+    const chip = millisDateCell(at, NOW, VIENNA);
+    expect(chip.matches("time.chip.date-chip[datetime]")).toBe(true);
+    expect(chip.textContent).toBe("2026-09-22 14:07:47.190");
+    expect(chip.title).toContain("2026-09-22 12:07:47 UTC");
+
+    const t0 = { ms: Date.parse("2026-09-22T12:07:40Z"), offsetMin: 0 };
+    const fromT0 = millisDateCell(at, NOW, { ...VIENNA, t0 });
+    expect(fromT0.textContent).toBe("+7.190");
+    expect(fromT0.classList.contains("date-from-t0")).toBe(true);
+  });
+
+  /** Cut from the right, a narrow Time column kept the date every line
+   *  shares and lost the seconds that tell them apart. */
+  it("gives way on the left in a log or from T0, and on the right elsewhere", () => {
+    const at = "2026-09-22T12:07:47.190000+00:00";
+    const leftCut = (el: HTMLElement) => !!el.querySelector(".chip-text.chip-elide-left");
+    expect(leftCut(millisDateCell(at, NOW, VIENNA))).toBe(true);
+    expect(leftCut(dateCell(at, NOW, VIENNA))).toBe(false);
+    const t0 = { ms: Date.parse("2026-09-22T12:07:40Z"), offsetMin: 0 };
+    expect(leftCut(dateCell(at, NOW, { ...VIENNA, t0 }))).toBe(true);
+    expect(millisDateCell(at, NOW, VIENNA).querySelector(".chip-ltr")?.textContent).toBe(
+      "2026-09-22 14:07:47.190",
+    );
   });
 });

@@ -305,22 +305,37 @@ test("a line's source links to its file and line at the server's commit", async 
   expect(target).toBe("_blank");
 });
 
-// A selected line opens in full in the column after the log — the
-// grid's own row-to-document pattern — and the inspector's "keep"
-// narrows the log through the bus.
-test("a selected line opens in full beside the log, and can narrow it", async ({ page }) => {
+// A click only selects a line. A double-click opens it in full in the
+// column after the log — as do Enter and its menu's "Open this line" —
+// and the inspector's "keep" narrows the log through the bus.
+test("a clicked line is only selected; a double-click opens it, and it can narrow the log", async ({
+  page,
+}) => {
   const dialog = await openServerLog(page);
   await scrollLogToStart(dialog);
   // By row, not by the first element: the grid adds a row's element when
   // it first scrolls in, so the page's order is not the grid's.
   const row = (n: number) => dialog.locator(`${ROWS}[data-row="${n}"]`);
+  const msgOf = async (n: number) =>
+    (await row(n).locator('.slick-cell[col-id="msg"]').textContent())?.trim() ?? "";
   const first = row(0);
-  const msg = (await first.locator('.slick-cell[col-id="msg"]').textContent())?.trim() ?? "";
-  await first.locator('.slick-cell[col-id="msg"]').click();
-
+  const msg = await msgOf(0);
   const inspector = shownCards(page).filter({ has: page.locator(".ll") });
-  // The card mounts in a new column after the click; on a loaded runner
-  // give it what the first row got above.
+
+  // The regression: a click selected the line and opened it. The menu
+  // the right-click opens comes after the click's handlers have run, so
+  // a card the click had opened would be on its way by then.
+  await first.locator('.slick-cell[col-id="msg"]').click();
+  await expect(first.locator(".slick-cell.selected").first()).toBeVisible();
+  const openEntry = menuEntry(page, "Open this line");
+  await rightClick(first.locator('.slick-cell[col-id="msg"]'), openEntry);
+  await expect(inspector).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(openEntry).toBeHidden();
+
+  await first.locator('.slick-cell[col-id="msg"]').dblclick();
+  // The card mounts in a new column after the double-click; on a loaded
+  // runner give it what the first row got above.
   await expect(inspector).toBeVisible({ timeout: 10_000 });
   await expect(inspector.locator(".ll-msg")).toHaveText(msg);
   await expect(inspector.locator(".ll-level")).toHaveText("info");
@@ -341,11 +356,20 @@ test("a selected line opens in full beside the log, and can narrow it", async ({
     `min_level:info process_id:${await launchOf(dialog)} thread:main`,
   );
 
-  // The arrow key moves the selection, and the inspector follows.
+  // The arrow key moves the selection and opens nothing; Enter opens
+  // the line it moved to.
   await row(0).locator('.slick-cell[col-id="msg"]').click();
   await page.keyboard.press("ArrowDown");
-  const second = (await row(1).locator('.slick-cell[col-id="msg"]').textContent())?.trim();
-  await expect(inspector.locator(".ll-msg")).toHaveText(second ?? "");
+  await expect(row(1).locator(".slick-cell.selected").first()).toBeVisible();
+  await expect(inspector.locator(".ll-msg")).toHaveText(msg);
+  const second = await msgOf(1);
+  await page.keyboard.press("Enter");
+  await expect(inspector.locator(".ll-msg")).toHaveText(second);
+
+  // And the right-click menu's entry opens the line under it.
+  await rightClick(row(0).locator('.slick-cell[col-id="msg"]'), openEntry);
+  await openEntry.click();
+  await expect(inspector.locator(".ll-msg")).toHaveText(msg);
 });
 
 /// The copy key after a shift-click range: the grid's own Ctrl+C copies

@@ -1,15 +1,15 @@
-import { test, expect, type Route } from "@playwright/test";
-import { GRID, selectRowByUuid, docBody } from "./grid-helpers";
+import { test, expect, type APIRequestContext, type Page, type Route } from "@playwright/test";
+import { GRID, openRowByUuid, docBody } from "./grid-helpers";
 
 // A rendered document asks for a chart with `<div data-time-series="…">`
 // and the document view draws it from the time-series applet
-// (docs/dev/time_series.md §"Charts in documents"). The TNG fixture
-// renders the yolink page but builds no time-series store, so this spec
-// answers the applet's two calls itself, with made-up values for the
-// ids the page names: what it checks is that the chart is mounted in
-// the document's frame and draws, that its legend turns lines off and
-// on, and that a zoom asks the applet for the narrower range — not what
-// the store holds.
+// (docs/dev/time_series.md §"Charts in documents"). This spec answers
+// the applet's two calls itself, with made-up values for the ids the
+// TNG yolink page names, so it can leave one chart's time series out of
+// the index and know the range a zoom asks for: what it checks is that
+// the chart is mounted in the document's frame and draws, that its
+// legend turns lines off and on, and that a zoom asks the applet for the
+// narrower range — not what the fixture's store holds.
 
 type Row = { uuid: string; kind: string; source_id: string; markdown_uuid: string | null };
 
@@ -39,10 +39,10 @@ const drawnAs = (lines: boolean[]) =>
 
 test.use({ viewport: { width: 1600, height: 900 } });
 
-test("a document's charts are drawn in its frame from the time-series applet", async ({
-  page,
-  request,
-}) => {
+/** Opens the TNG yolink page with the applet's two calls answered here,
+ *  and waits for its four charts. `spans` collects every range /points
+ *  is asked for. */
+async function openYolinkCharts(page: Page, request: APIRequestContext) {
   const resp = await request.get("/applet/unified_document_index/search?q=&limit=2000");
   expect(resp.ok()).toBeTruthy();
   const { rows } = (await resp.json()) as { rows: Row[] };
@@ -90,10 +90,18 @@ test("a document's charts are drawn in its frame from the time-series applet", a
 
   await page.goto(GRID);
   await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 15_000 });
-  await selectRowByUuid(page, pageRow!.uuid);
+  await openRowByUuid(page, pageRow!.uuid);
 
   const doc = docBody(page);
   await expect(doc.locator("[data-time-series]")).toHaveCount(4, { timeout: 10_000 });
+  return { doc, charts, missing, spans };
+}
+
+test("a document's charts are drawn in its frame from the time-series applet", async ({
+  page,
+  request,
+}) => {
+  const { doc, charts, missing, spans } = await openYolinkCharts(page, request);
   // Every chart whose time series are listed draws a line per series,
   // on an axis in the unit the applet reads.
   const drawn = doc.locator("[data-time-series] .ts-chart .uplot");
@@ -151,4 +159,30 @@ test("a document's charts are drawn in its frame from the time-series applet", a
       message: "a zoom should ask /points for a range inside the whole one",
     })
     .toBe(true);
+});
+
+/** While a T0 is set, a chart's hover readout says how far the point is
+ *  from T0, as a date chip would, not when it was. */
+test("a chart's hover reads the distance from T0", async ({ page, request }) => {
+  await page.addInitScript(() => {
+    const view = { zone: { kind: "named", name: "UTC" }, days: "iso", hours: "h23" };
+    localStorage.setItem(
+      "datalib-time-view",
+      JSON.stringify({ ...view, t0: { ms: 2_000_000, offsetMin: 0 } }),
+    );
+  });
+  const { doc } = await openYolinkCharts(page, request);
+  const chart = doc.locator("[data-time-series]").first();
+  const over = chart.locator(".u-over");
+  const r = await over.evaluate((el) => {
+    const b = el.getBoundingClientRect();
+    return { x: b.left, y: b.top, w: b.width, h: b.height };
+  });
+  const at = (f: number) => ({ clientX: r.x + r.w * f, clientY: r.y + r.h / 2 });
+  // The points are 1,000 s before T0, at it, and 1,000 s after.
+  await over.dispatchEvent("mouseenter", at(0.01));
+  await over.dispatchEvent("mousemove", { ...at(0.01), movementX: 1 });
+  await expect(chart.locator(".ts-when")).toHaveText("-16:40.000");
+  await over.dispatchEvent("mousemove", { ...at(0.99), movementX: 1 });
+  await expect(chart.locator(".ts-when")).toHaveText("+16:40.000");
 });

@@ -224,7 +224,9 @@ earlier ones, and the pages of the app); Manage opens it through
 on a Failed row. Selecting a line
 opens `logLineView(seq)` beside it: the whole message, the fields as a
 tree with copy and keep / exclude, the source link at the process's
-commit, both clocks. The grid shows Time, Step, Level, Stream,
+commit, both clocks. Time is a date chip to the millisecond, so "Use
+as T0" on one shows every line as its distance from that one
+(`chips.md` §"A date"). The grid shows Time, Step, Level, Stream,
 Source, Message and Fields; the columns that would say the same thing on line
 after line of one process's log — run, process, commit, thread, target
 — start hidden, as does Group, which the Step chip already names
@@ -237,7 +239,14 @@ The pickers above the grid are views of the query: picking a run, a
 launch or a step's attempt writes `run:`, `process_id:` or `step:` and
 `attempt:` into it, and clearing the query shows the whole store. Right-click a cell to
 keep or exclude its value; drag a column header into the bar to group.
-The card tails while what it shows may still be writing.
+A click only selects a line (⌘ and Shift add to the selection, ⌘A takes
+them all, ⌘C copies them); a double-click, Enter or the menu's "Open
+this line" opens it in full beside the card.
+The card tails while what it shows may still be writing. It hears of a
+new line from the `log` frame (below), which the server sends after
+each write its own writers make — its log and the loop's runs — rather
+than waiting on the filesystem, whose report can come seconds late on a
+mac; a line another process wrote is heard from the filesystem.
 
 **Over the API** (`Authorization: Bearer <token>`, the token being
 `<root>/system/api-token`):

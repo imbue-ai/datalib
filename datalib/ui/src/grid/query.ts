@@ -93,12 +93,18 @@ export function plainWords(query: string): string {
 }
 
 /// How long to wait after a keystroke before searching. A change to the
-/// free text is a qmd search when `ranked`: seconds long, one at a time,
-/// and finished by the server even once the page has moved on. So it
-/// waits for a real pause; a filter is a quick read and keeps up.
+/// free text is a qmd search when `ranked`: up to seconds long, and its
+/// embedding is finished even once the page has moved on. So it waits
+/// for a real pause; a filter is a quick read and keeps up.
 export function searchDelay(before: string, after: string, ranked: boolean): number {
   const words = plainWords(after);
   return ranked && words !== "" && words !== plainWords(before) ? 600 : 150;
+}
+
+/// Whether two queries ask the same: a space typed before the next word
+/// asks nothing new.
+export function sameSearch(a: string, b: string): boolean {
+  return a.trim() === b.trim();
 }
 
 function escapeRegExp(s: string): string {

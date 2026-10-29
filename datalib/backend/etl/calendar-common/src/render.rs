@@ -137,8 +137,8 @@ fn problem_row(
     )
 }
 
-/// The start as the grid's `created_at`: the instant the event happens,
-/// so `before:`/`after:` mean "happening then". `None`, recorded, when
+/// The start as the grid's `created_at` and `touched_at`: the instant the
+/// event happens, so `before:`/`after:` mean "happening then". `None`, recorded, when
 /// the start names a zone nobody knows; a floating time with no
 /// calendar zone is read as UTC and that is recorded too.
 fn resolve_start(
@@ -496,15 +496,13 @@ fn build_grid_row(
         .source_label(profile.source_label.clone())
         .is_document(true)
         .item_count(Some(1))
+        // Left alone, `touched_at` is the start too: an event is active
+        // when it happens, so `after:` and newest-first place it there.
         .created_at(start)
         // The grid orders a document's stamps created-then-modified, and
         // an event is nearly always last edited before it happens. The
         // edit stamp is on the page; the row carries only when it happens.
         .modified_at(None)
-        // Newest-first means most recently changed, and the start can be
-        // years ahead. Every event has one of these in practice: Google
-        // always sends `updated`, and RFC 5545 requires `DTSTAMP`.
-        .touched_at(event.modified_at.clone().or_else(|| event.created.clone()))
         .author(
             event
                 .organizer
@@ -882,8 +880,8 @@ mod tests {
         );
         assert_eq!(
             row.touched_at.as_deref(),
-            Some("2026-09-02T16:00:00+00:00"),
-            "newest-first sorts an event by its last edit, not its start"
+            Some("2026-01-05T09:00:00-08:00"),
+            "newest-first and after: place an event when it happens, not at its last edit"
         );
         assert_eq!(row.author.as_deref(), Some("Jean-Luc Picard"));
         assert_eq!(row.channel.as_deref(), Some("Bridge"));

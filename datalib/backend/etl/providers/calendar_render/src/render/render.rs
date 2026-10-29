@@ -22,8 +22,9 @@ use super::{calendly, google, ics, ids};
 /// 6 so a full walk sweeps the occurrences earlier versions kept after a
 /// "this and following" edit moved them to a new UID; 7 when "Added" and
 /// "Last changed" became `<time>` stamps; 8 when an organizer or guest
-/// with an address became a chip.
-pub const RENDER_VERSION: u32 = 8;
+/// with an address became a chip; 9 when an event's row was placed at its
+/// start rather than its last edit.
+pub const RENDER_VERSION: u32 = 9;
 
 /// A calendar as its events need it.
 #[derive(Debug, Clone)]

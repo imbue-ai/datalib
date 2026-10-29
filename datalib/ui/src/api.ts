@@ -168,6 +168,10 @@ export type RowsResponse<Row> = RowsSpec & {
   total: number;
   // Where the next page starts; null when this one reaches the end.
   next_offset: number | null;
+  // The search's alone, on its first page in an order newest first by a
+  // date: how many rows are still to come. Null for any other order or
+  // for free text.
+  now_at?: number | null;
   // The index commit the search was read at; null with no index yet.
   at: string | null;
   // Backend-side errors that don't fail the response — e.g. the

@@ -330,6 +330,9 @@ function spawnBackend(name: string, root: string, env: Record<string, string> = 
       DATALIB_BIND: "127.0.0.1:0",
       DATALIB_TOKEN: API_TOKEN,
       DATALIB_PARENT_PIPE: "0",
+      // The fixture is dated in the 2360s. A grid opens at now, so now is
+      // pinned past its newest stamp, and the newest row is the last one.
+      DATALIB_SEARCH_NOW: "2400-01-01T00:00:00Z",
       ...env,
     },
   });

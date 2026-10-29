@@ -366,6 +366,15 @@ qmd is not: a search waits at most 20 seconds on qmd to embed its text
 (`EMBED_DEADLINE`), then stops it and answers with a `qmd_error`. The
 next search starts a fresh qmd.
 
+A read the caller gives up on is hung up on: when the browser cancels
+a `GET` (a search the person has typed past), the gateway closes its
+connection to the applet, and the applet's server drops the handler at
+its next `await`. A read handler must therefore leave nothing half
+done if it stops at any `await`. Work handed to another thread
+(`spawn_blocking`) still runs to its end. A write is never hung up on:
+cut off halfway, it could leave a store's uncommitted rows behind, so
+it lands whole however long the browser waited.
+
 The gateway forwards an applet's stderr line by line as it arrives and
 keeps the tail, rather than reading the pipe to EOF when the applet
 fails. That matters because the pipe is held by the child *and* by

@@ -91,6 +91,10 @@ test.describe("toolbar", () => {
       .first();
     await expect(chip).toBeVisible({ timeout: 10_000 });
     const group = (await chip.getAttribute("data-entity"))!.slice("datalib:group/".length);
+    // The menu is the row's once the chip's answer has landed, which its
+    // label then ends with: "Work Slack, Slack source, Succeeded". Opened
+    // before, it has the chip's own entries alone.
+    await expect(chip).toHaveAttribute("aria-label", / source, [^,]+$/);
     await chip.click({ button: "right" });
     const menu = page.locator(".chip-menu");
     await expect(menu.getByRole("menuitem")).toContainText([

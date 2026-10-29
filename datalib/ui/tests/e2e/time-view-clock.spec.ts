@@ -44,3 +44,37 @@ test("a grid's date chips redraw in the zone and format the clock picks", async 
   await page.getByRole("menuitemradio", { name: /^UTC/ }).click();
   await expect(cell).toHaveText(isoIn(datetime, "UTC"));
 });
+
+/** T0 set by hand from the clock: a date and time in one zone, shown in
+ *  the view's, and every date chip drawn as its distance from it. */
+test("a T0 typed into the clock's picker, in its own zone", async ({ page }) => {
+  await page.goto(EVERY_ROW);
+  const chips = page.locator(".grid-box .slick-cell time.date-chip[datetime]");
+  await expect(chips.first()).toBeVisible({ timeout: 10_000 });
+  const datetime = (await chips.first().getAttribute("datetime"))!;
+  const cell = page.locator(`.grid-box .slick-cell time.date-chip[datetime="${datetime}"]`).first();
+
+  const clock = page.getByTestId("time-view-clock");
+  await clock.click();
+  await page.getByRole("menuitemradio", { name: /^UTC/ }).click();
+
+  await clock.click();
+  await page.getByTestId("time-view-pick-t0").click();
+  await page.getByLabel("T0 date and time").fill("2026-04-15T19:05:00.256");
+  await page.getByLabel("T0 time zone").selectOption("Asia/Tokyo");
+  await page.getByRole("button", { name: "Set T0" }).click();
+
+  await expect(clock).toContainText("T0=2026-04-15 10:05:00.256 UTC");
+  await expect(cell).toHaveText(/^[+-]?[\dyd: ]+\.\d{3}$/);
+
+  // Opened again, the picker starts from T0, in the view's zone.
+  await clock.click();
+  await page.getByTestId("time-view-pick-t0").click();
+  await expect(page.getByLabel("T0 date and time")).toHaveValue("2026-04-15T10:05:00.256");
+  await expect(page.getByLabel("T0 time zone")).toHaveValue("UTC");
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await page.keyboard.press("Escape");
+
+  await page.getByTestId("time-view-clear-t0").click();
+  await expect(cell).toHaveText(/^\D/);
+});

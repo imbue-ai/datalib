@@ -54,8 +54,7 @@ to one date of someone else's meeting — stands alone and says so.
 ## Dates in the grid
 
 `created_at` is **when the event happens**: the start's instant, so
-`before:` and `after:` mean "happening then" and the grid sorts a
-calendar the way a calendar reads. For a series that is its first
+the grid sorts a calendar the way a calendar reads. For a series that is its first
 occurrence; for a changed occurrence, its new start.
 
 `modified_at` is **null**. Every other provider's document is created
@@ -64,9 +63,14 @@ and then edited, and the index holds them to that order
 document row); an event is nearly always last edited *before* it
 happens, so its edit stamp in that column would break the order for
 almost every future meeting. When the event was added (`CREATED`) and
-last changed are on the page and in its frontmatter instead, and the
-edit stamp is the row's `touched_at`, what newest-first sorts by: an
-event changed today sorts today, not at a start years ahead.
+last changed are on the page and in its frontmatter instead.
+
+`touched_at`, what newest-first sorts by and `before:`/`after:` filter
+on, is the start as well: an event is active when it happens. The edit
+stamp would be a poor stand-in, since Google re-stamps every changed
+occurrence of a series when the series is edited, and most were edited
+long after they happened. A meeting to come sits ahead of now; the grid
+opens at now, so it is above the first screen rather than on it.
 
 The id is deliberately **not** stamped with that start (`datalib_id`'s
 leading bits): rescheduling a meeting must not re-key it and orphan its

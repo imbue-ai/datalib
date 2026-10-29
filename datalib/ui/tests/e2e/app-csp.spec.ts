@@ -8,7 +8,7 @@
 // proxy for every fetch are the things most likely to regress.
 
 import { test, expect, type Page } from "@playwright/test";
-import { GRID, SEARCH_ROWS, TABLE_ROWS, firstRowUuid, selectRowByUuid } from "./grid-helpers";
+import { GRID, SEARCH_ROWS, TABLE_ROWS, firstRowUuid, openRowByUuid } from "./grid-helpers";
 
 declare global {
   interface Window {
@@ -40,7 +40,7 @@ test("no screen violates the page's CSP", async ({ page, context }) => {
   // rendered markdown sanitized and mounted in a shadow root.
   await page.goto(GRID);
   await expect(page.locator(SEARCH_ROWS).first()).toBeVisible({ timeout: 15_000 });
-  await selectRowByUuid(page, await firstRowUuid(page));
+  await openRowByUuid(page, await firstRowUuid(page));
   await expect(page.locator(".chat-preview")).toBeVisible();
   expect(await violations(page)).toEqual([]);
 

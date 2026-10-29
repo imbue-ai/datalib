@@ -9,6 +9,7 @@ import * as api from "@/api";
 import type { ManageRow } from "@/api";
 import { copyToClipboard } from "@/clipboard";
 import { rowMenu, type MenuAction } from "@/config/rowMenu";
+import { setT0 } from "@/config/timeView";
 import { isDesktopApp, revealActionLabel } from "@/desktop";
 import { openExternal } from "@/externalLinks";
 import type { MenuEntry } from "@/grid/menu";
@@ -39,7 +40,7 @@ import {
   entityMenu,
 } from "./entities";
 import { CONTACT, type ChipRef } from "@/search/queryText";
-import { dateCopyText, dateMenu, dateText, dayQuery, parseStamp, sideQuery } from "./dates";
+import { dateCopyText, dateMenu, dateWallText, dayQuery, parseStamp, sideQuery } from "./dates";
 
 /** What a chip names: what the search field can name, or a date, which
  *  only a document draws. */
@@ -65,6 +66,8 @@ export const CHIP_ACTIONS = [
   "after",
   "browse",
   "edit",
+  "use-t0",
+  "clear-t0",
 ] as const;
 export type ChipAction = (typeof CHIP_ACTIONS)[number];
 /** An entry of a group's or step's Sources row, offered on its chip. */
@@ -188,7 +191,7 @@ export function chipName(chip: Chip): string {
       return contactLook(shownAs || "a contact", contactsById.get(ref.id)).text;
     case "date": {
       const s = parseStamp(ref.datetime);
-      return s ? dateText(s) : ref.datetime;
+      return s ? dateWallText(s) : ref.datetime;
     }
   }
 }
@@ -383,6 +386,14 @@ export async function runChipAction(id: ChipEntryId, chip: Chip, host: ChipHost)
     }
     case "edit":
       host.editLink?.();
+      return;
+    case "use-t0": {
+      const s = ref.kind === "date" ? parseStamp(ref.datetime) : null;
+      if (s?.kind === "instant") setT0({ ms: s.ms, offsetMin: s.offsetMin });
+      return;
+    }
+    case "clear-t0":
+      setT0(null);
       return;
   }
 }

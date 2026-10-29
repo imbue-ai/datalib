@@ -14,10 +14,10 @@
 // switching keeps each one's selection and scroll. The source chips rewrite the query
 // (cards/search.ts) rather than keep state beside it.
 //
-// Selecting a row opens the row's document as a new card via
-// ctx.host.openCards — structural changes never go through the bus.
-// Double-clicking a row opens that document as a standalone
-// single-column page in a new tab.
+// A click only selects a row (grid/rowIdioms.ts). A double-click, Enter
+// or the row menu opens the row's document as a new card via
+// ctx.host.openCards — structural changes never go through the bus —
+// and the menu can open it in a new tab instead.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import { timeView } from "@/config/timeView";
 // The grid is the framework-agnostic bundle, not the Vue wrapper: a
@@ -55,7 +55,7 @@ import {
   people,
 } from "./contacts";
 import { CONTACT } from "@/search/queryText";
-import { dateText, datesInText, parseStamp } from "./dates";
+import { dateWallText, datesInText, parseStamp } from "./dates";
 import {
   CHIP_SELECTOR,
   chipCardSource,
@@ -106,6 +106,7 @@ import { followFrame, isDarkTheme } from "@/grid/gridFrame";
 import {
   filterToken,
   keepExcludeEntries,
+  sameSearch,
   searchDelay,
   withToken,
   type FilterEntry,
@@ -113,6 +114,7 @@ import {
 import { menuSlots, onAfterMenuShowFit, perOpening } from "@/grid/menu";
 import { newlyPicked } from "@/grid/selection";
 import { copySelectedRowsOnKey } from "@/grid/copyRows";
+import { openRowsOn, selectAllRowsOnKey } from "@/grid/rowIdioms";
 import { markdownsToAsk, widen } from "@/grid/qmdAsk";
 import { searchCoverage, type SearchCoverage } from "@/grid/searchCoverage";
 import { keepActiveOnRecord } from "@/grid/activeCell";
@@ -130,6 +132,7 @@ import {
   type Page,
   type PagedWindow,
 } from "@/grid/pagedWindow";
+import { nowRow } from "@/grid/nowRow";
 import {
   countsByKey,
   groupItems,
@@ -229,8 +232,10 @@ pick one to see only its results. A chip and the tick box write a filter into th
 box, the same one you could type.</p>
 <p>The two tabs above the results are two ways to see them. <b>List and preview</b> shows
 each result with your words marked, and the picked one to read beside it. <b>Table</b>
-shows the same results with every column, sorting and grouping. A new search opens on
-the one you picked last.</p>
+shows the same results with every column, sorting and grouping: a click selects a row
+(⌘ and Shift add to the selection, ⌘A takes them all), and a double-click, Enter or
+<b>Open document</b> on its right-click menu opens it. A new search opens on the one you
+picked last.</p>
 `
     : null,
 );
@@ -240,7 +245,7 @@ the one you picked last.</p>
 // person in it by their name once it is known, and a date as its chip.
 function shownValue(value: string): string | null {
   const stamp = parseStamp(value);
-  if (stamp) return dateText(stamp);
+  if (stamp) return dateWallText(stamp);
   if (value.startsWith(CONTACT)) {
     const contact = contactsById.lookup(value.slice(CONTACT.length));
     return contact ? nameOf(contact) : null;
@@ -280,6 +285,11 @@ const shownQuery = ref<string | null>(null);
 /// The tab whose answer the rows on screen are, beside `shownQuery`.
 const shownTab = ref<Answer | null>(null);
 const total = ref(0);
+/// How many of the search's rows are still to come, when it is ordered
+/// newest first by a date: a calendar's meetings ahead. The grid opens
+/// at now, below them.
+let nowAt: number | null = null;
+const hasNow = ref(false);
 const loading = ref(false);
 const error = ref<SearchFailure | null>(null);
 // A failed search leaves the previous query's rows painted; say so, or
@@ -486,8 +496,7 @@ const boxEl = ref<HTMLDivElement | null>(null);
 
 // Suppress state writes (and column-open side effects) while we're
 // applying state from the URL ourselves — otherwise the grid's
-// column/selection events would clobber the state we just read, and
-// restoring a selection would open a duplicate document column.
+// column/selection events would clobber the state we just read.
 let restoring = false;
 
 /// What the URL keeps of the grid's shape: every column in order with
@@ -897,7 +906,11 @@ async function runSearch(q: string, refresh = false) {
     win = firstWindow(searchPage(r));
     // qmd's rank is not an order in time.
     const ranked = qmd() && !!r.query_echo?.free_text;
-    if (!again) shown = { q, sort, tab: t, tail: sort === null && !ranked };
+    if (!again) {
+      shown = { q, sort, tab: t, tail: sort === null && !ranked };
+      nowAt = r.now_at ?? null;
+      hasNow.value = nowAt !== null;
+    }
     rows.value = win.rows;
     total.value = r.total;
     qmdError.value = typeof r.query_echo?.qmd_error === "string" ? r.query_echo.qmd_error : null;
@@ -972,6 +985,35 @@ function loadWanted() {
   void loadThrough(seeking ? win.rows.length : nearing + MARGIN, seeking);
 }
 
+/// Bring now into view: the newest row that is not still to come, with
+/// what is to come beyond it. The rows up to it are loaded first.
+async function goToNow() {
+  const search = shown;
+  while (
+    search === shown &&
+    win &&
+    nowAt !== null &&
+    win.rows.length <= nowAt &&
+    win.next !== null
+  ) {
+    const held = win.rows.length;
+    await (loadingMore ?? loadThrough(nowAt + MARGIN));
+    // A page that failed to arrive: its error is on screen.
+    if (win && win.rows.length === held && !loadingMore) break;
+  }
+  if (search !== shown || !shown || !vueGrid || !win || nowAt === null) return;
+  const at = nowRow(nowAt, win.rows.length, shown.tail);
+  if (!at) return;
+  const grid = vueGrid.slickGrid;
+  if (at.edge === "top") return grid.scrollRowToTop(at.row);
+  // Measured off the viewport itself: the grid's own bottom-edge scroll
+  // (`scrollRowIntoView`) leaves the row half under the edge here.
+  const viewportHeight = grid.getViewportNode()?.clientHeight ?? 0;
+  const rowHeight = grid.getOptions().rowHeight ?? 0;
+  grid.scrollTo(Math.max(0, (at.row + 1) * rowHeight - viewportHeight));
+  grid.render();
+}
+
 /// Load pages until `uuid`'s row is held, and say where it is: null when
 /// the search does not have it.
 async function seek(uuid: string): Promise<number | null> {
@@ -1036,6 +1078,8 @@ async function runGrouped(q: string, refresh: boolean) {
       counts: countsByKey(r.groups, gettersOf(by)),
     };
     shown = { q, sort, tab: t, tail: false };
+    nowAt = null;
+    hasNow.value = false;
     win = null;
     qmdError.value = r.qmd_error ?? null;
     qmdIndexMissing.value = r.qmd_index_missing ?? false;
@@ -1143,6 +1187,10 @@ watch(query, (q, before) => {
   const ranked = rowsSpec === null ? isSearch : qmd();
   debounceTimer = setTimeout(
     () => {
+      if (sameSearch(q, settledQuery.value)) {
+        loading.value = false;
+        return;
+      }
       settledQuery.value = q;
       void startSearch(q);
     },
@@ -1243,14 +1291,19 @@ watch(view, (v) => {
 const sources = ref<RowGroup<Row>[]>([]);
 const sourcesQuery = computed(() => setSource(settledQuery.value, null));
 let sourcesAsked = 0;
+/// A newer search cancels the chips' request, so the server stops
+/// ranking free text nobody is waiting for.
+let sourcesInflight: AbortController | null = null;
 async function loadSources() {
   if (!isSearch || props.oneSource) return;
   const asked = ++sourcesAsked;
+  sourcesInflight?.abort();
+  const ctrl = (sourcesInflight = new AbortController());
   try {
     const r = await fetchGroups<Row>(
       sourcesQuery.value,
       "source_ref",
-      undefined,
+      ctrl.signal,
       SEARCH,
       tab.value,
     );
@@ -1402,9 +1455,11 @@ function showNew() {
   const shownRows = display(win.rows);
   vueGrid.dataset = shownRows;
   applyAdaptiveVisibility();
-  // Newest at the bottom for the default order, the top row otherwise.
+  // Newest at the bottom for the default order, the top row otherwise;
+  // then at now, for an order by a date, unless a selection is wanted.
   if (shownRows.length > 0)
     vueGrid.slickGrid.scrollRowIntoView(shown?.tail ? shownRows.length - 1 : 0);
+  if (!seekingSelection) void goToNow();
   tryRestoreSelection();
   // Fire-and-forget: the badges fill in a beat after the rows land
   // rather than holding the result set hostage to a second request.
@@ -1508,9 +1563,13 @@ function docSource(doc: { md: string; anchor: string | null }): string {
   return `documentView(${args})`;
 }
 
-function openRow(row: Row) {
-  // Double-click → open this row's doc as a standalone single-column
-  // page in a new tab, with the row's section highlighted.
+function openBeside(row: Row) {
+  const doc = documentOf(row);
+  if (doc) props.ctx.host.openCards(docSource(doc));
+}
+
+/// A standalone single-column page, with the row's section highlighted.
+function openInNewTab(row: Row) {
   const doc = documentOf(row);
   if (!doc) return;
   const href = encodeColumns([{ code: docSource(doc), state: "" }]);
@@ -1872,6 +1931,17 @@ const chipSlots = menuSlots(24, (args) => {
 });
 
 const menuItems: (MenuCommandItem | "divider")[] = [
+  entry(
+    "open",
+    (m) => (m.anchor && documentOf(m.anchor) ? "Open document" : null),
+    (m) => openBeside(m.anchor!),
+  ),
+  entry(
+    "open-tab",
+    (m) => (m.anchor && documentOf(m.anchor) ? "Open in a new tab" : null),
+    (m) => openInNewTab(m.anchor!),
+  ),
+  dividerAfter((m) => m.anchor !== null && documentOf(m.anchor) !== null),
   ...chipSlots.commandItems,
   dividerAfter((m) => m.chip !== null),
   entry(
@@ -1986,8 +2056,8 @@ function gridOptions(): GridOption {
     rowHeight: 52,
     enableTextSelectionOnCells: true,
     // Rows select on click, several with a modifier — so right-click
-    // "Copy UUID(s)" can target several rows, like Lightroom. The
-    // document column follows whichever row was most recently selected.
+    // "Copy UUID(s)" can target several rows, like Lightroom. Selecting
+    // opens nothing (grid/rowIdioms.ts).
     enableCellNavigation: true,
     enableSelection: true,
     multiSelect: true,
@@ -2116,7 +2186,11 @@ function createGrid() {
   const grid = bundle.slickGrid;
   grid.onSelectedRowsChanged.subscribe(onSelectedRowsChanged);
   grid.onClick.subscribe(onClick);
+  // Ahead of `openRowsOn`: a chip or a document link takes its own
+  // double-click.
   grid.onDblClick.subscribe(onDblClick);
+  openRowsOn(grid, rowData, openBeside);
+  selectAllRowsOnKey(grid, rowData);
   grid.onViewportChanged.subscribe(onViewportChanged);
   copySelectedRowsOnKey(grid, rowData, copyCell);
   bundle.instances?.eventPubSubService?.subscribe<GridStateChange>(
@@ -2223,28 +2297,20 @@ function onSelectedRowsChanged(_e: SlickEventData, args: OnSelectedRowsChangedEv
   if (!data) return;
   selectedRow.value = data;
   sel.value = rowKey(data);
-  // `restoring` is true when this is a URL-driven re-selection — the
-  // document column is already in the URL, so don't open a duplicate
-  // (and don't rewrite the state we just read).
-  if (restoring) return;
   saveState();
-  const doc = documentOf(data);
-  if (doc) props.ctx.host.openCards(docSource(doc));
 }
 
-/// A Document cell's link: the row is picked, as a click on the row
-/// picks it, and its document opens beside the grid — again, too, when
-/// the row was already the picked one and its document has been closed.
+/// A Document cell's link: a link opens on one click, so the row is
+/// picked, as a click on the row picks it, and its document opens
+/// beside the grid — again, too, when it has been closed.
 function pickAndOpen(data: Row) {
   if (!vueGrid) return;
   const selected = selectedRows();
   const at = vueGrid.dataView.getRowById(rowKey(data));
   if (at != null && !(selected.length === 1 && rowKey(selected[0]) === rowKey(data))) {
     vueGrid.slickGrid.setSelectedRows([at]);
-    return;
   }
-  const doc = documentOf(data);
-  if (doc) props.ctx.host.openCards(docSource(doc));
+  openBeside(data);
 }
 
 /// The chip under a pointer event in a cell, if any.
@@ -2270,22 +2336,22 @@ function onClick(e: SlickEventData, args: OnClickEventArgs) {
 
 function onDblClick(e: SlickEventData, args: OnDblClickEventArgs) {
   // A document link's first click already opened the document beside
-  // the grid; the second is not a request for a window of it as well.
+  // the grid; the second is not a request to open it again.
   const target = e.getNativeEvent<MouseEvent>()?.target as Element | null | undefined;
-  if (target?.closest?.("a.tg-link")) return;
+  if (target?.closest?.("a.tg-link")) {
+    e.stopImmediatePropagation();
+    return;
+  }
   // Double-click on a chip opens its card: a person's, led by this
   // row's source, or a group's dashboard or a step's log
   // (docs/dev/chips.md § Clicks).
   const el = chipAt(e);
   const chip = el ? chipOf(el) : null;
-  if (chip) {
-    const seenIn = rowData(args.row)?.source_id || null;
-    const source = chipCardSource(chip.ref, seenIn);
-    if (source) props.ctx.host.openCards(source);
-    return;
-  }
-  const data = rowData(args.row);
-  if (data) openRow(data);
+  if (!chip) return;
+  e.stopImmediatePropagation();
+  const seenIn = rowData(args.row)?.source_id || null;
+  const source = chipCardSource(chip.ref, seenIn);
+  if (source) props.ctx.host.openCards(source);
 }
 
 // Any change a USER can make to columns gets reflected in the persisted
@@ -2445,6 +2511,19 @@ onBeforeUnmount(() => {
     <div class="table-view" :class="{ 'is-off': view !== 'table' }">
       <div class="status">
         {{ rows.length }} rows (of {{ total }})
+        <!-- Hidden rather than removed, so it showing never moves the
+             grid it scrolls. -->
+        <button
+          type="button"
+          class="go-now"
+          :class="{ 'go-now--off': !hasNow }"
+          :disabled="!hasNow"
+          data-testid="grid-now"
+          title="Scroll to now: what is still to come lies beyond it"
+          @click="goToNow"
+        >
+          Now
+        </button>
         <span v-if="qmdCoverage" class="qmd-summary" :title="qmdCoverage.title">
           · {{ qmdCoverage.text }}
         </span>
@@ -2750,6 +2829,23 @@ onBeforeUnmount(() => {
 }
 .error-retry:hover {
   background: var(--datalib-border);
+}
+.go-now {
+  margin-left: 0.4rem;
+  padding: 0 0.5rem;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--datalib-fg);
+  background: transparent;
+  border: 1px solid var(--datalib-border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.go-now:hover {
+  background: var(--datalib-border);
+}
+.go-now--off {
+  visibility: hidden;
 }
 .query-unread,
 .qmd-unbuilt {
