@@ -595,6 +595,23 @@ python3 scripts/search_eval.py show after.json --missed words   # what a query f
 python3 scripts/search_eval.py audit-me --root <clone> --name "<owner>"  # where `me` is tagged
 ```
 
+A run is worth keeping when it measures a change or a new baseline.
+`keep` cuts it to its scores and each query's rank and time per answer,
+without the rows found, and files it in a history directory as
+`<date>-<commit>-<note>.json`. `history` prints every kept run, oldest
+first, marking where the eval set changed, since scores compare only
+within one set. A run records the commit of the checkout it ran from,
+whether that checkout was clean, the machine, its load average as the
+run started and ended (times taken on a busy machine compare with
+nothing), and the eval set's hash;
+build the applet from that same checkout, or the commit says nothing.
+Thad's history is beside his eval set, in `search_eval/history/`:
+
+```bash
+python3 scripts/search_eval.py keep after.json --history <dir> --note "what this measured"
+python3 scripts/search_eval.py history <dir>
+```
+
 By default it starts its own `datalib-applet unified_document_index` and
 times the answers warm, after one query of each kind. `--http <url>` asks
 a running `datalib-http` through its gateway instead, so the times

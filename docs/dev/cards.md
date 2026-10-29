@@ -544,8 +544,16 @@ besides components:
   opens one. Its table is the grid below, over the search: row click
   opens the row's document via `host.openCards`, as does one click on a
   Document cell's link (the problems grid's); double-click on the row
-  opens it as a standalone single-column page in a new tab. Persists
-  `q`/`sel`/`cols`/`view` state. A search given no `q` opens on
+  opens it as a standalone single-column page in a new tab. In an
+  order newest first by a date (its own, or a Touched, Created or
+  Modified sort going down) the table opens at now: the first page
+  says how many rows are still to come (`now_at`, a calendar's
+  meetings ahead), and the grid scrolls so they lie just out of view
+  beyond the newest row that has happened (`grid/nowRow.ts`). A **Now**
+  button beside the row count scrolls back there. Any other order has
+  no now and no button; going oldest first, now is at the far end of
+  every row, which the grid would have to load to reach.
+  Persists `q`/`sel`/`cols`/`view` state. A search given no `q` opens on
   `is:document`, one row per document; the empty bar suggests filters
   on the biggest source the index holds (`cards/searchDefaults.ts`).
 
@@ -750,6 +758,13 @@ A new chart starts there.
   `themeOf(el)`, which reads the colours a canvas needs off those
   tokens, since a canvas cannot take `var()`; `axis()`, the app's axis
   look; and `withAlpha()` for a fill.
+- **`t0Axis.ts`** is a time axis while T0 is set (`docs/dev/chips.md`
+  §"A date"): ticks on whole steps counted from T0 (`t0Ticks`), each
+  labelled by its distance from it in the units the step needs, the
+  zero ones left out (`t0TickTexts`): `T0`, `+30m`, `+1d 12h`, `-2y`,
+  `+1y 25d`. A chart's time axis uses it in place of its own ticks, and
+  has the time view in its `shape`, so setting or clearing T0 rebuilds
+  it.
 - **`PLOT_CSS`** (`plotCss.ts`) is uPlot's own stylesheet and `plot.css`
   (the crosshair, the zoom's selection, the legend). Neither a card's
   shadow root nor a document's frame sees the page's styles, so every

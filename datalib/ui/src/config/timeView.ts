@@ -13,7 +13,9 @@ export type DayStyle = "locale" | "iso";
 
 export type HourCycle = "h23" | "h12";
 
-export type TimeView = { zone: Zone; days: DayStyle; hours: HourCycle };
+/** `t0`, when set, is the instant every date chip is drawn relative to
+ *  (`sinceT0`) instead of as a date. */
+export type TimeView = { zone: Zone; days: DayStyle; hours: HourCycle; t0?: Instant | null };
 
 export const LOCAL: Zone = { kind: "local" };
 export const WRITTEN: Zone = { kind: "written" };
@@ -253,6 +255,112 @@ export function dayBounds(at: Instant, zone: Zone): [string, string] {
   return [stamp(start), stamp(end)];
 }
 
+/** An instant to the millisecond under `zone`, `2026-09-22 14:07:47.190`,
+ *  for a log: a step's own lines are stamped in UTC and the runner's in
+ *  local time, and showing the digits as written would interleave two
+ *  clocks. Digits and separators only, on a 24-hour clock whatever the
+ *  view's, so it sorts as text and a column can clip it from the left
+ *  down to the time of day. */
+export function millisText(at: Instant, zone: Zone): string {
+  const w = wallClock(at, zone);
+  const ms = String(((at.ms % 1000) + 1000) % 1000).padStart(3, "0");
+  return `${w.year}-${p2(w.month)}-${p2(w.day)} ${p2(w.hour)}:${p2(w.minute)}:${p2(w.second)}.${ms}`;
+}
+
+/** An instant as a `datetime-local` input holds it, under `zone`:
+ *  `2026-10-29T09:36:35.546`. */
+export function inputOfInstant(at: Instant, zone: Zone): string {
+  return millisText(at, zone).replace(" ", "T");
+}
+
+const WALL_INPUT = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/;
+
+/** What a `datetime-local` input holds, read as a wall clock under
+ *  `zone`: the instant, with that zone's offset then as its own. Null
+ *  for anything else, or a clock no calendar has (`2026-02-30`). */
+export function instantOfInput(value: string, zone: Zone): Instant | null {
+  const m = WALL_INPUT.exec(value.trim());
+  if (!m) return null;
+  const [year, month, day, hour, minute] = [+m[1]!, +m[2]!, +m[3]!, +m[4]!, +m[5]!];
+  const wall: Wall = { year, month, day, hour, minute, second: +(m[6] ?? 0) };
+  const check = new Date(Date.UTC(year, month - 1, day, hour, minute, wall.second));
+  const real =
+    check.getUTCFullYear() === year &&
+    check.getUTCMonth() === month - 1 &&
+    check.getUTCDate() === day &&
+    check.getUTCHours() === hour &&
+    check.getUTCMinutes() === minute &&
+    check.getUTCSeconds() === wall.second;
+  if (!real) return null;
+  const ms = instantOfWall(wall, zone, null) + +(m[7] ?? "0").padEnd(3, "0");
+  return { ms, offsetMin: offsetAt({ ms, offsetMin: null }, zone) };
+}
+
+/** How far `ms` is from T0, signed, to the millisecond: `+1.250`,
+ *  `-4:05.000`, `+2:00:00.000`, `-3d 04:05:06.789`, `+343y 075d
+ *  00:23:24.454`. The largest unit that is not zero leads, unpadded; the
+ *  rest are padded, so a column of them lines up when right-justified.
+ *  A year is a calendar year counted on from the earlier of the two in
+ *  UTC, so the same day a year on is `1y 000d`, leap day or not. */
+export function sinceT0(ms: number, t0: number): string {
+  const { sign, years, days, hours, minutes, seconds, millis } = partsSinceT0(ms, t0);
+  const frac = `.${String(millis).padStart(3, "0")}`;
+  const clock = `${p2(hours)}:${p2(minutes)}:${p2(seconds)}`;
+  const whole = years
+    ? `${years}y ${String(days).padStart(3, "0")}d ${clock}`
+    : days
+      ? `${days}d ${clock}`
+      : hours
+        ? `${hours}:${p2(minutes)}:${p2(seconds)}`
+        : minutes
+          ? `${minutes}:${p2(seconds)}`
+          : `${seconds}`;
+  return `${sign < 0 ? "-" : sign > 0 ? "+" : ""}${whole}${frac}`;
+}
+
+/** How far `ms` is from T0, in its units: calendar years, then days down
+ *  to milliseconds, and which side of T0 it is on. */
+export type SinceT0 = {
+  sign: -1 | 0 | 1;
+  years: number;
+  days: number;
+  hours: number;
+  minutes: number;
+  seconds: number;
+  millis: number;
+};
+
+export function partsSinceT0(ms: number, t0: number): SinceT0 {
+  const d = Math.round(ms - t0);
+  const [from, to] = d < 0 ? [t0 + d, t0] : [t0, t0 + d];
+  const years = wholeYears(from, to);
+  const a = to - yearsOn(from, years);
+  return {
+    sign: d < 0 ? -1 : d > 0 ? 1 : 0,
+    years,
+    days: Math.floor(a / 86_400_000),
+    hours: Math.floor(a / 3_600_000) % 24,
+    minutes: Math.floor(a / 60_000) % 60,
+    seconds: Math.floor(a / 1000) % 60,
+    millis: a % 1000,
+  };
+}
+
+/** The same instant `years` calendar years on (or back), in UTC. */
+export function yearsOn(ms: number, years: number): number {
+  const at = new Date(ms);
+  at.setUTCFullYear(at.getUTCFullYear() + years);
+  return at.getTime();
+}
+
+/** The calendar years from `from` that fit before `to`. */
+function wholeYears(from: number, to: number): number {
+  let years = Math.floor((to - from) / 31_556_952_000);
+  while (years > 0 && yearsOn(from, years) > to) years--;
+  while (yearsOn(from, years + 1) <= to) years++;
+  return years;
+}
+
 /** Whether a view reads every instant as this machine does, which is how
  *  the search reads a bare day. */
 export function readsAsMachine(view: TimeView): boolean {
@@ -314,10 +422,14 @@ export function readStoredView(raw: string | null): TimeView {
         : z?.kind === "named" && typeof z.name === "string" && isValidZone(z.name)
           ? { kind: "named", name: z.name }
           : LOCAL;
+    const t0 = v.t0;
     return {
       zone,
       days: v.days === "iso" ? "iso" : "locale",
       hours: v.hours === "h12" ? "h12" : "h23",
+      ...(t0 && Number.isFinite(t0.ms) && (t0.offsetMin === null || Number.isFinite(t0.offsetMin))
+        ? { t0: { ms: t0.ms, offsetMin: t0.offsetMin } }
+        : {}),
     };
   } catch {
     return DEFAULT_VIEW;
@@ -363,6 +475,11 @@ export const recentZones = ref<string[]>(readStoredRecent(load(RECENT_KEY)));
 export function setZone(zone: Zone) {
   timeView.value = { ...timeView.value, zone };
   recentZones.value = withRecent(recentZones.value, zone);
+}
+
+/** Draw every date chip relative to `at`, or as a date again for null. */
+export function setT0(at: Instant | null) {
+  timeView.value = { ...timeView.value, t0: at };
 }
 
 watch(timeView, (v) => save(VIEW_KEY, v), { deep: true });

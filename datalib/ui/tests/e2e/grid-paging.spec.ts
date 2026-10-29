@@ -3,7 +3,7 @@
 // the newest of them, and the rest arrive as it is scrolled.
 
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
-import { EVERY_ROW, SEARCH_ROWS, searchHeader, type GridApi } from "./grid-helpers";
+import { EVERY_ROW, gridSettled, SEARCH_ROWS, searchHeader, type GridApi } from "./grid-helpers";
 
 async function searchUuids(request: APIRequestContext, params: string): Promise<string[]> {
   const r = await request.get(`/applet/unified_document_index/search?q=&${params}`);
@@ -72,4 +72,51 @@ test("a header sort orders the whole search", async ({ page, request }) => {
   expect((await held(page)).loaded, "a sort loaded every row").toBeLessThan(
     (await held(page)).total,
   );
+});
+
+/// Whether `uuid`'s row is drawn inside the grid's viewport. Its index
+/// moves as older rows load above it, so it is asked for each time.
+async function inView(page: Page, uuid: string): Promise<boolean> {
+  await gridSettled(page);
+  const i = await page.evaluate(
+    (u) => (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.rowIndexOf(u),
+    uuid,
+  );
+  if (i === null) return false;
+  const row = page.locator(`${SEARCH_ROWS}[data-row="${i}"]`).first();
+  if ((await row.count()) === 0) return false;
+  const [r, v] = await Promise.all([
+    row.boundingBox(),
+    page.locator(".grid-box .slick-viewport").first().boundingBox(),
+  ]);
+  return !!r && !!v && r.y >= v.y - 1 && r.y + r.height <= v.y + v.height + 1;
+}
+
+/// The grid opens at now, the newest row that is not still to come (the
+/// suite pins now past the fixture, so that is its newest row), and the
+/// Now button brings it back after a scroll. An order that is not newest
+/// first by a date has no now to go to.
+test("the Now button returns to now, and only a newest-first date order has one", async ({
+  page,
+  request,
+}) => {
+  const [newest] = await searchUuids(request, "limit=1");
+  await page.goto(EVERY_ROW);
+  await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 15_000 });
+  const now = page.getByTestId("grid-now");
+  await expect.poll(() => inView(page, newest)).toBe(true);
+  await expect(now).toBeVisible();
+
+  await page.evaluate(() =>
+    (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.scrollToRow(0),
+  );
+  await expect.poll(() => inView(page, newest)).toBe(false);
+  await now.click();
+  await expect.poll(() => inView(page, newest)).toBe(true);
+
+  await searchHeader(page, "kind").click();
+  await expect(now).toBeHidden();
+  await searchHeader(page, "touched_at").click();
+  await searchHeader(page, "touched_at").click();
+  await expect(now, "Touched, newest first, is by a date").toBeVisible();
 });

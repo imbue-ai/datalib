@@ -3,7 +3,6 @@
 import { describe, expect, it } from "vitest";
 import {
   compareStamps,
-  formatDateTime,
   formatDuration,
   formatRelative,
   formatShortStamp,
@@ -174,19 +173,6 @@ describe("ordering by when, not by how it reads", () => {
     // Neither is older than the other; whatever secondary order the
     // grid settles on is not this function's business.
     expect(compareStamps(null, null)).toBe(0);
-  });
-});
-
-describe("formatDateTime", () => {
-  it("is the date and the time of day, one clock for every zone", () => {
-    const utc = formatDateTime("2026-09-11T15:10:41.113Z");
-    expect(utc).toBe(formatDateTime("2026-09-11T17:10:41.113+02:00"));
-    expect(utc).toMatch(/^2026-09-1\d \d\d:\d\d:41\.113$/);
-  });
-
-  it("passes an unreadable stamp through, and says nothing for none", () => {
-    expect(formatDateTime("not a date")).toBe("not a date");
-    expect(formatDateTime(null)).toBe("");
   });
 });
 

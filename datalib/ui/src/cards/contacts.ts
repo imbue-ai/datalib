@@ -162,6 +162,10 @@ export type ChipLook = {
   photo: string | null;
   /** The tooltip: who, the identifier, and what each source knows. */
   title: string;
+  /** Which end of the text gives way to "…" when the chip has less room
+   *  than it needs: the right, unless its end is what tells it apart (a
+   *  log's stamp, a distance from T0). */
+  elide?: "left" | "right";
 };
 
 /** The photo to lead with: your contact's, else the first source's. */
@@ -713,7 +717,18 @@ export function drawChip(el: HTMLElement, look: ChipLook): void {
   // needs can end it in "…"; the tooltip has it whole.
   const text = el.ownerDocument.createElement("span");
   text.className = "chip-text";
-  text.textContent = look.text;
+  if (look.elide === "left") {
+    // Right-to-left so the start is what overflows; the text itself in a
+    // left-to-right isolate, or "2026-09-22 14:07" would draw its time
+    // before its date.
+    text.classList.add("chip-elide-left");
+    const ltr = el.ownerDocument.createElement("span");
+    ltr.className = "chip-ltr";
+    ltr.textContent = look.text;
+    text.replaceChildren(ltr);
+  } else {
+    text.textContent = look.text;
+  }
   if (lead) el.replaceChildren(lead, text);
   else el.replaceChildren(text);
 }

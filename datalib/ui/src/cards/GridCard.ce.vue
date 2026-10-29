@@ -55,7 +55,7 @@ import {
   people,
 } from "./contacts";
 import { CONTACT } from "@/search/queryText";
-import { dateText, datesInText, parseStamp } from "./dates";
+import { dateWallText, datesInText, parseStamp } from "./dates";
 import {
   CHIP_SELECTOR,
   chipCardSource,
@@ -106,6 +106,7 @@ import { followFrame, isDarkTheme } from "@/grid/gridFrame";
 import {
   filterToken,
   keepExcludeEntries,
+  sameSearch,
   searchDelay,
   withToken,
   type FilterEntry,
@@ -131,6 +132,7 @@ import {
   type Page,
   type PagedWindow,
 } from "@/grid/pagedWindow";
+import { nowRow } from "@/grid/nowRow";
 import {
   countsByKey,
   groupItems,
@@ -243,7 +245,7 @@ picked last.</p>
 // person in it by their name once it is known, and a date as its chip.
 function shownValue(value: string): string | null {
   const stamp = parseStamp(value);
-  if (stamp) return dateText(stamp);
+  if (stamp) return dateWallText(stamp);
   if (value.startsWith(CONTACT)) {
     const contact = contactsById.lookup(value.slice(CONTACT.length));
     return contact ? nameOf(contact) : null;
@@ -283,6 +285,11 @@ const shownQuery = ref<string | null>(null);
 /// The tab whose answer the rows on screen are, beside `shownQuery`.
 const shownTab = ref<Answer | null>(null);
 const total = ref(0);
+/// How many of the search's rows are still to come, when it is ordered
+/// newest first by a date: a calendar's meetings ahead. The grid opens
+/// at now, below them.
+let nowAt: number | null = null;
+const hasNow = ref(false);
 const loading = ref(false);
 const error = ref<SearchFailure | null>(null);
 // A failed search leaves the previous query's rows painted; say so, or
@@ -899,7 +906,11 @@ async function runSearch(q: string, refresh = false) {
     win = firstWindow(searchPage(r));
     // qmd's rank is not an order in time.
     const ranked = qmd() && !!r.query_echo?.free_text;
-    if (!again) shown = { q, sort, tab: t, tail: sort === null && !ranked };
+    if (!again) {
+      shown = { q, sort, tab: t, tail: sort === null && !ranked };
+      nowAt = r.now_at ?? null;
+      hasNow.value = nowAt !== null;
+    }
     rows.value = win.rows;
     total.value = r.total;
     qmdError.value = typeof r.query_echo?.qmd_error === "string" ? r.query_echo.qmd_error : null;
@@ -974,6 +985,35 @@ function loadWanted() {
   void loadThrough(seeking ? win.rows.length : nearing + MARGIN, seeking);
 }
 
+/// Bring now into view: the newest row that is not still to come, with
+/// what is to come beyond it. The rows up to it are loaded first.
+async function goToNow() {
+  const search = shown;
+  while (
+    search === shown &&
+    win &&
+    nowAt !== null &&
+    win.rows.length <= nowAt &&
+    win.next !== null
+  ) {
+    const held = win.rows.length;
+    await (loadingMore ?? loadThrough(nowAt + MARGIN));
+    // A page that failed to arrive: its error is on screen.
+    if (win && win.rows.length === held && !loadingMore) break;
+  }
+  if (search !== shown || !shown || !vueGrid || !win || nowAt === null) return;
+  const at = nowRow(nowAt, win.rows.length, shown.tail);
+  if (!at) return;
+  const grid = vueGrid.slickGrid;
+  if (at.edge === "top") return grid.scrollRowToTop(at.row);
+  // Measured off the viewport itself: the grid's own bottom-edge scroll
+  // (`scrollRowIntoView`) leaves the row half under the edge here.
+  const viewportHeight = grid.getViewportNode()?.clientHeight ?? 0;
+  const rowHeight = grid.getOptions().rowHeight ?? 0;
+  grid.scrollTo(Math.max(0, (at.row + 1) * rowHeight - viewportHeight));
+  grid.render();
+}
+
 /// Load pages until `uuid`'s row is held, and say where it is: null when
 /// the search does not have it.
 async function seek(uuid: string): Promise<number | null> {
@@ -1038,6 +1078,8 @@ async function runGrouped(q: string, refresh: boolean) {
       counts: countsByKey(r.groups, gettersOf(by)),
     };
     shown = { q, sort, tab: t, tail: false };
+    nowAt = null;
+    hasNow.value = false;
     win = null;
     qmdError.value = r.qmd_error ?? null;
     qmdIndexMissing.value = r.qmd_index_missing ?? false;
@@ -1145,6 +1187,10 @@ watch(query, (q, before) => {
   const ranked = rowsSpec === null ? isSearch : qmd();
   debounceTimer = setTimeout(
     () => {
+      if (sameSearch(q, settledQuery.value)) {
+        loading.value = false;
+        return;
+      }
       settledQuery.value = q;
       void startSearch(q);
     },
@@ -1245,14 +1291,19 @@ watch(view, (v) => {
 const sources = ref<RowGroup<Row>[]>([]);
 const sourcesQuery = computed(() => setSource(settledQuery.value, null));
 let sourcesAsked = 0;
+/// A newer search cancels the chips' request, so the server stops
+/// ranking free text nobody is waiting for.
+let sourcesInflight: AbortController | null = null;
 async function loadSources() {
   if (!isSearch || props.oneSource) return;
   const asked = ++sourcesAsked;
+  sourcesInflight?.abort();
+  const ctrl = (sourcesInflight = new AbortController());
   try {
     const r = await fetchGroups<Row>(
       sourcesQuery.value,
       "source_ref",
-      undefined,
+      ctrl.signal,
       SEARCH,
       tab.value,
     );
@@ -1404,9 +1455,11 @@ function showNew() {
   const shownRows = display(win.rows);
   vueGrid.dataset = shownRows;
   applyAdaptiveVisibility();
-  // Newest at the bottom for the default order, the top row otherwise.
+  // Newest at the bottom for the default order, the top row otherwise;
+  // then at now, for an order by a date, unless a selection is wanted.
   if (shownRows.length > 0)
     vueGrid.slickGrid.scrollRowIntoView(shown?.tail ? shownRows.length - 1 : 0);
+  if (!seekingSelection) void goToNow();
   tryRestoreSelection();
   // Fire-and-forget: the badges fill in a beat after the rows land
   // rather than holding the result set hostage to a second request.
@@ -2458,6 +2511,19 @@ onBeforeUnmount(() => {
     <div class="table-view" :class="{ 'is-off': view !== 'table' }">
       <div class="status">
         {{ rows.length }} rows (of {{ total }})
+        <!-- Hidden rather than removed, so it showing never moves the
+             grid it scrolls. -->
+        <button
+          type="button"
+          class="go-now"
+          :class="{ 'go-now--off': !hasNow }"
+          :disabled="!hasNow"
+          data-testid="grid-now"
+          title="Scroll to now: what is still to come lies beyond it"
+          @click="goToNow"
+        >
+          Now
+        </button>
         <span v-if="qmdCoverage" class="qmd-summary" :title="qmdCoverage.title">
           · {{ qmdCoverage.text }}
         </span>
@@ -2763,6 +2829,23 @@ onBeforeUnmount(() => {
 }
 .error-retry:hover {
   background: var(--datalib-border);
+}
+.go-now {
+  margin-left: 0.4rem;
+  padding: 0 0.5rem;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--datalib-fg);
+  background: transparent;
+  border: 1px solid var(--datalib-border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.go-now:hover {
+  background: var(--datalib-border);
+}
+.go-now--off {
+  visibility: hidden;
 }
 .query-unread,
 .qmd-unbuilt {

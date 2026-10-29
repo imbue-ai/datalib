@@ -10,10 +10,14 @@ import {
   WRITTEN,
   dayBounds,
   formatAt,
+  inputOfInstant,
+  instantOfInput,
+  millisText,
   parseInstant,
   readStoredRecent,
   readStoredView,
   searchZones,
+  sinceT0,
   wallClock,
   withRecent,
   zoneName,
@@ -121,5 +125,84 @@ describe("a stored choice", () => {
     expect(readStoredRecent(JSON.stringify(["Europe/Vienna", "Mars/Olympus", 3]))).toEqual([
       "Europe/Vienna",
     ]);
+  });
+});
+
+describe("a log's stamp", () => {
+  it("is the date and the time of day to the millisecond, one clock for every stamp", () => {
+    const at = (iso: string) => parseInstant(iso)!;
+    expect(millisText(at("2026-09-11T15:10:41.113Z"), named("Europe/Vienna"))).toBe(
+      "2026-09-11 17:10:41.113",
+    );
+    expect(millisText(at("2026-09-11T17:10:41.113+02:00"), UTC)).toBe("2026-09-11 15:10:41.113");
+    expect(millisText(at("2026-09-11T17:10:41.000000+02:00"), WRITTEN)).toBe(
+      "2026-09-11 17:10:41.000",
+    );
+  });
+});
+
+describe("a date from T0", () => {
+  const T0 = Date.parse("2026-10-26T09:21:57.190Z");
+  const after = (ms: number) => sinceT0(T0 + ms, T0);
+
+  it("leads with the largest unit that is not zero, unpadded", () => {
+    expect(after(0)).toBe("0.000");
+    expect(after(1250)).toBe("+1.250");
+    expect(after(12_345)).toBe("+12.345");
+    expect(after(65_200)).toBe("+1:05.200");
+    expect(after(3_600_000)).toBe("+1:00:00.000");
+    expect(after(36_000_000 + 4_000)).toBe("+10:00:04.000");
+    expect(after(3 * 86_400_000 + 4 * 3_600_000 + 5 * 60_000 + 6_789)).toBe("+3d 04:05:06.789");
+  });
+
+  /** A search table of TNG documents read `+125346d 00:23:24.454`. */
+  it("counts calendar years past a year, then days", () => {
+    const at = (iso: string) => sinceT0(Date.parse(iso), T0);
+    expect(at("2027-10-26T09:21:57.190Z")).toBe("+1y 000d 00:00:00.000");
+    expect(at("2027-10-25T09:21:57.190Z")).toBe("+364d 00:00:00.000");
+    expect(at("2370-01-05T09:45:21.644Z")).toBe("+343y 071d 00:23:24.454");
+    expect(at("1990-01-02T09:21:57.190Z")).toBe("-36y 297d 00:00:00.000");
+    // From a leap day, a year on lands on the first of March.
+    expect(sinceT0(Date.parse("2029-03-01T00:00:00Z"), Date.parse("2028-02-29T00:00:00Z"))).toBe(
+      "+1y 000d 00:00:00.000",
+    );
+  });
+
+  it("is negative before T0", () => {
+    expect(after(-500)).toBe("-0.500");
+    expect(after(-245_000)).toBe("-4:05.000");
+    expect(after(-86_400_000)).toBe("-1d 00:00:00.000");
+  });
+});
+
+describe("a T0 typed in a zone", () => {
+  /** The clock's picker: a date and time to the millisecond, and the
+   *  zone it is read in. */
+  it("reads the wall clock in the zone it was typed in, with that zone's offset", () => {
+    expect(instantOfInput("2026-04-15T19:05:00.250", named("Asia/Tokyo"))).toEqual({
+      ms: Date.parse("2026-04-15T10:05:00.250Z"),
+      offsetMin: 540,
+    });
+    expect(instantOfInput("2026-01-15T12:00", named("Europe/Vienna"))).toEqual({
+      ms: Date.parse("2026-01-15T11:00:00Z"),
+      offsetMin: 60,
+    });
+    expect(instantOfInput("2026-04-15T10:05:00.5", UTC)?.ms).toBe(
+      Date.parse("2026-04-15T10:05:00.500Z"),
+    );
+  });
+
+  it("refuses what is not a clock", () => {
+    expect(instantOfInput("", UTC)).toBeNull();
+    expect(instantOfInput("2026-02-30T10:00", UTC)).toBeNull();
+    expect(instantOfInput("2026-04-15T24:00", UTC)).toBeNull();
+    expect(instantOfInput("2026-04-15 10:00", UTC)).toBeNull();
+  });
+
+  it("fills the picker with an instant as that zone reads it, and reads it back", () => {
+    const at = { ms: Date.parse("2026-10-29T08:36:35.546Z"), offsetMin: 0 };
+    const vienna = named("Europe/Vienna");
+    expect(inputOfInstant(at, vienna)).toBe("2026-10-29T09:36:35.546");
+    expect(instantOfInput(inputOfInstant(at, vienna), vienna)?.ms).toBe(at.ms);
   });
 });
