@@ -15,6 +15,7 @@ use crate::search::SearchRow;
 use crate::sort::Sort;
 use datalib_core::repo::RepoError;
 use datalib_schema::edges::EdgeRow;
+use datalib_schema::grid_rows::GridRowColumn;
 use datalib_schema::problems::{ProblemRow, ProblemRowColumn};
 
 /// Which rows a search holds, in order, and the commit they were read at
@@ -50,6 +51,17 @@ pub trait IndexRepo: Send + Sync {
         sort: &[Sort],
         within: &[Within],
     ) -> Result<Listing, RepoError>;
+
+    /// How many of the rows [`ordered_uuids`](Self::ordered_uuids) lists
+    /// for `query` and `within` are stamped after `utc` in `column`: the
+    /// head of an order newest first by it that is still to come.
+    async fn count_after(
+        &self,
+        query: &ParsedQuery,
+        within: &[Within],
+        column: GridRowColumn,
+        utc: &str,
+    ) -> Result<usize, RepoError>;
 
     /// The rows behind `uuids`, qmd's ranking, that `query`'s structured
     /// terms match: in `uuids`' order, or `sort`'s when given. A score

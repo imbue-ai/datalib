@@ -209,9 +209,9 @@ LinkedIn's `Contact` and `LinkedIn Chat`.
 All three are the record's own stamps, kept as the source wrote them
 (see the timestamp convention in AGENTS.md); each gets a `_utc` twin
 and an offset column at index time. `touched_at_utc` is what the grid
-sorts on, newest first, and Touched is the one date column the grid
-shows by default (a calendar's Browse shows Created instead);
-`created_at_utc` is what `before:`/`after:` filter on.
+sorts on, newest first, and what `before:`/`after:` filter on; Touched
+is the one date column the grid shows by default (a calendar's Browse
+shows Created instead).
 
 - **A document row:** `created_at` is the earliest moment in the
   document and `modified_at` the latest. Through `chat-common` that is
@@ -222,11 +222,13 @@ shows by default (a calendar's Browse shows Created instead);
   `modified_at` is the edit stamp where the source keeps one —
   **null** otherwise, never a copy of `created_at`: null means "not
   known to have changed since it was created".
-- **`touched_at`** is when the record last changed at its source. The
-  builder sets it to `modified_at`, else `created_at`, so a provider
-  sets it only when the last change is neither. Calendar is the one
-  that does: an event's `created_at` is when it happens, often years
-  ahead, so its `touched_at` is its edit stamp, else when it was added.
+- **`touched_at`** is when the record was last active: when it last
+  changed at its source, or for an event, when it happens. The builder
+  sets it to `modified_at`, else `created_at`, so a provider sets it
+  only when the answer is neither. Calendar is the one that does: an
+  event's `touched_at` is its start, though it was last edited before
+  then, so `after:` last Monday finds last week's meetings. A meeting to
+  come is ahead of now, and the grid opens at now rather than on it.
 - A record with no stamp of its own (a vCard has no creation event)
   leaves `created_at` null.
 

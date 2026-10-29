@@ -45,7 +45,7 @@ use datalib_unified_document_index::qmd::{
 use datalib_unified_document_index::query::{parse_query, Field, FreeTextMode, ParsedQuery};
 use datalib_unified_document_index::repo::{DocRow, DynIndexRepo, EdgeRowOut};
 use datalib_unified_document_index::search::SearchRow;
-use datalib_unified_document_index::sort::Sort;
+use datalib_unified_document_index::sort::{newest_first_by_date, Sort};
 use datalib_unified_document_index::view;
 use serde::{Deserialize, Serialize};
 use tabs::SearchTab;
@@ -319,6 +319,11 @@ pub struct SearchResponse {
     pub total: u64,
     /// The offset of the next page, or None when this one reaches the end.
     pub next_offset: Option<usize>,
+    /// Where now falls in an order newest first by a date: how many rows
+    /// are still to come, a calendar's meetings ahead. The grid opens
+    /// below them. On the first page only; None for any other order or
+    /// for free text.
+    pub now_at: Option<usize>,
     /// The commit the search was read at. A later page answered at another
     /// one means the index moved in between, and what the client holds
     /// should be read again.
@@ -346,6 +351,7 @@ impl SearchResponse {
             rows: Vec::new(),
             total: 0,
             next_offset: None,
+            now_at: None,
             at: None,
             errors,
             refused: Vec::new(),
@@ -447,7 +453,9 @@ async fn answer_search(s: &Index, p: SearchParams) -> SearchResponse {
         limit,
         through,
     };
-    let page = match search_page(s, &q, &parsed, spec).await {
+    let answered = search_page(s, &q, &parsed, spec).await;
+    let read = answered.is_ok();
+    let page = match answered {
         Ok(page) => page,
         Err(SearchFailure::NoIndex) => {
             qmd_index_missing = true;
@@ -464,6 +472,22 @@ async fn answer_search(s: &Index, p: SearchParams) -> SearchResponse {
             errors.push(msg);
             Page::default()
         }
+    };
+    let now_at = match newest_first_by_date(&sort) {
+        Some(column) if read && offset == 0 && parsed.free_text.is_empty() => {
+            match s
+                .repo
+                .count_after(&parsed, &within, column, &now_utc())
+                .await
+            {
+                Ok(n) => Some(n),
+                Err(e) => {
+                    errors.push(format!("find where now falls: {e}"));
+                    None
+                }
+            }
+        }
+        _ => None,
     };
     let mut rows = page.rows;
     // The names and marks the config gives each source, read per
@@ -489,9 +513,30 @@ async fn answer_search(s: &Index, p: SearchParams) -> SearchResponse {
         rows,
         total: page.total as u64,
         next_offset: page.next_offset,
+        now_at,
         at: page.at,
         errors,
         refused: Vec::new(),
+    }
+}
+
+/// Pins what the search counts as now. The e2e suite sets it past its
+/// fixture, which is dated in the 2360s; nothing else does.
+const SEARCH_NOW_ENV: &str = "DATALIB_SEARCH_NOW";
+
+/// Now, in the stamps' own form: UTC, `…Z`, to the microsecond.
+fn now_utc() -> String {
+    let utc =
+        |t: chrono::DateTime<chrono::Utc>| t.to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
+    let Ok(pinned) = std::env::var(SEARCH_NOW_ENV) else {
+        return utc(chrono::Utc::now());
+    };
+    match chrono::DateTime::parse_from_rfc3339(&pinned) {
+        Ok(t) => utc(t.with_timezone(&chrono::Utc)),
+        Err(e) => {
+            tracing::error!(%pinned, error = %e, "{SEARCH_NOW_ENV} is not an RFC 3339 instant; using the clock");
+            utc(chrono::Utc::now())
+        }
     }
 }
 
@@ -2373,6 +2418,40 @@ mod tests {
 
     pub(super) fn uuids(r: &SearchResponse) -> Vec<&str> {
         r.rows.iter().map(|row| row.uuid.as_str()).collect()
+    }
+
+    /// The first page of an order newest first by a date says how many
+    /// rows are still to come, so the grid opens below them; any other
+    /// order says nothing. The stamps to come are centuries out so the
+    /// calendar cannot reach them.
+    #[tokio::test]
+    async fn a_newest_first_date_order_says_where_now_falls() {
+        let tmp = tempfile::tempdir().unwrap();
+        index_chats(
+            tmp.path(),
+            &[
+                ("past-1", "2020-01-01T09:00:00+00:00"),
+                ("past-2", "2020-01-02T09:00:00+00:00"),
+                ("past-3", "2020-01-03T09:00:00+00:00"),
+                ("ahead-1", "2900-01-01T09:00:00+00:00"),
+                ("ahead-2", "2900-01-02T09:00:00+00:00"),
+            ],
+        )
+        .await;
+        let s = index_over(tmp.path()).await;
+        let now_at = |r: SearchResponse| r.now_at;
+
+        assert_eq!(now_at(search(&s, "", None, 2, None).await), Some(2));
+        assert_eq!(
+            now_at(search(&s, "", None, 2, Some("created_at:desc")).await),
+            Some(2)
+        );
+        assert_eq!(
+            now_at(search(&s, "", None, 2, Some("created_at")).await),
+            None
+        );
+        assert_eq!(now_at(search(&s, "", None, 2, Some("kind")).await), None);
+        assert_eq!(now_at(search(&s, "", Some(2), 2, None).await), None);
     }
 
     /// Following `next_offset` from the first page reads every row once,

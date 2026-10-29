@@ -544,8 +544,16 @@ besides components:
   opens one. Its table is the grid below, over the search: row click
   opens the row's document via `host.openCards`, as does one click on a
   Document cell's link (the problems grid's); double-click on the row
-  opens it as a standalone single-column page in a new tab. Persists
-  `q`/`sel`/`cols`/`view` state. A search given no `q` opens on
+  opens it as a standalone single-column page in a new tab. In an
+  order newest first by a date (its own, or a Touched, Created or
+  Modified sort going down) the table opens at now: the first page
+  says how many rows are still to come (`now_at`, a calendar's
+  meetings ahead), and the grid scrolls so they lie just out of view
+  beyond the newest row that has happened (`grid/nowRow.ts`). A **Now**
+  button beside the row count scrolls back there. Any other order has
+  no now and no button; going oldest first, now is at the far end of
+  every row, which the grid would have to load to reach.
+  Persists `q`/`sel`/`cols`/`view` state. A search given no `q` opens on
   `is:document`, one row per document; the empty bar suggests filters
   on the biggest source the index holds (`cards/searchDefaults.ts`).
 

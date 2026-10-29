@@ -745,6 +745,41 @@ impl IndexRepo for DoltRepo {
         })
     }
 
+    async fn count_after(
+        &self,
+        q: &ParsedQuery,
+        within: &[Within],
+        column: GridRowColumn,
+        utc: &str,
+    ) -> Result<usize, RepoError> {
+        let Some(mut at) = self.pinned().await? else {
+            return Ok(0);
+        };
+        let (where_sql, mut params) = where_within(q, within);
+        let joiner = if where_sql.is_empty() {
+            " WHERE"
+        } else {
+            " AND"
+        };
+        params.push(utc.to_string());
+        // Audited: the table name is a literal on `At`, every column name
+        // a column enum's `as_str`, and every value bound.
+        let sql = format!(
+            "SELECT count(*) FROM {}{where_sql}{joiner} {} > ?",
+            at.grid_rows,
+            column.as_str()
+        );
+        let mut query = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql));
+        for p in &params {
+            query = query.bind(p);
+        }
+        match query.fetch_one(&mut *at.tx).await {
+            Ok(n) => Ok(usize::try_from(n).unwrap_or(0)),
+            Err(e) if is_missing_table(&e, "grid_rows") => Ok(0),
+            Err(e) => Err(RepoError::Internal(e.to_string())),
+        }
+    }
+
     async fn filter_uuids(
         &self,
         q: &ParsedQuery,
