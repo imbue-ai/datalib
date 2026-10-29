@@ -359,7 +359,9 @@ hover, the copy and a chip's name in a menu stay the date, since a
 distance from T0 means nothing pasted elsewhere. The clock shows
 `T0=2026-10-26 09:21:57.190` in the view's zone in place of the time now,
 with a × beside it and "Clear T0" in its menu; a chip's menu has "Clear
-T0" too. T0 is kept per browser with the rest of the view.
+T0" too. "Set T0…" in the clock's menu takes one by hand: a date and
+time to the millisecond and the zone it is read in, starting from T0 or
+from now (`timeView.ts::instantOfInput`). T0 is kept per browser with the rest of the view.
 
 **A chip short of room ends in "…"** on the side `ChipLook.elide`
 names: the right, except a log's stamp and any date from T0, whose
