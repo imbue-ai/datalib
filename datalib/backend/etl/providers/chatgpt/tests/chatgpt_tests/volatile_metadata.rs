@@ -123,3 +123,31 @@ async fn a_re_fetch_that_moves_only_model_switcher_deny_leaves_the_row_alone() {
         "the loader puts the newest list back, so the wire object round-trips"
     );
 }
+
+/// `/me` names the account's `first_name` on some calls and null on
+/// others. Every conversation reads the `me` row, so on a live root the
+/// flip re-rendered every conversation on most syncs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_me_that_moves_only_first_name_leaves_the_row_alone() {
+    let d = tempdir().unwrap();
+    let api = d.path().join("api");
+    let playback = d.path().join("playback");
+    let out_db = d.path().join("out.doltlite_db");
+    write_json(&api.join("conversations.json"), &json!([]));
+    write_json(
+        &api.join(format!("conversations/{CONV}.json")),
+        &detail(&["soong-3"]),
+    );
+    let me = |first_name: Value| json!({"id": "u-1", "email": "geordi@enterprise.test", "name": "Geordi La Forge", "first_name": first_name});
+    let mut stored = Vec::new();
+    for first_name in [json!("Geordi"), Value::Null] {
+        write_json(&api.join("me.json"), &me(first_name));
+        sync(&api, &playback, &out_db).await;
+        let db = RawDb::open(&db_path_for(&out_db)).await.unwrap();
+        stored.push(db.load_me().await.unwrap().expect("me is stored"));
+        db.close().await;
+    }
+    assert_eq!(stored[0], stored[1], "only first_name moved");
+    assert_eq!(stored[1]["name"], json!("Geordi La Forge"));
+    assert!(stored[1].get("first_name").is_none());
+}

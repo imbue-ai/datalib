@@ -422,6 +422,25 @@ fn only_a_split_stamp_is_taken_off_a_series_id() {
     );
 }
 
+/// `store::open` wrote `_datalib_meta` again after the shared open, with
+/// the shared ladder at 0, so every later open ran its rung again.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reopened_store_does_not_migrate_again() {
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("occurrences.doltlite_db");
+    for _ in 0..3 {
+        store::open(&db).await.unwrap().close().await;
+    }
+    let pool = store::open(&db).await.unwrap();
+    let migrations: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM dolt_log() WHERE message LIKE 'migrate shared%'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    pool.close().await;
+    assert_eq!(migrations, 0);
+}
+
 /// The store holds what the last pass listed and nothing older.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_store_holds_the_last_pass_and_its_window() {

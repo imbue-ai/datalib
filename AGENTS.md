@@ -581,6 +581,12 @@ through bazel so the fixture is rebuilt first. Insta snapshots are
 updated through sibling `.update` targets (`docs/dev/testing.md`).
 Coverage: `docs/dev/coverage.md`. Why a run was slow: `docs/dev/ci.md`.
 
+**A green suite cannot show a sync that is right but slow**: work
+redone, fetches made one at a time, an ETA that never moves, files
+left behind. After changing a download, a render, an index or a stored
+layout, sync a real root and read its run store
+([`testing.md`](docs/dev/testing.md) §"Auditing a real sync's logs").
+
 ## Tests wait on the observable, never on the clock
 
 **A test never `sleep`s to order two writers, or to give something

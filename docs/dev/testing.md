@@ -618,6 +618,38 @@ a running `datalib-http` through its gateway instead, so the times
 include the gateway. A plain `bazelisk build` compiles Rust unoptimized;
 time what ships with an applet built `-c opt` (`--applet <path>`).
 
+## Auditing a real sync's logs
+
+Some problems pass every test. A sync can be correct and still slow. It
+can re-fetch what it already holds, or fetch one file at a time where
+it could fetch several. Its ETA can sit still for half an hour, a
+rate-limit wait can stretch a step, and old files can be left behind
+after a layout change. A fixture is too small and too fresh to show any
+of these. The run store of a real root, after a large sync, shows all of
+them. So after changing a download, a render, an index or a stored
+layout, sync a real root and read its logs as well as running the
+suite. Write what you find as a dated audit under `audits/`
+([`2026-10-29_live_sync_logs.md`](audits/2026-10-29_live_sync_logs.md)
+is one). Write counts and timings only, never what the records say
+(AGENTS.md §"Real data stays out of the repo").
+
+Everything is plain SQLite. Open it with `sqlite3 -readonly`. qmd's
+`index.sqlite` needs `file:<path>?immutable=1`, and the grid index
+needs `datalib-doltlite -readonly`. Run ids are in `runs`. What to look
+at, and where:
+
+| question | where it shows |
+|---|---|
+| how long each step really took | `supervisor.sqlite` `invocations`. `step_runs` gives a step that ran more than once the run's end as its finish. |
+| did a step redo everything, and why | `msg = 'rendering every document'`: `why`, and `changed`, which names the params that moved. `'the keyword index is done'`: `N new … N removed` means every path moved, and a high `updated` on a quiet day means content churned. |
+| did an incremental pass stay small | render's `reverse lookup from the changed rows to the buckets`: `stale_buckets` far above `changed_rows` is a fan-out. Each download's `the download is done` summary, compared run to run. |
+| where a step's time went | `event = 'http_request'` (debug), one line per request with its `url` (without the query), `status` and `duration_ms`, from every source that reaches a web service. Summed per ten minutes, a sum close to the wall time means one request at a time. A Slack download also logs each batch of threads and of files with its `elapsed_ms`. A keyword index or an embed logs its phases (`open_ms` …) with its last line. |
+| what rate limits cost | `msg LIKE 'HTTP 429%'`, with its `retry_after_ms` |
+| would the ETA have been right | `event = 'eta_shown'` (debug): what a running step's Manage row showed, once a minute. `metric_samples` for `queued` and `done_total` say why: a flat `queued` while `done_total` climbs never converges, and a jump in `done_total` is free work inflating the pace. |
+| is a migration repeating | `msg = 'migrated'` per store, across runs |
+| what is slow to read | `msg LIKE 'slow statement%'` (`db.statement`, `elapsed`); `GET /api/manage/rows` request times; the size of each `-wal` beside its file |
+| what was left behind | files under each `render_markdown/` against its documents; qmd's `documents` with `active = 0`; a directory under the root that no `[[groups]]` names |
+
 ## macOS permissions in the desktop app (by hand)
 
 Whether the app can read a protected folder — `~/Library/Messages`,

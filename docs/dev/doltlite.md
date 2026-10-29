@@ -842,6 +842,15 @@ join back, 27 ms and 6 ms.
   idle one open. `synchronous`
   at anything above `OFF` syncs every commit (upstream
   `doc/doltlite/pragmas.md`).
+- **Doltlite never checkpoints a plain file's WAL by itself.** Stock
+  SQLite copies the WAL back into the file once a commit leaves it past
+  `wal_autocheckpoint` pages. Doltlite reports the same setting (1000)
+  and never acts on it, so the `-wal` keeps every page ever written. A
+  live root's run store reached 4 GB that way in eight days, and every
+  read of the log slowed with it. An explicit `PRAGMA
+  wal_checkpoint(PASSIVE)` works, and with `journal_size_limit` set,
+  the next write restarts the WAL and cuts the file back. The run
+  store's writer does both every 30 seconds.
 - **Doltlite reads a WAL another program wrote.** A plain SQLite
   file another program keeps in WAL mode, as qmd keeps its index, reads
   through doltlite with the rows only its `-wal` holds, so a reader

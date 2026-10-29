@@ -6,7 +6,7 @@
 //! events, so nothing is owed after it: each page is one transaction,
 //! and the token moves with the prune that ends a listing.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result};
 use datalib_etl::control::DownloadControl;
@@ -206,7 +206,7 @@ async fn sync_calendar(
         None => db.sync_token(calendar_id).await?,
     };
     let full = token.is_none();
-    let known = db.google_event_ids(calendar_id).await?;
+    let known = db.google_event_payloads(calendar_id).await?;
     let mut seen = Seen::default();
     let mut page: Option<String> = None;
     let next_sync = loop {
@@ -251,7 +251,11 @@ async fn sync_calendar(
         });
         if last {
             if full && held_back.is_none() {
-                let gone: Vec<String> = known.difference(&seen.listed).cloned().collect();
+                let gone: Vec<String> = known
+                    .keys()
+                    .filter(|id| !seen.listed.contains(*id))
+                    .cloned()
+                    .collect();
                 summary.events_deleted += gone.len();
                 RawDb::delete_google_events(&mut tx, calendar_id, &gone).await?;
             }
@@ -312,7 +316,7 @@ async fn apply(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     calendar_id: &str,
     items: &[Value],
-    known: &HashSet<String>,
+    known: &HashMap<String, Value>,
     seen: &mut Seen,
     summary: &mut FetchSummary,
 ) -> Result<u64> {
@@ -342,10 +346,19 @@ async fn apply(
         .unzip();
     for row in &rows {
         seen.listed.insert(row.event_id.clone());
-        if known.contains(&row.event_id) {
-            summary.events_updated += 1;
-        } else {
-            summary.events_new += 1;
+        // Google re-stamps `etag` and `updated` on events nobody edited;
+        // those are volatile, so the content compared here is without them.
+        match known.get(&row.event_id) {
+            None => summary.events_new += 1,
+            Some(held)
+                if serde_json::from_str::<Value>(&row.id_and_payload.payload)
+                    .ok()
+                    .as_ref()
+                    != Some(held) =>
+            {
+                summary.events_updated += 1
+            }
+            Some(_) => {}
         }
     }
     RawDb::upsert_google_events_in_tx(tx, &rows, &volatile).await?;
@@ -358,7 +371,7 @@ async fn apply(
         }
         // Only what an earlier run stored is a deletion; the rest were
         // stored and removed within this one.
-        summary.events_deleted += gone.iter().filter(|id| known.contains(*id)).count();
+        summary.events_deleted += gone.iter().filter(|id| known.contains_key(*id)).count();
         wrote += gone.len() as u64;
         RawDb::delete_google_events(tx, calendar_id, &gone).await?;
     }

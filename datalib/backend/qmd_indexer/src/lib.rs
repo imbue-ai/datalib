@@ -231,6 +231,46 @@ impl std::fmt::Display for Updated {
     }
 }
 
+/// What one run of the script did, and how long each part of it took.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ran<T> {
+    pub done: T,
+    pub phases: Phases,
+}
+
+/// The script's own split of its run, in milliseconds since node
+/// started, in the order the script names them; `open_ms` includes
+/// node's start-up and qmd's imports.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Phases(pub Vec<(&'static str, u64)>);
+
+impl Phases {
+    fn of(done: &Value, names: &[&'static str]) -> Phases {
+        let timings = done.get("timings");
+        Phases(
+            names
+                .iter()
+                .filter_map(|&name| Some((name, timings?.get(name)?.as_u64()?)))
+                .collect(),
+        )
+    }
+
+    pub fn get(&self, name: &str) -> Option<u64> {
+        self.0.iter().find(|(n, _)| *n == name).map(|&(_, ms)| ms)
+    }
+}
+
+impl std::fmt::Display for Phases {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (i, (name, ms)) in self.0.iter().enumerate() {
+            let name = name.trim_end_matches("_ms");
+            let sep = if i == 0 { "" } else { ", " };
+            write!(f, "{sep}{name} {:.1} s", *ms as f64 / 1000.0)?;
+        }
+        Ok(())
+    }
+}
+
 /// What an embed did to one collection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Embedded {
@@ -352,7 +392,7 @@ impl Index {
         &self,
         groups: &[impl AsRef<str>],
         on_progress: &(dyn Fn(UpdateProgress) + Send + Sync),
-    ) -> Result<Updated> {
+    ) -> Result<Ran<Updated>> {
         let done = self.run(
             "update",
             json!({
@@ -362,12 +402,15 @@ impl Index {
             }),
             &mut |v| on_progress(UpdateProgress::from_json(v)),
         )?;
-        Ok(Updated {
-            indexed: n(&done, "indexed"),
-            updated: n(&done, "updated"),
-            unchanged: n(&done, "unchanged"),
-            removed: n(&done, "removed"),
-            skipped: n(&done, "skipped"),
+        Ok(Ran {
+            done: Updated {
+                indexed: n(&done, "indexed"),
+                updated: n(&done, "updated"),
+                unchanged: n(&done, "unchanged"),
+                removed: n(&done, "removed"),
+                skipped: n(&done, "skipped"),
+            },
+            phases: Phases::of(&done, &["open_ms", "files_ms", "finish_ms"]),
         })
     }
 
@@ -379,7 +422,7 @@ impl Index {
         &self,
         groups: &[impl AsRef<str>],
         on_progress: &(dyn Fn(EmbedProgress) + Send + Sync),
-    ) -> Result<Embedded> {
+    ) -> Result<Ran<Embedded>> {
         let models = self.qmd_dir.join("models");
         if !models_present(&models, &embed_model_names()) {
             bail!(
@@ -393,10 +436,13 @@ impl Index {
         let done = self.run("embed", json!({ "collections": names }), &mut |v| {
             on_progress(EmbedProgress::from_json(v))
         })?;
-        Ok(Embedded {
-            documents: n(&done, "documents"),
-            chunks: n(&done, "chunks"),
-            errors: n(&done, "errors"),
+        Ok(Ran {
+            done: Embedded {
+                documents: n(&done, "documents"),
+                chunks: n(&done, "chunks"),
+                errors: n(&done, "errors"),
+            },
+            phases: Phases::of(&done, &["open_ms", "first_ms", "embed_ms"]),
         })
     }
 

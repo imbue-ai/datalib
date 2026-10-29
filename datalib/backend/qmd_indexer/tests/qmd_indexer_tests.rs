@@ -118,7 +118,7 @@ fn a_keyword_update_fills_its_own_collection_and_no_other() {
     let index = open(root.path());
     index.register(&["bridge", "sickbay"]).unwrap();
 
-    let updated = index.keyword_index(&["bridge"], &quiet).unwrap();
+    let updated = index.keyword_index(&["bridge"], &quiet).unwrap().done;
     assert_eq!(
         updated,
         Updated {
@@ -130,6 +130,18 @@ fn a_keyword_update_fills_its_own_collection_and_no_other() {
         by_name(&index),
         [("bridge".into(), 2, 2), ("sickbay".into(), 0, 0)]
     );
+}
+
+/// A keyword step's log said nothing between its start and its end, so
+/// a 27 s floor on a two-document source could not be placed.
+#[test]
+fn a_keyword_update_says_where_its_time_went() {
+    let root = root_with(LOGS);
+    let index = open(root.path());
+    let ran = index.keyword_index(&["bridge"], &quiet).unwrap();
+    let names: Vec<&str> = ran.phases.0.iter().map(|(n, _)| *n).collect();
+    assert_eq!(names, ["open_ms", "files_ms", "finish_ms"]);
+    assert!(ran.phases.get("open_ms").unwrap() > 0);
 }
 
 /// The runner may start a source's keyword step before the step that
@@ -157,7 +169,7 @@ fn an_unchanged_tree_is_left_alone() {
     let index = open(root.path());
     index.keyword_index(&["bridge"], &quiet).unwrap();
 
-    let again = index.keyword_index(&["bridge"], &quiet).unwrap();
+    let again = index.keyword_index(&["bridge"], &quiet).unwrap().done;
     assert_eq!(
         again,
         Updated {
@@ -187,7 +199,7 @@ fn a_new_an_edited_and_a_deleted_file_all_reach_the_index() {
         "# Captain's log\n\nThe Borg.\n",
     );
 
-    let updated = index.keyword_index(&["bridge"], &quiet).unwrap();
+    let updated = index.keyword_index(&["bridge"], &quiet).unwrap().done;
     assert_eq!(
         updated,
         Updated {
@@ -292,7 +304,7 @@ fn an_embed_fills_only_the_collections_it_names() {
     link_model(&index, work.path());
     index.keyword_index(&["bridge", "sickbay"], &quiet).unwrap();
 
-    let embedded = index.embed(&["bridge"], &|_| {}).unwrap();
+    let embedded = index.embed(&["bridge"], &|_| {}).unwrap().done;
     assert_eq!(
         (embedded.documents, embedded.errors),
         (2, 0),
@@ -304,7 +316,7 @@ fn an_embed_fills_only_the_collections_it_names() {
         [("bridge".into(), 2, 0), ("sickbay".into(), 1, 1)]
     );
 
-    let embedded = index.embed(&["bridge", "sickbay"], &|_| {}).unwrap();
+    let embedded = index.embed(&["bridge", "sickbay"], &|_| {}).unwrap().done;
     assert_eq!(
         (embedded.documents, embedded.errors),
         (1, 0),
@@ -316,7 +328,7 @@ fn an_embed_fills_only_the_collections_it_names() {
     );
 
     assert_eq!(
-        index.embed(&["bridge", "sickbay"], &|_| {}).unwrap(),
+        index.embed(&["bridge", "sickbay"], &|_| {}).unwrap().done,
         Embedded::default()
     );
 }

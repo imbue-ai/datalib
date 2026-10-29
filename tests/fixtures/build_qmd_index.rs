@@ -21,8 +21,8 @@ fn main() -> Result<()> {
     let index = Index::open(Path::new(root), Qmd::new(node, package))?;
     index.link_models(Path::new(models))?;
     index.register(groups)?;
-    let updated = index.keyword_index(groups, &|_| {})?;
-    let embedded = index.embed(groups, &|_| {})?;
+    let updated = index.keyword_index(groups, &|_| {})?.done;
+    let embedded = index.embed(groups, &|_| {})?.done;
     eprintln!("[build_qmd_index] {updated}; {embedded}");
     if embedded.errors > 0 {
         bail!("{} chunk(s) failed to embed", embedded.errors);
