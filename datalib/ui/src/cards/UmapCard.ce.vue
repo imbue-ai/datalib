@@ -106,8 +106,9 @@ best few hundred matches rather than every mention. <b>Open in grid</b>
 lists the same search as a table.</p>
 <p>Colour by a field with the picker; hover a legend entry to isolate
 it, click it to hide or show it. Drag to pan, scroll to zoom, <b>Fit</b>
-to see everything. Hover a point for a preview; click it to open the
-document beside this card (with a modifier key, in a new tab).</p>
+to see everything. Hover a point for a preview; click it to mark it, and
+double-click it to open the document beside this card (with a modifier
+key, in a new tab).</p>
 `);
 
 function saveState() {
@@ -409,7 +410,12 @@ function onPointerUp(ev: PointerEvent) {
   const wasClick = drag && !drag.moved;
   drag = null;
   canvas.value?.releasePointerCapture(ev.pointerId);
-  if (wasClick && hovered.value >= 0) open(points.value[hovered.value], ev);
+  if (wasClick && hovered.value >= 0) select(points.value[hovered.value]);
+}
+
+/// A click only marks a point; opening it takes a double-click.
+function onDblClick(ev: MouseEvent) {
+  if (hovered.value >= 0) open(points.value[hovered.value], ev);
 }
 
 function onLeave() {
@@ -465,14 +471,18 @@ function docSource(p: MapPoint): string {
   return `documentView(${JSON.stringify(p.markdown_uuid)})`;
 }
 
+function select(p: MapPoint) {
+  selected.value = p.markdown_uuid;
+  saveState();
+  schedule();
+}
+
 function open(p: MapPoint, ev: MouseEvent) {
   if (isBrowserClick(ev)) {
     window.open(props.ctx.host.hrefFor(docSource(p)), "_blank", "noopener");
     return;
   }
-  selected.value = p.markdown_uuid;
-  saveState();
-  schedule();
+  select(p);
   props.ctx.host.openCards(docSource(p));
 }
 
@@ -617,6 +627,7 @@ onBeforeUnmount(() => {
           @pointerdown="onPointerDown"
           @pointermove="onPointerMove"
           @pointerup="onPointerUp"
+          @dblclick="onDblClick"
           @pointerleave="onLeave"
           @wheel="onWheel"
         />

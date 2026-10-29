@@ -187,8 +187,8 @@ export type ViewLibs = {
   configView: () => CardRender;
   // The run log: one process's lines — a step's newest attempt, the
   // runner, a launch of the server — or a whole run's, with pickers
-  // to move between them. Selecting a line opens `logLineView` beside
-  // it. See cards/LogCard.ce.vue.
+  // to move between them. Double-clicking a line opens `logLineView`
+  // beside it. See cards/LogCard.ce.vue.
   logView: (opts?: {
     run?: string | null;
     step?: string | null;

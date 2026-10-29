@@ -1,5 +1,5 @@
 import { test, expect, type APIRequestContext, type Page, type Route } from "@playwright/test";
-import { GRID, selectRowByUuid, docBody } from "./grid-helpers";
+import { GRID, openRowByUuid, docBody } from "./grid-helpers";
 
 // A rendered document asks for a chart with `<div data-time-series="…">`
 // and the document view draws it from the time-series applet
@@ -90,7 +90,7 @@ async function openYolinkCharts(page: Page, request: APIRequestContext) {
 
   await page.goto(GRID);
   await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 15_000 });
-  await selectRowByUuid(page, pageRow!.uuid);
+  await openRowByUuid(page, pageRow!.uuid);
 
   const doc = docBody(page);
   await expect(doc.locator("[data-time-series]")).toHaveCount(4, { timeout: 10_000 });

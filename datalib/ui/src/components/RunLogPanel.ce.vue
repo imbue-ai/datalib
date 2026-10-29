@@ -36,7 +36,7 @@ import { KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
 import { menuSlots, type MenuEntry } from "@/grid/menu";
 import { keepActiveOnRecord } from "@/grid/activeCell";
 import { redrawChanged } from "@/grid/redrawChanged";
-import { newlyPicked } from "@/grid/selection";
+import { openRowsOn, selectAllRowsOnKey } from "@/grid/rowIdioms";
 import { copySelectedRowsOnKey } from "@/grid/copyRows";
 import { copyToClipboard } from "@/clipboard";
 import {
@@ -108,9 +108,9 @@ export type LogScope =
 const emit = defineEmits<{
   /// The pickers moved, so the caller can say what is on screen.
   (e: "scope-changed", scope: LogScope): void;
-  /// A line was selected — by a click, or the arrow keys moving on —
-  /// for the caller to open in full.
-  (e: "line-selected", seq: number): void;
+  /// A line was asked for in full — a double-click, Enter, or its
+  /// right-click menu — for the caller to open. Selecting one is not.
+  (e: "line-opened", seq: number): void;
   /// A chip asked for a card: its double-click, or an entry of its menu.
   (e: "open-card", source: string): void;
 }>();
@@ -971,6 +971,12 @@ function menuEntries(args: MenuFromCellCallbackArgs): MenuEntry[] {
   const cell = cellUnderMenu(args);
   const chip = chipUnderMenu(args);
   const entries: MenuEntry[] = chip ? chipEntries(chip) : [];
+  const { column, line } = underMenu(args);
+  if (line && typeof line.seq === "number") {
+    if (entries.length) entries.push({ name: "", separator: true });
+    const seq = line.seq;
+    entries.push({ name: "Open this line", action: () => emit("line-opened", seq) });
+  }
   if (cell) {
     if (entries.length) entries.push({ name: "", separator: true });
     entries.push(
@@ -984,7 +990,6 @@ function menuEntries(args: MenuFromCellCallbackArgs): MenuEntry[] {
       },
     );
   }
-  const { column, line } = underMenu(args);
   const text = column && line && typeof line.seq === "number" ? copyCell(column, line) : "";
   if (text) {
     if (entries.length) entries.push({ name: "", separator: true });
@@ -1009,9 +1014,9 @@ function gridOptions(): GridOption {
     datasetIdPropertyName: "seq",
     // Cells and group rows are text (see `plain`), never markup.
     enableHtmlRendering: false,
-    // A row selects on click and the arrow keys move the selection;
-    // the line opens in full beside the card either way. Several select
-    // with a modifier, for ⌘C to copy as TSV.
+    // A click only selects (grid/rowIdioms.ts): several with ⌘ or
+    // Shift, for ⌘C to copy as TSV. A line opens in full beside the
+    // card on a double-click, Enter or its menu.
     enableCellNavigation: true,
     enableSelection: true,
     multiSelect: true,
@@ -1098,7 +1103,7 @@ function createGrid(first: RunLogLine[]) {
   b.slickGrid.onScroll.subscribe(onScroll);
   // A chip is a link: a click on it selects the line, and its href,
   // which names something in this app, is never followed. A double-click
-  // opens the group's dashboard or the step's log.
+  // on it opens the group's dashboard or the step's log, not the line.
   const entityAt = (e: SlickEventData) =>
     (e.getNativeEvent<MouseEvent>()?.target as Element | null)?.closest?.<HTMLElement>(
       "a.chip[data-entity]",
@@ -1110,23 +1115,17 @@ function createGrid(first: RunLogLine[]) {
     const el = entityAt(e);
     const chip = el ? chipOf(el) : null;
     const source = chip ? chipCardSource(chip.ref, null) : null;
-    if (source) emit("open-card", source);
+    if (!source) return;
+    e.stopImmediatePropagation();
+    emit("open-card", source);
   });
-  // A new line keeps the selection on its line, and the grid reports
-  // that as a change of index: only a line newly picked is announced.
   const lineAt = (row: number): RunLogLine | null => {
     const line = b.dataView.getItem(row) as RunLogLine | undefined;
     // A group row is no line.
     return line && typeof line.seq === "number" ? line : null;
   };
-  let selectedSeqs = new Set<string>();
-  b.slickGrid.onSelectedRowsChanged.subscribe((_e, args) => {
-    const now = args.rows.map(lineAt).filter((l): l is RunLogLine => l != null);
-    const { picked, selected } = newlyPicked(selectedSeqs, now, (l) => String(l.seq));
-    selectedSeqs = selected;
-    const line = picked[picked.length - 1];
-    if (line) emit("line-selected", line.seq);
-  });
+  openRowsOn(b.slickGrid, lineAt, (line) => emit("line-opened", line.seq));
+  selectAllRowsOnKey(b.slickGrid, lineAt);
   copySelectedRowsOnKey(b.slickGrid, lineAt, copyCell);
   // What the bar's drop does, without the mouse, for the e2e tests:
   // a drag dispatched by hand dies inside SortableJS under load, and

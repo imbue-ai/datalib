@@ -2,7 +2,7 @@ import { test, expect, type APIRequestContext, type Page } from "@playwright/tes
 import {
   EVERY_ROW,
   GRID,
-  selectRowByUuid,
+  openRowByUuid,
   gridSettled,
   inDocFrame,
   MENU_DISABLED,
@@ -51,7 +51,7 @@ async function openMessageBy(page: Page, request: APIRequestContext, handle: str
   await page.goto(EVERY_ROW);
   await searchAndSettle(page, `convo:${message!.conversation_uuid}`);
   await gridSettled(page);
-  await selectRowByUuid(page, message!.uuid);
+  await openRowByUuid(page, message!.uuid);
 }
 
 /// The Author chip for `handle` in the open grid.

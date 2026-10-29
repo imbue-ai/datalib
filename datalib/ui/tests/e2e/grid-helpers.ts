@@ -195,7 +195,8 @@ const ROW_CLICK_POINT = { x: 40, y: 10 };
 // the row would then scroll the Columns row back to it — undoing the
 // reveal of the document column the first click opened — and select
 // nothing new. So a thrown click is not retried as a pair; the next
-// attempt starts from the grid's answer.
+// attempt starts from the grid's answer. A click only selects: to read
+// the row's document, `openRowByUuid`.
 export async function selectRowByUuid(page: Page, uuid: string): Promise<Locator> {
   const selected = () =>
     page.evaluate(
@@ -213,6 +214,16 @@ export async function selectRowByUuid(page: Page, uuid: string): Promise<Locator
   });
   const rowIndex = await scrollRowIntoView(page, uuid);
   return rowLocator(page, rowIndex);
+}
+
+// Open a row's document beside the grid: select it, then Enter, which
+// opens the selected row. Not a double-click: the press lands on the
+// row's first cell, and a chip there opens what the chip names instead.
+// The select's click leaves the keyboard in the grid; a row the grid
+// already had selected gets no click, and its Enter goes nowhere.
+export async function openRowByUuid(page: Page, uuid: string): Promise<void> {
+  await selectRowByUuid(page, uuid);
+  await page.keyboard.press("Enter");
 }
 
 // Right-click a row located by uuid. Same virtualization dance as

@@ -6,7 +6,7 @@
 // the index on cue, and the frame is all the card listens for.
 
 import { test, expect, type Page } from "@playwright/test";
-import { docBody, EVERY_ROW, SEARCH_ROWS, selectRowByUuid } from "./grid-helpers";
+import { docBody, EVERY_ROW, SEARCH_ROWS, openRowByUuid } from "./grid-helpers";
 
 const PROBLEM = {
   problem_uuid: "00000000-0000-4000-8000-00000000d0c5",
@@ -63,7 +63,7 @@ test("an index commit clears a problem the open document no longer has", async (
 
   await page.goto(EVERY_ROW);
   await expect(page.locator(SEARCH_ROWS).first()).toBeVisible({ timeout: 15_000 });
-  await selectRowByUuid(page, pick!.uuid);
+  await openRowByUuid(page, pick!.uuid);
   const card = page.locator(`.chat-preview[data-markdown-uuid="${pick!.markdown_uuid}"]`);
   await expect(docBody(card)).toBeVisible();
   const banner = card.locator(`[data-problem-uuid="${PROBLEM.problem_uuid}"]`);

@@ -5,7 +5,7 @@
 // from the banner. Writes the allow store, so it runs on its own root.
 
 import { test, expect, type Page } from "@playwright/test";
-import { docBody, EVERY_ROW, SEARCH_ROWS, selectRowByUuid } from "./grid-helpers";
+import { docBody, EVERY_ROW, SEARCH_ROWS, openRowByUuid } from "./grid-helpers";
 
 declare const Buffer: { from(data: string, encoding: "base64"): Uint8Array };
 // A 1×1 transparent PNG, standing in for the server's answer: the
@@ -42,7 +42,7 @@ async function openMarketingEmail(page: Page): Promise<string> {
   expect(email, "the fixture's Risa marketing email").toBeDefined();
   await page.goto(EVERY_ROW);
   await expect(page.locator(SEARCH_ROWS).first()).toBeVisible({ timeout: 15_000 });
-  await selectRowByUuid(page, email!.uuid);
+  await openRowByUuid(page, email!.uuid);
   await expect(docBody(page)).toBeVisible();
   return email!.markdown_uuid;
 }

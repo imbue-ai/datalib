@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { EVERY_ROW, selectRowByUuid, docBody } from "./grid-helpers";
+import { EVERY_ROW, openRowByUuid, docBody } from "./grid-helpers";
 
 // Regression test for the off-by-one bug: clicking a grid row in the
 // message list highlighted a *different* message in the document pane
@@ -88,10 +88,10 @@ test("clicked grid row highlights the section with the matching uuid", async ({
   const mismatches: Mismatch[] = [];
 
   for (const pick of candidates) {
-    await selectRowByUuid(page, pick.uuid);
+    await openRowByUuid(page, pick.uuid);
 
-    // Each click opens a fresh documentView card; gate on the card
-    // for the clicked row's markdown being in place before reading
+    // Each open is a fresh documentView card; gate on the card
+    // for the opened row's markdown being in place before reading
     // the selection.
     const card = page.locator(
       `.chat-preview[data-markdown-uuid="${pick.markdown_uuid ?? pick.uuid}"]`,
