@@ -351,8 +351,9 @@ search field) draws it again when the view changes.
 menu sets the time view's `t0`, and from then on every date chip that
 names an instant (`dateText`) shows its distance from it, to the
 millisecond, earlier ones negative: `0.000`, `+1.250`, `-4:05.000`,
-`+2:00:00.000`, `-3d 04:05:06.789` (`timeView.ts::sinceT0`, which drops
-the units that are zero in front). A column of them is right-justified
+`+2:00:00.000`, `-3d 04:05:06.789`, `+343y 075d 00:23:24.454`
+(`timeView.ts::sinceT0`, which drops the units that are zero in front;
+a year is a calendar year). A column of them is right-justified
 so the units line up. A day stays a day, since it names no instant; the
 hover, the copy and a chip's name in a menu stay the date, since a
 distance from T0 means nothing pasted elsewhere. The clock shows

@@ -153,6 +153,19 @@ describe("a date from T0", () => {
     expect(after(3 * 86_400_000 + 4 * 3_600_000 + 5 * 60_000 + 6_789)).toBe("+3d 04:05:06.789");
   });
 
+  /** A search table of TNG documents read `+125346d 00:23:24.454`. */
+  it("counts calendar years past a year, then days", () => {
+    const at = (iso: string) => sinceT0(Date.parse(iso), T0);
+    expect(at("2027-10-26T09:21:57.190Z")).toBe("+1y 000d 00:00:00.000");
+    expect(at("2027-10-25T09:21:57.190Z")).toBe("+364d 00:00:00.000");
+    expect(at("2370-01-05T09:45:21.644Z")).toBe("+343y 071d 00:23:24.454");
+    expect(at("1990-01-02T09:21:57.190Z")).toBe("-36y 297d 00:00:00.000");
+    // From a leap day, a year on lands on the first of March.
+    expect(sinceT0(Date.parse("2029-03-01T00:00:00Z"), Date.parse("2028-02-29T00:00:00Z"))).toBe(
+      "+1y 000d 00:00:00.000",
+    );
+  });
+
   it("is negative before T0", () => {
     expect(after(-500)).toBe("-0.500");
     expect(after(-245_000)).toBe("-4:05.000");

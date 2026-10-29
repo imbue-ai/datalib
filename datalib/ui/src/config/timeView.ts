@@ -268,26 +268,47 @@ export function millisText(at: Instant, zone: Zone): string {
 }
 
 /** How far `ms` is from T0, signed, to the millisecond: `+1.250`,
- *  `-4:05.000`, `+2:00:00.000`, `-3d 04:05:06.789`. The largest unit
- *  that is not zero leads, unpadded; the rest are padded, so a column of
- *  them lines up when right-justified. */
+ *  `-4:05.000`, `+2:00:00.000`, `-3d 04:05:06.789`, `+343y 075d
+ *  00:23:24.454`. The largest unit that is not zero leads, unpadded; the
+ *  rest are padded, so a column of them lines up when right-justified.
+ *  A year is a calendar year counted on from the earlier of the two in
+ *  UTC, so the same day a year on is `1y 000d`, leap day or not. */
 export function sinceT0(ms: number, t0: number): string {
   const d = Math.round(ms - t0);
-  const a = Math.abs(d);
+  const [from, to] = d < 0 ? [ms, t0] : [t0, ms];
+  const years = wholeYears(from, to);
+  const a = to - yearsOn(from, years);
   const frac = `.${String(a % 1000).padStart(3, "0")}`;
   const sec = Math.floor(a / 1000) % 60;
   const min = Math.floor(a / 60_000) % 60;
   const hour = Math.floor(a / 3_600_000) % 24;
   const day = Math.floor(a / 86_400_000);
-  const whole = day
-    ? `${day}d ${p2(hour)}:${p2(min)}:${p2(sec)}`
-    : hour
-      ? `${hour}:${p2(min)}:${p2(sec)}`
-      : min
-        ? `${min}:${p2(sec)}`
-        : `${sec}`;
+  const clock = `${p2(hour)}:${p2(min)}:${p2(sec)}`;
+  const whole = years
+    ? `${years}y ${String(day).padStart(3, "0")}d ${clock}`
+    : day
+      ? `${day}d ${clock}`
+      : hour
+        ? `${hour}:${p2(min)}:${p2(sec)}`
+        : min
+          ? `${min}:${p2(sec)}`
+          : `${sec}`;
   const sign = d < 0 ? "-" : d > 0 ? "+" : "";
   return `${sign}${whole}${frac}`;
+}
+
+function yearsOn(ms: number, years: number): number {
+  const at = new Date(ms);
+  at.setUTCFullYear(at.getUTCFullYear() + years);
+  return at.getTime();
+}
+
+/** The calendar years from `from` that fit before `to`. */
+function wholeYears(from: number, to: number): number {
+  let years = Math.floor((to - from) / 31_556_952_000);
+  while (years > 0 && yearsOn(from, years) > to) years--;
+  while (yearsOn(from, years + 1) <= to) years++;
+  return years;
 }
 
 /** Whether a view reads every instant as this machine does, which is how
