@@ -1076,7 +1076,39 @@ struct Pending {
     metrics: BTreeMap<SeriesKey, MetricRow>,
 }
 
+impl Pending {
+    fn is_empty(&self) -> bool {
+        self.steps.is_empty()
+            && self.processes.is_empty()
+            && self.logs.is_empty()
+            && self.metrics.is_empty()
+    }
+}
+
 type Shared = Arc<Mutex<Pending>>;
+
+/// Told the store's path each time a writer in this process has written
+/// to it. The filesystem reports the same write, but late when it likes:
+/// fseventsd has held events back for over a minute on a busy disk, and
+/// the server's log card waits on that report to read its own lines.
+type AfterWrite = Box<dyn Fn(&Path) + Send + Sync>;
+static AFTER_WRITE: Mutex<Vec<AfterWrite>> = Mutex::new(Vec::new());
+
+/// Calls `hook` after every write any writer in this process makes, from
+/// now on, with the path of the store written. Writers started earlier
+/// call it too.
+pub fn after_every_write(hook: impl Fn(&Path) + Send + Sync + 'static) {
+    AFTER_WRITE
+        .lock()
+        .expect("run store hook mutex")
+        .push(Box::new(hook));
+}
+
+fn wrote(path: &Path) {
+    for hook in AFTER_WRITE.lock().expect("run store hook mutex").iter() {
+        hook(path);
+    }
+}
 
 /// Something that takes log lines. Both writers below are one, which is
 /// what lets the tracing layer feed either.
@@ -1404,8 +1436,9 @@ fn writer_loop(
         }
     };
     let _ = opened.send(Ok(()));
-    if let Err(e) = rt.block_on(begin(&pool, &scope)) {
-        tracing::warn!(error = %e, "run store: could not record the start");
+    match rt.block_on(begin(&pool, &scope)) {
+        Ok(()) => wrote(&path),
+        Err(e) => tracing::warn!(error = %e, "run store: could not record the start"),
     }
 
     let mut series: HashMap<SeriesKey, SeriesState> = HashMap::new();
@@ -1423,13 +1456,17 @@ fn writer_loop(
             std::mem::take(&mut *p)
         };
         let lines = batch.logs.len();
-        if let Err(e) = rt.block_on(flush_or_retry(&pool, &scope, &batch, &mut series, done)) {
+        match rt.block_on(flush_or_retry(&pool, &scope, &batch, &mut series, done)) {
+            Ok(()) if !batch.is_empty() => wrote(&path),
+            Ok(()) => {}
             // One bad flush must not stop the record for every other
             // step, and must never take the run down. Say how many
             // lines went with it: the count is the only trace left of
             // them, and a silent loss here is what makes anyone
             // distrust the store.
-            tracing::warn!(error = %e, lines, "run store: write failed twice; the batch is lost");
+            Err(e) => {
+                tracing::warn!(error = %e, lines, "run store: write failed twice; the batch is lost")
+            }
         }
         if let Some(ack) = ack {
             let _ = ack.send(());

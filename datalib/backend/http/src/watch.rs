@@ -592,11 +592,13 @@ pub fn spawn_with(root: PathBuf, tx: RootTx, timing: Timing) -> Ready {
 }
 
 /// Tells the watch that something may have published a commit the
-/// filesystem will not report: a write to a file its writer holds open,
-/// which the OS reports only once it is closed. The applet gateway
-/// nudges after every write it forwards, since a curated store's one
-/// writer is an applet that holds its store open for its life. The
-/// watch then compares the stores' heads, so a nudge that published
+/// filesystem will not report, or will report late: a write to a file
+/// its writer holds open, which the OS reports only once it is closed,
+/// and any write while fseventsd is behind. The applet gateway nudges
+/// after every write it forwards, since a curated store's one writer is
+/// an applet that holds its store open for its life; the run store's
+/// writers in this process nudge after every write. The watch then
+/// compares the stores' heads or counters, so a nudge that published
 /// nothing sends nothing.
 #[derive(Clone)]
 pub struct Nudge(tokio::sync::mpsc::UnboundedSender<Moved>);
@@ -604,6 +606,12 @@ pub struct Nudge(tokio::sync::mpsc::UnboundedSender<Moved>);
 impl Nudge {
     pub fn an_applet_wrote(&self) {
         let _ = self.0.send(Moved::Curated);
+    }
+
+    /// A run-store writer in this process wrote: the server's own log,
+    /// or the loop's runs (`datalib_runs::after_every_write`).
+    pub fn the_run_store_moved(&self) {
+        let _ = self.0.send(Moved::RunStore);
     }
 }
 
@@ -1421,6 +1429,31 @@ mod tests {
             !got.contains(&rows),
             "a server log line was reported as a change to the Manage rows: {got:?}"
         );
+    }
+
+    /// The regression: the server's log card heard of its own lines only
+    /// when fseventsd reported the store's write, which on a busy mac
+    /// came seconds late or not at all. A nudge alone, with no file event
+    /// fed, reports the line.
+    #[tokio::test]
+    async fn a_nudge_reports_a_run_store_write_the_filesystem_has_not() {
+        let td = tempfile::tempdir().unwrap();
+        let (mut rx, feed) = watching(td.path()).await;
+        let server = datalib_runs::ProcessLogWriter::start(
+            td.path(),
+            datalib_runs::Process::Http,
+            None,
+            datalib_runs::Retention::default(),
+        )
+        .unwrap();
+        server.log(datalib_runs::LogRow {
+            level: "info".into(),
+            msg: "a line".into(),
+            ..Default::default()
+        });
+        server.flush().await;
+        feed.nudge().the_run_store_moved();
+        until(&mut rx, RootEvent::TableChanged { table: Table::Log }).await;
     }
 
     /// A commit to the grid index, the way the `grid_index` step makes

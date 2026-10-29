@@ -1225,3 +1225,38 @@ async fn a_progress_tick_moves_the_steps_and_not_the_processes() {
         "a new attempt did not move the processes: {retried:?}"
     );
 }
+
+/// The server hears its own writes from this hook rather than waiting on
+/// the filesystem's report, which fseventsd can hold back for seconds.
+#[tokio::test]
+async fn every_write_is_told_to_the_hooks_with_its_store() {
+    let td = tempfile::tempdir().unwrap();
+    let store = datalib_runs::runs_path(td.path());
+    let heard = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    {
+        // Other tests' writers share the process, and so the hook.
+        let (store, heard) = (store.clone(), heard.clone());
+        datalib_runs::after_every_write(move |written| {
+            if written == store {
+                heard.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        });
+    }
+    let server = ProcessLogWriter::start(td.path(), Process::Http, None, Retention::default())
+        .expect("start the store");
+    // The start is recorded once the store is open, after `start` has
+    // returned; a flush waits for it.
+    server.flush().await;
+    let started = heard.load(std::sync::atomic::Ordering::SeqCst);
+    assert!(started >= 1, "recording the process's start was not told");
+    server.log(LogRow {
+        level: "info".into(),
+        msg: "a line".into(),
+        ..Default::default()
+    });
+    server.flush().await;
+    assert!(
+        heard.load(std::sync::atomic::Ordering::SeqCst) > started,
+        "a flushed line was not told"
+    );
+}
