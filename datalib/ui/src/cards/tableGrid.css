@@ -213,6 +213,45 @@
   color: var(--datalib-log-error);
   border-color: var(--datalib-log-error);
 }
+/* A membership switch: the knob left for out, centred for not known,
+   right for in. A settled answer is filled, green in and orange out; an
+   agent's answer no person has reviewed is only outlined, in the colour
+   it would fill. */
+.tg-member {
+  position: relative;
+  width: 40px;
+  height: 14px;
+  margin: 0 3px;
+  padding: 0;
+  border: 1px solid var(--datalib-border);
+  border-radius: 7px;
+  background: var(--datalib-hover);
+  cursor: pointer;
+  vertical-align: middle;
+  transition: background 0.12s;
+}
+.tg-member:disabled { cursor: default; }
+.tg-member-knob {
+  position: absolute;
+  top: 1px;
+  left: 14px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--datalib-muted);
+  transition: left 0.12s;
+}
+.tg-member[data-state="in"] .tg-member-knob { left: 27px; }
+.tg-member[data-state="out"] .tg-member-knob { left: 1px; }
+.tg-member[data-state="in"]:not(.proposed) { background: var(--datalib-ok-dot); border-color: var(--datalib-ok-dot); }
+.tg-member[data-state="out"]:not(.proposed) { background: var(--datalib-warn-dot); border-color: var(--datalib-warn-dot); }
+.tg-member:not(.proposed)[data-state="in"] .tg-member-knob,
+.tg-member:not(.proposed)[data-state="out"] .tg-member-knob { background: var(--datalib-card-bg); }
+.tg-member.proposed { border: 1.5px dashed var(--datalib-muted); background: none; }
+.tg-member.proposed[data-state="in"] { border-color: var(--datalib-ok-dot); }
+.tg-member.proposed[data-state="in"] .tg-member-knob { background: var(--datalib-ok-dot); }
+.tg-member.proposed[data-state="out"] { border-color: var(--datalib-warn-dot); }
+.tg-member.proposed[data-state="out"] .tg-member-knob { background: var(--datalib-warn-dot); }
 /* An on/off switch: the knob sits right, on the accent, when on. */
 .tg-switch {
   position: relative;

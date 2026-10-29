@@ -468,6 +468,34 @@ export async function deleteContact(contactId: string): Promise<void> {
   contactsById.revalidate();
 }
 
+// ── Reviewing what agents proposed ────────────────────────────────────
+// A subject is a handle or `contact:<id>`; `contactsReview.ts` has the rules.
+
+/** Agree with every link and label an agent proposed for each subject. */
+export async function confirmReview(subjects: string[]): Promise<number> {
+  const r = await post<{ confirmed: number }>("/review/confirm", { subjects });
+  people.revalidate();
+  return r.confirmed;
+}
+
+/** Turn the agent down: unlink what it linked, flip its labels. */
+export async function rejectReview(subjects: string[]): Promise<number> {
+  const r = await post<{ turned_down: number }>("/review/reject", { subjects });
+  people.revalidate();
+  contactsById.revalidate();
+  return r.turned_down;
+}
+
+/** Say `label` is in (`true`), out (`false`) or unknown (`null`). */
+export async function setLabel(
+  subjects: string[],
+  label: string,
+  applies: boolean | null,
+): Promise<number> {
+  const r = await post<{ changed: number }>("/label", { subjects, label, applies });
+  return r.changed;
+}
+
 // ── Editing a contact on its card ─────────────────────────────────────
 // The name, note and fields go through the contact's draft, which no
 // reader sees until a save publishes it; a photo changes at once.

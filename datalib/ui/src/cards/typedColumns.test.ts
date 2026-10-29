@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { copyText, typedColumns } from "./typedColumns";
-import type { ColumnSpec, Identity } from "@/api";
+import { copyText, membershipAt, membershipRank, typedColumns } from "./typedColumns";
+import type { ColumnSpec, Identity, Membership } from "@/api";
 import type { Formatter } from "@slickgrid-universal/common";
 import { timeView } from "@/config/timeView";
 
@@ -27,6 +27,12 @@ describe("what a cell copies as", () => {
     expect(copyText("timeseries", { value: 3, unit: "items", samples: [], window_secs: 60 })).toBe(
       "3 items",
     );
+  });
+
+  it("copies a membership as in, out, or nothing when not known", () => {
+    expect(copyText("membership", { applies: true, proposed: true })).toBe("in");
+    expect(copyText("membership", { applies: false })).toBe("out");
+    expect(copyText("membership", { applies: null })).toBe("");
   });
 
   it("copies nothing for an empty cell or a row of buttons", () => {
@@ -207,5 +213,82 @@ describe("a date cell", () => {
     expect(draw("2026-04-15T10:05:00").matches("time")).toBe(false);
     expect(draw("not a date").textContent).toBe("not a date");
     expect(draw(null).textContent).toBe("—");
+  });
+});
+
+/// A membership cell is in, not known or out, and a press hands the host
+/// the row, the column and the answer — never what is already settled.
+describe("a membership cell", () => {
+  const spec: ColumnSpec = {
+    field: "label:spam",
+    header: "Spam",
+    type: "membership",
+    default_visible: true,
+    editable: false,
+  };
+  const grid = { getOptions: () => ({ datasetIdPropertyName: "key" }) } as never;
+  const pressed: [string, string, boolean | null][] = [];
+  const [col] = typedColumns<Record<string, unknown>>([spec], {
+    onMembership: (row, field, applies) => pressed.push([String(row.key), field, applies]),
+  });
+  const draw = (key: string, m: Membership) =>
+    (col.formatter as Formatter)(0, 0, m, col, { key, "label:spam": m }, grid) as HTMLElement;
+  /** Press the switch at a third of it: 0 left, 1 middle, 2 right. */
+  const press = (el: HTMLElement, third: 0 | 1 | 2) => {
+    el.getBoundingClientRect = () => ({ left: 100, width: 30 }) as DOMRect;
+    el.dispatchEvent(new MouseEvent("click", { clientX: 100 + third * 10 + 5, bubbles: true }));
+  };
+
+  it("reads a press by where it lands", () => {
+    expect(membershipAt(2, 30)).toBe(false);
+    expect(membershipAt(15, 30)).toBeNull();
+    expect(membershipAt(28, 30)).toBe(true);
+  });
+
+  it("shows a settled answer filled, a proposed one outlined, and hands over a press", () => {
+    const settled = draw("a", { applies: false });
+    expect(settled.dataset.state).toBe("out");
+    expect(settled.getAttribute("aria-checked")).toBe("false");
+    expect(settled.classList.contains("proposed")).toBe(false);
+    press(settled, 0);
+    expect(pressed).toEqual([]);
+    press(settled, 2);
+    expect(pressed).toEqual([["a", "label:spam", true]]);
+
+    const proposed = draw("b", { applies: true, proposed: true, title: "agent: one-way offers" });
+    expect(proposed.classList.contains("proposed")).toBe(true);
+    expect(proposed.title).toContain("agent: one-way offers (in, proposed)");
+    press(proposed, 2);
+    press(proposed, 1);
+    expect(pressed.slice(1)).toEqual([
+      ["b", "label:spam", true],
+      ["b", "label:spam", null],
+    ]);
+    expect(draw("c", { applies: null }).getAttribute("aria-checked")).toBe("mixed");
+  });
+
+  it("sorts in, proposed in, not known, proposed out, out", () => {
+    const order: Membership[] = [
+      { applies: false },
+      { applies: null },
+      { applies: true, proposed: true },
+      { applies: false, proposed: true },
+      { applies: true },
+    ];
+    expect(order.map(membershipRank).sort()).toEqual([0, 1, 2, 3, 4]);
+    expect(membershipRank({ applies: true })).toBeLessThan(membershipRank({ applies: false }));
+  });
+
+  it("only shows when the host takes no answers", () => {
+    const [readOnly] = typedColumns<Record<string, unknown>>([spec], {});
+    const el = (readOnly.formatter as Formatter)(
+      0,
+      0,
+      { applies: true },
+      readOnly,
+      { key: "c" },
+      grid,
+    ) as HTMLElement;
+    expect((el as HTMLButtonElement).disabled).toBe(true);
   });
 });

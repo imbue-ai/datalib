@@ -41,6 +41,8 @@ pub fn store_path(data_root: &Path) -> PathBuf {
 }
 
 pub mod drafts;
+pub mod labels;
+pub mod review;
 pub mod schema;
 
 use schema::contacts::ContactRow;
@@ -233,17 +235,96 @@ fn stored_link(stored: &str, stopped_working_by: Option<String>) -> ContactHandl
     link
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, EnumString, IntoStaticStr, VariantArray)]
+/// How a link or a label was made: by a person's hand, or
+/// proposed by an agent, which waits for a person to confirm it.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    EnumString,
+    IntoStaticStr,
+    VariantArray,
+)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
-pub enum LinkedHow {
+pub enum DecidedHow {
     Manual,
+    Agent,
 }
 
-impl LinkedHow {
+impl DecidedHow {
     pub fn as_str(self) -> &'static str {
         self.into()
     }
+
+    /// `None` for a spelling this build does not know.
+    pub fn parse(s: &str) -> Option<Self> {
+        s.parse().ok()
+    }
+}
+
+/// The one label agents curate today, in when the person or sender is
+/// not spam: someone the person deals with, or a machine they want (a
+/// receipt, a notification). What the review shows a toggle for.
+pub const REAL: &str = "real";
+
+/// Who makes a link or a contact: a person, or an agent giving its
+/// reason, how sure it is and which of its runs this is.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Maker<'a> {
+    Person,
+    Agent {
+        agent: &'a str,
+        reason: Option<&'a str>,
+        confidence: Option<f64>,
+        run: Option<&'a str>,
+    },
+}
+
+impl Maker<'_> {
+    fn how(self) -> DecidedHow {
+        match self {
+            Maker::Person => DecidedHow::Manual,
+            Maker::Agent { .. } => DecidedHow::Agent,
+        }
+    }
+
+    fn agent(self) -> Option<String> {
+        match self {
+            Maker::Person => None,
+            Maker::Agent { agent, .. } => Some(agent.to_string()),
+        }
+    }
+
+    fn reason(self) -> Option<String> {
+        match self {
+            Maker::Person => None,
+            Maker::Agent { reason, .. } => reason.map(str::to_string),
+        }
+    }
+
+    fn confidence(self) -> Option<f64> {
+        match self {
+            Maker::Person => None,
+            Maker::Agent { confidence, .. } => confidence,
+        }
+    }
+
+    fn run(self) -> Option<String> {
+        match self {
+            Maker::Person => None,
+            Maker::Agent { run, .. } => run.map(str::to_string),
+        }
+    }
+}
+
+/// The labels table's key for a contact; a handle's is the handle.
+pub fn contact_subject(contact_id: &str) -> String {
+    format!("contact:{contact_id}")
 }
 
 /// What a contact's field says: a vCard property, more or less.
@@ -548,25 +629,14 @@ impl Store {
         if name.is_empty() {
             bail!("a contact needs a name");
         }
-        let contact_id = uuid::Uuid::new_v4().to_string();
         let (now, tz) = IsoOffsetTimestamp::now_local().to_utc_and_offset();
         let mut tx = self.pool.begin().await?;
-        let row = ContactRow {
-            contact_id: contact_id.clone(),
-            kind,
-            name: name.to_string(),
-            note: None,
-            merged_into: None,
-            created_at_utc: now.clone(),
-            updated_at_utc: now.clone(),
-            tz_offset: tz.clone(),
-        };
-        bulk_upsert_entity_in_tx(&mut tx, &[row])
-            .await
-            .context("insert a contact")?;
+        let contact_id = insert_contact(&mut tx, name, kind, Maker::Person, &now, &tz).await?;
         for h in handles {
             match plan_link(holder(&mut tx, h).await?.as_deref(), &contact_id) {
-                LinkPlan::Insert => insert_handle(&mut tx, h, &contact_id, &now, &tz).await?,
+                LinkPlan::Insert => {
+                    insert_handle(&mut tx, h, &contact_id, Maker::Person, &now, &tz).await?
+                }
                 LinkPlan::AlreadyLinked => {}
                 LinkPlan::HeldBy(other) => {
                     bail!("{h} already belongs to {}", name_of(&mut tx, &other).await?)
@@ -581,7 +651,8 @@ impl Store {
 
     /// Link `handle` to `contact_id`. Linking it where it already is
     /// does nothing; linking a handle someone else holds is refused —
-    /// unlink it there first.
+    /// unlink it there first. A person linking a pair they once turned
+    /// down has changed their mind, so the turn-down goes.
     pub async fn link(&self, handle: &Handle, contact_id: &str) -> Result<()> {
         let (now, tz) = IsoOffsetTimestamp::now_local().to_utc_and_offset();
         let mut tx = self.pool.begin().await?;
@@ -601,14 +672,21 @@ impl Store {
                     name_of(&mut tx, &other).await?
                 )
             }
-            LinkPlan::Insert => insert_handle(&mut tx, handle, contact_id, &now, &tz).await?,
+            LinkPlan::Insert => {
+                insert_handle(&mut tx, handle, contact_id, Maker::Person, &now, &tz).await?;
+                sqlx::query("DELETE FROM not_linked WHERE handle = ? AND contact_id = ?")
+                    .bind(handle.as_str())
+                    .bind(contact_id)
+                    .execute(&mut *tx)
+                    .await
+                    .context("forget a turned-down link")?;
+            }
         }
         tx.commit().await?;
         self.seal(&format!("contacts: link {handle} to {name:?}"))
             .await
     }
 
-    /// Returns whether the handle was linked to anyone.
     /// `member_id` a member of the group contact `group_id`. Refused for a
     /// contact that is not a group, or a member the store lacks.
     pub async fn add_member(&self, group_id: &str, member_id: &str) -> Result<()> {
@@ -640,15 +718,16 @@ impl Store {
             .await
     }
 
+    /// Returns whether the handle was linked to anyone. Unlinking what an
+    /// agent linked is a person overriding it, written down in
+    /// `not_linked` so no agent proposes it again.
     pub async fn unlink(&self, handle: &Handle) -> Result<bool> {
-        let done = sqlx::query("DELETE FROM handles WHERE handle = ?")
-            .bind(handle.as_str())
-            .execute(&self.pool)
-            .await
-            .context("unlink a handle")?;
-        if done.rows_affected() == 0 {
+        let (now, tz) = IsoOffsetTimestamp::now_local().to_utc_and_offset();
+        let mut tx = self.pool.begin().await?;
+        if !review::unlink_in(&mut tx, handle.as_str(), &now, &tz).await? {
             return Ok(false);
         }
+        tx.commit().await?;
         self.seal(&format!("contacts: unlink {handle}")).await?;
         Ok(true)
     }
@@ -818,9 +897,10 @@ impl Store {
         Ok(done)
     }
 
-    /// Delete a contact: its row, its links, fields, photo, draft and
-    /// memberships, and every contact merged into it, which were the same
-    /// person. Its handles are nobody's afterwards. The commit before it
+    /// Delete a contact: its row, its links, fields, photo, draft,
+    /// memberships and labels, and every contact merged into it, which
+    /// were the same person. Its handles are nobody's afterwards. What a
+    /// person turned down for it stays, as a record. The commit before it
     /// still holds all of it.
     pub async fn delete(&self, contact_id: &str) -> Result<()> {
         let _held = self.drafts.lock().await;
@@ -840,6 +920,7 @@ impl Store {
                 "DELETE FROM photos WHERE contact_id = ?1",
                 "DELETE FROM me WHERE contact_id = ?1",
                 "DELETE FROM members WHERE group_id = ?1 OR member_id = ?1",
+                "DELETE FROM labels WHERE subject = 'contact:' || ?1",
                 "DELETE FROM contacts WHERE contact_id = ?1",
             ] {
                 sqlx::query(sql)
@@ -857,11 +938,11 @@ impl Store {
         Ok(())
     }
 
-    /// Merge `from` into `into`, which survives: its links, fields and
-    /// memberships move over, and so does its mark as me; its photo and
-    /// note fill in where the survivor has none, and `from` is kept as a
-    /// row pointing at `into` so an id saved anywhere (a `contact:`
-    /// search) still reaches the person. A contact already merged into `from` now points at `into`,
+    /// Merge `from` into `into`, which survives: its links, fields,
+    /// memberships, labels and turned-down links move over, and so does
+    /// its mark as me; its photo and note fill in where the survivor has
+    /// none, and `from` is kept as a row pointing at `into` so an id saved
+    /// anywhere (a `contact:` search) still reaches the person. A contact already merged into `from` now points at `into`,
     /// so a chain is never more than one step.
     pub async fn merge(&self, from: &str, into: &str) -> Result<()> {
         if from == into {
@@ -916,6 +997,29 @@ impl Store {
             (
                 "DELETE FROM members WHERE group_id = ?1 OR member_id = ?1 OR group_id = member_id",
                 "drop the old memberships",
+            ),
+            (
+                "INSERT OR IGNORE INTO not_linked (handle, contact_id, contact_name, agent, \
+                   reason, decided_at_utc, tz_offset, contact_rejected) \
+                 SELECT handle, ?2, contact_name, agent, reason, decided_at_utc, tz_offset, \
+                   contact_rejected FROM not_linked WHERE contact_id = ?1",
+                "move the turned-down links",
+            ),
+            (
+                "DELETE FROM not_linked WHERE contact_id = ?1",
+                "drop the old turned-down links",
+            ),
+            (
+                "INSERT OR IGNORE INTO labels (subject, label, applies, decided_how, agent, reason, \
+                   decided_at_utc, reviewed_at_utc, tz_offset, confidence, run) \
+                 SELECT 'contact:' || ?2, label, applies, decided_how, agent, reason, \
+                   decided_at_utc, reviewed_at_utc, tz_offset, confidence, run \
+                   FROM labels WHERE subject = 'contact:' || ?1",
+                "move the labels, the survivor's own winning",
+            ),
+            (
+                "DELETE FROM labels WHERE subject = 'contact:' || ?1",
+                "drop the old labels",
             ),
             (
                 "UPDATE contacts SET merged_into = ?2 WHERE merged_into = ?1 OR contact_id = ?1",
@@ -1023,20 +1127,53 @@ async fn name_of(tx: &mut sqlx::SqliteConnection, contact_id: &str) -> Result<St
     Ok(name.unwrap_or_else(|| format!("contact {contact_id}")))
 }
 
+/// A new contact's id.
+async fn insert_contact(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    name: &str,
+    kind: ContactKind,
+    by: Maker<'_>,
+    now: &str,
+    tz: &str,
+) -> Result<String> {
+    let contact_id = uuid::Uuid::new_v4().to_string();
+    let row = ContactRow {
+        contact_id: contact_id.clone(),
+        kind,
+        name: name.to_string(),
+        note: None,
+        merged_into: None,
+        agent: by.agent(),
+        created_at_utc: now.to_string(),
+        updated_at_utc: now.to_string(),
+        tz_offset: tz.to_string(),
+    };
+    bulk_upsert_entity_in_tx(tx, &[row])
+        .await
+        .context("insert a contact")?;
+    Ok(contact_id)
+}
+
 async fn insert_handle(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     h: &Handle,
     contact_id: &str,
+    by: Maker<'_>,
     now: &str,
     tz: &str,
 ) -> Result<()> {
     let row = HandleRow {
         handle: h.as_str().to_string(),
         contact_id: contact_id.to_string(),
-        linked_how: LinkedHow::Manual,
+        linked_how: by.how(),
         linked_at_utc: now.to_string(),
         tz_offset: tz.to_string(),
         stopped_working_by: None,
+        agent: by.agent(),
+        reason: by.reason(),
+        reviewed_at_utc: None,
+        confidence: by.confidence(),
+        run: by.run(),
     };
     bulk_upsert_entity_in_tx(tx, &[row])
         .await
@@ -1352,8 +1489,9 @@ mod tests {
 
     #[test]
     fn strum_spellings_round_trip() {
-        for k in LinkedHow::VARIANTS {
+        for k in DecidedHow::VARIANTS {
             assert_eq!(serde_json::to_value(k).unwrap(), k.as_str());
+            assert_eq!(DecidedHow::parse(k.as_str()), Some(*k));
         }
     }
 

@@ -5,7 +5,8 @@
 // a double-click on a row opens the person card, a right-click offers
 // the card, everything with them, copying the name, merging the selected
 // rows into the one clicked, and deleting. A new contact is made from the
-// box at the top.
+// box at the top. Review switches to what agents proposed
+// (`ContactsReview.ce.vue`).
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from "vue";
 import { copyToClipboard } from "@/clipboard";
 import { confirmAction } from "@/desktop";
@@ -29,6 +30,8 @@ import {
   type NormalizedContact,
 } from "./contacts";
 import { filterContacts, mergeInto, rowHandle, type ContactRow } from "./contactsTable";
+import type { ReviewRow } from "./contactsReview";
+import ContactsReview from "./ContactsReview.ce.vue";
 import HandlePopover from "./HandlePopover.ce.vue";
 import TableGrid from "./TableGrid.ce.vue";
 import type { TableGridApi } from "./tableGridApi";
@@ -44,7 +47,15 @@ A contact with no handle yet is drawn as itself. Double-click a row to
 open the person card: your contact and what every source says about
 them. Right-click for everything with them, or to delete the contact.
 To merge duplicates, select them all and right-click the one to keep.</p>
+<p><b>Review</b> lists what agents proposed: contacts they made, handles
+they linked, and whether each person or sender is <i>real</i>, which is
+to say not spam. A label is in, out, or not decided. Confirm agrees with the agent; Reject unlinks what it
+linked and flips its labels, and both are written down so no agent
+proposes the same again. Select many rows to act on them at once.</p>
 `);
+
+const mode = ref<"contacts" | "review">("contacts");
+const waitingReview = ref<number | null>(null);
 
 const columns = ref<ColumnSpec[]>([]);
 const rows = ref<ContactRow[]>([]);
@@ -70,6 +81,19 @@ async function load() {
     error.value = null;
   } catch (e) {
     if (mine === asked) error.value = (e as Error).message;
+  }
+  void countReview();
+}
+
+/** How many review rows wait for you, for the switch's label. */
+async function countReview() {
+  try {
+    const r = await fetch(`${CONTACTS_APPLET}/review`);
+    if (!r.ok) return;
+    const t = (await r.json()) as { rows: ReviewRow[] };
+    waitingReview.value = t.rows.filter((row) => row.awaiting).length;
+  } catch {
+    // An applet from before the review answers 404; the switch says no count.
   }
 }
 
@@ -217,44 +241,69 @@ onBeforeUnmount(() => {
 
 <template>
   <div ref="cardEl" class="contacts-card" @click.capture="onChipClick">
-    <div class="contacts-bar">
-      <input
-        v-model="filter"
-        class="contacts-input"
-        type="search"
-        placeholder="Filter by name, address, number or note"
-        aria-label="Filter contacts"
-      />
-      <span class="contacts-count">
-        {{ shown.length === rows.length ? rows.length : `${shown.length} of ${rows.length}` }}
-        {{ rows.length === 1 ? "contact" : "contacts" }}
-      </span>
-      <form class="contacts-new" @submit.prevent="create">
+    <div class="contacts-modes" role="tablist">
+      <button
+        role="tab"
+        class="contacts-mode"
+        :aria-selected="mode === 'contacts'"
+        @click="mode = 'contacts'"
+      >
+        Contacts
+      </button>
+      <button
+        role="tab"
+        class="contacts-mode"
+        :aria-selected="mode === 'review'"
+        @click="mode = 'review'"
+      >
+        Review<span v-if="waitingReview" class="contacts-waiting">{{ waitingReview }} waiting</span>
+      </button>
+    </div>
+    <ContactsReview
+      v-if="mode === 'review'"
+      :ctx="props.ctx"
+      @waiting="(n) => (waitingReview = n)"
+    />
+    <template v-else>
+      <div class="contacts-bar">
         <input
-          v-model="newName"
+          v-model="filter"
           class="contacts-input"
-          placeholder="New contact's name"
-          aria-label="New contact's name"
+          type="search"
+          placeholder="Filter by name, address, number or note"
+          aria-label="Filter contacts"
         />
-        <button type="submit" class="contacts-button" :disabled="creating || !newName.trim()">
-          Create
-        </button>
-      </form>
-    </div>
-    <div v-if="error" class="contacts-error">{{ error }}</div>
-    <div class="contacts-grid">
-      <TableGrid
-        :columns="columns"
-        :rows="shown"
-        rowKey="key"
-        :selectable="true"
-        :chips="chips"
-        :menu="(anchor, targets) => menu(anchor, targets)"
-        @ready="(api) => (grid = api)"
-        @cellDoubleClick="(row) => openPerson(row)"
-        @openCard="(source) => props.ctx.host.openCards(source)"
-      />
-    </div>
+        <span class="contacts-count">
+          {{ shown.length === rows.length ? rows.length : `${shown.length} of ${rows.length}` }}
+          {{ rows.length === 1 ? "contact" : "contacts" }}
+        </span>
+        <form class="contacts-new" @submit.prevent="create">
+          <input
+            v-model="newName"
+            class="contacts-input"
+            placeholder="New contact's name"
+            aria-label="New contact's name"
+          />
+          <button type="submit" class="contacts-button" :disabled="creating || !newName.trim()">
+            Create
+          </button>
+        </form>
+      </div>
+      <div v-if="error" class="contacts-error">{{ error }}</div>
+      <div class="contacts-grid">
+        <TableGrid
+          :columns="columns"
+          :rows="shown"
+          rowKey="key"
+          :selectable="true"
+          :chips="chips"
+          :menu="(anchor, targets) => menu(anchor, targets)"
+          @ready="(api) => (grid = api)"
+          @cellDoubleClick="(row) => openPerson(row)"
+          @openCard="(source) => props.ctx.host.openCards(source)"
+        />
+      </div>
+    </template>
     <HandlePopover
       v-if="popover"
       :key="popover.handle"
@@ -274,6 +323,35 @@ onBeforeUnmount(() => {
   color: var(--datalib-fg);
   background: var(--datalib-bg);
   font-size: var(--datalib-font-size);
+}
+.contacts-modes {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.35rem 0.75rem 0;
+  border-bottom: 1px solid var(--datalib-border-soft);
+}
+.contacts-mode {
+  font: inherit;
+  padding: 0.2rem 0.7rem;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: var(--datalib-radius) var(--datalib-radius) 0 0;
+  background: none;
+  color: var(--datalib-muted);
+  cursor: pointer;
+}
+.contacts-mode[aria-selected="true"] {
+  border-color: var(--datalib-border-soft);
+  background: var(--datalib-surface);
+  color: var(--datalib-fg);
+}
+.contacts-waiting {
+  margin-left: 0.4rem;
+  padding: 0 0.4rem;
+  border-radius: 999px;
+  background: var(--datalib-accent);
+  color: var(--datalib-accent-fg, #fff);
+  font-size: 0.85em;
 }
 .contacts-bar {
   display: flex;

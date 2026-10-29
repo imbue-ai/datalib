@@ -1243,6 +1243,15 @@ export type Chip = { kind: ChipKind; text: string; title: string };
 
 /// A button on a row. Data decides whether it appears and what it says;
 /// the viewer's code decides what it does.
+/// `datalib_columns::Membership`: whether a row is in the set its column
+/// names — in, out, or not known (`null`) — and whether that is an
+/// agent's answer no person has reviewed.
+export type Membership = {
+  applies: boolean | null;
+  proposed?: boolean;
+  title?: string | null;
+};
+
 export type Action = {
   id: string;
   label: string;

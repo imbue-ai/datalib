@@ -17,6 +17,7 @@ import type {
   ColumnSpec,
   ColumnType,
   Identity,
+  Membership,
   Quantity,
   StatusView,
   Chip,
@@ -44,6 +45,10 @@ export type SlickColumnOptions<T> = {
   /// What each action id does when its button is pressed. An id with
   /// no handler draws no button.
   actions?: Record<string, (row: T) => void>;
+  /// A `membership` toggle was pressed: put the row in the column's set,
+  /// out of it, or (`null`) back to not known. Absent, the toggles only
+  /// show.
+  onMembership?: (row: T, field: string, applies: boolean | null) => void;
   /// A `markdown_uuid` cell was clicked.
   onOpenDocument?: (uuid: string, row: T) => void;
   /// Every column can be dragged into the grouping bar. Off, no column
@@ -238,6 +243,81 @@ function actionsFormatter<T extends Record<string, unknown>>(
   };
 }
 
+/// What a press at `x` along a membership switch `width` wide asks for:
+/// its left third out, its middle not known, its right third in.
+export function membershipAt(x: number, width: number): boolean | null {
+  if (width <= 0) return null;
+  const third = width / 3;
+  return x < third ? false : x >= 2 * third ? true : null;
+}
+
+function membershipWord(applies: boolean | null): string {
+  return applies == null ? "not known" : applies ? "in" : "out";
+}
+
+/// Where a membership sorts: in, then an agent's in, not known, an
+/// agent's out, out.
+export function membershipRank(m: Membership | null | undefined): number {
+  if (!m || m.applies == null) return 2;
+  if (m.applies) return m.proposed ? 1 : 0;
+  return m.proposed ? 3 : 4;
+}
+
+/// A `membership` cell: one three-position switch, its knob left for
+/// out, centred for not known, right for in; filled when settled, only
+/// outlined where it is an agent's answer no person has reviewed.
+/// Pressing a third of it hands the host that answer: pressing where the
+/// knob already is does nothing, unless the answer is only proposed,
+/// which the press confirms. Kept per row and column across repaints, as
+/// the action buttons are, so a press is never swallowed by a rebuild.
+function membershipFormatter<T extends Record<string, unknown>>(
+  onChange: SlickColumnOptions<T>["onMembership"],
+): Formatter<T> {
+  type Kept = { el: HTMLButtonElement; row: T; value: Membership };
+  const kept = new Map<string, Kept>();
+  return (_r, _c, value, col, row, grid) => {
+    const idProp = grid.getOptions().datasetIdPropertyName ?? "id";
+    const field = String(col.field);
+    const key = `${String(row[idProp])}\u0000${field}`;
+    const m: Membership = (value as Membership | null) ?? { applies: null };
+    let k = kept.get(key);
+    if (!k) {
+      const el = document.createElement("button");
+      el.type = "button";
+      el.className = "tg-member";
+      el.setAttribute("role", "checkbox");
+      const knob = document.createElement("span");
+      knob.className = "tg-member-knob";
+      el.appendChild(knob);
+      const held: Kept = { el, row, value: m };
+      el.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const box = el.getBoundingClientRect();
+        const wanted = membershipAt(e.clientX - box.left, box.width);
+        const now = held.value;
+        if (now.applies === wanted && !now.proposed) return;
+        onChange?.(held.row, field, wanted);
+      });
+      k = held;
+      kept.set(key, k);
+    }
+    k.row = row;
+    k.value = m;
+    const state = m.applies == null ? "unknown" : m.applies ? "in" : "out";
+    k.el.dataset.state = state;
+    k.el.classList.toggle("proposed", !!m.proposed);
+    k.el.setAttribute("aria-checked", m.applies == null ? "mixed" : String(m.applies));
+    k.el.disabled = !onChange;
+    const says = `${membershipWord(m.applies)}${m.proposed ? ", proposed" : ""}`;
+    const how = onChange
+      ? "\nPress the left for out, the middle for not known, the right for in."
+      : "";
+    k.el.title = `${m.title ? `${m.title} (${says})` : says}${how}`;
+    k.el.setAttribute("aria-label", says);
+    return k.el;
+  };
+}
+
 function text(value: unknown): string {
   return value == null ? "" : String(value);
 }
@@ -341,6 +421,10 @@ export function copyText(type: ColumnType, value: unknown): string {
       return quantityText(value as Quantity);
     case "actions":
       return "";
+    case "membership": {
+      const m = value as Membership;
+      return m.applies == null ? "" : m.applies ? "in" : "out";
+    }
     case "text":
     case "count":
     case "number":
@@ -363,6 +447,7 @@ export function typedColumns<T extends Record<string, unknown>>(
   opts: SlickColumnOptions<T>,
 ): Column<T>[] {
   const Actions = actionsFormatter<T>(opts.actions ?? {});
+  const Member = membershipFormatter<T>(opts.onMembership);
   const treeField = treeColumnField(specs);
 
   return specs.map((spec) => {
@@ -569,6 +654,13 @@ export function typedColumns<T extends Record<string, unknown>>(
           };
         case "actions":
           return { sortable: false, resizable: false, filterable: false, formatter: Actions };
+        case "membership":
+          return {
+            filterable: false,
+            formatter: Member,
+            sortComparer: (a, b, dir) =>
+              (membershipRank(a as Membership) - membershipRank(b as Membership)) * (dir ?? 1),
+          };
         case "text":
           return {};
       }

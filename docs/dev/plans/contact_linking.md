@@ -59,8 +59,8 @@ contacts app"); these parts of them are not used yet:
 
 - **Groups and members.** An address two people share belongs to a
   group contact whose members are those people; `members` holds them.
-- **`linked_how`** gains `card` (adopted from an address-book card)
-  and `suggestion` (accepted from a suggestion), beside `manual`.
+- **`linked_how`** gains `card` (adopted from an address-book card),
+  beside `manual` and `agent`.
 
 Routes still to add to the applet:
 
@@ -91,10 +91,11 @@ longer working.
    name them in the search terms. Linking the top fifty correspondents
    covers most of a mailbox, and this is where that happens.
 
-**Only a person makes links.** What upstream asserts — this
+**No source links anything by itself.** What upstream asserts — this
 address-book card holds these three handles, this Slack profile has
-this email — feeds the one-click adopt and, later, suggestions, but
-never links anything by itself.
+this email — feeds the one-click adopt and an agent's proposals. An
+agent's link waits for a person to confirm it
+([`../contacts.md`](../contacts.md) §"Agents propose, a person decides").
 
 ## Live content in the grid and in search
 

@@ -2,7 +2,10 @@
 //! `datalib_curated/datalib_contacts/`, serving what a chip needs to resolve a
 //! handle, what its popover needs to create or link a contact, the
 //! photo a person put on one, the draft a contact is edited through
-//! on its card, and the table of every contact the app's Browse opens.
+//! on its card, the table of every contact the app's Browse opens, and
+//! the review of what agents proposed (`review.rs`).
+
+mod review;
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -100,6 +103,7 @@ fn routes(store: Arc<Store>) -> Router {
                 .layer(DefaultBodyLimit::max(PHOTO_BODY_LIMIT)),
         )
         .route("/health", get(|| async { Json(json!({"ok": true})) }))
+        .merge(review::routes())
         .with_state(store)
 }
 
@@ -132,6 +136,9 @@ fn refused(e: anyhow::Error) -> ApiError {
         "already merged",
         "can be merged",
         "only a person",
+        "not a handle or a contact",
+        "is not a label",
+        "names its agent",
     ]
     .iter()
     .any(|m| msg.contains(m));
@@ -658,6 +665,117 @@ mod tests {
                 assert!(r.get(*f).is_some(), "row lacks {f}: {r}");
             }
         }
+    }
+
+    /// An agent's batch lands as one call; the review table puts each
+    /// subject on a row with its importance and labels, a person's
+    /// confirm and label land, and a bad subject is the person's to fix.
+    #[tokio::test]
+    async fn an_agents_batch_is_reviewed_through_the_routes() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&datalib_contacts::store_path(dir.path()))
+            .await
+            .unwrap();
+        let app = routes(Arc::new(store));
+        let (status, got) = call(
+            &app,
+            "POST",
+            "/proposals",
+            json!({
+                "agent": "claude-test",
+                "contacts": [{
+                    "name": "Deanna Troi",
+                    "handles": ["email:troi@enterprise.org"],
+                    "reason": "same name on Slack",
+                    "labels": [{"label": "real", "reason": "wrote back"}, {"label": "crew"}],
+                }],
+                "handles": [{
+                    "handle": "email:offers@ferengi.test",
+                    "labels": [{"label": "real", "applies": false, "reason": "one-way offers"}],
+                }],
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{got}");
+        assert_eq!(
+            (got["contacts_created"].as_u64(), got["labelled"].as_u64()),
+            (Some(1), Some(3))
+        );
+
+        let (_, table) = call(&app, "GET", "/review", json!(null)).await;
+        let rows = table["rows"].as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        let troi = &rows[0];
+        assert_eq!(troi["who"]["id"], "mailto:troi@enterprise.org");
+        assert_eq!(
+            troi["label:real"],
+            json!({"applies": true, "proposed": true, "title": "claude-test proposed it; you have not looked: wrote back"})
+        );
+        assert_eq!(troi["real"], true);
+        assert_eq!(troi["labels"][0]["text"], "crew?");
+        assert_eq!(troi["status"], "waiting for you");
+        assert_eq!(rows[1]["label:real"]["applies"], false);
+        assert_eq!(
+            rows[1]["label:crew"],
+            json!(null),
+            "no column for a label nobody asked to see"
+        );
+        let fields: Vec<&str> = table["columns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["field"].as_str().unwrap())
+            .collect();
+        for r in rows {
+            for f in &fields {
+                assert!(r.get(*f).is_some(), "row lacks {f}: {r}");
+            }
+        }
+
+        let subject = troi["key"].clone();
+        let (_, done) = call(
+            &app,
+            "POST",
+            "/review/confirm",
+            json!({"subjects": [subject]}),
+        )
+        .await;
+        assert_eq!(done["confirmed"], 3);
+        let (_, done) = call(
+            &app,
+            "POST",
+            "/label",
+            json!({"subjects": ["email:offers@ferengi.test"], "label": "real", "applies": true}),
+        )
+        .await;
+        assert_eq!(done["changed"], 1);
+        let (_, table) = call(&app, "GET", "/review", json!(null)).await;
+        let statuses: Vec<&str> = table["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["status"].as_str().unwrap())
+            .collect();
+        assert_eq!(statuses, ["you confirmed", "you overrode the agent"]);
+
+        let (_, table) = call(&app, "GET", "/review?label=Crew", json!(null)).await;
+        let fields: Vec<&str> = table["columns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["field"].as_str().unwrap())
+            .collect();
+        assert!(fields.contains(&"label:crew"), "{fields:?}");
+        assert_eq!(table["rows"][0]["label:crew"]["applies"], true);
+
+        let (status, err) = call(
+            &app,
+            "POST",
+            "/review/confirm",
+            json!({"subjects": ["nobody"]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{err}");
     }
 
     /// The card's switch: a person marked as me answers as the account and

@@ -1964,6 +1964,7 @@ contacts
     name
     note
     merged_into
+    agent
     created_at_utc
     updated_at_utc
     tz_offset
@@ -1984,6 +1985,23 @@ handles
     linked_at_utc
     tz_offset
     stopped_working_by
+    agent
+    reason
+    reviewed_at_utc
+    confidence
+    run
+labels
+    subject
+    label
+    applies
+    decided_how
+    agent
+    reason
+    decided_at_utc
+    reviewed_at_utc
+    tz_offset
+    confidence
+    run
 me
     contact_id
     marked_at_utc
@@ -1993,6 +2011,15 @@ members
     member_id
     added_at_utc
     tz_offset
+not_linked
+    handle
+    contact_id
+    contact_name
+    agent
+    reason
+    decided_at_utc
+    tz_offset
+    contact_rejected
 photos
     contact_id
     content_type

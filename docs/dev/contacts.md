@@ -74,7 +74,8 @@ tree does for a person.
 | **chip link** | how a document names a person: a markdown link whose href is the handle as a URI, `[Will Riker](mailto:riker@enterprise.org "Will Riker <riker@enterprise.org>")`. The viewer draws it as a chip. |
 | **source contact** | a `NormalizedContact` a source wrote: that source's attempt at a neutral, unified record of what it knows about one person, keyed by `source_id` and the source's own `key`. The index stores them in `source_contacts`; the UI holds them as `Who.sourceContacts`. |
 | **contact** | a person's own record in the contacts app, also answered as a `NormalizedContact`, with `source_id = "datalib_contacts"`. |
-| **link** | a row in the contacts app saying a handle belongs to a contact. Curated by a person; no source or step makes one. |
+| **link** | a row in the contacts app saying a handle belongs to a contact. Made by a person, or proposed by an agent for a person to confirm; no source or step makes one. |
+| **label** | a word on a handle or a contact (`real`, `family`), in or out, with who said so. §"Agents propose, a person decides". |
 | **the contacts app** | the `datalib_contacts` applet and its store under `datalib_curated/`. Optional: without it, chips still say what the individual sources know, and offer nothing to link. |
 
 ## Handles
@@ -389,8 +390,10 @@ person's work, so the rules that make it irreplaceable:
 
 | table | key | holds |
 |---|---|---|
-| `contacts` | `contact_id`, a random v4 (the one id here that is a person's act, not a function of a record) | `kind`, `name`, `note`, `merged_into`, stamps |
-| `handles` | `handle`, as `datalib_handle` spells it | `contact_id`, `linked_how`, `linked_at_utc`, `stopped_working_by` |
+| `contacts` | `contact_id`, a random v4 (the one id here that is a person's act, not a function of a record) | `kind`, `name`, `note`, `merged_into`, `agent` (the agent that made it, if one did), stamps |
+| `handles` | `handle`, as `datalib_handle` spells it | `contact_id`, `linked_how` (`manual` or `agent`), `linked_at_utc`, `stopped_working_by`, `agent`, `reason`, `confidence`, `run`, `reviewed_at_utc` |
+| `not_linked` | `(handle, contact_id)` | a link a person turned down: `contact_name`, the `agent` and `reason` that proposed it, `decided_at_utc`, `contact_rejected` (the agent's whole contact was rejected) |
+| `labels` | `(subject, label)`, the subject a handle or `contact:<id>` | `applies` (in or out), `decided_how`, `agent`, `reason`, `confidence`, `run`, `decided_at_utc`, `reviewed_at_utc` |
 | `members` | `(group_id, member_id)` | `added_at_utc` |
 | `photos` | `contact_id` | `content_type`, `bytes`, `set_at_utc` |
 | `fields` | `field_id`, minted by the card | `contact_id`, `kind` (`FieldKind`), `label`, `value`, `handle`, `position`, `copied_from_source` and `_key` |
@@ -440,6 +443,11 @@ is a 409 with the store's words; a handle that does not parse is a
 | `POST`, `GET /contact/{id}/draft` | open the contact's draft (cut it if there is none) / read it: `{base, mine, published, published_commit}` |
 | `PUT`, `DELETE /contact/{id}/draft` | autosave the whole edit onto the draft, uncommitted, answering `{handles: {<field_id>: <handle>}}` for each field whose value is an address or number / discard the draft |
 | `POST /contact/{id}/draft/save` | `{seen}`, the published commit the card last showed; `{"outcome": "saved", "commit"}`, or `{"outcome": "stale", "view"}` with nothing saved when the contact moved since |
+| `POST /proposals` | an agent's batch, one commit: `{agent, run?, contacts: [{contact_id?, name?, handles, reason?, confidence?, labels}], handles: [{handle, labels}]}`, each label `{label, applies?, reason?, confidence?}`, a confidence 0 to 1. Answers `{contacts_created, linked, labelled, skipped: [{what, why}]}` |
+| `GET /review?label=` | the review as a typed table, one row per contact or handle with anything an agent proposed or a label, with a `membership` column for `real` and for `label` if given; `GET /review/items` the same as plain records, for an agent |
+| `POST /review/confirm`, `POST /review/reject` | `{subjects}`: agree with, or turn down, everything an agent proposed for each |
+| `POST /label` | `{subjects, label, applies}`: a person's in (`true`), out (`false`) or unknown (`null`) |
+| `GET /not_linked` | every link a person turned down, newest first |
 
 The config entry is `[[applets]] id = "datalib_contacts"` with
 `command = "datalib-applet datalib_contacts"`; the gateway passes the
@@ -511,6 +519,64 @@ knows (`contactFields.ts`):
 
 Not built yet: history and undo, and the export
 ([`plans/contact_editing.md`](plans/contact_editing.md)).
+
+### Agents propose, a person decides
+
+An agent may curate the contacts app too: group handles into contacts,
+and label people and senders. Nothing it says is final, and the store
+writes down where a person agreed or did not, so a later agent can
+learn from it (`contacts/src/review.rs`). The label rules themselves
+(`contacts/src/labels.rs`) know nothing of contacts: the contacts app
+is where the pattern is proved before other parts of datalib label
+things the same way.
+
+- **Who said so is on every row.** A link, a contact and a label each
+  name the `agent` that made them, its `reason`, how sure it was
+  (`confidence`, 0 to 1) and which of its runs it was (`run`); a
+  person's own say is `manual` and names none. `reviewed_at_utc` is when
+  a person looked: an agent's link or label without one waits for
+  review.
+- **A label is in, out, or unknown.** A row says in or out
+  (`applies`); no row says nobody has decided, which is most of them.
+  A label is any word, and each stands alone: what one says never
+  changes another. The one agents curate is `real` (`REAL`): in when
+  the person or sender is not spam, which takes in a machine the person
+  wants (a receipt, a notification) as well as the people they deal
+  with. An agent's close calls are what its `confidence` is for: a
+  person reviews the least sure first.
+- **Confirm keeps the agent's row; reject turns it around.** Confirming
+  stamps `reviewed_at_utc`. Rejecting unlinks each link the agent made,
+  into `not_linked`, and flips each label, so its in becomes the
+  person's out; the row stays `manual` and still names the agent, which
+  said the opposite. A contact an agent made that is left holding no
+  handle goes with its links. Unlinking an agent's link anywhere else
+  (the popover) is written down the same way; a person's own link is
+  theirs to undo without a record, and linking a turned-down pair again
+  takes the record back.
+- **A person's word stands.** An agent's batch skips, and names in its
+  answer, a handle someone else holds, a pair in `not_linked`, a label
+  a person answered the other way; an
+  agent may re-propose over its own rows nobody has reviewed yet. A
+  new contact repeating every handle of an agent's contact the person
+  rejected whole is skipped too (`contact_rejected`); fewer of them is
+  a different claim and may be made.
+- **Merges and deletes carry them.** A merge moves the merged-away
+  contact's labels and turn-downs to the survivor, the survivor's own
+  answer winning where both have one; a delete takes the contact's labels and keeps its
+  turn-downs, which name it as it was called.
+
+The contacts card's *Review* switch is the person's side: every row
+with something proposed or labelled, close calls first (what waits,
+the agent's least sure first), filtered by what `real` says or by any
+other label. `real`, and the label picked in the filter, is a
+`membership` column ([`cards.md`](cards.md) §"Typed tables"): a
+three-position switch per row, out · not known · in, the agent's
+unreviewed answer outlined; a press on a third of it is the person's
+answer. *Confirm*, *Reject*, *Real*, *Not real* or a new label in the
+bar act on every selected row, and the right-click adds *Not <label>*
+for each other label a row holds. Labels sit over the view like
+links: no document renders again, and the search does not read them
+yet.
 
 ## In the UI
 
@@ -714,7 +780,7 @@ chip in the UI is separate and always uses the latest answer.
 | a provider's handles or source contacts | that provider's `RENDER_VERSION` |
 | the header, the recipients line, or what `people.rs` counts | chat-common's `LAYOUT_VERSION`, which renders every chat source again |
 | what contact-common writes | the `RENDER_VERSION` of each source that uses it (contacts, linkedin, facebook) |
-| a link, an unlink, a handle marked stopped | no document; open chips are drawn again |
+| a link, an unlink, a handle marked stopped, a label | no document; open chips are drawn again |
 | the contacts store's shape | a rung on `LADDER`; never a reset |
 
 ## Where it is tested
@@ -722,7 +788,9 @@ chip in the UI is separate and always uses the latest answer.
 - `handle`: every constructor's spellings, `parse` against `rebuild`,
   the URI round trip over every kind.
 - `contacts`: the store end to end on a real doltlite file, the ladder
-  against the current rules, the photo rules.
+  against the current rules, the photo rules; `review.rs` an agent's
+  batch, a person's confirm, reject and in/out/unknown, and a second
+  batch leaving the person's word alone.
 - `chat-common`: `people.rs` (the baseline, recipients, reactors, the
   provider merge); `render.rs` (the header and recipients line).
 - `unified_document_index`: `people.rs` ranking; the applet's `/people` against
@@ -742,7 +810,7 @@ chip in the UI is separate and always uses the latest answer.
 ## Not built
 
 Editing a contact on its card, merging or deleting from the person card, groups and members, undo, the triage grid of
-unresolved handles, a
+unresolved handles, labels in search (`label:` and its negation) and on a chip, a
 handle for a number without its country code, a handle that stopped
 working in some apps but not others, mentions in Google Chat,
 WhatsApp and Messages (each marks them up, in a shape not yet checked
