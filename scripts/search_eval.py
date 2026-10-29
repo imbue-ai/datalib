@@ -237,7 +237,9 @@ def run(args: argparse.Namespace) -> None:
         if m not in MODES:
             raise SystemExit(f"--modes: {m!r} is not one of {', '.join(MODES)}")
     root = Path(args.root).expanduser()
-    load_at_start = os.getloadavg()[0]
+    # Read before the first query: the checkout can move while a run takes
+    # its half hour, and the applet was built from what it was at the start.
+    made = provenance(args)
     server = connect(args, root)
     pages = Pages(server.get)
     results: list[dict[str, Any]] = []
@@ -287,14 +289,14 @@ def run(args: argparse.Namespace) -> None:
         "scope": args.scope,
         "corpus": held,
         "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-        "provenance": provenance(args, load_at_start),
+        "provenance": {**made, "load": [*made["load"], round(os.getloadavg()[0], 1)]},
         "results": results,
     }
     Path(args.out).write_text(json.dumps(record, indent=1, ensure_ascii=False) + "\n")
     print(report(record))
 
 
-def provenance(args: argparse.Namespace, load_at_start: float) -> dict[str, Any]:
+def provenance(args: argparse.Namespace) -> dict[str, Any]:
     """Where a run came from, so a kept run can be read beside another: the
     checkout the applet is meant to be built from, the machine and its load
     average as the run started and ended (times move with both), and which
@@ -311,7 +313,7 @@ def provenance(args: argparse.Namespace, load_at_start: float) -> dict[str, Any]
         "applet": None if args.http else args.applet,
         "host": platform.node(),
         "machine": f"{platform.system()} {platform.machine()}, {os.cpu_count()} cpus",
-        "load": [round(load_at_start, 1), round(os.getloadavg()[0], 1)],
+        "load": [round(os.getloadavg()[0], 1)],
         "evals_sha256": hashlib.sha256(Path(args.evals).read_bytes()).hexdigest(),
     }
 
