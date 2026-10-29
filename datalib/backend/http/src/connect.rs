@@ -728,11 +728,27 @@ pub async fn start_connect(
 /// only diagnosable afterwards if something durable says what latchkey
 /// printed. The output is latchkey's, so it is scrubbed first.
 fn fail(slot: &Arc<Mutex<ConnectStatus>>, service: &str, output: String) {
-    tracing::error!(service, "latchkey login failed: {}", scrub(&output));
+    let issue = classify(&output, false);
+    if failure_is_an_error(issue) {
+        tracing::error!(service, "latchkey login failed: {}", scrub(&output));
+    } else {
+        tracing::info!(
+            service,
+            issue = issue.as_str(),
+            "latchkey login stopped: {}",
+            scrub(&output)
+        );
+    }
     let mut slot = slot.lock().expect("connect slot mutex");
     slot.status = ConnectState::Failed;
-    slot.issue = Some(classify(&output, false));
+    slot.issue = Some(issue);
     slot.output = output;
+}
+
+/// latchkey holding no OAuth client is how every first Google sign-in
+/// ends; the wizard answers it with a button that creates one.
+fn failure_is_an_error(issue: IssueKind) -> bool {
+    issue != IssueKind::NoOauthClient
 }
 
 fn succeed(
@@ -1164,6 +1180,25 @@ mod account_report_tests {
     #[test]
     fn a_capture_that_names_nothing_yields_none() {
         assert_eq!(stored_account("Done\n"), None);
+    }
+}
+
+#[cfg(test)]
+mod failure_level_tests {
+    use super::{classify, failure_is_an_error};
+
+    /// The first try of a Google sign-in ends in latchkey saying it holds
+    /// no OAuth client yet, which the wizard answers with a button. Logged
+    /// as an error, it read as a sign-in that had failed.
+    #[test]
+    fn a_missing_oauth_client_is_not_an_error() {
+        let refusal = "Error: Service google-gmail requires preparation first. Run \
+                       'latchkey auth browser-prepare google-gmail' before logging in, or \
+                       pass --account to reuse the client stored with an existing account's \
+                       credentials.";
+        assert!(!failure_is_an_error(classify(refusal, false)));
+        let timeout = "locator.waitFor: Timeout 12000ms exceeded.";
+        assert!(failure_is_an_error(classify(timeout, false)));
     }
 }
 

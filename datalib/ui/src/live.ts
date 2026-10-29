@@ -9,6 +9,7 @@
 // Here there is one connection however many subscribers there are.
 
 import type { LiveTable } from "./generated/enums";
+import { noteAnswer, sessionEnded } from "./session";
 
 /// A dataset the server serves, named by what serves it: `watch::Table`,
 /// generated into `./generated/enums`. A consumer names the ones it reads
@@ -129,9 +130,20 @@ export function holdWhileOffScreen(inner: LiveHandlers): {
 /// user is still looking at the same screen.
 const STALL_MS = 35_000;
 
+/// The wait before reopening a stream the server refused, doubled per
+/// refusal up to the cap and started over once one opens. A refusal
+/// comes back within a millisecond, so reopening at once is a thousand
+/// connections a second, each with every card's refetch behind it.
+const RETRY_FIRST_MS = 1_000;
+const RETRY_MAX_MS = 30_000;
+
 const subscribers = new Set<LiveHandlers>();
 let source: EventSource | null = null;
 let watchdog: ReturnType<typeof setTimeout> | null = null;
+let retry: ReturnType<typeof setTimeout> | null = null;
+let retryMs = RETRY_FIRST_MS;
+/// Frames may have gone by unseen: the next stream to open owes a resync.
+let missedFrames = false;
 let visibilityBound = false;
 
 function fanOut(pick: (h: LiveHandlers) => void) {
@@ -166,14 +178,48 @@ function armWatchdog() {
 function reconnect() {
   if (source) source.close();
   source = null;
+  missedFrames = true;
   connect();
-  fanOut((h) => h.resync?.());
+}
+
+/// The browser gave up on `es`: the server answered with something other
+/// than a stream (a 401, a proxy's 502), and does not say which. A plain
+/// request does: a 401 means the session is gone for good, and anything
+/// else is tried again later.
+async function refused(es: EventSource) {
+  es.close();
+  source = null;
+  missedFrames = true;
+  if (watchdog) clearTimeout(watchdog);
+  watchdog = null;
+  await askAboutTheSession();
+  if (sessionEnded()) return;
+  retry = setTimeout(() => {
+    retry = null;
+    connect();
+  }, retryMs);
+  retryMs = Math.min(retryMs * 2, RETRY_MAX_MS);
+}
+
+async function askAboutTheSession() {
+  try {
+    noteAnswer("/api/health", (await fetch("/api/health")).status);
+  } catch {
+    // No server to ask: it is down, and the retry finds out when it is back.
+  }
 }
 
 function connect() {
-  if (source || subscribers.size === 0) return;
+  if (source || retry || sessionEnded() || subscribers.size === 0) return;
   const es = new EventSource("/api/sync/stream");
   source = es;
+
+  es.onopen = () => {
+    retryMs = RETRY_FIRST_MS;
+    if (!missedFrames) return;
+    missedFrames = false;
+    fanOut((h) => h.resync?.());
+  };
 
   es.addEventListener("root", (m) => {
     armWatchdog();
@@ -197,7 +243,7 @@ function connect() {
     // racing it with a second connection is worse than waiting — if its
     // retry never lands, the watchdog is still running and will take
     // over. `CLOSED` means it has given up, and only we can restart it.
-    if (es.readyState === EventSource.CLOSED) reconnect();
+    if (es.readyState === EventSource.CLOSED) void refused(es);
   };
 
   armWatchdog();
@@ -211,6 +257,8 @@ function connect() {
         watchdog = null;
         return;
       }
+      // With no stream open, the resync waits for the one that opens.
+      if (!source) return;
       // Back in the foreground. Whatever the stream did while we were
       // away, one reconcile settles it — and the watchdog starts again
       // from now rather than from whenever the last frame arrived.
@@ -248,6 +296,8 @@ export function subscribeLive(handlers: LiveHandlers, opts: LiveOptions = {}): U
     if (subscribers.size === 0) {
       if (watchdog) clearTimeout(watchdog);
       watchdog = null;
+      if (retry) clearTimeout(retry);
+      retry = null;
       source?.close();
       source = null;
     }

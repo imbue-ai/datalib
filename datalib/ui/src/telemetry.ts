@@ -10,6 +10,7 @@ import { START_LOCATION, type Router } from "vue-router";
 import { decodeColumns } from "@/router/columns";
 import { isDesktopApp } from "@/desktop";
 import { CAUSE_HEADER, chainOfFrameBeingHandled } from "@/live";
+import { noteAnswer } from "@/session";
 import { CARD_HEADER, CARD_TYPE_HEADER, cardBeingServed, type CardTag } from "@/cards/cardScope";
 
 export const PAGE_HEADER = "X-Datalib-Page";
@@ -149,15 +150,16 @@ export function installTelemetry(router: Router, app: App): void {
   const nativeFetch = window.fetch.bind(window);
   window.fetch = (input, init) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    if (isSameOrigin(url, origin)) {
-      const headers = stampRequest(
-        new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)),
-        chainOfFrameBeingHandled(),
-        cardBeingServed(),
-      );
-      init = { ...init, headers };
-    }
-    return nativeFetch(input, init);
+    if (!isSameOrigin(url, origin)) return nativeFetch(input, init);
+    const headers = stampRequest(
+      new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)),
+      chainOfFrameBeingHandled(),
+      cardBeingServed(),
+    );
+    return nativeFetch(input, { ...init, headers }).then((r) => {
+      noteAnswer(url, r.status);
+      return r;
+    });
   };
 
   track("page_load", {

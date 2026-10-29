@@ -427,21 +427,18 @@ pub(crate) async fn run_subprocess(
         };
         let failure = w.failure.unwrap_or(asked);
         let outputs = w.into_outputs(sink, &ctx.step_id);
-        let what = if failure == FailureKind::Cancelled {
+        // A stop is the whole reason a stopped step ended; what it wrote
+        // before is in the run store, and beside the stop it reads as a cause.
+        let message = if failure == FailureKind::Cancelled {
             format!("step {} stopped when asked to", ctx.step_id)
-        } else {
+        } else if stderr_tail.is_empty() {
             format!("step {} exited with {status}", ctx.step_id)
+        } else {
+            format!("step {} exited with {status}: {stderr_tail}", ctx.step_id)
         };
-        Err(StepError::new(
-            failure,
-            anyhow::anyhow!(
-                "{what}{}{}",
-                if stderr_tail.is_empty() { "" } else { ": " },
-                stderr_tail
-            ),
-        )
-        .with_outputs(outputs)
-        .with_exit(status.into()))
+        Err(StepError::new(failure, anyhow::anyhow!(message))
+            .with_outputs(outputs)
+            .with_exit(status.into()))
     }
 }
 
@@ -1911,6 +1908,29 @@ mod tests {
         assert_eq!(
             step.error.as_deref(),
             Some("step gmail/ingest stopped when asked to")
+        );
+    }
+
+    /// A stopped Slack download's message carried the rate-limit warnings
+    /// it had retried through, and a stopped embed the GPU warning it had
+    /// started with, so each read as the reason the step ended.
+    #[tokio::test]
+    async fn a_stopped_step_says_only_that_it_stopped() {
+        let root = tempfile::tempdir().unwrap();
+        let spec = StepSpec::new(
+            "slack/ingest",
+            sh(r#"
+                echo '{"level":"WARN","fields":{"message":"HTTP 429 from slack: waiting 10.0s"}}' >&2
+                echo '[node-llama-cpp] error compiling source' >&2
+                echo '{"event":"outcome","failure":"cancelled"}'
+                exit 130
+            "#),
+        );
+        let g = Graph::build(vec![spec]).unwrap();
+        let rep = Runner::new(root.path()).run(&g).await.unwrap();
+        assert_eq!(
+            rep.step("slack/ingest").error.as_deref(),
+            Some("step slack/ingest stopped when asked to")
         );
     }
 
