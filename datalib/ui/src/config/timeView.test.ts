@@ -10,6 +10,8 @@ import {
   WRITTEN,
   dayBounds,
   formatAt,
+  inputOfInstant,
+  instantOfInput,
   millisText,
   parseInstant,
   readStoredRecent,
@@ -170,5 +172,37 @@ describe("a date from T0", () => {
     expect(after(-500)).toBe("-0.500");
     expect(after(-245_000)).toBe("-4:05.000");
     expect(after(-86_400_000)).toBe("-1d 00:00:00.000");
+  });
+});
+
+describe("a T0 typed in a zone", () => {
+  /** The clock's picker: a date and time to the millisecond, and the
+   *  zone it is read in. */
+  it("reads the wall clock in the zone it was typed in, with that zone's offset", () => {
+    expect(instantOfInput("2026-04-15T19:05:00.250", named("Asia/Tokyo"))).toEqual({
+      ms: Date.parse("2026-04-15T10:05:00.250Z"),
+      offsetMin: 540,
+    });
+    expect(instantOfInput("2026-01-15T12:00", named("Europe/Vienna"))).toEqual({
+      ms: Date.parse("2026-01-15T11:00:00Z"),
+      offsetMin: 60,
+    });
+    expect(instantOfInput("2026-04-15T10:05:00.5", UTC)?.ms).toBe(
+      Date.parse("2026-04-15T10:05:00.500Z"),
+    );
+  });
+
+  it("refuses what is not a clock", () => {
+    expect(instantOfInput("", UTC)).toBeNull();
+    expect(instantOfInput("2026-02-30T10:00", UTC)).toBeNull();
+    expect(instantOfInput("2026-04-15T24:00", UTC)).toBeNull();
+    expect(instantOfInput("2026-04-15 10:00", UTC)).toBeNull();
+  });
+
+  it("fills the picker with an instant as that zone reads it, and reads it back", () => {
+    const at = { ms: Date.parse("2026-10-29T08:36:35.546Z"), offsetMin: 0 };
+    const vienna = named("Europe/Vienna");
+    expect(inputOfInstant(at, vienna)).toBe("2026-10-29T09:36:35.546");
+    expect(instantOfInput(inputOfInstant(at, vienna), vienna)?.ms).toBe(at.ms);
   });
 });
