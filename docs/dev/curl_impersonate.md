@@ -24,9 +24,9 @@ on the two names.
 
 | | |
 |---|---|
-| `latchkey-curl-router` | The `curl` that `LATCHKEY_CURL` points at. An invocation carrying the private `X-Imbue-Impersonate` header is rewritten — that header and any `User-Agent` dropped, `--compressed --noproxy '*' --impersonate <profile>` put in front — and handed to the impersonating curl; anything else goes to the system curl untouched. It can also send a request out through the latchkey gateway on the user's own computer, chosen by URL from the file `LATCHKEY_DESKTOP_PROXY_CONFIG` names; datalib plays no part in that decision. |
+| `latchkey-curl-router` | The `curl` that `LATCHKEY_CURL` points at. An invocation carrying the private `X-Imbue-Impersonate` header is rewritten — that header and the caller's browser-identity headers (`User-Agent`, `Accept-Encoding`, `Accept-Language`, client hints, `Sec-Fetch-*`) dropped, `--noproxy '*' --impersonate <profile>` put in front — and handed to the impersonating curl; anything else goes to the system curl untouched. The reply is handed on as the server sent it, compressed the way Chrome asked for, so the caller passes `--compressed` to decode it; datalib does. It can also send a request out through the latchkey gateway on the user's own computer, chosen by URL from the file `LATCHKEY_DESKTOP_PROXY_CONFIG` names; datalib plays no part in that decision. |
 | `curl-impersonate` | Upstream `curl-impersonate`, unmodified. It ships next to the router in every release tarball and in the app bundle, and the router finds it only as a sibling of that exact name. **On its own it does not impersonate**: without `--impersonate` it is a plain curl 8.x and gets the same `403` as one. |
-| `DATALIB_IMPERSONATE_PROFILE` | The `--impersonate` target, default `chrome150`. Passed through as-is; a name curl-impersonate does not know fails the request with exit 43 and a message naming a valid one. |
+| `DATALIB_IMPERSONATE_PROFILE` | The `--impersonate` target when the marker's value does not name one, default `chrome150`. datalib sends the value `1`, which means this default; `X-Imbue-Impersonate: chrome131` would select that profile. Either is passed through as-is; a name curl-impersonate does not know fails the request with exit 43 and a message naming a valid one. |
 
 Only the router understands the marker header, so **point
 `LATCHKEY_CURL` at the router, never at the impersonator directly.**
@@ -42,7 +42,7 @@ To make one hand-run request impersonate, pass the marker yourself:
 ```sh
 bazelisk build //third-party/latchkey-curl-shims
 LATCHKEY_CURL="$(bazelisk info bazel-bin)/third-party/latchkey-curl-shims/latchkey-curl-router" \
-    latchkey curl -sS -H 'X-Imbue-Impersonate: 1' https://claude.ai/api/organizations
+    latchkey curl -sS --compressed -H 'X-Imbue-Impersonate: 1' https://claude.ai/api/organizations
 ```
 
 ## Where the binaries come from
