@@ -578,7 +578,9 @@ Every query searches the whole library, as the search box does, unless
 it names a source itself; `--scope source` asks each one again narrowed
 to its target's source. A run records how many rows the library held,
 since a larger library is a bigger haystack: compare scores only
-between runs on the same clone.
+between runs on the same clone. A bare date in a query is read in the
+applet's zone, so an eval set names one (`"tz": "Europe/Zurich"`) and the
+applet `run` starts reads its dates there wherever the laptop is.
 
 An eval set built from a real library is that library's data, so it
 never goes in this repo; Thad's lives in the private

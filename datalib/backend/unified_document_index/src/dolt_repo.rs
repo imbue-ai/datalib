@@ -360,6 +360,38 @@ fn search_row_from(r: &sqlx::sqlite::SqliteRow) -> SearchRow {
 }
 
 impl DoltRepo {
+    /// `columns` of every row in a document the structured terms of `q`
+    /// match. `columns` is a literal at every caller.
+    async fn matching(
+        &self,
+        q: &ParsedQuery,
+        columns: &'static str,
+    ) -> Result<Vec<sqlx::sqlite::SqliteRow>, RepoError> {
+        let (where_sql, params) = build_where(q);
+        let Some(mut at) = self.pinned().await? else {
+            return Ok(Vec::new());
+        };
+        let clause = if where_sql.is_empty() {
+            " WHERE markdown_uuid IS NOT NULL".to_string()
+        } else {
+            format!("{where_sql} AND markdown_uuid IS NOT NULL")
+        };
+        // Audited: as `search` — a literal table name, literal columns and
+        // `build_where`'s static column names; every value is bound.
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT {columns} FROM {}{clause}",
+            at.grid_rows
+        )));
+        for p in &params {
+            query = query.bind(p);
+        }
+        match query.fetch_all(&mut *at.tx).await {
+            Ok(rows) => Ok(rows),
+            Err(e) if is_missing_table(&e, "grid_rows") => Ok(Vec::new()),
+            Err(e) => Err(RepoError::Internal(e.to_string())),
+        }
+    }
+
     /// The directory is created here, the file never is. The server's
     /// watcher arms its watch on this directory when it exists, and a
     /// grid that learns of the first `grid_index` pass from that watch
@@ -1158,33 +1190,28 @@ impl IndexRepo for DoltRepo {
         &self,
         q: &ParsedQuery,
     ) -> Result<std::collections::HashSet<String>, RepoError> {
-        let (where_sql, params) = build_where(q);
-        let Some(mut at) = self.pinned().await? else {
-            return Ok(Default::default());
-        };
-        let clause = if where_sql.is_empty() {
-            " WHERE markdown_uuid IS NOT NULL".to_string()
-        } else {
-            format!("{where_sql} AND markdown_uuid IS NOT NULL")
-        };
-        // Audited: as `search` — a literal table name and
-        // `build_where`'s static column names; every value is bound.
-        let mut query = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT DISTINCT markdown_uuid FROM {}{clause}",
-            at.grid_rows
-        )));
-        for p in &params {
-            query = query.bind(p);
-        }
-        let rows = match query.fetch_all(&mut *at.tx).await {
-            Ok(rows) => rows,
-            Err(e) if is_missing_table(&e, "grid_rows") => return Ok(Default::default()),
-            Err(e) => return Err(RepoError::Internal(e.to_string())),
-        };
+        let rows = self.matching(q, "DISTINCT markdown_uuid").await?;
         rows.iter()
             .map(|r| r.try_get::<String, _>("markdown_uuid"))
             .collect::<Result<_, _>>()
             .map_err(|e| RepoError::Internal(format!("decode markdown_uuid: {e}")))
+    }
+
+    async fn matching_rows(
+        &self,
+        q: &ParsedQuery,
+    ) -> Result<Vec<(String, String, bool)>, RepoError> {
+        let rows = self.matching(q, "uuid, markdown_uuid, is_document").await?;
+        rows.iter()
+            .map(|r| {
+                Ok((
+                    r.try_get("uuid")?,
+                    r.try_get("markdown_uuid")?,
+                    r.try_get::<i64, _>("is_document")? != 0,
+                ))
+            })
+            .collect::<Result<_, sqlx::Error>>()
+            .map_err(|e| RepoError::Internal(format!("decode a matching row: {e}")))
     }
 
     async fn grid_row_refs_for_documents(

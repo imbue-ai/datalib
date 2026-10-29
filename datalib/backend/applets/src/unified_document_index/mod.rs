@@ -1066,7 +1066,7 @@ async fn meaning_ranking(
         .map_err(qmd)?;
     let embedded = started.elapsed();
     let among = if narrows_documents(parsed) {
-        Some(s.repo.matching_documents(parsed).await.map_err(index)?)
+        Some(kept_of(s.repo.matching_rows(parsed).await.map_err(index)?))
     } else {
         None
     };
@@ -1096,6 +1096,28 @@ async fn meaning_ranking(
     rows_of_hits(&s.root, &s.repo, &hits, parsed)
         .await
         .map_err(qmd)
+}
+
+/// What the structured terms keep of each document they reach: the
+/// document's own row keeps all of it, else only the messages they keep.
+fn kept_of(
+    rows: Vec<(String, String, bool)>,
+) -> std::collections::HashMap<String, datalib_unified_document_index::qmd::vectors::Kept> {
+    use datalib_unified_document_index::qmd::vectors::Kept;
+    let mut kept: std::collections::HashMap<String, Kept> = std::collections::HashMap::new();
+    for (uuid, document, is_document) in rows {
+        let entry = kept
+            .entry(document)
+            .or_insert_with(|| Kept::Sections(Default::default()));
+        match (entry, is_document) {
+            (entry, true) => *entry = Kept::Whole,
+            (Kept::Sections(sections), false) => {
+                sections.insert(uuid);
+            }
+            (Kept::Whole, false) => {}
+        }
+    }
+    kept
 }
 
 /// Whether a search's structured terms narrow it below whole sources,

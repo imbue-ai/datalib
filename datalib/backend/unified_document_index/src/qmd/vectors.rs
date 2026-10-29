@@ -31,6 +31,7 @@ use anyhow::{bail, Context, Result};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
+use crate::qmd::mapping::parse_section_uuid;
 use crate::qmd::{qmd_index_path, QmdHit};
 use datalib_schema::grid_rows::markdown_uuid_of_path;
 
@@ -200,7 +201,9 @@ fn add_chunk(
 /// read as a search first asks for them. A key is `<content hash>_<seq>`
 /// and a model's vector for a content never changes, so a held vector
 /// stays right until a vector is removed or added in its place; either
-/// moves the stamp, and every vector held is dropped. Belongs to one
+/// moves the stamp, and every vector held is dropped. A content's
+/// messages are read as a filtered search first asks for them, and never
+/// change. Belongs to one
 /// connection, since `data_version` counts only for the connection asked.
 #[derive(Default)]
 pub struct VectorCache {
@@ -215,16 +218,30 @@ struct HeldVectors {
     documents: Vec<(String, String, String)>,
     /// `vectors_vec_rowids`' count and largest rowid, and the model.
     stamp: Option<(i64, i64, String)>,
-    /// hash → each live chunk's `(pos, vector)`; empty for a content with
-    /// none.
+    /// hash → each live chunk's `(pos, vector)`, by `pos`; empty for a
+    /// content with none.
     by_hash: HashMap<String, Vec<(i64, Vec<f32>)>>,
+    /// hash → where each message of the content starts, by `pos`.
+    sections: HashMap<String, Vec<(i64, String)>>,
+}
+
+/// What a search's structured terms keep of one document: what its
+/// chunks may rank it by.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Kept {
+    /// The document's own row: every chunk.
+    Whole,
+    /// Only these messages, by section id: a chunk that covers none of
+    /// them was written by someone, or at a time, the search leaves out.
+    Sections(HashSet<String>),
 }
 
 /// The `limit` documents nearest `query` by cosine, each at its nearest
 /// chunk: an exact score of every chunk `query.model` wrote for the
 /// active documents in `collections` (all when `None`) that are among
-/// `among` (all when `None`, else document ids, read from each path by
-/// `grid_rows::markdown_uuid_of_path`). Not qmd's
+/// `among` (all when `None`, else by document id, read from each path by
+/// `grid_rows::markdown_uuid_of_path`), of the chunks covering what
+/// `among` keeps of each. Not qmd's
 /// own vector search, which cannot take a document set and reads every
 /// vector in the file, live or not, to answer.
 pub async fn nearest_documents(
@@ -232,7 +249,7 @@ pub async fn nearest_documents(
     cache: &VectorCache,
     query: &QueryVector<'_>,
     collections: Option<&[String]>,
-    among: Option<&HashSet<String>>,
+    among: Option<&HashMap<String, Kept>>,
     limit: usize,
 ) -> Result<Vec<QmdHit>> {
     let create: Option<String> = sqlx::query_scalar(
@@ -282,19 +299,27 @@ pub async fn nearest_documents(
         let stamp = Some((count, last, query.model.to_string()));
         if held.stamp != stamp {
             held.by_hash.clear();
+            held.sections.clear();
         }
         held.stamp = stamp;
     }
-    let documents: Vec<(String, String)> = held
+    // path, hash, and the messages its chunks are limited to (all when `None`).
+    let documents: Vec<(String, String, Option<&HashSet<String>>)> = held
         .documents
         .iter()
         .filter(|(collection, _, _)| collections.is_none_or(|c| c.contains(collection)))
-        .filter(|(_, path, _)| {
-            among.is_none_or(|a| markdown_uuid_of_path(path).is_some_and(|d| a.contains(d)))
+        .filter_map(|(_, path, hash)| {
+            let kept = match among {
+                None => None,
+                Some(a) => match a.get(markdown_uuid_of_path(path)?)? {
+                    Kept::Whole => None,
+                    Kept::Sections(s) => Some(s),
+                },
+            };
+            Some((path.clone(), hash.clone(), kept))
         })
-        .map(|(_, path, hash)| (path.clone(), hash.clone()))
         .collect();
-    let mut hashes: Vec<String> = documents.iter().map(|(_, h)| h.clone()).collect();
+    let mut hashes: Vec<String> = documents.iter().map(|(_, h, _)| h.clone()).collect();
     hashes.sort_unstable();
     hashes.dedup();
     let hashes: Vec<&str> = hashes.iter().map(String::as_str).collect();
@@ -307,33 +332,52 @@ pub async fn nearest_documents(
         let read = read_chunk_vectors(pool, query.model, &unread, dim).await?;
         held.by_hash.extend(read);
     }
-
-    // hash → (score, pos, where the next chunk starts) of its nearest chunk.
-    let mut best: HashMap<&str, (f32, i64, Option<i64>)> = HashMap::new();
-    for &hash in &hashes {
-        let chunks = &held.by_hash[hash];
-        for (pos, v) in chunks {
-            let (dot, norm2) = dot_and_norm(v, &q);
-            if norm2 == 0.0 || !norm2.is_finite() {
-                continue;
-            }
-            let score = dot / norm2.sqrt();
-            let entry = best.entry(hash).or_insert((f32::MIN, *pos, None));
-            if score > entry.0 {
-                let next = chunks.iter().map(|(p, _)| *p).filter(|p| p > pos).min();
-                *entry = (score, *pos, next);
-            }
+    let mut unparsed: Vec<&str> = documents
+        .iter()
+        .filter(|(_, h, kept)| kept.is_some() && !held.sections.contains_key(h))
+        .map(|(_, h, _)| h.as_str())
+        .collect();
+    unparsed.sort_unstable();
+    unparsed.dedup();
+    if !unparsed.is_empty() {
+        let read: Vec<(String, String)> = sqlx::query_as(
+            "SELECT hash, doc FROM content WHERE hash IN (SELECT value FROM json_each(?))",
+        )
+        .bind(serde_json::to_string(&unparsed)?)
+        .fetch_all(pool)
+        .await?;
+        for (hash, body) in read {
+            held.sections.insert(hash, sections_of(&body));
         }
     }
-    drop(held);
 
+    // Each document's nearest chunk: (score, pos, where the next starts).
+    let none = Vec::new();
     let mut ranked: Vec<(&str, &str, f32, i64, Option<i64>)> = documents
         .iter()
-        .filter_map(|(path, hash)| {
-            let &(score, pos, next) = best.get(hash.as_str())?;
+        .filter_map(|(path, hash, kept)| {
+            let chunks = &held.by_hash[hash];
+            let sections = held.sections.get(hash).unwrap_or(&none);
+            let mut best: Option<(f32, i64, Option<i64>)> = None;
+            for (i, (pos, v)) in chunks.iter().enumerate() {
+                let next = chunks.get(i + 1).map(|(p, _)| *p);
+                if kept.is_some_and(|k| !covers_kept(sections, k, *pos, next)) {
+                    continue;
+                }
+                let (dot, norm2) = dot_and_norm(v, &q);
+                if norm2 == 0.0 || !norm2.is_finite() {
+                    continue;
+                }
+                let score = dot / norm2.sqrt();
+                if best.is_none_or(|(b, _, _)| score > b) {
+                    best = Some((score, *pos, next));
+                }
+            }
+            let (score, pos, next) = best?;
             Some((path.as_str(), hash.as_str(), score, pos, next))
         })
         .collect();
+    drop(held);
     ranked.sort_by(|a, b| b.2.total_cmp(&a.2).then_with(|| a.0.cmp(b.0)));
     ranked.truncate(limit);
 
@@ -424,7 +468,40 @@ async fn read_chunk_vectors(
             }
         }
     }
+    for chunks in out.values_mut() {
+        chunks.sort_by_key(|(pos, _)| *pos);
+    }
     Ok(out)
+}
+
+/// Where each message of `body` starts, in the UTF-16 units qmd's
+/// chunker counts in, with its section id.
+fn sections_of(body: &str) -> Vec<(i64, String)> {
+    let mut units: i64 = 0;
+    let mut out = Vec::new();
+    for line in body.split_inclusive('\n') {
+        if let Some(id) = parse_section_uuid(line) {
+            out.push((units, id.to_string()));
+        }
+        units += line.encode_utf16().count() as i64;
+    }
+    out
+}
+
+/// Whether the chunk from `pos` to `next` (the end when `None`) covers
+/// any of a message `kept` holds, each message running to where the next
+/// starts.
+fn covers_kept(
+    sections: &[(i64, String)],
+    kept: &HashSet<String>,
+    pos: i64,
+    next: Option<i64>,
+) -> bool {
+    let end = next.unwrap_or(i64::MAX);
+    sections.iter().enumerate().any(|(i, (start, id))| {
+        let until = sections.get(i + 1).map_or(i64::MAX, |(s, _)| *s);
+        kept.contains(id) && *start < end && pos < until
+    })
 }
 
 /// A query's embedding and the model that made it.
@@ -589,6 +666,42 @@ fn unit(v: &mut [f32]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A filtered Meaning search ranks a document only by the chunks over
+    /// the messages its filters keep: `from:worf` is not answered by a
+    /// chunk Riker wrote. Positions are UTF-16 units, as qmd's chunker
+    /// counts them.
+    #[test]
+    fn a_chunk_counts_only_over_a_kept_message() {
+        let body = "# Bridge\n<div data-section-uuid=\"m1\">\nRiker: ✓ warp\n\
+                    <div data-section-uuid=\"m2\">\nWorf: shields\n";
+        let sections = sections_of(body);
+        let m2 = body.find("<div data-section-uuid=\"m2").unwrap();
+        let m2 = body[..m2].encode_utf16().count() as i64;
+        assert_eq!(
+            sections,
+            vec![(9, "m1".to_string()), (m2, "m2".to_string())]
+        );
+        assert!(
+            (m2 as usize) < body.find("<div data-section-uuid=\"m2").unwrap(),
+            "the check mark is three bytes and one unit"
+        );
+
+        let worf: HashSet<String> = ["m2".to_string()].into();
+        assert!(
+            !covers_kept(&sections, &worf, 0, Some(m2)),
+            "title and Riker"
+        );
+        assert!(
+            covers_kept(&sections, &worf, 0, Some(m2 + 1)),
+            "reaches Worf"
+        );
+        assert!(
+            covers_kept(&sections, &worf, m2 + 3, None),
+            "Worf to the end"
+        );
+        assert!(!covers_kept(&sections, &HashSet::new(), 0, None));
+    }
 
     #[test]
     fn the_dimension_comes_from_the_table_definition() {

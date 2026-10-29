@@ -282,7 +282,7 @@ impl QmdIndexReader {
         cache: &crate::qmd::vectors::VectorCache,
         query: &crate::qmd::vectors::QueryVector<'_>,
         collections: Option<&[String]>,
-        among: Option<&std::collections::HashSet<String>>,
+        among: Option<&std::collections::HashMap<String, crate::qmd::vectors::Kept>>,
         limit: usize,
     ) -> anyhow::Result<Vec<QmdHit>> {
         crate::qmd::vectors::nearest_documents(&self.pool, cache, query, collections, among, limit)

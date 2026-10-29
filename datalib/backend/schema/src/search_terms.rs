@@ -58,7 +58,8 @@ pub enum SearchTermKind {
     /// Who a conversation with no title of its own is named after, on its
     /// document's own row: a direct message's other party, a group's
     /// members, by handle where the source has one, else by the name
-    /// shown. What the grid's Subject cell draws as chips.
+    /// shown. What the grid's Subject cell draws as chips, and what `with:`
+    /// finds a direct message by when its other party wrote nothing in it.
     Subject = 14,
     /// The row's own id as its source spells it, where that is a uuid (a
     /// Notion page's, for one): what an id or a link copied from the

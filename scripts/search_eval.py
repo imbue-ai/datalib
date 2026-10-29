@@ -11,8 +11,11 @@ for judging the rest of the list by eye.
 The eval set is JSON: {"targets": [{"id", "uuid", "markdown_uuid", "note",
 "queries": [{"q", "style"}]}]}. A row counts as the target when it is the
 target or another row of the same document (same `markdown_uuid`), since a
-search answers with the message it landed on. An eval set built from a real
-library is that library's data: keep it beside the library, never here.
+search answers with the message it landed on. An optional "tz" (an IANA
+zone) is the zone the applet runs in, so a bare date in a query
+(`after:2025-04-17`) names the same day wherever the run is. An eval set
+built from a real library is that library's data: keep it beside the
+library, never here.
 
 By default `run` starts its own `datalib-applet unified_document_index` on the
 root, which is the applet the app runs, minus the gateway. `--http` asks a
@@ -49,9 +52,11 @@ REPO = Path(__file__).resolve().parent.parent
 class Applet:
     """A search applet this script started, asked directly on its port."""
 
-    def __init__(self, binary: str, root: Path):
+    def __init__(self, binary: str, root: Path, tz: str | None = None):
         self.secret = secrets.token_hex(16)
         env = dict(os.environ)
+        if tz:
+            env["TZ"] = tz
         env["DATALIB_DAG_DATA_ROOT"] = str(root)
         env["DATALIB_APPLET_SECRET"] = self.secret
         env.setdefault("RUST_LOG", "warn")
@@ -101,8 +106,15 @@ class Gateway:
         pass
 
 
-def connect(args: argparse.Namespace, root: Path) -> Applet | Gateway:
-    return Gateway(args.http, root) if args.http else Applet(args.applet, root)
+def connect(
+    args: argparse.Namespace, root: Path, tz: str | None = None
+) -> Applet | Gateway:
+    if args.http and tz:
+        print(
+            f"--http: the app reads dates in its own zone, not the eval set's {tz}",
+            file=sys.stderr,
+        )
+    return Gateway(args.http, root) if args.http else Applet(args.applet, root, tz)
 
 
 def search(get: Callable[[str], Any], q: str, mode: str, depth: int) -> dict[str, Any]:
@@ -239,8 +251,8 @@ def run(args: argparse.Namespace) -> None:
     root = Path(args.root).expanduser()
     # Read before the first query: the checkout can move while a run takes
     # its half hour, and the applet was built from what it was at the start.
-    made = provenance(args)
-    server = connect(args, root)
+    made = provenance(args, evals.get("tz"))
+    server = connect(args, root, evals.get("tz"))
     pages = Pages(server.get)
     results: list[dict[str, Any]] = []
     try:
@@ -296,11 +308,11 @@ def run(args: argparse.Namespace) -> None:
     print(report(record))
 
 
-def provenance(args: argparse.Namespace) -> dict[str, Any]:
+def provenance(args: argparse.Namespace, tz: str | None) -> dict[str, Any]:
     """Where a run came from, so a kept run can be read beside another: the
     checkout the applet is meant to be built from, the machine and its load
-    average as the run started and ended (times move with both), and which
-    eval set."""
+    average as the run started and ended (times move with both), the zone
+    its dates were read in, and which eval set."""
 
     def git(*a: str) -> str:
         return subprocess.run(
@@ -314,6 +326,7 @@ def provenance(args: argparse.Namespace) -> dict[str, Any]:
         "host": platform.node(),
         "machine": f"{platform.system()} {platform.machine()}, {os.cpu_count()} cpus",
         "load": [round(os.getloadavg()[0], 1)],
+        "tz": tz if tz and not args.http else time.strftime("%Z"),
         "evals_sha256": hashlib.sha256(Path(args.evals).read_bytes()).hexdigest(),
     }
 
