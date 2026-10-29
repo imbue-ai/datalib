@@ -168,6 +168,12 @@ FIXTURE_WHATSAPP_KEY = "0" * 64
 # fingerprints keep the re-runs cheap.
 PRESEEDED_RAW = {"yolink"}
 
+# Source types whose data is also time series
+# (`datalib_dag::config::TIME_SERIES_SOURCE_TYPES`). Each gets a
+# `render_time_series` step, and the time-series index reads them all,
+# so the materialized root has a Time series card to open.
+TIME_SERIES_TYPES = {"garmin", "yolink", "airvisual"}
+
 
 @dataclass
 class Prepared:
@@ -440,6 +446,7 @@ def prepare(argv: list[str]) -> Prepared:
     steps: list[str] = []
     root_entries: list[str] = []
     ingest_ids: list[str] = []
+    time_series_groups: set[str] = set()
     for name, (type_str, _synth_input, extract_input) in sources.items():
         # Per-phase params, as a TOML inline table. The source name
         # isn't in either — each step takes it from its group. Ingest gets
@@ -485,13 +492,24 @@ params = {params}
         if name not in PRESEEDED_RAW:
             ingest_ids.append(f"{name}/ingest")
         render_block = f'[[steps]]\ngroup = "{name}"\nfunction = "render_markdown"'
+        series_block = ""
+        if type_str in TIME_SERIES_TYPES:
+            time_series_groups.add(name)
+            series_block = (
+                f'\n\n[[steps]]\ngroup = "{name}"\nfunction = "render_time_series"'
+            )
         steps.append(
-            group_block + ingest_block + render_block + inputs_line + render_params_line
+            group_block
+            + ingest_block
+            + render_block
+            + inputs_line
+            + render_params_line
+            + (series_block + inputs_line if series_block else "")
         )
         # The materialized root gets the render tree but not the raw
         # store, so there every source is shaped like a pre-seeded one:
-        # a group, a render step with no inputs, no ingest step.
-        root_entries.append(group_block + render_block + render_params_line)
+        # a group, render steps with no inputs, no ingest step.
+        root_entries.append(group_block + render_block + render_params_line + series_block)
 
     def config_texts(
         diffs: dict[str, tuple[str, str]], count: int | None = None
@@ -538,6 +556,24 @@ group = "unified_document_index"
 function = "grid_index"
 inputs = [{rendered_list}]"""
         )
+        # The time-series index reads every source's `render_time_series`.
+        # Declared here, so the app's config upgrade (which adds it to a
+        # config without one) leaves this config as written.
+        series = [g for g in groups if g in time_series_groups]
+        series_index = (
+            f"""[[groups]]
+id = "unified_time_series_index"
+name = "Time Series Index"
+
+[[steps]]
+group = "unified_time_series_index"
+function = "time_series_index"
+inputs = [{", ".join(f'"{g}/render_time_series"' for g in series)}]"""
+            if series
+            else ""
+        )
+        if series_index:
+            blocks.append(series_index)
         dag_text = "\n\n".join(blocks) + "\n"
         # Everything a materialized root's config needs but `data_root`
         # and the applet, which only the materializer knows. Both
@@ -561,6 +597,8 @@ inputs = [{qmd_list}]"""
         )
         # Each source fills its own qmd collection: a keyword index and
         # its embeddings. The index arrives pre-built here too.
+        if series_index:
+            root_blocks.append(series_index)
         for group in groups:
             root_blocks.append(
                 f'[[steps]]\ngroup = "{group}"\nfunction = "keyword_index"\n'

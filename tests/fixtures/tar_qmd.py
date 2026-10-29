@@ -40,13 +40,20 @@ those in the archive the ~90s CPU-only embed on CI re-ran for every
 change anywhere upstream, including changes that left all 57 markdown
 files byte-identical.
 
-Determinism guarantees for both archives: mtime / uid / gid / uname /
+A third, `time_series.tar`, holds the time-series stores: each
+source's `<stanza>/render_time_series/` and the index over them,
+`unified_time_series_index/time_series_index/`. The index names each
+store by its path under the data root and the commit it read, so the
+stores extract next to it unchanged.
+
+Determinism guarantees for every archive: mtime / uid / gid / uname /
 gname zeroed, entries sorted.
 
 Args (positional):
     1: path to the data root (containing `<stanza>/render_markdown/`)
     2: output path for qmd.tar (the whole rendered tree)
     3: output path for qmd_md.tar (markdown only)
+    4: output path for time_series.tar (the time-series stores)
 """
 
 from __future__ import annotations
@@ -115,6 +122,14 @@ def main() -> int:
 
     _write_tar(out_tar, src_root, all_entries)
     _write_tar(out_md_tar, src_root, sorted(md_entries))
+
+    series_dirs = sorted(src_root.glob("*/render_time_series")) + sorted(
+        src_root.glob("unified_time_series_index/time_series_index")
+    )
+    series_entries: list[Path] = []
+    for d in series_dirs:
+        series_entries.extend([d.parent, d] + sorted(d.rglob("*")))
+    _write_tar(Path(sys.argv[4]).resolve(), src_root, sorted(set(series_entries)))
     return 0
 
 

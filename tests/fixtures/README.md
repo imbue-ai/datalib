@@ -109,6 +109,7 @@ Aim: at least one example of every shape we've seen in real backups.
 | Notion `updated` stream (version bump) | `notion_block/updated/events.jsonl` (root page title changed v10→v11) |
 | Render-only source (no download step) | `yolink` — raw store seeded by `yolink-make-fixture` |
 | Timeseries render (one page of charts) | `yolink/render_markdown/index.md`, its `data-time-series` elements |
+| Time series in the Time series card | `garmin`, `yolink`, `ship-air` — each a `render_time_series` store, all read by `unified_time_series_index`, shipped in `time_series.tar` |
 | Non-SI unit converted where it is drawn | `sickbay_plasma_fridge` reports `temperature_f`, stored as `[degF]` and charted beside °C |
 | Two metrics of one quantity on two charts | `deck_12_water_main` — per-sample consumption, and the totalizer on a chart of its own |
 
@@ -158,6 +159,7 @@ without re-running the pipeline:
 bazelisk build //tests/fixtures:ingested_tng
 # bazel-bin/tests/fixtures/ingested/backend_index.doltlite_db
 # bazel-bin/tests/fixtures/ingested/qmd.tar
+# bazel-bin/tests/fixtures/ingested/time_series.tar
 ```
 
 **Determinism**: the genrule pins `--now` to a fixed TNG-era timestamp,
