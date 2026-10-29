@@ -5,7 +5,7 @@
 use datalib_contact_schema::ContactKind;
 use datalib_etl_macros::PortableTable;
 
-use crate::{FieldKind, LinkedHow};
+use crate::{DecidedHow, FieldKind};
 
 pub mod contacts {
     use super::*;
@@ -23,6 +23,9 @@ pub mod contacts {
         pub note: Option<String>,
         #[col(sql = "TEXT")]
         pub merged_into: Option<String>,
+        /// The agent that made the contact, for one a person did not.
+        #[col(sql = "TEXT")]
+        pub agent: Option<String>,
         #[col(sql = "TEXT")]
         pub created_at_utc: String,
         #[col(sql = "TEXT")]
@@ -36,7 +39,9 @@ pub mod handles {
     use super::*;
 
     /// A link: a handle belongs to one contact for all time, and an
-    /// address two people share belongs to a group contact.
+    /// address two people share belongs to a group contact. A link an
+    /// agent made names the agent and its reason, and waits for a person
+    /// until `reviewed_at_utc` says one confirmed it.
     #[derive(Debug, Clone, PortableTable)]
     #[portable_table(
         table = "handles",
@@ -49,13 +54,55 @@ pub mod handles {
         #[col(sql = "TEXT")]
         pub contact_id: String,
         #[col(sql = "TEXT", enum)]
-        pub linked_how: LinkedHow,
+        pub linked_how: DecidedHow,
         #[col(sql = "TEXT")]
         pub linked_at_utc: String,
         #[col(sql = "TEXT")]
         pub tz_offset: String,
         #[col(sql = "TEXT")]
         pub stopped_working_by: Option<String>,
+        #[col(sql = "TEXT")]
+        pub agent: Option<String>,
+        #[col(sql = "TEXT")]
+        pub reason: Option<String>,
+        #[col(sql = "TEXT")]
+        pub reviewed_at_utc: Option<String>,
+        /// How sure the agent was, 0 to 1, and which of its runs said so.
+        #[col(sql = "REAL")]
+        pub confidence: Option<f64>,
+        #[col(sql = "TEXT")]
+        pub run: Option<String>,
+    }
+}
+
+pub mod not_linked {
+    use super::*;
+
+    /// A person said `handle` is not `contact_id`: they unlinked or
+    /// rejected an agent's link. An agent may not propose it again, and
+    /// the row outlives the contact, so it names the contact as it was
+    /// called and keeps what the agent said. `contact_rejected` marks the
+    /// handles of a contact an agent made that the person rejected whole:
+    /// together they are a grouping no agent may propose again.
+    #[derive(Debug, Clone, PortableTable)]
+    #[portable_table(table = "not_linked", primary_key = "handle, contact_id")]
+    pub struct NotLinkedRow {
+        #[col(sql = "TEXT")]
+        pub handle: String,
+        #[col(sql = "TEXT")]
+        pub contact_id: String,
+        #[col(sql = "TEXT")]
+        pub contact_name: String,
+        #[col(sql = "TEXT")]
+        pub agent: Option<String>,
+        #[col(sql = "TEXT")]
+        pub reason: Option<String>,
+        #[col(sql = "TEXT")]
+        pub decided_at_utc: String,
+        #[col(sql = "TEXT")]
+        pub tz_offset: String,
+        #[col(sql = "INTEGER")]
+        pub contact_rejected: bool,
     }
 }
 
@@ -151,6 +198,47 @@ pub mod me {
     }
 }
 
+pub mod labels {
+    use super::*;
+
+    /// A label on a subject, which is a handle (`email:…`) or a contact
+    /// (`contact:<id>`), such as `REAL` (not spam). A row says
+    /// the label is in or out; no row says nobody knows. An agent's row
+    /// waits for a person (`reviewed_at_utc`); one the person overrode is
+    /// theirs (`manual`) and still names the agent, which said the
+    /// opposite.
+    #[derive(Debug, Clone, PortableTable)]
+    #[portable_table(
+        table = "labels",
+        primary_key = "subject, label",
+        index = "labels_by_label:label"
+    )]
+    pub struct LabelRow {
+        #[col(sql = "TEXT")]
+        pub subject: String,
+        #[col(sql = "TEXT")]
+        pub label: String,
+        #[col(sql = "INTEGER")]
+        pub applies: bool,
+        #[col(sql = "TEXT", enum)]
+        pub decided_how: DecidedHow,
+        #[col(sql = "TEXT")]
+        pub agent: Option<String>,
+        #[col(sql = "TEXT")]
+        pub reason: Option<String>,
+        #[col(sql = "TEXT")]
+        pub decided_at_utc: String,
+        #[col(sql = "TEXT")]
+        pub reviewed_at_utc: Option<String>,
+        #[col(sql = "TEXT")]
+        pub tz_offset: String,
+        #[col(sql = "REAL")]
+        pub confidence: Option<f64>,
+        #[col(sql = "TEXT")]
+        pub run: Option<String>,
+    }
+}
+
 /// Every table, then every index: what the store is opened with.
 pub const DDL: &[&str] = &[
     contacts::DDL[0].1,
@@ -159,6 +247,9 @@ pub const DDL: &[&str] = &[
     photos::DDL[0].1,
     fields::DDL[0].1,
     me::DDL[0].1,
+    not_linked::DDL[0].1,
+    labels::DDL[0].1,
     handles::INDEXES[0].1,
     fields::INDEXES[0].1,
+    labels::INDEXES[0].1,
 ];

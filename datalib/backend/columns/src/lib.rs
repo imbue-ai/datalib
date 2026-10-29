@@ -71,6 +71,10 @@ pub enum ColumnType {
     Actions,
     /// A `markdowns.uuid`, shown as its title; opens the document on click.
     MarkdownUuid,
+    /// A [`Membership`]: whether the row is in the set the column names,
+    /// out of it, or not known, drawn as a three-way toggle the viewer
+    /// hands to its host to change.
+    Membership,
 }
 
 impl ColumnType {
@@ -330,6 +334,20 @@ pub struct Quantity {
     /// How the figure was reached, for its hover.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+}
+
+/// Whether a row is in the set its column names: in (`Some(true)`),
+/// out (`Some(false)`), or nobody has said (`None`). `proposed` marks an
+/// answer an agent gave that no person has reviewed, which the toggle
+/// draws as a suggestion rather than a fact.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Membership {
+    pub applies: Option<bool>,
+    #[serde(default)]
+    pub proposed: bool,
+    /// The hover: who said so, and why.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 /// One row's status, reduced to a vocabulary a Status column can draw.

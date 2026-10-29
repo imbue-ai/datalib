@@ -51,6 +51,9 @@ const props = withDefaults(
     /// What each action id does when its button is pressed. An id with
     /// no handler here draws no button.
     actions?: Record<string, (row: T) => void>;
+    /// What pressing a `membership` toggle does: the row, the column and
+    /// the answer, in, out or (`null`) not known. Absent, toggles only show.
+    membership?: (row: T, field: string, applies: boolean | null) => void;
     /// The right-click menu for a row: the row under the click, the
     /// rows the click aims at (the selection when the row is in it),
     /// and the column it landed on.
@@ -246,6 +249,7 @@ function buildColumns(): Column<T>[] {
   const typed = typedColumns<T>(props.columns, {
     tree: props.tree,
     actions: props.actions,
+    onMembership: props.membership,
     onOpenDocument: (uuid) => emit("openDocument", uuid),
     overrides: props.columnOverrides,
     chips: props.chips,

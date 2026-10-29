@@ -497,6 +497,20 @@ Pick the surface that fits the question:
   (and one for config-editing agents at **`GET /agent/config.md`**);
   source reference: [`docs/dev/cards.md`](dev/cards.md).
 
+## Curating contacts
+
+An agent may group a user's handles into contacts and label people and
+senders `real` — in when not spam, out for spam — through the contacts app at `/applet/datalib_contacts/` on
+`datalib-http`, with the API token. Send one batch to `POST proposals`
+naming yourself as `agent` and the batch as `run`, with a `reason` and
+a `confidence` (0 to 1: the user reviews your least sure first) on
+each contact and label;
+read `GET review/items` and `GET not_linked` first, since what the user
+confirmed, overrode or turned down is not yours to propose again, and
+the batch says what it skipped. Nothing you send is final until the
+user confirms it on the contacts card's *Review*. Shapes and rules:
+[`docs/dev/contacts.md`](dev/contacts.md) §"Agents propose, a person decides".
+
 ## Feedback
 
 Something broken, missing, or confusing? **File an issue at

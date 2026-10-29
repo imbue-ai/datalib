@@ -26,7 +26,8 @@ export type ColumnType =
   | "status"
   | "chips"
   | "actions"
-  | "markdown_uuid";
+  | "markdown_uuid"
+  | "membership";
 
 /** `ChipKind in datalib/backend/columns/src/lib.rs`. */
 export type ChipKind =

@@ -848,6 +848,7 @@ own layout shape and decodes to nothing when it cannot be read.
 | `chips` | `[{kind, text, title}]` | a row of chips |
 | `actions` | `[{id, label, enabled, hint, disabled_reason, danger, on}]` | buttons, or a switch when `on` is set; the card supplies the handler for each id, and an id with no handler draws nothing |
 | `markdown_uuid` | a uuid or `{id, label}` | the title; click opens the document |
+| `membership` | `{applies, proposed, title}`: `applies` is `true`, `false` or `null` | whether the row is in the set the column names, as one three-position switch — knob left for out, centred for not known, right for in — filled when settled, only outlined when `proposed` (an agent's answer no person has reviewed); `title` on hover. A press on a third of it hands the host (`TableGrid`'s `membership`) the row, the field and that answer; a press where the knob already is does nothing, unless the answer is only proposed, which it confirms. Without a host handler it only shows. Sorts in, proposed in, not known, proposed out, out |
 
 The producer resolves, the viewer presents: an `identity` arrives with
 its label already looked up, because only the producer can, and the
