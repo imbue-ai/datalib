@@ -428,8 +428,8 @@ pub fn parse_retry_after(value: Option<&str>) -> Option<Duration> {
 }
 
 /// The marker header the router curl routes on (`latchkey-curl-router`
-/// in github.com/imbue-ai/latchkey-curl-shims matches it by name and
-/// ignores the value).
+/// in github.com/imbue-ai/latchkey-curl-shims). The value `1` asks for
+/// the router's default profile; a profile name would select that one.
 pub const IMPERSONATE_MARKER_HEADER: &str = "X-Imbue-Impersonate: 1";
 
 /// URL prefix that makes a request leave from the user's own machine rather
@@ -505,10 +505,12 @@ where
         // zero provider-side code. File-based ingestion never reaches this
         // path, so it correctly reports zero requests.
         datalib_etl::download_metrics::record_api_request();
+        let started = std::time::Instant::now();
         let outcome = match crate::playback::current() {
             None => live::send(req).await,
             Some(playback) => playback.answer(req, guard.stop()).await,
         };
+        log_attempt(req, &outcome, started.elapsed());
 
         // Decide whether this attempt is retryable. `None` = accept (success
         // or a definitive response/error → hand back to the caller as-is);
@@ -597,6 +599,32 @@ where
     }
 }
 
+/// One debug line per attempt, so a slow step's log says which calls
+/// its time went to. The query is left off: a signed URL carries its
+/// credential there.
+fn log_attempt(req: &HttpRequest, outcome: &Result<HttpResponse, HttpError>, took: Duration) {
+    let (status, bytes) = match outcome {
+        Ok(resp) => (resp.status.to_string(), resp.body.len()),
+        Err(HttpError::Timeout { .. }) => ("timeout".to_string(), 0),
+        Err(HttpError::Curl { exit, .. }) => (format!("curl exit {exit}"), 0),
+        Err(HttpError::Interrupted { .. }) => ("interrupted".to_string(), 0),
+        Err(_) => ("error".to_string(), 0),
+    };
+    let url = req.url.split('?').next().unwrap_or_default();
+    tracing::debug!(
+        event = "http_request",
+        service = %req.service,
+        method = req.method.as_str(),
+        url,
+        status,
+        bytes,
+        duration_ms = took.as_millis() as u64,
+        "{} {url} {status} in {}ms",
+        req.method.as_str(),
+        took.as_millis(),
+    );
+}
+
 // Live mode: shell out to `latchkey curl`.
 
 mod live {
@@ -638,7 +666,12 @@ mod live {
         // router curl's marker header. Only on the latchkey path -- a
         // bypass_latchkey request uses plain curl, which has no router
         // curl to act on the marker and would just send it upstream.
+        // The Chrome profile advertises compression and the router hands
+        // the reply on as the server sent it, so the decoding is this
+        // curl's: through a latchkey gateway, it is the curl at this end
+        // that decodes, with the header dump describing the wire body.
         if !req.bypass_latchkey && req.service.impersonates() {
+            cmd.arg("--compressed");
             cmd.arg("-H").arg(IMPERSONATE_MARKER_HEADER);
         }
         let writes_body_to_stdin = req.body.is_some();

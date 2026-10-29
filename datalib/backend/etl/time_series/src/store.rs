@@ -22,9 +22,10 @@ fn ddl(kind: StoreKind) -> Vec<&'static str> {
     }
 }
 
-/// Open `db_path` as its one writer, creating the tables `kind` has and
-/// recording `kind` in `_datalib_meta`. A store in an older shape is
-/// rebuilt empty; the schema is committed before this returns.
+/// Open `db_path` as its one writer, creating the tables `kind` has.
+/// The open records `kind`, the shape and the ladders' versions in
+/// `_datalib_meta`; a store in an older shape is rebuilt empty. The
+/// schema is committed before this returns.
 pub async fn open(db_path: &Path, kind: StoreKind) -> Result<SqlitePool> {
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -43,13 +44,6 @@ pub async fn open(db_path: &Path, kind: StoreKind) -> Result<SqlitePool> {
         .execute(&pool)
         .await
         .context("drop the retired time_series_points")?;
-    let versions = datalib_store_meta::Versions {
-        schema: 0,
-        shared: 0,
-    };
-    datalib_store_meta::write(&pool, kind, &schema_hash(kind), versions)
-        .await
-        .context("write _datalib_meta for a time-series store")?;
     doltlite_raw::commit_run(&pool, "schema: time series")
         .await
         .context("commit the time-series schema")?;
@@ -266,4 +260,35 @@ pub async fn remove_source(conn: &mut SqliteConnection, source_id: &str) -> Resu
         .await
         .context("delete a source from the index")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `open` wrote `_datalib_meta` again after the shared open had
+    /// recorded the ladder's top, with version 0, so every later open
+    /// ran the shared rung again: a live root logged `migrated` five
+    /// times in one sync of one source.
+    #[tokio::test]
+    async fn a_reopened_store_does_not_migrate_again() {
+        let td = tempfile::tempdir().unwrap();
+        let path = td.path().join(DB);
+        for _ in 0..3 {
+            open(&path, StoreKind::TimeSeries)
+                .await
+                .unwrap()
+                .close()
+                .await;
+        }
+        let pool = open(&path, StoreKind::TimeSeries).await.unwrap();
+        let migrations: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM dolt_log() WHERE message LIKE 'migrate shared%'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+        assert_eq!(migrations, 0);
+    }
 }

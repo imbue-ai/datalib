@@ -91,6 +91,14 @@ pub async fn build_state(
     // during startup is already being reported on.
     let (root_tx, _) = tokio::sync::broadcast::channel(64);
     let nudge = crate::watch::spawn((*root).clone(), root_tx.clone());
+    {
+        let (runs_store, nudge) = (datalib_runs::runs_path(&root), nudge.clone());
+        datalib_runs::after_every_write(move |store| {
+            if store == runs_store {
+                nudge.the_run_store_moved();
+            }
+        });
+    }
 
     // Before the loop, so its first read is of the current shape.
     let data_root = (*root).clone();

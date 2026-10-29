@@ -361,7 +361,9 @@ distance from T0 means nothing pasted elsewhere. The clock shows
 with a × beside it and "Clear T0" in its menu; a chip's menu has "Clear
 T0" too. "Set T0…" in the clock's menu takes one by hand: a date and
 time to the millisecond and the zone it is read in, starting from T0 or
-from now (`timeView.ts::instantOfInput`). T0 is kept per browser with the rest of the view.
+from now (`timeView.ts::instantOfInput`). T0 is kept per browser with
+the rest of the view. Every chart's time axis is drawn from T0 too
+(`docs/dev/cards.md` §"Charts"), and its crosshair reads the distance.
 
 **A chip short of room ends in "…"** on the side `ChipLook.elide`
 names: the right, except a log's stamp and any date from T0, whose

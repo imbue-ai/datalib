@@ -80,23 +80,6 @@ pub async fn open(db_path: &Path) -> Result<SqlitePool> {
     let pool = doltlite_raw::open_derived_indexed(db_path, DDL, INDEXES, StoreKind::Occurrences)
         .await
         .with_context(|| format!("open the occurrences store at {}", db_path.display()))?;
-    let versions = datalib_store_meta::Versions {
-        schema: 0,
-        shared: 0,
-    };
-    let opened = async {
-        datalib_store_meta::write(&pool, StoreKind::Occurrences, &schema_hash(), versions)
-            .await
-            .context("write _datalib_meta for the occurrences store")?;
-        doltlite_raw::commit_run(&pool, "schema: occurrences")
-            .await
-            .context("commit the occurrences schema")
-    }
-    .await;
-    if let Err(e) = opened {
-        pool.close().await;
-        return Err(e);
-    }
     Ok(pool)
 }
 

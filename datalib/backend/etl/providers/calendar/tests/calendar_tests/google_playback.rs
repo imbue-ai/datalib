@@ -335,9 +335,14 @@ async fn a_touch_that_bumps_only_etag_and_updated_leaves_the_payload_alone() {
     };
     run(&one, &store).await;
     let (before, _) = payload(store.clone()).await;
-    run(&two, &store).await;
+    let second = run(&two, &store).await;
     let (after, updated) = payload(store.clone()).await;
     assert_eq!(before, after, "the touch changed the stored payload");
+    assert_eq!(
+        (second.events_new, second.events_updated),
+        (0, 0),
+        "a touch is not an update"
+    );
     assert_eq!(updated, json!("2026-10-09T08:00:00.000Z"));
 }
 

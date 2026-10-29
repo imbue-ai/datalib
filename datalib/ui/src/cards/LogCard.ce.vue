@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // The run log as a card: the panel, titled by what its pickers show,
-// and a line selected in it opened as the card beside this one.
+// and a line opened from it as the card beside this one.
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import RunLogPanel, { type LogScope } from "@/components/RunLogPanel.ce.vue";
 import { logLineSource } from "./libs/logLineView";
@@ -46,8 +46,10 @@ and processes; the query bar narrows the lines (<code>level:warn
 -target:sqlx "a phrase"</code>, <code>min_level:info</code> for a level
 and above). Right-click a cell to keep only, or exclude, its value;
 drag a column header into the bar above the grid to group by it.</p>
-<p>Select a line to open it in full beside this card; the arrow keys
-move the selection.</p>
+<p>A click selects a line; ⌘-click and Shift-click select several, ⌘A
+all of them, and ⌘C copies the selection. Double-click a line, press
+Enter or pick <b>Open this line</b> from its right-click menu to open it
+in full beside this card.</p>
 `);
 
 function onScope(s: LogScope) {
@@ -55,7 +57,7 @@ function onScope(s: LogScope) {
   props.ctx.setTitle(title.value);
 }
 
-function onSelected(seq: number) {
+function onOpened(seq: number) {
   props.ctx.host.openCards(logLineSource(seq));
 }
 </script>
@@ -69,7 +71,7 @@ function onSelected(seq: number) {
     :initial-query="opts.q"
     :jump-to-end="opts.jumpToEnd"
     @scope-changed="onScope"
-    @line-selected="onSelected"
+    @line-opened="onOpened"
     @open-card="(source: string) => props.ctx.host.openCards(source)"
   />
 </template>

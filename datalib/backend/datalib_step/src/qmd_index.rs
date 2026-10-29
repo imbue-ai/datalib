@@ -250,12 +250,19 @@ pub async fn run_keyword(
     let root = data_root.to_path_buf();
     let group = env.group.clone();
     let stop = stop.clone();
-    let updated = tokio::task::spawn_blocking(move || {
+    let ran = tokio::task::spawn_blocking(move || {
         open_index(&root, &stop)?.keyword_index(&[group], sink.as_ref())
     })
     .await
     .context("qmd task panicked")??;
-    tracing::info!(%updated, "the keyword index is done");
+    tracing::info!(
+        updated = %ran.done,
+        took = %ran.phases,
+        open_ms = ran.phases.get("open_ms"),
+        files_ms = ran.phases.get("files_ms"),
+        finish_ms = ran.phases.get("finish_ms"),
+        "the keyword index is done"
+    );
     Ok(claim_reads(env))
 }
 
@@ -273,14 +280,21 @@ pub async fn run_embed(
     let root = data_root.to_path_buf();
     let group = env.group.clone();
     let stop = stop.clone();
-    let embedded = tokio::task::spawn_blocking(move || {
+    let ran = tokio::task::spawn_blocking(move || {
         let index = open_index(&root, &stop)?;
         provision_embed_model(&index, &root, models_dir)?;
         index.embed(&[group], sink.as_ref())
     })
     .await
     .context("qmd task panicked")??;
-    tracing::info!(%embedded, "the embeddings are done");
+    tracing::info!(
+        embedded = %ran.done,
+        took = %ran.phases,
+        open_ms = ran.phases.get("open_ms"),
+        first_ms = ran.phases.get("first_ms"),
+        embed_ms = ran.phases.get("embed_ms"),
+        "the embeddings are done"
+    );
     Ok(claim_reads(env))
 }
 

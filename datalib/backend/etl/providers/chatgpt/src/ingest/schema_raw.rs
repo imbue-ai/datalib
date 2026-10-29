@@ -30,6 +30,11 @@ pub struct MeRow {
     pub name: Option<String>,
 }
 
+/// `/me` answers `first_name` on some calls and null on others for the
+/// same account, and every conversation reads the `me` row, so the flip
+/// re-rendered every conversation on most syncs. Render never reads it.
+pub const ME_VOLATILE_PATHS: &[dr::VolatilePath] = &[&["first_name"]];
+
 /// `conversations` — one row per ChatGPT conversation id. `update_time`
 /// is the detail endpoint's, JSON-encoded; what the listing named is
 /// the sidecar's `held_version`.

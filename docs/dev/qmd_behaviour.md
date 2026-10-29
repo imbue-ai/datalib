@@ -192,6 +192,23 @@ does not carry over to `createStore()` without being re-measured.
     reached the script's handler 7.9s later. On a real mailbox a
     stopped `keyword_index` ran on for 16s.
 
+14. **A small update costs as much as the whole index.** Measured on a
+    copy of a live 4.2 GB index (276k documents, 108k of them retired)
+    by updating a two-file collection with nothing changed. Node, the
+    imports and opening the store took 0.1 s, and the walk took
+    milliseconds. Two statements over the whole index took the rest.
+    The first is `cleanupOrphanedContent`, which ends every
+    `reindexCollection` with `DELETE FROM content WHERE hash NOT IN
+    (…)` and scans every body (7–25 s). The second is the
+    needs-embedding count `store.update()` adds to its answer, a join
+    of every document against every vector (12–69 s). The same update
+    against a fresh two-document index took 0.55 s. Embed has the same
+    shape: `listCollections` counts every collection's documents, and
+    `getPendingEmbeddingDocs` reads every vector row. The index had
+    never been analysed, so the lookup of a chunk's vectors used the
+    index on `model`, which every row shares, and scanned it once per
+    document.
+
 ## What the shipped steps do with these
 
 `qmd_aggregator` keeps the collection set to the sources it reads and
@@ -203,6 +220,18 @@ one-slot `qmd_keyword` and `qmd_embed` locks
 (`dag/src/supervisor/locks.rs`; findings 5 and 12). Each step is its
 own process, so each pays finding 8's model load; that is the price of
 per-source steps over one loop calling `embed({collection})`.
+
+Finding 14 is why `update` calls `reindexCollection` itself rather than
+`store.update()`, which skips the count. `requireRegistered` reads the
+registry table rather than `listCollections`. An update or an embed
+ends with `PRAGMA optimize`, so the index has statistics: the first
+run on an unanalysed index spends a few seconds on them, and later runs
+spend almost nothing. The two-file update above went from 16–23 s to
+7.8 s. What is left is `cleanupOrphanedContent`, inside qmd, and taking
+it out takes a change upstream. Each run reports its phases (`open`,
+then `files` and `finish` for an update, `first` and `embed` for an
+embed), and the step logs them with "the keyword index is done" and
+"the embeddings are done".
 
 Finding 6 is fixed rather than looped around: the script calls
 `generateEmbeddings` with `maxDurationMs: 0`. Calling `store.embed()`

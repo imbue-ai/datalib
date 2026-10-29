@@ -1566,18 +1566,48 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                 break;
             }
             let before = totals.written();
+            let started = std::time::Instant::now();
             match frontier.next() {
                 Next::Done => break,
                 Next::Threads(owed) => {
+                    let threads = owed.len();
+                    let replies_before = totals.replies;
                     let with_files = mirror.fetch_threads(owed, &mut totals).await?;
+                    let mut files_found = 0;
                     if opts.media {
-                        let new = queue_files(&mut frontier, db.files_owed_by(&with_files).await?);
-                        if new > 0 {
-                            bar.expect(new);
+                        files_found =
+                            queue_files(&mut frontier, db.files_owed_by(&with_files).await?);
+                        if files_found > 0 {
+                            bar.expect(files_found);
                         }
                     }
+                    info!(
+                        event = "slack_threads_read",
+                        threads,
+                        replies = totals.replies - replies_before,
+                        files_found,
+                        elapsed_ms = started.elapsed().as_millis() as u64,
+                        "read a batch of threads"
+                    );
                 }
-                Next::Files(owed) => mirror.fetch_files(owed, &mut totals).await?,
+                Next::Files(owed) => {
+                    let files = owed.len();
+                    let media_before = totals.media.clone();
+                    mirror.fetch_files(owed, &mut totals).await?;
+                    let outcomes: BTreeMap<&str, usize> = totals
+                        .media
+                        .iter()
+                        .map(|(k, n)| (k.as_str(), n - media_before.get(k).copied().unwrap_or(0)))
+                        .filter(|(_, n)| *n > 0)
+                        .collect();
+                    info!(
+                        event = "slack_files_fetched",
+                        files,
+                        outcomes = ?outcomes,
+                        elapsed_ms = started.elapsed().as_millis() as u64,
+                        "fetched a batch of files"
+                    );
+                }
                 Next::Page(i) => {
                     let target = frontier.walks[i].target;
                     let (cid, name) = &targets[target];

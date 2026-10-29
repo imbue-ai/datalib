@@ -16,7 +16,9 @@ One row per event in the upstream's own shape, keyed
 - `google_events` — a Google event resource verbatim. A changed or
   cancelled occurrence is its own row naming its series. Its `etag`
   and `updated` are in the sidecar's `volatile_payload`: Google bumps
-  them on hundreds of events at once with nothing else changed.
+  them on hundreds of events at once with nothing else changed. The
+  summary's `updated` counts only an event whose payload differs from
+  the stored one, so such a re-stamp is not counted.
 - `calendly_events` — a Calendly scheduled event as the listing sent
   it, its `event_memberships` and `event_guests` put in a fixed order
   (by user URI, by address). `listing_hash` is the blake3 of that
