@@ -8,7 +8,7 @@
 // chart shares is `plot/`.
 import { computed, ref, watch } from "vue";
 import uPlot from "uplot";
-import { timeView } from "@/config/timeView";
+import { sinceT0, timeView } from "@/config/timeView";
 import {
   columnsOf,
   displayUnit,
@@ -31,6 +31,7 @@ import {
 } from "./timeSeries";
 import { fetchPoints } from "./timeSeriesApi";
 import { axis, withAlpha, type Theme } from "./plot/plot";
+import { t0TickTexts, t0Ticks } from "./plot/t0Axis";
 import { usePlot, type Range } from "./plot/usePlot";
 import PlotLegend from "./plot/PlotLegend.vue";
 
@@ -199,10 +200,14 @@ function options(theme: Theme) {
         size: M.bottom,
         splits: (u: uPlot, _axis: number, min: number, max: number) => {
           const k = Math.max(2, Math.min(6, Math.floor(u.bbox.width / uPlot.pxRatio / 140)));
+          const t0 = timeView.value.t0;
+          if (t0) return t0Ticks(min, max, t0.ms, k);
           return Array.from({ length: k + 1 }, (_, i) => min + ((max - min) * i) / k);
         },
         values: (u: uPlot, splits: number[]) => {
           const spanMs = (u.scales.x.max ?? 1) - (u.scales.x.min ?? 0);
+          const t0 = timeView.value.t0;
+          if (t0) return t0TickTexts(splits, t0.ms, spanMs);
           return splits.map((ms, i) => formatTimeTick(ms, timeKind.value, spanMs, i === 0));
         },
       }),
@@ -250,7 +255,7 @@ const { plot, resetZoom } = usePlot(box, {
     JSON.stringify([
       drawn.value.map((d) => [d.listed.time_series_id, props.colorOf(d.listed.time_series_id)]),
       quantities.value,
-      // The time axis is labelled in the clock's zone.
+      // The time axis is labelled in the clock's zone, or from T0.
       timeView.value,
     ]),
   data,
@@ -304,7 +309,9 @@ const hover = computed(() => {
   const left = plotLeft + u.valToPos(x, "x");
   return {
     x: left,
-    when: formatTime(x, rows[0]!.kind, hi - lo),
+    when: timeView.value.t0
+      ? sinceT0(x, timeView.value.t0.ms)
+      : formatTime(x, rows[0]!.kind, hi - lo),
     rows,
     flip: left > width.value / 2,
   };
