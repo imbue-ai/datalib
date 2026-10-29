@@ -7,7 +7,7 @@
 // an absolute one makes you do arithmetic for; the exact instant is the
 // occasional need, so it gets the gesture.
 
-import { formatAt, parseInstant, timeView, wallClock } from "./timeView";
+import { formatAt, parseInstant, timeView } from "./timeView";
 
 /// The absolute form, `Apr 15, 2026, 12:05:33`, in the zone and format
 /// the status bar's clock sets (`timeView.ts`).
@@ -30,23 +30,6 @@ export function formatShortStamp(iso: string | null, view = timeView.value): str
   if (!at) return iso;
   return `${formatAt(at, view, { day: "noYear" })} @ ${formatAt(at, view, { clock: true })}`;
 }
-
-/// The whole stamp to the millisecond, `2026-09-22 14:07:47.190`, in the
-/// view's zone: a step's own tracing lines are stamped in UTC and the
-/// runner's in local time, and showing the digits as written would
-/// interleave two clocks. Digits and separators only, on a 24-hour clock
-/// whatever the view's, so it sorts as text and a column can clip it from
-/// the left down to the time of day.
-export function formatDateTime(iso: string | null, view = timeView.value): string {
-  if (!iso) return "";
-  const at = parseInstant(iso);
-  if (!at) return iso;
-  const w = wallClock(at, view.zone);
-  const ms = String(((at.ms % 1000) + 1000) % 1000).padStart(3, "0");
-  return `${w.year}-${p2(w.month)}-${p2(w.day)} ${p2(w.hour)}:${p2(w.minute)}:${p2(w.second)}.${ms}`;
-}
-
-const p2 = (n: number) => String(n).padStart(2, "0");
 
 /// Order two stamps by the instant they name.
 ///

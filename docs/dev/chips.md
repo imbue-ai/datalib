@@ -228,6 +228,9 @@ A grid draws a chip from an `identity` typed cell
   date shows `2369-04-14 12:05`, then `2369-04-14`
   (`dates.ts::fittingDateCell`, chosen by a container query in
   `chip.css`); the text a copy or a screen reader gets stays whole.
+  The log's Time column is the same chip to the millisecond,
+  `2026-09-22 14:07:47.190` (`dates.ts::millisDateCell`), which a
+  narrow column cuts from the left so the seconds stay.
 
 `typedColumns.ts` draws such a cell through `chipCell` or `entityCell`
 when given its `chips` option, and `GridCard` redraws the Author,
@@ -344,11 +347,29 @@ search field) draws it again when the view changes.
   before:2026-04-17T00:00:00+02:00`).
 - **double-click**: a search card for its day.
 
+**T0 draws every date from one instant.** "Use as T0" on an instant's
+menu sets the time view's `t0`, and from then on every date chip that
+names an instant (`dateText`) shows its distance from it, to the
+millisecond, earlier ones negative: `0.000`, `+1.250`, `-4:05.000`,
+`+2:00:00.000`, `-3d 04:05:06.789`, `+343y 075d 00:23:24.454`
+(`timeView.ts::sinceT0`, which drops the units that are zero in front;
+a year is a calendar year). A column of them is right-justified
+so the units line up. A day stays a day, since it names no instant; the
+hover, the copy and a chip's name in a menu stay the date, since a
+distance from T0 means nothing pasted elsewhere. The clock shows
+`T0=2026-10-26 09:21:57.190` in the view's zone in place of the time now,
+with a × beside it and "Clear T0" in its menu; a chip's menu has "Clear
+T0" too. T0 is kept per browser with the rest of the view.
+
+**A chip short of room ends in "…"** on the side `ChipLook.elide`
+names: the right, except a log's stamp and any date from T0, whose
+end is what tells two of them apart.
+
 **A span is two dates read as one.** A render writes an event's start
 and end as two `<time>`s in a `<span class="time-range">`; where the end
 falls on the start's day in the view's zone it shows its clock alone
 (`Fri, Sep 18, 2026, 19:00 – 22:00`), and otherwise its own day
-(`rangeEndText`). The calendar's "When", its occurrences and its
+(`rangeEndText`); from T0 each end is its own distance. The calendar's "When", its occurrences and its
 cancelled dates are written this way, so no date on its page is text.
 
 **A date in a snippet reads the same.** A snippet or a row's preview

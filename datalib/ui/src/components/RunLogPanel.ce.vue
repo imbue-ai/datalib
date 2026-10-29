@@ -55,6 +55,7 @@ import { EVERYTHING, scopeOf, withScope, type LogScope as Scope } from "@/grid/l
 import "@/cards/tableGrid.css";
 import "@/cards/chip.css";
 import { uriFromEntity } from "@/cards/chipLinks";
+import { millisDateCell, parseStamp } from "@/cards/dates";
 import { entities, entityCell } from "@/cards/entities";
 import {
   CHIP_SELECTOR,
@@ -76,12 +77,7 @@ import {
 } from "./runLogSource";
 import { page as thisPage } from "@/telemetry";
 import { changed, subscribeLive } from "@/live";
-import {
-  compareStamps,
-  formatDateTime,
-  formatRelative,
-  formatShortStamp,
-} from "@/config/timeFormat";
+import { compareStamps, formatRelative, formatShortStamp } from "@/config/timeFormat";
 
 const { fetchLog, fetchProcesses, fetchRuns, healthSnapshot } = useApi();
 
@@ -679,9 +675,12 @@ function clippedFromLeft(text: string): HTMLElement {
   return el;
 }
 
+/// A date chip to the millisecond, which a narrow column cuts from the
+/// left; from T0 while one is set, right-justified so the units line up.
 const dateTime: Formatter<RunLogLine> = (_r, _c, value) => {
-  const text = formatDateTime(value ? String(value) : null);
-  return { html: clippedFromLeft(text), toolTip: text };
+  const iso = value ? String(value) : "";
+  if (!parseStamp(iso)) return { html: clippedFromLeft(iso), toolTip: iso };
+  return { html: millisDateCell(iso), addClasses: timeView.value.t0 ? "rl-from-t0" : "" };
 };
 
 const runIdShort: Formatter<RunLogLine> = (_r, _c, value) => ({
@@ -1375,6 +1374,9 @@ onUnmounted(() => {
 .rl-grid .rl-ltr {
   direction: ltr;
   unicode-bidi: isolate;
+}
+.rl-grid .slick-cell.rl-from-t0 {
+  text-align: right;
 }
 .rl-grid .slick-cell.rl-warn {
   color: var(--datalib-log-warn);

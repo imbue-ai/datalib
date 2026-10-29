@@ -15,6 +15,7 @@ import {
   type ChipHost,
 } from "./chipActions";
 import { people, type NormalizedContact } from "./contacts";
+import { timeView } from "@/config/timeView";
 
 const SLACK: Chip = { ref: { kind: "entity", uri: "datalib:group/slack" }, shownAs: "slack" };
 const INGEST: Chip = {
@@ -208,5 +209,19 @@ describe("entityChipMenu", () => {
     expect(entityChipMenu("datalib:group/slack", "Work Slack", undefined).map((e) => e.id)).toEqual(
       ["open", "copy-id", "copy-name", "copy-both", "browse"],
     );
+  });
+});
+
+describe("T0 from a date chip", () => {
+  /** "Use as T0" on a chip draws every date from that instant, to the
+   *  millisecond, until "Clear T0". */
+  it("sets T0 to the chip's instant and clears it", async () => {
+    const at = "2026-04-15T10:05:00.250+02:00";
+    const chip: Chip = { ref: { kind: "date", datetime: at }, shownAs: "" };
+    await runChipAction("use-t0", chip, host());
+    expect(timeView.value.t0).toEqual({ ms: Date.parse(at), offsetMin: 120 });
+    expect(chipMenuOf(chip, false).map((e) => e.id)).toContain("clear-t0");
+    await runChipAction("clear-t0", chip, host());
+    expect(timeView.value.t0).toBeNull();
   });
 });
