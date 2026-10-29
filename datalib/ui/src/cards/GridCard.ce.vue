@@ -106,6 +106,7 @@ import { followFrame, isDarkTheme } from "@/grid/gridFrame";
 import {
   filterToken,
   keepExcludeEntries,
+  sameSearch,
   searchDelay,
   withToken,
   type FilterEntry,
@@ -1143,6 +1144,10 @@ watch(query, (q, before) => {
   const ranked = rowsSpec === null ? isSearch : qmd();
   debounceTimer = setTimeout(
     () => {
+      if (sameSearch(q, settledQuery.value)) {
+        loading.value = false;
+        return;
+      }
       settledQuery.value = q;
       void startSearch(q);
     },
@@ -1243,14 +1248,19 @@ watch(view, (v) => {
 const sources = ref<RowGroup<Row>[]>([]);
 const sourcesQuery = computed(() => setSource(settledQuery.value, null));
 let sourcesAsked = 0;
+/// A newer search cancels the chips' request, so the server stops
+/// ranking free text nobody is waiting for.
+let sourcesInflight: AbortController | null = null;
 async function loadSources() {
   if (!isSearch || props.oneSource) return;
   const asked = ++sourcesAsked;
+  sourcesInflight?.abort();
+  const ctrl = (sourcesInflight = new AbortController());
   try {
     const r = await fetchGroups<Row>(
       sourcesQuery.value,
       "source_ref",
-      undefined,
+      ctrl.signal,
       SEARCH,
       tab.value,
     );
