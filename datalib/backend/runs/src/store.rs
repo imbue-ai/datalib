@@ -36,6 +36,16 @@ const SAMPLE_EVERY: Duration = Duration::from_secs(5);
 /// runs for weeks between syncs has to do it for itself.
 const PRUNE_EVERY: Duration = Duration::from_secs(60 * 60);
 
+/// How often a writer copies the WAL back into the file. Doltlite's
+/// engine never runs SQLite's automatic checkpoint on a plain file, so
+/// without this the `-wal` grows by every line ever written and every
+/// read pays for it (docs/dev/doltlite.md § Plain SQLite files).
+const CHECKPOINT_EVERY: Duration = Duration::from_secs(30);
+
+/// What a restarted WAL is cut back to, so a WAL that grew while a
+/// checkpoint was held off gives the disk back.
+const WAL_SIZE_LIMIT_BYTES: &str = "67108864";
+
 /// How long a writer waits for the other process's write lock before
 /// SQLite hands it `SQLITE_BUSY` and its batch is lost. Set here rather
 /// than left to sqlx's default, because the number is a decision: a
@@ -67,6 +77,7 @@ fn options(path: &Path, create: bool) -> SqliteConnectOptions {
         // file torn by a power cut is emptied and remade on the next
         // open (see `open_or_recreate`).
         .synchronous(sqlx::sqlite::SqliteSynchronous::Off)
+        .pragma("journal_size_limit", WAL_SIZE_LIMIT_BYTES)
         .busy_timeout(BUSY_TIMEOUT)
 }
 
@@ -1410,6 +1421,7 @@ fn writer_loop(
 
     let mut series: HashMap<SeriesKey, SeriesState> = HashMap::new();
     let mut last_prune = Instant::now();
+    let mut last_checkpoint = Instant::now();
     loop {
         // Wake on the interval, on a flush asked for, or when the writer
         // is dropped — whose disconnect is the signal to flush and go.
@@ -1443,11 +1455,29 @@ fn writer_loop(
             }
             last_prune = Instant::now();
         }
+        if last_checkpoint.elapsed() >= CHECKPOINT_EVERY {
+            rt.block_on(checkpoint(&pool));
+            last_checkpoint = Instant::now();
+        }
     }
     if let Err(e) = rt.block_on(end(&pool, &scope)) {
         tracing::warn!(error = %e, "run store: could not close the record");
     }
     rt.block_on(pool.close());
+}
+
+/// `PASSIVE` never waits on a reader: it copies what no reader still
+/// needs, and the next write restarts the WAL once all of it is copied.
+async fn checkpoint(pool: &SqlitePool) {
+    match sqlx::query_as::<_, (i64, i64, i64)>("PRAGMA wal_checkpoint(PASSIVE)")
+        .fetch_one(pool)
+        .await
+    {
+        Ok((busy, frames, copied)) => {
+            tracing::debug!(busy, frames, copied, "run store: checkpointed the WAL")
+        }
+        Err(e) => tracing::warn!(error = %e, "run store: could not checkpoint the WAL"),
+    }
 }
 
 /// An ISO stamp with an offset, as UTC plus that offset. A stamp that
@@ -2053,6 +2083,41 @@ async fn insert_sample(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Doltlite never checkpoints a plain file by itself, and a live
+    /// root's `-wal` reached 4 GB over eight days, behind which every
+    /// read of the log took seconds. The writer's own checkpoint, and
+    /// the size limit its connection sets, give the WAL back.
+    #[tokio::test]
+    async fn the_writers_checkpoint_cuts_the_wal_back() {
+        let td = tempfile::tempdir().unwrap();
+        let path = td.path().join("runs.sqlite");
+        let pool = open_or_create(&path).await.unwrap();
+        sqlx::query("CREATE TABLE filler (b BLOB)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        for _ in 0..20 {
+            sqlx::query(
+                "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1000) \
+                 INSERT INTO filler SELECT randomblob(4000) FROM n",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let wal = path.with_file_name("runs.sqlite-wal");
+        let limit: u64 = WAL_SIZE_LIMIT_BYTES.parse().unwrap();
+        assert!(std::fs::metadata(&wal).unwrap().len() > limit);
+
+        checkpoint(&pool).await;
+        sqlx::query("INSERT INTO filler VALUES (1)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(std::fs::metadata(&wal).unwrap().len() <= limit);
+        pool.close().await;
+    }
 
     /// A queue that fills and then empties within the sample floor: the
     /// drop is held back, then written once the floor has passed — with

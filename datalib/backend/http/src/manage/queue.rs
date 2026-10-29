@@ -352,6 +352,38 @@ fn eta(
     }
 }
 
+/// How often a running step's shown ETA is logged.
+const LOG_SHOWN_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Log the queue and ETA a running step's row shows, at most once a
+/// minute per step. The ETA is worked out each time the rows are read
+/// and kept nowhere, so without this a run's log cannot say what a
+/// person was told.
+pub fn log_shown(step: &str, cells: &Cells) {
+    static LAST: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
+    > = std::sync::OnceLock::new();
+    let mut last = LAST.get_or_init(Default::default).lock().unwrap();
+    let now = std::time::Instant::now();
+    if last.get(step).is_some_and(|t| now - *t < LOG_SHOWN_EVERY) {
+        return;
+    }
+    last.insert(step.to_string(), now);
+    tracing::debug!(
+        event = "eta_shown",
+        step,
+        queued = cells.queue.value,
+        eta_s = cells.eta.value,
+        note = cells.eta.note.as_deref(),
+        "{step}: {} queued, ETA {}",
+        cells.queue.value.map_or("-".to_string(), grouped),
+        cells.eta.value.map_or_else(
+            || cells.eta.note.clone().unwrap_or_else(|| "-".into()),
+            duration
+        ),
+    );
+}
+
 /// A group's cells from its steps', each with the label it goes by.
 /// There is no queue: one step counts files, the next documents, and a
 /// sum of the two means nothing. The ETA waits on the slowest step, and a

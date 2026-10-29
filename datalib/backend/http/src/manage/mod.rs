@@ -1217,6 +1217,9 @@ impl RowCtx<'_> {
             Entry::Step(_) => queue::step_cells(self.snap.record.progress.get(&id), activity),
             Entry::Applet(_) => queue::step_cells(None, queue::Activity::Idle),
         };
+        if activity == queue::Activity::Running {
+            queue::log_shown(&id, &cells);
+        }
         let problems = match e {
             Entry::Step(_) => problems::chips(self.snap.record.problems.get(&id)),
             Entry::Applet(_) => vec![],

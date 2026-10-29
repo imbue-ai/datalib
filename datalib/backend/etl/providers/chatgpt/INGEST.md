@@ -63,7 +63,14 @@ identically to itself:
   (`CONVERSATION_VOLATILE_PATHS`): it grows whenever OpenAI ships a
   model, with the conversation's `update_time` unmoved. A row stored
   before it moved keeps the list in its payload until that conversation
-  is fetched again, which changes the row once. A message id is unique within its
+  is fetched again, which changes the row once.
+- The account's `first_name` in `/me` is in `me_bookkeeping`'s
+  `volatile_payload` (`ME_VOLATILE_PATHS`): `/me` answers it on some
+  calls and null on others for the same account. Every conversation
+  reads the `me` row, so in the payload the flip re-rendered every
+  conversation on most syncs. Render never reads it.
+
+A message id is unique within its
 conversation, not across them: a conversation branched into a new chat
 repeats the original's (`../chatgpt_render/TRANSLATE.md` §"A message id
 is not unique across conversations"). Stock `sqlite3` cannot open the store;

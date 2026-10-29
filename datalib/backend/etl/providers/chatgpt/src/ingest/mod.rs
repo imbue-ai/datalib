@@ -41,7 +41,9 @@ pub use api::{ChatGPTClient, ChatGPTError};
 pub use db::{db_path_for, Conversation, FileRef, LoadedConversation, LoadedRaw, RawDb};
 use export::ExportFiles;
 use fetchers::{Attachments, Conversations};
-use schema_raw::{MeRow, ATTACHMENTS, CONVERSATIONS, CONVERSATION_VOLATILE_PATHS};
+use schema_raw::{
+    MeRow, ATTACHMENTS, CONVERSATIONS, CONVERSATION_VOLATILE_PATHS, ME_VOLATILE_PATHS,
+};
 
 /// Between listing pages. ChatGPT doesn't appear to throttle us at any
 /// polite rate; 100ms keeps us from looking like a tight loop.
@@ -556,10 +558,11 @@ async fn upsert_me(ctx: &Ctx<'_>, payload: &Value) -> Result<()> {
         Some(s) => datalib_time::parse_strict(s).context("--now")?,
         None => IsoOffsetTimestamp::now_local(),
     };
+    let (base, volatile) = dr::split_volatile(payload, ME_VOLATILE_PATHS);
     let row = MeRow {
         id_and_payload: WirePayload {
             id: id.to_string(),
-            payload: serde_json::to_string(payload).context("serialize /me")?,
+            payload: serde_json::to_string(&base).context("serialize /me")?,
         },
         email: payload
             .get("email")
@@ -572,6 +575,21 @@ async fn upsert_me(ctx: &Ctx<'_>, payload: &Value) -> Result<()> {
     };
     let mut tx = ctx.db.pool().begin().await.context("begin upsert_me tx")?;
     bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
+    let volatile = volatile
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .context("serialize /me's volatile fields")?;
+    sqlx::query(
+        "INSERT INTO me_bookkeeping (id, attempt_count, volatile_payload) \
+         VALUES (?, 0, jsonb(?)) \
+         ON CONFLICT(id) DO UPDATE SET volatile_payload = excluded.volatile_payload",
+    )
+    .bind(id)
+    .bind(volatile)
+    .execute(&mut *tx)
+    .await
+    .context("store /me's volatile fields")?;
     tx.commit().await.context("commit upsert_me tx")?;
     Ok(())
 }

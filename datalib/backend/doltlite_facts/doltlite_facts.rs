@@ -2169,6 +2169,41 @@ mod compat {
         assert_eq!(header("delete").await, [1, 1]);
     }
 
+    /// Stock SQLite checkpoints a WAL once a commit leaves it past
+    /// `wal_autocheckpoint` pages (1000). Doltlite never does on a plain
+    /// file, so its `-wal` keeps every page ever written until a
+    /// connection asks; asked, it copies all of them.
+    #[tokio::test]
+    async fn a_plain_file_in_wal_mode_is_checkpointed_only_when_asked() {
+        let s = Store::new();
+        let plain = s.path.with_file_name("plain-wal.sqlite");
+        let mut c = connect(
+            &format!("file:{}?doltlite_engine=sqlite", plain.display()),
+            false,
+            Duration::from_secs(5),
+        )
+        .await;
+        text(&mut c, "PRAGMA journal_mode = wal").await;
+        assert_eq!(int(&mut c, "PRAGMA wal_autocheckpoint").await, 1000);
+        ok(&mut c, "CREATE TABLE a (b BLOB)").await;
+        for _ in 0..3 {
+            ok(
+                &mut c,
+                "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1000) \
+                 INSERT INTO a SELECT randomblob(4000) FROM n",
+            )
+            .await;
+        }
+        let row = sqlx::query_as::<_, (i64, i64, i64)>("PRAGMA wal_checkpoint(PASSIVE)")
+            .fetch_one(&mut c)
+            .await
+            .unwrap();
+        let (busy, frames, copied) = row;
+        assert_eq!(busy, 0);
+        assert!(frames > 2000, "a checkpoint ran by itself: {frames} frames");
+        assert_eq!(copied, frames);
+    }
+
     #[tokio::test]
     async fn a_text_primary_key_is_not_null() {
         let (s, _) = store_with_rows().await;

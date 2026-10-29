@@ -42,10 +42,21 @@ const { createStore } = await load("dist/index.js");
 // Not exported from `dist/index.js`, and needed: `generateEmbeddings`
 // takes the time cap `store.embed()` drops, `removeCollection` deletes a
 // collection's documents where `store.removeCollection()` only
-// unregisters it, and `getHashesNeedingEmbedding` is qmd's own count of
-// what is left to embed.
-const { generateEmbeddings, removeCollection, getHashesNeedingEmbedding } =
-  await load("dist/store.js");
+// unregisters it, `getHashesNeedingEmbedding` is qmd's own count of
+// what is left to embed, and `reindexCollection` is `store.update()`
+// without the count of what every collection still needs embedded,
+// which scans the whole index and which `update` has no use for.
+const {
+  generateEmbeddings,
+  removeCollection,
+  getHashesNeedingEmbedding,
+  getStoreCollections,
+  reindexCollection,
+} = await load("dist/store.js");
+
+// Milliseconds since node started, so a phase's start includes node's own
+// start-up and qmd's imports.
+const now = () => Math.round(performance.now());
 
 async function addCollections(store, root, collections) {
   for (const { name, glob } of collections) {
@@ -73,25 +84,38 @@ async function register(store, { root, collections }) {
 // Registers first, so a keyword update never depends on the step that
 // registers every source having run before it: the runner does not hold
 // a step back for an input that is itself still waiting.
+//
+// `timings` splits the run: `open_ms` until the store is open and the
+// collections registered, `files_ms` until the last file is hashed, and
+// `finish_ms` for what qmd does after the walk (retiring missing
+// documents and deleting bodies nothing names, which scans every body in
+// the index however small the collection).
 async function update(store, { root, collections }) {
-  const r = await store.update({
-    collections: await addCollections(store, root, collections),
-    onProgress: ({ current, total }) => emit({ event: "progress", current, total }),
-  });
-  emit({
-    event: "done",
-    indexed: r.indexed,
-    updated: r.updated,
-    unchanged: r.unchanged,
-    removed: r.removed,
-    skipped: r.skipped,
-  });
+  const names = new Set(await addCollections(store, root, collections));
+  const opened = now();
+  let lastFile = opened;
+  const done = { event: "done", indexed: 0, updated: 0, unchanged: 0, removed: 0, skipped: 0 };
+  store.internal.clearCache();
+  for (const col of getStoreCollections(store.internal.db).filter((c) => names.has(c.name))) {
+    const r = await reindexCollection(store.internal, col.path, col.pattern || "**/*.md", col.name, {
+      ignorePatterns: col.ignore,
+      onProgress: ({ current, total }) => {
+        lastFile = now();
+        emit({ event: "progress", current, total });
+      },
+    });
+    for (const k of ["indexed", "updated", "unchanged", "removed", "skipped"]) done[k] += r[k];
+  }
+  done.timings = { open_ms: opened, files_ms: lastFile - opened, finish_ms: now() - lastFile };
+  emit(done);
 }
 
 // A scoped embed over a name the registry lacks matches nothing and
 // reports success having done nothing, so it is an error instead.
+// The registry table, not `listCollections`, which counts every
+// collection's documents to answer.
 async function requireRegistered(store, name) {
-  if (!(await store.listCollections()).some((c) => c.name === name)) {
+  if (!getStoreCollections(store.internal.db).some((c) => c.name === name)) {
     throw new Error(
       `collection ${JSON.stringify(name)} is not registered in this index; ` +
         "its keyword_index step registers it",
@@ -106,20 +130,31 @@ async function requireRegistered(store, name) {
 // that always fails loses its other chunks at the end of each pass
 // (`removeIncompleteEmbeddings`), so every pass embeds something and the
 // loop never ends.
+//
+// `timings`: `open_ms` until the store is open, `first_ms` until the
+// first chunk is embedded (finding what is owed, loading the model) and
+// `embed_ms` for the rest.
 async function embed(store, { collections }) {
   for (const collection of collections) await requireRegistered(store, collection);
+  const opened = now();
+  let first = null;
   const total = { event: "done", documents: 0, chunks: 0, errors: 0 };
   for (const collection of collections) {
     const r = await generateEmbeddings(store.internal, {
       collection,
       maxDurationMs: 0,
       // `failures` repeats every failed chunk on every callback.
-      onProgress: ({ failures: _drop, ...p }) => emit({ event: "progress", collection, ...p }),
+      onProgress: ({ failures: _drop, ...p }) => {
+        first ??= now();
+        emit({ event: "progress", collection, ...p });
+      },
     });
     total.documents += r.docsProcessed;
     total.chunks += r.chunksEmbedded;
     total.errors += r.errors;
   }
+  first ??= now();
+  total.timings = { open_ms: opened, first_ms: first - opened, embed_ms: now() - first };
   emit(total);
 }
 
@@ -159,11 +194,15 @@ async function serve() {
   }
 }
 
+// `optimize`: the index is never analysed otherwise, and without the
+// statistics SQLite looks a chunk's vectors up by the index on `model`,
+// which every row shares, so each embedded document scanned all of them.
+// Once there are statistics, `PRAGMA optimize` costs little.
 const VERBS = {
-  register: { run: register, withConfig: true },
-  update: { run: update, withConfig: true },
-  embed: { run: embed, withConfig: false },
-  status: { run: status, withConfig: false },
+  register: { run: register, withConfig: true, optimize: false },
+  update: { run: update, withConfig: true, optimize: true },
+  embed: { run: embed, withConfig: false, optimize: true },
+  status: { run: status, withConfig: false, optimize: false },
 };
 
 async function run() {
@@ -172,6 +211,7 @@ async function run() {
   const store = await createStore(v.withConfig ? { dbPath, configPath: args.config } : { dbPath });
   try {
     await v.run(store, args);
+    if (v.optimize) store.internal.db.exec("PRAGMA optimize");
   } finally {
     await store.close();
   }

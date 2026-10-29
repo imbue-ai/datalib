@@ -505,10 +505,12 @@ where
         // zero provider-side code. File-based ingestion never reaches this
         // path, so it correctly reports zero requests.
         datalib_etl::download_metrics::record_api_request();
+        let started = std::time::Instant::now();
         let outcome = match crate::playback::current() {
             None => live::send(req).await,
             Some(playback) => playback.answer(req, guard.stop()).await,
         };
+        log_attempt(req, &outcome, started.elapsed());
 
         // Decide whether this attempt is retryable. `None` = accept (success
         // or a definitive response/error → hand back to the caller as-is);
@@ -595,6 +597,32 @@ where
         }
         backoff = next_backoff;
     }
+}
+
+/// One debug line per attempt, so a slow step's log says which calls
+/// its time went to. The query is left off: a signed URL carries its
+/// credential there.
+fn log_attempt(req: &HttpRequest, outcome: &Result<HttpResponse, HttpError>, took: Duration) {
+    let (status, bytes) = match outcome {
+        Ok(resp) => (resp.status.to_string(), resp.body.len()),
+        Err(HttpError::Timeout { .. }) => ("timeout".to_string(), 0),
+        Err(HttpError::Curl { exit, .. }) => (format!("curl exit {exit}"), 0),
+        Err(HttpError::Interrupted { .. }) => ("interrupted".to_string(), 0),
+        Err(_) => ("error".to_string(), 0),
+    };
+    let url = req.url.split('?').next().unwrap_or_default();
+    tracing::debug!(
+        event = "http_request",
+        service = %req.service,
+        method = req.method.as_str(),
+        url,
+        status,
+        bytes,
+        duration_ms = took.as_millis() as u64,
+        "{} {url} {status} in {}ms",
+        req.method.as_str(),
+        took.as_millis(),
+    );
 }
 
 // Live mode: shell out to `latchkey curl`.
