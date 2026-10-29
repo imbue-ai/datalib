@@ -24,9 +24,9 @@ use super::parse::{ParsedChat, ParsedChatItem, ParsedRecipient, ParsedSignal};
 /// Signal's parse loads a bundle per bucket rather than per chat — so a
 /// chat spanning three periods carries three bundles with nothing to
 /// merge them. Splitting per bucket keys them apart without copying
-/// bytes around. Nothing downstream notices: the rendered path is
-/// `<chat_uuid>/<period>.md` either way, and the chat-level grid row
-/// was already one per document.
+/// bytes around. Nothing downstream notices: each document is filed by
+/// its own id either way, and the chat-level grid row was already one
+/// per document.
 pub fn to_chats(parsed: &ParsedSignal, source_id: &str) -> Vec<NormalizedChat> {
     let mut chats = Vec::with_capacity(parsed.docs.len());
 
@@ -67,7 +67,6 @@ pub fn to_chats(parsed: &ParsedSignal, source_id: &str) -> Vec<NormalizedChat> {
 
         chats.push(NormalizedChat {
             named_after: named_after(recipients, chat),
-            path_prefix: None,
             id: bundle_key.clone(),
             chat_uuid: chat_id.uuid,
             display: recipient_display(recipients, chat),

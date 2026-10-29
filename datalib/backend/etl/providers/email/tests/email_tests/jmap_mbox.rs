@@ -417,16 +417,14 @@ async fn star_trek_mbox_renders_through_render_all() {
     // One rendered document per thread.
     assert_eq!(docs.len(), 5);
 
-    // chat-common owns the page-dir layout; locate each thread's page by
-    // its markdown_uuid (= thread_uuid) from the captured RenderedMarkdowns.
-    let dir_for = |tuid: &str| -> std::path::PathBuf {
+    // chat-common owns the layout; locate each thread's page by its
+    // markdown_uuid (= thread_uuid) from the captured RenderedMarkdowns.
+    let page_for = |tuid: &str| -> std::path::PathBuf {
         docs.iter()
             .find(|d| d.markdown_uuid == tuid)
             .unwrap_or_else(|| panic!("no rendered doc for {tuid}"))
             .md_path
-            .parent()
-            .unwrap()
-            .to_path_buf()
+            .clone()
     };
 
     // The briefing thread links its attachment inside the stored `.eml`,
@@ -434,9 +432,12 @@ async fn star_trek_mbox_renders_through_render_all() {
     // the page.
     let cas = datalib_etl::blob_cas::cas_path_for(&db_path);
     let briefing_tuid = thread_uuid("enterprise", BRIEFING_THREAD);
-    let briefing_dir = dir_for(&briefing_tuid);
-    assert!(!briefing_dir.join("blobs").exists(), "a blobs/ was written");
-    let md = std::fs::read_to_string(briefing_dir.join("all.md")).unwrap();
+    let briefing = page_for(&briefing_tuid);
+    assert!(
+        !briefing.parent().unwrap().join("blobs").exists(),
+        "a blobs/ was written"
+    );
+    let md = std::fs::read_to_string(&briefing).unwrap();
     let parts = parts_linked(&md, &cas).await;
     assert!(
         parts
@@ -459,7 +460,7 @@ async fn star_trek_mbox_renders_through_render_all() {
     // Risa promo thread prefers the HTML body — `**jewel of the
     // Alpha Quadrant**` appears in the htmd output.
     let risa_tuid = thread_uuid("enterprise", "19b9251e8001a2b3");
-    let risa_md = std::fs::read_to_string(dir_for(&risa_tuid).join("all.md")).unwrap();
+    let risa_md = std::fs::read_to_string(page_for(&risa_tuid)).unwrap();
     assert!(
         risa_md.contains("jewel of the Alpha Quadrant"),
         "expected html-rendered body in risa thread"
@@ -470,9 +471,12 @@ async fn star_trek_mbox_renders_through_render_all() {
     // address. Regression test for the Fastmail case where the inline
     // image is absent from `attachments` but present in the .eml MIME tree.
     let bridge_tuid = thread_uuid("enterprise", "19b97af32801a2b4");
-    let bridge_dir = dir_for(&bridge_tuid);
-    let bridge_md = std::fs::read_to_string(bridge_dir.join("all.md")).unwrap();
-    assert!(!bridge_dir.join("blobs").exists(), "a blobs/ was written");
+    let bridge = page_for(&bridge_tuid);
+    let bridge_md = std::fs::read_to_string(&bridge).unwrap();
+    assert!(
+        !bridge.parent().unwrap().join("blobs").exists(),
+        "a blobs/ was written"
+    );
     let images: Vec<_> = parts_linked(&bridge_md, &cas)
         .await
         .into_iter()

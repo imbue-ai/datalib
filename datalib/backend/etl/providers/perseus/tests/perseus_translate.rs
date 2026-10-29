@@ -1,6 +1,6 @@
 //! End-to-end render test against the checked-in tiny TEI fixture.
 //! Feeds two TEI editions (Greek + English) through `parse + render_all`
-//! and asserts the rendered tree shape — file paths, emitted rows
+//! and asserts what it renders — the files, emitted rows
 //! structure, key text fragments. This is the regression net for the
 //! multi-edition render path: if the parser silently drops a section
 //! or the renderer flips a UUID derivation, this fails before bad data
@@ -24,7 +24,7 @@ fn paragraph_uuid(b: &str, c: &str, s: &str, e: &str) -> String {
 }
 use datalib_etl_perseus_render::render::align::PerseusAlignments;
 use datalib_etl_perseus_render::render::{parse, render};
-use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 
 const GRC: &str = "perseus-grc2";
 const ENG: &str = "1st1K-eng1";
@@ -91,16 +91,18 @@ fn renders_all_books_chapters_and_editions() {
         ]
     );
 
-    let book1 = out
-        .path()
-        .join("perseus/render_markdown/thucydides/histories/book_01/index.md");
+    let page = |uuid: String| {
+        doc_md_path(
+            &datalib_etl::layout::render_markdown_root(out.path(), "perseus"),
+            &uuid,
+        )
+    };
+    let book1 = page(book_uuid("1"));
     assert!(book1.exists(), "missing {}", book1.display());
 
     // Book 1 chapter 1, Greek side has both sections. Unaligned
     // editions render section text verbatim (no per-sentence spans).
-    let ch11_grc = out.path().join(format!(
-        "perseus/render_markdown/thucydides/histories/book_01/chapter_001_{GRC}.md"
-    ));
+    let ch11_grc = page(chapter_uuid("1", "1", GRC));
     let body = std::fs::read_to_string(&ch11_grc).unwrap();
     assert!(body.contains("Θουκυδίδης Ἀθηναῖος ξυνέγραψε."));
     assert!(body.contains("### 1.1.1"));
@@ -108,18 +110,14 @@ fn renders_all_books_chapters_and_editions() {
     assert!(!body.contains("<span data-section-uuid"));
 
     // English side: section 2 is the deliberate translation gap.
-    let ch11_eng = out.path().join(format!(
-        "perseus/render_markdown/thucydides/histories/book_01/chapter_001_{ENG}.md"
-    ));
+    let ch11_eng = page(chapter_uuid("1", "1", ENG));
     let body_eng = std::fs::read_to_string(&ch11_eng).unwrap();
     assert!(body_eng.contains("the Athenian wrote"));
     assert!(body_eng.contains("### 1.1.1"));
     assert!(!body_eng.contains("### 1.1.2"));
 
     // Book 2 chapter 2: bare chapter text → section "1".
-    let ch22_grc = out.path().join(format!(
-        "perseus/render_markdown/thucydides/histories/book_02/chapter_002_{GRC}.md"
-    ));
+    let ch22_grc = page(chapter_uuid("2", "2", GRC));
     let body22 = std::fs::read_to_string(&ch22_grc).unwrap();
     assert!(body22.contains("### 2.2.1"));
 }
@@ -150,11 +148,14 @@ fn documents_carry_stable_uuids_and_provider_metadata() {
     // with no CTS the title is the short id.
     assert_eq!(row.conversation_name.as_deref(), Some("1.1 grc2"));
     assert!(row.preview.contains("Θουκυδίδης"));
-    assert!(row
-        .qmd_path
-        .as_deref()
-        .unwrap()
-        .ends_with(&format!("/chapter_001_{GRC}.md")));
+    let page = doc_md_path(
+        &datalib_etl::layout::render_markdown_root(out.path(), "perseus"),
+        &expected,
+    );
+    assert_eq!(
+        row.qmd_path.as_deref(),
+        page.strip_prefix(out.path()).unwrap().to_str()
+    );
 
     let book = emitted
         .iter()

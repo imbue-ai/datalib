@@ -31,8 +31,8 @@ use anyhow::{bail, Context, Result};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
-use crate::qmd::mapping::norm_path;
 use crate::qmd::{qmd_index_path, QmdHit};
+use datalib_schema::grid_rows::markdown_uuid_of_path;
 
 /// Every active document with at least one embedded chunk: its qmd path
 /// (`<group>/render_markdown/…`, the data-root-relative path the grid's
@@ -222,8 +222,9 @@ struct HeldVectors {
 
 /// The `limit` documents nearest `query` by cosine, each at its nearest
 /// chunk: an exact score of every chunk `query.model` wrote for the
-/// active documents in `collections` (all when `None`) whose path is in
-/// `among` (all when `None`, else `norm_path`ed qmd paths). Not qmd's
+/// active documents in `collections` (all when `None`) that are among
+/// `among` (all when `None`, else document ids, read from each path by
+/// `grid_rows::markdown_uuid_of_path`). Not qmd's
 /// own vector search, which cannot take a document set and reads every
 /// vector in the file, live or not, to answer.
 pub async fn nearest_documents(
@@ -288,7 +289,9 @@ pub async fn nearest_documents(
         .documents
         .iter()
         .filter(|(collection, _, _)| collections.is_none_or(|c| c.contains(collection)))
-        .filter(|(_, path, _)| among.is_none_or(|a| a.contains(&norm_path(path))))
+        .filter(|(_, path, _)| {
+            among.is_none_or(|a| markdown_uuid_of_path(path).is_some_and(|d| a.contains(d)))
+        })
         .map(|(_, path, hash)| (path.clone(), hash.clone()))
         .collect();
     let mut hashes: Vec<String> = documents.iter().map(|(_, h)| h.clone()).collect();

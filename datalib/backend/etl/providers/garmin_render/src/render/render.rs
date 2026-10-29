@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl_render::front_matter::yaml_scalar;
-use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::html::escape_md_inline;
 use datalib_etl_render::message::stamp_text_html;
 use datalib_etl_render::title::Title;
@@ -138,15 +138,13 @@ struct Out<'a> {
 impl Out<'_> {
     fn emit(
         &mut self,
-        rel: &str,
         m_uuid: &str,
         body: String,
         build_rows: impl FnOnce(&str, &mut Vec<ProblemRow>) -> Vec<GridRow>,
     ) -> Result<()> {
-        let md_path = self.dir.join(rel);
-        if let Some(parent) = md_path.parent() {
-            fs::create_dir_all(parent).with_context(|| format!("mkdir -p {}", parent.display()))?;
-        }
+        let md_path = doc_md_path(&self.dir, m_uuid);
+        let parent = md_path.parent().expect("a document's file has a folder");
+        fs::create_dir_all(parent).with_context(|| format!("mkdir -p {}", parent.display()))?;
         fs::write(&md_path, body).with_context(|| format!("write {}", md_path.display()))?;
         let md_rel = md_path
             .strip_prefix(self.root)
@@ -252,7 +250,7 @@ pub fn render_all(
         on_doc: on_doc_complete,
     };
     let body = render_markdown(parsed, source_id, &m_uuid);
-    out.emit("index.md", &m_uuid, body, |md_rel, problems| {
+    out.emit(&m_uuid, body, |md_rel, problems| {
         build_grid_rows(parsed, source_id, &m_uuid, md_rel, problems)
     })?;
     progress.inc(1);
@@ -344,34 +342,29 @@ fn render_family(
         "{title}\n{last}: {latest}\n{} days since {first}",
         with_data.len()
     );
-    out.emit(
-        &format!("{}.md", family.slug()),
-        &m_uuid,
-        body,
-        |md_rel, problems| {
-            GridRow::builder()
-                .uuid(m_uuid.clone())
-                .provider(Provider::Garmin)
-                .kind("Garmin Metrics")
-                .source_label("Garmin")
-                .is_document(true)
-                .item_count(Some(with_data.len() as i64))
-                .created_at(created_at.clone())
-                .modified_at(modified_at.clone())
-                .author(parsed.full_name.clone())
-                .conversation_name(Some(title.clone()))
-                .conversation_uuid(m_uuid.clone())
-                .entire_chat(format!("/chat/{m_uuid}"))
-                .body(text)
-                .qmd_path(Some(md_rel.to_string()))
-                .markdown_uuid(Some(m_uuid.clone()))
-                .upstream_id(Some(family.slug().to_string()))
-                .upstream_entity_kind(Some(KIND_METRIC_PAGE.to_string()))
-                .build_or_record(source_id, &m_uuid, RENDER_VERSION, problems)
-                .into_iter()
-                .collect()
-        },
-    )?;
+    out.emit(&m_uuid, body, |md_rel, problems| {
+        GridRow::builder()
+            .uuid(m_uuid.clone())
+            .provider(Provider::Garmin)
+            .kind("Garmin Metrics")
+            .source_label("Garmin")
+            .is_document(true)
+            .item_count(Some(with_data.len() as i64))
+            .created_at(created_at.clone())
+            .modified_at(modified_at.clone())
+            .author(parsed.full_name.clone())
+            .conversation_name(Some(title.clone()))
+            .conversation_uuid(m_uuid.clone())
+            .entire_chat(format!("/chat/{m_uuid}"))
+            .body(text)
+            .qmd_path(Some(md_rel.to_string()))
+            .markdown_uuid(Some(m_uuid.clone()))
+            .upstream_id(Some(family.slug().to_string()))
+            .upstream_entity_kind(Some(KIND_METRIC_PAGE.to_string()))
+            .build_or_record(source_id, &m_uuid, RENDER_VERSION, problems)
+            .into_iter()
+            .collect()
+    })?;
     Ok(!charts.is_empty())
 }
 
@@ -408,7 +401,7 @@ fn render_daily_log(out: &mut Out<'_>, parsed: &ParsedGarmin, who: &str) -> Resu
         lines.push((date, by_family));
     }
     let count = lines.len();
-    out.emit("days.md", &m_uuid, body, |md_rel, problems| {
+    out.emit(&m_uuid, body, |md_rel, problems| {
         let mut rows: Vec<GridRow> = GridRow::builder()
             .uuid(m_uuid.clone())
             .provider(Provider::Garmin)
@@ -479,34 +472,29 @@ fn render_activity(
         let _ = writeln!(body, "{}\n", time_series_chart(&ids));
     }
     activities::body(&mut body, a, device.as_deref());
-    out.emit(
-        &format!("activities/{m_uuid}.md"),
-        &m_uuid,
-        body,
-        |md_rel, problems| {
-            GridRow::builder()
-                .uuid(m_uuid.clone())
-                .provider(Provider::Garmin)
-                .kind("Garmin Activity")
-                .source_label("Garmin")
-                .is_document(true)
-                .item_count(Some(1))
-                .created_at(created_at.clone())
-                .author(parsed.full_name.clone())
-                .channel(Some(a.type_label()))
-                .conversation_name(Some(name.clone()))
-                .conversation_uuid(m_uuid.clone())
-                .entire_chat(format!("/chat/{m_uuid}"))
-                .body(activities::row_text(a))
-                .qmd_path(Some(md_rel.to_string()))
-                .markdown_uuid(Some(m_uuid.clone()))
-                .upstream_id(Some(a.id.clone()))
-                .upstream_entity_kind(Some(KIND_ACTIVITY.to_string()))
-                .build_or_record(source_id, &m_uuid, RENDER_VERSION, problems)
-                .into_iter()
-                .collect()
-        },
-    )
+    out.emit(&m_uuid, body, |md_rel, problems| {
+        GridRow::builder()
+            .uuid(m_uuid.clone())
+            .provider(Provider::Garmin)
+            .kind("Garmin Activity")
+            .source_label("Garmin")
+            .is_document(true)
+            .item_count(Some(1))
+            .created_at(created_at.clone())
+            .author(parsed.full_name.clone())
+            .channel(Some(a.type_label()))
+            .conversation_name(Some(name.clone()))
+            .conversation_uuid(m_uuid.clone())
+            .entire_chat(format!("/chat/{m_uuid}"))
+            .body(activities::row_text(a))
+            .qmd_path(Some(md_rel.to_string()))
+            .markdown_uuid(Some(m_uuid.clone()))
+            .upstream_id(Some(a.id.clone()))
+            .upstream_entity_kind(Some(KIND_ACTIVITY.to_string()))
+            .build_or_record(source_id, &m_uuid, RENDER_VERSION, problems)
+            .into_iter()
+            .collect()
+    })
 }
 
 /// Personal records, badges, gear, workouts and goals on one page, a
@@ -545,7 +533,7 @@ fn render_listings(out: &mut Out<'_>, parsed: &ParsedGarmin, who: &str) -> Resul
         body.push_str("*(no records, badges, gear, workouts or goals mirrored yet)*\n\n");
     }
     let count = lines.len();
-    out.emit("records.md", &m_uuid, body, |md_rel, problems| {
+    out.emit(&m_uuid, body, |md_rel, problems| {
         let mut rows: Vec<GridRow> = GridRow::builder()
             .uuid(m_uuid.clone())
             .provider(Provider::Garmin)

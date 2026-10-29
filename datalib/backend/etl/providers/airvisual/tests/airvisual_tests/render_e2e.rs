@@ -11,7 +11,7 @@ use datalib_etl_airvisual::ingest::schema_raw::{
 use datalib_etl_airvisual::ingest::{db_path_for, RawDb};
 use datalib_etl_airvisual_render::render::parse::parse;
 use datalib_etl_airvisual_render::render::render::{document_uuid, render_all};
-use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::inputs::RawRange;
 use sqlx::sqlite::SqlitePool;
 
@@ -165,7 +165,8 @@ async fn renders_one_plot_per_quantity_with_data_then_skips_until_data_lands() {
     );
 
     let page_dir = root.join(STANZA).join("render_markdown");
-    let md = std::fs::read_to_string(page_dir.join("index.md")).unwrap();
+    let page = doc_md_path(&page_dir, &emitted[0].markdown_uuid);
+    let md = std::fs::read_to_string(&page).unwrap();
     assert!(
         !page_dir.join("plots").exists(),
         "charts are drawn from the time-series store, not written as pages"
@@ -223,7 +224,7 @@ async fn renders_one_plot_per_quantity_with_data_then_skips_until_data_lands() {
     assert_eq!(cursor_2.as_deref(), Some(cursor.as_str()));
     assert_eq!(emitted.len(), 1);
     assert_eq!(
-        std::fs::read_to_string(page_dir.join("index.md")).unwrap(),
+        std::fs::read_to_string(&page).unwrap(),
         md_1,
         "an unchanged store must render the same page, so the store records no change"
     );
@@ -262,8 +263,7 @@ async fn an_empty_store_renders_a_page_without_plots() {
 
     let (emitted, _) = render_once(&raw_path, root, None);
     assert_eq!(emitted.len(), 1);
-    let md = std::fs::read_to_string(root.join(STANZA).join("render_markdown").join("index.md"))
-        .unwrap();
+    let md = std::fs::read_to_string(&emitted[0].md_path).unwrap();
     assert!(md.contains("nothing to plot"), "{md}");
     assert!(md.contains("no samples yet"), "{md}");
     assert!(charts(&md).is_empty(), "no samples, no chart");

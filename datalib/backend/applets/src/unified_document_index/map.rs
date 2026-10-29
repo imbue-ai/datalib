@@ -10,8 +10,8 @@ use std::collections::{HashMap, HashSet};
 
 use axum::extract::{Query, State};
 use axum::response::Json;
+use datalib_schema::grid_rows::markdown_uuid_of_path;
 use datalib_unified_document_index::embedding_map::{self, SeedCounts};
-use datalib_unified_document_index::qmd::mapping::norm_path;
 use datalib_unified_document_index::query::parse_query;
 use datalib_unified_document_index::repo::MapDocRow;
 use datalib_unified_document_index::search::SearchRow;
@@ -154,21 +154,21 @@ fn markdowns(rows: Vec<SearchRow>) -> HashSet<String> {
     rows.into_iter().filter_map(|r| r.markdown_uuid).collect()
 }
 
-/// Each map point as its document row, by path; a point whose document
-/// the grid does not have is counted, not drawn.
+/// Each map point as its document row, by the id its path names; a point
+/// whose document the grid does not have is counted, not drawn.
 pub fn join(
     points: &[embedding_map::MapPoint],
     docs: Vec<MapDocRow>,
     sources: &columns::Sources,
 ) -> (Vec<PointOut>, usize) {
-    let mut by_path: HashMap<String, MapDocRow> = docs
+    let mut by_id: HashMap<String, MapDocRow> = docs
         .into_iter()
-        .map(|d| (norm_path(&d.qmd_path), d))
+        .map(|d| (d.markdown_uuid.clone(), d))
         .collect();
     let mut unplaced = 0;
     let mut out = Vec::with_capacity(points.len());
     for p in points {
-        let Some(doc) = by_path.remove(&norm_path(&p.path)) else {
+        let Some(doc) = markdown_uuid_of_path(&p.path).and_then(|id| by_id.remove(id)) else {
             unplaced += 1;
             continue;
         };
@@ -210,14 +210,13 @@ mod tests {
     use super::*;
     use datalib_unified_document_index::embedding_map::MapPoint;
 
-    fn doc(uuid: &str, path: &str) -> MapDocRow {
+    fn doc(uuid: &str) -> MapDocRow {
         MapDocRow {
             markdown_uuid: uuid.into(),
-            qmd_path: path.into(),
             title: format!("title {uuid}"),
             provider: "slack".into(),
             source_label: "Slack".into(),
-            source_id: path.split('/').next().unwrap().into(),
+            source_id: "work".into(),
             kind: "Slack Thread".into(),
             created_at: None,
             account: String::new(),
@@ -233,28 +232,29 @@ mod tests {
         }
     }
 
-    /// A point is its document by path, spelled the way the grid's
-    /// hit mapping spells it; one with no document is counted, not
-    /// drawn with a made-up identity.
+    /// A point is the document its path names; one with no document is
+    /// counted, not drawn with a made-up identity.
     #[test]
-    fn points_join_their_documents_by_path() {
+    fn points_join_the_documents_their_paths_name() {
+        let at = |id: &str| {
+            format!(
+                "work/render_markdown/{}",
+                datalib_schema::grid_rows::doc_file_rel(id)
+            )
+        };
         let points = [
-            point("work/render_markdown/a.md", 1.0),
-            point("work/render_markdown/Gone.md", 2.0),
-            point("work/render_markdown/b_c.md", 3.0),
+            point(&at("A-0a"), 1.0),
+            point(&at("Gone-0b"), 2.0),
+            point(&at("B-0c"), 3.0),
         ];
-        let docs = vec![
-            doc("A", "work/render_markdown/a.md"),
-            doc("B", "work/render_markdown/b-c.md"),
-            doc("Z", "work/render_markdown/not-on-the-map.md"),
-        ];
+        let docs = vec![doc("A-0a"), doc("B-0c"), doc("Z-0d")];
         let (out, unplaced) = join(&points, docs, &columns::Sources::default());
         assert_eq!(unplaced, 1);
         let got: Vec<(&str, f32)> = out
             .iter()
             .map(|p| (p.markdown_uuid.as_str(), p.x))
             .collect();
-        assert_eq!(got, vec![("A", 1.0), ("B", 3.0)]);
+        assert_eq!(got, vec![("A-0a", 1.0), ("B-0c", 3.0)]);
         assert_eq!(out[0].provider, "Slack");
         assert_eq!(out[0].source, "work");
     }

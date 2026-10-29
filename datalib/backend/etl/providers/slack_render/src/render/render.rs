@@ -325,7 +325,6 @@ fn build_chat(
 
     NormalizedChat {
         named_after,
-        path_prefix: None,
         id: thread_uuid.clone(),
         chat_uuid: thread_uuid.clone(),
         display: cname,

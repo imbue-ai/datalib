@@ -19,7 +19,9 @@ fn applet_command() -> String {
 fn seed_doc(tree: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str)]) {
     use datalib_etl_render::grid_index::RenderedMarkdown;
     use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
-    use datalib_schema::grid_rows::GridRow;
+    use datalib_schema::grid_rows::{doc_file_rel, GridRow};
+
+    let file = doc_file_rel(md);
 
     let mk = |uuid: String, index: Option<i64>, author: Option<&str>, text: &str, when: &str| {
         GridRow::builder()
@@ -41,6 +43,7 @@ fn seed_doc(tree: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str
             .entire_chat(format!("/chat/{md}"))
             .body(text)
             .markdown_uuid(Some(md.to_string()))
+            .qmd_path(file.clone())
             .build()
             .unwrap()
     };
@@ -66,7 +69,7 @@ fn seed_doc(tree: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str
                 source_id: "slack".into(),
                 upstream_cursor: None,
                 bucket_key: None,
-                md_path: tree.join(format!("{md}.md")),
+                md_path: tree.join(&file),
                 render_version: 1,
                 rows,
                 sections: Vec::new(),

@@ -5,14 +5,14 @@ pub mod convert;
 pub mod grid_rows;
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 
 use datalib_etl::blob_cas::blake3_hex;
 use datalib_etl::progress::Progress;
 use datalib_etl_render::front_matter::yaml_scalar;
-use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::html::{escape_html_outside_code, escape_md_inline};
 use datalib_etl_render::inputs::{Bucket, Buckets, Input, RawRange};
 use datalib_etl_render::section::{msg_div_open, MSG_DIV_CLOSE};
@@ -20,17 +20,6 @@ use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stag
 
 pub use convert::RENDER_VERSION;
 use datalib_etl_pdf::ingest::{RawDb, RenderTarget};
-
-fn md_path_for(out_dir: &Path, blake3: &str) -> PathBuf {
-    out_dir.join("docs").join(format!("{blake3}.md"))
-}
-
-pub fn doc_qmd_path_rel(stanza: &str, blake3: &str) -> String {
-    format!(
-        "{stanza}/{}/docs/{blake3}.md",
-        datalib_etl::layout::RENDER_MARKDOWN_DIR
-    )
-}
 
 pub struct RenderSummary {
     pub converted: usize,
@@ -138,7 +127,7 @@ pub fn buckets_of(
 
 pub fn render_targets(
     targets: &[RenderTarget],
-    out_dir: &Path,
+    data_root: &Path,
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -154,25 +143,24 @@ pub fn render_targets(
         return Ok(summary);
     }
     progress.set_length(Some(targets.len() as u64));
-    fs::create_dir_all(out_dir.join("docs"))
-        .with_context(|| format!("create {}", out_dir.join("docs").display()))?;
+    let render_root = datalib_etl::layout::render_markdown_root(data_root, source_id);
 
     for t in targets {
         progress.inc(1);
-        let md_path = md_path_for(out_dir, &t.blake3);
         let doc_uuid = grid_rows::document(
             source_id,
             &t.blake3,
             grid_rows::document_stamp(t.doc_created_at.as_deref(), t.doc_modified_at.as_deref()),
         )
         .uuid;
+        let md_path = doc_md_path(&render_root, &doc_uuid);
         let content = match read_document(t) {
             Ok(Some(bytes)) => convert::convert(&bytes, &t.abs_path).map(Content::Pages),
             Ok(None) => Ok(Content::FileChanged),
             Err(e) => Err(e),
         };
         let changed = matches!(content, Ok(Content::FileChanged));
-        match content.and_then(|c| render_one(t, c, &md_path, source_id, &doc_uuid)) {
+        match content.and_then(|c| render_one(t, c, data_root, &md_path, source_id, &doc_uuid)) {
             Ok(rendered) => {
                 if changed {
                     summary.changed += 1;
@@ -206,7 +194,7 @@ pub fn render_targets(
 /// caller that does not need the two phases apart.
 pub async fn render(
     raw_dir: &Path,
-    out_dir: &Path,
+    data_root: &Path,
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -214,7 +202,7 @@ pub async fn render(
     // An unreadable store renders nothing. This wrapper does no deleting,
     // so unlike the processor's path it can treat the two alike.
     let targets = load_targets(raw_dir).await?.unwrap_or_default();
-    render_targets(&targets, out_dir, source_id, progress, on_doc_complete)
+    render_targets(&targets, data_root, source_id, progress, on_doc_complete)
 }
 
 /// The document's bytes, or `None` when its file no longer holds them. The
@@ -240,13 +228,18 @@ const FILE_CHANGED: &str = "This file has changed since the last sync read it, s
 fn render_one(
     t: &RenderTarget,
     content: Content,
+    data_root: &Path,
     md_path: &Path,
     source_id: &str,
     doc_uuid: &str,
 ) -> Result<RenderedMarkdown> {
     let title = grid_rows::display_title(t.title.as_deref(), &t.rel_path);
 
-    let qmd_rel = doc_qmd_path_rel(source_id, &t.blake3);
+    let qmd_rel = md_path
+        .strip_prefix(data_root)
+        .unwrap_or(md_path)
+        .to_string_lossy()
+        .into_owned();
 
     let mut body = String::new();
     body.push_str("---\n");
@@ -402,35 +395,6 @@ mod tests {
             [(1, pages[0].text.clone())],
             "the grid keeps the words"
         );
-    }
-
-    #[test]
-    fn md_path_is_content_named() {
-        let p = md_path_for(Path::new("/out"), "abc123");
-        assert_eq!(p, Path::new("/out/docs/abc123.md"));
-    }
-
-    #[test]
-    fn qmd_path_is_data_root_relative_not_out_dir_relative() {
-        // The bug this pins: `docs/abc123.md` (out-dir-relative) can
-        // never match a qmd hit path, which is data-root-rooted.
-        let rel = doc_qmd_path_rel("tng_pdfs", "abc123");
-        assert_eq!(rel, "tng_pdfs/render_markdown/docs/abc123.md");
-        assert!(!rel.starts_with("docs/"), "{rel}");
-    }
-
-    #[test]
-    fn qmd_path_is_the_md_path_with_the_data_root_stripped() {
-        // The invariant `markdowns.md_path` and `grid_rows.qmd_path`
-        // must satisfy: same file, same spelling. `apply_one` derives
-        // md_path's stored form by stripping the data root off the
-        // absolute path, so building the two independently here and
-        // comparing is what keeps them from drifting apart again.
-        let root = Path::new("/data");
-        let out_dir = datalib_etl::layout::render_markdown_root(root, "tng_pdfs");
-        let md_path = md_path_for(&out_dir, "abc123");
-        let from_md_path = md_path.strip_prefix(root).unwrap().to_string_lossy();
-        assert_eq!(from_md_path, doc_qmd_path_rel("tng_pdfs", "abc123"));
     }
 }
 

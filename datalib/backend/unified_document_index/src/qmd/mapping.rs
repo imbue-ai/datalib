@@ -1,7 +1,11 @@
-//! Map qmd search hits to grid rows and back.
+//! Map qmd search hits to grid rows and back. A hit's path is its
+//! document's id (`grid_rows::markdown_uuid_of_path`); where in the
+//! document it lands is read from the file.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+
+use datalib_schema::grid_rows::markdown_uuid_of_path;
 
 /// Which collections a search may draw from: every one, or exactly these.
 /// There is one qmd collection per group, so these are group ids; an empty
@@ -40,29 +44,10 @@ pub struct QmdHit {
 pub struct GridRowRef {
     pub uuid: String,
     pub kind: String,
-    pub qmd_path: String,
+    pub markdown_uuid: String,
     pub provider: String,
-    /// The row that is the whole document at `qmd_path`, as opposed to
-    /// a place inside it.
+    /// The row that is the whole document, as opposed to a place inside it.
     pub is_document: bool,
-}
-
-pub fn norm_path(p: &str) -> String {
-    let lower = p.to_lowercase();
-    let mut out = String::with_capacity(lower.len());
-    let mut prev_dash = false;
-    for ch in lower.chars() {
-        if ch == '_' || ch == '-' {
-            if !prev_dash {
-                out.push('-');
-                prev_dash = true;
-            }
-        } else {
-            out.push(ch);
-            prev_dash = false;
-        }
-    }
-    out
 }
 
 pub fn parse_section_uuid(line: &str) -> Option<&str> {
@@ -174,7 +159,7 @@ fn best_section(
 pub struct GridIndex {
     root: PathBuf,
     by_uuid: HashMap<String, GridRowRef>,
-    by_norm_path: HashMap<String, Vec<GridRowRef>>,
+    by_document: HashMap<String, Vec<GridRowRef>>,
     /// The search's words, lowercased: a hit lands on the message within
     /// its span that holds the most of them.
     terms: Vec<String>,
@@ -186,18 +171,18 @@ pub struct GridIndex {
 impl GridIndex {
     pub fn new(root: impl Into<PathBuf>, rows: impl IntoIterator<Item = GridRowRef>) -> Self {
         let mut by_uuid: HashMap<String, GridRowRef> = HashMap::new();
-        let mut by_norm_path: HashMap<String, Vec<GridRowRef>> = HashMap::new();
+        let mut by_document: HashMap<String, Vec<GridRowRef>> = HashMap::new();
         for r in rows {
             by_uuid.insert(r.uuid.clone(), r.clone());
-            by_norm_path
-                .entry(norm_path(&r.qmd_path))
+            by_document
+                .entry(r.markdown_uuid.clone())
                 .or_default()
                 .push(r);
         }
         Self {
             root: root.into(),
             by_uuid,
-            by_norm_path,
+            by_document,
             terms: Vec::new(),
             allowed: None,
         }
@@ -221,10 +206,12 @@ impl GridIndex {
     }
 
     pub fn rows_for_hit(&self, hit: &QmdHit) -> Vec<GridRowRef> {
-        let Some(file_rows) = self.by_norm_path.get(&norm_path(&hit.path)) else {
+        let Some(file_rows) =
+            markdown_uuid_of_path(&hit.path).and_then(|d| self.by_document.get(d))
+        else {
             return Vec::new();
         };
-        if let Some(uuid) = self.section_for_line(&file_rows[0].qmd_path, hit) {
+        if let Some(uuid) = self.section_for_line(hit) {
             if let Some(row) = self.by_uuid.get(uuid.as_str()) {
                 return vec![row.clone()];
             }
@@ -251,7 +238,7 @@ impl GridIndex {
     pub fn document_for_hit(&self, hit: &QmdHit) -> Vec<GridRowRef> {
         self.rows_for_hit(hit)
             .first()
-            .and_then(|r| self.by_norm_path.get(&norm_path(&r.qmd_path)))
+            .and_then(|r| self.by_document.get(&r.markdown_uuid))
             .into_iter()
             .flatten()
             .filter(|r| r.is_document)
@@ -259,7 +246,7 @@ impl GridIndex {
             .collect()
     }
 
-    /// Read `<root>/<qmd_path>` and return the `data-section-uuid` of the
+    /// Read the hit's file and return the `data-section-uuid` of the
     /// message the hit lands on: of the messages within the hit's span (the
     /// whole document, or a Meaning chunk's lines), the one holding the most
     /// of the search's words. Without words, or when its own message holds
@@ -267,9 +254,9 @@ impl GridIndex {
     /// before it, or the first when the hit is above every message (title,
     /// front matter). `None` if the line can't be derived or the file can't
     /// be read.
-    fn section_for_line(&self, qmd_path: &str, hit: &QmdHit) -> Option<String> {
+    fn section_for_line(&self, hit: &QmdHit) -> Option<String> {
         let line = snippet_match_line(&hit.snippet)?;
-        let text = std::fs::read_to_string(self.root.join(qmd_path)).ok()?;
+        let text = std::fs::read_to_string(self.root.join(&hit.path)).ok()?;
         let lines: Vec<&str> = text.lines().collect();
         let starts: Vec<(usize, &str)> = lines
             .iter()
@@ -326,12 +313,12 @@ impl GridIndex {
                 on_orphan(h);
                 continue;
             }
-            // All rows from a single hit share one `qmd_path` (a hit resolves
-            // within one document), so this keeps the first — and, because we
-            // also skip documents seen via earlier (higher-ranked) hits, the
-            // output holds at most one row per document.
+            // All rows from a single hit are of one document, so this keeps
+            // the first — and, because we also skip documents seen via
+            // earlier (higher-ranked) hits, the output holds at most one
+            // row per document.
             for row in rows {
-                if seen_docs.insert(row.qmd_path.clone()) {
+                if seen_docs.insert(row.markdown_uuid.clone()) {
                     out.push((row, h));
                 }
             }
@@ -351,21 +338,30 @@ impl GridIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datalib_schema::grid_rows::doc_file_rel;
 
-    fn row(uuid: &str, kind: &str, qmd_path: &str, provider: &str) -> GridRowRef {
+    const CHAT: &str = "00000000-0000-8000-aaaa-0000000000c1";
+    const OTHER: &str = "00000000-0000-8000-bbbb-0000000000d2";
+
+    /// Where a source files document `id`: what qmd's hit names.
+    fn path_of(source: &str, id: &str) -> String {
+        format!("{source}/render_markdown/{}", doc_file_rel(id))
+    }
+
+    fn row(uuid: &str, kind: &str, document: &str, provider: &str) -> GridRowRef {
         GridRowRef {
             uuid: uuid.to_string(),
             kind: kind.to_string(),
-            qmd_path: qmd_path.to_string(),
+            markdown_uuid: document.to_string(),
             provider: provider.to_string(),
             is_document: false,
         }
     }
 
-    fn document(uuid: &str, kind: &str, qmd_path: &str, provider: &str) -> GridRowRef {
+    fn document(uuid: &str, kind: &str, document: &str, provider: &str) -> GridRowRef {
         GridRowRef {
             is_document: true,
-            ..row(uuid, kind, qmd_path, provider)
+            ..row(uuid, kind, document, provider)
         }
     }
 
@@ -378,13 +374,6 @@ mod tests {
             docid: String::new(),
             title: String::new(),
         }
-    }
-
-    #[test]
-    fn norm_path_lowercases_and_collapses_dashes_underscores() {
-        assert_eq!(norm_path("PR-42__Recalibrate"), "pr-42-recalibrate");
-        assert_eq!(norm_path("foo_-_bar"), "foo-bar");
-        assert_eq!(norm_path("already-normal"), "already-normal");
     }
 
     #[test]
@@ -485,7 +474,9 @@ mod tests {
         // No "before" annotation → fall back to the hunk start.
         assert_eq!(snippet_match_line("@@ -7,4 @@\nx"), Some(7));
     }
-    fn write_two_message_doc(root: &std::path::Path, rel: &str) -> Vec<GridRowRef> {
+    /// Writes `id`'s two-message chat where claude files it, and answers
+    /// its message rows.
+    fn write_two_message_doc(root: &std::path::Path, id: &str) -> Vec<GridRowRef> {
         let body = "---\n\
                     provider: claude\n\
                     ---\n\
@@ -503,20 +494,20 @@ mod tests {
                     ## Assistant\n\
                     second message text\n\
                     </div>\n";
-        let path = root.join(rel);
+        let path = root.join(path_of("claude", id));
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, body).unwrap();
         vec![
             row(
                 "aaaaaaaa-0000-0000-0000-000000000001",
                 "User Input",
-                rel,
+                id,
                 "claude",
             ),
             row(
                 "bbbbbbbb-0000-0000-0000-000000000002",
                 "LLM Response",
-                rel,
+                id,
                 "claude",
             ),
         ]
@@ -527,13 +518,12 @@ mod tests {
     #[test]
     fn rows_for_hit_lands_within_the_rows_kept() {
         let tmp = tempfile::tempdir().unwrap();
-        let rel = "render_markdown/claude/acct/org/llm_chats/conv/index.md";
         let second = "bbbbbbbb-0000-0000-0000-000000000002";
-        let idx = GridIndex::new(tmp.path(), write_two_message_doc(tmp.path(), rel))
+        let idx = GridIndex::new(tmp.path(), write_two_message_doc(tmp.path(), CHAT))
             .within([second.to_string()].into());
         // Line 7 is inside the first message.
         let h = hit(
-            "render-markdown/claude/acct/org/llm-chats/conv/index.md",
+            &path_of("claude", CHAT),
             "@@ -7,1 @@ (0 before, 0 after)\n## Human",
         );
         let got = idx.rows_for_hit(&h);
@@ -546,12 +536,10 @@ mod tests {
         // A hit whose diff header lands in the *second* message resolves to
         // exactly that one row — no snippet anchor required.
         let tmp = tempfile::tempdir().unwrap();
-        let rel = "render_markdown/claude/acct/org/llm_chats/conv/index.md";
-        let idx = GridIndex::new(tmp.path(), write_two_message_doc(tmp.path(), rel));
-
+        let idx = GridIndex::new(tmp.path(), write_two_message_doc(tmp.path(), CHAT));
         // `@@ -13,4 @@ (2 before, …)` → matched line 15, inside the 2nd message.
         let h = hit(
-            "render-markdown/claude/acct/org/llm-chats/conv/index.md",
+            &path_of("claude", CHAT),
             "@@ -13,4 @@ (2 before, 3 after)\n## Assistant",
         );
         let got = idx.rows_for_hit(&h);
@@ -564,12 +552,10 @@ mod tests {
         // The motivating bug: a hit on the conversation *title* (above the
         // first message) must resolve to the first message, not fan out.
         let tmp = tempfile::tempdir().unwrap();
-        let rel = "render_markdown/claude/acct/org/llm_chats/conv/index.md";
-        let idx = GridIndex::new(tmp.path(), write_two_message_doc(tmp.path(), rel));
-
+        let idx = GridIndex::new(tmp.path(), write_two_message_doc(tmp.path(), CHAT));
         // `@@ -4,4 @@ (1 before, …)` → matched line 5 (the <h1>), before any anchor.
         let h = hit(
-            "render-markdown/claude/acct/org/llm-chats/conv/index.md",
+            &path_of("claude", CHAT),
             "@@ -4,4 @@ (1 before, 10 after)\n<h1>Reactive data pipeline composition in Rust</h1>",
         );
         let got = idx.rows_for_hit(&h);
@@ -580,27 +566,17 @@ mod tests {
     #[test]
     fn rows_for_hit_unreadable_file_falls_back_to_whole_doc() {
         // File missing on disk → can't pin a section, but the document must
-        // still surface: every row whose qmd_path matches comes back.
+        // still surface: every row of the document comes back.
         let idx = GridIndex::new(
             "/nonexistent-root",
             vec![
-                row(
-                    "u1",
-                    "User Input",
-                    "claude/acct/llm_chats/conv/index.md",
-                    "claude",
-                ),
-                row(
-                    "u2",
-                    "LLM Response",
-                    "claude/acct/llm_chats/conv/index.md",
-                    "claude",
-                ),
-                row("u3", "Chat", "other/path/index.md", "claude"),
+                row("u1", "User Input", CHAT, "claude"),
+                row("u2", "LLM Response", CHAT, "claude"),
+                row("u3", "Chat", OTHER, "claude"),
             ],
         );
         let h = hit(
-            "claude/acct/llm-chats/conv/index.md",
+            &path_of("claude", CHAT),
             "@@ -9,4 @@ (2 before, 5 after)\nx",
         );
         let got = idx.rows_for_hit(&h);
@@ -612,16 +588,18 @@ mod tests {
     /// the document rather than on every row.
     #[test]
     fn rows_for_hit_unplaceable_prefers_the_document_row() {
-        let rel = "claude/acct/llm_chats/conv/index.md";
         let idx = GridIndex::new(
             "/nonexistent-root",
             vec![
-                row("u1", "User Input", rel, "claude"),
-                document("doc", "Chat", rel, "claude"),
-                row("u2", "LLM Response", rel, "claude"),
+                row("u1", "User Input", CHAT, "claude"),
+                document("doc", "Chat", CHAT, "claude"),
+                row("u2", "LLM Response", CHAT, "claude"),
             ],
         );
-        let h = hit(rel, "@@ -9,4 @@ (2 before, 5 after)\nx");
+        let h = hit(
+            &path_of("claude", CHAT),
+            "@@ -9,4 @@ (2 before, 5 after)\nx",
+        );
         let got = idx.rows_for_hit(&h);
         let uuids: Vec<&str> = got.iter().map(|r| r.uuid.as_str()).collect();
         assert_eq!(uuids, ["doc"]);
@@ -634,9 +612,11 @@ mod tests {
     #[test]
     fn document_for_hit_lifts_a_pinned_message_to_its_document() {
         let td = tempfile::tempdir().unwrap();
-        let rel = "claude/acct/llm_chats/conv/index.md";
-        let mut rows = write_two_message_doc(td.path(), rel);
-        let h = hit(rel, "@@ -13,4 @@ (2 before, 3 after)\n## Assistant");
+        let mut rows = write_two_message_doc(td.path(), CHAT);
+        let h = hit(
+            &path_of("claude", CHAT),
+            "@@ -13,4 @@ (2 before, 3 after)\n## Assistant",
+        );
         let pinned = GridIndex::new(td.path(), rows.clone()).rows_for_hit(&h);
         assert_eq!(
             pinned.iter().map(|r| r.uuid.as_str()).collect::<Vec<_>>(),
@@ -649,7 +629,7 @@ mod tests {
                 .is_empty(),
             "no document row, no document"
         );
-        rows.push(document("conv", "Chat", rel, "claude"));
+        rows.push(document("conv", "Chat", CHAT, "claude"));
         let lifted = GridIndex::new(td.path(), rows).document_for_hit(&h);
         assert_eq!(
             lifted.iter().map(|r| r.uuid.as_str()).collect::<Vec<_>>(),
@@ -657,16 +637,22 @@ mod tests {
         );
     }
 
+    /// A hit names no rows when its path is not filed by an id, or names a
+    /// document the grid does not have — the signal callers log as an
+    /// error.
     #[test]
-    fn rows_for_hit_unknown_path_is_empty() {
-        // A hit whose file matches no grid rows resolves to nothing — the
-        // signal callers log as an error.
-        let idx = GridIndex::new(
-            "/nonexistent-root",
-            vec![row("u1", "Chat", "a/b.md", "claude")],
-        );
-        let h = hit("totally/different.md", "@@ -1,4 @@ (0 before, 1 after)\nx");
-        assert!(idx.rows_for_hit(&h).is_empty());
+    fn rows_for_hit_unknown_document_is_empty() {
+        let idx = GridIndex::new("/nonexistent-root", vec![row("u1", "Chat", CHAT, "claude")]);
+        let snippet = "@@ -1,4 @@ (0 before, 1 after)\nx";
+        assert!(idx
+            .rows_for_hit(&hit(&path_of("claude", OTHER), snippet))
+            .is_empty());
+        assert!(idx
+            .rows_for_hit(&hit(
+                &format!("claude/render_markdown/{CHAT}/all.md"),
+                snippet
+            ))
+            .is_empty());
     }
 
     #[test]
@@ -678,12 +664,18 @@ mod tests {
             vec![row(
                 "11111111-2222-3333-4444-555555555555",
                 "LLM Response",
-                "p/index.md",
+                CHAT,
                 "claude",
             )],
         );
-        let h1 = hit("p/index.md", "@@ -1,4 @@ (0 before, 1 after)\nx");
-        let h2 = hit("p/index.md", "@@ -1,4 @@ (0 before, 1 after)\nx");
+        let h1 = hit(
+            &path_of("claude", CHAT),
+            "@@ -1,4 @@ (0 before, 1 after)\nx",
+        );
+        let h2 = hit(
+            &path_of("claude", CHAT),
+            "@@ -1,4 @@ (0 before, 1 after)\nx",
+        );
         let got = idx.rows_for_hits(&[h1, h2]);
         assert_eq!(got.len(), 1);
     }
@@ -722,44 +714,32 @@ mod tests {
     /// 1.0) — must outrank a poorly-matched Slack post that merely mentions
     /// "rust" (qmd's #2 hit, score 0.5) in the grid.
     #[test]
-    fn relevant_chat_outranks_spam_with_canonical_path() {
-        // The stale nested render is gone, so the grid stores the CANONICAL
-        // path — the same one qmd's #1 hit reports.
-        let chat_path = "claude/acct/llm_chats/b0c2f022/index.md";
+    fn relevant_chat_outranks_spam() {
         let chat_user = "019e2d00-aad9-7ecd-9cfd-b1cd1648b98f"; // the great result
         let chat_llm = "019e2d00-aad9-7933-8639-51c8474c1b11";
-        let spam_path = "slack/team/chan/threads/dba0820c/index.md";
         let spam_msg = "6d10c99d-1219-50e0-9d00-84979fd99d1d"; // the terrible result
 
         // No real files on disk, so every hit resolves via the whole-doc
-        // fallback — enough to exercise the path→score mapping (the line-based
-        // resolver doesn't change which *document* a hit maps to).
+        // fallback — enough to exercise the hit→score mapping.
         let idx = GridIndex::new(
             "/nonexistent-root",
             vec![
-                row(spam_msg, "Slack Message", spam_path, "slack"),
-                row(chat_user, "User Input", chat_path, "claude"),
-                row(chat_llm, "LLM Response", chat_path, "claude"),
+                row(spam_msg, "Slack Message", OTHER, "slack"),
+                row(chat_user, "User Input", CHAT, "claude"),
+                row(chat_llm, "LLM Response", CHAT, "claude"),
             ],
         );
-
-        // qmd's ranking, in order. The snippets are the page-title chunk (no
-        // m-uuid), so they resolve via the whole-doc fallback.
         let no_anchor = "@@ -10,4 @@\n<h1 data-page-title-uuid=\"b0c2f022\">Reactive data pipeline composition in Rust</h1>";
         let hits = vec![
-            // #1: qmd's best hit — the canonical path the grid now stores.
-            scored_hit(chat_path, 1.0, no_anchor),
-            // #2: the spam, matched only on a stray "rust cli" vector hit.
+            scored_hit(&path_of("claude", CHAT), 1.0, no_anchor),
             scored_hit(
-                spam_path,
+                &path_of("slack", OTHER),
                 0.5,
                 "@@ -23,4 @@\nthe rust cli that sped up your build",
             ),
         ];
 
         let ranked = fanout(&idx, &hits);
-
-        // qmd's #1 hit (score 1.0) resolves to the chat's rows.
         let user_score = ranked.iter().find(|(u, _)| u == chat_user).map(|(_, s)| *s);
         assert_eq!(user_score, Some(1.0));
 
@@ -767,11 +747,8 @@ mod tests {
         let mut shown = ranked.clone();
         shown.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
         let order: Vec<&str> = shown.iter().map(|(u, _)| u.as_str()).collect();
-
         let spam_pos = order.iter().position(|u| *u == spam_msg).unwrap();
         let chat_pos = order.iter().position(|u| *u == chat_user).unwrap();
-
-        // The relevant chat (1.0) now sits above the spam (0.5).
         assert!(
             chat_pos < spam_pos,
             "chat at {chat_pos}, spam at {spam_pos}: {order:?}"
@@ -786,11 +763,9 @@ mod tests {
     fn ranked_rows_one_per_doc_keeps_top_hit_per_document() {
         let tmp = tempfile::tempdir().unwrap();
         // A two-message chat (anchors at lines 7 and 13) ...
-        let chat = "render_markdown/claude/acct/llm_chats/conv/index.md";
-        let mut rows = write_two_message_doc(tmp.path(), chat);
+        let mut rows = write_two_message_doc(tmp.path(), CHAT);
         // ... plus a second, single-message document (anchor at line 5).
-        let other = "render_markdown/slack/team/chan/index.md";
-        let other_path = tmp.path().join(other);
+        let other_path = tmp.path().join(path_of("slack", OTHER));
         std::fs::create_dir_all(other_path.parent().unwrap()).unwrap();
         std::fs::write(
             &other_path,
@@ -802,7 +777,7 @@ mod tests {
         rows.push(row(
             "cccccccc-0000-0000-0000-000000000003",
             "Slack Message",
-            other,
+            OTHER,
             "slack",
         ));
         let idx = GridIndex::new(tmp.path(), rows);
@@ -811,13 +786,18 @@ mod tests {
         //   #1 (1.0)  pins the chat's 2nd message (matched line 15).
         //   #2 (0.5)  lands in the other document.
         //   #3 (0.25) pins the chat's 1st message — same doc as #1, dropped.
-        //   #4 (0.1)  a path the grid doesn't know — orphan.
+        //   #4 (0.1)  a document the grid doesn't know — orphan.
+        let chat = path_of("claude", CHAT);
         let hits = vec![
-            scored_hit(chat, 1.0, "@@ -13,4 @@ (2 before, 3 after)\n## Assistant"),
-            scored_hit(other, 0.5, "@@ -7,4 @@ (0 before, 1 after)\nslack body"),
-            scored_hit(chat, 0.25, "@@ -7,4 @@ (0 before, 1 after)\n## Human"),
+            scored_hit(&chat, 1.0, "@@ -13,4 @@ (2 before, 3 after)\n## Assistant"),
             scored_hit(
-                "unknown/doc/index.md",
+                &path_of("slack", OTHER),
+                0.5,
+                "@@ -7,4 @@ (0 before, 1 after)\nslack body",
+            ),
+            scored_hit(&chat, 0.25, "@@ -7,4 @@ (0 before, 1 after)\n## Human"),
+            scored_hit(
+                &path_of("slack", "00000000-0000-8000-cccc-0000000000e3"),
                 0.1,
                 "@@ -1,4 @@ (0 before, 1 after)\nx",
             ),
@@ -826,7 +806,7 @@ mod tests {
         let mut orphans = 0;
         let ranked = idx.ranked_rows_one_per_doc(&hits, false, |_| orphans += 1);
 
-        assert_eq!(orphans, 1, "the unknown-path hit is an orphan");
+        assert_eq!(orphans, 1, "the unknown document's hit is an orphan");
         let got: Vec<(&str, f64)> = ranked
             .iter()
             .map(|(r, h)| (r.uuid.as_str(), h.score))

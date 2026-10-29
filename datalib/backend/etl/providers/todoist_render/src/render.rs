@@ -9,8 +9,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use datalib_etl::layout::render_markdown_root;
 use datalib_etl_render::front_matter::yaml_scalar;
-use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::html::{
     escape_html_outside_code, escape_md_inline, escape_text, md_link_dest,
 };
@@ -44,23 +45,6 @@ pub fn project_url(id: &str) -> String {
 /// The form Todoist's API reference gives for a task's link.
 pub fn task_url(id: &str) -> String {
     format!("https://app.todoist.com/app/task/{id}")
-}
-
-/// Where a project's `.md` lives, relative to the data root.
-pub fn md_rel(source_id: &str, project_id: &str) -> PathBuf {
-    let file: String = project_id
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    datalib_etl::layout::render_markdown_root(Path::new(""), source_id)
-        .join("projects")
-        .join(format!("{file}.md"))
 }
 
 /// A person a row names: who added a task, who is to do it, who wrote a
@@ -201,10 +185,9 @@ pub fn render_project(
     inputs: &Inputs,
 ) -> Result<RenderedMarkdown> {
     let doc = build(source_id, store, project_id, inputs);
-    let md_path = root.join(md_rel(source_id, project_id));
-    if let Some(dir) = md_path.parent() {
-        fs::create_dir_all(dir).with_context(|| format!("mkdir -p {}", dir.display()))?;
-    }
+    let md_path = root.join(&doc.md_path);
+    let dir = md_path.parent().expect("a document's file has a folder");
+    fs::create_dir_all(dir).with_context(|| format!("mkdir -p {}", dir.display()))?;
     fs::write(&md_path, join(&doc.sections))
         .with_context(|| format!("write {}", md_path.display()))?;
     Ok(RenderedMarkdown { md_path, ..doc })
@@ -224,11 +207,14 @@ pub fn build(
         inputs.read("user", uid);
     }
     let people = People { store, inputs };
-    let rel = md_rel(source_id, project_id).to_string_lossy().into_owned();
+    let id = ids::project(source_id, project_id);
+    let rel = doc_md_path(&render_markdown_root(Path::new(""), source_id), &id.uuid)
+        .to_string_lossy()
+        .into_owned();
     let facts = ProjectFacts {
         source_id: source_id.to_string(),
         project_id: project_id.to_string(),
-        id: ids::project(source_id, project_id),
+        id,
         name: project
             .and_then(|p| str_of(p, "name"))
             .map(String::from)

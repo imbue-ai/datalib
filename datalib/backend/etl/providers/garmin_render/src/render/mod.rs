@@ -17,7 +17,7 @@ pub mod time_series;
 pub mod render;
 
 /// Bump when the rendered page or the grid row shape changes enough
-/// that an existing `index.md` must be re-rendered.
+/// that an existing page must be re-rendered.
 /// v2: ids are minted through `datalib_id` under the configured source
 ///     and every row carries its backpointer. Every uuid moved.
 /// v8: every stamp on a page is a `<time>`.

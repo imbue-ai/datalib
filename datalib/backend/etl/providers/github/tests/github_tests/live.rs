@@ -69,9 +69,10 @@ async fn github_live_single_pr_snapshot() {
     .expect("render_github failed");
 
     // The rendered doc must exist.
-    let qmd_rel =
-        datalib_etl_github_render::render::PROFILE.qmd_path_rel(stanza, &pr.container, pr.number);
-    let qmd_abs = render_root.join(&qmd_rel);
+    let qmd_abs = datalib_etl_render::grid_index::doc_md_path(
+        &datalib_etl::layout::render_markdown_root(&render_root, stanza),
+        &pr.uuid,
+    );
     assert!(
         qmd_abs.exists(),
         "rendered md missing: {}",

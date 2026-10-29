@@ -154,12 +154,11 @@ pub trait IndexRepo: Send + Sync {
         markdown_uuids: &[String],
     ) -> Result<std::collections::HashMap<String, PathBuf>, RepoError>;
 
-    /// The rows behind the files qmd's hits name, matched as
-    /// `qmd::norm_path` matches them: what a hit is mapped to its rows by,
-    /// without reading every row.
-    async fn grid_row_refs_for_hits(
+    /// The rows of the documents qmd's hits name, by `markdown_uuid`: a
+    /// hit's path is its document's id (`grid_rows::markdown_uuid_of_path`).
+    async fn grid_row_refs_for_documents(
         &self,
-        hit_paths: &[String],
+        markdown_uuids: &[String],
     ) -> Result<Vec<GridRowRef>, RepoError>;
 
     /// Every row that is a whole document, with just what the embedding
@@ -170,13 +169,6 @@ pub trait IndexRepo: Send + Sync {
     /// `markdown_uuid` behind every matching row, a message's as much as
     /// a document's. Free text is left out — qmd answers that.
     async fn matching_documents(
-        &self,
-        q: &ParsedQuery,
-    ) -> Result<std::collections::HashSet<String>, RepoError>;
-
-    /// The `qmd_path` behind every row a query's structured terms match,
-    /// `norm_path`ed: the documents a vector search may score.
-    async fn matching_qmd_paths(
         &self,
         q: &ParsedQuery,
     ) -> Result<std::collections::HashSet<String>, RepoError>;
@@ -204,7 +196,7 @@ pub trait IndexRepo: Send + Sync {
 
     /// List rendered documents (the `markdowns` table), newest first,
     /// for the document-picker card. Returns an empty Vec for an empty
-    /// or missing store — like [`grid_row_refs_for_hits`](Self::grid_row_refs_for_hits),
+    /// or missing store — like [`grid_row_refs_for_documents`](Self::grid_row_refs_for_documents),
     /// a bare data root just means there's nothing to pick yet.
     async fn list_docs(&self, _limit: usize) -> Result<Vec<DocRow>, RepoError> {
         Ok(Vec::new())
@@ -278,9 +270,8 @@ pub struct DocRow {
 /// identity, its label, and what it can be coloured by.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct MapDocRow {
+    /// What the map's points are keyed by: a point's path is its id.
     pub markdown_uuid: String,
-    /// Data-root-relative; what the map's points are keyed by.
-    pub qmd_path: String,
     pub title: String,
     pub provider: String,
     /// The provider's human label ("Slack"), as the grid's `source`.

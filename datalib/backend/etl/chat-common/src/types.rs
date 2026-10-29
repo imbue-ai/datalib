@@ -400,11 +400,6 @@ pub struct NormalizedChat {
     /// default.
     pub org_uuid: Option<String>,
     pub org_name: Option<String>,
-    /// Extra path segment between `render_markdown/` and the chat's own
-    /// directory, for a source that bridges several upstreams and wants
-    /// them apart on disk (Beeper's `<network>/`). `None` — the default
-    /// — puts the chat directly under `render_markdown/<chat_uuid>/`.
-    pub path_prefix: Option<String>,
     /// Buckets sorted by period_key.
     pub buckets: Vec<NormalizedDoc>,
     /// Who `display` names, when the chat has no title of its own and is

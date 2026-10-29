@@ -212,8 +212,6 @@ mod tests {
             from_ref_key: "head_ref",
             to_ref_key: "base_ref",
             number_sigil: '#',
-            dir_prefix: "pr-",
-            container_needs_owner: true,
             reviews: true,
             render_version: 1,
         }

@@ -9,13 +9,14 @@ crate reads the raw tables into it (`src/render/parse.rs`), mints the ids
 (`src/render/mod.rs`).
 
 ```
-<root>/<source_id>/render_markdown/<owner>/<repo>/pr-<num>/
-    index.md                # the PR's document
+<root>/<source_id>/render_markdown/<xx>/<markdown_uuid>.md
+                            # the PR's document, filed by its id
 <root>/<source_id>/render_markdown/indexed_markdown.doltlite_db
                             # its rows: one for the PR + one per comment
 ```
 
-A repo with no owner segment is filed under `unknown/<repo>/`.
+`<xx>` is the id's last two characters
+([`grid_rows.md`](../../../../../docs/dev/grid_rows.md) §"`qmd_path` and `source_id`").
 
 ## Markdown layout
 

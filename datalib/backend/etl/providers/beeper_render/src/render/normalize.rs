@@ -186,9 +186,6 @@ fn to_chat(
         source_url: room.source_url.clone(),
         org_uuid: None,
         org_name: None,
-        // A Beeper stanza bridges several networks, so they stay apart
-        // on disk: `render_markdown/<network>/<room_uuid>/<period>.md`.
-        path_prefix: Some(room.network.clone()),
         buckets: vec![{
             let period = ids::period(source_id, &room.native_room_id, &doc.period_key);
             NormalizedDoc {

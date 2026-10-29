@@ -279,7 +279,6 @@ fn build_chats(
             named_after,
             contacts: account(source_id, &rows).into_iter().collect(),
             inputs: inputs.declared(),
-            path_prefix: None,
             id: id.clone(),
             chat_uuid: conversation.uuid,
             display,

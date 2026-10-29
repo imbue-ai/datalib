@@ -307,16 +307,24 @@ takes a `RENDER_VERSION` bump to reach a store already rendered.
 
 ### `qmd_path` and `source_id`
 
-`qmd_path` is `<source_id>/render_markdown/<renderer-specific tail>`,
-where `<source_id>` is the group's id — its directory under the data
-root, never the display name the config may also give it.
+`qmd_path` is where the document's markdown is filed,
+`<source_id>/render_markdown/<xx>/<markdown_uuid>.md`, where
+`<source_id>` is the group's id (its directory under the data root,
+never the display name the config may also give it) and `<xx>` is the
+id's last two characters. Those come from the id's hash, so they spread
+documents over 256 folders; the first characters are a stamp or zeros
+and would not. Every renderer gets the path from one function,
+`datalib_etl_render::grid_index::doc_md_path`, and the store refuses a
+document filed any other way, or a row naming another file
+(`misfiled` in `grid_index.rs`).
 
-For a given `markdown_uuid`, `grid_rows.qmd_path` must be byte-equal to
-that markdown's `markdowns.md_path` — the applet's qmd mapping
-(`GridIndex` in `unified_document_index/src/qmd/mapping.rs`) keys rows by this
-path to resolve search hits, and a row whose path doesn't match what
-qmd reports is silently dropped from free-text results.
-`//tests/fixtures:ingested_tng_test` asserts it across providers.
+So a qmd hit's path *is* its document's id
+(`grid_rows::markdown_uuid_of_path`): the search reads the id out of
+the path and finds the document's rows through `grid_rows_by_markdown`,
+with no lookup by path. Changing the layout is a bump of
+`grid_index::DOC_LAYOUT`, which every source carries in its render
+params, so every source renders again; each document's old file is
+deleted as the new one is written.
 
 `source_id` is derived from `qmd_path` at index time: its first
 segment, except a storage row (provider `datalib`), which sits under

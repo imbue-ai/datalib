@@ -13,8 +13,9 @@ use std::path::Path;
 
 use anyhow::Result;
 use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact};
+use datalib_etl::layout::render_markdown_root;
 use datalib_etl::progress::Progress;
-use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::inputs::{Bucket, Buckets, Input, RawRange};
 use datalib_handle::Handle;
 use datalib_schema::problems::ProblemRow;
@@ -41,30 +42,9 @@ pub struct ForgeProfile {
     pub to_ref_key: &'static str,
     /// What goes before the number in the title: `#` or `!`.
     pub number_sigil: char,
-    /// The document's directory under its container: `pr-7`, `mr-7`.
-    pub dir_prefix: &'static str,
-    /// Whether a container with no owner segment is filed under
-    /// `unknown/`, as a GitHub `owner/repo` is expected to have one.
-    pub container_needs_owner: bool,
     /// Whether the document has a Reviews section.
     pub reviews: bool,
     pub render_version: u32,
-}
-
-impl ForgeProfile {
-    /// The document's path under the data root.
-    pub fn qmd_path_rel(&self, stanza: &str, container: &str, number: u32) -> String {
-        let container = if self.container_needs_owner && !container.contains('/') {
-            format!("unknown/{container}")
-        } else {
-            container.to_string()
-        };
-        format!(
-            "{stanza}/{}/{container}/{}{number}/index.md",
-            datalib_etl::layout::RENDER_MARKDOWN_DIR,
-            self.dir_prefix,
-        )
-    }
 }
 
 /// A pull request or a merge request.
@@ -235,9 +215,13 @@ pub fn render_all(
     progress.set_length(Some(parsed.change_requests.len() as u64));
     for cr in &parsed.change_requests {
         let comments = by_parent.remove(cr.row_id.as_str()).unwrap_or_default();
-        let md_rel = profile.qmd_path_rel(stanza, &cr.container, cr.number);
-        let md_path = root.join(&md_rel);
+        let md_path = doc_md_path(&render_markdown_root(root, stanza), &cr.uuid);
         markdown::write(profile, cr, &comments, &md_path)?;
+        let md_rel = md_path
+            .strip_prefix(root)
+            .unwrap_or(&md_path)
+            .to_string_lossy()
+            .into_owned();
         let mut problems: Vec<ProblemRow> = Vec::new();
         let rows = grid_rows::rows_for(profile, cr, &comments, stanza, &md_rel, &mut problems);
         on_doc_complete(RenderedMarkdown {
@@ -398,36 +382,5 @@ mod tests {
         let ids: Vec<i64> = ordered(&refs).flat().map(|c| c.external_id).collect();
         assert_eq!(ids, vec![4, 3, 1, 2]);
         assert_eq!(ordered(&refs).inline.len(), 1, "one thread, not two");
-    }
-
-    #[test]
-    fn a_container_with_no_owner_is_filed_under_unknown_only_where_it_should_have_one() {
-        let mut p = ForgeProfile {
-            provider: Provider::Github,
-            tag: "github",
-            source_label: "GitHub",
-            doc_kind: "GitHub PR",
-            doc_entity_kind: "pull_request",
-            table: "pull_requests",
-            container_key: "repo",
-            number_key: "pr_number",
-            from_ref_key: "head_ref",
-            to_ref_key: "base_ref",
-            number_sigil: '#',
-            dir_prefix: "pr-",
-            container_needs_owner: true,
-            reviews: true,
-            render_version: 1,
-        };
-        assert!(p
-            .qmd_path_rel("s", "repo", 7)
-            .ends_with("/unknown/repo/pr-7/index.md"));
-        assert!(p
-            .qmd_path_rel("s", "o/repo", 7)
-            .ends_with("/o/repo/pr-7/index.md"));
-        p.container_needs_owner = false;
-        assert!(p
-            .qmd_path_rel("s", "proj", 7)
-            .ends_with("/proj/pr-7/index.md"));
     }
 }

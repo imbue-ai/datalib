@@ -59,8 +59,7 @@ and what a handle is, is [`docs/dev/contacts.md`](../../../../docs/dev/contacts.
   the member has a handle.
 - **The photo is markdown** (`![…](/data/<group>/<function>/blob/<hash>)`),
   linked where its source's blob store holds it; nothing is written
-  beside the page, and a `blobs/` an older build left there goes when
-  the page is next written.
+  beside the page.
 
 The look is `documentBody.css` (`.contact-head`, `.contact-fields`,
 `.contact-members`); a chip's grey (not linked to a contact) and blue

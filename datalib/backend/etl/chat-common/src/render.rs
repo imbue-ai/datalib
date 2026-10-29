@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Default `upstream_entity_kind` for a chat/thread-level row — the
 /// value most providers put in [`RenderProfile::chat_entity_kind`].
@@ -72,7 +72,7 @@ use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::periodize::Period;
 use datalib_etl::progress::Progress;
-use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::message::{chip_link, timestamp_html, MessageHeader};
 use datalib_etl_render::section::{join, msg_div_open_with, Section};
 use datalib_etl_render::title::Title;
@@ -107,8 +107,7 @@ pub enum TextFormat {
 /// provider.
 #[derive(Debug, Clone)]
 pub struct RenderProfile {
-    /// On-disk subdir under `render_markdown/<provider>/<source_id>/…`
-    /// and the value of the markdown's `provider:` frontmatter key.
+    /// The value of the markdown's `provider:` frontmatter key.
     pub provider: Provider,
     /// The `source_label` column on every grid_row this provider
     /// emits. Beeper sets this to a composite like `"Beeper:Signal"`;
@@ -293,12 +292,16 @@ fn render_one(
     blobs: &BlobBundle,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<(usize, usize)> {
-    let (md_path, page_dir) = output_paths(out_dir, source_id, chat, &doc.period_key);
-    fs::create_dir_all(&page_dir).with_context(|| format!("mkdir -p {}", page_dir.display()))?;
+    let md_path = doc_md_path(
+        &datalib_etl::layout::render_markdown_root(out_dir, source_id),
+        &doc.markdown_uuid,
+    );
+    let page_dir = md_path.parent().expect("a document's file has a folder");
+    fs::create_dir_all(page_dir).with_context(|| format!("mkdir -p {}", page_dir.display()))?;
 
     // Point each attachment at its bytes. Mutates a local copy of `doc` —
     // the same chat may be re-rendered into another bucket later.
-    let mut resolved_doc = link_attachments(doc, &page_dir, blobs);
+    let mut resolved_doc = link_attachments(doc, blobs);
     the_account_as_me(&mut resolved_doc);
     let doc = &resolved_doc;
 
@@ -358,17 +361,10 @@ fn render_one(
 }
 
 /// Set each attachment's `href` from the bundle: its address in the
-/// source's blob store. A page loses any `blobs/` an older build wrote
-/// copies into beside it.
-fn link_attachments(doc: &NormalizedDoc, page_dir: &Path, blobs: &BlobBundle) -> NormalizedDoc {
+/// source's blob store.
+fn link_attachments(doc: &NormalizedDoc, blobs: &BlobBundle) -> NormalizedDoc {
     let mut out = doc.clone();
     report_missing_bytes(&mut out, blobs);
-    let blobs_dir = page_dir.join("blobs");
-    if let Err(e) = std::fs::remove_dir_all(&blobs_dir) {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!(dir = %blobs_dir.display(), error = %e, "chat_common: removing an old blobs/ failed");
-        }
-    }
     for item in &mut out.items {
         for att in &mut item.attachments {
             let Some(ref_id) = att.ref_id.as_deref() else {
@@ -403,26 +399,6 @@ fn report_missing_bytes(doc: &mut NormalizedDoc, blobs: &BlobBundle) {
             }
         }
     }
-}
-
-/// `<out>/<stanza>/render_markdown/<chat_uuid>/<period>.md` plus the matching
-/// markdown and its parent dir. The directory is the chat's stable UUID — never a
-/// title-derived slug — so an upstream rename (channel/title change)
-/// re-renders in place instead of orphaning the old file at a stale path. The
-/// human title still lives in the markdown frontmatter and the grid_rows DB.
-fn output_paths(
-    out_dir: &Path,
-    source_id: &str,
-    chat: &NormalizedChat,
-    period_key: &str,
-) -> (PathBuf, PathBuf) {
-    let mut page_dir = datalib_etl::layout::render_markdown_root(out_dir, source_id);
-    if let Some(prefix) = &chat.path_prefix {
-        page_dir = page_dir.join(prefix);
-    }
-    let page_dir = page_dir.join(&chat.chat_uuid);
-    let md_path = page_dir.join(format!("{period_key}.md"));
-    (md_path, page_dir)
 }
 
 // Markdown
@@ -1302,7 +1278,6 @@ mod tests {
             title: None,
             org_uuid: None,
             org_name: None,
-            path_prefix: None,
             buckets: vec![NormalizedDoc {
                 period_key: "2364-04".to_string(),
                 markdown_uuid: "22222222-2222-2222-2222-222222222222".to_string(),
@@ -2098,8 +2073,7 @@ mod tests {
         }];
         let mut blobs = BlobBundle::default();
         blobs.mark_missing("scan-1");
-        // No bytes to write, so nothing touches the page directory.
-        let doc = link_attachments(&chat.buckets[0], Path::new("/nonexistent"), &blobs);
+        let doc = link_attachments(&chat.buckets[0], &blobs);
 
         let problems = &doc.items[0].problems;
         assert_eq!(problems.len(), 1, "{problems:?}");
@@ -2179,17 +2153,14 @@ mod tests {
             vec![0; 2048],
             Some("application/pdf".into()),
         );
-        let dir = tempfile::tempdir().unwrap();
-
-        let doc = link_attachments(&chat.buckets[0], dir.path(), &blobs);
+        let doc = link_attachments(&chat.buckets[0], &blobs);
 
         assert_eq!(doc.items[0].attachments[0].byte_len, Some(2048));
         assert!(doc.items[0].attachments[0].href.is_some());
     }
 
     /// An attachment its source's blob store holds is linked at its
-    /// address there, and no copy is written beside the page; a
-    /// `blobs/` an older build wrote there goes.
+    /// address there.
     #[test]
     fn a_stored_attachment_is_linked_not_copied() {
         let mut chat = mk_chat();
@@ -2213,11 +2184,7 @@ mod tests {
             },
             None,
         );
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join("blobs")).unwrap();
-        std::fs::write(dir.path().join("blobs").join("old.pdf"), b"old copy").unwrap();
-
-        let doc = link_attachments(&chat.buckets[0], dir.path(), &blobs);
+        let doc = link_attachments(&chat.buckets[0], &blobs);
 
         let att = &doc.items[0].attachments[0];
         assert_eq!(
@@ -2225,7 +2192,6 @@ mod tests {
             Some(format!("/data/enterprise/ingest/blob/{hash}").as_str())
         );
         assert_eq!(att.byte_len, Some(2048));
-        assert!(!dir.path().join("blobs").exists(), "the old copy went");
     }
 
     #[test]

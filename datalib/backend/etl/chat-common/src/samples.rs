@@ -120,7 +120,6 @@ fn chat(id: &str, display: &str, items: Vec<NormalizedChatItem>) -> NormalizedCh
         source_url: Some(format!("https://example.invalid/chat/{id}")),
         org_uuid: None,
         org_name: None,
-        path_prefix: None,
         buckets: vec![NormalizedDoc {
             period_key: "all".to_string(),
             markdown_uuid: id.to_string(),

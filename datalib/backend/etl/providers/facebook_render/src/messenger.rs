@@ -199,7 +199,6 @@ fn conversation(
         named_after: named_after(thread, &participants, owner, &people),
         contacts: owner.contact().into_iter().collect(),
         inputs: inputs.declared(),
-        path_prefix: None,
         id: format!("conversation:{row_id}"),
         chat_uuid: chat.uuid,
         display: display(row_id, thread, &participants, owner),

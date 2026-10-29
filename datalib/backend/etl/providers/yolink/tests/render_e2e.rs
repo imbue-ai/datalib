@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use datalib_etl::progress::Progress;
-use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::inputs::RawRange;
 use datalib_etl_yolink::ingest::schema_raw::{YolinkDeviceRow, YolinkReadingRow};
 use datalib_etl_yolink::ingest::{db_path_for, RawDb};
@@ -143,7 +143,8 @@ async fn renders_a_page_with_one_plot_per_quantity_then_skips_until_data_lands()
     );
 
     let page_dir = root.join(STANZA).join("render_markdown");
-    let md = std::fs::read_to_string(page_dir.join("index.md")).unwrap();
+    let page = doc_md_path(&page_dir, &emitted[0].markdown_uuid);
+    let md = std::fs::read_to_string(&page).unwrap();
     assert!(
         !page_dir.join("plots").exists(),
         "charts are drawn from the time-series store, not written as pages"
@@ -210,7 +211,7 @@ async fn renders_a_page_with_one_plot_per_quantity_then_skips_until_data_lands()
     assert_eq!(cursor_2.as_deref(), Some(cursor.as_str()));
     assert_eq!(emitted.len(), 1);
     assert_eq!(
-        std::fs::read_to_string(page_dir.join("index.md")).unwrap(),
+        std::fs::read_to_string(&page).unwrap(),
         md_1,
         "an unchanged store must render the same page, so the store records no change"
     );
@@ -229,7 +230,7 @@ async fn renders_a_page_with_one_plot_per_quantity_then_skips_until_data_lands()
         "the store moved, so the cursor must too"
     );
     assert_eq!(emitted.len(), 1, "an appended reading must re-render");
-    let md_3 = std::fs::read_to_string(page_dir.join("index.md")).unwrap();
+    let md_3 = std::fs::read_to_string(&page).unwrap();
     assert_ne!(
         md_3, md_1,
         "the page content should reflect the new reading"
@@ -271,7 +272,7 @@ async fn an_empty_store_renders_a_page_without_plots() {
 
     let (emitted, _) = render_once(&raw_path, root, None);
     assert_eq!(emitted.len(), 1);
-    let md = std::fs::read_to_string(root.join(STANZA).join("render_markdown/index.md")).unwrap();
+    let md = std::fs::read_to_string(&emitted[0].md_path).unwrap();
     assert!(md.contains("nothing to plot"), "{md}");
     assert!(md.contains("main_fridge"), "{md}");
     assert!(charts(&md).is_empty(), "an empty quantity gets no chart");

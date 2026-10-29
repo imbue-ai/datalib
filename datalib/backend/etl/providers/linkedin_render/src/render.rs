@@ -252,7 +252,6 @@ fn build_chats(
             named_after,
             contacts: Vec::new(),
             inputs: inputs.declared(),
-            path_prefix: None,
             id: format!("{table}:{conv}"),
             chat_uuid: conversation.uuid.clone(),
             display,

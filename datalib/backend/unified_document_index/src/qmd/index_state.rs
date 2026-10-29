@@ -190,8 +190,8 @@ impl QmdIndexReader {
     /// first appears, in the header `snippet_match_line` reads, so the hit
     /// lands on that message.
     ///
-    /// `among`, when given, keeps only the documents at those
-    /// (`norm_path`ed) paths, before the cut: a search's other terms narrow
+    /// `among`, when given, keeps only those documents, by id
+    /// (`grid_rows::markdown_uuid_of_path`), before the cut: a search's other terms narrow
     /// what is ranked, so a match below the first `limit` of every source
     /// is still found.
     pub async fn keyword_hits(
@@ -221,7 +221,10 @@ impl QmdIndexReader {
                 Some(
                     every
                         .into_iter()
-                        .filter(|(_, path)| among.contains(&crate::qmd::mapping::norm_path(path)))
+                        .filter(|(_, path)| {
+                            datalib_schema::grid_rows::markdown_uuid_of_path(path)
+                                .is_some_and(|d| among.contains(d))
+                        })
                         .map(|(id, _)| id)
                         .take(limit)
                         .collect(),

@@ -108,7 +108,7 @@ impl GridRow {
     /// *belongs to* rather than the directory it happens to sit in.
     ///
     /// For everything a provider rendered the two are the same: the first
-    /// segment of `qmd_path` (`slack/render_markdown/x/all.md` → `slack`),
+    /// segment of `qmd_path` (`slack/render_markdown/fa/<id>.md` → `slack`),
     /// the group's directory under the data root. The storage rows are the
     /// exception: each source's measurements are written into that
     /// source's own `render_markdown/`, the one tree its render step may
@@ -135,20 +135,28 @@ impl GridRow {
     }
 }
 
-/// [`qmd_path_key`] in SQL, for the index that serves it and the query that
-/// uses that index; the two must spell it alike.
-pub const QMD_PATH_KEY_SQL: &str = "replace(replace(lower(qmd_path), '-', ''), '_', '')";
+/// Where a document's markdown is filed under its source's
+/// `render_markdown/`: named by its id, in a folder named by the id's last
+/// two characters. Those come from the id's hash; its first ones are a
+/// stamp, or zeros, and would put most documents in one folder. A search
+/// hit's path is then its document's id ([`markdown_uuid_of_path`]).
+pub fn doc_file_rel(markdown_uuid: &str) -> String {
+    let shard = markdown_uuid
+        .char_indices()
+        .rev()
+        .nth(1)
+        .map_or(markdown_uuid, |(i, _)| &markdown_uuid[i..]);
+    format!("{shard}/{markdown_uuid}.md")
+}
 
-/// What a qmd hit's path and a row's `qmd_path` are matched by first. qmd
-/// folds case and joins a run of `-` and `_` into one `-`; this key drops
-/// them all, so it finds every row a hit could name and a few more, and an
-/// exact comparison keeps the right ones. Lowercased as SQLite's `lower`
-/// does, ASCII only, so it equals [`QMD_PATH_KEY_SQL`] on every path.
-pub fn qmd_path_key(path: &str) -> String {
-    path.chars()
-        .filter(|c| *c != '-' && *c != '_')
-        .map(|c| c.to_ascii_lowercase())
-        .collect()
+/// The document a path names, when it is filed as [`doc_file_rel`] files
+/// it: the file's stem, in a folder named for the stem's last two
+/// characters. Any prefix (`<source>/render_markdown/`) is ignored.
+pub fn markdown_uuid_of_path(path: &str) -> Option<&str> {
+    let (dir, file) = path.rsplit_once('/')?;
+    let uuid = file.strip_suffix(".md")?;
+    let shard = dir.rsplit('/').next()?;
+    (!uuid.is_empty() && doc_file_rel(uuid) == format!("{shard}/{file}")).then_some(uuid)
 }
 
 impl GridRow {
@@ -433,6 +441,26 @@ impl GridRowBuilder {
 #[cfg(test)]
 mod builder_tests {
     use super::*;
+
+    /// A hit's path is its document's id, read back from where the id
+    /// filed it; a path filed any other way names no document.
+    #[test]
+    fn a_document_is_filed_by_its_id_and_read_back_from_its_path() {
+        let id = "00000000-0000-8005-8b12-1a825fd6bafa";
+        assert_eq!(doc_file_rel(id), format!("fa/{id}.md"));
+        let path = format!("slack/render_markdown/fa/{id}.md");
+        assert_eq!(markdown_uuid_of_path(&path), Some(id));
+        assert_eq!(markdown_uuid_of_path(&doc_file_rel(id)), Some(id));
+        for other in [
+            format!("slack/render_markdown/{id}/all.md"),
+            format!("slack/render_markdown/ab/{id}.md"),
+            format!("{id}.md"),
+            "slack/render_markdown/fa/.md".to_string(),
+            "garmin/render_markdown/days.md".to_string(),
+        ] {
+            assert_eq!(markdown_uuid_of_path(&other), None, "{other}");
+        }
+    }
 
     fn ok_builder() -> GridRowBuilder {
         GridRow::builder()

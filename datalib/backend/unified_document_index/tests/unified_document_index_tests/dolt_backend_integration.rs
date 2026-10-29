@@ -136,7 +136,7 @@ async fn dolt_repo_databaseless_root_reads_as_empty() {
         .unwrap()
         .is_empty());
     assert!(repo
-        .grid_row_refs_for_hits(&["slack/render_markdown/a.md".into()])
+        .grid_row_refs_for_documents(&["c-1".into()])
         .await
         .unwrap()
         .is_empty());
@@ -166,12 +166,10 @@ async fn dolt_repo_databaseless_root_reads_as_empty() {
     let _ = std::fs::remove_file(&db_path);
 }
 
-/// A qmd hit names its file as qmd spells it: lowercased, a run of `-`
-/// and `_` joined into one `-`. Its rows are found through the path key,
-/// and a row whose path only shares the key is not one of them.
+/// A hit's rows are its document's, found by the id its path names, and
+/// no other document's.
 #[tokio::test]
-async fn a_hit_finds_the_rows_of_its_file_and_no_others() {
-    use datalib_schema::grid_rows::QMD_PATH_KEY_SQL;
+async fn a_hit_finds_the_rows_of_its_document_and_no_others() {
     let db_path = unique_db_path();
     let root = Arc::new(db_path.parent().unwrap().to_path_buf());
     let repo = DoltRepo::open(root.clone()).await.unwrap();
@@ -179,33 +177,24 @@ async fn a_hit_finds_the_rows_of_its_file_and_no_others() {
     for (_t, ddl) in GRID_DDL {
         sqlx::query(*ddl).execute(&writer).await.unwrap();
     }
-    // Audited: the expression is a literal.
-    sqlx::query(sqlx::AssertSqlSafe(format!(
-        "CREATE INDEX grid_rows_by_qmd_path_key ON grid_rows ({QMD_PATH_KEY_SQL})"
-    )))
-    .execute(&writer)
-    .await
-    .unwrap();
     insert_rows(
         &writer,
         &[
-            chat_row("in-the-file", "Google_Calendar/render_markdown/Week__12.md"),
-            chat_row(
-                "same-key-other-file",
-                "googlecalendar/render_markdown/week12.md",
-            ),
-            chat_row("elsewhere", "slack/render_markdown/c-1.md"),
+            chat_row("week-12", "calendar/render_markdown/12/week-12.md"),
+            chat_row("week-13", "calendar/render_markdown/13/week-13.md"),
         ],
     )
     .await;
     commit(&writer, "rows").await;
 
+    let hit = "calendar/render_markdown/12/week-12.md";
+    let id = datalib_schema::grid_rows::markdown_uuid_of_path(hit).unwrap();
     let refs = repo
-        .grid_row_refs_for_hits(&["google-calendar/render_markdown/week-12.md".into()])
+        .grid_row_refs_for_documents(&[id.to_string()])
         .await
         .unwrap();
     let uuids: Vec<&str> = refs.iter().map(|r| r.uuid.as_str()).collect();
-    assert_eq!(uuids, ["in-the-file"]);
+    assert_eq!(uuids, ["week-12"]);
 }
 
 #[tokio::test]

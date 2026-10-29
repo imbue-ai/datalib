@@ -1,7 +1,5 @@
-//! Render one `index.md` per book plus one `.md` per (chapter,
-//! edition) under `<out_dir>/<stanza>/render_markdown/thucydides/histories/`,
-//! each emitting into the render store all rows for
-//! that doc.
+//! Render one document per book plus one per (chapter, edition), each
+//! emitting into the render store all rows for that doc.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -12,7 +10,7 @@ use chrono::{DateTime, Duration, TimeZone, Utc};
 use datalib_etl::layout::render_markdown_root;
 use datalib_etl::progress::Progress;
 use datalib_etl_render::front_matter::yaml_scalar;
-use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::html::{escape_md_block, escape_md_inline};
 use datalib_schema::edges::EdgeRow;
 use datalib_schema::grid_rows::GridRow;
@@ -125,15 +123,10 @@ fn render_book(
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<()> {
     let m_uuid = ids::book(source_id, &book.n).uuid;
-    let book_dir = render_markdown_root(out_dir, source_id).join(book_content_rel(&book.n));
-    fs::create_dir_all(&book_dir).with_context(|| format!("mkdir -p {}", book_dir.display()))?;
-    let md_path = book_dir.join("index.md");
-
-    let md = render_book_md(book);
-    fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
+    let (md_path, md_rel) = write_doc(out_dir, source_id, &m_uuid, &render_book_md(book))?;
 
     let mut problems: Vec<ProblemRow> = Vec::new();
-    let rows: Vec<GridRow> = book_grid_row(source_id, book, &m_uuid, &mut problems)
+    let rows: Vec<GridRow> = book_grid_row(source_id, book, &m_uuid, &md_rel, &mut problems)
         .into_iter()
         .collect();
     let edges: Vec<EdgeRow> = Vec::new();
@@ -170,15 +163,8 @@ fn render_chapter(
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<()> {
     let m_uuid = ids::chapter(source_id, &book.n, &chapter.n, &edition.id).uuid;
-    let rel = chapter_md_rel(source_id, &book.n, &chapter.n, &edition.id);
-    let md_path = out_dir.join(&rel);
-
-    if let Some(parent) = md_path.parent() {
-        fs::create_dir_all(parent).with_context(|| format!("mkdir -p {}", parent.display()))?;
-    }
-
     let md = render_chapter_md(source_id, chapter, edition, alignments);
-    fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
+    let (md_path, rel) = write_doc(out_dir, source_id, &m_uuid, &md)?;
 
     let mut problems: Vec<ProblemRow> = Vec::new();
     let mut rows: Vec<GridRow> = Vec::with_capacity(1 + chapter.sections.len());
@@ -240,31 +226,19 @@ fn render_chapter(
     Ok(())
 }
 
-/// Book directory path under `render_markdown/`, relative to the stanza's
-/// `render_markdown` root: `thucydides/histories/book_{NN}`. Content-only —
-/// the `<stanza>/render_markdown/` prefix is added by the callers (absolute
-/// via `layout::render_markdown_root`, rel-string via `book_dir_rel`).
-fn book_content_rel(book_n: &str) -> PathBuf {
-    let bn: u32 = book_n.parse().unwrap_or(0);
-    PathBuf::from(format!("thucydides/histories/book_{bn:02}"))
-}
-
-fn book_dir_rel(stanza: &str, book_n: &str) -> PathBuf {
-    PathBuf::from(stanza)
-        .join(datalib_etl::layout::RENDER_MARKDOWN_DIR)
-        .join(book_content_rel(book_n))
-}
-
-fn chapter_md_rel(stanza: &str, book_n: &str, ch_n: &str, edition_id: &str) -> String {
-    let ci: u32 = ch_n.parse().unwrap_or(0);
-    // `_<edition>.md`, not `.<edition>.md`: qmd's docid normalization
-    // collapses `.x.md` to `-x.md` but our `norm_path` keeps the dot,
-    // so a dotted form would miss the hit-to-row path lookup. Edition
-    // ids contain no dots (the work prefix is stripped at parse time).
-    format!(
-        "{}/chapter_{ci:03}_{edition_id}.md",
-        book_dir_rel(stanza, book_n).display()
-    )
+/// Write a document to the file its id names; its path, and that path
+/// relative to the data root, which its rows name.
+fn write_doc(out_dir: &Path, source_id: &str, m_uuid: &str, md: &str) -> Result<(PathBuf, String)> {
+    let md_path = doc_md_path(&render_markdown_root(out_dir, source_id), m_uuid);
+    let dir = md_path.parent().expect("a document's file has a folder");
+    fs::create_dir_all(dir).with_context(|| format!("mkdir -p {}", dir.display()))?;
+    fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
+    let md_rel = md_path
+        .strip_prefix(out_dir)
+        .unwrap_or(&md_path)
+        .to_string_lossy()
+        .into_owned();
+    Ok((md_path, md_rel))
 }
 
 fn chapter_locator(book_n: &str, ch_n: &str) -> String {
@@ -433,6 +407,7 @@ fn book_grid_row(
     stanza: &str,
     book: &Book,
     bk_uuid: &str,
+    md_rel: &str,
     problems: &mut Vec<ProblemRow>,
 ) -> Option<GridRow> {
     GridRow::builder()
@@ -450,10 +425,7 @@ fn book_grid_row(
         .conversation_uuid(bk_uuid.to_string())
         .entire_chat(format!("/chat/{bk_uuid}"))
         .body(book_text_for_grid(book))
-        .qmd_path(Some(format!(
-            "{}/index.md",
-            book_dir_rel(stanza, &book.n).display()
-        )))
+        .qmd_path(Some(md_rel.to_string()))
         .source_url(Some(format!(
             "https://scaife.perseus.org/reader/{DEFAULT_EDITION_URN}:{}/",
             book.n

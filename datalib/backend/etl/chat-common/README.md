@@ -190,16 +190,13 @@ Three constraints, each easy to undo by accident:
 
 Most of a provider's shape reaches the renderer through
 `RenderProfile` — its `grid_rows` taxonomy, its `source_label`, its
-`created_at` precision. Three knobs exist for one source each, and are
-worth knowing about before you invent a fourth:
+`created_at` precision. Two knobs exist for one source each, and are
+worth knowing about before you invent a third:
 
 - **`RenderProfile` is per *call*, not per source.** Beeper bridges
   many upstreams and its taxonomy is per-network ("Signal Chat",
   "Google Chat Message"), so it groups its chats by network and calls
   `render_all` once per group.
-- **`NormalizedChat::path_prefix`** puts a segment between
-  `render_markdown/` and the chat's directory. Beeper's `<network>/`, so
-  two upstreams bridged into one stanza stay apart on disk.
 - **`NormalizedDoc::orphan_reactions`** carries reactions to a message
   the mirror does not have. A period-bucketed provider is expected to
   file a reaction under its *target's* period rather than its own — a
@@ -213,7 +210,7 @@ worth knowing about before you invent a fourth:
 One `NormalizedChat` per *bucket* rather than per chat is the idiom for
 a period-bucketed source (beeper, signal): attachment bundles are keyed
 by `NormalizedChat::id`, and those sources load a bundle per bucket.
-Nothing downstream notices — the path is `<chat_uuid>/<period>.md`
+Nothing downstream notices — each document is filed by its own id
 either way, and the chat-level grid row was already one per document.
 
 ## `LAYOUT_VERSION`

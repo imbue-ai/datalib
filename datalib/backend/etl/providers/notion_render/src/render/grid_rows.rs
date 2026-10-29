@@ -14,9 +14,7 @@ use serde_json::Value;
 
 use super::ids;
 use super::parse::{parent_block_of, ParsedNotion};
-use super::render::{
-    notion_thread_url, notion_url, page_qmd_path_rel, thread_qmd_path_rel, RENDER_VERSION,
-};
+use super::render::{notion_thread_url, notion_url, RENDER_VERSION};
 
 fn page_title_from(page: &Value) -> String {
     let props = page.get("properties");
@@ -171,7 +169,6 @@ fn page_row(
         .conversation_uuid(id.uuid.clone())
         .entire_chat(format!("/chat/{}", id.uuid))
         .body(title.to_string())
-        .qmd_path(Some(page_qmd_path_rel(stanza, &pid)))
         .source_url(Some(notion_url(&pid)))
         .upstream_id(Some(id.natural_key))
         .upstream_entity_kind(Some(id.entity_kind.to_string()))
@@ -195,7 +192,6 @@ fn thread_rows(
     if members_sorted.is_empty() {
         return Vec::new();
     }
-    let thread_qmd = thread_qmd_path_rel(stanza, page_id, disc_id);
     let thread_url = notion_thread_url(page_id, Some(disc_id), parent_block_id);
     let thread = ids::discussion(stanza, disc_id);
     let page_uuid = ids::page(stanza, page_id, None).uuid;
@@ -246,7 +242,6 @@ fn thread_rows(
             .conversation_uuid(thread.uuid.clone())
             .entire_chat(format!("/chat/{}", thread.uuid))
             .body(aggregated_text)
-            .qmd_path(Some(thread_qmd.clone()))
             .source_url(Some(thread_url.clone()))
             .upstream_id(Some(thread.natural_key.clone()))
             .upstream_entity_kind(Some(thread.entity_kind.to_string()))
@@ -283,7 +278,6 @@ fn thread_rows(
                 .message_index(Some(idx as i64))
                 .entire_chat(format!("/chat/{}", thread.uuid))
                 .body(comment_text_plain(c))
-                .qmd_path(Some(thread_qmd.clone()))
                 .source_url(Some(thread_url.clone()))
                 .upstream_id(Some(id.natural_key))
                 .upstream_entity_kind(Some(id.entity_kind.to_string()))
@@ -305,7 +299,7 @@ pub struct DocumentRows {
 }
 
 pub struct PageDocument {
-    /// Notion's page id: the bucket key and the path segment.
+    /// Notion's page id: the bucket key.
     pub page_uuid: String,
     /// The id datalib minted for it: the document's `markdown_uuid`.
     pub markdown_uuid: String,
@@ -320,7 +314,7 @@ pub struct PageDocument {
 }
 
 pub struct ThreadDocument {
-    /// Notion's discussion id: the bucket key and the path segment.
+    /// Notion's discussion id: the bucket key.
     pub discussion_uuid: String,
     /// The id datalib minted for it: the document's `markdown_uuid`.
     pub markdown_uuid: String,

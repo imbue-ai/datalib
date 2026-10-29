@@ -182,11 +182,9 @@ pub fn render_all(
     .context("claude chat-common render")?;
     let mut buckets = renderer.finish().buckets;
 
-    // Projects are a second pass with their own profile. They share the
-    // page-path namespace with conversations (`render_markdown/<source>/
-    // <uuid>/all.md`) and can't collide: a project UUID is never a
-    // conversation UUID. No blobs — knowledge docs carry their text
-    // inline.
+    // Projects are a second pass with their own profile. Each document is
+    // filed by its id, and a project's id is never a conversation's. No
+    // blobs — knowledge docs carry their text inline.
     if !parsed.projects.is_empty() {
         let project_chats: Vec<NormalizedChat> = parsed
             .projects
@@ -440,7 +438,6 @@ fn build_chat(
     let project_names = inputs.lookup("projects", project_names);
     NormalizedChat {
         named_after: Vec::new(),
-        path_prefix: None,
         id: chat_uuid.clone(),
         chat_uuid: chat_uuid.clone(),
         display: title.clone(),
@@ -579,7 +576,6 @@ fn build_project_page(
     }
     NormalizedChat {
         named_after: Vec::new(),
-        path_prefix: None,
         id: page_uuid.clone(),
         chat_uuid: page_uuid.clone(),
         display: name.clone(),

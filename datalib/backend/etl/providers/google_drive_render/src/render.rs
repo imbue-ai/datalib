@@ -4,12 +4,12 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl_render::front_matter::yaml_scalar;
-use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::inputs::Inputs;
 use datalib_etl_render::section::{join, Section};
 use datalib_etl_render::title::Title;
@@ -47,12 +47,6 @@ pub struct DocInput<'a> {
     pub comments: &'a [(String, Value)],
 }
 
-pub fn doc_dir(root: &Path, source_id: &str, file_id: &str) -> PathBuf {
-    datalib_etl::layout::render_markdown_root(root, source_id)
-        .join("docs")
-        .join(file_id)
-}
-
 /// Write one Doc's `.md` and its images, and return what goes in the
 /// store. `inputs` gets every raw row it read.
 pub fn render_doc(
@@ -77,15 +71,6 @@ pub fn render_doc(
     );
     inputs.read_all("comments", comment_rows.iter().map(|(id, _)| id.as_str()));
 
-    let dir = doc_dir(root, source_id, file_id);
-    fs::create_dir_all(&dir).with_context(|| format!("mkdir -p {}", dir.display()))?;
-    // An older build copied the images here; the page links its CAS now.
-    match fs::remove_dir_all(dir.join("blobs")) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-            return Err(e).with_context(|| format!("remove {}/blobs", dir.display()));
-        }
-        _ => {}
-    }
     let image_paths: HashMap<String, String> = capture
         .parts
         .iter()
@@ -113,7 +98,12 @@ pub fn render_doc(
 
     let mut sections = vec![Section::unkeyed(file.head())];
     sections.extend(interleave(&body.blocks, &threads, &placed));
-    let md_path = dir.join("index.md");
+    let md_path = doc_md_path(
+        &datalib_etl::layout::render_markdown_root(root, source_id),
+        &file.id.uuid,
+    );
+    let dir = md_path.parent().expect("a document's file has a folder");
+    fs::create_dir_all(dir).with_context(|| format!("mkdir -p {}", dir.display()))?;
     fs::write(&md_path, join(&sections)).with_context(|| format!("write {}", md_path.display()))?;
     let md_rel = md_path
         .strip_prefix(root)

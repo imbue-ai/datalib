@@ -488,7 +488,6 @@ impl ChatBuild {
             named_after,
             contacts: Vec::new(),
             inputs: self.inputs.declared(),
-            path_prefix: None,
             chat_uuid: chat_uuid(source_id, &self.guid),
             external_id: Some(self.guid.clone()),
             id: self.guid,
