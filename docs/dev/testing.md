@@ -601,7 +601,9 @@ without the rows found, and files it in a history directory as
 `<date>-<commit>-<note>.json`. `history` prints every kept run, oldest
 first, marking where the eval set changed, since scores compare only
 within one set. A run records the commit of the checkout it ran from,
-whether that checkout was clean, the machine and the eval set's hash;
+whether that checkout was clean, the machine, its load average as the
+run started and ended (times taken on a busy machine compare with
+nothing), and the eval set's hash;
 build the applet from that same checkout, or the commit says nothing.
 Thad's history is beside his eval set, in `search_eval/history/`:
 

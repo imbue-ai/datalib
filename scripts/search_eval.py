@@ -237,6 +237,7 @@ def run(args: argparse.Namespace) -> None:
         if m not in MODES:
             raise SystemExit(f"--modes: {m!r} is not one of {', '.join(MODES)}")
     root = Path(args.root).expanduser()
+    load_at_start = os.getloadavg()[0]
     server = connect(args, root)
     pages = Pages(server.get)
     results: list[dict[str, Any]] = []
@@ -286,17 +287,18 @@ def run(args: argparse.Namespace) -> None:
         "scope": args.scope,
         "corpus": held,
         "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-        "provenance": provenance(args),
+        "provenance": provenance(args, load_at_start),
         "results": results,
     }
     Path(args.out).write_text(json.dumps(record, indent=1, ensure_ascii=False) + "\n")
     print(report(record))
 
 
-def provenance(args: argparse.Namespace) -> dict[str, Any]:
+def provenance(args: argparse.Namespace, load_at_start: float) -> dict[str, Any]:
     """Where a run came from, so a kept run can be read beside another: the
-    checkout the applet is meant to be built from, the machine (times move
-    with it, and with whatever else it was doing), and which eval set."""
+    checkout the applet is meant to be built from, the machine and its load
+    average as the run started and ended (times move with both), and which
+    eval set."""
 
     def git(*a: str) -> str:
         return subprocess.run(
@@ -309,6 +311,7 @@ def provenance(args: argparse.Namespace) -> dict[str, Any]:
         "applet": None if args.http else args.applet,
         "host": platform.node(),
         "machine": f"{platform.system()} {platform.machine()}, {os.cpu_count()} cpus",
+        "load": [round(load_at_start, 1), round(os.getloadavg()[0], 1)],
         "evals_sha256": hashlib.sha256(Path(args.evals).read_bytes()).hexdigest(),
     }
 
@@ -479,8 +482,8 @@ def history(args: argparse.Namespace) -> None:
     """Every kept run, oldest first: found in the top 10, mean reciprocal
     rank and median time per answer. Scores compare only between runs on
     the same eval set; a change of set is marked where it happens."""
-    print("| at | commit | note | rows | " + " | ".join(MODES) + " |")
-    print("|---" * (len(MODES) + 4) + "|")
+    print("| at | commit | note | rows | load | " + " | ".join(MODES) + " |")
+    print("|---" * (len(MODES) + 5) + "|")
     evals = None
     kept = [load(str(path)) for path in Path(args.history).glob("*.json")]
     for record in sorted(kept, key=lambda r: ran_at(r["at"])):
@@ -499,8 +502,9 @@ def history(args: argparse.Namespace) -> None:
                 else f"{s['@10']:.0%} · {s['mrr']:.2f} · {s['p50_ms']:.0f} ms"
             )
         rows = sum((record.get("corpus") or {}).values())
+        busy = " to ".join(str(x) for x in made.get("load", [])) or "?"
         print(
-            f"| {record['at'][:16]} | {commit} | {note} | {rows} | "
+            f"| {record['at'][:16]} | {commit} | {note} | {rows} | {busy} | "
             + " | ".join(cells)
             + " |"
         )
