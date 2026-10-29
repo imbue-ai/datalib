@@ -295,14 +295,27 @@ impl RawDb {
         dr::set_volatile_payloads_in_tx(tx, "google_events", &volatile).await
     }
 
-    pub async fn google_event_ids(&self, calendar_id: &str) -> Result<HashSet<String>> {
-        let ids: Vec<String> =
-            sqlx::query_scalar("SELECT event_id FROM google_events WHERE calendar_id = ?")
-                .bind(calendar_id)
-                .fetch_all(self.pool())
-                .await
-                .context("select google event ids")?;
-        Ok(ids.into_iter().collect())
+    /// Every stored event of the calendar, with its content: what a
+    /// listing's events are compared to, to count only a changed one as
+    /// updated.
+    pub async fn google_event_payloads(
+        &self,
+        calendar_id: &str,
+    ) -> Result<HashMap<String, serde_json::Value>> {
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT event_id, json(payload) FROM google_events WHERE calendar_id = ?",
+        )
+        .bind(calendar_id)
+        .fetch_all(self.pool())
+        .await
+        .context("select google events")?;
+        rows.into_iter()
+            .map(|(id, payload)| {
+                let payload = serde_json::from_str::<serde_json::Value>(&payload)
+                    .with_context(|| format!("parse the stored event {id}"))?;
+                Ok((id, payload))
+            })
+            .collect()
     }
 
     /// The stored occurrences of these series.

@@ -281,7 +281,11 @@ pub fn render_source(
     );
     if let RenderPlan::Everything(why) = &plan {
         progress.set_message(&format!("{why}; re-rendering this source in full"));
-        tracing::info!(source = %name, why, "rendering every document");
+        let changed = stored_cursor
+            .as_ref()
+            .map(|c| changed_params(&c.params, &declared_params).join(", "))
+            .unwrap_or_default();
+        tracing::info!(source = %name, why, changed, "rendering every document");
     }
     let render_everything = matches!(plan, RenderPlan::Everything(_));
     let raw_cursor: Option<String> = match plan {
@@ -1164,6 +1168,26 @@ impl RenderPlan {
     }
 }
 
+/// The top-level params whose value differs between the stored cursor
+/// and this build: a processor's id, or one of the underscored keys.
+fn changed_params(stored: &str, declared: &serde_json::Value) -> Vec<String> {
+    let stored: serde_json::Value = serde_json::from_str(stored).unwrap_or_default();
+    let empty = serde_json::Map::new();
+    let (old, new) = (
+        stored.as_object().unwrap_or(&empty),
+        declared.as_object().unwrap_or(&empty),
+    );
+    let mut keys: Vec<String> = old
+        .keys()
+        .chain(new.keys())
+        .filter(|k| old.get(*k) != new.get(*k))
+        .cloned()
+        .collect();
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
 /// The key the render store's own DDL hash sits under, beside the
 /// processors' params. Underscored so it cannot collide with a
 /// processor id, which is a group's function name.
@@ -1310,6 +1334,18 @@ mod plan_tests {
             rendered_at_utc: "2026-01-01T00:00:00.000000Z".into(),
             tz_offset: Some("+00:00".into()),
         }
+    }
+
+    /// "render params changed" said nothing of which: a live root
+    /// re-rendered every source and its log could not say why.
+    #[test]
+    fn the_changed_params_are_named() {
+        let stored = json!({"render": {"a": 1}, "_doc_layout": 1, "_gone": true}).to_string();
+        let declared = json!({"render": {"a": 1}, "_doc_layout": 2, "_new": 0});
+        assert_eq!(
+            changed_params(&stored, &declared),
+            ["_doc_layout", "_gone", "_new"]
+        );
     }
 
     /// The steady state: the same params as last time diff from the
