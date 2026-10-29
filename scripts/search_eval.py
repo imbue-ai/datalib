@@ -13,7 +13,7 @@ The eval set is JSON: {"targets": [{"id", "uuid", "markdown_uuid", "note",
 target or another row of the same document (same `markdown_uuid`), since a
 search answers with the message it landed on. An optional "tz" (an IANA
 zone) is the zone the applet runs in, so a bare date in a query
-(`after:2025-04-17`) names the same day wherever the run is. An eval set
+(`after:2369-04-15`) names the same day wherever the run is. An eval set
 built from a real library is that library's data: keep it beside the
 library, never here.
 
