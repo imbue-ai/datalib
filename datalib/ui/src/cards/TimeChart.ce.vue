@@ -10,8 +10,10 @@ import { computed, ref, watch } from "vue";
 import uPlot from "uplot";
 import { formatBytes } from "@/config/bytes";
 import { formatClock } from "@/config/timeFormat";
+import { sinceT0, timeView } from "@/config/timeView";
 import { aligned, valueAt, yRange, type Chart, type Line } from "./dashboardCharts";
 import { axis, seriesColor } from "./plot/plot";
+import { t0TickTexts, t0Ticks } from "./plot/t0Axis";
 import { usePlot } from "./plot/usePlot";
 import PlotLegend from "./plot/PlotLegend.vue";
 
@@ -65,10 +67,22 @@ const legend = computed(() =>
 );
 
 /// The shape a plot is built for: another line, a renamed one or another
-/// unit needs a new plot; anything else is new data on the old one.
+/// unit needs a new plot, and so does another zone or T0 for its time
+/// axis; anything else is new data on the old one.
 const shape = computed(() =>
-  JSON.stringify([props.chart.unit, props.chart.lines.map((l) => [l.label, l.color])]),
+  JSON.stringify([
+    props.chart.unit,
+    props.chart.lines.map((l) => [l.label, l.color]),
+    timeView.value,
+  ]),
 );
+
+/// An instant as the axis and the crosshair read it: the clock, or the
+/// distance from T0 while one is set.
+const timeText = (ms: number) => {
+  const t0 = timeView.value.t0;
+  return t0 ? sinceT0(ms, t0.ms) : formatClock(ms);
+};
 const shown = ref<boolean[]>([]);
 watch(shape, () => (shown.value = props.chart.lines.map(() => true)), { immediate: true });
 
@@ -119,7 +133,27 @@ const { resetZoom } = usePlot(box, {
         font: theme.fontSmall,
         size: 20,
         space: 72,
-        values: (_u, splits) => splits.map((s) => formatClock(s * 1000)),
+        // uPlot's own ticks on the clock; from T0, whole steps from it.
+        ...(timeView.value.t0
+          ? {
+              splits: (u: uPlot, _axis: number, min: number, max: number) => {
+                const k = Math.max(2, Math.round(u.bbox.width / uPlot.pxRatio / 60));
+                return t0Ticks(min * 1000, max * 1000, timeView.value.t0!.ms, k).map(
+                  (ms) => ms / 1000,
+                );
+              },
+            }
+          : {}),
+        values: (u, splits) => {
+          const t0 = timeView.value.t0;
+          if (!t0) return splits.map((s) => formatClock(s * 1000));
+          const spanMs = ((u.scales.x.max ?? 1) - (u.scales.x.min ?? 0)) * 1000;
+          return t0TickTexts(
+            splits.map((s) => s * 1000),
+            t0.ms,
+            spanMs,
+          );
+        },
       }),
       axis(theme, "value", {
         font: theme.fontSmall,
@@ -169,7 +203,7 @@ watch(() => props.domain[0], resetZoom);
       ref="box"
       class="tc-plot"
       role="img"
-      :aria-label="`${chart.title} over the run${cursorAt === null ? '' : `, at ${formatClock(readAt)}`}`"
+      :aria-label="`${chart.title} over the run${cursorAt === null ? '' : `, at ${timeText(readAt)}`}`"
     />
   </figure>
 </template>

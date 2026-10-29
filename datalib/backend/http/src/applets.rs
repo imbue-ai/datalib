@@ -463,6 +463,7 @@ impl AppletRegistry {
         path_and_query: &str,
         content_type: Option<&str>,
         body: &[u8],
+        hangup: &Hangup,
     ) -> Result<ProxyResponse, ProxyError> {
         // Configured but not running is a different failure from not
         // configured at all, and the message says which.
@@ -496,13 +497,17 @@ impl AppletRegistry {
                 ))
             }
         };
-        let answer = forward(
+        // A write the browser gave up on still lands whole: cut off
+        // halfway, it could leave a store's uncommitted rows behind.
+        let answer = forward_within(
             port,
             method,
             path_and_query,
             content_type,
             body,
             Some(&self.secret),
+            APPLET_READ_TIMEOUT,
+            (!is_write(method)).then_some(hangup),
         );
         if answer.is_ok() && is_write(method) {
             if let Some(nudge) = self.after_writes.get() {
@@ -996,6 +1001,49 @@ impl std::fmt::Display for ProxyError {
     }
 }
 
+/// One forwarded read's connection to its applet, held so that the side
+/// waiting on it can hang up once its own caller has gone. The applet
+/// then sees the connection close and drops the work (a search the
+/// person has typed past) instead of finishing what nobody will read.
+#[derive(Clone, Default)]
+pub struct Hangup(Arc<Mutex<Line>>);
+
+#[derive(Default)]
+struct Line {
+    stream: Option<TcpStream>,
+    hung_up: bool,
+}
+
+impl Hangup {
+    pub fn hang_up(&self) {
+        let mut line = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        line.hung_up = true;
+        if let Some(stream) = line.stream.take() {
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+        }
+    }
+
+    /// Keeps `stream` to hang up on; false when the caller already has.
+    fn hold(&self, stream: &TcpStream) -> std::io::Result<bool> {
+        let mut line = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        if line.hung_up {
+            return Ok(false);
+        }
+        line.stream = Some(stream.try_clone()?);
+        Ok(true)
+    }
+}
+
+/// Hangs up when dropped: held by a request's handler, which is dropped
+/// when its caller goes away before the answer.
+pub struct HangUpOnDrop(pub Hangup);
+
+impl Drop for HangUpOnDrop {
+    fn drop(&mut self) {
+        self.0.hang_up();
+    }
+}
+
 /// How long the gateway waits for the applet's next bytes — including
 /// the first, which is the whole search for an applet that builds its
 /// answer before sending it.
@@ -1017,9 +1065,11 @@ pub fn forward(
         body,
         secret,
         APPLET_READ_TIMEOUT,
+        None,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn forward_within(
     port: u16,
     method: &str,
@@ -1028,6 +1078,7 @@ fn forward_within(
     body: &[u8],
     secret: Option<&str>,
     read_timeout: Duration,
+    hangup: Option<&Hangup>,
 ) -> Result<ProxyResponse, ProxyError> {
     let failed = ProxyError::Failed;
     // The caller encodes; this is the check that it did, because the
@@ -1046,6 +1097,11 @@ fn forward_within(
     stream
         .set_read_timeout(Some(read_timeout))
         .map_err(|e| failed(e.to_string()))?;
+    if let Some(hangup) = hangup {
+        if !hangup.hold(&stream).map_err(|e| failed(e.to_string()))? {
+            return Err(failed("the caller hung up".to_string()));
+        }
+    }
 
     let mut req = format!(
         "{method} {path_and_query} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n"
@@ -1236,6 +1292,65 @@ mod tests {
         assert_eq!(encode_path("/é"), "/%C3%A9");
     }
 
+    /// A read whose caller gave up closes its connection to the applet
+    /// at once, so the applet stops working on it; the gateway's own
+    /// read timeout would hold it open for 30 s, through the whole search.
+    #[test]
+    fn hanging_up_closes_the_connection_to_the_applet() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (asked_tx, asked) = std::sync::mpsc::channel();
+        let (closed_tx, closed) = std::sync::mpsc::channel();
+        let applet = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = sock.read(&mut buf);
+            asked_tx.send(()).unwrap();
+            while matches!(sock.read(&mut buf), Ok(n) if n > 0) {}
+            closed_tx.send(()).unwrap();
+        });
+        let hangup = Hangup::default();
+        let gateway = {
+            let hangup = hangup.clone();
+            std::thread::spawn(move || {
+                forward_within(
+                    port,
+                    "GET",
+                    "/search",
+                    None,
+                    b"",
+                    None,
+                    APPLET_READ_TIMEOUT,
+                    Some(&hangup),
+                )
+            })
+        };
+        asked
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the request never reached the applet");
+
+        drop(HangUpOnDrop(hangup.clone()));
+        closed
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the applet's connection stayed open after the hang-up");
+        assert!(gateway.join().unwrap().is_err());
+        applet.join().unwrap();
+
+        let idle = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let err = forward_within(
+            idle.local_addr().unwrap().port(),
+            "GET",
+            "/search",
+            None,
+            b"",
+            None,
+            APPLET_READ_TIMEOUT,
+            Some(&hangup),
+        )
+        .expect_err("a caller that hung up first is not forwarded");
+        assert_eq!(err, ProxyError::Failed("the caller hung up".into()));
+    }
+
     #[test]
     fn forward_refuses_an_unencoded_target() {
         let err = match forward(1, "GET", "/x\r\nEvil: 1", None, b"", None) {
@@ -1275,6 +1390,7 @@ mod tests {
             b"",
             None,
             Duration::from_millis(200),
+            None,
         )
         .expect_err("nothing was sent");
         assert_eq!(
@@ -1295,6 +1411,7 @@ mod tests {
             b"",
             None,
             Duration::from_millis(200),
+            None,
         )
         .expect_err("the answer never finished");
         assert_eq!(

@@ -758,6 +758,13 @@ A new chart starts there.
   `themeOf(el)`, which reads the colours a canvas needs off those
   tokens, since a canvas cannot take `var()`; `axis()`, the app's axis
   look; and `withAlpha()` for a fill.
+- **`t0Axis.ts`** is a time axis while T0 is set (`docs/dev/chips.md`
+  §"A date"): ticks on whole steps counted from T0 (`t0Ticks`), each
+  labelled by its distance from it in the units the step needs, the
+  zero ones left out (`t0TickTexts`): `T0`, `+30m`, `+1d 12h`, `-2y`,
+  `+1y 25d`. A chart's time axis uses it in place of its own ticks, and
+  has the time view in its `shape`, so setting or clearing T0 rebuilds
+  it.
 - **`PLOT_CSS`** (`plotCss.ts`) is uPlot's own stylesheet and `plot.css`
   (the crosshair, the zoom's selection, the legend). Neither a card's
   shadow root nor a document's frame sees the page's styles, so every

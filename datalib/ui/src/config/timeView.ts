@@ -267,6 +267,35 @@ export function millisText(at: Instant, zone: Zone): string {
   return `${w.year}-${p2(w.month)}-${p2(w.day)} ${p2(w.hour)}:${p2(w.minute)}:${p2(w.second)}.${ms}`;
 }
 
+/** An instant as a `datetime-local` input holds it, under `zone`:
+ *  `2026-10-29T09:36:35.546`. */
+export function inputOfInstant(at: Instant, zone: Zone): string {
+  return millisText(at, zone).replace(" ", "T");
+}
+
+const WALL_INPUT = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/;
+
+/** What a `datetime-local` input holds, read as a wall clock under
+ *  `zone`: the instant, with that zone's offset then as its own. Null
+ *  for anything else, or a clock no calendar has (`2026-02-30`). */
+export function instantOfInput(value: string, zone: Zone): Instant | null {
+  const m = WALL_INPUT.exec(value.trim());
+  if (!m) return null;
+  const [year, month, day, hour, minute] = [+m[1]!, +m[2]!, +m[3]!, +m[4]!, +m[5]!];
+  const wall: Wall = { year, month, day, hour, minute, second: +(m[6] ?? 0) };
+  const check = new Date(Date.UTC(year, month - 1, day, hour, minute, wall.second));
+  const real =
+    check.getUTCFullYear() === year &&
+    check.getUTCMonth() === month - 1 &&
+    check.getUTCDate() === day &&
+    check.getUTCHours() === hour &&
+    check.getUTCMinutes() === minute &&
+    check.getUTCSeconds() === wall.second;
+  if (!real) return null;
+  const ms = instantOfWall(wall, zone, null) + +(m[7] ?? "0").padEnd(3, "0");
+  return { ms, offsetMin: offsetAt({ ms, offsetMin: null }, zone) };
+}
+
 /** How far `ms` is from T0, signed, to the millisecond: `+1.250`,
  *  `-4:05.000`, `+2:00:00.000`, `-3d 04:05:06.789`, `+343y 075d
  *  00:23:24.454`. The largest unit that is not zero leads, unpadded; the
@@ -274,30 +303,51 @@ export function millisText(at: Instant, zone: Zone): string {
  *  A year is a calendar year counted on from the earlier of the two in
  *  UTC, so the same day a year on is `1y 000d`, leap day or not. */
 export function sinceT0(ms: number, t0: number): string {
-  const d = Math.round(ms - t0);
-  const [from, to] = d < 0 ? [ms, t0] : [t0, ms];
-  const years = wholeYears(from, to);
-  const a = to - yearsOn(from, years);
-  const frac = `.${String(a % 1000).padStart(3, "0")}`;
-  const sec = Math.floor(a / 1000) % 60;
-  const min = Math.floor(a / 60_000) % 60;
-  const hour = Math.floor(a / 3_600_000) % 24;
-  const day = Math.floor(a / 86_400_000);
-  const clock = `${p2(hour)}:${p2(min)}:${p2(sec)}`;
+  const { sign, years, days, hours, minutes, seconds, millis } = partsSinceT0(ms, t0);
+  const frac = `.${String(millis).padStart(3, "0")}`;
+  const clock = `${p2(hours)}:${p2(minutes)}:${p2(seconds)}`;
   const whole = years
-    ? `${years}y ${String(day).padStart(3, "0")}d ${clock}`
-    : day
-      ? `${day}d ${clock}`
-      : hour
-        ? `${hour}:${p2(min)}:${p2(sec)}`
-        : min
-          ? `${min}:${p2(sec)}`
-          : `${sec}`;
-  const sign = d < 0 ? "-" : d > 0 ? "+" : "";
-  return `${sign}${whole}${frac}`;
+    ? `${years}y ${String(days).padStart(3, "0")}d ${clock}`
+    : days
+      ? `${days}d ${clock}`
+      : hours
+        ? `${hours}:${p2(minutes)}:${p2(seconds)}`
+        : minutes
+          ? `${minutes}:${p2(seconds)}`
+          : `${seconds}`;
+  return `${sign < 0 ? "-" : sign > 0 ? "+" : ""}${whole}${frac}`;
 }
 
-function yearsOn(ms: number, years: number): number {
+/** How far `ms` is from T0, in its units: calendar years, then days down
+ *  to milliseconds, and which side of T0 it is on. */
+export type SinceT0 = {
+  sign: -1 | 0 | 1;
+  years: number;
+  days: number;
+  hours: number;
+  minutes: number;
+  seconds: number;
+  millis: number;
+};
+
+export function partsSinceT0(ms: number, t0: number): SinceT0 {
+  const d = Math.round(ms - t0);
+  const [from, to] = d < 0 ? [t0 + d, t0] : [t0, t0 + d];
+  const years = wholeYears(from, to);
+  const a = to - yearsOn(from, years);
+  return {
+    sign: d < 0 ? -1 : d > 0 ? 1 : 0,
+    years,
+    days: Math.floor(a / 86_400_000),
+    hours: Math.floor(a / 3_600_000) % 24,
+    minutes: Math.floor(a / 60_000) % 60,
+    seconds: Math.floor(a / 1000) % 60,
+    millis: a % 1000,
+  };
+}
+
+/** The same instant `years` calendar years on (or back), in UTC. */
+export function yearsOn(ms: number, years: number): number {
   const at = new Date(ms);
   at.setUTCFullYear(at.getUTCFullYear() + years);
   return at.getTime();

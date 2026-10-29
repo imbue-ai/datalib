@@ -428,8 +428,8 @@ pub fn parse_retry_after(value: Option<&str>) -> Option<Duration> {
 }
 
 /// The marker header the router curl routes on (`latchkey-curl-router`
-/// in github.com/imbue-ai/latchkey-curl-shims matches it by name and
-/// ignores the value).
+/// in github.com/imbue-ai/latchkey-curl-shims). The value `1` asks for
+/// the router's default profile; a profile name would select that one.
 pub const IMPERSONATE_MARKER_HEADER: &str = "X-Imbue-Impersonate: 1";
 
 /// URL prefix that makes a request leave from the user's own machine rather
@@ -666,7 +666,12 @@ mod live {
         // router curl's marker header. Only on the latchkey path -- a
         // bypass_latchkey request uses plain curl, which has no router
         // curl to act on the marker and would just send it upstream.
+        // The Chrome profile advertises compression and the router hands
+        // the reply on as the server sent it, so the decoding is this
+        // curl's: through a latchkey gateway, it is the curl at this end
+        // that decodes, with the header dump describing the wire body.
         if !req.bypass_latchkey && req.service.impersonates() {
+            cmd.arg("--compressed");
             cmd.arg("-H").arg(IMPERSONATE_MARKER_HEADER);
         }
         let writes_body_to_stdin = req.body.is_some();

@@ -2,8 +2,8 @@
 // The clock in the status bar: the time now in the zone every date in
 // the app is drawn in, or the T0 every date chip is drawn from, and the
 // menu that changes it — the zone, how a day is written, a 12- or 24-hour
-// clock, clearing T0. A click or a right-click opens it; the setting is
-// `config/timeView.ts`.
+// clock, setting T0 by hand or clearing it. A click or a right-click opens
+// it; the setting is `config/timeView.ts`.
 import { computed, nextTick, onMounted, onUnmounted, ref, useTemplateRef } from "vue";
 import {
   LOCAL,
@@ -11,6 +11,8 @@ import {
   WRITTEN,
   allZones,
   formatAt,
+  inputOfInstant,
+  instantOfInput,
   millisText,
   offsetAt,
   offsetText,
@@ -61,7 +63,7 @@ const face = computed(() => {
 });
 const faceTitle = computed(() => {
   if (t0Text.value) {
-    return "Every date is shown as its distance from T0, earlier ones negative. Click to clear T0 or change the zone.";
+    return "Every date is shown as its distance from T0, earlier ones negative. Click to change or clear T0, or change the zone.";
   }
   const z = timeView.value.zone;
   const where =
@@ -84,6 +86,7 @@ async function show() {
   if (r)
     anchor.value = { right: window.innerWidth - r.right, bottom: window.innerHeight - r.top + 4 };
   search.value = "";
+  picking.value = false;
   open.value = true;
   await nextTick();
   searchBox.value?.focus();
@@ -109,6 +112,32 @@ function pickZone(zone: Zone) {
 
 function clearT0() {
   setT0(null);
+  close();
+}
+
+// Setting T0 by hand: a date and time to the millisecond, read in the
+// zone picked beside it. Changing the zone keeps the clock as typed, so
+// it names a different instant.
+const picking = ref(false);
+const pickedText = ref("");
+const pickedZone = ref("local");
+const t0Input = useTemplateRef<HTMLInputElement>("t0Input");
+const zoneOfKey = (key: string): Zone => (key === "local" ? LOCAL : { kind: "named", name: key });
+const picked = computed(() => instantOfInput(pickedText.value, zoneOfKey(pickedZone.value)));
+
+async function startPicking() {
+  const z = timeView.value.zone;
+  pickedZone.value = z.kind === "named" ? z.name : "local";
+  const from = timeView.value.t0 ?? { ms: Date.now(), offsetMin: null };
+  pickedText.value = inputOfInstant(from, zoneOfKey(pickedZone.value));
+  picking.value = true;
+  await nextTick();
+  t0Input.value?.focus();
+}
+
+function setPickedT0() {
+  if (!picked.value) return;
+  setT0(picked.value);
   close();
 }
 
@@ -177,6 +206,50 @@ const sampleOf = (days: DayStyle, hours: HourCycle) =>
           @contextmenu.stop
         >
           <div class="tv-heading">T0</div>
+          <form
+            v-if="picking"
+            class="tv-t0-form"
+            data-testid="time-view-t0-form"
+            @submit.prevent="setPickedT0"
+          >
+            <input
+              ref="t0Input"
+              v-model="pickedText"
+              class="tv-field"
+              type="datetime-local"
+              step="0.001"
+              aria-label="T0 date and time"
+            />
+            <select v-model="pickedZone" class="tv-field" aria-label="T0 time zone">
+              <option value="local">This computer ({{ zonePlace(machineZone) }})</option>
+              <option value="UTC">UTC</option>
+              <optgroup v-if="recent.length" label="Recent">
+                <option v-for="z in recent" :key="z.name" :value="z.name">
+                  {{ zonePlace(z.name) }} {{ z.offset }}
+                </option>
+              </optgroup>
+              <optgroup label="Every zone">
+                <option v-for="name in zoneList" :key="name" :value="name">
+                  {{ name.replace(/_/g, " ") }}
+                </option>
+              </optgroup>
+            </select>
+            <div class="tv-t0-actions">
+              <button type="button" class="tv-button" @click="picking = false">Cancel</button>
+              <button type="submit" class="tv-button is-primary" :disabled="!picked">Set T0</button>
+            </div>
+          </form>
+          <div
+            v-else
+            class="tv-item"
+            role="menuitem"
+            data-testid="time-view-pick-t0"
+            @click="startPicking"
+          >
+            <span class="tv-check" />
+            <span class="tv-label">{{ t0Text ? "Change T0…" : "Set T0…" }}</span>
+            <span v-if="!t0Text" class="tv-detail">or right-click a date</span>
+          </div>
           <div
             v-if="t0Text"
             class="tv-item"
@@ -188,7 +261,6 @@ const sampleOf = (days: DayStyle, hours: HourCycle) =>
             <span class="tv-label">Clear T0</span>
             <span class="tv-detail">{{ t0Text }}</span>
           </div>
-          <div v-else class="tv-none">Right-click a date: Use as T0</div>
           <div class="tv-divider" />
           <div class="tv-heading">Time zone</div>
           <div
@@ -408,6 +480,45 @@ const sampleOf = (days: DayStyle, hours: HourCycle) =>
   background: var(--datalib-surface);
   color: var(--datalib-fg);
   font: inherit;
+}
+.tv-t0-form {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 8px;
+}
+.tv-field {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 4px 6px;
+  border: 1px solid var(--datalib-border);
+  border-radius: var(--datalib-radius);
+  background: var(--datalib-surface);
+  color: var(--datalib-fg);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+.tv-t0-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.tv-button {
+  padding: 3px 10px;
+  border: 1px solid var(--datalib-border);
+  border-radius: var(--datalib-radius);
+  background: var(--datalib-surface);
+  color: var(--datalib-fg);
+  cursor: pointer;
+  font: inherit;
+}
+.tv-button.is-primary {
+  border-color: var(--datalib-accent);
+  color: var(--datalib-accent);
+}
+.tv-button:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 .tv-none {
   padding: 4px 14px 4px 28px;
