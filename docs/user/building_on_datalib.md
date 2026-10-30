@@ -346,7 +346,7 @@ datalib-doltlite -readonly unified_document_index/grid_index/db.doltlite_db \
 
 With the app up, `GET /applet/unified_document_index/problems?q=…`
 serves the same rows a page at a time, in the search bar's grammar:
-`source_id:gmail severity:error`, with `outcome:`, `reason:`, `stage:`
+`source:gmail severity:error`, with `outcome:`, `reason:`, `stage:`
 and `field:` too. Each step's counts are its `problems` series in the
 run store's `metrics`, one per `severity=` label; they are the
 errors and warnings cell on the Manage screen. The copies lag the

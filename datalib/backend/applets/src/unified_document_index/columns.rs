@@ -597,7 +597,7 @@ mod tests {
     #[test]
     fn the_grid_offers_every_key_it_reads() {
         let keys = grid_keys();
-        assert_eq!(values_of(&keys, "source_id"), KeyValues::Source);
+        assert_eq!(values_of(&keys, "source"), KeyValues::Source);
         assert_eq!(values_of(&keys, "channel"), KeyValues::Text);
         assert_eq!(values_of(&keys, "before"), KeyValues::Stamp);
         assert_eq!(

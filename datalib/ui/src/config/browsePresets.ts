@@ -150,7 +150,7 @@ export function browseName(sourceName: string, type: string | null = null): stri
 /// it — one row per thread, conversation, PR or page, not the messages
 /// inside them, which repeat the document's name down the grid and are
 /// one chip-delete away (`is:document`). A group id is its directory
-/// under the data root, which is what `source_id:` matches on. Its own
+/// under the data root, which is what `source:` matches on. Its own
 /// data, not datalib's report on it: the storage rows sit in the same
 /// directory but are filed under `datalib`, and the filter leaves them
 /// out.
@@ -158,6 +158,6 @@ export function browseQuery(groupId: string, type: string | null = null): string
   // A diff's browse is the rows that moved: `-change:unchanged` drops
   // the rows a changed document carries for context, and every diff
   // row is worth a line of its own, so no `is:document`.
-  if (type === DIFF_TYPE) return `source_id:${groupId} -change:unchanged`;
-  return `source_id:${groupId} is:document`;
+  if (type === DIFF_TYPE) return `source:${groupId} -change:unchanged`;
+  return `source:${groupId} is:document`;
 }

@@ -783,7 +783,7 @@ async fn land(
         .await
         .map_err(index)?;
     let fetched = started.elapsed();
-    // Every term, `source_id:` too: a source's file can hold rows filed
+    // Every term, `source:` too: a source's file can hold rows filed
     // under another, which its collection's ranking does not drop.
     let kept = if parsed.terms.is_empty() {
         None
@@ -1227,7 +1227,7 @@ fn kept_of(
 }
 
 /// Whether a search's structured terms narrow it below whole sources,
-/// which `collection_scope` already does for a positive `source_id:`.
+/// which `collection_scope` already does for a positive `source:`.
 fn narrows_documents(parsed: &ParsedQuery) -> bool {
     let scoped = collection_scope(parsed);
     parsed.terms.iter().any(|t| {
@@ -1302,19 +1302,19 @@ async fn ranked_rows(
 /// The qmd collections a parsed query may draw from.
 ///
 /// There is one collection per group, named after it, and
-/// `source_id:` names a group — so a scoped query becomes a scoped
+/// `source:` names a group — so a scoped query becomes a scoped
 /// retrieval instead of a filter over whatever the global top-N happened
 /// to contain. That difference is the whole point: a source whose hits
 /// never enter the global list cannot be recovered by filtering, so
-/// `source_id:x <text>` used to come back empty while `x` matched
+/// `source:x <text>` used to come back empty while `x` matched
 /// strongly on its own.
 ///
-/// Only positive terms scope. A negated `-source_id:x` is "every
+/// Only positive terms scope. A negated `-source:x` is "every
 /// collection but this one", which needs a list this function has no way
 /// to obtain; it stays unscoped and is left to the SQL filter, which is
 /// no worse than before.
 ///
-/// `source_id:datalib` names no collection: the storage rows are filed
+/// `source:datalib` names no collection: the storage rows are filed
 /// under datalib but their markdown still sits in the measured source's
 /// tree, so there is nothing called `datalib` to retrieve from. It is
 /// dropped here and left to the SQL filter — scoping to a collection
@@ -1790,7 +1790,7 @@ fn strip_frontmatter(text: &str) -> &str {
 mod tests {
     use super::*;
 
-    /// What `source_id:` hands qmd: every positive id; nothing for a
+    /// What `source:` hands qmd: every positive id; nothing for a
     /// negated one or for `datalib`, which has no collection.
     #[test]
     fn source_ids_become_the_collections_qmd_searches() {
@@ -1798,12 +1798,12 @@ mod tests {
         let only =
             |names: &[&str]| CollectionScope::Only(names.iter().map(|n| n.to_string()).collect());
         assert_eq!(scope("tea"), CollectionScope::All);
-        assert_eq!(scope("tea source_id:a"), only(&["a"]));
-        assert_eq!(scope("tea source_id:a source_id:b"), only(&["a", "b"]));
-        assert_eq!(scope("tea -source_id:a"), CollectionScope::All);
-        assert_eq!(scope("tea -source_id:a source_id:b"), only(&["b"]));
+        assert_eq!(scope("tea source:a"), only(&["a"]));
+        assert_eq!(scope("tea source:a source:b"), only(&["a", "b"]));
+        assert_eq!(scope("tea -source:a"), CollectionScope::All);
+        assert_eq!(scope("tea -source:a source:b"), only(&["b"]));
         assert_eq!(
-            scope(&format!("tea source_id:{}", datalib_source_id())),
+            scope(&format!("tea source:{}", datalib_source_id())),
             CollectionScope::All
         );
     }
@@ -2666,7 +2666,7 @@ mod tests {
         assert_eq!(g.errors.len(), 1, "{:?}", g.errors);
 
         let params = map::MatchParams {
-            q: Some("source_id:enterprise".to_string()),
+            q: Some("source:enterprise".to_string()),
         };
         let matched = map::matches_handler(State(s), Query(params)).await.0;
         assert!(matched.markdown_uuids.is_empty());

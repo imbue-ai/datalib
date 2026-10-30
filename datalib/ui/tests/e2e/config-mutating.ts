@@ -10,7 +10,7 @@ export const CONFIG_MUTATING = [
   // Syncs, which write the root's stores.
   "data-sources-layout",
   "data-sources-menu",
-  "grid-source-id",
+  "grid-source",
   // Writes the remote-media allow-list, not the config.
   "remote-images-load",
   "wizard-select",

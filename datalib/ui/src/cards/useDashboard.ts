@@ -135,7 +135,7 @@ export function useDashboard(
     const everything = row.id === "unified_document_index";
     const q = {
       url: `${UNIFIED_DOCUMENT_INDEX}/problems`,
-      q: everything ? "" : `source_id:${row.id}`,
+      q: everything ? "" : `source:${row.id}`,
       name: everything ? "Problems" : `Problems: ${row.name.label}`,
     };
     open(`gridView(${JSON.stringify(q)})`);

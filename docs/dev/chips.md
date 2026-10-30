@@ -288,7 +288,7 @@ and imports `chip.css`.
 ## In the search field
 
 The search field (`ui/src/search/`) draws the value of a term whose key
-names a source, a group or a step (`source_id:slack`, the log's
+names a source, a group or a step (`source:slack`, the log's
 `step:slack/ingest`) as that entity's chip, and a person key's value
 that is a handle (`from:email:riker@enterprise.org`) as the person's
 chip, and one that names a contact (`from:contact:<id>`) as the

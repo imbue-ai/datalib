@@ -440,7 +440,7 @@ Pick the surface that fits the question:
   (every document's text by BM25, from qmd's keyword index, a document
   holding the words as typed first) or `meaning` (the 1,000 documents
   nearest the text by cosine over qmd's vectors). Each is ranked within
-  the rows the other terms leave, so `from:`, `after:` or `source_id:`
+  the rows the other terms leave, so `from:`, `after:` or `source:`
   narrow what is ranked rather than what is kept. With no `tab`, the three
   are fused by reciprocal rank, identifiers aside; the command line, the
   map and the app's links all get that answer. Each row's `link` is where opening it goes, `datalib:doc/<page>#<section>`: its page, at the row when it is a message of the page. It answers a page: `limit=` rows from `offset=`, with `total`

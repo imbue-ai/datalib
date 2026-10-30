@@ -334,7 +334,7 @@ def provenance(args: argparse.Namespace, tz: str | None) -> dict[str, Any]:
 def scoped(q: str, target: dict[str, Any]) -> str:
     """`q` narrowed to the target's source, as a person who knew where it was
     would ask; a query that names a source already is asked as it is."""
-    return q if "source_id:" in q else f"{q} source_id:{target['source_id']}"
+    return q if "source:" in q else f"{q} source:{target['source_id']}"
 
 
 def corpus(get: Callable[[str], Any]) -> dict[str, int]:
@@ -598,7 +598,7 @@ def audit_me(args: argparse.Namespace) -> None:
         print("|---" * (header.count("|") - 1) + "|")
         shown: list[str] = []
         for source in sources:
-            scope = f"source_id:{source}"
+            scope = f"source:{source}"
             cells = [str(ask(scope)["total"])]
             cells += [
                 str(ask(f"{role}:me {scope}")["total"])
@@ -644,7 +644,7 @@ def main() -> None:
     r.add_argument(
         "--scope",
         choices=["source"],
-        help="narrow every query to its target's source, as `source_id:` would",
+        help="narrow every query to its target's source, as `source:` would",
     )
     r.add_argument(
         "--applet", default=DEFAULT_APPLET, help="the datalib-applet binary to start"

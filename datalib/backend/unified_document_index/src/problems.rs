@@ -161,7 +161,7 @@ mod tests {
         );
         assert_eq!(
             for_column::<ProblemColumn>("source_ref"),
-            Some(("source_id", "source_id"))
+            Some(("source", "source_id"))
         );
         assert_eq!(for_column::<ProblemColumn>("sample"), None);
     }

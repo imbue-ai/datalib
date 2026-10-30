@@ -25,7 +25,7 @@ export function searchPlaceholder(bySource: RowGroup<Partial<SearchRow>>[]): str
       null,
     );
   if (!biggest) return PLAIN_HINT;
-  const examples = [`source_id:${biggest.values[0]}`];
+  const examples = [`source:${biggest.values[0]}`];
   const year = biggest.sample.touched_at?.slice(0, 4);
   if (year && /^\d{4}$/.test(year)) examples.push(`after:${year}-01-01`);
   return `${PLAIN_HINT}  (try: ${examples.join(", ")})`;

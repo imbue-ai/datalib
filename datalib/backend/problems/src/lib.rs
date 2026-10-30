@@ -336,7 +336,7 @@ pub struct ProblemRow {
     pub problem_uuid: String,
     /// The id of the source that produced this, matching
     /// `markdowns.source_id`.
-    #[col(sql = "VARCHAR(64)", search, alias = "source")]
+    #[col(sql = "VARCHAR(64)", search = "source", alias = "source_id")]
     pub source_id: String,
     #[col(sql = "VARCHAR(16)", enum, search)]
     pub stage: Stage,

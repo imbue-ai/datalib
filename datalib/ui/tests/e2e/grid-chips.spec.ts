@@ -113,7 +113,7 @@ test("a storage report's group and step are chips that open their cards", async 
   request,
 }) => {
   const resp = await request.get(
-    `/applet/unified_document_index/search?q=${encodeURIComponent("source_id:datalib")}&limit=500`,
+    `/applet/unified_document_index/search?q=${encodeURIComponent("source:datalib")}&limit=500`,
   );
   expect(resp.ok()).toBeTruthy();
   const { rows } = (await resp.json()) as {
@@ -122,7 +122,7 @@ test("a storage report's group and step are chips that open their cards", async 
   const report = rows.find((r) => r.conversation_name === "slack storage" && r.markdown_uuid);
   expect(report, "the fixture must have the slack storage report").toBeTruthy();
   await page.goto(EVERY_ROW);
-  await searchAndSettle(page, "source_id:datalib");
+  await searchAndSettle(page, "source:datalib");
   await gridSettled(page);
   await openRowByUuid(page, report!.uuid);
 

@@ -21,7 +21,7 @@ describe("searchPlaceholder", () => {
         group("enterprise-mail", 12, "2025-03-04T09:00:00-08:00"),
         group("ten-forward-slack", 40, "2026-06-02T13:00:00-07:00"),
       ]),
-    ).toBe("search…  (try: source_id:ten-forward-slack, after:2026-01-01)");
+    ).toBe("search…  (try: source:ten-forward-slack, after:2026-01-01)");
   });
 
   /// Datalib's storage report is a source id in the index, but not one
@@ -32,7 +32,7 @@ describe("searchPlaceholder", () => {
         group("datalib", 300, "2026-09-29T11:47:01+02:00"),
         group("holodeck-pdfs", 2, null),
       ]),
-    ).toBe("search…  (try: source_id:holodeck-pdfs)");
+    ).toBe("search…  (try: source:holodeck-pdfs)");
   });
 
   it("says only search… when the index names no source", () => {

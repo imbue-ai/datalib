@@ -112,7 +112,7 @@ describe("a group or step chip's hover, copy, menu and card", () => {
     ]);
     // Named only by its id, it offers that once.
     expect(entityMenu(SLACK, "slack").map((e) => e.id)).toEqual(["open", "copy-id", "browse"]);
-    expect(browseQuery(SLACK)).toBe("source_id:slack is:document");
+    expect(browseQuery(SLACK)).toBe("source:slack is:document");
     expect(browseQuery(INGEST)).toBeNull();
   });
 });

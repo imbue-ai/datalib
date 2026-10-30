@@ -88,7 +88,7 @@ const keysField = StateField.define<SearchKeySpec[]>({
 });
 
 /// The word being typed is drawn as text until the cursor leaves it or
-/// the field loses focus, so `source_id:sla` does not turn into a chip
+/// the field loses focus, so `source:sla` does not turn into a chip
 /// for a source named "sla" while it is typed.
 type Span = { from: number; to: number };
 

@@ -580,7 +580,7 @@ mod tests {
         for text in [
             "nonsense:x",
             "severity:catastrophic",
-            "source_id:enterprise nonsense:x",
+            "source:enterprise nonsense:x",
         ] {
             let r = ask(&s, q(text)).await;
             assert!(r.rows.is_empty(), "{text}: {} rows", r.rows.len());

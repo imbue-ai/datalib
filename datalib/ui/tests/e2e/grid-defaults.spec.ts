@@ -68,13 +68,13 @@ test("the empty search bar suggests a source this library has", async ({ page, r
   await page.goto(GRID);
   await page.getByTestId("search-clear").click();
   const input = page.getByTestId("search-input");
-  await expect(input).toHaveAttribute("aria-placeholder", /source_id:/);
+  await expect(input).toHaveAttribute("aria-placeholder", /source:/);
   const hint = (await input.getAttribute("aria-placeholder"))!;
-  const source = /source_id:(\S+?)[,)]/.exec(hint)?.[1];
+  const source = /source:(\S+?)[,)]/.exec(hint)?.[1];
   expect(source, hint).toBeTruthy();
   expect(source).not.toBe("datalib");
-  expect(await total(request, `source_id:${source}`), hint).toBeGreaterThan(0);
+  expect(await total(request, `source:${source}`), hint).toBeGreaterThan(0);
   const year = /after:(\d{4})-01-01/.exec(hint)?.[1];
   expect(year, hint).toBeTruthy();
-  expect(await total(request, `source_id:${source} after:${year}-01-01`), hint).toBeGreaterThan(0);
+  expect(await total(request, `source:${source} after:${year}-01-01`), hint).toBeGreaterThan(0);
 });

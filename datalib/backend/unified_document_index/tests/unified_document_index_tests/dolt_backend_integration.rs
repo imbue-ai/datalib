@@ -331,7 +331,7 @@ async fn a_listing_orders_filters_and_reads_back_by_uuid() {
     assert_eq!(newest_first.uuids, ["c-new", "v-1", "c-mid", "c-old"]);
     assert_eq!(newest_first.at.as_deref(), Some(head.as_str()));
 
-    let enterprise = parse_query("source_id:enterprise");
+    let enterprise = parse_query("source:enterprise");
     let oldest_first = repo
         .ordered_uuids(&enterprise, &order("created_at:asc"), &[])
         .await
@@ -429,7 +429,7 @@ async fn a_key_suggests_its_values_most_rows_first() {
         "a % is itself"
     );
     assert_eq!(
-        values("source_id:voyager", "").await,
+        values("source:voyager", "").await,
         pairs(&[("bridge", 1)]),
         "the rest of the query narrows the values"
     );
@@ -523,7 +523,7 @@ async fn a_repo_opened_before_the_first_commit_reads_after_it() {
 
 /// A source's storage report is written into that source's own
 /// `render_markdown/` tree, so the first segment of its `qmd_path` is
-/// the measured source. It must not be filed there: `source_id:` has
+/// the measured source. It must not be filed there: `source:` has
 /// to answer `datalib` for it, and the measured source's own name has to
 /// leave it out. Both halves — the column's value and the SQL filter —
 /// are checked here against a real store, because the two are derived
@@ -576,7 +576,7 @@ async fn storage_rows_are_filed_under_datalib_not_the_measured_source() {
     assert_eq!(storage.source_id, "datalib");
 
     let measured = repo
-        .search(&parse_query("source_id:claude-work"), 100)
+        .search(&parse_query("source:claude-work"), 100)
         .await
         .unwrap();
     assert_eq!(
@@ -586,7 +586,7 @@ async fn storage_rows_are_filed_under_datalib_not_the_measured_source() {
     );
 
     let datalibs = repo
-        .search(&parse_query("source_id:datalib"), 100)
+        .search(&parse_query("source:datalib"), 100)
         .await
         .unwrap();
     assert_eq!(
@@ -734,7 +734,7 @@ async fn every_filter_key_is_served_by_an_index() {
             ("", false),
             ("is:document", false),
             ("-is:document", false),
-            ("source_id:slack is:document", false),
+            ("source:slack is:document", false),
         ]);
     let mut unserved: Vec<String> = Vec::new();
     let mut used: std::collections::BTreeSet<String> = Default::default();

@@ -93,7 +93,7 @@ async fn structured_terms_narrow_the_ranking_and_a_sort_reorders_it() {
     let s = index_over(root.path()).await;
     let everything = search(&s, QUERY, None, 1_000, None).await;
 
-    let narrowed = format!("{QUERY} source_id:slack");
+    let narrowed = format!("{QUERY} source:slack");
     let slack = search(&s, &narrowed, None, 1_000, None).await;
     assert!(slack.total > 0, "the fixture's slack source matches");
     assert!(
@@ -115,7 +115,7 @@ async fn structured_terms_narrow_the_ranking_and_a_sort_reorders_it() {
     assert_eq!(uuids(&worst_first), best_first);
 }
 
-/// `source_id:` scopes the ranking, not only the rows the grid keeps: a
+/// `source:` scopes the ranking, not only the rows the grid keeps: a
 /// source whose hits rank below another source's still answers in full.
 #[tokio::test]
 async fn source_id_scopes_the_ranking_before_its_cut() {
@@ -130,7 +130,7 @@ async fn source_id_scopes_the_ranking_before_its_cut() {
         .expect("the fixture's hits span sources")
         .source_id;
 
-    let scoped = search(&s, &format!("{QUERY} source_id:{other}"), None, 1, None).await;
+    let scoped = search(&s, &format!("{QUERY} source:{other}"), None, 1, None).await;
     assert_eq!(scoped.rows.len(), 1, "{:?}", scoped.errors);
     assert_eq!(&scoped.rows[0].source_id, other);
 }
@@ -211,7 +211,7 @@ async fn the_map_matches_structured_terms_without_qmd() {
     datalib_qmd_fixture::copy_grid_index(root.path());
     let s = index_over(root.path()).await;
     let params = map::MatchParams {
-        q: Some("source_id:slack".to_string()),
+        q: Some("source:slack".to_string()),
     };
     let matched = map::matches_handler(State(s), Query(params)).await.0;
     assert!(matched.errors.is_empty(), "{:?}", matched.errors);
@@ -358,13 +358,13 @@ async fn a_person_is_found_where_they_were_blind_copied_or_mentioned() {
     }
 }
 
-/// The Words tab is scoped by `source_id:` like any search, and its groups
+/// The Words tab is scoped by `source:` like any search, and its groups
 /// count the same rows its pages list.
 #[tokio::test]
 async fn the_words_tab_narrows_and_groups_like_a_search() {
     let root = fixture_root();
     let s = index_over(root.path()).await;
-    let narrowed = format!("{QUERY} source_id:slack");
+    let narrowed = format!("{QUERY} source:slack");
     let slack = search_tab(&s, &narrowed, Some(SearchTab::Words), None, 1_000, None).await;
     assert!(slack.total > 0, "the fixture's slack source has the words");
     assert!(slack.rows.iter().all(|r| r.source_id == "slack"));
