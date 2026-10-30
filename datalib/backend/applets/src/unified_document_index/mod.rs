@@ -70,6 +70,7 @@ struct Index {
     qmd_index: Arc<datalib_unified_document_index::qmd::HeldIndex>,
     qmd_summary: Arc<SummaryCache>,
     results: Arc<results::ResultCache>,
+    keyed: Arc<tokio::sync::Mutex<results::KeyedCache>>,
 }
 
 impl Index {
@@ -86,6 +87,7 @@ impl Index {
             qmd_index: Arc::default(),
             qmd_summary: Arc::new(SummaryCache::default()),
             results: Arc::new(results::ResultCache::default()),
+            keyed: Arc::default(),
             repo: Arc::new(repo),
             root,
         })
@@ -785,8 +787,15 @@ async fn land(
     let fetched = started.elapsed();
     // Every term, `source_id:` too: a source's file can hold rows filed
     // under another, which its collection's ranking does not drop.
-    let kept = if parsed.terms.is_empty() {
+    let kept: Option<std::collections::HashSet<String>> = if parsed.terms.is_empty() {
         None
+    } else if let Some(keyed) = keyed(s, parsed).await? {
+        Some(
+            refs.iter()
+                .filter(|r| keyed.rows.contains(&r.uuid))
+                .map(|r| r.uuid.clone())
+                .collect(),
+        )
     } else {
         let uuids: Vec<String> = refs.iter().map(|r| r.uuid.clone()).collect();
         let listing = s
@@ -951,15 +960,27 @@ async fn ranked(
         .filter(|(_, hit)| hit.document.is_none())
         .map(|(uuid, _)| uuid.clone())
         .collect();
-    let listing = s
-        .repo
-        .filter_uuids(parsed, &rows, &[], &[])
-        .await
-        .map_err(index)?;
+    // The keys, once worked out, answer from memory; a list of documents
+    // alone asks nothing.
+    let (kept, at): (std::collections::HashSet<String>, Option<String>) = if rows.is_empty() {
+        (Default::default(), key.at.clone())
+    } else if let Some(keyed) = keyed(s, parsed).await? {
+        let kept = rows
+            .into_iter()
+            .filter(|r| keyed.rows.contains(r))
+            .collect();
+        (kept, key.at.clone())
+    } else {
+        let listing = s
+            .repo
+            .filter_uuids(parsed, &rows, &[], &[])
+            .await
+            .map_err(index)?;
+        (listing.uuids.into_iter().collect(), listing.at)
+    };
     // Terms written for another commit than the rows were read at may be
     // a pass out: answer with them, and ask again next time.
-    let keep = terms_at.is_none_or(|at| at == listing.at);
-    let kept: std::collections::HashSet<String> = listing.uuids.into_iter().collect();
+    let keep = terms_at.is_none_or(|t| t == at);
     let list: Arc<Vec<results::Entry>> = Arc::new(
         ranking
             .into_iter()
@@ -970,13 +991,13 @@ async fn ranked(
     if keep {
         s.results.put(
             results::Key {
-                at: listing.at.clone(),
+                at: at.clone(),
                 ..key
             },
             list.clone(),
         );
     }
-    Ok((list, listing.at, keep))
+    Ok((list, at, keep))
 }
 
 /// One ranking of a search's rows, best first, each with its score and
@@ -1094,11 +1115,8 @@ async fn words_ranking(s: &Index, parsed: &ParsedQuery) -> Result<Ranking, Searc
     };
     // Narrowed before the cut, as Meaning is: a common word's best
     // thousand documents rarely include the one the other terms ask for.
-    let among = if narrows_documents(parsed) {
-        Some(s.repo.matching_documents(parsed).await.map_err(index)?)
-    } else {
-        None
-    };
+    let keyed = keyed(s, parsed).await?;
+    let among = keyed.as_deref().map(|k| &k.documents);
     let Some(open) = s
         .qmd_index
         .open(&s.root)
@@ -1117,14 +1135,14 @@ async fn words_ranking(s: &Index, parsed: &ParsedQuery) -> Result<Ranking, Searc
         let mut hits = match &phrase {
             Some(phrase) => {
                 reader
-                    .keyword_hits(phrase, scope.names(), among.as_ref(), QMD_DEPTH)
+                    .keyword_hits(phrase, scope.names(), among, QMD_DEPTH)
                     .await?
             }
             None => Vec::new(),
         };
         let seen: std::collections::HashSet<String> = hits.iter().map(|h| h.path.clone()).collect();
         let all = reader
-            .keyword_hits(&query, scope.names(), among.as_ref(), QMD_DEPTH)
+            .keyword_hits(&query, scope.names(), among, QMD_DEPTH)
             .await?;
         hits.extend(all.into_iter().filter(|h| !seen.contains(&h.path)));
         hits.truncate(QMD_DEPTH);
@@ -1166,11 +1184,8 @@ async fn meaning_ranking(s: &Index, parsed: &ParsedQuery) -> Result<Ranking, Sea
         .map_err(|e| SearchFailure::Qmd(format!("query embedder task: {e}")))?
         .map_err(qmd)?;
     let embedded = started.elapsed();
-    let among = if narrows_documents(parsed) {
-        Some(kept_of(s.repo.matching_rows(parsed).await.map_err(index)?))
-    } else {
-        None
-    };
+    let keyed = keyed(s, parsed).await?;
+    let among = keyed.as_deref().map(|k| &k.kept);
     let narrowed = started.elapsed();
     let scope = collection_scope(parsed);
     let hits = reader
@@ -1181,7 +1196,7 @@ async fn meaning_ranking(s: &Index, parsed: &ParsedQuery) -> Result<Ranking, Sea
                 vector: &query.vector,
             },
             scope.names(),
-            among.as_ref(),
+            among,
             QMD_DEPTH,
         )
         .await;
@@ -1190,7 +1205,7 @@ async fn meaning_ranking(s: &Index, parsed: &ParsedQuery) -> Result<Ranking, Sea
         embed_ms = embedded.as_millis() as u64,
         narrow_ms = (narrowed - embedded).as_millis() as u64,
         score_ms = (started.elapsed() - narrowed).as_millis() as u64,
-        among = among.as_ref().map(|a| a.len()),
+        among = among.map(|a| a.len()),
         hits = hits.len(),
         "ranked a search by meaning"
     );
@@ -1226,6 +1241,37 @@ fn kept_of(
         .collect()
 }
 
+/// What the search's structured terms keep, worked out once for this query
+/// and the index's commit and shared by every answer and page of it.
+/// `None` when they keep whole sources, which `collection_scope` narrows.
+async fn keyed(
+    s: &Index,
+    parsed: &ParsedQuery,
+) -> Result<Option<Arc<results::Keyed>>, SearchFailure> {
+    if !narrows_documents(parsed) {
+        return Ok(None);
+    }
+    let key = (
+        format!("{:?}", parsed.terms),
+        s.repo.head().await.map_err(index)?,
+    );
+    let mut cache = s.keyed.lock().await;
+    if let Some(keyed) = cache.get(&key) {
+        return Ok(Some(keyed));
+    }
+    let rows = s.repo.matching_rows(parsed).await.map_err(index)?;
+    let keyed = Arc::new(results::Keyed {
+        rows: rows.iter().map(|(uuid, _, _)| uuid.clone()).collect(),
+        documents: rows
+            .iter()
+            .map(|(_, document, _)| document.clone())
+            .collect(),
+        kept: kept_of(rows),
+    });
+    cache.put(key, keyed.clone());
+    Ok(Some(keyed))
+}
+
 /// Whether a search's structured terms narrow it below whole sources,
 /// which `collection_scope` already does for a positive `source_id:`.
 fn narrows_documents(parsed: &ParsedQuery) -> bool {
@@ -1255,11 +1301,17 @@ async fn documents_of_hits(
         .iter()
         .filter_map(|h| markdown_uuid_of_path(&h.path).map(String::from))
         .collect();
-    let present = s
-        .repo
-        .documents_kept(parsed, &documents)
-        .await
-        .map_err(index)?;
+    let present = match keyed(s, parsed).await? {
+        Some(keyed) => documents
+            .into_iter()
+            .filter(|d| keyed.documents.contains(d))
+            .collect(),
+        None => s
+            .repo
+            .documents_kept(parsed, &documents)
+            .await
+            .map_err(index)?,
+    };
     let mut ranking: Ranking = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for hit in hits {
