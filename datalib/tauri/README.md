@@ -38,7 +38,8 @@ which reads `datalib/backend/Cargo.toml` via `crate.from_cargo`,
 never has to resolve the tauri dependency tree. Drive it with cargo/pnpm:
 
 ```sh
-# Run it — one command. Bazel-builds the bundled binaries
+# Run it — one command. Bazel-builds the bundled binaries (`-c opt`;
+# DATALIB_COMPILATION_MODE=fastbuild for a quicker, slower-running build)
 # via the config's beforeBuildCommand, compiles the shell, bundles the
 # .app, and launches it. Optional data-root arg skips the folder picker.
 ./run.sh

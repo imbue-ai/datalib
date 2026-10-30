@@ -7,12 +7,13 @@
 
 use std::path::PathBuf;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use datalib_problems::{Outcome, Problem, Reason};
 use serde::Serialize;
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
-use datalib_etl::progress::Progress;
+use datalib_etl::bulk::{bulk_upsert_entity_in_tx, BulkUpsertable};
+use datalib_etl::progress::{Progress, RunBar};
 use datalib_etl::run_problems::RunProblems;
 use datalib_etl_files::file_checkpoint;
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
@@ -121,26 +122,51 @@ impl FetchSummary {
 
 type FileProblem = (Outcome, Problem);
 
-/// The files a run read, to stamp as read in the transaction that
-/// writes their rows.
-pub struct ReadFiles {
-    read: Vec<(String, ScannedFile, Option<FileProblem>)>,
-    /// `(scope, rel)` of files a clean walk no longer finds. Their rows
-    /// stay; their stamps, and what a stamp says the file lacked, go.
-    gone: Vec<(String, String)>,
+/// One session file's rows, as a provider's parser makes them.
+pub struct ParsedSession<T, R> {
+    pub transcript: T,
+    pub records: Vec<R>,
+    pub counts: SessionCounts,
+}
+
+/// A file the scan says changed, and where its rows and stamp go.
+struct ToRead {
+    scope: String,
+    rel_path: String,
+    file: ScannedFile,
 }
 
 /// Whether a path under one tree is one this run had no way to read.
 type Unseen = Box<dyn Fn(&str) -> bool + Send + Sync>;
 
-impl ReadFiles {
-    pub async fn stamp(&self, tx: &mut Transaction<'_, Sqlite>) -> Result<()> {
-        for (scope, f, problem) in &self.read {
-            file_checkpoint::record_file_with_problem(tx, scope, f, problem.clone()).await?;
+/// File bytes read between writes. Rows are written as the files are
+/// read, so the step's count of files moves through the write too and a
+/// run holds one batch of rows rather than the whole tree's.
+const BATCH_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Rows read and not yet written, and how many files they came from.
+struct Batch<T, R> {
+    transcripts: Vec<T>,
+    records: Vec<R>,
+    files: u64,
+    bytes: u64,
+}
+
+impl<T: BulkUpsertable, R: BulkUpsertable> Batch<T, R> {
+    fn new() -> Self {
+        Self {
+            transcripts: Vec::new(),
+            records: Vec::new(),
+            files: 0,
+            bytes: 0,
         }
-        for (scope, rel) in &self.gone {
-            file_checkpoint::forget_file(tx, scope, rel).await?;
-        }
+    }
+
+    async fn write(&mut self, tx: &mut Transaction<'_, Sqlite>, bar: &RunBar) -> Result<()> {
+        bulk_upsert_entity_in_tx(tx, &self.transcripts).await?;
+        bulk_upsert_entity_in_tx(tx, &self.records).await?;
+        bar.did(self.files);
+        *self = Self::new();
         Ok(())
     }
 }
@@ -167,13 +193,14 @@ fn file_problem(lossy: bool, skipped: Option<String>) -> Option<FileProblem> {
     })
 }
 
-/// Hand every changed `.jsonl` under `trees` to `read`, with the path the
-/// rows keep and its text. `read` parses the file and keeps its rows,
-/// and returns `None` when the file is not a session.
+/// Read every changed `.jsonl` under `trees`, hand each to `parse`
+/// with the path its rows keep, and write the rows it makes. `parse`
+/// returns `None` when the file is not a session.
 ///
 /// A file that could not be read is left unstamped, so the next run
 /// tries it again. One that was read is stamped whether or not it was a
 /// session: a file that names no session will not start naming one.
+/// Every row and stamp is written in one transaction.
 ///
 /// A tree that is not a directory fails the run only when nothing has
 /// been read from any tree yet; otherwise what is stored stands and the
@@ -182,20 +209,18 @@ fn file_problem(lossy: bool, skipped: Option<String>) -> Option<FileProblem> {
 /// Every run walks every tree and re-reads every file it could not read
 /// before, so an unreadable file's row stands only where this run could
 /// not look: under an entry a walk could not read, or a tree that is gone.
-pub async fn read_changed(
+pub async fn read_changed<T: BulkUpsertable, R: BulkUpsertable>(
     pool: &SqlitePool,
     cache: &FingerprintCache,
     trees: &[SessionTree],
     progress: &Progress,
     provider: &str,
     found: &RunProblems,
-    mut read: impl FnMut(&str, &str) -> Option<SessionCounts>,
-) -> Result<(FetchSummary, ReadFiles)> {
+    mut parse: impl FnMut(&str, &str) -> Option<ParsedSession<T, R>>,
+) -> Result<FetchSummary> {
     let mut summary = FetchSummary::default();
-    let mut out = ReadFiles {
-        read: Vec::new(),
-        gone: Vec::new(),
-    };
+    let mut to_read: Vec<ToRead> = Vec::new();
+    let mut gone: Vec<(String, String)> = Vec::new();
     let mut unseen: Vec<(String, Unseen)> = Vec::new();
     let mut missing = Vec::new();
     let mut stored = 0;
@@ -219,53 +244,84 @@ pub async fn read_changed(
         }
         let changes = scan.changes_since(&prev);
         summary.files += scan.files.len();
-        out.gone.extend(
+        gone.extend(
             changes
                 .gone()
                 .into_iter()
                 .map(|rel| (tree.scope.clone(), rel.to_string())),
         );
-
-        for f in changes.needs_reading() {
-            let rel_path = format!("{}{}", tree.rel_prefix, f.rel);
-            let bytes = match std::fs::read(&f.path) {
-                Ok(b) => b,
-                Err(e) => {
-                    summary.unreadable += 1;
-                    found.record_failed("transcripts", &rel_path, e.to_string());
-                    continue;
-                }
-            };
-            let text = String::from_utf8_lossy(&bytes);
-            let lossy = matches!(text, std::borrow::Cow::Owned(_));
-            summary.files_read += 1;
-            let Some(counts) = read(&rel_path, &text) else {
-                summary.not_transcripts += 1;
-                out.read.push((tree.scope.clone(), f.clone(), None));
-                continue;
-            };
-            out.read.push((
-                tree.scope.clone(),
-                f.clone(),
-                file_problem(lossy, counts.skipped),
-            ));
-            summary.transcripts += 1;
-            summary.records += counts.records;
-            summary.malformed_lines += counts.malformed_lines;
-            if counts.is_subagent {
-                summary.subagents += 1;
-            }
-            progress.set_message(&format!(
-                "{provider}: {} transcripts / {} records ({} of {} files read)",
-                summary.transcripts, summary.records, summary.files_read, summary.files,
-            ));
-        }
+        to_read.extend(changes.needs_reading().map(|f| ToRead {
+            scope: tree.scope.clone(),
+            rel_path: format!("{}{}", tree.rel_prefix, f.rel),
+            file: f.clone(),
+        }));
     }
     if let Some(first) = missing.first() {
         if stored == 0 && summary.files == 0 {
             bail!("{} is not a directory", first.root.display());
         }
     }
+
+    let bar = RunBar::new(progress, to_read.len() as u64);
+    let mut tx = pool
+        .begin()
+        .await
+        .with_context(|| format!("begin {provider} tx"))?;
+    let mut batch = Batch::<T, R>::new();
+    for ToRead {
+        scope,
+        rel_path,
+        file,
+    } in to_read
+    {
+        batch.files += 1;
+        let bytes = match std::fs::read(&file.path) {
+            Ok(b) => b,
+            Err(e) => {
+                summary.unreadable += 1;
+                found.record_failed("transcripts", &rel_path, e.to_string());
+                continue;
+            }
+        };
+        batch.bytes += bytes.len() as u64;
+        let text = String::from_utf8_lossy(&bytes);
+        let lossy = matches!(text, std::borrow::Cow::Owned(_));
+        summary.files_read += 1;
+        let problem = match parse(&rel_path, &text) {
+            None => {
+                summary.not_transcripts += 1;
+                None
+            }
+            Some(session) => {
+                let counts = session.counts;
+                summary.transcripts += 1;
+                summary.records += counts.records;
+                summary.malformed_lines += counts.malformed_lines;
+                if counts.is_subagent {
+                    summary.subagents += 1;
+                }
+                batch.transcripts.push(session.transcript);
+                batch.records.extend(session.records);
+                file_problem(lossy, counts.skipped)
+            }
+        };
+        file_checkpoint::record_file_with_problem(&mut tx, &scope, &file, problem).await?;
+        bar.doing(&format!(
+            "{provider}: {} transcripts / {} records ({} of {} files read)",
+            summary.transcripts, summary.records, summary.files_read, summary.files,
+        ));
+        if batch.bytes >= BATCH_BYTES {
+            batch.write(&mut tx, &bar).await?;
+        }
+    }
+    batch.write(&mut tx, &bar).await?;
+    for (scope, rel) in &gone {
+        file_checkpoint::forget_file(&mut tx, scope, rel).await?;
+    }
+    tx.commit()
+        .await
+        .with_context(|| format!("commit {provider} tx"))?;
+
     for tree in missing {
         unseen.push((tree.rel_prefix.clone(), Box::new(|_| true)));
         found.listing(
@@ -281,5 +337,5 @@ pub async fn read_changed(
             .iter()
             .any(|(rel_prefix, unseen)| id.strip_prefix(rel_prefix.as_str()).is_some_and(unseen))
     });
-    Ok((summary, out))
+    Ok(summary)
 }

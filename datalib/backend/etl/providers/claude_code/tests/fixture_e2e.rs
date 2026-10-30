@@ -3,9 +3,10 @@
 //! documents back.
 
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use datalib_etl::control::DownloadControl;
-use datalib_etl::progress::Progress;
+use datalib_etl::progress::{Progress, ProgressSink};
 use datalib_etl_claude_code::ingest::{db_path_for, fetch, FetchOptions, RawDb};
 use datalib_etl_claude_code_render::render::render;
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
@@ -207,4 +208,57 @@ async fn the_tng_fixture_ingests_and_renders() {
     assert!(md.contains("Tool result: Bash (error)"));
     assert!(md.contains("1 image(s) not shown"));
     assert!(md.contains("claude-sonnet-5"));
+}
+
+#[derive(Default)]
+struct Counts {
+    lengths: Mutex<Vec<Option<u64>>>,
+    done: Mutex<u64>,
+}
+
+impl ProgressSink for Counts {
+    fn set_length(&self, total: Option<u64>) {
+        self.lengths.lock().unwrap().push(total);
+    }
+    fn inc(&self, delta: u64) {
+        *self.done.lock().unwrap() += delta;
+    }
+}
+
+/// The Manage screen's ETA is the announced total less what was counted
+/// done, over the pace it was counted. The download announced nothing,
+/// so a Claude Code sync showed no ETA however long it ran.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_sync_announces_the_files_it_reads_and_counts_them_done() {
+    let td = tempfile::tempdir().unwrap();
+    let raw_path = td.path().join(STANZA).join("raw");
+    std::fs::create_dir_all(&raw_path).unwrap();
+    let db = RawDb::open(&db_path_for(&raw_path)).await.unwrap();
+    let cache = FingerprintCache::open(&td.path().join("fp.sqlite"))
+        .await
+        .unwrap();
+    let sync = |counts: Arc<Counts>| {
+        fetch(FetchOptions {
+            db: db.clone(),
+            input_path: fixture_dir(),
+            cache: cache.clone(),
+            progress: Progress::new(counts),
+            control: DownloadControl::default(),
+        })
+    };
+
+    let first = Arc::new(Counts::default());
+    sync(first.clone()).await.unwrap();
+    assert_eq!(*first.lengths.lock().unwrap(), vec![Some(3)]);
+    assert_eq!(*first.done.lock().unwrap(), 3);
+
+    let unchanged = Arc::new(Counts::default());
+    sync(unchanged.clone()).await.unwrap();
+    assert_eq!(
+        *unchanged.lengths.lock().unwrap(),
+        vec![],
+        "nothing to read announces no total, which is not a total of zero"
+    );
+    assert_eq!(*unchanged.done.lock().unwrap(), 0);
+    db.close().await;
 }

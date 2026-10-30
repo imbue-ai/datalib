@@ -9,14 +9,13 @@ pub mod schema_raw;
 
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 
-use datalib_etl::bulk::bulk_upsert_entity_in_tx;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw::WirePayload;
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::{self, RunProblems};
-use datalib_etl_agent_sessions::{read_changed, SessionCounts, SessionTree};
+use datalib_etl_agent_sessions::{read_changed, ParsedSession, SessionCounts, SessionTree};
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
 
 pub use datalib_etl_agent_sessions::FetchSummary;
@@ -49,7 +48,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 }
 
 async fn read_rollouts(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
-    let db = opts.db.clone();
     let trees: Vec<SessionTree> = SESSION_DIRS
         .iter()
         .map(|dir| SessionTree {
@@ -60,10 +58,8 @@ async fn read_rollouts(opts: FetchOptions, found: RunProblems) -> Result<FetchSu
             optional: *dir == "archived_sessions",
         })
         .collect();
-    let mut transcript_rows: Vec<TranscriptRow> = Vec::new();
-    let mut record_rows: Vec<RecordRow> = Vec::new();
-    let (summary, read) = read_changed(
-        db.pool(),
+    read_changed(
+        opts.db.pool(),
         &opts.cache,
         &trees,
         &opts.progress,
@@ -71,32 +67,15 @@ async fn read_rollouts(opts: FetchOptions, found: RunProblems) -> Result<FetchSu
         &found,
         |rel_path, text| {
             let parsed = parse_rollout(text, rel_path)?;
-            push_rows(&parsed, &mut transcript_rows, &mut record_rows);
-            Some(SessionCounts {
-                records: parsed.records.len(),
-                malformed_lines: parsed.stats.malformed,
-                is_subagent: parsed.meta.parent_thread_id.is_some(),
-                skipped: parsed.skipped.clone(),
-            })
+            Some(rows(&parsed))
         },
     )
-    .await?;
-
-    let mut tx = db.pool().begin().await.context("begin codex tx")?;
-    bulk_upsert_entity_in_tx(&mut tx, &transcript_rows).await?;
-    bulk_upsert_entity_in_tx(&mut tx, &record_rows).await?;
-    read.stamp(&mut tx).await?;
-    tx.commit().await.context("commit codex tx")?;
-    Ok(summary)
+    .await
 }
 
-fn push_rows(
-    parsed: &ParsedRollout,
-    transcripts: &mut Vec<TranscriptRow>,
-    records: &mut Vec<RecordRow>,
-) {
+fn rows(parsed: &ParsedRollout) -> ParsedSession<TranscriptRow, RecordRow> {
     let meta = &parsed.meta;
-    transcripts.push(TranscriptRow {
+    let transcript = TranscriptRow {
         id_and_payload: WirePayload {
             id: parsed.thread_id.clone(),
             payload: serde_json::to_string(meta).expect("meta serializes"),
@@ -108,15 +87,27 @@ fn push_rows(
         started_at: meta.started_at.clone(),
         updated_at: meta.updated_at.clone(),
         rel_path: meta.rel_path.clone(),
-    });
-    for l in &parsed.records {
-        records.push(RecordRow {
+    };
+    let records = parsed
+        .records
+        .iter()
+        .map(|l| RecordRow {
             id_and_payload: WirePayload {
                 id: record_id(&parsed.thread_id, l.line_no),
                 payload: l.raw.to_string(),
             },
             transcript_id: parsed.thread_id.clone(),
             line_no: l.line_no,
-        });
+        })
+        .collect();
+    ParsedSession {
+        transcript,
+        records,
+        counts: SessionCounts {
+            records: parsed.records.len(),
+            malformed_lines: parsed.stats.malformed,
+            is_subagent: meta.parent_thread_id.is_some(),
+            skipped: parsed.skipped.clone(),
+        },
     }
 }
