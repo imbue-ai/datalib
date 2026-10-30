@@ -56,16 +56,19 @@ test("every group is there with its true count before its rows are read", async 
 });
 
 /// Opening a group reads its rows, and only its: the rows under it all
-/// share its value.
-test("opening a group reads its rows", async ({ page, request }) => {
-  const [smallest] = (await groupsOf(request, "kind")).sort((a, b) => a.count - b.count);
+/// share its value. The group opened is the smallest the grid drew: the
+/// fixture has more kinds than fit on screen, and the grid draws only
+/// the group rows in view.
+test("opening a group reads its rows", async ({ page }) => {
   await page.goto(GRID);
   await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 15_000 });
   await groupBy(page, ["kind"]);
   await gridSettled(page);
   await page.locator(".grid-box .slick-group-toggle-all").click();
 
-  const kind = smallest.values[0]!;
+  await expect.poll(async () => (await titles(page)).length).toBeGreaterThan(1);
+  const drawn = (await titles(page)).filter((t): t is [string, number] => t !== null);
+  const [kind, count] = drawn.sort((a, b) => a[1] - b[1])[0]!;
   const group = page.locator(".grid-box .slick-group").filter({ hasText: `Type: ${kind} (` });
   await group.locator(".slick-group-toggle").click();
   await expect
@@ -78,6 +81,6 @@ test("opening a group reads its rows", async ({ page, request }) => {
         kind,
       ),
     )
-    .toBe(smallest.count);
+    .toBe(count);
   await expect(page.locator(".grid-box .datalib-more")).toHaveCount(0);
 });
