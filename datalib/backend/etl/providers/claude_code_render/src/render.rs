@@ -40,7 +40,13 @@ use crate::ids;
 /// v6: what the harness writes in the person's place (notices,
 ///     reminders) is a Harness Message, and a subagent's brief an Agent
 ///     Prompt, not "Me".
-pub const RENDER_VERSION: u32 = 6;
+/// v7: a tool's result is the harness's, not authored by the tool's name.
+pub const RENDER_VERSION: u32 = 7;
+
+/// Who the harness's own rows are by: what it writes in the person's place,
+/// a tool's result, its system notes. A tool's name is not a person, and
+/// `from:bas` must not find every Bash result.
+const HARNESS: &str = "Claude Code";
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -304,7 +310,7 @@ fn user_items(
         let body = fenced(&clamp(&tool_result_text(b.get("content")), max_bytes));
         out.push(item(
             id,
-            name.to_string(),
+            HARNESS.to_string(),
             ms.map(|m| m + n as i64),
             details(&summary, &body),
             "Tool Result",
@@ -321,7 +327,7 @@ fn user_items(
             author_kind: AuthorKind::Named,
             ..item(
                 ids::reminder(source_id, uuid, ms.map(|m| m + n as i64)),
-                "Claude Code".to_string(),
+                HARNESS.to_string(),
                 ms.map(|m| m + n as i64),
                 reminders.join("\n\n"),
                 "Harness Message",
@@ -352,9 +358,9 @@ fn user_items(
     // A subagent's brief is the parent agent's, and what its transcript
     // is about: shown, not folded away with the harness's notices.
     let (label, author, author_kind, aside) = if sidechain {
-        ("Agent Prompt", "Claude Code", AuthorKind::Named, false)
+        ("Agent Prompt", HARNESS, AuthorKind::Named, false)
     } else if written_by_the_harness(v, &text) {
-        ("Harness Message", "Claude Code", AuthorKind::Named, true)
+        ("Harness Message", HARNESS, AuthorKind::Named, true)
     } else {
         ("User Input", "Me", AuthorKind::Account, false)
     };
@@ -532,7 +538,7 @@ fn system_item(
     }
     let mut it = item(
         ids::record(source_id, uuid, ms),
-        "Claude Code".to_string(),
+        HARNESS.to_string(),
         ms,
         String::new(),
         "System",
@@ -668,6 +674,14 @@ mod tests {
             .unwrap()
             .contains("Tool result: Bash"));
         assert!(result.text.as_deref().unwrap().contains("emitter nominal"));
+        assert_eq!(
+            (
+                items[2].author_display.as_str(),
+                result.author_display.as_str()
+            ),
+            ("claude-opus-5", "Claude Code"),
+            "a call is the model's and its result the harness's, never the tool's name"
+        );
         assert_eq!(items[4].author_display, "claude-opus-5");
         // Inputs name the transcript row and every record row.
         assert!(c
