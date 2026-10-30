@@ -5,7 +5,7 @@
 // Reporting must never get in the way: a batch that fails to send is
 // dropped, with one warning in the console, and nothing here throws.
 
-import type { App } from "vue";
+import { nextTick, type App } from "vue";
 import { START_LOCATION, type Router } from "vue-router";
 import { decodeColumns } from "@/router/columns";
 import { isDesktopApp } from "@/desktop";
@@ -19,7 +19,14 @@ export const PAGE_HEADER = "X-Datalib-Page";
 /// cannot misspell one; the server takes any word and files it as
 /// `ui.<name>`, so an older server never refuses a newer page.
 export type PageEventName =
-  "page_load" | "page_hide" | "navigate" | "card_open" | "card_rename" | "error" | "toast";
+  | "page_load"
+  | "page_hide"
+  | "navigate"
+  | "card_open"
+  | "card_rename"
+  | "error"
+  | "toast"
+  | WaitName;
 
 export type PageEventLevel = "info" | "warn" | "error";
 
@@ -114,6 +121,56 @@ export function trackError(
 ): void {
   const ev = errorEvent(source, err, extra);
   track(ev.name, ev.fields, { level: ev.level, msg: ev.msg });
+}
+
+/// The waits a person sits through that the log times: a search's
+/// answer reaching the screen, and a document's.
+export type WaitName = "search_answered" | "doc_shown";
+
+const WAIT_WORDS: Record<WaitName, string> = {
+  search_answered: "search answered",
+  doc_shown: "document shown",
+};
+
+/// A wait under way: when it began, and whether opening the card began
+/// it or a search asked of a card already open.
+export type Wait = { since: number; trigger: "open" | "search" };
+
+/// A wait this long is a `warn` line, so the log card at
+/// `min_level:warn target:ui` lists every slow one.
+export const SLOW_WAIT_MS = 2_000;
+
+export function startWait(trigger: Wait["trigger"]): Wait {
+  return { since: performance.now(), trigger };
+}
+
+/// The line for a wait that ended `at`, on the clock `startWait` read.
+export function waitEvent(
+  name: WaitName,
+  wait: Wait,
+  at: number,
+  fields: Record<string, unknown>,
+): PageEvent {
+  const ms = Math.round(at - wait.since);
+  return {
+    at: nowIso(),
+    name,
+    level: ms >= SLOW_WAIT_MS ? "warn" : "info",
+    msg: `${WAIT_WORDS[name]} in ${ms} ms`,
+    fields: { ...fields, trigger: wait.trigger, ms },
+  };
+}
+
+/// Log `wait` as over at the frame that draws its answer, once Vue has
+/// put it in the page. A hidden page draws no frames until it is shown
+/// again, so there the wait ends as the answer arrives, marked `hidden`.
+export function endWait(name: WaitName, wait: Wait, fields: Record<string, unknown>): void {
+  const report = (more: Record<string, unknown>) => {
+    const ev = waitEvent(name, wait, performance.now(), { ...fields, ...more });
+    track(ev.name, ev.fields, { level: ev.level, msg: ev.msg });
+  };
+  if (document.hidden) return report({ hidden: true });
+  void nextTick(() => requestAnimationFrame(() => report({})));
 }
 
 /// The `navigate` line for a path: the path itself, and the card codes

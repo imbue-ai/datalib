@@ -145,6 +145,7 @@ import {
 } from "@/grid/serverGroups";
 import { searchFailure, type SearchFailure } from "./searchFailure";
 import { DEFAULT_QUERY } from "./searchDefaults";
+import { endWait, startWait, type Wait } from "@/telemetry";
 import SearchList from "./SearchList.ce.vue";
 import { freeText, pickedSource, searchTitle, setSource } from "./search";
 import SearchField from "@/search/SearchField.vue";
@@ -809,6 +810,26 @@ let win: PagedWindow<Row, number> | null = null;
 /// the bottom, where it opens, with older rows loading above. Rows a
 /// sync adds then land below the ones on screen instead of moving them.
 let shown: { q: string; sort: string | null; tab: SearchTab | null; tail: boolean } | null = null;
+/// The person's wait for the rows of a search not yet on screen: from
+/// the card opening, or from asking a search other than the one shown.
+/// A search that replaces one still on its way keeps the earlier start.
+let wait: Wait | null = startWait("open");
+
+function answered(q: string, outcome: "rows" | "refused" | "failed", more = {}) {
+  if (!wait) return;
+  endWait("search_answered", wait, {
+    card: props.ctx.cardId,
+    card_type: props.ctx.cardType,
+    url,
+    view: "table",
+    q,
+    tab: tab.value,
+    outcome,
+    ...more,
+  });
+  wait = null;
+}
+
 /// Free text's answers, a tab each; null for a search without it, which
 /// has one answer.
 const tabs = ref<TabsState | null>(null);
@@ -866,8 +887,11 @@ async function runSearch(q: string, refresh = false) {
   if (view.value === "list") {
     tableBehind = true;
     loading.value = false;
+    // The list times its own answer.
+    wait = null;
     return;
   }
+  if (!refresh) wait ??= startWait("search");
   // Free text shows nothing until a tab opens.
   if (tabs.value && tabs.value.open === null) return;
   if (groupedBy().length > 0) return runGrouped(q, refresh);
@@ -898,7 +922,7 @@ async function runSearch(q: string, refresh = false) {
       { sort, through, tab: t },
     );
     unfinished.value = r.refused?.[0] ?? null;
-    if (unfinished.value !== null) return;
+    if (unfinished.value !== null) return answered(q, "refused");
     rowsSpec = { row_key: r.row_key, document: r.document, free_text: r.free_text };
     if (r.columns?.length && JSON.stringify(r.columns) !== JSON.stringify(columns.value)) {
       columns.value = r.columns;
@@ -918,10 +942,14 @@ async function runSearch(q: string, refresh = false) {
     shownQuery.value = q;
     shownTab.value = tabs.value?.open ?? null;
     if (again) showChanged(true);
-    else showNew();
+    else {
+      showNew();
+      answered(q, "rows", { rows: win.rows.length, total: r.total });
+    }
   } catch (e) {
     if ((e as { name?: string }).name === "AbortError") return;
     error.value = searchFailure(e);
+    answered(q, "failed");
   } finally {
     if (inflight === ctrl) loading.value = false;
   }
@@ -1048,7 +1076,7 @@ async function runGrouped(q: string, refresh: boolean) {
   try {
     const r = await fetchGroups<Row>(q, by.join(","), ctrl.signal, url, t);
     unfinished.value = r.refused?.[0] ?? null;
-    if (unfinished.value !== null) return;
+    if (unfinished.value !== null) return answered(q, "refused", { grouped_by: by });
     const windows = new Map(r.groups.map((g) => [groupKey(g.values), unread(g, r.at)]));
     if (again) {
       await Promise.all(
@@ -1086,9 +1114,11 @@ async function runGrouped(q: string, refresh: boolean) {
     shownQuery.value = q;
     shownTab.value = tabs.value?.open ?? null;
     showGroups(again ? "refresh" : "new");
+    if (!again) answered(q, "rows", { grouped_by: by, groups: r.groups.length });
   } catch (e) {
     if ((e as { name?: string }).name === "AbortError") return;
     error.value = searchFailure(e);
+    answered(q, "failed", { grouped_by: by });
   } finally {
     if (inflight === ctrl) loading.value = false;
   }

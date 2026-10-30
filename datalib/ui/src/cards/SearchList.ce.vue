@@ -15,6 +15,7 @@ import { markWords } from "./search";
 import { datesInText } from "./dates";
 import { people, peopleTitle } from "./contacts";
 import { handleFromUri } from "./chipLinks";
+import { endWait, startWait, type Wait } from "@/telemetry";
 
 const props = defineProps<{
   ctx: CardCtx;
@@ -48,7 +49,26 @@ const now = Date.now();
 
 let inflight: AbortController | null = null;
 
+/// The person's wait for an answer not yet on screen, as the table
+/// times its own (GridCard.ce.vue).
+let wait: Wait | null = startWait("open");
+
+function report(q: string, outcome: "rows" | "refused" | "failed", more = {}) {
+  if (!wait) return;
+  endWait("search_answered", wait, {
+    card: props.ctx.cardId,
+    card_type: props.ctx.cardType,
+    view: "list",
+    q,
+    tab: props.tab,
+    outcome,
+    ...more,
+  });
+  wait = null;
+}
+
 async function run(keepPick = false) {
+  if (!keepPick) wait ??= startWait("search");
   inflight?.abort();
   const ctrl = new AbortController();
   inflight = ctrl;
@@ -71,7 +91,7 @@ async function run(keepPick = false) {
         ? "Nothing has been indexed for search yet, so there is nothing to match your words against. Sync a source first."
         : (echo?.qmd_error ?? null));
     // A query the search cannot read yet leaves the last results up.
-    if (page.refused?.length) return;
+    if (page.refused?.length) return report(q, "refused");
     results.value = page.rows;
     total.value = page.total;
     nextOffset.value = page.next_offset;
@@ -80,8 +100,12 @@ async function run(keepPick = false) {
     if (!keepPick || !results.value.some((r) => r.uuid === picked.value?.uuid)) {
       picked.value = results.value[0] ?? null;
     }
+    report(q, "rows", { rows: page.rows.length, total: page.total });
   } catch (e) {
-    if (!ctrl.signal.aborted) notice.value = (e as Error).message;
+    if (!ctrl.signal.aborted) {
+      notice.value = (e as Error).message;
+      report(q, "failed");
+    }
   } finally {
     if (inflight === ctrl) loading.value = false;
   }
