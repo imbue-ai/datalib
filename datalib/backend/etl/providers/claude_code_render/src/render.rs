@@ -37,8 +37,9 @@ use crate::ids;
 /// v4: the account's own messages are "Me", as every chat source writes
 ///     them.
 /// v5: an answer's author is its model's chip (`ai_model:` handle).
-/// v6: what the harness writes in the person's place (notices, reminders,
-///     a subagent's brief) is a Harness Message, not "Me".
+/// v6: what the harness writes in the person's place (notices,
+///     reminders) is a Harness Message, and a subagent's brief an Agent
+///     Prompt, not "Me".
 pub const RENDER_VERSION: u32 = 6;
 
 fn profile() -> RenderProfile {
@@ -344,7 +345,15 @@ fn user_items(
     if text.trim().is_empty() {
         return;
     }
-    let (label, author, author_kind, aside) = if written_by_the_harness(v, &text) {
+    let sidechain = v
+        .get("isSidechain")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    // A subagent's brief is the parent agent's, and what its transcript
+    // is about: shown, not folded away with the harness's notices.
+    let (label, author, author_kind, aside) = if sidechain {
+        ("Agent Prompt", "Claude Code", AuthorKind::Named, false)
+    } else if written_by_the_harness(v, &text) {
         ("Harness Message", "Claude Code", AuthorKind::Named, true)
     } else {
         ("User Input", "Me", AuthorKind::Account, false)
@@ -375,9 +384,8 @@ const HARNESS_TAGS: &[&str] = &[
 
 /// Whether a `user` record is the harness's rather than the person's: its
 /// own messages (`isMeta`), a summary it wrote when it compacted the
-/// session, a subagent's brief (the parent agent's), anything whose
-/// `origin` is not a person typing, and, before transcripts said so, a
-/// notice by the tag it opens with.
+/// session, anything whose `origin` is not a person typing, and, before
+/// transcripts said so, a notice by the tag it opens with.
 fn written_by_the_harness(v: &Value, text: &str) -> bool {
     let flag = |key: &str| v.get(key).and_then(Value::as_bool).unwrap_or(false);
     let origin = v
@@ -386,7 +394,6 @@ fn written_by_the_harness(v: &Value, text: &str) -> bool {
         .and_then(Value::as_str);
     flag("isMeta")
         || flag("isCompactSummary")
-        || flag("isSidechain")
         || match origin {
             Some(kind) => kind != "human",
             None => HARNESS_TAGS.iter().any(|t| text.starts_with(t)),
@@ -837,7 +844,7 @@ mod tests {
             ),
             user("old", 5, json!({"message": {"content": "Engage"}})),
         ];
-        let chats = build_chats("cc", &transcripts, &records, 1024);
+        let chats = build_chats("cc", &transcripts, &records, &titles(&transcripts), 1024);
         let said: Vec<(&str, &str, &str)> = chats[0].buckets[0]
             .items
             .iter()
@@ -864,7 +871,7 @@ mod tests {
                     "Claude Code",
                     "<ci-monitor-event>checks green</ci-monitor-event>"
                 ),
-                ("Harness Message", "Claude Code", "Survey the nebula"),
+                ("Agent Prompt", "Claude Code", "Survey the nebula"),
                 ("User Input", "Me", "Engage"),
             ]
         );
