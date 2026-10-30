@@ -18,6 +18,10 @@ pub struct DownloadMetrics {
     /// Stays 0 for file-based ingestion (mbox, vCard, Signal, WhatsApp),
     /// which never touches the network transport.
     api_requests: AtomicU64,
+    /// Requests out now, and the most there were at once: whether a
+    /// download's calls overlap is otherwise invisible.
+    in_flight: AtomicU64,
+    peak_in_flight: AtomicU64,
     /// Rows passed through the entity/CAS upsert chokepoints, keyed by
     /// table (`cas_objects` for the blob store). Counts *attempts* —
     /// some are no-op updates / `INSERT OR IGNORE` dupes — which is the
@@ -63,6 +67,10 @@ impl DownloadMetrics {
         self.api_requests.load(Ordering::Relaxed)
     }
 
+    pub fn peak_requests_in_flight(&self) -> u64 {
+        self.peak_in_flight.load(Ordering::Relaxed)
+    }
+
     pub fn rows_upserted_total(&self) -> u64 {
         self.rows_upserted.lock().unwrap().values().sum()
     }
@@ -98,6 +106,25 @@ fn with_current<R>(f: impl FnOnce(&DownloadMetrics) -> R) -> Option<R> {
 
 pub fn record_api_request() {
     let _ = with_current(DownloadMetrics::record_api_request);
+}
+
+/// Counts a request as out until the returned guard drops.
+pub fn request_in_flight() -> Option<InFlight> {
+    CURRENT
+        .try_with(|m| {
+            let now = m.in_flight.fetch_add(1, Ordering::Relaxed) + 1;
+            m.peak_in_flight.fetch_max(now, Ordering::Relaxed);
+            InFlight(m.clone())
+        })
+        .ok()
+}
+
+pub struct InFlight(Arc<DownloadMetrics>);
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        self.0.in_flight.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 pub fn record_upserts(table: &str, n: usize) {
