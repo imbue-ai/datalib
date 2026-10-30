@@ -541,6 +541,16 @@ Render reads both marks: a top-level message after its conversation's
 `last_read`, or a reply after its followed thread's, renders unread
 ([`slack_render/TRANSLATE.md`](../slack_render/TRANSLATE.md)).
 
+## What a run asks first
+
+Before any history, a run makes the calls that tell it what to walk.
+The ones that need nothing from each other go out together, up to the
+source's `common.download_params` limit on requests at once:
+`users.list` beside `conversations.list`; then `client.counts`,
+`saved.list` and the bookmarks beside the reply search. Each page of
+one listing still waits for the page before it, since its cursor
+names where the next one starts.
+
 ## Rate limits
 
 Slack signals a rate limit either as `429 Retry-After` or, on older

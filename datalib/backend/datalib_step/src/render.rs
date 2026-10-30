@@ -304,6 +304,7 @@ pub fn render_source(
         pin: raw_pin,
         stale,
         removed: removed_rows,
+        bookkeeping_only,
     } = reverse_lookup(
         &store,
         raw_db.as_deref(),
@@ -465,6 +466,7 @@ pub fn render_source(
     // nothing about what should exist, and nothing is swept.
     let full_walk =
         render_everything && !consumed.is_empty() && consumed.iter().all(Option::is_some);
+    let rendered_any = !emitted.is_empty();
     let mut keep = emitted;
     // The storage report's id goes in `keep`: the provider's processors
     // know nothing about it, and the sweep would otherwise drop it on
@@ -538,8 +540,13 @@ pub fn render_source(
             storage,
             // The cursor is rewritten only when it moves: its row carries
             // a per-run stamp, and rewriting it unchanged would give
-            // every steady-state run a commit.
+            // every steady-state run a commit. A run that rendered nothing
+            // over a range where only bookkeeping moved leaves it too:
+            // the next diff from it reads the same, and moving it would
+            // move this store's version and run everything downstream
+            // for nothing.
             cursor: raw_commit
+                .filter(|_| render_everything || !bookkeeping_only || rendered_any)
                 .filter(|raw_commit| {
                     stored_cursor.as_ref().is_none_or(|c| {
                         c.raw_commit != *raw_commit || c.params != declared_params_text
@@ -899,6 +906,10 @@ struct ReverseLookup {
     /// The declared inputs the diff reports removed: the only evidence a
     /// bucket declared with nothing is gone.
     removed: Option<HashSet<Input>>,
+    /// Between the cursor and the pin only bookkeeping moved: `sync_runs`,
+    /// the sidecars, the other shared tables. Every download commits a
+    /// `sync_runs` row, so this is a sync that fetched nothing new.
+    bookkeeping_only: bool,
 }
 
 /// The buckets whose declared inputs changed between the cursor and the
@@ -963,6 +974,10 @@ fn reverse_lookup(
             }
         }
         let stale = store.buckets_reading(&changed)?;
+        let bookkeeping_only = blocking(datalib_etl::doltlite_raw::content_tables_changed(
+            &pool, from, &to,
+        ))?
+        .is_empty();
         tracing::info!(
             changed_rows = changed.len(),
             removed_rows = removed.len(),
@@ -973,6 +988,7 @@ fn reverse_lookup(
             pin: Some(to),
             stale: Some(stale),
             removed: Some(removed),
+            bookkeeping_only,
         })
     })();
     blocking(pool.close());

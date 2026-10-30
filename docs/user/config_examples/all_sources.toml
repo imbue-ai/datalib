@@ -2269,7 +2269,8 @@ since = "2025-01-01"           # oldest message: a day, an RFC 3339 instant, or 
                                # from the sync ("-30d"); default 2024-01-01
 channels = ["bridge", "engineering"]  # by name, without `#`; omit for every channel you are in
 all_channels = false           # also channels you can see but are not in (ignored with `channels`)
-media = true                   # download attachments into blobs
+media = true                   # download attachments into blobs; on unless set, so a
+                               # first sync fetches every file in range
 dms = true                     # direct messages, 1:1 and group: off unless set
 dm_conversations = ["D024BE7LH", "https://enterprise.slack.com/archives/G0ABC12DE"]
                                # only these DMs, by id or pasted link; needs `dms = true`.

@@ -481,8 +481,25 @@ async fn fetch_account_state(
     let mut totals = AccountTotals::default();
     let mut problems = Vec::new();
 
-    progress.set_message(M_COUNTS);
-    let open_latest = match fetch_read_states(db, &in_scope, latchkey).await {
+    // Three calls that need nothing from each other, out together.
+    let mut bookmark_problems = Vec::new();
+    let (read_states, saved, bookmarks) = tokio::join!(
+        async {
+            progress.set_message(M_COUNTS);
+            fetch_read_states(db, &in_scope, latchkey).await
+        },
+        list_saved_items(latchkey),
+        fetch_bookmarks(
+            db,
+            targets,
+            now,
+            stop,
+            progress,
+            latchkey,
+            &mut bookmark_problems
+        ),
+    );
+    let open_latest = match read_states {
         Ok(entries) => {
             totals.read_states = entries.len();
             Some(self::open_latest(&entries))
@@ -493,8 +510,7 @@ async fn fetch_account_state(
         }
     };
 
-    progress.set_message(M_SAVED);
-    match list_saved_items(latchkey).await {
+    match saved {
         Ok(items) => {
             let listed = items.len();
             let kept = saved_items_in_scope(items, &in_scope);
@@ -510,8 +526,8 @@ async fn fetch_account_state(
         Err(e) => problems.push(listing_problem(M_SAVED, &e)),
     }
 
-    let (bookmarks, pruned) =
-        fetch_bookmarks(db, targets, now, stop, progress, latchkey, &mut problems).await?;
+    let (bookmarks, pruned) = bookmarks?;
+    problems.extend(bookmark_problems);
     totals.bookmarks = bookmarks;
     totals.pruned += pruned;
 
@@ -1404,22 +1420,24 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         // Without the workspace's identity nothing below can be keyed:
         // the one failure that fails the run.
         let (team_id, self_user_id) = fetch_self(&db, &setup, &opts.latchkey).await?;
-        // Users before channels: a DM is titled after its counterpart,
-        // so the DM progress labels need the user directory to already
-        // be mirrored. A listing that fails leaves the stored one.
-        if let Err(e) = fetch_users(&db, &now, &setup, &opts.latchkey).await {
+        // The two listings need nothing from each other; a DM's title,
+        // which needs the user directory, is worked out once both are in.
+        // A listing that fails leaves the stored one.
+        let (users, listed) = tokio::join!(
+            fetch_users(&db, &now, &setup, &opts.latchkey),
+            fetch_channels(
+                &db,
+                opts.members_only,
+                opts.channels.is_some(),
+                opts.dms,
+                &setup,
+                &opts.latchkey,
+            ),
+        );
+        if let Err(e) = users {
             found.push(listing_problem(M_USERS, &e));
         }
-        let listed = match fetch_channels(
-            &db,
-            opts.members_only,
-            opts.channels.is_some(),
-            opts.dms,
-            &setup,
-            &opts.latchkey,
-        )
-        .await
-        {
+        let listed = match listed {
             Ok(listed) => listed,
             // The channels an earlier listing stored are still worth
             // walking; with none stored there is nothing to do at all.
@@ -1479,9 +1497,13 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         );
         let targets = plan.targets;
 
-        let mut open_latest = None;
-        if !opts.control.stop.requested() {
-            let state = fetch_account_state(
+        // The account's own state and the reply search read and write
+        // nothing of each other's, so they go out together.
+        let account_state = async {
+            if opts.control.stop.requested() {
+                return Ok(None);
+            }
+            fetch_account_state(
                 &db,
                 &targets,
                 &now,
@@ -1489,23 +1511,13 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                 &setup,
                 &opts.latchkey,
             )
-            .await?;
-            found.extend(state.problems);
-            open_latest = state.open_latest;
-            let account = state.totals;
-            if let Some(sealer) = opts.sealer.as_ref() {
-                sealer
-                    .wrote(
-                        (account.read_states
-                            + account.saved_items
-                            + account.bookmarks
-                            + account.pruned) as u64,
-                    )
-                    .await;
+            .await
+            .map(Some)
+        };
+        let reply_search = async {
+            if !opts.search_replies || opts.control.stop.requested() {
+                return;
             }
-            grand.account = account;
-        }
-        if opts.search_replies && !opts.control.stop.requested() {
             let top = ts_key(&datetime_to_slack_ts(&(now - SEARCH_LAG)));
             let search = ReplySearch {
                 db: &db,
@@ -1524,6 +1536,24 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             if let Some(sealer) = opts.sealer.as_ref() {
                 sealer.wrote(totals.roots_reread as u64).await;
             }
+        };
+        let (account_state, ()) = tokio::join!(account_state, reply_search);
+        let mut open_latest = None;
+        if let Some(state) = account_state? {
+            found.extend(state.problems);
+            open_latest = state.open_latest;
+            let account = state.totals;
+            if let Some(sealer) = opts.sealer.as_ref() {
+                sealer
+                    .wrote(
+                        (account.read_states
+                            + account.saved_items
+                            + account.bookmarks
+                            + account.pruned) as u64,
+                    )
+                    .await;
+            }
+            grand.account = account;
         }
         setup.finish(&format!(
             "setup done in {}ms",
