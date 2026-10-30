@@ -12,6 +12,7 @@ use datalib_etl_claude_code_render::render::render;
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
+use datalib_etl_render::pages::PageSize;
 
 const STANZA: &str = "claude-code";
 const SESSION_1: &str = "91ad7d3f-2915-5956-995d-cba3754abadc";
@@ -142,7 +143,9 @@ async fn the_tng_fixture_ingests_and_renders() {
             docs.push(md);
             Ok(())
         },
+        &mut |_| Ok(()),
         RawRange::cold(),
+        PageSize::DEFAULT,
         16 * 1024,
     )
     .unwrap();
@@ -261,4 +264,119 @@ async fn a_sync_announces_the_files_it_reads_and_counts_them_done() {
     );
     assert_eq!(*unchanged.done.lock().unwrap(), 0);
     db.close().await;
+}
+
+fn copy_tree(from: &std::path::Path, to: &std::path::Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let dest = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_tree(&entry.path(), &dest);
+        } else {
+            std::fs::copy(entry.path(), &dest).unwrap();
+        }
+    }
+}
+
+/// A render read every transcript and record in the store before it
+/// kept the few that changed: gigabytes held for one new message. It
+/// now loads a page of transcripts at a time, and on a narrowed run
+/// only the ones the diff names.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_render_reads_a_page_at_a_time_and_only_what_changed() {
+    let td = tempfile::tempdir().unwrap();
+    let input = td.path().join("projects");
+    copy_tree(&fixture_dir(), &input);
+    let raw_path = td.path().join(STANZA).join("raw");
+    std::fs::create_dir_all(&raw_path).unwrap();
+    let cache = FingerprintCache::open(&td.path().join("fp.sqlite"))
+        .await
+        .unwrap();
+    let sync = || async {
+        let db = RawDb::open(&db_path_for(&raw_path)).await.unwrap();
+        fetch(FetchOptions {
+            db: db.clone(),
+            input_path: input.clone(),
+            cache: cache.clone(),
+            progress: Progress::default(),
+            control: DownloadControl::default(),
+        })
+        .await
+        .unwrap();
+        datalib_etl::doltlite_raw::commit_run(db.pool(), "sync")
+            .await
+            .unwrap();
+        db.close().await;
+    };
+    let out_root = td.path().join("render");
+    let render_with = |range: RawRange<'_>, progress: Progress| {
+        let mut titles: Vec<String> = Vec::new();
+        let mut pages: Vec<usize> = Vec::new();
+        let outcome = render(
+            &raw_path,
+            &out_root,
+            STANZA,
+            &progress,
+            &mut |md| {
+                titles.extend(md.rows.iter().find_map(|r| r.conversation_name.clone()));
+                Ok(())
+            },
+            &mut |buckets| {
+                pages.push(buckets.len());
+                Ok(())
+            },
+            range,
+            PageSize {
+                buckets: 1,
+                bytes: PageSize::DEFAULT.bytes,
+            },
+            16 * 1024,
+        )
+        .unwrap();
+        (outcome, titles, pages)
+    };
+
+    sync().await;
+    let (cold, titles, pages) = render_with(RawRange::cold(), Progress::default());
+    assert_eq!(titles.len(), 3);
+    assert_eq!(
+        pages,
+        [0, 1, 1, 1],
+        "nothing gone, then one page per transcript"
+    );
+    let head = cold.new_head.expect("a cold render stamps the head");
+
+    let file = input
+        .join("-Users-picard-src-enterprise")
+        .join(format!("{SESSION_2}.jsonl"));
+    let mut text = std::fs::read_to_string(&file).unwrap();
+    text.push_str(
+        &serde_json::json!({
+            "type": "user", "uuid": "0d1c5e7a-0000-4000-8000-000000000001",
+            "sessionId": SESSION_2, "timestamp": "2364-04-11T15:00:00.000Z",
+            "message": {"role": "user", "content": "Tea, Earl Grey, hot. Again."},
+        })
+        .to_string(),
+    );
+    text.push('\n');
+    std::fs::write(&file, text).unwrap();
+    sync().await;
+
+    let counts = Arc::new(Counts::default());
+    let nothing_stale = std::collections::HashSet::new();
+    let (narrowed, titles, pages) = render_with(
+        RawRange {
+            cursor: Some(&head),
+            pin: None,
+            stale: Some(&nothing_stale),
+        },
+        Progress::new(counts.clone()),
+    );
+    assert_eq!((narrowed.rendered, narrowed.skipped), (1, 2));
+    assert_eq!(titles.len(), 1);
+    assert!(titles[0].contains("cold Earl Grey"), "{titles:?}");
+    assert_eq!(pages, [0, 1]);
+    assert_eq!(*counts.lengths.lock().unwrap(), vec![Some(1)]);
+    assert_eq!(*counts.done.lock().unwrap(), 1);
 }
