@@ -516,7 +516,7 @@ expression: snapshot
       "md_path": "claude-code/render_markdown/02/00000000-0000-83df-8efb-7b99abfef902.md",
       "modified_at": "2364-04-11T10:00:58+00:00",
       "provider": "claude_code",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "claude-code",
       "title": "Scan the emitter logs since stardate 41153.7 for phase drift events. — subagent of Deflector dish drift"
     },
@@ -744,7 +744,7 @@ expression: snapshot
       "md_path": "codex/render_markdown/2e/00000000-0000-86ab-b7b0-53153bf8d22e.md",
       "modified_at": "2364-04-11T10:03:56+00:00",
       "provider": "codex",
-      "renderer_version": "rust-v1.4",
+      "renderer_version": "rust-v1.5",
       "source_id": "codex",
       "title": "Data — sub-agent of The deflector dish drifts 0.3 degrees every hour. Find out why and fix it."
     },
@@ -900,7 +900,7 @@ expression: snapshot
       "md_path": "codex/render_markdown/35/00000000-0000-8791-bfaa-35b2f6b12135.md",
       "modified_at": "2364-04-11T10:03:51+00:00",
       "provider": "codex",
-      "renderer_version": "rust-v1.4",
+      "renderer_version": "rust-v1.5",
       "source_id": "codex",
       "title": "The deflector dish drifts 0.3 degrees every hour. Find out why and fix it."
     },
@@ -1248,7 +1248,7 @@ expression: snapshot
       "md_path": "claude-code/render_markdown/fa/00000000-0000-8a77-bcf1-64f2ad0583fa.md",
       "modified_at": "2364-04-11T14:30:35+00:00",
       "provider": "claude_code",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "claude-code",
       "title": "Why does the replicator return cold Earl Grey? Screenshot attached."
     },
@@ -1260,7 +1260,7 @@ expression: snapshot
       "md_path": "codex/render_markdown/ff/00000000-0000-8a78-90c5-dbad27c044ff.md",
       "modified_at": "2364-04-12T14:31:17+00:00",
       "provider": "codex",
-      "renderer_version": "rust-v1.4",
+      "renderer_version": "rust-v1.5",
       "source_id": "codex",
       "title": "Why does the replicator return cold Earl Grey? Screenshot attached."
     },
@@ -1356,7 +1356,7 @@ expression: snapshot
       "md_path": "claude-code/render_markdown/6b/00000000-0000-8b27-94b8-759d35b8fe6b.md",
       "modified_at": "2364-04-11T10:01:59+00:00",
       "provider": "claude_code",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "claude-code",
       "title": "Deflector dish drift"
     },
@@ -1464,7 +1464,7 @@ expression: snapshot
       "md_path": "codex/render_markdown/cd/00000000-0000-8bef-8ff5-58a96f311ccd.md",
       "modified_at": "2364-04-13T09:18:02+00:00",
       "provider": "codex",
-      "renderer_version": "rust-v1.4",
+      "renderer_version": "rust-v1.5",
       "source_id": "codex",
       "title": "Audit the warp core containment logs and tell me what you find."
     },
@@ -10801,7 +10801,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "Bash",
+      "author": "Claude Code",
       "byte_size": 157,
       "channel": null,
       "content_hash": "469dd750a01b4006",
@@ -10921,7 +10921,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "Read",
+      "author": "Claude Code",
       "byte_size": 235,
       "channel": null,
       "content_hash": "e11a3766af53c103",
@@ -11071,7 +11071,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "Grep",
+      "author": "Claude Code",
       "byte_size": 192,
       "channel": null,
       "content_hash": "8ac39f79dc99fd79",
@@ -11161,7 +11161,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "Agent",
+      "author": "Claude Code",
       "byte_size": 151,
       "channel": null,
       "content_hash": "16a4fe9ebec31767",
@@ -11221,7 +11221,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "Edit",
+      "author": "Claude Code",
       "byte_size": 106,
       "channel": null,
       "content_hash": "7c8c060380f6e24a",
@@ -11311,7 +11311,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "shell",
+      "author": "Codex",
       "byte_size": 137,
       "channel": null,
       "content_hash": "67c6552781edb1de",
@@ -11431,7 +11431,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "Bash",
+      "author": "Claude Code",
       "byte_size": 116,
       "channel": null,
       "content_hash": "789f474c37266796",
@@ -11521,7 +11521,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "apply_patch",
+      "author": "Codex",
       "byte_size": 133,
       "channel": null,
       "content_hash": "671b1d3dbd84f421",
@@ -11581,7 +11581,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "shell",
+      "author": "Codex",
       "byte_size": 137,
       "channel": null,
       "content_hash": "464caddc47651c6d",
@@ -11761,7 +11761,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "shell",
+      "author": "Codex",
       "byte_size": 99,
       "channel": null,
       "content_hash": "c0c62351d0a2d131",
@@ -11941,7 +11941,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "Bash",
+      "author": "Claude Code",
       "byte_size": 106,
       "channel": null,
       "content_hash": "4ad59d5445f74265",
@@ -12091,7 +12091,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "shell",
+      "author": "Codex",
       "byte_size": 107,
       "channel": null,
       "content_hash": "b6c7475a9ff0a5ec",
@@ -12301,7 +12301,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "exec",
+      "author": "Codex",
       "byte_size": 118,
       "channel": null,
       "content_hash": "4c7be6a3746bc4b2",
@@ -12391,7 +12391,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "exec",
+      "author": "Codex",
       "byte_size": 182,
       "channel": null,
       "content_hash": "b784b5aa3a451896",

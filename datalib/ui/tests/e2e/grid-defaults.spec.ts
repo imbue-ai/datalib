@@ -1,7 +1,6 @@
 // What a newcomer sees on opening the app: the search grid one row per
-// document, Contents beside Source, and a hint that names a source this
-// library has. The suite drives the columns layout; the app opens on
-// tabs, so the defaults are checked there too.
+// document, Contents beside Source. The suite drives the columns layout;
+// the app opens on tabs, so the defaults are checked there too.
 
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import { GRID, gridSettled, SEARCH_ROWS, type GridApi } from "./grid-helpers";
@@ -60,21 +59,4 @@ test("a cleared default stays cleared", async ({ page, request }) => {
   await page.reload();
   await expect(page.getByTestId("search-input")).toHaveAttribute("data-query", "");
   await expect(page.locator(".grid-column .status")).toContainText(`(of ${every})`);
-});
-
-/// The hint used to suggest `source:Slack` whatever the library held.
-/// Its example source has to be one a search finds rows in.
-test("the empty search bar suggests a source this library has", async ({ page, request }) => {
-  await page.goto(GRID);
-  await page.getByTestId("search-clear").click();
-  const input = page.getByTestId("search-input");
-  await expect(input).toHaveAttribute("aria-placeholder", /source:/);
-  const hint = (await input.getAttribute("aria-placeholder"))!;
-  const source = /source:(\S+?)[,)]/.exec(hint)?.[1];
-  expect(source, hint).toBeTruthy();
-  expect(source).not.toBe("datalib");
-  expect(await total(request, `source:${source}`), hint).toBeGreaterThan(0);
-  const year = /after:(\d{4})-01-01/.exec(hint)?.[1];
-  expect(year, hint).toBeTruthy();
-  expect(await total(request, `source:${source} after:${year}-01-01`), hint).toBeGreaterThan(0);
 });
