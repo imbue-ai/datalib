@@ -347,7 +347,13 @@ async fn main() {
         }
         _ => {}
     }
-    let _obs_guard = datalib_obs::init(&cli.obs, "datalib-step").ok();
+    // A probe run by hand says on stderr only what went wrong; the
+    // step's own default keeps everything, for the runner to store.
+    let mut obs = cli.obs.clone();
+    if matches!(cli.cmd, Some(Cmd::Probe { .. })) {
+        obs.log_level.get_or_insert_with(|| "warn".to_string());
+    }
+    let _obs_guard = datalib_obs::init(&obs, "datalib-step").ok();
     // Before the first `qmd` or `latchkey` spawn, wherever it comes
     // from: a release tarball without `runtime/` beside its binaries
     // fetches the one its manifest names, once per machine.

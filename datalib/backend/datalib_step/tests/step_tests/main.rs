@@ -9,5 +9,6 @@ mod embedding_map;
 mod final_message;
 mod interrupt;
 mod item_table;
+mod probe;
 mod reset;
 mod runtime_fetch;
