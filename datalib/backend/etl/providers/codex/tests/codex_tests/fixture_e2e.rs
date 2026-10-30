@@ -14,6 +14,7 @@ use datalib_etl_codex_render::render::render;
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
+use datalib_etl_render::pages::PageSize;
 
 const STANZA: &str = "codex";
 const THREAD_1: &str = "41b8781c-6a77-7fbf-9c78-8125d1a37f24";
@@ -188,7 +189,9 @@ async fn the_tng_fixture_ingests_and_renders() {
             docs.push(md);
             Ok(())
         },
+        &mut |_| Ok(()),
         RawRange::cold(),
+        PageSize::DEFAULT,
         16 * 1024,
     )
     .unwrap();

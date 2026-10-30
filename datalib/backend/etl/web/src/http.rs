@@ -486,6 +486,9 @@ where
     let guard = crate::retry::current_or_default();
     let mut backoff = guard.initial_backoff();
     loop {
+        // Held for the attempt only, never through a backoff, so a request
+        // waiting to retry leaves its slot to one that can go now.
+        let slot = guard.request_slot().await;
         // Once the step is asked to stop, no new request leaves. Every
         // page loop in every API provider funnels through here, so this
         // is what ends a half-walked channel or thread without each loop
@@ -510,6 +513,7 @@ where
             None => live::send(req).await,
             Some(playback) => playback.answer(req, guard.stop()).await,
         };
+        drop(slot);
         log_attempt(req, &outcome, started.elapsed());
 
         // Decide whether this attempt is retryable. `None` = accept (success
@@ -1261,6 +1265,56 @@ mod tests {
             released.elapsed() < Duration::from_secs(5),
             "the answer must follow the release, not a timer"
         );
+    }
+
+    /// A source's requests wait for one of its slots, however many its
+    /// download starts at once: Google Drive's nested fan-out had 31
+    /// `latchkey curl` processes out together, 1.7 GB between them.
+    #[tokio::test]
+    async fn a_source_has_no_more_requests_out_than_its_slots() {
+        let dir = tempfile::tempdir().unwrap();
+        let req = HttpRequest::get(HttpService::Slack, "https://slack.com/api/auth.test");
+        ok_fixture(dir.path(), &req);
+        let hold = dir.path().join("hold");
+        std::fs::write(&hold, b"").unwrap();
+
+        let fast = Duration::from_millis(1);
+        let guard = crate::retry::RetryGuard::new_with_requests_at_once(
+            Duration::from_secs(3600),
+            3,
+            fast,
+            fast,
+            2,
+            datalib_etl::stop::StopFlag::default(),
+        );
+        let metrics = datalib_etl::download_metrics::DownloadMetrics::new();
+        let calls = futures::future::join_all((0..5).map(|_| latchkey_curl(&req)));
+        let watch = async {
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            while metrics.api_requests() < 2 {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "two requests never reached the held tape"
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            let out_while_held = metrics.api_requests();
+            std::fs::remove_file(&hold).unwrap();
+            out_while_held
+        };
+        let (answers, out_while_held) = playback::scope(
+            Playback::at(dir.path()).hold(&hold),
+            crate::retry::scope(
+                guard,
+                datalib_etl::download_metrics::scope(metrics.clone(), async {
+                    tokio::join!(calls, watch)
+                }),
+            ),
+        )
+        .await;
+        assert_eq!(out_while_held, 2, "only the two slots' requests went out");
+        assert!(answers.iter().all(|a| a.as_ref().unwrap().status == 200));
+        assert_eq!(metrics.api_requests(), 5, "the rest went once a slot freed");
     }
 
     /// A stop while the tape is held ends the wait as `Interrupted`, so a

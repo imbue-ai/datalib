@@ -9,25 +9,28 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::normalize::iso_to_ms;
 use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
 use datalib_etl_chat_common::types::{
     AuthorKind, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc,
 };
-use datalib_etl_chat_common::{render_changed, RenderTarget};
+use datalib_etl_chat_common::RenderTarget;
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::inputs::{Inputs, RawRange};
+use datalib_etl_render::inputs::{Bucket, Inputs, RawRange};
+use datalib_etl_render::pages::PageSize;
 use datalib_handle::Handle;
 use serde_json::Value;
+use sqlx::SqlitePool;
 
+use datalib_etl_codex::ingest::db_path_for;
 use datalib_etl_codex::ingest::parse::is_typed_message;
-use datalib_etl_codex::ingest::{db_path_for, RawDb};
 use datalib_schema::providers::Provider;
 
 use datalib_etl_agent_sessions_render::{
-    clamp, details, fenced, item, json_block, project_of, str_of, TRANSCRIPT_BUCKETS_SQL,
+    clamp, details, fenced, item, json_block, project_of, render_paged, str_of, PagedOutcome,
+    SessionRender,
 };
 
 use crate::ids;
@@ -52,8 +55,8 @@ fn profile() -> RenderProfile {
     }
 }
 
-pub use datalib_etl_chat_common::RenderOutcome;
-
+/// Renders the threads this run has to, a page at a time; `on_buckets`
+/// hears each page's buckets before the next is read.
 #[allow(clippy::too_many_arguments)]
 pub fn render(
     raw_dir: &Path,
@@ -61,107 +64,98 @@ pub fn render(
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+    on_buckets: &mut dyn FnMut(&[Bucket]) -> Result<()>,
     range: RawRange<'_>,
+    size: PageSize,
     max_tool_result_bytes: usize,
-) -> Result<RenderOutcome> {
-    let db_path = db_path_for(raw_dir);
-    if !db_path.exists() {
-        return Ok(RenderOutcome::default());
-    }
-    let (transcripts, records, scan) = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async {
-            // Pinned at open; no commit means nothing committed to render.
-            let Some(db) = RawDb::open_reader(&db_path, range.pin).await? else {
-                return Ok(Default::default());
-            };
-            let pin = db.pin().expect("a reader is pinned at open").clone();
-            let loaded = async {
-                let transcripts =
-                    datalib_etl::doltlite_raw::load_payloads_with_id(db.pool(), "transcripts")
-                        .await?;
-                let records = load_records(db.pool()).await?;
-                let scan = scan_diff(db.pool(), range.cursor, &pin).await?;
-                anyhow::Ok((transcripts, records, scan))
-            }
-            .await;
-            db.close().await;
-            loaded
-        })
-    })?;
-
-    // No early return on an empty store: a run that deleted every
-    // thread still has to declare their buckets empty so the documents
-    // go.
-    let all_chats = build_chats(source_id, &transcripts, &records, max_tool_result_bytes);
-    render_changed(
-        &profile(),
-        all_chats,
-        scan,
+) -> Result<PagedOutcome> {
+    render_paged(
+        &Codex {
+            source_id,
+            max_tool_result_bytes,
+        },
+        &db_path_for(raw_dir),
         range,
-        |id| ids::thread(source_id, id).uuid,
-        &HashMap::new(),
+        size,
         RenderTarget {
             out_root,
             source_id,
             progress,
             on_doc_complete,
         },
+        on_buckets,
     )
+}
+
+struct Codex<'a> {
+    source_id: &'a str,
+    max_tool_result_bytes: usize,
+}
+
+impl SessionRender for Codex<'_> {
+    type Record = RecordRow;
+
+    fn profile(&self) -> RenderProfile {
+        profile()
+    }
+
+    fn chat_uuid(&self, transcript_id: &str) -> String {
+        ids::thread(self.source_id, transcript_id).uuid
+    }
+
+    async fn load_records(&self, pool: &SqlitePool, ids: &str) -> Result<Vec<RecordRow>> {
+        let rows: Vec<(String, String, i64, String)> = sqlx::query_as(
+            "SELECT id, transcript_id, line_no, json(payload) FROM records \
+             WHERE transcript_id IN (SELECT value FROM json_each(?1)) \
+             ORDER BY transcript_id, line_no",
+        )
+        .bind(ids)
+        .fetch_all(pool)
+        .await
+        .context("select a page of records")?;
+        rows.into_iter()
+            .map(|(id, tid, n, p)| Ok((id, tid, n, serde_json::from_str(&p)?)))
+            .collect::<Result<_>>()
+            .context("read a page of records")
+    }
+
+    fn build_chats(
+        &self,
+        page: &[(String, Value)],
+        records: &[RecordRow],
+        titles: &HashMap<String, String>,
+    ) -> Vec<NormalizedChat> {
+        build_chats(
+            self.source_id,
+            page,
+            records,
+            titles,
+            self.max_tool_result_bytes,
+        )
+    }
 }
 
 /// One raw line: its row id, the thread, its number, the line.
 pub type RecordRow = (String, String, i64, Value);
 
-async fn load_records(pool: &sqlx::SqlitePool) -> Result<Vec<RecordRow>> {
-    let rows: Vec<(String, String, i64, String)> = sqlx::query_as(
-        "SELECT id, transcript_id, line_no, json(payload) FROM records ORDER BY transcript_id, line_no",
-    )
-    .fetch_all(pool)
-    .await?;
-    rows.into_iter()
-        .map(|(id, tid, n, p)| Ok((id, tid, n, serde_json::from_str(&p)?)))
-        .collect()
-}
-
-/// Which threads moved since `last_render_hash`. The bucket is the raw
-/// store's transcript id, which is also `NormalizedChat::id`.
-async fn scan_diff(
-    pool: &sqlx::SqlitePool,
-    last_render_hash: Option<&str>,
-    pin: &datalib_etl::pin::Pin,
-) -> Result<datalib_etl::doltlite_raw::DiffScan> {
-    datalib_etl::doltlite_raw::scan_buckets(
-        pool,
-        last_render_hash,
-        pin,
-        &datalib_etl::doltlite_raw::DiffScanSpec {
-            global_fanout_tables: &[],
-            bucket_query: TRANSCRIPT_BUCKETS_SQL,
-        },
-    )
-    .await
-}
-
 fn build_chats(
     source_id: &str,
     transcripts: &[(String, Value)],
     records: &[RecordRow],
+    titles: &HashMap<String, String>,
     max_tool_result_bytes: usize,
 ) -> Vec<NormalizedChat> {
     let mut by_thread: BTreeMap<&str, Vec<&RecordRow>> = BTreeMap::new();
     for r in records {
         by_thread.entry(r.1.as_str()).or_default().push(r);
     }
-    let titles: HashMap<&str, &str> = transcripts
-        .iter()
-        .filter_map(|(id, meta)| str_of(meta, "title").map(|t| (id.as_str(), t)))
-        .collect();
 
     let mut chats = Vec::with_capacity(transcripts.len());
     for (tid, meta) in transcripts {
         let mut rows = by_thread.remove(tid.as_str()).unwrap_or_default();
         rows.sort_by_key(|r| r.2);
-        let parent_title = str_of(meta, "parent_thread_id").and_then(|p| titles.get(p).copied());
+        let parent_title =
+            str_of(meta, "parent_thread_id").and_then(|p| titles.get(p).map(String::as_str));
         chats.push(build_chat(
             source_id,
             tid,
@@ -596,6 +590,7 @@ fn fenced_json_or_text(s: &str, max_bytes: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datalib_etl_agent_sessions_render::titles;
     use serde_json::json;
 
     fn meta(tid: &str, title: &str, parent: Option<&str>) -> (String, Value) {
@@ -641,7 +636,7 @@ mod tests {
             rec("t1", 13, "2364-04-11T10:00:07.000Z", "event_msg", json!({"type": "agent_message", "message": "Dish realigned."})),
             rec("t1", 14, "2364-04-11T10:00:07.000Z", "event_msg", json!({"type": "task_complete", "turn_id": "u1"})),
         ];
-        let chats = build_chats("codex", &transcripts, &records, 1024);
+        let chats = build_chats("codex", &transcripts, &records, &titles(&transcripts), 1024);
         assert_eq!(chats.len(), 1);
         let c = &chats[0];
         assert_eq!(c.display, "Realign the deflector dish");
@@ -724,7 +719,7 @@ mod tests {
                 user("<environment_context>\n<cwd>/x</cwd>\n</environment_context>"),
             ),
         ];
-        let items = build_chats("codex", &transcripts, &records, 1024)
+        let items = build_chats("codex", &transcripts, &records, &titles(&transcripts), 1024)
             .remove(0)
             .buckets
             .remove(0)
@@ -744,7 +739,7 @@ mod tests {
             rec("t1", 1, t, "response_item", user("Realign")),
             rec("t2", 1, t, "response_item", user("Scan the logs")),
         ];
-        let chats = build_chats("codex", &transcripts, &records, 1024);
+        let chats = build_chats("codex", &transcripts, &records, &titles(&transcripts), 1024);
         assert_eq!(chats.len(), 2);
         let agent = chats.iter().find(|c| c.id == "t2").unwrap();
         assert_eq!(
@@ -768,7 +763,7 @@ mod tests {
             "response_item",
             json!({"type": "function_call", "call_id": "c1", "name": "<script>x</script> & co", "arguments": "{}"}),
         )];
-        let items = build_chats("codex", &transcripts, &records, 1024)
+        let items = build_chats("codex", &transcripts, &records, &titles(&transcripts), 1024)
             .remove(0)
             .buckets
             .remove(0)
@@ -816,7 +811,7 @@ mod tests {
                 json!({"type": "reasoning", "summary": [], "encrypted_content": "xxx"}),
             ),
         ];
-        let items = build_chats("codex", &transcripts, &records, 1024)
+        let items = build_chats("codex", &transcripts, &records, &titles(&transcripts), 1024)
             .remove(0)
             .buckets
             .remove(0)

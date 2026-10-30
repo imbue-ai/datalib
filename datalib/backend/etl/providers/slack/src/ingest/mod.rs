@@ -37,10 +37,10 @@ pub use db::{
 use files::{FileFetcher, FILE_BATCH};
 use frontier::{Frontier, Next, Walk};
 use reply_search::{ReplySearch, ReplySearchTotals, SEARCH_LAG};
-use schema_raw::{SlackAttachmentRow, THREADS};
+use schema_raw::{SlackAttachmentRow, UserRow, THREADS};
 use shapes::{
     M_AUTH_TEST, M_BOOKMARKS, M_CHANNELS, M_COUNTS, M_HISTORY, M_REPLIES, M_SAVED, M_SEARCH,
-    M_USERS,
+    M_USERS, M_USER_INFO,
 };
 
 pub const DEFAULT_SINCE: &str = "2024-01-01";
@@ -49,11 +49,15 @@ pub const DEFAULT_REFRESH_WINDOW_DAYS: i64 = 30;
 /// whole before a run reads it again.
 pub const DEFAULT_REFRESH_EVERY_MINUTES: i64 = 60;
 
-/// Max age of a successful channel/user list sweep before we refetch.
-/// Slack `conversations.list` is Tier-2 rate-limited (~20 req/min), so
-/// a workspace with thousands of channels costs tens of seconds per
-/// refetch even on warm-cache runs.
+/// Max age of a successful user or bookmark sweep before we refetch.
+/// A new poster does not wait for it: the messages name their authors,
+/// and an author with no `users` row is looked up on its own.
 pub const MANIFEST_TTL: chrono::Duration = chrono::Duration::hours(6);
+
+/// `conversations.list` answers fewer than `limit` after dropping the
+/// archived channels: on a real workspace, 381 open channels took 5
+/// calls at 1000 and 23 at 200.
+const CHANNELS_PER_PAGE: &str = "1000";
 
 // Per-method drivers.
 
@@ -130,47 +134,21 @@ pub(crate) fn conversation_types(dms: bool) -> &'static str {
     }
 }
 
-#[instrument(skip(db, now, progress, latchkey))]
+#[instrument(skip(db, progress, latchkey))]
 async fn fetch_channels(
     db: &RawDb,
     members_only: bool,
     include_archived: bool,
     dms: bool,
-    now: &DateTime<Utc>,
     progress: &datalib_etl::progress::Progress,
     latchkey: &LatchkeySettings,
 ) -> Result<Vec<FetchTarget>> {
-    // `dms` is part of the key, not just the request: turning DMs on
-    // asks for a strictly wider `types`, and a sweep recorded under the
-    // narrower one would suppress the refetch for up to MANIFEST_TTL —
-    // the run would then find no DM rows and quietly mirror nothing.
-    let sweep_key = format!("channels:archived={include_archived}:dms={dms}");
-    if let Some(age) = db.manifest_sweep_age(&sweep_key, now).await? {
-        if age < MANIFEST_TTL {
-            let age_s = age.num_seconds().max(0);
-            info!(
-                event = "slack_fetch_channels_skipped",
-                reason = "ttl",
-                age_s = age_s,
-                ttl_s = MANIFEST_TTL.num_seconds(),
-                "the channel listing is fresh enough; not re-listing"
-            );
-            progress.set_message(&format!(
-                "conversations.list cached ({age_s}s old, TTL {}s)",
-                MANIFEST_TTL.num_seconds()
-            ));
-            return db
-                .channels_for_fetch(members_only, include_archived, dms)
-                .await;
-        }
-    }
-
     let mut params = BTreeMap::new();
     params.insert(
         "exclude_archived".to_string(),
         if include_archived { "false" } else { "true" }.to_string(),
     );
-    params.insert("limit".to_string(), "200".to_string());
+    params.insert("limit".to_string(), CHANNELS_PER_PAGE.to_string());
     params.insert("types".to_string(), conversation_types(dms).to_string());
 
     let t0 = std::time::Instant::now();
@@ -204,7 +182,6 @@ async fn fetch_channels(
         elapsed_ms = t0.elapsed().as_millis() as u64,
         "listed the channels"
     );
-    db.record_manifest_sweep(&sweep_key, now).await?;
     db.channels_for_fetch(members_only, include_archived, dms)
         .await
 }
@@ -905,7 +882,92 @@ impl Fetcher<Thread> for Threads<'_> {
     }
 }
 
+/// Owed users, for [`owed::drain`]: one `users.info` each.
+struct UserLookup<'a> {
+    db: &'a RawDb,
+    latchkey: &'a LatchkeySettings,
+}
+
+/// `users.info`'s user as `users.list` lists it, so a later listing of
+/// the same person is no change: `users.info` adds the custom profile
+/// fields.
+fn as_listed(mut user: Value) -> Value {
+    if let Some(profile) = user.get_mut("profile").and_then(Value::as_object_mut) {
+        profile.remove("fields");
+    }
+    user
+}
+
+#[async_trait]
+impl Fetcher<Value> for UserLookup<'_> {
+    async fn fetch(
+        &self,
+        batch: Vec<Listed>,
+    ) -> std::result::Result<Vec<Fetched<Value>>, BatchError> {
+        let mut out = Vec::with_capacity(batch.len());
+        for listed in batch {
+            let mut p = BTreeMap::new();
+            p.insert("user".to_string(), listed.key.clone());
+            let user = call(M_USER_INFO, &p, self.latchkey).await.and_then(|resp| {
+                resp.get("user")
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("{M_USER_INFO} {}: no `user`", listed.key))
+            });
+            let outcome = match user {
+                Ok(user) => Outcome::Got(as_listed(user)),
+                Err(e) if interrupted(&e) => return Err(BatchError::Batch(e)),
+                // A token that may not look users up refuses every one.
+                Err(e) if refused(&e) => return Err(BatchError::Terminal(e)),
+                Err(e) => Outcome::Failed(format!("{e:#}")),
+            };
+            out.push(Fetched { listed, outcome });
+        }
+        Ok(out)
+    }
+
+    async fn store(
+        &self,
+        tx: &mut Transaction<'static, Sqlite>,
+        batch: &[Fetched<Value>],
+    ) -> Result<()> {
+        self.db.store_looked_up_users(tx, batch).await
+    }
+}
+
+/// Users looked up per transaction.
+const USER_FLUSH: usize = 50;
+
 impl Mirror<'_> {
+    /// Every user [`RawDb::users_owed`] names, one `users.info` each. A
+    /// lookup that fails is an attempt on the user's own row, owed still.
+    async fn fetch_users_owed(&self) -> Result<owed::Drained> {
+        self.db.settle_listed_users().await?;
+        let owed = self.db.users_owed().await?;
+        if owed.is_empty() {
+            return Ok(owed::Drained::default());
+        }
+        self.bar
+            .doing(&format!("{M_USER_INFO}: {} new authors", owed.len()));
+        let l = owed::Loop {
+            pool: self.db.pool(),
+            table: UserRow::TABLE,
+            phase: M_USER_INFO,
+            stop: self.stop,
+            found: self.found,
+            sealer: self.sealer,
+            batch: 1,
+            concurrency: 1,
+            flush: USER_FLUSH,
+            flush_bytes: 0,
+            failures_in_a_row: 0,
+        };
+        let lookup = UserLookup {
+            db: self.db,
+            latchkey: self.latchkey,
+        };
+        owed::drain(&l, owed, &lookup).await
+    }
+
     /// The next page of `walk`, in one transaction with the stretch it
     /// settles. `walk` is left where the page after starts.
     async fn page(&self, channel_id: &str, walk: &mut Walk) -> Result<Page> {
@@ -1353,7 +1415,6 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             opts.members_only,
             opts.channels.is_some(),
             opts.dms,
-            &now,
             &setup,
             &opts.latchkey,
         )
@@ -1657,6 +1718,20 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             bar.doing(&totals.line());
             if let Some(sealer) = opts.sealer.as_ref() {
                 sealer.wrote((totals.written() - before) as u64).await;
+            }
+        }
+        if !opts.control.stop.requested() {
+            let started = std::time::Instant::now();
+            let users = mirror.fetch_users_owed().await?;
+            if users != owed::Drained::default() {
+                info!(
+                    event = "slack_users_looked_up",
+                    got = users.got,
+                    failed = users.failed,
+                    left = users.left,
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    "looked up the authors no user listing had named"
+                );
             }
         }
         grand.messages = totals.messages;

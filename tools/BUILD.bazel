@@ -96,6 +96,22 @@ sh_test(
     deps = ["@bazel_tools//tools/bash/runfiles"],
 )
 
+sh_test(
+    name = "check_binaries_test",
+    srcs = ["check_binaries_test.sh"],
+    data = ["//:scripts/release/check_binaries.sh"],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)
+
+sh_test(
+    name = "check_binaries_bash32_test",
+    srcs = ["check_binaries_test.sh"],
+    data = ["//:scripts/release/check_binaries.sh"],
+    env = {"RELEASE_SHELL": "/bin/bash"},
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)
+
 # The tests above, run on Linux from a mac: in the devcontainer, built
 # from .devcontainer/Dockerfile for this host's arch, over the working
 # tree, with the devcontainer's own cache volumes. A `run` target, not
@@ -210,6 +226,18 @@ py_test(
     ],
     imports = ["."],
     main = "check_tzdata_current_test.py",
+)
+
+# How a release's notes read the raw shapes and the migration ladders.
+py_test(
+    name = "release_notes_test",
+    size = "small",
+    srcs = [
+        "release_notes.py",
+        "release_notes_test.py",
+    ],
+    imports = ["."],
+    main = "release_notes_test.py",
 )
 
 # The qmd model pins (repo, revision, file, sha256) live in the build's

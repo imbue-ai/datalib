@@ -1,9 +1,12 @@
-//! Orchestrator-enforced give-up policy for the shared HTTP chokepoint.
+//! Orchestrator-enforced limits for the shared HTTP chokepoint: when a
+//! source gives up, and how many requests it has out at once.
 
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+use tokio::sync::{Semaphore, SemaphorePermit};
 
 use crate::download_params::DownloadParams;
 
@@ -27,6 +30,10 @@ pub struct RetryGuard {
     last_progress: Mutex<Instant>,
     /// Ends a backoff sleep early when the step is asked to stop.
     stop: datalib_etl::stop::StopFlag,
+    /// One permit per request the source may have out at once. A download
+    /// that fans out at several levels multiplies their limits; this is the
+    /// one bound on the product.
+    requests: Semaphore,
 }
 
 /// What the guard says to do after a failure.
@@ -62,6 +69,24 @@ impl RetryGuard {
         max_backoff: Duration,
         stop: datalib_etl::stop::StopFlag,
     ) -> Arc<Self> {
+        Self::new_with_requests_at_once(
+            max_time_without_progress,
+            max_sequential_failures,
+            initial_backoff,
+            max_backoff,
+            DownloadParams::default().max_requests_at_once(),
+            stop,
+        )
+    }
+
+    pub fn new_with_requests_at_once(
+        max_time_without_progress: Duration,
+        max_sequential_failures: u64,
+        initial_backoff: Duration,
+        max_backoff: Duration,
+        requests_at_once: usize,
+        stop: datalib_etl::stop::StopFlag,
+    ) -> Arc<Self> {
         Arc::new(Self {
             max_time_without_progress,
             max_sequential_failures,
@@ -70,15 +95,17 @@ impl RetryGuard {
             sequential_failures: AtomicU64::new(0),
             last_progress: Mutex::new(Instant::now()),
             stop,
+            requests: Semaphore::new(requests_at_once.max(1)),
         })
     }
 
     pub fn from_params(p: &DownloadParams, stop: datalib_etl::stop::StopFlag) -> Arc<Self> {
-        Self::new(
+        Self::new_with_requests_at_once(
             p.max_time_without_progress(),
             p.max_sequential_failures(),
             Self::DEFAULT_INITIAL_BACKOFF,
             Self::DEFAULT_MAX_BACKOFF,
+            p.max_requests_at_once(),
             stop,
         )
     }
@@ -93,6 +120,15 @@ impl RetryGuard {
 
     pub fn max_backoff(&self) -> Duration {
         self.max_backoff
+    }
+
+    /// Waits until the source has a request slot free. The request holds
+    /// it until the permit drops.
+    pub async fn request_slot(&self) -> SemaphorePermit<'_> {
+        self.requests
+            .acquire()
+            .await
+            .expect("the request semaphore is never closed")
     }
 
     pub fn on_progress(&self) {
