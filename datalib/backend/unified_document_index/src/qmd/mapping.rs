@@ -211,13 +211,15 @@ impl GridIndex {
         else {
             return Vec::new();
         };
+        let kept = |r: &GridRowRef| self.allowed.as_ref().is_none_or(|a| a.contains(&r.uuid));
         if let Some(uuid) = self.section_for_line(hit) {
-            if let Some(row) = self.by_uuid.get(uuid.as_str()) {
+            if let Some(row) = self.by_uuid.get(uuid.as_str()).filter(|r| kept(r)) {
                 return vec![row.clone()];
             }
         }
-        // A hit that cannot be placed inside the document is a hit on
-        // the document: its row, when the file has one, else every row.
+        // A hit that cannot be placed inside the document, or only on a
+        // message the search drops, is a hit on the document: its row,
+        // when the file has one, else every row.
         let documents: Vec<GridRowRef> = file_rows
             .iter()
             .filter(|r| r.is_document)
@@ -529,6 +531,24 @@ mod tests {
         let got = idx.rows_for_hit(&h);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].uuid, second);
+    }
+
+    /// A hit on a message the search drops, in a document whose own row it
+    /// keeps (`with:` finds a DM by who it is named after), lands on the
+    /// document's row.
+    #[test]
+    fn a_hit_on_a_dropped_message_lands_on_its_kept_document() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut rows = write_two_message_doc(tmp.path(), CHAT);
+        rows.push(document(CHAT, "Chat", CHAT, "claude"));
+        let idx = GridIndex::new(tmp.path(), rows).within([CHAT.to_string()].into());
+        let h = hit(
+            &path_of("claude", CHAT),
+            "@@ -7,1 @@ (0 before, 0 after)\n## Human",
+        );
+        let got = idx.rows_for_hit(&h);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].uuid, CHAT);
     }
 
     #[test]

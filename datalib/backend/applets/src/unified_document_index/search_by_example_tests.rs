@@ -12,8 +12,8 @@ use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact};
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::ENTITY_KIND_CONVERSATION;
 use datalib_etl_chat_common::types::{
-    AuthorKind, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, NormalizedReaction,
-    Recipient, RecipientRole,
+    AuthorKind, ItemKind, NamedPerson, NormalizedChat, NormalizedChatItem, NormalizedDoc,
+    NormalizedReaction, Recipient, RecipientRole,
 };
 use datalib_etl_chat_common::{RecordStampPrecision, RenderProfile, TextFormat};
 use datalib_etl_contact_common::{ContactDoc, ContactRenderProfile};
@@ -189,6 +189,24 @@ fn worf_slack() -> NormalizedChat {
     chat("bridge-thread", "#bridge", None, item)
 }
 
+/// Worf writes to Data in a direct message, which Slack names after Data;
+/// Data has not answered.
+fn worf_to_data() -> NormalizedChat {
+    let item = message(
+        "dm-message",
+        "Worf",
+        slack_user("U0000003"),
+        T0 + 4 * HOUR,
+        "The diagnostic is overdue.",
+    );
+    let mut dm = chat("dm-thread", "@Data", None, item);
+    dm.named_after = vec![NamedPerson {
+        shown: "Data".into(),
+        handle: Some(slack_user("U0000002")),
+    }];
+    dm
+}
+
 fn card(uuid: &str, kind: ContactKind, name: &str, addresses: &[&str]) -> ContactDoc {
     let mut contact = NormalizedContact::new("contacts", uuid, kind);
     contact.names = vec![name.into()];
@@ -259,7 +277,7 @@ async fn render_cast(root: &Path) -> HashSet<(String, SearchTermKind, String)> {
     .unwrap();
     datalib_etl_chat_common::render_all(
         &chat_profile(Provider::Slack, "Slack", "Slack Thread", "Slack Message"),
-        &[worf_slack()],
+        &[worf_slack(), worf_to_data()],
         root,
         "slack",
         &none,
@@ -491,7 +509,13 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
         ("is:document with:troi", vec!["riker-thread"]),
         (
             "is:document with:slack:T1701/U0000002",
-            vec!["bridge-thread"],
+            vec!["bridge-thread", "dm-thread"],
+        ),
+        // A direct message is with whoever it is named after, though only
+        // Worf wrote in it.
+        (
+            "with:slack:T1701/U0000002",
+            vec!["bridge-thread", "dm-thread", "worf-slack"],
         ),
         // A reactor takes part too, by name where the source has no handle.
         (r#"is:document with:"Q""#, vec!["bridge-thread"]),
@@ -509,6 +533,8 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
             vec![
                 "bridge-thread",
                 "captain-text",
+                "dm-message",
+                "dm-thread",
                 "picard-card",
                 "q-reaction",
                 "riker-email",
@@ -522,6 +548,8 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
             vec![
                 "bridge-thread",
                 "captain-text",
+                "dm-message",
+                "dm-thread",
                 "q-reaction",
                 "senior-staff-card",
                 "text-thread",

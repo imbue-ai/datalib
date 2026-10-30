@@ -175,3 +175,111 @@ async fn a_held_index_rereads_the_documents_after_another_connection_commits() {
         "an inactive document is not found"
     );
 }
+
+/// A filtered Meaning search ranks a document only by the chunks over the
+/// messages its filters keep (`from:worf` by what Worf wrote), so its hit
+/// is one of those chunks rather than the document's nearest overall,
+/// which the filter would then drop along with the document.
+#[tokio::test]
+async fn a_filtered_meaning_search_ranks_by_the_kept_messages() {
+    use std::collections::{HashMap, HashSet};
+
+    use datalib_unified_document_index::qmd::mapping::{parse_section_uuid, snippet_match_line};
+    use datalib_unified_document_index::qmd::vectors::{Kept, QueryVector};
+    use datalib_unified_document_index::qmd::{qmd_index_path, HeldIndex, QmdHit};
+    use sqlx::{ConnectOptions, Connection};
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path();
+    materialize_root_with_grid(root);
+    let vectors = read_document_vectors(root).await.unwrap().unwrap();
+
+    let mut qmd = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(qmd_index_path(root))
+        .read_only(true)
+        .connect()
+        .await
+        .unwrap();
+    let model: String = sqlx::query_scalar("SELECT model FROM content_vectors LIMIT 1")
+        .fetch_one(&mut qmd)
+        .await
+        .unwrap();
+    let chunked: Vec<(String, String)> = sqlx::query_as(
+        "SELECT d.path, c.doc FROM documents d JOIN content c ON c.hash = d.hash \
+          WHERE d.active = 1 \
+            AND (SELECT count(*) FROM content_vectors v WHERE v.hash = d.hash) >= 3",
+    )
+    .fetch_all(&mut qmd)
+    .await
+    .unwrap();
+    qmd.close().await.unwrap();
+
+    let held = HeldIndex::default();
+    let nearest = |document: String, kept: Kept, vector: Vec<f32>| {
+        let held = &held;
+        let model = &model;
+        async move {
+            let open = held.open(root).await.unwrap().unwrap();
+            let among: HashMap<String, Kept> = [(document, kept)].into();
+            let query = QueryVector {
+                model,
+                vector: &vector,
+            };
+            let hits: Vec<QmdHit> = open
+                .reader
+                .nearest_documents(&open.vectors, &query, None, Some(&among), 5)
+                .await
+                .unwrap();
+            hits
+        }
+    };
+
+    let mut checked = 0;
+    for (path, body) in &chunked {
+        let Some(at) = vectors.paths.iter().position(|p| p == path) else {
+            continue;
+        };
+        let document = markdown_uuid_of_path(path).unwrap().to_string();
+        let vector = vectors.vectors[at * vectors.dim..(at + 1) * vectors.dim].to_vec();
+        // Each message's lines, 1-based, to where the next one starts.
+        let lines: Vec<&str> = body.lines().collect();
+        let starts: Vec<(usize, &str)> = lines
+            .iter()
+            .enumerate()
+            .filter_map(|(i, l)| Some((i + 1, parse_section_uuid(l)?)))
+            .collect();
+        let span_of = |i: usize| {
+            (
+                starts[i].0,
+                starts.get(i + 1).map_or(lines.len() + 1, |s| s.0),
+            )
+        };
+
+        let whole = nearest(document.clone(), Kept::Whole, vector.clone()).await;
+        let hit = &whole[0];
+        let from = snippet_match_line(&hit.snippet).unwrap();
+        let to = from + hit.lines.unwrap();
+        // A message the document's nearest chunk does not reach.
+        let Some(other) = (0..starts.len()).find(|&i| {
+            let (a, b) = span_of(i);
+            b <= from || to <= a
+        }) else {
+            continue;
+        };
+        let (a, b) = span_of(other);
+        let kept = Kept::Sections(HashSet::from([starts[other].1.to_string()]));
+        let narrowed = nearest(document.clone(), kept, vector).await;
+        let hit = narrowed.first().unwrap_or_else(|| panic!("{path}: no hit"));
+        let from = snippet_match_line(&hit.snippet).unwrap();
+        let to = from + hit.lines.unwrap();
+        assert!(
+            from < b && a < to,
+            "{path}: the hit at lines {from}..{to} misses the kept message at {a}..{b}"
+        );
+        checked += 1;
+    }
+    assert!(
+        checked > 0,
+        "no fixture document has a message its nearest chunk misses"
+    );
+}

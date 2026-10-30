@@ -15,7 +15,8 @@ pub const ATTACHED_AS: &str = "search_terms";
 pub enum Kinds {
     These(&'static [Kind]),
     /// A person in any role, an author by the name they were shown
-    /// under, or the person a contact's card is about.
+    /// under, someone in a conversation or named in its title, or the
+    /// person a contact's card is about.
     AnyPerson,
 }
 
@@ -39,7 +40,11 @@ impl TermsKey {
                 .iter()
                 .copied()
                 .filter(|k| {
-                    k.is_person() || matches!(k, Kind::Author | Kind::About | Kind::Participant)
+                    k.is_person()
+                        || matches!(
+                            k,
+                            Kind::Author | Kind::About | Kind::Participant | Kind::Subject
+                        )
                 })
                 .collect(),
         }

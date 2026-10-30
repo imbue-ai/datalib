@@ -24,7 +24,9 @@ must match. Free text looks for words in your documents:
 - **`--tab words`** (`tab=words`) matches the words themselves, ranked
   by how well each document matches.
 - **`--tab meaning`** finds the documents closest in meaning, even with
-  none of your words in them.
+  none of your words in them. With a key that keeps only some of a
+  document's messages (`from:riker`, a day), the document is judged by
+  those messages alone.
 - **`--tab fields`** matches every word as the start of a value a row
   is filed under: a name, an address, an id, a title, a label.
 
@@ -71,7 +73,7 @@ A person is found by the part they played:
 | `to:`, `cc:`, `bcc:` | was in that header |
 | `recipient:` | was in any of them |
 | `mention:` | was mentioned, where the source marks mentions up |
-| `with:` (also `involves:`) | played any of those parts, or took part in the conversation the row is, or is who an address-book card is about |
+| `with:` (also `involves:`) | played any of those parts, or took part in the conversation the row is or is named after (a direct message's other party, even where only you wrote), or is who an address-book card is about |
 | `label:` | (not a person) an email's labels |
 
 The value can be:
