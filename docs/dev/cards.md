@@ -528,7 +528,7 @@ besides components:
   § "The field"). The query string is the card's
   only record of a search (`cards/search.ts`): the chips for the
   sources the results come from, with their counts
-  (`/search/groups?by=source_ref`), write and read its `source_id:`
+  (`/search/groups?by=source_ref`), write and read its `source:`
   filter, so a filter that was clicked is the one that could have been
   typed. Free text has four answers, a
   small tab each at the start of that row (`grid/searchTabs.ts`):

@@ -413,7 +413,7 @@ export function perseusView(): CardRender {
         Promise.all(
           rows
             .filter((r) => r.kind === "group" && r.type?.id === "perseus")
-            .map((g) => fetchSearch(`source_id:${g.id}`, 200000, ac.signal)),
+            .map((g) => fetchSearch(`source:${g.id}`, 200000, ac.signal)),
         ),
       )
       .then((found) => {

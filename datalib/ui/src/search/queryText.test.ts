@@ -3,7 +3,7 @@ import type { SearchKeySpec } from "@/api";
 import { chipWords, completingAt, dateWords, termValue, words } from "./queryText";
 
 const KEYS: SearchKeySpec[] = [
-  { key: "source_id", aliases: [], values: { kind: "source" }, partial: false },
+  { key: "source", aliases: ["source_id"], values: { kind: "source" }, partial: false },
   { key: "channel", aliases: [], values: { kind: "text" }, partial: false },
   { key: "step", aliases: [], values: { kind: "step" }, partial: false },
   { key: "author_handle", aliases: ["handle"], values: { kind: "text" }, partial: false },
@@ -98,7 +98,7 @@ describe("termValue", () => {
 
 describe("chipWords", () => {
   it("draws a source, a group or a step as its chip, by key or alias", () => {
-    const q = "source_id:slack channel:bridge -step:slack/ingest";
+    const q = "source:slack channel:bridge -step:slack/ingest";
     expect(
       chipWords(q, KEYS).map(({ word, chip }) => [q.slice(word.valueFrom, word.to), chip]),
     ).toEqual([

@@ -342,11 +342,11 @@ mod tests {
     /// the `(source_id, …)` index can serve it.
     #[test]
     fn source_id_filter_is_equality_on_the_derived_column() {
-        let (sql, params) = build_where(&parse_query("source_id:slack_work"));
+        let (sql, params) = build_where(&parse_query("source:slack_work"));
         assert_eq!(sql, " WHERE source_id = ?");
         assert_eq!(params, vec!["slack_work"]);
 
-        let (sql, params) = build_where(&parse_query("-source_id:datalib"));
+        let (sql, params) = build_where(&parse_query("-source:datalib"));
         assert_eq!(sql, " WHERE (source_id IS NULL OR source_id != ?)");
         assert_eq!(params, vec!["datalib"]);
     }

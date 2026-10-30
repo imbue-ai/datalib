@@ -238,7 +238,7 @@ ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
     // is that it updates itself.
     const grid = await context.newPage();
     await grid.goto(GRID);
-    await searchAndSettle(grid, `source_id:${SOURCES[0]}`);
+    await searchAndSettle(grid, `source:${SOURCES[0]}`);
     await expect(grid.getByText("no matches.")).toBeVisible();
 
     // The pipeline DAG, in a third tab: its nodes are recoloured as the
@@ -349,7 +349,7 @@ ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
     await settleRunner(page, 120_000);
     const search = (await (
       await page.request.get(
-        `/applet/unified_document_index/search?q=${encodeURIComponent(`source_id:${SOURCES[0]}`)}&limit=1000`,
+        `/applet/unified_document_index/search?q=${encodeURIComponent(`source:${SOURCES[0]}`)}&limit=1000`,
       )
     ).json()) as { rows: unknown[] };
     expect(search.rows.length, "the tapes hold more than one conversation").toBeGreaterThan(
@@ -436,7 +436,7 @@ ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
 
     const grid = await context.newPage();
     await grid.goto(GRID);
-    await searchAndSettle(grid, `source_id:${id}`);
+    await searchAndSettle(grid, `source:${id}`);
     const activeUuid = () =>
       grid.evaluate(() => (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.activeUuid());
 

@@ -235,7 +235,7 @@ export function rowActions<R extends ActionRow>(h: RowActionHost<R>) {
     const q =
       sourceId === "unified_document_index"
         ? "scope_key:render_store"
-        : `source_id:${sourceId}${stage}`;
+        : `source:${sourceId}${stage}`;
     const source =
       row.kind === "group" ? row : h.rows().find((r) => r.kind === "group" && r.id === sourceId);
     const name =

@@ -331,7 +331,7 @@ deleted as the new one is written.
 `source_id` is derived from `qmd_path` at index time: its first
 segment, except a storage row (provider `datalib`), which sits under
 the source it measures and is filed under `datalib`
-(`GridRow::derived_source_id`). The `source_id:` filter compares it.
+(`GridRow::derived_source_id`). The `source:` filter compares it.
 
 ### `byte_size`, `item_count`
 
@@ -424,7 +424,7 @@ emitting a handful of rows tagged `provider = "datalib"`, `source_label
 = "Storage"`, kinds `Source Size`, `Store` and `Table`. That is what
 gives a download-only source — `fsindex`, `media` — a place in the grid
 at all: they render no documents, so without this they appear nowhere.
-`source_id:datalib` is "show me what everything weighs". The code is
+`source:datalib` is "show me what everything weighs". The code is
 `datalib/backend/datalib_step/src/introspect.rs`; its header has the
 reasons behind the rules below.
 

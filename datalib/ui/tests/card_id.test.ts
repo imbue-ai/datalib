@@ -22,7 +22,7 @@ describe("uuidv7", () => {
 
 describe("cardType", () => {
   it("is the factory or component the source calls", () => {
-    expect(cardType('gridView({ q: "source_id:slack" })')).toBe("gridView");
+    expect(cardType('gridView({ q: "source:slack" })')).toBe("gridView");
     expect(cardType("  logView()")).toBe("logView");
     expect(cardType("comp . user . tetris()")).toBe("comp.user.tetris");
   });
