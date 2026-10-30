@@ -10,6 +10,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
 use crate::qmd::lex::Fts5Query;
+use crate::qmd::mapping::Place;
 use crate::qmd::{qmd_index_path, QmdHit};
 use crate::repo::IndexRepo;
 
@@ -186,9 +187,7 @@ impl QmdIndexReader {
 
     /// The documents qmd's keyword index ranks for `query`, best first by
     /// BM25, at most `limit`, from `collections` or every one, read from
-    /// qmd's `documents_fts` table. Each hit's snippet opens with the line where `query.first`
-    /// first appears, in the header `snippet_match_line` reads, so the hit
-    /// lands on that message.
+    /// qmd's `documents_fts` table, each placed at `query.first`.
     ///
     /// `among`, when given, keeps only those documents, by id
     /// (`grid_rows::markdown_uuid_of_path`), before the cut: a search's other terms narrow
@@ -231,47 +230,38 @@ impl QmdIndexReader {
                 )
             }
         };
-        // The line is counted in the top hits' bodies only, after the cut:
-        // a common word matches tens of thousands of documents. The body
-        // is the file as qmd read it, so its lines are the file's.
-        let rows: Vec<(String, f64, String, Option<i64>)> = sqlx::query_as(
-            "WITH hits AS ( \
-               SELECT d.id AS id, d.path AS path, \
-                      bm25(documents_fts, 0.0, 2.0, 1.0) AS rank, \
-                      snippet(documents_fts, 2, '', '', '…', 16) AS snippet \
-                 FROM documents_fts JOIN documents d ON d.id = documents_fts.rowid \
-                WHERE documents_fts MATCH ?1 AND d.active = 1 \
-                  AND (NOT ?2 OR d.collection IN (SELECT value FROM json_each(?3))) \
-                  AND (NOT ?6 OR d.id IN (SELECT value FROM json_each(?7))) \
-                ORDER BY rank LIMIT ?4) \
-             SELECT h.path, -h.rank, h.snippet, \
-                    (SELECT CASE WHEN instr(lower(f.body), lower(?5)) > 0 THEN \
-                       1 + length(substr(f.body, 1, instr(lower(f.body), lower(?5)))) \
-                         - length(replace(substr(f.body, 1, instr(lower(f.body), lower(?5))), char(10), '')) \
-                       END FROM documents_fts f WHERE f.rowid = h.id) \
-               FROM hits h ORDER BY h.rank",
+        // Ranking reads no document's text: `snippet()` re-reads every
+        // match's whole body before the cut, which for a few hundred long
+        // agent sessions took half a minute. A page quotes the hits it
+        // shows from their files (`GridIndex::land`).
+        let rows: Vec<(String, f64)> = sqlx::query_as(
+            "SELECT d.path, -bm25(documents_fts, 0.0, 2.0, 1.0) AS score \
+               FROM documents_fts JOIN documents d ON d.id = documents_fts.rowid \
+              WHERE documents_fts MATCH ?1 AND d.active = 1 \
+                AND (NOT ?2 OR d.collection IN (SELECT value FROM json_each(?3))) \
+                AND (NOT ?5 OR d.id IN (SELECT value FROM json_each(?6))) \
+              ORDER BY score DESC LIMIT ?4",
         )
         .bind(&query.expr)
         .bind(scoped)
         .bind(wanted)
         .bind(limit as i64)
-        .bind(&query.first)
         .bind(ids.is_some())
         .bind(serde_json::to_string(&ids.unwrap_or_default()).unwrap_or_default())
         .fetch_all(&self.pool)
         .await?;
         Ok(rows
             .into_iter()
-            .map(|(path, score, snippet, line)| QmdHit {
+            .map(|(path, score)| QmdHit {
                 path,
                 score,
-                snippet: match line {
-                    Some(line) => format!("@@ -{line},1 @@ (0 before, 0 after)\n{snippet}"),
-                    None => snippet,
-                },
+                snippet: String::new(),
                 lines: None,
                 docid: String::new(),
                 title: String::new(),
+                place: Some(Place::Words {
+                    first: query.first.clone(),
+                }),
             })
             .collect())
     }
@@ -702,10 +692,10 @@ mod tests {
         assert_eq!(paths, ["sickbay/render_markdown/r.md"]);
     }
 
-    /// A hit carries the line its first word appears on, as the header the
-    /// mapping reads, so it lands on that message.
+    /// A hit carries the word it is placed at and no text: ranking reads no
+    /// document's body, which for long agent sessions took half a minute.
     #[tokio::test]
-    async fn a_keyword_hit_names_the_line_its_word_is_on() {
+    async fn a_keyword_hit_is_placed_at_its_first_word_without_reading_text() {
         let td = tempfile::tempdir().unwrap();
         let body = "---\ntitle: Log\n---\n\nNothing here.\nThe Warp core holds.\n";
         let r = keyword_db(
@@ -723,9 +713,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            crate::qmd::mapping::snippet_match_line(&hits[0].snippet),
-            Some(6)
+            hits[0].place,
+            Some(Place::Words {
+                first: "warp".into()
+            })
         );
+        assert_eq!(hits[0].snippet, "");
     }
 
     /// Two paths with identical content share one hash. Both are

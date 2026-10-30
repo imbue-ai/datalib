@@ -58,6 +58,20 @@ source by its id in the config), `kind:` (`Email`, `Slack Message`, …),
 grid shows (`org_name:`, `created_at:`, …). These match the whole value
 as stored, case and all: `kind:Email`, not `kind:email`.
 
+### Dates and words together
+
+`after:` and `before:` keep each message by its own time, and a
+document (a thread, a chat, an agent session) by its last message. A
+chat that runs over several days is kept for any day it was active,
+and without free text you see only that day's messages. With free text
+the tabs differ:
+
+- **Meaning** ranks the chat by its messages in the window alone.
+- **Words** ranks the whole chat by every word in it, then opens it at
+  the message in the window holding the most of your words. A chat can
+  rank for words it said on another day, and open on a message that
+  does not hold them.
+
 `GET …/search/keys` lists every key a root has, and
 `…/search/values?key=…&typed=…` the values one takes, most rows first.
 A key the search does not have is refused by name rather than ignored,

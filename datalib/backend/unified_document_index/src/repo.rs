@@ -192,6 +192,13 @@ pub trait IndexRepo: Send + Sync {
         q: &ParsedQuery,
     ) -> Result<Vec<(String, String, bool)>, RepoError>;
 
+    /// Which of `markdown_uuids` hold a row `q`'s structured terms match.
+    async fn documents_kept(
+        &self,
+        q: &ParsedQuery,
+        markdown_uuids: &[String],
+    ) -> Result<std::collections::HashSet<String>, RepoError>;
+
     /// List outgoing edges originating from `markdown_uuid`. Each
     /// returned [`EdgeRowOut`] pairs the raw edge with whatever
     /// destination metadata the UI needs to render an "outgoing

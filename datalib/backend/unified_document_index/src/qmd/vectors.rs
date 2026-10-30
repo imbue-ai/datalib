@@ -31,7 +31,7 @@ use anyhow::{bail, Context, Result};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
-use crate::qmd::mapping::parse_section_uuid;
+use crate::qmd::mapping::{parse_section_uuid, Place};
 use crate::qmd::{qmd_index_path, QmdHit};
 use datalib_schema::grid_rows::markdown_uuid_of_path;
 
@@ -380,28 +380,16 @@ pub async fn nearest_documents(
     drop(held);
     ranked.sort_by(|a, b| b.2.total_cmp(&a.2).then_with(|| a.0.cmp(b.0)));
     ranked.truncate(limit);
-
-    let shown: Vec<&str> = ranked.iter().map(|r| r.1).collect();
-    let bodies: HashMap<String, String> = sqlx::query_as(
-        "SELECT hash, doc FROM content WHERE hash IN (SELECT value FROM json_each(?))",
-    )
-    .bind(serde_json::to_string(&shown)?)
-    .fetch_all(pool)
-    .await?
-    .into_iter()
-    .collect();
     Ok(ranked
         .into_iter()
-        .map(|(path, hash, score, pos, next)| QmdHit {
+        .map(|(path, _, score, pos, next)| QmdHit {
             path: path.to_string(),
             score: f64::from(score),
-            snippet: bodies
-                .get(hash)
-                .map(|body| chunk_snippet(body, pos))
-                .unwrap_or_default(),
-            lines: bodies.get(hash).map(|body| chunk_lines(body, pos, next)),
+            snippet: String::new(),
+            lines: None,
             docid: String::new(),
             title: String::new(),
+            place: Some(Place::Chunk { pos, next }),
         })
         .collect())
 }
@@ -490,7 +478,8 @@ fn sections_of(body: &str) -> Vec<(i64, String)> {
 
 /// Whether the chunk from `pos` to `next` (the end when `None`) covers
 /// any of a message `kept` holds, each message running to where the next
-/// starts.
+/// starts. `sections` is in file order, so the messages a chunk covers
+/// are found by halving: a session has thousands, and every chunk asks.
 fn covers_kept(
     sections: &[(i64, String)],
     kept: &HashSet<String>,
@@ -498,10 +487,13 @@ fn covers_kept(
     next: Option<i64>,
 ) -> bool {
     let end = next.unwrap_or(i64::MAX);
-    sections.iter().enumerate().any(|(i, (start, id))| {
-        let until = sections.get(i + 1).map_or(i64::MAX, |(s, _)| *s);
-        kept.contains(id) && *start < end && pos < until
-    })
+    let from = sections
+        .partition_point(|(start, _)| *start <= pos)
+        .saturating_sub(1);
+    let to = sections.partition_point(|(start, _)| *start < end);
+    sections[from..to.max(from)]
+        .iter()
+        .any(|(_, id)| kept.contains(id))
 }
 
 /// A query's embedding and the model that made it.
@@ -701,6 +693,15 @@ mod tests {
             "Worf to the end"
         );
         assert!(!covers_kept(&sections, &HashSet::new(), 0, None));
+        let riker: HashSet<String> = ["m1".to_string()].into();
+        assert!(
+            !covers_kept(&sections, &riker, 0, Some(5)),
+            "the title only"
+        );
+        assert!(
+            covers_kept(&sections, &riker, 10, Some(12)),
+            "inside Riker's"
+        );
     }
 
     #[test]

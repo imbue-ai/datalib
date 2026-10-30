@@ -349,7 +349,7 @@ async fn page(s: &Index, query: &ProblemsQuery, spec: PageSpec<'_>) -> Result<Pa
     let list: Vec<results::Entry> = listing
         .uuids
         .into_iter()
-        .map(|uuid| results::Entry { uuid, hit: None })
+        .map(|uuid| results::Entry::new(uuid, None))
         .collect();
     let limit = results::reaching(&list, spec.offset, spec.limit, spec.through);
     let (entries, next_offset) = results::page(&list, spec.offset, limit);

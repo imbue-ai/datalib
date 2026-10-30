@@ -37,6 +37,21 @@ pub struct QmdHit {
     pub lines: Option<usize>,
     pub docid: String,
     pub title: String,
+    /// Where in the document a ranking matched, for [`GridIndex::land`] to
+    /// read from its file. `None` when `snippet` and `lines` already say.
+    pub place: Option<Place>,
+}
+
+/// Where in its document a ranked hit matched. A ranking reads no text, so
+/// that a long chat costs nothing until a page shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Place {
+    /// Somewhere in the document's words: the first word or phrase the
+    /// search requires, as typed.
+    Words { first: String },
+    /// A Meaning chunk, from `pos` to `next` (the end when `None`), in the
+    /// UTF-16 units qmd's chunker counts.
+    Chunk { pos: i64, next: Option<i64> },
 }
 
 /// The bits of a `grid_rows` row that the hit↔row mapping needs.
@@ -153,6 +168,41 @@ fn best_section(
         .map_or(own, |(i, _)| i)
 }
 
+/// `hit` with the line it matched on and the lines it spans, read from
+/// `text`, its document: a keyword hit at the first line holding `first`
+/// (no line when none does, so it lands on the document), a Meaning hit
+/// at its chunk.
+fn placed(text: &str, hit: &QmdHit, place: &Place) -> QmdHit {
+    let (snippet, lines) = match place {
+        Place::Chunk { pos, next } => (
+            crate::qmd::vectors::chunk_snippet(text, *pos),
+            Some(crate::qmd::vectors::chunk_lines(text, *pos, *next)),
+        ),
+        // ASCII lowercasing keeps every byte where it was, so the line
+        // counted is the file's.
+        Place::Words { first } => {
+            let at = text.to_ascii_lowercase().find(&first.to_ascii_lowercase());
+            let snippet = at.map_or_else(String::new, |at| {
+                quoted_from(&[], 1 + text[..at].matches('\n').count())
+            });
+            (snippet, None)
+        }
+    };
+    QmdHit {
+        snippet,
+        lines,
+        place: None,
+        ..hit.clone()
+    }
+}
+
+/// `lines`, the first of them line `line` of the file, as a hit's snippet:
+/// under the header `snippet_match_line` reads, twelve at most.
+fn quoted_from(lines: &[&str], line: usize) -> String {
+    let text: Vec<&str> = lines.iter().take(12).copied().collect();
+    format!("@@ -{line},1 @@ (0 before, 0 after)\n{}", text.join("\n"))
+}
+
 /// Indexes a set of `GridRowRef`s for fast hit→rows / row→hits lookup. Holds
 /// the data root so a hit can be resolved to the exact message it landed in by
 /// reading the rendered markdown and mapping the hit's line to a section.
@@ -206,13 +256,20 @@ impl GridIndex {
     }
 
     pub fn rows_for_hit(&self, hit: &QmdHit) -> Vec<GridRowRef> {
+        let text = std::fs::read_to_string(self.root.join(&hit.path)).ok();
+        self.rows_for_hit_in(text.as_deref(), hit)
+    }
+
+    /// [`Self::rows_for_hit`] over the document's text, read once by the
+    /// caller; `None` when the file could not be read.
+    fn rows_for_hit_in(&self, text: Option<&str>, hit: &QmdHit) -> Vec<GridRowRef> {
         let Some(file_rows) =
             markdown_uuid_of_path(&hit.path).and_then(|d| self.by_document.get(d))
         else {
             return Vec::new();
         };
         let kept = |r: &GridRowRef| self.allowed.as_ref().is_none_or(|a| a.contains(&r.uuid));
-        if let Some(uuid) = self.section_for_line(hit) {
+        if let Some(uuid) = text.and_then(|text| self.section_for_line(text, hit)) {
             if let Some(row) = self.by_uuid.get(uuid.as_str()).filter(|r| kept(r)) {
                 return vec![row.clone()];
             }
@@ -238,7 +295,12 @@ impl GridIndex {
     /// message row would only be filtered out afterwards. Empty when the
     /// file has no document row, so an orphan stays an orphan.
     pub fn document_for_hit(&self, hit: &QmdHit) -> Vec<GridRowRef> {
-        self.rows_for_hit(hit)
+        let text = std::fs::read_to_string(self.root.join(&hit.path)).ok();
+        self.document_for_hit_in(text.as_deref(), hit)
+    }
+
+    fn document_for_hit_in(&self, text: Option<&str>, hit: &QmdHit) -> Vec<GridRowRef> {
+        self.rows_for_hit_in(text, hit)
             .first()
             .and_then(|r| self.by_document.get(&r.markdown_uuid))
             .into_iter()
@@ -248,17 +310,83 @@ impl GridIndex {
             .collect()
     }
 
+    /// The row a hit ranked on its whole document lands on, with the lines
+    /// quoted from where it matched, reading the document's file once: the
+    /// work a page does for each hit it shows, and only for those. The
+    /// document's own row for an `is:document` search. `None` for a
+    /// document the grid does not have.
+    pub fn land(&self, hit: &QmdHit, documents_only: bool) -> Option<(GridRowRef, String)> {
+        let text = std::fs::read_to_string(self.root.join(&hit.path)).ok();
+        let placed = match (&text, &hit.place) {
+            (Some(text), Some(place)) => placed(text, hit, place),
+            _ => hit.clone(),
+        };
+        let rows = if documents_only {
+            self.document_for_hit_in(text.as_deref(), &placed)
+        } else {
+            self.rows_for_hit_in(text.as_deref(), &placed)
+        };
+        let row = rows.into_iter().next()?;
+        let row = if self.keeps(&row) {
+            row
+        } else {
+            self.first_kept(text.as_deref(), &row.markdown_uuid)
+                .unwrap_or(row)
+        };
+        let quoted = match (&text, &hit.place) {
+            (Some(text), Some(Place::Words { .. })) => self.quote(text, &row.uuid),
+            _ => None,
+        };
+        Some((row, quoted.unwrap_or(placed.snippet)))
+    }
+
+    fn keeps(&self, row: &GridRowRef) -> bool {
+        self.allowed.as_ref().is_none_or(|a| a.contains(&row.uuid))
+    }
+
+    /// The first row of `document` the search keeps, its messages in the
+    /// order the file has them, then its own row: where a hit lands when
+    /// none of the messages it matched is kept, rather than on one the
+    /// search drops.
+    fn first_kept(&self, text: Option<&str>, document: &str) -> Option<GridRowRef> {
+        let rows = self.by_document.get(document)?;
+        let in_order = text
+            .into_iter()
+            .flat_map(str::lines)
+            .filter_map(parse_section_uuid)
+            .filter_map(|uuid| self.by_uuid.get(uuid));
+        in_order.chain(rows).find(|r| self.keeps(r)).cloned()
+    }
+
+    /// The lines of message `uuid` from the first that holds one of the
+    /// search's words, under the header `snippet_match_line` reads.
+    fn quote(&self, text: &str, uuid: &str) -> Option<String> {
+        let lines: Vec<&str> = text.lines().collect();
+        let start = lines
+            .iter()
+            .position(|l| parse_section_uuid(l) == Some(uuid))?;
+        let end = lines[start + 1..]
+            .iter()
+            .position(|l| parse_section_uuid(l).is_some())
+            .map_or(lines.len(), |i| start + 1 + i);
+        let at = (start + 1..end)
+            .find(|&i| {
+                let line = lines[i].to_lowercase();
+                self.terms.iter().any(|t| holds(&line, t))
+            })
+            .unwrap_or(start);
+        Some(quoted_from(&lines[at..end], at + 1))
+    }
+
     /// Read the hit's file and return the `data-section-uuid` of the
     /// message the hit lands on: of the messages within the hit's span (the
     /// whole document, or a Meaning chunk's lines), the one holding the most
     /// of the search's words. Without words, or when its own message holds
     /// as many, the message covering the matched line: the last anchor at or
     /// before it, or the first when the hit is above every message (title,
-    /// front matter). `None` if the line can't be derived or the file can't
-    /// be read.
-    fn section_for_line(&self, hit: &QmdHit) -> Option<String> {
+    /// front matter). `None` if the line can't be derived.
+    fn section_for_line(&self, text: &str, hit: &QmdHit) -> Option<String> {
         let line = snippet_match_line(&hit.snippet)?;
-        let text = std::fs::read_to_string(self.root.join(&hit.path)).ok()?;
         let lines: Vec<&str> = text.lines().collect();
         let starts: Vec<(usize, &str)> = lines
             .iter()
@@ -375,6 +503,7 @@ mod tests {
             lines: None,
             docid: String::new(),
             title: String::new(),
+            place: None,
         }
     }
 
@@ -513,6 +642,36 @@ mod tests {
                 "claude",
             ),
         ]
+    }
+
+    /// A ranking places a hit without reading its document; landing reads
+    /// the file once and finds the message: the one holding the search's
+    /// words for a keyword hit, quoted from the line that holds them, and
+    /// the one a Meaning chunk starts in.
+    #[test]
+    fn a_placed_hit_lands_on_its_message_and_quotes_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rows = write_two_message_doc(tmp.path(), CHAT);
+        let idx = GridIndex::new(tmp.path(), rows).with_terms("Second message");
+        let placed_at = |place: Place| QmdHit {
+            place: Some(place),
+            ..hit(&path_of("claude", CHAT), "")
+        };
+
+        let words = placed_at(Place::Words {
+            first: "second".into(),
+        });
+        let (row, quoted) = idx.land(&words, false).unwrap();
+        assert_eq!(row.uuid, "bbbbbbbb-0000-0000-0000-000000000002");
+        assert!(quoted.starts_with("@@ -16,1 @@"), "{quoted}");
+        assert!(quoted.contains("second message text"), "{quoted}");
+
+        let text = std::fs::read_to_string(tmp.path().join(path_of("claude", CHAT))).unwrap();
+        let pos = text.find("## Assistant").unwrap() as i64;
+        let chunk = placed_at(Place::Chunk { pos, next: None });
+        let (row, quoted) = idx.land(&chunk, false).unwrap();
+        assert_eq!(row.uuid, "bbbbbbbb-0000-0000-0000-000000000002");
+        assert!(quoted.contains("## Assistant"), "{quoted}");
     }
 
     /// A hit on a message the search's other terms drop lands on one they
@@ -727,6 +886,7 @@ mod tests {
             lines: None,
             docid: String::new(),
             title: String::new(),
+            place: None,
         }
     }
 
