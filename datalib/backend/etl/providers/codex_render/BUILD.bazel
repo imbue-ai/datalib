@@ -26,7 +26,6 @@ rust_library(
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
-        "@datalib_crates//:tokio",
     ],
 )
 

@@ -6,13 +6,10 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::Result;
-use datalib_etl::blob_cas::BlobBundle;
-use datalib_etl::doltlite_raw::DiffScan;
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{Bucket, Buckets, RawRange};
 
-use crate::render::{render_all, RenderProfile};
 use crate::types::NormalizedChat;
 
 /// The chats one pass renders, and the buckets it names before it
@@ -96,35 +93,4 @@ pub struct RenderTarget<'a> {
     pub source_id: &'a str,
     pub progress: &'a Progress,
     pub on_doc_complete: &'a mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-}
-
-/// The whole incremental pass for a source rendered under one profile:
-/// [`changed_chats`] against the diff in `scan`, then [`render_all`].
-pub fn render_changed(
-    profile: &RenderProfile,
-    all: Vec<NormalizedChat>,
-    scan: DiffScan,
-    range: RawRange<'_>,
-    uuid_of: impl Fn(&str) -> String,
-    blobs_by_chat: &HashMap<String, BlobBundle>,
-    target: RenderTarget<'_>,
-) -> Result<RenderOutcome> {
-    let mut changed = changed_chats(all, range, scan.render.as_ref(), uuid_of);
-    let summary = render_all(
-        profile,
-        &changed.chats,
-        target.out_root,
-        target.source_id,
-        blobs_by_chat,
-        target.progress,
-        target.on_doc_complete,
-    )?;
-    changed.buckets.extend(summary.buckets);
-    Ok(RenderOutcome {
-        rendered: summary.docs_rendered,
-        skipped: changed.skipped,
-        new_head: scan.new_head,
-        scan_elapsed: scan.scan_elapsed,
-        buckets: changed.buckets,
-    })
 }

@@ -908,8 +908,10 @@ with one bound JSON array each (`etl/README.md` §"Binding a set of
 values"), renders it, and declares the page's buckets before reading
 the next, so nothing about a bucket outlives its page. Only the small
 tables every bucket looks up (users, channels, accounts, mailboxes)
-are read whole, up front. Email and Slack render this way; the other
-renders still read their rows whole
+are read whole, up front. Email and Slack render this way, and so do
+Claude Code and Codex (`datalib_etl_agent_sessions_render::render_paged`),
+which size a page by how many records it holds, counted from the index
+without reading one. The other renders still read their rows whole
 ([`audits/2026-10-20_render_memory.md`](audits/2026-10-20_render_memory.md)
 lists them).
 

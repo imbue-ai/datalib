@@ -40,19 +40,20 @@ impl SourceRender for CodexRender {
     }
 
     async fn run(&self, raw_path: &Path, ctx: &RenderCtx<'_>) -> Result<String> {
-        let mut on_doc = |md| ctx.emit_doc(md);
         let outcome = crate::render::render(
             raw_path,
             ctx.root,
             ctx.name,
             ctx.progress,
-            &mut on_doc,
+            &mut |md| ctx.emit_doc(md),
+            &mut |buckets| ctx.declare_buckets(buckets),
             ctx.raw_range(),
+            ctx.page_size,
             self.max_tool_result_bytes,
         )
         .context("codex render")?;
 
-        ctx.finish(&outcome.buckets, outcome.new_head.as_deref())?;
+        ctx.finish(&[], outcome.new_head.as_deref())?;
         Ok(format!(
             "rendered={} skipped={}",
             outcome.rendered, outcome.skipped

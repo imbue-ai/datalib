@@ -1,6 +1,11 @@
 //! What the agent-session render crates (claude_code, codex) share: the
-//! item a transcript line becomes, the folded block a run of tool
-//! traffic becomes, and the text helpers both read their JSON with.
+//! paged read of the store (`paged`), the item a transcript line
+//! becomes, the folded block a run of tool traffic becomes, and the text
+//! helpers both read their JSON with.
+
+mod paged;
+
+pub use paged::{render_paged, titles, PagedOutcome, SessionRender};
 
 use datalib_etl_chat_common::normalize::json_pretty_sorted;
 use datalib_etl_chat_common::types::{AuthorKind, ItemKind, NormalizedChatItem, UpstreamRef};
