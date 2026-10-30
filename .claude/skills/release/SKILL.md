@@ -166,6 +166,22 @@ published from a local machine — the tag is the trigger.
     the per-triple tarballs and the macOS dmg. Tarball filenames are
     stable/un-versioned on purpose — the install script fetches
     `releases/latest/download/<name>`.
+
+    Then give the release its notes. The workflow creates it with an
+    empty body, and apps that read the raw stores learn of a change
+    there and nowhere else:
+
+    ```sh
+    tools/release_notes.py v<previous> vX.Y.Z > /tmp/notes.md
+    ```
+
+    It lists each raw store's migrations and its tables and columns
+    added, gone or retyped, then the PRs. Read every "Migrated on first
+    open" line: when a rung changes what a stored value means (an id's
+    spelling, a unit, what a NULL says), write a **Breaking for readers**
+    paragraph at the top in plain words: which column, what it held,
+    what it holds now (v0.46.0's notes are the example). Then
+    `gh release edit vX.Y.Z --notes-file /tmp/notes.md`.
 12. Bump the pin in DWT, `imbue-ai/default-workspace-template`
     (§"Updating DWT"). Only after step 11 — every pin there is a
     tag-relative URL that has to resolve when a workspace first uses

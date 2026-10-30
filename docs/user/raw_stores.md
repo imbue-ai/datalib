@@ -23,6 +23,13 @@ written down here yet. A test (`raw_stores_doc_test.rs` in
 guide names against the tables the code creates, so a column added or
 renamed fails the build until this page says what it holds.
 
+**Before upgrading a reader, read the release notes.** Each release on
+GitHub lists, under "Changes to the raw stores", every table and column
+added, removed or retyped since the release before, and every migration
+that rewrites existing rows. A migration can change what a value means
+while the column stays the same type, as when v0.46.0 changed Gmail's
+thread ids from decimal to hex.
+
 ## Opening a store
 
 A source's raw directory holds two files:

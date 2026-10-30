@@ -228,6 +228,18 @@ py_test(
     main = "check_tzdata_current_test.py",
 )
 
+# How a release's notes read the raw shapes and the migration ladders.
+py_test(
+    name = "release_notes_test",
+    size = "small",
+    srcs = [
+        "release_notes.py",
+        "release_notes_test.py",
+    ],
+    imports = ["."],
+    main = "release_notes_test.py",
+)
+
 # The qmd model pins (repo, revision, file, sha256) live in the build's
 # fetch rule and in the Rust table the shipped binaries verify against.
 py_test(
