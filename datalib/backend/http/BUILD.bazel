@@ -281,7 +281,31 @@ rust_test_slice(
 rust_test(
     name = "shutdown_test",
     size = "small",
-    srcs = ["tests/shutdown.rs"],
+    srcs = [
+        "tests/server/mod.rs",
+        "tests/shutdown.rs",
+    ],
+    crate_root = "tests/shutdown.rs",
+    data = [":datalib_http_bin"],
+    edition = "2021",
+    env = {
+        "DATALIB_HTTP_BIN": "$(rootpath :datalib_http_bin)",
+    },
+    deps = [
+        "@datalib_crates//:tempfile",
+    ],
+)
+
+# A relative data root, given from the server's own working directory:
+# every step is handed it absolute.
+rust_test(
+    name = "relative_root_test",
+    size = "small",
+    srcs = [
+        "tests/relative_root.rs",
+        "tests/server/mod.rs",
+    ],
+    crate_root = "tests/relative_root.rs",
     data = [":datalib_http_bin"],
     edition = "2021",
     env = {
