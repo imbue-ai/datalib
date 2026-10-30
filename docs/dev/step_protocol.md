@@ -229,6 +229,12 @@ it covers your process alone, not what you spawned. Linux keeps no peak
 past exit for anyone but the process that reaps you, so there a short
 step's peak is still its first reading.
 
+On macOS the runner starts you with `MallocLargeCache=0`. Without it
+the system allocator keeps freed large blocks for reuse and counts them
+in your footprint: a Claude Code first sync's ingest peaked at up to
+2.9 GB with the cache on and under 0.4 GB with it off, at the same CPU
+time. A step's `env` (or the run's) can set it back to `1`.
+
 A step that counts one thing and knows its total may use the shorter
 form instead, which the runner translates into the `done_total` and `queued`
 metrics for it:
