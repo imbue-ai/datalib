@@ -654,10 +654,11 @@ pub fn load_graded(path: &Path) -> Result<(ConfigCheck, PathBuf)> {
 }
 
 /// Where a config at `path` keeps its data: its `data_root`, else its own
-/// directory.
+/// directory. Always absolute: a step runs with the root as its working
+/// directory, and would resolve a relative one a second time.
 pub fn data_root_of(path: &Path, cfg: &DagConfig) -> PathBuf {
     match &cfg.data_root {
-        Some(p) => expand_tilde(p),
+        Some(p) => absolutize(expand_tilde(p)),
         None => {
             let abs = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
             abs.parent()

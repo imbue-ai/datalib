@@ -84,7 +84,11 @@ fn rfc3339(s: &str) -> Result<String, String> {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    let root = args.data_root;
+    // Absolute before anything uses it: a step and an applet run with the
+    // root as their working directory, and would resolve a relative one a
+    // second time.
+    let root = std::path::absolute(&args.data_root)
+        .map_err(|e| anyhow::anyhow!("data root {}: {e}", args.data_root.display()))?;
     // The connect flow runs `latchkey`; from a release tarball that
     // ships no `runtime/`, the first one fetches the manifest's.
     datalib_fetch::enable_runtime_fetch();
