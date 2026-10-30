@@ -223,7 +223,7 @@ One row per download run.
 | `finished_at_utc` | when it ended; NULL while it runs, or if it was killed |
 | `tz_offset` | the offset for the two stamps |
 | `config` | the step's params as that run saw them, JSON |
-| `status` | `running`, `ok` or `error` |
+| `status` | `running`, `ok` or `error`; `interrupted` for a run killed before it could finish, set when the next run starts |
 | `summary` | what it did, JSON (counts, and why it stopped early if it did) |
 
 ### `sync_scope_state`

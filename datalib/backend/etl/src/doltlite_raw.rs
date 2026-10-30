@@ -1651,6 +1651,12 @@ async fn discard_dirty_working_tree(pool: &SqlitePool, db_path: &Path) -> Result
 pub async fn start_run(pool: &SqlitePool, config: &Value) -> Result<i64> {
     let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
     let cfg = serde_json::to_string(config).context("serialize run config")?;
+    // A store has one writer, so a run still `running` as this one starts
+    // was killed before it could say how it ended.
+    sqlx::query("UPDATE sync_runs SET status = 'interrupted' WHERE status = 'running'")
+        .execute(pool)
+        .await
+        .context("close sync_runs left running")?;
     let row = sqlx::query(
         "INSERT INTO sync_runs (started_at_utc, tz_offset, config, status) \
          VALUES (?, ?, ?, 'running') RETURNING run_id",

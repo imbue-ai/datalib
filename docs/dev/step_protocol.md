@@ -696,6 +696,31 @@ on SIGINT and commits there, and emits versions where it has them (the grid
 index claims the hash of its store's tree). Use it as the
 reference implementation.
 
+### Running `datalib-step` by hand
+
+An app that embeds one download can run `datalib-step` itself, with no
+config and no loop, into a folder of its own. It needs the working
+directory set to that folder, and in the environment:
+
+- `DATALIB_DAG_DATA_ROOT`, the same folder, absolute;
+- `DATALIB_DAG_GROUP` and `DATALIB_DAG_FUNCTION`, such as `slack` and
+  `ingest`;
+- `DATALIB_DAG_STEP`, `<group>/<function>`;
+- `DATALIB_DAG_GROUP_TYPE`, the source type, for `ingest` and the
+  renders;
+- `DATALIB_DAG_INPUTS`, for a step that reads another (a render reads
+  `<group>/ingest`).
+
+The params go in a JSON file passed as `--params-file`, shaped as the
+step's `params` table would be. The step checkpoints as it goes and
+writes the event protocol on stdout, as under the runner. What the
+runner adds is lost: nothing records its version, so no step that reads
+it knows to run, and no other process is told. A run killed part way
+leaves its `sync_runs` row `running` until the next run of that step
+marks it `interrupted`. The store's lock still refuses a second writer,
+so a hand run and the app's own run of the same step never write at
+once.
+
 The index functions' ids are fixed at `unified_document_index/<function>`, and
 the qmd steps share one index file; the rules are in
 [`config_model.md`](config_model.md) § "Naming rules".
