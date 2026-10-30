@@ -3,9 +3,10 @@
 //! list: the second page of a search does not run it again.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use datalib_unified_document_index::group::Within;
+use datalib_unified_document_index::qmd::QmdHit;
 use datalib_unified_document_index::sort::Sort;
 
 /// Searches kept. A list of every row of a large root is a few MB of
@@ -26,13 +27,48 @@ pub struct Key {
     pub at: Option<String>,
 }
 
-/// One row of a search's result, in order.
-#[derive(Debug, Clone, PartialEq)]
+/// One row of a search's result, in order: a row, or a document a
+/// free-text ranking found, which a page lands on one of its messages.
+#[derive(Debug, Clone)]
 pub struct Entry {
     pub uuid: String,
-    /// What qmd matched, for a free-text search: its score, and the words
-    /// it matched on, shown as the row's Contents.
-    pub hit: Option<(f64, String)>,
+    /// What qmd matched, for a free-text search.
+    pub hit: Option<Hit>,
+    /// The message a document's hit landed on and the lines quoted from
+    /// it, set the first time a page shows it.
+    pub landed: Arc<OnceLock<(String, String)>>,
+}
+
+/// A free-text ranking's score for a row or document, and the words it
+/// matched, shown as the row's Contents.
+#[derive(Debug, Clone)]
+pub struct Hit {
+    pub score: f64,
+    pub snippet: String,
+    /// A hit on a whole document, still to be landed on a message.
+    pub document: Option<Arc<QmdHit>>,
+}
+
+impl Entry {
+    pub fn new(uuid: String, hit: Option<Hit>) -> Self {
+        Self {
+            uuid,
+            hit,
+            landed: Arc::default(),
+        }
+    }
+
+    /// The row this entry shows: the message its hit landed on, once a
+    /// page has landed it, else its own uuid.
+    pub fn row(&self) -> &str {
+        self.landed.get().map_or(&self.uuid, |(uuid, _)| uuid)
+    }
+
+    /// Whether a page must still land this entry before showing it.
+    pub fn unlanded(&self) -> Option<&QmdHit> {
+        let document = self.hit.as_ref()?.document.as_deref()?;
+        self.landed.get().is_none().then_some(document)
+    }
 }
 
 #[derive(Default)]
@@ -81,7 +117,8 @@ pub const MAX_PAGE: usize = 100_000;
 /// that row is past `offset`: a grid re-reading the rows it holds, or
 /// seeking a selected row, asks for them in one request.
 pub fn reaching(list: &[Entry], offset: usize, limit: usize, through: Option<&str>) -> usize {
-    let target = through.and_then(|uuid| list.iter().position(|e| e.uuid == uuid));
+    let target =
+        through.and_then(|uuid| list.iter().position(|e| e.uuid == uuid || e.row() == uuid));
     let needed = target.map_or(0, |i| (i + 1).saturating_sub(offset));
     limit.max(needed).min(MAX_PAGE)
 }
@@ -100,12 +137,7 @@ mod tests {
     use super::*;
 
     fn list(n: usize) -> Vec<Entry> {
-        (0..n)
-            .map(|i| Entry {
-                uuid: format!("u{i}"),
-                hit: None,
-            })
-            .collect()
+        (0..n).map(|i| Entry::new(format!("u{i}"), None)).collect()
     }
 
     fn key(q: &str, at: &str) -> Key {

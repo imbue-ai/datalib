@@ -1232,6 +1232,39 @@ impl IndexRepo for DoltRepo {
             .map_err(|e| RepoError::Internal(format!("decode a matching row: {e}")))
     }
 
+    async fn documents_kept(
+        &self,
+        q: &ParsedQuery,
+        markdown_uuids: &[String],
+    ) -> Result<std::collections::HashSet<String>, RepoError> {
+        let (where_sql, params) = build_where(q);
+        let Some(mut at) = self.pinned().await? else {
+            return Ok(Default::default());
+        };
+        let wanted = serde_json::to_string(markdown_uuids)
+            .map_err(|e| RepoError::Internal(format!("encode document ids: {e}")))?;
+        let among = "markdown_uuid IN (SELECT value FROM json_each(?))";
+        let clause = if where_sql.is_empty() {
+            format!(" WHERE {among}")
+        } else {
+            format!("{where_sql} AND {among}")
+        };
+        // Audited: as `matching` — a literal table name and `build_where`'s
+        // static column names; every value is bound, the ids last.
+        let mut query = sqlx::query_as::<_, (String,)>(sqlx::AssertSqlSafe(format!(
+            "SELECT DISTINCT markdown_uuid FROM {}{clause}",
+            at.grid_rows
+        )));
+        for p in &params {
+            query = query.bind(p);
+        }
+        match query.bind(wanted).fetch_all(&mut *at.tx).await {
+            Ok(rows) => Ok(rows.into_iter().map(|(d,)| d).collect()),
+            Err(e) if is_missing_table(&e, "grid_rows") => Ok(Default::default()),
+            Err(e) => Err(RepoError::Internal(e.to_string())),
+        }
+    }
+
     async fn grid_row_refs_for_documents(
         &self,
         markdown_uuids: &[String],

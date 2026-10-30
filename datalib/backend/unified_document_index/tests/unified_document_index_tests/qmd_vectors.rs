@@ -184,8 +184,12 @@ async fn a_held_index_rereads_the_documents_after_another_connection_commits() {
 async fn a_filtered_meaning_search_ranks_by_the_kept_messages() {
     use std::collections::{HashMap, HashSet};
 
-    use datalib_unified_document_index::qmd::mapping::{parse_section_uuid, snippet_match_line};
-    use datalib_unified_document_index::qmd::vectors::{Kept, QueryVector};
+    use datalib_unified_document_index::qmd::mapping::{
+        parse_section_uuid, snippet_match_line, Place,
+    };
+    use datalib_unified_document_index::qmd::vectors::{
+        chunk_lines, chunk_snippet, Kept, QueryVector,
+    };
     use datalib_unified_document_index::qmd::{qmd_index_path, HeldIndex, QmdHit};
     use sqlx::{ConnectOptions, Connection};
 
@@ -254,11 +258,17 @@ async fn a_filtered_meaning_search_ranks_by_the_kept_messages() {
                 starts.get(i + 1).map_or(lines.len() + 1, |s| s.0),
             )
         };
+        // The lines a hit's chunk spans.
+        let chunk_of = |hit: &QmdHit| match hit.place {
+            Some(Place::Chunk { pos, next }) => {
+                let from = snippet_match_line(&chunk_snippet(body, pos)).unwrap();
+                (from, from + chunk_lines(body, pos, next))
+            }
+            ref other => panic!("{path}: a Meaning hit placed at {other:?}"),
+        };
 
         let whole = nearest(document.clone(), Kept::Whole, vector.clone()).await;
-        let hit = &whole[0];
-        let from = snippet_match_line(&hit.snippet).unwrap();
-        let to = from + hit.lines.unwrap();
+        let (from, to) = chunk_of(&whole[0]);
         // A message the document's nearest chunk does not reach.
         let Some(other) = (0..starts.len()).find(|&i| {
             let (a, b) = span_of(i);
@@ -270,8 +280,7 @@ async fn a_filtered_meaning_search_ranks_by_the_kept_messages() {
         let kept = Kept::Sections(HashSet::from([starts[other].1.to_string()]));
         let narrowed = nearest(document.clone(), kept, vector).await;
         let hit = narrowed.first().unwrap_or_else(|| panic!("{path}: no hit"));
-        let from = snippet_match_line(&hit.snippet).unwrap();
-        let to = from + hit.lines.unwrap();
+        let (from, to) = chunk_of(hit);
         assert!(
             from < b && a < to,
             "{path}: the hit at lines {from}..{to} misses the kept message at {a}..{b}"

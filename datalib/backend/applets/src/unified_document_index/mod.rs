@@ -722,15 +722,20 @@ async fn search_page(
     let (list, at) = search_results(s, q, parsed, spec.tab, spec.sort, spec.within).await?;
     let limit = results::reaching(&list, spec.offset, spec.limit, spec.through);
     let (entries, next_offset) = results::page(&list, spec.offset, limit);
-    let uuids: Vec<String> = entries.iter().map(|e| e.uuid.clone()).collect();
+    land(s, parsed, entries).await?;
+    let uuids: Vec<String> = entries.iter().map(|e| e.row().to_string()).collect();
     let mut rows = s.repo.rows_by_uuids(&uuids).await.map_err(index)?;
-    let hits: std::collections::HashMap<&str, &(f64, String)> = entries
+    let hits: std::collections::HashMap<&str, (f64, &str)> = entries
         .iter()
-        .filter_map(|e| Some((e.uuid.as_str(), e.hit.as_ref()?)))
+        .filter_map(|e| {
+            let hit = e.hit.as_ref()?;
+            let quoted = e.landed.get().map_or(hit.snippet.as_str(), |(_, q)| q);
+            Some((e.row(), (hit.score, quoted)))
+        })
         .collect();
     for row in &mut rows {
         if let Some(hit) = hits.get(row.uuid.as_str()) {
-            show_hit(row, hit);
+            show_hit(row, *hit);
         }
     }
     Ok(Page {
@@ -743,11 +748,90 @@ async fn search_page(
 
 /// qmd's score, and the words the hit matched in place of the row's
 /// opening words. A hit that showed nothing readable keeps the preview.
-fn show_hit(row: &mut SearchRow, (score, context): &(f64, String)) {
-    row.score = Some(*score);
+fn show_hit(row: &mut SearchRow, (score, context): (f64, &str)) {
+    row.score = Some(score);
     if !context.is_empty() {
-        row.snippet = context.clone();
+        row.snippet = context.to_string();
     }
+}
+
+/// Lands each of `entries` a ranking left on its whole document on the
+/// message its words or chunk fall in, of the rows the search's other
+/// terms keep, and quotes the lines it matched. One file read each, for
+/// the rows a page shows: a ranking reads no document, since a long agent
+/// session is megabytes and a search ranks a thousand.
+async fn land(
+    s: &Index,
+    parsed: &ParsedQuery,
+    entries: &[results::Entry],
+) -> Result<(), SearchFailure> {
+    let todo: Vec<(
+        &results::Entry,
+        &datalib_unified_document_index::qmd::QmdHit,
+    )> = entries
+        .iter()
+        .filter_map(|e| Some((e, e.unlanded()?)))
+        .collect();
+    if todo.is_empty() {
+        return Ok(());
+    }
+    let started = std::time::Instant::now();
+    let documents: Vec<String> = todo.iter().map(|(e, _)| e.uuid.clone()).collect();
+    let refs = s
+        .repo
+        .grid_row_refs_for_documents(&documents)
+        .await
+        .map_err(index)?;
+    let fetched = started.elapsed();
+    // Every term, `source_id:` too: a source's file can hold rows filed
+    // under another, which its collection's ranking does not drop.
+    let kept = if parsed.terms.is_empty() {
+        None
+    } else {
+        let uuids: Vec<String> = refs.iter().map(|r| r.uuid.clone()).collect();
+        let listing = s
+            .repo
+            .filter_uuids(parsed, &uuids, &[], &[])
+            .await
+            .map_err(index)?;
+        Some(listing.uuids.into_iter().collect())
+    };
+    let filtered = started.elapsed();
+    let n_refs = refs.len();
+    let words = datalib_unified_document_index::qmd::lex::strip_lex_syntax(&parsed.free_text);
+    let idx = GridIndex::new((*s.root).clone(), refs).with_terms(&words);
+    let idx = match kept {
+        Some(kept) => idx.within(kept),
+        None => idx,
+    };
+    let documents_only = parsed.documents() == Some(true);
+    let work: Vec<_> = todo
+        .iter()
+        .map(|(e, hit)| (e.uuid.clone(), (*hit).clone(), e.landed.clone()))
+        .collect();
+    let n = work.len();
+    tokio::task::spawn_blocking(move || {
+        for (document, hit, landed) in work {
+            let found = idx
+                .land(&hit, documents_only)
+                .map_or((document, String::new()), |(row, quoted)| {
+                    (row.uuid, display_snippet(&quoted))
+                });
+            // Another page may have landed it first, on the same row.
+            let _ = landed.set(found);
+        }
+    })
+    .await
+    .map_err(|e| SearchFailure::Qmd(format!("landing a page's hits: {e}")))?;
+    tracing::info!(
+        landed = n,
+        rows = n_refs,
+        fetch_ms = fetched.as_millis() as u64,
+        filter_ms = (filtered - fetched).as_millis() as u64,
+        read_ms = (started.elapsed() - filtered).as_millis() as u64,
+        "landed a page's hits"
+    );
+    Ok(())
 }
 
 /// The search's rows in order, from the cache when this query, sort and
@@ -779,7 +863,7 @@ async fn search_results(
         let list: Vec<results::Entry> = listing
             .uuids
             .into_iter()
-            .map(|uuid| results::Entry { uuid, hit: None })
+            .map(|uuid| results::Entry::new(uuid, None))
             .collect();
         (list, listing.at, true)
     } else {
@@ -787,20 +871,27 @@ async fn search_results(
         if sort.is_empty() && within.is_empty() {
             return Ok((ranked, ranked_at));
         }
-        let uuids: Vec<String> = ranked.iter().map(|e| e.uuid.clone()).collect();
+        // Sorting or grouping by a column reads every row's column, so
+        // every hit is landed first: the slow way, and the rare one.
+        land(s, parsed, &ranked).await?;
+        let uuids: Vec<String> = ranked.iter().map(|e| e.row().to_string()).collect();
         let listing = s
             .repo
             .filter_uuids(parsed, &uuids, sort, within)
             .await
             .map_err(index)?;
         let hit_of: std::collections::HashMap<&str, &results::Entry> =
-            ranked.iter().map(|e| (e.uuid.as_str(), e)).collect();
+            ranked.iter().map(|e| (e.row(), e)).collect();
         let list: Vec<results::Entry> = listing
             .uuids
             .into_iter()
-            .map(|uuid| results::Entry {
-                hit: hit_of.get(uuid.as_str()).and_then(|e| e.hit.clone()),
-                uuid,
+            .map(|uuid| match hit_of.get(uuid.as_str()) {
+                Some(e) => results::Entry {
+                    uuid,
+                    hit: e.hit.clone(),
+                    landed: e.landed.clone(),
+                },
+                None => results::Entry::new(uuid, None),
             })
             .collect();
         (list, listing.at, keep)
@@ -852,25 +943,28 @@ async fn ranked(
         Some(SearchTab::Meaning) => (meaning_ranking(s, parsed).await?, None),
         None => fused_ranking(s, parsed).await?,
     };
-    let uuids: Vec<String> = ranking.iter().map(|(uuid, _)| uuid.clone()).collect();
+    // A row the ranking names is kept if the search's terms keep it. A
+    // document's hit was narrowed by them before it was ranked, and lands
+    // on a row they keep.
+    let rows: Vec<String> = ranking
+        .iter()
+        .filter(|(_, hit)| hit.document.is_none())
+        .map(|(uuid, _)| uuid.clone())
+        .collect();
     let listing = s
         .repo
-        .filter_uuids(parsed, &uuids, &[], &[])
+        .filter_uuids(parsed, &rows, &[], &[])
         .await
         .map_err(index)?;
     // Terms written for another commit than the rows were read at may be
     // a pass out: answer with them, and ask again next time.
     let keep = terms_at.is_none_or(|at| at == listing.at);
-    let mut hit_of: std::collections::HashMap<String, (f64, String)> =
-        ranking.into_iter().collect();
+    let kept: std::collections::HashSet<String> = listing.uuids.into_iter().collect();
     let list: Arc<Vec<results::Entry>> = Arc::new(
-        listing
-            .uuids
+        ranking
             .into_iter()
-            .map(|uuid| results::Entry {
-                hit: hit_of.remove(&uuid),
-                uuid,
-            })
+            .filter(|(uuid, hit)| hit.document.is_some() || kept.contains(uuid))
+            .map(|(uuid, hit)| results::Entry::new(uuid, Some(hit)))
             .collect(),
     );
     if keep {
@@ -887,7 +981,7 @@ async fn ranked(
 
 /// One ranking of a search's rows, best first, each with its score and
 /// the words it matched.
-type Ranking = Vec<(String, (f64, String))>;
+type Ranking = Vec<(String, results::Hit)>;
 
 /// The search terms file's ranking, and the grid commit the file
 /// reflects.
@@ -910,7 +1004,18 @@ async fn fields_ranking(s: &Index, parsed: &ParsedQuery) -> Result<TermsRanking,
         .await
         .map_err(index)?;
     let found = found.ok_or(SearchFailure::NoIndex)?;
-    Ok((search_terms::rank(&found), Some(found.grid_commit)))
+    let ranking = search_terms::rank(&found)
+        .into_iter()
+        .map(|(uuid, (score, snippet))| {
+            let hit = results::Hit {
+                score,
+                snippet,
+                document: None,
+            };
+            (uuid, hit)
+        })
+        .collect();
+    Ok((ranking, Some(found.grid_commit)))
 }
 
 /// The answer with no tab, which the CLI, the map and a link without a
@@ -951,26 +1056,30 @@ async fn fused_ranking(s: &Index, parsed: &ParsedQuery) -> Result<TermsRanking, 
 /// each row's document; a row it does not name is its own.
 fn fuse(rankings: &[Ranking], doc_of: &std::collections::HashMap<String, String>) -> Ranking {
     const K: f64 = 60.0;
-    let mut fused: Vec<(String, (f64, String))> = Vec::new();
+    let mut fused: Ranking = Vec::new();
     let mut at: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     for ranking in rankings {
         let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        for (uuid, (_, words)) in ranking {
+        for (uuid, hit) in ranking {
             let doc = doc_of.get(uuid).map_or(uuid.as_str(), String::as_str);
             if !seen.insert(doc) {
                 continue;
             }
             let score = 1.0 / (K + seen.len() as f64);
             match at.get(doc) {
-                Some(&i) => fused[i].1 .0 += score,
+                Some(&i) => fused[i].1.score += score,
                 None => {
                     at.insert(doc, fused.len());
-                    fused.push((uuid.clone(), (score, words.clone())));
+                    let hit = results::Hit {
+                        score,
+                        ..hit.clone()
+                    };
+                    fused.push((uuid.clone(), hit));
                 }
             }
         }
     }
-    fused.sort_by(|a, b| b.1 .0.total_cmp(&a.1 .0));
+    fused.sort_by(|a, b| b.1.score.total_cmp(&a.1.score));
     fused.truncate(QMD_DEPTH);
     fused
 }
@@ -978,10 +1087,7 @@ fn fuse(rankings: &[Ranking], doc_of: &std::collections::HashMap<String, String>
 /// The Words tab: qmd's keyword index ranked by BM25, read from its own
 /// table so a source can answer with more than the 20 documents `qmd mcp`
 /// takes from each.
-async fn words_ranking(
-    s: &Index,
-    parsed: &ParsedQuery,
-) -> Result<Vec<(String, (f64, String))>, SearchFailure> {
+async fn words_ranking(s: &Index, parsed: &ParsedQuery) -> Result<Ranking, SearchFailure> {
     let Some(query) = datalib_unified_document_index::qmd::lex::fts5_query(&parsed.free_text)
     else {
         return Ok(Vec::new());
@@ -1026,19 +1132,14 @@ async fn words_ranking(
     }
     .await;
     let hits = hits.map_err(|e| SearchFailure::Qmd(format!("qmd's keyword index: {e}")))?;
-    rows_of_hits(&s.root, &s.repo, &hits, parsed)
-        .await
-        .map_err(|e| SearchFailure::Qmd(format!("{e:#}")))
+    documents_of_hits(s, parsed, hits).await
 }
 
 /// The Meaning tab: the documents nearest the free text by cosine, scored
 /// here over qmd's stored vectors. Structured terms narrow the documents
 /// before any is scored, so a filter never empties a ranking cut too
 /// shallow to hold its rows; qmd only embeds the query.
-async fn meaning_ranking(
-    s: &Index,
-    parsed: &ParsedQuery,
-) -> Result<Vec<(String, (f64, String))>, SearchFailure> {
+async fn meaning_ranking(s: &Index, parsed: &ParsedQuery) -> Result<Ranking, SearchFailure> {
     use datalib_unified_document_index::qmd::lex::{has_lex_syntax, strip_lex_syntax};
     let qmd = |e: anyhow::Error| SearchFailure::Qmd(format!("{e:#}"));
     let text = if has_lex_syntax(&parsed.free_text) {
@@ -1093,31 +1194,36 @@ async fn meaning_ranking(
         hits = hits.len(),
         "ranked a search by meaning"
     );
-    rows_of_hits(&s.root, &s.repo, &hits, parsed)
-        .await
-        .map_err(qmd)
+    documents_of_hits(s, parsed, hits).await
 }
 
 /// What the structured terms keep of each document they reach: the
-/// document's own row keeps all of it, else only the messages they keep.
+/// messages they keep, or all of it when they keep only the document's own
+/// row. A long chat whose last message falls in a date window keeps its
+/// row too, and that must not bring back its other days.
 fn kept_of(
     rows: Vec<(String, String, bool)>,
 ) -> std::collections::HashMap<String, datalib_unified_document_index::qmd::vectors::Kept> {
     use datalib_unified_document_index::qmd::vectors::Kept;
-    let mut kept: std::collections::HashMap<String, Kept> = std::collections::HashMap::new();
+    let mut sections: std::collections::HashMap<String, std::collections::HashSet<String>> =
+        std::collections::HashMap::new();
     for (uuid, document, is_document) in rows {
-        let entry = kept
-            .entry(document)
-            .or_insert_with(|| Kept::Sections(Default::default()));
-        match (entry, is_document) {
-            (entry, true) => *entry = Kept::Whole,
-            (Kept::Sections(sections), false) => {
-                sections.insert(uuid);
-            }
-            (Kept::Whole, false) => {}
+        let kept = sections.entry(document).or_default();
+        if !is_document {
+            kept.insert(uuid);
         }
     }
-    kept
+    sections
+        .into_iter()
+        .map(|(document, kept)| {
+            let kept = if kept.is_empty() {
+                Kept::Whole
+            } else {
+                Kept::Sections(kept)
+            };
+            (document, kept)
+        })
+        .collect()
 }
 
 /// Whether a search's structured terms narrow it below whole sources,
@@ -1136,70 +1242,47 @@ fn narrows_documents(parsed: &ParsedQuery) -> bool {
 /// cut from these.
 const QMD_DEPTH: usize = 1_000;
 
-/// qmd's hits as grid rows: one row per document, at its best-ranked hit,
-/// with the hit's score and the words it matched.
-async fn rows_of_hits(
-    root: &std::sync::Arc<PathBuf>,
-    repo: &DynIndexRepo,
-    hits: &[datalib_unified_document_index::qmd::QmdHit],
+/// qmd's hits as one entry per document, best first, each landed on a
+/// message only when a page shows it, of the documents holding a row the
+/// search's terms keep. A hit on a document the grid does not have is
+/// dropped, loudly, so its lost score is seen.
+async fn documents_of_hits(
+    s: &Index,
     parsed: &ParsedQuery,
-) -> anyhow::Result<Vec<(String, (f64, String))>> {
-    let started = std::time::Instant::now();
-    let mut documents: Vec<String> = hits
+    hits: Vec<datalib_unified_document_index::qmd::QmdHit>,
+) -> Result<Ranking, SearchFailure> {
+    let documents: Vec<String> = hits
         .iter()
         .filter_map(|h| markdown_uuid_of_path(&h.path).map(String::from))
         .collect();
-    documents.sort_unstable();
-    documents.dedup();
-    let refs = repo
-        .grid_row_refs_for_documents(&documents)
+    let present = s
+        .repo
+        .documents_kept(parsed, &documents)
         .await
-        .map_err(|e| anyhow::anyhow!("the rows behind qmd's hits: {e}"))?;
-    let fetched = started.elapsed();
-    // Each hit lands on the message holding the most of the search's words,
-    // of the rows its other terms keep: a hit on a message they drop would
-    // lose its document with it.
-    let words = datalib_unified_document_index::qmd::lex::strip_lex_syntax(&parsed.free_text);
-    let kept = if narrows_documents(parsed) {
-        let uuids: Vec<String> = refs.iter().map(|r| r.uuid.clone()).collect();
-        let listing = repo
-            .filter_uuids(parsed, &uuids, &[], &[])
-            .await
-            .map_err(|e| anyhow::anyhow!("the rows the search keeps: {e}"))?;
-        Some(listing.uuids.into_iter().collect())
-    } else {
-        None
-    };
-    let filtered = started.elapsed();
-    let n_refs = refs.len();
-    let idx = GridIndex::new((**root).clone(), refs).with_terms(&words);
-    let idx = match kept {
-        Some(kept) => idx.within(kept),
-        None => idx,
-    };
-    // Map hits to grid rows in rank order, keeping only the top hit per
-    // markdown document so the result list stays concise — a single chat that
-    // matches in several places shows up once, at its best rank. Orphan hits
-    // (a document the grid doesn't have, or a file not named for one)
-    // resolve to no rows; flag them loudly so their dropped score is
-    // visible.
-    // An `is:document` search wants the document a hit is in, not the
-    // message it landed on — which the SQL filter would then drop.
-    let ranked = idx.ranked_rows_one_per_doc(hits, parsed.documents() == Some(true), |h| {
-        tracing::error!(path = %h.path, score = h.score, "a qmd hit resolved to no grid rows");
-    });
-    tracing::info!(
-        hits = hits.len(),
-        rows = n_refs,
-        fetch_ms = fetched.as_millis() as u64,
-        filter_ms = (filtered - fetched).as_millis() as u64,
-        land_ms = (started.elapsed() - filtered).as_millis() as u64,
-        "placed a search's hits"
-    );
-    Ok(ranked
-        .into_iter()
-        .map(|(row, hit)| (row.uuid.clone(), (hit.score, display_snippet(&hit.snippet))))
-        .collect())
+        .map_err(index)?;
+    let mut ranking: Ranking = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for hit in hits {
+        let Some(document) = markdown_uuid_of_path(&hit.path).map(String::from) else {
+            tracing::error!(path = %hit.path, score = hit.score, "a qmd hit names no document");
+            continue;
+        };
+        if !present.contains(&document) {
+            if parsed.terms.is_empty() {
+                tracing::error!(path = %hit.path, score = hit.score, "a qmd hit resolved to no grid rows");
+            }
+            continue;
+        }
+        if seen.insert(document.clone()) {
+            let hit = results::Hit {
+                score: hit.score,
+                snippet: String::new(),
+                document: Some(Arc::new(hit)),
+            };
+            ranking.push((document, hit));
+        }
+    }
+    Ok(ranking)
 }
 
 /// The rows a free-text search ranks, best first, at most `depth`: what
@@ -1723,6 +1806,27 @@ mod tests {
             scope(&format!("tea source_id:{}", datalib_source_id())),
             CollectionScope::All
         );
+    }
+
+    /// A chat whose last message falls in a date window keeps its own row
+    /// as well as that day's messages; meaning must rank it by those
+    /// messages, not by every day of it.
+    #[test]
+    fn a_kept_document_row_counts_whole_only_without_kept_messages() {
+        use datalib_unified_document_index::qmd::vectors::Kept;
+        let row = |uuid: &str, document: &str, is_document| {
+            (uuid.to_string(), document.to_string(), is_document)
+        };
+        let kept = kept_of(vec![
+            row("bridge-log", "bridge-log", true),
+            row("stardate-2", "bridge-log", false),
+            row("ten-forward", "ten-forward", true),
+        ]);
+        assert_eq!(
+            kept["bridge-log"],
+            Kept::Sections(["stardate-2".to_string()].into())
+        );
+        assert_eq!(kept["ten-forward"], Kept::Whole);
     }
 
     /// Frontmatter trimming is text handling, not parsing — a body
@@ -2587,7 +2691,14 @@ mod tests {
     fn fusion_lists_each_document_once_on_the_first_rankings_row() {
         let ranking = |rows: &[(&str, &str)]| -> Ranking {
             rows.iter()
-                .map(|(uuid, words)| (uuid.to_string(), (1.0, words.to_string())))
+                .map(|(uuid, words)| {
+                    let hit = results::Hit {
+                        score: 1.0,
+                        snippet: words.to_string(),
+                        document: None,
+                    };
+                    (uuid.to_string(), hit)
+                })
                 .collect()
         };
         let doc_of: std::collections::HashMap<String, String> = ["m12", "m40", "m3", "m5"]
@@ -2604,20 +2715,20 @@ mod tests {
         );
         let order: Vec<&str> = fused.iter().map(|(uuid, _)| uuid.as_str()).collect();
         assert_eq!(order, ["m12", "email"]);
-        assert_eq!(fused[0].1 .1, "warp core breach");
-        assert_eq!(fused[0].1 .0, 3.0 / 61.0);
-        assert_eq!(fused[1].1 .0, 3.0 / 62.0, "second in each ranking");
+        assert_eq!(fused[0].1.snippet, "warp core breach");
+        assert_eq!(fused[0].1.score, 3.0 / 61.0);
+        assert_eq!(fused[1].1.score, 3.0 / 62.0, "second in each ranking");
     }
 
     #[test]
     fn a_hit_shows_its_words_unless_it_has_none() {
         let mut matched = row("opening words");
-        show_hit(&mut matched, &(0.9, "the words it matched".into()));
+        show_hit(&mut matched, (0.9, "the words it matched"));
         assert_eq!(matched.score, Some(0.9));
         assert_eq!(matched.snippet, "the words it matched");
 
         let mut unreadable = row("opening words");
-        show_hit(&mut unreadable, &(0.5, String::new()));
+        show_hit(&mut unreadable, (0.5, ""));
         assert_eq!(unreadable.score, Some(0.5));
         assert_eq!(unreadable.snippet, "opening words");
     }

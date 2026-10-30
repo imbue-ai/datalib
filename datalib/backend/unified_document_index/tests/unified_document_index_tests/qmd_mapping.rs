@@ -169,6 +169,7 @@ fn fake_hits(hits: &[(&str, &str)]) -> Vec<QmdHit> {
             lines: None,
             docid: "d".into(),
             title: "t".into(),
+            place: None,
         })
         .collect()
 }
@@ -317,6 +318,7 @@ fn bidirectional_coverage_every_indexed_path_resolves() {
             lines: None,
             docid: String::new(),
             title: String::new(),
+            place: None,
         };
         let rows = idx.rows_for_hit(&hit);
         assert!(!rows.is_empty(), "indexed path with no rows: {p}");
