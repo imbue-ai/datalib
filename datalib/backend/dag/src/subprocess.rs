@@ -198,6 +198,9 @@ pub(crate) async fn run_subprocess(
         tokio::process::Command::new(prog)
     };
     cmd.args(args);
+    // Before the run's and the step's own `env`, so either may turn it back on.
+    #[cfg(target_os = "macos")]
+    cmd.env(datalib_env::MALLOC_LARGE_CACHE, "0");
     if let Some(f) = &params_file {
         cmd.arg(PARAMS_FILE_FLAG).arg(f.path());
     }
@@ -1634,6 +1637,44 @@ mod tests {
             "2026-07-21T00:00:00Z/step\n",
             "run-wide env is visible; the step's own env wins on collision"
         );
+    }
+
+    /// macOS's allocator keeps freed large blocks unless told not to; with
+    /// the cache on, a Claude Code first sync peaked at up to 2.9 GB where
+    /// 0.4 GB was in use. A config may still turn it back on.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn a_step_starts_with_the_large_allocation_cache_off() {
+        let root = tempfile::tempdir().unwrap();
+        let probe = |id: &str, env: BTreeMap<String, String>| {
+            let dir = id.to_string();
+            StepSpec::new(
+                id,
+                StepRun::Subprocess {
+                    argv: vec![
+                        "/bin/sh".into(),
+                        "-c".into(),
+                        format!(r#"mkdir -p {dir} && echo "$MallocLargeCache" > {dir}/probe.txt"#),
+                    ],
+                    env,
+                    params: None,
+                },
+            )
+        };
+        let g = Graph::build(vec![
+            probe("cache/off", BTreeMap::new()),
+            probe(
+                "cache/on",
+                [(datalib_env::MALLOC_LARGE_CACHE.to_string(), "1".to_string())].into(),
+            ),
+        ])
+        .unwrap();
+        let rep = Runner::new(root.path()).run(&g).await.unwrap();
+        assert!(rep.all_ok(), "{rep:#?}");
+        let read =
+            |id: &str| std::fs::read_to_string(root.path().join(id).join("probe.txt")).unwrap();
+        assert_eq!(read("cache/off"), "0\n");
+        assert_eq!(read("cache/on"), "1\n", "a step's own env wins");
     }
 
     /// `--reset` appends `--reset store` to the step's argv, and forgets

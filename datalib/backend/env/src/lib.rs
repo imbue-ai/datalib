@@ -40,6 +40,11 @@ names! { LATCHKEY:
     LATCHKEY_GATEWAY,
 }
 
+/// macOS's allocator setting the runner turns to `0` for every step:
+/// otherwise it keeps freed large blocks for reuse, and a step that churns
+/// big buffers holds gigabytes it no longer uses.
+pub const MALLOC_LARGE_CACHE: &str = "MallocLargeCache";
+
 #[cfg(test)]
 mod tests {
     use super::*;
