@@ -1057,8 +1057,9 @@ async fn rev_read(args: &Args) -> Result<Value> {
 /// one statement that counts the full-text index, the terms table, and
 /// the terms whose row is in the commit. With `--pinned`, it reads as the
 /// search applet does (`DoltRepo::pinned`): one read-only connection on
-/// `main`, the file attached once outside any transaction, and each
-/// window a transaction that holds one commit while it samples.
+/// `main`, asked outside any transaction whether the file is attached and
+/// attached when it is not, then each window a transaction on that same
+/// connection that holds one commit while it samples.
 async fn terms_read(args: &Args) -> Result<Value> {
     if args.flag("pinned") {
         return pinned_terms_read(args).await;
@@ -1131,10 +1132,6 @@ async fn pinned_terms_read(args: &Args) -> Result<Value> {
         "ATTACH 'file:{}?doltlite_engine=sqlite&mode=ro' AS t",
         terms.display()
     );
-    sqlx::query(sqlx::AssertSqlSafe(attach))
-        .execute(&pool)
-        .await
-        .context("attach the terms file")?;
     write_atomic(&args.path("ready-out")?, b"ready")?;
     let sample_sql = "SELECT \
         (SELECT COUNT(*) FROM t.terms_fts WHERE terms_fts MATCH 'email*'), \
@@ -1146,7 +1143,22 @@ async fn pinned_terms_read(args: &Args) -> Result<Value> {
     let mut txn = 0u64;
     while !until.exists() {
         let window = async {
-            let mut tx = pool.begin().await.context("begin")?;
+            let mut conn = pool.acquire().await.context("acquire")?;
+            let here: bool = sqlx::query_scalar(
+                "SELECT count(*) > 0 FROM pragma_database_list WHERE name = 't'",
+            )
+            .fetch_one(&mut *conn)
+            .await
+            .context("ask whether the terms file is attached")?;
+            if !here {
+                sqlx::query(sqlx::AssertSqlSafe(attach.clone()))
+                    .execute(&mut *conn)
+                    .await
+                    .context("attach the terms file")?;
+            }
+            let mut tx = sqlx::Transaction::begin(conn, None)
+                .await
+                .context("begin")?;
             let _: i64 = sqlx::query_scalar("SELECT count(*) FROM sqlite_master")
                 .fetch_one(&mut *tx)
                 .await
