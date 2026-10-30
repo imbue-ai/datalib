@@ -9,6 +9,7 @@
 mod append;
 mod check_params;
 mod compact;
+mod config_backup;
 mod dispatch;
 mod embedding_map;
 mod events;
@@ -204,7 +205,7 @@ enum Cmd {
         /// and add its steps to the `inputs` of the index steps that read
         /// them. Refused, writing nothing, when the config already has the
         /// group or would not then check clean. The previous file is kept
-        /// as `<file>.bak`.
+        /// as `<file>.<UTC time>.bak`, one per append.
         #[arg(long, value_name = "CONFIG")]
         append: Option<PathBuf>,
         /// With --append: which ingest method's stanza, for a source with
@@ -265,7 +266,8 @@ enum Cmd {
     /// Utility (not a pipeline step): rewrite a config file in the order
     /// data flows — each step below the steps it reads, each group's
     /// entries together — moving an entry only when it has to, and
-    /// its comments with it. The previous text is kept as `<file>.bak`.
+    /// its comments with it. The previous text is kept as
+    /// `<file>.<UTC time>.bak`.
     /// Needs no data root.
     TopoSortConfig {
         /// The config file: `<data root>/config.toml`.

@@ -124,7 +124,16 @@ way to list one, apart from the window's `calendar-query` above.
 ## Google Calendar — measured against a live account
 
 latchkey's `google-calendar` service holds the OAuth token
-(`latchkey auth browser google-calendar`). The events call is
+(`latchkey auth browser google-calendar`). A sync makes two kinds of
+call, both `GET` under `https://www.googleapis.com/calendar/v3`, and a
+latchkey permission (or a gateway's) has to allow both:
+
+- `/users/me/calendarList`, every run, even with `calendars` set: it
+  is how a calendar is found by name and how one removed from the
+  account is noticed.
+- `/calendars/<id>/events`, for each calendar mirrored.
+
+The events call is
 `singleEvents=false&showDeleted=true`: a series is one resource with
 `recurrence`, and changed and cancelled occurrences are resources with
 `recurringEventId` and `originalStartTime`. A `410 Gone` means the sync

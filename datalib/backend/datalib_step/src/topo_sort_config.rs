@@ -1,10 +1,9 @@
 //! `datalib-step topo-sort-config <config.toml>`: put a config file in the
 //! order data flows (`datalib_dag::config_order`), keeping the text it
-//! replaced beside it as `<file>.bak`.
+//! replaced beside it as `<file>.<UTC time>.bak`.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use datalib_dag::config::write_owner_only;
 use datalib_obs::status_line;
 use datalib_runtime::atomic;
 
@@ -36,13 +35,10 @@ pub fn run_cli(path: &Path, check: bool) -> i32 {
         );
         return 1;
     }
-    let mut bak = path.as_os_str().to_owned();
-    bak.push(".bak");
-    let bak = PathBuf::from(bak);
-    match write_owner_only(&bak, text.as_bytes())
-        .and_then(|()| atomic::write_owner_only(path, sorted.as_bytes()))
+    match crate::config_backup::keep(path, &text)
+        .and_then(|bak| atomic::write_owner_only(path, sorted.as_bytes()).map(|()| bak))
     {
-        Ok(()) => {
+        Ok(bak) => {
             status_line!(
                 "Sorted {shown} into data-flow order. The previous file is {}.",
                 bak.display()

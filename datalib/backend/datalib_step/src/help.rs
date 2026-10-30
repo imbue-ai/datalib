@@ -342,7 +342,25 @@ fn overview(commands: &[String]) -> String {
 
 fn source_page(t: SourceType, base: &str) -> String {
     let mut out = String::new();
-    for section in sections_for(t) {
+    let sections = sections_for(t);
+    // Each section is one way in, and the first alone reads as the whole.
+    if sections.len() > 1 {
+        let headings: Vec<&str> = sections
+            .iter()
+            .filter_map(|s| s.lines().next()?.strip_prefix("## "))
+            .collect();
+        out.push_str(&wrap(
+            &format!(
+                "This type covers {} ways in, one section each: {}.",
+                headings.len(),
+                headings.join(", ")
+            ),
+            0,
+            0,
+        ));
+        out.push('\n');
+    }
+    for section in sections {
         out.push_str(&absolute_links(
             section.trim_end(),
             GETTING_YOUR_DATA_PATH,
@@ -673,7 +691,10 @@ mod tests {
                 page.contains(&format!("`type = \"{}\"`", t.as_str())),
                 "{t}: getting_your_data.md has no section for it:\n{page}"
             );
-            assert!(page.starts_with("## "), "{t}: {page}");
+            assert!(
+                page.starts_with("## ") || page.starts_with("This type covers"),
+                "{t}: {page}"
+            );
             assert_eq!(relative_links(&page), Vec::<String>::new(), "{t}");
             for m in ingest_methods(t) {
                 assert!(page.contains(m.path), "{t}: method {} missing", m.path);
@@ -686,6 +707,52 @@ mod tests {
         let page = page(&["email".into()], &commands(), "abc123").unwrap();
         for heading in ["## Email", "## Fastmail\n", "## Gmail"] {
             assert!(page.contains(heading), "{heading} missing:\n{page}");
+        }
+    }
+
+    /// `help calendar` opened on "## Calendar (CalDAV)", so it read as if
+    /// Google Calendar were not one of its ways in.
+    #[test]
+    fn a_type_reached_several_ways_names_them_all_first() {
+        let page = page(&["calendar".into()], &commands(), "abc123").unwrap();
+        let intro = page
+            .split("## ")
+            .next()
+            .unwrap_or_default()
+            .replace('\n', " ");
+        for way in [
+            "Calendar (CalDAV)",
+            "Calendly",
+            "Fastmail Calendar",
+            "Google Calendar",
+        ] {
+            assert!(intro.contains(way), "{way} missing from {intro:?}");
+        }
+    }
+
+    /// Whether the text ending at `before` is inside a link's `[…]`.
+    fn in_link_text(before: &str) -> bool {
+        before.rfind('[') > before.rfind(']')
+    }
+
+    /// A release has no source tree, so a path into it is a link to the
+    /// repo at this build's commit, never bare text.
+    #[test]
+    fn no_page_names_a_source_tree_path_outside_a_link() {
+        let mut topics: Vec<String> = SourceType::VARIANTS
+            .iter()
+            .map(|t| t.as_str().into())
+            .collect();
+        topics.extend(["agent", "raw-stores", "apps", "search"].map(String::from));
+        for topic in topics {
+            let page = page(std::slice::from_ref(&topic), &commands(), "abc123").unwrap();
+            for (i, _) in page.match_indices("datalib/backend/") {
+                assert!(
+                    page[..i].ends_with("abc123/") || in_link_text(&page[..i]),
+                    "{topic}: a bare source path: {}",
+                    &page[i.saturating_sub(40)..(i + 60).min(page.len())]
+                );
+            }
         }
     }
 

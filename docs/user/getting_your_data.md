@@ -143,7 +143,7 @@ offset from the day of the sync as for [Calendar (CalDAV)](#calendar-caldav);
 a meeting that leaves it is dropped from the copy. Every sync
 lists the meetings whole, and reads a meeting's invitees again only
 when the meeting has changed.
-`datalib/backend/etl/providers/calendar/INGEST.md` has the details.
+[The provider's INGEST.md](../../datalib/backend/etl/providers/calendar/INGEST.md) has the details.
 
 ## ChatGPT
 
@@ -571,7 +571,9 @@ The first time, latchkey needs an OAuth client to sign in with:
 [your own Google OAuth client](#your-own-google-oauth-client).
 
 The `google` table needs nothing else; `calendars` narrows it to the
-calendars you name.
+calendars you name. Behind a latchkey gateway, its permissions have to
+allow reading the calendar list (`/users/me/calendarList`) as well as
+the events: every sync reads the list first.
 
 ## Google Chat (Takeout)
 
@@ -762,7 +764,7 @@ name teams by key or name in `teams` and projects by name in
 and most issues belong to no project, so name their teams. The first
 sync copies everything, newest first. Each sync after that reads only
 what changed since, and for a quiet workspace that takes seconds.
-`datalib/backend/etl/providers/linear/INGEST.md` has the details.
+[The provider's INGEST.md](../../datalib/backend/etl/providers/linear/INGEST.md) has the details.
 
 ## LinkedIn
 
@@ -975,7 +977,7 @@ An empty `api` table copies everything. Completed tasks are read back
 to the day you joined Todoist, a quarter at a time; set
 `completed_since = "YYYY-MM-DD"` to stop sooner, or `completed = false`
 to leave them out. Each sync after the first reads only what changed.
-`datalib/backend/etl/providers/todoist/INGEST.md` has the details.
+[The provider's INGEST.md](../../datalib/backend/etl/providers/todoist/INGEST.md) has the details.
 
 ## WhatsApp backups
 
@@ -1017,7 +1019,7 @@ The whole decrypted database is kept — every table, versioned across
 backups, the way the Lightroom and Apple Photos sources keep theirs —
 so a message you delete on the phone is still in an earlier commit of
 the store. Three tables of app bookkeeping are left out by default
-(`skip_churn`); `providers/whatsapp/INGEST.md` says which and why.
+(`skip_churn`); [the provider's INGEST.md](../../datalib/backend/etl/providers/whatsapp/INGEST.md) says which and why.
 
 ## YoLink
 
