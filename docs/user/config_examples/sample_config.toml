@@ -81,12 +81,15 @@ command = "datalib-step"
 [steps.params.common]
 blob_size_limit_bytes = "1 MB"  # skip larger file uploads
 # Bound how long the download keeps retrying upstream rate limits
-# before giving up. The shared HTTP layer always honors a 429
-# `Retry-After` (else backs off exponentially); these decide when
-# to stop. Defaults shown.
+# before giving up, and how many requests it has out at once. The
+# shared HTTP layer always honors a 429 `Retry-After` (else backs off
+# exponentially); the first two decide when to stop. Each request is a
+# `latchkey curl` process of about 80 MB, so the third bounds memory
+# too. Defaults shown.
 # [steps.params.common.download_params]
 # maximum_time_without_progress_in_minutes = 30
 # maximum_sequential_failed_requests = 50
+# maximum_requests_at_once = 8
 
 [steps.params.api]
 media = true
