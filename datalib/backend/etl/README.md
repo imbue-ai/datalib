@@ -167,6 +167,15 @@ starts on the default branch — an fsindex scan on a non-`main` branch
 would silently start writing to `main` after 30 minutes and report
 success.
 
+sqlx also drops the connection when an `acquire` is cancelled while it
+pings the idle connection before handing it out, which happens whenever
+a request is dropped mid-read (the gateway hangs up on a search the
+person typed past). So a reader's pool (`datalib_pin`) turns that ping
+off, and session state is set up on whichever connection a read holds,
+never once at open: a writer's branch in `after_connect`, and the search
+applet's attached terms file asked of its connection on every read
+(`DoltRepo::pinned`).
+
 Every *other* sqlx pool in the tree turns them off too, for a second
 reason: either setting gives the pool a maintenance task, and in sqlx
 0.9.0 that task can spin forever. It loops `for _ in
@@ -343,8 +352,9 @@ table, `BEGIN`/`COMMIT` around plain reads (the held read transaction),
 their blobs, at a commit the writer has since moved past (the
 time-series applet's read), and, on that open or on
 the held read transaction's connection to `main`, an `ATTACH` of a
-plain SQLite file read-only with an FTS5 `MATCH` on it and a join from
-it to the store's tables — and that list is the allowlist. The plain
+plain SQLite file read-only (after a `pragma_database_list` read asking
+whether it is attached already) with an FTS5 `MATCH` on it and a join
+from it to the store's tables — and that list is the allowlist. The plain
 file is in rollback-journal mode (its writer never asks for WAL), so a transaction
 that reads it holds off its writer's commits for as long as it is open:
 keep one to a request's queries. A transaction around one query waits

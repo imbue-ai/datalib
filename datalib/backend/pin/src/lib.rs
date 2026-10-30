@@ -190,11 +190,16 @@ pub async fn holds_a_table(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
     Ok(n > 0)
 }
 
+// No ping before handing the connection out: an acquire cancelled during
+// it drops the connection, and a reader loses what it set up there (the
+// search applet's attached terms file) along with the open. The ping
+// proves nothing in process: a dead connection fails its next query.
 async fn reader_pool(opts: SqliteConnectOptions) -> Result<SqlitePool, sqlx::Error> {
     SqlitePoolOptions::new()
         .max_connections(1)
         .idle_timeout(None)
         .max_lifetime(None)
+        .test_before_acquire(false)
         .acquire_timeout(acquire_timeout())
         .connect_with(opts)
         .await
@@ -311,6 +316,48 @@ mod tests {
         insert(&w, 1).await;
         commit(&w).await?;
         Some(w)
+    }
+
+    /// A search the browser hangs up on is dropped wherever it stands,
+    /// inside the pool's hand-out of its connection too. The pool must
+    /// keep that connection: a fresh one has lost what the reader set up
+    /// on it, which for the search applet was the attached terms file.
+    #[tokio::test]
+    async fn a_cancelled_acquire_keeps_the_readers_connection() {
+        use std::future::Future;
+        let td = tempfile::tempdir().unwrap();
+        let db = td.path().join("t.doltlite_db");
+        let Some(_w) = seeded(&db).await else { return };
+        let r = open_reader(&db).await.unwrap();
+        sqlx::query("ATTACH ':memory:' AS probe")
+            .execute(&r)
+            .await
+            .unwrap();
+        let attached = || async {
+            let ask = sqlx::query_scalar::<_, bool>(
+                "SELECT count(*) > 0 FROM pragma_database_list WHERE name = 'probe'",
+            )
+            .fetch_one(&r);
+            tokio::time::timeout(Duration::from_secs(10), ask)
+                .await
+                .expect("the pool lost its connection and gives out none")
+                .unwrap()
+        };
+        for _ in 0..10 {
+            // Back from the last read, so the acquire finds it idle.
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            while r.num_idle() == 0 {
+                assert!(std::time::Instant::now() < deadline, "no idle connection");
+                tokio::task::yield_now().await;
+            }
+            let mut acquire = std::pin::pin!(r.acquire());
+            std::future::poll_fn(|cx| {
+                let _ = acquire.as_mut().poll(cx);
+                std::task::Poll::Ready(())
+            })
+            .await;
+            assert!(attached().await, "the pool opened a new connection");
+        }
     }
 
     /// A pinned read answers for the commit it names however the working

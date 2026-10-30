@@ -24,6 +24,27 @@ captain-text
     title      Number One                               derived
     author     Me                                       derived
 
+dm-message
+  columns
+    kind           Slack Message
+    author         Worf
+    author_handle  slack:T1701/U0000003
+  terms
+    id         dm-message                               derived
+    container  dm-thread                                derived
+    from       slack:T1701/U0000003                     derived
+    title      @Data                                    derived
+    author     Worf                                     derived
+
+dm-thread
+  columns
+    kind           Slack Thread
+  terms
+    id         dm-thread                                derived
+    title      @Data                                    derived
+    participant slack:T1701/U0000003                     supplied
+    subject    slack:T1701/U0000002                     supplied
+
 picard-card
   columns
     kind           Contact

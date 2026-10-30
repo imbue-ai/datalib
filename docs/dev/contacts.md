@@ -704,7 +704,9 @@ A conversation with no title of its own is named after its people, and
 says so: the provider fills `NormalizedChat::named_after` (a DM's other
 party, an untitled group's members, by handle where it has one) and
 chat-common writes each as a `subject` term on the document's row. The
-grid's Subject cell draws them as chips. LinkedIn, Slack DMs, Messenger,
+grid's Subject cell draws them as chips, and `with:` reads them too, so
+`with:riker` finds a thread in your direct messages with him where only
+you wrote. LinkedIn, Slack DMs, Messenger,
 Signal and WhatsApp one-to-one chats, Messages, Google Chat and SMS
 backups fill it; a titled chat names nobody.
 

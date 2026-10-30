@@ -105,7 +105,7 @@ describe("listSteps", () => {
     );
     expect(qmd.get("slack/keyword_index")!.phase).toBe("index");
     expect(qmd.get("slack/embed")!.phase).toBe("index");
-    expect(qmd.get("slack/embed")!.name).toBe("Work Slack (embeddings)");
+    expect(qmd.get("slack/embed")!.name).toBe("Work Slack (QMD embedding index)");
     // A custom function under a group, and a step outside any group,
     // are steps and nothing more — whatever their ids look like.
     const custom = listSteps(`[[steps]]
