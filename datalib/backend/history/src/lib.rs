@@ -59,9 +59,10 @@ pub struct TableState {
 }
 
 /// The tables every raw store has that are datalib's, not the source's:
-/// `datalib_etl::doltlite_raw::SHARED_TABLES` and the file-scan cursor
-/// `ingested_files`, plus `sync_scope_config`, which no build writes but
-/// older commits still hold. Listed here because this crate cannot link
+/// `datalib_etl::doltlite_raw::SHARED_TABLES`, the file-scan cursor
+/// `ingested_files`, the walked ranges of `datalib_etl_web::coverage`,
+/// plus `sync_scope_config`, which no build writes but older commits
+/// still hold. Listed here because this crate cannot link
 /// the ingest framework; a test there keeps the two in step.
 const DATALIB_TABLES: &[&str] = &[
     "_datalib_meta",
@@ -70,6 +71,7 @@ const DATALIB_TABLES: &[&str] = &[
     "sync_scope_config",
     "problems",
     "ingested_files",
+    "coverage",
 ];
 
 /// Whether a table holds the source's records: every table but
@@ -581,6 +583,7 @@ mod tests {
             "sync_scope_config",
             "problems",
             "ingested_files",
+            "coverage",
             "sqlite_sequence",
         ] {
             assert!(!holds_records(t), "{t}");
