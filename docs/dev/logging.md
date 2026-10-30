@@ -167,6 +167,19 @@ call; the server files any word. Uncaught exceptions, route changes
 and every toast shown (`target:ui.toast`, its text as the line, at its
 level) are already tracked — see the union for what is.
 
+So are the two waits a person sits through most. `ui.search_answered`
+is a search card's rows reaching the screen, in the table or the list.
+`ui.doc_shown` is a document's body drawn in its frame. Each line has
+`ms`, `outcome` (rows, refused or failed for a search; shown or failed
+for a document) and `trigger`: `open` counts from the card opening,
+`search` from the card asking a search it has not shown. That second
+clock starts once the search bar's pause for typing is over, not at
+the keystroke. A wait of two seconds or more is a `warn`, so
+`target:ui.search_answered min_level:warn` in the log card lists the
+slow ones. On a page in the background, which draws nothing, the wait
+ends when the answer arrives and the line says `hidden`
+(`startWait` / `endWait` in `telemetry.ts`).
+
 Levels are `trace` … `error`. The level a root logs at is
 `log_level` at the top of its `config.toml` — `trace` when it does
 not say, while the pipeline is being debugged — and it applies to

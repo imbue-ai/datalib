@@ -1,13 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  endWait,
   errorEvent,
   flush,
   isSameOrigin,
   navigateEvent,
   nowIso,
   page,
+  SLOW_WAIT_MS,
   stampRequest,
+  startWait,
   track,
+  waitEvent,
 } from "../src/telemetry";
 import { pushToast } from "../src/toasts";
 
@@ -184,5 +188,59 @@ describe("a toast", () => {
         msg: "`is:do` is not something the search knows",
       }),
     ]);
+  });
+});
+
+describe("a wait", () => {
+  /// A source's table took seven seconds to open for days, and nothing a
+  /// person would read said so: the server timed each request, never the
+  /// wait as a whole.
+  it("is a line with its milliseconds, a warning once it is slow", () => {
+    const wait = { since: 1_000, trigger: "open" as const };
+    const quick = waitEvent("search_answered", wait, 1_250.4, { q: "is:document" });
+    expect(quick).toMatchObject({
+      name: "search_answered",
+      level: "info",
+      msg: "search answered in 250 ms",
+      fields: { q: "is:document", trigger: "open", ms: 250 },
+    });
+    const slow = waitEvent("doc_shown", wait, 1_000 + SLOW_WAIT_MS, {});
+    expect(slow.level).toBe("warn");
+    expect(slow.msg).toBe(`document shown in ${SLOW_WAIT_MS} ms`);
+  });
+
+  it("ends at the frame that draws the answer, not when it arrives", async () => {
+    const { bodies } = fakeFetch();
+    vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => frames.push(cb));
+    const now = vi.spyOn(performance, "now").mockReturnValue(100);
+    const wait = startWait("search");
+    endWait("search_answered", wait, { q: "kind:Log" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(frames).toHaveLength(1);
+    now.mockReturnValue(400);
+    frames[0]!(0);
+    await vi.advanceTimersByTimeAsync(3_000);
+    const events = (bodies[0] as { events: { name: string; fields: object }[] }).events;
+    expect(events).toEqual([
+      expect.objectContaining({
+        name: "search_answered",
+        fields: { q: "kind:Log", trigger: "search", ms: 300 },
+      }),
+    ]);
+  });
+
+  it("on a hidden page ends as the answer arrives, and says so", async () => {
+    const { bodies } = fakeFetch();
+    vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    const frame = vi.fn();
+    vi.stubGlobal("requestAnimationFrame", frame);
+    vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValue(50);
+    endWait("doc_shown", startWait("open"), {});
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(frame).not.toHaveBeenCalled();
+    const events = (bodies[0] as { events: { fields: object }[] }).events;
+    expect(events[0]!.fields).toEqual({ hidden: true, trigger: "open", ms: 50 });
   });
 });
