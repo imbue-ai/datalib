@@ -8,6 +8,7 @@ const KINDS: IssueKind[] = [
   "expired",
   "rejected",
   "forbidden",
+  "not_permitted",
   "blocked",
   "rate_limited",
   "service_error",
@@ -37,6 +38,14 @@ describe("issueText", () => {
     const failure = { issue: "rejected" as const, detail: "" };
     expect(issueText(failure, "Slack", "here").advice).toContain("Sign in again above");
     expect(issueText(failure, "Slack", "gateway").advice).toContain("gateway is managed");
+  });
+
+  it("does not send a permission refusal back to sign in", () => {
+    const failure = { issue: "not_permitted" as const, detail: "" };
+    expect(issueText(failure, "Google Calendar", "gateway").advice).toContain(
+      "Signing in again won't help",
+    );
+    expect(issueText(failure, "Google Calendar", "gateway").advice).toContain("gateway");
   });
 
   it("does not call a bot wall a sign-in problem", () => {

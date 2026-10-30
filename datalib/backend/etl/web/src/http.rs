@@ -269,6 +269,13 @@ pub enum HttpError {
         url: String,
         message: String,
     },
+    /// latchkey's permissions, or its gateway's, refused the request
+    /// before it reached the service.
+    NotPermitted {
+        service: HttpService,
+        url: String,
+        message: String,
+    },
     PlaybackMiss(String),
     PlaybackInvalid(String),
     /// The shared retry loop respected rate limits / backed off but the
@@ -302,9 +309,13 @@ impl HttpError {
             HttpError::Curl { exit, .. } if matches!(*exit, 7 | 28 | 35 | 56) => {
                 Some(Upstream::Unavailable)
             }
+            HttpError::Curl { exit, stderr, .. } if latchkey_did_not_permit(*exit, stderr) => {
+                Some(Upstream::NotPermitted)
+            }
             HttpError::Curl { stderr, .. } if latchkey_had_no_credential(stderr) => {
                 Some(Upstream::CredentialRefused)
             }
+            HttpError::NotPermitted { .. } => Some(Upstream::NotPermitted),
             HttpError::GaveUp {
                 last_status: Some(429),
                 ..
@@ -322,6 +333,40 @@ fn latchkey_had_no_credential(stderr: &str) -> bool {
     stderr.contains("Error: No service matches URL")
         || stderr.contains("Error: No credentials found for")
         || (stderr.contains("Error: Credentials for ") && stderr.contains(" are expired."))
+}
+
+/// A local latchkey refusing on its permissions: its own exit code for
+/// it (`PERMISSION_DENIED_EXIT_CODE`), or the words when a wrapper changed
+/// the code.
+fn latchkey_did_not_permit(exit: i32, stderr: &str) -> bool {
+    exit == 126 || stderr.contains("Error: Request not permitted.")
+}
+
+/// A latchkey gateway's refusal: every 403 it sends itself, marked
+/// `latchkeyError`, is its permission check (no credentials allowed, the
+/// request not permitted, the check failing). The service's own 403 has
+/// no such marker and stays the caller's to read.
+fn gateway_refusal(req: &HttpRequest, resp: &HttpResponse) -> Option<HttpError> {
+    if resp.status != 403 {
+        return None;
+    }
+    let body: serde_json::Value = serde_json::from_slice(&resp.body).ok()?;
+    if body
+        .get("latchkeyError")
+        .and_then(serde_json::Value::as_bool)
+        != Some(true)
+    {
+        return None;
+    }
+    Some(HttpError::NotPermitted {
+        service: req.service,
+        url: req.url.clone(),
+        message: body
+            .get("error")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+    })
 }
 
 impl std::fmt::Display for HttpError {
@@ -352,6 +397,14 @@ impl std::fmt::Display for HttpError {
                 f,
                 "{service}: malformed response from latchkey curl ({url}): {message}"
             ),
+            HttpError::NotPermitted {
+                service,
+                url,
+                message,
+            } => write!(
+                f,
+                "{service}: latchkey did not permit this request ({url}): {message}"
+            ),
             HttpError::PlaybackMiss(m) => write!(f, "playback miss: {m}"),
             HttpError::PlaybackInvalid(m) => write!(f, "playback fixture invalid: {m}"),
             HttpError::GaveUp {
@@ -371,6 +424,7 @@ impl std::error::Error for HttpError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self.upstream()? {
             Upstream::CredentialRefused => Some(&Upstream::CredentialRefused),
+            Upstream::NotPermitted => Some(&Upstream::NotPermitted),
             Upstream::RateLimited => Some(&Upstream::RateLimited),
             Upstream::Unavailable => Some(&Upstream::Unavailable),
         }
@@ -512,6 +566,10 @@ where
         let outcome = match crate::playback::current() {
             None => live::send(req).await,
             Some(playback) => playback.answer(req, guard.stop()).await,
+        };
+        let outcome = match outcome {
+            Ok(resp) => gateway_refusal(req, &resp).map_or(Ok(resp), Err),
+            Err(e) => Err(e),
         };
         drop(slot);
         log_attempt(req, &outcome, started.elapsed());
@@ -1031,6 +1089,59 @@ mod tests {
             b"{\"q\":\"b\"}".to_vec(),
         );
         assert_ne!(fixture_key(&a), fixture_key(&b));
+    }
+
+    /// latchkey's answer when its permissions refuse a request: a 403
+    /// from the gateway, exit 126 from a local latchkey. Both read as the
+    /// service refusing the credential, so the advice was to sign in
+    /// again, which cannot help; granting the permission does.
+    #[tokio::test]
+    async fn a_request_latchkey_does_not_permit_is_its_own_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = "https://www.googleapis.com/calendar/v3/users/me/calendarList";
+        let req = HttpRequest::get(HttpService::GoogleCalendar, url);
+        let answer = |status: u16, body: &str| HttpResponse {
+            status,
+            headers: BTreeMap::from([("content-type".into(), "application/json".into())]),
+            body: body.as_bytes().to_vec(),
+            duration_ms: 0,
+        };
+        let tape = |resp: &HttpResponse| {
+            let at = dir.path().join(HttpService::GoogleCalendar.as_str());
+            std::fs::create_dir_all(&at).unwrap();
+            std::fs::write(
+                at.join(fixture_key(&req)),
+                serde_json::to_vec(resp).unwrap(),
+            )
+            .unwrap();
+        };
+
+        tape(&answer(
+            403,
+            r#"{"error":"Error: Request not permitted.","latchkeyError":true}"#,
+        ));
+        let err = playback::scope(dir.path(), latchkey_curl(&req))
+            .await
+            .unwrap_err();
+        assert_eq!(err.upstream(), Some(Upstream::NotPermitted), "{err}");
+
+        // The service's own 403 is the caller's to read.
+        tape(&answer(
+            403,
+            r#"{"error":{"code":403,"message":"Forbidden"}}"#,
+        ));
+        let got = playback::scope(dir.path(), latchkey_curl(&req))
+            .await
+            .unwrap();
+        assert_eq!(got.status, 403);
+
+        let local = HttpError::Curl {
+            service: HttpService::GoogleCalendar,
+            url: url.into(),
+            exit: 126,
+            stderr: "Error: Request not permitted.".into(),
+        };
+        assert_eq!(local.upstream(), Some(Upstream::NotPermitted));
     }
 
     #[tokio::test]

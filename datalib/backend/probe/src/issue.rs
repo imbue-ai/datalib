@@ -39,6 +39,9 @@ pub enum IssueKind {
     Rejected,
     /// The credential works but may not do this.
     Forbidden,
+    /// latchkey's permissions, or its gateway's, do not allow the
+    /// request; it never reached the service.
+    NotPermitted,
     /// A bot wall (Cloudflare's challenge) stood in front of the service.
     Blocked,
     RateLimited,
@@ -134,6 +137,9 @@ pub fn classify(text: &str, gateway: bool) -> IssueKind {
     if text.contains("Credentials for ") && text.contains(" are expired") {
         return IssueKind::Expired;
     }
+    if has(&["Request not permitted", "latchkey did not permit"]) {
+        return IssueKind::NotPermitted;
+    }
     if has(&[r#"cf-mitigated=Some("challenge")"#, "Just a moment..."])
         || has_lower(&["cf-mitigated: challenge"])
     {
@@ -208,6 +214,16 @@ mod tests {
             IssueKind::Blocked,
         ),
         (r#"auth.test: ok=false error="invalid_auth""#, IssueKind::Rejected),
+        // A latchkey gateway whose permissions leave the call out, as a
+        // provider that reads every 403 as a refusal reported it.
+        (
+            r#"GET https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=250: 403: {"error":"Error: Request not permitted.","latchkeyError":true}"#,
+            IssueKind::NotPermitted,
+        ),
+        (
+            "google_calendar: latchkey did not permit this request (https://www.googleapis.com/calendar/v3/users/me/calendarList): Error: Request not permitted.",
+            IssueKind::NotPermitted,
+        ),
         (
             r#"claude.ai credentials are not set up: GET /account -> HTTP 401: "{\"error\":{\"type\":\"authentication_error\"}}""#,
             IssueKind::Rejected,

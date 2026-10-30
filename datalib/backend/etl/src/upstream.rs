@@ -11,6 +11,9 @@ pub enum Upstream {
     /// The service would not take the credential, or latchkey would not
     /// send one. A person signs in again.
     CredentialRefused,
+    /// latchkey's permissions, or its gateway's, do not allow this
+    /// request. Signing in again changes nothing; granting it does.
+    NotPermitted,
     /// The service is limiting how often we may ask.
     RateLimited,
     /// The service did not answer, or said it is briefly unavailable.
@@ -48,6 +51,7 @@ impl std::fmt::Display for Upstream {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::CredentialRefused => "the service did not accept the credential",
+            Self::NotPermitted => "latchkey's permissions do not allow this request",
             Self::RateLimited => "the service is limiting how often we may ask",
             Self::Unavailable => "the service did not answer",
         })

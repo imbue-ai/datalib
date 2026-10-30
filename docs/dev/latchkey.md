@@ -247,6 +247,14 @@ renews must check the account it got before using it
   all: no credential, a missing plugin, a refresh that failed. Every
   later request would fail the same way, so a provider should end the
   run on it rather than retry (see `garmin/src/ingest/api.rs`).
+- When latchkey's permissions refuse a request, a local latchkey exits
+  126 and a gateway answers 403 with `"latchkeyError": true`. The HTTP
+  layer turns both into `HttpError::NotPermitted` before a provider
+  reads the status, so no provider mistakes it for the service turning
+  the credential away. Signing in again cannot fix it; granting the
+  permission can. Behind a gateway (`LATCHKEY_GATEWAY` set), a step's
+  sign-in hint points at the gateway instead of `latchkey auth browser`,
+  which the gateway refuses.
 - The wizard turns whatever latchkey or a probe printed into one
   sentence per kind of trouble: `IssueKind` in
   `datalib/backend/probe/src/issue.rs`, worded in
