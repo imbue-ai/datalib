@@ -98,9 +98,9 @@ pub struct SlackApiSync {
     /// for each (`D…` for a 1:1, `G…` or `C…` for a group DM) or a
     /// pasted link to it — the `Copy link` on a DM gives
     /// `https://<workspace>.slack.com/archives/<id>`. Unset (with
-    /// `dms = true`) means every DM the account can see, each read only
-    /// while it is open in Slack's sidebar with something new; a DM
-    /// named here is read whatever its state.
+    /// `dms = true`) means every DM the account can see. Either way, a DM
+    /// is read once, then while it is open in Slack's sidebar with
+    /// something new, and once a day while it is closed.
     #[serde(default)]
     pub dm_conversations: Option<Vec<String>>,
 }

@@ -190,8 +190,8 @@ are the signals, from cheapest to most exact:
   - **Slack**: a conversation whose `history:<channel id>` scope in
     `coverage` is one row, reaching back to the source's `since`, has
     no gap. Two rows or more, or a `lo` later than `since`, means the
-    walk is not done there. A DM closed in the sidebar has no row at all
-    until it opens again, which is not the same as "not done".
+    walk is not done there. A conversation walked and found empty has
+    one row with `lo = hi`: the point the walk began.
 
     ```sql
     SELECT scope, count(*) AS spans, min(lo), max(hi)
@@ -295,9 +295,9 @@ question reaches outside that:
 
 - **Slack**: anything before the source's `since` (2024-01-01 unless
   set); a time in a conversation outside every `coverage` span; direct
-  messages unless the source sets `dms = true`; a DM closed in the
-  account's sidebar, unless it is named in `dm_conversations` (it is
-  walked again once it opens with something new); channels the account is
+  messages unless the source sets `dms = true`; the newest messages of a
+  DM closed in the account's sidebar, for up to a day (a closed DM is
+  checked once a day); channels the account is
   not in unless it sets `all_channels`; files when `media = false`. A
   root's `reply_count` is Slack's; the mirror holds every reply up to
   `latest_reply` only once `threads_bookkeeping.held_version` equals
