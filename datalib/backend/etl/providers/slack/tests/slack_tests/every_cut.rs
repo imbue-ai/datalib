@@ -182,7 +182,7 @@ fn record_workspace(api: &Path) {
     )
     .unwrap();
 
-    let list = json!({"exclude_archived": "true", "limit": "200", "types": DM_TYPES});
+    let list = json!({"exclude_archived": "true", "limit": "1000", "types": DM_TYPES});
     record_call(
         api,
         "conversations.list",

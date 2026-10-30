@@ -45,6 +45,7 @@ a file download is retried, rate-limited and replayed like an API call.
 | `auth.test`                 | Identify the workspace + the calling user |
 | `conversations.list`        | Enumerate channels                       |
 | `users.list`                | Enumerate workspace users                |
+| `users.info`                | One author no `users.list` has named yet |
 | `conversations.history`     | Each channel's uncovered stretches + refresh window |
 | `conversations.replies`     | The replies of each thread the store owes |
 | `search.messages`           | Replies posted since the last search, to roots history will not read again |
@@ -395,11 +396,29 @@ what is owed is computed from the config a run has now.
 | `common.blob_size_limit_bytes` raised | The edges skipped for their size are still without bytes, so they are fetched. |
 | a new channel, or `dms` on | The conversation has no coverage, so it is walked from `since` once `client.counts` shows a message in range, or names nothing (see [Which conversations a run walks](#which-conversations-a-run-walks)). |
 
-Turning `dms` on also needs a fresh `conversations.list`: the cached
-sweep was taken under the narrower `types` and holds no DM rows at all.
-The sweep marker is keyed on `dms`, so flipping the knob misses the
-six-hour TTL rather than mirroring nothing until it expires. A sweep
-marker only says "do not list again yet"; it is not progress.
+## What appeared since the last sync
+
+Slack has no call that answers "what changed since then" for channels
+or users, so each is found its own way.
+
+- **Channels.** Every run lists `conversations.list` whole, so a channel
+  created a minute ago, or the DMs `dms = true` just asked for, are
+  walked by the next run. It asks for 1000 a page: Slack drops the
+  archived channels from a page after filling it, so it answers fewer
+  than it was asked for, and on a real workspace 381 open channels took
+  5 calls at 1000 and 23 at 200.
+- **Users.** `users.list` is listed at most once per `MANIFEST_TTL` (six
+  hours), since its rows change only when someone edits a profile. A
+  person who posts for the first time does not wait for it: storing a
+  message adds a `users` row with no payload for an author not already
+  there, and each run then asks `users.info` for every such row. The
+  answer is stored as `users.list` lists it (without the custom
+  `profile.fields` only `users.info` carries), so the next listing is no
+  change. A lookup that fails is an attempt on the user's own row
+  (`users:<id>`), asked again each run until it answers or a
+  `users.list` names the user.
+
+A sweep marker only says "do not list again yet"; it is not progress.
 
 ## When part of a sync fails
 
@@ -413,6 +432,10 @@ and the sync goes on with the rest.
   `listing:conversations.history <channel>`). The run walks what an
   earlier listing stored. A run that gets to its end replaces the last
   run's rows, so the next run that lists cleanly clears them.
+- **An author** whose `users.info` fails is an error on the user's own
+  row (`users:<id>`), cleared by the lookup or listing that names them.
+  A token that may not call `users.info` at all ends the lookups as
+  one `phase:users.info` row.
 - **A thread** whose `conversations.replies` fails is an attempt on the
   thread's own row (`threads:<team>#<channel>#<ts>`, the key its root
   message has), an error while its replies have never been read and a
@@ -506,7 +529,7 @@ otherwise), leaves that table as it was, and does not stop the sync.
   `bookmarks` or `folder` tab, or when we already hold bookmarks for it.
   On a real workspace 75 of 128 channels had no such tab, and
   none of the 25 of those we asked held a bookmark. Listed at most once
-  per `MANIFEST_TTL`, like the channel list. The listing is not paged,
+  per `MANIFEST_TTL`, like the user list. The listing is not paged,
   so it is the conversation's whole set, and a bookmark it no longer
   names is deleted.
 

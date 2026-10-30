@@ -167,12 +167,11 @@ async fn dm_conversations_naming_nothing_walks_no_dms() {
     assert_eq!(channels_with_messages(&t.out), set(&["C1"]));
 }
 
-/// Turning DMs on for an already-synced store has to refetch
-/// `conversations.list`, even inside the six-hour sweep TTL — the
-/// cached listing predates the wider `types` and contains no DM rows,
-/// so honoring it would mirror nothing and report success.
+/// Turning DMs on for an already-synced store walks the DMs on the very
+/// next run: the stored listing predates the wider `types` and holds no
+/// DM rows.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn turning_dms_on_relists_despite_the_sweep_ttl() {
+async fn turning_dms_on_walks_them_on_the_next_run() {
     let t = Tree::new();
     write_auth_and_users(&t.api);
     write_channels_only(&t.api);
@@ -184,13 +183,12 @@ async fn turning_dms_on_relists_despite_the_sweep_ttl() {
     run_fetch(&t.playback, &t.out, false, None).await;
     assert_eq!(channels_with_messages(&t.out), set(&["C1"]));
 
-    // Run 2, seconds later — well inside MANIFEST_TTL.
+    // Run 2, seconds later.
     run_fetch(&t.playback, &t.out, true, None).await;
     assert_eq!(
         channels_with_messages(&t.out),
         set(&["C1", "D1", "D2", "G1"]),
-        "the second run must re-list under the wider `types` rather than \
-         serve the cached channels-only sweep",
+        "the second run must list under the wider `types`",
     );
 }
 

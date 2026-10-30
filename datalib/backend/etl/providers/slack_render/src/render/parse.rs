@@ -500,10 +500,12 @@ async fn load_users(
     pool: &SqlitePool,
     unparsed: &mut Vec<Unparsed>,
 ) -> Result<BTreeMap<String, User>> {
-    let rows = sqlx::query("SELECT id, team_id, json(payload) AS payload FROM users")
-        .fetch_all(pool)
-        .await
-        .context("select users")?;
+    let rows = sqlx::query(
+        "SELECT id, team_id, json(payload) AS payload FROM users WHERE payload IS NOT NULL",
+    )
+    .fetch_all(pool)
+    .await
+    .context("select users")?;
     let mut out: BTreeMap<String, User> = BTreeMap::new();
     for r in rows {
         let id: String = r.try_get("id").unwrap_or_default();

@@ -2,7 +2,7 @@
 
 use datalib_etl::entity_store::CasEntityStore;
 use datalib_etl_macros::RawStoreHandle;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -149,62 +149,90 @@ impl RawDb {
     // ── users ───────────────────────────────────────────────────────
 
     pub async fn upsert_users(&self, payloads: &[Value]) -> Result<()> {
-        if payloads.is_empty() {
-            return Ok(());
-        }
-        let mut rows: Vec<UserRow> = Vec::with_capacity(payloads.len());
-        let mut tape_pairs: Vec<(&str, &Value)> = Vec::with_capacity(payloads.len());
-        // Owns split-out volatile Values; see `upsert_channels`.
-        let mut volatile_store: Vec<(&str, Value)> = Vec::with_capacity(payloads.len());
-        for payload in payloads {
-            let Some(id) = payload.get("id").and_then(|v| v.as_str()) else {
-                continue;
-            };
-            let profile = payload.get("profile");
-            let real_name = payload
-                .get("real_name")
-                .and_then(|v| v.as_str())
-                .or_else(|| {
-                    profile
-                        .and_then(|p| p.get("real_name"))
-                        .and_then(|v| v.as_str())
-                });
-            let display_name = profile
-                .and_then(|p| p.get("display_name"))
-                .and_then(|v| v.as_str());
-            // Split the per-fetch `updated` bookkeeping into the sidecar.
-            let (base, volatile) = dr::split_volatile(payload, USER_VOLATILE_PATHS);
-            rows.push(UserRow {
-                id_and_payload: WirePayload {
-                    id: id.to_string(),
-                    payload: serde_json::to_string(&base).context("serialize user")?,
-                },
-                team_id: payload
-                    .get("team_id")
-                    .and_then(|v| v.as_str())
-                    .map(String::from),
-                name: payload
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .map(String::from),
-                real_name: real_name.map(String::from),
-                display_name: display_name.map(String::from),
-            });
-            tape_pairs.push((id, payload));
-            if let Some(v) = volatile {
-                volatile_store.push((id, v));
-            }
-        }
-        let volatile_pairs: Vec<(&str, &Value)> =
-            volatile_store.iter().map(|(id, v)| (*id, v)).collect();
+        let users = PreparedUsers::new(payloads)?;
         bulk_upsert_with_tape_split(
             self.pool(),
             self.tape_ref(),
-            &rows,
-            &tape_pairs,
-            &volatile_pairs,
+            &users.rows,
+            &users.tape,
+            &users.volatile(),
         )
         .await
+    }
+
+    /// The authors stored messages name that no `users.list` or
+    /// `users.info` has answered for, each listed with no version: a
+    /// user only has to have been fetched.
+    pub async fn users_owed(&self) -> Result<Vec<Listed>> {
+        let ids: Vec<String> =
+            sqlx::query_scalar("SELECT id FROM users WHERE payload IS NULL ORDER BY id")
+                .fetch_all(self.pool())
+                .await
+                .context("select the users owed")?;
+        Ok(ids
+            .into_iter()
+            .map(|id| Listed::new(id, None::<String>))
+            .collect())
+    }
+
+    /// Clears the failed lookup of each user a `users.list` has since
+    /// returned. Returns how many.
+    pub async fn settle_listed_users(&self) -> Result<usize> {
+        let ids: Vec<String> = sqlx::query_scalar(
+            "SELECT u.id FROM users u JOIN users_bookkeeping b ON b.id = u.id \
+             WHERE u.payload IS NOT NULL AND b.last_error IS NOT NULL",
+        )
+        .fetch_all(self.pool())
+        .await
+        .context("select the listed users with a failed lookup")?;
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let mut tx = self.pool().begin().await.context("begin settling users")?;
+        for id in &ids {
+            dr::record_object_attempt(&mut tx, UserRow::TABLE, id, None).await?;
+        }
+        tx.commit().await.context("commit settling users")?;
+        Ok(ids.len())
+    }
+
+    /// The users `users.info` answered for, in the transaction the
+    /// lookup loop holds them in.
+    pub async fn store_looked_up_users(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        fetched: &[Fetched<Value>],
+    ) -> Result<()> {
+        let payloads: Vec<Value> = fetched
+            .iter()
+            .filter_map(|f| match &f.outcome {
+                Outcome::Got(user) => Some(user.clone()),
+                _ => None,
+            })
+            .collect();
+        let users = PreparedUsers::new(&payloads)?;
+        if users.rows.is_empty() {
+            return Ok(());
+        }
+        let now = datalib_time::IsoOffsetTimestamp::now_local();
+        bulk_upsert_in_tx(tx, &users.rows, &now).await?;
+        dr::set_volatile_payloads_in_tx(tx, UserRow::TABLE, &users.volatile()).await?;
+        if let Some(tape) = self.tape_ref() {
+            let batch = EventBatch {
+                table: UserRow::TABLE,
+                rows: &users.tape,
+            };
+            if let Err(e) = tape.append_batch(&batch) {
+                tracing::error!(
+                    event = "event_tape_append_failed",
+                    table = UserRow::TABLE,
+                    count = users.tape.len(),
+                    error = %format!("{e:#}"),
+                    "the users are stored, but the event tape is missing their lines"
+                );
+            }
+        }
+        Ok(())
     }
 
     pub async fn load_users(&self) -> Result<Vec<Value>> {
@@ -327,10 +355,12 @@ impl RawDb {
     /// progress lines. Typed columns only — no payload parse, since
     /// this runs before the walk on every DM-enabled run.
     pub async fn user_directory(&self) -> Result<Vec<UserDirectoryEntry>> {
-        let rows = sqlx::query("SELECT id, name, real_name, display_name FROM users")
-            .fetch_all(self.pool())
-            .await
-            .context("select user_directory")?;
+        let rows = sqlx::query(
+            "SELECT id, name, real_name, display_name FROM users WHERE payload IS NOT NULL",
+        )
+        .fetch_all(self.pool())
+        .await
+        .context("select user_directory")?;
         let entries = rows
             .iter()
             .map(|r| {
@@ -893,6 +923,67 @@ pub struct OwedFile {
     pub file: Value,
 }
 
+/// `users` rows from Slack's user objects, whichever call returned them.
+struct PreparedUsers<'a> {
+    rows: Vec<UserRow>,
+    tape: Vec<(&'a str, &'a Value)>,
+    /// The per-fetch fields split out of each content payload.
+    split: Vec<(&'a str, Value)>,
+}
+
+impl<'a> PreparedUsers<'a> {
+    fn new(payloads: &'a [Value]) -> Result<Self> {
+        let mut out = Self {
+            rows: Vec::with_capacity(payloads.len()),
+            tape: Vec::with_capacity(payloads.len()),
+            split: Vec::new(),
+        };
+        for payload in payloads {
+            let Some(id) = payload.get("id").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let profile = payload.get("profile");
+            let real_name = payload
+                .get("real_name")
+                .and_then(|v| v.as_str())
+                .or_else(|| {
+                    profile
+                        .and_then(|p| p.get("real_name"))
+                        .and_then(|v| v.as_str())
+                });
+            let display_name = profile
+                .and_then(|p| p.get("display_name"))
+                .and_then(|v| v.as_str());
+            let (base, volatile) = dr::split_volatile(payload, USER_VOLATILE_PATHS);
+            out.rows.push(UserRow {
+                id_and_payload: WirePayload {
+                    id: id.to_string(),
+                    payload: serde_json::to_string(&base).context("serialize user")?,
+                },
+                team_id: payload
+                    .get("team_id")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                name: payload
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                real_name: real_name.map(String::from),
+                display_name: display_name.map(String::from),
+            });
+            out.tape.push((id, payload));
+            if let Some(v) = volatile {
+                out.split.push((id, v));
+            }
+        }
+        Ok(out)
+    }
+
+    fn volatile(&self) -> Vec<(&str, &Value)> {
+        self.split.iter().map(|(id, v)| (*id, v)).collect()
+    }
+}
+
 struct Prepared<'a> {
     row: MessageRow,
     payload: &'a Value,
@@ -942,6 +1033,7 @@ async fn write_messages(tx: &mut Transaction<'_, Sqlite>, page: &[Prepared<'_>])
     let now = datalib_time::IsoOffsetTimestamp::now_local();
     bulk_upsert_in_tx(tx, &rows, &now).await?;
     dr::merge_volatile_payloads_in_tx(tx, MessageRow::TABLE, &volatile).await?;
+    list_authors(tx, page).await?;
     for p in page {
         let message_uuid = &p.row.id_and_payload.id;
         let files = p.payload.get("files").and_then(Value::as_array);
@@ -970,6 +1062,24 @@ async fn write_messages(tx: &mut Transaction<'_, Sqlite>, page: &[Prepared<'_>])
             .await
             .with_context(|| format!("list the file {id}"))?;
         }
+    }
+    Ok(())
+}
+
+/// A `users` row with no payload for each author of `page` not already
+/// there: someone who posted after the last `users.list`, owed a
+/// `users.info` ([`RawDb::users_owed`]).
+async fn list_authors(tx: &mut Transaction<'_, Sqlite>, page: &[Prepared<'_>]) -> Result<()> {
+    let authors: BTreeSet<&str> = page
+        .iter()
+        .filter_map(|p| p.row.user_id.as_deref())
+        .collect();
+    for id in authors {
+        sqlx::query("INSERT INTO users (id) VALUES (?) ON CONFLICT(id) DO NOTHING")
+            .bind(id)
+            .execute(&mut **tx)
+            .await
+            .with_context(|| format!("list the author {id}"))?;
     }
     Ok(())
 }

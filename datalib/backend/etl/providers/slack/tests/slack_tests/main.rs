@@ -11,6 +11,7 @@ mod history_prune;
 mod history_walk;
 mod idle_dms;
 mod interrupt;
+mod new_since_last_sync;
 mod newest_first;
 mod playback_roundtrip;
 mod probe;

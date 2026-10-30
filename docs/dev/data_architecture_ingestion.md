@@ -611,11 +611,11 @@ Gmail `historyId`, RFC 6578 `sync-token`, Google's `syncToken`,
 Todoist's `sync_token`),
 written in the transaction that stores the page it covers, and a
 **sweep marker** that only schedules when to list again (Slack's
-channel list, claude's orgs and project docs).
+user list, claude's orgs and project docs).
 
 | Source | Listed | Held at | Range in `coverage` |
 |---|---|---|---|
-| slack | channels, threads (by `latest_reply`), file edges | `messages`, `threads`, `slack_attachments` sidecars | each channel's history; each conversation's searched reply time |
+| slack | channels, threads (by `latest_reply`), file edges, the authors of stored messages | `messages`, `threads`, `slack_attachments`, `users` sidecars | each channel's history; each conversation's searched reply time |
 | github, gitlab | `listed_change_requests`, from each scope's search | the PR / MR sidecar, at `updated_at` | each scope's `updated_at` |
 | email (JMAP, Gmail) | `listed_messages`, from the delta or an enumeration; under a label filter, also the rest of each kept thread, from `thread_members` | `emails` sidecar, then the `.eml` edge | — |
 | notion | search results are the `pages` rows; in roots mode, `listed_pages`, and the pages `tree` puts under a root | `pages` (roots mode), `page_markdown`, `page_comments`, attachment edges | the search's `last_edited_time` |
