@@ -17,6 +17,7 @@ pub const KIND_THINKING: &str = "thinking_block";
 pub const KIND_TOOL_USE: &str = "tool_use";
 pub const KIND_TOOL_RESULT: &str = "tool_result";
 pub const KIND_BLOCK: &str = "content_block";
+pub const KIND_REMINDER: &str = "system_reminder";
 
 /// `date_ms` is the item's `date_ms`, so the stamp in the id is the
 /// row's; a transcript's id carries none, its row's stamp being
@@ -39,6 +40,12 @@ pub fn transcript(source_id: &str, session_id: &str, agent_id: Option<&str>) -> 
 
 pub fn record(source_id: &str, record_uuid: &str, date_ms: Option<i64>) -> Identity {
     IDS.mint(source_id, KIND_RECORD, record_uuid.to_string(), date_ms)
+}
+
+/// The `<system-reminder>` text the harness put into a person's turn,
+/// shown apart from what they typed.
+pub fn reminder(source_id: &str, record_uuid: &str, date_ms: Option<i64>) -> Identity {
+    IDS.mint(source_id, KIND_REMINDER, record_uuid.to_string(), date_ms)
 }
 
 pub fn thinking_block(

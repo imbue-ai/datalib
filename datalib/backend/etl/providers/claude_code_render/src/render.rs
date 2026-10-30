@@ -37,7 +37,9 @@ use crate::ids;
 /// v4: the account's own messages are "Me", as every chat source writes
 ///     them.
 /// v5: an answer's author is its model's chip (`ai_model:` handle).
-pub const RENDER_VERSION: u32 = 5;
+/// v6: what the harness writes in the person's place (notices, reminders,
+///     a subagent's brief) is a Harness Message, not "Me".
+pub const RENDER_VERSION: u32 = 6;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -284,7 +286,6 @@ fn user_items(
     out: &mut Vec<NormalizedChatItem>,
 ) {
     let content = v.get("message").and_then(|m| m.get("content"));
-    let is_meta = v.get("isMeta").and_then(Value::as_bool).unwrap_or(false);
     let mut n = 0usize;
     for b in content.map(blocks_of_content).unwrap_or_default() {
         if b.get("type").and_then(Value::as_str) != Some("tool_result") {
@@ -313,7 +314,20 @@ fn user_items(
     let Some(content) = content else {
         return;
     };
-    let mut text = human_text(content).unwrap_or_default();
+    let (reminders, mut text) = split_reminders(&human_text(content).unwrap_or_default());
+    if !reminders.is_empty() {
+        out.push(NormalizedChatItem {
+            author_kind: AuthorKind::Named,
+            ..item(
+                ids::reminder(source_id, uuid, ms.map(|m| m + n as i64)),
+                "Claude Code".to_string(),
+                ms.map(|m| m + n as i64),
+                reminders.join("\n\n"),
+                "Harness Message",
+                true,
+            )
+        });
+    }
     let images = content
         .as_array()
         .map(|a| {
@@ -330,7 +344,7 @@ fn user_items(
     if text.trim().is_empty() {
         return;
     }
-    let (label, author, author_kind, aside) = if is_meta {
+    let (label, author, author_kind, aside) = if written_by_the_harness(v, &text) {
         ("Harness Message", "Claude Code", AuthorKind::Named, true)
     } else {
         ("User Input", "Me", AuthorKind::Account, false)
@@ -346,6 +360,59 @@ fn user_items(
             aside,
         )
     });
+}
+
+/// The tags a record the harness writes in the person's place opens with,
+/// in a transcript too old to say who wrote it in `origin`.
+const HARNESS_TAGS: &[&str] = &[
+    "<task-notification>",
+    "<ci-monitor-event>",
+    "<side-sessions-event>",
+    "<local-command-stdout>",
+    "<local-command-stderr>",
+    "<local-command-caveat>",
+];
+
+/// Whether a `user` record is the harness's rather than the person's: its
+/// own messages (`isMeta`), a summary it wrote when it compacted the
+/// session, a subagent's brief (the parent agent's), anything whose
+/// `origin` is not a person typing, and, before transcripts said so, a
+/// notice by the tag it opens with.
+fn written_by_the_harness(v: &Value, text: &str) -> bool {
+    let flag = |key: &str| v.get(key).and_then(Value::as_bool).unwrap_or(false);
+    let origin = v
+        .get("origin")
+        .and_then(|o| o.get("kind"))
+        .and_then(Value::as_str);
+    flag("isMeta")
+        || flag("isCompactSummary")
+        || flag("isSidechain")
+        || match origin {
+            Some(kind) => kind != "human",
+            None => HARNESS_TAGS.iter().any(|t| text.starts_with(t)),
+        }
+}
+
+/// The `<system-reminder>` spans the harness puts into a person's turn
+/// (the instructions it loaded, a hook's notes, sessions it is watching),
+/// and what is left, which is what the person typed.
+fn split_reminders(text: &str) -> (Vec<String>, String) {
+    const OPEN: &str = "<system-reminder>";
+    const CLOSE: &str = "</system-reminder>";
+    let mut reminders = Vec::new();
+    let mut said = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find(OPEN) {
+        let Some(len) = rest[at..].find(CLOSE) else {
+            break;
+        };
+        said.push_str(&rest[..at]);
+        reminders.push(rest[at + OPEN.len()..at + len].trim().to_string());
+        rest = &rest[at + len + CLOSE.len()..];
+    }
+    said.push_str(rest);
+    reminders.retain(|r| !r.is_empty());
+    (reminders, said.trim().to_string())
 }
 
 fn assistant_items(
@@ -728,6 +795,91 @@ mod tests {
         .items[0];
         assert_eq!(it.kind_label.as_deref(), Some("Harness Message"));
         assert!(it.is_aside);
+    }
+
+    /// The harness writes into the person's place too: notices it sends
+    /// the agent, a subagent's brief, the reminders it prepends to a turn.
+    /// None of it is "Me", or `from:me` finds the harness talking.
+    #[test]
+    fn what_the_harness_writes_is_not_the_persons_turn() {
+        let transcripts = vec![meta("s1", "t", None)];
+        let user = |uuid: &str, second: u32, extra: Value| {
+            let mut v = json!({"type": "user"});
+            for (k, x) in extra.as_object().unwrap() {
+                v[k] = x.clone();
+            }
+            rec(uuid, &format!("2364-04-11T10:00:{second:02}.000Z"), v)
+        };
+        let records = vec![
+            user(
+                "typed",
+                1,
+                json!({"origin": {"kind": "human"}, "message": {"content": [
+                    {"type": "text", "text": "<system-reminder>\nYou are in a worktree.\n</system-reminder>"},
+                    {"type": "text", "text": "Raise the shields"}
+                ]}}),
+            ),
+            user(
+                "notice",
+                2,
+                json!({"origin": {"kind": "task-notification"},
+                       "message": {"content": "<task-notification>scan done</task-notification>"}}),
+            ),
+            user(
+                "event",
+                3,
+                json!({"message": {"content": "<ci-monitor-event>checks green</ci-monitor-event>"}}),
+            ),
+            user(
+                "brief",
+                4,
+                json!({"isSidechain": true, "message": {"content": "Survey the nebula"}}),
+            ),
+            user("old", 5, json!({"message": {"content": "Engage"}})),
+        ];
+        let chats = build_chats("cc", &transcripts, &records, 1024);
+        let said: Vec<(&str, &str, &str)> = chats[0].buckets[0]
+            .items
+            .iter()
+            .map(|i| {
+                (
+                    i.kind_label.as_deref().unwrap(),
+                    i.author_display.as_str(),
+                    i.text.as_deref().unwrap_or(""),
+                )
+            })
+            .collect();
+        assert_eq!(
+            said,
+            [
+                ("Harness Message", "Claude Code", "You are in a worktree."),
+                ("User Input", "Me", "Raise the shields"),
+                (
+                    "Harness Message",
+                    "Claude Code",
+                    "<task-notification>scan done</task-notification>"
+                ),
+                (
+                    "Harness Message",
+                    "Claude Code",
+                    "<ci-monitor-event>checks green</ci-monitor-event>"
+                ),
+                ("Harness Message", "Claude Code", "Survey the nebula"),
+                ("User Input", "Me", "Engage"),
+            ]
+        );
+    }
+
+    #[test]
+    fn reminders_split_from_what_was_typed_wherever_they_sit() {
+        let (reminders, said) = split_reminders(
+            "<system-reminder>a</system-reminder>Make it so<system-reminder> b </system-reminder>",
+        );
+        assert_eq!(reminders, ["a", "b"]);
+        assert_eq!(said, "Make it so");
+        let (reminders, said) = split_reminders("Engage <system-reminder>unclosed");
+        assert!(reminders.is_empty());
+        assert_eq!(said, "Engage <system-reminder>unclosed");
     }
 
     /// A deleted transcript has no row to mint its document id from, so
