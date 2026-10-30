@@ -596,7 +596,10 @@ Nothing is marked done, and no position in a walk is stored.
 What is **owed** is the listing minus what is held, plus the gaps in the
 range wanted. [`owed.rs`](/datalib/backend/etl/web/src/owed.rs) asks the
 store for it and fetches it: in batches, as many requests at once as
-the provider allows, a flush per transaction by count or by bytes, a
+the provider allows (and never more than the source's
+`download_params.maximum_requests_at_once`, 8 unless set, which every
+request through `latchkey_curl` waits on), a flush per transaction by
+count or by bytes, a
 stop that writes what was answered, and one outcome per record (got;
 got but partly unusable, held with a warning; gone; failed, owed with
 an error; skipped by our rule, owed with a warning). A provider says

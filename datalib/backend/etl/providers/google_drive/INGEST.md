@@ -44,7 +44,9 @@ its own, and the kinds drain side by side.
    goes up on every change to the file.
 3. **Capture.** Up to four files of each kind are fetched at once
    (`Captures::capture`). Each fetch reads the first three of these
-   together, then the images:
+   together, then the images, six at a time. All of it shares the
+   source's request slots (`download_params.maximum_requests_at_once`,
+   8 unless set), so the run never has more than that out at once:
    - the revision list, paged, unless the account may only comment
      (`capabilities.canReadRevisions = false`), when Drive lists none.
      It is listed twice, and every revision either listing named is

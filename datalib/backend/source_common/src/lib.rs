@@ -408,6 +408,7 @@ mod tests {
             download_params: DownloadParams {
                 maximum_time_without_progress_in_minutes: Some(30),
                 maximum_sequential_failed_requests: Some(50),
+                maximum_requests_at_once: Some(4),
             },
             event_tape: None,
         };
@@ -418,6 +419,7 @@ mod tests {
             download_params: DownloadParams {
                 maximum_time_without_progress_in_minutes: None,
                 maximum_sequential_failed_requests: Some(100),
+                maximum_requests_at_once: None,
             },
             ..Default::default()
         };
@@ -434,6 +436,7 @@ mod tests {
             common.download_params.maximum_sequential_failed_requests,
             Some(100) // source wins
         );
+        assert_eq!(common.download_params.max_requests_at_once(), 4); // global
         assert!(!common.event_tape_enabled()); // None → off
     }
 
