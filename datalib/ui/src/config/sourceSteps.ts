@@ -100,8 +100,8 @@ function groupedName(
   if (fn === "render_time_series") return `${group.name} (render time series)`;
   if (fn === "render_occurrences") return `${group.name} (render occurrences)`;
   if (phase === "render") return `${group.name} (render markdown)`;
-  if (fn === "keyword_index") return `${group.name} (keyword index)`;
-  if (fn === "embed") return `${group.name} (embeddings)`;
+  if (fn === "keyword_index") return `${group.name} (QMD keyword index)`;
+  if (fn === "embed") return `${group.name} (QMD embedding index)`;
   return defaultName(id);
 }
 
