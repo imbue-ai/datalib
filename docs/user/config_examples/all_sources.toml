@@ -2273,8 +2273,8 @@ media = true                   # download attachments into blobs
 dms = true                     # direct messages, 1:1 and group: off unless set
 dm_conversations = ["D024BE7LH", "https://enterprise.slack.com/archives/G0ABC12DE"]
                                # only these DMs, by id or pasted link; needs `dms = true`.
-                               # Unset, a DM is read only while it is open in Slack's
-                               # sidebar with new messages
+                               # Unset, every DM: each is read once, then when Slack
+                               # shows it open with new messages, and daily if closed
 refresh_window_days = 30       # re-walk this many trailing days for edits, reactions
                                # and deletions; default 30, 0 turns it off
 refresh_every_minutes = 60     # re-walk that window at most this often; default 60,
