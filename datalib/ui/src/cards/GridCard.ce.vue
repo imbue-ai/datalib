@@ -144,7 +144,7 @@ import {
   type ServerGroup,
 } from "@/grid/serverGroups";
 import { searchFailure, type SearchFailure } from "./searchFailure";
-import { DEFAULT_QUERY, PLAIN_HINT, searchPlaceholder } from "./searchDefaults";
+import { DEFAULT_QUERY } from "./searchDefaults";
 import SearchList from "./SearchList.ce.vue";
 import { freeText, pickedSource, searchTitle, setSource } from "./search";
 import SearchField from "@/search/SearchField.vue";
@@ -1514,20 +1514,7 @@ onMounted(async () => {
   runSearch(query.value);
 });
 
-const hint = ref(props.placeholder ?? PLAIN_HINT);
-const namesASource = () => hint.value !== PLAIN_HINT;
-
-/// A search card with no hint of its own suggests filters on this
-/// library's sources, once the index holds any.
-async function nameSourcesInPlaceholder() {
-  if (props.placeholder != null || url !== SEARCH) return;
-  try {
-    hint.value = searchPlaceholder((await fetchGroups<Row>("", "source_ref")).groups);
-  } catch {
-    /* only a hint */
-  }
-}
-onMounted(nameSourcesInPlaceholder);
+const hint = computed(() => props.placeholder ?? "search…");
 
 // The index moved under us — a `grid_index` pass committed, which under
 // streaming happens many times per sync, as each source's rows arrive.
@@ -1548,7 +1535,6 @@ onMounted(() => {
         if (e.kind !== "index_changed") return;
         refreshRows();
         void loadSources();
-        if (!namesASource()) void nameSourcesInPlaceholder();
       },
     },
     { onScreen: cardEl.value ?? undefined },
