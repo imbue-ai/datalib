@@ -15,11 +15,11 @@
 # skip the folder picker (see `explicit_data_root` in src/main.rs),
 # which also makes the app scriptable/testable without a GUI click.
 #
-# The bundled binaries are built `-c opt`, as the release tarballs' are,
-# so a sync's timings mean something: Bazel's default leaves the Rust
-# unoptimized, and a sync takes about twice as long. DATALIB_COMPILATION_
-# MODE=fastbuild builds quicker when the timings don't matter. The shell
-# itself stays `--debug`; it only launches the backend.
+# The bundled binaries are built `-c opt` (the config's default), as the
+# release's are, so a sync's timings mean something.
+# DATALIB_COMPILATION_MODE=fastbuild builds quicker and syncs about twice
+# as slowly. The shell itself stays `--debug`; it only launches the
+# backend.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -33,7 +33,7 @@ source "$here/../../scripts/ensure_pnpm.sh"
 # beforeBuildCommand, re-bundles. Seconds when nothing changed. The CLI
 # comes from pnpm-lock.yaml (same pin the signing build uses).
 pnpm install --frozen-lockfile --ignore-scripts
-DATALIB_COMPILATION_MODE="${DATALIB_COMPILATION_MODE:-opt}" pnpm exec tauri build --debug
+pnpm exec tauri build --debug
 
 # macOS: launch through LaunchServices (`open`), NOT by exec'ing the
 # binary inside the bundle. A bundle binary run directly gets NSBundle

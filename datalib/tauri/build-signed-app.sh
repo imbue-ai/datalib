@@ -164,6 +164,11 @@ export APPLE_API_ISSUER
 # from the live registry at signing time. In CI this is a no-op: the
 # workflow installs it before the signing secrets are exported.
 pnpm install --frozen-lockfile --ignore-scripts
+# The bundled binaries as the release tarballs build them: optimized, and
+# stamped so `datalib-dag --version` names the release. Set here rather
+# than defaulted, since this is what ships; the workflow's prebuild step
+# passes the same flags so the build below is all cache hits.
+export DATALIB_COMPILATION_MODE=opt DATALIB_STAMP=1
 # shellcheck disable=SC2054  # app,dmg is one comma-separated CLI argument
 build_args=(build --bundles app,dmg)
 if [[ -n "${DATALIB_APP_VERSION:-}" ]]; then
@@ -202,6 +207,14 @@ spctl --assess --type execute "$app_bundle"
 # Signed and notarized is not the same as runs: the bundled Node and
 # both JS trees have to start from inside the .app.
 "$here/check-app.sh" "$app_bundle"
+# Optimized, and stamped with the version this bundle claims: the tag's
+# in CI, `git describe` (what the stamp reads) in a local run.
+if [[ -n "${DATALIB_APP_VERSION:-}" ]]; then
+    stamped="v$DATALIB_APP_VERSION"
+else
+    stamped="$(git describe --tags --match 'v[0-9]*' --always --dirty)"
+fi
+"$here/../../scripts/release/check_binaries.sh" "$stamped" "$app_bundle/Contents/Resources/binaries"
 
 echo
 echo "Signed + notarized:"

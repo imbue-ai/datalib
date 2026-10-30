@@ -67,10 +67,21 @@ in the workflow. They are the part that cannot run anywhere else.
   (`target_compatible_with`); `scripts/lint_repo.py` check 10 refuses
   an empty bash array in any workflow step, since CI has no mac leg.
 
-The workflow's other checks that a release makes on its own runner —
-the binary reports the tag, the musl binaries are fully static — are
-inline: they are assertions over a built artifact, not steps that make
-one.
+The workflow's other checks are assertions over a built artifact, made
+on its own runner before anything is published:
+
+- **`scripts/release/check_binaries.sh <tag> <dir>`** refuses backend
+  binaries that were not built `-c opt` or whose `datalib-dag
+  --version` is not the tag. Bazel's default mode leaves the Rust
+  unoptimized and a sync about twice as slow, and the app shipped that
+  way through v0.47.0, unstamped too. The `build` job runs it on the
+  tarball's binaries; the `macos-app` job, through
+  `build-signed-app.sh`, on the ones inside `Datalib.app`. It tells the
+  mode from the Bazel output directory (`darwin_arm64-opt`,
+  `k8-fastbuild`) that generated-source paths compile into a binary,
+  and fails when it finds none. `//tools:check_binaries_test` (and its
+  `_bash32` twin) runs it against stand-ins.
+- The musl binaries are fully static: inline in the workflow.
 
 ## Before a tag: the Linux run from a mac
 

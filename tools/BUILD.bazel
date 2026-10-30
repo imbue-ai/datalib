@@ -96,6 +96,22 @@ sh_test(
     deps = ["@bazel_tools//tools/bash/runfiles"],
 )
 
+sh_test(
+    name = "check_binaries_test",
+    srcs = ["check_binaries_test.sh"],
+    data = ["//:scripts/release/check_binaries.sh"],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)
+
+sh_test(
+    name = "check_binaries_bash32_test",
+    srcs = ["check_binaries_test.sh"],
+    data = ["//:scripts/release/check_binaries.sh"],
+    env = {"RELEASE_SHELL": "/bin/bash"},
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)
+
 # The tests above, run on Linux from a mac: in the devcontainer, built
 # from .devcontainer/Dockerfile for this host's arch, over the working
 # tree, with the devcontainer's own cache volumes. A `run` target, not

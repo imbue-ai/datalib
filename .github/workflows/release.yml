@@ -327,31 +327,15 @@ jobs:
               fi
           done
 
-      # Defense against the v0.7.0 / v0.8.0 incident where the dist
-      # build went out unstamped and the version smoke test
-      # printed `dev` in the published tarball. Run
-      # the freshly-built binary on the host (matrix runner is the
-      # same triple as the artifact) and require it to report exactly
-      # the tag name. Anything else — `dev`, `unknown`, a `-dirty`
-      # suffix, or a mismatched tag — fails the release before any
-      # tarball is staged.
-      - name: Assert release binary reports tag version
+      # Refuse to stage a tarball of binaries that are not optimized
+      # or do not report exactly the tag (`dev`, a `-dirty` suffix, a
+      # different tag). The matrix runner is the artifact's own triple,
+      # so the binary runs here. The same script checks the app's
+      # bundled binaries in the macos-app job.
+      - name: Assert release binaries are optimized and report the tag
         env:
           REF_NAME: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          actual="$(./bazel-bin/datalib/backend/dag/datalib_dag_bin --version)"
-          echo "datalib-dag --version => ${actual}"
-          expected="datalib-dag ${REF_NAME}"
-          if [[ "${actual}" != "${expected}" ]]; then
-              echo "ERROR: release binary version mismatch." >&2
-              echo "  expected: ${expected}" >&2
-              echo "  actual:   ${actual}" >&2
-              echo "Likely cause: build-stamping was off for the dist build" >&2
-              echo "(see .bazelrc 'build:release --stamp' and the" >&2
-              echo "'--config=release' on the Build dist bins step above)." >&2
-              exit 1
-          fi
+        run: scripts/release/check_binaries.sh "${REF_NAME}" bazel-bin/datalib/backend/bin
 
       # The full `bazel test //...` suite is gated by `test.yml` on
       # PRs / main; this workflow only re-checks `version_consistency_test`
@@ -525,21 +509,25 @@ jobs:
       # beforeBuildCommand copies out and stage-runtime.sh rsyncs — so
       # the signing step's bazel invocations are analysis + cache hits
       # with no network, and no crate lands after the certs are in
-      # scope. The target list mirrors tauri.conf.json's
-      # beforeBuildCommand plus those in scripts/stage_runtime.sh and
-      # scripts/third_party_notices.sh.
+      # scope. Each list mirrors its caller, flags included: the
+      # binaries are tauri.conf.json's beforeBuildCommand as
+      # build-signed-app.sh runs it (`-c opt`, stamped, as the tarballs
+      # are); the rest is scripts/stage_runtime.sh and
+      # scripts/third_party_notices.sh, which build in the default mode.
       - name: Prebuild the bundled binaries and runtime
         run: |
           set -euo pipefail
           (cd datalib/tauri && cargo fetch --locked)
           (cd datalib/backend && cargo fetch --locked)
-          bazel build --build_metadata=ROLE=CI \
+          bazel build -c opt --config=release --build_metadata=ROLE=CI \
               //datalib/backend/http:datalib_http_bin \
               //datalib/backend/dag:datalib_dag_bin \
               //datalib/backend/datalib_step:datalib_step \
               //datalib/backend/applets:datalib_applet \
               //datalib/backend/migrate_config:datalib_migrate_config_bin \
               //third-party/latchkey-curl-shims \
+              //third-party/doltlite:doltlite
+          bazel build --build_metadata=ROLE=CI \
               //datalib/tauri:bundled_node \
               //datalib/ui:dist \
               //third-party:bundled_licenses \
