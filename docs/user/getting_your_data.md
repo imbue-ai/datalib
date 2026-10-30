@@ -505,8 +505,9 @@ The first time, latchkey needs an OAuth client to sign in with:
 
 Use a `gmail` table on the ingest step. Incremental sync is driven by
 Gmail's own change history, so deletions and label changes show up as
-events. Throughput is capped by Google's quota at roughly 100 messages
-a minute, so a large mailbox backfills over several runs. With a Takeout
+events. Google's quota caps throughput at about 100 messages a minute,
+and a slow link or large messages bring it lower, so a large mailbox
+backfills over several runs. With a Takeout
 of the same account, the first sync downloads only what is newer than
 it: put the folder holding the Takeout's `.zip` or `.tgz` parts (or,
 unpacked, its `Mail` folder) beside the `gmail` table,
