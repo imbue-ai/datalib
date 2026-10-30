@@ -73,11 +73,14 @@ const DATALIB_TABLES: &[&str] = &[
 ];
 
 /// Whether a table holds the source's records: every table but
-/// [`DATALIB_TABLES`] and the `<table>_bookkeeping` sidecars, which hold
+/// [`DATALIB_TABLES`], the `<table>_bookkeeping` sidecars, which hold
 /// one row of fetch stamps per record and so would count each change
-/// twice.
+/// twice, and SQLite's own `sqlite_*` tables (`sqlite_sequence` moves
+/// with every `sync_runs` row).
 pub fn holds_records(table: &str) -> bool {
-    !table.ends_with("_bookkeeping") && !DATALIB_TABLES.contains(&table)
+    !table.ends_with("_bookkeeping")
+        && !table.starts_with("sqlite_")
+        && !DATALIB_TABLES.contains(&table)
 }
 
 pub async fn read(db_path: &Path, limit: usize) -> Result<StoreHistory> {
@@ -578,6 +581,7 @@ mod tests {
             "sync_scope_config",
             "problems",
             "ingested_files",
+            "sqlite_sequence",
         ] {
             assert!(!holds_records(t), "{t}");
         }

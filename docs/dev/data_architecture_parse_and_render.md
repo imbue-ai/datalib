@@ -700,6 +700,10 @@ Two tables in the render store, both written by the driver
   without anyone bumping a `RENDER_VERSION`. The driver writes it in the
   same transaction as the run's last work, so it can never claim a range
   the store's rows do not reflect, and rewrites it only when it moves.
+  A run that rendered nothing over a range where only bookkeeping moved
+  (`sync_runs`, the sidecars: every download commits one) leaves it
+  where it was, so the store's version stays put and nothing downstream
+  runs; the next diff from it reads the same.
 - **`render_inputs`** — `(bucket_key, input_table, input_id)`, one row
   per raw row a bucket's render **asked for, found or not**. A thread
   rendered while its author's `users` row had not been fetched yet
