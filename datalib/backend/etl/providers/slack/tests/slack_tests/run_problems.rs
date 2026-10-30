@@ -186,8 +186,9 @@ async fn a_thread_that_fails_is_a_problem_on_the_thread_until_it_fetches() {
     assert_eq!(problems(&out).await, [], "the thread fetched this time");
 }
 
-/// A user listing that fails costs the user directory, not the run; the
-/// next run that lists it clears the row.
+/// A user listing that fails costs the user directory, not the run. The
+/// author it left unnamed is looked up on its own, and that failing too
+/// is a row on the user; the next run that lists both clears them.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_user_listing_that_fails_is_a_problem_and_the_run_goes_on() {
     let d = tempdir().unwrap();
@@ -212,7 +213,10 @@ async fn a_user_listing_that_fails_is_a_problem_and_the_run_goes_on() {
     serve(&api1, &playback1);
     fetch_into(&playback1, &out, |o| o).await.unwrap();
     assert_eq!(stored_ts(&out), [A]);
-    assert_eq!(problems(&out).await, [row("listing:users.list", "error")]);
+    assert_eq!(
+        problems(&out).await,
+        [row("listing:users.list", "error"), row("users:U1", "error")]
+    );
 
     let api2 = d.path().join("api2");
     record_listings(&api2, channels);
@@ -232,7 +236,7 @@ async fn a_channel_listing_cut_short_walks_what_it_stored() {
     let api = d.path().join("api");
     record_auth(&api).unwrap();
     record_users(&api, json!([{"id": "U1", "name": "picard"}])).unwrap();
-    let page = json!({"exclude_archived": "true", "limit": "200", "types": CHANNEL_TYPES});
+    let page = json!({"exclude_archived": "true", "limit": "1000", "types": CHANNEL_TYPES});
     record_call(
         &api,
         "conversations.list",
@@ -270,7 +274,7 @@ async fn a_channel_listing_that_fails_with_nothing_stored_fails_the_run() {
     record_call(
         &api,
         "conversations.list",
-        json!({"exclude_archived": "true", "limit": "200", "types": CHANNEL_TYPES}),
+        json!({"exclude_archived": "true", "limit": "1000", "types": CHANNEL_TYPES}),
         refused_by_slack(),
     )
     .unwrap();

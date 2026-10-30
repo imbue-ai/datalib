@@ -51,12 +51,26 @@ pub fn record_users(api_dir: &Path, members: Value) -> Result<()> {
     )
 }
 
+/// `users.info` answering for `user`, keyed by its `id`.
+pub fn record_user_info(api_dir: &Path, user: Value) -> Result<()> {
+    let id = user["id"]
+        .as_str()
+        .context("a user with an id")?
+        .to_string();
+    record_call(
+        api_dir,
+        "users.info",
+        json!({"user": id}),
+        json!({"ok": true, "user": user}),
+    )
+}
+
 /// One `conversations.list` page listing `channels`, asked for `types`.
 pub fn record_conversations(api_dir: &Path, types: &str, channels: Value) -> Result<()> {
     record_call(
         api_dir,
         "conversations.list",
-        json!({"exclude_archived": "true", "limit": "200", "types": types}),
+        json!({"exclude_archived": "true", "limit": "1000", "types": types}),
         json!({"ok": true, "channels": channels, "has_more": false}),
     )
 }
