@@ -460,7 +460,7 @@ so a file in data-flow order stays in it.
 
 `datalib-step topo-sort-config <root>/config.toml` puts a whole file in
 that order (`dag/src/config_order.rs`), keeping the old text as
-`config.toml.bak`; `--check` only says whether it is. Each group, with
+`config.toml.<UTC time>.bak`; `--check` only says whether it is. Each group, with
 its steps and applets, goes after the groups it reads, and inside a
 group each step after the steps it reads. Nothing else moves, and the
 comments above an entry move with it. Where two groups read each other

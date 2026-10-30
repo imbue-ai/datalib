@@ -64,6 +64,14 @@ export function issueText(failure: Failure, service: string, where: SignInWhere)
         headline: `${service} accepted the sign-in but refused this request.`,
         advice: "The account, or the key's permissions, may not cover it.",
       };
+    case "not_permitted":
+      return {
+        headline: `latchkey's permissions don't allow this ${service} request.`,
+        advice:
+          where === "gateway"
+            ? "Signing in again won't help. Grant the permission where the latchkey gateway is managed, then check again."
+            : "Signing in again won't help. Allow it in latchkey's permissions file, then check again.",
+      };
     case "blocked":
       return {
         headline: `${service}'s bot protection blocked the request.`,

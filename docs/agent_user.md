@@ -162,7 +162,7 @@ source reached more than one way names the method (`--method gmail`),
 and `--id` gives the group an id of its own, for a second account. It
 refuses an id the config already has, and a result `datalib-dag
 --check` would refuse, writing nothing; the previous file is kept as
-`config.toml.bak`. Its page says how to do the same by hand.
+`config.toml.<UTC time>.bak`, one per append. Its page says how to do the same by hand.
 `datalib-step help <type> <method>` lists every option with its type,
 default and meaning. Both are read from the source's own config crate,
 and a test loads and plans every stanza.

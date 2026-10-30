@@ -1913,6 +1913,7 @@ export type IssueKind =
   | "expired"
   | "rejected"
   | "forbidden"
+  | "not_permitted"
   | "blocked"
   | "rate_limited"
   | "service_error"

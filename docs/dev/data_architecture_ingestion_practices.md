@@ -165,6 +165,7 @@ type, never by the words of the message. The type it looks for is
 | `Upstream` | the run reports | means |
 |---|---|---|
 | `CredentialRefused` | `auth` | the service would not take the credential, or latchkey would not send one |
+| `NotPermitted` | `auth` | latchkey's permissions, or its gateway's, refused the request before it left; the hint says to grant the permission, not to sign in |
 | `RateLimited` | `rate_limited` | the service is limiting how often we may ask |
 | `Unavailable` | `transient` | the service did not answer |
 

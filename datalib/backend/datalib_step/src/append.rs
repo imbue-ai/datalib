@@ -5,7 +5,7 @@
 //! way `datalib-dag --check` checks a config before it is written.
 
 use std::ops::Range;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use datalib_dag::config::{DagConfig, TIME_SERIES_INDEX_GROUP};
 use datalib_dag::config_array::edit_string_array;
@@ -356,15 +356,15 @@ pub fn run_cli(word: &str, path: &Path, method: Option<&str>, id: Option<&str>) 
         );
         return 1;
     }
-    let mut bak = path.as_os_str().to_owned();
-    bak.push(".bak");
-    let bak = PathBuf::from(bak);
-    if let Err(e) = datalib_dag::config::write_owner_only(&bak, config.as_bytes())
-        .and_then(|()| datalib_runtime::atomic::write_owner_only(path, appended.text.as_bytes()))
-    {
-        status_line!("error: could not rewrite {shown}: {e}");
-        return 1;
-    }
+    let bak = match crate::config_backup::keep(path, &config).and_then(|bak| {
+        datalib_runtime::atomic::write_owner_only(path, appended.text.as_bytes()).map(|()| bak)
+    }) {
+        Ok(bak) => bak,
+        Err(e) => {
+            status_line!("error: could not rewrite {shown}: {e}");
+            return 1;
+        }
+    };
     let group = &appended.group;
     status_line!(
         "Added {t} by `{method}` to {shown} as group {group:?}. The previous file is {}.",
@@ -392,6 +392,29 @@ pub fn run_cli(word: &str, path: &Path, method: Option<&str>, id: Option<&str>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each append kept the previous file as `<file>.bak`, so three in a
+    /// row left only the state before the third, and the starter config
+    /// was gone. Each now keeps its own.
+    #[test]
+    fn every_append_keeps_the_file_it_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let starter = datalib_dag::starter::STARTER_CONFIG;
+        std::fs::write(&path, starter).unwrap();
+        for id in ["slack_a", "slack_b", "slack_c"] {
+            assert_eq!(run_cli("slack", &path, None, Some(id)), 0, "{id}");
+        }
+        let mut kept: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p != &path)
+            .map(|p| std::fs::read_to_string(p).unwrap())
+            .collect();
+        kept.sort_by_key(String::len);
+        assert_eq!(kept.len(), 3, "one backup per append");
+        assert_eq!(kept[0], starter, "the first holds the starter config");
+    }
 
     /// Loads with nothing to report, and reads in data-flow order: the
     /// stanza went where `topo-sort-config` would leave it.

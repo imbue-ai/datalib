@@ -183,7 +183,9 @@ are the signals, from cheapest to most exact:
 
 - **The store's own runs.** In the raw store, the newest `sync_runs`
   row: `status` is `running` until the run ends, and `summary` says
-  what it did and why it stopped early, if it did.
+  what it did and why it stopped early, if it did. A run killed part
+  way stays `running` until the next run starts and marks it
+  `interrupted`.
 
 - **What the source still owes**, asked of its raw store:
 
