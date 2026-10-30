@@ -516,7 +516,7 @@ expression: snapshot
       "md_path": "claude-code/render_markdown/02/00000000-0000-83df-8efb-7b99abfef902.md",
       "modified_at": "2364-04-11T10:00:58+00:00",
       "provider": "claude_code",
-      "renderer_version": "rust-v1.5",
+      "renderer_version": "rust-v1.6",
       "source_id": "claude-code",
       "title": "Scan the emitter logs since stardate 41153.7 for phase drift events. — subagent of Deflector dish drift"
     },
@@ -1248,7 +1248,7 @@ expression: snapshot
       "md_path": "claude-code/render_markdown/fa/00000000-0000-8a77-bcf1-64f2ad0583fa.md",
       "modified_at": "2364-04-11T14:30:35+00:00",
       "provider": "claude_code",
-      "renderer_version": "rust-v1.5",
+      "renderer_version": "rust-v1.6",
       "source_id": "claude-code",
       "title": "Why does the replicator return cold Earl Grey? Screenshot attached."
     },
@@ -1356,7 +1356,7 @@ expression: snapshot
       "md_path": "claude-code/render_markdown/6b/00000000-0000-8b27-94b8-759d35b8fe6b.md",
       "modified_at": "2364-04-11T10:01:59+00:00",
       "provider": "claude_code",
-      "renderer_version": "rust-v1.5",
+      "renderer_version": "rust-v1.6",
       "source_id": "claude-code",
       "title": "Deflector dish drift"
     },
@@ -10891,7 +10891,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "Me",
+      "author": "Claude Code",
       "byte_size": 68,
       "channel": null,
       "content_hash": "2e114afc4d888af6",
@@ -10901,7 +10901,7 @@ expression: snapshot
       "entire_chat": "/chat/00000000-0000-83df-8efb-7b99abfef902",
       "git_sha": null,
       "item_count": 1,
-      "kind": "User Input",
+      "kind": "Agent Prompt",
       "markdown_uuid": "00000000-0000-83df-8efb-7b99abfef902",
       "message_index": 0,
       "notion_block_uuid": null,
