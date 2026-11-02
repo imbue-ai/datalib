@@ -499,8 +499,10 @@ impl Runner {
     }
 }
 
+/// To the microsecond, as a request's stamps are: a reader asks whether a
+/// step started after a request opened, and the two may share a second.
 pub(crate) fn now_stamp() -> String {
-    datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs()
+    datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_micros()
 }
 
 /// Open a step's run record when the scheduler dispatches it, so a
