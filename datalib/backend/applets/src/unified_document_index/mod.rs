@@ -380,6 +380,11 @@ pub struct ChatResponse {
     /// The configured source this document came from, as the grid's
     /// Source column shows it. `None` when no grid row points at it.
     pub source_ref: Option<Identity>,
+    /// The picture the document is, where it is one (`datalib:photo/…`):
+    /// such a document has no page, so `body` is empty and the UI draws
+    /// it from the applet that serves the name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
     pub body: String,
     /// What render could not fully do to this document, errors first.
     /// Drawn above the body.
@@ -1740,8 +1745,6 @@ async fn chat(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
-    let raw = std::fs::read_to_string(&path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let body = strip_frontmatter(&raw).to_string();
     let meta = s
         .repo
         .chat_meta(&markdown_uuid)
@@ -1749,6 +1752,12 @@ async fn chat(
         .ok()
         .flatten()
         .unwrap_or_default();
+    let body = match std::fs::read_to_string(&path) {
+        Ok(raw) => strip_frontmatter(&raw).to_string(),
+        // A picture's document is drawn by its applet, not from a page.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && meta.image.is_some() => String::new(),
+        Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+    };
     // Synthesize page-level URLs for providers that don't carry one in
     // `source_url`. Claude/ChatGPT use the conversation UUID directly
     // in their public URL scheme — and for those providers
@@ -1797,6 +1806,7 @@ async fn chat(
         source_label: meta.source_label,
         source_url,
         source_ref,
+        image: meta.image,
         body,
         outgoing_edges,
         problems,
@@ -1961,6 +1971,7 @@ mod tests {
             sections: Vec::new(),
             edges: Vec::new(),
             contacts: Vec::new(),
+            photos: Vec::new(),
             problems: Vec::new(),
         }
     }

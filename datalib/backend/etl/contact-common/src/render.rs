@@ -184,6 +184,7 @@ fn render_one(
         // can then say who any of their handles is, and where their
         // photo is served from.
         contacts: vec![with_photo_url(contact)],
+        photos: Vec::new(),
         problems,
     })
     .with_context(|| format!("on_doc_complete {m_uuid}"))?;

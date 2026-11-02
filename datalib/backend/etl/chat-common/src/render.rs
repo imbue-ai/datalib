@@ -353,6 +353,7 @@ fn render_one(
         .iter()
         .map(datalib_etl_render::photo::with_photo_url)
         .collect(),
+        photos: Vec::new(),
         problems,
     })
     .with_context(|| format!("on_doc_complete {}", doc.markdown_uuid))?;

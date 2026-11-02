@@ -26,6 +26,7 @@ use datalib_contact_schema::NormalizedContact;
 use datalib_etl::bulk::BulkUpsertable;
 use datalib_etl::doltlite_raw::StoreKind;
 use datalib_etl::stop::StopFlag;
+use datalib_photo_schema::NormalizedPhoto;
 use datalib_schema::edges::{EdgeRow, DDL as EDGES_DDL};
 use datalib_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL, INDEXES as GRID_ROWS_INDEXES};
 use datalib_schema::markdowns::DDL as MARKDOWNS_TABLE_DDL;
@@ -34,6 +35,7 @@ use datalib_schema::search_terms::{TERMS_DDL, TERMS_SHAPE};
 use datalib_schema::source_contact_handles::DDL as SOURCE_CONTACT_HANDLES_DDL;
 use datalib_schema::source_contacts::DDL as SOURCE_CONTACTS_DDL;
 use datalib_schema::source_cursors::{SourceCursorRow, DDL as SOURCE_CURSORS_DDL};
+use datalib_schema::source_photos::DDL as SOURCE_PHOTOS_DDL;
 use serde::Serialize;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
@@ -459,6 +461,8 @@ pub(crate) const DOCUMENT_LOOKUP_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS edges_by_src_markdown ON edges (src_markdown_uuid)",
     // A chip asks who a handle is.
     "CREATE INDEX IF NOT EXISTS source_contact_handles_by_handle ON source_contact_handles (handle)",
+    // The photos applet asks for one photo by its id.
+    "CREATE INDEX IF NOT EXISTS source_photos_by_photo ON source_photos (photo_uuid)",
 ];
 
 /// Tables an older build made in every store that holds documents.
@@ -476,6 +480,7 @@ fn index_ddl() -> impl Iterator<Item = &'static str> {
         .chain(EDGES_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(SOURCE_CONTACTS_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(SOURCE_CONTACT_HANDLES_DDL.iter().map(|(_table, ddl)| *ddl))
+        .chain(SOURCE_PHOTOS_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(PROBLEMS_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(SOURCE_CURSORS_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(std::iter::once(datalib_etl::pin::GENERATION_DDL))
@@ -805,6 +810,7 @@ fn doc_kind_for(grid_kind: &str) -> &'static str {
         // The per-source storage report: datalib describing a mirror,
         // not anything the upstream authored.
         "Source Size" => datalib_schema::measurements::DOC_KIND,
+        "Photo" | "Video" => "photo",
         _ => "chat",
     }
 }
@@ -846,6 +852,9 @@ pub struct RenderedMarkdown {
     /// The people this document describes or mentions, as its source
     /// describes them; owned by the document like its edges.
     pub contacts: Vec<NormalizedContact>,
+    /// The photos or videos this document is, as its source describes
+    /// them; owned by the document like its contacts.
+    pub photos: Vec<NormalizedPhoto>,
     /// What render could not do while producing this document: records
     /// dropped, fields nulled, lossy rules that fired. Travels with the
     /// document so the rows and the record of what was lost commit together.
@@ -1700,6 +1709,7 @@ pub(crate) async fn delete_document_rows(
         "DELETE FROM edges WHERE src_markdown_uuid = ?",
         "DELETE FROM source_contacts WHERE markdown_uuid = ?",
         "DELETE FROM source_contact_handles WHERE markdown_uuid = ?",
+        "DELETE FROM source_photos WHERE markdown_uuid = ?",
         "DELETE FROM markdowns WHERE markdown_uuid = ?",
     ] {
         sqlx::query(sql)
@@ -1805,6 +1815,14 @@ async fn apply_markdown(
     }
     for contact in &md.contacts {
         insert_source_contact(conn, &md.markdown_uuid, contact).await?;
+    }
+    sqlx::query("DELETE FROM source_photos WHERE markdown_uuid = ?")
+        .bind(&md.markdown_uuid)
+        .execute(&mut **conn)
+        .await
+        .context("delete prior source photos")?;
+    for photo in &md.photos {
+        insert_source_photo(conn, &md.markdown_uuid, photo).await?;
     }
     upsert_markdown(conn, md, canonical, qmd_path)
         .await
@@ -1932,6 +1950,26 @@ async fn insert_source_contact(
         .await
         .with_context(|| format!("insert handle {handle} of {}", contact.key))?;
     }
+    Ok(())
+}
+
+async fn insert_source_photo(
+    conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
+    markdown_uuid: &str,
+    photo: &NormalizedPhoto,
+) -> Result<()> {
+    let json = serde_json::to_string(photo).context("serialize a source photo")?;
+    sqlx::query(
+        "INSERT OR REPLACE INTO source_photos (markdown_uuid, photo_uuid, source_id, photo_json) \
+         VALUES (?, ?, ?, ?)",
+    )
+    .bind(markdown_uuid)
+    .bind(&photo.uuid)
+    .bind(&photo.source_id)
+    .bind(json)
+    .execute(&mut **conn)
+    .await
+    .with_context(|| format!("insert source photo {}", photo.uuid))?;
     Ok(())
 }
 
@@ -2164,6 +2202,9 @@ mod insert_round_trip_tests {
             diff_status: Some("modified".into()),
             diff_changed_columns: Some("text|author".into()),
             supplied_terms: Some(r#"[["to","email:troi@enterprise.org"]]"#.into()),
+            image: Some("datalib:photo/u-1".into()),
+            latitude: Some(37.8),
+            longitude: Some(-122.4),
         }
     }
 
@@ -2292,6 +2333,9 @@ mod write_lock_tests {
             diff_status: None,
             diff_changed_columns: None,
             supplied_terms: None,
+            image: None,
+            latitude: None,
+            longitude: None,
         };
         RenderedMarkdown {
             markdown_uuid: uuid.clone(),
@@ -2304,6 +2348,7 @@ mod write_lock_tests {
             sections: Vec::new(),
             edges: Vec::new(),
             contacts: Vec::new(),
+            photos: Vec::new(),
             problems: Vec::new(),
         }
     }
@@ -2670,6 +2715,7 @@ mod source_cursor_tests {
             sections: Vec::new(),
             edges: Vec::new(),
             contacts: Vec::new(),
+            photos: Vec::new(),
             problems: Vec::new(),
         }
     }

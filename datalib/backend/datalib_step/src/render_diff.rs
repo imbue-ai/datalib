@@ -317,6 +317,7 @@ pub fn render_diff_source(
                 edges: base.md.edges.clone(),
                 // The people are the source's; a diff row only compares.
                 contacts: Vec::new(),
+                photos: Vec::new(),
                 problems: base.md.problems.clone(),
             };
             fs::write(&doc.md_path, join(&doc.sections))
@@ -608,6 +609,7 @@ mod tests {
                         sections: vec![Section::keyed(&format!("d{i}"), "x\n".into())],
                         edges: vec![],
                         contacts: Vec::new(),
+                        photos: Vec::new(),
                         problems: vec![],
                     });
                     // `true`: swallow the sink's answer, as a provider that
@@ -687,6 +689,7 @@ mod tests {
             sections: vec![],
             edges: vec![],
             contacts: Vec::new(),
+            photos: Vec::new(),
             problems: vec![],
         };
         let sections = whole_document_sections(&md).unwrap();

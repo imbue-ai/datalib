@@ -962,7 +962,7 @@ impl IndexRepo for DoltRepo {
         };
         let sql = format!(
             "SELECT source_id, conversation_name, account, project, channel, \
-                    created_at, source_label, source_url \
+                    created_at, source_label, source_url, image \
              FROM {} \
              WHERE markdown_uuid = ? \
              ORDER BY CASE WHEN kind IN ('Chat','Slack Thread') THEN 0 ELSE 1 END \
@@ -992,6 +992,7 @@ impl IndexRepo for DoltRepo {
             channel: text("channel"),
             created_at: text("created_at"),
             source_label: text("source_label"),
+            image: text("image"),
             source_url: text("source_url"),
         }))
     }

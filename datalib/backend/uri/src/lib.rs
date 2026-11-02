@@ -1,7 +1,7 @@
 //! datalib's names: a `datalib:<kind>/<id>` link saying what something is
 //! (docs/dev/plans/datalib_uris.md). `ui/src/uri.ts` is the same in the
-//! UI; both read and write `ui/tests/uri-fixtures.json` alike. Only the
-//! `doc` kind lives here so far.
+//! UI; both read and write `ui/tests/uri-fixtures.json` alike. The `doc`
+//! and `photo` kinds live here so far.
 
 /// A name read back, or one to write.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -12,10 +12,14 @@ pub enum Name {
         page: String,
         section: Option<String>,
     },
+    /// A photo or video, by its grid row's uuid; whichever applet says it
+    /// serves `photo` hands out its pictures (docs/dev/plans/photos_applet.md).
+    Photo { id: String },
 }
 
 const SCHEME: &str = "datalib:";
 const DOC: &str = "doc/";
+const PHOTO: &str = "photo/";
 
 impl Name {
     /// A page, at `section` when it is not the page itself.
@@ -26,19 +30,29 @@ impl Name {
         }
     }
 
+    pub fn photo(id: &str) -> Self {
+        Name::Photo { id: id.to_string() }
+    }
+
     pub fn write(&self) -> String {
         match self {
             Name::Doc { page, section } => match section {
                 Some(section) => format!("{SCHEME}{DOC}{page}#{section}"),
                 None => format!("{SCHEME}{DOC}{page}"),
             },
+            Name::Photo { id } => format!("{SCHEME}{PHOTO}{id}"),
         }
     }
 
     /// `None` for anything that is not a name this build knows, never a
     /// guess.
     pub fn parse(s: &str) -> Option<Self> {
-        let rest = s.strip_prefix(SCHEME)?.strip_prefix(DOC)?;
+        let rest = s.strip_prefix(SCHEME)?;
+        if let Some(id) = rest.strip_prefix(PHOTO) {
+            let plain = !id.is_empty() && !id.contains(['/', '#']);
+            return plain.then(|| Name::photo(id));
+        }
+        let rest = rest.strip_prefix(DOC)?;
         let (page, section) = rest.split_once('#').unwrap_or((rest, ""));
         if page.is_empty() || page.contains('/') {
             return None;
@@ -62,6 +76,8 @@ mod tests {
         name: String,
         link: String,
         doc: Option<Doc>,
+        #[serde(default)]
+        photo: Option<String>,
     }
 
     #[derive(serde::Deserialize)]
@@ -74,10 +90,13 @@ mod tests {
     fn every_fixture_reads_and_writes_alike() {
         let fixtures: Vec<Fixture> = serde_json::from_str(FIXTURES).unwrap();
         for f in fixtures {
-            let want = f.doc.map(|d| Name::Doc {
-                page: d.page,
-                section: d.section,
-            });
+            let want = f
+                .doc
+                .map(|d| Name::Doc {
+                    page: d.page,
+                    section: d.section,
+                })
+                .or(f.photo.map(|id| Name::Photo { id }));
             assert_eq!(Name::parse(&f.link), want, "{}: reading {}", f.name, f.link);
             if let Some(name) = want {
                 assert_eq!(name.write(), f.link, "{}: writing", f.name);

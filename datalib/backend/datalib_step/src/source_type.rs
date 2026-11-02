@@ -157,7 +157,6 @@ impl SourceType {
         match self {
             SourceType::Fsindex => Some("files"),
             SourceType::Media => Some("media_files"),
-            SourceType::Lightroom => Some("Adobe_images"),
             SourceType::ApplePhotos => Some("ZASSET"),
             SourceType::Linear => Some("issues"),
             _ => None,
@@ -255,7 +254,6 @@ mod tests {
                 t,
                 SourceType::ApplePhotos
                     | SourceType::Fsindex
-                    | SourceType::Lightroom
                     | SourceType::Linear
                     | SourceType::Media
             );

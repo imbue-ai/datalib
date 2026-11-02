@@ -16,5 +16,13 @@
   {"name": "the old copied-id form", "link": "datalib://chat/abc-123?msg=def-456", "doc": null},
   {"name": "a kind this build does not know", "link": "datalib:ship/enterprise", "doc": null},
   {"name": "no page", "link": "datalib:doc/", "doc": null},
-  {"name": "a page with a slash", "link": "datalib:doc/a/b", "doc": null}
+  {"name": "a page with a slash", "link": "datalib:doc/a/b", "doc": null},
+  {
+    "name": "a photo",
+    "link": "datalib:photo/00000000-0000-8000-a000-000000000002",
+    "doc": null,
+    "photo": "00000000-0000-8000-a000-000000000002"
+  },
+  {"name": "no photo", "link": "datalib:photo/", "doc": null},
+  {"name": "a photo with a slash", "link": "datalib:photo/a/b", "doc": null}
 ]

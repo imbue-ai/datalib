@@ -128,6 +128,59 @@ describe("the Slack applet's card", () => {
   });
 });
 
+describe("the photos applet's card", () => {
+  const COMPONENT = decodeURIComponent(
+    new URL("../../backend/applets/src/photos/component.js", import.meta.url).pathname,
+  );
+
+  async function photos(): Promise<(appletId: unknown, uuid?: unknown) => CardRender> {
+    return (await import(/* @vite-ignore */ COMPONENT)).default;
+  }
+
+  /// Both arguments land in a path: the applet's id under `/applet/`,
+  /// the photo's under `/photo/`. Neither may climb out of its segment.
+  it("asks only its own applet for only one photo, whatever its arguments", async () => {
+    const factory = await photos();
+    const hostile = ["../api/manage/rows?refresh=1&x=", "photos/../../api/config#", "%2e%2e/api"];
+    for (const id of hostile) {
+      for (const uuid of [undefined, "abc", ...hostile]) {
+        const seen = await requestsDuring(async () => {
+          try {
+            factory(id, uuid)(shadow(), ctx);
+          } catch {
+            // Refusing the argument is one right answer.
+          }
+        });
+        for (const path of seen)
+          expect(path, `${id} ${uuid}`).toMatch(/^\/applet\/[A-Za-z0-9_-]+\//);
+      }
+    }
+    for (const uuid of hostile) {
+      const seen = await requestsDuring(async () => {
+        try {
+          factory("photos", uuid)(shadow(), ctx);
+        } catch {
+          // Refusing the argument is one right answer.
+        }
+      });
+      for (const path of seen)
+        expect(path, uuid).toMatch(/^\/applet\/photos\/photo\/[A-Za-z0-9-]+$/);
+    }
+  });
+
+  it("still asks its own applet for the contact sheet and for one photo", async () => {
+    const factory = await photos();
+    const sheet = await requestsDuring(async () => {
+      factory("photos")(shadow(), ctx);
+    });
+    expect(sheet).toEqual(["/applet/photos/photos?offset=0"]);
+    const one = await requestsDuring(async () => {
+      factory("photos", "abc-1")(shadow(), ctx);
+    });
+    expect(one).toEqual(["/applet/photos/photo/abc-1"]);
+  });
+});
+
 describe("the agent seed card", () => {
   /// `agentSeedView(name)` put its argument into the prompt it copies,
   /// and that prompt tells a coding agent to read the API token and run

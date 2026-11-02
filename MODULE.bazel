@@ -217,6 +217,35 @@ LIGHTROOM_DB_DIFF_COMMIT = "733187a5216ccf631a92969a8fc147a4885353df"
     ]
 ]
 
+# Catalog 03 again, from the later commit that added its previews and
+# `previews.db`, with the original photos it points at: what the
+# lightroom render and the photos applet are tested against. A second pin,
+# so the four above (and the mirror test's counts) do not move. Laid out
+# as the repo has it, so the catalog's relative path to its originals
+# (`../../test_photos/`) resolves in runfiles too.
+http_archive(
+    name = "lightroom_catalog_03_previews",
+    build_file_content = """
+filegroup(
+    name = "catalog_03",
+    srcs = glob([
+        "testdata/test_catalogs/test_catalog_03/*.lrcat",
+        "testdata/test_catalogs/test_catalog_03/* Previews.lrdata/**",
+        "testdata/test_photos/*",
+    ]),
+    visibility = ["//visibility:public"],
+)
+filegroup(
+    name = "lrcat",
+    srcs = glob(["testdata/test_catalogs/test_catalog_03/*.lrcat"]),
+    visibility = ["//visibility:public"],
+)
+""",
+    sha256 = "e6082edbcb3ac0c721a3934b62905603f0c54b3d9660d365c9d7de81832bfb1e",
+    strip_prefix = "lightroom_db_diff-d8d1364926a3e0acb08af57951df94b0f8ef361d",
+    urls = ["https://github.com/thadd3us/lightroom_db_diff/archive/d8d1364926a3e0acb08af57951df94b0f8ef361d.tar.gz"],
+)
+
 # qmd's GGUF models are fetched by a build action, not a repository
 # rule: see //third-party/qmd_models. As `http_file` repositories they were
 # downloaded whenever `//...` was analysed, needed or not.

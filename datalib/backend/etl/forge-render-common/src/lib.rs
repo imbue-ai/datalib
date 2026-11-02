@@ -237,6 +237,7 @@ pub fn render_all(
             contacts: account_contact(stanza, parsed.account.as_ref(), cr, &comments)
                 .into_iter()
                 .collect(),
+            photos: Vec::new(),
             problems,
         })?;
         summary.buckets.push(Bucket {

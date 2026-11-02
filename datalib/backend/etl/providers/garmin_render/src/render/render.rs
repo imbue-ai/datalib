@@ -166,6 +166,7 @@ impl Out<'_> {
             sections: Vec::new(),
             edges: Vec::new(),
             contacts: Vec::new(),
+            photos: Vec::new(),
             problems,
         })
         .with_context(|| format!("on_doc_complete {m_uuid}"))

@@ -33,6 +33,9 @@ pub struct ChatMeta {
     /// Canonical web URL back to the provider, used for the page-level
     /// "Open in …" button.
     pub source_url: Option<String>,
+    /// The picture the document is, where it is one: a
+    /// `datalib:photo/…` name, which has no page on disk.
+    pub image: Option<String>,
 }
 
 /// A term's value that stands for any value at all: `author:*`.

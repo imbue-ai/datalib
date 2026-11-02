@@ -1894,6 +1894,9 @@ grid_rows
     diff_status
     diff_changed_columns
     supplied_terms
+    image
+    latitude
+    longitude
 markdowns
     markdown_uuid
     source_id
@@ -1949,6 +1952,11 @@ source_measurements
     tz_offset
     bytes
     items
+source_photos
+    markdown_uuid
+    photo_uuid
+    source_id
+    photo_json
 
 == system ==
 disk_free
