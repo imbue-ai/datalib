@@ -324,8 +324,6 @@
     "https://bcr.bazel.build/modules/toml.bzl/0.4.1/source.json": "86a90afd8b43c9b69ad31f5c03998c3adcf4b08175e621addb93e3a38eec538b",
     "https://bcr.bazel.build/modules/toolchains_musl/0.1.29/MODULE.bazel": "724ad47533dcd50b03c3d52e7147e2c4f83bff7b703ee9330e890a69f019a880",
     "https://bcr.bazel.build/modules/toolchains_musl/0.1.29/source.json": "a0ab379a91432d0e38774bb919acda51c511addd38934d8ad501b060c68348ee",
-    "https://bcr.bazel.build/modules/toolchains_protoc/0.6.1/MODULE.bazel": "377cbb438118f413c3361a1dd363da8a42077018473fcdc71a19c203aaf94b17",
-    "https://bcr.bazel.build/modules/toolchains_protoc/0.6.1/source.json": "b14b0b38c8309691bee7a0ab46113678b8675e04e8999294c58e68b036b8dbff",
     "https://bcr.bazel.build/modules/upb/0.0.0-20220923-a547704/MODULE.bazel": "7298990c00040a0e2f121f6c32544bab27d4452f80d9ce51349b1a28f3005c43",
     "https://bcr.bazel.build/modules/upb/0.0.0-20230516-61a97ef/MODULE.bazel": "c0df5e35ad55e264160417fd0875932ee3c9dda63d9fccace35ac62f45e1b6f9",
     "https://bcr.bazel.build/modules/yq.bzl/0.1.1/MODULE.bazel": "9039681f9bcb8958ee2c87ffc74bdafba9f4369096a2b5634b88abc0eaefa072",
@@ -369,7 +367,7 @@
     "@@protobuf+//python/dist:system_python.bzl%system_python_extension": {
       "general": {
         "bzlTransitiveDigest": "qh0n9IrXU/xS94wxKQrG1J63zrLkA1Wy2Y3BQxptPcI=",
-        "usagesDigest": "kVbxR/mYndN3QWrZLS6jdk6e1CL7kQy3QMa3NBMjEpE=",
+        "usagesDigest": "729NT5g1WOPoRlz1gj2n8O5W61I2KE7oupR2tCn6Xac=",
         "recordedInputs": [],
         "generatedRepoSpecs": {
           "system_python": {
@@ -383,7 +381,7 @@
     },
     "@@pybind11_bazel+//:internal_configure.bzl%internal_configure_extension": {
       "general": {
-        "bzlTransitiveDigest": "NRXra7941UfmNUyIxnLt82V5hULluVGL2nBsijTl4j4=",
+        "bzlTransitiveDigest": "BsgERqYptkJeeC8wFaLj251IoTZTSy/58WA6kVp0q8I=",
         "usagesDigest": "D1r3lfzMuUBFxgG8V6o0bQTLMk3GkaGOaPzw53wrwyw=",
         "recordedInputs": [
           "REPO_MAPPING:pybind11_bazel+,bazel_tools bazel_tools",
@@ -405,7 +403,7 @@
     },
     "@@rules_android+//bzlmod_extensions:apksig.bzl%apksig_extension": {
       "general": {
-        "bzlTransitiveDigest": "qEcqhUuyYlPmvAtyYRqS+4Y7cRHA2Vho3JIBJZJJX+s=",
+        "bzlTransitiveDigest": "0A8O20aQTIZnt20CyMK1wzktVUyJO1Y3jI6cS1WftKQ=",
         "usagesDigest": "zr/niBQ/s2fHozWAsg4vI70wAxcuFjG+QtM15qGkq9o=",
         "recordedInputs": [
           "REPO_MAPPING:rules_android+,bazel_tools bazel_tools"
@@ -423,7 +421,7 @@
     },
     "@@rules_android+//bzlmod_extensions:com_android_dex.bzl%com_android_dex_extension": {
       "general": {
-        "bzlTransitiveDigest": "gTuOqknGgqPw9YQSCY+qXxgxVwiLRGdBCsCe4i4q/xw=",
+        "bzlTransitiveDigest": "stTLqB1DjqvC1RcosQO9gDBmAlvTegb/9MYDyiRNuFo=",
         "usagesDigest": "c1Y/KGGjUYCyd8zNIVTUh1bynVXRFz6xGKaSCBpQANM=",
         "recordedInputs": [
           "REPO_MAPPING:rules_android+,bazel_tools bazel_tools"
@@ -7850,8 +7848,8 @@
     },
     "@@rules_rust+//crate_universe/private:internal_extensions.bzl%cu_nr": {
       "general": {
-        "bzlTransitiveDigest": "T9P5TPLHJzgZy/KsClSVePOVrzKD3vEZcFIOdHNcoQM=",
-        "usagesDigest": "McimNXAztVHDzspa1Kng94T+YeyY/44zx9FkNqIMn2s=",
+        "bzlTransitiveDigest": "RS0huHIeg95s4Bb39A77IyKLcoHJWviROItFw6JTKlM=",
+        "usagesDigest": "/bGmDj4Nr856OGWTjcSOPnxG0gSTFtYse380wG1a98A=",
         "recordedInputs": [
           "REPO_MAPPING:apple_support+,bazel_skylib bazel_skylib+",
           "REPO_MAPPING:bazel_features+,bazel_features_globals bazel_features++version_extension+bazel_features_globals",
@@ -7933,7 +7931,7 @@
               "binary": "cargo-bazel",
               "cargo_lockfile": "@@rules_rust+//crate_universe:Cargo.lock",
               "cargo_toml": "@@rules_rust+//crate_universe:Cargo.toml",
-              "version": "1.98.0",
+              "version": "1.99.1",
               "rust_toolchain_cargo_template": "@rust_host_tools//:bin/{tool}",
               "rust_toolchain_rustc_template": "@rust_host_tools//:bin/{tool}",
               "compressed_windows_toolchain_names": false,

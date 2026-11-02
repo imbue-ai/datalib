@@ -263,36 +263,14 @@ bazel_dep(name = "rules_rust", version = "0.75.0")
 # crate stays build.rs-free and the generated code is reproducible /
 # cacheable across builds.
 #
-# Pieces:
-#
-#   * `rules_proto` — provides the standard `proto_library` rule that
-#     `rust_prost_library` consumes.
-#   * `protobuf` — stub for the `@com_google_protobuf` repo name
-#     (`rust_prost_library` and `proto_library` reference it). We do NOT
-#     compile protoc from source; toolchains_protoc replaces its
-#     `:protoc` target below.
-#   * `toolchains_protoc` — fetches a prebuilt `protoc` binary and
-#     registers a `proto_toolchain`. Saves the ~30s protobuf C++ build
-#     and (more importantly) the bindgen/cmake host-tool chain.
-#     Upstream is archived (per BCR note) but the prebuilt-protoc story
-#     it implements is unchanged; if we ever need to migrate we'll
-#     switch to whatever Bazel's blessed prebuilt path is at the time.
-#   * `rules_rust_prost` — provides `rust_prost_library` + the
-#     toolchain type. The actual toolchain wiring (which prost / tonic
-#     crate targets to use) lives at `//tools/prost_toolchain` so it
-#     can reach `@datalib_crates//:prost` etc.
-bazel_dep(name = "rules_proto", version = "7.1.0")
-bazel_dep(name = "protobuf", version = "36.2", repo_name = "com_google_protobuf")
-bazel_dep(name = "toolchains_protoc", version = "0.6.1")
+#   * `protobuf` — `proto_library`, and prebuilt `protoc` toolchains
+#     (`prebuilt_protoc.<os_arch>`), so protoc is downloaded for the
+#     host, never compiled, and its version is this module's.
+#   * `rules_rust_prost` — `rust_prost_library` and its toolchain type.
+#     Which prost crates the toolchain uses is `//tools/prost_toolchain`,
+#     where `@datalib_crates` is in reach.
+bazel_dep(name = "protobuf", version = "36.2")
 bazel_dep(name = "rules_rust_prost", version = "0.75.0")
-
-protoc = use_extension("@toolchains_protoc//protoc:extensions.bzl", "protoc")
-protoc.toolchain(
-    # Pin a specific prebuilt-protoc release. Bumped on the same 7-day
-    # burn-in cadence as everything else in this file.
-    google_protobuf = "com_google_protobuf",
-    version = "v36.2",
-)
 
 register_toolchains(
     "//tools/prost_toolchain",
