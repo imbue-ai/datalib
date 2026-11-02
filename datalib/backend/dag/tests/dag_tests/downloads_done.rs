@@ -40,12 +40,16 @@ async fn a_download_reads_as_done_for_the_request_that_ran_it() {
         .expect("run datalib-dag");
     assert!(out.status.success(), "{out:?}");
 
-    let pool = sqlx::SqlitePool::connect(&format!(
-        "sqlite://{}?mode=ro",
-        Path::new(root).join("system/supervisor.sqlite").display()
-    ))
-    .await
-    .unwrap();
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
+        .connect(&format!(
+            "sqlite://{}?mode=ro",
+            Path::new(root).join("system/supervisor.sqlite").display()
+        ))
+        .await
+        .unwrap();
     let request: String = sqlx::query_scalar("SELECT id FROM requests")
         .fetch_one(&pool)
         .await
