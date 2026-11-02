@@ -25,7 +25,7 @@ use datalib_etl_render::inputs::Lookup;
 use datalib_etl_render::pages::{batches, PageSize};
 use datalib_handle::Handle;
 use datalib_schema::providers::Provider;
-use mail_parser::{Address, MessageParser, MimeHeaders, PartType};
+use mail_parser::{AddressList, MessageParser, MessagePart, PartKind};
 
 /// Bump when the item-shape / column mapping changes meaningfully.
 /// v3: render via chat-common (+ quoted-text folding, label chips).
@@ -51,7 +51,9 @@ use mail_parser::{Address, MessageParser, MimeHeaders, PartType};
 ///     `.eml`, and no `blobs/` is written beside the page.
 /// v16: the account's own address is a source contact marked as the
 ///     account, so search reads it as `me`.
-pub const RENDER_VERSION: u32 = 16;
+/// v17: mail-parser 1.0: base64 without its final `=` decodes whole,
+///     RFC 8621's body lists, and a `Fr om:` line is no longer From.
+pub const RENDER_VERSION: u32 = 17;
 
 /// Which webmail to build each email's `↗` outlink for. Mirrors
 /// `datalib_core::config::EmailOutlink`; the orchestrator maps the
@@ -794,7 +796,7 @@ impl ParsedEml {
         let from_display = format_address(msg.from());
         let from_handle = msg
             .from()
-            .and_then(|a| a.iter().next())
+            .and_then(|a| a.first())
             .and_then(|a| a.address())
             .and_then(Handle::email);
         let recipients = [
@@ -806,7 +808,7 @@ impl ParsedEml {
         .flat_map(|(role, addrs)| {
             addrs
                 .into_iter()
-                .flat_map(|a| a.iter())
+                .flat_map(|a| a.mailboxes())
                 .filter_map(move |a| {
                     let address = a.address().unwrap_or_default();
                     let name = a.name().unwrap_or_default();
@@ -821,26 +823,30 @@ impl ParsedEml {
         })
         .collect();
         let mut text_body = String::new();
-        for &idx in &msg.text_body {
-            if let Some(part) = msg.part(idx) {
-                text_body.push_str(&part_text(part));
-                text_body.push('\n');
-            }
+        for part in msg.text_body() {
+            text_body.push_str(&part_text(part));
+            text_body.push('\n');
         }
         let mut html_body = String::new();
-        for &idx in &msg.html_body {
-            if let Some(part) = msg.part(idx) {
-                html_body.push_str(&part_text(part));
-                html_body.push('\n');
-            }
+        for part in msg.html_body() {
+            html_body.push_str(&part_text(part));
+            html_body.push('\n');
         }
+        // RFC 8621 lists an image shown in the body there and not again
+        // among the attachments, so all three lists are read.
+        let mut seen = HashSet::new();
         let mut inline_parts: Vec<InlinePart> = Vec::new();
-        for &idx in &msg.attachments {
-            let Some(part) = msg.part(idx) else { continue };
-            let bytes: Vec<u8> = match &part.body {
-                PartType::Binary(b) | PartType::InlineBinary(b) => b.to_vec(),
-                _ => continue,
-            };
+        for part in msg
+            .attachments()
+            .chain(msg.text_body())
+            .chain(msg.html_body())
+        {
+            if !matches!(part.kind(), PartKind::Binary | PartKind::InlineBinary)
+                || !seen.insert(part.id())
+            {
+                continue;
+            }
+            let bytes = part.decoded().into_owned();
             let cid = part.content_id().map(str::to_string);
             let content_type = part.content_type().map(|ct| match ct.subtype() {
                 Some(sub) => format!("{}/{}", ct.ctype(), sub),
@@ -863,21 +869,18 @@ impl ParsedEml {
     }
 }
 
-fn part_text(part: &mail_parser::MessagePart<'_>) -> String {
-    match &part.body {
-        PartType::Text(s) | PartType::Html(s) => s.to_string(),
-        // Inline image bytes belong in the blob CAS, not lossy-decoded
-        // into the body string.
-        _ => String::new(),
-    }
+/// Inline image bytes belong in the blob CAS, not lossy-decoded into the
+/// body string, so a part that is not text reads as nothing.
+fn part_text(part: MessagePart<'_>) -> String {
+    part.text().map(String::from).unwrap_or_default()
 }
 
-fn format_address(addr: Option<&Address>) -> String {
+fn format_address(addr: Option<AddressList<'_>>) -> String {
     let Some(addr) = addr else {
         return "(unknown sender)".to_string();
     };
     let mut parts: Vec<String> = Vec::new();
-    for a in addr.iter() {
+    for a in addr.mailboxes() {
         let email = a.address().unwrap_or_default();
         let name = a.name().unwrap_or_default();
         if !name.is_empty() {
@@ -1060,6 +1063,31 @@ mod tests {
         assert!(
             quoted.contains("> The warp core is at &lt;99.7%&gt;."),
             "{quoted}"
+        );
+    }
+
+    /// An image placed between two text parts is in RFC 8621's body
+    /// lists and not among its attachments; it still has to reach the
+    /// page.
+    #[test]
+    fn an_image_between_two_text_parts_is_an_inline_part() {
+        let eml = b"From: Data <data@enterprise.ufp>\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/mixed; boundary=\"b\"\r\n\r\n\
+--b\r\nContent-Type: text/plain\r\n\r\nBefore.\r\n\
+--b\r\nContent-Type: image/png\r\nContent-Disposition: inline\r\n\
+Content-Transfer-Encoding: base64\r\n\r\niVBORw0KGgo=\r\n\
+--b\r\nContent-Type: text/plain\r\n\r\nAfter.\r\n\
+--b--\r\n";
+        let parsed = ParsedEml::from_eml_bytes(eml);
+        let images: Vec<_> = parsed
+            .inline_parts
+            .iter()
+            .map(|p| (p.content_type.as_deref(), p.bytes.as_slice()))
+            .collect();
+        assert_eq!(
+            images,
+            [(Some("image/png"), b"\x89PNG\r\n\x1a\n".as_slice())]
         );
     }
 

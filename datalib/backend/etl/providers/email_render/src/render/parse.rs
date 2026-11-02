@@ -262,7 +262,7 @@ async fn open_async(
 /// page's address finds it inside the stored `.eml`
 /// (`datalib_blob_store::part_of` hashes them the same way).
 fn extract_attachments_from_emls(bucket: &mut EmailThreadBucket) {
-    use mail_parser::{MessageParser, MimeHeaders, PartType};
+    use mail_parser::{MessageParser, PartKind};
 
     for em in &bucket.emails {
         let Some(eml_blob) = bucket.blobs.get(&em.blob_id) else {
@@ -273,42 +273,35 @@ fn extract_attachments_from_emls(bucket: &mut EmailThreadBucket) {
         else {
             continue;
         };
-        // Walk both `msg.attachments` and `msg.html_body` (the latter
-        // catches inline images that live inside `multipart/related`
-        // and only show up via the html-body index). Filter out the
-        // alternate text/html body parts mail-parser sometimes
-        // surfaces in `attachments`.
-        let body_idx: HashSet<u32> = msg
-            .text_body
-            .iter()
-            .copied()
-            .chain(msg.html_body.iter().copied())
+        // A part with no name is labelled by its place among the
+        // message's own parts, the root counted as 0.
+        let place: HashMap<_, usize> = msg
+            .root()
+            .parts()
+            .enumerate()
+            .map(|(i, part)| (part.id(), i))
             .collect();
-        let mut seen_idx: HashSet<u32> = HashSet::new();
+        // `html_body` too: an inline image inside `multipart/related`
+        // may be listed only there. A text or HTML body part is skipped
+        // unless something links it by its Content-ID.
+        let mut seen = HashSet::new();
         let mut atts: Vec<datalib_etl_email::ingest::db::LoadedAttachment> = Vec::new();
-        let candidate_idxs: Vec<u32> = msg
-            .attachments
-            .iter()
-            .copied()
-            .chain(msg.html_body.iter().copied())
-            .collect();
-        for idx in candidate_idxs {
-            if !seen_idx.insert(idx) {
+        for part in msg.attachments().chain(msg.html_body()) {
+            if !seen.insert(part.id()) {
                 continue;
             }
-            let Some(part) = msg.part(idx) else { continue };
-            if body_idx.contains(&idx) && part.content_id().is_none() {
+            let in_body = part.in_text_body() || part.in_html_body();
+            if in_body && part.content_id().is_none() {
                 continue;
             }
-            if matches!(part.body, PartType::Text(_) | PartType::Html(_))
-                && part.content_id().is_none()
-                && part.attachment_name().is_none()
-            {
+            if part.is_text() && part.content_id().is_none() && part.attachment_name().is_none() {
                 continue;
             }
-            let bytes: &[u8] = match &part.body {
-                PartType::Binary(b) | PartType::InlineBinary(b) => b,
-                PartType::Text(t) | PartType::Html(t) => t.as_bytes(),
+            let bytes: Vec<u8> = match part.kind() {
+                PartKind::Binary | PartKind::InlineBinary => part.decoded().into_owned(),
+                PartKind::Text | PartKind::Html => {
+                    part.text().unwrap_or_default().into_owned().into_bytes()
+                }
                 _ => continue,
             };
             let name = part.attachment_name().map(str::to_string);
@@ -319,8 +312,8 @@ fn extract_attachments_from_emls(bucket: &mut EmailThreadBucket) {
                 None => ct.ctype().to_string(),
             });
             atts.push(datalib_etl_email::ingest::db::LoadedAttachment {
-                part_id: format!("p{idx}"),
-                blob_id: blob_cas::blake3_hex(bytes),
+                part_id: format!("p{}", place.get(&part.id()).copied().unwrap_or_default()),
+                blob_id: blob_cas::blake3_hex(&bytes),
                 name,
                 content_type,
                 size: Some(bytes.len() as i64),
