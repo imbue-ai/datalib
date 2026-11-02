@@ -8597,6 +8597,12 @@
             "https://files.pythonhosted.org/packages/32/91/30151a39f7570f448ed84529390628a651d7f27c87d73c9b887f8189695e/docutils-0.23-py3-none-any.whl": "sha256:25d013af9bf23bc1c7b2b093dff4208166c53a94786c9e447808335ef1185fea",
             "https://files.pythonhosted.org/packages/39/a4/5180d9afc57e8fca05601dd652bdff19604c218814037fe90ffc7625a50a/docutils-0.23.tar.gz": "sha256:746f5060322511280a1e50eb76846ed6bf2342984b2ac04dc42caa1a8d78799e"
           },
+          "doltlite": {
+            "https://files.pythonhosted.org/packages/37/18/e0893bc70769880b41598033b844ffedb2a8254035ab455b0370439b4ad6/doltlite-0.50.16.tar.gz": "sha256:19fc9ebafa9e41353741d06c723928619a2857dd487d5c6450100a5e6e9b9954",
+            "https://files.pythonhosted.org/packages/d4/93/e1f06562c979af83af290b97b3179ef1a1db89a528d92c788a696ff4affb/doltlite-0.50.16-py3-none-macosx_11_0_arm64.whl": "sha256:3a7291e254d3aeb88dc621989b733a5fa3889d887a50f84f24b96508b63f3533",
+            "https://files.pythonhosted.org/packages/ec/9c/7439b9924b81d79109c727eb0194e72c87d3d9d8eae20e470661d885e491/doltlite-0.50.16-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl": "sha256:d074a8d7971933427f2986105644115fcb8c4c97d89aea4f91a59ba01111ec21",
+            "https://files.pythonhosted.org/packages/ed/5a/d9973f8e5d426279184f70d2b239cd442ffdf27cd9c38f5c17bef1f94ab1/doltlite-0.50.16-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl": "sha256:63b9b655e8d2604bc990d55dbcbd5cfe32402c9350447b1766b6cab020e4b82f"
+          },
           "id": {
             "https://files.pythonhosted.org/packages/42/77/de194443bf38daed9452139e960c632b0ef9f9a5dd9ce605fdf18ca9f1b1/id-1.6.1-py3-none-any.whl": "sha256:f5ec41ed2629a508f5d0988eda142e190c9c6da971100612c4de9ad9f9b237ca",
             "https://files.pythonhosted.org/packages/6d/04/c2156091427636080787aac190019dc64096e56a23b7364d3c1764ee3a06/id-1.6.1.tar.gz": "sha256:d0732d624fb46fd4e7bc4e5152f00214450953b9e772c182c1c22964def1a069"
