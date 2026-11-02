@@ -1,8 +1,8 @@
-//! Snapshot of the TNG fixture's `backend_index.doltlite_db` contents.
+//! Snapshot of the TNG fixture's `backend_index.sqlite` contents.
 //!
 //! One row per source is a storage report (`provider: "datalib"`,
 //! `kind: "Source Size"`). Its body deliberately carries no byte
-//! figure: a doltlite store's size is not reproducible — it drifts
+//! figure: a store's size is not reproducible — it drifts
 //! between rebuilds on one machine and differs outright between
 //! machines — so nothing hashed may contain it. That is enforced at
 //! the producer (`datalib_step::introspect`), not scrubbed here, which
@@ -19,9 +19,7 @@ use sqlx::Row;
 
 fn fixture_db_path() -> PathBuf {
     if let Ok(r) = runfiles::Runfiles::create() {
-        if let Some(candidate) =
-            r.rlocation("_main/tests/fixtures/ingested/backend_index.doltlite_db")
-        {
+        if let Some(candidate) = r.rlocation("_main/tests/fixtures/ingested/backend_index.sqlite") {
             if candidate.exists() {
                 return candidate;
             }
@@ -29,11 +27,11 @@ fn fixture_db_path() -> PathBuf {
     }
     let cargo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let bazel_bin = cargo_root
-        .join("../../../bazel-bin/tests/fixtures/ingested/backend_index.doltlite_db")
+        .join("../../../bazel-bin/tests/fixtures/ingested/backend_index.sqlite")
         .canonicalize()
         .unwrap_or_else(|_| {
             panic!(
-                "fixture backend_index.doltlite_db not found. Run \
+                "fixture backend_index.sqlite not found. Run \
                  `bazelisk build //tests/fixtures:ingested_tng` first."
             )
         });
@@ -41,10 +39,6 @@ fn fixture_db_path() -> PathBuf {
 }
 
 async fn open_readonly(path: &std::path::Path) -> SqlitePool {
-    // Doltlite-format databases reject `immutable=1` (and the WAL-mode
-    // open machinery in general) — the prolly chunk store doesn't
-    // model a frozen-bytes view the way stock SQLite's pager does. So
-    // we open with `read_only=true` only.
     let real = path
         .canonicalize()
         .unwrap_or_else(|e| panic!("canonicalize {}: {e}", path.display()));
@@ -191,56 +185,6 @@ async fn snapshot_grid_rows_and_documents() {
         })
         .collect();
 
-    // ── dolt_log ─────────────────────────────────────────────────
-    // doltlite stamps every `dolt_commit` call into `dolt_log`.
-    //
-    // `grid_index` commits once per source per *pass*, and since `render`
-    // streams it runs a pass whenever a source seals or finishes. **How the
-    // work splits across those passes is timing, not behavior** — it moves with
-    // machine speed, so pinning it here would make this golden fail on a
-    // slower box while nothing was wrong. It did: 2/21/22/25/6 locally
-    // against 2/33/35 on CI, for the same 76 documents.
-    //
-    // So the passes are folded into one row carrying the totals. Those are
-    // the claim worth making — every document was read exactly once, and
-    // all of them were — and they hold whatever the tranching.
-    let log_rows = sqlx::query("SELECT message FROM dolt_log() ORDER BY date ASC, message ASC")
-        .fetch_all(&pool)
-        .await
-        .expect("read dolt_log");
-
-    let mut dolt_log: Vec<serde_json::Value> = Vec::new();
-    let mut totals: std::collections::BTreeMap<String, i64> = Default::default();
-    let mut passes = 0usize;
-    for r in &log_rows {
-        let msg: String = r.try_get("message").expect("dolt_log message");
-        let Some(fields) = msg.strip_prefix("datalib-step grid_index: ") else {
-            // Without the ` run=<id>` stamp every step commit carries: the
-            // id is minted per build.
-            let message = msg.rsplit_once(" run=").map_or(msg.as_str(), |(m, _)| m);
-            dolt_log.push(json!({ "message": message }));
-            continue;
-        };
-        passes += 1;
-        for kv in fields.split_whitespace() {
-            if let Some((k, v)) = kv.split_once('=') {
-                if let Ok(n) = v.parse::<i64>() {
-                    *totals.entry(k.to_string()).or_default() += n;
-                }
-            }
-        }
-    }
-    if passes > 0 {
-        let summed = totals
-            .iter()
-            .map(|(k, v)| format!("{k}={v}"))
-            .collect::<Vec<_>>()
-            .join(" ");
-        dolt_log.push(json!({
-            "message": format!("datalib-step grid_index (all passes summed): {summed}")
-        }));
-    }
-
     // Storage rows are summarized rather than enumerated. They are 43%
     // of the rows and none of this golden's purpose — it exists to
     // catch *provider render* regressions, and a measurement row's
@@ -291,14 +235,10 @@ async fn snapshot_grid_rows_and_documents() {
             "grid_rows_count": grid_rows.len(),
             "storage_rows_count": storage.len(),
             "documents_count": documents.len(),
-            // Deliberately the *folded* length: the raw count moves with
-        // how many passes streaming happened to take.
-        "dolt_log_count": dolt_log.len(),
         },
         "grid_rows": grid_rows,
         "storage_rows": storage_rows,
         "documents": documents,
-        "dolt_log": dolt_log,
     });
 
     // Pretty-printed JSON is the most diff-friendly representation —

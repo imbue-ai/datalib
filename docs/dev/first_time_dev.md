@@ -188,7 +188,7 @@ as a subprocess. Datalib's own steps write `command = "datalib-step"`
 reads its function and its group's type from the environment — `ingest`
 brings a source's data into its raw store, `render_markdown` renders
 markdown + its store, and `grid_index` loads every render store into
-`<root>/unified_document_index/grid_index/db.doltlite_db`. Several provider
+`<root>/unified_document_index/grid_index/db.sqlite`. Several provider
 crates also build a standalone `<p>_ingest` binary. See
 [`step_protocol.md`](step_protocol.md) for the step contract and
 [`datalib/backend/dag/README.md`](../../datalib/backend/dag/README.md)
@@ -243,7 +243,7 @@ SDK from the staged runtime tree (above) through
 at `<root>/unified_document_index/qmd_aggregator/qmd/index.sqlite` (each collection
 scans `<root>` with the `<group>/render_markdown/**/*.md` mask),
 alongside the per-source `<group>/render_markdown/` trees and
-`unified_document_index/grid_index/db.doltlite_db`. This is what the search bar's
+`unified_document_index/grid_index/db.sqlite`. This is what the search bar's
 Words and Meaning tabs read (see `datalib/backend/unified_document_index/src/qmd/`).
 
 Design notes:

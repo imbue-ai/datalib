@@ -562,6 +562,7 @@ where
         // zero provider-side code. File-based ingestion never reaches this
         // path, so it correctly reports zero requests.
         datalib_etl::download_metrics::record_api_request();
+        let in_flight = datalib_etl::download_metrics::request_in_flight();
         let started = std::time::Instant::now();
         let outcome = match crate::playback::current() {
             None => live::send(req).await,
@@ -571,7 +572,7 @@ where
             Ok(resp) => gateway_refusal(req, &resp).map_or(Ok(resp), Err),
             Err(e) => Err(e),
         };
-        drop(slot);
+        drop((slot, in_flight));
         log_attempt(req, &outcome, started.elapsed());
 
         // Decide whether this attempt is retryable. `None` = accept (success

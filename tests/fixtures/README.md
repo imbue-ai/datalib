@@ -157,7 +157,8 @@ without re-running the pipeline:
 
 ```
 bazelisk build //tests/fixtures:ingested_tng
-# bazel-bin/tests/fixtures/ingested/backend_index.doltlite_db
+# bazel-bin/tests/fixtures/ingested/backend_index.sqlite
+# bazel-bin/tests/fixtures/ingested/backend_search_terms.sqlite
 # bazel-bin/tests/fixtures/ingested/qmd.tar
 # bazel-bin/tests/fixtures/ingested/time_series.tar
 ```
@@ -173,7 +174,8 @@ inside the same second can agree by luck:
 | | byte-stable? |
 |---|---|
 | `grid_rows` / `markdowns` / `edges` **contents** | **yes** |
-| `backend_index.doltlite_db` **file** | no |
+| `backend_index.sqlite` **file** | no |
+| the render stores in `qmd.tar` | no |
 | rendered `.md` trees | yes, except yolink's `index.md` (below) |
 
 **The table contents are the property worth relying on, and they hold.**
@@ -181,8 +183,11 @@ Dump them (`.mode json`, `SELECT * … ORDER BY 1`) and two independent
 runs agree byte for byte. `//datalib/backend/unified_document_index:fixture_db_snapshot_test`
 is an insta snapshot of exactly that, which is why it can exist at all.
 
-The **file** cannot be byte-stable, and no amount of `--now` pinning will
-change that: doltlite's own "Initialize data repository" commit and the
+The **files** cannot be byte-stable, and no amount of `--now` pinning
+will change that. The index mints a random id for itself
+(`store_generation`), so a reader can tell a rebuilt index from the one
+it read. The render stores are doltlite: its own "Initialize data
+repository" commit and the
 shared layer's "schema: apply DDL" (`doltlite_raw::open`) both take the
 wall clock ([`doltlite.md`](/docs/dev/doltlite.md#plain-sqlite-files-and-sqlite-compatibility)),
 and commit hashes chain, so every later hash moves with them.

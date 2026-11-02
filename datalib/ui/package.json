@@ -22,7 +22,7 @@
     "@slickgrid-universal/event-pub-sub": "10.10.0",
     "@slickgrid-universal/vanilla-bundle": "10.11.3",
     "@tauri-apps/api": "^2.12.4",
-    "@tauri-apps/plugin-dialog": "^2.8.3",
+    "@tauri-apps/plugin-dialog": "^2.8.4",
     "@tauri-apps/plugin-opener": "^2.7.2",
     "dompurify": "3.4.17",
     "highlight.js": "^11.12.0",
@@ -43,7 +43,7 @@
     "typescript": "^6.0.3",
     "vite": "8.3.5",
     "vitest": "5.0.5",
-    "vue-tsc": "3.3.13"
+    "vue-tsc": "3.3.14"
   },
   "pnpm": {
     "//": "Declares which transitive deps may run postinstall lifecycle scripts under aspect_rules_js. Required by npm_translate_lock to parse the v9 lockfile. (Modern pnpm 10+ reads this from pnpm-workspace.yaml#allowBuilds instead and ignores this field — we keep it here for aspect_rules_js to find.)",

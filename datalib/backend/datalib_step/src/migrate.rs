@@ -28,6 +28,16 @@ pub async fn run(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<V
         }
         Function::GridIndex => {
             let store = datalib_core::layout::grid_index_db(data_root);
+            let retired = datalib_core::layout::grid_index_dir(data_root)
+                .join(datalib_core::layout::RETIRED_GRID_DB);
+            if retired.exists() {
+                tracing::info!(
+                    step = %env.step,
+                    "migrate: the grid index is still the doltlite store; it needs a rerun"
+                );
+                emitter.needs_rerun();
+                return Ok(Vec::new());
+            }
             let shape = datalib_etl_render::grid_index::schema_hash();
             ask_for_a_rerun_if(env, emitter, &store, &shape).await?;
             Ok(Vec::new())

@@ -515,8 +515,9 @@ Slack listed in it is stored.
 
 A conversation's history reaches back to the source's `since` (2024-01-01
 unless the config says otherwise) and up to the newest message the
-last walk saw. A `ts` inside a `history:` span is mirrored; one outside
-every span is not, and you should ask Slack.
+last walk saw. A conversation walked and found empty has one row with
+`lo = hi`, the point the walk began. A `ts` inside a `history:` span is
+mirrored; one outside every span is not, and you should ask Slack.
 
 ```sql
 SELECT 1 FROM coverage
@@ -526,11 +527,11 @@ SELECT 1 FROM coverage
 ```
 
 **What is not mirrored**: anything before `since`; direct messages,
-unless the source sets `dms = true`; with `dms = true` and no
-`dm_conversations` list, a DM closed in the account's Slack sidebar, which
-is not walked and has no `history:` span until it is open with a new
-message (Slack reopens a DM when a message arrives, and closes it after a
-while); channels the account is not in,
+unless the source sets `dms = true`; for up to a day, the newest
+messages of a DM closed in the account's Slack sidebar (Slack reopens a
+DM when a message arrives and the next sync reads it, but one closed
+again before that sync is only read by the daily check of closed DMs);
+channels the account is not in,
 unless it sets `all_channels`; files, when it sets `media = false`;
 Slack Lists. A message deleted in Slack is dropped from the mirror only
 inside the last `refresh_window_days` (30 by default), the next time

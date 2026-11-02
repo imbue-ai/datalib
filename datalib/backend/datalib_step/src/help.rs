@@ -106,8 +106,9 @@ const SETUP: &[SetupStep] = &[
               and get JSON back: `datalib-applet search <data_root> 'from:picard \
               after:2026-10-01'` (`''` lists every row; `datalib-applet search --help` has \
               the flags). For SQL, `datalib-doltlite -readonly \
-              <data_root>/unified_document_index/grid_index/db.doltlite_db \"SELECT provider, \
-              count(*) FROM grid_rows GROUP BY 1\"` (stock sqlite3 cannot open it). Or serve \
+              <data_root>/unified_document_index/grid_index/db.sqlite \"SELECT provider, \
+              count(*) FROM grid_rows GROUP BY 1\"` (stock sqlite3 opens it read-only only \
+              while its writer is running). Or serve \
               the app with `datalib-http <data_root>`. `datalib-step help search` has the \
               search's query language, and `datalib-step help agent` the rest.",
         commands: &[],

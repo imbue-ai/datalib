@@ -256,7 +256,7 @@ fn is_dashed_uuid(s: &str) -> bool {
 /// built under another shape is rebuilt whole, so change it whenever
 /// either changes. A kind a render starts to supply needs no change: it
 /// reaches the file through the diff of `grid_rows`, as its rows change.
-pub const TERMS_SHAPE: &str = "7";
+pub const TERMS_SHAPE: &str = "8";
 
 /// The search terms file's tables, dictionary-encoded: each grid row once in
 /// `rows`, each distinct value once in `vals`, and a term is three
@@ -286,8 +286,12 @@ pub const TERMS_DDL: &[&str] = &[
      source_id TEXT NOT NULL, PRIMARY KEY (handle, source_id)) WITHOUT ROWID",
 ];
 
-/// The `terms_meta` key naming the grid index commit the terms reflect.
-pub const META_GRID_COMMIT: &str = "grid_commit";
+/// The `terms_meta` key naming the grid index generation the terms
+/// reflect (`datalib_pin::generation`).
+pub const META_GRID_GENERATION: &str = "grid_generation";
+/// The `terms_meta` key naming the last of the grid index's
+/// `grid_changes` the terms have applied.
+pub const META_GRID_CHANGE: &str = "grid_change";
 /// The `terms_meta` key naming the [`TERMS_SHAPE`] the file was built under.
 pub const META_SHAPE: &str = "shape";
 
