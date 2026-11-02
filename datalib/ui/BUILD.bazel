@@ -1,4 +1,4 @@
-load("@aspect_bazel_lib//lib:copy_to_bin.bzl", "copy_to_bin")
+load("@bazel_lib//lib:copy_to_bin.bzl", "copy_to_bin")
 load("@aspect_rules_js//js:defs.bzl", "js_run_binary")
 load("@bazel_skylib//rules:build_test.bzl", "build_test")
 load("@npm//:defs.bzl", "npm_link_all_packages")
@@ -407,7 +407,7 @@ build_test(
 # Inputs are staged into bazel-out rather than read from the source tree,
 # matching `:vite_inputs`. tsconfig.json's `include` covers `src/**` and
 # `tests/**`, so both have to be here or vue-tsc silently checks less
-# than the `npx` version did. (aspect_bazel_lib memoizes the per-file
+# than the `npx` version did. (bazel_lib memoizes the per-file
 # copy action, so sharing package.json / tsconfig.json with the other
 # `copy_to_bin` targets in this package is fine, not a conflict.)
 copy_to_bin(
