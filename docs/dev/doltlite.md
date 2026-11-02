@@ -114,6 +114,48 @@ Two variants worth knowing:
   primary keys or indexes, which leaves `.dump` the higher-fidelity
   route.
 
+## Reading a store from Python
+
+A program that runs many small queries should not start the shell for
+each one. Dolthub's **`doltlite`** package on PyPI makes Python's own
+`sqlite3` module run on doltlite, so a store opens once and stays open:
+
+```sh
+pip install doltlite==<DOLTLITE_VERSION>   # the pin in third-party/doltlite/BUILD.bazel
+```
+
+```python
+import doltlite  # first, before anything imports sqlite3
+import sqlite3
+
+conn = sqlite3.connect(f"file:{store}?mode=ro", uri=True)    # main, read-only
+conn = sqlite3.connect(f"file:{store}@{commit}?mode=ro", uri=True)  # one commit
+```
+
+The second form is the [detached open](#opening-a-revision-by-path) our
+own readers use. Install the wheel whose version matches the pin: a
+release that changes the storage format refuses our stores.
+
+Measured on a mac against a 212 MB store, with the 0.50.16 wheel: the
+open and first query took ~11 ms, and a lookup by primary key on the open
+connection ~0.01 ms. The same lookup cost ~15 ms when each one ran in a
+new `doltlite -readonly -json` process. Writes are refused on both kinds
+of open, and the store came out byte-identical.
+
+What the package needs:
+
+- **A Python that loads SQLite as a shared library**: Homebrew, the
+  system Python, pyenv or Conda. The python-build-standalone builds that
+  `uv python install`, mise and Rye fetch compile SQLite in, and the
+  package cannot replace it there. With uv, name the interpreter:
+  `uv venv --python /opt/homebrew/bin/python3.13`.
+- **On macOS, a script to restart.** The import restarts the interpreter
+  with doltlite preloaded, so it works for `python script.py` and
+  `python -m pkg`, and fails under `python -c`, the REPL and Jupyter.
+  Each start copies a 3.9 MB library into `$TMPDIR/doltlite-shim-*`, and
+  0.50.16 never reuses the copy, so a long-lived machine wants those
+  cleared now and then.
+
 ## Recipes
 
 ### `git log` for the current branch
@@ -965,7 +1007,9 @@ cause (network timeout, panic, OOM, etc.).
   pools"). The CLI takes no such lock, so a writable CLI session is
   exactly the second writer that rule exists to keep out.
 - **For routine reads from app code.** Open the file via `sqlx` like
-  everything else in the backend; the CLI is for ad-hoc inspection.
+  everything else in the backend, or from Python with the `doltlite`
+  package ([Reading a store from Python](#reading-a-store-from-python));
+  the CLI is for ad-hoc inspection.
 - **To "fix" a wedged DB.** The next writer's `open` discards the
   uncommitted state itself. Only reach for `dolt_reset` /
   `dolt_checkout` against a copy of the file, never against the live
