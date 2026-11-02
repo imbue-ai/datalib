@@ -406,7 +406,9 @@ when there are none. A renderer sets it with
 **Nothing searches this column.** SQLite cannot index the elements of
 a JSON array, so the search bar never looks inside it. After each
 `grid_index` pass the search terms file (`search_terms.sqlite`,
-`etl/render/src/search_terms.rs`) melts every changed row into one
+`etl/render/src/search_terms.rs`) melts every changed row — each uuid
+the index's triggers logged in its `grid_changes` table, which a row
+written again unchanged never reaches — into one
 indexed row per term, these together with the terms its other columns
 give (`search_terms_of`). The wide row is what is stored; the tall,
 indexed form is derived from it.

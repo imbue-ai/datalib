@@ -108,13 +108,12 @@ pub async fn run(
         );
     }
 
-    // HEAD's tree, whether or not this pass sealed anything: the builder
-    // seals once per source that moved, and a pass that moved none must
-    // still report the version it left, or the runner takes it as new.
-    let version = datalib_etl::doltlite_raw::content_version(&pool)
-        .await
-        .context("grid_index head")?;
-    pool.close().await;
+    // The generation, whether or not this pass sealed anything: the
+    // builder raises it once per source that moved, and a pass that moved
+    // none must still report the version it left, or the runner takes it
+    // as new.
+    let version = datalib_etl_render::grid_index::version(&pool).await?;
+    datalib_etl_render::grid_index::close_index(pool).await?;
 
     // Every other source is sealed by now; this one is still a failure,
     // and the Manage row should say so.
@@ -131,10 +130,6 @@ pub async fn run(
         );
     }
 
-    // The dolt commit hash is a faithful content version: HEAD only
-    // advances when rows actually changed. Without doltlite
-    // (stock-sqlite dev builds) there is no hash and we report nothing,
-    // so every success reads as new.
     match version {
         Some(version) => Ok(vec![OutputClaim {
             path: out_rel(),

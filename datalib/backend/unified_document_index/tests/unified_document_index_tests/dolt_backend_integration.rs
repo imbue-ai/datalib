@@ -1,4 +1,4 @@
-//! End-to-end integration test for the doltlite backend.
+//! End-to-end integration test for the grid index's reader, `DoltRepo`.
 
 use datalib_query::table::SearchTable;
 use datalib_schema::grid_rows::{GridRow, GridRowColumn, DDL as GRID_DDL, INDEXES as GRID_INDEXES};
@@ -18,36 +18,34 @@ use datalib_unified_document_index::view;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// The `grid_index` step's handle on the root's index, for seeding, and
-/// writing the way the step does: on the writer branch, never on `main`
-/// (`etl/README.md`, "A writer works on its own branch"). The repo under
-/// test opens its own, read-only, once the file exists — which is exactly
-/// how the applet reads what the step wrote.
+/// The `grid_index` step's handle on the root's index, for seeding: a
+/// plain WAL file with its generation row, as `open_index` makes it. The
+/// repo under test opens its own, read-only, once the file exists — which
+/// is exactly how the applet reads what the step wrote.
 async fn writer(root: &Path) -> sqlx::SqlitePool {
-    let pool = datalib_core::store::open_pool(&datalib_core::layout::grid_index_db(root))
+    let pool = datalib_core::store::open_plain_pool(&datalib_core::layout::grid_index_db(root))
         .await
         .expect("open a writer on the grid index");
-    sqlx::query("SELECT dolt_checkout('-b', 'datalib_writer')")
-        .execute(&pool)
-        .await
-        .expect("put the writer on its branch");
+    for sql in [
+        "PRAGMA journal_mode = WAL",
+        datalib_pin::GENERATION_DDL,
+        "INSERT INTO store_generation VALUES (1, 'f', 0)",
+    ] {
+        sqlx::query(sql)
+            .execute(&pool)
+            .await
+            .expect("set up the grid index");
+    }
     pool
 }
 
-/// What the step does after its DDL, and again after every batch: commit
-/// on its branch, then publish by moving `main` (`commit_run`). The repo
-/// reads `main`, so a table or a row that was never published is not
-/// there to read.
-async fn commit(writer: &sqlx::SqlitePool, what: &str) {
-    sqlx::query_scalar::<_, Option<String>>("SELECT dolt_commit('-Am', ?)")
-        .bind(what)
-        .fetch_one(writer)
-        .await
-        .expect("dolt_commit");
-    sqlx::query("SELECT dolt_branch('-f', 'main', 'datalib_writer')")
+/// What the step does at the end of each transaction that changed what a
+/// reader sees: raise the generation.
+async fn commit(writer: &sqlx::SqlitePool, _what: &str) {
+    sqlx::query("UPDATE store_generation SET generation = generation + 1")
         .execute(writer)
         .await
-        .expect("publish main");
+        .expect("raise the generation");
 }
 
 /// The INSERT the index itself uses, from the derived column list, so the
@@ -103,7 +101,7 @@ fn unique_db_path() -> PathBuf {
     tempfile::TempDir::with_prefix("datalib-dolt-itest-")
         .expect("create tempdir")
         .keep()
-        .join("backend_index.doltlite_db")
+        .join("backend_index.sqlite")
 }
 
 /// A fresh data root has no `grid_rows`/`markdowns` yet (they appear on
@@ -452,11 +450,9 @@ async fn insert_chat_row(writer: &sqlx::SqlitePool, uuid: &str) {
 }
 
 /// The repo reads what the step committed, never what it is writing: a
-/// row that has reached the working set but not a commit is not there,
-/// and appears at the commit. Under streaming the working set holds a
-/// whole batch between the step's SQL `COMMIT` and its `dolt_commit`
-/// (`doltlite_two_process_test` measures that window), and this is what
-/// keeps the grid from serving it.
+/// row inside the step's open transaction is not there, and appears at
+/// its `COMMIT`. A pass holds one source's whole batch in one
+/// transaction, and this is what keeps the grid from serving half of it.
 #[tokio::test]
 async fn a_row_the_step_has_not_committed_is_not_served() {
     let db_path = unique_db_path();
@@ -466,12 +462,29 @@ async fn a_row_the_step_has_not_committed_is_not_served() {
     commit(&writer, "schema").await;
     let repo = DoltRepo::open(root.clone()).await.unwrap();
 
-    insert_chat_row(&writer, "c-1").await;
+    let mut tx = writer.begin().await.unwrap();
+    let row = chat_row("c-1", "chats/x.md");
+    let columns = std::iter::once(GridRow::ID_COLUMN)
+        .chain(GridRow::TYPED_COLUMNS.iter().copied())
+        .collect::<Vec<_>>();
+    let sql = format!(
+        "INSERT INTO grid_rows ({}) VALUES ({})",
+        columns.join(", "),
+        vec!["?"; columns.len()].join(", ")
+    );
+    row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)))
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE store_generation SET generation = generation + 1")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
     let before = repo.search(&parse_query(""), 100).await.unwrap();
     assert!(before.is_empty(), "served an uncommitted row: {before:?}");
     assert!(repo.chat_meta("c-1").await.unwrap().is_none());
 
-    commit(&writer, "rows").await;
+    tx.commit().await.unwrap();
     let after = repo.search(&parse_query(""), 100).await.unwrap();
     assert_eq!(after.len(), 1, "{after:?}");
     assert!(repo.chat_meta("c-1").await.unwrap().is_some());

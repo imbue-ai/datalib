@@ -394,7 +394,7 @@ onBeforeUnmount(() => unsubscribe?.());
     <p v-else-if="error && lines.length === 0" class="hc-note bad">{{ error }}</p>
     <p v-else-if="lines.length === 0" class="hc-note">
       No doltlite store under <code>{{ storeNote }}</code> yet. A step that has never run has
-      written nothing, and the QMD index keeps no store of its own.
+      written nothing, and the document index keeps no store with a history.
     </p>
     <div v-else class="hc-grid">
       <!-- Stores open, commits closed until asked. -->

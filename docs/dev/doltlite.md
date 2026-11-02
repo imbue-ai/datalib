@@ -25,8 +25,7 @@ then whatever in the tree leaned on it.
 > (`-readonly`) in Terminal — `datalib/tauri/src/raw_store.rs`.
 
 Every store the pipeline writes — the raw stores under
-`<data_root>/<group>/ingest/`, each source's render store, and the grid
-index (`<data_root>/unified_document_index/grid_index/db.doltlite_db`) — is a
+`<data_root>/<group>/ingest/` and each source's render store — is a
 [doltlite](https://github.com/dolthub/doltlite) database: SQLite with
 content-addressed prolly-tree storage and a `git`-shaped commit history
 exposed through SQL. The bazel build statically links doltlite into our
@@ -67,14 +66,14 @@ a fact about the on-disk format, not about lock-in — the shell above
 dumps any store to ordinary SQL, which stock SQLite loads:
 
 ```sh
-datalib-doltlite -readonly unified_document_index/grid_index/db.doltlite_db .dump \
-  | sqlite3 grid.sqlite
+datalib-doltlite -readonly slack/render_markdown/indexed_markdown.doltlite_db .dump \
+  | sqlite3 render.sqlite
 ```
 
-That is the whole export. A 16 MB grid store comes out as about 15 MB
-of SQL, well under a second each way, and `grid_rows` / `markdowns` /
-`edges` arrive with their schemas, primary keys and indexes intact. It
-works for the raw stores too — BLOB columns come through as hex
+That is the whole export. A 16 MB store comes out as about 15 MB of
+SQL, well under a second each way, and its tables arrive with their
+schemas, primary keys and indexes intact. It works for the raw stores
+too — BLOB columns come through as hex
 literals. (A source's `blobs.sqlite` is plain SQLite already; stock
 `sqlite3` opens it.)
 
@@ -771,8 +770,8 @@ Creating and dropping a table in one open still appends chunks, though
   needs about the store's size again in free disk (upstream
   `doc/doltlite/dolt_gc.md`; not measured here).
 - `sqlite_mirror` and `fsindex` run gc, and so does `datalib-dag
-  --compact` on the render stores and the grid index, after folding
-  their history into one commit (`doltlite_raw::fold_history`).
+  --compact` on the render stores, after folding their history into
+  one commit (`doltlite_raw::fold_history`).
 
 ### Trees, and keeping one through a fold
 
@@ -800,8 +799,7 @@ message. `dolt_hashof_db(<rev>)` answers the tree's hash, and
 - **A read-only connection that reads each request in a transaction of
   its own reads on through a fold and gc in another process**: a
   transaction begun before finishes on the tree it began on, and the next
-  one reads the folded `main`. That is the search applet's connection to
-  the grid index.
+  one reads the folded `main`.
 - **A fold must not drop a commit a reader is open on.** A detached
   `<file>@<commit>` reader in another process, whose commit a fold and
   gc dropped, gets "database disk image is malformed" on its next read

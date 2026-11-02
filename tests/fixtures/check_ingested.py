@@ -9,8 +9,8 @@ the fixture declares must have rows in `grid_rows` and a row in
 must have time series in the time-series index.
 
 Args (positional):
-    1: the doltlite shell (stock sqlite3 cannot open the index)
-    2: the grid index store, `backend_index.doltlite_db`
+    1: the doltlite shell (stock sqlite3 cannot open the time-series index)
+    2: the grid index store, `backend_index.sqlite`
     3: `config_body.toml`, the fixture's sources as groups
     4: the time-series index store, `time_series.doltlite_db`
 """

@@ -420,7 +420,7 @@ faster.
 - A `render_markdown` step per source: each conversation or document
   rendered into readable markdown, attachments included.
 - The `grid_index` step: one row per message or document written into
-  the SQL store at `<data_root>/unified_document_index/grid_index/db.doltlite_db`.
+  the SQL store at `<data_root>/unified_document_index/grid_index/db.sqlite`.
 - A `keyword_index` and an `embed` step per source: that source's part
   of free-text search — its words, then its embeddings, which let a
   search match on meaning. The first `embed` downloads its model once.
@@ -452,7 +452,7 @@ faster.
 ├── gmail-takeout/
 │   └── …
 ├── unified_document_index/                  # the shared indexes, rebuildable
-│   ├── grid_index/db.doltlite_db   #   grid rows + markdowns + edges
+│   ├── grid_index/db.sqlite        #   grid rows + markdowns + edges
 │   └── qmd_aggregator/qmd/index.sqlite  #   the semantic search index
 └── system/                         # everything that isn't a source
     ├── supervisor.sqlite           # syncs asked for, and which steps are up to date
@@ -570,17 +570,20 @@ are already in open formats you can read with no datalib at all:
   your language's stdlib — opens directly:
 
   ```sh
-  datalib-doltlite -readonly ~/datalib/unified_document_index/grid_index/db.doltlite_db .dump \
-    | sqlite3 ~/grid.sqlite
+  datalib-doltlite -readonly ~/datalib/<group>/ingest/entities.doltlite_db .dump \
+    | sqlite3 ~/source.sqlite
 
-  sqlite3 ~/grid.sqlite "SELECT provider, count(*) FROM grid_rows GROUP BY 1;"
+  sqlite3 ~/source.sqlite ".tables"
   ```
 
   The same command works on any `.doltlite_db` under your data root,
-  including the raw per-source stores under `<group>/ingest/`.
+  the render stores under `<group>/render_markdown/` included.
   Attachments are not in those: their bytes live beside them in
   `<group>/ingest/blobs.sqlite`, which is plain SQLite already and
-  opens as it is.
+  opens as it is. So is the grid's table,
+  `unified_document_index/grid_index/db.sqlite`, which is rebuilt from
+  the stores and keeps no history; the same pipe makes a copy of it
+  that opens anywhere.
 
   What the export gives you is the current state of every table, with
   its schema and indexes. What it leaves behind is the version history

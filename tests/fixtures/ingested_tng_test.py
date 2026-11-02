@@ -536,9 +536,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
     @property
     def _index_db(self) -> Path:
         """The grid index the `grid_index` fan-in step writes."""
-        return (
-            self.workspace / "unified_document_index" / "grid_index" / "db.doltlite_db"
-        )
+        return self.workspace / "unified_document_index" / "grid_index" / "db.sqlite"
 
     @property
     def _signal_entities_db(self) -> Path:
@@ -557,7 +555,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
 
     def _query(self, db: Path, sql: str) -> list[str]:
         """Run one SQL statement, returning stripped non-empty lines."""
-        self.assertTrue(db.is_file(), f"expected a doltlite store at {db}")
+        self.assertTrue(db.is_file(), f"expected a store at {db}")
         result = subprocess.run(
             [str(Path(self.cwd) / self.doltlite_bin), str(db), sql],
             check=True,
@@ -1945,11 +1943,13 @@ class IngestedTngPipelineTest(unittest.TestCase):
         for name, n in counts.items():
             self.assertGreater(n, 0, f"{name} must have rows")
 
-        # The index is committed, so its version history is non-empty.
+        # The index sealed what it wrote, so its generation moved.
         self.assertGreater(
-            int(self._scalar(self._index_db, "SELECT COUNT(*) FROM dolt_log;")),
+            int(
+                self._scalar(self._index_db, "SELECT generation FROM store_generation;")
+            ),
             0,
-            "grid_index must commit, leaving a dolt_log entry",
+            "grid_index must seal, raising the index's generation",
         )
         # Signal recorded both phones' snapshots in its resume cursor.
         cursor1 = self._signal_cursor()

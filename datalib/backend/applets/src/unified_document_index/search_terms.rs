@@ -9,7 +9,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use datalib_schema::search_terms::{SearchTermKind, META_GRID_COMMIT};
+use datalib_schema::search_terms::{SearchTermKind, META_GRID_GENERATION};
 use datalib_unified_document_index::query::is_uuid_shape;
 use datalib_unified_document_index::terms_keys::handle_of;
 use sqlx::sqlite::SqliteConnectOptions;
@@ -155,7 +155,7 @@ pub struct Found {
     pub hits: Vec<Hit>,
     /// The grid commit the file reflects. A ranking read at any other
     /// commit may be one pass out, so it is not kept.
-    pub grid_commit: Option<String>,
+    pub grid_generation: Option<String>,
 }
 
 /// The rows of [`Found::hits`], at most `depth` of them. The file holds a
@@ -206,9 +206,9 @@ pub async fn lookup(root: &Path, m: &Match, depth: usize) -> Result<Option<Found
         .with_context(|| format!("open {}", path.display()))?;
     let read = async {
         sqlx::query("BEGIN").execute(&mut conn).await?;
-        let grid_commit: Option<String> =
+        let grid_generation: Option<String> =
             sqlx::query_scalar("SELECT value FROM terms_meta WHERE key = ?")
-                .bind(META_GRID_COMMIT)
+                .bind(META_GRID_GENERATION)
                 .fetch_optional(&mut conn)
                 .await?;
         let hits: Vec<Hit> = sqlx::query_as(HITS_SQL)
@@ -219,7 +219,10 @@ pub async fn lookup(root: &Path, m: &Match, depth: usize) -> Result<Option<Found
             .fetch_all(&mut conn)
             .await?;
         sqlx::query("COMMIT").execute(&mut conn).await?;
-        anyhow::Ok(Found { hits, grid_commit })
+        anyhow::Ok(Found {
+            hits,
+            grid_generation,
+        })
     }
     .await
     .context("read the search terms file");

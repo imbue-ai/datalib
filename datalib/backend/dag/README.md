@@ -396,8 +396,10 @@ changed something ([`doltlite.md`](../../../docs/dev/doltlite.md#diffs)),
 and the hash of that commit's tree, which also stays put when the
 store's history is folded into fewer commits
 ([Trees](../../../docs/dev/doltlite.md#trees-and-keeping-one-through-a-fold)).
-`render_markdown` and `grid_index` report the tree, since nothing reads
-their history; an ingest and the time-series steps report the commit,
+`render_markdown` reports the tree, since nothing reads its history;
+`grid_index`, whose index is plain SQLite, reports its generation, a
+count it raises only when a reader would see a change; an ingest and
+the time-series steps report the commit,
 since a diff group names a raw commit and the time-series index reads
 each store at the commit it recorded. Each spells its version the same
 way on a seal and in the outcome, so finishing on the commit last

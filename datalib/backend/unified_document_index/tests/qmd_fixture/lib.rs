@@ -60,7 +60,7 @@ pub fn copy_grid_index(dst: &Path) {
     std::fs::create_dir_all(db.parent().expect("a grid index has a directory"))
         .expect("create grid dir");
     for (from, to) in [
-        ("ingested/backend_index.doltlite_db", db),
+        ("ingested/backend_index.sqlite", db),
         (
             "ingested/backend_search_terms.sqlite",
             datalib_runtime::layout::search_terms_db(dst),
