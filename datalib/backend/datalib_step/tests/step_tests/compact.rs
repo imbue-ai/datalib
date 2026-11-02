@@ -1,6 +1,7 @@
-//! `datalib-dag --compact` over the real `datalib-step`: a render store's
-//! history folds to one commit and its content version stays, and a raw
-//! store's history is left as it was.
+//! `datalib-dag --compact` and `--collect` over the real `datalib-step`:
+//! compacting folds a render store's history to one commit and keeps its
+//! content version; collecting folds nothing; both give back what no
+//! commit reaches, and a raw store keeps its history either way.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -37,26 +38,34 @@ async fn store_with_history(path: &Path, commits: usize) {
     pool.close().await;
 }
 
-async fn commits(path: &Path) -> i64 {
-    let pool = sqlx::sqlite::SqlitePoolOptions::new()
-        .max_connections(1)
-        .idle_timeout(None)
-        .max_lifetime(None)
-        .connect(&format!("sqlite://{}?mode=ro", path.display()))
-        .await
-        .unwrap();
-    let n = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_log()")
-        .fetch_one(&pool)
+/// Rewrites every row in twenty transactions under one commit, so the
+/// pages the nineteen in between wrote are reachable from no commit.
+async fn leave_garbage(path: &Path) {
+    let pool = open(
+        path,
+        &["CREATE TABLE log (id INTEGER PRIMARY KEY, body TEXT)"],
+    )
+    .await
+    .unwrap();
+    for _ in 0..20 {
+        sqlx::query("UPDATE log SET body = hex(randomblob(100))")
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    commit_run(&pool, "one commit over twenty transactions")
         .await
         .unwrap();
     pool.close().await;
-    n
 }
 
-#[tokio::test]
-async fn compact_folds_a_render_stores_history_and_leaves_the_raw_stores() {
-    let td = tempfile::tempdir().unwrap();
-    let root = td.path();
+fn size(path: &Path) -> u64 {
+    std::fs::metadata(path).unwrap().len()
+}
+
+/// A root with one source, whose raw and render stores each hold six
+/// commits and garbage: its render store and its raw store.
+async fn enterprise(root: &Path) -> (PathBuf, PathBuf) {
     std::fs::create_dir(root.join("bin")).unwrap();
     std::os::unix::fs::symlink(bin("DATALIB_STEP_BIN"), root.join("bin/datalib-step")).unwrap();
     std::fs::write(
@@ -69,33 +78,106 @@ async fn compact_folds_a_render_stores_history_and_leaves_the_raw_stores() {
     .unwrap();
     let render = root.join("enterprise/render_markdown/indexed_markdown.doltlite_db");
     let raw = datalib_etl::raw_layout::entities_db(&root.join("enterprise/ingest"));
-    store_with_history(&render, 6).await;
-    store_with_history(&raw, 6).await;
-    let version = content_version_at_path(&render).await.unwrap();
-    let raw_commits = commits(&raw).await;
+    for store in [&render, &raw] {
+        store_with_history(store, 6).await;
+        leave_garbage(store).await;
+    }
+    (render, raw)
+}
 
+/// `datalib-dag <verb>` on the root, and what it printed.
+fn dag(root: &Path, verb: &str) -> String {
     let out = Command::new(bin("DATALIB_DAG_BIN"))
         .arg(root.join("config.toml"))
-        .arg("--compact")
+        .arg(verb)
         .arg("--binary-dir")
         .arg(root.join("bin"))
         .output()
-        .expect("run datalib-dag --compact");
-    let stdout = String::from_utf8_lossy(&out.stdout);
+        .unwrap_or_else(|e| panic!("run datalib-dag {verb}: {e}"));
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     assert!(
         out.status.success(),
         "{stdout}\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
+    stdout
+}
 
-    assert_eq!(commits(&render).await, 2, "the first commit and the fold");
+async fn commits(path: &Path) -> Vec<String> {
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
+        .connect(&format!("sqlite://{}?mode=ro", path.display()))
+        .await
+        .unwrap();
+    let log = sqlx::query_scalar("SELECT commit_hash FROM dolt_log()")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+    log
+}
+
+/// Every commit `before` named is still in `after`. The launch's migrate
+/// pass may add one on top, applying the ingest's own schema to the test's.
+fn kept_every_commit(before: &[String], after: &[String]) -> bool {
+    before.iter().all(|c| after.contains(c))
+}
+
+#[tokio::test]
+async fn compact_folds_a_render_stores_history_and_collects_the_raw_store() {
+    let td = tempfile::tempdir().unwrap();
+    let root = td.path();
+    let (render, raw) = enterprise(root).await;
+    let version = content_version_at_path(&render).await.unwrap();
+    let (raw_commits, raw_size) = (commits(&raw).await, size(&raw));
+
+    let stdout = dag(root, "--compact");
+
+    assert_eq!(
+        commits(&render).await.len(),
+        2,
+        "the first commit and the fold"
+    );
     assert_eq!(content_version_at_path(&render).await.unwrap(), version);
     assert!(
-        commits(&raw).await >= raw_commits,
+        kept_every_commit(&raw_commits, &commits(&raw).await),
         "the raw store's history stays"
     );
+    assert!(size(&raw) < raw_size, "the raw store is collected");
     assert!(
         stdout.contains("enterprise/render_markdown") && stdout.contains("in all"),
+        "says what it gave back: {stdout}"
+    );
+}
+
+/// Collecting loses nothing: every store keeps every commit, a render
+/// store's included, and only what no commit reached goes.
+#[tokio::test]
+async fn collect_keeps_every_commit_and_gives_back_the_garbage() {
+    let td = tempfile::tempdir().unwrap();
+    let root = td.path();
+    let (render, raw) = enterprise(root).await;
+    let before = [
+        (commits(&render).await, size(&render)),
+        (commits(&raw).await, size(&raw)),
+    ];
+    let version = content_version_at_path(&render).await.unwrap();
+
+    let stdout = dag(root, "--collect");
+
+    for (store, (was_commits, was_size)) in [&render, &raw].into_iter().zip(before) {
+        assert!(
+            kept_every_commit(&was_commits, &commits(store).await),
+            "{} keeps its history",
+            store.display()
+        );
+        assert!(size(store) < was_size, "{} is collected", store.display());
+    }
+    assert_eq!(content_version_at_path(&render).await.unwrap(), version);
+    assert!(
+        stdout.contains("in all"),
         "says what it gave back: {stdout}"
     );
 }

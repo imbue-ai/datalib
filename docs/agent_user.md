@@ -177,10 +177,9 @@ Useful flags: `--sync <step-id>` (repeatable; runs the named steps and
 everything downstream of them, and nothing else — pending work in other
 sources waits for a full run), `--parallelism N`, `--reset
 <step-id>` (see **Resetting** below; alone it does nothing else,
-with `--sync` it runs first), `--compact` (folds the history of every
-render store and the grid index into one commit and gives back the disk
-it held; their content stays, so nothing re-runs; refused while the app
-is up, where `POST /api/compact {}` does the same), `--binary-dir DIR` (put at the front of
+with `--sync` it runs first), `--collect` and `--compact` (give back the
+disk the stores hold; refused while the app is up; see **Giving back
+disk** below), `--binary-dir DIR` (put at the front of
 every step's `PATH`, so a bare `command` like `datalib-step` resolves
 there; defaults to the config's `binary_dir`, else the directory
 `datalib-dag` itself is in). A sync that fails with "has a shape this build's DDL
@@ -278,6 +277,29 @@ is emptied once it has. The
 Manage screen's row menu offers the same. With no app up,
 `datalib-dag --reset slack/ingest` empties the store alone; add
 `--sync slack/ingest` to download it again at once.
+
+**Giving back disk.** A doltlite store never edits in place, so every
+sync leaves chunks behind that no commit reaches; a store that refills
+whole tables each run (Lightroom, Apple Photos, Apple Messages) can carry
+several times what it holds. Two ways to give it back, both safe while
+nothing is syncing and both refused or queued while something is:
+
+| | what goes | what stays |
+|---|---|---|
+| **collect** | chunks no commit reaches, in every store | every commit of every store |
+| **compact** | the same, and the older commits of each render store and the grid index | every commit of every download store; the latest of the rest |
+
+Collect loses nothing; compact loses the history of what can be rebuilt
+from the downloads, which nothing but the History card reads. With the
+app up, `POST /api/collect {"by": "claude"}` or `POST /api/compact
+{"by": "claude"}`; add `"targets": ["lightroom/ingest"]` for one step.
+They answer 204 when done, or 202 while they run on, and the steps they
+touch, and what reads them, wait meanwhile. With no app up,
+`datalib-dag <config> --collect` or `--compact` does it and prints each
+step's tree before and after. Each store needs about its own size free
+on disk while it is rewritten, and takes minutes per ten gigabytes. The
+status bar's "Free up disk space…" (a right-click on the data root's
+size) offers the same two.
 
 **Logs.** The run store is where to read what happened.
 `GET /api/runs` lists runs: a run is one stretch of the loop being busy,

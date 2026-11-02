@@ -56,7 +56,11 @@ pub const EXAMPLES: &[Example] = &[
         command: "datalib-dag ~/datalib/config.toml --reset slack/ingest --sync slack/ingest --by claude",
     },
     Example {
-        what: "give back the disk the rendered documents' and the grid's history holds; quit the app first",
+        what: "give back the disk no commit of any store reaches, keeping every commit; quit the app first",
+        command: "datalib-dag ~/datalib/config.toml --collect",
+    },
+    Example {
+        what: "also fold the rendered documents' and the grid's history into one commit each; quit the app first",
         command: "datalib-dag ~/datalib/config.toml --compact",
     },
     Example {
@@ -112,12 +116,17 @@ pub struct Cli {
     pub reset: Vec<String>,
     /// Fold the history of every store nothing reads the history of (each
     /// source's rendered documents, and the grid index) into one commit,
-    /// and give back the disk it held. Their content stays as it is, so
-    /// nothing runs again for it. Alone, that is all this invocation does;
-    /// with --sync it runs first. Refused while anything else runs the
-    /// loop on the root.
-    #[arg(long)]
+    /// collect every other store as --collect does, and give back the
+    /// disk. Their content stays as it is, so nothing runs again for it.
+    /// Alone, that is all this invocation does; with --sync it runs first.
+    /// Refused while anything else runs the loop on the root.
+    #[arg(long, conflicts_with = "collect")]
     pub compact: bool,
+    /// Delete from every store the chunks no commit reaches, and give back
+    /// the disk. Every commit stays readable, downloads' history included.
+    /// Alone or with --sync, as --compact.
+    #[arg(long)]
+    pub collect: bool,
     /// Who is asking. The request records it, and the app shows it
     /// ("started by claude").
     #[arg(long, value_name = "WHO", default_value = "cli")]

@@ -18,8 +18,9 @@ export const CONFIG_MUTATING = [
   "wizard-slack",
   // Writes the library's saved layout (system/ui-state/layout.json).
   "containers",
-  // Folds the history of the render stores and the grid index.
-  "compact-history",
+  // Collects every store, then folds the render stores' and the grid
+  // index's history.
+  "free-disk-space",
   // Links handles to contacts in the contacts app's store, on a root
   // that has the app (`contactsRoot` in playwright.config.ts).
   "contacts",

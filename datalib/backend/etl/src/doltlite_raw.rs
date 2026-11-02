@@ -2057,7 +2057,30 @@ pub async fn fold_history(db_path: &Path) -> Result<Option<Folded>> {
     if !db_path.exists() {
         return Ok(None);
     }
-    let pool = open_inner(
+    let pool = open_bare(db_path).await?;
+    let result = fold_on(&pool).await;
+    pool.close().await;
+    result.with_context(|| format!("fold {}", db_path.display()))
+}
+
+/// Delete the chunks no commit, branch or tag reaches (`dolt_gc`). Every
+/// commit stays readable, so it loses nothing; what it gives back is what
+/// a writer's transactions left behind. `false` when there is no store.
+pub async fn collect_garbage(db_path: &Path) -> Result<bool> {
+    if !db_path.exists() {
+        return Ok(false);
+    }
+    let pool = open_bare(db_path).await?;
+    let result = sqlx::query("SELECT dolt_gc()").execute(&pool).await;
+    pool.close().await;
+    result.with_context(|| format!("dolt_gc {}", db_path.display()))?;
+    Ok(true)
+}
+
+/// The writer's open with no schema work: the lock, the working set
+/// discarded and a stranded seal published, and nothing else.
+async fn open_bare(db_path: &Path) -> Result<SqlitePool> {
+    open_inner(
         db_path,
         &[],
         &[],
@@ -2066,10 +2089,7 @@ pub async fn fold_history(db_path: &Path) -> Result<Option<Folded>> {
         OnSchemaBreak::Refuse,
         &[],
     )
-    .await?;
-    let result = fold_on(&pool).await;
-    pool.close().await;
-    result.with_context(|| format!("fold {}", db_path.display()))
+    .await
 }
 
 async fn fold_on(pool: &SqlitePool) -> Result<Option<Folded>> {

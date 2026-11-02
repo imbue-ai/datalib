@@ -259,6 +259,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/reset", post(reset_steps))
         .route("/api/purge", post(purge_groups))
         .route("/api/compact", post(compact_steps))
+        .route("/api/collect", post(collect_steps))
         .route("/api/runs", get(runs_list))
         .route("/api/processes", get(processes_list))
         .route("/api/log/{seq}", get(log_line))
@@ -1660,6 +1661,7 @@ struct ResetRequest {
     by: Option<String>,
 }
 
+/// The body of `POST /api/compact` and `POST /api/collect`.
 #[derive(Debug, Deserialize)]
 struct CompactRequest {
     /// Step ids; none for every step that takes the verb.
@@ -1861,17 +1863,27 @@ async fn purge_groups(
     wiped(s.sync.purge(&req.groups, &by).await)
 }
 
-/// `POST /api/compact` — fold away the history nothing reads, and give
-/// back the disk it held (`step_protocol.md` § Compact). No targets is
-/// every step that takes the verb. 204 once done; 202 while it runs,
-/// once the steps it holds have stopped; 409, with the reason, for a
-/// step it cannot compact.
+/// `POST /api/compact` — fold away the history nothing reads, collect
+/// every other store, and give back the disk (`step_protocol.md` §
+/// Compact and collect). No targets is every step that takes the verb.
+/// 204 once done; 202 while it runs, once the steps it holds have
+/// stopped; 409, with the reason, for a step it cannot compact.
 async fn compact_steps(
     State(s): State<AppState>,
     Json(req): Json<CompactRequest>,
 ) -> Result<StatusCode, Refusal> {
     let by = req.by.unwrap_or_else(|| "ui".to_string());
     wiped(s.sync.compact(&req.targets, &by).await)
+}
+
+/// `POST /api/collect` — delete what no commit reaches, keeping every
+/// commit, and give back the disk. Answered as `/api/compact` is.
+async fn collect_steps(
+    State(s): State<AppState>,
+    Json(req): Json<CompactRequest>,
+) -> Result<StatusCode, Refusal> {
+    let by = req.by.unwrap_or_else(|| "ui".to_string());
+    wiped(s.sync.collect(&req.targets, &by).await)
 }
 
 fn wiped(answer: Result<supervisor::WipeAnswer, String>) -> Result<StatusCode, Refusal> {

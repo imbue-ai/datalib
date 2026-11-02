@@ -133,9 +133,17 @@ impl SyncControl {
     }
 
     /// Fold away the history of `targets`, or of every step that takes the
-    /// verb when it names none, holding them and what reads them meanwhile.
+    /// verb when it names none, and collect the rest, holding them and
+    /// what reads them meanwhile.
     pub async fn compact(&self, targets: &[String], by: &str) -> Result<WipeAnswer, String> {
         self.wipe(WipeKind::Compact, targets, by).await
+    }
+
+    /// Delete what no commit reaches from the stores of `targets`, or of
+    /// every step that takes the verb when it names none, keeping every
+    /// commit, holding them and what reads them meanwhile.
+    pub async fn collect(&self, targets: &[String], by: &str) -> Result<WipeAnswer, String> {
+        self.wipe(WipeKind::Collect, targets, by).await
     }
 
     /// Ask the loop for a wipe and wait, up to [`WIPE_WAIT`], for it to
@@ -153,6 +161,7 @@ impl SyncControl {
                     WipeKind::Reset => "reset",
                     WipeKind::Purge => "delete",
                     WipeKind::Compact => "compact",
+                    WipeKind::Collect => "collect",
                 }
             ));
         }

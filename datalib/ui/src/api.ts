@@ -1503,11 +1503,12 @@ export async function resetSteps(targets: string[]): Promise<"done" | "queued"> 
   return r.status === 202 ? "queued" : "done";
 }
 
-/// Fold away the history of every rendered document store and the grid
-/// index, and give back the disk it held (`step_protocol.md` § Compact).
-/// "queued" when it is still going after the server's wait.
-export async function compactHistory(): Promise<"done" | "queued"> {
-  const r = await post("/api/compact", {});
+/// Give back the disk no commit of any store reaches; with
+/// `dropOldVersions`, also fold the history of every rendered document
+/// store and the grid index into one commit (`step_protocol.md` § Compact
+/// and collect). "queued" when it is still going after the server's wait.
+export async function freeDiskSpace(dropOldVersions: boolean): Promise<"done" | "queued"> {
+  const r = await post(dropOldVersions ? "/api/compact" : "/api/collect", {});
   return r.status === 202 ? "queued" : "done";
 }
 
