@@ -613,8 +613,9 @@ writer's `open` discards whatever you wrote after your last commit. So
 is anything you spawned that is still in your process group, even once
 you have exited: stop your children before you exit.
 
-`datalib-step` does this for the built-in ingests: SIGINT raises a
-stop flag (`datalib_etl::stop::StopFlag`, on `DownloadControl`) that
+`datalib-step` does this for the built-in ingests, on SIGINT or
+SIGTERM (what a process manager sends a step run by hand): either one
+raises a stop flag (`datalib_etl::stop::StopFlag`, on `DownloadControl`) that
 the fetch loops read before starting a unit of work — a channel, a
 conversation, a batch of messages — that makes the seal path seal at
 the next consistent point whatever the cadence says, and that ends a
@@ -720,11 +721,13 @@ marks it `interrupted`.
 
 Four things a hand run has to get right that the runner does for it:
 
-- **Stop it with SIGINT.** That is the signal it answers by stopping at
-  its next consistent point and sealing what it has. SIGTERM, which a
-  process manager such as supervisord sends by default, and SIGKILL end
-  it at once: what it fetched since its last seal is discarded, and the
-  next run fetches it again.
+- **Stop it with SIGINT or SIGTERM, and wait for it.** Either one makes
+  it stop at its next consistent point and seal what it has; one still
+  running ten seconds later exits without that last seal. Give it more
+  than those ten seconds before anything harsher: supervisord's
+  `stopwaitsecs` and Docker's stop timeout both default to exactly ten,
+  so raise them to fifteen. SIGKILL ends it at once: what it fetched
+  since its last seal is discarded, and the next run fetches it again.
 - **Leave `DATALIB_PARENT_PIPE` unset**, unless you hand it a pipe on
   that descriptor and keep the other end open. A process the applet
   gateway started has it set to `0`, and a step that inherits it

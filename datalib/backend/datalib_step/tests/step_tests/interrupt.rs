@@ -1,6 +1,6 @@
-//! SIGINT to a running `datalib-step` ingest ends it at the next unit
-//! boundary with a final commit — the last seal — and a `cancelled`
-//! outcome. The real binary runs a slack playback slowed by
+//! SIGINT or SIGTERM to a running `datalib-step` ingest ends it at the
+//! next unit boundary with a final commit — the last seal — and a
+//! `cancelled` outcome. The real binary runs a slack playback slowed by
 //! `DATALIB_HTTP_PLAYBACK_DELAY_MS`; the signal is sent when its stdout
 //! reports the first channel done, so nothing here waits on the clock.
 use std::fs;
@@ -37,6 +37,18 @@ fn doltlite(db: &Path, sql: &str) -> Vec<String> {
 
 #[test]
 fn sigint_ends_the_ingest_at_a_channel_boundary_with_a_final_commit() {
+    stops_at_a_channel_boundary_with_a_final_commit(libc::SIGINT);
+}
+
+/// SIGTERM is what a process manager (supervisord, Docker) sends to stop
+/// a program, giving it a while before SIGKILL. It ended a step at once,
+/// discarding what it had fetched since its last seal.
+#[test]
+fn sigterm_ends_the_ingest_at_a_channel_boundary_with_a_final_commit() {
+    stops_at_a_channel_boundary_with_a_final_commit(libc::SIGTERM);
+}
+
+fn stops_at_a_channel_boundary_with_a_final_commit(signal: libc::c_int) {
     let d = tempfile::tempdir().unwrap();
     let root = d.path().join("root");
     let api = d.path().join("input_raw");
@@ -88,7 +100,7 @@ fn sigint_ends_the_ingest_at_a_channel_boundary_with_a_final_commit() {
                     if v["event"] == "progress_inc" && v["step"] == STEP {
                         // Safety: our own child, still running (we hold
                         // its handle), a valid signal.
-                        unsafe { libc::kill(pid as libc::pid_t, libc::SIGINT) };
+                        unsafe { libc::kill(pid as libc::pid_t, signal) };
                         signalled = true;
                     }
                 }

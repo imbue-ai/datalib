@@ -452,8 +452,9 @@ async fn main() {
         .expect("no data root: set DATALIB_DAG_DATA_ROOT or run inside one");
     let emitter = Emitter::new(step_id);
 
-    // SIGINT (terminal Ctrl-C, or forwarded by the runner on cancel):
-    // raise the stop flag and let the step end at a boundary of its own
+    // SIGINT (terminal Ctrl-C, or forwarded by the runner on cancel) or
+    // SIGTERM (a process manager stopping a step run by hand, as
+    // `datalib-dag` and `datalib-http` take it too): raise the stop flag and let the step end at a boundary of its own
     // choosing — a fetch loop stops taking units, the seal path seals at
     // the next consistent point, `finish` commits — then report
     // `cancelled`. Nothing is committed *from here*: a commit made by a
@@ -463,8 +464,14 @@ async fn main() {
     let stop = datalib_etl::stop::StopFlag::new();
     let sig_stop = stop.clone();
     let sig_emitter = emitter.clone();
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("install the SIGTERM handler");
     tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
+        let asked = tokio::select! {
+            r = tokio::signal::ctrl_c() => r.is_ok(),
+            _ = sigterm.recv() => true,
+        };
+        if asked {
             sig_stop.request();
             tracing::info!("interrupted; stopping at the next consistent point");
             tokio::time::sleep(INTERRUPT_GRACE).await;
