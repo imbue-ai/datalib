@@ -1,13 +1,13 @@
 # Photos: a row per picture, and an applet that shows it
 
-*Proposal (2026-11-02). Nothing here is built. Lightroom Classic first;
+*Proposal (2026-11-02), partly built: §8 says which steps landed and
+where the build departed from the plan. Lightroom Classic first;
 written so Apple Photos can follow through the same shape (§3).*
 
-Today a Lightroom source is a versioned backup of the catalog and
-nothing else: its `render_markdown` step writes only the storage report,
-so not one photo reaches the grid or the search bar
-([`lightroom/INGEST.md`](../../../datalib/backend/etl/providers/lightroom/INGEST.md)
-§"What render will need"). This plan gives every photo and video in a
+Before this plan, a Lightroom source was a versioned backup of the
+catalog and nothing else: its `render_markdown` step wrote only the
+storage report, so not one photo reached the grid or the search bar.
+This plan gives every photo and video in a
 catalog one row in the grid, findable by when it was taken, its caption,
 its keywords, the people tagged in it, the albums it is in and where it
 was taken, and adds a `photos` applet that draws the picture: a
@@ -168,24 +168,26 @@ in. §9 lists the ways to change that.
 
 ### A document with no file
 
-The render store and the grid index assume every document is a file
-today. Three places change, in `etl/render`:
-
-- **`RenderedMarkdown.md_path` becomes optional.** A document without
-  one writes its `markdowns` row with a null `md_path`, and its grid rows
-  a null `qmd_path`. The `misfiled` check passes a document with no file
-  and no path.
-- **`source_id` stops being derived from `qmd_path` alone.** It falls
-  back to `markdowns.source_id`, which every document already carries
-  and `grid_index` already copies.
-- **qmd ignores them for free**: its collection is a glob over `.md`
-  files, and there are none.
+Planned as a change to `etl/render` (an optional `md_path`, `source_id`
+from `markdowns`); built as none. The render store never writes a
+document's file, its renderer does, so a renderer that writes none
+leaves everything else as it is: the rows still name the `qmd_path` the
+file would have, which keeps `source_id` and the id-from-path rule, and
+qmd, whose collection is a glob over `.md` files, finds nothing. The
+document carries one keyed section, a short text of the photo, so a
+diff group can still compare two renders of it. `/chat/<uuid>` answers
+a document whose file is missing and whose row has an `image` with that
+name and an empty body.
 
 The step stays `render_markdown`. The name lies a little for this
 source, but renaming a step is a migration, and `grid_index` and the
 wizard already know this one.
 
-**Incremental**: a photo is a bucket keyed by `id_global`. The rows that
+**Incremental**, as built: every photo is filed under one bucket,
+declared over the whole tables render reads, so a sync where the catalog
+did not change costs one lookup and one where it did renders every photo
+again. Planned, and still to do for a large library: a bucket per photo
+keyed by `id_global`. The rows that
 change one photo are spread over a dozen tables, so the render diffs the
 mirror between the commit it last rendered and HEAD on each, and
 re-renders the union of photos they touch. A change to a shared row
@@ -353,21 +355,23 @@ built, turns a click into `place:<cell>` at the zoom it is drawn at.
 
 ## 8. Order of work
 
-1. **Pin catalog 03 with its previews.** `lightroom_db_diff` at
-   `d8d1364` has them (§1). Fetch the catalog, `previews.db` and the
-   previews folder as a new set of `http_file`s in `MODULE.bazel`,
-   beside the four catalogs the mirror test already pins, so that test
-   is not moved.
-2. **A document with no file** in `etl/render`, with its tests: the
-   store writes no file, the index fills `source_id`, qmd skips it.
-3. **`photo_schema`, the new `GridRow` columns and term kinds, and
-   `lightroom_render`.** Goldens over catalog 03. `ingest_only!` for
-   Lightroom becomes a real render in `dispatch.rs`.
-4. **The applet**: routes, preview lookup for both formats, the
-   original fallback, the two cards. Tests against catalog 03's previews
-   folder.
-5. **The UI**: the thumbnail cell, the `serves` lookup, opening a photo
-   row.
+1. **Built.** Catalog 03 with its previews, `previews.db` and originals,
+   pinned as one `http_archive` (`lightroom_catalog_03_previews`) beside
+   the four catalogs the mirror test pins.
+2. **Not needed**: see §3, "A document with no file".
+3. **Built.** `photo_schema`, `source_photos` (render store and index),
+   the `image`, `latitude` and `longitude` columns, the `Place` and
+   `Caption` term kinds behind `place:` and `caption:`, and
+   `lightroom_render`, tested against catalog 03
+   (`lightroom_render:catalog_03`).
+4. **Built**, but one card rather than two: `photos(applet, uuid?)` is
+   the contact sheet without a uuid and the photo with one. Both preview
+   formats; tested by starting the binary over catalog 03's previews
+   (`applets:photos_catalog_03`).
+5. **Partly built.** The `serves` lookup, and opening a photo row: the
+   document card hands a photo to the applet's card, and beside the
+   search list shows its picture. The grid's thumbnail cell is not
+   built.
 6. **Time zones by position** (§5 rule 3), once §9 settles the data.
 
 Later: Apple Photos through the same `photos` table; a RAW original's

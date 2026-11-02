@@ -8,9 +8,10 @@ use datalib_source_common::{LocalPath, SourceCommon};
 use serde::{Deserialize, Serialize};
 
 /// Columns folded in by [`LightroomConfig::skip_xmp`]. These are the
-/// bulky, wholly-derived metadata blobs in a Lightroom catalog: the
-/// serialized XMP packet Lightroom keeps per image, and the flattened
-/// search-index strings it rebuilds from the harvested EXIF/IPTC tables.
+/// bulky metadata blobs in a Lightroom catalog: the serialized XMP packet
+/// Lightroom keeps per image, which alone holds a photo's title and the
+/// offset of its capture time, and the flattened search-index strings it
+/// rebuilds from the harvested EXIF/IPTC tables.
 pub const XMP_COLUMN_PATTERNS: &[&str] = &[
     "Adobe_AdditionalMetadata.xmp",
     "AgMetadataSearchIndex.*SearchIndex",
@@ -51,9 +52,9 @@ pub struct LightroomConfig {
     /// nothing in the store and never shows up in a diff.
     pub exclude_columns: Vec<String>,
 
-    /// Also leave out the bulkiest columns, which Lightroom derives from
-    /// others that stay: the per-image XMP packet and the flattened
-    /// search-index strings.
+    /// Also leave out the bulkiest columns: the per-image XMP packet and
+    /// the flattened search-index strings. Photos then render with no
+    /// title, and most with no known time zone.
     pub skip_xmp: bool,
 
     /// Column names that, when present as a single-column UNIQUE index on

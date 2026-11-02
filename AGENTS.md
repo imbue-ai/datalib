@@ -235,9 +235,9 @@ datalib/
                    of etl/agent_sessions/; fsindex has its own walker
                    over etl/files/src/fswalk.rs); four mirror a SQLite
                    file through etl/sqlite_mirror/; three render time
-                   series (airvisual, yolink, garmin). fsindex, media,
-                   lightroom, apple_photos and linear have no
-                   <p>_render.
+                   series (airvisual, yolink, garmin); lightroom renders
+                   a row per photo and writes no markdown. fsindex,
+                   media, apple_photos and linear have no <p>_render.
     etl/sqlite_mirror/ the table-for-table SQLite→doltlite mirror engine.
     table/         `BulkUpsertable`, alone.
     packages/      `datalib_packages`: a package's manifest, the lookup
@@ -268,6 +268,9 @@ datalib/
                    `data-handle`. No first-party deps.
     contact_schema/ `NormalizedContact`: a person as one source describes
                    them. Only the shape; contact-common renders it.
+    photo_schema/  `NormalizedPhoto`: a photo or video as one source
+                   describes it. Only the shape; the photos applet
+                   reads nothing else.
     time_series_schema/ a time series, its tables, `TimeKind`,
                    `ValueType` and `Unit` (UCUM codes).
                    Only the shape.
@@ -751,6 +754,8 @@ upstream (block types, MIME types), free-form display text
 | what a time-series point's `t` counts | `TimeKind` | `time_series_schema/src/lib.rs` (`datalib_time_series_schema`) |
 | what every value of a time series is | `ValueType` | `time_series_schema/src/lib.rs` (`datalib_time_series_schema`) |
 | a contact is a person or a group; how one is reached | `ContactKind`, `Medium` | `contact_schema/src/lib.rs` (`datalib_contact_schema`) |
+| a photo or a video; where its time's offset came from | `MediaKind`, `OffsetFrom` | `photo_schema/src/lib.rs` (`datalib_photo_schema`) |
+| which picture of a photo the applet serves | `Size` | `applets/src/photos/pictures.rs` |
 | who made a link or a label: a person, or an agent waiting for one | `DecidedHow` | `contacts/src/lib.rs` (`datalib_contacts`) |
 | what a contact's field says | `FieldKind` | `contacts/src/lib.rs` (`datalib_contacts`) |
 

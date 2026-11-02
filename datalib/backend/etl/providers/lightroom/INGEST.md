@@ -16,10 +16,8 @@ differs there.
 
 The result is an incremental, versioned backup that costs one pass over
 the catalog per run and stores only what actually changed, with every
-prior state still queryable. It renders no documents: its
-`render_markdown` step writes only the storage report, which gives the
-source its row in the grid and its Items count (`Adobe_images`); see
-[What render will need](#what-render-will-need).
+prior state still queryable. Its `render_markdown` step makes a grid
+row per photo and video, and no markdown; see [Rendering](#rendering).
 
 [`CASE_STUDY.md`](CASE_STUDY.md) tells the story of this provider with
 measurements, from first principles: what Lightroom and doltlite are,
@@ -240,8 +238,11 @@ and is routinely the single largest column in a catalog — 486 KB of a
 holds flattened search strings rebuilt from the harvested EXIF/IPTC
 tables.
 
-Both are wholly derived from columns that stay, so `skip_xmp = true`
-drops them. The column is **absent** from the mirrored table, not blanked
+The search strings are wholly derived from columns that stay. The XMP
+mostly is too, but not entirely: a photo's title and headline, and the
+UTC offset of the time it was taken, are only there, so a source with
+`skip_xmp` renders photos with no title and, for most of them, no known
+time zone, and says so on its Manage row. `skip_xmp = true` drops both. The column is **absent** from the mirrored table, not blanked
 — so it costs nothing in the store and never appears in a diff.
 
 It is **off by default**: a backup should be a faithful mirror unless you
@@ -638,42 +639,15 @@ Peak memory is about twice the rows copied
 A multi-hundred-GB database would want the copy chunked by primary-key
 range; a Lightroom catalog (tens of MB) is nowhere near that.
 
-## What render will need
+## Rendering
 
-Render is not built: a photo is not chat-shaped and the projection is
-its own design question. What it would need:
+`lightroom_render` makes one grid row per image and writes no markdown;
+the `photos` applet draws the picture. What it reads, how a photo's time
+gets its offset, and what goes into the search terms:
+[`docs/dev/plans/photos_applet.md`](/docs/dev/plans/photos_applet.md)
+and the crate's `src/read.rs`. Render reads only the mirror; the
+previews are read by the applet, live, from the `Previews.lrdata` beside
+the catalog, since their file names change on every edit.
 
-- **One `grid_rows` row per image.** This join runs against a mirrored
-  catalog today and yields absolute on-disk paths:
-
-  ```sql
-  SELECT i.id_global,
-         i.captureTime,
-         i.rating,
-         rf.absolutePath || f.pathFromRoot || fi.baseName || '.' || fi.extension AS path,
-         cm.value AS camera,
-         ip.caption
-    FROM Adobe_images i
-    JOIN AgLibraryFile       fi ON fi.id_local = i.rootFile
-    JOIN AgLibraryFolder      f ON f.id_local  = fi.folder
-    JOIN AgLibraryRootFolder rf ON rf.id_local = f.rootFolder
-    LEFT JOIN AgHarvestedExifMetadata     e ON e.image    = i.id_local
-    LEFT JOIN AgInternedExifCameraModel  cm ON cm.id_local = e.cameraModelRef
-    LEFT JOIN AgLibraryIPTC              ip ON ip.image    = i.id_local;
-  ```
-
-  Add `AgLibraryKeywordImage` → `AgLibraryKeyword` for keywords and
-  `AgInternedExifLens` for the lens. `Adobe_images.captureTime` is
-  ISO-8601 but **carries no offset** (`2002-10-01T00:00:00`); it stays
-  as written ([timestamp convention](/AGENTS.md#timestamp-convention)),
-  but a sortable UTC twin cannot be derived from it alone.
-- **A way to show the pictures.** The catalog stores paths, not pixels.
-  Three candidates, cheapest first: (1) link out to the original file via
-  the resolved absolute path — no bytes copied, breaks if the library
-  moves; (2) pull Lightroom's own previews out of the sibling
-  `<Catalog> Previews.lrdata` bundle into the blob CAS — self-contained
-  and already grid-sized, but the bundle's layout is undocumented and
-  hasn't been examined here, so cost that out before committing to it;
-  (3) generate thumbnails from the originals — most work, most control.
-- **`fsindex` as a companion**, if you want to know whether the files the
-  catalog points at are still there.
+**`fsindex` as a companion**, if you want to know whether the files the
+catalog points at are still there.

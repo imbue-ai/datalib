@@ -88,7 +88,9 @@ A person is found by the part they played:
 | `recipient:` | was in any of them |
 | `mention:` | was mentioned, where the source marks mentions up |
 | `with:` (also `involves:`) | played any of those parts, or took part in the conversation the row is or is named after (a direct message's other party, even where only you wrote), or is who an address-book card is about |
-| `label:` | (not a person) an email's labels |
+| `label:` | (not a person) an email's labels; a photo's keywords (and the keywords above them), the people tagged in it and its albums |
+| `place:` | (not a person) where a photo was taken: a city, a landmark, or an H3 cell its GPS fix falls in |
+| `caption:` | (not a person) a photo's caption; the free text in the search box does not reach photos, which have no page |
 
 The value can be:
 

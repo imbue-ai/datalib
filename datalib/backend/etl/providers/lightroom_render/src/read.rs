@@ -457,7 +457,9 @@ async fn load_xmp(pool: &SqlitePool, images: &mut BTreeMap<i64, ImageRow>) -> Re
     .context("read Adobe_AdditionalMetadata")?;
     for r in rows {
         if let Some(image) = images.get_mut(&r.get::<i64, _>("image")) {
-            image.xmp = r.try_get::<Vec<u8>, _>("xmp").ok();
+            image.xmp = r
+                .try_get::<Option<Vec<u8>>, _>("xmp")
+                .context("read an XMP packet")?;
         }
     }
     Ok(())
