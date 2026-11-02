@@ -84,11 +84,39 @@ open-and-return form: it answers as soon as the loop has taken the
 request on. The command line has no flag that does the same.
 
 **To wait for the downloads only**, not the render and indexes after
-them, read the loop's record instead of the request. A request stays
-open until everything downstream of its roots has run, which for an
-app that reads only the raw stores is time spent waiting on the search
-index. A download is done for your request once its `steps` row says
-it started after the request opened and has finished since:
+them, ask about your request's steps rather than the request. A
+request stays open until everything downstream of its roots has run,
+which for an app that reads only the raw stores is time spent waiting
+on the search index. With the app up, `GET /api/requests/<id>` answers
+with the request and each step it covers, its roots first:
+
+```sh
+curl -H "Authorization: Bearer $(cat <data_root>/system/api-token)" \
+  <origin>/api/requests/<request id>
+```
+
+```json
+{"id": "…", "roots": ["slack/ingest"], "by": "today", "state": "open", …,
+ "steps": [
+   {"id": "slack/ingest", "root": true, "phase": "done",
+    "last_run": {"status": "succeeded", …}, "progress": {…}, …},
+   {"id": "slack/render_markdown", "root": false, "phase": "running", …},
+   …]}
+```
+
+Each step's `phase` is where it stands for your request: `pending` (it
+has work left: waiting its turn, or the loop has not taken the request
+on yet), `running`, or `done` (nothing left for it). Once a root is
+`done`, `last_run.status` says how its run ended: `succeeded`, `failed`
+or `stopped`. A step turned off is done without running, and its
+`state` says `off`. `progress` is what the step has reported in the
+loop's current run: the same numbers as `GET /api/runs/{run}/steps`
+(see "How fresh is the mirror?"). Ask again every second or two, or
+when `GET /api/sync/stream` pushes a frame.
+
+With no app up, read the loop's record yourself. A download is done
+for your request once its `steps` row says it started after the
+request opened and has finished since:
 
 ```sh
 sqlite3 <data_root>/system/supervisor.sqlite "

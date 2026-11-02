@@ -62,6 +62,7 @@ rust_library(
         "src/prometheus.rs",
         "src/remote_media.rs",
         "src/request_log.rs",
+        "src/request_progress.rs",
         "src/supervisor.rs",
         "src/ui_events.rs",
         "src/ui_mirror.rs",

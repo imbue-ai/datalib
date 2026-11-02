@@ -244,7 +244,11 @@ instead of a second one.
 
 **Watching.** `GET /api/requests` lists the open requests, then the
 newest closed ones: each with its `roots`, `by`, and `state` (`open`, or
-how it ended: `done`, `failed`, `stopped`). `datalib-dag status
+how it ended: `done`, `failed`, `stopped`). `GET /api/requests/<id>`
+adds each step the request covers, roots first, with its `phase` for
+that request (`pending`, `running`, `done`), its last run and its live
+progress: wait on a root's `done` to wait for a download without the
+render and indexes after it. `datalib-dag status
 <config>` prints the same from the shell, with the steps turned off and the steps
 running now. What each step is doing is in the loop's record, which the
 Manage screen's Status column reads directly:
