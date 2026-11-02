@@ -2,14 +2,11 @@
 //! backups, into a doltlite store.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Result;
 use clap::Parser;
-use datalib_etl::doltlite_raw as dr;
-use datalib_etl::progress::{Progress, TracingSink};
-use datalib_etl::stop::StopFlag;
+use datalib_etl::standalone::StandaloneRun;
 use datalib_etl_files::fingerprint_cache::{self, FingerprintCache};
 use datalib_etl_lightroom::ingest::{mirror, sync, MirrorOptions};
 use datalib_etl_lightroom_config::XMP_COLUMN_PATTERNS;
@@ -109,29 +106,30 @@ async fn main() -> Result<()> {
         ..MirrorOptions::new(input)
     };
 
-    let progress = Progress::new(Arc::new(TracingSink::new("lightroom")));
+    let run = StandaloneRun::start("lightroom", &args.db);
     let pool = mirror::open_mirror(&args.db).await?;
-    let cache = FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?;
-    let run = sync::run(
-        &pool,
-        &cache,
-        sync::Inputs {
-            backups: args.backups.as_deref(),
-            catalog: args.catalog.as_deref(),
-        },
-        &options,
-        &progress,
-        &StopFlag::default(),
-        "lightroom",
-    )
-    .await?;
-    let summary = run.summary();
-    let commit = dr::commit_run(&pool, &format!("download lightroom: {summary}")).await?;
-    pool.close().await;
-    let elapsed_ms = started.elapsed().as_millis() as u64;
-    match commit {
-        Some(hash) => tracing::info!(elapsed_ms, commit = %hash, "{summary}"),
-        None => tracing::info!(elapsed_ms, "{summary} (no further changes)"),
-    }
+    let summary = run
+        .run_store(pool.clone(), None, |_| async {
+            let cache = FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?;
+            let synced = sync::run(
+                &pool,
+                &cache,
+                sync::Inputs {
+                    backups: args.backups.as_deref(),
+                    catalog: args.catalog.as_deref(),
+                },
+                &options,
+                &run.progress(),
+                &run.control().stop,
+                "lightroom",
+            )
+            .await?;
+            Ok(synced.summary())
+        })
+        .await?;
+    tracing::info!(
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "{summary}"
+    );
     Ok(())
 }

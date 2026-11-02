@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use clap::Parser;
+use datalib_etl::standalone::StandaloneRun;
 use datalib_etl_claude::ingest::{
     self as claude, db_path_for, FetchOptions, RawDb, DEFAULT_OVERLAP, SLEEP_BETWEEN,
 };
@@ -72,38 +73,45 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let _guard = init_obs(&args.obs, "claude-ingest")?;
 
-    // The one writer: this process opens the store, hands the handle to
-    // `fetch`, and closes it below.
+    let run = StandaloneRun::start("claude", &args.out);
     let db = RawDb::open(&db_path_for(&args.out)).await?;
-    let opts = FetchOptions {
-        export_dir: args.export_dir.clone(),
-        overlap: args.overlap,
-        sleep_between: Duration::from_secs_f64(args.sleep_between.max(0.0)),
-        since: args.since.clone(),
-        conv_uuids: args.conv_uuids.clone(),
-        projects: !args.no_projects,
-        project_uuids: args.project_uuids.clone(),
-        ..FetchOptions::new(db.clone())
-    };
-
+    let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
     let span = info_span!("claude_ingest", out = %args.out.display());
-    let summary = claude::fetch(opts).instrument(span).await;
-    db.close().await;
-    let summary = summary?;
-    info!(
-        event = "claude_download_complete",
-        total = summary.total,
-        fetched = summary.fetched,
-        skipped = summary.skipped,
-        out_of_scope = summary.out_of_scope,
-        non_chat_orgs = summary.non_chat_orgs,
-        forbidden_orgs = summary.forbidden_orgs,
-        projects = summary.projects_fetched,
-        project_docs = summary.project_docs_fetched,
-        errors = summary.errors,
-        requests = summary.requests,
-        network_seconds = summary.network_seconds,
-        "the claude download is done"
-    );
+    run.run_store(pool, Some(cas_pool), |sealer| async {
+        let opts = FetchOptions {
+            export_dir: args.export_dir.clone(),
+            overlap: args.overlap,
+            sleep_between: Duration::from_secs_f64(args.sleep_between.max(0.0)),
+            since: args.since.clone(),
+            conv_uuids: args.conv_uuids.clone(),
+            projects: !args.no_projects,
+            project_uuids: args.project_uuids.clone(),
+            sealer: Some(sealer),
+            progress: run.progress(),
+            control: run.control(),
+            ..FetchOptions::new(db)
+        };
+        let summary = claude::fetch(opts).instrument(span).await?;
+        info!(
+            event = "claude_download_complete",
+            total = summary.total,
+            fetched = summary.fetched,
+            skipped = summary.skipped,
+            out_of_scope = summary.out_of_scope,
+            non_chat_orgs = summary.non_chat_orgs,
+            forbidden_orgs = summary.forbidden_orgs,
+            projects = summary.projects_fetched,
+            project_docs = summary.project_docs_fetched,
+            errors = summary.errors,
+            requests = summary.requests,
+            network_seconds = summary.network_seconds,
+            "the claude download is done"
+        );
+        Ok(format!(
+            "fetched={} skipped={} errors={} total={}",
+            summary.fetched, summary.skipped, summary.errors, summary.total
+        ))
+    })
+    .await?;
     Ok(())
 }

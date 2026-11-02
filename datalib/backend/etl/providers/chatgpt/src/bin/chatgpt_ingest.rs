@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use clap::Parser;
+use datalib_etl::standalone::StandaloneRun;
 use datalib_etl_chatgpt::ingest::{
     self as chatgpt, db_path_for, FetchOptions, RawDb, SLEEP_BETWEEN,
 };
@@ -57,32 +58,39 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let _guard = init_obs(&args.obs, "chatgpt-ingest")?;
 
-    // The one writer: this process opens the store, hands the handle
-    // to `fetch`, and closes it below.
+    let run = StandaloneRun::start("chatgpt", &args.out);
     let db = RawDb::open(&db_path_for(&args.out)).await?;
-    let opts = FetchOptions {
-        max_pages: args.max_pages,
-        limit: args.limit,
-        sleep_between: Duration::from_secs_f64(args.sleep_between.max(0.0)),
-        since: args.since.clone(),
-        conv_uuids: args.conv_uuids.clone(),
-        ..FetchOptions::new(db.clone())
-    };
-
+    let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
     let span = info_span!("chatgpt_ingest", out = %args.out.display());
-    let summary = chatgpt::fetch(opts).instrument(span).await;
-    db.close().await;
-    let summary = summary?;
-    info!(
-        event = "chatgpt_download_complete",
-        listing = summary.listing,
-        fetched = summary.fetched,
-        skipped = summary.skipped,
-        out_of_scope = summary.out_of_scope,
-        errors = summary.errors,
-        requests = summary.requests,
-        network_seconds = summary.network_seconds,
-        "the chatgpt download is done"
-    );
+    run.run_store(pool, Some(cas_pool), |sealer| async {
+        let opts = FetchOptions {
+            max_pages: args.max_pages,
+            limit: args.limit,
+            sleep_between: Duration::from_secs_f64(args.sleep_between.max(0.0)),
+            since: args.since.clone(),
+            conv_uuids: args.conv_uuids.clone(),
+            sealer: Some(sealer),
+            progress: run.progress(),
+            control: run.control(),
+            ..FetchOptions::new(db)
+        };
+        let summary = chatgpt::fetch(opts).instrument(span).await?;
+        info!(
+            event = "chatgpt_download_complete",
+            listing = summary.listing,
+            fetched = summary.fetched,
+            skipped = summary.skipped,
+            out_of_scope = summary.out_of_scope,
+            errors = summary.errors,
+            requests = summary.requests,
+            network_seconds = summary.network_seconds,
+            "the chatgpt download is done"
+        );
+        Ok(format!(
+            "fetched={} skipped={} errors={} listing={}",
+            summary.fetched, summary.skipped, summary.errors, summary.listing
+        ))
+    })
+    .await?;
     Ok(())
 }

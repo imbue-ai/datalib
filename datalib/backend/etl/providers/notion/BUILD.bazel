@@ -48,6 +48,7 @@ rust_binary(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         ":datalib_etl_notion",
+        "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/obs:datalib_obs",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:clap",

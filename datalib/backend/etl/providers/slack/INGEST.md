@@ -2,7 +2,8 @@
 
 The ingest step of a `slack` group mirrors a Slack workspace into
 `<data_root>/<group>/ingest/entities.doltlite_db`, with the blob CAS
-beside it (`slack-ingest` does the same from the command line). The
+beside it (`slack-ingest` does the same from the command line, sealing
+and committing the store the way the step does). The
 tables (`src/ingest/schema_raw.rs`) are `workspaces`, `users`,
 `channels`, `messages`, `threads` (one id per thread whose replies have
 been asked for), `slack_attachments` (the edges to file bytes in the

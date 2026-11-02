@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::Parser;
+use datalib_etl::standalone::StandaloneRun;
 use datalib_etl_notion::ingest::{self as notion, db_path_for, FetchOptions, RawDb};
 use datalib_obs::{init as init_obs, ObsArgs};
 use tracing::{info, info_span, Instrument};
@@ -53,36 +54,43 @@ async fn main() -> Result<()> {
     // No flag at all is the whole-workspace mirror: search enumerates
     // what the token can see, so there is nothing to require.
 
-    // The one writer: this process opens the store, hands the handle to
-    // `fetch`, and closes it below.
+    let run = StandaloneRun::start("notion", &args.out);
     let db = RawDb::open(&db_path_for(&args.out)).await?;
-    let opts = FetchOptions {
-        subtree_pages: args.subtree_page.clone(),
-        max_pages: args.max_pages,
-        full_sync: args.full_sync,
-        refresh_window_days: args.refresh_window_days,
-        page: args.page.clone(),
-        ..FetchOptions::new(db.clone())
-    };
-
+    let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
     let span = info_span!("notion_ingest", db = %args.out.display());
-    let summary = notion::fetch(opts).instrument(span).await;
-    db.close().await;
-    let summary = summary?;
-    info!(
-        event = "notion_download_complete",
-        listed = summary.listed,
-        new_pages = summary.new_pages,
-        upd_pages = summary.upd_pages,
-        skipped_pages = summary.skipped_pages,
-        bodies = summary.bodies,
-        empty_bodies = summary.empty_bodies,
-        failed_bodies = summary.failed_bodies,
-        comments = summary.comments,
-        new_blobs = summary.new_blobs,
-        failed_blobs = summary.failed_blobs,
-        official_requests = summary.official_requests,
-        "the notion download is done"
-    );
+    run.run_store(pool, Some(cas_pool), |sealer| async {
+        let opts = FetchOptions {
+            subtree_pages: args.subtree_page.clone(),
+            max_pages: args.max_pages,
+            full_sync: args.full_sync,
+            refresh_window_days: args.refresh_window_days,
+            page: args.page.clone(),
+            sealer: Some(sealer),
+            progress: run.progress(),
+            control: run.control(),
+            ..FetchOptions::new(db)
+        };
+        let summary = notion::fetch(opts).instrument(span).await?;
+        info!(
+            event = "notion_download_complete",
+            listed = summary.listed,
+            new_pages = summary.new_pages,
+            upd_pages = summary.upd_pages,
+            skipped_pages = summary.skipped_pages,
+            bodies = summary.bodies,
+            empty_bodies = summary.empty_bodies,
+            failed_bodies = summary.failed_bodies,
+            comments = summary.comments,
+            new_blobs = summary.new_blobs,
+            failed_blobs = summary.failed_blobs,
+            official_requests = summary.official_requests,
+            "the notion download is done"
+        );
+        Ok(format!(
+            "pages(listed={}/new={}/upd={}) bodies={} comments={}",
+            summary.listed, summary.new_pages, summary.upd_pages, summary.bodies, summary.comments
+        ))
+    })
+    .await?;
     Ok(())
 }

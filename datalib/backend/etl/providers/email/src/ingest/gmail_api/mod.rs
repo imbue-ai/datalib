@@ -65,7 +65,8 @@ pub struct FetchOptions {
     /// construction").
     pub db: RawDb,
     /// Seals a flushed batch, so render can start on the mail already
-    /// mirrored while the fetch continues. `None` commits once at the end.
+    /// mirrored while the fetch continues. `None` seals nothing mid-run:
+    /// the caller's commit at the end is the only one.
     pub sealer: Option<datalib_etl::raw_store::Sealer>,
     pub config: EmailGmailApi,
     /// Which latchkey identity the download authenticates as, from the

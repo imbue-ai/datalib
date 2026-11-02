@@ -22,5 +22,6 @@ mod reply_search;
 mod run_problems;
 mod slack_render;
 mod slack_translate;
+mod standalone_ingest;
 mod support;
 mod upgrade;

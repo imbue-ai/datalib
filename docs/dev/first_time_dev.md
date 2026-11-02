@@ -189,7 +189,10 @@ reads its function and its group's type from the environment — `ingest`
 brings a source's data into its raw store, `render_markdown` renders
 markdown + its store, and `grid_index` loads every render store into
 `<root>/unified_document_index/grid_index/db.sqlite`. Several provider
-crates also build a standalone `<p>_ingest` binary. See
+crates also build a standalone `<p>_ingest` binary, which owns its raw
+store the way the `ingest` step does (`datalib_etl::standalone`): it
+seals where the step would, commits when the download succeeds, and on
+Ctrl-C stops at the next consistent point and commits there. See
 [`step_protocol.md`](step_protocol.md) for the step contract and
 [`datalib/backend/dag/README.md`](../../datalib/backend/dag/README.md)
 for the runner's rules.

@@ -4,9 +4,10 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::Parser;
+use datalib_etl::standalone::StandaloneRun;
 use datalib_etl_email::ingest::{self as jmap, db_path_for, FetchOptions, RawDb};
 use datalib_obs::{init as init_obs, ObsArgs};
-use tracing::{info_span, Instrument};
+use tracing::{info, info_span, Instrument};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -52,26 +53,39 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let _guard = init_obs(&args.obs, "jmap-ingest")?;
 
-    // The one writer: this process opens the store, hands the handle to
-    // `fetch`, and closes it below.
+    let run = StandaloneRun::start("email", &args.out);
     let db = RawDb::open(&db_path_for(&args.out)).await?;
-    let opts = FetchOptions {
-        db: db.clone(),
-        hostname: args.hostname.clone(),
-        account_id: args.account_id.clone(),
-        only_mailbox_labels: args.only_mailbox_labels.clone(),
-        blob_size_limit_bytes: args.blob_size_limit_bytes,
-        blob_download_concurrency: args.blob_download_concurrency,
-        ..FetchOptions::new(db.clone())
-    };
-
+    let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
     let span = info_span!(
         "jmap_ingest",
         hostname = %args.hostname,
         out = %args.out.display(),
     );
-    let result = jmap::fetch(opts).instrument(span).await;
-    db.close().await;
-    result?;
+    let summary = run
+        .run_store(pool, Some(cas_pool), |sealer| async {
+            let opts = FetchOptions {
+                hostname: args.hostname.clone(),
+                account_id: args.account_id.clone(),
+                only_mailbox_labels: args.only_mailbox_labels.clone(),
+                blob_size_limit_bytes: args.blob_size_limit_bytes,
+                blob_download_concurrency: args.blob_download_concurrency,
+                sealer: Some(sealer),
+                progress: run.progress(),
+                control: run.control(),
+                ..FetchOptions::new(db)
+            };
+            let s = jmap::fetch(opts).instrument(span).await?;
+            Ok(format!(
+                "mailboxes={} emails={} destroyed={} blobs(dl={} oversize={} err={})",
+                s.mailboxes_upserted,
+                s.emails_upserted,
+                s.emails_destroyed,
+                s.blobs_downloaded,
+                s.blobs_oversize,
+                s.blobs_errored,
+            ))
+        })
+        .await?;
+    info!(summary = %summary, "the jmap download is done");
     Ok(())
 }

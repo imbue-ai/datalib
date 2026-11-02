@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use clap::Parser;
+use datalib_etl::standalone::StandaloneRun;
 use datalib_etl_gitlab::ingest::{
     self as gitlab, db_path_for, parse_mr_ref, FetchOptions, RawDb, DEFAULT_SCOPES,
 };
@@ -70,29 +71,36 @@ async fn main() -> Result<()> {
         .map(|s| parse_mr_ref(s))
         .collect::<Result<Vec<_>>>()?;
 
-    // The one writer: this process opens the store, hands the handle to
-    // `fetch`, and closes it below.
+    let run = StandaloneRun::start("gitlab", &args.out);
     let db = RawDb::open(&db_path_for(&args.out)).await?;
-    let opts = FetchOptions {
-        scopes,
-        refresh_window_days: args.refresh_window_days,
-        max_mrs: args.max_mrs,
-        targets,
-        full_sync: args.full,
-        sleep_between: Duration::from_secs_f64(args.sleep_between.max(0.0)),
-        ..FetchOptions::new(db.clone(), datalib_time::IsoOffsetTimestamp::now_local())
-    };
-
+    let pool = db.pool().clone();
     let span = info_span!("gitlab_ingest", out = %args.out.display());
-    let summary = gitlab::fetch(opts).instrument(span).await;
-    db.close().await;
-    let summary = summary?;
-    info!(
-        event = "gitlab_download_complete",
-        new_mrs = summary.new_mrs,
-        new_discussions = summary.new_discussions,
-        requests = summary.requests,
-        "the gitlab download is done"
-    );
+    run.run_store(pool, None, |sealer| async {
+        let opts = FetchOptions {
+            scopes,
+            refresh_window_days: args.refresh_window_days,
+            max_mrs: args.max_mrs,
+            targets,
+            full_sync: args.full,
+            sleep_between: Duration::from_secs_f64(args.sleep_between.max(0.0)),
+            sealer: Some(sealer),
+            progress: run.progress(),
+            control: run.control(),
+            ..FetchOptions::new(db, datalib_time::IsoOffsetTimestamp::now_local())
+        };
+        let summary = gitlab::fetch(opts).instrument(span).await?;
+        info!(
+            event = "gitlab_download_complete",
+            new_mrs = summary.new_mrs,
+            new_discussions = summary.new_discussions,
+            requests = summary.requests,
+            "the gitlab download is done"
+        );
+        Ok(format!(
+            "mrs(new={}) requests={}",
+            summary.new_mrs, summary.requests
+        ))
+    })
+    .await?;
     Ok(())
 }

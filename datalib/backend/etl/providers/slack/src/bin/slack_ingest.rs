@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::Parser;
+use datalib_etl::standalone::StandaloneRun;
 use datalib_etl_slack::ingest::{
     self as slack, db_path_for, FetchOptions, RawDb, DEFAULT_REFRESH_EVERY_MINUTES,
     DEFAULT_REFRESH_WINDOW_DAYS, DEFAULT_SINCE,
@@ -92,44 +93,50 @@ async fn main() -> Result<()> {
         );
     }
 
-    // The one writer: this process opens the store, hands the handle to
-    // `fetch`, and closes it below.
+    let run = StandaloneRun::start("slack", &args.out);
     let db = RawDb::open(&db_path_for(&args.out)).await?;
-    let opts = FetchOptions {
-        channels,
-        since: args.since.clone(),
-        refresh_window_days: args.refresh_window_days,
-        refresh_every_minutes: args.refresh_every_minutes,
-        members_only: args.members_only,
-        media: args.media,
-        dms: args.dms,
-        dm_conversations: (!args.dm_conversations.is_empty())
-            .then(|| args.dm_conversations.clone()),
-        search_replies: true,
-        ..FetchOptions::new(db.clone())
-    };
-
+    let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
     // Root span: every downstream span hangs off this, and OTLP gets a
     // single trace per CLI invocation.
     let span = info_span!(
         "slack_ingest",
         out = %args.out.display(),
-        channels = opts.channels.as_deref().map(|c| c.join(",")),
-        media = opts.media,
-        dms = opts.dms,
+        channels = channels.as_deref().map(|c| c.join(",")),
+        media = args.media,
+        dms = args.dms,
     );
-    let summary = slack::fetch(opts).instrument(span).await;
-    db.close().await;
-    let summary = summary?;
-
-    info!(
-        event = "slack_download_complete",
-        messages = summary.messages,
-        replies = summary.replies,
-        media_downloaded = summary.media.get("downloaded").copied().unwrap_or(0),
-        media_skipped = summary.media.get("skipped").copied().unwrap_or(0),
-        media_errors = summary.media.get("error").copied().unwrap_or(0),
-        "the slack download is done"
-    );
+    run.run_store(pool, Some(cas_pool), |sealer| async {
+        let opts = FetchOptions {
+            channels,
+            since: args.since.clone(),
+            refresh_window_days: args.refresh_window_days,
+            refresh_every_minutes: args.refresh_every_minutes,
+            members_only: args.members_only,
+            media: args.media,
+            dms: args.dms,
+            dm_conversations: (!args.dm_conversations.is_empty())
+                .then(|| args.dm_conversations.clone()),
+            search_replies: true,
+            sealer: Some(sealer),
+            progress: run.progress(),
+            control: run.control(),
+            ..FetchOptions::new(db)
+        };
+        let summary = slack::fetch(opts).instrument(span).await?;
+        info!(
+            event = "slack_download_complete",
+            messages = summary.messages,
+            replies = summary.replies,
+            media_downloaded = summary.media.get("downloaded").copied().unwrap_or(0),
+            media_skipped = summary.media.get("skipped").copied().unwrap_or(0),
+            media_errors = summary.media.get("error").copied().unwrap_or(0),
+            "the slack download is done"
+        );
+        Ok(format!(
+            "msgs={} replies={} pruned={}",
+            summary.messages, summary.replies, summary.pruned
+        ))
+    })
+    .await?;
     Ok(())
 }

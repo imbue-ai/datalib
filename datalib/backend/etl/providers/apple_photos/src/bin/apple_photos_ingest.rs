@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use anyhow::Result;
 use clap::Parser;
+use datalib_etl::standalone::StandaloneRun;
 use datalib_etl_apple_photos::ingest;
 use datalib_etl_apple_photos::processor::mirror_options;
 use datalib_etl_apple_photos_config::ApplePhotosConfig;
@@ -94,5 +95,17 @@ async fn main() -> Result<()> {
     };
     let options = mirror_options(&config)?;
 
-    ingest::fetch_and_commit(&args.db, options, "apple_photos", started).await
+    let run = StandaloneRun::start("apple_photos", &args.db);
+    let pool = ingest::mirror::open_mirror(&args.db).await?;
+    let summary = run
+        .run_store(pool.clone(), None, |_| async {
+            let stats = ingest::mirror::run(&pool, &options, &run.progress()).await?;
+            Ok(stats.summary())
+        })
+        .await?;
+    tracing::info!(
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "{summary}"
+    );
+    Ok(())
 }

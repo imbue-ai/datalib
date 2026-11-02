@@ -312,10 +312,18 @@ branch". Nothing but the store's writer touches a draft.
 Every provider's `FetchOptions` carries `pub db: RawDb` — a live handle,
 not a path and not an `Option`. **Whoever opens a store closes it**, and
 for a download that is always the caller: the step's processor, the
-provider's `*_download` binary, or the test. `fetch` borrows it for the
+provider's `*_ingest` binary, or the test. `fetch` borrows it for the
 run and returns. A `fetch` that opened its own store while the caller
 held one would now be refused at open rather than failing the caller's
 commit later.
+
+**Whoever opens it also seals it.** `fetch` never commits, so a caller
+that closes without `commit_run` leaves a store a reader sees as empty
+and the next writer's open discards. The step's processor and every
+`*_ingest` binary go through `RunCtx::run_store` (a binary by way of
+`StandaloneRun`, `src/standalone.rs`), which hands `fetch` a `Sealer`,
+commits on `Ok` and closes on every path; a test that drives `fetch`
+itself calls `commit_all` before it closes.
 
 ### A reader opens read-only and pinned
 

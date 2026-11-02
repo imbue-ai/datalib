@@ -53,6 +53,7 @@ rust_binary(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         ":datalib_etl_claude",
+        "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/obs:datalib_obs",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:clap",

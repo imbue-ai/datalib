@@ -54,6 +54,7 @@ rust_binary(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         ":datalib_etl_slack",
+        "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/obs:datalib_obs",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:clap",
@@ -83,11 +84,15 @@ rust_test(
     name = "slack_tests",
     srcs = glob(["tests/slack_tests/*.rs"]),
     crate_root = "tests/slack_tests/main.rs",
-    data = glob(["tests/slack_tests/snapshots/*.snap"], allow_empty = True) + [":tng_fixture"],
+    data = glob(["tests/slack_tests/snapshots/*.snap"], allow_empty = True) + [
+        ":slack_ingest",
+        ":tng_fixture",
+    ],
     edition = "2021",
     env = {
         "INSTA_WORKSPACE_ROOT": ".",
         "SLACK_FIXTURE_DIR": "datalib/backend/etl/providers/slack/tests/fixtures/slack_api",
+        "SLACK_INGEST_BIN": "$(rootpath :slack_ingest)",
     },
     proc_macro_deps = ["@datalib_crates//:async-trait"],
     deps = [
@@ -112,8 +117,12 @@ rust_test(
 insta_update(
     name = "slack_tests.update",
     test = ":slack_tests",
-    extra_data = [":tng_fixture"],
+    extra_data = [
+        ":slack_ingest",
+        ":tng_fixture",
+    ],
     extra_env = {
         "SLACK_FIXTURE_DIR": "datalib/backend/etl/providers/slack/tests/fixtures/slack_api",
+        "SLACK_INGEST_BIN": "$(rootpath :slack_ingest)",
     },
 )
