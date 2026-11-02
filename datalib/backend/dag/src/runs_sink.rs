@@ -55,6 +55,24 @@ fn raise_peak(process: Option<&mut ProcessRow>, bytes: i64) -> Option<ProcessRow
     Some(p.clone())
 }
 
+/// What a step owes as it ends `status`, its own queue last at `queued`;
+/// `None` keeps what its last run said, for a step this run did not
+/// invoke. Only an end short of done owes: a render's or an index's bar
+/// ends a successful run still holding work it announced and then found
+/// it had no need to do, and a download that gives up with work owed
+/// ends `incomplete`, which is a failure.
+fn owed_at_end(status: RunState, ran: bool, queued: Option<i64>) -> Option<i64> {
+    if !ran {
+        return None;
+    }
+    Some(match status {
+        RunState::Failed | RunState::Stopped => queued.unwrap_or(0).max(0),
+        RunState::Succeeded | RunState::SkippedUpToDate | RunState::Blocked | RunState::Running => {
+            0
+        }
+    })
+}
+
 /// Record a running total's new value, and say what it was if this is
 /// the first time within the attempt it has gone down.
 fn counter_fell(
@@ -332,12 +350,7 @@ impl EventSink for RunStoreSink {
                 let mut owed = None;
                 self.update(step, |a| {
                     queued = std::mem::take(&mut a.queued);
-                    // Only a step that ran this run says anything about
-                    // what it owes; one it skipped keeps its last word.
-                    owed = a
-                        .process
-                        .is_some()
-                        .then(|| a.own_queued.unwrap_or(0).max(0));
+                    owed = owed_at_end(*status, a.process.is_some(), a.own_queued);
                     a.row.state = status.as_str().into();
                     a.row.finished_at_utc = Some(finished_at_utc.clone());
                     a.row.error = error.clone();
@@ -353,8 +366,7 @@ impl EventSink for RunStoreSink {
                 if let Some(p) = ended {
                     self.writer.process(p);
                 }
-                // What its own queue still held is what it owes, and stays
-                // after the queue is emptied, until its next run ends.
+                // Stays after the queue is emptied, until its next run ends.
                 if let Some(owed) = owed {
                     self.write_metric(step, OWED, String::new(), owed);
                 }
@@ -1011,6 +1023,35 @@ mod tests {
             ],
             "a step the run skipped keeps what its last run said"
         );
+    }
+
+    /// Renders and embeds end most successful runs with work still on
+    /// their bar that they found they had no need to do, which read as
+    /// "20,349 owed" on a healthy source. Only an end short of done owes;
+    /// a step the run did not invoke keeps its last word.
+    #[test]
+    fn only_a_step_that_ended_short_of_done_owes() {
+        use strum::VariantArray;
+        let ends: Vec<(RunState, Option<i64>)> = RunState::VARIANTS
+            .iter()
+            .map(|&s| (s, owed_at_end(s, true, Some(20_349))))
+            .collect();
+        assert_eq!(
+            ends,
+            [
+                (RunState::Running, Some(0)),
+                (RunState::Succeeded, Some(0)),
+                (RunState::SkippedUpToDate, Some(0)),
+                (RunState::Blocked, Some(0)),
+                (RunState::Failed, Some(20_349)),
+                (RunState::Stopped, Some(20_349)),
+            ]
+        );
+        assert_eq!(owed_at_end(RunState::Failed, true, None), Some(0));
+        assert_eq!(owed_at_end(RunState::Stopped, true, Some(-3)), Some(0));
+        for &s in RunState::VARIANTS {
+            assert_eq!(owed_at_end(s, false, Some(9)), None, "{s:?}");
+        }
     }
 
     /// A retry re-runs the step from the beginning, so the count has to

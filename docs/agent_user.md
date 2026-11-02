@@ -247,8 +247,9 @@ newest closed ones: each with its `roots`, `by`, and `state` (`open`, or
 how it ended: `done`, `failed`, `stopped`). `datalib-dag status
 <config>` prints the same from the shell, with the steps turned off, the steps
 running now, and a line `owed <step>  <n>  as of run <id>` for each step
-at rest whose last run ended with work it saw waiting and did not get
-to — a Slack sync that was stopped, say, with the conversations, threads
+at rest whose last run ended short of done (stopped, failed, given up)
+with work it saw waiting and did not get to — a Slack sync that was
+stopped, say, with the conversations, threads
 and files it had not reached; the next sync starts on them. What each step is doing is in the loop's record, which the
 Manage screen's Status column reads directly:
 

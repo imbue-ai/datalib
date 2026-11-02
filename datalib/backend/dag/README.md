@@ -569,13 +569,19 @@ the sink sets every `queued` series of that step to zero, its own and
 each `queued{from=…}`: a step that is not running has nothing ahead of
 it in this run.
 
-What its own `queued` held at that moment is what it still owes: the
-conversations, threads and files a Slack sync saw waiting and did not
-get to before it was stopped, gave up or failed. The sink writes it
-first as the step's `owed` (`datalib_metrics::OWED`), which nothing
-zeroes: every step a run invokes gets one as it ends, zero when its own
-queue was empty or it never counted, and the next run that invokes the
-step replaces it. A `queued{from=…}` is not owed — it is the producer's
+When the step ended short of done — stopped, turned off, failed, or
+given up with work owed (`incomplete`, a failure) — what its own
+`queued` held at that moment is what it still owes: the conversations,
+threads and files a Slack sync saw waiting and did not get to. The sink
+writes it first as the step's `owed` (`datalib_metrics::OWED`), which
+nothing zeroes. A step that succeeded owes nothing, whatever its bar
+still showed: a render or an embed often ends a successful run with
+thousands announced that it then found it had no need to do, and a
+download that cannot finish says so by ending `incomplete`. So every
+step a run invokes gets an `owed` as it ends — zero when it succeeded,
+when its own queue was empty or when it never counted — and the next
+run that invokes the step replaces it; a step the run did not invoke
+keeps its last (`runs_sink::owed_at_end`). A `queued{from=…}` is not owed — it is the producer's
 seals the step has not read, which its next run reads anyway. The
 Manage row of a step at rest draws it ("412 owed", and on the group the
 first of its steps that owes), and `datalib-dag status` lists it. A

@@ -770,7 +770,7 @@ async fn status_lines(store: &Store, data_root: &Path) -> Result<Vec<String>> {
         }
     }
     if lines.is_empty() {
-        lines.push("nothing open, nothing off, nothing running, nothing owed".to_string());
+        lines.push("idle: no open requests, no steps turned off, nothing owed".to_string());
     }
     Ok(lines)
 }

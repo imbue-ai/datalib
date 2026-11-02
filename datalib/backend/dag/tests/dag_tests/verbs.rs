@@ -189,7 +189,7 @@ fi
     let status = stdout(&dag(root, &["status"]));
     assert_eq!(
         status.trim(),
-        "nothing open, nothing off, nothing running, nothing owed"
+        "idle: no open requests, no steps turned off, nothing owed"
     );
 }
 
