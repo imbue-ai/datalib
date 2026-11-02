@@ -223,6 +223,14 @@ describe("rowMenu", () => {
 
   it("names the trees that keep no store", () => {
     expect(noStoreReason(target({ kind: "step", func: "ingest" }))).toBeNull();
-    expect(noStoreReason(target({ kind: "step", func: "grid_index" }))).toBeNull();
+    expect(noStoreReason(target({ kind: "step", func: "grid_index" }))).toBe(
+      "The grid index is plain SQLite, with no commit history",
+    );
+    expect(noStoreReason(target({ kind: "group", id: "unified_document_index", func: null }))).toBe(
+      "The document index keeps no doltlite store",
+    );
+    expect(
+      noStoreReason(target({ kind: "group", id: "unified_time_series_index", func: null })),
+    ).toBeNull();
   });
 });

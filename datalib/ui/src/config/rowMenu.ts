@@ -115,6 +115,10 @@ export function noStoreReason(t: MenuTarget): string | null {
     return "The QMD index keeps no doltlite store";
   }
   if (t.func === "embedding_map") return "The embedding map keeps no doltlite store";
+  if (t.func === "grid_index") return "The grid index is plain SQLite, with no commit history";
+  if (t.kind === "group" && t.id === "unified_document_index") {
+    return "The document index keeps no doltlite store";
+  }
   return null;
 }
 

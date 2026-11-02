@@ -14,7 +14,7 @@ fn unique_db_path() -> PathBuf {
     tempfile::TempDir::with_prefix("datalib-http-auth-itest-")
         .expect("create tempdir")
         .keep()
-        .join("backend_index.doltlite_db")
+        .join("backend_index.sqlite")
 }
 
 async fn app() -> (axum::Router, ApiToken) {

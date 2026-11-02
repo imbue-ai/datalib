@@ -1,8 +1,8 @@
 // Right-click a row on the Manage screen → "Show commit history" → a
 // card beside it with the store's dolt_log as a tree: the store, its
-// commits, and under each commit the tables it left behind. The fixture root's grid index is a
-// real doltlite store with real commits, so the rows here are read from
-// it.
+// commits, and under each commit the tables it left behind. The fixture root's render
+// stores are real doltlite stores with real commits, so the rows here are
+// read from Slack's.
 
 import { test, expect } from "@playwright/test";
 import {
@@ -21,7 +21,7 @@ const ROWS = TABLE_ROWS;
 test("a group's commit history opens from the context menu as a card", async ({ page }) => {
   await page.goto("/data_sources");
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
-  const row = groupRow(page, "unified_document_index");
+  const row = groupRow(page, "slack");
   await expect(row).toBeVisible({ timeout: 10_000 });
 
   await row.click({ button: "right" });
@@ -29,9 +29,7 @@ test("a group's commit history opens from the context menu as a card", async ({ 
 
   const card = shownCards(page).filter({ has: page.locator(".hc") });
   await expect(card).toBeVisible({ timeout: 10_000 });
-  await expect(card.locator(".ct-card-title")).toHaveText("History · Document Index");
-  // Not a source, so nothing here to compare.
-  await expect(card.getByText(/right-click to compare/)).toHaveCount(0);
+  await expect(card.locator(".ct-card-title")).toHaveText(/^History · /);
 
   const rows = card.locator(ROWS);
   await expect(rows).not.toHaveCount(0, { timeout: 10_000 });
@@ -41,8 +39,8 @@ test("a group's commit history opens from the context menu as a card", async ({ 
 
   // The store leads, open, with its commits under it.
   const store = rows.filter({ has: page.locator(".hc-store") }).first();
-  await expect(store).toContainText("db.doltlite_db");
-  const commit = rows.filter({ hasText: "datalib-step grid_index" }).first();
+  await expect(store).toContainText("indexed_markdown.doltlite_db");
+  const commit = rows.filter({ hasText: "document(s)" }).first();
   await expect(commit.locator(".hc-copy-id")).toHaveAttribute("title", /\(([0-9a-f]{40})\)$/);
   // The fixture is built by `datalib-dag`, so its commits carry the run
   // that made them.
@@ -50,8 +48,8 @@ test("a group's commit history opens from the context menu as a card", async ({ 
 
   // Opening a commit shows what it did to each table.
   await commit.locator(".slick-tree-toggle.collapsed").click();
-  const table = rows.filter({ has: page.locator(".hc-table") }).first();
-  await expect(table).toContainText("grid_rows");
+  const table = rows.filter({ has: page.locator(".hc-table"), hasText: "grid_rows" }).first();
+  await expect(table).toBeVisible();
 
   // A refresh that fails leaves the log on screen, and the commit
   // opened in it open. The tab coming back to the foreground is a

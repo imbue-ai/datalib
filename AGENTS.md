@@ -422,9 +422,10 @@ The rules, none optional. How our code enforces them is in
   half-written rows, and doltlite itself only makes a second writer
   wait its turn, never refuses it
   ([locks and writers](docs/dev/doltlite.md#locks-and-writers)). Our
-  per-file lock refuses it. The `grid_index` step owns the index;
-  `datalib-http` owns feedback, usage and remote media; the applet only
-  reads. A download takes its store as an input
+  per-file lock refuses it. `datalib-http` owns feedback, usage and
+  remote media; the applet only reads. (The grid index is not doltlite:
+  it is plain SQLite in WAL mode, which keeps no history and needs none
+  of these rules, and the `grid_index` step is its one writer.) A download takes its store as an input
   (`FetchOptions.db: RawDb`) and never opens one.
 - **A writer works on `datalib_writer`, never on `main`**, and
   fast-forwards `main` when it seals, so a reader never sees a
@@ -438,11 +439,10 @@ The rules, none optional. How our code enforces them is in
 - **A reader opens read-only and reads one commit**, one of
   [three ways](docs/dev/doltlite.md#three-ways-to-read-one-commit):
   `dolt_at_<t>('<hash>')`, a held read transaction, or a detached
-  read-only open of `<file>@<hash>`. Render and `grid_index` use the
-  last (`doltlite_raw::open_reader`), so their queries name the tables
-  themselves; the search applet holds a transaction
-  (`DoltRepo::pinned`). A process that *moves a ref*, even on its own
-  branch, is a writer.
+  read-only open of `<file>@<hash>`. Render and `grid_index` read their
+  input stores the last way (`doltlite_raw::open_reader`), so their
+  queries name the tables themselves. A process that *moves a ref*,
+  even on its own branch, is a writer.
 - **A statement a reader adds is presumed guilty until
   `doltlite_two_process_test` has run with it.** Looking like a read is
   not enough; `etl/README.md` has the allowlist.

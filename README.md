@@ -249,12 +249,14 @@ A mirror you can't leave is just another silo, so the exits are plain:
 - **Search** — `datalib-applet search <data_root> '<query>'` answers as
   the app's search box does, as JSON, with no server: for scripts and
   agents.
-- **SQL** — `datalib-doltlite` ships with the tools and is a `sqlite3`
-  shell that understands the versioned format. One pipe writes a plain
-  SQLite file for any tool that wants one:
+- **SQL** — the grid's table, `unified_document_index/grid_index/db.sqlite`,
+  is plain SQLite. Each source's own stores are doltlite:
+  `datalib-doltlite` ships with the tools and is a `sqlite3` shell that
+  understands the versioned format, and one pipe writes a plain SQLite
+  file for any tool that wants one:
 
   ```sh
-  datalib-doltlite -readonly unified_document_index/grid_index/db.doltlite_db .dump | sqlite3 grid.sqlite
+  datalib-doltlite -readonly slack/ingest/entities.doltlite_db .dump | sqlite3 slack.sqlite
   ```
 
   Or browse a store in a GUI: a build of DB Browser for SQLite patched to

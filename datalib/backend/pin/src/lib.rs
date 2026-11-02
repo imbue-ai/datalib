@@ -8,7 +8,8 @@
 //! (docs/dev/doltlite.md#three-ways-to-read-one-commit).
 //!
 //! This crate is the part of that discipline with no dependencies: the
-//! hash as a type, HEAD, and the two read-only opens.
+//! hash as a type, HEAD, and the two read-only opens. A plain SQLite store
+//! has no commits, and says where it is with a [`generation`] instead.
 
 use std::path::Path;
 use std::str::FromStr;
@@ -80,6 +81,34 @@ pub async fn head(pool: &SqlitePool) -> Result<Option<Pin>> {
         .await
         .unwrap_or(None);
     commit.map(Pin::at).transpose()
+}
+
+/// The one-row table a plain SQLite store keeps its version in: an id
+/// minted when the file was made, and a count its writer raises in each
+/// transaction that changes what a reader sees. A file built again gets a
+/// new id, so its count starting over names no version an old file had.
+pub const GENERATION_DDL: &str = "CREATE TABLE IF NOT EXISTS store_generation (\
+     id INTEGER PRIMARY KEY CHECK (id = 1), \
+     file_id TEXT NOT NULL, \
+     generation INTEGER NOT NULL)";
+
+/// Where a plain store is now, as `<file id>.<count>`: the version its
+/// step reports and what a reader compares to see that it moved. `None`
+/// before its writer has made the row. On a connection in a read
+/// transaction, the version that transaction reads.
+pub async fn generation<'c, E>(conn: E) -> Result<Option<String>, sqlx::Error>
+where
+    E: sqlx::Executor<'c, Database = sqlx::Sqlite>,
+{
+    match sqlx::query_scalar::<_, String>(
+        "SELECT file_id || '.' || generation FROM store_generation WHERE id = 1",
+    )
+    .fetch_optional(conn)
+    .await
+    {
+        Err(e) if is_missing_table(&e, "store_generation") => Ok(None),
+        other => other,
+    }
 }
 
 /// Something a statement named that the store, at the commit read, does

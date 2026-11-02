@@ -111,7 +111,7 @@ pub struct Cli {
     #[arg(long, value_name = "STEP_ID", value_delimiter = ',')]
     pub reset: Vec<String>,
     /// Fold the history of every store nothing reads the history of (each
-    /// source's rendered documents, and the grid index) into one commit,
+    /// source's rendered documents) into one commit,
     /// and give back the disk it held. Their content stays as it is, so
     /// nothing runs again for it. Alone, that is all this invocation does;
     /// with --sync it runs first. Refused while anything else runs the

@@ -1015,7 +1015,7 @@ async fn fields_ranking(s: &Index, parsed: &ParsedQuery) -> Result<TermsRanking,
             (uuid, hit)
         })
         .collect();
-    Ok((ranking, Some(found.grid_commit)))
+    Ok((ranking, Some(found.grid_generation)))
 }
 
 /// The answer with no tab, which the CLI, the map and a link without a
@@ -1943,9 +1943,7 @@ mod tests {
                 .await
                 .unwrap();
         }
-        datalib_etl::doltlite_raw::commit_run(&pool, "chats")
-            .await
-            .unwrap();
+        datalib_etl_render::grid_index::seal(&pool).await.unwrap();
         pool.close().await;
     }
 
@@ -1975,12 +1973,12 @@ mod tests {
             .any(|m| m.ino() == ino)
     }
 
-    /// Compacting the grid index swaps a new file in under the same name.
-    /// The applet's held reader lets go of the old one at its next read
-    /// (doltlite notices the swap), which is what frees its disk; until
-    /// then the data root reads smaller than the free space has grown.
+    /// A reset deletes the grid index, and the next pass makes a new file
+    /// under the same name. The applet's held reader lets go of the old
+    /// one at its next read, or it would answer from rows that are gone,
+    /// and hold their disk, until it restarted.
     #[tokio::test]
-    async fn a_compacted_grid_index_is_reopened() {
+    async fn a_rebuilt_grid_index_is_reopened() {
         use std::os::unix::fs::MetadataExt;
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
@@ -2001,24 +1999,15 @@ mod tests {
         let db = datalib_runtime::layout::grid_index_db(root);
         let before = std::fs::metadata(&db).unwrap().ino();
         assert!(held_open(before), "the first read left no reader open");
-        datalib_etl::doltlite_raw::fold_history(&db)
-            .await
-            .unwrap()
-            .expect("two syncs leave a history to fold");
-        assert_ne!(
-            std::fs::metadata(&db).unwrap().ino(),
-            before,
-            "the fold no longer swaps the file, so this test no longer tests that"
-        );
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", db.display()));
+        }
         index_chats(root, &[(c, "2026-01-03T00:00:00Z")]).await;
 
-        assert_eq!(
-            found(s.repo.rows_by_uuids(&uuids).await.unwrap()),
-            [a, b, c]
-        );
+        assert_eq!(found(s.repo.rows_by_uuids(&uuids).await.unwrap()), [c]);
         assert!(
             !held_open(before),
-            "the reader still holds the grid index compaction replaced"
+            "the reader still holds the grid index a reset deleted"
         );
     }
 
@@ -2094,9 +2083,7 @@ mod tests {
                 .await
                 .unwrap();
         }
-        datalib_etl::doltlite_raw::commit_run(&pool, "mail")
-            .await
-            .unwrap();
+        datalib_etl_render::grid_index::seal(&pool).await.unwrap();
         pool.close().await;
     }
 
@@ -2649,9 +2636,7 @@ mod tests {
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
-        datalib_etl::doltlite_raw::commit_run(&pool, "a table the search cannot read")
-            .await
-            .unwrap();
+        datalib_etl_render::grid_index::seal(&pool).await.unwrap();
         pool.close().await;
         let s = index_over(tmp.path()).await;
 

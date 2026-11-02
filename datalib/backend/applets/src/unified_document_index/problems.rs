@@ -491,9 +491,7 @@ mod tests {
                 .await
                 .unwrap();
         }
-        datalib_etl::doltlite_raw::commit_run(&pool, "problems")
-            .await
-            .unwrap();
+        datalib_etl_render::grid_index::seal(&pool).await.unwrap();
         pool.close().await;
     }
 

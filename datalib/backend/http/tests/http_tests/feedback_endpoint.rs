@@ -24,7 +24,7 @@ fn unique_db_path() -> PathBuf {
     tempfile::TempDir::with_prefix("datalib-http-fb-itest-")
         .expect("create tempdir")
         .keep()
-        .join("backend_index.doltlite_db")
+        .join("backend_index.sqlite")
 }
 
 #[tokio::test]
