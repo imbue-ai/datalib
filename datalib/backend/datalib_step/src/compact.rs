@@ -1,9 +1,10 @@
 //! The compact verb (`--compact`): fold the history of a store nothing
 //! reads the history of into one commit, and give back the disk it held
-//! (`docs/dev/step_protocol.md` § Compact). That is a render store and the
-//! grid index, both rebuilt from what they read. A raw store's history is
-//! the record of what upstream once held, and a time-series store's
-//! commits are what its index points at, so neither is touched.
+//! (`docs/dev/step_protocol.md` § Compact). That is a render store, rebuilt
+//! from what it reads. A raw store's history is the record of what
+//! upstream once held, and a time-series store's commits are what its
+//! index points at, so neither is touched; the grid index is plain SQLite
+//! and keeps no history.
 
 use std::path::Path;
 
@@ -19,7 +20,6 @@ pub async fn run(env: &StepEnv, data_root: &Path) -> Result<Vec<OutputClaim>> {
         Function::RenderMarkdown => {
             datalib_etl_render::indexed_markdown::path_for(&data_root.join(&env.step))
         }
-        Function::GridIndex => datalib_core::layout::grid_index_db(data_root),
         _ => {
             tracing::info!(step = %env.step, "compact: no history of ours to fold");
             return Ok(Vec::new());

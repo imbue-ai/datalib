@@ -93,7 +93,7 @@ filegroup(
 # pipeline (ingest -> render) against the checked-in TNG-themed source
 # JSON and emits five outputs:
 #
-#   * backend_index.doltlite_db -- the doltlite store the backend reads.
+#   * backend_index.sqlite -- the grid index the backend reads (plain SQLite).
 #   * backend_search_terms.sqlite -- the terms file the grid_index step writes
 #                   beside it.
 #   * qmd.tar    -- the rendered conversation tree (markdown, each
@@ -146,9 +146,8 @@ filegroup(
 # over the same fixture. The pipeline runs
 # every source's download+render step pair over the checked-in
 # fixtures and the index fan-in stacks the resulting render stores into
-# `backend_index.doltlite_db` (the doltlite chunk store is linked
-# statically via `//third-party/doltlite:sqlite3`, so no host `dolt`
-# install is required). This rule then tars the render_markdown tree into
+# `backend_index.sqlite` (doltlite is linked statically via
+# `//third-party/doltlite:sqlite3`, so no host `dolt` install is required). This rule then tars the render_markdown tree into
 # qmd.tar.
 # Tar packaging is *not* the pipeline binary's concern — it operates
 # at the layer of DB + qmd files.
@@ -183,7 +182,7 @@ genrule(
         "//third-party/doltlite:doltlite",
     ],
     outs = [
-        "ingested/backend_index.doltlite_db",
+        "ingested/backend_index.sqlite",
         "ingested/backend_search_terms.sqlite",
         "ingested/qmd.tar",
         "ingested/qmd_md.tar",
@@ -274,7 +273,7 @@ genrule(
         # Copy the grid index store out of the workspace.
         # It lives under the `unified_document_index/` tree the index steps own
         # (see core::layout).
-        "cp $(RULEDIR)/sync_workspace/unified_document_index/grid_index/db.doltlite_db $(execpath ingested/backend_index.doltlite_db)",
+        "cp $(RULEDIR)/sync_workspace/unified_document_index/grid_index/db.sqlite $(execpath ingested/backend_index.sqlite)",
         # And the terms file the same step writes beside it.
         "cp $(RULEDIR)/sync_workspace/unified_document_index/grid_index/search_terms.sqlite $(execpath ingested/backend_search_terms.sqlite)",
         # The sources as render-only groups, for materialize_tng_root.sh
@@ -285,7 +284,7 @@ genrule(
         " ".join([
             "python3 $(execpath check_ingested.py)",
             "$(execpath //third-party/doltlite:doltlite)",
-            "$(execpath ingested/backend_index.doltlite_db)",
+            "$(execpath ingested/backend_index.sqlite)",
             "$(execpath ingested/config_body.toml)",
             "$(RULEDIR)/sync_workspace/unified_time_series_index/time_series_index/time_series.doltlite_db",
         ]),
@@ -350,13 +349,13 @@ py_test(
     srcs = ["check_ingested_test.py"],
     args = [
         "$(rootpath //third-party/doltlite:doltlite)",
-        "$(rootpath ingested/backend_index.doltlite_db)",
+        "$(rootpath ingested/backend_index.sqlite)",
         "$(rootpath ingested/config_body.toml)",
         "$(rootpath ingested/time_series.tar)",
     ],
     data = [
         "check_ingested.py",
-        "ingested/backend_index.doltlite_db",
+        "ingested/backend_index.sqlite",
         "ingested/config_body.toml",
         "ingested/time_series.tar",
         "//third-party/doltlite:doltlite",

@@ -580,8 +580,7 @@ the verb to give back the disk its history holds, once each, with
 its history goes: the command line needs the root to itself, as
 `--reset` does, and the app's loop holds the steps it asks and every
 step that reads them until it is done (`dag/README.md` §"Resets and
-purges"). The search applet, which the loop does not schedule, reads on
-through a compaction of the grid index (`doltlite.md` § Trees). The step decides what that means for
+purges"). The step decides what that means for
 what it wrote, runs nothing else, and reports its version as a run
 would; the runner records it, so a step that kept its content and
 reports a content version moves nothing downstream. Report nothing when
@@ -590,10 +589,10 @@ steps take the verb (`StepSpec::compacts`).
 
 `datalib-step` folds the history of the stores nothing reads the
 history of into one commit and runs `dolt_gc`
-(`doltlite_raw::fold_history`): a render store and the grid index.
-Their version is their tree, which the fold keeps, so nothing runs
-again for it, and the grid index finds its cursor again by the tree it
-recorded (`grid_rows.md`). It refuses a store whose size is more than
+(`doltlite_raw::fold_history`): a render store. Its version is its
+tree, which the fold keeps, so nothing runs again for it, and the grid
+index finds its cursor again by the tree it recorded (`grid_rows.md`).
+The grid index is plain SQLite and keeps no history to fold. It refuses a store whose size is more than
 the disk has free, since gc writes the compacted store before it drops
 the old one. A raw store's history is the record of what upstream once
 held, and a time-series store's commits are what its index points at,

@@ -11,12 +11,15 @@
                                                   a calendar's occurrences in a window of
                                                   days, one row each, replaced whole by each
                                                   run (`calendar_render/src/occurrences/`)
-<data_root>/unified_document_index/grid_index/db.doltlite_db   grid_rows / markdowns / edges / problems /
-                                                  source_contacts (who each handle is, per source)
+<data_root>/unified_document_index/grid_index/db.sqlite   grid_rows / markdowns / edges / problems /
+                                                  source_contacts (who each handle is, per source);
+                                                  plain SQLite in WAL mode, its version the
+                                                  `store_generation` row
 <data_root>/unified_document_index/grid_index/search_terms.sqlite every id, handle, title, label and name each
                                                   grid row answers to, full-text indexed, and the
-                                                  names each handle went by (plain SQLite;
-                                                  `grid_index` rewrites it after each pass,
+                                                  names each handle went by (plain SQLite
+                                                  in WAL mode; `grid_index` brings it up to
+                                                  date after each pass,
                                                   `etl/render/src/search_terms.rs`)
 <data_root>/unified_document_index/qmd_aggregator/           the qmd index (plain SQLite inside)
 <data_root>/unified_document_index/embedding_map/embedding_map.json
@@ -107,10 +110,15 @@ One writer per file ([`etl/README.md`](../../datalib/backend/etl/README.md)
 two stores; `render_markdown` owns its render store; `grid_index` owns
 the index; `datalib-http` owns feedback, usage and remote media;
 the applet only reads, each request inside one read transaction on a
-read-only connection, which holds one commit (`DoltRepo::pinned` in
-`unified_document_index/src/dolt_repo.rs`;
-[`doltlite.md`](doltlite.md#three-ways-to-read-one-commit)) — so a
-`grid_index` pass in flight is never served. `runs.sqlite` is the exception because it is not doltlite: plain
+read-only connection (`DoltRepo::pinned` in
+`unified_document_index/src/dolt_repo.rs`). The grid index is plain
+SQLite in WAL mode, and its step writes one source per transaction, so
+that transaction reads one state of it and a `grid_index` pass in
+flight is never served; a request also reopens the file when a reset
+has replaced it. Doltlite never copies a plain file's WAL back by
+itself ([`doltlite.md`](doltlite.md) § "Plain SQLite files and SQLite
+compatibility"), so the step
+does it at the end of every pass (`grid_index::close_index`). `runs.sqlite` is the other exception to doltlite: plain
 SQLite in WAL mode, written by whoever runs the loop (its
 runs) and the server (its own log) — one process while the server is
 up, two while a `datalib-dag` runs the loop — which SQLite's own locking

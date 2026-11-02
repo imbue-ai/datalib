@@ -6,7 +6,7 @@ inside documents. The schema is the `EdgeRow` struct in
 `#[derive(PortableTable)]`). A renderer returns a document's outgoing
 edges on `RenderedMarkdown::edges`; they are stored in the source's
 render store beside its rows, and the `grid_index` step copies them into
-`<root>/unified_document_index/grid_index/db.doltlite_db` beside `grid_rows` and
+`<root>/unified_document_index/grid_index/db.sqlite` beside `grid_rows` and
 `markdowns` (`init_schema` in
 `datalib/backend/etl/render/src/grid_index.rs` creates the table).
 

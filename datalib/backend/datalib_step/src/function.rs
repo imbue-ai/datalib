@@ -66,7 +66,7 @@ impl Function {
             }
             Function::GridIndex => {
                 "Stack every source's rendered rows into the one SQL index the grid and \
-                 search read, unified_document_index/grid_index/db.doltlite_db. Goes \
+                 search read, unified_document_index/grid_index/db.sqlite. Goes \
                  under the `unified_document_index` group; its inputs name each \
                  source's `<group>/render_markdown`."
             }

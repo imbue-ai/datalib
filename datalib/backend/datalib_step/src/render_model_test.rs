@@ -17,15 +17,13 @@ use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use datalib_etl::doltlite_raw::{self, DiffScanSpec};
 use datalib_etl::progress::Progress;
-use datalib_etl_render::grid_index::{
-    build_grid_index, doc_md_path, init_schema, RenderedMarkdown,
-};
+use datalib_etl_render::grid_index::{build_grid_index, doc_md_path, open_index, RenderedMarkdown};
 use datalib_etl_render::indexed_markdown::{blocking, IndexedMarkdownStore};
 use datalib_etl_render::processor::{Input, ReadScope, RenderCtx, RenderProcessor, Unparsed};
 use datalib_schema::edges::EdgeRow;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::providers::Provider;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use crate::render::{render_source, RenderSource};
@@ -750,20 +748,9 @@ impl World {
         let raw_dir = data_root.join(SOURCE).join("raw");
         std::fs::create_dir_all(&raw_dir).unwrap();
         let raw_db = doltlite_raw::db_path_for(&raw_dir);
-        let db = data_root.join("unified_document_index/grid/db.doltlite_db");
-        std::fs::create_dir_all(db.parent().unwrap()).unwrap();
-        let index = SqlitePoolOptions::new()
-            .max_connections(1)
-            .idle_timeout(None)
-            .max_lifetime(None)
-            .connect_with(
-                SqliteConnectOptions::new()
-                    .filename(&db)
-                    .create_if_missing(true),
-            )
+        let index = open_index(&datalib_core::layout::grid_index_db(data_root))
             .await
             .unwrap();
-        init_schema(&index).await.unwrap();
         // Create the raw store's schema now, and ask it whether this
         // build links doltlite at all.
         let pool = doltlite_raw::open(&raw_db, RAW_DDL).await.unwrap();

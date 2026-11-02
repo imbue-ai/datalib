@@ -4,36 +4,53 @@
 //! with the grid index after each `grid_index` pass. It is the grid's
 //! rows melted, one indexed row per term: a pure function of `grid_rows`
 //! at one commit, what each row's columns say (`search_terms_of`) and what
-//! its render supplied (`supplied_terms`). The file records the commit it
-//! reflects and moves to the next by `dolt_diff`, or is built whole when
-//! it cannot. Plain SQLite, so it keeps no history of itself.
+//! its render supplied (`supplied_terms`). The file records the grid
+//! generation it reflects and the last `grid_changes` entry it applied,
+//! moves forward by the entries after that, or is built whole when it
+//! cannot.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use datalib_schema::search_terms::{
-    decode_supplied, search_terms_of, SearchTerm, SearchTermSource, META_GRID_COMMIT, META_SHAPE,
-    TERMS_DDL, TERMS_SHAPE,
+    decode_supplied, search_terms_of, SearchTerm, SearchTermSource, META_GRID_CHANGE,
+    META_GRID_GENERATION, META_SHAPE, TERMS_DDL, TERMS_SHAPE,
 };
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::SqliteConnection;
 
-/// What a sync has to do, from what the file records and the grid's head.
+/// What a sync has to do, from what the file records and where the grid is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Plan {
-    /// The file already reflects the head.
+    /// The file already reflects the grid's generation.
     Current,
-    /// Build the file whole: it records no commit, or another shape.
+    /// Build the file whole: it records nothing, another shape, or another
+    /// grid file (a generation `<file id>.<count>` with another id).
     Whole,
-    /// Apply the rows that changed since this commit.
-    Since(String),
+    /// Apply the rows of the `grid_changes` after this one.
+    Since(i64),
 }
 
-pub fn plan(recorded_commit: Option<&str>, recorded_shape: Option<&str>, head: &str) -> Plan {
-    match (recorded_commit, recorded_shape) {
-        (Some(commit), Some(TERMS_SHAPE)) if commit == head => Plan::Current,
-        (Some(commit), Some(TERMS_SHAPE)) => Plan::Since(commit.to_string()),
+/// What the file records: the grid generation, and the last change applied.
+#[derive(Debug, Clone, Default)]
+pub struct Recorded {
+    pub generation: Option<String>,
+    pub change: Option<i64>,
+    pub shape: Option<String>,
+}
+
+pub fn plan(recorded: &Recorded, generation: &str) -> Plan {
+    let file_id = |g: &str| g.split_once('.').map(|(id, _)| id.to_string());
+    match (
+        &recorded.generation,
+        recorded.change,
+        recorded.shape.as_deref(),
+    ) {
+        (Some(g), _, Some(TERMS_SHAPE)) if g == generation => Plan::Current,
+        (Some(g), Some(change), Some(TERMS_SHAPE)) if file_id(g) == file_id(generation) => {
+            Plan::Since(change)
+        }
         _ => Plan::Whole,
     }
 }
@@ -47,19 +64,29 @@ pub struct Synced {
     pub rows: usize,
     /// Terms written.
     pub terms: usize,
+    /// The last `grid_changes` entry the file reflects.
+    pub through: i64,
 }
 
-/// Bring the search terms file at `terms_path` to the grid index's head. A store
-/// without doltlite has no head, and no terms.
+/// Bring the search terms file at `terms_path` to the grid index's
+/// generation. Run by the grid's one writer between its passes, so the
+/// grid holds still while it reads; it then deletes the changes it applied.
 pub async fn sync(grid: &SqlitePool, terms_path: &Path) -> Result<Synced> {
-    let Some(head) = datalib_etl::doltlite_raw::head_commit(grid).await? else {
+    let Some(generation) = datalib_etl::pin::generation(grid).await? else {
         return Ok(Synced::default());
     };
     let terms = open_in_shape(terms_path).await?;
-    let result = sync_open(grid, &terms, &head).await;
+    let result = sync_open(grid, &terms, &generation).await;
     // On the error path too: dropping the pool only schedules the close.
-    terms.close().await;
-    result
+    let closed = crate::grid_index::close_wal_file(terms, "the search terms file").await;
+    let synced = result?;
+    closed?;
+    sqlx::query("DELETE FROM grid_changes WHERE seq <= ?")
+        .bind(synced.through)
+        .execute(grid)
+        .await
+        .context("forget the grid changes the terms applied")?;
+    Ok(synced)
 }
 
 /// The file, made new when it was built in another shape: it holds
@@ -89,7 +116,14 @@ async fn open_in_shape(path: &Path) -> Result<SqlitePool> {
         "the search terms file is in another shape; building it again"
     );
     pool.close().await;
-    std::fs::remove_file(path).with_context(|| format!("remove {}", path.display()))?;
+    // Its log too: a `-wal` left beside a new file would be read into it.
+    for suffix in ["", "-wal", "-shm"] {
+        let file = PathBuf::from(format!("{}{suffix}", path.display()));
+        match std::fs::remove_file(&file) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            other => other.with_context(|| format!("remove {}", file.display()))?,
+        }
+    }
     let pool = open_terms(path).await?;
     let mut conn = pool.acquire().await?;
     create(&mut conn).await?;
@@ -97,12 +131,12 @@ async fn open_in_shape(path: &Path) -> Result<SqlitePool> {
     Ok(pool)
 }
 
-async fn sync_open(grid: &SqlitePool, terms: &SqlitePool, head: &str) -> Result<Synced> {
+async fn sync_open(grid: &SqlitePool, terms: &SqlitePool, generation: &str) -> Result<Synced> {
     let mut conn = terms
         .acquire()
         .await
         .context("acquire the search terms file")?;
-    let synced = sync_terms(grid, &mut conn, head).await?;
+    let synced = sync_terms(grid, &mut conn, generation).await?;
     if synced.plan != "current" {
         write_people(grid, &mut conn).await?;
     }
@@ -213,44 +247,61 @@ pub fn names_seen_under(
     out
 }
 
-async fn sync_terms(grid: &SqlitePool, conn: &mut SqliteConnection, head: &str) -> Result<Synced> {
-    let recorded = meta(&mut *conn, META_GRID_COMMIT).await?;
-    let shape = meta(&mut *conn, META_SHAPE).await?;
-    match plan(recorded.as_deref(), shape.as_deref(), head) {
+async fn sync_terms(
+    grid: &SqlitePool,
+    conn: &mut SqliteConnection,
+    generation: &str,
+) -> Result<Synced> {
+    let recorded = Recorded {
+        generation: meta(&mut *conn, META_GRID_GENERATION).await?,
+        change: meta(&mut *conn, META_GRID_CHANGE)
+            .await?
+            .and_then(|c| c.parse().ok()),
+        shape: meta(&mut *conn, META_SHAPE).await?,
+    };
+    let through: i64 = sqlx::query_scalar("SELECT coalesce(max(seq), 0) FROM grid_changes")
+        .fetch_one(grid)
+        .await
+        .context("read the grid's last change")?;
+    let at = At {
+        generation,
+        through,
+    };
+    match plan(&recorded, generation) {
         Plan::Current => Ok(Synced {
             plan: "current",
+            through: recorded.change.unwrap_or(0).max(through),
             ..Synced::default()
         }),
         Plan::Since(from) => {
-            match datalib_etl::doltlite_raw::changed_keys(grid, "grid_rows", &from, head).await {
-                Ok(changed) => {
-                    let uuids: Vec<String> = changed.into_iter().map(|k| k.key).collect();
-                    let rows = rows_by_uuid(grid, &uuids).await?;
-                    let terms = write(conn, Some(&uuids), &rows, head).await?;
-                    Ok(Synced {
-                        plan: "since",
-                        rows: uuids.len(),
-                        terms,
-                    })
-                }
-                // A commit the grid no longer has, say after a rebuild:
-                // the whole file is the one answer still right.
-                Err(e) => {
-                    tracing::warn!(
-                        from = %from,
-                        error = %format!("{e:#}"),
-                        "could not diff the grid index from the commit the terms \
-                         reflect; building the search terms file whole"
-                    );
-                    whole(grid, conn, head).await
-                }
-            }
+            let uuids: Vec<String> = sqlx::query_scalar(
+                "SELECT DISTINCT uuid FROM grid_changes WHERE seq > ? AND seq <= ?",
+            )
+            .bind(from)
+            .bind(through)
+            .fetch_all(grid)
+            .await
+            .context("read the grid's changes")?;
+            let rows = rows_by_uuid(grid, &uuids).await?;
+            let terms = write(conn, Some(&uuids), &rows, &at).await?;
+            Ok(Synced {
+                plan: "since",
+                rows: uuids.len(),
+                terms,
+                through,
+            })
         }
-        Plan::Whole => whole(grid, conn, head).await,
+        Plan::Whole => whole(grid, conn, &at).await,
     }
 }
 
-async fn whole(grid: &SqlitePool, conn: &mut SqliteConnection, head: &str) -> Result<Synced> {
+/// The grid as a sync found it: its generation, and its last change.
+struct At<'a> {
+    generation: &'a str,
+    through: i64,
+}
+
+async fn whole(grid: &SqlitePool, conn: &mut SqliteConnection, at: &At<'_>) -> Result<Synced> {
     // Audited: the column list is a literal.
     let rows: Vec<SearchTermSource> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT {} FROM grid_rows",
@@ -259,11 +310,12 @@ async fn whole(grid: &SqlitePool, conn: &mut SqliteConnection, head: &str) -> Re
     .fetch_all(grid)
     .await
     .context("read grid_rows for the terms")?;
-    let terms = write(conn, None, &rows, head).await?;
+    let terms = write(conn, None, &rows, at).await?;
     Ok(Synced {
         plan: "whole",
         rows: rows.len(),
         terms,
+        through: at.through,
     })
 }
 
@@ -310,12 +362,12 @@ fn every_term(rows: &[SearchTermSource]) -> Result<Vec<(&SearchTermSource, Searc
 
 /// One transaction: drop the rows `replace` names (every row, for `None`)
 /// with their terms, write `rows`' terms, drop the values no term uses any
-/// more, and record `head`. Returns the terms written.
+/// more, and record `at`. Returns the terms written.
 async fn write(
     conn: &mut SqliteConnection,
     replace: Option<&[String]>,
     rows: &[SearchTermSource],
-    head: &str,
+    at: &At<'_>,
 ) -> Result<usize> {
     sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
     let written = async {
@@ -414,7 +466,12 @@ async fn write(
         ] {
             sqlx::query(sql).execute(&mut *conn).await?;
         }
-        for (key, value) in [(META_GRID_COMMIT, head), (META_SHAPE, TERMS_SHAPE)] {
+        let through = at.through.to_string();
+        for (key, value) in [
+            (META_GRID_GENERATION, at.generation),
+            (META_GRID_CHANGE, through.as_str()),
+            (META_SHAPE, TERMS_SHAPE),
+        ] {
             sqlx::query(
                 "INSERT INTO terms_meta (key, value) VALUES (?, ?) \
                  ON CONFLICT (key) DO UPDATE SET value = excluded.value",
@@ -459,6 +516,11 @@ async fn open_terms(path: &Path) -> Result<SqlitePool> {
     let opts = SqliteConnectOptions::new()
         .filename(datalib_core::plain_sqlite::uri(path))
         .create_if_missing(true)
+        // A sync that rewrites much of the file spills more pages than the
+        // cache holds; with a rollback journal each spill waited on a
+        // journal sync, and a reader's transaction held off its commit.
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+        .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)
         .busy_timeout(Duration::from_secs(30));
     SqlitePoolOptions::new()
         .max_connections(1)
@@ -624,9 +686,7 @@ mod tests {
             for md in remove {
                 delete_markdown(&lock, md).await.unwrap();
             }
-            datalib_etl::doltlite_raw::commit_run(&self.pool, "pass")
-                .await
-                .unwrap();
+            crate::grid_index::seal(&self.pool).await.unwrap();
         }
 
         /// The `(uuid, kind)` of every term matching `value` exactly.
@@ -781,16 +841,16 @@ mod tests {
         assert_eq!(g.matching("email:bo@example.com").await, Vec::new());
     }
 
-    /// A commit the grid no longer has, or a file in another shape, cannot
-    /// be moved forward; it is built again.
+    /// Another grid file, or a file in another shape, cannot be moved
+    /// forward; it is built again.
     #[tokio::test]
-    async fn an_unknown_commit_or_another_shape_builds_the_file_whole() {
+    async fn another_grid_file_or_another_shape_builds_the_file_whole() {
         let g = Grid::new().await;
         g.seal(&[doc(&g.root, "c-a", "email:ann@example.com", "Away")], &[])
             .await;
         sync(&g.pool, &g.terms).await.unwrap();
 
-        g.set_meta(META_GRID_COMMIT, &"0".repeat(40)).await;
+        g.set_meta(META_GRID_GENERATION, "0000000000000000.1").await;
         let again = sync(&g.pool, &g.terms).await.unwrap();
         assert_eq!((again.plan, again.rows), ("whole", 1));
 
@@ -804,12 +864,29 @@ mod tests {
 
     #[test]
     fn the_plan_follows_what_the_file_records() {
-        assert_eq!(plan(Some("h"), Some(TERMS_SHAPE), "h"), Plan::Current);
+        let recorded = |g: &str, change: Option<i64>, shape: &str| Recorded {
+            generation: Some(g.to_string()),
+            change,
+            shape: Some(shape.to_string()),
+        };
         assert_eq!(
-            plan(Some("a"), Some(TERMS_SHAPE), "h"),
-            Plan::Since("a".into())
+            plan(&recorded("f.3", Some(9), TERMS_SHAPE), "f.3"),
+            Plan::Current
         );
-        assert_eq!(plan(None, None, "h"), Plan::Whole);
-        assert_eq!(plan(Some("h"), Some("0"), "h"), Plan::Whole);
+        assert_eq!(
+            plan(&recorded("f.2", Some(9), TERMS_SHAPE), "f.3"),
+            Plan::Since(9)
+        );
+        assert_eq!(
+            plan(&recorded("e.2", Some(9), TERMS_SHAPE), "f.3"),
+            Plan::Whole,
+            "another grid file"
+        );
+        assert_eq!(
+            plan(&recorded("f.2", None, TERMS_SHAPE), "f.3"),
+            Plan::Whole
+        );
+        assert_eq!(plan(&Recorded::default(), "f.3"), Plan::Whole);
+        assert_eq!(plan(&recorded("f.3", Some(9), "0"), "f.3"), Plan::Whole);
     }
 }

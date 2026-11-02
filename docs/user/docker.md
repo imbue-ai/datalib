@@ -109,7 +109,7 @@ the container or from any other one with the folder mounted:
 <!-- doc-test: run demo-sql -->
 ```sh
 docker exec datalib-demo datalib-doltlite -readonly \
-  /opt/datalib/demo/unified_document_index/grid_index/db.doltlite_db \
+  /opt/datalib/demo/unified_document_index/grid_index/db.sqlite \
   "SELECT provider, count(*) FROM grid_rows GROUP BY 1;"
 ```
 
@@ -224,7 +224,7 @@ describes. Query it without the server running at all:
 <!-- doc-test: run own-sql -->
 ```sh
 docker run --rm -v "$DATA_ROOT:/data" "$IMG" datalib-doltlite -readonly \
-  /data/unified_document_index/grid_index/db.doltlite_db \
+  /data/unified_document_index/grid_index/db.sqlite \
   "SELECT provider, count(*) FROM grid_rows GROUP BY 1;"
 ```
 
