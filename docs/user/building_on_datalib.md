@@ -285,15 +285,24 @@ first:
   reads the result from there.
 - **It reads one moment of each input.** `DATALIB_READS` in its
   environment is a JSON object from each input to the version the loop
-  started it against; for a raw store that is a commit hash. Open that
-  commit (`<data_root>/gmail/ingest/entities.doltlite_db/<hash>`, see
+  started it against, written `<fingerprint>:<version>`: a hash of the
+  producing step's definition, a colon, then the version that step
+  reported. For a raw store that version is the store's commit, so the
+  commit is everything after the first `:`
+  (`v=$(printf '%s' "$DATALIB_READS" | jq -r '."gmail/ingest"')`, then
+  `${v#*:}`). Open that commit
+  (`<data_root>/gmail/ingest/entities.doltlite_db/<commit>`, see
   [raw_stores.md](raw_stores.md) § "Reading one commit, and following
   changes") rather than `main`, which may have moved on.
   `DATALIB_DAG_CHANGED_INPUTS` names the inputs that moved since its
-  last success.
-- **It is run again, often.** Make it safe to repeat. Keep the last
-  hash you processed per input, under your tree, and process only what
-  `dolt_diff_<table>` says changed since then.
+  last success; empty, it means all of them.
+- **It is run again, often, and may start before a download ends.** A
+  long download lets the steps that read it run at each of its seals
+  and once more when it ends, so make it safe to repeat. Keep the last
+  commit you processed per input, under your tree, and process only
+  what `dolt_diff_<table>` says changed since then. The rules, from the
+  step's side, are
+  [When you are started](../dev/step_protocol.md#when-you-are-started).
 - **Stop when told.** On SIGINT, finish or abandon the current unit of
   work, write nothing half-done, and exit; you have fifteen seconds.
 
@@ -303,17 +312,23 @@ never learns it moved.
 
 ## Following changes
 
-To process only what changed since last time, keep the commit hash of
-`main` you last processed as your cursor, and ask the store for the
-difference:
+To process only what changed since last time, keep the commit you
+last processed as your cursor, and ask the store for the difference
+between it and the commit the loop started your step against, taken
+from `DATALIB_READS` (above):
 
 ```sh
-NEW=$(datalib-doltlite -readonly slack/ingest/entities.doltlite_db "SELECT dolt_hashof('main')")
+v=$(printf '%s' "$DATALIB_READS" | jq -r '."slack/ingest"')   # <fingerprint>:<commit>
+NEW=${v#*:}
 datalib-doltlite -readonly -json slack/ingest/entities.doltlite_db \
   "SELECT diff_type, from_id, to_id FROM dolt_diff_messages('$CURSOR', '$NEW')"
 ```
 
-Store `NEW` as the cursor only once your own work is saved. A raw
+Store `NEW` as the cursor only once your own work is saved. With no
+cursor yet, read the whole commit instead. Read `NEW`, not `main`:
+`main` may already be past it, and the loop runs your step again for
+what it moved to. Outside a step, `dolt_hashof('main')` is the store's
+current commit. A raw
 store's history is never folded away, so a cursor stays good; the
 recipe and its edge cases are in [raw_stores.md](raw_stores.md)
 § "Reading one commit, and following changes".
@@ -442,9 +457,20 @@ config only when it goes from idle to busy. A `datalib-dag --sync`
 started after your edit hands its request to that loop, which runs it
 with the **old** params and does not say so
 ([#1363](https://github.com/imbue-ai/datalib/issues/1363), open). Until
-that is fixed, after editing, wait until `datalib-dag status` shows no
-open request (or stop them) before syncing again. `datalib-dag --check
-<data_root>/config.toml` checks an edit without running anything.
+that is fixed, after editing, let the open requests finish (or stop
+them) before syncing again. A `datalib-dag --sync` waits for its own
+request and exits when it closes (0 done, 2 failed, 130 stopped), so
+wait for the one you started to exit: run it in the foreground, or
+`wait` on it. For a request someone else opened, poll `datalib-dag
+status`, which prints a line starting `request ` for each open request
+and `running ` for each step in progress:
+
+```sh
+while datalib-dag status <data_root>/config.toml | grep -Eq '^(request|running) '; do sleep 10; done
+```
+
+`datalib-dag --check <data_root>/config.toml` checks an edit without
+running anything.
 
 **Starting a source over is a reset, not a setting.** When a mail
 service stops honouring the download's change token (Gmail's

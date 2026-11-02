@@ -242,8 +242,11 @@ instead of a second one.
 **Watching.** `GET /api/requests` lists the open requests, then the
 newest closed ones: each with its `roots`, `by`, and `state` (`open`, or
 how it ended: `done`, `failed`, `stopped`). `datalib-dag status
-<config>` prints the same from the shell, with the steps turned off and the steps
-running now. What each step is doing is in the loop's record, which the
+<config>` prints the open ones from the shell, with the steps turned off and the steps
+running now: one line each, starting `request `, `off ` or `running `,
+or one line starting `idle:` when there is none. To wait for your own
+sync, don't poll: `datalib-dag <config> --sync <step>` returns when its
+request closes. What each step is doing is in the loop's record, which the
 Manage screen's Status column reads directly:
 
 ```sh

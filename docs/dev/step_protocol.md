@@ -115,7 +115,7 @@ its id, which arrives in the environment.
 | `DATALIB_DAG_DATA_ROOT` | absolute path of the data root (== cwd) |
 | `DATALIB_DAG_INPUTS` | resolved input artifacts, `\n`-separated, relative to the data root |
 | `DATALIB_DAG_CHANGED_INPUTS` | the subset of the above whose version moved since this step's last success; empty when there is no last success to compare against (never completed, or the step's own config changed) — do all your work |
-| `DATALIB_READS` | a JSON object, input path → the version the runner started this invocation against; an input with no version yet is absent. A version for what you *read*, where the output's own would say less (the qmd index reports a hash of this) |
+| `DATALIB_READS` | a JSON object, input path → the version the runner started this invocation against, as `<fingerprint>:<version>` (§ "When you are started"); an input with no version yet is absent. A version for what you *read*, where the output's own would say less (the qmd index reports a hash of this) |
 | `DATALIB_DAG_NOW` | the run's pinned timestamp (RFC 3339). Stamp times with this instead of sampling your own clock, so one run's outputs agree |
 | `DATALIB_DAG_CHECKPOINT_CADENCE` | set when the config has `checkpoint_cadence`: how many seconds to let pass before a run's first checkpoint. `datalib-step` doubles the wait after each one (the next comes once the run is twice as old as at the last), since every commit keeps the pages it touched; `0` means every consistent point and never grows |
 | `DATALIB_DAG_RENDER_PAGES` | set when the config has `render_pages`: `<buckets>,<blob_mb>`, either side empty when the config leaves it out — how many buckets a render reads together and how many MB of their blobs it loads at once |
@@ -143,6 +143,36 @@ These are what the scheduler's correctness rests on:
 
 Everything else — resume cursors, dedup indexes, bookkeeping — is
 private to you. Keep it under your own output trees.
+
+## When you are started
+
+The loop decides when your step runs ([the runner's
+README](../../datalib/backend/dag/README.md#what-the-loop-runs-and-what-makes-a-step-stale)).
+What that means from your side:
+
+* **You may be started while an input is still being written, and run
+  again.** A producer that declares `streams_output` (below, under
+  "checkpoint") lets the steps that read it start on each of its seals
+  while it carries on. The downloads datalib ships for Slack, mail,
+  Claude, ChatGPT, Notion, Google Drive, Linear, Todoist, Garmin and
+  YoLink all declare it. You are run again after each later seal, and
+  once more when the producer ends if it moved since your last run;
+  never twice at once. A step that sets `reads = "files"` is not
+  started while what it reads is being written.
+* **Read the commit you were started against, never `main`.**
+  `DATALIB_READS` holds, for each input, the version you were started
+  against, as `<fingerprint>:<version>`: a hash of the producing step's
+  definition, a colon, and the version that step reported. For a raw
+  store that version is its commit, so the commit is everything after
+  the first `:` (`${v#*:}` in a shell). `main` may have moved on since;
+  the loop runs you again for what it moved to.
+* **An empty `DATALIB_DAG_CHANGED_INPUTS` means every input.** There is
+  no success to compare with: a first run, or your definition changed
+  since. Do all your work.
+* **A failed input is read at its last commit.** What a producer
+  committed before it failed is a version like any other, and you are
+  started on it. Only a step none of whose inputs has ever published
+  anything is held back (`blocked`).
 
 ## stdout: the event protocol (optional)
 
@@ -655,7 +685,8 @@ A python step using inputs + progress + outcome:
 import hashlib, json, os, pathlib, sys
 
 inputs = [p for p in os.environ["DATALIB_DAG_INPUTS"].split("\n") if p]
-changed = set(os.environ["DATALIB_DAG_CHANGED_INPUTS"].split("\n"))
+# Empty when there is no last success to compare with: then every input counts.
+changed = {p for p in os.environ["DATALIB_DAG_CHANGED_INPUTS"].split("\n") if p} or set(inputs)
 root = pathlib.Path(os.environ["DATALIB_DAG_DATA_ROOT"])
 out = os.environ["DATALIB_DAG_STEP"]   # the one tree this step writes
 args = dict(zip(sys.argv[1::2], sys.argv[2::2]))
