@@ -66,6 +66,9 @@ describe("layoutOf", () => {
       "Copy until",
       "Edit-catcher window (days)",
       "Re-query that window every (minutes)",
+      "What involves me",
+      "Start before the first one",
+      "Stop after each one",
     ]);
     expect(advanced.every((r) => r.solo)).toBe(true);
   });

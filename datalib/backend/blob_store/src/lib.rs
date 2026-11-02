@@ -2,10 +2,11 @@
 //! reads. Its shape is a contract between the step that writes it and
 //! the server that hands its bytes out; README.md sets it out.
 
+use std::borrow::Cow;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use mail_parser::{MessageParser, MimeHeaders, PartType};
+use mail_parser::{MessageParser, PartKind};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 
@@ -112,22 +113,30 @@ pub fn part_of(stored: &Stored, part: &str) -> Option<Stored> {
     if !is_a_message(stored.content_type.as_deref(), !msg.headers().is_empty()) {
         return None;
     }
-    msg.parts.iter().find_map(|p| {
+    let found = msg.root().parts().find_map(|p| {
         let declared = p.content_type().map(|ct| match ct.subtype() {
             Some(sub) => format!("{}/{sub}", ct.ctype()),
             None => ct.ctype().to_string(),
         });
-        let (bytes, content_type) = match &p.body {
-            PartType::Binary(b) | PartType::InlineBinary(b) => (b.as_ref(), declared),
-            PartType::Text(t) => (t.as_bytes(), Some(utf8(declared, "text/plain"))),
-            PartType::Html(t) => (t.as_bytes(), Some(utf8(declared, "text/html"))),
-            PartType::Message(_) | PartType::Multipart(_) => return None,
+        let (bytes, content_type) = match p.kind() {
+            PartKind::Binary | PartKind::InlineBinary => (p.decoded(), declared),
+            PartKind::Text => (text_bytes(p.text()?), Some(utf8(declared, "text/plain"))),
+            PartKind::Html => (text_bytes(p.text()?), Some(utf8(declared, "text/html"))),
+            PartKind::Message(_) | PartKind::Multipart => return None,
         };
-        (blake3::hash(bytes).to_hex().as_str() == part).then(|| Stored {
+        (blake3::hash(&bytes).to_hex().as_str() == part).then(|| Stored {
             content_type,
-            bytes: bytes.to_vec(),
+            bytes: bytes.into_owned(),
         })
-    })
+    });
+    found
+}
+
+fn text_bytes(text: Cow<'_, str>) -> Cow<'_, [u8]> {
+    match text {
+        Cow::Borrowed(s) => Cow::Borrowed(s.as_bytes()),
+        Cow::Owned(s) => Cow::Owned(s.into_bytes()),
+    }
 }
 
 fn utf8(declared: Option<String>, otherwise: &str) -> String {
@@ -252,6 +261,34 @@ iVBORw0KGgo=\r\n\
         assert_eq!(text, message(Some("text/html; charset=utf-8"), html));
 
         assert_eq!(part_of(&eml, &blake3::hash(b"never").to_hex()), None);
+    }
+
+    /// Base64 without its final `=` still decodes to every byte; mail-parser
+    /// 0.11 dropped the last unpadded group, so the part's hash, and the
+    /// address a render wrote for it, missed its tail.
+    #[test]
+    fn an_unpadded_base64_part_keeps_its_last_bytes() {
+        const UNPADDED: &[u8] = b"From: Data <data@enterprise.example>\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/mixed; boundary=\"b\"\r\n\
+\r\n\
+--b\r\n\
+Content-Type: text/plain\r\n\
+\r\n\
+Attached.\r\n\
+--b\r\n\
+Content-Type: application/octet-stream\r\n\
+Content-Disposition: attachment; filename=\"order.bin\"\r\n\
+Content-Transfer-Encoding: base64\r\n\
+\r\n\
+VGVhLCBFYXJsIEdyZXksIGhvdA\r\n\
+--b--\r\n";
+        let order = b"Tea, Earl Grey, hot";
+        let part = part_of(
+            &message(Some("message/rfc822"), UNPADDED),
+            &blake3::hash(order).to_hex(),
+        );
+        assert_eq!(part, Some(message(Some("application/octet-stream"), order)));
     }
 
     /// Only a row that is a message is taken apart: one stored as

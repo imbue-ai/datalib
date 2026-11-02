@@ -2,7 +2,9 @@
 //! Schema-only (serde + anyhow).
 
 use datalib_source_common::{LatchkeySettings, SourceCommon};
+use datalib_time::TimeBound;
 use serde::{Deserialize, Serialize};
+use strum::{EnumString, IntoStaticStr, VariantArray};
 
 /// This source's config stanzas, for `datalib-step help`.
 pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
@@ -103,6 +105,122 @@ pub struct SlackApiSync {
     /// something new, and once a day while it is closed.
     #[serde(default)]
     pub dm_conversations: Option<Vec<String>>,
+    /// Which channels a sync walks. `every_conversation` (the default)
+    /// walks every channel `channels` / `all_channels` choose.
+    /// `involves_me` walks only the channels where something involves
+    /// the account, each from a little before the oldest such message;
+    /// DMs follow `dms` either way.
+    #[serde(default)]
+    pub scope: Scope,
+    /// With `scope = "involves_me"`: what counts as involving the
+    /// account. Unset is every kind.
+    #[serde(default)]
+    pub involves_me: Option<Vec<InvolvesMe>>,
+    /// With `scope = "involves_me"`: how long before the oldest message
+    /// involving the account a channel is walked from, as an offset
+    /// (`"-1d"`, `"-3h"`). Unset is `-1d`.
+    #[serde(default)]
+    pub context_before: Option<String>,
+    /// With `scope = "involves_me"`: how long after each message
+    /// involving the account to walk, as an offset (`"+1d"`). Unset
+    /// walks a channel up to now.
+    #[serde(default)]
+    pub context_after: Option<String>,
+}
+
+/// Which channels a sync walks.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    schemars::JsonSchema,
+    EnumString,
+    IntoStaticStr,
+    VariantArray,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum Scope {
+    #[default]
+    EveryConversation,
+    InvolvesMe,
+}
+
+/// A kind of message that involves the account, each found by a Slack
+/// search.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    schemars::JsonSchema,
+    EnumString,
+    IntoStaticStr,
+    VariantArray,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum InvolvesMe {
+    /// A message that mentions the account by name.
+    Mention,
+    /// A message the account posted.
+    FromMe,
+    /// A message that says `@here` or `@channel`.
+    Broadcast,
+}
+
+impl Scope {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+
+    /// `None` for a spelling this build does not know.
+    pub fn parse(s: &str) -> Option<Self> {
+        s.parse().ok()
+    }
+}
+
+impl InvolvesMe {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+
+    /// `None` for a spelling this build does not know.
+    pub fn parse(s: &str) -> Option<Self> {
+        s.parse().ok()
+    }
+}
+
+/// The default of `context_before`.
+pub const DEFAULT_CONTEXT_BEFORE: &str = "-1d";
+
+/// An offset from a message, as `context_before` or `context_after`
+/// write it: the offset form of the shared window grammar, signed
+/// `sign`. A day or an instant names no distance from a message.
+fn context_offset(field: &str, s: &str, sign: i32) -> anyhow::Result<chrono::Duration> {
+    let expected = if sign < 0 { "-1d" } else { "+1d" };
+    match TimeBound::parse(s) {
+        Ok(TimeBound::Relative(d))
+            if (sign < 0 && d <= chrono::Duration::zero())
+                || (sign > 0 && d >= chrono::Duration::zero()) =>
+        {
+            Ok(d)
+        }
+        _ => anyhow::bail!(
+            "`api.{field}` is {s:?}: write an offset from each message, like {expected:?} \
+             (units h, d, w)"
+        ),
+    }
 }
 
 impl Default for SlackApiSync {
@@ -116,6 +234,10 @@ impl Default for SlackApiSync {
             media: true,
             dms: false,
             dm_conversations: None,
+            scope: Scope::default(),
+            involves_me: None,
+            context_before: None,
+            context_after: None,
         }
     }
 }
@@ -149,7 +271,69 @@ impl SlackApiSync {
                 }
             }
         }
+        self.context_before()?;
+        self.context_after()?;
+        if self.scope != Scope::InvolvesMe {
+            let set: Vec<&str> = [
+                ("involves_me", self.involves_me.is_some()),
+                ("context_before", self.context_before.is_some()),
+                ("context_after", self.context_after.is_some()),
+            ]
+            .into_iter()
+            .filter_map(|(name, set)| set.then_some(name))
+            .collect();
+            if !set.is_empty() {
+                anyhow::bail!(
+                    "`{}` only applies with `scope = \"involves_me\"`, and `scope` is {:?}. \
+                     Set the scope, or drop {}.",
+                    set.join("`, `"),
+                    self.scope.as_str(),
+                    if set.len() == 1 { "it" } else { "them" },
+                );
+            }
+        }
+        if self.involves_me.as_ref().is_some_and(Vec::is_empty) {
+            anyhow::bail!(
+                "`api.involves_me` is empty, so nothing would count as involving you and no \
+                 channel would be walked. List at least one of {:?}, or drop it for all of them.",
+                InvolvesMe::VARIANTS
+                    .iter()
+                    .map(|k| k.as_str())
+                    .collect::<Vec<_>>(),
+            );
+        }
         Ok(())
+    }
+
+    /// The kinds of message that count as involving the account, each
+    /// once, in a fixed order.
+    pub fn involves_me_kinds(&self) -> Vec<InvolvesMe> {
+        let mut kinds = self
+            .involves_me
+            .clone()
+            .unwrap_or_else(|| InvolvesMe::VARIANTS.to_vec());
+        kinds.sort();
+        kinds.dedup();
+        kinds
+    }
+
+    /// `context_before` as a duration, at most zero.
+    pub fn context_before(&self) -> anyhow::Result<chrono::Duration> {
+        context_offset(
+            "context_before",
+            self.context_before
+                .as_deref()
+                .unwrap_or(DEFAULT_CONTEXT_BEFORE),
+            -1,
+        )
+    }
+
+    /// `context_after` as a duration, at least zero; `None` is up to now.
+    pub fn context_after(&self) -> anyhow::Result<Option<chrono::Duration>> {
+        self.context_after
+            .as_deref()
+            .map(|s| context_offset("context_after", s, 1))
+            .transpose()
     }
 }
 
@@ -254,5 +438,105 @@ mod tests {
         // No `api` table: nothing for the schema to check. Refusing an
         // ingest step without one is `datalib-step`'s job.
         SlackConfig::default().validate().unwrap();
+    }
+
+    fn involving(f: impl FnOnce(&mut SlackApiSync)) -> anyhow::Result<()> {
+        let mut sync = SlackApiSync {
+            scope: Scope::InvolvesMe,
+            ..Default::default()
+        };
+        f(&mut sync);
+        sync.validate()
+    }
+
+    #[test]
+    fn strum_and_serde_agree() {
+        for scope in Scope::VARIANTS {
+            let json = serde_json::to_value(scope).unwrap();
+            assert_eq!(json, scope.as_str());
+            assert_eq!(Scope::parse(scope.as_str()), Some(*scope));
+        }
+        for kind in InvolvesMe::VARIANTS {
+            let json = serde_json::to_value(kind).unwrap();
+            assert_eq!(json, kind.as_str());
+            assert_eq!(InvolvesMe::parse(kind.as_str()), Some(*kind));
+        }
+    }
+
+    /// The defaults are the wide ones: every kind, a day before, and up
+    /// to now after.
+    #[test]
+    fn involves_me_defaults_are_wide() {
+        let sync = SlackApiSync {
+            scope: Scope::InvolvesMe,
+            ..Default::default()
+        };
+        sync.validate().unwrap();
+        assert_eq!(sync.involves_me_kinds(), InvolvesMe::VARIANTS);
+        assert_eq!(sync.context_before().unwrap(), chrono::Duration::days(-1));
+        assert_eq!(sync.context_after().unwrap(), None);
+    }
+
+    #[test]
+    fn a_toml_scope_loads() {
+        let cfg: SlackConfig = toml::from_str(
+            "[api]\nscope = \"involves_me\"\ninvolves_me = [\"mention\", \"from_me\"]\n\
+             context_before = \"-3h\"\ncontext_after = \"+2d\"\n",
+        )
+        .unwrap();
+        cfg.validate().unwrap();
+        let api = cfg.api.unwrap();
+        assert_eq!(
+            api.involves_me_kinds(),
+            [InvolvesMe::Mention, InvolvesMe::FromMe]
+        );
+        assert_eq!(api.context_before().unwrap(), chrono::Duration::hours(-3));
+        assert_eq!(
+            api.context_after().unwrap(),
+            Some(chrono::Duration::days(2))
+        );
+    }
+
+    /// The context settings take the offset form of the window grammar,
+    /// pointing the right way; a day or an instant is no distance from a
+    /// message.
+    #[test]
+    fn context_takes_offsets_that_point_the_right_way() {
+        for bad in ["2026-09-01", "2026-09-01T09:00:00Z", "+1d", "1 day"] {
+            let err = involving(|s| s.context_before = Some(bad.into()))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("`api.context_before`"), "{bad}: {err}");
+        }
+        for bad in ["2026-09-01", "-1d"] {
+            let err = involving(|s| s.context_after = Some(bad.into()))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("`api.context_after`"), "{bad}: {err}");
+        }
+        involving(|s| s.context_before = Some("-2w".into())).unwrap();
+        involving(|s| s.context_after = Some("+12h".into())).unwrap();
+    }
+
+    /// A setting of the narrow scope on the default one would do
+    /// nothing, silently.
+    #[test]
+    fn involves_me_settings_need_the_scope() {
+        let err = SlackApiSync {
+            context_before: Some("-3h".into()),
+            ..Default::default()
+        }
+        .validate()
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("scope = \"involves_me\""), "{err}");
+    }
+
+    #[test]
+    fn an_empty_involves_me_is_refused() {
+        let err = involving(|s| s.involves_me = Some(vec![]))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("`api.involves_me` is empty"), "{err}");
     }
 }

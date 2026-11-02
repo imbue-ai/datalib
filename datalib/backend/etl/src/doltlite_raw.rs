@@ -1569,9 +1569,7 @@ async fn forget_cursors(pool: &SqlitePool, created: &[String], recreated: &[Stri
 /// `dolt_clean` for any it created and never committed. Every commit here
 /// is `-Am`, so anything still dirty would ride into the schema commit.
 ///
-/// At the initialization commit only `dolt_clean` runs: a hard reset
-/// there breaks it (`no such table: main.sqlite_sequence`). The
-/// `sqlite_sequence` that `dolt_clean` leaves behind is emptied instead,
+/// A `sqlite_sequence` that `dolt_clean` leaves behind is emptied instead,
 /// since SQLite refuses to drop it
 /// (docs/dev/doltlite.md#plain-sqlite-files-and-sqlite-compatibility).
 async fn discard_dirty_working_tree(pool: &SqlitePool, db_path: &Path) -> Result<()> {
@@ -1594,17 +1592,10 @@ async fn discard_dirty_working_tree(pool: &SqlitePool, db_path: &Path) -> Result
         "discard_dirty_working_tree: a prior writer left {count} dirty entries; \
          starting from the last commit"
     );
-    let commits: i64 = sqlx::query_scalar("SELECT count(*) FROM dolt_log()")
-        .fetch_one(pool)
+    sqlx::query("SELECT dolt_reset('--hard')")
+        .execute(pool)
         .await
-        .context("count the commits to go back to")?;
-    let sealed_before = commits > 1;
-    if sealed_before {
-        sqlx::query("SELECT dolt_reset('--hard')")
-            .execute(pool)
-            .await
-            .context("dolt_reset --hard")?;
-    }
+        .context("dolt_reset --hard")?;
     sqlx::query("SELECT dolt_clean()")
         .execute(pool)
         .await
@@ -1651,6 +1642,12 @@ async fn discard_dirty_working_tree(pool: &SqlitePool, db_path: &Path) -> Result
 pub async fn start_run(pool: &SqlitePool, config: &Value) -> Result<i64> {
     let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
     let cfg = serde_json::to_string(config).context("serialize run config")?;
+    // A store has one writer, so a run still `running` as this one starts
+    // was killed before it could say how it ended.
+    sqlx::query("UPDATE sync_runs SET status = 'interrupted' WHERE status = 'running'")
+        .execute(pool)
+        .await
+        .context("close sync_runs left running")?;
     let row = sqlx::query(
         "INSERT INTO sync_runs (started_at_utc, tz_offset, config, status) \
          VALUES (?, ?, ?, 'running') RETURNING run_id",
@@ -2057,7 +2054,30 @@ pub async fn fold_history(db_path: &Path) -> Result<Option<Folded>> {
     if !db_path.exists() {
         return Ok(None);
     }
-    let pool = open_inner(
+    let pool = open_bare(db_path).await?;
+    let result = fold_on(&pool).await;
+    pool.close().await;
+    result.with_context(|| format!("fold {}", db_path.display()))
+}
+
+/// Delete the chunks no commit, branch or tag reaches (`dolt_gc`). Every
+/// commit stays readable, so it loses nothing; what it gives back is what
+/// a writer's transactions left behind. `false` when there is no store.
+pub async fn collect_garbage(db_path: &Path) -> Result<bool> {
+    if !db_path.exists() {
+        return Ok(false);
+    }
+    let pool = open_bare(db_path).await?;
+    let result = sqlx::query("SELECT dolt_gc()").execute(&pool).await;
+    pool.close().await;
+    result.with_context(|| format!("dolt_gc {}", db_path.display()))?;
+    Ok(true)
+}
+
+/// The writer's open with no schema work: the lock, the working set
+/// discarded and a stranded seal published, and nothing else.
+async fn open_bare(db_path: &Path) -> Result<SqlitePool> {
+    open_inner(
         db_path,
         &[],
         &[],
@@ -2066,10 +2086,7 @@ pub async fn fold_history(db_path: &Path) -> Result<Option<Folded>> {
         OnSchemaBreak::Refuse,
         &[],
     )
-    .await?;
-    let result = fold_on(&pool).await;
-    pool.close().await;
-    result.with_context(|| format!("fold {}", db_path.display()))
+    .await
 }
 
 async fn fold_on(pool: &SqlitePool) -> Result<Option<Folded>> {

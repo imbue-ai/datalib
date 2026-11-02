@@ -313,8 +313,8 @@ pub struct GridRow {
     /// a message was addressed to, who it mentions, where it is filed.
     /// [`crate::search_terms::encode_supplied`]'s JSON, NULL for none.
     /// Kept on the row so a row that moves to another document takes its
-    /// terms with it. Nothing searches this column; the search terms file
-    /// is its indexed form, one row per term.
+    /// terms with it. Nothing searches this column; the index's search
+    /// terms are its indexed form, one row per term.
     #[col(sql = "TEXT")]
     pub supplied_terms: Option<String>,
 }

@@ -1,22 +1,21 @@
-//! Searches answered from the grid's search terms file rather than qmd: the
-//! Fields tab, and a search made only of identifiers (a uuid, an email
+//! Searches answered from the grid index's search terms rather than qmd:
+//! the Fields tab, and a search made only of identifiers (a uuid, an email
 //! address, a handle) whichever tab asks. The rows that answer to each
-//! word, best match first, as deep as the other tabs rank. The file and
-//! what it holds:
-//! `datalib_etl_render::search_terms`.
+//! word, best match first, as deep as the other tabs rank. The terms and
+//! what they hold: `datalib_etl_render::search_terms`.
 
 use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use datalib_schema::search_terms::{SearchTermKind, META_GRID_GENERATION};
+use datalib_schema::search_terms::SearchTermKind;
 use datalib_unified_document_index::query::is_uuid_shape;
 use datalib_unified_document_index::terms_keys::handle_of;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection};
 use strum::VariantArray;
 
-/// What a search asks the search terms file: FTS5 expressions over the terms'
+/// What a search asks the search terms: FTS5 expressions over the terms'
 /// values, each of which a row must answer to, and those it must not.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Match {
@@ -79,7 +78,7 @@ fn phrase(s: &str) -> String {
 
 fn identifier(word: &str) -> Option<String> {
     // A quoted word is a phrase for qmd, and a quote would end the
-    // search terms file's own phrase early.
+    // search terms' own phrase early.
     if word.contains('"') {
         return None;
     }
@@ -89,7 +88,7 @@ fn identifier(word: &str) -> Option<String> {
 /// The uuid a word ends in, dashed and lowercase: a bare one, dashed or
 /// not, or the last part of a slug or a link (`Shift-Roster-<id>`,
 /// `https://…/p/<id>?pvs=4`, `…/chat/<id>`). Notion writes its ids
-/// without dashes; the search terms file holds them dashed.
+/// without dashes; the search terms hold them dashed.
 fn uuid_at_end(word: &str) -> Option<String> {
     let word = word.split(['?', '#']).next().unwrap_or(word);
     let word = word.strip_suffix('/').unwrap_or(word);
@@ -146,19 +145,19 @@ pub fn rank(found: &Found) -> Vec<(String, (f64, String))> {
         .collect()
 }
 
-/// What the search terms file says about a [`Match`], read in one transaction.
+/// What the search terms say about a [`Match`], read in one transaction.
 #[derive(Debug, Default)]
 pub struct Found {
     /// The rows every included expression matched and no excluded one did,
     /// each at its best match: the most telling kind first
     /// (`SearchTermKind::affinity`), then newest.
     pub hits: Vec<Hit>,
-    /// The grid commit the file reflects. A ranking read at any other
-    /// commit may be one pass out, so it is not kept.
+    /// The grid generation the terms were read at. A ranking whose rows
+    /// were read at another may be a pass out, so it is not kept.
     pub grid_generation: Option<String>,
 }
 
-/// The rows of [`Found::hits`], at most `depth` of them. The file holds a
+/// The rows of [`Found::hits`], at most `depth` of them. The index holds a
 /// term per row and value, so a short prefix matches a large share of it:
 /// the intersecting, ranking and cut happen in SQLite, never in a list here.
 const HITS_SQL: &str = "\
@@ -186,9 +185,9 @@ const HITS_SQL: &str = "\
     ORDER BY b.affinity DESC, r.touched_at_utc DESC, r.uuid \
     LIMIT ?4";
 
-/// `None` when the root has no search terms file yet.
+/// `None` when the root has no grid index yet.
 pub async fn lookup(root: &Path, m: &Match, depth: usize) -> Result<Option<Found>> {
-    let path = datalib_runtime::layout::search_terms_db(root);
+    let path = datalib_runtime::layout::grid_index_db(root);
     if !path.exists() {
         return Ok(None);
     }
@@ -206,11 +205,7 @@ pub async fn lookup(root: &Path, m: &Match, depth: usize) -> Result<Option<Found
         .with_context(|| format!("open {}", path.display()))?;
     let read = async {
         sqlx::query("BEGIN").execute(&mut conn).await?;
-        let grid_generation: Option<String> =
-            sqlx::query_scalar("SELECT value FROM terms_meta WHERE key = ?")
-                .bind(META_GRID_GENERATION)
-                .fetch_optional(&mut conn)
-                .await?;
+        let grid_generation = datalib_etl::pin::generation(&mut conn).await?;
         let hits: Vec<Hit> = sqlx::query_as(HITS_SQL)
             .bind(serde_json::to_string(&m.include)?)
             .bind(serde_json::to_string(&m.exclude)?)
@@ -225,16 +220,16 @@ pub async fn lookup(root: &Path, m: &Match, depth: usize) -> Result<Option<Found
         })
     }
     .await
-    .context("read the search terms file");
+    .context("read the search terms");
     conn.close().await.ok();
     read.map(Some)
 }
 
 /// Every handle a source says is its account's own, each once. `None`
-/// when the root has no search terms file yet, or one written before it
-/// held them.
+/// when the root has no grid index yet, or one written before it held
+/// them.
 pub async fn account_handles(root: &Path) -> Result<Option<Vec<String>>> {
-    let path = datalib_runtime::layout::search_terms_db(root);
+    let path = datalib_runtime::layout::grid_index_db(root);
     if !path.exists() {
         return Ok(None);
     }
@@ -353,9 +348,10 @@ mod tests {
         assert_eq!(fields("-spam"), None);
     }
 
-    /// A search terms file at `root` holding `(row, kind, value, touched)`.
+    /// A grid index at `root` whose search terms hold `(row, kind, value,
+    /// touched)`, and nothing else.
     async fn terms_file(root: &Path, terms: &[(&str, &str, &str, &str)]) {
-        let path = datalib_runtime::layout::search_terms_db(root);
+        let path = datalib_runtime::layout::grid_index_db(root);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let mut conn = SqliteConnectOptions::new()
             .filename(datalib_runtime::plain_sqlite::uri(&path))
@@ -409,7 +405,7 @@ mod tests {
         let found = lookup(root, &fields(q).expect("a word to look up"), depth)
             .await
             .unwrap()
-            .expect("a search terms file");
+            .expect("a grid index");
         rank(&found)
     }
 
@@ -417,15 +413,15 @@ mod tests {
         ranked.iter().map(|(u, _)| u.as_str()).collect()
     }
 
-    /// A terms file from a build before `account_handles` has none to
-    /// give, so `me` is refused rather than failing on a missing table.
+    /// An index from a build before `account_handles` has none to give,
+    /// so `me` is refused rather than failing on a missing table.
     #[tokio::test]
-    async fn the_accounts_handles_are_read_only_from_a_file_that_holds_them() {
+    async fn the_accounts_handles_are_read_only_from_an_index_that_holds_them() {
         let tmp = tempfile::tempdir().unwrap();
         assert_eq!(account_handles(tmp.path()).await.unwrap(), None);
 
         terms_file(tmp.path(), &[]).await;
-        let path = datalib_runtime::layout::search_terms_db(tmp.path());
+        let path = datalib_runtime::layout::grid_index_db(tmp.path());
         let mut conn = SqliteConnectOptions::new()
             .filename(datalib_runtime::plain_sqlite::uri(&path))
             .connect()
@@ -539,8 +535,8 @@ mod tests {
 
     /// A word is looked up through the full-text index and a row by its
     /// key. A plan that scans `terms`, `vals` or `rows`, or reads
-    /// `vals_fts` without its MATCH, reads the whole file for every word:
-    /// on a 300k-row file that is the difference between milliseconds and
+    /// `vals_fts` without its MATCH, reads every term for every word:
+    /// on a 300k-row index that is the difference between milliseconds and
     /// seconds a keystroke.
     #[tokio::test]
     async fn the_lookup_reads_by_index_never_by_scan() {
@@ -548,7 +544,7 @@ mod tests {
         terms_file(tmp.path(), &[("a", "from", "warp", "1")]).await;
         let mut conn = SqliteConnectOptions::new()
             .filename(datalib_runtime::plain_sqlite::uri(
-                &datalib_runtime::layout::search_terms_db(tmp.path()),
+                &datalib_runtime::layout::grid_index_db(tmp.path()),
             ))
             .read_only(true)
             .connect()

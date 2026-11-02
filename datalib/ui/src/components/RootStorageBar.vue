@@ -8,10 +8,11 @@
 // request. The free space is `GET /api/pipeline/disk`, looked at every
 // ten seconds; while the config's `[disk_space]` floor holds the steps it
 // turns red and a toast says syncs are paused. A right-click on the size
-// offers to compact the library's history; the size drops when the walk
-// at the end of that busy period says so.
+// offers to free up disk space (`FreeSpaceDialog.vue`); the size drops
+// when the walk at the end of that busy period says so.
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import ChipMenu from "@/cards/ChipMenu.ce.vue";
+import FreeSpaceDialog from "@/components/FreeSpaceDialog.vue";
 import { adoptStyles } from "@/cards/documentStyles";
 import { type DiskFree, type PipelineStorage } from "@/api";
 import { useApi } from "@/cards/cardApi";
@@ -21,13 +22,13 @@ import { sparkTrack } from "@/cards/cellRenderers";
 // one is `tg-` prefixed, so loading it here styles nothing else.
 import "@/cards/tableGrid.css";
 import { changed, subscribeLive } from "@/live";
-import { confirmAction, isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
+import { isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
 import { copyToClipboard } from "@/clipboard";
 import { dismissToast, pushToast } from "@/toasts";
 import { CLEARED_MESSAGE, diskCrossing, diskTitle, lowDiskMessage } from "@/config/diskFree";
 import { PATH_GLYPHS } from "@/config/glyphs";
 
-const { fetchPipelineStorage, fetchPipelineDisk, compactHistory } = useApi();
+const { fetchPipelineStorage, fetchPipelineDisk, freeDiskSpace } = useApi();
 adoptStyles(ChipMenu);
 
 const storage = ref<PipelineStorage | null>(null);
@@ -124,30 +125,27 @@ async function copyPath() {
 }
 
 const menuAt = ref<{ x: number; y: number } | null>(null);
-const MENU = [{ id: "compact", label: "Compact history…" }];
+const MENU = [{ id: "free", label: "Free up disk space…" }];
+const asking = ref(false);
 
-const COMPACT_CONFIRM =
-  "Compact the library’s history?\n\n" +
-  "Every source’s rendered documents and the search index keep one commit " +
-  "of history instead of one per run, and the disk the rest held is given " +
-  "back. Your documents and downloads stay as they are, and so does the " +
-  "history of each download. " +
-  "Syncs reading these stores wait until it is done, a minute or two on a " +
-  "large library.";
-
-async function compact() {
+function openDialog() {
   menuAt.value = null;
-  if (!(await confirmAction(COMPACT_CONFIRM))) return;
+  asking.value = true;
+}
+
+async function onAnswer(a: { ok: boolean; dropOldVersions: boolean }) {
+  asking.value = false;
+  if (!a.ok) return;
   try {
-    const done = await compactHistory();
+    const done = await freeDiskSpace(a.dropOldVersions);
     pushToast(
       done === "done"
-        ? "Compacted the history."
-        : "Compacting the history. The size here drops when it is done.",
+        ? "Freed up disk space."
+        : "Freeing up disk space. The size here drops when it is done.",
       "info",
     );
   } catch (e) {
-    pushToast(`Could not compact the history: ${e instanceof Error ? e.message : e}`, "error");
+    pushToast(`Could not free up disk space: ${e instanceof Error ? e.message : e}`, "error");
   }
 }
 
@@ -211,9 +209,12 @@ onBeforeUnmount(() => unsubscribe?.());
       :entries="MENU"
       :x="menuAt.x"
       :y="menuAt.y"
-      @pick="compact"
+      @pick="openDialog"
       @close="menuAt = null"
     />
+    <Teleport to="body">
+      <FreeSpaceDialog v-if="asking" @answer="onAnswer" />
+    </Teleport>
     <span
       class="root-bar-spark root-bar-free"
       :class="{ 'root-bar-low': disk?.low }"

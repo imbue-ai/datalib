@@ -67,10 +67,8 @@ impl Pin {
 /// commits yet, or a build without the dolt extensions, which read the
 /// same: nothing to pin.
 pub async fn head(pool: &SqlitePool) -> Result<Option<Pin>> {
-    // A table read first: a bare `dolt_hashof` answers from the session's
-    // last view, so a connection held across a writer's commit would keep
-    // reporting the HEAD it opened at (`a_pinned_read_names_one_commit`;
-    // docs/dev/doltlite.md#what-a-read-only-connection-may-do).
+    // A table read first: the `dolt_hashof` below reads any error as "no
+    // commit", so a file that is not a store would pass for an empty one.
     let _: i64 = sqlx::query_scalar("SELECT count(*) FROM sqlite_master")
         .fetch_one(pool)
         .await?;
@@ -220,9 +218,9 @@ pub async fn holds_a_table(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
 }
 
 // No ping before handing the connection out: an acquire cancelled during
-// it drops the connection, and a reader loses what it set up there (the
-// search applet's attached terms file) along with the open. The ping
-// proves nothing in process: a dead connection fails its next query.
+// it drops the connection, and a reader loses what it set up there along
+// with the open. The ping proves nothing in process: a dead connection
+// fails its next query.
 async fn reader_pool(opts: SqliteConnectOptions) -> Result<SqlitePool, sqlx::Error> {
     SqlitePoolOptions::new()
         .max_connections(1)
@@ -350,7 +348,7 @@ mod tests {
     /// A search the browser hangs up on is dropped wherever it stands,
     /// inside the pool's hand-out of its connection too. The pool must
     /// keep that connection: a fresh one has lost what the reader set up
-    /// on it, which for the search applet was the attached terms file.
+    /// on it.
     #[tokio::test]
     async fn a_cancelled_acquire_keeps_the_readers_connection() {
         use std::future::Future;
@@ -411,8 +409,6 @@ mod tests {
         assert_eq!(head(&r).await.unwrap().unwrap(), first);
 
         commit(&w).await.unwrap();
-        // A `dolt_hashof` alone would still answer `first` here: nothing
-        // has made this session reload the root since the commit.
         let second = head(&r).await.unwrap().unwrap();
         assert_ne!(second, first, "HEAD moved on a connection already open");
         assert_eq!(count_at(&r, &second).await.unwrap(), 2);

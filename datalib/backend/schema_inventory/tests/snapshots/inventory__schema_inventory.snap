@@ -1430,6 +1430,22 @@ coverage
     scope
     lo
     hi
+involving
+    id
+    payload
+    query
+    channel_id
+    ts
+    thread_ts
+involving_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+    held_version
 messages
     id
     payload

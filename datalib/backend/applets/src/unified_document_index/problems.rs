@@ -491,7 +491,11 @@ mod tests {
                 .await
                 .unwrap();
         }
-        datalib_etl_render::grid_index::seal(&pool).await.unwrap();
+        datalib_etl_render::grid_index::seal(
+            &datalib_etl_render::grid_index::WriteLock::for_index(pool.clone()),
+        )
+        .await
+        .unwrap();
         pool.close().await;
     }
 

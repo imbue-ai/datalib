@@ -74,4 +74,6 @@ if [ -z "${LATCHKEY_CURL:-}" ] && [ -x "$here/latchkey-curl-router" ]; then
     export LATCHKEY_CURL
 fi
 
-exec "$node" "$entry" "$@"
+# Without the flag, any program running as you can signal this Node to
+# open its debugger and read the sign-ins out of its memory (#1515).
+exec "$node" --disable-sigusr1 "$entry" "$@"

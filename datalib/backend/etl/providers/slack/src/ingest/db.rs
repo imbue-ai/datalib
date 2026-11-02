@@ -22,8 +22,8 @@ pub use datalib_etl::doltlite_raw::db_path_for;
 
 use super::schema_raw::{
     full_ddl, join_dm_user_ids, parse_dm_user_ids, saved_item_key, slack_message_key,
-    slack_thread_key, BookmarkRow, ChannelReadStateRow, ChannelRow, MessageRow, SavedItemRow,
-    SlackAttachmentRow, UserRow, WorkspaceRow, CHANNEL_VOLATILE_PATHS, LADDER,
+    slack_thread_key, BookmarkRow, ChannelReadStateRow, ChannelRow, InvolvingRow, MessageRow,
+    SavedItemRow, SlackAttachmentRow, UserRow, WorkspaceRow, CHANNEL_VOLATILE_PATHS, LADDER,
     MESSAGE_VOLATILE_PATHS, READ_STATE_VOLATILE_PATHS, THREADS, USER_VOLATILE_PATHS,
 };
 use datalib_etl::doltlite_raw::WirePayload;
@@ -441,6 +441,41 @@ impl RawDb {
         tx.commit().await.context("commit reply search page")?;
         self.tape_messages(&page);
         Ok(())
+    }
+
+    /// One page of an involves-me search, in one transaction: the
+    /// messages it listed and the stretch of time it settled.
+    pub async fn store_involving_page(
+        &self,
+        rows: &[InvolvingRow],
+        scope: &str,
+        covered: Option<&Span>,
+    ) -> Result<()> {
+        let mut tx = self.pool().begin().await.context("begin involving page")?;
+        let now = datalib_time::IsoOffsetTimestamp::now_local();
+        bulk_upsert_in_tx(&mut tx, rows, &now).await?;
+        if let Some(span) = covered {
+            coverage::cover(&mut tx, scope, span.clone()).await?;
+        }
+        tx.commit().await.context("commit involving page")?;
+        Ok(())
+    }
+
+    /// `(channel_id, ts, thread_ts)` of every message the searches named
+    /// in `queries` listed.
+    pub async fn involving(
+        &self,
+        queries: &[&str],
+    ) -> Result<Vec<(String, String, Option<String>)>> {
+        let names = serde_json::to_string(queries).context("serialize query names")?;
+        sqlx::query_as(
+            "SELECT channel_id, ts, thread_ts FROM involving \
+             WHERE query IN (SELECT value FROM json_each(?))",
+        )
+        .bind(names)
+        .fetch_all(self.pool())
+        .await
+        .context("select involving")
     }
 
     /// The `latest_reply` each stored thread root lists, by the root's
@@ -887,6 +922,12 @@ impl RawDb {
 /// The `coverage` scope of one channel's history.
 pub fn history_scope(channel_id: &str) -> String {
     format!("history:{channel_id}")
+}
+
+/// The `coverage` scope of the time one involves-me search has searched,
+/// as `ts` keys.
+pub fn involving_scope(query: &str) -> String {
+    format!("involving:{query}")
 }
 
 /// The `coverage` scope of the reply time searched in one conversation,

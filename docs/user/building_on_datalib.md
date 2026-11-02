@@ -58,6 +58,12 @@ conversation's last `refresh_window_days` for edits and deletions,
 which costs about one request per channel, one after another: a minute
 or so for a hundred channels. `refresh_every_minutes` sets that hour.
 
+An app that only needs what involves the account (its DMs, mentions and
+its own messages) can set `scope = "involves_me"`: a few searches choose
+the channels, and the first sync walks only those, each from a day
+before the oldest such message, rather than every channel the account
+is in.
+
 ## Waiting, not waiting, and stopping
 
 `datalib-dag --sync` waits until its request is done and exits with
@@ -205,7 +211,9 @@ are the signals, from cheapest to most exact:
 
 - **The store's own runs.** In the raw store, the newest `sync_runs`
   row: `status` is `running` until the run ends, and `summary` says
-  what it did and why it stopped early, if it did.
+  what it did and why it stopped early, if it did. A run killed part
+  way stays `running` until the next run starts and marks it
+  `interrupted`.
 
 - **What the source still owes**, asked of its raw store:
 
@@ -320,7 +328,10 @@ question reaches outside that:
   messages unless the source sets `dms = true`; the newest messages of a
   DM closed in the account's sidebar, for up to a day (a closed DM is
   checked once a day); channels the account is
-  not in unless it sets `all_channels`; files when `media = false`. A
+  not in unless it sets `all_channels`; with `scope = "involves_me"`,
+  a channel where nothing involves the account, and a chosen channel
+  before `context_before` ahead of its first such message; files when
+  `media = false`. A
   root's `reply_count` is Slack's; the mirror holds every reply up to
   `latest_reply` only once `threads_bookkeeping.held_version` equals
   it. A message deleted in Slack more than `refresh_window_days` ago

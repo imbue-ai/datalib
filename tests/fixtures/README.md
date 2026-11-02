@@ -158,7 +158,6 @@ without re-running the pipeline:
 ```
 bazelisk build //tests/fixtures:ingested_tng
 # bazel-bin/tests/fixtures/ingested/backend_index.sqlite
-# bazel-bin/tests/fixtures/ingested/backend_search_terms.sqlite
 # bazel-bin/tests/fixtures/ingested/qmd.tar
 # bazel-bin/tests/fixtures/ingested/time_series.tar
 ```

@@ -293,7 +293,10 @@ mod locks {
             exec(&mut second, "INSERT INTO t VALUES ('d', 4)").await,
             "database is locked",
         );
-        err_contains(exec(&mut second, "SELECT dolt_branch('x')").await, "locked");
+        err_contains(
+            exec(&mut second, "SELECT dolt_branch('x')").await,
+            "database is busy: another connection holds the write lock",
+        );
 
         ok(&mut first, "COMMIT").await;
         ok(&mut second, "INSERT INTO t VALUES ('d', 4)").await;
@@ -349,7 +352,7 @@ mod read_only {
     }
 
     #[tokio::test]
-    async fn a_scalar_answers_from_the_last_view_until_a_table_read() {
+    async fn a_scalar_sees_another_connections_commit_without_a_table_read() {
         let (s, first) = store_with_rows().await;
         let mut r = s.ro().await;
         assert_eq!(
@@ -361,11 +364,6 @@ mod read_only {
         ok(&mut w, "INSERT INTO t VALUES ('c', 3)").await;
         let second = commit(&mut w, "more").await;
 
-        assert_eq!(
-            text(&mut r, "SELECT dolt_hashof('HEAD')").await.as_deref(),
-            Some(first.as_str())
-        );
-        int(&mut r, "SELECT COUNT(*) FROM sqlite_master").await;
         assert_eq!(
             text(&mut r, "SELECT dolt_hashof('HEAD')").await.as_deref(),
             Some(second.as_str())
@@ -1038,6 +1036,28 @@ mod drafts {
         assert_eq!(name_of(&mut m, "r").await.as_deref(), Some("Number One"));
     }
 
+    /// Why a draft's save ends its transaction with `COMMIT` itself.
+    #[tokio::test]
+    async fn dolt_commit_inside_begin_leaves_the_transaction_open() {
+        let (s, _) = store_with_draft().await;
+        let mut m = s.rw().await;
+        ok(&mut m, "BEGIN").await;
+        ok(&mut m, "UPDATE p SET note = 'kept' WHERE id = 'r'").await;
+        let saved = commit(&mut m, "kept").await;
+        ok(&mut m, "BEGIN").await;
+        ok(&mut m, "UPDATE p SET note = 'undone' WHERE id = 'r'").await;
+        ok(&mut m, "ROLLBACK").await;
+        err_contains(exec(&mut m, "ROLLBACK").await, "no transaction is active");
+
+        assert_eq!(
+            text(&mut m, "SELECT note FROM p WHERE id = 'r'")
+                .await
+                .as_deref(),
+            Some("kept")
+        );
+        assert_eq!(head(&mut m).await, saved);
+    }
+
     #[tokio::test]
     async fn inside_a_transaction_a_conflict_resolves_as_theirs_and_commits() {
         let (s, _) = store_with_draft().await;
@@ -1060,7 +1080,7 @@ mod drafts {
         ok(&mut m, "SELECT dolt_conflicts_resolve('--theirs', 'p')").await;
         assert_eq!(int(&mut m, "SELECT COUNT(*) FROM dolt_conflicts").await, 0);
         commit(&mut m, "save").await;
-        err_contains(exec(&mut m, "COMMIT").await, "no transaction is active");
+        ok(&mut m, "COMMIT").await;
 
         assert_eq!(name_of(&mut m, "r").await.as_deref(), Some("Will Riker"));
         assert_eq!(parents_of_head(&mut m).await, 2, "a merge commit");
@@ -1121,7 +1141,6 @@ mod drafts {
         let mut d = on_draft(&s).await;
         ok(&mut d, "UPDATE p SET name = 'Will Riker' WHERE id = 'r'").await;
         commit(&mut d, "rename").await;
-        ok(&mut d, "UPDATE p SET note = 'dirty' WHERE id = 'r'").await;
         d.close().await.unwrap();
 
         let mut m = s.rw().await;
@@ -1129,6 +1148,12 @@ mod drafts {
             exec(&mut m, "SELECT dolt_branch('-d', 'draft')").await,
             "branch is not fully merged",
         );
+        m.close().await.unwrap();
+        let mut d = on_draft(&s).await;
+        ok(&mut d, "UPDATE p SET note = 'dirty' WHERE id = 'r'").await;
+        d.close().await.unwrap();
+
+        let mut m = s.rw().await;
         ok(&mut m, "SELECT dolt_branch('-D', 'draft')").await;
         assert_eq!(
             texts(&mut m, "SELECT name FROM dolt_branches").await,
@@ -1145,17 +1170,20 @@ mod drafts {
     }
 
     #[tokio::test]
-    async fn dash_d_drops_a_branch_whose_only_change_is_uncommitted() {
+    async fn dash_d_refuses_a_branch_whose_only_change_is_uncommitted() {
         let (s, _) = store_with_draft().await;
         let mut d = on_draft(&s).await;
         ok(&mut d, "UPDATE p SET name = 'Will Riker' WHERE id = 'r'").await;
         d.close().await.unwrap();
 
         let mut m = s.rw().await;
-        ok(&mut m, "SELECT dolt_branch('-d', 'draft')").await;
+        err_contains(
+            exec(&mut m, "SELECT dolt_branch('-d', 'draft')").await,
+            "branch has uncommitted changes",
+        );
         assert_eq!(
-            texts(&mut m, "SELECT name FROM dolt_branches").await,
-            ["main"]
+            texts(&mut m, "SELECT name FROM dolt_branches ORDER BY name").await,
+            ["draft", "main"]
         );
     }
     /// The draft renames Riker and commits; `main` renames him too and
@@ -2271,10 +2299,10 @@ mod compat {
         );
     }
 
-    /// Why `doltlite_raw` skips the reset when the store has only its
+    /// Why `doltlite_raw` runs the reset even when the store has only its
     /// initialization commit.
     #[tokio::test]
-    async fn a_hard_reset_at_the_first_commit_breaks_the_clean_after_it() {
+    async fn a_hard_reset_at_the_first_commit_leaves_the_clean_after_it_working() {
         let s = Store::new();
         let mut w = s.rw().await;
         ok(
@@ -2284,7 +2312,15 @@ mod compat {
         .await;
         ok(&mut w, "INSERT INTO a (v) VALUES ('x')").await;
         ok(&mut w, "SELECT dolt_reset('--hard')").await;
-        err_contains(exec(&mut w, "SELECT dolt_clean()").await, "sqlite_sequence");
+        ok(&mut w, "SELECT dolt_clean()").await;
+        assert_eq!(
+            texts(
+                &mut w,
+                "SELECT table_name || ': ' || status FROM dolt_status"
+            )
+            .await,
+            Vec::<String>::new()
+        );
     }
 
     /// sqlx's `try_get` skips its type check for a NULL, and its SQLite

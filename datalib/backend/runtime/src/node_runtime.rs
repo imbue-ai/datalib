@@ -24,6 +24,12 @@ pub use crate::runtime_manifest::{AssetKind, Manifest, RuntimeAsset, MANIFEST_FI
 /// Relative path of the Node executable inside `runtime/`.
 const NODE_REL: &str = "node/bin/node";
 
+/// Every bundled tool starts with this. Without it, any program running
+/// as the same user can send Node `SIGUSR1`, which opens its debugger on
+/// localhost, and read a running latchkey's decrypted sign-ins out of
+/// its memory (#1515). `scripts/latchkey-wrapper.sh` passes it too.
+const DISABLE_DEBUG_SIGNAL: &str = "--disable-sigusr1";
+
 /// Points at a staged `runtime/` tree, overriding the sibling lookup.
 pub const RUNTIME_DIR_ENV: &str = "DATALIB_RUNTIME_DIR";
 
@@ -408,7 +414,7 @@ fn command_in(root: &Path, kind: &str, version: &str, entry_rel: &str) -> Option
         return None;
     }
     let mut cmd = Command::new(node);
-    cmd.arg(entry);
+    cmd.arg(DISABLE_DEBUG_SIGNAL).arg(entry);
     Some(cmd)
 }
 
@@ -569,11 +575,14 @@ mod tests {
             .expect("staged tree should resolve");
         assert_eq!(cmd.get_program(), node.as_os_str());
         let args: Vec<_> = cmd.get_args().collect();
-        assert_eq!(args, vec![entry.as_os_str()]);
+        assert_eq!(
+            args,
+            vec![OsStr::new("--disable-sigusr1"), entry.as_os_str()]
+        );
         assert!(is_bundled(&cmd));
         assert_eq!(
             display_command(&cmd),
-            format!("{} {}", node.display(), entry.display())
+            format!("{} --disable-sigusr1 {}", node.display(), entry.display())
         );
 
         // Version not staged → miss.

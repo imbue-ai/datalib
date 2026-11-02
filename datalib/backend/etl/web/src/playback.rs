@@ -38,6 +38,14 @@ pub struct Playback {
     delay: Duration,
     hold: Option<PathBuf>,
     hold_sealed: Option<PathBuf>,
+    meet: Option<std::sync::Arc<Meet>>,
+}
+
+/// Requests held until every one named has arrived ([`Playback::meet`]).
+#[derive(Debug)]
+struct Meet {
+    names: Vec<String>,
+    arrived: tokio::sync::watch::Sender<std::collections::BTreeSet<usize>>,
 }
 
 impl Playback {
@@ -47,6 +55,7 @@ impl Playback {
             delay: Duration::ZERO,
             hold: None,
             hold_sealed: None,
+            meet: None,
         }
     }
 
@@ -69,6 +78,19 @@ impl Playback {
         self
     }
 
+    /// Each request whose URL contains one of `names` waits until one
+    /// for every name has arrived. A test that says some calls go out
+    /// together checks it this way rather than by timing them: calls made
+    /// one after another never all arrive, and the test's own deadline
+    /// fails it. A stop ends the wait as `Interrupted`.
+    pub fn meet(mut self, names: &[&str]) -> Self {
+        self.meet = Some(std::sync::Arc::new(Meet {
+            names: names.iter().map(|n| n.to_string()).collect(),
+            arrived: tokio::sync::watch::Sender::new(Default::default()),
+        }));
+        self
+    }
+
     /// Like [`Playback::hold`], but a request waits only once its process
     /// has sealed a checkpoint, so a download publishes something before
     /// it parks.
@@ -88,6 +110,7 @@ impl Playback {
             delay: delay_from_env(),
             hold: path_in(PLAYBACK_HOLD_ENV),
             hold_sealed: path_in(PLAYBACK_HOLD_SEALED_ENV),
+            meet: None,
         })
     }
 
@@ -115,9 +138,38 @@ impl Playback {
                 return Err(interrupted());
             }
         }
+        if let Some(meet) = &self.meet {
+            if !meet.arrive(&req.url, stop).await {
+                return Err(interrupted());
+            }
+        }
         match crate::interrupt::before_request().await {
             Some(crate::interrupt::Strike::Interrupted) => Err(interrupted()),
             None => lookup(req, &self.root).await,
+        }
+    }
+}
+
+impl Meet {
+    /// Waits, if `url` names one of the requests to meet, until all have
+    /// arrived. `false` when a stop ended the wait.
+    async fn arrive(&self, url: &str, stop: &datalib_etl::stop::StopFlag) -> bool {
+        let Some(i) = self.names.iter().position(|n| url.contains(n.as_str())) else {
+            return true;
+        };
+        self.arrived.send_modify(|arrived| {
+            arrived.insert(i);
+        });
+        let mut rx = self.arrived.subscribe();
+        let all = self.names.len();
+        loop {
+            if rx.borrow_and_update().len() == all {
+                return true;
+            }
+            if stop.requested() {
+                return false;
+            }
+            let _ = tokio::time::timeout(HOLD_POLL, rx.changed()).await;
         }
     }
 }

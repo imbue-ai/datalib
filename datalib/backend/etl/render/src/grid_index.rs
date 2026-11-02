@@ -6,13 +6,13 @@
 //! every source's store into the unified document index, which is the `grid_index` DAG
 //! step's whole job.
 //!
-//! Writes are delete-then-insert, so a re-render replaces a document's rows
-//! rather than accumulating them. The index is a plain SQLite file in WAL
-//! mode, not a doltlite store: nothing reads its history, and a reader's
-//! transaction already reads one state of it. Each transaction that changes
-//! what a reader sees raises its generation (`datalib_pin::generation`),
-//! and triggers log every `grid_rows` uuid it touched in `grid_changes`,
-//! which the search terms file follows.
+//! A re-render replaces a document's rows rather than accumulating them,
+//! writing only those that differ, and the search terms of what it wrote
+//! in the same transaction (`search_terms`). The index is a plain SQLite
+//! file in WAL mode, not a doltlite store: nothing reads its history, and
+//! a reader's transaction already reads one state of it. Each transaction
+//! that changes what a reader sees raises its generation
+//! (`datalib_pin::generation`).
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -30,6 +30,7 @@ use datalib_schema::edges::{EdgeRow, DDL as EDGES_DDL};
 use datalib_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL, INDEXES as GRID_ROWS_INDEXES};
 use datalib_schema::markdowns::DDL as MARKDOWNS_TABLE_DDL;
 use datalib_schema::problems::{ProblemRow, Severity, DDL as PROBLEMS_DDL};
+use datalib_schema::search_terms::{TERMS_DDL, TERMS_SHAPE};
 use datalib_schema::source_contact_handles::DDL as SOURCE_CONTACT_HANDLES_DDL;
 use datalib_schema::source_contacts::DDL as SOURCE_CONTACTS_DDL;
 use datalib_schema::source_cursors::{SourceCursorRow, DDL as SOURCE_CURSORS_DDL};
@@ -62,6 +63,10 @@ pub struct WriteLock {
     /// this run minted one row uuid" from "a row moved here from a
     /// document an earlier run wrote" — see `put_grid_row`.
     written: std::sync::Mutex<std::collections::HashSet<String>>,
+    /// In the grid index, the grid rows written or deleted since the
+    /// search terms last followed them; `None` in a render store, which
+    /// holds no terms.
+    changed: Option<std::sync::Mutex<Vec<String>>>,
 }
 
 struct WriteLockInner {
@@ -103,7 +108,33 @@ impl WriteLock {
             total_hold_ns: AtomicU64::new(0),
             acquisitions: AtomicU64::new(0),
             written: std::sync::Mutex::new(std::collections::HashSet::new()),
+            changed: None,
         }
+    }
+
+    /// The grid index's lock, which keeps the rows its writes change for
+    /// the search terms to follow.
+    pub fn for_index(pool: SqlitePool) -> Self {
+        Self {
+            changed: Some(std::sync::Mutex::new(Vec::new())),
+            ..Self::new(pool)
+        }
+    }
+
+    fn note_changed(&self, uuids: impl IntoIterator<Item = String>) {
+        if let Some(changed) = &self.changed {
+            changed.lock().unwrap().extend(uuids);
+        }
+    }
+
+    fn changed_rows(&self) -> usize {
+        self.changed.as_ref().map_or(0, |c| c.lock().unwrap().len())
+    }
+
+    fn take_changed(&self) -> Vec<String> {
+        self.changed
+            .as_ref()
+            .map_or_else(Vec::new, |c| std::mem::take(&mut *c.lock().unwrap()))
     }
 
     fn note_written(&self, markdown_uuid: &str) {
@@ -158,6 +189,8 @@ impl WriteLock {
     }
 
     pub async fn rollback_transaction(&self) -> Result<()> {
+        // What the rolled-back writes changed was never written.
+        self.take_changed();
         let mut inner = self.inner.lock().await;
         let Some(mut conn) = inner.tx_conn.take() else {
             return Ok(());
@@ -255,6 +288,10 @@ pub struct GridIndexSummary {
     pub markdowns_removed: usize,
     /// Problem rows copied in from the render stores this run read.
     pub problems_copied: usize,
+    /// Search terms written for the rows this run changed.
+    pub terms_written: usize,
+    /// Transactions that changed what a reader sees.
+    pub seals: usize,
     /// Sources whose render store this build could not read, left as the
     /// index already had them.
     pub sources_unreadable: Vec<String>,
@@ -408,27 +445,10 @@ pub fn schema_hash() -> String {
         index_ddl()
             .chain(GRID_ROWS_INDEXES.iter().map(|(_table, ddl)| *ddl))
             .chain(DOCUMENT_LOOKUP_INDEXES.iter().copied())
-            .chain(GRID_CHANGES_TRIGGERS.iter().copied()),
+            // What the terms derive, which no DDL shows.
+            .chain([TERMS_SHAPE]),
     )
 }
-
-/// Every `grid_rows` uuid a write touched, in order: what the search
-/// terms file follows (`search_terms::sync`), which deletes what it has
-/// applied.
-const GRID_CHANGES_DDL: &str = "CREATE TABLE IF NOT EXISTS grid_changes (\
-     seq INTEGER PRIMARY KEY AUTOINCREMENT, uuid TEXT NOT NULL)";
-
-/// What fills `grid_changes`. Only in the index: a render store has a
-/// `grid_rows` too, and nothing follows its changes.
-const GRID_CHANGES_TRIGGERS: &[&str] = &[
-    "CREATE TRIGGER IF NOT EXISTS grid_rows_inserted AFTER INSERT ON grid_rows \
-     BEGIN INSERT INTO grid_changes (uuid) VALUES (new.uuid); END",
-    "CREATE TRIGGER IF NOT EXISTS grid_rows_deleted AFTER DELETE ON grid_rows \
-     BEGIN INSERT INTO grid_changes (uuid) VALUES (old.uuid); END",
-    "CREATE TRIGGER IF NOT EXISTS grid_rows_updated AFTER UPDATE ON grid_rows \
-     BEGIN INSERT INTO grid_changes (uuid) VALUES (old.uuid); \
-     INSERT INTO grid_changes (uuid) VALUES (new.uuid); END",
-];
 
 /// What replacing one document looks its old rows up by, in every store
 /// that holds documents. Without them each document's `DELETE` scans the
@@ -441,26 +461,13 @@ pub(crate) const DOCUMENT_LOOKUP_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS source_contact_handles_by_handle ON source_contact_handles (handle)",
 ];
 
-/// Indexes an older build made and this one no longer reads. Every write
-/// keeps an index current, so one nothing queries is dropped, not left.
-const RETIRED_INDEXES: &[&str] = &[
-    // A hit names its document by id now, found through `grid_rows_by_markdown`.
-    "DROP INDEX IF EXISTS grid_rows_by_qmd_path_key",
-    "DROP INDEX IF EXISTS grid_rows_by_source_label",
-    // `author:` and `author_handle:` read the search terms, as `from:`.
-    "DROP INDEX IF EXISTS grid_rows_by_author",
-    "DROP INDEX IF EXISTS grid_rows_by_author_handle",
-];
-
 /// Tables an older build made in every store that holds documents.
 /// `supplied_search_terms` kept each row's supplied terms apart from the
 /// row, owned by document; a row that moved left them behind (#1202).
 /// They are `grid_rows.supplied_terms` now.
 pub(crate) const RETIRED_TABLES: &[&str] = &["DROP TABLE IF EXISTS supplied_search_terms"];
 
-/// Every `CREATE TABLE` in the grid index, in creation order. One list, so
-/// the DDL pass and the schema check can't drift into covering different
-/// sets of tables.
+/// The grid index's tables, and the terms' with their indexes.
 fn index_ddl() -> impl Iterator<Item = &'static str> {
     GRID_ROWS_DDL
         .iter()
@@ -470,54 +477,25 @@ fn index_ddl() -> impl Iterator<Item = &'static str> {
         .chain(SOURCE_CONTACTS_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(SOURCE_CONTACT_HANDLES_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(PROBLEMS_DDL.iter().map(|(_table, ddl)| *ddl))
-        // `source_cursors` belongs in this list, not beside it: the reconcile
-        // drops and rebuilds every table named here together, and a cursor
-        // that survived a rebuild would tell the next run "nothing changed"
-        // about an index that had just been emptied.
         .chain(SOURCE_CURSORS_DDL.iter().map(|(_table, ddl)| *ddl))
-        // These two as well: a rebuilt index is a new file to its readers,
-        // with a new id, and a change log that started over.
-        .chain([GRID_CHANGES_DDL, datalib_etl::pin::GENERATION_DDL])
+        .chain(std::iter::once(datalib_etl::pin::GENERATION_DDL))
+        .chain(TERMS_DDL.iter().copied())
 }
 
-/// Apply the index DDL, rebuilding from scratch if what's on disk no longer
-/// matches.
-///
-/// **Drop and rebuild, rather than `ALTER TABLE … ADD COLUMN`** — the
-/// opposite of [`datalib_etl::doltlite_raw::open`]'s policy, because every row here
-/// is a pure function of a row in a source's render store, so a rebuild costs
-/// one local scan. It is also the only answer that yields correct values:
-/// `ADD COLUMN` leaves existing rows NULL, and the cursor then never
-/// revisits them.
-///
-/// Every table goes together even when only one drifted — see the note on
-/// `source_cursors` in [`index_ddl`].
+/// Create whatever of the index is missing: on a new file, all of it;
+/// after a build stopped partway, the search indexes it left out. Only
+/// here: every render store has a `grid_rows` too, and only the index the
+/// grid reads wants to pay for the search indexes on every write.
 pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
-    for ddl in index_ddl() {
-        sqlx::query(ddl)
-            .execute(pool)
-            .await
-            .with_context(|| format!("create {}", table_of(ddl)))?;
-    }
-    reconcile_index_schema(pool).await?;
-    // After the reconcile, which drops the tables and their indexes with
-    // them. Only here: every render store has a `grid_rows` too, and only
-    // the index the grid reads wants to pay for these on every write.
     let search = GRID_ROWS_INDEXES.iter().map(|(_table, ddl)| *ddl);
-    for ddl in search
+    for ddl in index_ddl()
+        .chain(search)
         .chain(DOCUMENT_LOOKUP_INDEXES.iter().copied())
-        .chain(GRID_CHANGES_TRIGGERS.iter().copied())
     {
         sqlx::query(ddl)
             .execute(pool)
             .await
-            .with_context(|| format!("create index: {ddl}"))?;
-    }
-    for ddl in RETIRED_INDEXES.iter().chain(RETIRED_TABLES) {
-        sqlx::query(*ddl)
-            .execute(pool)
-            .await
-            .with_context(|| format!("retire: {ddl}"))?;
+            .with_context(|| format!("create: {ddl}"))?;
     }
     Ok(())
 }
@@ -550,40 +528,29 @@ async fn create_search_indexes(conn: &mut sqlx::SqliteConnection) -> Result<()> 
 }
 
 /// Whether the rest of a source's load should drop the search indexes
-/// and remake them at its end: when the `grid_changes` entries its first
-/// `applied` of `applying` documents logged, projected over all of them,
-/// come to an eighth of the rows the index holds. A changed row logs two
-/// entries, and on an 800k-row index remaking the indexes cost about what
-/// keeping them up cost for a fifteenth of its rows.
-fn remakes_search_indexes(logged: i64, applied: usize, applying: usize, held_rows: i64) -> bool {
-    let projected = logged.max(0) as u128 * applying as u128;
-    logged > 0 && projected * 8 >= held_rows.max(0) as u128 * applied as u128
+/// and remake them at its end: when the rows its first `applied` of
+/// `applying` documents changed, projected over all of them, come to a
+/// sixteenth of the rows the index holds. On an 800k-row index remaking
+/// the indexes cost about what keeping them up cost for a fifteenth.
+fn remakes_search_indexes(changed: usize, applied: usize, applying: usize, held_rows: i64) -> bool {
+    let projected = changed as u128 * applying as u128;
+    changed > 0 && projected * 16 >= held_rows.max(0) as u128 * applied as u128
 }
 
-/// Where a load decides about the search indexes: how far the change log
-/// had counted and how many rows the index held when it began. The count
-/// is `grid_changes`' `AUTOINCREMENT` sequence, which the terms sync's
-/// pruning of the table does not reset.
+/// Where a load decides about the search indexes: how many rows the
+/// index held when it began.
 struct RemakeProbe {
-    logged_before: i64,
     held_rows: i64,
 }
 
 impl RemakeProbe {
     async fn start(write_lock: &WriteLock) -> Result<Self> {
         let mut guard = write_lock.acquire().await?;
-        let (logged_before, held_rows): (i64, i64) = sqlx::query_as(
-            "SELECT (SELECT coalesce(max(seq), 0) FROM sqlite_sequence \
-                     WHERE name = 'grid_changes'), \
-                    (SELECT count(*) FROM grid_rows)",
-        )
-        .fetch_one(&mut **guard.conn())
-        .await
-        .context("measure the index before a large load")?;
-        Ok(Self {
-            logged_before,
-            held_rows,
-        })
+        let held_rows: i64 = sqlx::query_scalar("SELECT count(*) FROM grid_rows")
+            .fetch_one(&mut **guard.conn())
+            .await
+            .context("measure the index before a large load")?;
+        Ok(Self { held_rows })
     }
 
     /// Drop the search indexes if the load so far says to; whether it did.
@@ -593,17 +560,12 @@ impl RemakeProbe {
         applied: usize,
         applying: usize,
     ) -> Result<bool> {
-        let mut guard = write_lock.acquire().await?;
-        let conn = guard.conn();
-        let logged_now: i64 = sqlx::query_scalar(
-            "SELECT coalesce(max(seq), 0) FROM sqlite_sequence WHERE name = 'grid_changes'",
-        )
-        .fetch_one(&mut **conn)
-        .await?;
-        let logged = logged_now - self.logged_before;
-        if !remakes_search_indexes(logged, applied, applying, self.held_rows) {
+        let changed = write_lock.changed_rows();
+        if !remakes_search_indexes(changed, applied, applying, self.held_rows) {
             return Ok(false);
         }
+        let mut guard = write_lock.acquire().await?;
+        let conn = guard.conn();
         // Inside the source's transaction, so a reader keeps the indexed
         // state it had until the remade one commits.
         drop_search_indexes(conn).await?;
@@ -620,7 +582,7 @@ impl RemakeProbe {
         tracing::info!(
             applied,
             applying,
-            logged,
+            changed,
             held_rows = self.held_rows,
             "this source changes much of the index; remaking its search indexes after it"
         );
@@ -638,11 +600,43 @@ fn index_name(ddl: &str) -> Option<&str> {
 /// for writing. One connection, never recycled, as every pool here
 /// (`etl/README.md` § "Connection pools"). A reader that looks before the
 /// generation row is made reads the index as not built yet.
+///
+/// An index written in another shape is deleted and made new: every row
+/// in it is a function of a render store, so a rebuild costs one local
+/// read of them, where altering it in place would leave a new column
+/// empty in the rows the cursors never revisit.
 pub async fn open_index(db_path: &Path) -> Result<SqlitePool> {
-    retire_doltlite_index(db_path)?;
+    retire_old_files(db_path)?;
     if let Some(dir) = db_path.parent() {
         std::fs::create_dir_all(dir)?;
     }
+    let mut pool = connect(db_path).await?;
+    match datalib_store_meta::read(&pool).await {
+        Ok(Some(meta)) if meta.schema_hash != schema_hash() => {
+            pool.close().await;
+            tracing::info!(
+                path = %db_path.display(),
+                "the grid index was written in another shape; building it again"
+            );
+            remove_index_files(db_path)?;
+            pool = connect(db_path).await?;
+        }
+        Ok(_) => {}
+        Err(e) => {
+            pool.close().await;
+            return Err(e).context("read the grid index's shape");
+        }
+    }
+    match set_up(&pool).await {
+        Ok(()) => Ok(pool),
+        Err(e) => {
+            pool.close().await;
+            Err(e)
+        }
+    }
+}
+
+async fn connect(db_path: &Path) -> Result<SqlitePool> {
     let opts = sqlx::sqlite::SqliteConnectOptions::new()
         .filename(datalib_core::plain_sqlite::uri(db_path))
         .create_if_missing(true)
@@ -653,25 +647,18 @@ pub async fn open_index(db_path: &Path) -> Result<SqlitePool> {
         // So the pages of dropped search indexes can be handed back
         // (`RemakeProbe::decide`). Takes effect only on a new file.
         .auto_vacuum(sqlx::sqlite::SqliteAutoVacuum::Incremental)
-        // Each insert into `grid_rows` fires a trigger, so SQLite journals
-        // every statement in case it fails halfway; in a temp file that
-        // was most of a cold build.
+        // SQLite journals each statement that can stop halfway — an
+        // upsert, a delete of several rows — so it can undo that one
+        // statement; in a temp file that was most of a load's time.
         .pragma("temp_store", "memory")
         .busy_timeout(Duration::from_secs(30));
-    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+    sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(1)
         .idle_timeout(None)
         .max_lifetime(None)
         .connect_with(opts)
         .await
-        .with_context(|| format!("open the grid index at {}", db_path.display()))?;
-    match set_up(&pool).await {
-        Ok(()) => Ok(pool),
-        Err(e) => {
-            pool.close().await;
-            Err(e)
-        }
-    }
+        .with_context(|| format!("open the grid index at {}", db_path.display()))
 }
 
 async fn set_up(pool: &SqlitePool) -> Result<()> {
@@ -695,18 +682,37 @@ async fn set_up(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
-/// Delete the doltlite store the index used to be, beside `db_path`: a
-/// derived store the step rebuilds from the render stores, and the bulk
-/// of an upgraded root's disk.
-fn retire_doltlite_index(db_path: &Path) -> Result<()> {
+/// The index file and its log. A `-wal` left beside a new file would be
+/// read into it.
+fn remove_index_files(db_path: &Path) -> Result<()> {
+    for suffix in ["", "-wal", "-shm"] {
+        let path = PathBuf::from(format!("{}{suffix}", db_path.display()));
+        match fs::remove_file(&path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            other => other.with_context(|| format!("remove {}", path.display()))?,
+        }
+    }
+    Ok(())
+}
+
+/// Delete what an older build kept beside the index: the doltlite store it
+/// used to be, and the search terms file the index now holds. Both are
+/// derived, and the doltlite store was the bulk of an upgraded root's disk.
+fn retire_old_files(db_path: &Path) -> Result<()> {
     let Some(dir) = db_path.parent() else {
         return Ok(());
     };
-    let old = datalib_core::layout::RETIRED_GRID_DB;
+    let (store, terms) = (
+        datalib_core::layout::RETIRED_GRID_DB,
+        datalib_core::layout::RETIRED_TERMS_DB,
+    );
     for name in [
-        old.to_string(),
-        format!("{old}.lock"),
-        format!(".{old}-lock"),
+        store.to_string(),
+        format!("{store}.lock"),
+        format!(".{store}-lock"),
+        terms.to_string(),
+        format!("{terms}-wal"),
+        format!("{terms}-shm"),
     ] {
         let path = dir.join(&name);
         let Ok(meta) = fs::metadata(&path) else {
@@ -716,35 +722,29 @@ fn retire_doltlite_index(db_path: &Path) -> Result<()> {
         tracing::info!(
             path = %path.display(),
             bytes = meta.len(),
-            "removed the doltlite grid index; this pass builds the plain one"
+            "removed a file an older build kept beside the grid index"
         );
     }
     Ok(())
 }
 
-/// Copy the WAL into the index and empty it, then close.
-pub async fn close_index(pool: SqlitePool) -> Result<()> {
-    close_wal_file(pool, "the grid index").await
-}
-
-/// Copy a WAL file's log back into it and empty the log, then close.
-/// Doltlite, which our binaries link, never does this by itself
+/// Copy the WAL back into the index and empty it, then close. Doltlite,
+/// which our binaries link, never does this by itself
 /// (`docs/dev/doltlite.md`), and while the search applet holds the file
 /// open, closing the writer's connection does not either: the `-wal`
 /// would keep every page any pass wrote.
-pub(crate) async fn close_wal_file(pool: SqlitePool, what: &str) -> Result<()> {
+pub async fn close_index(pool: SqlitePool) -> Result<()> {
     let checkpoint: Result<(i64, i64, i64), sqlx::Error> =
         sqlx::query_as("PRAGMA wal_checkpoint(TRUNCATE)")
             .fetch_one(&pool)
             .await;
     pool.close().await;
-    match checkpoint.with_context(|| format!("checkpoint {what}'s WAL"))? {
+    match checkpoint.context("checkpoint the grid index's WAL")? {
         (0, _, _) => {}
         (_, log, copied) => tracing::warn!(
-            file = what,
             log,
             copied,
-            "a reader held this WAL past the busy timeout; the next write empties it"
+            "a reader held the grid index's WAL past the busy timeout; the next pass empties it"
         ),
     }
     Ok(())
@@ -763,12 +763,15 @@ async fn bump_generation(conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>) ->
     .context("raise the grid index's generation")
 }
 
-/// Raise the generation of an index written outside a pass — with
+/// Write the terms of what `write_lock` changed outside a pass — with
 /// [`apply_one`] and [`delete_markdown`] outside a transaction, as tests
-/// and dev tools do — so its readers see that it moved.
-pub async fn seal(pool: &SqlitePool) -> Result<i64> {
-    let mut conn = pool.acquire().await?;
-    bump_generation(&mut conn).await
+/// and dev tools do — and raise the generation, so readers see it moved.
+pub async fn seal(write_lock: &WriteLock) -> Result<i64> {
+    let mut guard = write_lock.acquire().await?;
+    let conn = guard.conn();
+    crate::search_terms::write_rows(conn, &write_lock.take_changed()).await?;
+    crate::search_terms::write_people(conn).await?;
+    bump_generation(conn).await
 }
 
 /// Where the index is now, as its step reports it.
@@ -776,56 +779,6 @@ pub async fn version(pool: &SqlitePool) -> Result<Option<String>> {
     datalib_etl::pin::generation(pool)
         .await
         .context("read the grid index's generation")
-}
-
-/// The table a DDL statement creates, for error messages. Degrades to the
-/// raw SQL rather than panicking.
-fn table_of(ddl: &str) -> String {
-    datalib_etl::doltlite_raw::parse_create_table_name(ddl).unwrap_or_else(|| ddl.to_string())
-}
-
-/// Drop and recreate every index table if any one of them disagrees with
-/// its DDL. See [`init_schema`] for why it is all-or-nothing.
-async fn reconcile_index_schema(pool: &SqlitePool) -> Result<()> {
-    let mut drift: Vec<String> = Vec::new();
-    for ddl in index_ddl() {
-        let Some(table) = datalib_etl::doltlite_raw::parse_create_table_name(ddl) else {
-            continue;
-        };
-        if let Some(what) = datalib_etl::doltlite_raw::table_drift(pool, ddl, &table)
-            .await
-            .with_context(|| format!("compare {table} to its DDL"))?
-        {
-            drift.push(format!("{table} ({what})"));
-        }
-    }
-    if drift.is_empty() {
-        return Ok(());
-    }
-
-    tracing::warn!(
-        drift = %drift.join("; "),
-        "index schema predates this build; dropping and rebuilding \
-         every index table from the per-source render stores (no re-download, \
-         no re-render)"
-    );
-    for ddl in index_ddl() {
-        let Some(table) = datalib_etl::doltlite_raw::parse_create_table_name(ddl) else {
-            continue;
-        };
-        // Audited: `table` is parsed out of our own static index DDL.
-        sqlx::query(sqlx::AssertSqlSafe(format!("DROP TABLE IF EXISTS {table}")))
-            .execute(pool)
-            .await
-            .with_context(|| format!("drop {table} for index rebuild"))?;
-    }
-    for ddl in index_ddl() {
-        sqlx::query(ddl)
-            .execute(pool)
-            .await
-            .with_context(|| format!("recreate {}", table_of(ddl)))?;
-    }
-    Ok(())
 }
 
 /// The index side of `markdowns.renderer_version` (`"<index>.<render>"`).
@@ -1015,7 +968,7 @@ pub async fn build_grid_index_for(
     now_override: Option<&str>,
     stop: &StopFlag,
 ) -> Result<GridIndexSummary> {
-    let write_lock = WriteLock::new(pool.clone());
+    let write_lock = WriteLock::for_index(pool.clone());
     // Before any transaction opens, because the index pool is one
     // connection wide.
     let cursors = load_source_cursors(pool).await?;
@@ -1120,6 +1073,7 @@ pub async fn build_grid_index_for(
             let documents = indexed.get(source).map_or(0, HashSet::len);
             retire_source(&write_lock, source, indexed.get(source)).await?;
             summary.markdowns_removed += documents;
+            summary.seals += 1;
             tracing::info!(
                 source,
                 documents,
@@ -1134,6 +1088,9 @@ pub async fn build_grid_index_for(
             took_ms = started.elapsed().as_millis() as u64,
             "built the search indexes over the new index"
         );
+    }
+    if summary.seals > 0 {
+        refresh_people(&write_lock).await?;
     }
     tracing::info!(
         sources = sources.len(),
@@ -1163,9 +1120,11 @@ async fn retire_source(
     let res = async {
         let mut guard = write_lock.acquire().await?;
         let conn = guard.conn();
+        let mut gone = Vec::new();
         for markdown_uuid in documents.into_iter().flatten() {
-            delete_document_rows(conn, markdown_uuid).await?;
+            gone.extend(delete_document_rows(conn, markdown_uuid).await?);
         }
+        crate::search_terms::write_rows(conn, &gone).await?;
         replace_source_problems(conn, source, &[]).await?;
         sqlx::query("DELETE FROM source_cursors WHERE source_id = ?")
             .bind(source)
@@ -1194,6 +1153,25 @@ async fn retire_source(
         "sealed the index"
     );
     Ok(())
+}
+
+/// The people the terms name, read from every source at once: once a
+/// pass that changed anything, in a seal of its own.
+async fn refresh_people(write_lock: &WriteLock) -> Result<()> {
+    write_lock.begin_transaction().await?;
+    let res = async {
+        let mut guard = write_lock.acquire().await?;
+        crate::search_terms::write_people(guard.conn()).await?;
+        bump_generation(guard.conn()).await
+    }
+    .await;
+    match res {
+        Ok(_) => write_lock.commit_transaction().await,
+        Err(e) => {
+            let _ = write_lock.rollback_transaction().await;
+            Err(e).context("write the names the terms know people by")
+        }
+    }
 }
 
 fn stopped_before(stop: &StopFlag, source: &str) -> bool {
@@ -1440,10 +1418,10 @@ async fn apply_source(
             } => (docs, removed, problems, head),
         };
         summary.markdowns_total += docs.len();
-        // Too few documents to change an eighth of the index, whatever they
-        // hold, are not worth measuring.
+        // Too few documents to change a sixteenth of the index, whatever
+        // they hold, are not worth measuring.
         let probe = match held {
-            Some(held) if docs.len() * 20 >= held && docs.len() > 1 => {
+            Some(held) if docs.len() * 16 >= held && docs.len() > 1 => {
                 Some(RemakeProbe::start(write_lock).await?)
             }
             _ => None,
@@ -1485,6 +1463,8 @@ async fn apply_source(
                 "remade the search indexes"
             );
         }
+        summary.terms_written +=
+            crate::search_terms::write_rows(conn, &write_lock.take_changed()).await?;
         let problems_moved = replace_source_problems(conn, stanza, &problems)
             .await
             .with_context(|| format!("copy {stanza}'s problems into the index"))?;
@@ -1526,6 +1506,7 @@ async fn apply_source(
                 .await
                 .with_context(|| format!("commit the index transaction for {stanza}"))?;
             if let Some(generation) = generation {
+                summary.seals += 1;
                 let counts = SealCounts::of(summary).since(&before).message(stanza);
                 tracing::info!(source = %stanza, generation, %counts, "sealed the index");
             }
@@ -1697,18 +1678,25 @@ async fn write_source_cursor(
 /// conversation used to stay in the grid forever.
 pub async fn delete_markdown(write_lock: &WriteLock, markdown_uuid: &str) -> Result<()> {
     let mut guard = write_lock.acquire().await?;
-    delete_document_rows(guard.conn(), markdown_uuid).await
+    let gone = delete_document_rows(guard.conn(), markdown_uuid).await?;
+    write_lock.note_changed(gone);
+    Ok(())
 }
 
 /// The rows a document owns: its grid rows, its outgoing edges and its
 /// `markdowns` row. Not its `problems`, which say why a document
-/// is the way it is and outlive one that ends with nothing.
+/// is the way it is and outlive one that ends with nothing. Returns the
+/// grid rows it deleted.
 pub(crate) async fn delete_document_rows(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
     markdown_uuid: &str,
-) -> Result<()> {
+) -> Result<Vec<String>> {
+    let gone = sqlx::query_scalar("DELETE FROM grid_rows WHERE markdown_uuid = ? RETURNING uuid")
+        .bind(markdown_uuid)
+        .fetch_all(&mut **conn)
+        .await
+        .with_context(|| format!("delete {markdown_uuid}'s rows from the index"))?;
     for sql in [
-        "DELETE FROM grid_rows WHERE markdown_uuid = ?",
         "DELETE FROM edges WHERE src_markdown_uuid = ?",
         "DELETE FROM source_contacts WHERE markdown_uuid = ?",
         "DELETE FROM source_contact_handles WHERE markdown_uuid = ?",
@@ -1720,7 +1708,7 @@ pub(crate) async fn delete_document_rows(
             .await
             .with_context(|| format!("delete {markdown_uuid} from the index"))?;
     }
-    Ok(())
+    Ok(gone)
 }
 
 pub async fn load_cursors(pool: &SqlitePool) -> Result<HashMap<String, String>> {
@@ -1757,7 +1745,8 @@ async fn apply_markdown(
     // rest, or a stale `bucket_key` and title would outlive the render
     // that replaced them. The problems recording why stay.
     if md.rows.is_empty() {
-        delete_document_rows(conn, &md.markdown_uuid).await?;
+        let gone = delete_document_rows(conn, &md.markdown_uuid).await?;
+        write_lock.note_changed(gone);
         tracing::info!(
             document = %md.markdown_uuid,
             "this document has no rows left; dropped it",
@@ -1778,15 +1767,16 @@ async fn apply_markdown(
     }
     // Only the rows it no longer has; the rest are written in place, and
     // one that did not change is not written at all.
-    sqlx::query(
+    let gone = sqlx::query_scalar(
         "DELETE FROM grid_rows WHERE markdown_uuid = ? \
-         AND uuid NOT IN (SELECT value FROM json_each(?))",
+         AND uuid NOT IN (SELECT value FROM json_each(?)) RETURNING uuid",
     )
     .bind(&md.markdown_uuid)
     .bind(serde_json::to_string(&uuids)?)
-    .execute(&mut **conn)
+    .fetch_all(&mut **conn)
     .await
     .context("delete the rows this document no longer has")?;
+    write_lock.note_changed(gone);
 
     for row in &md.rows {
         put_grid_row(conn, write_lock, row).await?;
@@ -1973,8 +1963,8 @@ fn first_repeated<'a>(uuids: &[&'a str]) -> Option<&'a str> {
 
 /// Insert one `GridRow`; on a uuid its own document already holds,
 /// rewrite the row only where it differs. An unchanged row then costs no
-/// index write and, in the grid index, no `grid_changes` entry: a source
-/// read whole again rewrites only what moved.
+/// index write and, in the grid index, no new search terms: a source read
+/// whole again rewrites only what moved.
 static PUT_GRID_ROW_SQL: LazyLock<String> = LazyLock::new(|| {
     let columns = GridRow::TYPED_COLUMNS;
     let list = |prefix: &str| -> String {
@@ -2018,6 +2008,7 @@ async fn put_grid_row(
         .await
         .with_context(|| format!("write grid_row {}", row.uuid))?;
     if written.rows_affected() == 1 {
+        write_lock.note_changed([row.uuid.clone()]);
         return Ok(());
     }
 
@@ -2062,6 +2053,7 @@ async fn put_grid_row(
     .execute(&mut **conn)
     .await
     .with_context(|| format!("insert moved grid_row {}", row.uuid))?;
+    write_lock.note_changed([row.uuid.clone()]);
     Ok(())
 }
 
@@ -2536,239 +2528,66 @@ mod write_lock_tests {
 }
 
 #[cfg(test)]
-mod schema_reconcile_tests {
-    //! The index must survive a schema change to `grid_rows`, `markdowns` or
-    //! `edges` without a human deleting the file.
-    //!
-    //! Both directions fail silently. A reconcile that doesn't fire leaves
-    //! every statement naming a new column erroring against an older root.
-    //! One that fires when it shouldn't wipes a healthy index on every run,
-    //! and since the rebuild repopulates it, the only symptom is slowness.
+mod shape_tests {
+    //! An index in another shape must be rebuilt without a person deleting
+    //! it, and one in this shape left alone. Both fail silently: kept, a
+    //! statement naming a new column errors against an older root; thrown
+    //! away on every open, the index is rebuilt each pass, and the only
+    //! symptom is slowness.
 
     use std::path::Path;
-    use std::str::FromStr;
 
-    use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+    use sqlx::sqlite::SqlitePool;
     use tempfile::tempdir;
 
-    use crate::grid_index::{init_schema, EDGES_DDL, MARKDOWNS_DDL};
+    use crate::grid_index::open_index;
 
-    /// `grid_rows` exactly as data roots created before #216 have it on disk.
-    /// Written out longhand rather than derived from the current DDL: the
-    /// point is to pin a shape from history, and a computed one would
-    /// silently become today's shape again.
-    const PRE_216_GRID_ROWS_DDL: &str = "CREATE TABLE IF NOT EXISTS grid_rows (
-        uuid VARCHAR(96) NOT NULL,
-        provider VARCHAR(32) NOT NULL,
-        kind VARCHAR(32) NOT NULL,
-        source_label VARCHAR(32) NOT NULL,
-        when_ts VARCHAR(40),
-        when_ts_utc VARCHAR(40),
-        when_offset VARCHAR(8),
-        author VARCHAR(255),
-        account VARCHAR(96),
-        project VARCHAR(96),
-        org_uuid VARCHAR(96),
-        org_name VARCHAR(255),
-        channel VARCHAR(255),
-        conversation_name TEXT,
-        conversation_uuid VARCHAR(96) NOT NULL,
-        message_index INT,
-        entire_chat VARCHAR(255) NOT NULL,
-        text LONGTEXT NOT NULL,
-        slack_link VARCHAR(512),
-        qmd_path VARCHAR(512),
-        source_url VARCHAR(1024),
-        git_sha VARCHAR(64),
-        external_id VARCHAR(128),
-        notion_page_uuid VARCHAR(96),
-        notion_block_uuid VARCHAR(96),
-        markdown_uuid VARCHAR(96),
-        PRIMARY KEY (uuid)
-    )";
-
-    async fn open_pool(db: &Path) -> SqlitePool {
-        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db.display()))
-            .unwrap()
-            .create_if_missing(true);
-        SqlitePoolOptions::new()
-            .max_connections(1)
-            .idle_timeout(None)
-            .max_lifetime(None)
-            .connect_with(opts)
-            .await
-            .unwrap()
+    async fn holding_one_document(db: &Path) -> SqlitePool {
+        let pool = open_index(db).await.unwrap();
+        sqlx::query(
+            "INSERT INTO markdowns (markdown_uuid, source_id, provider, kind) \
+             VALUES ('md-1', 'claude_web', 'claude', 'Chat')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool
     }
 
-    async fn count(pool: &SqlitePool, table: &str) -> i64 {
-        // Test helper; `table` is a literal at every callsite.
-        sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT COUNT(*) FROM {table}")))
+    async fn documents(pool: &SqlitePool) -> i64 {
+        sqlx::query_scalar("SELECT count(*) FROM markdowns")
             .fetch_one(pool)
             .await
             .unwrap()
     }
 
-    async fn seed_pre_216(pool: &SqlitePool) {
-        sqlx::query(PRE_216_GRID_ROWS_DDL)
-            .execute(pool)
-            .await
-            .unwrap();
-        sqlx::query(MARKDOWNS_DDL).execute(pool).await.unwrap();
-        for (_table, ddl) in EDGES_DDL {
-            sqlx::query(*ddl).execute(pool).await.unwrap();
-        }
-        sqlx::query(
-            "INSERT INTO markdowns (markdown_uuid, source_id, provider, kind) \
-             VALUES ('md-1', 'claude_web', 'claude', 'Chat')",
-        )
-        .execute(pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            "INSERT INTO grid_rows (uuid, provider, kind, source_label, conversation_uuid, \
-             entire_chat, text, external_id, markdown_uuid) \
-             VALUES ('row-1', 'claude', 'Chat', 'Claude', 'conv-1', '/chat/md-1', 'hi', \
-             'upstream-1', 'md-1')",
-        )
-        .execute(pool)
-        .await
-        .unwrap();
-    }
-
-    /// An index written before #216 is brought to the current schema, and its
-    /// `markdowns` rows are cleared so the rebuild actually runs.
-    ///
-    /// The `markdowns` assertion is the load-bearing half: recreating
-    /// `grid_rows` alone satisfies every "does the column exist" check while
-    /// leaving the cursors in place, and `build_grid_index` reads nothing
-    /// from a store its cursor already covers — so the index would stay
-    /// empty until something upstream changed.
+    /// An index another build wrote is made new, its cursors with it: a
+    /// cursor kept would tell the next pass that nothing changed in a
+    /// store, and the rebuilt index would stay empty.
     #[tokio::test]
-    async fn an_index_predating_a_column_rename_is_rebuilt() {
+    async fn an_index_in_another_shape_is_made_new() {
         let dir = tempdir().unwrap();
-        let pool = open_pool(&dir.path().join("grid.doltlite_db")).await;
-        seed_pre_216(&pool).await;
-
-        init_schema(&pool).await.expect("init_schema");
-
-        let cols: Vec<String> =
-            sqlx::query_scalar("SELECT name FROM pragma_table_info('grid_rows')")
-                .fetch_all(&pool)
-                .await
-                .unwrap();
-        for added in ["upstream_id", "upstream_entity_kind", "upstream_account"] {
-            assert!(
-                cols.iter().any(|c| c == added),
-                "grid_rows must have gained {added}"
-            );
-        }
-        assert!(
-            !cols.iter().any(|c| c == "external_id"),
-            "the column upstream_id replaced must be gone"
-        );
-        assert_eq!(
-            count(&pool, "markdowns").await,
-            0,
-            "markdowns must be cleared, or build_grid_index reads nothing \
-             and the rebuilt index stays empty"
-        );
-        assert_eq!(count(&pool, "grid_rows").await, 0);
-    }
-
-    /// The write path works afterwards. `no such column: upstream_id` from
-    /// inside `put_grid_row` is what actually failed on a real data root,
-    /// so asserting the column list alone would leave that untested.
-    #[tokio::test]
-    async fn the_rebuilt_index_accepts_a_write() {
-        let dir = tempdir().unwrap();
-        let pool = open_pool(&dir.path().join("grid.doltlite_db")).await;
-        seed_pre_216(&pool).await;
-        init_schema(&pool).await.expect("init_schema");
-
-        sqlx::query(
-            "INSERT INTO grid_rows (uuid, provider, kind, source_label, conversation_uuid, \
-             entire_chat, preview, content_hash, upstream_id, upstream_entity_kind, \
-             upstream_account, markdown_uuid, is_document) \
-             VALUES ('row-2', 'claude', 'Chat', 'Claude', 'conv-1', '/chat/md-1', 'hi', '', \
-             'upstream-1', 'conversation', '', 'md-1', 1)",
-        )
-        .execute(&pool)
-        .await
-        .expect("insert naming the post-#216 columns must succeed");
-    }
-
-    /// An index already at the current schema is left completely alone. A
-    /// reconcile whose comparison is subtly wrong would rebuild on every run,
-    /// and nothing downstream would notice — the only symptom is a pipeline
-    /// that quietly stopped being incremental.
-    #[tokio::test]
-    async fn a_current_index_is_not_touched() {
-        let dir = tempdir().unwrap();
-        let pool = open_pool(&dir.path().join("grid.doltlite_db")).await;
-        init_schema(&pool).await.expect("first init_schema");
-
-        sqlx::query(
-            "INSERT INTO markdowns (markdown_uuid, source_id, provider, kind) \
-             VALUES ('md-1', 'claude_web', 'claude', 'Chat')",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        init_schema(&pool).await.expect("second init_schema");
-
-        assert_eq!(
-            count(&pool, "markdowns").await,
-            1,
-            "a matching schema must not be rebuilt; the rows that make the \
-             index incremental would be thrown away on every run"
-        );
-    }
-
-    /// The table an older build kept each row's supplied terms in, apart
-    /// from the row, goes when the index is opened (#1202).
-    #[tokio::test]
-    async fn the_retired_search_terms_table_is_dropped() {
-        let dir = tempdir().unwrap();
-        let pool = open_pool(&dir.path().join("grid.doltlite_db")).await;
-        sqlx::query("CREATE TABLE supplied_search_terms (uuid TEXT)")
+        let db = dir.path().join("db.sqlite");
+        let pool = holding_one_document(&db).await;
+        sqlx::query("UPDATE _datalib_meta SET value = 'older' WHERE key = 'schema_hash'")
             .execute(&pool)
             .await
             .unwrap();
+        crate::grid_index::close_index(pool).await.unwrap();
 
-        init_schema(&pool).await.expect("init_schema");
-
-        let left: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM sqlite_master WHERE name = 'supplied_search_terms'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert_eq!(left, 0);
+        let pool = open_index(&db).await.unwrap();
+        assert_eq!(documents(&pool).await, 0);
     }
 
-    /// An index an older build made, for a search key since retired, is
-    /// dropped rather than kept current on every write for nobody.
     #[tokio::test]
-    async fn a_retired_index_is_dropped() {
+    async fn an_index_in_this_shape_is_kept() {
         let dir = tempdir().unwrap();
-        let pool = open_pool(&dir.path().join("grid.doltlite_db")).await;
-        init_schema(&pool).await.expect("first init_schema");
-        sqlx::query("CREATE INDEX grid_rows_by_source_label ON grid_rows (source_label)")
-            .execute(&pool)
-            .await
-            .unwrap();
+        let db = dir.path().join("db.sqlite");
+        let pool = holding_one_document(&db).await;
+        crate::grid_index::close_index(pool).await.unwrap();
 
-        init_schema(&pool).await.expect("second init_schema");
-
-        let left: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM sqlite_master \
-             WHERE type = 'index' AND name = 'grid_rows_by_source_label'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert_eq!(left, 0);
+        let pool = open_index(&db).await.unwrap();
+        assert_eq!(documents(&pool).await, 1);
     }
 }
 
@@ -2777,10 +2596,10 @@ mod remake_tests {
     use super::remakes_search_indexes;
 
     /// A load whose first twentieth changed nothing, or a sliver of a
-    /// large index, keeps the indexes; one on course to change an eighth
+    /// large index, keeps the indexes; one on course to change a sixteenth
     /// of the rows remakes them.
     #[test]
-    fn only_a_load_on_course_to_change_an_eighth_of_the_index_remakes_it() {
+    fn only_a_load_on_course_to_change_a_sixteenth_of_the_index_remakes_it() {
         assert!(!remakes_search_indexes(0, 3_000, 60_000, 800_000));
         assert!(!remakes_search_indexes(100, 3_000, 60_000, 800_000));
         assert!(remakes_search_indexes(6_000, 3_000, 60_000, 800_000));
@@ -3797,13 +3616,6 @@ mod source_cursor_tests {
         assert_eq!(index_row_count(&pool).await, 1);
     }
 
-    async fn logged_changes(pool: &SqlitePool) -> Vec<String> {
-        sqlx::query_scalar("SELECT DISTINCT uuid FROM grid_changes ORDER BY uuid")
-            .fetch_all(pool)
-            .await
-            .unwrap()
-    }
-
     /// A source read whole again — its cursor lost, every document
     /// re-rendered — used to delete and reinsert every row, so the search
     /// terms rewrote all of them and every index took every row again.
@@ -3818,11 +3630,7 @@ mod source_cursor_tests {
             "src",
             &[doc(root, "src", "md-1", "a"), doc(root, "src", "md-2", "b")],
         );
-        build_grid_index(&pool, root, |_| {}, None).await.unwrap();
-        sqlx::query("DELETE FROM grid_changes")
-            .execute(&pool)
-            .await
-            .unwrap();
+        let first = build_grid_index(&pool, root, |_| {}, None).await.unwrap();
 
         render(root, "src", &[doc(root, "src", "md-2", "b, changed")]);
         sqlx::query("DELETE FROM source_cursors")
@@ -3831,7 +3639,12 @@ mod source_cursor_tests {
             .unwrap();
         let s = build_grid_index(&pool, root, |_| {}, None).await.unwrap();
         assert_eq!(s.markdowns_total, 2, "read whole");
-        assert_eq!(logged_changes(&pool).await, vec!["md-2".to_string()]);
+        assert!(first.terms_written > 0);
+        assert_eq!(
+            2 * s.terms_written,
+            first.terms_written,
+            "md-2's terms, and not md-1's"
+        );
     }
 
     /// One document holding a uuid twice is a renderer bug; written in

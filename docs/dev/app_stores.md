@@ -13,14 +13,12 @@
                                                   run (`calendar_render/src/occurrences/`)
 <data_root>/unified_document_index/grid_index/db.sqlite   grid_rows / markdowns / edges / problems /
                                                   source_contacts (who each handle is, per source);
-                                                  plain SQLite in WAL mode, its version the
+                                                  the search terms: every id, handle, title,
+                                                  label and name each row answers to, full-text
+                                                  indexed, and the names each handle went by
+                                                  (`etl/render/src/search_terms.rs`); plain
+                                                  SQLite in WAL mode, its version the
                                                   `store_generation` row
-<data_root>/unified_document_index/grid_index/search_terms.sqlite every id, handle, title, label and name each
-                                                  grid row answers to, full-text indexed, and the
-                                                  names each handle went by (plain SQLite
-                                                  in WAL mode; `grid_index` brings it up to
-                                                  date after each pass,
-                                                  `etl/render/src/search_terms.rs`)
 <data_root>/unified_document_index/qmd_aggregator/           the qmd index (plain SQLite inside)
 <data_root>/unified_document_index/embedding_map/embedding_map.json
                                                   every embedded document's place on
