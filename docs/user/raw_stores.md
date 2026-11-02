@@ -58,7 +58,20 @@ datalib-doltlite -readonly -json gmail/ingest/entities.doltlite_db \
 ```
 
 From a program, the simplest route is to run `datalib-doltlite
--readonly -json` as a subprocess and parse its output. For a tool that
+-readonly -json` as a subprocess and parse its output. That costs a
+process start and a store open per query, so a Python program that runs
+many can keep the store open instead: dolthub's `doltlite` package
+(`pip install doltlite==<version>`, the DoltLite version
+`datalib-doltlite --version` prints) makes the standard `sqlite3`
+module run on doltlite. `import doltlite` before anything imports
+`sqlite3`, then open with
+`sqlite3.connect(f"file:{path}?mode=ro", uri=True)`. It needs a Python
+that loads SQLite as a shared library (Homebrew, the system Python,
+pyenv or Conda; not the builds `uv python install` fetches), and on
+macOS a script file, since it restarts the interpreter: `python -c`
+and the REPL fail.
+
+For a tool that
 speaks only SQLite, one pipe writes a plain SQLite copy with the same
 tables (the data, not the history):
 
