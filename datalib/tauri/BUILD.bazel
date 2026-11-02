@@ -1,4 +1,4 @@
-load("@aspect_bazel_lib//lib:copy_file.bzl", "copy_file")
+load("@bazel_lib//lib:copy_file.bzl", "copy_file")
 load("@rules_rust//rust:defs.bzl", "rust_test")
 
 exports_files([
