@@ -213,6 +213,16 @@ those mentions and nothing else, while `<!here>` and `<!channel>`
 match the words. A user group's `<!subteam^…>` and `@handle` matched
 no message carrying the mention, so user groups are not searched for.
 
+**What it misses, measured.** On one real account over 14 days, a
+sync with this scope and one with every channel were compared. Of the
+104 channel messages in the full mirror that involve the account (a
+mention of it, its own message, or `@here` / `@channel`), 103 were in
+the narrow one, and the DM messages were the same in both. The one
+missed was the account's own "joined the channel" notice
+(`subtype: channel_join`), in a channel where nothing else involved it:
+search does not list join notices, so a channel the account only
+joined is not walked.
+
 A search match is never stored as the message. It lacks `reactions`,
 `edited` and a broadcast's `subtype`, and its `text` loses mrkdwn
 about one time in eight; the message comes from history.
