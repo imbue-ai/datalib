@@ -4,8 +4,10 @@ pub mod api;
 pub mod db;
 pub mod files;
 mod frontier;
+mod involving;
 mod reply_search;
 pub mod schema_raw;
+mod search;
 pub mod shapes;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -36,6 +38,7 @@ pub use db::{
 };
 use files::{FileFetcher, FILE_BATCH};
 use frontier::{Frontier, Next, Walk};
+use involving::{InvolvingSearch, InvolvingTotals, Query};
 use reply_search::{ReplySearch, ReplySearchTotals, SEARCH_LAG};
 use schema_raw::{SlackAttachmentRow, UserRow, THREADS};
 use shapes::{
@@ -308,9 +311,13 @@ pub struct AccountTotals {
 async fn fetch_read_states(
     db: &RawDb,
     in_scope: &HashSet<String>,
+    counts: Option<Result<Value>>,
     latchkey: &LatchkeySettings,
 ) -> Result<Vec<Value>> {
-    let resp = call(M_COUNTS, &empty_params(), latchkey).await?;
+    let resp = match counts {
+        Some(counts) => counts?,
+        None => call(M_COUNTS, &empty_params(), latchkey).await?,
+    };
     let mut entries: Vec<Value> = Vec::new();
     for surface in ["channels", "mpims", "ims"] {
         let listed = resp
@@ -468,10 +475,12 @@ struct AccountState {
 
 /// Read states, saved items and bookmarks for the conversations this run
 /// mirrors. Each listing that fails becomes a `problems` row and costs
-/// only its own table; none of them sinks the message walk.
+/// only its own table; none of them sinks the message walk. `counts` is
+/// a `client.counts` answer the run already asked for, if it did.
 async fn fetch_account_state(
     db: &RawDb,
     targets: &[(String, String)],
+    counts: Option<Result<Value>>,
     now: &DateTime<Utc>,
     stop: &datalib_etl::stop::StopFlag,
     progress: &datalib_etl::progress::Progress,
@@ -482,7 +491,7 @@ async fn fetch_account_state(
     let mut problems = Vec::new();
 
     progress.set_message(M_COUNTS);
-    let open_latest = match fetch_read_states(db, &in_scope, latchkey).await {
+    let open_latest = match fetch_read_states(db, &in_scope, counts, latchkey).await {
         Ok(entries) => {
             totals.read_states = entries.len();
             Some(self::open_latest(&entries))
@@ -678,30 +687,44 @@ struct Stretch {
     reread: bool,
 }
 
-/// What to walk of a channel that has `held` covered: the gaps in
-/// `[since, ∞)`, newest first, then whatever was already covered from
-/// `refresh_from` up.
-fn stretches(since: &str, refresh_from: Option<&str>, held: &[Span]) -> Vec<Stretch> {
-    let wanted = Span::new(since, END_OF_TIME);
-    let mut out: Vec<Stretch> = coverage::gaps(&wanted, held)
-        .into_iter()
-        .rev()
-        .map(|gap| Stretch {
-            inclusive: gap.lo == since,
-            span: gap,
-            reread: false,
-        })
-        .collect();
-    let Some(from) = refresh_from.map(|from| from.max(since)) else {
+/// The stretch every channel wants when nothing narrows it: everything
+/// from `since` up.
+fn from_since(since: &str) -> Vec<Span> {
+    vec![Span::new(since, END_OF_TIME)]
+}
+
+/// What to walk of a channel that has `held` covered: the gaps in each
+/// `wanted` stretch, newest first, then whatever of them was already
+/// covered from `refresh_from` up. A gap's ends are read when they are
+/// the ends of what is wanted, and not when they are the ends of what is
+/// held.
+fn stretches(wanted: &[Span], refresh_from: Option<&str>, held: &[Span]) -> Vec<Stretch> {
+    let mut out: Vec<Stretch> = Vec::new();
+    for want in wanted.iter().rev() {
+        for gap in coverage::gaps(want, held).into_iter().rev() {
+            out.push(Stretch {
+                inclusive: gap.lo == want.lo || (gap.hi == want.hi && want.hi != END_OF_TIME),
+                span: gap,
+                reread: false,
+            });
+        }
+    }
+    let Some(refresh_from) = refresh_from else {
         return out;
     };
-    for span in coverage::merged(held.to_vec()).into_iter().rev() {
-        if span.hi.as_str() > from {
-            out.push(Stretch {
-                span: Span::new(span.lo.as_str().max(from), span.hi),
-                inclusive: true,
-                reread: true,
-            });
+    let held = coverage::merged(held.to_vec());
+    for want in wanted.iter().rev() {
+        let from = refresh_from.max(want.lo.as_str());
+        for span in held.iter().rev() {
+            let hi = span.hi.as_str().min(want.hi.as_str());
+            let lo = span.lo.as_str().max(from);
+            if span.hi.as_str() > from && lo <= hi {
+                out.push(Stretch {
+                    span: Span::new(lo, hi),
+                    inclusive: true,
+                    reread: true,
+                });
+            }
         }
     }
     out
@@ -747,8 +770,13 @@ fn shows_activity(latest: &str, owes: &[Stretch]) -> bool {
 /// re-read when `refresh_from` says one is due. A closed DM is walked
 /// whole when its check is due, and otherwise only for a gap under
 /// what is held, which a `since` moved earlier leaves.
-fn to_walk(since: &str, refresh_from: Option<&str>, held: &[Span], newest: Newest) -> Vec<Stretch> {
-    let all = stretches(since, refresh_from, held);
+fn to_walk(
+    wanted: &[Span],
+    refresh_from: Option<&str>,
+    held: &[Span],
+    newest: Newest,
+) -> Vec<Stretch> {
+    let all = stretches(wanted, refresh_from, held);
     match newest {
         Newest::Unknown | Newest::Closed { check_due: true } => all,
         Newest::Closed { check_due: false } => all
@@ -1327,6 +1355,9 @@ pub struct FetchOptions {
     /// (`reply_search`). Off in [`FetchOptions::new`], whose playback
     /// tests run on the wall clock: the query names the run's days.
     pub search_replies: bool,
+    /// `scope = "involves_me"`: walk only the channels where something
+    /// involves the account. `None` walks every channel chosen.
+    pub involves_me: Option<InvolvesMeOptions>,
     /// The run's one "now": the refresh window and the age of a listing
     /// sweep are measured from it.
     pub now: DateTime<Utc>,
@@ -1352,11 +1383,23 @@ impl FetchOptions {
             dm_conversations: None,
             blob_size_limit_bytes: None,
             search_replies: false,
+            involves_me: None,
             now: Utc::now(),
             progress: datalib_etl::progress::Progress::noop(),
             control: datalib_etl::control::DownloadControl::default(),
         }
     }
+}
+
+/// What `scope = "involves_me"` searches for, and how much of a channel
+/// around each message it finds a run walks.
+#[derive(Debug, Clone)]
+pub struct InvolvesMeOptions {
+    pub kinds: Vec<datalib_etl_slack_config::InvolvesMe>,
+    /// At most zero.
+    pub before: ChronoDuration,
+    /// `None` walks up to now.
+    pub after: Option<ChronoDuration>,
 }
 
 #[derive(serde::Serialize)]
@@ -1407,6 +1450,11 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         "dm_conversations": opts.dm_conversations,
         "blob_size_limit_bytes": opts.blob_size_limit_bytes,
         "search_replies": opts.search_replies,
+        "involves_me": opts.involves_me.as_ref().map(|o| json!({
+            "kinds": o.kinds.iter().map(|k| k.as_str()).collect::<Vec<_>>(),
+            "before_s": o.before.num_seconds(),
+            "after_s": o.after.map(|a| a.num_seconds()),
+        })),
     });
     let run = datalib_etl::download_run::DownloadRun::start(db.pool(), &run_config).await?;
 
@@ -1501,13 +1549,91 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             media = opts.media,
             "planned the export"
         );
-        let targets = plan.targets;
+        let mut targets = plan.targets;
+
+        // `scope = "involves_me"`: the channels with something that
+        // involves the account, and the stretches of each to walk. DMs
+        // are walked as they would be anyway.
+        let mut counts = None;
+        let mut wanted: Option<BTreeMap<String, Vec<Span>>> = None;
+        if let Some(narrow) = opts.involves_me.as_ref() {
+            if opts.control.stop.requested() {
+                return Ok(());
+            }
+            let Some(user_id) = self_user_id.as_deref() else {
+                anyhow::bail!(
+                    "{M_AUTH_TEST} named no user, so nothing can be searched for as involving it"
+                );
+            };
+            let queries = Query::for_kinds(&narrow.kinds);
+            let top = ts_key(&datetime_to_slack_ts(&(now - SEARCH_LAG)));
+            let mut searched = InvolvingTotals::default();
+            let search = InvolvingSearch {
+                db: &db,
+                team_id: &team_id,
+                user_id,
+                latchkey: &opts.latchkey,
+                progress: &setup,
+            };
+            // No fallback: walking every channel instead is the cost this
+            // scope exists to avoid, so a search that fails fails the run.
+            match search.run(&queries, &since, &top, &mut searched).await {
+                Ok(()) => {}
+                Err(e) if interrupted(&e) => return Ok(()),
+                Err(e) => {
+                    return Err(e.context(
+                        "scope = \"involves_me\": the search for the messages that involve \
+                         the account failed, so no channel was chosen",
+                    ))
+                }
+            }
+            setup.set_message(M_COUNTS);
+            let answer = call(M_COUNTS, &empty_params(), &opts.latchkey).await;
+            let mentioned = match &answer {
+                Ok(answer) => involving::mentioned(answer, &datetime_to_slack_ts(&now)),
+                Err(_) => BTreeMap::new(),
+            };
+            counts = Some(answer);
+            let first_dm = targets.len() - plan.dm_targets;
+            let candidates: HashSet<String> =
+                targets[..first_dm].iter().map(|(c, _)| c.clone()).collect();
+            let hits = involving::hits(&db, &queries).await?;
+            let chosen = involving::plan(
+                &since,
+                &hits,
+                &mentioned,
+                &candidates,
+                &involving::Context {
+                    before: narrow.before,
+                    after: narrow.after,
+                },
+            );
+            info!(
+                event = "slack_involving_planned",
+                candidates = candidates.len(),
+                channels = chosen.wanted.len(),
+                hits = hits.len(),
+                mentioned = mentioned.len(),
+                roots_outside = chosen.roots.len(),
+                dm_targets = plan.dm_targets,
+                "chose the channels where something involves the account"
+            );
+            let mut index = 0usize;
+            targets.retain(|(cid, _)| {
+                let keep = index >= first_dm || chosen.wanted.contains_key(cid);
+                index += 1;
+                keep
+            });
+            read_roots_outside(&db, &team_id, &chosen.roots, &opts, &found, &setup).await?;
+            wanted = Some(chosen.wanted);
+        }
 
         let mut open_latest = None;
         if !opts.control.stop.requested() {
             let state = fetch_account_state(
                 &db,
                 &targets,
+                counts,
                 &now,
                 &opts.control.stop,
                 &setup,
@@ -1596,8 +1722,12 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                 refresh_every,
             );
             let held = coverage::held(db.pool(), &db::history_scope(cid)).await?;
+            let wants = wanted
+                .as_ref()
+                .and_then(|w| w.get(cid).cloned())
+                .unwrap_or_else(|| from_since(&since));
             let walks = to_walk(
-                &since,
+                &wants,
                 refresh_from.as_deref().filter(|_| due),
                 &held,
                 newest,
@@ -1826,6 +1956,54 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
     Ok(grand)
 }
 
+/// The roots of threads a reply that involves the account is in, where
+/// no stretch walked reaches them: each read on its own, so its thread
+/// is owed like any other. A root already stored is left alone; one
+/// that could not be read is a `problems` row, and still owed next run.
+async fn read_roots_outside(
+    db: &RawDb,
+    team_id: &str,
+    roots: &[(String, String)],
+    opts: &FetchOptions,
+    found: &RunProblems,
+    progress: &datalib_etl::progress::Progress,
+) -> Result<()> {
+    let keys: Vec<String> = roots
+        .iter()
+        .map(|(cid, root)| schema_raw::slack_thread_key(team_id, cid, root))
+        .collect();
+    let stored = db.root_latest_replies(&keys).await?;
+    let mut read = 0usize;
+    for ((cid, root), key) in roots.iter().zip(&keys) {
+        if stored.contains_key(key) {
+            continue;
+        }
+        if opts.control.stop.requested() {
+            break;
+        }
+        progress.set_message(&format!("{M_HISTORY} a thread root in {cid}"));
+        match reply_search::read_root(team_id, cid, root, &opts.latchkey).await {
+            Ok(Some(message)) => {
+                db.upsert_messages(&[message]).await?;
+                read += 1;
+            }
+            Ok(None) => {}
+            Err(e) if interrupted(&e) => break,
+            Err(e) => found.push(listing_problem(&format!("{M_HISTORY} root {key}"), &e)),
+        }
+    }
+    info!(
+        event = "slack_involving_roots_read",
+        outside = roots.len(),
+        read,
+        "read the thread roots no stretch walked reaches"
+    );
+    if let Some(sealer) = opts.sealer.as_ref() {
+        sealer.wrote(read as u64).await;
+    }
+    Ok(())
+}
+
 fn parse_iso_or_utc_date(s: &str) -> Result<DateTime<Utc>> {
     let t = datalib_time::parse_strict(s)
         .or_else(|_| datalib_time::parse_yyyy_mm_dd_assumed_utc(s))
@@ -1852,7 +2030,11 @@ mod tests {
     }
 
     fn planned(refresh_from: Option<&str>, held: &[Span]) -> Vec<Stretch> {
-        stretches(&ts_key(SINCE), refresh_from.map(ts_key).as_deref(), held)
+        stretches(
+            &from_since(&ts_key(SINCE)),
+            refresh_from.map(ts_key).as_deref(),
+            held,
+        )
     }
 
     /// The TNG fixtures' stardate `ts`es have an eleventh digit, which
@@ -2003,11 +2185,37 @@ mod tests {
         assert_eq!(settled(&below, Some(&top), &[], true), Some(below.clone()));
     }
 
+    /// A stretch with a top, `context_after`'s window: the top is asked
+    /// for, since nothing read it, and a refresh re-reads only inside
+    /// the window however far up what is held reaches.
+    #[test]
+    fn a_window_is_walked_inside_its_ends() {
+        let want = [span("1735689600.000100", "1735776000.000100")];
+        assert_eq!(
+            stretches(&want, None, &[]),
+            [gap("1735689600.000100", "1735776000.000100", true)]
+        );
+        let bottom = [span("1735689600.000100", "1735700000.000100")];
+        assert_eq!(
+            stretches(&want, None, &bottom),
+            [gap("1735700000.000100", "1735776000.000100", true)]
+        );
+        let beyond = [span("1735689600.000100", "1735800000.000100")];
+        assert_eq!(
+            stretches(&want, Some(&ts_key("1735700000.000000")), &beyond),
+            [Stretch {
+                span: span("1735700000.000000", "1735776000.000100"),
+                inclusive: true,
+                reread: true,
+            }]
+        );
+    }
+
     // ── Which conversations are walked ───────────────────────────────
 
     fn planned_walk(refresh_from: Option<&str>, held: &[Span], newest: Newest) -> Vec<Stretch> {
         to_walk(
-            &ts_key(SINCE),
+            &from_since(&ts_key(SINCE)),
             refresh_from.map(ts_key).as_deref(),
             held,
             newest,

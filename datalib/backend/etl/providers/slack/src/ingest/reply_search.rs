@@ -13,7 +13,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use anyhow::Result;
-use chrono::{DateTime, Duration as ChronoDuration, NaiveDate, Utc};
+use chrono::Duration as ChronoDuration;
 use serde_json::Value;
 use tracing::info;
 
@@ -22,8 +22,9 @@ use datalib_etl_web::http::LatchkeySettings;
 
 use super::db::{self, MessageInput, RawDb};
 use super::schema_raw::slack_thread_key;
-use super::shapes::{M_HISTORY, M_SEARCH};
-use super::{call, history_message_input, key_ts, settled, ts_key};
+use super::search::{days_clause, permalink_thread_ts, SearchWalk};
+use super::shapes::M_HISTORY;
+use super::{call, history_message_input, ts_key};
 
 /// How far behind the run's now the searched range stops: a reply is
 /// searchable a little after it is posted, and one the index has not
@@ -32,11 +33,6 @@ pub const SEARCH_LAG: ChronoDuration = ChronoDuration::minutes(30);
 
 /// Conversations named in one query. Slack ORs `in:` filters.
 const CONVERSATIONS_PER_QUERY: usize = 20;
-
-/// Slack serves no page of a search past this one.
-const MAX_PAGES: u64 = 100;
-
-const PER_PAGE: &str = "100";
 
 /// One conversation the run mirrors, as the plan sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,34 +76,14 @@ pub(super) fn plan(since: &str, top: &str, conversations: &[Conversation]) -> Pl
     out
 }
 
-/// A `ts` key as the day it falls on, in UTC.
-fn day_of(key: &str) -> NaiveDate {
-    let secs: i64 = key_ts(key)
-        .split('.')
-        .next()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
-    DateTime::<Utc>::from_timestamp(secs, 0)
-        .unwrap_or(DateTime::UNIX_EPOCH)
-        .date_naive()
-}
-
 /// The query for the threads of `channels` with a message in `span`.
-/// `after:` and `before:` take whole days, excluded, in the account's
-/// own time zone, so each reaches two days past the span's ends.
 pub(super) fn query(channels: &[String], span: &Span) -> String {
-    let pad = chrono::Days::new(2);
-    let after = day_of(&span.lo) - pad;
-    let before = day_of(&span.hi) + pad;
     let mut q = String::from("is:thread");
     for c in channels {
         q.push_str(&format!(" in:<#{c}>"));
     }
-    q.push_str(&format!(
-        " after:{} before:{}",
-        after.format("%Y-%m-%d"),
-        before.format("%Y-%m-%d")
-    ));
+    q.push(' ');
+    q.push_str(&days_clause(span));
     q
 }
 
@@ -123,11 +99,7 @@ pub(super) struct ReplyHit {
 pub(super) fn reply_hit(m: &Value) -> Option<ReplyHit> {
     let ts = m.get("ts")?.as_str()?;
     let channel_id = m.get("channel")?.get("id")?.as_str()?;
-    let permalink = m.get("permalink")?.as_str()?;
-    let (_, query) = permalink.split_once('?')?;
-    let thread_ts = query
-        .split('&')
-        .find_map(|kv| kv.strip_prefix("thread_ts="))?;
+    let thread_ts = permalink_thread_ts(m)?;
     (thread_ts != ts).then(|| ReplyHit {
         channel_id: channel_id.to_string(),
         ts: ts.to_string(),
@@ -194,10 +166,6 @@ impl ReplySearch<'_> {
     }
 
     /// Every page of the search of `gap` in `channels`, newest first.
-    /// Each page settles from its oldest message up to where the page
-    /// before left off, as a history page does. A search that reaches
-    /// Slack's last page before the bottom of `gap` is asked again below
-    /// what it settled.
     async fn search(
         &self,
         gap: &Span,
@@ -206,82 +174,37 @@ impl ReplySearch<'_> {
     ) -> Result<()> {
         let wanted: HashSet<&str> = channels.iter().map(String::as_str).collect();
         let scopes: Vec<String> = channels.iter().map(|c| db::replies_scope(c)).collect();
-        let mut stretch = gap.clone();
-        loop {
-            let q = query(channels, &stretch);
-            let mut top = Some(stretch.hi.clone());
-            let mut page = 1u64;
-            let reached_bottom = loop {
-                self.progress.set_message(&format!(
-                    "{M_SEARCH} page {page} ({} found)",
-                    totals.replies_found
-                ));
-                let mut params = BTreeMap::new();
-                params.insert("query".to_string(), q.clone());
-                params.insert("count".to_string(), PER_PAGE.to_string());
-                params.insert("sort".to_string(), "timestamp".to_string());
-                params.insert("sort_dir".to_string(), "desc".to_string());
-                params.insert("page".to_string(), page.to_string());
-                let resp = call(M_SEARCH, &params, self.latchkey).await?;
-                totals.pages += 1;
-                let found = resp.get("messages");
-                let matches: Vec<Value> = found
-                    .and_then(|m| m.get("matches"))
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default();
-                let pages = found
-                    .and_then(|m| m.get("paging"))
-                    .and_then(|p| p.get("pages"))
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0);
-                let last = matches.is_empty() || page >= pages;
-                let in_stretch: Vec<String> = matches
-                    .iter()
-                    .filter(|m| {
-                        m.get("channel")
-                            .and_then(|c| c.get("id"))
-                            .and_then(Value::as_str)
-                            .is_some_and(|c| wanted.contains(c))
-                    })
-                    .filter_map(|m| m.get("ts").and_then(Value::as_str).map(ts_key))
-                    .filter(|key| *key >= stretch.lo && *key <= stretch.hi)
-                    .collect();
-                let covered = settled(&stretch, top.as_deref(), &in_stretch, last);
-                let hits: Vec<ReplyHit> = matches
-                    .iter()
-                    .filter_map(reply_hit)
-                    .filter(|h| wanted.contains(h.channel_id.as_str()))
-                    .collect();
-                totals.replies_found += hits.len();
-                let roots = self.stale_roots(&hits).await?;
-                totals.roots_reread += roots.len();
-                self.db
-                    .store_reply_search_page(&roots, &scopes, covered.as_ref())
-                    .await?;
-                if last {
-                    break true;
-                }
-                if page >= MAX_PAGES {
-                    break false;
-                }
-                if let Some(oldest) = in_stretch.into_iter().min() {
-                    top = Some(oldest);
-                }
-                page += 1;
-            };
-            if reached_bottom {
-                return Ok(());
-            }
-            match top.filter(|t| *t < stretch.hi && *t > stretch.lo) {
-                Some(below) => stretch = Span::new(stretch.lo.clone(), below),
-                None => anyhow::bail!(
-                    "{M_SEARCH}: {MAX_PAGES} pages settled nothing of {}..{}; the rest was not searched",
-                    key_ts(&stretch.lo),
-                    key_ts(&stretch.hi)
-                ),
-            }
+        let in_wanted = |m: &Value| {
+            m.get("channel")
+                .and_then(|c| c.get("id"))
+                .and_then(Value::as_str)
+                .is_some_and(|c| wanted.contains(c))
+        };
+        let mut walk = SearchWalk::new(gap, |stretch: &Span| query(channels, stretch));
+        while let Some(page) = walk
+            .next(
+                in_wanted,
+                self.latchkey,
+                self.progress,
+                &format!("replies ({} found)", totals.replies_found),
+            )
+            .await?
+        {
+            totals.pages += 1;
+            let hits: Vec<ReplyHit> = page
+                .matches
+                .iter()
+                .filter_map(reply_hit)
+                .filter(|h| wanted.contains(h.channel_id.as_str()))
+                .collect();
+            totals.replies_found += hits.len();
+            let roots = self.stale_roots(&hits).await?;
+            totals.roots_reread += roots.len();
+            self.db
+                .store_reply_search_page(&roots, &scopes, page.covered.as_ref())
+                .await?;
         }
+        Ok(())
     }
 
     /// The roots of `hits` whose stored `latest_reply` is older than a
@@ -316,24 +239,33 @@ impl ReplySearch<'_> {
         Ok(roots)
     }
 
-    /// The one message at `thread_ts`, as history lists it.
     async fn read_root(&self, channel_id: &str, thread_ts: &str) -> Result<Option<MessageInput>> {
-        let mut params = BTreeMap::new();
-        params.insert("channel".to_string(), channel_id.to_string());
-        params.insert("oldest".to_string(), thread_ts.to_string());
-        params.insert("latest".to_string(), thread_ts.to_string());
-        params.insert("inclusive".to_string(), "true".to_string());
-        params.insert("include_all_metadata".to_string(), "true".to_string());
-        params.insert("limit".to_string(), "1".to_string());
-        let resp = call(M_HISTORY, &params, self.latchkey).await?;
-        Ok(resp
-            .get("messages")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter(|m| m.get("ts").and_then(Value::as_str) == Some(thread_ts))
-            .find_map(|m| history_message_input(self.team_id, channel_id, m)))
+        read_root(self.team_id, channel_id, thread_ts, self.latchkey).await
     }
+}
+
+/// The one message at `thread_ts`, as history lists it.
+pub(super) async fn read_root(
+    team_id: &str,
+    channel_id: &str,
+    thread_ts: &str,
+    latchkey: &LatchkeySettings,
+) -> Result<Option<MessageInput>> {
+    let mut params = BTreeMap::new();
+    params.insert("channel".to_string(), channel_id.to_string());
+    params.insert("oldest".to_string(), thread_ts.to_string());
+    params.insert("latest".to_string(), thread_ts.to_string());
+    params.insert("inclusive".to_string(), "true".to_string());
+    params.insert("include_all_metadata".to_string(), "true".to_string());
+    params.insert("limit".to_string(), "1".to_string());
+    let resp = call(M_HISTORY, &params, latchkey).await?;
+    Ok(resp
+        .get("messages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|m| m.get("ts").and_then(Value::as_str) == Some(thread_ts))
+        .find_map(|m| history_message_input(team_id, channel_id, m)))
 }
 
 #[cfg(test)]
