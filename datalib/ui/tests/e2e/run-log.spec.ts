@@ -347,6 +347,9 @@ test("a clicked line is only selected; a double-click opens it, and it can narro
   );
 
   // "keep" on the thread chip narrows the log beside it.
+  const narrowed = page.waitForResponse(
+    (r) => r.url().includes("/api/log?") && decodeURIComponent(r.url()).includes("thread:main"),
+  );
   await inspector
     .locator(".ll-meta")
     .getByRole("button", { name: /^main$/ })
@@ -355,6 +358,11 @@ test("a clicked line is only selected; a double-click opens it, and it can narro
     "data-query",
     `min_level:info process_id:${await launchOf(dialog)} thread:main`,
   );
+  // The query shows at once; the narrowed lines replace the grid's rows,
+  // and its selection, only when they land. Keys pressed before that
+  // move a selection the reload then puts back.
+  await narrowed;
+  await expect(dialog.locator(".rl-panel")).toHaveAttribute("aria-busy", "false");
 
   // The arrow key moves the selection and opens nothing; Enter opens
   // the line it moved to.
