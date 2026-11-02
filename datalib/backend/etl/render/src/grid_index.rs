@@ -2205,6 +2205,7 @@ mod insert_round_trip_tests {
             image: Some("datalib:photo/u-1".into()),
             latitude: Some(37.8),
             longitude: Some(-122.4),
+            h3: Some(0x8f28308280f18f2),
         }
     }
 
@@ -2336,6 +2337,7 @@ mod write_lock_tests {
             image: None,
             latitude: None,
             longitude: None,
+            h3: None,
         };
         RenderedMarkdown {
             markdown_uuid: uuid.clone(),

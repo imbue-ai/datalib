@@ -195,6 +195,7 @@ pub fn rows_for_document(
         image: None,
         latitude: None,
         longitude: None,
+        h3: None,
     });
 
     for (number, text) in pages {
@@ -246,6 +247,7 @@ pub fn rows_for_document(
             image: None,
             latitude: None,
             longitude: None,
+            h3: None,
         });
     }
     rows

@@ -402,6 +402,14 @@ bytes moves no row. `latitude` and `longitude` are where the thing was,
 in degrees. All three are null on every row but a Lightroom photo's
 today.
 
+### `h3`
+
+The finest [H3](https://h3geo.org) cell holding `latitude` and
+`longitude`, as an integer, which the builder sets from `.geo(…)`: a
+render gives a row a location and nothing else. `place:<cell>` and
+`near:<cell>` are ranges of this one indexed column, at any resolution
+(`datalib/backend/h3/README.md`).
+
 **A photo's document has no file.** Its rows name a `qmd_path` like any
 document's, so `source_id` and the id-from-path rule hold, but render
 never writes the file: the `photos` applet draws the photo from the
