@@ -71,6 +71,10 @@ pub enum ColumnType {
     Actions,
     /// A `markdowns.uuid`, shown as its title; opens the document on click.
     MarkdownUuid,
+    /// A picture, by its name (`datalib:photo/<id>`): drawn small, by
+    /// whichever applet says it serves that kind of name; empty where none
+    /// does.
+    Image,
     /// A [`Membership`]: whether the row is in the set the column names,
     /// out of it, or not known, drawn as a three-way toggle the viewer
     /// hands to its host to change.

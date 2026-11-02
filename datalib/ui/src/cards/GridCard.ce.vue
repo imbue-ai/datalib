@@ -80,6 +80,8 @@ import {
   type SearchTab,
 } from "@/api";
 import { parseDoc } from "@/uri";
+import { thumbnailUrl } from "./photos";
+import { ensureFrontend, frontendManifest } from "./frontendRegistry";
 import {
   SEARCH_TABS,
   apiTab,
@@ -1394,11 +1396,12 @@ function tryRestoreSelection() {
 // This list is what the rule may *reveal*, so it is deliberately not
 // "every optional column": a column named here appears in the default
 // grid whenever its values vary, which is exactly what `hidden` on a
-// definition is there to prevent. Contact is the one hidden column
-// here: it varies only when contacts are among the results, and then it
-// is the only cell that says whose card a row is.
+// definition is there to prevent. Contact and Picture are the hidden
+// columns here: each varies only when contacts or photos are among the
+// results, and then it is the cell that says what the row is.
 /// Column id → the row field it reads.
 const ADAPTIVE_FIELDS: Record<string, keyof SearchRow> = {
+  image: "image",
   score: "score",
   kind: "kind",
   channel: "channel",
@@ -1446,7 +1449,11 @@ function applyAdaptiveVisibility() {
   const hidden: Record<string, boolean> = {};
   for (const [colId, field] of adaptiveFields()) {
     const first = stringifyForCompare(rows.value[0][field]);
-    hidden[colId] = rows.value.every((r) => stringifyForCompare(r[field]) === first);
+    hidden[colId] =
+      colId === "image"
+        ? // One photo alone is still worth its picture.
+          rows.value.every((r) => r.image == null)
+        : rows.value.every((r) => stringifyForCompare(r[field]) === first);
   }
   setHidden(hidden);
 }
@@ -1667,6 +1674,11 @@ const columnOverrides: Record<string, Partial<Column<Row>>> = {
   },
 };
 
+// Which applet serves pictures is in the frontend manifest, which may land
+// after the first paint, or change when an applet is added.
+void ensureFrontend();
+watch(frontendManifest, () => vueGrid?.slickGrid.invalidate());
+
 /// Two columns rather than one combined "search state": `qmd update`
 /// and `qmd embed` are separate passes, so "in the keyword index" and
 /// "reachable by semantic search" are genuinely different facts, and
@@ -1748,6 +1760,7 @@ watch(
     const typed = typedColumns<Row>(specs, {
       overrides: columnOverrides,
       onOpenDocument: (_uuid, row) => pickAndOpen(row),
+      picture: thumbnailUrl,
       groupable: true,
       chips: {
         who: (h) => people.lookup(h),

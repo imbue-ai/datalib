@@ -49,6 +49,9 @@ export type SlickColumnOptions<T> = {
   /// out of it, or (`null`) back to not known. Absent, the toggles only
   /// show.
   onMembership?: (row: T, field: string, applies: boolean | null) => void;
+  /// Where the picture an `image` cell names is served, small, or null
+  /// when nothing serves it. Absent, an `image` column draws nothing.
+  picture?: (name: string) => string | null;
   /// A `markdown_uuid` cell was clicked.
   onOpenDocument?: (uuid: string, row: T) => void;
   /// Every column can be dragged into the grouping bar. Off, no column
@@ -425,6 +428,7 @@ export function copyText(type: ColumnType, value: unknown): string {
       const m = value as Membership;
       return m.applies == null ? "" : m.applies ? "in" : "out";
     }
+    case "image":
     case "text":
     case "count":
     case "number":
@@ -654,6 +658,23 @@ export function typedColumns<T extends Record<string, unknown>>(
           };
         case "actions":
           return { sortable: false, resizable: false, filterable: false, formatter: Actions };
+        case "image":
+          return {
+            sortable: false,
+            filterable: false,
+            cssClass: "tg-thumb-cell",
+            formatter: (_r, _c, value) => {
+              const src = typeof value === "string" ? opts.picture?.(value) : null;
+              if (!src) return "";
+              const img = document.createElement("img");
+              img.className = "tg-thumb";
+              img.loading = "lazy";
+              img.decoding = "async";
+              img.alt = "";
+              img.src = src;
+              return img;
+            },
+          };
         case "membership":
           return {
             filterable: false,
