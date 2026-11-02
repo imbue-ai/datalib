@@ -9,16 +9,16 @@ importers:
   .:
     dependencies:
       latchkey:
-        specifier: 3.19.3
-        version: 3.19.3
+        specifier: 3.20.0
+        version: 3.20.0
 
 packages:
 
   '@cfworker/json-schema@4.1.1':
     resolution: {integrity: sha512-gAmrUZSGtKc3AiBL71iNWxDsyUC5uMaKKGdvzYsBoTW/xi42JQHl7eKV2OYzCUqvc+D2RCcf7EXY2iCyFIk6og==}
 
-  '@imbue-ai/detent@1.16.0':
-    resolution: {integrity: sha512-rg/dOiSI828HhIN7UUFXM2Q/KFVs0yPtXlIoVGA5xdBYBUZ5qCO9dzszkVpO9FVZbJFH45B0o3GaHy5GWoRo/w==}
+  '@imbue-ai/detent@1.17.0':
+    resolution: {integrity: sha512-2aSjd6ep1SF5mJHl0ShIR184EJneNeIjcW4J608cwDpk9v/wpoJgaGNrIhO8Go2TzhOQZIJQIli9t/QIUuI8Pg==}
     engines: {node: '>=20'}
     hasBin: true
 
@@ -111,8 +111,8 @@ packages:
     resolution: {integrity: sha512-H+y0Jo/T1RZ9qPP4Eh1pkcQcLRglraJaSLoyOtHxu6AapkjWVCy2Sit1QQ4x3Dng8qDlSsZEet7g5Pq06MvTgw==}
     engines: {node: '>=20'}
 
-  latchkey@3.19.3:
-    resolution: {integrity: sha512-nkBeiO4gX+aRD/xT4Bi37kRrRNVPTlhO37f/G9FgD8d0gyRvI/j0DqcEmMMZDJKMOxkKekWUcrXAQMSFAcDJdg==}
+  latchkey@3.20.0:
+    resolution: {integrity: sha512-A7ZE1shZJ0WlJ5oDXmj2nJxX1znHVBUDC1mm1UFp9fzieWYRUe14CZAG+87yy+5DTASY1qwmMueZFrcoOT+83A==}
     engines: {node: '>=20'}
     hasBin: true
 
@@ -131,14 +131,14 @@ packages:
     engines: {node: '>=10'}
     hasBin: true
 
-  zod@3.25.76:
-    resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
+  zod@4.6.7:
+    resolution: {integrity: sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg==}
 
 snapshots:
 
   '@cfworker/json-schema@4.1.1': {}
 
-  '@imbue-ai/detent@1.16.0':
+  '@imbue-ai/detent@1.17.0':
     dependencies:
       '@cfworker/json-schema': 4.1.1
       commander: 14.0.3
@@ -198,15 +198,15 @@ snapshots:
 
   commander@14.0.3: {}
 
-  latchkey@3.19.3:
+  latchkey@3.20.0:
     dependencies:
-      '@imbue-ai/detent': 1.16.0
+      '@imbue-ai/detent': 1.17.0
       '@napi-rs/keyring': 1.3.0
       commander: 12.1.0
       playwright: 1.63.0
       playwright-core: 1.63.0
       semver: 7.8.5
-      zod: 3.25.76
+      zod: 4.6.7
 
   playwright-core@1.63.0: {}
 
@@ -216,4 +216,4 @@ snapshots:
 
   semver@7.8.5: {}
 
-  zod@3.25.76: {}
+  zod@4.6.7: {}
