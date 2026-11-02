@@ -2015,10 +2015,10 @@ mod tests {
         pool.close().await;
     }
 
-    /// Whether this process has a file open whose inode is `ino`; with
-    /// `deleted`, only a file no name links to any more. The tests are
-    /// threads of one process, and Linux hands a freed inode number to the
-    /// next file another test makes, so an inode alone can name that file.
+    /// Whether this process has a file open whose inode is `ino` and,
+    /// with `deleted`, that no name links to any more. A deleted file's
+    /// number is free for the next file created, by any test in this
+    /// process, so after a delete only the link count tells them apart.
     fn held_open(ino: u64, deleted: bool) -> bool {
         use std::os::unix::fs::MetadataExt;
         std::fs::read_dir("/dev/fd")

@@ -405,8 +405,11 @@ Pick the surface that fits the question:
 
   A copy of a doltlite store carries the data, not the commit history —
   see [`docs/dev/doltlite.md`](dev/doltlite.md) for what that costs and
-  for a single-table variant. If you would rather not touch the store at
-  all, `datalib-http`'s endpoints below serve the same rows.
+  for a single-table variant. A Python program that runs many queries
+  can keep a store open instead of starting the shell for each one: see
+  that doc's §"Reading a store from Python". If you would rather not
+  touch the store at all, `datalib-http`'s endpoints below serve the
+  same rows.
 
   Column semantics: [`docs/dev/grid_rows.md`](dev/grid_rows.md).
   Cross-document links: [`docs/dev/edges.md`](dev/edges.md).
