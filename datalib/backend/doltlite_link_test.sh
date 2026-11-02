@@ -74,9 +74,79 @@ function = "grid_index"
 inputs = ["contacts/render_markdown"]
 CONFIG
 
+# The run takes seconds. Past the deadline it is hung, and a job killed
+# by its own timeout prints nothing, so this says what was still running
+# and what each thread was blocked in before it gives up. Under 60s, so
+# it fires before Bazel's `small` timeout does.
+deadline="${DATALIB_LINK_TEST_DEADLINE:-45}"
+
+tree() {  # <pid> — the pid and every process below it
+    echo "$1"
+    local kids
+    if [[ -d /proc/self ]]; then
+        local s rest state ppid
+        kids=""
+        for s in /proc/[0-9]*/stat; do
+            rest="$(cat "$s" 2>/dev/null)" || continue
+            read -r state ppid _ <<<"${rest##*) }"
+            [[ "$ppid" == "$1" ]] && kids+="$(basename "$(dirname "$s")") "
+        done
+    else
+        kids="$(pgrep -P "$1" || true)"
+    fi
+    local k
+    for k in $kids; do tree "$k"; done
+}
+
+dump_hang() {  # <dag pid>
+    echo "datalib-dag still running after ${deadline}s; what it had said:"
+    cat "$root/dag.stderr"
+    local p t
+    for p in $(tree "$1"); do
+        if [[ -d "/proc/$p" ]]; then
+            echo "--- pid $p: $(tr '\0' ' ' <"/proc/$p/cmdline" 2>/dev/null)"
+            tr '\0' '\n' <"/proc/$p/environ" 2>/dev/null | grep '^DATALIB_DAG_STEP=' || true
+            for t in "/proc/$p"/task/*; do
+                # `syscall`'s first field is the call it is in (x86_64: 7
+                # poll, 72 fcntl, 202 futex, 230 clock_nanosleep).
+                echo "  thread $(basename "$t") $(cat "$t/comm" 2>/dev/null):" \
+                    "wchan=$(cat "$t/wchan" 2>/dev/null)" \
+                    "syscall=$(cut -d' ' -f1 "$t/syscall" 2>/dev/null)"
+                sed -n '1,8s/^/    /p' "$t/stack" 2>/dev/null || true
+            done
+        else
+            ps -o pid=,ppid=,etime=,stat=,command= -p "$p" || true
+        fi
+    done
+    local runs="$root/system/runs/runs.sqlite"
+    if [[ -e "$runs" ]]; then
+        echo "--- step_runs"
+        "$shell" -readonly -header "$runs" "SELECT * FROM step_runs;" || true
+        echo "--- the last 40 lines in the run store"
+        "$shell" -readonly "$runs" \
+            "SELECT l.ts_utc, p.process, l.level, l.target, l.msg
+               FROM log l LEFT JOIN processes p USING (process_id)
+              ORDER BY l.seq DESC LIMIT 40;" || true
+    else
+        echo "--- no run store at $runs"
+    fi
+}
+
 # datalib-step resolves as a sibling of datalib-dag, which is how :bin
 # lays them out and how the installer does.
-"$dag" "$root/config.toml" --now 2369-04-15T00:00:00+00:00 2>"$root/dag.stderr" \
+echo "running $dag"
+"$dag" "$root/config.toml" --now 2369-04-15T00:00:00+00:00 2>"$root/dag.stderr" &
+dag_pid=$!
+give_up_at=$((SECONDS + deadline))
+while kill -0 "$dag_pid" 2>/dev/null; do
+    if ((SECONDS >= give_up_at)); then
+        dump_hang "$dag_pid" >&2
+        kill -KILL $(tree "$dag_pid") 2>/dev/null || true
+        exit 1
+    fi
+    sleep 0.2
+done
+wait "$dag_pid" \
     || { echo "datalib-dag failed:" >&2; cat "$root/dag.stderr" >&2; exit 1; }
 
 commits() {  # <store> — prints the commit count, or fails loudly
