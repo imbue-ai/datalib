@@ -38,7 +38,6 @@ test("a row's menu offers the actions for its kind, grouped, wherever the pointe
     "Turn off",
     "Edit settings…",
     "Rename…",
-    "Show commit history",
     "Show step log",
     "Show sync dashboard",
     "Copy path",
@@ -47,11 +46,12 @@ test("a row's menu offers the actions for its kind, grouped, wherever the pointe
   ]);
   // Compare and Reset are for a source: the index mirrors nothing to
   // compare, and it rebuilds from the sources rather than being reset.
+  // It keeps no commit history either: its grid is plain SQLite.
   await page.keyboard.press("Escape");
 
   // The Name cell offers the same menu as any other.
   await nameCell(page, "group:unified_document_index").click({ button: "right" });
-  await expect(menuEntries(page)).toHaveCount(11);
+  await expect(menuEntries(page)).toHaveCount(10);
   await page.keyboard.press("Escape");
 });
 
@@ -88,11 +88,12 @@ test("right-clicking inside a selection targets all of it; outside it, the one r
   page,
 }) => {
   await openManager(page);
+  await expandGroup(page, "slack");
   await expandGroup(page, "unified_document_index");
-  const grid = pipelineRow(page, "unified_document_index/grid_index");
+  const render = pipelineRow(page, "slack/render_markdown");
   const qmd = pipelineRow(page, "unified_document_index/qmd_aggregator");
-  await expect(grid).toBeVisible();
-  await grid.locator('[col-id="status"]').click();
+  await expect(render).toBeVisible();
+  await render.locator('[col-id="status"]').click();
   await qmd.locator('[col-id="status"]').click({ modifiers: ["ControlOrMeta"] });
   await expect(page.locator(SELECTED_ROWS)).toHaveCount(2);
 

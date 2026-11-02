@@ -1,4 +1,6 @@
+load("@py_pip//:requirements.bzl", "requirement")
 load("@rules_rust//rust:defs.bzl", "rust_test")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 # The doltlite facts datalib depends on (docs/dev/doltlite.md), one test
 # each. Run it after every doltlite bump; a fact that moved fails by name.
@@ -21,4 +23,30 @@ rust_test(
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
     ],
+)
+
+# This package's contribution to `//:python_sources`, which lints it.
+filegroup(
+    name = "python_sources",
+    srcs = glob(["*.py"], allow_empty = False),
+    visibility = ["//visibility:public"],
+)
+
+# What docs/dev/doltlite.md tells a Python program to do, with the PyPI
+# wheel at the pinned version. An sh_test so it runs the host's python3:
+# the interpreter rules_python brings compiles SQLite in, and the package
+# cannot replace it there. CI's devcontainer and a mac with Xcode's
+# command line tools both have a python3 it works under.
+sh_test(
+    name = "python_package_test",
+    size = "small",
+    srcs = ["python_package_test.py"],
+    data = [
+        "//third-party/doltlite:doltlite",
+        requirement("doltlite"),
+    ],
+    env = {
+        "DOLTLITE_BIN": "$(rootpath //third-party/doltlite:doltlite)",
+        "DOLTLITE_WHEEL_FILES": "$(rootpaths %s)" % requirement("doltlite"),
+    },
 )

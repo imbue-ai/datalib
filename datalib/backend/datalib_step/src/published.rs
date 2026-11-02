@@ -22,9 +22,7 @@ pub async fn version(env: &StepEnv, data_root: &Path) -> Result<Option<String>> 
         Function::RenderMarkdown => {
             content_version_at_path(&datalib_etl_render::indexed_markdown::path_for(&tree)).await
         }
-        Function::GridIndex => {
-            content_version_at_path(&datalib_core::layout::grid_index_db(data_root)).await
-        }
+        Function::GridIndex => grid_index_generation(data_root).await,
         Function::RenderTimeSeries | Function::TimeSeriesIndex => {
             head_commit_at_path(&time_series_store(env, data_root)).await
         }
@@ -39,6 +37,17 @@ pub async fn version(env: &StepEnv, data_root: &Path) -> Result<Option<String>> 
         | Function::Embed
         | Function::EmbeddingMap => Ok(None),
     }
+}
+
+async fn grid_index_generation(data_root: &Path) -> Result<Option<String>> {
+    let path = datalib_core::layout::grid_index_db(data_root);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let pool = datalib_pin::open_reader(&path).await?;
+    let generation = datalib_pin::generation(&pool).await;
+    pool.close().await;
+    Ok(generation?)
 }
 
 /// The time-series store a `render_time_series` or `time_series_index`

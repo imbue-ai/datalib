@@ -11,8 +11,10 @@ that holds it. The pinned version is in `MODULE.bazel`;
 checks every single-process fact below in well under a second, one
 test each, in a module named for its section here;
 `//datalib/backend/etl:doltlite_two_process_test` checks the ones about
-a writer and a reader in two processes. After a doltlite bump, run
-both. A fact that moved fails by name: fix it here, then the test,
+a writer and a reader in two processes, and
+`//datalib/backend/doltlite_facts:python_package_test` the ones in
+[Reading a store from Python](#reading-a-store-from-python). After a
+doltlite bump, run all three. A fact that moved fails by name: fix it here, then the test,
 then whatever in the tree leaned on it.
 
 > **GUI option:** For a macOS sqlite-browser build patched to load
@@ -25,8 +27,7 @@ then whatever in the tree leaned on it.
 > (`-readonly`) in Terminal — `datalib/tauri/src/raw_store.rs`.
 
 Every store the pipeline writes — the raw stores under
-`<data_root>/<group>/ingest/`, each source's render store, and the grid
-index (`<data_root>/unified_document_index/grid_index/db.doltlite_db`) — is a
+`<data_root>/<group>/ingest/` and each source's render store — is a
 [doltlite](https://github.com/dolthub/doltlite) database: SQLite with
 content-addressed prolly-tree storage and a `git`-shaped commit history
 exposed through SQL. The bazel build statically links doltlite into our
@@ -67,14 +68,14 @@ a fact about the on-disk format, not about lock-in — the shell above
 dumps any store to ordinary SQL, which stock SQLite loads:
 
 ```sh
-datalib-doltlite -readonly unified_document_index/grid_index/db.doltlite_db .dump \
-  | sqlite3 grid.sqlite
+datalib-doltlite -readonly slack/render_markdown/indexed_markdown.doltlite_db .dump \
+  | sqlite3 render.sqlite
 ```
 
-That is the whole export. A 16 MB grid store comes out as about 15 MB
-of SQL, well under a second each way, and `grid_rows` / `markdowns` /
-`edges` arrive with their schemas, primary keys and indexes intact. It
-works for the raw stores too — BLOB columns come through as hex
+That is the whole export. A 16 MB store comes out as about 15 MB of
+SQL, well under a second each way, and its tables arrive with their
+schemas, primary keys and indexes intact. It works for the raw stores
+too — BLOB columns come through as hex
 literals. (A source's `blobs.sqlite` is plain SQLite already; stock
 `sqlite3` opens it.)
 
@@ -113,6 +114,55 @@ Two variants worth knowing:
   `CREATE TABLE … AS SELECT` copies rows and column types but not
   primary keys or indexes, which leaves `.dump` the higher-fidelity
   route.
+
+## Reading a store from Python
+
+A program that runs many small queries should not start the shell for
+each one. Dolthub's **`doltlite`** package on PyPI makes Python's own
+`sqlite3` module run on doltlite, so a store opens once and stays open:
+
+```sh
+pip install doltlite==<DOLTLITE_VERSION>   # the pin in third-party/doltlite/BUILD.bazel
+```
+
+```python
+import doltlite  # first, before anything imports sqlite3
+import sqlite3
+
+conn = sqlite3.connect(f"file:{store}?mode=ro", uri=True)    # main, read-only
+conn = sqlite3.connect(f"file:{store}@{commit}?mode=ro", uri=True)  # one commit
+```
+
+The second form is the [detached open](#opening-a-revision-by-path) our
+own readers use, and it is read-only even without `?mode=ro`. Install
+the wheel whose version matches the pin: a release that changes the
+storage format refuses our stores.
+
+Measured on a mac against a 212 MB store, with the 0.50.16 wheel: the
+open and first query took ~11 ms, and a lookup by primary key on the open
+connection ~0.01 ms. The same lookup cost ~15 ms when each one ran in a
+new `doltlite -readonly -json` process. Writes are refused on both kinds
+of open, and the store came out byte-identical.
+
+What the package needs:
+
+- **A Python that loads SQLite as a shared library**: Homebrew, the
+  system Python, pyenv or Conda. The python-build-standalone builds that
+  `uv python install`, mise and Rye fetch compile SQLite in, and the
+  package cannot replace it there. With uv, name the interpreter:
+  `uv venv --python /opt/homebrew/bin/python3.13`.
+- **On macOS, a script to restart.** The import restarts the interpreter
+  with doltlite preloaded, so it works for `python script.py` and
+  `python -m pkg`, and fails under `python -c`, the REPL and Jupyter.
+  Each start copies a 3.9 MB library into `$TMPDIR/doltlite-shim-*`, and
+  0.50.16 never reuses the copy (dolthub/doltlite-python#2), so a
+  long-lived machine wants those cleared now and then. On Linux the
+  import loads doltlite in place, so `python -c` works there.
+
+`//datalib/backend/doltlite_facts:python_package_test` holds each of
+these, with the pinned wheel against a store the pinned CLI wrote. It
+runs under the host's `python3`: CI's Ubuntu one, and on a mac the
+`/usr/bin/python3` that Xcode's command line tools install.
 
 ## Recipes
 
@@ -729,8 +779,8 @@ Creating and dropping a table in one open still appends chunks, though
   needs about the store's size again in free disk (upstream
   `doc/doltlite/dolt_gc.md`; not measured here).
 - `sqlite_mirror` and `fsindex` run gc, and so does `datalib-dag
-  --compact` on the render stores and the grid index, after folding
-  their history into one commit (`doltlite_raw::fold_history`).
+  --compact` on the render stores, after folding their history into
+  one commit (`doltlite_raw::fold_history`).
 
 ### Trees, and keeping one through a fold
 
@@ -758,8 +808,7 @@ message. `dolt_hashof_db(<rev>)` answers the tree's hash, and
 - **A read-only connection that reads each request in a transaction of
   its own reads on through a fold and gc in another process**: a
   transaction begun before finishes on the tree it began on, and the next
-  one reads the folded `main`. That is the search applet's connection to
-  the grid index.
+  one reads the folded `main`.
 - **A fold must not drop a commit a reader is open on.** A detached
   `<file>@<commit>` reader in another process, whose commit a fold and
   gc dropped, gets "database disk image is malformed" on its next read
@@ -965,7 +1014,9 @@ cause (network timeout, panic, OOM, etc.).
   pools"). The CLI takes no such lock, so a writable CLI session is
   exactly the second writer that rule exists to keep out.
 - **For routine reads from app code.** Open the file via `sqlx` like
-  everything else in the backend; the CLI is for ad-hoc inspection.
+  everything else in the backend, or from Python with the `doltlite`
+  package ([Reading a store from Python](#reading-a-store-from-python));
+  the CLI is for ad-hoc inspection.
 - **To "fix" a wedged DB.** The next writer's `open` discards the
   uncommitted state itself. Only reach for `dolt_reset` /
   `dolt_checkout` against a copy of the file, never against the live

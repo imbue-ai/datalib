@@ -42,13 +42,15 @@ pub struct DoltRepo {
     root: Arc<PathBuf>,
 }
 
-/// The pool of one read-only connection, and the search terms file last
-/// attached to it, by inode: a file rebuilt under a new shape is a new
-/// file, and the old one stays attached until it is noticed. sqlx can
-/// swap that connection for a fresh one with nothing attached, so each
-/// read asks the connection it holds, never this inode alone.
+/// The pool of one read-only connection, the grid index file it opened
+/// and the search terms file last attached to it, by inode. A file
+/// rebuilt — a reset, a terms file in a new shape — is a new file under
+/// the old name, and a connection reads the old one until it is noticed.
+/// sqlx can swap that connection for a fresh one with nothing attached,
+/// so each read asks the connection it holds, never this inode alone.
 struct Reader {
     pool: SqlitePool,
+    grid: u64,
     terms: Option<u64>,
 }
 
@@ -410,31 +412,36 @@ impl DoltRepo {
         })
     }
 
-    /// The store at the commit it is at now, or `None` while the
-    /// `grid_index` step has yet to create it or commit into it — the
-    /// same answer every read gives for a missing table.
+    /// The index at the generation it is at now, or `None` while the
+    /// `grid_index` step has yet to create it — the same answer every read
+    /// gives for a missing table.
     ///
-    /// A transaction on a read-only connection holds one commit and reads
-    /// the plain tables, so their indexes serve it; `dolt_at_` would lose
-    /// them, and a plain read outside a transaction can see `main` move
-    /// between two statements
-    /// (docs/dev/doltlite.md#three-ways-to-read-one-commit). The writer
-    /// publishes by moving `main` in one step, so the transaction never
-    /// sees a half-written batch.
+    /// A transaction on a read-only connection to the WAL file reads one
+    /// state of it for every statement, and the writer changes it one
+    /// whole source per transaction, so a request never sees a
+    /// half-written batch.
     async fn pinned(&self) -> Result<Option<At>, RepoError> {
         let internal = |what: &str, e: sqlx::Error| RepoError::Internal(format!("{what}: {e}"));
-        if !self.db_path.is_file() {
+        use std::os::unix::fs::MetadataExt;
+        let Ok(grid) = std::fs::metadata(&self.db_path).map(|m| m.ino()) else {
             return Ok(None);
-        }
+        };
         // The terms are attached on the connection the transaction then
         // runs on: another acquire could be handed a different one.
         let (conn, terms) = {
             let mut slot = self.pool.lock().await;
+            if let Some(stale) = slot.take_if(|r| r.grid != grid) {
+                stale.pool.close().await;
+            }
             if slot.is_none() {
                 let pool = open_reader(&self.db_path)
                     .await
                     .map_err(|e| internal("open the grid index read-only", e))?;
-                *slot = Some(Reader { pool, terms: None });
+                *slot = Some(Reader {
+                    pool,
+                    grid,
+                    terms: None,
+                });
             }
             let reader = slot.as_mut().expect("opened above");
             let mut conn = reader
@@ -450,17 +457,9 @@ impl DoltRepo {
         let mut tx = sqlx::Transaction::begin(conn, None)
             .await
             .map_err(|e| internal("begin a read of the grid index", e))?;
-        // A table read first: a scalar function answers from the
-        // connection's last view, and a table read is what loads the
-        // commit this transaction reads (`datalib_pin::head`).
-        let _: i64 = sqlx::query_scalar("SELECT count(*) FROM sqlite_master")
-            .fetch_one(&mut *tx)
+        let commit = datalib_pin::generation(&mut *tx)
             .await
-            .map_err(|e| internal("read the grid index", e))?;
-        let commit: Option<String> = sqlx::query_scalar("SELECT dolt_hashof('HEAD')")
-            .fetch_optional(&mut *tx)
-            .await
-            .unwrap_or(None);
+            .map_err(|e| internal("read the grid index's generation", e))?;
         let Some(commit) = commit else {
             return Ok(None);
         };
@@ -512,9 +511,9 @@ pub fn term_values_sql(grid_rows: &str, where_sql: &str, kinds: &[u8], by_name: 
 /// Attaches the root's search terms file read-only under
 /// [`ATTACHED_AS`], so a term on a terms key is a clause of the grid's own
 /// query (`crate::terms_keys`). Outside any transaction, as SQLite
-/// requires; the file keeps a rollback journal (its writer never asks for WAL),
-/// so a reader in a transaction holds off the terms writer for as long as
-/// it reads, which each request's transaction keeps short. `attached` is
+/// requires. The file is in WAL mode, as the grid index is, so a reader
+/// in a transaction holds off only the writer's checkpoint, and each
+/// request's transaction keeps that short. `attached` is
 /// the inode last attached, to whichever connection; `conn` itself says
 /// whether it holds one. Returns whether the file is attached to `conn`.
 async fn attach_terms(
@@ -1464,24 +1463,20 @@ mod tests {
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use sqlx::Connection;
 
-    /// A root with an empty grid index published on `main` and an empty
-    /// search terms file beside it.
+    /// A root with an empty grid index at its first generation and an
+    /// empty search terms file beside it.
     async fn empty_root(root: &Path) {
         let grid = datalib_runtime::layout::grid_index_db(root);
         std::fs::create_dir_all(grid.parent().unwrap()).unwrap();
-        let writer = datalib_core::store::open_pool(&grid).await.unwrap();
-        sqlx::query("SELECT dolt_checkout('-b', 'datalib_writer')")
-            .execute(&writer)
-            .await
-            .unwrap();
+        let writer = datalib_core::store::open_plain_pool(&grid).await.unwrap();
         for (_t, ddl) in datalib_schema::grid_rows::DDL {
             sqlx::query(*ddl).execute(&writer).await.unwrap();
         }
-        sqlx::query("SELECT dolt_commit('-Am', 'tables')")
+        sqlx::query(datalib_pin::GENERATION_DDL)
             .execute(&writer)
             .await
             .unwrap();
-        sqlx::query("SELECT dolt_branch('-f', 'main', 'datalib_writer')")
+        sqlx::query("INSERT INTO store_generation VALUES (1, 'f', 1)")
             .execute(&writer)
             .await
             .unwrap();
