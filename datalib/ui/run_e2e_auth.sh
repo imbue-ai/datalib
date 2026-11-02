@@ -74,13 +74,15 @@ FAKE_NODE_JS="$UI_DIR/tests/e2e_auth/fake_node.mjs"
 rm "$DATALIB_RUNTIME_DIR/node/bin/node"
 cat > "$DATALIB_RUNTIME_DIR/node/bin/node" <<EOF
 #!/bin/sh
+flag=""
+if [ "\$1" = --disable-sigusr1 ]; then flag="\$1"; shift; fi
 case "\$1" in
   */latchkey/dist/src/cli.js) ;;
-  *) exec '$REAL_NODE' "\$@" ;;
+  *) exec '$REAL_NODE' \$flag "\$@" ;;
 esac
 '$REAL_NODE' '$FAKE_NODE_JS' "\$@"
 rc=\$?
-[ "\$rc" -eq 0 ] && exec '$REAL_NODE' "\$@"
+[ "\$rc" -eq 0 ] && exec '$REAL_NODE' \$flag "\$@"
 [ "\$rc" -eq 100 ] && exit 0
 exit "\$rc"
 EOF

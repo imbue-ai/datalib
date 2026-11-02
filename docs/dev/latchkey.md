@@ -25,6 +25,14 @@ sign-in, the wizard's account row, or a provider's HTTP client.
   running `datalib-step probe`, which makes one real request.
 - **`--account` is a global option**, so it goes *before* the
   subcommand: `latchkey --account work curl …`, never after.
+- **Node starts with `--disable-sigusr1`**, from `bundled_command` and
+  from the `latchkey` wrapper we ship (`scripts/latchkey-wrapper.sh`).
+  Without it, any program running as the same user can send Node the
+  `SIGUSR1` signal, which opens Node's debugger, and read a running
+  latchkey's decrypted sign-ins out of its memory
+  ([#1515](https://github.com/imbue-ai/datalib/issues/1515)).
+  `//datalib/backend/runtime:debug_signal_test` signals the pinned Node
+  to check.
 
 ## Every run reads the keychain
 

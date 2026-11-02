@@ -32,3 +32,19 @@ rust_test(
     crate = ":datalib_runtime",
     edition = "2021",
 )
+
+# A bundled tool, run by the pinned Node, ignores the debugger signal.
+rust_test(
+    name = "debug_signal_test",
+    size = "small",
+    srcs = ["tests/debug_signal.rs"],
+    data = ["@nodejs_host//:node_bin"],
+    edition = "2021",
+    env = {"NODE_RLOC": "$(rlocationpath @nodejs_host//:node_bin)"},
+    deps = [
+        ":datalib_runtime",
+        "@datalib_crates//:libc",
+        "@datalib_crates//:runfiles",
+        "@datalib_crates//:tempfile",
+    ],
+)
