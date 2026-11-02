@@ -594,6 +594,7 @@ pub fn render_notion(
                 sections: Vec::new(),
                 edges: Vec::new(),
                 contacts: Vec::new(),
+                photos: Vec::new(),
                 problems: doc.problems.clone(),
             })?;
             summary.buckets.push(Bucket {
@@ -645,6 +646,7 @@ pub fn render_notion(
             sections: Vec::new(),
             edges: Vec::new(),
             contacts: Vec::new(),
+            photos: Vec::new(),
             problems: doc.problems.clone(),
         })?;
         summary.buckets.push(Bucket {

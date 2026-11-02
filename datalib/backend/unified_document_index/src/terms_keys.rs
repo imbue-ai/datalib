@@ -81,6 +81,18 @@ pub const TERMS_KEYS: &[TermsKey] = &[
         kinds: Kinds::These(&[Kind::Label]),
         person: false,
     },
+    TermsKey {
+        key: "place",
+        aliases: &[],
+        kinds: Kinds::These(&[Kind::Place]),
+        person: false,
+    },
+    TermsKey {
+        key: "caption",
+        aliases: &[],
+        kinds: Kinds::These(&[Kind::Caption]),
+        person: false,
+    },
 ];
 
 /// The terms key a person typed, by its name or an alias.

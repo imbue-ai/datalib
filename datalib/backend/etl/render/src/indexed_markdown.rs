@@ -33,6 +33,7 @@ use datalib_schema::render_cursor::{RenderCursorRow, DDL as RENDER_CURSOR_DDL};
 use datalib_schema::render_inputs::{DDL as RENDER_INPUTS_DDL, INDEX_DDL as RENDER_INPUTS_INDEX};
 use datalib_schema::source_contact_handles::DDL as SOURCE_CONTACT_HANDLES_DDL;
 use datalib_schema::source_contacts::DDL as SOURCE_CONTACTS_DDL;
+use datalib_schema::source_photos::DDL as SOURCE_PHOTOS_DDL;
 
 use crate::grid_index::{RenderedMarkdown, WriteLock};
 use datalib_etl::bulk::BulkUpsertable;
@@ -64,6 +65,7 @@ pub(crate) fn store_tables() -> impl Iterator<Item = (&'static str, &'static str
         .chain(EDGES_DDL.iter())
         .chain(SOURCE_CONTACTS_DDL.iter())
         .chain(SOURCE_CONTACT_HANDLES_DDL.iter())
+        .chain(SOURCE_PHOTOS_DDL.iter())
         .chain(PROBLEMS_DDL.iter())
         .chain(MEASUREMENTS_DDL.iter())
         .chain(RENDER_CURSOR_DDL.iter())
@@ -1225,6 +1227,17 @@ impl IndexedMarkdownStore {
                 )
                 .await
                 .context("read source contacts")?;
+            let mut photos_by_doc =
+                group_by_document::<datalib_schema::source_photos::SourcePhotoRow>(
+                    &self.pool,
+                    "SELECT * FROM source_photos \
+                      WHERE markdown_uuid IN (SELECT value FROM json_each(?1)) \
+                      ORDER BY markdown_uuid, photo_uuid",
+                    "markdown_uuid",
+                    &wanted,
+                )
+                .await
+                .context("read source photos")?;
             let mut out = Vec::with_capacity(mds.len());
             for md in mds {
                 let rows = rows_by_doc.remove(&md.markdown_uuid).unwrap_or_default();
@@ -1236,6 +1249,16 @@ impl IndexedMarkdownStore {
                     .map(|r| {
                         serde_json::from_str(&r.contact_json).with_context(|| {
                             format!("source contact {} of {}", r.contact_key, r.markdown_uuid)
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let photos = photos_by_doc
+                    .remove(&md.markdown_uuid)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|r| {
+                        serde_json::from_str(&r.photo_json).with_context(|| {
+                            format!("source photo {} of {}", r.photo_uuid, r.markdown_uuid)
                         })
                     })
                     .collect::<Result<Vec<_>>>()?;
@@ -1261,6 +1284,7 @@ impl IndexedMarkdownStore {
                     sections: Vec::new(),
                     edges,
                     contacts,
+                    photos,
                     problems: Vec::new(),
                 });
             }
@@ -1521,6 +1545,7 @@ mod tests {
             sections: Vec::new(),
             edges: Vec::new(),
             contacts: Vec::new(),
+            photos: Vec::new(),
             problems,
         }
     }

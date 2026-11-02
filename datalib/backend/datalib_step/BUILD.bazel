@@ -77,6 +77,7 @@ rust_binary(
         "//datalib/backend/etl/providers/garmin_config:datalib_etl_garmin_config",
         "//datalib/backend/etl/providers/lightroom:datalib_etl_lightroom",
         "//datalib/backend/etl/providers/lightroom_config:datalib_etl_lightroom_config",
+        "//datalib/backend/etl/providers/lightroom_render:datalib_etl_lightroom_render",
         "//datalib/backend/etl/providers/github:datalib_etl_github",
         "//datalib/backend/etl/providers/github_render:datalib_etl_github_render",
         "//datalib/backend/etl/providers/github_config:datalib_etl_github_config",

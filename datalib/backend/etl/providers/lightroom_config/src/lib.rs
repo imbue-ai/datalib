@@ -8,9 +8,10 @@ use datalib_source_common::{LocalPath, SourceCommon};
 use serde::{Deserialize, Serialize};
 
 /// Columns folded in by [`LightroomConfig::skip_xmp`]. These are the
-/// bulky, wholly-derived metadata blobs in a Lightroom catalog: the
-/// serialized XMP packet Lightroom keeps per image, and the flattened
-/// search-index strings it rebuilds from the harvested EXIF/IPTC tables.
+/// bulky metadata blobs in a Lightroom catalog: the serialized XMP packet
+/// Lightroom keeps per image, which alone holds a photo's title and the
+/// offset of its capture time, and the flattened search-index strings it
+/// rebuilds from the harvested EXIF/IPTC tables.
 pub const XMP_COLUMN_PATTERNS: &[&str] = &[
     "Adobe_AdditionalMetadata.xmp",
     "AgMetadataSearchIndex.*SearchIndex",
@@ -51,9 +52,9 @@ pub struct LightroomConfig {
     /// nothing in the store and never shows up in a diff.
     pub exclude_columns: Vec<String>,
 
-    /// Also leave out the bulkiest columns, which Lightroom derives from
-    /// others that stay: the per-image XMP packet and the flattened
-    /// search-index strings.
+    /// Also leave out the bulkiest columns: the per-image XMP packet and
+    /// the flattened search-index strings. Photos then render with no
+    /// title, and most with no known time zone.
     pub skip_xmp: bool,
 
     /// Column names that, when present as a single-column UNIQUE index on
@@ -128,10 +129,26 @@ impl LightroomConfig {
     }
 }
 
-/// Params for the render step. `lightroom` is download-only for now (see
-/// the provider crate's `processor::plan_render`), so this is the shared
-/// bare envelope.
-pub type LightroomRenderConfig = datalib_source_common::BareRenderConfig;
+/// Params for the render step, which makes a grid row per photo and video
+/// (`datalib_etl_lightroom_render`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LightroomRenderConfig {
+    #[serde(default)]
+    pub common: datalib_source_common::RenderCommon,
+    /// The IANA zone (`Europe/Berlin`) a photo was taken in when its own
+    /// metadata records no offset, as most older cameras' does not.
+    /// Unset reads those photos' times as UTC, and says so on the
+    /// source's Manage row.
+    #[serde(default)]
+    pub capture_time_zone: Option<String>,
+    /// Where the catalog is now, when Lightroom's own record of it
+    /// (`Adobe_lastScannedCatalogPath`) is out of date: the catalog was
+    /// moved, or is read from another machine. Its previews are the
+    /// `<name> Previews.lrdata` folder beside it.
+    #[serde(default)]
+    pub catalog_path: Option<String>,
+}
 
 pub use datalib_source_common::glob_match;
 

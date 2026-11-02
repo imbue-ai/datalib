@@ -57,6 +57,9 @@ fn row(uuid: &str, kind: &str, document: &str, provider: &str) -> GridRow {
         diff_status: None,
         diff_changed_columns: None,
         supplied_terms: None,
+        image: None,
+        latitude: None,
+        longitude: None,
     }
 }
 

@@ -425,6 +425,7 @@ fn to_rendered(
         sections: Vec::new(),
         edges,
         contacts: Vec::new(),
+        photos: Vec::new(),
         problems: Vec::new(),
     }
 }

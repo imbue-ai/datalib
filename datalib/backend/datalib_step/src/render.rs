@@ -1445,6 +1445,7 @@ mod plan_tests {
                     sections: Vec::new(),
                     edges: Vec::new(),
                     contacts: Vec::new(),
+                    photos: Vec::new(),
                     problems: Vec::new(),
                 },
             )
@@ -1775,6 +1776,7 @@ mod stale_tree_tests {
                     sections: Vec::new(),
                     edges: Vec::new(),
                     contacts: Vec::new(),
+                    photos: Vec::new(),
                     problems: Vec::new(),
                 },
             )

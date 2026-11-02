@@ -260,6 +260,9 @@ export type ChatResponse = {
   /// The configured source this document came from, as the grid's
   /// Source column shows it; null when no grid row points at the doc.
   source_ref: Identity | null;
+  /// The picture the document is, where it is one (`datalib:photo/…`):
+  /// such a document has no page, and `body` is empty.
+  image?: string | null;
   body: string;
   outgoing_edges: EdgeOut[];
   /// What render could not fully do to this document, errors first.
@@ -1702,6 +1705,8 @@ export type Meta =
       // A tool for working on the library, not a view of the data: the
       // gallery lists it under "Developer tools".
       dev_tool?: boolean;
+      // The kinds of `datalib:` name this applet answers for (`photo`).
+      serves?: string[];
     }
   | { renamed_to: string };
 

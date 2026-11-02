@@ -210,8 +210,9 @@ SELECT h.commit_date, a.ZTITLE FROM dolt_history_Z_33ASSETS h
 
 ## What render would need
 
-Everything `lightroom/INGEST.md` lists under "What render will need", with the
-paths already resolved: an asset is `originals/<ZDIRECTORY>/<ZFILENAME>`
+A render that fills the same `NormalizedPhoto` Lightroom's does
+(`docs/dev/plans/photos_applet.md`), so the `photos` applet draws it
+unchanged, with the paths already resolved: an asset is `originals/<ZDIRECTORY>/<ZFILENAME>`
 under the bundle, and its edited version is under `resources/renders/`.
 The cheapest way to the pixels is the one already in the tree: a
 `media` source pointed at `<library>/originals`, which yields EXIF,

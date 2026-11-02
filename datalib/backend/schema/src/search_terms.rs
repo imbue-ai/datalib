@@ -63,6 +63,13 @@ pub enum SearchTermKind {
     /// Notion page's, for one): what an id or a link copied from the
     /// source finds the row by.
     UpstreamId = 15,
+    /// Where the row was: a place's name (a city, a landmark) or an H3
+    /// cell it falls in. What `place:` finds a photo by.
+    Place = 16,
+    /// The row's caption, where it has one apart from its body: a
+    /// photo's. What `caption:` finds it by, since a photo has no page
+    /// for free text to search.
+    Caption = 17,
 }
 
 impl SearchTermKind {
@@ -101,7 +108,11 @@ impl SearchTermKind {
             | SearchTermKind::Bcc
             | SearchTermKind::Mention
             | SearchTermKind::Container => 3,
-            SearchTermKind::Title | SearchTermKind::Subject | SearchTermKind::Label => 2,
+            SearchTermKind::Title
+            | SearchTermKind::Subject
+            | SearchTermKind::Label
+            | SearchTermKind::Place
+            | SearchTermKind::Caption => 2,
             SearchTermKind::Author | SearchTermKind::Name | SearchTermKind::Participant => 1,
         }
     }
@@ -123,7 +134,9 @@ impl SearchTermKind {
             | SearchTermKind::About
             | SearchTermKind::Participant
             | SearchTermKind::Subject
-            | SearchTermKind::Label => false,
+            | SearchTermKind::Label
+            | SearchTermKind::Place
+            | SearchTermKind::Caption => false,
         }
     }
 }
@@ -419,6 +432,8 @@ mod tests {
             SearchTermKind::Mention,
             SearchTermKind::Author,
             SearchTermKind::UpstreamId,
+            SearchTermKind::Place,
+            SearchTermKind::Caption,
         ]
         .into_iter()
         .map(|k| (k, k.code()))
@@ -438,6 +453,8 @@ mod tests {
                 (SearchTermKind::Mention, 10),
                 (SearchTermKind::Author, 11),
                 (SearchTermKind::UpstreamId, 15),
+                (SearchTermKind::Place, 16),
+                (SearchTermKind::Caption, 17),
             ]
         );
     }

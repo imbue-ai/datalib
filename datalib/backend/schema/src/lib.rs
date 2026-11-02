@@ -61,6 +61,10 @@ pub mod source_contact_handles {
     include!("source_contact_handles.rs");
 }
 
+pub mod source_photos {
+    include!("source_photos.rs");
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

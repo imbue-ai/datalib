@@ -45,7 +45,7 @@ python3 tools/proto_from_descriptor.py "$work/upstream.pb" datalib/backend/signa
 ```
 
 `protoc` is the one Bazel already fetched:
-`$(bazelisk info output_base)/external/toolchains_protoc++protoc+toolchains_protoc_hub.<os_arch>/bin/protoc`
+`$(bazelisk info output_base)/external/protobuf++protoc+prebuilt_protoc.<os_arch>/bin/protoc`
 (`<os_arch>` is e.g. `osx_aarch_64` or `linux_x86_64`).
 The upstream download is an input to the generator and must not be
 committed. Then `bazelisk test //datalib/backend/signal-backup/... //datalib/backend/etl/providers/signal/...`.

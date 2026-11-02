@@ -36,7 +36,9 @@ reference behind them.
   them; neither waits for the other.
 - `bazel build :dist (musl static)` — the fully static release leg,
   plus `doltlite_link_test` against those binaries. Separate job so
-  its ~80 s is not on the other one's critical path.
+  its ~80 s is not on the other one's critical path. The test's sync
+  takes seconds; if it is still running after 45 s, the test prints each
+  process still running, its step and what every thread is blocked in, then fails.
 - `warm the contributor cache` — on a `main` push only; see "Two caches"
   below.
 

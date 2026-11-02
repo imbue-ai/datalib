@@ -26,6 +26,8 @@ rust_binary(
         "//datalib/backend/handle:datalib_handle",
         "//datalib/backend/obs:datalib_obs",
         "//datalib/backend/parent_watch:datalib_parent_watch",
+        "//datalib/backend/photo_schema:datalib_photo_schema",
+        "//datalib/backend/pin:datalib_pin",
         "//datalib/backend/env:datalib_env",
         "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/etl/render:datalib_etl_render",
@@ -43,6 +45,7 @@ rust_binary(
         "@datalib_crates//:chrono",
         "//datalib/backend/cli_help:datalib_cli_help",
         "@datalib_crates//:clap",
+        "@datalib_crates//:futures",
         "@datalib_crates//:serde",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:serde_json",
@@ -92,6 +95,40 @@ insta_update(
         "RUST_TEST_THREADS": "1",
     },
     test = ":applet_unittests",
+)
+
+# The photos applet as the gateway runs it, over catalog 03 of
+# github.com/thadd3us/lightroom_db_diff and its previews (the
+# `lightroom_catalog_03_previews` archive in MODULE.bazel).
+# `requires-network` for a cold cache, as the lightroom tests.
+rust_test(
+    name = "photos_catalog_03",
+    size = "medium",
+    srcs = ["tests/photos_catalog_03.rs"],
+    crate_name = "photos_catalog_03",
+    data = [
+        ":datalib_applet",
+        "@lightroom_catalog_03_previews//:catalog_03",
+        "@lightroom_catalog_03_previews//:lrcat",
+    ],
+    edition = "2021",
+    env = {
+        "APPLET_BIN": "$(rootpath :datalib_applet)",
+        "LIGHTROOM_CATALOG_03": "$(rootpath @lightroom_catalog_03_previews//:lrcat)",
+    },
+    tags = [
+        "no-remote-exec",
+        "requires-network",
+    ],
+    deps = [
+        "//datalib/backend/photo_schema:datalib_photo_schema",
+        "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/schema:datalib_schema",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
 )
 
 # The applets' card components as the browser runs them, for the UI's

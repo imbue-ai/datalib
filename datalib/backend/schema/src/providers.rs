@@ -64,6 +64,8 @@ pub enum Provider {
     /// Docs, Sheets and Slides through Drive's and each editor's API.
     GoogleDrive,
     GoogleTakeout,
+    /// Adobe Lightroom Classic: a catalog's photos and videos.
+    Lightroom,
     Linkedin,
     Notion,
     Pdf,

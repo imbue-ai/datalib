@@ -3,6 +3,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod launcher;
+mod protected;
 mod raw_store;
 mod read_access;
 mod zoom;
@@ -105,6 +106,8 @@ fn version() -> &'static str {
 #[tauri::command]
 fn launcher_state(app: AppHandle) -> serde_json::Value {
     let dir = libraries_dir(&app);
+    let dirs = libraries_dirs(&app);
+    let container = protected_container(&app);
     let home = home_dir(&app).unwrap_or_default();
     // TODO(after 2026-12-09): drop `legacy` and `move_from_documents`
     // with `launcher::move_from_documents`.
@@ -113,18 +116,22 @@ fn launcher_state(app: AppHandle) -> serde_json::Value {
         launcher::libraries_in_documents(&launcher::recents_file(&home), old)
     });
     let libraries: Vec<serde_json::Value> =
-        launcher::libraries(&launcher::recents_file(&home), &dir)
+        launcher::libraries(&launcher::recents_file(&home), &dirs)
             .into_iter()
             .map(|l| {
-                // A library in the libraries folder is known by its name; only
-                // one somewhere else shows where it is.
-                let elsewhere = l.path.parent() != Some(dir.as_path());
+                // A library in one of the libraries folders is known by its
+                // name; only one somewhere else shows where it is.
+                let elsewhere = !dirs.iter().any(|d| l.path.parent() == Some(d.as_path()));
+                let protected = container
+                    .as_deref()
+                    .is_some_and(|c| protected::is_protected(&l.path, c));
                 serde_json::json!({
                     "name": launcher::display_name(&l.path),
                     "path": l.path.to_string_lossy(),
                     "shown_path": elsewhere.then(|| launcher::tilde(&l.path, &home)),
-                    "forgettable": launcher::forgettable(&l.path, &dir),
-                    "deletable": launcher::deletable(&l.path, &dir),
+                    "protected": protected,
+                    "forgettable": launcher::forgettable(&l.path, &dirs),
+                    "deletable": launcher::deletable(&l.path, &dirs),
                     "found": l.found,
                     "legacy": legacy.contains(&l.path),
                     "summary": launcher::summary(&l.path),
@@ -143,6 +150,7 @@ fn launcher_state(app: AppHandle) -> serde_json::Value {
         "libraries_dir": launcher::tilde(&dir, &home),
         "move_from_documents": move_from,
         "suggested_name": launcher::suggested_name(&dir),
+        "protected_available": container.is_some(),
     })
 }
 
@@ -177,9 +185,9 @@ fn launcher_move_from_documents(app: AppHandle) -> Result<usize, String> {
 /// What the new-library field names: the folder, as the popover shows
 /// it, and what is there now. Null for an empty field.
 #[tauri::command]
-fn launcher_resolve(app: AppHandle, input: String) -> serde_json::Value {
+fn launcher_resolve(app: AppHandle, input: String, protect: bool) -> serde_json::Value {
     let home = home_dir(&app).unwrap_or_default();
-    match launcher::resolve_new(&input, &home, &libraries_dir(&app)) {
+    match new_library_root(&app, &input, protect) {
         Some(root) => serde_json::json!({
             "shown_path": launcher::tilde(&root, &home),
             "path": root.to_string_lossy(),
@@ -189,21 +197,50 @@ fn launcher_resolve(app: AppHandle, input: String) -> serde_json::Value {
     }
 }
 
+/// The folder a new library would go in: a name or a path in the
+/// libraries folder, or a plain name in the protected one.
+fn new_library_root(app: &AppHandle, input: &str, protect: bool) -> Option<PathBuf> {
+    if protect {
+        let container = protected_container(app)?;
+        return protected::resolve_name(input, &protected::libraries_dir(&container));
+    }
+    let home = home_dir(app).unwrap_or_default();
+    launcher::resolve_new(input, &home, &libraries_dir(app))
+}
+
 /// Make the library the field names and open it on its Dashboard: the
 /// starter config is written before the server starts (`--init`). A
 /// folder that is already a library is opened instead.
 #[tauri::command]
-fn launcher_create(app: AppHandle, input: String) -> Result<(), String> {
+fn launcher_create(app: AppHandle, input: String, protect: bool) -> Result<(), String> {
     let home = home_dir(&app).unwrap_or_default();
-    let root = launcher::resolve_new(&input, &home, &libraries_dir(&app))
-        .ok_or("Type a name for the library, or a folder.")?;
+    let refused = if protect {
+        "Type a name for the library. A protected library goes in Datalib's protected folder, \
+         not in a folder you choose."
+    } else {
+        "Type a name for the library, or a folder."
+    };
+    new_library_root(&app, &input, protect).ok_or(refused)?;
+    // The folder macOS names, not the one worked out from the home
+    // directory: the two are the same, but macOS's is the one it guards.
+    let parent = if protect {
+        protected::libraries_dir(&make_protected_container()?)
+    } else {
+        libraries_dir(&app)
+    };
+    let root = if protect {
+        protected::resolve_name(&input, &parent)
+    } else {
+        launcher::resolve_new(&input, &home, &parent)
+    }
+    .ok_or(refused)?;
     let shown = launcher::tilde(&root, &home);
     match launcher::classify(&root) {
         launcher::Target::Library => {
             tauri::async_runtime::spawn(boot(app, root, false));
         }
         launcher::Target::New => {
-            launcher::create_library_dir(&root, &libraries_dir(&app))
+            launcher::create_library_dir(&root, &parent)
                 .map_err(|e| format!("Could not create {shown}: {e}"))?;
             tauri::async_runtime::spawn(boot(app, root, true));
         }
@@ -272,7 +309,7 @@ async fn launcher_pick(app: AppHandle) -> Result<bool, String> {
 /// forgotten.
 #[tauri::command]
 fn launcher_forget(app: AppHandle, path: String) -> Result<(), String> {
-    if !launcher::forgettable(Path::new(&path), &libraries_dir(&app)) {
+    if !launcher::forgettable(Path::new(&path), &libraries_dirs(&app)) {
         return Err("A library in the Datalib folder is always listed.".into());
     }
     let home = home_dir(&app).ok_or("No home directory.")?;
@@ -286,7 +323,7 @@ fn launcher_forget(app: AppHandle, path: String) -> Result<(), String> {
 #[tauri::command]
 async fn launcher_delete(app: AppHandle, path: String) -> Result<bool, String> {
     let root = PathBuf::from(path);
-    if !launcher::deletable(&root, &libraries_dir(&app)) {
+    if !launcher::deletable(&root, &libraries_dirs(&app)) {
         return Err("Only a library in the Datalib folder can be deleted from here.".into());
     }
     let name = launcher::display_name(&root);
@@ -347,6 +384,7 @@ fn launcher_open_folder(app: AppHandle, path: String) -> Result<(), String> {
     if !launcher::is_data_root(&root) {
         return Err(format!("{} is not a library.", root.display()));
     }
+    refuse_if_protected(&app, &root, "Finder")?;
     app.opener()
         .open_path(path, None::<&str>)
         .map_err(|e| e.to_string())
@@ -365,7 +403,7 @@ fn library_menu(app: AppHandle) -> serde_json::Value {
         .clone();
     let home = home_dir(&app).unwrap_or_default();
     let others: Vec<serde_json::Value> =
-        launcher::libraries(&launcher::recents_file(&home), &libraries_dir(&app))
+        launcher::libraries(&launcher::recents_file(&home), &libraries_dirs(&app))
             .into_iter()
             .filter(|l| Some(&l.path) != current.as_ref())
             .map(|l| {
@@ -445,6 +483,7 @@ fn open_raw_store(app: AppHandle, path: String) -> Result<String, String> {
         .expect("data root lock")
         .clone()
         .ok_or("No data library is open.")?;
+    refuse_if_protected(&app, &root, "another app")?;
     let store = raw_store::check_store(&root, Path::new(&path))?;
     match raw_store::choose(default_handler(&store)) {
         raw_store::Launch::DbBrowser { app: db_browser } => {
@@ -528,7 +567,64 @@ fn libraries_dir(app: &AppHandle) -> PathBuf {
     launcher::libraries_dir(&home)
 }
 
+/// The folders whose libraries the screen lists whether or not they were
+/// opened: `~/Datalib`, and on macOS the protected one.
+fn libraries_dirs(app: &AppHandle) -> Vec<PathBuf> {
+    let mut dirs = vec![libraries_dir(app)];
+    if let Some(container) = protected_container(app) {
+        dirs.push(protected::libraries_dir(&container));
+    }
+    dirs
+}
+
+/// Where the protected folder is, whether or not it exists yet. `None`
+/// off macOS, which has no such folder.
+fn protected_container(app: &AppHandle) -> Option<PathBuf> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    Some(protected::container(&home_dir(app)?))
+}
+
+/// Ask macOS for the protected folder, which it makes the first time.
+#[cfg(target_os = "macos")]
+fn make_protected_container() -> Result<PathBuf, String> {
+    use objc2_foundation::{NSFileManager, NSString};
+    let url = NSFileManager::defaultManager()
+        .containerURLForSecurityApplicationGroupIdentifier(&NSString::from_str(protected::GROUP_ID))
+        .ok_or("macOS gave Datalib no protected folder. Only a copy of Datalib signed by Imbue has one.")?;
+    let path = url
+        .path()
+        .ok_or("macOS named a protected folder that is not on disk.")?;
+    Ok(PathBuf::from(path.to_string()))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn make_protected_container() -> Result<PathBuf, String> {
+    Err("A protected library is only built for macOS.".into())
+}
+
+/// A protected library is opened by Datalib alone. Handing it to Finder
+/// or Terminal would make macOS ask the person to let that app in, and a
+/// yes lasts as long as the app runs: for Finder, until the next log out.
+fn refuse_if_protected(app: &AppHandle, root: &Path, who: &str) -> Result<(), String> {
+    match protected_container(app) {
+        Some(container) if protected::is_protected(root, &container) => Err(format!(
+            "This library is in Datalib's protected folder, so {who} cannot open it \
+             without macOS asking you to let it in, and keeping it in afterwards."
+        )),
+        _ => Ok(()),
+    }
+}
+
 fn main() {
+    // The release runs this on the signed app before shipping it: macOS
+    // refuses to start a program whose entitlements its signature cannot
+    // back, and that refusal happens here, before any window.
+    if std::env::args().nth(1).as_deref() == Some("--version") {
+        println!("Datalib {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
     #[cfg(target_os = "macos")]
     inherit_shell_path();
 
@@ -975,6 +1071,7 @@ fn start_backend(app: &AppHandle, root: PathBuf, init: bool) -> anyhow::Result<S
     let log_err = log
         .try_clone()
         .map_err(|e| anyhow::anyhow!("clone backend log handle: {e}"))?;
+    let latchkey_dir = protected_latchkey_dir(app, &root)?;
 
     let mut child = Command::new(&http_bin)
         .arg(&root)
@@ -988,6 +1085,7 @@ fn start_backend(app: &AppHandle, root: PathBuf, init: bool) -> anyhow::Result<S
         // the ways it can still run code, this is for the ones it
         // can't. `child` keeps the write end; never `take()` it.
         .env("DATALIB_PARENT_PIPE", "0")
+        .envs(latchkey_dir.map(|dir| ("LATCHKEY_DIRECTORY", dir)))
         .stdin(Stdio::piped())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(log_err))
@@ -1028,6 +1126,23 @@ fn start_backend(app: &AppHandle, root: PathBuf, init: bool) -> anyhow::Result<S
     *app.state::<HttpChild>().0.lock().expect("http child lock") = Some(child);
     *app.state::<DataRoot>().0.lock().expect("data root lock") = Some(root);
     Ok(url)
+}
+
+/// For a protected library, latchkey's store in the protected folder,
+/// made from `~/.latchkey` the first time; `None` for any other library,
+/// which uses latchkey's own default.
+fn protected_latchkey_dir(app: &AppHandle, root: &Path) -> anyhow::Result<Option<PathBuf>> {
+    let Some(container) = protected_container(app) else {
+        return Ok(None);
+    };
+    if !protected::is_protected(root, &container) {
+        return Ok(None);
+    }
+    let dir = protected::latchkey_dir(&container);
+    let home = home_dir(app).ok_or_else(|| anyhow::anyhow!("no home directory"))?;
+    protected::seed_latchkey(&home.join(".latchkey"), &dir)
+        .map_err(|e| anyhow::anyhow!("set up latchkey's store in {}: {e}", dir.display()))?;
+    Ok(Some(dir))
 }
 
 fn log_tail(path: &std::path::Path) -> String {

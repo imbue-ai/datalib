@@ -1,7 +1,7 @@
 // datalib's names: a `datalib:<kind>/<id>` link saying what something is
 // (docs/dev/plans/datalib_uris.md). The Rust crate `datalib_uri` is the
-// same; both read and write `tests/uri-fixtures.json` alike. Only the
-// `doc` kind lives here so far.
+// same; both read and write `tests/uri-fixtures.json` alike. The `doc`
+// and `photo` kinds live here so far.
 
 /** A rendered page, and a section of it: a message's uuid, its
  *  `data-section-uuid`. */
@@ -22,4 +22,18 @@ export function parseDoc(link: string): DocName | null {
   const section = hash === -1 ? "" : rest.slice(hash + 1);
   if (page === "" || page.includes("/")) return null;
   return { page, section: section === "" ? null : section };
+}
+
+const PHOTO = "datalib:photo/";
+
+/** A photo or video, by its grid row's uuid. */
+export function writePhoto(id: string): string {
+  return PHOTO + id;
+}
+
+/** The photo's id, or `null` for anything that is not a `photo` name. */
+export function parsePhoto(link: string): string | null {
+  if (!link.startsWith(PHOTO)) return null;
+  const id = link.slice(PHOTO.length);
+  return id === "" || id.includes("/") || id.includes("#") ? null : id;
 }

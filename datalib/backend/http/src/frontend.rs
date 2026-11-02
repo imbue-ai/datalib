@@ -47,6 +47,11 @@ pub enum Meta {
         /// under "Developer tools". Absent means it is not.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         dev_tool: bool,
+        /// The kinds of `datalib:` name this applet answers for, such as
+        /// `photo`: the UI draws such a name from this namespace's
+        /// applet. Absent answers for none.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        serves: Vec<String>,
     },
     /// This name no longer holds a component; it moved, within this
     /// same namespace. The UI follows the chain to repoint cards.

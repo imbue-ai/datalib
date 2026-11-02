@@ -17,6 +17,7 @@ rust_library(
         "src/diff_status.rs",
         "src/source_contact_handles.rs",
         "src/source_contacts.rs",
+        "src/source_photos.rs",
         "src/plain_text.rs",
     ],
     crate_name = "datalib_schema",
