@@ -580,30 +580,29 @@ once each, with the flag appended. Nothing that reads a store may be
 reading it while it is rewritten: the command line needs the root to
 itself, as `--reset` does, and the app's loop holds the steps it asks
 and every step that reads them until it is done (`dag/README.md`
-§"Resets and purges"). The search applet, which the loop does not
-schedule, reads on through a rewrite of the grid index (`doltlite.md` §
-Trees). The step decides what the verb means for what it wrote, runs
-nothing else, and reports its version as a run would; the runner records
-it, so a step that kept its content and reports a content version moves
-nothing downstream. Report nothing when there is nothing to give back.
-As with Migrate, only `datalib-step`'s own steps take the verbs
-(`StepSpec::compacts`).
+§"Resets and purges"). The step decides what the verb means for what it
+wrote, runs nothing else, and reports its version as a run would; the
+runner records it, so a step that kept its content and reports a
+content version moves nothing downstream. Report nothing when there is
+nothing to give back. As with Migrate, only `datalib-step`'s own steps
+take the verbs (`StepSpec::compacts`).
 
 `--collect` is lossless: `datalib-step` runs `dolt_gc` on the step's
-store (`doltlite_raw::collect_garbage`), which deletes only chunks no
-commit, branch or tag reaches, so every commit stays readable. A store
-whose writer refills whole tables, or seals one commit over many
+doltlite store (`doltlite_raw::collect_garbage`), which deletes only
+chunks no commit, branch or tag reaches, so every commit stays readable.
+A store whose writer refills whole tables, or seals one commit over many
 transactions, can hold several times what its commits reach.
 
-`--compact` is lossy for the stores nothing reads the history of: a
-render store and the grid index have their history folded into one
-commit, then collected (`doltlite_raw::fold_history`). Their version is
-their tree, which the fold keeps, so nothing runs again for it, and the
-grid index finds its cursor again by the tree it recorded
-(`grid_rows.md`). Every other store it collects, as `--collect` does: a
-raw store's history is the record of what upstream once held, and a
-time-series store's commits are what its index points at, so neither is
-ever folded. The History card of a compacted store shows one commit.
+`--compact` is lossy for a render store, whose history nothing reads:
+its history is folded into one commit, then collected
+(`doltlite_raw::fold_history`). Its version is its tree, which the fold
+keeps, so nothing runs again for it, and the grid index finds its cursor
+again by the tree it recorded (`grid_rows.md`). Every other store it
+collects, as `--collect` does: a raw store's history is the record of
+what upstream once held, and a time-series store's commits are what its
+index points at, so neither is ever folded. The History card of a
+compacted store shows one commit. The grid index is plain SQLite, so
+neither verb touches it.
 
 Either verb refuses a store whose size is more than the disk has free,
 since gc writes the compacted store before it drops the old one.

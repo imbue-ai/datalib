@@ -93,8 +93,8 @@ pub async fn read_at(store: &Path) -> Result<Option<Meta>> {
 
 /// Every store under a data root: each `*.doltlite_db` up to three
 /// levels down (`system/`, `<group>/ingest/`, `<group>/render_markdown/`,
-/// `unified_document_index/grid_index/`), and the two plain-SQLite stores that
-/// carry a meta row: the run store and disk stats. A walk rather than a
+/// `unified_document_index/grid_index/`), and the plain-SQLite stores that
+/// carry a meta row: the run store, disk stats and the grid index. A walk rather than a
 /// list of the layout's names, so a store this crate has not heard of is
 /// inspected too.
 pub fn stores_under(root: &Path) -> Vec<PathBuf> {
@@ -125,6 +125,7 @@ pub fn stores_under(root: &Path) -> Vec<PathBuf> {
     for plain in [
         datalib_runtime::layout::runs_db(root),
         datalib_runtime::layout::disk_stats_db(root),
+        datalib_runtime::layout::grid_index_db(root),
     ] {
         if plain.is_file() {
             out.push(plain);
@@ -197,7 +198,8 @@ mod tests {
             "slack/ingest/blobs.sqlite",
             "slack/render_markdown/indexed_markdown.doltlite_db",
             "slack/render_markdown/a/b/c.md",
-            "unified_document_index/grid_index/db.doltlite_db",
+            "unified_document_index/grid_index/db.sqlite",
+            "unified_document_index/grid_index/db.sqlite-wal",
             "unified_document_index/qmd_aggregator/qmd/index.sqlite",
             "config.toml",
         ];
@@ -218,7 +220,7 @@ mod tests {
                 "system/disk_stats.sqlite",
                 "system/feedback.doltlite_db",
                 "system/runs/runs.sqlite",
-                "unified_document_index/grid_index/db.doltlite_db",
+                "unified_document_index/grid_index/db.sqlite",
             ]
         );
     }

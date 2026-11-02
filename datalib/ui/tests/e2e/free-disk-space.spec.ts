@@ -2,11 +2,11 @@ import { test, expect, type Page } from "@playwright/test";
 
 // A right-click on the data root's size in the status bar frees up disk.
 // Left as it opens, the dialog deletes only what no commit reaches; with
-// "drop old versions" ticked, the rendered documents and the grid index
-// each also keep one commit, holding what they held. It rewrites the
+// "drop old versions" ticked, each source's rendered documents also keep
+// one commit, holding what they held. It rewrites the
 // stores, so the spec has a root of its own (config-mutating.ts).
 
-const GRID = "unified_document_index/grid_index";
+const RENDER = "slack/render_markdown";
 
 async function openDialog(page: Page) {
   const root = page.getByTestId("root-storage");
@@ -18,12 +18,12 @@ async function openDialog(page: Page) {
 
 test("freeing disk collects, and folds history only when asked", async ({ page, request }) => {
   const log = async (): Promise<string[]> => {
-    const r = await request.get(`/api/pipeline/history?tree=${encodeURIComponent(GRID)}`);
+    const r = await request.get(`/api/pipeline/history?tree=${encodeURIComponent(RENDER)}`);
     const h = (await r.json()) as { stores: { commits: { message: string }[] }[] };
     return h.stores[0]?.commits.map((c) => c.message) ?? [];
   };
   const before = await log();
-  expect(before.length, "the fixture's index has a history to fold").toBeGreaterThan(2);
+  expect(before.length, "the fixture's render store has a history to fold").toBeGreaterThan(2);
 
   await page.goto("/");
   let dialog = await openDialog(page);

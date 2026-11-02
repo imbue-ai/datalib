@@ -3,7 +3,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 # Checked-in ST:TNG-themed fixture, consumed by:
 #   * the render crate's `beeper_roundtrip` test
 #   * the unified //tests/fixtures:ingested_tng genrule that builds
-#     `backend_index.doltlite_db` against every provider's fixtures.
+#     `backend_index.sqlite` against every provider's fixtures.
 #
 # The fixture is SQL + a couple of small media files; the consumer
 # lays out a Beeper-Texts-shaped dir from those before the download.

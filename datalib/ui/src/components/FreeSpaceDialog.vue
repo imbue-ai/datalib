@@ -54,12 +54,12 @@ function onKeydown(e: KeyboardEvent) {
         <label class="free-check">
           <input v-model="dropOldVersions" type="checkbox" data-testid="free-drop-old" />
           <span>
-            <strong>Drop old versions of rendered documents and the search index</strong>
+            <strong>Drop old versions of rendered documents</strong>
             <span class="free-tag free-tag-lossy">loses history</span>
             <span class="free-help">
-              They keep only their latest version. Both are rebuilt from your downloads, so no
-              document is lost, but a source's History no longer shows earlier renders. The history
-              of your downloads is kept.
+              Each source's rendered documents keep only their latest version. They are rebuilt from
+              your downloads, so no document is lost, but a source's History no longer shows earlier
+              renders. The history of your downloads is kept.
             </span>
           </span>
         </label>

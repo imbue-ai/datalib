@@ -60,7 +60,7 @@ pub const EXAMPLES: &[Example] = &[
         command: "datalib-dag ~/datalib/config.toml --collect",
     },
     Example {
-        what: "also fold the rendered documents' and the grid's history into one commit each; quit the app first",
+        what: "also fold each source's rendered documents' history into one commit; quit the app first",
         command: "datalib-dag ~/datalib/config.toml --compact",
     },
     Example {
@@ -115,11 +115,11 @@ pub struct Cli {
     #[arg(long, value_name = "STEP_ID", value_delimiter = ',')]
     pub reset: Vec<String>,
     /// Fold the history of every store nothing reads the history of (each
-    /// source's rendered documents, and the grid index) into one commit,
-    /// collect every other store as --collect does, and give back the
-    /// disk. Their content stays as it is, so nothing runs again for it.
-    /// Alone, that is all this invocation does; with --sync it runs first.
-    /// Refused while anything else runs the loop on the root.
+    /// source's rendered documents) into one commit, collect every other
+    /// store as --collect does, and give back the disk. Their content stays
+    /// as it is, so nothing runs again for it. Alone, that is all this
+    /// invocation does; with --sync it runs first. Refused while anything
+    /// else runs the loop on the root.
     #[arg(long, conflicts_with = "collect")]
     pub compact: bool,
     /// Delete from every store the chunks no commit reaches, and give back

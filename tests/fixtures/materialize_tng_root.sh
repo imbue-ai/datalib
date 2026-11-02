@@ -9,7 +9,7 @@
 #   <stanza>/render_markdown/...       Conversation markdown trees (from qmd.tar).
 #   <stanza>/ingest/blobs.sqlite       the blob store its pages link attachments in
 #                                      (from qmd.tar; no raw store beside it).
-#   unified_document_index/grid_index/db.doltlite_db  doltlite (SQLite-compatible) file the backend reads.
+#   unified_document_index/grid_index/db.sqlite  the plain SQLite grid index the backend reads.
 #   unified_document_index/qmd_aggregator/qmd/index.sqlite QMD index (from qmd-index.tar).
 #   unified_document_index/qmd_models/          the qmd GGUFs this target carries,
 #                                      linked in from bazel outputs (all
@@ -51,14 +51,14 @@ OUT_ROOT="${1:-}"
 [[ -n "$OUT_ROOT" ]] || { echo "usage: $0 <out-root>" >&2; exit 2; }
 
 APPLET_BIN="$(rlocation _main/datalib/backend/applets/datalib_applet)"
-DB_FILE="$(rlocation _main/tests/fixtures/ingested/backend_index.doltlite_db)"
+DB_FILE="$(rlocation _main/tests/fixtures/ingested/backend_index.sqlite)"
 TERMS_FILE="$(rlocation _main/tests/fixtures/ingested/backend_search_terms.sqlite)"
 QMD_TAR="$(rlocation _main/tests/fixtures/ingested/qmd.tar)"
 QMD_INDEX_TAR="$(rlocation _main/tests/fixtures/ingested/qmd-index.tar)"
 TIME_SERIES_TAR="$(rlocation _main/tests/fixtures/ingested/time_series.tar)"
 CONFIG_BODY="$(rlocation _main/tests/fixtures/ingested/config_body.toml)"
 [[ -x "$APPLET_BIN" ]]    || { echo "ERROR: datalib_applet not found at $APPLET_BIN" >&2; exit 1; }
-[[ -f "$DB_FILE" ]]       || { echo "ERROR: backend_index.doltlite_db not found at $DB_FILE" >&2; exit 1; }
+[[ -f "$DB_FILE" ]]       || { echo "ERROR: backend_index.sqlite not found at $DB_FILE" >&2; exit 1; }
 [[ -f "$TERMS_FILE" ]]    || { echo "ERROR: backend_search_terms.sqlite not found at $TERMS_FILE" >&2; exit 1; }
 [[ -f "$QMD_TAR" ]]       || { echo "ERROR: qmd.tar not found at $QMD_TAR" >&2; exit 1; }
 [[ -f "$QMD_INDEX_TAR" ]] || { echo "ERROR: qmd-index.tar not found at $QMD_INDEX_TAR" >&2; exit 1; }
@@ -79,11 +79,11 @@ tar -xf "$QMD_INDEX_TAR" -C "$OUT_ROOT" --strip-components=1
 # commit it read, so the stores land where they were written.
 tar -xf "$TIME_SERIES_TAR" -C "$OUT_ROOT" --strip-components=1
 
-# Drop the doltlite file into the `grid_index` step's tree; the backend
-# opens it directly via `<data_root>/unified_document_index/grid_index/db.doltlite_db`.
+# Drop the grid index into the `grid_index` step's tree; the backend
+# opens it directly via `<data_root>/unified_document_index/grid_index/db.sqlite`.
 mkdir -p "$OUT_ROOT/unified_document_index/grid_index"
-cp "$DB_FILE" "$OUT_ROOT/unified_document_index/grid_index/db.doltlite_db"
-chmod u+w "$OUT_ROOT/unified_document_index/grid_index/db.doltlite_db"
+cp "$DB_FILE" "$OUT_ROOT/unified_document_index/grid_index/db.sqlite"
+chmod u+w "$OUT_ROOT/unified_document_index/grid_index/db.sqlite"
 cp "$TERMS_FILE" "$OUT_ROOT/unified_document_index/grid_index/search_terms.sqlite"
 chmod u+w "$OUT_ROOT/unified_document_index/grid_index/search_terms.sqlite"
 

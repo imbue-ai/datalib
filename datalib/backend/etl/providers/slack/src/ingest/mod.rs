@@ -481,8 +481,25 @@ async fn fetch_account_state(
     let mut totals = AccountTotals::default();
     let mut problems = Vec::new();
 
-    progress.set_message(M_COUNTS);
-    let open_latest = match fetch_read_states(db, &in_scope, latchkey).await {
+    // Three calls that need nothing from each other, out together.
+    let mut bookmark_problems = Vec::new();
+    let (read_states, saved, bookmarks) = tokio::join!(
+        async {
+            progress.set_message(M_COUNTS);
+            fetch_read_states(db, &in_scope, latchkey).await
+        },
+        list_saved_items(latchkey),
+        fetch_bookmarks(
+            db,
+            targets,
+            now,
+            stop,
+            progress,
+            latchkey,
+            &mut bookmark_problems
+        ),
+    );
+    let open_latest = match read_states {
         Ok(entries) => {
             totals.read_states = entries.len();
             Some(self::open_latest(&entries))
@@ -493,8 +510,7 @@ async fn fetch_account_state(
         }
     };
 
-    progress.set_message(M_SAVED);
-    match list_saved_items(latchkey).await {
+    match saved {
         Ok(items) => {
             let listed = items.len();
             let kept = saved_items_in_scope(items, &in_scope);
@@ -510,8 +526,8 @@ async fn fetch_account_state(
         Err(e) => problems.push(listing_problem(M_SAVED, &e)),
     }
 
-    let (bookmarks, pruned) =
-        fetch_bookmarks(db, targets, now, stop, progress, latchkey, &mut problems).await?;
+    let (bookmarks, pruned) = bookmarks?;
+    problems.extend(bookmark_problems);
     totals.bookmarks = bookmarks;
     totals.pruned += pruned;
 
@@ -710,12 +726,26 @@ fn stretches(since: &str, refresh_from: Option<&str>, held: &[Span]) -> Vec<Stre
 /// What `client.counts` says of a conversation's newest message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Newest<'a> {
-    /// Nothing: `client.counts` failed, the conversation is a channel it
-    /// does not list, or a DM named in `dm_conversations`.
+    /// Nothing: `client.counts` failed, or the conversation is a channel
+    /// it does not list.
     Unknown,
     /// A DM `client.counts` leaves out, being closed in the sidebar.
-    Closed,
+    /// `check_due` when it has not been walked through to its newest
+    /// message within [`CLOSED_DM_CHECK_EVERY`].
+    Closed {
+        check_due: bool,
+    },
     At(&'a str),
+}
+
+/// How often a DM closed in the sidebar is walked for what is newer than
+/// what is held. Slack reopens a DM when a message arrives, which
+/// `client.counts` shows; this catches one closed again before a run saw
+/// it open.
+const CLOSED_DM_CHECK_EVERY: chrono::Duration = chrono::Duration::days(1);
+
+fn closed_dm_check_key(channel_id: &str) -> String {
+    format!("closed_dm:{channel_id}")
 }
 
 /// Whether a stretch a conversation `owes` reaches down to its newest
@@ -730,14 +760,17 @@ fn shows_activity(latest: &str, owes: &[Stretch]) -> bool {
 /// What a run walks of one conversation: its [`stretches`], less the
 /// ones `client.counts` shows hold nothing new. A conversation whose
 /// newest message is already covered costs no request, except its
-/// re-read when `refresh_from` says one is due. A closed DM costs
-/// none: nothing is covered for it, so the run that finds it open again
-/// owes it whole.
+/// re-read when `refresh_from` says one is due. A closed DM is walked
+/// whole when its check is due, and otherwise only for a gap under
+/// what is held, which a `since` moved earlier leaves.
 fn to_walk(since: &str, refresh_from: Option<&str>, held: &[Span], newest: Newest) -> Vec<Stretch> {
     let all = stretches(since, refresh_from, held);
     match newest {
-        Newest::Unknown => all,
-        Newest::Closed => Vec::new(),
+        Newest::Unknown | Newest::Closed { check_due: true } => all,
+        Newest::Closed { check_due: false } => all
+            .into_iter()
+            .filter(|s| !s.reread && s.span.hi != END_OF_TIME)
+            .collect(),
         Newest::At(latest) if shows_activity(latest, &all) => all,
         Newest::At(_) => all.into_iter().filter(|s| s.reread).collect(),
     }
@@ -1016,8 +1049,15 @@ impl Mirror<'_> {
             .map(|m| ts_key(&m.ts))
             .filter(|key| *key >= stretch.span.lo)
             .collect();
-        let covered =
-            settled(&stretch.span, walk.top.as_deref(), &in_stretch, last).filter(|_| !short);
+        // An open-topped walk that found nothing names no message to
+        // cover up to, so it covers the one point where it began: that
+        // tells "read, nothing there" from "never read".
+        let found_nothing = open_top && walk.top.is_none() && in_stretch.is_empty();
+        let covered = settled(&stretch.span, walk.top.as_deref(), &in_stretch, last)
+            .or_else(|| {
+                (last && found_nothing).then(|| Span::new(&stretch.span.lo, &stretch.span.lo))
+            })
+            .filter(|_| !short);
         let enumerated = covered
             .as_ref()
             .filter(|_| stretch.reread)
@@ -1404,22 +1444,24 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         // Without the workspace's identity nothing below can be keyed:
         // the one failure that fails the run.
         let (team_id, self_user_id) = fetch_self(&db, &setup, &opts.latchkey).await?;
-        // Users before channels: a DM is titled after its counterpart,
-        // so the DM progress labels need the user directory to already
-        // be mirrored. A listing that fails leaves the stored one.
-        if let Err(e) = fetch_users(&db, &now, &setup, &opts.latchkey).await {
+        // The two listings need nothing from each other; a DM's title,
+        // which needs the user directory, is worked out once both are in.
+        // A listing that fails leaves the stored one.
+        let (users, listed) = tokio::join!(
+            fetch_users(&db, &now, &setup, &opts.latchkey),
+            fetch_channels(
+                &db,
+                opts.members_only,
+                opts.channels.is_some(),
+                opts.dms,
+                &setup,
+                &opts.latchkey,
+            ),
+        );
+        if let Err(e) = users {
             found.push(listing_problem(M_USERS, &e));
         }
-        let listed = match fetch_channels(
-            &db,
-            opts.members_only,
-            opts.channels.is_some(),
-            opts.dms,
-            &setup,
-            &opts.latchkey,
-        )
-        .await
-        {
+        let listed = match listed {
             Ok(listed) => listed,
             // The channels an earlier listing stored are still worth
             // walking; with none stored there is nothing to do at all.
@@ -1479,9 +1521,13 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         );
         let targets = plan.targets;
 
-        let mut open_latest = None;
-        if !opts.control.stop.requested() {
-            let state = fetch_account_state(
+        // The account's own state and the reply search read and write
+        // nothing of each other's, so they go out together.
+        let account_state = async {
+            if opts.control.stop.requested() {
+                return Ok(None);
+            }
+            fetch_account_state(
                 &db,
                 &targets,
                 &now,
@@ -1489,23 +1535,13 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                 &setup,
                 &opts.latchkey,
             )
-            .await?;
-            found.extend(state.problems);
-            open_latest = state.open_latest;
-            let account = state.totals;
-            if let Some(sealer) = opts.sealer.as_ref() {
-                sealer
-                    .wrote(
-                        (account.read_states
-                            + account.saved_items
-                            + account.bookmarks
-                            + account.pruned) as u64,
-                    )
-                    .await;
+            .await
+            .map(Some)
+        };
+        let reply_search = async {
+            if !opts.search_replies || opts.control.stop.requested() {
+                return;
             }
-            grand.account = account;
-        }
-        if opts.search_replies && !opts.control.stop.requested() {
             let top = ts_key(&datetime_to_slack_ts(&(now - SEARCH_LAG)));
             let search = ReplySearch {
                 db: &db,
@@ -1524,6 +1560,24 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             if let Some(sealer) = opts.sealer.as_ref() {
                 sealer.wrote(totals.roots_reread as u64).await;
             }
+        };
+        let (account_state, ()) = tokio::join!(account_state, reply_search);
+        let mut open_latest = None;
+        if let Some(state) = account_state? {
+            found.extend(state.problems);
+            open_latest = state.open_latest;
+            let account = state.totals;
+            if let Some(sealer) = opts.sealer.as_ref() {
+                sealer
+                    .wrote(
+                        (account.read_states
+                            + account.saved_items
+                            + account.bookmarks
+                            + account.pruned) as u64,
+                    )
+                    .await;
+            }
+            grand.account = account;
         }
         setup.finish(&format!(
             "setup done in {}ms",
@@ -1543,16 +1597,27 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         let mut owed_before: u64 = 0;
         let mut refreshing = vec![false; targets.len()];
         let mut quiet = vec![false; targets.len()];
+        // Closed DMs whose check is due, and whether they were ever
+        // checked before.
+        let mut checking = vec![false; targets.len()];
+        let mut rechecking = vec![false; targets.len()];
+        let mut closed = 0usize;
         for (target, (cid, _)) in targets.iter().enumerate() {
-            // A DM named in `dm_conversations` was asked for by name, and
-            // without `client.counts` nothing says which are quiet:
-            // those are walked.
             let newest = match (&open_latest, target >= first_dm) {
                 (None, _) => Newest::Unknown,
-                (Some(_), true) if opts.dm_conversations.is_some() => Newest::Unknown,
                 (Some(open), is_dm) => match open.get(cid) {
                     Some(latest) => Newest::At(latest),
-                    None if is_dm => Newest::Closed,
+                    None if is_dm => {
+                        let age = db
+                            .manifest_sweep_age(&closed_dm_check_key(cid), &now)
+                            .await?;
+                        closed += 1;
+                        checking[target] = refresh_due(age, CLOSED_DM_CHECK_EVERY);
+                        rechecking[target] = checking[target] && age.is_some();
+                        Newest::Closed {
+                            check_due: checking[target],
+                        }
+                    }
                     None => Newest::Unknown,
                 },
             };
@@ -1589,6 +1654,8 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             walking = walking.len(),
             quiet = quiet.iter().filter(|q| **q).count(),
             refreshing = refreshing.iter().filter(|r| **r).count(),
+            closed_dms = closed,
+            closed_dms_checked = checking.iter().filter(|c| **c).count(),
             "left out the history with nothing new since what is held"
         );
 
@@ -1610,6 +1677,8 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         };
         let mut totals = Totals::default();
         let mut messages_in = vec![0usize; targets.len()];
+        // Messages a walk found above everything held.
+        let mut news_in = vec![0usize; targets.len()];
         let mut failed = vec![false; targets.len()];
         // A conversation `client.counts` shows quiet has answered for its
         // history as surely as one walked.
@@ -1671,6 +1740,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                 }
                 Next::Page(i) => {
                     let target = frontier.walks[i].target;
+                    let open_top = frontier.walks[i].stretch.span.hi == END_OF_TIME;
                     let (cid, name) = &targets[target];
                     bar.doing(&format!("{name}: listing"));
                     let span = info_span!("channel", channel_name = %name, channel_id = %cid);
@@ -1683,6 +1753,9 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                             totals.messages += page.rows.len();
                             totals.pruned += page.pruned;
                             messages_in[target] += page.rows.len();
+                            if open_top {
+                                news_in[target] += page.rows.len();
+                            }
                             queue_owed(&db, &mut frontier, &bar, &page.rows, opts.media).await?;
                             if page.last {
                                 frontier.walks.remove(i);
@@ -1711,6 +1784,21 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                         if refreshing[target] && !failed[target] {
                             db.record_manifest_sweep(&refresh_sweep_key(cid), &now)
                                 .await?;
+                        }
+                        if checking[target] && !failed[target] {
+                            db.record_manifest_sweep(&closed_dm_check_key(cid), &now)
+                                .await?;
+                            // The daily check is the fallback behind
+                            // `client.counts`; it finding news means a DM
+                            // was reopened and closed between runs.
+                            if rechecking[target] && news_in[target] > 0 {
+                                warn!(
+                                    event = "slack_closed_dm_had_news",
+                                    channel = %name,
+                                    messages = news_in[target],
+                                    "a DM closed in the sidebar had messages client.counts did not show"
+                                );
+                            }
                         }
                     }
                 }
@@ -1934,8 +2022,8 @@ mod tests {
         );
     }
 
-    /// An open-topped walk that found nothing has looked at no stretch
-    /// it can name, so the channel is asked again next run.
+    /// An open-topped walk that found nothing names no message to settle
+    /// up to; `Mirror::page` covers the point it began at instead.
     #[test]
     fn an_empty_walk_of_the_open_top_settles_nothing() {
         assert_eq!(settled(&span(SINCE, END_OF_TIME), None, &[], true), None);
@@ -1957,7 +2045,7 @@ mod tests {
     }
 
     fn walks(held: &[Span], latest: Option<&str>) -> bool {
-        let newest = latest.map_or(Newest::Closed, Newest::At);
+        let newest = latest.map_or(Newest::Closed { check_due: false }, Newest::At);
         !planned_walk(None, held, newest).is_empty()
     }
 
@@ -1979,6 +2067,33 @@ mod tests {
         assert!(!walks(&held, Some("1735689600.000100")));
         assert!(walks(&held, Some("1735689600.000200")));
         assert!(!walks(&held, None));
+    }
+
+    /// A closed DM due its check is walked whole: never walked, or not
+    /// for a day. Before, a closed DM was never walked, and a first sync
+    /// lost what it held.
+    #[test]
+    fn a_closed_dm_due_its_check_is_walked_whole() {
+        let held = [span(SINCE, "1735689600.000100")];
+        let due = Newest::Closed { check_due: true };
+        assert_eq!(
+            planned_walk(None, &[], due),
+            [gap(SINCE, END_OF_TIME, true)]
+        );
+        assert_eq!(
+            planned_walk(None, &held, due),
+            [gap("1735689600.000100", END_OF_TIME, false)]
+        );
+    }
+
+    /// A closed DM not due its check still owes a gap under what is held.
+    #[test]
+    fn a_closed_dm_between_checks_walks_only_a_gap_under_what_is_held() {
+        let held = [span("1735689600.000050", "1735689600.000100")];
+        assert_eq!(
+            planned_walk(None, &held, Newest::Closed { check_due: false }),
+            [gap(SINCE, "1735689600.000050", true)]
+        );
     }
 
     /// A walk cut off, or a `since` moved earlier, leaves a gap under
@@ -2018,7 +2133,7 @@ mod tests {
             2
         );
         // A closed DM is not refreshed: it is not walked at all.
-        assert!(planned_walk(window, &held, Newest::Closed).is_empty());
+        assert!(planned_walk(window, &held, Newest::Closed { check_due: false }).is_empty());
     }
 
     #[test]

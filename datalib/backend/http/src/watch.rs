@@ -144,12 +144,12 @@ pub enum RootEvent {
     /// A component appeared, changed or vanished under
     /// `system/frontend/`.
     FrontendChanged,
-    /// The grid index (`unified_document_index/grid_index/db.doltlite_db`) has a
-    /// new HEAD. Under streaming that happens many times per sync -- a
-    /// `grid_index` pass per checkpoint -- and it is how rows reach the
+    /// The grid index (`unified_document_index/grid_index/db.sqlite`) has a
+    /// new generation. Under streaming that happens many times per sync --
+    /// a `grid_index` pass per checkpoint -- and it is how rows reach the
     /// grid while the download that produced them is still running. The
-    /// commit, not the file: the applet reads at HEAD, so a write that
-    /// has not committed is not something a reader can fetch yet.
+    /// generation, not the file: a write in a transaction that has not
+    /// committed is not something a reader can fetch yet.
     IndexChanged,
     /// The time-series index
     /// (`unified_time_series_index/time_series_index/time_series.doltlite_db`)
@@ -282,7 +282,7 @@ fn moved_parts(
 struct Seen {
     /// The run store's write counters as of the last burst.
     runs: BTreeMap<StorePart, i64>,
-    /// The grid index's HEAD as of the last burst.
+    /// The grid index's generation as of the last burst.
     index_head: Option<String>,
     /// The time-series index's HEAD as of the last burst.
     time_series_head: Option<String>,
@@ -425,14 +425,20 @@ fn merge_chain(a: Option<u32>, b: Option<u32>) -> Option<u32> {
     Some(a?.max(b?))
 }
 
-/// The grid index's HEAD, or `None` when there is no store or nothing
-/// committed in it; `Err` when there is a store and its head could not be
-/// read, which says nothing about whether it moved. Opened read-only for
-/// the look and closed again: a handle held across a rebuild would point
-/// at a file that is gone. A read-only open beside the live `grid_index`
-/// writer is measured safe by `doltlite_two_process_test`.
+/// The grid index's generation, or `None` when there is no index or its
+/// writer has yet to make the row; `Err` when there is an index and its
+/// generation could not be read, which says nothing about whether it
+/// moved. Opened read-only for the look and closed again: a handle held
+/// across a rebuild would point at a file that is gone.
 async fn index_head(root: &Path) -> anyhow::Result<Option<String>> {
-    store_head(&datalib_core::layout::grid_index_db(root)).await
+    let path = datalib_core::layout::grid_index_db(root);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let pool = datalib_pin::open_reader(&path).await?;
+    let generation = datalib_pin::generation(&pool).await;
+    pool.close().await;
+    Ok(generation?)
 }
 
 async fn time_series_head(root: &Path) -> anyhow::Result<Option<String>> {
@@ -988,18 +994,17 @@ mod tests {
             Some(Moved::Frontend)
         );
         assert_eq!(classify(root, &root.join("system/frontend")), None);
-        // A writer taking or releasing its lock is not the index moving.
         assert_eq!(
             classify(
                 root,
-                &root.join("unified_document_index/grid_index/db.doltlite_db.lock")
+                &root.join("unified_document_index/grid_index/db.sqlite-wal")
             ),
-            None
+            Some(Moved::GridIndex)
         );
         assert_eq!(
             classify(
                 root,
-                &root.join("unified_document_index/grid_index/db.doltlite_db")
+                &root.join("unified_document_index/grid_index/db.sqlite")
             ),
             Some(Moved::GridIndex)
         );
@@ -1479,6 +1484,31 @@ mod tests {
         writer.close().await;
     }
 
+    /// The grid index's writer: a plain file whose transaction raises the
+    /// generation when `seal`, and writes a row without raising it when not.
+    async fn write_grid_index(db: &Path, id: i64, seal: bool) {
+        let writer = datalib_core::store::open_plain_pool(db).await.unwrap();
+        for sql in [
+            datalib_pin::GENERATION_DDL,
+            "CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY)",
+            "INSERT INTO store_generation VALUES (1, 'f', 0) ON CONFLICT (id) DO NOTHING",
+        ] {
+            sqlx::query(sql).execute(&writer).await.unwrap();
+        }
+        sqlx::query("INSERT INTO t VALUES (?)")
+            .bind(id)
+            .execute(&writer)
+            .await
+            .unwrap();
+        if seal {
+            sqlx::query("UPDATE store_generation SET generation = generation + 1")
+                .execute(&writer)
+                .await
+                .unwrap();
+        }
+        writer.close().await;
+    }
+
     /// A commit to the time-series index is reported as its own event,
     /// so the time-series card refetches and the grid does not.
     #[tokio::test]
@@ -1504,13 +1534,13 @@ mod tests {
         until(&mut rx, RootEvent::TimeSeriesIndexChanged).await;
     }
 
-    /// The grid index reports when its HEAD moves and not when its file
-    /// does. The step writes the file throughout a pass — the working set
-    /// lives in it — and commits once at the end; a grid told to refetch
-    /// on the writes would fetch the same HEAD again each time, and be
-    /// told nothing when the rows it can read actually changed.
+    /// The grid index reports when its generation moves and not when its
+    /// file does. The step writes the file throughout a pass and raises
+    /// the generation only in a transaction that changed what a reader
+    /// sees; a grid told to refetch on every write would fetch the same
+    /// rows again each time.
     #[tokio::test]
-    async fn the_grid_index_reports_its_commits_and_not_its_writes() {
+    async fn the_grid_index_reports_its_seals_and_not_its_writes() {
         let td = tempfile::tempdir().unwrap();
         // The applet creates the directory at boot, before the first
         // pass; the watch is armed on it from the start here too.
@@ -1518,22 +1548,20 @@ mod tests {
         std::fs::create_dir_all(db.parent().unwrap()).unwrap();
         let (mut rx, feed) = watching(td.path()).await;
 
-        // A store is born with a commit, so a first write moves the head
-        // twice; the barrier takes whatever it reported.
-        write_index(&db, 1, true).await;
+        write_grid_index(&db, 1, true).await;
         feed.moved(&db);
         until(&mut rx, RootEvent::IndexChanged).await;
         barrier(td.path(), &feed, &mut rx).await;
         for i in 100..110 {
-            write_index(&db, i, false).await;
+            write_grid_index(&db, i, false).await;
             feed.moved(&db);
         }
         let got = barrier(td.path(), &feed, &mut rx).await;
         assert!(
             !got.contains(&RootEvent::IndexChanged),
-            "a write the step has not committed was reported as an index change: {got:?}"
+            "a write that raised no generation was reported as an index change: {got:?}"
         );
-        write_index(&db, 200, true).await;
+        write_grid_index(&db, 200, true).await;
         feed.moved(&db);
         until(&mut rx, RootEvent::IndexChanged).await;
     }
@@ -1611,7 +1639,7 @@ mod tests {
         let db = datalib_core::layout::grid_index_db(td.path());
         std::fs::create_dir_all(db.parent().unwrap()).unwrap();
         let (mut rx, feed) = watching(td.path()).await;
-        write_index(&db, 1, true).await;
+        write_grid_index(&db, 1, true).await;
         feed.moved(&db);
         until(&mut rx, RootEvent::IndexChanged).await;
         barrier(td.path(), &feed, &mut rx).await;

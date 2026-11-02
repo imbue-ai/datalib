@@ -135,6 +135,45 @@ fn ids(values: &[Value], key: &str) -> BTreeSet<String> {
         .collect()
 }
 
+/// A refresh with nothing new spent 25 s on setup calls made one after
+/// another, though `client.counts`, `saved.list` and the bookmarks need
+/// nothing from each other, nor the user list from the channel list.
+/// Each request here takes 50 ms, so calls started together overlap.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn independent_setup_calls_go_out_together() {
+    let d = tempdir().unwrap();
+    let (api, tape, out) = (
+        d.path().join("api"),
+        d.path().join("tape"),
+        d.path().join("out"),
+    );
+    write_workspace(&api);
+    write_counts(&api, "1735689600.000100");
+    write_saved(&api, vec![]);
+    serve(&api, &tape);
+
+    let db = RawDb::open(&db_path_for(&out)).await.unwrap();
+    let metrics = datalib_etl::download_metrics::DownloadMetrics::new();
+    let download = datalib_etl_slack::ingest::fetch(datalib_etl_slack::ingest::FetchOptions {
+        refresh_window_days: 0,
+        members_only: false,
+        media: false,
+        ..datalib_etl_slack::ingest::FetchOptions::new(db.clone())
+    });
+    datalib_etl_web::playback::scope(
+        datalib_etl_web::playback::Playback::at(&tape).delay(std::time::Duration::from_millis(50)),
+        datalib_etl::download_metrics::scope(metrics.clone(), download),
+    )
+    .await
+    .unwrap();
+    db.close().await;
+    assert!(
+        metrics.peak_requests_in_flight() >= 3,
+        "at most {} requests were ever out at once",
+        metrics.peak_requests_in_flight()
+    );
+}
+
 /// Read states, saved items and bookmarks land for the mirrored
 /// conversations only; `last_read` lives in the volatile sidecar, so a
 /// second run that finds it moved leaves the content table as it was;

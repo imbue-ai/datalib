@@ -1,12 +1,12 @@
 //! The two verbs that give disk back (`docs/dev/step_protocol.md` §
 //! Compact and collect). `--collect` runs `dolt_gc` on the step's store,
 //! which deletes only chunks no commit reaches, so every commit stays
-//! readable. `--compact` first folds the history of a store nothing reads
-//! the history of — a render store and the grid index, both rebuilt from
-//! what they read — into one commit, which loses the older commits; any
-//! other store it collects. A raw store's history is the record of what
-//! upstream once held, and a time-series store's commits are what its
-//! index points at, so neither is ever folded.
+//! readable. `--compact` first folds the history of a render store, which
+//! nothing reads the history of and which is rebuilt from what it reads,
+//! into one commit, losing the older commits; any other store it collects.
+//! A raw store's history is the record of what upstream once held, and a
+//! time-series store's commits are what its index points at, so neither is
+//! ever folded. The grid index is plain SQLite and has nothing to give.
 
 use std::path::Path;
 
@@ -41,8 +41,7 @@ pub async fn run(env: &StepEnv, data_root: &Path, verb: Verb) -> Result<Vec<Outp
         human_bytes(before),
         human_bytes(free)
     );
-    let folds = verb == Verb::Compact
-        && matches!(env.function, Function::RenderMarkdown | Function::GridIndex);
+    let folds = verb == Verb::Compact && matches!(env.function, Function::RenderMarkdown);
     let folded = if folds {
         datalib_etl::doltlite_raw::fold_history(&store).await?
     } else {

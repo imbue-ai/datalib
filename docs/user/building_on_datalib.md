@@ -190,8 +190,8 @@ are the signals, from cheapest to most exact:
   - **Slack**: a conversation whose `history:<channel id>` scope in
     `coverage` is one row, reaching back to the source's `since`, has
     no gap. Two rows or more, or a `lo` later than `since`, means the
-    walk is not done there. A DM closed in the sidebar has no row at all
-    until it opens again, which is not the same as "not done".
+    walk is not done there. A conversation walked and found empty has
+    one row with `lo = hi`: the point the walk began.
 
     ```sql
     SELECT scope, count(*) AS spans, min(lo), max(hi)
@@ -295,9 +295,9 @@ question reaches outside that:
 
 - **Slack**: anything before the source's `since` (2024-01-01 unless
   set); a time in a conversation outside every `coverage` span; direct
-  messages unless the source sets `dms = true`; a DM closed in the
-  account's sidebar, unless it is named in `dm_conversations` (it is
-  walked again once it opens with something new); channels the account is
+  messages unless the source sets `dms = true`; the newest messages of a
+  DM closed in the account's sidebar, for up to a day (a closed DM is
+  checked once a day); channels the account is
   not in unless it sets `all_channels`; files when `media = false`. A
   root's `reply_count` is Slack's; the mirror holds every reply up to
   `latest_reply` only once `threads_bookkeeping.held_version` equals
@@ -335,11 +335,11 @@ Each source's problems travel with its data. The download writes them
 into its raw store's `problems` table, where `source_id` is empty. The
 render step copies them under the source's id, and `grid_index` copies
 every source's into one `problems` table in
-`unified_document_index/grid_index/db.doltlite_db`. That last copy is
+`unified_document_index/grid_index/db.sqlite`. That last copy is
 the one to query, since it covers every source:
 
 ```sh
-datalib-doltlite -readonly unified_document_index/grid_index/db.doltlite_db \
+datalib-doltlite -readonly unified_document_index/grid_index/db.sqlite \
   "SELECT source_id, severity, outcome, reason, scope_key, sample
      FROM problems WHERE stage = 'fetch' ORDER BY changed_at_utc DESC LIMIT 20"
 ```
@@ -398,7 +398,11 @@ your app's own calls can be refused.
 
 **With the app (`datalib-http`) running**, an edit to `config.toml` is
 picked up at once: a step that is running finishes under the
-definition it started with, and its next start uses the new one.
+definition it started with, and its next start uses the new one. So to
+shrink a first sync that is taking too long (a narrower `since`, fewer
+channels), edit the config, then stop the request
+(`datalib-dag stop`, or `POST /api/requests/<id>/stop`) and sync again:
+what the stopped run sealed is kept.
 
 **With no app up**, the loop is a `datalib-dag`, and it reads the
 config only when it goes from idle to busy. A `datalib-dag --sync`

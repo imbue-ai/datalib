@@ -81,6 +81,7 @@ rust_test(
     deps = [
         ":qmd_fixture",
         "//datalib/backend/core:datalib_core",
+        "//datalib/backend/pin:datalib_pin",
         "//datalib/backend/query:datalib_query",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/table:datalib_table",
