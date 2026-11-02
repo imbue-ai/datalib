@@ -576,9 +576,10 @@ migrated. The qmd steps have nothing to answer.
 `datalib-dag --free-disk-space`, or the app's `POST /api/free_disk_space`
 (the status bar's "Free up disk space…"), asks every step that takes the
 verbs to give back the disk its store holds, once each: with
-`--compact` appended when old versions are to be dropped
-(`--drop-old-versions`, `"drop_old_versions": true`), else `--collect`. Nothing that reads a store may be
-reading it while it is rewritten: the command line needs the root to
+`--compact` appended when old versions of derived data are to be
+dropped (`--drop-old-versions-on-derived-data`,
+`"drop_old_versions_on_derived_data": true`), else `--collect`. Nothing
+that reads a store may be reading it while it is rewritten: the command line needs the root to
 itself, as `--reset` does, and the app's loop holds the steps it asks
 and every step that reads them until it is done (`dag/README.md`
 §"Resets and purges"). The step decides what the verb means for what it

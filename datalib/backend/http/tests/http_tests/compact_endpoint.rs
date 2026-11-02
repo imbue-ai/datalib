@@ -1,5 +1,5 @@
 //! `POST /api/free_disk_space`, and `POST /api/compact`, its old spelling
-//! with `drop_old_versions`: the loop the server runs asks each step that
+//! with `drop_old_versions_on_derived_data`: the loop the server runs asks each step that
 //! takes the verbs to `--collect`, or `--compact` when old versions go,
 //! all of them when no target is named, and refuses a step that does not
 //! take them.
@@ -206,7 +206,7 @@ async fn free_disk_space_collects_every_step_that_takes_the_verb() {
     assert!(state.sync.shutdown(Duration::from_secs(10)).await);
 }
 
-/// `drop_old_versions` asks with `--compact`.
+/// `drop_old_versions_on_derived_data` asks with `--compact`.
 #[tokio::test]
 async fn free_disk_space_dropping_old_versions_compacts() {
     let td = tempfile::tempdir().unwrap();
@@ -218,7 +218,7 @@ async fn free_disk_space_dropping_old_versions_compacts() {
     let (status, body) = post(
         &state,
         "/api/free_disk_space",
-        serde_json::json!({"drop_old_versions": true, "targets": ["enterprise/render_markdown"]}),
+        serde_json::json!({"drop_old_versions_on_derived_data": true, "targets": ["enterprise/render_markdown"]}),
     )
     .await;
     assert!(

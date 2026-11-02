@@ -155,7 +155,7 @@ are in [`doltlite.md`](../dev/doltlite.md#what-changed-between-two-commits).
 
 A raw store's history is never folded away (`datalib-dag
 --free-disk-space` deletes only chunks no commit reaches, with
-`--drop-old-versions` too), so a cursor stays readable. A reset of the
+`--drop-old-versions-on-derived-data` too), so a cursor stays readable. A reset of the
 source empties the tables in a new commit, which reads as every row
 `removed`. If your cursor no longer resolves (the store was deleted and
 synced again), start over from a full read. A `datalib-dag diff` verb

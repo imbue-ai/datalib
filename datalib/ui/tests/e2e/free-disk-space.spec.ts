@@ -33,7 +33,7 @@ test("freeing disk collects, and folds history only when asked", async ({ page, 
   await dialog.getByRole("button", { name: "Free up space" }).click();
   let answer = await asked;
   expect([202, 204]).toContain(answer.status());
-  expect(answer.request().postDataJSON()).toEqual({ drop_old_versions: false });
+  expect(answer.request().postDataJSON()).toEqual({ drop_old_versions_on_derived_data: false });
 
   // Dropping old versions holds the first box ticked: it collects too.
   dialog = await openDialog(page);
@@ -44,7 +44,7 @@ test("freeing disk collects, and folds history only when asked", async ({ page, 
   await dialog.getByRole("button", { name: "Free up space" }).click();
   answer = await asked;
   expect([202, 204]).toContain(answer.status());
-  expect(answer.request().postDataJSON()).toEqual({ drop_old_versions: true });
+  expect(answer.request().postDataJSON()).toEqual({ drop_old_versions_on_derived_data: true });
 
   await expect
     .poll(log, { timeout: 60_000 })

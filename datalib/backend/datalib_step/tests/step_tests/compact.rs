@@ -1,5 +1,5 @@
 //! `datalib-dag --free-disk-space` over the real `datalib-step`: alone it
-//! folds nothing; with `--drop-old-versions` it folds a render store's
+//! folds nothing; with `--drop-old-versions-on-derived-data` it folds a render store's
 //! history to one commit and keeps its content version; both give back
 //! what no commit reaches, and a raw store keeps its history either way.
 //! `--compact`, the old spelling, does what the second does.
@@ -134,7 +134,10 @@ async fn dropping_old_versions_folds_a_render_store_and_collects_the_raw_store()
     let version = content_version_at_path(&render).await.unwrap();
     let (raw_commits, raw_size) = (commits(&raw).await, size(&raw));
 
-    let stdout = dag(root, &["--free-disk-space", "--drop-old-versions"]);
+    let stdout = dag(
+        root,
+        &["--free-disk-space", "--drop-old-versions-on-derived-data"],
+    );
 
     assert_eq!(
         commits(&render).await.len(),

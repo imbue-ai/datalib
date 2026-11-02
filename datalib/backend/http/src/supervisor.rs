@@ -134,15 +134,15 @@ impl SyncControl {
 
     /// Give back the disk no commit reaches in the stores of `targets`, or
     /// of every step that takes the verb when it names none; with
-    /// `drop_old_versions`, fold each render store's history first. Holds
+    /// `drop_old_versions_on_derived_data`, fold each render store's history first. Holds
     /// them and what reads them meanwhile.
     pub async fn free_disk_space(
         &self,
         targets: &[String],
-        drop_old_versions: bool,
+        drop_old_versions_on_derived_data: bool,
         by: &str,
     ) -> Result<WipeAnswer, String> {
-        let kind = if drop_old_versions {
+        let kind = if drop_old_versions_on_derived_data {
             WipeKind::Compact
         } else {
             WipeKind::Collect

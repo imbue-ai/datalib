@@ -1507,7 +1507,9 @@ export async function resetSteps(targets: string[]): Promise<"done" | "queued"> 
 /// `dropOldVersions`, also fold the history of every rendered document
 /// store into one commit (`step_protocol.md` § Compact and collect). "queued" when it is still going after the server's wait.
 export async function freeDiskSpace(dropOldVersions: boolean): Promise<"done" | "queued"> {
-  const r = await post("/api/free_disk_space", { drop_old_versions: dropOldVersions });
+  const r = await post("/api/free_disk_space", {
+    drop_old_versions_on_derived_data: dropOldVersions,
+  });
   return r.status === 202 ? "queued" : "done";
 }
 

@@ -81,7 +81,7 @@ async fn main() -> Result<()> {
         sync: sync_only,
         reset,
         free_disk_space,
-        drop_old_versions,
+        drop_old_versions_on_derived_data,
         compact,
         by,
         binary_dir,
@@ -177,7 +177,7 @@ async fn main() -> Result<()> {
     // `--reset` empties stores and `--free-disk-space` rewrites them, so
     // each needs the root to itself: refused, not queued, while anyone
     // runs the loop.
-    let shrink = if compact || drop_old_versions {
+    let shrink = if compact || drop_old_versions_on_derived_data {
         Some(Shrink::Compact)
     } else if free_disk_space {
         Some(Shrink::Collect)

@@ -61,7 +61,7 @@ pub const EXAMPLES: &[Example] = &[
     },
     Example {
         what: "free up more, keeping only the latest version of each source's rendered documents; quit the app first",
-        command: "datalib-dag ~/datalib/config.toml --free-disk-space --drop-old-versions",
+        command: "datalib-dag ~/datalib/config.toml --free-disk-space --drop-old-versions-on-derived-data",
     },
     Example {
         what: "list the open syncs (with their request ids), the steps turned off and the steps running",
@@ -120,12 +120,13 @@ pub struct Cli {
     /// Refused while anything else runs the loop on the root.
     #[arg(long)]
     pub free_disk_space: bool,
-    /// With --free-disk-space, also fold each source's rendered documents'
-    /// history into one commit. Loses that history, which is rebuilt from
-    /// the downloads; a download's history is always kept.
+    /// With --free-disk-space, also keep only the latest version of the
+    /// derived data: what datalib rebuilds from the downloads, which is
+    /// each source's rendered documents. Loses their history; a download's
+    /// history is always kept.
     #[arg(long, requires = "free_disk_space")]
-    pub drop_old_versions: bool,
-    /// The old spelling of `--free-disk-space --drop-old-versions`.
+    pub drop_old_versions_on_derived_data: bool,
+    /// The old spelling of `--free-disk-space --drop-old-versions-on-derived-data`.
     #[arg(long, hide = true)]
     pub compact: bool,
     /// Who is asking. The request records it, and the app shows it

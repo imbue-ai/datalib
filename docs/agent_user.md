@@ -285,22 +285,22 @@ several times what it holds. Freeing disk space gives it back:
 | | what goes | what stays |
 |---|---|---|
 | free disk space | chunks no commit reaches, in every store | every commit of every store |
-| … dropping old versions | the same, and the older commits of each render store | every commit of every download store; the latest of each render store |
+| … and drop old versions on derived data | the same, and the older commits of each render store | every commit of every download store; the latest of each render store |
 
-The first loses nothing. Dropping old versions loses the rendered
-documents' history, which nothing but the History card reads; the
-documents themselves are rebuilt from the downloads. The grid index is
-plain SQLite and is not touched.
+The first loses nothing. Derived data is what datalib rebuilds from the
+downloads: each source's rendered documents. Dropping its old versions
+loses their history, which nothing but the History card reads. The grid
+index is plain SQLite and is not touched.
 
 ```sh
 datalib-dag ~/datalib/config.toml --free-disk-space                      # app not running
-datalib-dag ~/datalib/config.toml --free-disk-space --drop-old-versions
+datalib-dag ~/datalib/config.toml --free-disk-space --drop-old-versions-on-derived-data
 ```
 
 It prints each step's tree before and after. With the app up, `POST
-/api/free_disk_space {"by": "claude"}`, adding `"drop_old_versions":
-true` for the second, and `"targets": ["lightroom/ingest"]` for one step
-only. It answers 204 when done, or 202 while it runs on; the steps it
+/api/free_disk_space {"by": "claude"}`, adding
+`"drop_old_versions_on_derived_data": true` for the second, and
+`"targets": ["lightroom/ingest"]` for one step only. It answers 204 when done, or 202 while it runs on; the steps it
 touches, and what reads them, wait meanwhile. Each store needs about its
 own size free on disk while it is rewritten, and takes minutes per ten
 gigabytes. The status bar's "Free up disk space…" (a right-click on the

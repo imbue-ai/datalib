@@ -1668,7 +1668,7 @@ struct FreeDiskSpaceRequest {
     targets: Vec<String>,
     /// Also fold each render store's history into one commit.
     #[serde(default)]
-    drop_old_versions: bool,
+    drop_old_versions_on_derived_data: bool,
     #[serde(default)]
     by: Option<String>,
 }
@@ -1866,7 +1866,7 @@ async fn purge_groups(
 }
 
 /// `POST /api/free_disk_space` — give back the disk no commit reaches,
-/// keeping every commit; with `drop_old_versions`, also fold each render
+/// keeping every commit; with `drop_old_versions_on_derived_data`, also fold each render
 /// store's history into one commit (`step_protocol.md` § Compact and
 /// collect). No targets is every step that takes the verb. 204 once done;
 /// 202 while it runs, once the steps it holds have stopped; 409, with the
@@ -1878,13 +1878,13 @@ async fn free_disk_space(
     let by = req.by.unwrap_or_else(|| "ui".to_string());
     wiped(
         s.sync
-            .free_disk_space(&req.targets, req.drop_old_versions, &by)
+            .free_disk_space(&req.targets, req.drop_old_versions_on_derived_data, &by)
             .await,
     )
 }
 
 /// `POST /api/compact` — the old spelling of `/api/free_disk_space` with
-/// `drop_old_versions`.
+/// `drop_old_versions_on_derived_data`.
 async fn compact_steps(
     State(s): State<AppState>,
     Json(req): Json<FreeDiskSpaceRequest>,
