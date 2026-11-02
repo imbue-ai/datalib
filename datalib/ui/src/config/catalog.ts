@@ -327,6 +327,7 @@ export const CATALOG: CatalogEntry[] = [
         ],
       },
       { heading: "Files people shared", fields: ["api.media", "common.blob_size_limit_bytes"] },
+      { heading: "Archived channels", fields: ["api.archived"], advanced: true },
     ],
     fields: [
       {
@@ -385,6 +386,16 @@ export const CATALOG: CatalogEntry[] = [
         label: "Include channels you're not a member of",
         default: false,
         help: "Ignored when Channels is set.",
+      },
+      {
+        kind: "bool",
+        target: "api.archived",
+        label: "Copy archived channels too",
+        default: false,
+        help:
+          "With every channel you're in, only the archived ones Slack still lists you in. A " +
+          "channel you choose by name is copied whether or not it is archived. Each archived " +
+          "channel can cost a request on every sync.",
       },
       {
         kind: "bool",

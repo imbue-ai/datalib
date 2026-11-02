@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::stop::StopFlag;
 use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl_slack::ingest::{db_path_for, fetch, FetchOptions, RawDb};
+use datalib_etl_slack::ingest::{db_path_for, fetch, FetchOptions, RawDb, MESSAGES_PER_PAGE};
 use datalib_etl_slack::recorded::{record_auth, record_call, DEFAULT_SINCE_TS};
 use datalib_etl_web::http::{HttpRequest, HttpResponse, HttpService};
 use datalib_etl_web::interrupt::{dump_tables, every_cut_resumes, How, Rig};
@@ -116,7 +116,7 @@ fn record_history(api: &Path, channel: &str, newest_first: &[Value], bounds: &[S
                         "channel": channel,
                         "include_all_metadata": "true",
                         "inclusive": if inclusive { "true" } else { "false" },
-                        "limit": "200",
+                        "limit": MESSAGES_PER_PAGE,
                         "oldest": oldest,
                     });
                     if let Some(latest) = latest {
@@ -257,7 +257,7 @@ fn record_workspace(api: &Path) {
     let riker = vec![said(81, "U1", "Agreed."), said(80, "U2", "Poker tonight?")];
     record_history(api, "D_RIKER", &riker, &bounds(&[&riker]));
 
-    let thread = json!({"channel": "C_BRIDGE", "ts": ts(THREAD), "limit": "200"});
+    let thread = json!({"channel": "C_BRIDGE", "ts": ts(THREAD), "limit": MESSAGES_PER_PAGE});
     record_call(
         api,
         "conversations.replies",
@@ -320,7 +320,7 @@ const MIRRORED: &[&str] = &[
     "saved_items",
 ];
 
-struct Slack;
+pub struct Slack;
 
 #[async_trait]
 impl Rig for Slack {

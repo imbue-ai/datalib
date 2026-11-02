@@ -4,13 +4,16 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use datalib_etl::stop::StopFlag;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_slack::ingest::{
     block_on_load_all, db_path_for, fetch, FetchOptions, FetchSummary, RawDb,
 };
 use datalib_etl_slack::recorded::{record_auth, record_conversations, record_users, CHANNEL_TYPES};
 use datalib_etl_slack::synthesize::SlackSynth;
+use datalib_etl_web::download_params::DownloadParams;
 use datalib_etl_web::playback;
+use datalib_etl_web::retry::{self, RetryGuard};
 use datalib_etl_web::synthesize::Synthesizer;
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -68,6 +71,16 @@ pub async fn fetch_into(
     db.commit_all("test").await.unwrap();
     db.close().await;
     summary
+}
+
+/// Runs `download` as a source whose `download_params` allow one request
+/// at a time, `stop` being the flag the download reads.
+pub async fn one_at_a_time<F: std::future::Future>(stop: StopFlag, download: F) -> F::Output {
+    let params = DownloadParams {
+        maximum_requests_at_once: Some(1),
+        ..Default::default()
+    };
+    retry::scope(RetryGuard::from_params(&params, stop), download).await
 }
 
 /// Alice, alone in `#general` (`C1`): the listing calls of a one-channel

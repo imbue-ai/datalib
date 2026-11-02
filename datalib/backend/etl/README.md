@@ -388,8 +388,8 @@ What that means here:
   `raw_store::Batch`, one transaction between two seals; within one of
   those the order rows arrive in does not matter. The downloads that go
   through `datalib_etl_web::owed::drain` still commit a transaction per
-  flush, and their stores keep each one's pages until something runs
-  gc. A `Batch` holds the store's one connection while it is open, so a
+  flush (Slack's walk, one per answer), and their stores keep each
+  one's pages until something runs gc. A `Batch` holds the store's one connection while it is open, so a
   download that adopts one has to read through it too.
 - **Key for adjacency where the key is ours.** Rows a run writes
   together should sort together: `(device_id, ts_ms)`,

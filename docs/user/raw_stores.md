@@ -551,7 +551,8 @@ messages of a DM closed in the account's Slack sidebar (Slack reopens a
 DM when a message arrives and the next sync reads it, but one closed
 again before that sync is only read by the daily check of closed DMs);
 channels the account is not in,
-unless it sets `all_channels`; with `scope = "involves_me"`, channels
+unless it sets `all_channels`; archived channels, unless it sets
+`archived = true` or names them in `channels`; with `scope = "involves_me"`, channels
 where nothing involves the account, and the part of each channel
 before `context_before` (and after `context_after`, when set); files, when it sets `media = false`;
 Slack Lists. A message deleted in Slack is dropped from the mirror only

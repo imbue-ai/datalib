@@ -109,7 +109,7 @@ impl<'a> History<'a> {
             "channel": self.channel,
             "include_all_metadata": "true",
             "inclusive": if self.inclusive { "true" } else { "false" },
-            "limit": "200",
+            "limit": crate::ingest::MESSAGES_PER_PAGE,
             "oldest": self.oldest,
         });
         if let Some(latest) = self.latest {

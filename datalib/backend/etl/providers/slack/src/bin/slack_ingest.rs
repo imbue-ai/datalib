@@ -51,6 +51,11 @@ struct Args {
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     members_only: bool,
 
+    /// Also mirror archived channels. A channel named with `--channel`
+    /// is mirrored archived or not.
+    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
+    archived: bool,
+
     /// Download file uploads inline. Off = JSON metadata only.
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     media: bool,
@@ -101,6 +106,7 @@ async fn main() -> Result<()> {
         refresh_window_days: args.refresh_window_days,
         refresh_every_minutes: args.refresh_every_minutes,
         members_only: args.members_only,
+        archived: args.archived,
         media: args.media,
         dms: args.dms,
         dm_conversations: (!args.dm_conversations.is_empty())

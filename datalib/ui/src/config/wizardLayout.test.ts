@@ -62,15 +62,15 @@ describe("every wizard's sections", () => {
 describe("layoutOf", () => {
   it("puts a field no section names in Advanced options, under its own label", () => {
     const advanced = layoutOf(entry("slack"), true).advanced;
-    expect(advanced.map((r) => r.heading)).toEqual([
-      "Copy until",
-      "Edit-catcher window (days)",
-      "Re-query that window every (minutes)",
-      "What involves me",
-      "Start before the first one",
-      "Stop after each one",
+    expect(advanced.map((r) => [r.heading, !!r.solo])).toEqual([
+      ["Archived channels", false],
+      ["Copy until", true],
+      ["Edit-catcher window (days)", true],
+      ["Re-query that window every (minutes)", true],
+      ["What involves me", true],
+      ["Start before the first one", true],
+      ["Stop after each one", true],
     ]);
-    expect(advanced.every((r) => r.solo)).toBe(true);
   });
 
   it("leaves the account of a source that signs in to the account row", () => {

@@ -34,6 +34,7 @@ pub struct RetryGuard {
     /// that fans out at several levels multiplies their limits; this is the
     /// one bound on the product.
     requests: Semaphore,
+    requests_at_once: usize,
 }
 
 /// What the guard says to do after a failure.
@@ -96,6 +97,7 @@ impl RetryGuard {
             last_progress: Mutex::new(Instant::now()),
             stop,
             requests: Semaphore::new(requests_at_once.max(1)),
+            requests_at_once: requests_at_once.max(1),
         })
     }
 
@@ -120,6 +122,12 @@ impl RetryGuard {
 
     pub fn max_backoff(&self) -> Duration {
         self.max_backoff
+    }
+
+    /// The most requests the source may have out at once, for a download
+    /// that sizes its own fan-out to fit.
+    pub fn requests_at_once(&self) -> usize {
+        self.requests_at_once
     }
 
     /// Waits until the source has a request slot free. The request holds

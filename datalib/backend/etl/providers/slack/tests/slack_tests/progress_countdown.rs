@@ -14,7 +14,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use datalib_etl::progress::{Progress, ProgressSink};
-use datalib_etl_slack::ingest::FetchOptions;
+use datalib_etl_slack::ingest::{FetchOptions, MESSAGES_PER_PAGE};
 use datalib_etl_slack::recorded::{record_call, record_workspace};
 use datalib_etl_web::http::{HttpRequest, HttpResponse, HttpService};
 use datalib_etl_web::synthesize::write_fixture;
@@ -202,7 +202,7 @@ fn record_thread(api: &Path) {
     record_call(
         api,
         "conversations.replies",
-        json!({"channel": "C1", "ts": THREAD_ROOT, "limit": "200"}),
+        json!({"channel": "C1", "ts": THREAD_ROOT, "limit": MESSAGES_PER_PAGE}),
         json!({"ok": true, "has_more": false, "messages": thread}),
     )
     .unwrap();

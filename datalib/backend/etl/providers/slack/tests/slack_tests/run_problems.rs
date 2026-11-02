@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use datalib_etl_slack::ingest::{db_path_for, RawDb};
+use datalib_etl_slack::ingest::{db_path_for, RawDb, MESSAGES_PER_PAGE};
 use datalib_etl_slack::recorded::{
     record_auth, record_call, record_conversations, record_users, History, CHANNEL_TYPES,
 };
@@ -93,7 +93,7 @@ async fn a_channel_that_fails_is_a_problem_until_it_walks() {
         &api1,
         "conversations.history",
         json!({"channel": "C2", "include_all_metadata": "true", "inclusive": "true",
-               "limit": "200", "oldest": History::cold("C2").oldest}),
+               "limit": MESSAGES_PER_PAGE, "oldest": History::cold("C2").oldest}),
         refused_by_slack(),
     )
     .unwrap();
@@ -130,7 +130,7 @@ async fn a_thread_that_fails_is_a_problem_on_the_thread_until_it_fetches() {
     let d = tempdir().unwrap();
     let out = d.path().join("out_raw");
     let channels = json!([channel("C1", "bridge")]);
-    let replies_params = json!({"channel": "C1", "ts": A, "limit": "200"});
+    let replies_params = json!({"channel": "C1", "ts": A, "limit": MESSAGES_PER_PAGE});
 
     let api1 = d.path().join("api1");
     record_listings(&api1, channels.clone());

@@ -8,7 +8,7 @@
 use std::path::Path;
 
 use datalib_etl_slack::ingest::schema_raw::slack_message_key;
-use datalib_etl_slack::ingest::{db_path_for, FetchOptions, RawDb};
+use datalib_etl_slack::ingest::{db_path_for, FetchOptions, RawDb, MESSAGES_PER_PAGE};
 use datalib_etl_slack::recorded::{record_call, History};
 use serde_json::{json, Value};
 
@@ -58,7 +58,7 @@ fn write_cold_start_with_thread(api: &Path) {
     record_call(
         api,
         "conversations.replies",
-        json!({"channel": "C1", "ts": TS_A, "limit": "200"}),
+        json!({"channel": "C1", "ts": TS_A, "limit": MESSAGES_PER_PAGE}),
         json!({"ok": true, "has_more": false, "messages": [
             thread_root(),
             {"ts": TS_REPLY_1, "user": "U1", "text": "shields holding", "thread_ts": TS_A},
@@ -301,7 +301,7 @@ async fn a_window_of_two_pages_deletes_page_by_page() {
     write_cold_start(&t.api);
     write_nothing_new(&t.api);
     let window = json!({"channel": "C1", "include_all_metadata": "true", "inclusive": "true",
-                        "limit": "200", "oldest": SINCE_TS, "latest": TS_C});
+                        "limit": MESSAGES_PER_PAGE, "oldest": SINCE_TS, "latest": TS_C});
     record_call(
         &t.api,
         "conversations.history",
