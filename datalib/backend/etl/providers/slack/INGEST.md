@@ -139,9 +139,14 @@ What a conversation `client.counts` does not name depends on what it is:
 - **A channel** is walked as before. Every channel the account is a
   member of is in the sidebar, so this is a channel mirrored through
   `all_channels` or `channels` that the account has not joined.
-- **A DM** is treated as quiet, and walked not at all, not even its
-  refresh window. A workspace a few years old lists thousands of DMs,
-  and `client.counts` names only the ones open in the sidebar.
+- **A DM** is closed in the sidebar. It is walked whole when its check
+  is due: on the first run that finds it closed, and then once a day
+  (`CLOSED_DM_CHECK_EVERY`), each check recorded as a sweep
+  (`closed_dm:<id>`) when its walk ends. Between checks it is walked
+  only for a gap under what is held, which a `since` moved earlier
+  leaves, and not even its refresh window. A workspace a few years old
+  lists hundreds of DMs, and `client.counts` names only the ones open
+  in the sidebar.
 
 Checked against the live API:
 
@@ -158,18 +163,19 @@ Checked against the live API:
 - Search cannot prove a DM empty: `is:dm` and `in:<#D…>` both missed
   one of five DMs with messages that week.
 
-**The trade-off: a DM closed in the sidebar is treated as quiet.** Slack
-reopens a DM when a message arrives and hides it again after a stretch
-of inactivity, so a DM that had messages inside `since` and has since
-been closed is not walked until it is open again. That matters most
-with a wide `since` on a first sync. A DM named in `dm_conversations`
-is walked whatever its state, and a run whose `client.counts` call
-fails walks every conversation, as before.
+**What the daily check is for.** Slack reopens a DM when a message
+arrives, so the next run sees it in `client.counts` and walks it. A DM
+closed again before that run shows nothing, and the daily check is what
+reads it; one finding a message logs `slack_closed_dm_had_news` at
+warn, since it means `client.counts` missed it. Without the first
+walk, a first sync with a wide `since` would lose every message in the
+DMs the account had closed. The cost is one request per closed DM a
+day, and one per DM on a first sync.
 
-A DM left out is not covered: nothing claims its history was read.
-The first run that finds it open owes it whole, from `since`, and a
-`since` moved earlier owes the stretch below what was held, as for a
-channel.
+A DM named in `dm_conversations` is held to the same rules: naming it
+narrows which DMs are mirrored, nothing else. A run whose
+`client.counts` call fails walks every conversation, as before.
+`slack_walks_planned` counts the closed DMs and the ones checked.
 
 ## What bounds how far back we mirror
 
@@ -221,9 +227,10 @@ saw, not up to "now", so a run asks a channel for what is newer than
 that, and a message that only becomes visible late is not skipped. It
 does so only when `client.counts` says there is something newer, or
 says nothing ([which conversations a run
-walks](#which-conversations-a-run-walks)). A channel with no messages
-has no span; it is asked from `since` each run that `client.counts`
-does not name it.
+walks](#which-conversations-a-run-walks)). A walk that finds no
+message at all covers one point, `lo = hi`, where it began, so a reader
+can tell "read, nothing there" from "never read". Above that point is
+owed like the stretch above any newest message.
 
 A span's ends are `ts`es padded to one width (`ts_key`), so they sort as
 instants do. The TNG fixtures' stardate `ts`es have an eleventh digit.
@@ -394,7 +401,7 @@ what is owed is computed from the config a run has now.
 | `since` later | Nothing. What is stored stays; nothing here deletes it. |
 | `media` off → on | Every edge without bytes is owed, and fetched from its stored message. No channel is walked again. |
 | `common.blob_size_limit_bytes` raised | The edges skipped for their size are still without bytes, so they are fetched. |
-| a new channel, or `dms` on | The conversation has no coverage, so it is walked from `since` once `client.counts` shows a message in range, or names nothing (see [Which conversations a run walks](#which-conversations-a-run-walks)). |
+| a new channel, or `dms` on | The conversation has no coverage, so it is walked from `since` once `client.counts` shows a message in range, names nothing, or leaves out a DM whose check is due (see [Which conversations a run walks](#which-conversations-a-run-walks)). |
 
 ## What appeared since the last sync
 
