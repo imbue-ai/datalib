@@ -1,7 +1,7 @@
 //! Turning one RFC 5322 message into a JMAP-shaped `Email/get` envelope.
 
 use anyhow::{anyhow, Result};
-use mail_parser::{Address, HeaderValue, Message, MessageParser, MimeHeaders, PartType};
+use mail_parser::{AddressList, HeaderValue, Message, MessageParser, PartKind};
 use serde_json::{json, Value};
 
 /// The per-message facts a transport knows and the bytes do not.
@@ -34,14 +34,15 @@ pub fn synthesize(raw: &[u8], msg: &Message<'_>, facts: &TransportFacts) -> Valu
         "mailboxIds": Value::Object(mailbox_ids_obj),
         "keywords": Value::Object(keywords_obj),
         "size": raw.len(),
-        "hasAttachment": iter_attachments(msg).next().is_some(),
+        "hasAttachment": has_attachment(msg),
     });
     let obj = envelope.as_object_mut().expect("envelope is an object");
     if let Some(r) = received_at(msg) {
         obj.insert("receivedAt".into(), Value::String(r.clone()));
         obj.insert("sentAt".into(), Value::String(r));
     }
-    if let Some(s) = msg.subject() {
+    // An empty Subject stores none, as every row already stored has it.
+    if let Some(s) = msg.subject().filter(|s| !s.is_empty()) {
         obj.insert("subject".into(), Value::String(s.to_string()));
     }
     if let Some(from) = addresses_to_jmap(msg.from()) {
@@ -59,14 +60,15 @@ pub fn synthesize(raw: &[u8], msg: &Message<'_>, facts: &TransportFacts) -> Valu
             Value::Array(vec![Value::String(strip_angle(mid).to_string())]),
         );
     }
-    if let Some(irt) = msg.header("In-Reply-To").and_then(header_text) {
+    if let Some(irt) = msg.headers().value("In-Reply-To").and_then(header_text) {
         obj.insert(
             "inReplyTo".into(),
             Value::Array(vec![Value::String(strip_angle(&irt).to_string())]),
         );
     }
     let refs: Vec<Value> = msg
-        .header("References")
+        .headers()
+        .value("References")
         .and_then(header_text)
         .map(|s| {
             s.split_whitespace()
@@ -132,7 +134,7 @@ pub fn received_at(msg: &Message<'_>) -> Option<String> {
     msg.date()
         .and_then(|d| datalib_time::parse_strict(&d.to_rfc3339()).ok())
         .map(|t| t.to_rfc3339())
-        .or_else(|| header_text(msg.header("Date")?))
+        .or_else(|| header_text(msg.headers().value("Date")?))
 }
 
 /// Parse `raw`, or fail with a message naming what could not be parsed.
@@ -146,18 +148,18 @@ pub fn strip_angle(s: &str) -> &str {
     s.trim().trim_start_matches('<').trim_end_matches('>')
 }
 
-pub fn header_text(hv: &HeaderValue) -> Option<String> {
+pub fn header_text(hv: HeaderValue<'_>) -> Option<String> {
     match hv {
         HeaderValue::Text(t) => Some(t.to_string()),
-        HeaderValue::TextList(v) => Some(v.join(" ")),
+        HeaderValue::TextList(v) => Some(v.iter().collect::<Vec<_>>().join(" ")),
         _ => None,
     }
 }
 
-pub fn addresses_to_jmap(addr: Option<&Address>) -> Option<Vec<Value>> {
+pub fn addresses_to_jmap(addr: Option<AddressList<'_>>) -> Option<Vec<Value>> {
     let list = addr?;
     let mut out = Vec::new();
-    for a in list.iter() {
+    for a in list.mailboxes() {
         let email = a.address()?.to_string();
         let mut o = serde_json::Map::new();
         o.insert("email".into(), Value::String(email));
@@ -169,13 +171,13 @@ pub fn addresses_to_jmap(addr: Option<&Address>) -> Option<Vec<Value>> {
     (!out.is_empty()).then_some(out)
 }
 
-pub fn iter_attachments<'a>(
-    msg: &'a Message<'a>,
-) -> impl Iterator<Item = (String, &'a mail_parser::MessagePart<'a>)> {
-    msg.parts.iter().enumerate().filter_map(move |(i, part)| {
-        let is_attachment = part.attachment_name().is_some()
-            || matches!(part.body, PartType::Binary(_) | PartType::InlineBinary(_));
-        is_attachment.then(|| ((i + 1).to_string(), part))
+/// Any part of the message itself that is named or not text: the rule
+/// every stored `hasAttachment` was made with. RFC 8621's is narrower; it
+/// leaves out an inline image.
+pub fn has_attachment(msg: &Message<'_>) -> bool {
+    msg.root().parts().any(|part| {
+        part.attachment_name().is_some()
+            || matches!(part.kind(), PartKind::Binary | PartKind::InlineBinary)
     })
 }
 
@@ -329,8 +331,8 @@ Make it so.\r\n";
 
 /// What a download keeps from the parse, pinned on made-up messages
 /// whose handling moved between mail-parser releases. A parser change
-/// that moves one of these changes rows already stored, so it needs a
-/// migration rung, not just a new expected value.
+/// that moves one of these changes rows already stored: it needs a
+/// migration rung, or a reason here why the stored row can move.
 #[cfg(test)]
 mod stored_facts {
     use super::*;
@@ -375,6 +377,8 @@ Message-ID: <blank.subject@enterprise.ufp>\r\n\r\nNo subject.\r\n";
         );
     }
 
+    /// mail-parser 0.11 and 1.0 alike drop a mailbox that follows a
+    /// group in the same field.
     #[test]
     fn a_group_stores_its_members_in_order() {
         let raw = b"From: William Riker <riker@enterprise.ufp>\r\n\
@@ -478,13 +482,15 @@ Message-ID: <encoded@enterprise.ufp>\r\n\r\nHot.\r\n";
     }
 
     /// Which inputs parse at all: one that does not is counted as a
-    /// parse error and stores no row.
+    /// parse error and stores no row. mail-parser 0.11 also took one
+    /// line with no line break, as a message with no header and an empty
+    /// body; 1.0 refuses it, as both refuse that line with a line break.
     #[test]
     fn which_headerless_inputs_parse() {
         let cases: &[(&[u8], bool)] = &[
             (b"", false),
             (b"Captain's log, stardate 41153.7.\r\n", false),
-            (b"Captain's log", true),
+            (b"Captain's log", false),
             (b"Captain's log\r\nSecond entry\r\n", false),
             (b"\r\nA body with no header.\r\n", true),
             (
@@ -517,6 +523,10 @@ Message-ID: <stardate@enterprise.ufp>\r\n\r\nbody\r\n";
         assert_eq!(stored(raw).get("receivedAt"), None);
     }
 
+    /// mail-parser 0.11 read `Fr om:` as `From:`, so a sender could put
+    /// a second From where a DKIM check would not see it. The rows of an
+    /// mbox take the real sender on its next read; a Gmail API row keeps
+    /// the one it stored, in `from_json`, which nothing shows.
     #[test]
     fn a_ut_zone_and_a_spaced_header_name() {
         let raw = b"From: Data <data@enterprise.ufp>\r\n\
@@ -530,7 +540,7 @@ Message-ID: <ut.zone@enterprise.ufp>\r\n\r\nbody\r\n";
                 "email_id": "ut.zone@enterprise.ufp",
                 "messageId": ["ut.zone@enterprise.ufp"],
                 "subject": "After the UT zone",
-                "from": [{"email": "q@continuum.example", "name": "Q"}],
+                "from": [{"email": "data@enterprise.ufp", "name": "Data"}],
                 "receivedAt": "2027-05-04T03:42:05+00:00",
                 "sentAt": "2027-05-04T03:42:05+00:00",
                 "hasAttachment": false,
@@ -547,7 +557,7 @@ X-GM-THRID: 1853466712473707184\r\n\
 X-Gmail-Labels: Archived,Category Updates,\r\n =?UTF-8?Q?Caf=C3=A9?=,Opened\r\n\
 Message-ID: <labels@enterprise.ufp>\r\n\r\nbody\r\n";
         let msg = parse(raw).unwrap();
-        let header = |name| msg.header(name).and_then(header_text);
+        let header = |name| msg.headers().value(name).and_then(header_text);
         assert_eq!(header("X-GM-THRID").as_deref(), Some("1853466712473707184"));
         assert_eq!(
             header("X-Gmail-Labels").as_deref(),
@@ -555,14 +565,24 @@ Message-ID: <labels@enterprise.ufp>\r\n\r\nbody\r\n";
         );
     }
 
+    /// mail-parser 0.11 dropped the line after a one-letter zone, so a
+    /// non-Gmail mbox stored this message under its content hash. It
+    /// moves to its Message-ID on the mbox's next read, which drops the
+    /// old row.
+    #[test]
+    fn a_military_zone_no_longer_hides_the_message_id() {
+        let raw = b"From: Data <data@enterprise.ufp>\r\n\
+Date: Tue, 4 May 2027 03:42:05 A\r\n\
+Message-ID: <military.zone@enterprise.ufp>\r\n\r\nbody\r\n";
+        assert_eq!(stored(raw)["email_id"], "military.zone@enterprise.ufp");
+    }
+
     #[test]
     fn an_unpadded_base64_attachment_is_an_attachment() {
         assert_eq!(stored(UNPADDED_ATTACHMENT)["hasAttachment"], true);
     }
 
-    /// A multipart whose attachment's base64 has no final `=`; shared
-    /// with the blob store's and the render's tests of the decoded bytes.
-    pub(crate) const UNPADDED_ATTACHMENT: &[u8] = b"From: Data <data@enterprise.ufp>\r\n\
+    const UNPADDED_ATTACHMENT: &[u8] = b"From: Data <data@enterprise.ufp>\r\n\
 Subject: Log\r\nMessage-ID: <unpadded@enterprise.ufp>\r\nMIME-Version: 1.0\r\n\
 Content-Type: multipart/mixed; boundary=\"b1\"\r\n\r\n\
 --b1\r\nContent-Type: text/plain\r\n\r\nAttached.\r\n\

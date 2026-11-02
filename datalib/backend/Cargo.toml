@@ -66,7 +66,7 @@ kamadak-exif = "0.6"
 libc = "0.2"
 lofty = "0.25"
 lopdf = { version = "0.45", default-features = false }
-mail-parser = "0.11"
+mail-parser = "1.0"
 md-5 = "0.11"
 mime_guess = "2"
 ndarray = "0.17"
