@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
-use datalib_etl_slack_config::{SlackApiSync, SlackConfig};
+use datalib_etl_slack_config::{Scope, SlackApiSync, SlackConfig};
 use datalib_etl_web::http::LatchkeySettings;
 
 use crate::ingest;
@@ -106,6 +106,14 @@ impl DataProcessor for SlackIngest {
                 dm_conversations: self.sync.dm_conversations.clone(),
                 blob_size_limit_bytes: self.blob_size_limit_bytes,
                 search_replies: true,
+                involves_me: match self.sync.scope {
+                    Scope::EveryConversation => None,
+                    Scope::InvolvesMe => Some(ingest::InvolvesMeOptions {
+                        kinds: self.sync.involves_me_kinds(),
+                        before: self.sync.context_before()?,
+                        after: self.sync.context_after()?,
+                    }),
+                },
                 latchkey: self.latchkey.clone(),
                 now,
                 progress: ctx.progress.clone(),

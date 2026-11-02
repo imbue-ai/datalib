@@ -2280,6 +2280,14 @@ refresh_window_days = 30       # re-walk this many trailing days for edits, reac
                                # and deletions; default 30, 0 turns it off
 refresh_every_minutes = 60     # re-walk that window at most this often; default 60,
                                # 0 re-walks it on every sync
+scope = "involves_me"          # walk only the channels where something involves you;
+                               # default "every_conversation". DMs follow `dms` either way
+involves_me = ["mention", "from_me", "broadcast"]
+                               # what counts: a mention of you, your own message,
+                               # @here / @channel; unset is all three
+context_before = "-1d"         # walk a channel from this long before the oldest such
+                               # message; default "-1d"
+context_after = "+2d"          # walk only this long after each one; unset walks up to now
 
 [[steps]]
 group = "slack"

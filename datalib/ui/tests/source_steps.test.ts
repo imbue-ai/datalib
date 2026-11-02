@@ -514,7 +514,7 @@ describe("the Slack pickers", () => {
   /// the `api` table that selects the live method, defaults included.
   it("probe with the ingest params the form would write", () => {
     expect(paramsObject(SLACK, seedFieldValues(SLACK), "download")).toEqual({
-      api: { media: true, all_channels: false, dms: false },
+      api: { media: true, all_channels: false, dms: false, scope: "every_conversation" },
       common: { blob_size_limit_bytes: "5 MB" },
     });
   });

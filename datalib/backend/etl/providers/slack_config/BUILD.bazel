@@ -12,8 +12,10 @@ rust_library(
         "//datalib/backend/source_common:datalib_source_common",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
+        "@datalib_crates//:chrono",
         "@datalib_crates//:schemars",
         "@datalib_crates//:serde",
+        "@datalib_crates//:strum",
     ],
 )
 
@@ -22,5 +24,8 @@ rust_test(
     size = "small",
     crate = ":datalib_etl_slack_config",
     edition = "2021",
-    deps = ["@datalib_crates//:toml"],
+    deps = [
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:toml",
+    ],
 )
