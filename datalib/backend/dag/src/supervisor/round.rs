@@ -25,6 +25,7 @@ use crate::scheduler::{
     step_summary, QueueLedger, RunReport, Runner, StepReport, StepStatus,
 };
 use crate::step::{Exit, FailureKind, StepCtx, StepError, StepId, StepOutcome, StopSignal};
+use crate::subprocess::Shrink;
 use crate::supervisor::record::{CurrentRun, Record};
 use crate::version::UNKNOWN;
 
@@ -968,7 +969,7 @@ impl Runner {
             // A purge waits for the config swap too: a step the graph
             // still has would be written back into the record.
             let ready = match kind {
-                WipeKind::Reset | WipeKind::Compact => stopped,
+                WipeKind::Reset | WipeKind::Compact | WipeKind::Collect => stopped,
                 WipeKind::Purge => held.is_empty(),
             };
             if !ready {
@@ -995,16 +996,23 @@ impl Runner {
                 WipeKind::Purge => delete_trees(&self.data_root, &w.targets)
                     .await
                     .map(|()| wipe::forget_groups(state, &w.targets)),
-                WipeKind::Compact => self.compact_in_loop(graph, &w.targets, state, facts).await,
+                WipeKind::Compact => {
+                    self.shrink_in_loop(graph, &w.targets, Shrink::Compact, state, facts)
+                        .await
+                }
+                WipeKind::Collect => {
+                    self.shrink_in_loop(graph, &w.targets, Shrink::Collect, state, facts)
+                        .await
+                }
             };
             record.save(state).await?;
             match done {
                 Ok(()) => {
                     let roots = match kind {
                         WipeKind::Reset => wipe::after_reset(graph, &w.targets),
-                        // The fold kept every store's content, so nothing
-                        // downstream has anything new to read.
-                        WipeKind::Purge | WipeKind::Compact => Vec::new(),
+                        // A fold or a collection kept every store's content,
+                        // so nothing downstream has anything new to read.
+                        WipeKind::Purge | WipeKind::Compact | WipeKind::Collect => Vec::new(),
                     };
                     if !roots.is_empty() {
                         store.open_request(&roots, &w.opened_by).await?;
@@ -1042,20 +1050,21 @@ impl Runner {
         Ok(())
     }
 
-    /// Each step the compaction asks invoked with `--compact`, and the
-    /// version it reports recorded. One that fails is named and the rest
-    /// go on.
-    async fn compact_in_loop(
+    /// Each step the compaction or collection asks invoked with `how`'s
+    /// flag, and the version it reports recorded. One that fails is named
+    /// and the rest go on.
+    async fn shrink_in_loop(
         &self,
         graph: &Graph,
         targets: &[String],
+        how: Shrink,
         state: &mut Record,
         facts: &mut Facts,
     ) -> Result<()> {
         let mut failed: BTreeMap<String, Vec<&str>> = BTreeMap::new();
         for i in wipe::compact_targets(graph, targets) {
             let step = &graph.steps[i].id;
-            match self.compact_one(graph, step).await {
+            match self.shrink_one(graph, step, how).await {
                 Ok(Some(version)) => {
                     state.steps.entry(step.clone()).or_default().version = Some(version.clone());
                     facts.sinks[i] = Some(version);
@@ -1066,7 +1075,7 @@ impl Runner {
         }
         anyhow::ensure!(
             failed.is_empty(),
-            "could not compact {}",
+            "could not free up disk in {}",
             wipe::by_cause(&failed)
         );
         Ok(())
@@ -1362,6 +1371,7 @@ fn say_wiping(graph: &Graph, state: &mut Record, t: &Tick, wiping: &BTreeMap<usi
             WipeKind::Reset => "being reset",
             WipeKind::Purge => "being deleted",
             WipeKind::Compact => "being compacted",
+            WipeKind::Collect => "collecting unused space",
         };
         if let Some(entry) = state.steps.get_mut(&graph.steps[i].id) {
             entry.state_detail = Some(match t.states[i] {

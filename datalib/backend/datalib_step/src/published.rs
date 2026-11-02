@@ -4,7 +4,7 @@
 //! one its crashed predecessor left. A seal names the same commit the same
 //! way, so finishing on the commit last sealed moves nothing downstream.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
@@ -16,27 +16,35 @@ use crate::source::StepEnv;
 /// holds no doltlite store.
 pub async fn version(env: &StepEnv, data_root: &Path) -> Result<Option<String>> {
     use datalib_etl::doltlite_raw::{content_version_at_path, head_commit_at_path};
-    let tree = data_root.join(&env.step);
+    if matches!(env.function, Function::GridIndex) {
+        return grid_index_generation(data_root).await;
+    }
+    let Some(store) = store(env, data_root) else {
+        return Ok(None);
+    };
     match env.function {
-        Function::Ingest => crate::ingest::raw_store_version(&tree).await,
-        Function::RenderMarkdown => {
-            content_version_at_path(&datalib_etl_render::indexed_markdown::path_for(&tree)).await
-        }
-        Function::GridIndex => grid_index_generation(data_root).await,
-        Function::RenderTimeSeries | Function::TimeSeriesIndex => {
-            head_commit_at_path(&time_series_store(env, data_root)).await
-        }
+        Function::RenderMarkdown => content_version_at_path(&store).await,
+        _ => head_commit_at_path(&store).await,
+    }
+}
+
+/// The doltlite store a step writes; `None` for a step that has none. The
+/// grid index is plain SQLite.
+pub fn store(env: &StepEnv, data_root: &Path) -> Option<PathBuf> {
+    let tree = data_root.join(&env.step);
+    Some(match env.function {
+        Function::Ingest => datalib_etl::raw_layout::entities_db(&tree),
+        Function::RenderMarkdown => datalib_etl_render::indexed_markdown::path_for(&tree),
+        Function::RenderTimeSeries | Function::TimeSeriesIndex => time_series_store(env, data_root),
         Function::RenderOccurrences => {
-            head_commit_at_path(&datalib_etl::layout::render_occurrences_db(
-                data_root, &env.group,
-            ))
-            .await
+            datalib_etl::layout::render_occurrences_db(data_root, &env.group)
         }
-        Function::QmdAggregator
+        Function::GridIndex
+        | Function::QmdAggregator
         | Function::KeywordIndex
         | Function::Embed
-        | Function::EmbeddingMap => Ok(None),
-    }
+        | Function::EmbeddingMap => return None,
+    })
 }
 
 async fn grid_index_generation(data_root: &Path) -> Result<Option<String>> {
@@ -52,7 +60,7 @@ async fn grid_index_generation(data_root: &Path) -> Result<Option<String>> {
 
 /// The time-series store a `render_time_series` or `time_series_index`
 /// step writes.
-pub fn time_series_store(env: &StepEnv, data_root: &Path) -> std::path::PathBuf {
+pub fn time_series_store(env: &StepEnv, data_root: &Path) -> PathBuf {
     match env.function {
         Function::TimeSeriesIndex => datalib_core::layout::time_series_index_db(data_root),
         _ => datalib_etl::layout::render_time_series_db(data_root, &env.group),

@@ -110,7 +110,8 @@ impl RequestOutcome {
 
 /// What a wipe does: a reset empties what steps wrote, a purge deletes
 /// the trees of groups the config no longer names, a compaction folds
-/// away history nothing reads (`step_protocol.md` § Compact).
+/// away history nothing reads and collects the rest, a collection deletes
+/// only what no commit reaches (`step_protocol.md` § Compact and collect).
 #[derive(
     Debug,
     Clone,
@@ -129,11 +130,21 @@ pub enum WipeKind {
     Reset,
     Purge,
     Compact,
+    Collect,
 }
 
 impl WipeKind {
     pub fn as_str(self) -> &'static str {
         self.into()
+    }
+
+    /// How the steps a compaction or a collection asks give back disk.
+    pub fn shrink(self) -> Option<crate::subprocess::Shrink> {
+        match self {
+            WipeKind::Compact => Some(crate::subprocess::Shrink::Compact),
+            WipeKind::Collect => Some(crate::subprocess::Shrink::Collect),
+            WipeKind::Reset | WipeKind::Purge => None,
+        }
     }
 
     /// `None` for a spelling this build does not know.

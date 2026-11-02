@@ -166,8 +166,9 @@ Name both commits as arguments, as above: a filter on `from_commit` or
 `to_commit` does something else. More recipes, and what each costs,
 are in [`doltlite.md`](../dev/doltlite.md#what-changed-between-two-commits).
 
-A raw store's history is never folded away (`datalib-dag --compact`
-leaves raw stores alone), so a cursor stays readable. A reset of the
+A raw store's history is never folded away (`datalib-dag
+--free-disk-space` deletes only chunks no commit reaches, with
+`--drop-old-versions-on-derived-data` too), so a cursor stays readable. A reset of the
 source empties the tables in a new commit, which reads as every row
 `removed`. If your cursor no longer resolves (the store was deleted and
 synced again), start over from a full read. A `datalib-dag diff` verb

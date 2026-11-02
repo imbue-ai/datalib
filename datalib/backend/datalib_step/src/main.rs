@@ -166,18 +166,22 @@ struct Cli {
     models_dir: Option<PathBuf>,
     /// Appended by `datalib-dag --reset`: empty this part of what the step
     /// wrote (`store`) and do nothing else (`step_protocol.md` § Reset).
-    #[arg(long, value_name = "PART", conflicts_with_all = ["migrate", "compact"])]
+    #[arg(long, value_name = "PART", conflicts_with_all = ["migrate", "compact", "collect"])]
     reset: Option<String>,
     /// Appended by a launch after an upgrade: bring what the step wrote to
     /// this build's shape where that can be done in place, fetch nothing,
     /// and say when it cannot (`step_protocol.md` § Migrate).
-    #[arg(long, conflicts_with = "compact")]
+    #[arg(long, conflicts_with_all = ["compact", "collect"])]
     migrate: bool,
     /// Appended by `datalib-dag --compact`: fold the history of a store
-    /// nothing reads the history of into one commit, and give back the
-    /// disk it held (`step_protocol.md` § Compact).
-    #[arg(long)]
+    /// nothing reads the history of into one commit, collect any other,
+    /// and give back the disk (`step_protocol.md` § Compact and collect).
+    #[arg(long, conflicts_with = "collect")]
     compact: bool,
+    /// Appended by `datalib-dag --collect`: delete what no commit of the
+    /// step's store reaches, keeping every commit.
+    #[arg(long)]
+    collect: bool,
     #[command(flatten)]
     obs: datalib_obs::ObsArgs,
 }
@@ -596,7 +600,10 @@ async fn run(
                 return migrate::run(&env, data_root, emitter).await;
             }
             if cli.compact {
-                return compact::run(&env, data_root).await;
+                return compact::run(&env, data_root, compact::Verb::Compact).await;
+            }
+            if cli.collect {
+                return compact::run(&env, data_root, compact::Verb::Collect).await;
             }
             run_function(
                 env,
