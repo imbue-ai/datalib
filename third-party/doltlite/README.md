@@ -72,13 +72,14 @@ In normal day-to-day edits to Rust code, none of these actions re-run.
 
 ## Upgrading doltlite
 
-A version lives in **three** places and they must all move together:
+A version lives in **four** places and they must all move together:
 
 | # | Location |
 |---|----------|
 | 1 | `MODULE.bazel` → `http_archive(name = "doltlite_amalgamation")` — the library |
 | 2 | `MODULE.bazel` → `http_archive(name = "doltlite_autoconf")` — the CLI's `shell.c` |
 | 3 | `BUILD.bazel` → `DOLTLITE_VERSION` |
+| 4 | `pyproject.toml` → `doltlite==…`, the PyPI wheel the Python docs recommend; then regenerate `requirements.txt` (AGENTS.md §"Python deps") |
 
 and two files ride along: `LICENSE.md` and `APACHE_LICENSE`, upstream's
 notices at the pinned version, which every release ships under
@@ -107,12 +108,15 @@ Steps:
    It feeds `-DDOLTLITE_VERSION` into both the library and the CLI.
 7. `bazelisk test //tools:version_pins_test
    //third-party/doltlite:cli_version_test` — the pins agree, and the
-   CLI links and its dolt-SQL surface works.
+   CLI links and its dolt-SQL surface works. Not every release
+   reaches PyPI (0.50.5–0.50.7 never did); pick one that did.
 8. Run what holds the engine facts:
    `//datalib/backend/doltlite_facts:doltlite_facts_test` (one test per
    single-process fact, a module per section of `doltlite.md`) and
    `//datalib/backend/etl:doltlite_two_process_test` (a writer and a
-   reader in two processes). Where a fact moved, fix
+   reader in two processes), and
+   `//datalib/backend/doltlite_facts:python_package_test` (the PyPI
+   wheel at the new pin). Where a fact moved, fix
    [`docs/dev/doltlite.md`](../../docs/dev/doltlite.md) first, then the
    test, and add a row to its § Versions table saying what the new pin
    brought.

@@ -28,13 +28,15 @@ ignore = [
     # pdf-inspector -> ttf-parser (font parsing for the pdf provider).
     # lopdf itself has moved to skrifa; pdf-inspector has not.
     { id = "RUSTSEC-2026-0192", reason = "ttf-parser, via pdf-inspector" },
-    # candle-core -> zip 8. All three are in extracting an archive to
+    # candle-core -> zip 8. All four are in extracting an archive to
     # disk (`ZipArchive::extract`, `ZipStreamReader::extract`), fixed in
-    # zip 9; candle 0.11 still requires zip 8. Our own zip dependency is
-    # on 9, and candle only reads entries by name; nothing calls extract.
+    # zip 9; candle 0.11.0 requires zip 8 and 0.11.1 moves to 9. Our own
+    # zip dependency is on 9, and candle only reads entries by name;
+    # nothing calls extract.
     { id = "RUSTSEC-2026-0367", reason = "zip 8 extract keeps SUID/SGID bits, via candle-core, which never calls extract" },
     { id = "RUSTSEC-2026-0368", reason = "zip 8 extract writes symlinks outside the destination, via candle-core, which never calls extract" },
     { id = "RUSTSEC-2026-0369", reason = "zip 8 extract applies permissions through symlinks, via candle-core, which never calls extract" },
+    { id = "RUSTSEC-2026-0429", reason = "zip 8 extract aborts on a symlink entry with a huge declared size, via candle-core, which never calls extract" },
 ]
 
 [bans]

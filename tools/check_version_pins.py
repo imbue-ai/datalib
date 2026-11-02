@@ -131,13 +131,18 @@ FAMILIES: list[Family] = [
             "constant it is handed. The prod image used to carry a fourth "
             "pin, `ARG DOLTLITE_CLI_VERSION`, for a `.deb` copy of the "
             "shell; it now installs the one in the release tarball, which "
-            "is built from these same archives and so cannot drift."
+            "is built from these same archives and so cannot drift. The "
+            "PyPI `doltlite` wheel is the one docs/dev/doltlite.md tells "
+            "a Python program to install, and "
+            "//datalib/backend/doltlite_facts:python_package_test runs it "
+            "against stores the pinned CLI wrote."
         ),
         canonical="third-party/doltlite/BUILD.bazel",
         sites=[
             ("third-party/doltlite/BUILD.bazel", r'^DOLTLITE_VERSION = "([^"]+)"'),
             ("MODULE.bazel", r"doltlite-amalgamation-([\d.]+)\.zip"),
             ("MODULE.bazel", r"doltlite-autoconf-([\d.]+)\.tar\.gz"),
+            ("requirements.txt", r"^doltlite==([^\s\\]+)"),
         ],
     ),
     Family(
