@@ -83,6 +83,28 @@ fresh is the mirror?"). With the app up, `POST /api/requests` is the
 open-and-return form: it answers as soon as the loop has taken the
 request on. The command line has no flag that does the same.
 
+**To wait for the downloads only**, not the render and indexes after
+them, read the loop's record instead of the request. A request stays
+open until everything downstream of its roots has run, which for an
+app that reads only the raw stores is time spent waiting on the search
+index. A download is done for your request once its `steps` row says
+it started after the request opened and has finished since:
+
+```sh
+sqlite3 <data_root>/system/supervisor.sqlite "
+  SELECT s.step, s.last_status
+    FROM steps s, requests r
+   WHERE r.id = '<request id>' AND s.step = 'slack/ingest'
+     AND s.last_started_at_utc > r.opened_at_utc
+     AND s.last_finished_at_utc >= s.last_started_at_utc"
+```
+
+A row back means done, and `last_status` says how: `succeeded`,
+`failed` (with `last_failure_kind`) or `stopped`. The start is
+compared, not the finish, because a download already running when you
+asked runs once more after it ends. `POST /api/requests` answers with
+a list of requests, one per group it names, each with its `id`.
+
 **To stop your sync**, send your `datalib-dag` one SIGINT or SIGTERM,
 or run `datalib-dag stop <data_root>/config.toml <request-id>`. That
 stops your request and nothing else: its steps stop at their next
