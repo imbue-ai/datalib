@@ -1,4 +1,4 @@
-// The unified document index grid's "Source" column, and the `source_id:`
+// The unified document index grid's "Source" column, and the `source:`
 // filter behind it.
 //
 // The column answers which *configured source* a row came from, led by
@@ -57,7 +57,7 @@ test.afterEach(async ({ page }) => {
   if (original) await writeConfig(page, original);
 });
 
-test("the Source column shows the configured name, and source_id: filters by id", async ({
+test("the Source column shows the configured name, and source: filters by id", async ({
   page,
   request,
 }) => {
@@ -70,7 +70,7 @@ test("the Source column shows the configured name, and source_id: filters by id"
   // paints only the rows in view, and which those are is the sort's
   // business, not this test's.
   const slackRow = (await (
-    await request.get("/applet/unified_document_index/search?q=source_id:slack&limit=1")
+    await request.get("/applet/unified_document_index/search?q=source:slack&limit=1")
   ).json()) as { rows: { uuid: string }[] };
   expect(slackRow.rows.length, "the fixture has slack rows").toBe(1);
   await openGrid(page);
@@ -82,23 +82,23 @@ test("the Source column shows the configured name, and source_id: filters by id"
   );
   expect(cellText.trim()).toBe("slack");
 
-  // --- `source_id:` narrows to one source --------------------------
+  // --- `source:` narrows to one source --------------------------
   // Every visible cell must read `slack` — the filter is a whole-segment
   // prefix test on qmd_path, not a substring match on anything.
-  await searchAndSettle(page, "source_id:slack");
+  await searchAndSettle(page, "source:slack");
   await expect(page.locator(SOURCE_CELLS).first()).toBeVisible();
   expect(await distinctSourceCells(page)).toEqual(["slack"]);
 
   // A stanza that exists in the fixture but isn't the one asked for
   // must be excluded, so the filter is provably doing work.
-  await searchAndSettle(page, "source_id:claude-api");
+  await searchAndSettle(page, "source:claude-api");
   expect(await distinctSourceCells(page)).toEqual(["claude-api"]);
 
   // Datalib's own rows — every source's storage report — are filed
   // under `datalib` rather than the source they measure, which is why
   // neither search above turned one up. They have their own bucket,
   // and the column spells it out.
-  await searchAndSettle(page, "source_id:datalib");
+  await searchAndSettle(page, "source:datalib");
   expect(await distinctSourceCells(page)).toEqual(["Datalib"]);
 
   // --- A name in the config changes the column's text --------------
@@ -109,11 +109,11 @@ test("the Source column shows the configured name, and source_id: filters by id"
   await writeConfig(page, original.replace(slackGroup, `${slackGroup}name = "Work Slack"\n`));
 
   await openGrid(page);
-  await searchAndSettle(page, "source_id:slack");
+  await searchAndSettle(page, "source:slack");
   expect(await distinctSourceCells(page)).toEqual(["Work Slack"]);
 
   // The filter token still carries the id, not the name: the index has
   // never heard of names, and two sources may share one.
-  await searchAndSettle(page, 'source_id:"Work Slack"');
+  await searchAndSettle(page, 'source:"Work Slack"');
   await expect(page.locator(SOURCE_CELLS)).toHaveCount(0);
 });

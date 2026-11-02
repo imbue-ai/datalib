@@ -38,7 +38,12 @@ use crate::ids;
 /// v3: the account's own messages are "Me", as every chat source writes
 ///     them.
 /// v4: an answer's author is its model's chip (`ai_model:` handle).
-pub const RENDER_VERSION: u32 = 4;
+/// v5: a tool's result is the harness's, not authored by the tool's name.
+pub const RENDER_VERSION: u32 = 5;
+
+/// Who the harness's own rows are by: its notes, a tool's result. A tool's
+/// name is not a person, and `from:` must not find it as one.
+const HARNESS: &str = "Codex";
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -326,7 +331,7 @@ fn response_item(
             let (author, author_kind, label, aside) = match str_of(p, "role") {
                 Some("assistant") => (model, AuthorKind::Named, "LLM Response", false),
                 Some("user") if typed_here() => ("Me", AuthorKind::Account, "User Input", false),
-                _ => ("Codex", AuthorKind::Named, "Harness Message", true),
+                _ => (HARNESS, AuthorKind::Named, "Harness Message", true),
             };
             // An injected blob — a permissions primer, a whole AGENTS.md —
             // is cut like a tool output: the store keeps it, the page
@@ -439,7 +444,7 @@ fn response_item(
             };
             Some(item(
                 id,
-                name.to_string(),
+                HARNESS.to_string(),
                 ms,
                 details(&summary, &fenced(&clamp(&text, max_bytes))),
                 "Tool Result",
@@ -488,7 +493,7 @@ fn compacted_item(
     let message = str_of(p, "message").filter(|m| !m.trim().is_empty())?;
     let mut it = item(
         ids::record(source_id, tid, line_no, ms),
-        "Codex".to_string(),
+        HARNESS.to_string(),
         ms,
         String::new(),
         "System",
@@ -672,6 +677,10 @@ mod tests {
             .unwrap()
             .contains("Tool call: shell"));
         assert!(items[4].text.as_deref().unwrap().contains("diag emitter"));
+        assert_eq!(
+            items[5].author_display, "Codex",
+            "a tool's result is the harness's, never the tool's name"
+        );
         let result = items[5].text.as_deref().unwrap();
         assert!(result.contains("Tool result: shell"), "{result}");
         assert!(result.contains("emitter nominal"));

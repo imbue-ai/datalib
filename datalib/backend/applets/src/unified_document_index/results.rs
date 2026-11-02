@@ -2,7 +2,7 @@
 //! per query, sort and commit, then every page of it is a slice of the
 //! list: the second page of a search does not run it again.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use datalib_unified_document_index::group::Within;
@@ -109,6 +109,47 @@ impl ResultCache {
         entries.truncate(CAPACITY);
     }
 }
+
+/// What a search's structured terms keep, worked out once per query and
+/// commit and shared by every answer to it: Words narrows to its
+/// documents, Meaning to its messages, a page lands only on its rows.
+/// Asked of the index each time, one person key cost seconds per ask, and
+/// one search asked four or five times.
+pub struct Keyed {
+    pub rows: HashSet<String>,
+    pub documents: HashSet<String>,
+    pub kept: HashMap<String, datalib_unified_document_index::qmd::vectors::Kept>,
+}
+
+/// A search's terms, written out, and the commit they were read at.
+pub type KeyedKey = (String, Option<String>);
+
+/// The terms of the last few searches, as `Keyed`: a search card asks for
+/// its Best, Words and Meaning answers with the same keys.
+#[derive(Default)]
+pub struct KeyedCache {
+    entries: VecDeque<(KeyedKey, Arc<Keyed>)>,
+}
+
+impl KeyedCache {
+    pub fn get(&mut self, key: &KeyedKey) -> Option<Arc<Keyed>> {
+        let i = self.entries.iter().position(|(k, _)| k == key)?;
+        let found = self.entries.remove(i)?;
+        let keyed = found.1.clone();
+        self.entries.push_front(found);
+        Some(keyed)
+    }
+
+    pub fn put(&mut self, key: KeyedKey, keyed: Arc<Keyed>) {
+        self.entries.retain(|(k, _)| k != &key);
+        self.entries.push_front((key, keyed));
+        self.entries.truncate(KEYED_CAPACITY);
+    }
+}
+
+/// A key that keeps nearly every row holds a set of nearly a million
+/// uuids, so only a few are kept.
+const KEYED_CAPACITY: usize = 4;
 
 /// The most rows one page carries.
 pub const MAX_PAGE: usize = 100_000;

@@ -73,7 +73,7 @@ pub struct SearchRow {
     ///
     /// Never the group's display name. The grid's "Source" column shows
     /// the name, resolved client-side from the config; this is what it
-    /// resolves *from*, and what a `source_id:` filter matches.
+    /// resolves *from*, and what a `source:` filter matches.
     pub source_id: String,
     pub kind: String,
     /// The author as the source showed them.

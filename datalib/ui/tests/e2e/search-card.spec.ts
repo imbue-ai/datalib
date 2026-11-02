@@ -81,7 +81,7 @@ test("a source chip writes the source filter, and a typed one lights the chip", 
   await expect(chips(page).first()).toContainText("All");
   await expect(chips(page).first()).toHaveAttribute("aria-pressed", "true");
   await chips(page).nth(1).click();
-  await expect(input(page)).toHaveAttribute("data-query", /^is:document source_id:\S+$/);
+  await expect(input(page)).toHaveAttribute("data-query", /^is:document source:\S+$/);
   await expect(chips(page).nth(1)).toHaveAttribute("aria-pressed", "true");
   const narrowed = (await input(page).getAttribute("data-query")) ?? "";
   await expect(tableShows(page)).toHaveAttribute("data-shown-query", narrowed);

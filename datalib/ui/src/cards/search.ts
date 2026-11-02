@@ -9,7 +9,8 @@ import { filterToken, isFilterWord, queryWords, unquoteValue } from "@/grid/quer
 /// `FreeTextMode`): words and meaning together, or meaning alone.
 const HYBRID = "qmd:";
 const MEANING = "qmd_vsearch:";
-const SOURCE = "source_id:";
+/// `source:`, and `source_id:`, its older spelling a saved query may hold.
+const SOURCE = /^(source|source_id):/;
 
 const carriesText = (w: string) => w.startsWith(HYBRID) || w.startsWith(MEANING);
 const carried = (w: string) => unquoteValue(w.slice(w.indexOf(":") + 1));
@@ -24,10 +25,10 @@ export function freeText(query: string): string {
     .join(" ");
 }
 
-/// The one source `query` is narrowed to: the value of its `source_id:`
+/// The one source `query` is narrowed to: the value of its `source:`
 /// filter when it has exactly one. Null for none, or for several.
 export function pickedSource(query: string): string | null {
-  const picked = queryWords(query).filter((w) => w.startsWith(SOURCE));
+  const picked = queryWords(query).filter((w) => SOURCE.test(w));
   return picked.length === 1 ? carried(picked[0]) : null;
 }
 
@@ -51,11 +52,11 @@ export function searchTitle(query: string, nameOf: (value: string) => string | n
 }
 
 /// `query` narrowed to the source `id`, or to no source for null: every
-/// `source_id:` filter it had is replaced. An excluded source
-/// (`-source_id:`) is left alone.
+/// `source:` filter it had is replaced. An excluded source
+/// (`-source:`) is left alone.
 export function setSource(query: string, id: string | null): string {
-  const kept = queryWords(query).filter((w) => !w.startsWith(SOURCE));
-  if (id !== null) kept.push(filterToken("source_id", id, false));
+  const kept = queryWords(query).filter((w) => !SOURCE.test(w));
+  if (id !== null) kept.push(filterToken("source", id, false));
   return kept.join(" ");
 }
 

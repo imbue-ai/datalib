@@ -46,9 +46,17 @@ pub fn build_where<C: Column>(q: &ParsedQuery<C>) -> (String, Vec<String>) {
     let mut clauses: Vec<String> = Vec::new();
     let mut params: Vec<String> = Vec::new();
 
+    // A store has no planner statistics, so SQLite guesses that `is_document
+    // = 1` narrows as hard as `source_id = ?`, and on a tie takes the flag's
+    // index: every document in the library, each looked up for its source.
+    // A flag halves a table at best; `likelihood` says so.
     for (_, column) in <C::Table as SearchTable>::FLAGS {
         if let Some(on) = q.flag(*column) {
-            clauses.push(format!("{} = {}", column.as_str(), i32::from(on)));
+            clauses.push(format!(
+                "likelihood({} = {}, 0.5)",
+                column.as_str(),
+                i32::from(on)
+            ));
         }
     }
 
@@ -310,10 +318,10 @@ mod tests {
     #[test]
     fn is_document_is_a_column_test_not_a_kind_list() {
         let (sql, params) = build_where(&parse_query("is:document"));
-        assert_eq!(sql, " WHERE is_document = 1");
+        assert_eq!(sql, " WHERE likelihood(is_document = 1, 0.5)");
         assert!(params.is_empty());
         let (sql, _) = build_where(&parse_query("-is:document"));
-        assert_eq!(sql, " WHERE is_document = 0");
+        assert_eq!(sql, " WHERE likelihood(is_document = 0, 0.5)");
     }
 
     /// `author:*` keeps the rows with an author and `-author:*` the rows
@@ -334,11 +342,11 @@ mod tests {
     /// the `(source_id, …)` index can serve it.
     #[test]
     fn source_id_filter_is_equality_on_the_derived_column() {
-        let (sql, params) = build_where(&parse_query("source_id:slack_work"));
+        let (sql, params) = build_where(&parse_query("source:slack_work"));
         assert_eq!(sql, " WHERE source_id = ?");
         assert_eq!(params, vec!["slack_work"]);
 
-        let (sql, params) = build_where(&parse_query("-source_id:datalib"));
+        let (sql, params) = build_where(&parse_query("-source:datalib"));
         assert_eq!(sql, " WHERE (source_id IS NULL OR source_id != ?)");
         assert_eq!(params, vec!["datalib"]);
     }

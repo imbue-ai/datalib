@@ -38,6 +38,7 @@ import { asElement } from "./docFrame";
 import { openExternal } from "@/externalLinks";
 import { isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
 import { pushToast } from "@/toasts";
+import { endWait, startWait, type Wait } from "@/telemetry";
 import DocTitleBar from "./DocTitleBar.ce.vue";
 import { sourceSource } from "./cardSources";
 import { documentCopyText, documentTitle, outlinkOf, type DocumentAction } from "./documentMenu";
@@ -515,6 +516,23 @@ async function onDocAction(id: DocumentAction) {
   }
 }
 
+/// The person's wait for the document named, from the card opening or
+/// from naming another, to its body drawn in the frame (ChatBody's
+/// `painted`).
+let wait: Wait | null = startWait("open");
+
+function shown(outcome: "shown" | "failed", more = {}) {
+  if (!wait) return;
+  endWait("doc_shown", wait, {
+    card: props.ctx.cardId,
+    card_type: props.ctx.cardType,
+    preview: props.preview ?? false,
+    outcome,
+    ...more,
+  });
+  wait = null;
+}
+
 watch(
   // One UUID per rendered file — when `markdownUuid` changes, refetch
   // the file. No row-uuid disambiguation needed: provider-specific
@@ -524,8 +542,10 @@ watch(
   async (uuid) => {
     if (!uuid) {
       chat.value = null;
+      wait = null;
       return;
     }
+    wait ??= startWait("open");
     loading.value = true;
     error.value = null;
     remoteRefs.value = [];
@@ -540,6 +560,7 @@ watch(
       chat.value = doc;
     } catch (e) {
       error.value = (e as Error).message;
+      shown("failed");
     } finally {
       loading.value = false;
     }
@@ -748,6 +769,7 @@ watch(
             :hover-anchor-uuid="hoverAnchor"
             @open-edge="onOpenEdge"
             @hover-edge="onHoverEdge"
+            @painted="shown('shown', { bytes: chat.body.length })"
             :remote-accept="remoteAccept"
             :remote-context="remoteContext"
             :source-id="chat.source_ref?.id ?? null"

@@ -488,21 +488,28 @@ mod tests {
     }
 
     #[test]
-    fn source_id_and_kind_keys_recognized() {
-        let q = parse_query("source_id:slack kind:Chat");
+    fn source_and_kind_keys_recognized() {
+        let q = parse_query("source:slack kind:Chat");
         assert_eq!(kept(&q, col("source_id")), ["slack"]);
         assert_eq!(kept(&q, col("kind")), ["Chat"]);
     }
 
-    /// `source:` (the provider's label) and `source_name:` (the old
-    /// spelling of `source_id:`) are gone. A saved query that still names
-    /// one is refused by name, not searched as free text.
+    /// `source_id:` was the key's name before `source:`; a saved query or
+    /// a link that still says it finds the same rows.
     #[test]
-    fn the_retired_source_keys_are_refused() {
-        for q in ["source:Slack", "source_name:slack"] {
-            let parsed = parse_query(q);
-            assert!(parsed.refusal().is_some(), "{q}: {parsed:?}");
-        }
+    fn source_id_is_still_the_source_key() {
+        let q = parse_query("source_id:slack");
+        assert_eq!(q.refusal(), None);
+        assert_eq!(kept(&q, col("source_id")), ["slack"]);
+    }
+
+    /// `source_name:` (an older spelling of `source:`) is gone. A saved
+    /// query that still names it is refused by name, not searched as
+    /// free text.
+    #[test]
+    fn the_retired_source_key_is_refused() {
+        let parsed = parse_query("source_name:slack");
+        assert!(parsed.refusal().is_some(), "{parsed:?}");
     }
 
     #[test]
@@ -564,7 +571,7 @@ mod tests {
     #[test]
     fn qmd_predicate_single_word_unquoted() {
         // Single-word qmd: value doesn't need re-quoting.
-        let q = parse_query("qmd:\"foo\" source_id:slack");
+        let q = parse_query("qmd:\"foo\" source:slack");
         assert_eq!(q.free_text, "foo");
         assert_eq!(q.free_text_mode, FreeTextMode::Hybrid);
         assert_eq!(kept(&q, col("source_id")), ["slack"]);

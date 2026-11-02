@@ -105,6 +105,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: "open-edge", edge: EdgeOut): void;
+  /** A body was written into the frame: the first, or a changed one. */
+  (e: "painted"): void;
   /** Every remote reference the body carries, after each render;
    *  those held back are shown as placeholders here. */
   (e: "remote-media", refs: RemoteRef[]): void;
@@ -465,6 +467,7 @@ function paint() {
     unmountCharts();
     el.innerHTML = html.value;
     painted = html.value;
+    emit("painted");
   }
   chartStops.push(mountTimeSeries(el));
   // The document card's title bar has the page's own ID button.

@@ -140,7 +140,7 @@ describe("previewText", () => {
 
 describe("state", () => {
   it("round-trips, and a pristine card writes nothing", () => {
-    const st = { q: "source_id:slack", by: "kind" as const, sel: "abc" };
+    const st = { q: "source:slack", by: "kind" as const, sel: "abc" };
     expect(decodeState(encodeState(st))).toEqual(st);
     expect(encodeState({ q: "", by: "provider", sel: null })).toBe("");
     expect(decodeState("by=bogus").by).toBe("provider");

@@ -329,7 +329,7 @@ async fn a_listing_orders_filters_and_reads_back_by_uuid() {
     assert_eq!(newest_first.uuids, ["c-new", "v-1", "c-mid", "c-old"]);
     assert_eq!(newest_first.at.as_deref(), Some(head.as_str()));
 
-    let enterprise = parse_query("source_id:enterprise");
+    let enterprise = parse_query("source:enterprise");
     let oldest_first = repo
         .ordered_uuids(&enterprise, &order("created_at:asc"), &[])
         .await
@@ -427,7 +427,7 @@ async fn a_key_suggests_its_values_most_rows_first() {
         "a % is itself"
     );
     assert_eq!(
-        values("source_id:voyager", "").await,
+        values("source:voyager", "").await,
         pairs(&[("bridge", 1)]),
         "the rest of the query narrows the values"
     );
@@ -536,7 +536,7 @@ async fn a_repo_opened_before_the_first_commit_reads_after_it() {
 
 /// A source's storage report is written into that source's own
 /// `render_markdown/` tree, so the first segment of its `qmd_path` is
-/// the measured source. It must not be filed there: `source_id:` has
+/// the measured source. It must not be filed there: `source:` has
 /// to answer `datalib` for it, and the measured source's own name has to
 /// leave it out. Both halves — the column's value and the SQL filter —
 /// are checked here against a real store, because the two are derived
@@ -589,7 +589,7 @@ async fn storage_rows_are_filed_under_datalib_not_the_measured_source() {
     assert_eq!(storage.source_id, "datalib");
 
     let measured = repo
-        .search(&parse_query("source_id:claude-work"), 100)
+        .search(&parse_query("source:claude-work"), 100)
         .await
         .unwrap();
     assert_eq!(
@@ -599,7 +599,7 @@ async fn storage_rows_are_filed_under_datalib_not_the_measured_source() {
     );
 
     let datalibs = repo
-        .search(&parse_query("source_id:datalib"), 100)
+        .search(&parse_query("source:datalib"), 100)
         .await
         .unwrap();
     assert_eq!(
@@ -723,10 +723,14 @@ const SCANS: &[&str] = &[
 
 /// A key the search bar offers must be served by an index in the order
 /// the grid sorts by, with no sort of its own, or be one of [`SCANS`]: a
-/// new key does not pass until someone decides which. Fails naming the
-/// query whose plan does neither, a key in `SCANS` that an index now
-/// serves, and an index no query uses. `before:`/`after:` are ranges on
-/// `created_at_utc`, which cannot share an index with a newest-first order.
+/// new key does not pass until someone decides which. Beside `is:document`
+/// it must search the same index, not the flag's: the planner has no
+/// statistics and took the flag's index on a tie, so a one-source table
+/// read every document in the library (seconds, on a real root). Fails
+/// naming the query whose plan does neither, a key in `SCANS` that an
+/// index now serves, and an index no query uses. `before:`/`after:` are
+/// ranges on `created_at_utc`, which cannot share an index with a
+/// newest-first order.
 #[tokio::test]
 async fn every_filter_key_is_served_by_an_index() {
     let db_path = unique_db_path();
@@ -742,29 +746,12 @@ async fn every_filter_key_is_served_by_an_index() {
     let queries = key_queries
         .iter()
         .map(|(q, scans)| (q.as_str(), *scans))
-        // The unfiltered grid, `is:`, its inverse, and a Browse card.
-        .chain([
-            ("", false),
-            ("is:document", false),
-            ("-is:document", false),
-            ("source_id:slack is:document", false),
-        ]);
+        // The unfiltered grid, `is:` and its inverse.
+        .chain([("", false), ("is:document", false), ("-is:document", false)]);
     let mut unserved: Vec<String> = Vec::new();
     let mut used: std::collections::BTreeSet<String> = Default::default();
     for (q, scans) in queries {
-        let (sql, params) = listing_sql(&parse_query(q), &[], &[]);
-        let explain = format!("EXPLAIN QUERY PLAN {sql}");
-        let mut query = sqlx::query(sqlx::AssertSqlSafe(explain));
-        for p in &params {
-            query = query.bind(p.clone());
-        }
-        let plan: Vec<String> = query
-            .fetch_all(&writer)
-            .await
-            .expect("explain")
-            .iter()
-            .map(|r| sqlx::Row::get::<String, _>(r, "detail"))
-            .collect();
+        let plan = plan_of(&writer, q).await;
         // A filter must SEARCH an index on its own column. SCANning the
         // newest-first index in order and testing each row also avoids a
         // sort, and is the slow walk this test exists to catch; only the
@@ -774,9 +761,7 @@ async fn every_filter_key_is_served_by_an_index() {
                 d.starts_with("SCAN grid_rows USING") && d.contains("grid_rows_by_touched")
             })
         } else {
-            plan.iter().any(|d| {
-                d.starts_with("SEARCH grid_rows USING") && d.contains("INDEX grid_rows_by_")
-            })
+            searched_index(&plan).is_some()
         };
         let sorts = plan.iter().any(|d| d.contains("TEMP B-TREE"));
         let as_expected = if scans { !served } else { served && !sorts };
@@ -787,6 +772,22 @@ async fn every_filter_key_is_served_by_an_index() {
                 "not served"
             };
             unserved.push(format!("{q:?} ({why}): {plan:?}"));
+        }
+        // A Browse card is a key and the flag. Every per-column index
+        // holds `is_document` between the stamp and `uuid`, so rows that
+        // share a stamp are put in `uuid` order after the search: a sort
+        // of ties, never of the whole result.
+        if served && !scans && q.contains(':') && !q.contains("is:") {
+            let with_flag = format!("{q} is:document");
+            let paired = plan_of(&writer, &with_flag).await;
+            let full_sort = paired
+                .iter()
+                .any(|d| d.contains("TEMP B-TREE") && !d.contains("LAST TERM OF ORDER BY"));
+            if searched_index(&paired) != searched_index(&plan) || full_sort {
+                unserved.push(format!(
+                    "{with_flag:?} (not served as {q:?} is): {paired:?}"
+                ));
+            }
         }
         for detail in &plan {
             if let Some(rest) = detail.split("INDEX ").nth(1) {
@@ -810,6 +811,30 @@ async fn every_filter_key_is_served_by_an_index() {
         "these keys are not what the test expects of them:\n{}",
         unserved.join("\n")
     );
+}
+
+async fn plan_of(db: &sqlx::SqlitePool, q: &str) -> Vec<String> {
+    let (sql, params) = listing_sql(&parse_query(q), &[], &[]);
+    let explain = format!("EXPLAIN QUERY PLAN {sql}");
+    let mut query = sqlx::query(sqlx::AssertSqlSafe(explain));
+    for p in &params {
+        query = query.bind(p.clone());
+    }
+    query
+        .fetch_all(db)
+        .await
+        .expect("explain")
+        .iter()
+        .map(|r| sqlx::Row::get::<String, _>(r, "detail"))
+        .collect()
+}
+
+/// The `grid_rows_by_*` index a plan SEARCHes `grid_rows` with.
+fn searched_index(plan: &[String]) -> Option<&str> {
+    plan.iter()
+        .filter(|d| d.starts_with("SEARCH grid_rows USING"))
+        .find_map(|d| d.split("INDEX ").nth(1)?.split_whitespace().next())
+        .filter(|name| name.starts_with("grid_rows_by_"))
 }
 
 /// The problems banner and table read the index's `problems` through the

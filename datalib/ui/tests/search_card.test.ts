@@ -2,25 +2,28 @@ import { describe, expect, it } from "vitest";
 import { freeText, markWords, pickedSource, searchTitle, setSource } from "../src/cards/search";
 
 describe("the picked source, as the query says it", () => {
-  it("is the one source_id filter, typed or clicked", () => {
-    expect(pickedSource("risa source_id:slack")).toBe("slack");
-    expect(pickedSource('source_id:"tng email"')).toBe("tng email");
+  it("is the one source filter, typed or clicked", () => {
+    expect(pickedSource("risa source:slack")).toBe("slack");
+    expect(pickedSource('source:"tng email"')).toBe("tng email");
     expect(pickedSource("risa")).toBeNull();
   });
 
+  /** A saved search or a link from before `source:` says `source_id:`. */
+  it("reads and replaces the older source_id spelling", () => {
+    expect(pickedSource("risa source_id:slack")).toBe("slack");
+    expect(pickedSource("source_id:slack source:notion")).toBeNull();
+    expect(setSource("risa source_id:slack", "notion")).toBe("risa source:notion");
+  });
+
   it("is none when the query names several, or only excludes one", () => {
-    expect(pickedSource("source_id:slack source_id:tng_email")).toBeNull();
-    expect(pickedSource("-source_id:slack")).toBeNull();
+    expect(pickedSource("source:slack source:tng_email")).toBeNull();
+    expect(pickedSource("-source:slack")).toBeNull();
   });
 
   it("replaces every source filter and leaves the rest of the query", () => {
-    expect(setSource("source_id:slack risa source_id:tng_email", "notion")).toBe(
-      "risa source_id:notion",
-    );
-    expect(setSource("risa source_id:slack -source_id:garmin", null)).toBe(
-      "risa -source_id:garmin",
-    );
-    expect(setSource("", "slack")).toBe("source_id:slack");
+    expect(setSource("source:slack risa source:tng_email", "notion")).toBe("risa source:notion");
+    expect(setSource("risa source:slack -source:garmin", null)).toBe("risa -source:garmin");
+    expect(setSource("", "slack")).toBe("source:slack");
   });
 });
 

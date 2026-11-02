@@ -99,7 +99,7 @@ async fn matching_documents_follows_the_structured_terms() {
     }
 
     let only = repo
-        .matching_documents(&parse_query(&format!("source_id:{source}")))
+        .matching_documents(&parse_query(&format!("source:{source}")))
         .await
         .expect("match one source");
     assert!(!only.is_empty());
@@ -107,7 +107,7 @@ async fn matching_documents_follows_the_structured_terms() {
         assert_eq!(
             only.contains(&d.markdown_uuid),
             d.source_id == source,
-            "{} under source_id:{source}",
+            "{} under source:{source}",
             d.markdown_uuid
         );
     }

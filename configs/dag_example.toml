@@ -52,7 +52,8 @@
 # `--binary-dir DIR` only to point at binaries staged somewhere else.)
 #
 # data_root defaults to the directory this file lives in; set it
-# explicitly for a real run.
+# explicitly for a real run. A relative one is taken from the directory
+# `datalib-dag` is run in.
 data_root = "~/tmp/dr-dag"
 
 # The lowest level of datalib's own log lines every process of this

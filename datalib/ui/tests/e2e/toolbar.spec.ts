@@ -75,7 +75,7 @@ test.describe("toolbar", () => {
     );
     await expect(card.getByTestId("search-input")).toHaveAttribute(
       "data-query",
-      new RegExp(`source_id:${group}`),
+      new RegExp(`source:${group}`),
     );
     await card.getByRole("tab", { name: "Sync" }).click();
     await expect(card.locator(`.sd-section[data-step^="${group}/"]`).first()).toBeVisible();

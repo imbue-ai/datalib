@@ -182,7 +182,7 @@ export function entityMenu(uri: string, name: string): EntityMenuEntry[] {
 /** The search that lists a group's documents, as its Browse does. */
 export function browseQuery(uri: string): string | null {
   const e = entityFromUri(uri);
-  return e?.kind === "group" ? `source_id:${e.id} is:document` : null;
+  return e?.kind === "group" ? `source:${e.id} is:document` : null;
 }
 
 /** A group or step chip for a grid cell, drawn from what is known now. */

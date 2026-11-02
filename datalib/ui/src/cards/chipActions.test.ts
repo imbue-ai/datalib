@@ -92,13 +92,13 @@ describe("runChipAction", () => {
     await runChipAction("browse", SLACK, host({ search }));
     await runChipAction("search", RIKER, host({ search }));
     expect(search.mock.calls).toEqual([
-      ["source_id:slack is:document", "replace"],
+      ["source:slack is:document", "replace"],
       ["with:email:riker@enterprise.org", "narrow"],
     ]);
 
     const h = host();
     await runChipAction("browse", SLACK, h);
-    expect(h.openCard).toHaveBeenCalledWith(searchSource("source_id:slack is:document"));
+    expect(h.openCard).toHaveBeenCalledWith(searchSource("source:slack is:document"));
   });
 
   /** "Everything with" on a linked handle searched that one handle, so it

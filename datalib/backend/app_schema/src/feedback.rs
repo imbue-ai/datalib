@@ -175,7 +175,7 @@ pub struct FeedbackSurfacePageHeader {
     pub entity_uuid: String,
 }
 
-/// Right-click on one of the filter-bar chips (e.g. `source_id:claude`).
+/// Right-click on one of the filter-bar chips (e.g. `source:claude`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeedbackSurfaceFilterChip {
     /// Chip key (field name).

@@ -206,10 +206,15 @@ pub struct GridRow {
     /// resolves through.
     ///
     /// `source_id` is derived from it at index time: the source the row is
-    /// filed under, which the `source_id:` filter matches
+    /// filed under, which the `source:` filter matches
     /// (`GridRow::derived_source_id`).
     #[col(sql = "VARCHAR(512)")]
-    #[derived(name = "source_id", sql = "VARCHAR(96)", search)]
+    #[derived(
+        name = "source_id",
+        sql = "VARCHAR(96)",
+        search = "source",
+        alias = "source_id"
+    )]
     pub qmd_path: Option<String>,
     /// Canonical link back to the provider's own web UI. Null for providers
     /// with no stable public link.

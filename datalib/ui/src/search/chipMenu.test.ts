@@ -33,9 +33,9 @@ describe("a chip's menu in the search field", () => {
   });
 
   it("excludes with a leading dash, and includes by taking it off", () => {
-    const q = "is:document source_id:slack -step:slack/ingest";
+    const q = "is:document source:slack -step:slack/ingest";
     const [, plain, negated] = words(q);
     expect(toggleNegate(plain)).toEqual({ from: 12, to: 12, insert: "-" });
-    expect(toggleNegate(negated)).toEqual({ from: 28, to: 29, insert: "" });
+    expect(toggleNegate(negated)).toEqual({ from: 25, to: 26, insert: "" });
   });
 });

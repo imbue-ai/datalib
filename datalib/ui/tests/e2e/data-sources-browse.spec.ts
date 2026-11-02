@@ -101,10 +101,10 @@ test.afterEach(async ({ page }) => {
 test("a source's row opens that source, with its type's columns", async ({ page }) => {
   test.setTimeout(120_000);
   await openManage(page);
-  await browse(page, "slack", "source_id:slack is:document");
+  await browse(page, "slack", "source:slack is:document");
 
   // The browse is a card of its own, on that source's query.
-  await expect(cardOf(page, "source_id:slack")).toBeVisible();
+  await expect(cardOf(page, "source:slack")).toBeVisible();
 
   // The card is named for what it holds, not for its query, and keeps
   // that name while the person searches inside it (checked below).
@@ -141,7 +141,7 @@ test("a source's row opens that source, with its type's columns", async ({ page 
 
   // The messages are one chip-delete away: drop `is:document` and the
   // Kind column earns its place back, with the thread's rows under it.
-  await searchAndSettle(page, "source_id:slack");
+  await searchAndSettle(page, "source:slack");
   await expect
     .poll(async () => {
       const kinds = await columnValues(page, "kind");
@@ -163,7 +163,7 @@ test("a source's row opens that source, with its type's columns", async ({ page 
 test("a different type gets a different column set", async ({ page }) => {
   test.setTimeout(120_000);
   await openManage(page);
-  await browse(page, "github", "source_id:github is:document");
+  await browse(page, "github", "source:github is:document");
 
   // GitHub's preset is an author and the repo the row belongs to, and
   // no channel — the opposite pair to Slack's, from the same fixture.
@@ -172,7 +172,7 @@ test("a different type gets a different column set", async ({ page }) => {
   // trims it. A preset is a ceiling, not a fixed set — and the two PRs
   // share an author too, so the column shows once the review comments
   // are back in the grid.
-  await searchAndSettle(page, "source_id:github");
+  await searchAndSettle(page, "source:github");
   await expect(searchHeader(page, "author_ref")).toBeVisible();
   await expect(searchHeader(page, "channel")).toHaveCount(0);
 });
@@ -210,8 +210,8 @@ test("a step's row opens its source, as its group's row does", async ({ page }) 
   await expect(step).toBeEnabled();
   await step.click();
   await expect(page.locator(SEARCH)).toBeVisible({ timeout: 30_000 });
-  await expect(page.locator(SEARCH)).toHaveAttribute("data-query", "source_id:slack is:document");
-  await expect(cardOf(page, "source_id:slack")).toBeVisible();
+  await expect(page.locator(SEARCH)).toHaveAttribute("data-query", "source:slack is:document");
+  await expect(cardOf(page, "source:slack")).toBeVisible();
 });
 
 /// A source with no render step has no rows at all — not even the

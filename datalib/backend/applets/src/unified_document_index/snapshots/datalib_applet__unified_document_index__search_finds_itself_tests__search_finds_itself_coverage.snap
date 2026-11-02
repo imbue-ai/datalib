@@ -91,7 +91,7 @@ phone:
 project:
   checked: beeper 19, claude-api 16, claude-code 29, codex 40, facebook 42, github 10, gitlab 9, google-takeout 63, sms-backup-restore 14
   never: chatgpt-api, datalib, garmin, google-drive, linkedin, notion, ship-air, signal, slack, slack-diff, tng_calendar, tng_contacts, tng_contacts-diff, tng_email, tng_pdfs, whatsapp, yolink
-source_id:
+source:
   checked: beeper 25, chatgpt-api 33, claude-api 70, claude-code 29, codex 40, datalib 251, facebook 71, garmin 16, github 10, gitlab 9, google-drive 7, google-takeout 75, linkedin 14, notion 8, ship-air 3, signal 15, slack 35, slack-diff 13, sms-backup-restore 14, tng_calendar 9, tng_contacts 9, tng_contacts-diff 5, tng_email 12, tng_pdfs 9, whatsapp 29, yolink 5
 subject:
   checked: beeper 25, chatgpt-api 33, claude-api 70, claude-code 29, codex 40, datalib 251, facebook 71, garmin 16, github 10, gitlab 9, google-drive 7, google-takeout 75, linkedin 14, notion 8, ship-air 3, signal 15, slack 35, slack-diff 13, sms-backup-restore 14, tng_calendar 9, tng_contacts 9, tng_contacts-diff 5, tng_email 12, tng_pdfs 9, whatsapp 29, yolink 5

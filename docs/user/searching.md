@@ -50,10 +50,10 @@ until then free text finds nothing there and the answer says why.
 | `before:2026-10-01`, `after:2026-10-01T09:00` | rows last active before or after then — a thread's last message, a page's last edit, an event's start; a time with no zone is your machine's |
 | `is:document` / `-is:document` | one row per document (a thread, a conversation, a page) / only the rows inside documents |
 
-The keys for what a row is and where it lives are `source_id:` (a
-source by its id in the config), `kind:` (`Email`, `Slack Message`, …),
-`subject:` (also `conversation:`), `channel:`, `account:`, `project:`,
-`convo:` (a document by its id, and every row in it), `contact:` and
+The keys for what a row is and where it lives are `source:` (a
+source by its id in the config; also `source_id:`), `kind:` (`Email`,
+`Slack Message`, …), `subject:` (also `conversation:`), `channel:`,
+`account:`, `project:`, `convo:` (a document by its id, and every row in it), `contact:` and
 `email:` (an address book's columns), and the id of any other column the
 grid shows (`org_name:`, `created_at:`, …). These match the whole value
 as stored, case and all: `kind:Email`, not `kind:email`.

@@ -15,10 +15,10 @@ test("a key, then a source picked from its values, is drawn as the source's chip
   await typeInto(field(page), "is:document");
   await field(page).press("End");
   await field(page).pressSequentially(" sou");
-  await expect(menu(page).getByText("source_id:", { exact: true })).toBeVisible();
+  await expect(menu(page).getByText("source:", { exact: true })).toBeVisible();
   // Tab takes the first suggestion, and taking a key asks for its values.
   await field(page).press("Tab");
-  await expect(field(page)).toHaveAttribute("data-query", "is:document source_id:");
+  await expect(field(page)).toHaveAttribute("data-query", "is:document source:");
   const slack = menu(page).locator('a.chip[data-entity="datalib:group/slack"]');
   await expect(slack).toBeVisible();
 
@@ -29,14 +29,14 @@ test("a key, then a source picked from its values, is drawn as the source's chip
     "datalib:group/slack",
   );
   await field(page).press("Tab");
-  await expect(field(page)).toHaveAttribute("data-query", "is:document source_id:slack ");
+  await expect(field(page)).toHaveAttribute("data-query", "is:document source:slack ");
   await expect(field(page).locator('a.chip[data-entity="datalib:group/slack"]')).toBeVisible();
 
   // Backspace at the chip's end takes it whole; the key stays.
   await field(page).press("End");
   await field(page).press("Backspace");
   await field(page).press("Backspace");
-  await expect(field(page)).toHaveAttribute("data-query", "is:document source_id:");
+  await expect(field(page)).toHaveAttribute("data-query", "is:document source:");
 });
 
 /// Enter with nothing chosen searches what was typed: a value taken by
@@ -45,10 +45,10 @@ test("a key, then a source picked from its values, is drawn as the source's chip
 test("Enter with no suggestion chosen leaves the typed value as it is", async ({ page }) => {
   await page.goto(GRID);
   await typeInto(field(page), "");
-  await field(page).pressSequentially("source_id:sla");
+  await field(page).pressSequentially("source:sla");
   await expect(menu(page)).toBeVisible();
   await field(page).press("Enter");
-  await expect(field(page)).toHaveAttribute("data-query", "source_id:sla");
+  await expect(field(page)).toHaveAttribute("data-query", "source:sla");
   await expect(menu(page)).toBeHidden();
 });
 
@@ -58,11 +58,11 @@ const slackChip = (page: Page) => field(page).locator('a.chip[data-entity="datal
 /// typed stays text until the cursor leaves it.
 test("a click selects a chip, and typing replaces it", async ({ page }) => {
   await page.goto(GRID);
-  await typeInto(field(page), "is:document source_id:slack ");
+  await typeInto(field(page), "is:document source:slack ");
   await slackChip(page).click();
   await expect(slackChip(page)).toHaveClass(/cm-chip-selected/);
   await page.keyboard.type("gith");
-  await expect(field(page)).toHaveAttribute("data-query", "is:document source_id:gith ");
+  await expect(field(page)).toHaveAttribute("data-query", "is:document source:gith ");
   await expect(slackChip(page)).toHaveCount(0);
 });
 
@@ -70,21 +70,21 @@ test("a click selects a chip, and typing replaces it", async ({ page }) => {
 /// key's values offered.
 test("a double-click opens a chip to be edited", async ({ page }) => {
   await page.goto(GRID);
-  await typeInto(field(page), "is:document source_id:slack ");
+  await typeInto(field(page), "is:document source:slack ");
   await slackChip(page).dblclick();
   await expect(slackChip(page)).toHaveCount(0);
-  await expect(field(page)).toContainText("source_id:slack");
+  await expect(field(page)).toContainText("source:slack");
   await expect(menu(page)).toBeVisible();
   // The value is selected, so what is typed replaces it.
   await page.keyboard.type("x");
-  await expect(field(page)).toHaveAttribute("data-query", "is:document source_id:x ");
+  await expect(field(page)).toHaveAttribute("data-query", "is:document source:x ");
 });
 
 /// A right-click is the chip's menu: the field's entries, then the chip's
 /// own. Exclude adds the dash and keeps the chip.
 test("a chip's menu excludes what it names, and opens it as text", async ({ page }) => {
   await page.goto(GRID);
-  await typeInto(field(page), "is:document source_id:slack ");
+  await typeInto(field(page), "is:document source:slack ");
   await slackChip(page).click({ button: "right" });
   const chipMenu = shownCards(page).locator(".cm-chip-menu");
   await expect(chipMenu.getByRole("menuitem")).toContainText([
@@ -93,12 +93,12 @@ test("a chip's menu excludes what it names, and opens it as text", async ({ page
     /^Copy /,
   ]);
   await chipMenu.getByRole("menuitem", { name: /^Exclude / }).click();
-  await expect(field(page)).toHaveAttribute("data-query", "is:document -source_id:slack ");
+  await expect(field(page)).toHaveAttribute("data-query", "is:document -source:slack ");
   await expect(slackChip(page)).toBeVisible();
 
   await slackChip(page).click({ button: "right" });
   await chipMenu.getByRole("menuitem", { name: /^Include / }).click();
-  await expect(field(page)).toHaveAttribute("data-query", "is:document source_id:slack ");
+  await expect(field(page)).toHaveAttribute("data-query", "is:document source:slack ");
   await slackChip(page).click({ button: "right" });
   await chipMenu.getByRole("menuitem", { name: "Edit as text" }).click();
   await expect(slackChip(page)).toHaveCount(0);
@@ -140,11 +140,11 @@ test("a Tab while the values are on their way takes the first of them", async ({
     await route.continue();
   });
   await page.goto(GRID);
-  await typeInto(field(page), "source_id:");
+  await typeInto(field(page), "source:");
   await expect(menu(page).locator('a.chip[data-entity="datalib:group/slack"]')).toBeVisible();
   await field(page).pressSequentially("slac");
   await field(page).press("Tab");
-  await expect(field(page)).toHaveAttribute("data-query", "source_id:slack ");
+  await expect(field(page)).toHaveAttribute("data-query", "source:slack ");
 });
 
 /// A date menu's search, `after:… before:…`, was plain text in the field,

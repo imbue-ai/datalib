@@ -99,7 +99,7 @@ embeddings, computed by the <code>unified_document_index/embedding_map</code>
 step. Each sync starts from the last layout, so documents already on
 the map stay where they were as new ones arrive; <b>Lay out afresh</b>
 throws the old layout away.</p>
-<p>The search bar takes the grid's grammar (<code>source_id:slack</code>,
+<p>The search bar takes the grid's grammar (<code>source:slack</code>,
 <code>after:2025-01-01</code>, free text): what it matches stays in
 colour, the rest greys out. Free text asks qmd, so it lights up the
 best few hundred matches rather than every mention. <b>Open in grid</b>
@@ -582,7 +582,7 @@ onBeforeUnmount(() => {
         v-model="query"
         class="map-search"
         type="search"
-        placeholder="Filter: free text, source_id:…, after:2025-01-01"
+        placeholder="Filter: free text, source:…, after:2025-01-01"
         spellcheck="false"
         @keydown.enter="apply(query)"
       />
