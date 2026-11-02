@@ -152,7 +152,7 @@ profraws lived in the sandbox and were gone by then.
 3. **The LLVM tools match rustc's LLVM.** A profraw's format follows
    the compiler's LLVM version. The wrapper uses the `llvm-profdata`
    and `llvm-cov` shipped in the rules_rust toolchain repo (rustc
-   1.98.0 ships LLVM 22; Xcode's is Apple LLVM 21), and passes them to
+   1.99.1 ships LLVM 23; Xcode's is Apple LLVM 21), and passes them to
    the test as `--test_env=LLVM_PROFDATA --test_env=LLVM_COV`, which
    bazel's C++ collection script needs or it aborts with
    `LLVM_PROFDATA: unbound variable`. Set both variables yourself to
@@ -203,7 +203,7 @@ subprocess, the steps are:
 
 Not available on the pinned compiler. The report has line and function
 counts only; no `BRDA` records. Rust's branch coverage is
-`-Zcoverage-options=branch`, and stable rustc 1.98.0 refuses both
+`-Zcoverage-options=branch`, and stable rustc 1.99.1 refuses both
 spellings: `-Ccoverage-options` is an unknown
 codegen option, and `-Z` is only accepted on nightly. With
 `RUSTC_BOOTSTRAP=1`, which unlocks nightly flags on a stable compiler,

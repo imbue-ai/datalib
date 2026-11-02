@@ -4,8 +4,8 @@ Version policy: 7-day burn-in. We avoid versions released in the last 7
 days because hot releases are where regressions hide. When bumping a
 bazel_dep or a toolchain, check the upstream release date and prefer
 the newest version that is at least 7 days old. Today's working
-reference (2026-09-25): rules_python 2.3.2, rules_rust 0.74.0,
-Rust 1.98.0, Bazel 9.2.0. Keep rules_rust new enough to list RUST_VERSION
+reference (2026-11-02): rules_python 2.4.5, rules_rust 0.75.0,
+Rust 1.99.1, Bazel 9.3.1. Keep rules_rust new enough to list RUST_VERSION
 in its known_shas.bzl: without a checksum the toolchain download skips
 Bazel's repository cache, so every new worktree fetches it again.
 
@@ -27,10 +27,14 @@ module(
 )
 
 # Apple's C/C++ toolchain, so a mac builds the doltlite amalgamation with
-# the Xcode clang it has rather than Bazel's autodetected one. Already in
-# the graph at this version through rules_cc; declared first so its
-# toolchains are registered ahead of that autodetected one.
-bazel_dep(name = "apple_support", version = "2.3.0")
+# the Xcode clang it has rather than Bazel's autodetected one. rules_cc
+# and rules_rust pull it in too; declared first so its toolchains are
+# registered ahead of that autodetected one.
+#
+# Not 2.10.x: its archiver wrapper overwrites an archive that cc-rs
+# appends to in batches, so ring's C objects vanish and the link fails
+# (bazelbuild/rules_rust#4336).
+bazel_dep(name = "apple_support", version = "2.11.0")
 
 # Rules Shell — provides sh_binary etc. (split out of bazel core in Bazel 8/9).
 bazel_dep(name = "rules_shell", version = "0.8.0")
@@ -38,7 +42,7 @@ bazel_dep(name = "rules_shell", version = "0.8.0")
 # Rules CC — needed for the cc_library that compiles doltlite's
 # amalgamation. Pulled in transitively by rules_rust today but worth
 # declaring explicitly since our own BUILD files use it directly.
-bazel_dep(name = "rules_cc", version = "0.2.22")
+bazel_dep(name = "rules_cc", version = "0.2.27")
 bazel_dep(name = "platforms", version = "1.1.0")
 
 # Bazel Skylib — for `build_test`, which compiles a target without
@@ -51,7 +55,7 @@ bazel_dep(name = "platforms", version = "1.1.0")
 # Exempt from the 7-day burn-in above: 1.9.0 is what the resolved
 # dependency graph already carried transitively, so declaring it changes
 # what the root module can *see*, not what the build uses.
-bazel_dep(name = "bazel_skylib", version = "1.9.0")
+bazel_dep(name = "bazel_skylib", version = "1.9.2")
 
 # doltlite v0.51.3: the amalgamation, a single-file `doltlite.c` with the
 # SQLite core, the prolly-tree engine and the `dolt_*` SQL surface, built
@@ -138,7 +142,7 @@ filegroup(
 # (scripts/third_party_notices.sh). A prebuilt release binary, pinned by
 # version and sha256; //third-party/cargo-about picks the one for the
 # host. The Linux builds are static musl, so they run on any libc.
-CARGO_ABOUT_VERSION = "0.9.2"
+CARGO_ABOUT_VERSION = "0.9.3"
 
 [
     http_archive(
@@ -152,9 +156,9 @@ CARGO_ABOUT_VERSION = "0.9.2"
         build_file_content = 'exports_files(["cargo-about"])',
     )
     for triple, sha in [
-        ("aarch64-apple-darwin", "ae72f0df0c399a1e96336f696fa55b1b28679fd725632eba8cf8e4568467cc3e"),
-        ("x86_64-unknown-linux-musl", "9099a59e820c38a68b9d65f300662a567d56562f9a10f6aa4c7e86c17c2566af"),
-        ("aarch64-unknown-linux-musl", "af5169282fb6f84e13471493f405437e43ac517744c9ae12fbe2cdf0a6f0e5a8"),
+        ("aarch64-apple-darwin", "45520df8680978a6e7c4023ace0e3f311c73efc208cd68e5a7f4ed4822fa0349"),
+        ("x86_64-unknown-linux-musl", "3ad1e94ea1e63d69d1961f4fb15ccbbe9575d906111f96d2cb4dce6df48f71b4"),
+        ("aarch64-unknown-linux-musl", "eb4d9ff6ebd2518152a8308729431a04b3836e71d2bd5ead7aea69f91a71162e"),
     ]
 ]
 
@@ -218,7 +222,7 @@ LIGHTROOM_DB_DIFF_COMMIT = "733187a5216ccf631a92969a8fc147a4885353df"
 # downloaded whenever `//...` was analysed, needed or not.
 
 # Rules Python — pinned to a recent stable. uv.lock ingestion via pip.parse.
-bazel_dep(name = "rules_python", version = "2.3.2")
+bazel_dep(name = "rules_python", version = "2.4.5")
 
 PYTHON_VERSION = "3.13"
 
@@ -250,7 +254,7 @@ use_repo(pip, "py_pip")
 
 # Rust — rules_rust, with crate_universe resolving the third-party crates
 # that datalib/backend/Cargo.toml lists.
-bazel_dep(name = "rules_rust", version = "0.74.0")
+bazel_dep(name = "rules_rust", version = "0.75.0")
 
 # Proto / prost — first introduced for `datalib-signal-backup`, which
 # parses Signal-Android's backup format. We use the Bazel-native prost
@@ -278,16 +282,16 @@ bazel_dep(name = "rules_rust", version = "0.74.0")
 #     crate targets to use) lives at `//tools/prost_toolchain` so it
 #     can reach `@datalib_crates//:prost` etc.
 bazel_dep(name = "rules_proto", version = "7.1.0")
-bazel_dep(name = "protobuf", version = "36.0.bcr.1", repo_name = "com_google_protobuf")
+bazel_dep(name = "protobuf", version = "36.2", repo_name = "com_google_protobuf")
 bazel_dep(name = "toolchains_protoc", version = "0.6.1")
-bazel_dep(name = "rules_rust_prost", version = "0.74.0")
+bazel_dep(name = "rules_rust_prost", version = "0.75.0")
 
 protoc = use_extension("@toolchains_protoc//protoc:extensions.bzl", "protoc")
 protoc.toolchain(
     # Pin a specific prebuilt-protoc release. Bumped on the same 7-day
     # burn-in cadence as everything else in this file.
     google_protobuf = "com_google_protobuf",
-    version = "v36.0",
+    version = "v36.2",
 )
 
 register_toolchains(
@@ -296,7 +300,7 @@ register_toolchains(
 
 RUST_EDITION = "2021"
 
-RUST_VERSION = "1.98.0"
+RUST_VERSION = "1.99.1"
 
 rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
 rust.toolchain(
@@ -418,7 +422,7 @@ register_toolchains("@rust_toolchains//:all")
 # constraint the rust musl toolchains use onto the cc toolchains, so
 # only an explicit `--config=musl-*` build resolves them; host builds
 # keep the autodetected host cc toolchain.
-bazel_dep(name = "toolchains_musl", version = "0.1.27.bcr.1")
+bazel_dep(name = "toolchains_musl", version = "0.1.29")
 
 toolchains_musl = use_extension("@toolchains_musl//:toolchains_musl.bzl", "toolchains_musl")
 toolchains_musl.config(
@@ -537,7 +541,7 @@ crate.annotation(
 # bundle (consumed by datalib_http via rust-embed) is produced by
 # Bazel without any host pnpm/Node. Mirrors the install snippet
 # published with aspect_rules_js v3.1.2 (released 2026-05-13).
-bazel_dep(name = "aspect_rules_js", version = "3.4.1")
+bazel_dep(name = "aspect_rules_js", version = "3.5.2")
 # Pulled in transitively by aspect_rules_js, but we use it directly
 # via `copy_to_bin` to stage Vite inputs into bazel-out.
 bazel_dep(name = "aspect_bazel_lib", version = "2.22.5")
@@ -548,7 +552,7 @@ bazel_dep(name = "aspect_bazel_lib", version = "2.22.5")
 # it stages a `DATALIB_RUNTIME_DIR` tree (`node/bin/node` + the qmd
 # package tree) so `datalib_core::node_runtime::bundled_command` resolves,
 # which is what takes `npx` out of the build.
-bazel_dep(name = "rules_nodejs", version = "6.7.5")
+bazel_dep(name = "rules_nodejs", version = "6.7.7")
 
 # NODE_VERSION is the one Node pin in the repo, and it is read by
 # //tools:version_pins_test. It used to be two: this toolchain's
@@ -566,7 +570,7 @@ bazel_dep(name = "rules_nodejs", version = "6.7.5")
 # hashes. Bumping it is this one line.
 #
 # Must stay >= 22: qmd requires it (latchkey needs only >= 20).
-NODE_VERSION = "22.23.1"
+NODE_VERSION = "22.23.4"
 
 node = use_extension("@rules_nodejs//nodejs:extensions.bzl", "node")
 node.toolchain(node_version = NODE_VERSION)

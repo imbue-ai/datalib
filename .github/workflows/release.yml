@@ -469,7 +469,7 @@ jobs:
       # says rust-version = "1.83"). Plain rustup, no third-party action;
       # the runner image carries rustup, with the official installer as
       # fallback in case a future image drops it.
-      - name: Install Rust (1.98.0, the version Bazel builds with)
+      - name: Install Rust (1.99.1, the version Bazel builds with)
         run: |
           set -euo pipefail
           if ! command -v rustup >/dev/null 2>&1; then
@@ -478,8 +478,8 @@ jobs:
               echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
               export PATH="$HOME/.cargo/bin:$PATH"
           fi
-          rustup toolchain install 1.98.0 --profile minimal --no-self-update
-          rustup default 1.98.0
+          rustup toolchain install 1.99.1 --profile minimal --no-self-update
+          rustup default 1.99.1
           rustc --version
 
       # scripts/ensure_pnpm.sh bootstraps pnpm via corepack, but corepack

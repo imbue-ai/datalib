@@ -83,6 +83,13 @@ build:macos --action_env=LANG=C.UTF-8
 build:macos --host_action_env=LANG=C.UTF-8
 test:macos --test_env=LANG=C.UTF-8
 
+# rules_rust hands rustc the cc toolchain's deployment target, which is
+# Bazel's default of 10.11 unless set; rustc refuses anything below 10.12
+# and warns on every crate. 11.0 is the oldest macOS on Apple Silicon,
+# the only mac a release ships for.
+build:macos --macos_minimum_os=11.0
+build:macos --host_macos_minimum_os=11.0
+
 # There used to be a `--sandbox_add_mount_pair=$(HOME)/.cache/qmd/models`
 # here, so the qmd-indexer genrule could read the host's ~2 GB GGUF cache
 # from inside the sandbox instead of re-downloading it. Nothing in the

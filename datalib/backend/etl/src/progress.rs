@@ -136,7 +136,7 @@ impl RunBar {
     pub fn expect_at_least(&self, at_least: u64) {
         if self
             .announced
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |cur| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |cur| {
                 (at_least > cur).then_some(at_least)
             })
             .is_ok()
