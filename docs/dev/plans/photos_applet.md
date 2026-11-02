@@ -34,8 +34,8 @@ Words used throughout:
 
 ## 1. What the example catalogs show
 
-Read from `thadd3us/lightroom_db_diff` at `234e972f` (the "Preview and
-Smart Previews" commit), catalog 03. Everything in this section was
+Read from `thadd3us/lightroom_db_diff` at `d8d1364` (catalog 03 with its
+previews and `previews.db`). Everything in this section was
 checked against those files; what was not is said.
 
 **One photo is one `Adobe_images` row**, keyed by `id_global`, a UUID.
@@ -67,14 +67,21 @@ size, each JPEG behind a short `AgHg` header naming its level. In both,
 seven photos).
 
 **Which preview is current is said by `previews.db`**, beside the
-previews: `ImageCacheEntry(imageId → uuid, digest)`, with
-`PyramidLevel(uuid, digest, level, longDimension, width, height)` for
-the sizes. Catalog 03's folder holds up to three digests for one photo,
-so the files alone cannot say which is the edited one. That schema is
-read from the 2020 `previews.db`; catalog 03's own `previews.db` was
-not committed (the repo's `.gitignore` excludes it), so **that the new
-format keeps the same tables is not verified**. It is the first thing
-to check (§8).
+previews. `ImageCacheEntry(imageId, uuid, digest)` gives one
+`(uuid, digest)` per photo, `imageId` being `Adobe_images.id_local`;
+`PyramidLevel(uuid, digest, level, longDimension, width, height,
+fileSize)` lists that render's sizes. Catalog 03's folder holds up to
+five digests for one photo (older renders Lightroom has not yet thrown
+away), so the files alone cannot say which is the edited one. The tables
+are the 2020 ones plus `fileSize`. All 19 sizes `ImageCacheEntry` names
+current are on disk, each exactly its `fileSize`, and every file in the
+folder has a `PyramidLevel` row.
+
+**The current preview can be smaller than the original.** Lightroom
+renders a size when something asks for it: photo 87's current render
+goes up to 756 px of a 1200 px original, while an older render of the
+same photo has a 1200 px level. `Pyramid.quality` (`thumbnail`,
+`smallRender`, `standard`, `final`) says how far a render got.
 
 Not in any example catalog: a video, a virtual copy, a RAW original, a
 photo with no preview. Each needs a catalog that has one before the code
@@ -239,7 +246,7 @@ the gateway adds, and any whose `Host` is not its own loopback port
 | --- | --- |
 | `GET /photo/<uuid>` | the photo's `photos` row as JSON: everything the card draws |
 | `GET /photo/<uuid>/image?size=thumb` | the smallest preview at least 320 px on its long edge |
-| `GET /photo/<uuid>/image?size=full` | the largest preview there is |
+| `GET /photo/<uuid>/image?size=full` | the largest size of the current preview, which may be smaller than the original (§1); the card says how big it is |
 | `GET /photo/<uuid>/original` | the original file, with range requests, so a video can play and seek |
 
 **Which preview**: open `previews.db` read-only, read
@@ -346,9 +353,9 @@ built, turns a click into `place:<cell>` at the zoom it is drawn at.
 
 ## 8. Order of work
 
-1. **Get catalog 03's `previews.db` committed** to `lightroom_db_diff`
-   (`git add -f`, past its `.gitignore`), and check its tables against
-   §1. Pin the commit in `MODULE.bazel` as a new set of `http_file`s
+1. **Pin catalog 03 with its previews.** `lightroom_db_diff` at
+   `d8d1364` has them (§1). Fetch the catalog, `previews.db` and the
+   previews folder as a new set of `http_file`s in `MODULE.bazel`,
    beside the four catalogs the mirror test already pins, so that test
    is not moved.
 2. **A document with no file** in `etl/render`, with its tests: the
@@ -381,9 +388,15 @@ blob store, so a library on an unplugged drive still shows thumbnails
 - [ ] **Time zone by position.** The usual boundary map
   (timezone-boundary-builder) is ODbL, which is not on the allow list.
   Without it, rule 3 goes and rule 4 covers more photos.
-- [ ] **Reading `previews.db` while Lightroom is open.** The catalog is
-  WAL; if `previews.db` is too, a read-only open may need the `-shm`
-  file. To try against a running Lightroom before step 4 is merged.
+- [ ] **Reading `previews.db` while Lightroom is open.** The committed
+  copy is in rollback-journal mode, not WAL, so a read-only open needs no
+  `-shm` file; whether Lightroom keeps it that way while running, and
+  how long it holds a write lock, is to try against a running Lightroom
+  before step 4 is merged.
+- [ ] **"Full size" smaller than the original.** Serve the current
+  preview's largest size (this plan: it is the edited picture), or the
+  original when it is larger and a browser can show it (bigger, but
+  without the person's edits)?
 - [ ] **Virtual copies** share one original and so one file uuid; they
   should get their own `ImageCacheEntry` rows. Unverified: no example
   catalog has one.
