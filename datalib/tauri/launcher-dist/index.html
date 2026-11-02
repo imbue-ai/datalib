@@ -292,6 +292,10 @@
         font-weight: 600;
         white-space: nowrap;
       }
+      .tag.calm {
+        background: color-mix(in srgb, var(--accent) 14%, transparent);
+        color: var(--accent);
+      }
       .moved {
         display: flex;
         align-items: flex-start;
@@ -392,6 +396,23 @@
       .where .what code {
         color: var(--fg);
       }
+      .pop label.protect {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        font-size: 12px;
+        font-weight: normal;
+        line-height: 1.5;
+        color: var(--muted);
+      }
+      .pop label.protect strong {
+        color: var(--fg);
+      }
+      .pop .protect input {
+        width: auto;
+        height: auto;
+        margin: 3px 0 0;
+      }
       .where.bad .what {
         color: var(--warn-fg);
       }
@@ -414,12 +435,21 @@
             New library
           </button>
           <div class="pop" id="pop" role="dialog" aria-label="New library" hidden>
-            <label for="name">Name or path of folder</label>
+            <label for="name" id="name-label">Name or path of folder</label>
             <input id="name" autocomplete="off" spellcheck="false" />
             <div class="where" id="where">
               <span class="what" id="what"></span>
               <button class="link" id="choose">Create elsewhere…</button>
             </div>
+            <label class="protect" id="protect-row" hidden>
+              <input type="checkbox" id="protect" />
+              <span>
+                <strong>Keep it in a protected folder</strong>
+                <span class="tag calm">Experimental</span><br />
+                Only Datalib opens it. Terminal, AI agents and other apps have to ask you
+                first. Your latchkey sign-ins are copied in with it.
+              </span>
+            </label>
             <button class="btn primary" id="create">Create and open</button>
           </div>
         </div>
@@ -526,13 +556,19 @@
         name.className = "name";
         const strong = document.createElement("strong");
         strong.textContent = lib.name;
-        if (lib.legacy) {
+        const tags = [];
+        if (lib.legacy) tags.push(["tag", "Legacy location"]);
+        if (lib.protected) tags.push(["tag calm", "Protected"]);
+        if (tags.length) {
           const title = document.createElement("span");
           title.className = "title";
-          const tag = document.createElement("span");
-          tag.className = "tag";
-          tag.textContent = "Legacy location";
-          title.append(strong, tag);
+          title.append(strong);
+          for (const [cls, text] of tags) {
+            const tag = document.createElement("span");
+            tag.className = cls;
+            tag.textContent = text;
+            title.append(tag);
+          }
           name.append(title);
         } else {
           name.append(strong);
@@ -604,11 +640,14 @@
         const folder = document.createElement("button");
         folder.className = "folder";
         folder.innerHTML = FOLDER;
-        folder.title = "Open the folder in Finder";
+        folder.title = lib.protected
+          ? "Only Datalib opens the protected folder"
+          : "Open the folder in Finder";
         folder.setAttribute("aria-label", `Open ${lib.name}'s folder`);
-        // A folder that is gone has nothing to open; the button keeps its
-        // place so the columns line up.
-        folder.disabled = !lib.found;
+        // A folder that is gone has nothing to open, and Finder would
+        // have to be let into a protected one; the button keeps its place
+        // so the columns line up.
+        folder.disabled = !lib.found || lib.protected;
         folder.addEventListener("click", async () => {
           try {
             await invoke("launcher_open_folder", { path: lib.path });
@@ -625,14 +664,17 @@
       let resolved = null;
       async function resolveField() {
         const input = $("name").value;
+        const protect = $("protect").checked;
+        $("choose").hidden = protect;
+        $("name-label").textContent = protect ? "Name" : "Name or path of folder";
         let r = null;
         try {
-          r = await invoke("launcher_resolve", { input });
+          r = await invoke("launcher_resolve", { input, protect });
         } catch (e) {
           fail(e);
           return;
         }
-        if ($("name").value !== input) return; // typed on since
+        if ($("name").value !== input || $("protect").checked !== protect) return; // changed since
         resolved = r;
         const what = $("what");
         const where = $("where");
@@ -644,10 +686,16 @@
           return c;
         };
         let ok = false;
-        if (!r) {
-          what.append("Type a name, or a folder.");
+        if (!r && protect && input.trim()) {
+          what.append("A protected library takes a name, not a folder.");
+          where.classList.add("bad");
+        } else if (!r) {
+          what.append(protect ? "Type a name." : "Type a name, or a folder.");
         } else if (r.target === "new") {
-          what.append("Creates ", code(r.shown_path));
+          what.append(
+            protect ? "Creates the protected library " : "Creates ",
+            code(protect ? input.trim() : r.shown_path),
+          );
           ok = true;
         } else if (r.target === "library") {
           what.append(code(r.shown_path), " is already a library. ");
@@ -679,6 +727,7 @@
 
       $("new").addEventListener("click", () => setPopover($("pop").hidden));
       $("name").addEventListener("input", () => void resolveField());
+      $("protect").addEventListener("change", () => void resolveField());
       $("name").addEventListener("keydown", (e) => {
         if (e.key === "Enter" && !$("create").disabled) $("create").click();
         if (e.key === "Escape") setPopover(false);
@@ -695,7 +744,7 @@
         }
       });
       $("create").addEventListener("click", () =>
-        run("launcher_create", { input: $("name").value }),
+        run("launcher_create", { input: $("name").value, protect: $("protect").checked }),
       );
       document.addEventListener("mousedown", (e) => {
         if ($("pop").hidden) return;
@@ -732,6 +781,7 @@
         const name = $("name");
         if (!name.value || name.value === suggested) name.value = state.suggested_name;
         suggested = state.suggested_name;
+        $("protect-row").hidden = !state.protected_available;
         const move = state.move_from_documents;
         $("moved").hidden = !move;
         if (move) {

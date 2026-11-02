@@ -207,6 +207,9 @@ spctl --assess --type execute "$app_bundle"
 # Signed and notarized is not the same as runs: the bundled Node and
 # both JS trees have to start from inside the .app.
 "$here/check-app.sh" "$app_bundle"
+# macOS refuses to start a program whose signature cannot back its
+# entitlements (Datalib.entitlements), and says so only by killing it.
+"$app_bundle/Contents/MacOS/datalib-tauri" --version
 # Optimized, and stamped with the version this bundle claims: the tag's
 # in CI, `git describe` (what the stamp reads) in a local run.
 if [[ -n "${DATALIB_APP_VERSION:-}" ]]; then
