@@ -115,6 +115,7 @@ fn render_one(
         sections,
         edges: edges(event),
         contacts: Vec::new(),
+        photos: Vec::new(),
         problems,
     })
 }

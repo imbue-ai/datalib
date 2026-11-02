@@ -317,4 +317,16 @@ pub struct GridRow {
     /// terms are its indexed form, one row per term.
     #[col(sql = "TEXT")]
     pub supplied_terms: Option<String>,
+    /// The picture this row shows, as a name (`datalib:photo/<uuid>`):
+    /// what the grid draws a thumbnail from. Which server hands out the
+    /// bytes is decided when it is drawn, so moving them moves no row.
+    /// Null on a row with no picture of its own.
+    #[col(sql = "VARCHAR(160)")]
+    pub image: Option<String>,
+    /// Where the thing the row describes was, in degrees (WGS 84): a
+    /// photo's GPS fix. Null when the source does not say.
+    #[col(sql = "REAL")]
+    pub latitude: Option<f64>,
+    #[col(sql = "REAL")]
+    pub longitude: Option<f64>,
 }

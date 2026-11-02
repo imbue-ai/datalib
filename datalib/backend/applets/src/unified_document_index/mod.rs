@@ -1961,6 +1961,7 @@ mod tests {
             sections: Vec::new(),
             edges: Vec::new(),
             contacts: Vec::new(),
+            photos: Vec::new(),
             problems: Vec::new(),
         }
     }

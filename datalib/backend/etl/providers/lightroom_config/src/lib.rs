@@ -128,10 +128,26 @@ impl LightroomConfig {
     }
 }
 
-/// Params for the render step. `lightroom` is download-only for now (see
-/// the provider crate's `processor::plan_render`), so this is the shared
-/// bare envelope.
-pub type LightroomRenderConfig = datalib_source_common::BareRenderConfig;
+/// Params for the render step, which makes a grid row per photo and video
+/// (`datalib_etl_lightroom_render`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LightroomRenderConfig {
+    #[serde(default)]
+    pub common: datalib_source_common::RenderCommon,
+    /// The IANA zone (`Europe/Berlin`) a photo was taken in when its own
+    /// metadata records no offset, as most older cameras' does not.
+    /// Unset reads those photos' times as UTC, and says so on the
+    /// source's Manage row.
+    #[serde(default)]
+    pub capture_time_zone: Option<String>,
+    /// Where the catalog is now, when Lightroom's own record of it
+    /// (`Adobe_lastScannedCatalogPath`) is out of date: the catalog was
+    /// moved, or is read from another machine. Its previews are the
+    /// `<name> Previews.lrdata` folder beside it.
+    #[serde(default)]
+    pub catalog_path: Option<String>,
+}
 
 pub use datalib_source_common::glob_match;
 
