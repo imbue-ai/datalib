@@ -264,4 +264,11 @@ mod cli_tests {
         super::Cli::command().debug_assert();
         datalib_cli_help::assert_examples_parse(super::Cli::command(), super::EXAMPLES);
     }
+
+    #[test]
+    fn the_commands_the_docs_show_parse() {
+        let commands = datalib_agent_docs::commands_running("datalib-applet");
+        assert!(!commands.is_empty(), "no doc runs datalib-applet");
+        datalib_cli_help::assert_argvs_parse(super::Cli::command(), &commands);
+    }
 }

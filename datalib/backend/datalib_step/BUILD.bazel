@@ -12,19 +12,12 @@ load("//tools:insta.bzl", "insta_update")
 rust_binary(
     name = "datalib_step",
     srcs = glob(["src/**/*.rs"]),
-    # `datalib-step help` prints these (src/help.rs).
-    compile_data = [
-        "//docs:agent_user.md",
-        "//docs/user:building_on_datalib.md",
-        "//docs/user:getting_your_data.md",
-        "//docs/user:raw_stores.md",
-        "//docs/user:searching.md",
-    ],
     crate_name = "datalib_step",
     crate_root = "src/main.rs",
     edition = "2021",
     visibility = ["//visibility:public"],
     deps = [
+        "//datalib/backend/agent_docs:datalib_agent_docs",
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/dag:datalib_dag",
         "//datalib/backend/pin:datalib_pin",

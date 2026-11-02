@@ -9,7 +9,7 @@ or failure handling.
 
 This doc is the contract from the command's point of view. The
 runner/scheduler side (staleness, retry, what a dropped entry costs)
-is in [`datalib/backend/dag/README.md`](../../datalib/backend/dag/README.md).
+is in [the runner's README](../../datalib/backend/dag/README.md).
 
 ## The config entry
 
@@ -248,8 +248,8 @@ metrics for it:
 `log`'s `target` and `fields` are optional; a plain `msg` is fine.
 
 A step that seals part of its output while still running says so with
-a `checkpoint` (P2 in `datalib/backend/dag/README.md`
-§ "What a sink owes its consumers"), and should say how many rows
+a `checkpoint` (P2 in [the runner's README](../../datalib/backend/dag/README.md#what-a-sink-owes-its-consumers)),
+and should say how many rows
 that seal added:
 
 ```json
@@ -525,8 +525,8 @@ and the rest are still in the history. Keeping the tables is what lets
 a reader take the emptiness in as ordinary deletions: the app's Reset
 then syncs what reads the step, so its documents leave the grid. The app
 does not wait for a sync to end: the loop stops the step if it runs and
-resets it there and then (`datalib/backend/dag/README.md` §"Resets and
-purges"). A reset
+resets it there and then ([the runner's
+README](../../datalib/backend/dag/README.md#resets-and-purges)). A reset
 also reports the metrics a run would (`problems`, and `documents` for a
 render step), counted off the emptied store: the Manage row shows a
 step's newest sample, and the reset step itself does not run again
@@ -543,8 +543,8 @@ does not fetch what its edge rows say it already has.
 The first time a build runs on a root, before the loop takes any
 request, the process that holds the runner lock invokes every step that
 takes the verb once, producers before their readers, with `--migrate`
-appended ([dag README](../../datalib/backend/dag/README.md) §
-"Upgrading a root"). The runner knows nothing of what a step wrote; the
+appended ([the runner's README](../../datalib/backend/dag/README.md#upgrading-a-root)).
+The runner knows nothing of what a step wrote; the
 step decides, and answers in its outcome line:
 
 * **nothing to do** — what it wrote is in this build's shape, or it has

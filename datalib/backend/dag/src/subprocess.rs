@@ -167,7 +167,7 @@ impl WireOutcome {
                     msg: format!(
                         "reported output {:?} with no version; content-hashing it \
                          instead. Steps report a content-derived version per \
-                         output — see docs/dev/step_protocol.md",
+                         output — see `datalib-step help step-protocol`",
                         row.path.as_str()
                     ),
                     ts: None,

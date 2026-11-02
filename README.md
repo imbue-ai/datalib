@@ -37,8 +37,9 @@ Three ways in, from least to most hands-on:
 3. **Hand it to your agent.** Point an AI coding agent at this
    repository and ask it to set you up.
    [`docs/agent_user.md`](docs/agent_user.md) is written for an agent
-   running datalib on your behalf; [`AGENTS.md`](AGENTS.md) is for one
-   working on the code.
+   running datalib on your behalf, and once the tools are installed
+   `datalib-step help` prints it and every doc it links to, no checkout
+   needed; [`AGENTS.md`](AGENTS.md) is for one working on the code.
 
 Cautious? The [Docker image](docs/user/docker.md) keeps the binaries
 and your credentials inside a container that sees only the folders
