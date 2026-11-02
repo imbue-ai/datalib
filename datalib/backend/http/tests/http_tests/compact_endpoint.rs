@@ -1,7 +1,8 @@
-//! `POST /api/compact` and `POST /api/collect`: the loop the server runs
-//! asks each step that takes the verbs to `--compact` or `--collect`, all
-//! of them when no target is named, and refuses a step that does not take
-//! them.
+//! `POST /api/free_disk_space`, and `POST /api/compact`, its old spelling
+//! with `drop_old_versions`: the loop the server runs asks each step that
+//! takes the verbs to `--collect`, or `--compact` when old versions go,
+//! all of them when no target is named, and refuses a step that does not
+//! take them.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -170,17 +171,18 @@ async fn compact_asks_the_named_step_and_refuses_one_it_cannot() {
     assert!(state.sync.shutdown(Duration::from_secs(10)).await);
 }
 
-/// Collecting asks the same steps with `--collect`, and refuses a step that
-/// does not take it by that verb's name.
+/// Freeing disk space without dropping old versions asks the same steps
+/// with `--collect`, and refuses a step that does not take it by that
+/// verb's name.
 #[tokio::test]
-async fn collect_asks_every_step_that_takes_the_verb() {
+async fn free_disk_space_collects_every_step_that_takes_the_verb() {
     let td = tempfile::tempdir().unwrap();
     let root = td.path().join("root");
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("config.toml"), CONFIG).unwrap();
     let state = boot(&root, &bin_dir_with_fake_step(td.path())).await;
 
-    let (status, body) = post(&state, "/api/collect", serde_json::json!({})).await;
+    let (status, body) = post(&state, "/api/free_disk_space", serde_json::json!({})).await;
     assert!(
         status == StatusCode::NO_CONTENT || status == StatusCode::ACCEPTED,
         "{status}: {body}"
@@ -195,11 +197,38 @@ async fn collect_asks_every_step_that_takes_the_verb() {
 
     let (status, body) = post(
         &state,
-        "/api/collect",
+        "/api/free_disk_space",
         serde_json::json!({"targets": ["enterprise/captains_log"]}),
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert!(body.contains("does not take --collect"), "{body}");
+    assert!(state.sync.shutdown(Duration::from_secs(10)).await);
+}
+
+/// `drop_old_versions` asks with `--compact`.
+#[tokio::test]
+async fn free_disk_space_dropping_old_versions_compacts() {
+    let td = tempfile::tempdir().unwrap();
+    let root = td.path().join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("config.toml"), CONFIG).unwrap();
+    let state = boot(&root, &bin_dir_with_fake_step(td.path())).await;
+
+    let (status, body) = post(
+        &state,
+        "/api/free_disk_space",
+        serde_json::json!({"drop_old_versions": true, "targets": ["enterprise/render_markdown"]}),
+    )
+    .await;
+    assert!(
+        status == StatusCode::NO_CONTENT || status == StatusCode::ACCEPTED,
+        "{status}: {body}"
+    );
+    until_asked(&root, "compact", &["enterprise/render_markdown"]).await;
+    assert!(
+        asked(&root, "collect").is_empty(),
+        "nothing is only collected"
+    );
     assert!(state.sync.shutdown(Duration::from_secs(10)).await);
 }

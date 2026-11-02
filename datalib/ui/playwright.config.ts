@@ -219,8 +219,8 @@ const SANDBOX_ENV: Record<string, Record<string, string>> = {
         DATALIB_HTTP_PLAYBACK_HOLD: playbackHold("DATALIB_TEST_E2E_SYNC_PLAYBACK_HOLD"),
       }
     : {},
-  // Freeing disk runs `datalib-step --collect` and `--compact` on every
-  // step, so this root's server has to find it.
+  // Freeing disk runs `datalib-step` on every step, so this root's
+  // server has to find it.
   "free-disk-space": { DATALIB_BINARY_DIR: binDir },
 };
 

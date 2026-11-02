@@ -29,18 +29,22 @@ test("freeing disk collects, and folds history only when asked", async ({ page, 
   let dialog = await openDialog(page);
   await expect(dialog.getByTestId("free-collect")).toBeChecked();
   await expect(dialog.getByTestId("free-drop-old")).not.toBeChecked();
-  let asked = page.waitForResponse((r) => r.url().endsWith("/api/collect"));
+  let asked = page.waitForResponse((r) => r.url().endsWith("/api/free_disk_space"));
   await dialog.getByRole("button", { name: "Free up space" }).click();
-  expect([202, 204]).toContain((await asked).status());
+  let answer = await asked;
+  expect([202, 204]).toContain(answer.status());
+  expect(answer.request().postDataJSON()).toEqual({ drop_old_versions: false });
 
   // Dropping old versions holds the first box ticked: it collects too.
   dialog = await openDialog(page);
   await dialog.getByTestId("free-drop-old").check();
   await expect(dialog.getByTestId("free-collect")).toBeChecked();
   await expect(dialog.getByTestId("free-collect")).toBeDisabled();
-  asked = page.waitForResponse((r) => r.url().endsWith("/api/compact"));
+  asked = page.waitForResponse((r) => r.url().endsWith("/api/free_disk_space"));
   await dialog.getByRole("button", { name: "Free up space" }).click();
-  expect([202, 204]).toContain((await asked).status());
+  answer = await asked;
+  expect([202, 204]).toContain(answer.status());
+  expect(answer.request().postDataJSON()).toEqual({ drop_old_versions: true });
 
   await expect
     .poll(log, { timeout: 60_000 })

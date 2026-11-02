@@ -132,18 +132,22 @@ impl SyncControl {
         self.wipe(WipeKind::Purge, groups, by).await
     }
 
-    /// Fold away the history of `targets`, or of every step that takes the
-    /// verb when it names none, and collect the rest, holding them and
-    /// what reads them meanwhile.
-    pub async fn compact(&self, targets: &[String], by: &str) -> Result<WipeAnswer, String> {
-        self.wipe(WipeKind::Compact, targets, by).await
-    }
-
-    /// Delete what no commit reaches from the stores of `targets`, or of
-    /// every step that takes the verb when it names none, keeping every
-    /// commit, holding them and what reads them meanwhile.
-    pub async fn collect(&self, targets: &[String], by: &str) -> Result<WipeAnswer, String> {
-        self.wipe(WipeKind::Collect, targets, by).await
+    /// Give back the disk no commit reaches in the stores of `targets`, or
+    /// of every step that takes the verb when it names none; with
+    /// `drop_old_versions`, fold each render store's history first. Holds
+    /// them and what reads them meanwhile.
+    pub async fn free_disk_space(
+        &self,
+        targets: &[String],
+        drop_old_versions: bool,
+        by: &str,
+    ) -> Result<WipeAnswer, String> {
+        let kind = if drop_old_versions {
+            WipeKind::Compact
+        } else {
+            WipeKind::Collect
+        };
+        self.wipe(kind, targets, by).await
     }
 
     /// Ask the loop for a wipe and wait, up to [`WIPE_WAIT`], for it to
@@ -160,8 +164,7 @@ impl SyncControl {
                 match kind {
                     WipeKind::Reset => "reset",
                     WipeKind::Purge => "delete",
-                    WipeKind::Compact => "compact",
-                    WipeKind::Collect => "collect",
+                    WipeKind::Compact | WipeKind::Collect => "free up disk space",
                 }
             ));
         }

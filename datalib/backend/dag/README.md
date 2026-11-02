@@ -668,15 +668,17 @@ does not wait for the sync to end. What it decides is in
   lacks, a purge of a group it still has or of anything that is not a
   group id. The row closes with the reason in `error`.
 
-The server's `POST /api/reset`, `POST /api/purge`, `POST /api/compact`
-and `POST /api/collect` write the row and wait up to ten seconds for it
-to close: 204 once done, 202 when its steps have not stopped yet or it
+The server's `POST /api/reset`, `POST /api/purge` and `POST
+/api/free_disk_space` (a compaction with `drop_old_versions`, else a
+collection; `POST /api/compact` is the old spelling of the first) write
+the row and wait up to ten seconds for it to close: 204 once done, 202 when its steps have not stopped yet or it
 is still going, 409 with the reason when refused. A compaction or a
 collection opens nothing downstream: each keeps every store's content, so
 no version moves.
 
-From the command line, `datalib-dag --compact` and `--collect` take
-`runner-lock` themselves, as `--reset` does, so they are refused while
+From the command line, `datalib-dag --free-disk-space` (with
+`--drop-old-versions`, a compaction) takes `runner-lock` itself, as
+`--reset` does, so it is refused while
 the app or another `datalib-dag` runs the loop. `Runner::shrink` asks the same steps and
 records the same versions; the binary measures each step's tree as a
 directory before and after, never its store, and prints what it gave

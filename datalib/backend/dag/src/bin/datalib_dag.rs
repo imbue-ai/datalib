@@ -80,8 +80,9 @@ async fn main() -> Result<()> {
         check: check_only,
         sync: sync_only,
         reset,
+        free_disk_space,
+        drop_old_versions,
         compact,
-        collect,
         by,
         binary_dir,
         parallelism,
@@ -173,19 +174,25 @@ async fn main() -> Result<()> {
         );
     }
 
-    // `--reset` empties stores, `--compact` folds their history away and
-    // `--collect` rewrites them, so each needs the root to itself:
-    // refused, not queued, while anyone runs the loop.
-    let shrink = match (compact, collect) {
-        (true, _) => Some(Shrink::Compact),
-        (false, true) => Some(Shrink::Collect),
-        (false, false) => None,
+    // `--reset` empties stores and `--free-disk-space` rewrites them, so
+    // each needs the root to itself: refused, not queued, while anyone
+    // runs the loop.
+    let shrink = if compact || drop_old_versions {
+        Some(Shrink::Compact)
+    } else if free_disk_space {
+        Some(Shrink::Collect)
+    } else {
+        None
     };
     let alone = !reset.is_empty() || shrink.is_some();
     let reset_lock = if alone {
         Some(acquire_or_explain(
             &data_root,
-            shrink.map_or("--reset", Shrink::flag),
+            if shrink.is_some() {
+                "--free-disk-space"
+            } else {
+                "--reset"
+            },
         )?)
     } else {
         None
@@ -531,7 +538,7 @@ async fn follow_or_lock(data_root: &Path, store: &Store, own: &str) -> Result<Ta
     }
 }
 
-/// `--compact` or `--collect`, and one line per step whose tree it shrank.
+/// `--free-disk-space`, and one line per step whose tree it shrank.
 /// The trees are measured from outside, as directories, since the runner
 /// never opens a step's store. `true` when some step could not do it.
 async fn shrink_and_report(

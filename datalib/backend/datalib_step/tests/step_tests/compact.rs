@@ -1,7 +1,8 @@
-//! `datalib-dag --compact` and `--collect` over the real `datalib-step`:
-//! compacting folds a render store's history to one commit and keeps its
-//! content version; collecting folds nothing; both give back what no
-//! commit reaches, and a raw store keeps its history either way.
+//! `datalib-dag --free-disk-space` over the real `datalib-step`: alone it
+//! folds nothing; with `--drop-old-versions` it folds a render store's
+//! history to one commit and keeps its content version; both give back
+//! what no commit reaches, and a raw store keeps its history either way.
+//! `--compact`, the old spelling, does what the second does.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -85,15 +86,15 @@ async fn enterprise(root: &Path) -> (PathBuf, PathBuf) {
     (render, raw)
 }
 
-/// `datalib-dag <verb>` on the root, and what it printed.
-fn dag(root: &Path, verb: &str) -> String {
+/// `datalib-dag <flags>` on the root, and what it printed.
+fn dag(root: &Path, flags: &[&str]) -> String {
     let out = Command::new(bin("DATALIB_DAG_BIN"))
         .arg(root.join("config.toml"))
-        .arg(verb)
+        .args(flags)
         .arg("--binary-dir")
         .arg(root.join("bin"))
         .output()
-        .unwrap_or_else(|e| panic!("run datalib-dag {verb}: {e}"));
+        .unwrap_or_else(|e| panic!("run datalib-dag {flags:?}: {e}"));
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     assert!(
         out.status.success(),
@@ -126,14 +127,14 @@ fn kept_every_commit(before: &[String], after: &[String]) -> bool {
 }
 
 #[tokio::test]
-async fn compact_folds_a_render_stores_history_and_collects_the_raw_store() {
+async fn dropping_old_versions_folds_a_render_store_and_collects_the_raw_store() {
     let td = tempfile::tempdir().unwrap();
     let root = td.path();
     let (render, raw) = enterprise(root).await;
     let version = content_version_at_path(&render).await.unwrap();
     let (raw_commits, raw_size) = (commits(&raw).await, size(&raw));
 
-    let stdout = dag(root, "--compact");
+    let stdout = dag(root, &["--free-disk-space", "--drop-old-versions"]);
 
     assert_eq!(
         commits(&render).await.len(),
@@ -152,10 +153,10 @@ async fn compact_folds_a_render_stores_history_and_collects_the_raw_store() {
     );
 }
 
-/// Collecting loses nothing: every store keeps every commit, a render
-/// store's included, and only what no commit reached goes.
+/// Freeing disk space loses nothing: every store keeps every commit, a
+/// render store's included, and only what no commit reached goes.
 #[tokio::test]
-async fn collect_keeps_every_commit_and_gives_back_the_garbage() {
+async fn freeing_disk_keeps_every_commit_and_gives_back_the_garbage() {
     let td = tempfile::tempdir().unwrap();
     let root = td.path();
     let (render, raw) = enterprise(root).await;
@@ -165,7 +166,7 @@ async fn collect_keeps_every_commit_and_gives_back_the_garbage() {
     ];
     let version = content_version_at_path(&render).await.unwrap();
 
-    let stdout = dag(root, "--collect");
+    let stdout = dag(root, &["--free-disk-space"]);
 
     for (store, (was_commits, was_size)) in [&render, &raw].into_iter().zip(before) {
         assert!(
@@ -180,4 +181,17 @@ async fn collect_keeps_every_commit_and_gives_back_the_garbage() {
         stdout.contains("in all"),
         "says what it gave back: {stdout}"
     );
+}
+
+/// `--compact`, the spelling scripts used before `--free-disk-space`,
+/// still folds a render store's history.
+#[tokio::test]
+async fn compact_is_the_old_spelling_of_dropping_old_versions() {
+    let td = tempfile::tempdir().unwrap();
+    let root = td.path();
+    let (render, _) = enterprise(root).await;
+
+    dag(root, &["--compact"]);
+
+    assert_eq!(commits(&render).await.len(), 2, "folded");
 }

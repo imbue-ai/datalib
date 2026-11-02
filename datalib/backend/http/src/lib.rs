@@ -258,8 +258,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/steps/{id}/turn_on", post(step_turn_on))
         .route("/api/reset", post(reset_steps))
         .route("/api/purge", post(purge_groups))
+        .route("/api/free_disk_space", post(free_disk_space))
         .route("/api/compact", post(compact_steps))
-        .route("/api/collect", post(collect_steps))
         .route("/api/runs", get(runs_list))
         .route("/api/processes", get(processes_list))
         .route("/api/log/{seq}", get(log_line))
@@ -1661,12 +1661,14 @@ struct ResetRequest {
     by: Option<String>,
 }
 
-/// The body of `POST /api/compact` and `POST /api/collect`.
 #[derive(Debug, Deserialize)]
-struct CompactRequest {
+struct FreeDiskSpaceRequest {
     /// Step ids; none for every step that takes the verb.
     #[serde(default)]
     targets: Vec<String>,
+    /// Also fold each render store's history into one commit.
+    #[serde(default)]
+    drop_old_versions: bool,
     #[serde(default)]
     by: Option<String>,
 }
@@ -1863,27 +1865,32 @@ async fn purge_groups(
     wiped(s.sync.purge(&req.groups, &by).await)
 }
 
-/// `POST /api/compact` — fold away the history nothing reads, collect
-/// every other store, and give back the disk (`step_protocol.md` §
-/// Compact and collect). No targets is every step that takes the verb.
-/// 204 once done; 202 while it runs, once the steps it holds have
-/// stopped; 409, with the reason, for a step it cannot compact.
-async fn compact_steps(
+/// `POST /api/free_disk_space` — give back the disk no commit reaches,
+/// keeping every commit; with `drop_old_versions`, also fold each render
+/// store's history into one commit (`step_protocol.md` § Compact and
+/// collect). No targets is every step that takes the verb. 204 once done;
+/// 202 while it runs, once the steps it holds have stopped; 409, with the
+/// reason, for a step it cannot ask.
+async fn free_disk_space(
     State(s): State<AppState>,
-    Json(req): Json<CompactRequest>,
+    Json(req): Json<FreeDiskSpaceRequest>,
 ) -> Result<StatusCode, Refusal> {
     let by = req.by.unwrap_or_else(|| "ui".to_string());
-    wiped(s.sync.compact(&req.targets, &by).await)
+    wiped(
+        s.sync
+            .free_disk_space(&req.targets, req.drop_old_versions, &by)
+            .await,
+    )
 }
 
-/// `POST /api/collect` — delete what no commit reaches, keeping every
-/// commit, and give back the disk. Answered as `/api/compact` is.
-async fn collect_steps(
+/// `POST /api/compact` — the old spelling of `/api/free_disk_space` with
+/// `drop_old_versions`.
+async fn compact_steps(
     State(s): State<AppState>,
-    Json(req): Json<CompactRequest>,
+    Json(req): Json<FreeDiskSpaceRequest>,
 ) -> Result<StatusCode, Refusal> {
     let by = req.by.unwrap_or_else(|| "ui".to_string());
-    wiped(s.sync.collect(&req.targets, &by).await)
+    wiped(s.sync.free_disk_space(&req.targets, true, &by).await)
 }
 
 fn wiped(answer: Result<supervisor::WipeAnswer, String>) -> Result<StatusCode, Refusal> {

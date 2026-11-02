@@ -80,7 +80,7 @@ declared fields to your argv, each only when present/non-empty:
 | `--inputs <json>` | the entry's `inputs`, as a JSON string array |
 | `--reset <part>` | only on a reset, and then this invocation is a reset, not a run: see § Reset |
 | `--migrate` | only on the first launch of a build, to a step that takes it, and then this invocation fetches nothing: see § Migrate |
-| `--compact`, `--collect` | only from `datalib-dag --compact` or `--collect`, to a step that takes them, and then this invocation runs nothing else: see § Compact and collect |
+| `--compact`, `--collect` | only when disk is freed (`datalib-dag --free-disk-space`), to a step that takes them, and then this invocation runs nothing else: see § Compact and collect |
 
 A verb (`--reset`, `--migrate`, `--compact`, `--collect`) rides on the command line rather than in
 the environment so that a command which has never heard of it refuses it
@@ -573,10 +573,11 @@ migrated. The qmd steps have nothing to answer.
 
 ## Compact and collect
 
-`datalib-dag --compact` or `--collect`, or the app's `POST /api/compact`
-or `POST /api/collect` (the status bar's "Free up disk space…"), asks
-every step that takes the verbs to give back the disk its store holds,
-once each, with the flag appended. Nothing that reads a store may be
+`datalib-dag --free-disk-space`, or the app's `POST /api/free_disk_space`
+(the status bar's "Free up disk space…"), asks every step that takes the
+verbs to give back the disk its store holds, once each: with
+`--compact` appended when old versions are to be dropped
+(`--drop-old-versions`, `"drop_old_versions": true`), else `--collect`. Nothing that reads a store may be
 reading it while it is rewritten: the command line needs the root to
 itself, as `--reset` does, and the app's loop holds the steps it asks
 and every step that reads them until it is done (`dag/README.md`

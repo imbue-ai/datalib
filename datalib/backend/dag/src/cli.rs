@@ -56,12 +56,12 @@ pub const EXAMPLES: &[Example] = &[
         command: "datalib-dag ~/datalib/config.toml --reset slack/ingest --sync slack/ingest --by claude",
     },
     Example {
-        what: "give back the disk no commit of any store reaches, keeping every commit; quit the app first",
-        command: "datalib-dag ~/datalib/config.toml --collect",
+        what: "free up disk space, losing nothing; quit the app first",
+        command: "datalib-dag ~/datalib/config.toml --free-disk-space",
     },
     Example {
-        what: "also fold each source's rendered documents' history into one commit; quit the app first",
-        command: "datalib-dag ~/datalib/config.toml --compact",
+        what: "free up more, keeping only the latest version of each source's rendered documents; quit the app first",
+        command: "datalib-dag ~/datalib/config.toml --free-disk-space --drop-old-versions",
     },
     Example {
         what: "list the open syncs (with their request ids), the steps turned off and the steps running",
@@ -114,19 +114,20 @@ pub struct Cli {
     /// runs first. Refused while anything else runs the loop on the root.
     #[arg(long, value_name = "STEP_ID", value_delimiter = ',')]
     pub reset: Vec<String>,
-    /// Fold the history of every store nothing reads the history of (each
-    /// source's rendered documents) into one commit, collect every other
-    /// store as --collect does, and give back the disk. Their content stays
-    /// as it is, so nothing runs again for it. Alone, that is all this
-    /// invocation does; with --sync it runs first. Refused while anything
-    /// else runs the loop on the root.
-    #[arg(long, conflicts_with = "collect")]
-    pub compact: bool,
-    /// Delete from every store the chunks no commit reaches, and give back
-    /// the disk. Every commit stays readable, downloads' history included.
-    /// Alone or with --sync, as --compact.
+    /// Give back the disk every store holds that no commit reaches. Every
+    /// commit stays readable, so nothing is lost and nothing runs again.
+    /// Alone, that is all this invocation does; with --sync it runs first.
+    /// Refused while anything else runs the loop on the root.
     #[arg(long)]
-    pub collect: bool,
+    pub free_disk_space: bool,
+    /// With --free-disk-space, also fold each source's rendered documents'
+    /// history into one commit. Loses that history, which is rebuilt from
+    /// the downloads; a download's history is always kept.
+    #[arg(long, requires = "free_disk_space")]
+    pub drop_old_versions: bool,
+    /// The old spelling of `--free-disk-space --drop-old-versions`.
+    #[arg(long, hide = true)]
+    pub compact: bool,
     /// Who is asking. The request records it, and the app shows it
     /// ("started by claude").
     #[arg(long, value_name = "WHO", default_value = "cli")]
