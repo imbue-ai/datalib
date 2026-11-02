@@ -647,13 +647,13 @@ fn manual_e2e_live_sync_golden() {
         assert_json_snapshot!("qmd_collections", qmd_collections_report(&data_root, &cfg_out));
     });
 
-    // The search terms file: what each row answers to when an id or a handle is
+    // The search terms: what each row answers to when an id or a handle is
     // pasted into the search. Derived from `grid_rows`, so a change here
     // with no change above is a change in the derivation.
     insta::with_settings!({
         snapshot_path => snap_base().join("unified_document_index").display().to_string(),
         prepend_module_to_snapshot => false,
-        description => "unified_document_index/grid_index/search_terms.sqlite, one term a line: kind, value, uuid",
+        description => "unified_document_index/grid_index/db.sqlite#terms, one term a line: kind, value, uuid",
     }, {
         assert_snapshot!("search_terms", search_terms(&data_root));
     });
@@ -1467,10 +1467,10 @@ fn index_problems(data_root: &Path) -> Value {
     rows
 }
 
-/// Every term in the grid's search terms file, decoded from its dictionary, one
+/// Every term in the grid index's search terms, decoded from its dictionary, one
 /// line each as `kind<TAB>value<TAB>uuid`, sorted.
 fn search_terms(data_root: &Path) -> String {
-    let path = datalib_runtime::layout::search_terms_db(data_root);
+    let path = datalib_runtime::layout::grid_index_db(data_root);
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

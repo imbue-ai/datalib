@@ -1186,7 +1186,8 @@ impl Accumulator {
         };
 
         let thread_id = msg
-            .header("X-GM-THRID")
+            .headers()
+            .value("X-GM-THRID")
             .and_then(header_text)
             .filter(|s| !s.is_empty())
             .map(|s| GmailId::from_takeout(&s).map_or(s, GmailId::key))
@@ -1194,7 +1195,8 @@ impl Accumulator {
 
         // Labels → mailbox ids + JMAP keyword set.
         let label_header = msg
-            .header("X-Gmail-Labels")
+            .headers()
+            .value("X-Gmail-Labels")
             .and_then(header_text)
             .unwrap_or_default();
         let labels = split_gmail_labels(&label_header);

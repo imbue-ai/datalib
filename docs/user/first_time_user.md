@@ -152,6 +152,56 @@ You don't need to install `latchkey`: the installer put it on your
 `PATH` in step 1, and `datalib-step pull-runtime` fetched the Node
 runtime it runs on.
 
+### Who can use your sign-ins, and why
+
+Every program you start on your computer runs *as you*, and macOS and
+Linux mostly treat all of them alike: what one of them can read, the
+others can too. That covers both halves of what datalib keeps:
+
+- **Your mirror** is ordinary files in your data root. Any program
+  running as you can read everything datalib has downloaded.
+- **Your sign-ins** are encrypted in `~/.latchkey`, but a program
+  doesn't need to break that encryption to use them: it can run
+  `latchkey curl …`, and latchkey adds your sign-in to the request for
+  it. That is handy when it's your own AI agent fetching something for
+  you, and dangerous when it's a program you didn't mean to trust.
+
+macOS does have one way to give a secret to one program and not the
+others: the **keychain**. Each keychain entry carries a list of the
+programs allowed to read it. A program on the list is named by who
+signed it (a certificate Apple issues to the company that makes it)
+and by its name, not by where it sits on disk, so an app keeps its
+access when it updates. Any other program that asks gets the "wants
+to use your confidential information" prompt. That is how Chrome
+guards your cookies and how Mail guards your passwords.
+
+The lock is only as strong as the program holding the key, because a
+program on the list has to **refuse orders from strangers**: anything
+running as you can start it too. Trusting a general-purpose tool, like
+`node`, which runs any script, or `latchkey curl`, which makes whatever
+request it's told, means trusting everyone who can run it. Even an app
+built for one job can be talked into misusing its access. Attackers
+used to start Chrome with its remote-debugging switch turned on and
+read your cookies through it, until Chrome stopped allowing that
+switch on your everyday profile.
+
+What that means for datalib today:
+
+- **latchkey's encryption key is in your keychain**, and the Node that
+  latchkey runs on is allowed to read it without asking. So any program
+  running as you can use your sign-ins.
+- **Locking your sign-ins so only the datalib app can use them is
+  possible, but not built.** datalib's programs are signed by Imbue,
+  so a lock like that would last through upgrades. It would stop a
+  script or an agent from casually using your sign-ins. It would not
+  stop a program determined to steal them: that program could still
+  read your mirror, and could try to steer datalib itself.
+- **What you can do now:** run datalib on a computer where you trust
+  every program you run. Sign in with read-only access where the
+  service offers it ([Fastmail](getting_your_data.md#fastmail) does,
+  for example). Sign out of a service you stop syncing:
+  `latchkey auth clear <service>`.
+
 ### Option 1: A Google Takeout export (no credentials needed)
 
 Google Takeout (<https://takeout.google.com>) lets you export your own

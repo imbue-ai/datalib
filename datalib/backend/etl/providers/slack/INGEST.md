@@ -48,7 +48,7 @@ a file download is retried, rate-limited and replayed like an API call.
 | `users.info`                | One author no `users.list` has named yet |
 | `conversations.history`     | Each channel's uncovered stretches + refresh window |
 | `conversations.replies`     | The replies of each thread the store owes |
-| `search.messages`           | Replies posted since the last search, to roots history will not read again |
+| `search.messages`           | Replies posted since the last search, to roots history will not read again; with `scope = "involves_me"`, the messages that involve the account |
 | `client.counts`             | How far the account has read, and which conversations have something new |
 | `saved.list`                | The account's "Saved for later" items    |
 | `bookmarks.list`            | A conversation's header bookmarks        |
@@ -176,6 +176,54 @@ A DM named in `dm_conversations` is held to the same rules: naming it
 narrows which DMs are mirrored, nothing else. A run whose
 `client.counts` call fails walks every conversation, as before.
 `slack_walks_planned` counts the closed DMs and the ones checked.
+
+### Only what involves me
+
+With `scope = "involves_me"`, search decides which channels a run
+walks and from when; the walk itself is the one above. A first sync
+over two weeks then walks the few dozen channels where the account
+was mentioned or posted, instead of every channel it is in.
+
+1. **Search.** Each kind in `involves_me` is one or two
+   `search.messages` queries over `[since, now − 30 min]`
+   (`ingest/involving.rs`): `mention` is `<@U…>`, `from_me` is
+   `from:<@U…>`, and `broadcast` is `@here` and `@channel`. Each query's
+   searched time is a `coverage` scope of its own (`involving:<query>`),
+   paged and settled like the reply search, and each page stores the
+   messages it listed in `involving`, a pointer per message (its
+   conversation, `ts` and thread), not a copy.
+2. **Choose.** A channel is walked when a stored hit inside `since` is
+   in it, or `client.counts` shows a mention of the account there
+   (`mention_count`, or a thread mention in
+   `threads.mention_count_by_channel`), which search may not list for
+   half an hour. Either can add a channel; neither removes one.
+3. **Where each starts.** A channel's stretch reaches from
+   `context_before` (default a day) ahead of its oldest hit up to now,
+   or with `context_after` set, a window around each hit. A
+   `client.counts` mention opens it from `context_before` ahead of the
+   last message read, up to now. Nothing starts before `since`.
+4. **A root no stretch reaches.** A hit that is a reply on an older
+   root has the root read on its own (`conversations.history` at
+   exactly its `ts`, as the reply search does), so the thread is owed
+   like any other.
+
+Checked against the live API: `<@U…>` and `from:<@U…>` match what they
+say (`from:me` is the same as the second); `@here` and `@channel` match
+those mentions and nothing else, while `<!here>` and `<!channel>`
+match the words. A user group's `<!subteam^…>` and `@handle` matched
+no message carrying the mention, so user groups are not searched for.
+
+A search match is never stored as the message. It lacks `reactions`,
+`edited` and a broadcast's `subtype`, and its `text` loses mrkdwn
+about one time in eight; the message comes from history.
+
+DMs follow `dms` and the rules above, whatever the scope: every DM
+involves the account, and search cannot prove one empty. A search that
+fails fails the run: walking every channel instead would cost the very
+sync this scope avoids. Switching the scope either way needs nothing
+done to the store. Turning it on leaves what is stored and walks less;
+turning it off leaves each chosen channel's `history:` coverage
+starting at its floor, so the next run walks down to `since`.
 
 ## What bounds how far back we mirror
 

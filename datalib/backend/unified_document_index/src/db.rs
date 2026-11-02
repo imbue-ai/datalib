@@ -4,7 +4,7 @@
 
 use crate::group::like_pattern;
 use crate::query::{extract_uuid_suffix, Field, FilterTerm, ParsedQuery};
-use crate::terms_keys::{self, TermsKey, TermsValue, ATTACHED_AS};
+use crate::terms_keys::{self, TermsKey, TermsValue};
 use datalib_query::table::{Column, FreeText, SearchTable};
 use datalib_schema::providers::Provider;
 
@@ -144,7 +144,6 @@ pub fn build_where<C: Column>(q: &ParsedQuery<C>) -> (String, Vec<String>) {
 /// clause over `pk` and the values it binds. The kinds are the enum's own
 /// codes, so they are written in; the value is bound.
 fn terms_clause<C>(pk: &str, key: &TermsKey, term: &FilterTerm<C>) -> (String, Vec<String>) {
-    let s = ATTACHED_AS;
     let codes: Vec<String> = key.kinds().iter().map(|k| k.code().to_string()).collect();
     let (matched, bound) = match terms_keys::value_of(key, &term.value, term.quoted, ANY_VALUE) {
         TermsValue::Any => (String::new(), Vec::new()),
@@ -157,14 +156,14 @@ fn terms_clause<C>(pk: &str, key: &TermsKey, term: &FilterTerm<C>) -> (String, V
                 .collect();
             let mut bound = values;
             if let Some(name) = by_name {
-                any.push(format!(
-                    "value IN (SELECT handle FROM {s}.names WHERE name = ? COLLATE NOCASE)"
-                ));
+                any.push(
+                    "value IN (SELECT handle FROM names WHERE name = ? COLLATE NOCASE)".to_string(),
+                );
                 bound.push(name);
             }
             (
                 format!(
-                    " AND t.val_id IN (SELECT val_id FROM {s}.vals WHERE {})",
+                    " AND t.val_id IN (SELECT val_id FROM vals WHERE {})",
                     any.join(" OR ")
                 ),
                 bound,
@@ -175,10 +174,9 @@ fn terms_clause<C>(pk: &str, key: &TermsKey, term: &FilterTerm<C>) -> (String, V
         TermsValue::Words { text, by_name } => {
             let phrase = format!("\"{}\"", text.replace('"', "\"\""));
             let names = if by_name {
-                format!(
-                    " OR t.val_id IN (SELECT val_id FROM {s}.vals WHERE value IN \
-                     (SELECT handle FROM {s}.names WHERE name = ? COLLATE NOCASE))"
-                )
+                " OR t.val_id IN (SELECT val_id FROM vals WHERE value IN \
+                     (SELECT handle FROM names WHERE name = ? COLLATE NOCASE))"
+                    .to_string()
             } else {
                 String::new()
             };
@@ -189,7 +187,7 @@ fn terms_clause<C>(pk: &str, key: &TermsKey, term: &FilterTerm<C>) -> (String, V
             };
             (
                 format!(
-                    " AND (t.val_id IN (SELECT rowid FROM {s}.vals_fts \
+                    " AND (t.val_id IN (SELECT rowid FROM vals_fts \
                      WHERE vals_fts MATCH ?){names})"
                 ),
                 bound,
@@ -198,10 +196,9 @@ fn terms_clause<C>(pk: &str, key: &TermsKey, term: &FilterTerm<C>) -> (String, V
         TermsValue::Partial { text, by_name } => {
             let pattern = like_pattern(&text);
             let names = if by_name {
-                format!(
-                    " OR value IN (SELECT handle FROM {s}.names \
+                " OR value IN (SELECT handle FROM names \
                      WHERE LOWER(name) LIKE ? ESCAPE '\\')"
-                )
+                    .to_string()
             } else {
                 String::new()
             };
@@ -212,7 +209,7 @@ fn terms_clause<C>(pk: &str, key: &TermsKey, term: &FilterTerm<C>) -> (String, V
             };
             (
                 format!(
-                    " AND t.val_id IN (SELECT val_id FROM {s}.vals \
+                    " AND t.val_id IN (SELECT val_id FROM vals \
                      WHERE LOWER(value) LIKE ? ESCAPE '\\'{names})"
                 ),
                 bound,
@@ -224,10 +221,9 @@ fn terms_clause<C>(pk: &str, key: &TermsKey, term: &FilterTerm<C>) -> (String, V
         TermsValue::Contact(_) | TermsValue::Me => {
             let handles = term.handles.as_deref().unwrap_or_default();
             (
-                format!(
-                    " AND t.val_id IN (SELECT val_id FROM {s}.vals \
+                " AND t.val_id IN (SELECT val_id FROM vals \
                      WHERE value IN (SELECT value FROM json_each(?)))"
-                ),
+                    .to_string(),
                 vec![serde_json::Value::from(handles.to_vec()).to_string()],
             )
         }
@@ -235,7 +231,7 @@ fn terms_clause<C>(pk: &str, key: &TermsKey, term: &FilterTerm<C>) -> (String, V
     let not = if term.negate { "NOT " } else { "" };
     (
         format!(
-            "{pk} {not}IN (SELECT r.uuid FROM {s}.terms t JOIN {s}.rows r ON r.row_id = t.row_id \
+            "{pk} {not}IN (SELECT r.uuid FROM terms t JOIN rows r ON r.row_id = t.row_id \
              WHERE t.kind IN ({}){matched})",
             codes.join(", ")
         ),
@@ -356,13 +352,13 @@ mod tests {
     /// anything else in part, `*` any term of its kinds; negated, the rows
     /// without one.
     #[test]
-    fn a_terms_key_is_a_clause_over_the_attached_terms() {
+    fn a_terms_key_is_a_clause_over_the_terms() {
         let (sql, params) = build_where(&parse_query("from:Ann@Example.com"));
         assert_eq!(
             sql,
-            " WHERE uuid IN (SELECT r.uuid FROM search_terms.terms t JOIN search_terms.rows r \
+            " WHERE uuid IN (SELECT r.uuid FROM terms t JOIN rows r \
              ON r.row_id = t.row_id WHERE t.kind IN (3, 11) AND t.val_id IN \
-             (SELECT val_id FROM search_terms.vals WHERE value = ? COLLATE NOCASE \
+             (SELECT val_id FROM vals WHERE value = ? COLLATE NOCASE \
              OR value = ? COLLATE NOCASE))"
         );
         assert_eq!(params, ["email:ann@example.com", "Ann@Example.com"]);
@@ -370,9 +366,9 @@ mod tests {
         let (sql, params) = build_where(&parse_query(r#"author:"Data""#));
         assert!(
             sql.ends_with(
-                "AND (t.val_id IN (SELECT rowid FROM search_terms.vals_fts WHERE vals_fts \
-                 MATCH ?) OR t.val_id IN (SELECT val_id FROM search_terms.vals WHERE value IN \
-                 (SELECT handle FROM search_terms.names WHERE name = ? COLLATE NOCASE))))"
+                "AND (t.val_id IN (SELECT rowid FROM vals_fts WHERE vals_fts \
+                 MATCH ?) OR t.val_id IN (SELECT val_id FROM vals WHERE value IN \
+                 (SELECT handle FROM names WHERE name = ? COLLATE NOCASE))))"
             ),
             "{sql}"
         );
@@ -398,10 +394,7 @@ mod tests {
         let (sql, params) = build_where(&parse_query("-author:riker"));
         assert!(sql.starts_with(" WHERE uuid NOT IN ("), "{sql}");
         assert!(sql.contains("LOWER(value) LIKE ?"), "{sql}");
-        assert!(
-            sql.contains("search_terms.names WHERE LOWER(name) LIKE ?"),
-            "{sql}"
-        );
+        assert!(sql.contains("names WHERE LOWER(name) LIKE ?"), "{sql}");
         assert_eq!(params, ["%riker%", "%riker%"]);
 
         let (sql, params) = build_where(&parse_query("recipient:*"));

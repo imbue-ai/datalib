@@ -166,8 +166,9 @@ Name both commits as arguments, as above: a filter on `from_commit` or
 `to_commit` does something else. More recipes, and what each costs,
 are in [`doltlite.md`](../dev/doltlite.md#what-changed-between-two-commits).
 
-A raw store's history is never folded away (`datalib-dag --compact`
-leaves raw stores alone), so a cursor stays readable. A reset of the
+A raw store's history is never folded away (`datalib-dag
+--free-disk-space` deletes only chunks no commit reaches, with
+`--drop-old-versions-on-derived-data` too), so a cursor stays readable. A reset of the
 source empties the tables in a new commit, which reads as every row
 `removed`. If your cursor no longer resolves (the store was deleted and
 synced again), start over from a full read. A `datalib-dag diff` verb
@@ -522,13 +523,18 @@ Slack listed in it is stored.
 - Scope `replies:<channel id>` covers the stretches whose new replies
   the download has searched for (a reply to an old root is found this
   way).
+- Scope `involving:<search>` (with `scope = "involves_me"`) covers the
+  stretches of time one search for messages that involve the account
+  has searched, across the whole workspace.
 - `lo` and `hi` are `ts` values left-padded with zeros to 19
   characters (`001712345678.123456`), so they sort as times do. Both
   ends are inside the stretch.
 
 A conversation's history reaches back to the source's `since` (2024-01-01
 unless the config says otherwise) and up to the newest message the
-last walk saw. A conversation walked and found empty has one row with
+last walk saw. With `scope = "involves_me"`, a channel's reaches back
+only to `context_before` ahead of the oldest message that involves the
+account, and a channel where nothing does is not walked at all. A conversation walked and found empty has one row with
 `lo = hi`, the point the walk began. A `ts` inside a `history:` span is
 mirrored; one outside every span is not, and you should ask Slack.
 
@@ -545,7 +551,9 @@ messages of a DM closed in the account's Slack sidebar (Slack reopens a
 DM when a message arrives and the next sync reads it, but one closed
 again before that sync is only read by the daily check of closed DMs);
 channels the account is not in,
-unless it sets `all_channels`; files, when it sets `media = false`;
+unless it sets `all_channels`; with `scope = "involves_me"`, channels
+where nothing involves the account, and the part of each channel
+before `context_before` (and after `context_after`, when set); files, when it sets `media = false`;
 Slack Lists. A message deleted in Slack is dropped from the mirror only
 inside the last `refresh_window_days` (30 by default), the next time
 that window is re-read (at most once every `refresh_every_minutes`, 60
@@ -669,13 +677,29 @@ archived. A saved message is a pointer to it, not a copy.
 | `item_id` | the conversation (or file) it is in |
 | `ts` | the saved message's `ts`, when it is a message |
 
+### `involving`
+
+With `scope = "involves_me"`: each message a search listed as
+involving the account, one row per search that found it. A row is a
+pointer to the message, not a copy; the message itself is in
+`messages` once its channel is walked.
+
+| column | what it holds |
+|---|---|
+| `id` | `<search>#<team id>#<channel id>#<ts>` |
+| `payload` | `ts`, `channel.id` and `permalink` from the search match |
+| `query` | which search found it: `mention`, `from_me`, `here` or `channel` |
+| `channel_id` | the conversation it is in |
+| `ts` | the message's `ts` |
+| `thread_ts` | the root's `ts` when it is in a thread (its own for a root); NULL otherwise |
+
 ### `coverage`
 
 The stretches of each conversation the download has walked (above).
 
 | column | what it holds |
 |---|---|
-| `scope` | `history:<channel id>` or `replies:<channel id>` |
+| `scope` | `history:<channel id>`, `replies:<channel id>` or `involving:<search>` |
 | `lo` | the oldest `ts` in the stretch, zero-padded to 19 characters |
 | `hi` | the newest `ts` in the stretch, the same way |
 

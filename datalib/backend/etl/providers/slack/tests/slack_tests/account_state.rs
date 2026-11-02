@@ -138,7 +138,9 @@ fn ids(values: &[Value], key: &str) -> BTreeSet<String> {
 /// A refresh with nothing new spent 25 s on setup calls made one after
 /// another, though `client.counts`, `saved.list` and the bookmarks need
 /// nothing from each other, nor the user list from the channel list.
-/// Each request here takes 50 ms, so calls started together overlap.
+/// The tape answers none of the three until all three have arrived, so
+/// calls made one after another never finish. A version that held each
+/// request 50 ms and counted the overlap failed on a loaded machine.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn independent_setup_calls_go_out_together() {
     let d = tempdir().unwrap();
@@ -160,13 +162,22 @@ async fn independent_setup_calls_go_out_together() {
         media: false,
         ..datalib_etl_slack::ingest::FetchOptions::new(db.clone())
     });
-    datalib_etl_web::playback::scope(
-        datalib_etl_web::playback::Playback::at(&tape).delay(std::time::Duration::from_millis(50)),
-        datalib_etl::download_metrics::scope(metrics.clone(), download),
+    let together = datalib_etl_web::playback::Playback::at(&tape).meet(&[
+        "client.counts",
+        "saved.list",
+        "bookmarks.list",
+    ]);
+    let ran = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        datalib_etl_web::playback::scope(
+            together,
+            datalib_etl::download_metrics::scope(metrics.clone(), download),
+        ),
     )
-    .await
-    .unwrap();
+    .await;
     db.close().await;
+    ran.expect("client.counts, saved.list and bookmarks.list never went out together")
+        .unwrap();
     assert!(
         metrics.peak_requests_in_flight() >= 3,
         "at most {} requests were ever out at once",

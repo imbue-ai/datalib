@@ -20,6 +20,7 @@ use crate::step::{
     ArtifactState, FailureKind, StepCtx, StepError, StepId, StepOutcome, StepRun, StepSpec,
     StopSignal,
 };
+use crate::subprocess::Shrink;
 use crate::supervisor::record::{LastRun, Record};
 
 #[derive(Debug, Clone)]
@@ -217,29 +218,25 @@ impl Runner {
         Ok(out)
     }
 
-    /// Ask every step that takes the verb to fold history nothing reads
-    /// into fewer commits and give back the disk it held, running nothing
-    /// else: each is invoked once with `--compact` appended
-    /// (`step_protocol.md` § Compact). A step that reports a version is
-    /// recorded at it, which for a fold that kept the content is the
-    /// version it had. One that fails is reported and the rest go on. The
-    /// caller holds the runner lock: nothing may read a store while its
-    /// history is folded away.
-    pub async fn compact(&self, graph: &Graph) -> Result<Vec<Compacted>> {
+    /// Ask every step that takes the verbs to give back disk its store
+    /// holds, running nothing else: each is invoked once with `how`'s flag
+    /// appended (`step_protocol.md` § Compact and collect). A step that
+    /// reports a version is recorded at it, which for a fold or a
+    /// collection that kept the content is the version it had. One that
+    /// fails is reported and the rest go on. The caller holds the runner
+    /// lock: nothing may read a store while it is rewritten.
+    pub async fn shrink(&self, graph: &Graph, how: Shrink) -> Result<Vec<Shrunk>> {
         let store = crate::supervisor::store::Store::open(&self.data_root).await?;
         let mut out = Vec::new();
         let steps = crate::supervisor::wipe::compact_targets(graph, &[]);
         for step in steps.iter().map(|&i| &graph.steps[i].id) {
-            let answer = match self
-                .invoke_once(graph, step, &[crate::subprocess::COMPACT_FLAG])
-                .await
-            {
+            let answer = match self.invoke_once(graph, step, &[how.flag()]).await {
                 Ok((i, outcome)) => record_answer(graph, i, &outcome, &store)
                     .await
                     .map_err(|e| format!("{e:#}")),
                 Err(e) => Err(e),
             };
-            out.push(Compacted {
+            out.push(Shrunk {
                 step: step.clone(),
                 answer,
             });
@@ -248,15 +245,14 @@ impl Runner {
         Ok(out)
     }
 
-    /// `step` invoked once with `--compact`, and the version it reports.
-    pub(crate) async fn compact_one(
+    /// `step` invoked once with `how`'s flag, and the version it reports.
+    pub(crate) async fn shrink_one(
         &self,
         graph: &Graph,
         step: &StepId,
+        how: Shrink,
     ) -> std::result::Result<Option<String>, String> {
-        let (i, outcome) = self
-            .invoke_once(graph, step, &[crate::subprocess::COMPACT_FLAG])
-            .await?;
+        let (i, outcome) = self.invoke_once(graph, step, &[how.flag()]).await?;
         reported_version(&graph.steps[i], &graph.fingerprints[i], &outcome.outputs)
             .map_err(|e| format!("{e:#}"))
     }
@@ -370,9 +366,9 @@ pub struct Migrated {
     pub answer: std::result::Result<bool, String>,
 }
 
-/// How one step answered `--compact`, or why it could not.
+/// How one step answered `--compact` or `--collect`, or why it could not.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Compacted {
+pub struct Shrunk {
     pub step: StepId,
     pub answer: std::result::Result<(), String>,
 }

@@ -1,6 +1,6 @@
 //! Which of a free-text search's three answers a request asks for. The
 //! search grid shows each in a tab of its own. With none named, a search
-//! answers as it always has: identifiers from the search terms file, the
+//! answers as it always has: identifiers from the search terms, the
 //! rest from qmd's hybrid query.
 
 use serde::{Deserialize, Serialize};

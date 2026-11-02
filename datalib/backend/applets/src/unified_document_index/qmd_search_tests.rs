@@ -254,7 +254,7 @@ async fn free_text_without_a_qmd_index_says_it_is_not_built() {
 }
 
 /// Each tab answers the same words its own way, and keeps its answer apart
-/// from the others': Fields from the search terms file, each row saying which of
+/// from the others': Fields from the search terms, each row saying which of
 /// its terms matched unless its title did; Words by BM25 from qmd's keyword index, best first;
 /// Meaning from qmd's vectors alone.
 #[tokio::test]

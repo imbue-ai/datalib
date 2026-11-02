@@ -18,6 +18,7 @@ pub const DATA_TABLES: &[&str] = &[
     "channel_read_states",
     "bookmarks",
     "saved_items",
+    "involving",
 ];
 
 /// `workspaces` — one row per Slack team (workspace).
@@ -282,6 +283,25 @@ pub fn saved_item_key(item_type: &str, item_id: &str, ts: Option<&str>) -> Strin
     format!("{item_type}#{item_id}#{}", ts.unwrap_or(""))
 }
 
+/// `involving` — the messages a `scope = "involves_me"` search listed as
+/// involving the account, one row per search that found one. A row is a
+/// pointer (its conversation, its `ts`, the thread it is in), not a
+/// copy: a search match is not a faithful one, and the message itself is
+/// read from history. `query` names the search (`involving::Query`).
+#[derive(Debug, Clone, WirePayloadRow)]
+#[wire_payload_row(table = "involving")]
+pub struct InvolvingRow {
+    pub id_and_payload: WirePayload,
+    pub query: String,
+    pub channel_id: String,
+    pub ts: String,
+    pub thread_ts: Option<String>,
+}
+
+pub fn involving_key(query: &str, team_id: &str, channel_id: &str, ts: &str) -> String {
+    format!("{query}#{team_id}#{channel_id}#{ts}")
+}
+
 /// The raw store's keys: the upstream's own, joined with `#`. A
 /// message is `{team}#{channel}#{ts}`, a thread the same over its root's
 /// `ts`, so a channel's messages sort by time and a sync's new ones
@@ -378,6 +398,7 @@ pub fn full_ddl() -> Vec<String> {
         BOOKMARKS_BY_CHANNEL_INDEX_DDL.to_string(),
         SavedItemRow::ddl(),
         SAVED_ITEMS_BY_ITEM_INDEX_DDL.to_string(),
+        InvolvingRow::ddl(),
     ];
     out.extend(SlackAttachmentRow::all_ddl());
     for table in DATA_TABLES {

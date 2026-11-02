@@ -296,6 +296,7 @@ export const CATALOG: CatalogEntry[] = [
           { label: "Only the channels I choose", fields: ["api.channels"] },
         ],
       },
+      { heading: "All of each channel?", fields: ["api.scope"] },
       {
         heading: "Direct messages?",
         answers: [
@@ -334,6 +335,20 @@ export const CATALOG: CatalogEntry[] = [
         target: "api.channels",
         label: "Channels",
         help: "A channel named here is copied whether or not you're a member of it.",
+      },
+      {
+        kind: "select",
+        target: "api.scope",
+        label: "Copy",
+        default: "every_conversation",
+        options: [
+          { value: "every_conversation", label: "Everything in those channels" },
+          { value: "involves_me", label: "Only the channels that involve me" },
+        ],
+        help:
+          "The second copies only the channels where you're mentioned, you posted, or someone " +
+          "wrote @here or @channel, from a day before. A first sync takes minutes rather than " +
+          "hours. Direct messages follow the next question either way.",
       },
       {
         kind: "date",
@@ -405,6 +420,30 @@ export const CATALOG: CatalogEntry[] = [
         help:
           "How long after the last re-query a sync re-queries a conversation's window again. " +
           "New messages are fetched on every sync either way. Empty is 60; 0 re-queries every sync.",
+      },
+      {
+        kind: "string_list",
+        target: "api.involves_me",
+        label: "What involves me",
+        help:
+          "With Copy set to the channels that involve you: any of mention, from_me, and " +
+          "broadcast (@here and @channel). Empty is all three.",
+      },
+      {
+        kind: "text",
+        target: "api.context_before",
+        label: "Start before the first one",
+        help:
+          "An offset such as -1d or -3h: how long before the oldest message that involves you " +
+          "a channel is copied from. Empty is -1d.",
+      },
+      {
+        kind: "text",
+        target: "api.context_after",
+        label: "Stop after each one",
+        help:
+          "An offset such as +1d: copy only this long after each message that involves you. " +
+          "Empty copies up to now.",
       },
     ],
   },

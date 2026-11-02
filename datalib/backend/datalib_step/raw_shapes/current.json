@@ -584,7 +584,7 @@
     ]
   },
   "slack": {
-    "schema_hash": "ffa7a7c0a16257f5d7c826582271d0982701c4a1607a48dcc3eb251ce0bc5c11",
+    "schema_hash": "4850d0b2c2d142105d99a87a79a5c00add5764e9d220f88af59709f3bf7cac4a",
     "schema_version": 1,
     "shared_schema_version": 1,
     "sql": [
@@ -596,6 +596,8 @@
       "CREATE TABLE channels( id TEXT PRIMARY KEY, payload TEXT NULL, name TEXT NULL, is_member INTEGER NULL, is_archived INTEGER NULL, is_dm INTEGER NULL, dm_user_ids TEXT NULL)",
       "CREATE TABLE channels_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE coverage(scope TEXT NOT NULL, lo TEXT NOT NULL, hi TEXT NOT NULL, PRIMARY KEY(scope, lo))",
+      "CREATE TABLE involving( id TEXT PRIMARY KEY, payload TEXT NULL, query TEXT NOT NULL, channel_id TEXT NOT NULL, ts TEXT NOT NULL, thread_ts TEXT NULL)",
+      "CREATE TABLE involving_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE messages( id TEXT PRIMARY KEY, payload TEXT NULL, team_id TEXT NOT NULL, channel_id TEXT NOT NULL, ts TEXT NOT NULL, thread_ts TEXT NULL, thread_root_uuid TEXT NOT NULL, is_thread_root INTEGER NOT NULL, user_id TEXT NULL)",
       "CREATE TABLE messages_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX messages_by_channel_ts ON messages(channel_id, ts)",

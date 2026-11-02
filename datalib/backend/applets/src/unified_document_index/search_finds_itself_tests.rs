@@ -147,9 +147,9 @@ async fn values_of(root: &std::path::Path, column: &str) -> BTreeMap<String, BTr
     out
 }
 
-/// Each `(kind, value)` in the search terms file, with the rows holding it.
+/// Each `(kind, value)` in the search terms, with the rows holding it.
 async fn terms_of(root: &std::path::Path) -> BTreeMap<(String, String), BTreeSet<String>> {
-    let path = datalib_runtime::layout::search_terms_db(root);
+    let path = datalib_runtime::layout::grid_index_db(root);
     let mut terms = SqliteConnectOptions::new()
         .filename(datalib_runtime::plain_sqlite::uri(&path))
         .read_only(true)
@@ -174,10 +174,9 @@ async fn terms_of(root: &std::path::Path) -> BTreeMap<(String, String), BTreeSet
     out
 }
 
-/// Each handle with the names it was seen under, from the search terms
-/// file.
+/// Each handle with the names it was seen under, from the search terms.
 async fn names_of(root: &std::path::Path) -> HashMap<String, Vec<String>> {
-    let path = datalib_runtime::layout::search_terms_db(root);
+    let path = datalib_runtime::layout::grid_index_db(root);
     let mut terms = SqliteConnectOptions::new()
         .filename(datalib_runtime::plain_sqlite::uri(&path))
         .read_only(true)
@@ -227,7 +226,7 @@ fn rarest_words(texts: &HashMap<String, String>) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// A term's words as the search terms file's full-text index cuts them:
+/// A term's words as the search terms' full-text index cuts them:
 /// letters and digits, and `@ . - _ + : /` inside a word.
 fn tokens(text: &str) -> Vec<String> {
     text.to_lowercase()
