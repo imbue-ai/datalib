@@ -67,6 +67,11 @@ impl Pin {
 /// commits yet, or a build without the dolt extensions, which read the
 /// same: nothing to pin.
 pub async fn head(pool: &SqlitePool) -> Result<Option<Pin>> {
+    // A table read first: the `dolt_hashof` below reads any error as "no
+    // commit", so a file that is not a store would pass for an empty one.
+    let _: i64 = sqlx::query_scalar("SELECT count(*) FROM sqlite_master")
+        .fetch_one(pool)
+        .await?;
     // `dolt_hashof` resolves the ref; ordering `dolt_log()` by its
     // second-resolution `date` ties on every checkpointing writer.
     let commit: Option<String> = sqlx::query_scalar("SELECT dolt_hashof('HEAD')")
