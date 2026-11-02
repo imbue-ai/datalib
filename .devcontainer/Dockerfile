@@ -24,8 +24,8 @@
 # on pull, the way the uv binary below already arrives. The tag is
 # documentation; the digest is what is fetched. A bump moves both, and
 # the version check after each COPY fails the build if only one moved.
-ARG NODE_VERSION=22.23.1
-ARG NODE_IMAGE_DIGEST=sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3
+ARG NODE_VERSION=22.23.4
+ARG NODE_IMAGE_DIGEST=sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da
 ARG BUN_VERSION=1.4.0
 ARG BUN_IMAGE_DIGEST=sha256:e0ee68d16ccb9927bf02aa7dd8fd4bf3369ee6d46da04faa72b05ce8bfd135f6
 FROM node:${NODE_VERSION}-bookworm-slim@${NODE_IMAGE_DIGEST} AS node_dist
@@ -124,9 +124,9 @@ COPY --from=ghcr.io/astral-sh/uv:0.11.20 /uv /uvx /bin/
 # release assets come from the same place as the assets, so they only
 # catch a bad download, not a substituted one. A bump moves the version
 # and both digests together, or the build fails on the mismatch.
-ARG BAZELISK_VERSION=1.29.0
-ARG BAZELISK_SHA256_AMD64=5a408715e932c0250d28bd84555f12edbf70117de42f9181691c736eacc4a992
-ARG BAZELISK_SHA256_ARM64=e20e8b0f4f240091b7a55bf17b9398bd4f40ee70ae0208dff95dd4c445fb4010
+ARG BAZELISK_VERSION=1.30.0
+ARG BAZELISK_SHA256_AMD64=a248ae2b2b62b5baebb748f6fba7203bff1a27e5d01b55399a8406744cb539e8
+ARG BAZELISK_SHA256_ARM64=b2bcc040c213b44586b121bda6d983c35df121b917c3a7a66fb16f2fa0df1a4f
 ARG TARGETARCH
 RUN ARCH="${TARGETARCH:-$(dpkg --print-architecture)}" \
     && case "$ARCH" in \
