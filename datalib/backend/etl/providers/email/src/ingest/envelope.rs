@@ -326,3 +326,249 @@ Make it so.\r\n";
         assert_eq!(a, b);
     }
 }
+
+/// What a download keeps from the parse, pinned on made-up messages
+/// whose handling moved between mail-parser releases. A parser change
+/// that moves one of these changes rows already stored, so it needs a
+/// migration rung, not just a new expected value.
+#[cfg(test)]
+mod stored_facts {
+    use super::*;
+
+    /// The fields of a stored envelope that come from the bytes, and the
+    /// Message-ID-keyed `email_id` an mbox without Gmail ids stores.
+    fn stored(raw: &[u8]) -> Value {
+        let Ok(msg) = parse(raw) else {
+            return json!("unparsed");
+        };
+        let facts = TransportFacts {
+            email_id: String::new(),
+            blob_id: String::new(),
+            thread_id: String::new(),
+            mailbox_ids: vec![],
+            keywords: vec![],
+        };
+        let mut env = synthesize(raw, &msg, &facts);
+        let obj = env.as_object_mut().unwrap();
+        for transport in ["id", "blobId", "threadId", "mailboxIds", "keywords", "size"] {
+            obj.remove(transport);
+        }
+        obj.insert(
+            "email_id".into(),
+            email_id(None, &msg, "content-hash").into(),
+        );
+        env
+    }
+
+    #[test]
+    fn an_empty_subject_stores_no_subject() {
+        let raw = b"From: Data <data@enterprise.ufp>\r\nSubject: \r\n\
+Message-ID: <blank.subject@enterprise.ufp>\r\n\r\nNo subject.\r\n";
+        assert_eq!(
+            stored(raw),
+            json!({
+                "email_id": "blank.subject@enterprise.ufp",
+                "messageId": ["blank.subject@enterprise.ufp"],
+                "from": [{"email": "data@enterprise.ufp", "name": "Data"}],
+                "hasAttachment": false,
+            })
+        );
+    }
+
+    #[test]
+    fn a_group_stores_its_members_in_order() {
+        let raw = b"From: William Riker <riker@enterprise.ufp>\r\n\
+To: Away Team: Worf <worf@enterprise.ufp>, Deanna Troi <troi@enterprise.ufp>;,\r\n\
+ Beverly Crusher <crusher@enterprise.ufp>\r\n\
+Cc: undisclosed-recipients:;\r\n\
+Subject: Away team roster\r\n\
+Message-ID: <roster@enterprise.ufp>\r\n\r\nBeam down at 0800.\r\n";
+        assert_eq!(
+            stored(raw),
+            json!({
+                "email_id": "roster@enterprise.ufp",
+                "messageId": ["roster@enterprise.ufp"],
+                "subject": "Away team roster",
+                "from": [{"email": "riker@enterprise.ufp", "name": "William Riker"}],
+                "to": [
+                    {"email": "worf@enterprise.ufp", "name": "Worf"},
+                    {"email": "troi@enterprise.ufp", "name": "Deanna Troi"},
+                ],
+                "hasAttachment": false,
+            })
+        );
+    }
+
+    /// One name with no address drops the whole field, not just that
+    /// name.
+    #[test]
+    fn a_name_without_an_address_drops_the_field() {
+        let raw = b"From: Guinan\r\nTo: Guinan, Geordi La Forge <laforge@enterprise.ufp>\r\n\
+Subject: Ten Forward\r\nMessage-ID: <ten.forward@enterprise.ufp>\r\n\r\nA drink?\r\n";
+        assert_eq!(
+            stored(raw),
+            json!({
+                "email_id": "ten.forward@enterprise.ufp",
+                "messageId": ["ten.forward@enterprise.ufp"],
+                "subject": "Ten Forward",
+                "hasAttachment": false,
+            })
+        );
+    }
+
+    #[test]
+    fn encoded_words_in_a_subject_and_a_name() {
+        let raw = b"From: =?utf-8?q?Jean-Luc?= Picard <picard@enterprise.ufp>\r\n\
+To: =?utf-8?b?QmV2ZXJseQ==?= =?utf-8?b?IENydXNoZXI=?= <crusher@enterprise.ufp>\r\n\
+Subject: Re: =?utf-8?q?Tea,?= =?utf-8?q?_Earl_Grey?= hot\r\n\
+Message-ID: <encoded@enterprise.ufp>\r\n\r\nHot.\r\n";
+        assert_eq!(
+            stored(raw),
+            json!({
+                "email_id": "encoded@enterprise.ufp",
+                "messageId": ["encoded@enterprise.ufp"],
+                "subject": "Re: Tea, Earl Grey hot",
+                "from": [{"email": "picard@enterprise.ufp", "name": "Jean-Luc Picard"}],
+                "to": [{"email": "crusher@enterprise.ufp", "name": "Beverly Crusher"}],
+                "hasAttachment": false,
+            })
+        );
+    }
+
+    /// The `email_id` of every Message-ID spelling below is a row key in
+    /// a non-Gmail mbox's store; a change re-keys the row.
+    #[test]
+    fn odd_message_id_spellings_keep_their_email_id() {
+        let cases: &[(&str, &str)] = &[
+            (
+                "Message-ID: tea.earl.grey@enterprise.ufp",
+                "tea.earl.grey@enterprise.ufp",
+            ),
+            (
+                "Message-ID: <first@enterprise.ufp> <second@enterprise.ufp>",
+                "second@enterprise.ufp",
+            ),
+            (
+                "Message-ID: <relayed@enterprise.ufp> (Starfleet relay)",
+                "relayed@enterprise.ufp",
+            ),
+            (
+                "Message-ID:\r\n <folded@enterprise.ufp>",
+                "folded@enterprise.ufp",
+            ),
+            (
+                "Message-Id: <lower.case@enterprise.ufp>",
+                "lower.case@enterprise.ufp",
+            ),
+            (
+                "Message-ID: <with space@enterprise.ufp>",
+                "with space@enterprise.ufp",
+            ),
+            ("Message-ID: <>", "content-hash"),
+            ("Message-ID: ", "content-hash"),
+            (
+                "Message-ID: <one@enterprise.ufp>\r\nMessage-ID: <two@enterprise.ufp>",
+                "two@enterprise.ufp",
+            ),
+        ];
+        for (header, want) in cases {
+            let raw = format!("From: Data <data@enterprise.ufp>\r\n{header}\r\n\r\nbody\r\n");
+            assert_eq!(stored(raw.as_bytes())["email_id"], *want, "{header:?}");
+        }
+    }
+
+    /// Which inputs parse at all: one that does not is counted as a
+    /// parse error and stores no row.
+    #[test]
+    fn which_headerless_inputs_parse() {
+        let cases: &[(&[u8], bool)] = &[
+            (b"", false),
+            (b"Captain's log, stardate 41153.7.\r\n", false),
+            (b"Captain's log", true),
+            (b"Captain's log\r\nSecond entry\r\n", false),
+            (b"\r\nA body with no header.\r\n", true),
+            (
+                b"Captain's log\r\n\r\nA body after a line that is no header.\r\n",
+                true,
+            ),
+            (b"Note: a header and nothing else", true),
+            (b"Note: a header\r\n\r\n", true),
+        ];
+        let got: Vec<_> = cases
+            .iter()
+            .map(|(raw, _)| {
+                (
+                    String::from_utf8_lossy(raw),
+                    stored(raw) != json!("unparsed"),
+                )
+            })
+            .collect();
+        let want: Vec<_> = cases
+            .iter()
+            .map(|(raw, parses)| (String::from_utf8_lossy(raw), *parses))
+            .collect();
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn a_date_that_does_not_parse_stores_no_received_at() {
+        let raw = b"From: Data <data@enterprise.ufp>\r\nDate: stardate 41153.7\r\n\
+Message-ID: <stardate@enterprise.ufp>\r\n\r\nbody\r\n";
+        assert_eq!(stored(raw).get("receivedAt"), None);
+    }
+
+    #[test]
+    fn a_ut_zone_and_a_spaced_header_name() {
+        let raw = b"From: Data <data@enterprise.ufp>\r\n\
+Date: Tue, 4 May 2027 03:42:05 UT\r\n\
+Subject: After the UT zone\r\n\
+Fr om: Q <q@continuum.example>\r\n\
+Message-ID: <ut.zone@enterprise.ufp>\r\n\r\nbody\r\n";
+        assert_eq!(
+            stored(raw),
+            json!({
+                "email_id": "ut.zone@enterprise.ufp",
+                "messageId": ["ut.zone@enterprise.ufp"],
+                "subject": "After the UT zone",
+                "from": [{"email": "q@continuum.example", "name": "Q"}],
+                "receivedAt": "2027-05-04T03:42:05+00:00",
+                "sentAt": "2027-05-04T03:42:05+00:00",
+                "hasAttachment": false,
+            })
+        );
+    }
+
+    /// A Takeout's labels name the mailboxes a message is stored in, read
+    /// as written: an encoded word stays encoded, a fold stays folded.
+    #[test]
+    fn takeout_label_and_thread_headers_are_read_raw() {
+        let raw = b"From: Data <data@enterprise.ufp>\r\n\
+X-GM-THRID: 1853466712473707184\r\n\
+X-Gmail-Labels: Archived,Category Updates,\r\n =?UTF-8?Q?Caf=C3=A9?=,Opened\r\n\
+Message-ID: <labels@enterprise.ufp>\r\n\r\nbody\r\n";
+        let msg = parse(raw).unwrap();
+        let header = |name| msg.header(name).and_then(header_text);
+        assert_eq!(header("X-GM-THRID").as_deref(), Some("1853466712473707184"));
+        assert_eq!(
+            header("X-Gmail-Labels").as_deref(),
+            Some("Archived,Category Updates,\r\n =?UTF-8?Q?Caf=C3=A9?=,Opened")
+        );
+    }
+
+    #[test]
+    fn an_unpadded_base64_attachment_is_an_attachment() {
+        assert_eq!(stored(UNPADDED_ATTACHMENT)["hasAttachment"], true);
+    }
+
+    /// A multipart whose attachment's base64 has no final `=`; shared
+    /// with the blob store's and the render's tests of the decoded bytes.
+    pub(crate) const UNPADDED_ATTACHMENT: &[u8] = b"From: Data <data@enterprise.ufp>\r\n\
+Subject: Log\r\nMessage-ID: <unpadded@enterprise.ufp>\r\nMIME-Version: 1.0\r\n\
+Content-Type: multipart/mixed; boundary=\"b1\"\r\n\r\n\
+--b1\r\nContent-Type: text/plain\r\n\r\nAttached.\r\n\
+--b1\r\nContent-Type: text/plain; name=\"order.txt\"\r\n\
+Content-Disposition: attachment; filename=\"order.txt\"\r\n\
+Content-Transfer-Encoding: base64\r\n\r\n\
+VGVhLCBFYXJsIEdyZXksIGhvdA\r\n\
+--b1--\r\n";
+}
