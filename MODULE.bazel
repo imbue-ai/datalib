@@ -5,7 +5,7 @@ days because hot releases are where regressions hide. When bumping a
 bazel_dep or a toolchain, check the upstream release date and prefer
 the newest version that is at least 7 days old. Today's working
 reference (2026-11-02): rules_python 2.4.5, rules_rust 0.75.0,
-Rust 1.98.0, Bazel 9.3.1. Keep rules_rust new enough to list RUST_VERSION
+Rust 1.99.1, Bazel 9.3.1. Keep rules_rust new enough to list RUST_VERSION
 in its known_shas.bzl: without a checksum the toolchain download skips
 Bazel's repository cache, so every new worktree fetches it again.
 
@@ -304,7 +304,7 @@ register_toolchains(
 
 RUST_EDITION = "2021"
 
-RUST_VERSION = "1.98.0"
+RUST_VERSION = "1.99.1"
 
 rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
 rust.toolchain(
