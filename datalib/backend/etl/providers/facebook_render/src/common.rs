@@ -194,6 +194,7 @@ pub fn chat_item(
         is_aside: false,
         branch: Vec::new(),
         unread: false,
+        replies: None,
         recipients: Vec::new(),
         mentions: Vec::new(),
         problems: Vec::new(),

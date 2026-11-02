@@ -1654,7 +1654,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # threads moved between the two captures. A new thread (its chat
         # row and message added); the "status report" thread grown by a
         # reply (the reply added, the chat row modified, its three
-        # messages and three reactions unchanged); Worf's one-message
+        # messages and three reactions unchanged as rows, though the
+        # root's page now counts one more reply); Worf's one-message
         # thread edited (the message and chat row modified, the new
         # reaction added). Nothing removed: an incremental sync cannot
         # carry a deletion, which is the contacts diff's job.
@@ -1696,9 +1697,18 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self.assertEqual(
             status_report.count('<div class="diff-added">'),
             1,
-            "one added section in the grown thread, the rest verbatim",
+            "one added section in the grown thread",
         )
-        self.assertNotIn("<ins>", status_report.split('<div class="diff-added">')[0])
+        self.assertIn(
+            '<span class="msg-replies"><del>2</del><ins>3</ins> replies</span>',
+            status_report,
+            "the root counts the reply its thread gained",
+        )
+        self.assertEqual(
+            status_report.split('<div class="diff-added">')[0].count("<ins>"),
+            1,
+            "the reply count is the one change before the added reply",
+        )
         worf = self._markdown(SLACK_DIFF_GROUP, "raising shields")
         self.assertIn(
             "raising <del>shields,</del><ins>shields **now**,</ins> Captain.",

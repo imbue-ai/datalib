@@ -236,6 +236,11 @@ pub struct NormalizedChatItem {
     /// class, and the first unread item of a document `first-unread`,
     /// which the UI draws a "New" line above.
     pub unread: bool,
+    /// The thread this item heads, where upstream keeps a count of its
+    /// replies apart from the replies themselves (a Slack thread root).
+    /// Drawn as one line under the item. `None` for an item that heads
+    /// no thread, and for every provider without such a count.
+    pub replies: Option<Replies>,
     /// What the provider could not do with this item while normalizing
     /// it — a stamp upstream sent that would not parse, a field left
     /// empty for want of a shape. Each becomes a `problems` row on the
@@ -250,6 +255,27 @@ impl NormalizedChatItem {
     /// system note are in the transcript but are not messages.
     pub fn is_message(&self) -> bool {
         !self.is_aside && !matches!(self.kind, ItemKind::System)
+    }
+}
+
+/// How many replies a thread has upstream, against how many the mirror
+/// holds. A thread whose replies are still to be fetched shows the
+/// difference, so a reader can tell "no replies" from "replies not
+/// mirrored yet".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Replies {
+    /// What upstream says the thread has.
+    pub upstream: u64,
+    /// How many of those the mirror holds.
+    pub held: u64,
+}
+
+impl Replies {
+    /// The ones upstream counts and the mirror does not hold. A reply
+    /// held after upstream deleted it makes `held` the larger, which is
+    /// none missing.
+    pub fn missing(self) -> u64 {
+        self.upstream.saturating_sub(self.held)
     }
 }
 

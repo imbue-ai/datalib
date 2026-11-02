@@ -611,6 +611,7 @@ fn build_chat(
             is_aside: false,
             branch: Vec::new(),
             unread,
+            replies: None,
             recipients: parsed_eml.recipients.clone(),
             mentions,
             problems,

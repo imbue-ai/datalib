@@ -236,6 +236,7 @@ fn build_chat(
             is_aside,
             branch: branch.clone(),
             unread: false,
+            replies: None,
             recipients: Vec::new(),
             mentions: Vec::new(),
             problems,

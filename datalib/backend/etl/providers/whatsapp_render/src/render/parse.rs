@@ -544,6 +544,7 @@ fn build_item(
         is_aside: false,
         branch: Vec::new(),
         unread,
+        replies: None,
         recipients: (key.from_me != 1)
             .then(Recipient::the_account)
             .into_iter()

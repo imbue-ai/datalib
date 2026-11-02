@@ -61,6 +61,7 @@ fn message(uuid: &str, author: &str, handle: Handle, at: i64, text: &str) -> Nor
         is_aside: false,
         branch: Vec::new(),
         unread: false,
+        replies: None,
         problems: Vec::new(),
     }
 }

@@ -157,6 +157,7 @@ fn to_item(
         is_aside: false,
         branch: Vec::new(),
         unread: item.unread,
+        replies: None,
         recipients: (!item.outgoing)
             .then(Recipient::the_account)
             .into_iter()
