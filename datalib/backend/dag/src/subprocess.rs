@@ -695,9 +695,15 @@ fn retag(ev: Event, id: &str) -> Event {
             signal,
         },
         Event::PassEnd {
-            exit_code, signal, ..
+            status,
+            error,
+            exit_code,
+            signal,
+            ..
         } => Event::PassEnd {
             step: id,
+            status,
+            error,
             exit_code,
             signal,
         },

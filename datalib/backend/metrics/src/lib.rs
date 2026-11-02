@@ -50,6 +50,14 @@ pub const CHECKPOINTS: &str = "checkpoints_total";
 /// the pace off.
 pub const DEQUEUED: &str = "dequeued_total";
 
+/// The passes of a step's last run that failed and were run again
+/// because what the step reads moved: a gauge the runner reports as the
+/// step ends, zero included, so the next run that invokes the step
+/// replaces it. The run reports only the last pass's outcome, so this is
+/// where an earlier failure stays visible; the Manage screen counts each
+/// one as a warning on the step's row.
+pub const FAILED_PASSES: &str = "failed_passes";
+
 /// Whether a series is a running total — a counter — by the naming rule
 /// above. `GET /metrics` types a series by this, and the runner warns
 /// when one goes down within a step's attempt.

@@ -266,6 +266,8 @@ rust_test(
     env = {"PUPPET": "$(rootpath :puppet)"},
     deps = [
         ":datalib_dag",
+        "//datalib/backend/metrics:datalib_metrics",
+        "//datalib/backend/runs:datalib_runs",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:libc",
         "@datalib_crates//:serde_json",

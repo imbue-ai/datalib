@@ -473,6 +473,15 @@ and that line is where the Manage row's double-click opens the log.
 A step that exits after a cancel (`failure: cancelled`) is recorded
 as stopped, its message says so, and its line is a `warn`.
 
+A step that reads a streaming producer runs once per seal it reads,
+and a pass of it that fails runs again once that producer seals again.
+The run then reports the last pass, but a failed pass that was run
+again is still reported: its message is an `error` line of its own
+(`pass 1 failed: …`), the Manage row counts it as a warning, and
+`datalib-dag`'s report says how many there were
+([dag README](../../datalib/backend/dag/README.md) §"What the loop
+runs, and what makes a step stale").
+
 Each line records which pipe it came from (`stream`) and is
 timestamped as the runner reads it, and the two pipes are read
 concurrently, so the log is in arrival order across both.

@@ -20,6 +20,7 @@ use crate::artifact::ArtifactPath;
 use crate::disk_space::{self, DiskFloor, LowDisk};
 use crate::events::{Event, PlannedStep, StepProgress};
 use crate::graph::Graph;
+use crate::run_state::RunState;
 use crate::scheduler::{
     fresh_version, invoke_with_retry, mark_running, new_run_id, now_stamp, reported_version,
     step_summary, QueueLedger, RunReport, Runner, StepReport, StepStatus,
@@ -78,6 +79,8 @@ struct Slot {
     status: Option<StepStatus>,
     attempts: u32,
     error: Option<String>,
+    /// Passes that failed and were run again this round.
+    failed_passes: u32,
 }
 
 impl Slot {
@@ -343,16 +346,7 @@ impl Runner {
                             continue;
                         }
                         if let Some(e) = s.ended.take() {
-                            self.finish(
-                                &old,
-                                &mut state,
-                                &mut s.status,
-                                i,
-                                e.status,
-                                e.error,
-                                e.exit,
-                                e.attempts,
-                            );
+                            self.finish_ended(&old, &mut state, s, i, e);
                         }
                     }
                     shape = shape_of(graph, &self.lock_slots);
@@ -498,24 +492,22 @@ impl Runner {
                     e.pass_ended = true;
                     self.sink.emit(&Event::PassEnd {
                         step: graph.steps[i].id.clone(),
+                        status: e.status.state(),
+                        error: e.error.clone(),
                         exit_code: e.exit.and_then(|x| x.code),
                         signal: e.exit.and_then(|x| x.signal),
                     });
                 }
                 if again {
+                    // Its run reports the pass that runs now, so a failure
+                    // here would be lost but for this count.
+                    if e.status.state() == RunState::Failed {
+                        s.failed_passes += 1;
+                    }
                     s.ended = None;
                 } else if !upstream_busy {
                     let e = s.ended.take().expect("checked above");
-                    self.finish(
-                        graph,
-                        &mut state,
-                        &mut s.status,
-                        i,
-                        e.status,
-                        e.error,
-                        e.exit,
-                        e.attempts,
-                    );
+                    self.finish_ended(graph, &mut state, s, i, e);
                 }
             }
 
@@ -745,16 +737,7 @@ impl Runner {
         let graph = &current;
         for (i, s) in slots.iter_mut().enumerate() {
             if let Some(e) = s.ended.take() {
-                self.finish(
-                    graph,
-                    &mut state,
-                    &mut s.status,
-                    i,
-                    e.status,
-                    e.error,
-                    e.exit,
-                    e.attempts,
-                );
+                self.finish_ended(graph, &mut state, s, i, e);
             }
             self.settle_row(graph, &mut state, &mut queue, s, i, cancelled);
         }
@@ -790,11 +773,20 @@ impl Runner {
                     .unwrap_or_else(|| UNKNOWN.to_string());
                 let before = at_start.get(&graph.steps[i].id).cloned().flatten();
                 let changed = facts.sinks[i].is_some() && facts.sinks[i] != before;
+                // A pass's own `changed` is against the seal before it; the
+                // run's is against where the run started.
+                let status = match slots[i].status.clone()? {
+                    StepStatus::Succeeded { .. } => StepStatus::Succeeded {
+                        changed: changed as usize,
+                    },
+                    other => other,
+                };
                 Some(StepReport {
                     id: graph.steps[i].id.clone(),
-                    status: slots[i].status.clone()?,
+                    status,
                     attempts: slots[i].attempts,
                     error: slots[i].error.clone(),
+                    failed_passes: slots[i].failed_passes,
                     outputs: vec![(path, now, changed)],
                 })
             })
@@ -978,17 +970,7 @@ impl Runner {
             }
             for &i in &held {
                 if let Some(e) = slots[i].ended.take() {
-                    let s = &mut slots[i];
-                    self.finish(
-                        graph,
-                        state,
-                        &mut s.status,
-                        i,
-                        e.status,
-                        e.error,
-                        e.exit,
-                        e.attempts,
-                    );
+                    self.finish_ended(graph, state, &mut slots[i], i, e);
                 }
             }
             let done = match kind {
@@ -1158,6 +1140,28 @@ impl Runner {
             progress: StepProgress::new(spec.id.clone(), self.sink.clone()),
             stop: StopSignal::new(stop).with_grace(self.stop_grace),
         }
+    }
+
+    /// A step done with its last invocation: its finish, after the count
+    /// of the passes before that one that failed, which replaces the
+    /// count its last run left.
+    fn finish_ended(&self, graph: &Graph, state: &mut Record, s: &mut Slot, i: usize, e: Ended) {
+        self.sink.emit(&Event::Metric {
+            step: graph.steps[i].id.clone(),
+            name: datalib_metrics::FAILED_PASSES.to_string(),
+            labels: BTreeMap::new(),
+            value: i64::from(s.failed_passes),
+        });
+        self.finish(
+            graph,
+            state,
+            &mut s.status,
+            i,
+            e.status,
+            e.error,
+            e.exit,
+            e.attempts,
+        );
     }
 
     /// A step a request wanted, with no row of its own yet and nothing

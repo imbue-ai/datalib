@@ -395,15 +395,7 @@ async fn main() -> Result<()> {
 
         #[allow(clippy::disallowed_macros)]
         for s in &report.steps {
-            println!(
-                "{:<32} {:?}{}",
-                s.id,
-                s.status,
-                s.error
-                    .as_deref()
-                    .map(|e| format!("  ({e})"))
-                    .unwrap_or_default()
-            );
+            println!("{}", s.line());
         }
         // A dropped config entry is reported here as well as before
         // the run, because the per-step report is the thing a person

@@ -1371,7 +1371,8 @@ pub struct DagRecord {
     /// step id → what it has reported in the run in flight.
     pub progress: std::collections::HashMap<String, DagStepProgress>,
     /// step id → the errors and warnings its store held the last time
-    /// it counted, in whichever run that was.
+    /// it counted, in whichever run that was, and the passes of its last
+    /// run that failed and were run again.
     pub problems: std::collections::HashMap<String, manage::ProblemCounts>,
     /// step id → the Items cell: what its store held the last time it
     /// counted, and the series behind that. Only render steps report it.
@@ -1430,8 +1431,10 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
     };
     let run_progress = started.elapsed() - loop_record;
 
-    let problems =
-        manage::counts_by_step(&datalib_runs::latest_metric(root, datalib_problems::METRIC).await);
+    let problems = manage::counts_by_step(
+        &datalib_runs::latest_metric(root, datalib_problems::METRIC).await,
+        &datalib_runs::latest_metric(root, datalib_metrics::FAILED_PASSES).await,
+    );
     let (since, _) = datalib_time::IsoOffsetTimestamp::now_local()
         .bump_micros(-(manage::ITEMS_WINDOW.as_micros() as i64))
         .to_utc_and_offset();

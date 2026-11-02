@@ -5,5 +5,6 @@ mod downloads_done;
 mod newer_root;
 mod parent_gone;
 mod relative_root;
+mod run_report;
 mod shared_root;
 mod verbs;
