@@ -11,8 +11,10 @@ that holds it. The pinned version is in `MODULE.bazel`;
 checks every single-process fact below in well under a second, one
 test each, in a module named for its section here;
 `//datalib/backend/etl:doltlite_two_process_test` checks the ones about
-a writer and a reader in two processes. After a doltlite bump, run
-both. A fact that moved fails by name: fix it here, then the test,
+a writer and a reader in two processes, and
+`//datalib/backend/doltlite_facts:python_package_test` the ones in
+[Reading a store from Python](#reading-a-store-from-python). After a
+doltlite bump, run all three. A fact that moved fails by name: fix it here, then the test,
 then whatever in the tree leaned on it.
 
 > **GUI option:** For a macOS sqlite-browser build patched to load
@@ -132,8 +134,9 @@ conn = sqlite3.connect(f"file:{store}@{commit}?mode=ro", uri=True)  # one commit
 ```
 
 The second form is the [detached open](#opening-a-revision-by-path) our
-own readers use. Install the wheel whose version matches the pin: a
-release that changes the storage format refuses our stores.
+own readers use, and it is read-only even without `?mode=ro`. Install
+the wheel whose version matches the pin: a release that changes the
+storage format refuses our stores.
 
 Measured on a mac against a 212 MB store, with the 0.50.16 wheel: the
 open and first query took ~11 ms, and a lookup by primary key on the open
@@ -153,7 +156,13 @@ What the package needs:
   `python -m pkg`, and fails under `python -c`, the REPL and Jupyter.
   Each start copies a 3.9 MB library into `$TMPDIR/doltlite-shim-*`, and
   0.50.16 never reuses the copy (dolthub/doltlite-python#2), so a
-  long-lived machine wants those cleared now and then.
+  long-lived machine wants those cleared now and then. On Linux the
+  import loads doltlite in place, so `python -c` works there.
+
+`//datalib/backend/doltlite_facts:python_package_test` holds each of
+these, with the pinned wheel against a store the pinned CLI wrote. It
+runs under the host's `python3`: CI's Ubuntu one, and on a mac the
+`/usr/bin/python3` that Xcode's command line tools install.
 
 ## Recipes
 
