@@ -1,9 +1,7 @@
 // What a grid row answers to beyond its own columns' search keys: its ids,
-// the people it names, its title, its names. One row of the search terms
-// file per term, so a pasted id or address is one lookup, whatever column
-// holds it. The file, and why it is plain SQLite beside the grid index
-// rather than a table in it: `docs/dev/plans/search_tabs.md` §
-// "The search terms".
+// the people it names, its title, its names. One row of the grid index's
+// `terms` table per term, so a pasted id or address is one lookup, whatever
+// column holds it.
 
 /// What a term is to its row. Stored as its [`code`](SearchTermKind::code).
 #[derive(
@@ -77,7 +75,7 @@ impl SearchTermKind {
         s.parse().ok()
     }
 
-    /// What the search terms file stores. A code, once given, keeps its kind.
+    /// What the search terms store. A code, once given, keeps its kind.
     pub fn code(self) -> u8 {
         self as u8
     }
@@ -252,13 +250,13 @@ fn is_dashed_uuid(s: &str) -> bool {
         })
 }
 
-/// What [`search_terms_of`] derives and how the file lays it out. A file
-/// built under another shape is rebuilt whole, so change it whenever
-/// either changes. A kind a render starts to supply needs no change: it
-/// reaches the file through the diff of `grid_rows`, as its rows change.
-pub const TERMS_SHAPE: &str = "8";
+/// What [`search_terms_of`] derives and how [`TERMS_DDL`] lays it out. It
+/// is part of the grid index's shape, and an index in another shape is
+/// built again, so change it whenever either changes. A kind a render
+/// starts to supply needs no change: it arrives as its rows are written.
+pub const TERMS_SHAPE: &str = "9";
 
-/// The search terms file's tables, dictionary-encoded: each grid row once in
+/// The search terms' tables in the grid index, dictionary-encoded: each grid row once in
 /// `rows`, each distinct value once in `vals`, and a term is three
 /// integers. The FTS5 index covers `vals` alone, linked by rowid, and
 /// keeps `@ . - _ + : /` inside a token so an id or a handle is one
@@ -275,7 +273,6 @@ pub const TERMS_DDL: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS vals_nocase ON vals (value COLLATE NOCASE)",
     "CREATE VIRTUAL TABLE IF NOT EXISTS vals_fts USING fts5(value, content='', \
      contentless_delete=1, tokenize=\"unicode61 tokenchars '@.-_+:/'\")",
-    "CREATE TABLE IF NOT EXISTS terms_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
     // Each handle with every name it was seen under, so a name finds the
     // handles of whoever went by it (`datalib_etl_render::search_terms`).
     "CREATE TABLE IF NOT EXISTS names (handle TEXT NOT NULL, name TEXT NOT NULL, \
@@ -285,15 +282,6 @@ pub const TERMS_DDL: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS account_handles (handle TEXT NOT NULL, \
      source_id TEXT NOT NULL, PRIMARY KEY (handle, source_id)) WITHOUT ROWID",
 ];
-
-/// The `terms_meta` key naming the grid index generation the terms
-/// reflect (`datalib_pin::generation`).
-pub const META_GRID_GENERATION: &str = "grid_generation";
-/// The `terms_meta` key naming the last of the grid index's
-/// `grid_changes` the terms have applied.
-pub const META_GRID_CHANGE: &str = "grid_change";
-/// The `terms_meta` key naming the [`TERMS_SHAPE`] the file was built under.
-pub const META_SHAPE: &str = "shape";
 
 #[cfg(test)]
 mod tests {
@@ -414,7 +402,7 @@ mod tests {
         assert_eq!(SearchTermKind::from_code(0), None);
     }
 
-    /// A stored code is a promise: a kind keeps its number, or every file
+    /// A stored code is a promise: a kind keeps its number, or every index
     /// written before reads its terms as another kind.
     #[test]
     fn the_codes_are_the_ones_files_hold() {

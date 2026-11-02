@@ -3,7 +3,7 @@
 //! reads inside one read transaction: one commit, and the plain tables'
 //! indexes (`docs/dev/plans/paged_grids.md`, "Pinned and indexed").
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -21,7 +21,6 @@ use crate::query::ParsedQuery;
 use crate::repo::{DocRow, EdgeRowOut, IndexRepo, Listing, LocatedProblem, MapDocRow};
 use crate::search::SearchRow;
 use crate::sort::{default_order, order_by, Sort};
-use crate::terms_keys::ATTACHED_AS;
 use datalib_core::repo::RepoError;
 use datalib_pin::{is_missing_table, missing_schema, open_reader, Missing};
 use datalib_query::table::{Column, SearchTable};
@@ -42,16 +41,13 @@ pub struct DoltRepo {
     root: Arc<PathBuf>,
 }
 
-/// The pool of one read-only connection, the grid index file it opened
-/// and the search terms file last attached to it, by inode. A file
-/// rebuilt — a reset, a terms file in a new shape — is a new file under
-/// the old name, and a connection reads the old one until it is noticed.
-/// sqlx can swap that connection for a fresh one with nothing attached,
-/// so each read asks the connection it holds, never this inode alone.
+/// The pool of one read-only connection and the grid index file it
+/// opened, by inode. A file rebuilt — a reset, an index in a new shape —
+/// is a new file under the old name, and a connection reads the old one
+/// until it is noticed.
 struct Reader {
     pool: SqlitePool,
     grid: u64,
-    terms: Option<u64>,
 }
 
 /// One request's read of the index: a transaction on the read-only
@@ -60,8 +56,6 @@ struct Reader {
 struct At {
     tx: sqlx::Transaction<'static, sqlx::Sqlite>,
     commit: String,
-    /// The search terms file is attached under [`ATTACHED_AS`].
-    terms: bool,
     grid_rows: &'static str,
     markdowns: &'static str,
     edges: &'static str,
@@ -426,9 +420,7 @@ impl DoltRepo {
         let Ok(grid) = std::fs::metadata(&self.db_path).map(|m| m.ino()) else {
             return Ok(None);
         };
-        // The terms are attached on the connection the transaction then
-        // runs on: another acquire could be handed a different one.
-        let (conn, terms) = {
+        let conn = {
             let mut slot = self.pool.lock().await;
             if let Some(stale) = slot.take_if(|r| r.grid != grid) {
                 stale.pool.close().await;
@@ -437,22 +429,14 @@ impl DoltRepo {
                 let pool = open_reader(&self.db_path)
                     .await
                     .map_err(|e| internal("open the grid index read-only", e))?;
-                *slot = Some(Reader {
-                    pool,
-                    grid,
-                    terms: None,
-                });
+                *slot = Some(Reader { pool, grid });
             }
-            let reader = slot.as_mut().expect("opened above");
-            let mut conn = reader
+            let reader = slot.as_ref().expect("opened above");
+            reader
                 .pool
                 .acquire()
                 .await
-                .map_err(|e| internal("acquire the grid index reader", e))?;
-            let terms = attach_terms(&mut conn, &mut reader.terms, &self.root)
-                .await
-                .map_err(|e| internal("attach the search terms", e))?;
-            (conn, terms)
+                .map_err(|e| internal("acquire the grid index reader", e))?
         };
         let mut tx = sqlx::Transaction::begin(conn, None)
             .await
@@ -466,7 +450,6 @@ impl DoltRepo {
         Ok(Some(At {
             tx,
             commit,
-            terms,
             grid_rows: "grid_rows",
             markdowns: "markdowns",
             edges: "edges",
@@ -481,12 +464,10 @@ impl DoltRepo {
 /// (its values bound after the patterns): each with how many rows hold
 /// it, most first.
 pub fn term_values_sql(grid_rows: &str, where_sql: &str, kinds: &[u8], by_name: bool) -> String {
-    let s = ATTACHED_AS;
     let names = if by_name {
-        format!(
-            " OR v.value IN (SELECT handle FROM {s}.names \
+        " OR v.value IN (SELECT handle FROM names \
              WHERE LOWER(name) LIKE ? ESCAPE '\\')"
-        )
+            .to_string()
     } else {
         String::new()
     };
@@ -495,65 +476,17 @@ pub fn term_values_sql(grid_rows: &str, where_sql: &str, kinds: &[u8], by_name: 
         String::new()
     } else {
         format!(
-            " AND t.row_id IN (SELECT r.row_id FROM {s}.rows r \
+            " AND t.row_id IN (SELECT r.row_id FROM rows r \
              WHERE r.uuid IN (SELECT uuid FROM {grid_rows}{where_sql}))"
         )
     };
     format!(
-        "SELECT v.value, count(DISTINCT t.row_id) FROM {s}.terms t \
-         JOIN {s}.vals v ON v.val_id = t.val_id \
+        "SELECT v.value, count(DISTINCT t.row_id) FROM terms t \
+         JOIN vals v ON v.val_id = t.val_id \
          WHERE t.kind IN ({}) AND (LOWER(v.value) LIKE ? ESCAPE '\\'{names}){among} \
          GROUP BY v.val_id ORDER BY 2 DESC, 1 LIMIT {MAX_VALUES}",
         codes.join(", ")
     )
-}
-
-/// Attaches the root's search terms file read-only under
-/// [`ATTACHED_AS`], so a term on a terms key is a clause of the grid's own
-/// query (`crate::terms_keys`). Outside any transaction, as SQLite
-/// requires. The file is in WAL mode, as the grid index is, so a reader
-/// in a transaction holds off only the writer's checkpoint, and each
-/// request's transaction keeps that short. `attached` is
-/// the inode last attached, to whichever connection; `conn` itself says
-/// whether it holds one. Returns whether the file is attached to `conn`.
-async fn attach_terms(
-    conn: &mut sqlx::SqliteConnection,
-    attached: &mut Option<u64>,
-    root: &Path,
-) -> Result<bool, sqlx::Error> {
-    use std::os::unix::fs::MetadataExt;
-    let path = datalib_runtime::layout::search_terms_db(root);
-    let now = std::fs::metadata(&path).ok().map(|m| m.ino());
-    let here: bool =
-        sqlx::query_scalar("SELECT count(*) > 0 FROM pragma_database_list WHERE name = ?")
-            .bind(ATTACHED_AS)
-            .fetch_one(&mut *conn)
-            .await?;
-    if here && now == *attached {
-        return Ok(true);
-    }
-    if here {
-        // Audited: a fixed schema name.
-        let detach = format!("DETACH DATABASE {ATTACHED_AS}");
-        sqlx::query(sqlx::AssertSqlSafe(detach))
-            .execute(&mut *conn)
-            .await?;
-    }
-    *attached = None;
-    if now.is_some() {
-        let uri = format!("{}&mode=ro", datalib_runtime::plain_sqlite::uri(&path));
-        // Audited: the path comes from the data root's layout, escaped for
-        // a URI, and any quote in it doubled for the SQL string.
-        let attach = format!(
-            "ATTACH DATABASE '{}' AS {ATTACHED_AS}",
-            uri.replace('\'', "''")
-        );
-        sqlx::query(sqlx::AssertSqlSafe(attach))
-            .execute(&mut *conn)
-            .await?;
-        *attached = now;
-    }
-    Ok(attached.is_some())
 }
 
 /// One group as `group_sql` counts it: its values, its count, and its
@@ -942,7 +875,7 @@ impl IndexRepo for DoltRepo {
         let Some(mut at) = self.pinned().await? else {
             return Ok(Vec::new());
         };
-        if !at.terms || kinds.is_empty() {
+        if kinds.is_empty() {
             return Ok(Vec::new());
         }
         let (where_sql, params) = where_within(q, &[]);
@@ -1454,71 +1387,5 @@ impl IndexRepo for DoltRepo {
             .try_get("md_path")
             .map_err(|e| RepoError::Internal(format!("decode md_path: {e}")))?;
         Ok(Some(self.root.as_ref().join(rel)))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-    use sqlx::Connection;
-
-    /// A root with an empty grid index at its first generation and an
-    /// empty search terms file beside it.
-    async fn empty_root(root: &Path) {
-        let grid = datalib_runtime::layout::grid_index_db(root);
-        std::fs::create_dir_all(grid.parent().unwrap()).unwrap();
-        let writer = datalib_core::store::open_plain_pool(&grid).await.unwrap();
-        for (_t, ddl) in datalib_schema::grid_rows::DDL {
-            sqlx::query(*ddl).execute(&writer).await.unwrap();
-        }
-        sqlx::query(datalib_pin::GENERATION_DDL)
-            .execute(&writer)
-            .await
-            .unwrap();
-        sqlx::query("INSERT INTO store_generation VALUES (1, 'f', 1)")
-            .execute(&writer)
-            .await
-            .unwrap();
-        writer.close().await;
-        let opts = SqliteConnectOptions::new()
-            .filename(datalib_runtime::plain_sqlite::uri(
-                &datalib_runtime::layout::search_terms_db(root),
-            ))
-            .create_if_missing(true);
-        let terms = SqlitePoolOptions::new()
-            .max_connections(1)
-            .idle_timeout(None)
-            .max_lifetime(None)
-            .connect_with(opts)
-            .await
-            .unwrap();
-        for ddl in datalib_schema::search_terms::TERMS_DDL {
-            sqlx::query(*ddl).execute(&terms).await.unwrap();
-        }
-        terms.close().await;
-    }
-
-    /// The pool can hand out a new connection in place of the one the
-    /// terms were attached to. Every person-key search then failed with
-    /// "no such table: search_terms.terms" until the applet restarted
-    /// (CI's e2e runs, Oct 2026): the reader remembered the attach, not
-    /// which connection held it.
-    #[tokio::test]
-    async fn a_new_connection_gets_the_terms_attached_again() {
-        let tmp = tempfile::tempdir().unwrap();
-        empty_root(tmp.path()).await;
-        let repo = DoltRepo::open(Arc::new(tmp.path().to_path_buf()))
-            .await
-            .unwrap();
-        let q = crate::query::parse_query("from:riker@enterprise.starfleet");
-        repo.ordered_uuids(&q, &[], &[]).await.unwrap();
-
-        let pool = repo.pool.lock().await.as_ref().unwrap().pool.clone();
-        let lost = pool.acquire().await.unwrap().detach();
-        lost.close().await.unwrap();
-
-        let listed = repo.ordered_uuids(&q, &[], &[]).await;
-        assert!(listed.is_ok(), "{:?}", listed.err());
     }
 }

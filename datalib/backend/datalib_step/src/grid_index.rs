@@ -71,20 +71,6 @@ pub async fn run(
         "the index is built"
     );
 
-    // After the pass has sealed: the terms follow the grid, never lead it.
-    let terms = datalib_etl_render::search_terms::sync(
-        &pool,
-        &datalib_core::layout::search_terms_db(data_root),
-    )
-    .await
-    .context("bring the search terms file to the index's head")?;
-    tracing::info!(
-        plan = terms.plan,
-        rows = terms.rows,
-        terms = terms.terms,
-        "the search terms file is current"
-    );
-
     // What this pass did, not a running total: the next pass reports
     // its own, so each is a gauge, and its name says which pass.
     for (name, n) in [
@@ -93,7 +79,7 @@ pub async fn run(
         ("last_pass_markdowns_removed", summary.markdowns_removed),
         ("last_pass_rows_inserted", summary.rows_inserted),
         ("last_pass_problems_copied", summary.problems_copied),
-        ("last_pass_search_terms_written", terms.terms),
+        ("last_pass_search_terms_written", summary.terms_written),
     ] {
         progress.metric(name, &[], n as i64);
     }

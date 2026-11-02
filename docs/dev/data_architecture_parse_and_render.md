@@ -87,7 +87,7 @@ database per source, at
     other columns: an email's To, Cc and Bcc by handle, the people a
     message mentions, an email's labels, and on a document's own row who
     took part in it. chat-common and contact-common supply them; the
-    index melts them into the search terms file, one indexed row per
+    index melts them into its search terms, one indexed row per
     term (`etl/render/src/search_terms.rs`).
   - `edges` — its outgoing links.
   - `source_contacts` and `source_contact_handles` — the people it
