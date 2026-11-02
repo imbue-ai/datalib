@@ -1569,9 +1569,7 @@ async fn forget_cursors(pool: &SqlitePool, created: &[String], recreated: &[Stri
 /// `dolt_clean` for any it created and never committed. Every commit here
 /// is `-Am`, so anything still dirty would ride into the schema commit.
 ///
-/// At the initialization commit only `dolt_clean` runs: a hard reset
-/// there breaks it (`no such table: main.sqlite_sequence`). The
-/// `sqlite_sequence` that `dolt_clean` leaves behind is emptied instead,
+/// A `sqlite_sequence` that `dolt_clean` leaves behind is emptied instead,
 /// since SQLite refuses to drop it
 /// (docs/dev/doltlite.md#plain-sqlite-files-and-sqlite-compatibility).
 async fn discard_dirty_working_tree(pool: &SqlitePool, db_path: &Path) -> Result<()> {
@@ -1594,17 +1592,10 @@ async fn discard_dirty_working_tree(pool: &SqlitePool, db_path: &Path) -> Result
         "discard_dirty_working_tree: a prior writer left {count} dirty entries; \
          starting from the last commit"
     );
-    let commits: i64 = sqlx::query_scalar("SELECT count(*) FROM dolt_log()")
-        .fetch_one(pool)
+    sqlx::query("SELECT dolt_reset('--hard')")
+        .execute(pool)
         .await
-        .context("count the commits to go back to")?;
-    let sealed_before = commits > 1;
-    if sealed_before {
-        sqlx::query("SELECT dolt_reset('--hard')")
-            .execute(pool)
-            .await
-            .context("dolt_reset --hard")?;
-    }
+        .context("dolt_reset --hard")?;
     sqlx::query("SELECT dolt_clean()")
         .execute(pool)
         .await

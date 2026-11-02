@@ -155,7 +155,8 @@ What the package needs:
   with doltlite preloaded, so it works for `python script.py` and
   `python -m pkg`, and fails under `python -c`, the REPL and Jupyter.
   Each start copies a 3.9 MB library into `$TMPDIR/doltlite-shim-*`, and
-  0.50.16 never reuses the copy (dolthub/doltlite-python#2), so a
+  the pinned wheel never reuses the copy (dolthub/doltlite-python#2,
+  closed upstream after 0.51.3), so a
   long-lived machine wants those cleared now and then. On Linux the
   import loads doltlite in place, so `python -c` works there.
 
@@ -417,7 +418,7 @@ The common-use subset:
 
 ## How doltlite behaves
 
-The facts our rules rest on, checked on the pinned doltlite (0.50.16)
+The facts our rules rest on, checked on the pinned doltlite (0.51.3)
 by the tests below; a number measured on an older release names it. A fact in one process is a test in
 `doltlite_facts_test`, in the module named for its section. Anything
 about a writer and a reader in two processes is measured with
@@ -475,7 +476,10 @@ in the doltlite repo, at the pinned tag.
   while another holds a write transaction waits in the busy handler
   (sqlx sets a 5 s busy timeout by default) and then fails with
   `database is locked`. `dolt_commit`, `dolt_merge` and `dolt_branch`
-  wait the same way. A commit that loses a race for its branch's HEAD
+  wait the same way, and `dolt_branch` then fails with `database is
+  busy: another connection holds the write lock`; both are
+  `SQLITE_BUSY`, so code that retries matches the code, not the words.
+  A commit that loses a race for its branch's HEAD
   fails with `cannot commit: database is busy or branch HEAD changed.
   Please retry your transaction.`
 - **Doltlite does not refuse a second writer**; it only takes turns.
@@ -519,12 +523,10 @@ in the doltlite repo, at the pinned tag.
   so they see sealed state; a writable CLI session on `main` is the
   exception. On a [detached open](#opening-a-revision-by-path) a plain
   `SELECT` reads the commit and nothing else.
-- **A scalar function answers from the session's last view of the
-  store.** A bare `dolt_hashof('HEAD')` keeps naming the HEAD the
-  connection last loaded, until a table read — any `SELECT` from a
-  table, `sqlite_master` included — reloads it. `datalib_pin::head`
-  reads `sqlite_master` first for that reason; `datalib_pin`'s tests
-  hold it.
+- **A scalar function sees another connection's commit at once.** A
+  bare `dolt_hashof('HEAD')` on a connection that is not in a
+  transaction names the newest HEAD, with no table read before it
+  (0.51.x; 0.50.16 kept answering from the connection's last view).
 - **The per-table modules are registered the first time a statement
   names them** (0.50.12 and later). So `pragma_module_list` is no census
   of what a commit holds, and a table another process commits after this
@@ -653,9 +655,14 @@ is the recipe in code.
   an error (`Merge has 1 conflict(s)`), but the transaction stays open:
   `dolt_conflicts_<table>` holds each row's `base_`, `our_` and
   `their_` columns for every column, the table itself holds our side,
-  and `dolt_commit` commits the merge and ends the transaction. A
-  squash conflicts and resolves the same way, into one commit with one
-  parent.
+  and `dolt_commit` commits the merge. A squash conflicts and resolves
+  the same way, into one commit with one parent.
+- **`dolt_commit` inside `BEGIN` leaves the transaction open**: the
+  commit is made and stays made, and the statements after it are in the
+  same transaction until a `COMMIT` or `ROLLBACK` ends it. A `BEGIN`
+  there is accepted, so it is no test of whether one is open; a
+  `ROLLBACK` is. (0.50.16 ended the transaction at the `dolt_commit`.) A
+  draft's save ends its own with `COMMIT`.
 - **`dolt_conflicts_resolve('--theirs', '<table>')` takes the whole
   row from the merged branch**, so a change on our side to another
   column of that row is lost. To keep it, write the cells you want
@@ -670,9 +677,10 @@ is the recipe in code.
 - **A branch name may hold a slash** (`draft/riker`).
 - **A merge commit and a squash both revert** with `dolt_revert`.
 - **`dolt_branch('-d', b)` refuses a branch with unmerged commits**
-  (`branch is not fully merged`) and drops one whose only change is
-  uncommitted; `-D` drops either, uncommitted rows included, so a
-  branch made again under the same name starts clean.
+  (`branch is not fully merged`) **or uncommitted rows** (`branch has
+  uncommitted changes`); `-D` drops either, uncommitted rows included,
+  so a branch made again under the same name starts clean. A draft is
+  thrown away with `-D`.
 
 ### Reverting a commit
 
@@ -919,10 +927,9 @@ join back, 27 ms and 6 ms.
   `dolt_commit('--date', …)` pins a commit's date. `dolt_log().date`
   has one-second resolution.
 - **`dolt_reset('--hard')` restores tracked tables and keeps an untracked
-  one; `dolt_clean()` removes it.** At the initialization commit, a hard
-  reset drops `sqlite_sequence`, after which `dolt_clean()` fails with
-  `no such table: main.sqlite_sequence`, so `doltlite_raw` skips the
-  reset there.
+  one; `dolt_clean()` removes it.** That holds at the initialization
+  commit too, where the pair leaves `dolt_status` empty (0.50.16 dropped
+  `sqlite_sequence` there and `dolt_clean()` then failed).
 - **Through sqlx, a NULL read as a bare `String` or `i64` is `""` or
   `0`, not an error.** sqlx's `try_get` skips its type check for a NULL
   and its SQLite decoders return the default, so only an `Option<T>`
@@ -943,6 +950,7 @@ What each pin was taken for, newest first:
 
 | version | what it brought us |
 |---|---|
+| 0.51.3 | upstream fixes to concurrent writes, merges and recovery. A `<store>@<commit>` open that finds the store busy now waits under the busy timeout, so the 0.50.17 failure is gone. 0.51.0 also put back the 0.50.14 encoding of a number just before a `DESC` field in a primary key or an index, with no migration; none of our tables has a `DESC` key, so no store of ours was written in the other encoding. Five facts moved: `dolt_commit` inside `BEGIN` leaves the transaction open, `dolt_branch('-d')` refuses uncommitted rows, a scalar sees another connection's commit at once, a hard reset works at the initialization commit, and a busy `dolt_branch` says `database is busy`. |
 | 0.50.16 | upstream fixes to concurrent writes and to recovery after an interrupted `VACUUM` or `dolt_gc()`. Three facts moved: a plain SQLite file honours `journal_mode` (dolthub/doltlite#3740), a `from_commit` / `to_commit` filter matches only adjacent pairs again, and a new empty store's first commit is `nothing to commit`. Like 0.50.15, it does not reuse the chunks 0.50.14 or earlier wrote: refilling such a table with the same rows appends about a copy of it that no commit reaches, once, and `datalib-dag --free-disk-space` takes it back. Later bumps reuse each other's chunks (dolthub/doltlite#4552; measured by hand, not held by a test). (0.50.17 was passed over: its read lock on a `<store>@<commit>` open gives up after about 100 ms, and readers here open that way.) |
 | 0.50.14 | a detached open runs `IN` and `DISTINCT` (dolthub/doltlite#3392), so readers open `<store>@<commit>` directly |
 | 0.50.13 | a revision opened by path works on any file name (dolthub/doltlite#3231); an unindexed filter plans as scan + sort |

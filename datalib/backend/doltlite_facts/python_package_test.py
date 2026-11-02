@@ -56,7 +56,7 @@ def digest(path: Path) -> str:
 
 class TheWheel(unittest.TestCase):
     def test_is_the_doltlite_the_cli_was_built_from(self) -> None:
-        # "DoltLite 0.50.16 (SQLite 3.54.0, 64-bit)"
+        # "DoltLite 0.51.3 (SQLite 3.54.0, 64-bit)"
         _, version, _, sqlite_version = cli("--version").split()[:4]
         self.assertEqual(doltlite.__version__, version)
         self.assertEqual(sqlite3.sqlite_version, sqlite_version.rstrip(","))

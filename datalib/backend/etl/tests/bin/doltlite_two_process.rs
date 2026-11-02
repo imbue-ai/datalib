@@ -740,7 +740,7 @@ async fn branch_read(args: &Args) -> Result<Value> {
         // reader keeps the snapshot it has and tries again next time.
         let outcome = match &refreshed {
             Ok(()) => "ok",
-            Err(e) if format!("{e:#}").contains("locked") => "busy",
+            Err(e) if e.downcast_ref::<sqlx::Error>().is_some_and(is_busy) => "busy",
             Err(e) => {
                 errors.push(format!(
                     "refresh {txn} after {attempts} attempts, {ms} ms: {e:#}"
@@ -1035,6 +1035,16 @@ async fn main_tip(db: &Path) -> Result<String> {
     Ok(tip?)
 }
 
+/// `SQLITE_BUSY` under any of its extended codes. Doltlite words it
+/// differently by statement (`database is locked`, `database is busy: another
+/// connection holds the write lock`), so the code is what to match.
+fn is_busy(e: &sqlx::Error) -> bool {
+    e.as_database_error()
+        .and_then(|d| d.code())
+        .and_then(|code| code.parse::<i32>().ok())
+        .is_some_and(|code| code & 0xff == 5)
+}
+
 /// Run `sql` until it is not refused as busy or `budget` runs out; each try
 /// also waits out the connection's busy timeout. Returns the last outcome and
 /// how many tries it took.
@@ -1053,7 +1063,7 @@ async fn retry_busy(
             .await
         {
             Ok(_) => return (Ok(()), attempts),
-            Err(e) if e.to_string().contains("locked") && started.elapsed() < budget => {
+            Err(e) if is_busy(&e) && started.elapsed() < budget => {
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
             Err(e) => return (Err(e.into()), attempts),

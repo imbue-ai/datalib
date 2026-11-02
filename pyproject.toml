@@ -24,7 +24,7 @@ dev = [
     # checks what docs/dev/doltlite.md tells a Python program to do. The
     # version is DOLTLITE_VERSION's; `//tools:version_pins_test` holds
     # them together.
-    "doltlite==0.50.16",
+    "doltlite==0.51.3",
 ]
 
 [tool.ruff]
