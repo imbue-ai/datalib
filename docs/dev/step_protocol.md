@@ -716,9 +716,31 @@ writes the event protocol on stdout, as under the runner. What the
 runner adds is lost: nothing records its version, so no step that reads
 it knows to run, and no other process is told. A run killed part way
 leaves its `sync_runs` row `running` until the next run of that step
-marks it `interrupted`. The store's lock still refuses a second writer,
-so a hand run and the app's own run of the same step never write at
-once.
+marks it `interrupted`.
+
+Four things a hand run has to get right that the runner does for it:
+
+- **Stop it with SIGINT.** That is the signal it answers by stopping at
+  its next consistent point and sealing what it has. SIGTERM, which a
+  process manager such as supervisord sends by default, and SIGKILL end
+  it at once: what it fetched since its last seal is discarded, and the
+  next run fetches it again.
+- **Leave `DATALIB_PARENT_PIPE` unset**, unless you hand it a pipe on
+  that descriptor and keep the other end open. A process the applet
+  gateway started has it set to `0`, and a step that inherits it
+  watches its own stdin: `/dev/null` there makes it refuse to start, and
+  a pipe that gets closed makes it exit without sealing.
+- **Don't run a step the app's loop also runs on that data root.** The
+  store's lock refuses a second writer at open, naming the first
+  (`already has a writer: datalib-step (pid N)`). The two never write at
+  once, but whichever comes second fails. When that is the loop's run,
+  it is reported as a `data` failure, not retried, and its request
+  ends failed. Use a folder no loop serves, or turn the step off in the
+  loop (`datalib-dag turn-off`, `POST /api/steps/<id>/turn_off`) while
+  you run it.
+- **Give an absolute `DATALIB_DAG_DATA_ROOT`.** The step runs with the
+  data root as its working directory, so a relative one is resolved a
+  second time, beneath itself.
 
 The index functions' ids are fixed at `unified_document_index/<function>`, and
 the qmd steps share one index file; the rules are in
