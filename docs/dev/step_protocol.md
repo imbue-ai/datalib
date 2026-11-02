@@ -188,7 +188,10 @@ over the pace work has come off it lately: read off `done_total` when you
 use the `progress_*` form below, otherwise off the falls in your
 `queued`. Every series you report is charted over the run on the
 group's sync dashboard. You need not send a last `queued` of zero: when you end, however
-you end, the runner sets it to zero for you. Absolute values are what
+you end, the runner sets it to zero for you, and keeps what it held
+as your **`owed`**, which the Manage row and `datalib-dag status` show
+once you are at rest. So a `queued` you end on above zero says you still
+owe that much: leave nothing in it that you will not do. Absolute values are what
 make the runner's coalescing lossless: it keeps the newest value per
 series, and a dropped position costs nothing where a dropped increment
 would be lost work.

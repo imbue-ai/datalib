@@ -630,7 +630,7 @@ besides components:
   (`useSourcesCard`); the component holds only the template and styles.
 - `sourceView({ group, step, tab })` — one source as one card
   (`cards/SourceCard.ce.vue`), what a source's chip opens. The group's
-  Manage row is at the top: its chip, status, ETA, items, size and a
+  Manage row is at the top: its chip, status, ETA, what it owes, items, size and a
   toolbar of its row-menu actions. Under it are two tabs. **Documents**
   is the group's Browse, a `GridCard` drawn inside this card with the
   query and columns that suit its type (`rowActions.ts::groupBrowseOpts`);

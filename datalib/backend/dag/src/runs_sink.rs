@@ -35,6 +35,9 @@ struct Acc {
     /// The labels of every `queued` series written for the step, so its
     /// finish can empty them all.
     queued: BTreeSet<String>,
+    /// This attempt's last value of its own `queued`, the one without a
+    /// `from`: what it still owes if it ends now.
+    own_queued: Option<i64>,
     /// This attempt's last value of each running total (`name`, labels),
     /// and whether it has already been caught going down.
     counters: HashMap<(String, String), (i64, bool)>,
@@ -90,6 +93,9 @@ const RUNNER_TARGET: &str = "datalib_dag::runner";
 /// producer (`queued{from=<producer>}`) that the scheduler keeps.
 const QUEUED: &str = datalib_metrics::QUEUED;
 
+/// What a step's own queue held when it ended; not emptied with it.
+const OWED: &str = datalib_metrics::OWED;
+
 impl RunStoreSink {
     /// Returns `None` when the store could not be opened. The store is
     /// observability: a sync that runs without a record is much better
@@ -144,6 +150,9 @@ impl RunStoreSink {
             let acc = steps.entry(step.clone()).or_default();
             if name == QUEUED {
                 acc.queued.insert(labels.clone());
+                if labels.is_empty() {
+                    acc.own_queued = Some(value);
+                }
             }
             let raised = if name == crate::memory::RSS_PEAK_BYTES {
                 raise_peak(acc.process.as_mut(), value)
@@ -320,8 +329,15 @@ impl EventSink for RunStoreSink {
                 let finished_at_utc = now().0;
                 let mut ended = None;
                 let mut queued = BTreeSet::new();
+                let mut owed = None;
                 self.update(step, |a| {
                     queued = std::mem::take(&mut a.queued);
+                    // Only a step that ran this run says anything about
+                    // what it owes; one it skipped keeps its last word.
+                    owed = a
+                        .process
+                        .is_some()
+                        .then(|| a.own_queued.unwrap_or(0).max(0));
                     a.row.state = status.as_str().into();
                     a.row.finished_at_utc = Some(finished_at_utc.clone());
                     a.row.error = error.clone();
@@ -336,6 +352,11 @@ impl EventSink for RunStoreSink {
                 });
                 if let Some(p) = ended {
                     self.writer.process(p);
+                }
+                // What its own queue still held is what it owes, and stays
+                // after the queue is emptied, until its next run ends.
+                if let Some(owed) = owed {
+                    self.write_metric(step, OWED, String::new(), owed);
                 }
                 // Ended is ended, however: nothing is ahead of it now.
                 for labels in queued {
@@ -888,6 +909,108 @@ mod tests {
                 Some(3)
             );
         }
+    }
+
+    /// Emptying a stopped step's queue left nothing to say what it still
+    /// owed: Slack's conversations, threads and files not reached were
+    /// only in its store. What its own queue held as it ended is its
+    /// `owed`, which outlives the run; a producer's queue for it is not
+    /// owed, and the next run that ends the step replaces the count. A
+    /// step that never counted owes nothing it can show.
+    #[tokio::test]
+    async fn what_a_step_owes_when_it_ends_outlives_the_run_until_its_next_ends() {
+        let td = tempfile::tempdir().unwrap();
+        let sync = |run: &str, events: Vec<Event>| {
+            let sink = RunStoreSink::start(
+                td.path(),
+                run,
+                "2026-09-11T10:00:00+01:00",
+                None,
+                Retention::default(),
+            )
+            .expect("start the store");
+            for e in &events {
+                sink.emit(e);
+            }
+        };
+        let start = |step: &str| Event::StepStart {
+            step: step.into(),
+            attempt: 1,
+            builtin: true,
+        };
+        let length = |total| Event::ProgressLength {
+            step: "slack/ingest".into(),
+            total: Some(total),
+        };
+        let finish = |step: &str, status| Event::StepFinish {
+            step: step.into(),
+            status,
+            error: None,
+            exit_code: None,
+            signal: None,
+        };
+        let from_ingest = Event::Metric {
+            step: "slack/render_markdown".into(),
+            name: QUEUED.into(),
+            labels: BTreeMap::from([("from".to_string(), "slack/ingest".to_string())]),
+            value: 40,
+        };
+        async fn owed(root: &std::path::Path) -> Vec<(String, i64, String)> {
+            datalib_runs::latest_metric(root, OWED)
+                .await
+                .into_iter()
+                .map(|m| (m.step, m.value, m.run_id))
+                .collect()
+        }
+
+        sync(
+            "run-1",
+            vec![
+                start("slack/ingest"),
+                length(12),
+                inc("slack/ingest", 3),
+                finish("slack/ingest", RunState::Stopped),
+                start("slack/render_markdown"),
+                from_ingest,
+                finish("slack/render_markdown", RunState::Stopped),
+                start("tools/backfill"),
+                finish("tools/backfill", RunState::Succeeded),
+            ],
+        );
+        let snap = snapshot(td.path()).await;
+        assert_eq!(
+            metric_value(&snap, "slack/ingest", QUEUED),
+            Some(0),
+            "the queue is emptied as before"
+        );
+        assert_eq!(
+            owed(td.path()).await,
+            [
+                ("slack/ingest".to_string(), 9, "run-1".to_string()),
+                ("slack/render_markdown".to_string(), 0, "run-1".to_string()),
+                ("tools/backfill".to_string(), 0, "run-1".to_string()),
+            ]
+        );
+
+        sync(
+            "run-2",
+            vec![
+                start("slack/ingest"),
+                length(4),
+                inc("slack/ingest", 4),
+                finish("slack/ingest", RunState::Succeeded),
+                finish("slack/render_markdown", RunState::SkippedUpToDate),
+            ],
+        );
+        assert_eq!(
+            owed(td.path()).await,
+            [
+                ("slack/ingest".to_string(), 0, "run-2".to_string()),
+                ("slack/render_markdown".to_string(), 0, "run-1".to_string()),
+                ("tools/backfill".to_string(), 0, "run-1".to_string()),
+            ],
+            "a step the run skipped keeps what its last run said"
+        );
     }
 
     /// A retry re-runs the step from the beginning, so the count has to

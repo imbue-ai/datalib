@@ -1376,6 +1376,8 @@ pub struct DagRecord {
     /// step id → the Items cell: what its store held the last time it
     /// counted, and the series behind that. Only render steps report it.
     pub items: std::collections::HashMap<String, datalib_columns::Timeseries>,
+    /// step id → what its own queue still held when its last run ended.
+    pub owed: std::collections::HashMap<String, manage::Owed>,
     /// How long each read took, for the line a slow Manage answer writes.
     pub took: RecordTimings,
 }
@@ -1385,7 +1387,7 @@ pub struct RecordTimings {
     /// The loop's record, in `system/supervisor.sqlite`.
     pub loop_record: std::time::Duration,
     /// The rest is the run store, `system/runs/runs.sqlite`: the live
-    /// run's progress, then the metrics behind Problems and Items.
+    /// run's progress, then the metrics behind Problems, Items and what a step owes.
     pub run_progress: std::time::Duration,
     pub run_metrics: std::time::Duration,
 }
@@ -1440,6 +1442,8 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
         &datalib_runs::latest_metric(root, datalib_metrics::DOCUMENTS).await,
         &datalib_runs::metric_history(root, datalib_metrics::ITEMS, &since).await,
     );
+    let owed =
+        manage::owed_by_step(&datalib_runs::latest_metric(root, datalib_metrics::OWED).await);
     let took = RecordTimings {
         loop_record,
         run_progress,
@@ -1453,6 +1457,7 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
         progress,
         problems,
         items,
+        owed,
         took,
     }
 }
@@ -1471,6 +1476,7 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
         progress,
         problems: _,
         items: _,
+        owed: _,
         took: _,
     } = dag_record(&s.root, &s.sync).await;
 

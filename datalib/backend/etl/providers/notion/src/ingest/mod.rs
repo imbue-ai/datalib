@@ -290,8 +290,11 @@ impl Ctx<'_> {
         flush_bytes: usize,
     ) -> Result<owed::Drained> {
         let foreseen = self.foreseen.lock().unwrap().remove(table).unwrap_or(0);
-        self.bar
-            .expect((owed.len() as u64).saturating_sub(foreseen));
+        let owed_here = owed.len() as u64;
+        // A page foreseen to owe this whose record the store turns out to
+        // hold owes nothing, and leaves the queue.
+        self.bar.expect(owed_here.saturating_sub(foreseen));
+        self.bar.forgo(foreseen.saturating_sub(owed_here));
         self.bar.doing(table);
         let l = self.a_loop(table, flush, flush_bytes);
         owed::drain(&l, owed, f).await
@@ -323,13 +326,21 @@ impl Ctx<'_> {
     async fn comments(&self, s: &mut FetchSummary) -> Result<()> {
         let listed = self.db.pages_listed().await?;
         let owed = owed::owed(self.db.pool(), PAGE_COMMENTS, listed).await?;
+        let listings = owed.len() as u64;
+        let done_before = self.bar.done();
         match self
             .drain(PAGE_COMMENTS, owed, &Comments(self), 50, 0)
             .await
         {
             Ok(drained) => s.failed_comment_listings += drained.failed,
             Err(e) => match e.downcast::<CommentsForbidden>() {
-                Ok(forbidden) => self.found.push(comments_forbidden(&forbidden.0)),
+                Ok(forbidden) => {
+                    // No run lists comments until the integration may
+                    // read them, so the listings not reached are not owed.
+                    let reached = self.bar.done() - done_before;
+                    self.bar.forgo(listings.saturating_sub(reached));
+                    self.found.push(comments_forbidden(&forbidden.0))
+                }
                 Err(e) => return Err(e),
             },
         }

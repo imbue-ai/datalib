@@ -33,6 +33,14 @@ pub const ITEMS: &str = "items";
 /// sums them.
 pub const QUEUED: &str = "queued";
 
+/// What a step's own [`QUEUED`] still held when it last ended: work it
+/// saw waiting and did not get done, which the next sync starts on. A
+/// gauge the runner writes as the step ends, however it ends, zero
+/// included, so the next run that invokes the step replaces it; the
+/// runner sets `queued` itself to zero then, since a step that has ended
+/// has nothing ahead of it in that run. The Manage screen's "owed".
+pub const OWED: &str = "owed";
+
 /// What a step's own progress bar has counted done: a running total.
 /// With the step's own [`QUEUED`], it is how fast that queue is worked
 /// off.

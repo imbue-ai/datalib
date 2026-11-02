@@ -44,7 +44,7 @@ use status::{StatusView, StepEdges};
 pub use dashboard::get_dashboard;
 pub use items::{by_step as items_by_step, WINDOW as ITEMS_WINDOW};
 pub use problems::{counts_by_step, ProblemCounts};
-pub use queue::{queue_drain, QueueDrain};
+pub use queue::{owed_by_step, queue_drain, Owed, QueueDrain};
 pub use status::dropped_detail;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -117,7 +117,7 @@ pub fn columns() -> Vec<ColumnSpec> {
         ColumnSpec::new("actions", "Actions", ColumnType::Actions)
             .describe("Browse this row's data, sync it \u{2014} or stop the sync in progress \u{2014} and open its sync dashboard."),
         ColumnSpec::new("status", "Status", ColumnType::Status)
-            .describe("What it is doing now, or did last, and when it got there. While it has work queued: how much the step says is still ahead of it (a group shows none, since its steps count different things), then when that is done at the pace work has come off the queue over the last two minutes (or since the step started; a group waits on its slowest step) \u{2014} or a word when there is no pace to go by: stalled, measuring, growing, flat. Hover any part for why; double-click for the log."),
+            .describe("What it is doing now, or did last, and when it got there. While it has work queued: how much the step says is still ahead of it (a group shows none, since its steps count different things), then when that is done at the pace work has come off the queue over the last two minutes (or since the step started; a group waits on its slowest step) \u{2014} or a word when there is no pace to go by: stalled, measuring, growing, flat. At rest, what its last run saw waiting and did not get to, which the next sync starts on: 412 owed (a group shows its first step that owes). Hover any part for why; double-click for the log."),
         ColumnSpec::new("items", "Items", ColumnType::Timeseries)
             .describe("How many things this source holds \u{2014} messages, readings, events \u{2014} whole store, as of its last render, with the last few days of syncs behind it. Hover for how many documents they sit in. Blank means it has never counted."),
         ColumnSpec::new("last_synced", "Last synced", ColumnType::Timestamp)
@@ -178,6 +178,10 @@ pub struct ManageRow {
     pub queue: Quantity,
     /// When that work is done at its recent pace — see `manage::queue`.
     pub eta: Quantity,
+    /// At rest, what the step's own queue still held when its last run
+    /// ended: work it owes the next sync. A group shows its first step
+    /// that owes.
+    pub owed: Quantity,
     /// The errors and warnings the step found, drawn after the name —
     /// see `manage::problems`. A group shows the sum of its steps'; the
     /// System row, the config's warnings.
@@ -772,6 +776,7 @@ impl Snapshot<'_> {
             status_from: None,
             queue: Quantity::default(),
             eta: Quantity::default(),
+            owed: Quantity::default(),
             problems: vec![],
             items: Timeseries::default(),
             last_synced: None,
@@ -1220,6 +1225,10 @@ impl RowCtx<'_> {
         if activity == queue::Activity::Running {
             queue::log_shown(&id, &cells);
         }
+        let owed = match e {
+            Entry::Step(_) => queue::owed_cell(self.snap.record.owed.get(&id), activity),
+            Entry::Applet(_) => queue::owed_cell(None, activity),
+        };
         let problems = match e {
             Entry::Step(_) => problems::chips(self.snap.record.problems.get(&id)),
             Entry::Applet(_) => vec![],
@@ -1304,6 +1313,7 @@ impl RowCtx<'_> {
             status_from: None,
             queue: cells.queue,
             eta: cells.eta,
+            owed,
             problems,
             items,
             disk,
@@ -1535,6 +1545,13 @@ impl RowCtx<'_> {
             .collect();
         let cells =
             queue::group_cells(&child_cells.iter().map(|(l, c)| (*l, c)).collect::<Vec<_>>());
+        let owed = queue::group_owed(
+            &ordered
+                .iter()
+                .map(|c| row_of(c.id()))
+                .map(|r| (r.name.label.as_str(), &r.owed))
+                .collect::<Vec<_>>(),
+        );
         let problems = problems::group_chips(
             &steps
                 .iter()
@@ -1589,6 +1606,7 @@ impl RowCtx<'_> {
             status_from,
             queue: cells.queue,
             eta: cells.eta,
+            owed,
             problems,
             items,
             last_synced,
