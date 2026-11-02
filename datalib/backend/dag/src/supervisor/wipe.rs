@@ -1,4 +1,4 @@
-//! What a wipe — a reset, a purge or a compaction (`store::WipeKind`) — touches, when
+//! What a wipe — a reset, a purge, a compaction or a collection (`store::WipeKind`) — touches, when
 //! the loop may carry it out, and what it leaves in the record. Pure; the
 //! loop (`round.rs`) stops the steps, runs the reset and deletes the trees.
 
@@ -12,10 +12,12 @@ use crate::supervisor::store::WipeKind;
 /// done. A reset holds its targets; a purge, every step still writing
 /// under one of its groups, which is any the config has not yet let go;
 /// a compaction, the steps it asks and every step that reads one, since a
-/// reader on a commit the fold drops would be left reading nothing.
+/// reader on a commit the fold drops would be left reading nothing. A
+/// collection holds the same: it drops no commit, but it rewrites the
+/// file under a reader.
 pub fn held(graph: &Graph, kind: WipeKind, targets: &[String]) -> Vec<usize> {
     match kind {
-        WipeKind::Compact => {
+        WipeKind::Compact | WipeKind::Collect => {
             let asked = compact_targets(graph, targets);
             let readers = asked
                 .iter()
@@ -36,15 +38,20 @@ pub fn held(graph: &Graph, kind: WipeKind, targets: &[String]) -> Vec<usize> {
 /// Why the wipe cannot be done at all, or `None`. `latest` is the newest
 /// graph the loop has heard of, taken on or not.
 pub fn refusal(latest: &Graph, kind: WipeKind, targets: &[String]) -> Option<String> {
-    if targets.is_empty() && kind != WipeKind::Compact {
+    if targets.is_empty() && kind.shrink().is_none() {
         return Some("nothing to wipe".into());
     }
     match kind {
-        WipeKind::Compact => targets.iter().find_map(|t| match latest.by_id.get(t) {
-            None => Some(format!("the config has no step {t:?}")),
-            Some(&i) if !latest.steps[i].compacts => Some(format!("{t:?} does not take --compact")),
-            Some(_) => None,
-        }),
+        WipeKind::Compact | WipeKind::Collect => {
+            targets.iter().find_map(|t| match latest.by_id.get(t) {
+                None => Some(format!("the config has no step {t:?}")),
+                Some(&i) if !latest.steps[i].compacts => Some(format!(
+                    "{t:?} does not take {}",
+                    kind.shrink().map_or("", |s| s.flag())
+                )),
+                Some(_) => None,
+            })
+        }
         WipeKind::Reset => targets
             .iter()
             .find(|t| !latest.by_id.contains_key(*t))
@@ -62,7 +69,7 @@ pub fn refusal(latest: &Graph, kind: WipeKind, targets: &[String]) -> Option<Str
     }
 }
 
-/// The steps a compaction asks, in graph order: its targets, or with none
+/// The steps a compaction or a collection asks, in graph order: its targets, or with none
 /// named, every step that takes the verb.
 pub fn compact_targets(graph: &Graph, targets: &[String]) -> Vec<usize> {
     if targets.is_empty() {
@@ -248,6 +255,16 @@ mod tests {
         assert!(refusal(&g, WipeKind::Compact, &strings(&["nope/x"]))
             .unwrap()
             .contains("no step"));
+
+        // A collection rewrites the same files, so it holds the same steps.
+        assert_eq!(
+            names(held(&g, WipeKind::Collect, &[])),
+            names(held(&g, WipeKind::Compact, &[]))
+        );
+        assert_eq!(refusal(&g, WipeKind::Collect, &[]), None);
+        assert!(refusal(&g, WipeKind::Collect, &strings(&["idx/qmd"]))
+            .unwrap()
+            .contains("does not take --collect"));
     }
 
     /// One cause shared by many steps is said once.

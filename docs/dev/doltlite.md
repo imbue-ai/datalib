@@ -787,8 +787,10 @@ Creating and dropping a table in one open still appends chunks, though
   needs about the store's size again in free disk (upstream
   `doc/doltlite/dolt_gc.md`; not measured here).
 - `sqlite_mirror` and `fsindex` run gc, and so does `datalib-dag
-  --compact` on the render stores, after folding their history into
-  one commit (`doltlite_raw::fold_history`).
+  --free-disk-space` on every step's doltlite store
+  (`doltlite_raw::collect_garbage`). With `--drop-old-versions-on-derived-data` it folds
+  the render stores' history into one commit first
+  (`doltlite_raw::fold_history`).
 
 ### Trees, and keeping one through a fold
 
@@ -952,7 +954,7 @@ What each pin was taken for, newest first:
 | version | what it brought us |
 |---|---|
 | 0.51.3 | upstream fixes to concurrent writes, merges and recovery. A `<store>@<commit>` open that finds the store busy now waits under the busy timeout, so the 0.50.17 failure is gone. 0.51.0 also put back the 0.50.14 encoding of a number just before a `DESC` field in a primary key or an index, with no migration; none of our tables has a `DESC` key, so no store of ours was written in the other encoding. Five facts moved: `dolt_commit` inside `BEGIN` leaves the transaction open, `dolt_branch('-d')` refuses uncommitted rows, a scalar sees another connection's commit at once, a hard reset works at the initialization commit, and a busy `dolt_branch` says `database is busy`. |
-| 0.50.16 | upstream fixes to concurrent writes and to recovery after an interrupted `VACUUM` or `dolt_gc()`. Three facts moved: a plain SQLite file honours `journal_mode` (dolthub/doltlite#3740), a `from_commit` / `to_commit` filter matches only adjacent pairs again, and a new empty store's first commit is `nothing to commit`. (0.50.17 was passed over: its read lock on a `<store>@<commit>` open gives up after about 100 ms, and readers here open that way.) |
+| 0.50.16 | upstream fixes to concurrent writes and to recovery after an interrupted `VACUUM` or `dolt_gc()`. Three facts moved: a plain SQLite file honours `journal_mode` (dolthub/doltlite#3740), a `from_commit` / `to_commit` filter matches only adjacent pairs again, and a new empty store's first commit is `nothing to commit`. Like 0.50.15, it does not reuse the chunks 0.50.14 or earlier wrote: refilling such a table with the same rows appends about a copy of it that no commit reaches, once, and `datalib-dag --free-disk-space` takes it back. Later bumps reuse each other's chunks (dolthub/doltlite#4552; measured by hand, not held by a test). (0.50.17 was passed over: its read lock on a `<store>@<commit>` open gives up after about 100 ms, and readers here open that way.) |
 | 0.50.14 | a detached open runs `IN` and `DISTINCT` (dolthub/doltlite#3392), so readers open `<store>@<commit>` directly |
 | 0.50.13 | a revision opened by path works on any file name (dolthub/doltlite#3231); an unindexed filter plans as scan + sort |
 | 0.50.12 | per-table modules registered on first use; `dolt_at_` and `dolt_history_` seek a text primary key; a ref-moving reader no longer refuses the writer's seals |

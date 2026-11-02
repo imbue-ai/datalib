@@ -26,6 +26,7 @@ const VERSION_RESOLVED: &str = {
 use datalib_dag::cli::{Cli, Verb};
 use datalib_dag::disk_space::human_bytes;
 use datalib_dag::events::FanOutSink;
+use datalib_dag::subprocess::Shrink;
 use datalib_dag::supervisor::host;
 use datalib_dag::supervisor::reload::ConfigFile;
 use datalib_dag::supervisor::store::{RequestOutcome, Store};
@@ -79,6 +80,8 @@ async fn main() -> Result<()> {
         check: check_only,
         sync: sync_only,
         reset,
+        free_disk_space,
+        drop_old_versions_on_derived_data,
         compact,
         by,
         binary_dir,
@@ -171,14 +174,25 @@ async fn main() -> Result<()> {
         );
     }
 
-    // `--reset` empties stores and `--compact` folds their history away,
-    // so each needs the root to itself: refused, not queued, while anyone
+    // `--reset` empties stores and `--free-disk-space` rewrites them, so
+    // each needs the root to itself: refused, not queued, while anyone
     // runs the loop.
-    let alone = !reset.is_empty() || compact;
+    let shrink = if compact || drop_old_versions_on_derived_data {
+        Some(Shrink::Compact)
+    } else if free_disk_space {
+        Some(Shrink::Collect)
+    } else {
+        None
+    };
+    let alone = !reset.is_empty() || shrink.is_some();
     let reset_lock = if alone {
         Some(acquire_or_explain(
             &data_root,
-            if compact { "--compact" } else { "--reset" },
+            if shrink.is_some() {
+                "--free-disk-space"
+            } else {
+                "--reset"
+            },
         )?)
     } else {
         None
@@ -366,14 +380,13 @@ async fn main() -> Result<()> {
         if !reset.is_empty() {
             runner.reset(&graph, &reset).await?;
         }
-        let compact_failed = if compact {
-            compact_and_report(&runner, &graph, &data_root).await?
-        } else {
-            false
+        let shrink_failed = match shrink {
+            Some(how) => shrink_and_report(&runner, &graph, &data_root, how).await?,
+            None => false,
         };
         let Some(own) = own else {
             store.close().await;
-            if compact_failed {
+            if shrink_failed {
                 std::process::exit(2);
             }
             return Ok(());
@@ -525,10 +538,15 @@ async fn follow_or_lock(data_root: &Path, store: &Store, own: &str) -> Result<Ta
     }
 }
 
-/// `--compact`, and one line per step whose tree it shrank. The trees are
-/// measured from outside, as directories, since the runner never opens a
-/// step's store. `true` when some step could not compact.
-async fn compact_and_report(runner: &Runner, graph: &Graph, data_root: &Path) -> Result<bool> {
+/// `--free-disk-space`, and one line per step whose tree it shrank.
+/// The trees are measured from outside, as directories, since the runner
+/// never opens a step's store. `true` when some step could not do it.
+async fn shrink_and_report(
+    runner: &Runner,
+    graph: &Graph,
+    data_root: &Path,
+    how: Shrink,
+) -> Result<bool> {
     let tree = |step: &str| tree_bytes(&data_root.join(step));
     let before: HashMap<String, u64> = graph
         .steps
@@ -539,7 +557,7 @@ async fn compact_and_report(runner: &Runner, graph: &Graph, data_root: &Path) ->
     let mut failed = false;
     let (mut was, mut is) = (0, 0);
     #[allow(clippy::disallowed_macros)]
-    for c in runner.compact(graph).await? {
+    for c in runner.shrink(graph, how).await? {
         match c.answer {
             Ok(()) => {
                 let (from, to) = (before[&c.step], tree(&c.step));
@@ -550,14 +568,14 @@ async fn compact_and_report(runner: &Runner, graph: &Graph, data_root: &Path) ->
             }
             Err(error) => {
                 failed = true;
-                println!("{:<40} could not compact: {error}", c.step);
+                println!("{:<40} could not shrink: {error}", c.step);
             }
         }
     }
     #[allow(clippy::disallowed_macros)]
     {
         if was == 0 {
-            println!("nothing to compact");
+            println!("nothing to give back");
         } else {
             println!(
                 "{:<40} {} → {}",

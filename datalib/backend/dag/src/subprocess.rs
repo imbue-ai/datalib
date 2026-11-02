@@ -62,10 +62,26 @@ pub const RESET_FLAG: &str = "--reset";
 /// shape where it can do that in place, fetches nothing, and says in its
 /// outcome when it cannot (`needs_rerun`).
 pub const MIGRATE_FLAG: &str = "--migrate";
-/// Appended by `datalib-dag --compact`, to a step that takes it
-/// (`StepSpec::compacts`): the step folds history nothing reads into fewer
-/// commits, gives back the disk it held, and runs nothing else.
-pub const COMPACT_FLAG: &str = "--compact";
+/// Appended by `datalib-dag --compact` or `--collect`, to a step that
+/// takes them (`StepSpec::compacts`): the step gives back disk its store
+/// holds and runs nothing else (`step_protocol.md` § Compact and collect).
+/// Collecting keeps every commit; compacting also folds away the history
+/// nothing reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shrink {
+    Collect,
+    Compact,
+}
+
+impl Shrink {
+    pub fn flag(self) -> &'static str {
+        match self {
+            Shrink::Collect => "--collect",
+            Shrink::Compact => "--compact",
+        }
+    }
+}
+
 /// Seconds between a step's checkpoints, at most — see
 /// `config::CheckpointCadence`.
 pub const ENV_CHECKPOINT_CADENCE: &str = datalib_env::DATALIB_DAG_CHECKPOINT_CADENCE;

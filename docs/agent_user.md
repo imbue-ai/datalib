@@ -177,10 +177,8 @@ Useful flags: `--sync <step-id>` (repeatable; runs the named steps and
 everything downstream of them, and nothing else — pending work in other
 sources waits for a full run), `--parallelism N`, `--reset
 <step-id>` (see **Resetting** below; alone it does nothing else,
-with `--sync` it runs first), `--compact` (folds the history of every
-render store and the grid index into one commit and gives back the disk
-it held; their content stays, so nothing re-runs; refused while the app
-is up, where `POST /api/compact {}` does the same), `--binary-dir DIR` (put at the front of
+with `--sync` it runs first), `--free-disk-space` (see **Giving back
+disk** below; refused while the app is up), `--binary-dir DIR` (put at the front of
 every step's `PATH`, so a bare `command` like `datalib-step` resolves
 there; defaults to the config's `binary_dir`, else the directory
 `datalib-dag` itself is in). A sync that fails with "has a shape this build's DDL
@@ -278,6 +276,35 @@ is emptied once it has. The
 Manage screen's row menu offers the same. With no app up,
 `datalib-dag --reset slack/ingest` empties the store alone; add
 `--sync slack/ingest` to download it again at once.
+
+**Giving back disk.** A doltlite store never edits in place, so every
+sync leaves chunks behind that no commit reaches; a store that refills
+whole tables each run (Lightroom, Apple Photos, Apple Messages) can carry
+several times what it holds. Freeing disk space gives it back:
+
+| | what goes | what stays |
+|---|---|---|
+| free disk space | chunks no commit reaches, in every store | every commit of every store |
+| … and drop old versions on derived data | the same, and the older commits of each render store | every commit of every download store; the latest of each render store |
+
+The first loses nothing. Derived data is what datalib rebuilds from the
+downloads: each source's rendered documents. Dropping its old versions
+loses their history, which nothing but the History card reads. The grid
+index is plain SQLite and is not touched.
+
+```sh
+datalib-dag ~/datalib/config.toml --free-disk-space                      # app not running
+datalib-dag ~/datalib/config.toml --free-disk-space --drop-old-versions-on-derived-data
+```
+
+It prints each step's tree before and after. With the app up, `POST
+/api/free_disk_space {"by": "claude"}`, adding
+`"drop_old_versions_on_derived_data": true` for the second, and
+`"targets": ["lightroom/ingest"]` for one step only. It answers 204 when done, or 202 while it runs on; the steps it
+touches, and what reads them, wait meanwhile. Each store needs about its
+own size free on disk while it is rewritten, and takes minutes per ten
+gigabytes. The status bar's "Free up disk space…" (a right-click on the
+data root's size) asks the same.
 
 **Logs.** The run store is where to read what happened.
 `GET /api/runs` lists runs: a run is one stretch of the loop being busy,

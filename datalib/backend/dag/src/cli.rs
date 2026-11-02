@@ -56,8 +56,12 @@ pub const EXAMPLES: &[Example] = &[
         command: "datalib-dag ~/datalib/config.toml --reset slack/ingest --sync slack/ingest --by claude",
     },
     Example {
-        what: "give back the disk the rendered documents' and the grid's history holds; quit the app first",
-        command: "datalib-dag ~/datalib/config.toml --compact",
+        what: "free up disk space, losing nothing; quit the app first",
+        command: "datalib-dag ~/datalib/config.toml --free-disk-space",
+    },
+    Example {
+        what: "free up more, keeping only the latest version of each source's rendered documents; quit the app first",
+        command: "datalib-dag ~/datalib/config.toml --free-disk-space --drop-old-versions-on-derived-data",
     },
     Example {
         what: "list the open syncs (with their request ids), the steps turned off and the steps running",
@@ -110,13 +114,20 @@ pub struct Cli {
     /// runs first. Refused while anything else runs the loop on the root.
     #[arg(long, value_name = "STEP_ID", value_delimiter = ',')]
     pub reset: Vec<String>,
-    /// Fold the history of every store nothing reads the history of (each
-    /// source's rendered documents) into one commit,
-    /// and give back the disk it held. Their content stays as it is, so
-    /// nothing runs again for it. Alone, that is all this invocation does;
-    /// with --sync it runs first. Refused while anything else runs the
-    /// loop on the root.
+    /// Give back the disk every store holds that no commit reaches. Every
+    /// commit stays readable, so nothing is lost and nothing runs again.
+    /// Alone, that is all this invocation does; with --sync it runs first.
+    /// Refused while anything else runs the loop on the root.
     #[arg(long)]
+    pub free_disk_space: bool,
+    /// With --free-disk-space, also keep only the latest version of the
+    /// derived data: what datalib rebuilds from the downloads, which is
+    /// each source's rendered documents. Loses their history; a download's
+    /// history is always kept.
+    #[arg(long, requires = "free_disk_space")]
+    pub drop_old_versions_on_derived_data: bool,
+    /// The old spelling of `--free-disk-space --drop-old-versions-on-derived-data`.
+    #[arg(long, hide = true)]
     pub compact: bool,
     /// Who is asking. The request records it, and the app shows it
     /// ("started by claude").

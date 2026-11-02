@@ -80,9 +80,9 @@ declared fields to your argv, each only when present/non-empty:
 | `--inputs <json>` | the entry's `inputs`, as a JSON string array |
 | `--reset <part>` | only on a reset, and then this invocation is a reset, not a run: see § Reset |
 | `--migrate` | only on the first launch of a build, to a step that takes it, and then this invocation fetches nothing: see § Migrate |
-| `--compact` | only from `datalib-dag --compact`, to a step that takes it, and then this invocation runs nothing else: see § Compact |
+| `--compact`, `--collect` | only when disk is freed (`datalib-dag --free-disk-space`), to a step that takes them, and then this invocation runs nothing else: see § Compact and collect |
 
-A verb (`--reset`, `--migrate`, `--compact`) rides on the command line rather than in
+A verb (`--reset`, `--migrate`, `--compact`, `--collect`) rides on the command line rather than in
 the environment so that a command which has never heard of it refuses it
 instead of running a sync, and so that nothing the step starts inherits
 it.
@@ -571,33 +571,43 @@ store's `_datalib_meta.schema_hash` with this build's and answer
 `needs_rerun` when it differs; a derived store is rebuilt, never
 migrated. The qmd steps have nothing to answer.
 
-## Compact
+## Compact and collect
 
-`datalib-dag --compact`, or the app's `POST /api/compact` (a right-click
-on the data root's size in the status bar), asks every step that takes
-the verb to give back the disk its history holds, once each, with
-`--compact` appended. Nothing that reads a store may be reading it while
-its history goes: the command line needs the root to itself, as
-`--reset` does, and the app's loop holds the steps it asks and every
-step that reads them until it is done (`dag/README.md` §"Resets and
-purges"). The step decides what that means for
-what it wrote, runs nothing else, and reports its version as a run
-would; the runner records it, so a step that kept its content and
-reports a content version moves nothing downstream. Report nothing when
-there is nothing to compact. As with Migrate, only `datalib-step`'s own
-steps take the verb (`StepSpec::compacts`).
+`datalib-dag --free-disk-space`, or the app's `POST /api/free_disk_space`
+(the status bar's "Free up disk space…"), asks every step that takes the
+verbs to give back the disk its store holds, once each: with
+`--compact` appended when old versions of derived data are to be
+dropped (`--drop-old-versions-on-derived-data`,
+`"drop_old_versions_on_derived_data": true`), else `--collect`. Nothing
+that reads a store may be reading it while it is rewritten: the command line needs the root to
+itself, as `--reset` does, and the app's loop holds the steps it asks
+and every step that reads them until it is done (`dag/README.md`
+§"Resets and purges"). The step decides what the verb means for what it
+wrote, runs nothing else, and reports its version as a run would; the
+runner records it, so a step that kept its content and reports a
+content version moves nothing downstream. Report nothing when there is
+nothing to give back. As with Migrate, only `datalib-step`'s own steps
+take the verbs (`StepSpec::compacts`).
 
-`datalib-step` folds the history of the stores nothing reads the
-history of into one commit and runs `dolt_gc`
-(`doltlite_raw::fold_history`): a render store. Its version is its
-tree, which the fold keeps, so nothing runs again for it, and the grid
-index finds its cursor again by the tree it recorded (`grid_rows.md`).
-The grid index is plain SQLite and keeps no history to fold. It refuses a store whose size is more than
-the disk has free, since gc writes the compacted store before it drops
-the old one. A raw store's history is the record of what upstream once
-held, and a time-series store's commits are what its index points at,
-so an ingest and the time-series steps answer with nothing. The
-History card of a compacted store shows one commit.
+`--collect` is lossless: `datalib-step` runs `dolt_gc` on the step's
+doltlite store (`doltlite_raw::collect_garbage`), which deletes only
+chunks no commit, branch or tag reaches, so every commit stays readable.
+A store whose writer refills whole tables, or seals one commit over many
+transactions, can hold several times what its commits reach.
+
+`--compact` is lossy for a render store, whose history nothing reads:
+its history is folded into one commit, then collected
+(`doltlite_raw::fold_history`). Its version is its tree, which the fold
+keeps, so nothing runs again for it, and the grid index finds its cursor
+again by the tree it recorded (`grid_rows.md`). Every other store it
+collects, as `--collect` does: a raw store's history is the record of
+what upstream once held, and a time-series store's commits are what its
+index points at, so neither is ever folded. The History card of a
+compacted store shows one commit. The grid index is plain SQLite, so
+neither verb touches it.
+
+Either verb refuses a store whose size is more than the disk has free,
+since gc writes the compacted store before it drops the old one.
 
 ## Signals: graceful cancellation (optional)
 
@@ -690,7 +700,7 @@ step carries the provider's download config (`common` envelope, the method table
 block, …), the render step only the render knobs (nothing for most
 providers; beeper/signal `period`, perseus `alignment_pairs`, email
 `outlink_format`/`only_render_labels`) — honors `DATALIB_DAG_NOW`,
-`--reset`, `--migrate` and `--compact`, stops at its next consistent point
+`--reset`, `--migrate`, `--compact` and `--collect`, stops at its next consistent point
 on SIGINT and commits there, and emits versions where it has them (the grid
 index claims the hash of its store's tree). Use it as the
 reference implementation.
