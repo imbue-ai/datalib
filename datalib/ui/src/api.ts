@@ -121,6 +121,9 @@ export type SearchRow = {
   diff_status: DiffStatus | null;
   // For a modified row, the columns whose value differs, `|`-joined.
   diff_changed_columns: string | null;
+  // The row's picture, as a `datalib:photo/<id>` name (`uri.ts`). Null on
+  // a row with none of its own.
+  image: string | null;
   // QMD rank score. Present when the row came from a free-text (qmd)
   // search; omitted for a query of structured terms alone.
   score?: number;

@@ -19,9 +19,17 @@ describe("browseColumns", () => {
   /// preset may drop it, and only what the row is and what it is called
   /// come before it, so it is on screen however narrow the card. An
   /// address book's row is a person, and who they are and how to reach
-  /// them is what it is called.
+  /// them is what it is called; a photo's picture is what it is.
   it("shows the contents right after the row's kind and name", () => {
-    const naming = ["kind", "subject_ref", "diff_status", "diff_changed_columns", "phone", "email"];
+    const naming = [
+      "kind",
+      "subject_ref",
+      "diff_status",
+      "diff_changed_columns",
+      "phone",
+      "email",
+      "image",
+    ];
     for (const type of [...browsePresetTypes(), "some_type_we_never_heard_of", "diff"]) {
       const cols = browseColumns(type)!;
       const before = cols.slice(0, cols.indexOf("snippet"));

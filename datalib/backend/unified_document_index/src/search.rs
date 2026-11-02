@@ -152,6 +152,9 @@ pub struct SearchRow {
     pub diff_status: Option<String>,
     /// For a modified row, the columns that differ, `|`-joined.
     pub diff_changed_columns: Option<String>,
+    /// The row's picture, as a `datalib:photo/…` name; `None` on a row
+    /// with none of its own.
+    pub image: Option<String>,
     /// QMD-routed rank score for this row, when the search went through qmd.
     /// `None` for a query of structured terms alone. Surfaced to the UI as
     /// a sortable "Score" column.

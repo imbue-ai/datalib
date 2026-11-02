@@ -368,10 +368,11 @@ built, turns a click into `place:<cell>` at the zoom it is drawn at.
    the contact sheet without a uuid and the photo with one. Both preview
    formats; tested by starting the binary over catalog 03's previews
    (`applets:photos_catalog_03`).
-5. **Partly built.** The `serves` lookup, and opening a photo row: the
-   document card hands a photo to the applet's card, and beside the
-   search list shows its picture. The grid's thumbnail cell is not
-   built.
+5. **Built.** The `serves` lookup; opening a photo row (the document
+   card hands a photo to the applet's card, and beside the search list
+   shows its picture); and the grid's Picture column, an `image` column
+   the grid shows as soon as a row in the results has one. A Lightroom
+   source's Browse card opens with it beside the title.
 6. **Time zones by position** (§5 rule 3), once §9 settles the data.
 
 Later: Apple Photos through the same `photos` table; a RAW original's
