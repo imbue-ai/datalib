@@ -8,7 +8,6 @@ platform.
 
 QMD_FIXTURE_DATA = [
     "//tests/fixtures:ingested/backend_index.sqlite",
-    "//tests/fixtures:ingested/backend_search_terms.sqlite",
     "//tests/fixtures:ingested/qmd.tar",
     "//tests/fixtures:ingested/qmd-index.tar",
     "@nodejs_host//:node_bin",

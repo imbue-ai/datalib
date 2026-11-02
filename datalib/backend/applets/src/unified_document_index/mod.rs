@@ -411,7 +411,7 @@ async fn answer_search(s: &Index, p: SearchParams) -> SearchResponse {
         refused: vec![why],
         ..SearchResponse::unread(Vec::new())
     };
-    if let Some(why) = refusal(&s.root, &parsed) {
+    if let Some(why) = parsed.refusal() {
         return refused(why);
     }
     let (parsed, q) = match with_people(&s.root, &q, parsed).await {
@@ -617,7 +617,7 @@ async fn groups_handler(
     let q = p.q.unwrap_or_default();
     let parsed = parse_query(&q);
     let mut out = GroupsResponse::default();
-    if let Some(why) = refusal(&s.root, &parsed) {
+    if let Some(why) = parsed.refusal() {
         out.refused.push(why);
         return Json(out);
     }
@@ -1004,12 +1004,11 @@ async fn ranked(
 /// the words it matched.
 type Ranking = Vec<(String, results::Hit)>;
 
-/// The search terms file's ranking, and the grid commit the file
-/// reflects.
+/// The search terms' ranking, and the grid generation it was read at.
 type TermsRanking = (Ranking, Option<Option<String>>);
 
 /// The Fields tab: the ids, people, titles and names a row answers to,
-/// from the search terms file, which a root has once `grid_index` has run.
+/// from the grid index's search terms.
 /// Every match when other terms narrow the search, since they are applied
 /// after this list.
 async fn fields_ranking(s: &Index, parsed: &ParsedQuery) -> Result<TermsRanking, SearchFailure> {
@@ -1529,22 +1528,6 @@ async fn people(
     }
 }
 
-/// Why the grid cannot read `parsed`: the query's own refusal, or a key
-/// that reads the search terms on a root whose first index pass has not
-/// written them yet.
-pub fn refusal(root: &std::path::Path, parsed: &ParsedQuery) -> Option<String> {
-    use datalib_unified_document_index::query::Field;
-    parsed.refusal().or_else(|| {
-        let key = parsed.terms.iter().find_map(|t| match t.field {
-            Field::Terms(k) => Some(k.key),
-            _ => None,
-        })?;
-        (!datalib_runtime::layout::search_terms_db(root).exists()).then(|| {
-            format!("`{key}:` reads the search terms, which the first sync of the index writes")
-        })
-    })
-}
-
 /// `parsed` with each `me` and `contact:` value given the handles it
 /// reaches, and the key its results are cached under: the query and
 /// those handles, so a search after they change is a new search.
@@ -1560,8 +1543,8 @@ pub async fn with_people(
 /// Each `me` value given the owner's handles: `me:self`, the stand-in
 /// sources write for them, every handle a source says is its account's
 /// own, and every handle of the contacts the person marked as themself,
-/// read from the contacts store now. Refused when the search terms file
-/// predates the accounts' handles.
+/// read from the contacts store now. Refused when the index predates the
+/// accounts' handles.
 async fn with_me(
     root: &std::path::Path,
     q: &str,
@@ -1989,29 +1972,13 @@ mod tests {
         let pool = open_index(&datalib_runtime::layout::grid_index_db(root))
             .await
             .unwrap();
-        let lock = WriteLock::new(pool.clone());
+        let lock = WriteLock::for_index(pool.clone());
         for row in rows {
             apply_one(&lock, root, &own_document(root, row))
                 .await
                 .unwrap();
         }
-        datalib_etl_render::grid_index::seal(&pool).await.unwrap();
-        pool.close().await;
-    }
-
-    /// What the `grid_index` step does after its pass.
-    pub(super) async fn sync_terms(root: &std::path::Path) {
-        let pool = datalib_etl_render::grid_index::open_index(
-            &datalib_runtime::layout::grid_index_db(root),
-        )
-        .await
-        .unwrap();
-        datalib_etl_render::search_terms::sync(
-            &pool,
-            &datalib_runtime::layout::search_terms_db(root),
-        )
-        .await
-        .unwrap();
+        datalib_etl_render::grid_index::seal(&lock).await.unwrap();
         pool.close().await;
     }
 
@@ -2069,9 +2036,8 @@ mod tests {
         );
     }
 
-    /// A pasted uuid or address is answered from the search terms file, never by
-    /// qmd, which this root has no index for. Before the terms are written
-    /// the search says the index is not built, not that nothing matched.
+    /// A pasted uuid or address is answered from the search terms, never by
+    /// qmd, which this root has no index for.
     #[tokio::test]
     async fn an_identifier_search_is_answered_from_the_terms_without_qmd() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2094,11 +2060,6 @@ mod tests {
         )
         .await;
         let qmd_missing = |r: &SearchResponse| r.query_echo["qmd_index_missing"] == true;
-
-        let before = search(&index_over(tmp.path()).await, a, None, 10, None).await;
-        assert!(qmd_missing(&before), "{:?}", before.query_echo);
-
-        sync_terms(tmp.path()).await;
         let s = index_over(tmp.path()).await;
         let by_id = search(&s, a, None, 10, None).await;
         assert!(!qmd_missing(&by_id), "{:?}", by_id.query_echo);
@@ -2130,7 +2091,7 @@ mod tests {
         let pool = open_index(&datalib_runtime::layout::grid_index_db(root))
             .await
             .unwrap();
-        let lock = WriteLock::new(pool.clone());
+        let lock = WriteLock::for_index(pool.clone());
         for (mut row, supplied) in rows {
             row.set_supplied_terms(
                 supplied
@@ -2141,7 +2102,7 @@ mod tests {
                 .await
                 .unwrap();
         }
-        datalib_etl_render::grid_index::seal(&pool).await.unwrap();
+        datalib_etl_render::grid_index::seal(&lock).await.unwrap();
         pool.close().await;
     }
 
@@ -2195,7 +2156,6 @@ mod tests {
         use datalib_contacts::{store_path, ContactKind, Store};
         let tmp = tempfile::tempdir().unwrap();
         mail(tmp.path()).await;
-        sync_terms(tmp.path()).await;
         let s = index_over(tmp.path()).await;
         let found = |q: &'static str| {
             let s = s.clone();
@@ -2227,15 +2187,14 @@ mod tests {
         assert!(found("from:me").await.is_empty());
     }
 
-    /// A terms file written before it held the account's handles refuses
+    /// An index written before it held the account's handles refuses
     /// `me` by name, where it would otherwise fail on a missing table or
     /// quietly find only the stand-in "Me".
     #[tokio::test]
-    async fn me_on_a_terms_file_without_the_accounts_handles_says_so() {
+    async fn me_on_an_index_without_the_accounts_handles_says_so() {
         let tmp = tempfile::tempdir().unwrap();
         mail(tmp.path()).await;
-        sync_terms(tmp.path()).await;
-        let path = datalib_runtime::layout::search_terms_db(tmp.path());
+        let path = datalib_runtime::layout::grid_index_db(tmp.path());
         use sqlx::{ConnectOptions, Connection};
         let mut conn = sqlx::sqlite::SqliteConnectOptions::new()
             .filename(datalib_runtime::plain_sqlite::uri(&path))
@@ -2269,17 +2228,6 @@ mod tests {
     async fn a_person_is_found_in_the_role_the_key_names() {
         let tmp = tempfile::tempdir().unwrap();
         mail(tmp.path()).await;
-        let before = search(&index_over(tmp.path()).await, "from:ann", None, 10, None).await;
-        assert!(
-            before
-                .refused
-                .iter()
-                .any(|r| r.contains("`from:` reads the search terms")),
-            "{:?}",
-            before.refused
-        );
-
-        sync_terms(tmp.path()).await;
         let s = index_over(tmp.path()).await;
         for (q, want) in [
             ("from:Ann@Example.com", vec!["m-1"]),
@@ -2332,7 +2280,6 @@ mod tests {
             ],
         )
         .await;
-        sync_terms(tmp.path()).await;
         let s = index_over(tmp.path()).await;
         for (q, want) in [
             ("with:ann@example.com", vec!["m-ann", "card-ann"]),
@@ -2351,7 +2298,6 @@ mod tests {
     async fn a_person_key_suggests_handles_and_names() {
         let tmp = tempfile::tempdir().unwrap();
         mail(tmp.path()).await;
-        sync_terms(tmp.path()).await;
         let s = index_over(tmp.path()).await;
         let values = |key: &str, typed: &str, q: &str| {
             let params = columns::ValuesParams {
@@ -2436,7 +2382,6 @@ mod tests {
             ],
         )
         .await;
-        sync_terms(root).await;
     }
 
     /// A name reaches the handles seen under it: Picard is "Jean-Luc" on
@@ -2694,7 +2639,10 @@ mod tests {
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
-        datalib_etl_render::grid_index::seal(&pool).await.unwrap();
+        sqlx::query("UPDATE store_generation SET generation = generation + 1")
+            .execute(&pool)
+            .await
+            .unwrap();
         pool.close().await;
         let s = index_over(tmp.path()).await;
 
@@ -2960,7 +2908,6 @@ mod tests {
     async fn a_star_keeps_the_rows_with_a_value() {
         let tmp = tempfile::tempdir().unwrap();
         crew(tmp.path()).await;
-        sync_terms(tmp.path()).await;
         let s = index_over(tmp.path()).await;
 
         let signed = search(&s, "author:*", None, 10, None).await;

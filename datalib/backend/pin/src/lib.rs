@@ -220,9 +220,9 @@ pub async fn holds_a_table(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
 }
 
 // No ping before handing the connection out: an acquire cancelled during
-// it drops the connection, and a reader loses what it set up there (the
-// search applet's attached terms file) along with the open. The ping
-// proves nothing in process: a dead connection fails its next query.
+// it drops the connection, and a reader loses what it set up there along
+// with the open. The ping proves nothing in process: a dead connection
+// fails its next query.
 async fn reader_pool(opts: SqliteConnectOptions) -> Result<SqlitePool, sqlx::Error> {
     SqlitePoolOptions::new()
         .max_connections(1)
@@ -350,7 +350,7 @@ mod tests {
     /// A search the browser hangs up on is dropped wherever it stands,
     /// inside the pool's hand-out of its connection too. The pool must
     /// keep that connection: a fresh one has lost what the reader set up
-    /// on it, which for the search applet was the attached terms file.
+    /// on it.
     #[tokio::test]
     async fn a_cancelled_acquire_keeps_the_readers_connection() {
         use std::future::Future;

@@ -851,9 +851,6 @@ index over the term's text alone, `content=''` and
 - **A reader of one commit matches that commit's terms**, through a
   detached `<file>@<hash>` open and through a held read transaction
   alike.
-- **A plain SQLite file attached to a reader of one commit matches
-  too**, and a join from its terms to the store's tables seeks keys on
-  both sides. The plain file is read as it is now, not at the commit.
 
 **What it costs to write, measured** (shell, 0.50.14, 732k synthetic
 terms for 122k rows; not a test). One transaction built the table and

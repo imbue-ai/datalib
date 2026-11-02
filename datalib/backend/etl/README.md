@@ -172,9 +172,7 @@ pings the idle connection before handing it out, which happens whenever
 a request is dropped mid-read (the gateway hangs up on a search the
 person typed past). So a reader's pool (`datalib_pin`) turns that ping
 off, and session state is set up on whichever connection a read holds,
-never once at open: a writer's branch in `after_connect`, and the search
-applet's attached terms file asked of its connection on every read
-(`DoltRepo::pinned`).
+never once at open: a writer's branch in `after_connect`.
 
 Every *other* sqlx pool in the tree turns them off too, for a second
 reason: either setting gives the pool a maintenance task, and in sqlx
@@ -350,15 +348,7 @@ table, `BEGIN`/`COMMIT` around plain reads (the held read transaction),
 `dolt_branches`, a read-only open of `<file>@<hash>` with a
 `COUNT(*)`, a `_datalib_meta` read and the rows of a key range with
 their blobs, at a commit the writer has since moved past (the
-time-series applet's read), and, on that open or on
-the held read transaction's connection to `main`, an `ATTACH` of a
-plain SQLite file read-only (after a `pragma_database_list` read asking
-whether it is attached already) with an FTS5 `MATCH` on it and a join
-from it to the store's tables — and that list is the allowlist. The plain
-file is in WAL mode, so a transaction that reads it holds off only its
-writer's checkpoint, never a commit; still keep one to a request's
-queries, since the checkpoint at the end of the writer's sync waits for
-it. Any other
+time-series applet's read) — and that list is the allowlist. Any other
 statement a reader adds is presumed guilty until
 `doltlite_two_process_test` has run with it. Looking like a read is not
 enough: a read-only `dolt_status` once failed the writer's commit and

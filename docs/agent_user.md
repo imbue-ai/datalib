@@ -51,8 +51,7 @@ write the one index file under `unified_document_index/qmd_aggregator/`):
 ├── <group>/render_markdown/        # per-source markdown tree
 │   └── indexed_markdown.doltlite_db  #   its rows, edges + render problems
 ├── unified_document_index/                  # derived; carries a CACHEDIR.TAG
-│   ├── grid_index/db.sqlite        # the grid_rows SQL index (plain SQLite) — query this
-│   ├── grid_index/search_terms.sqlite     # each row's ids, people, labels and names, full-text (plain SQLite)
+│   ├── grid_index/db.sqlite        # the grid_rows SQL index and each row's search terms (plain SQLite) — query this
 │   └── qmd_aggregator/qmd/index.sqlite  # semantic search index
 └── system/                         # the server's own state
     ├── supervisor.sqlite           # sync requests, steps turned off, and the loop's record (plain SQLite)
@@ -463,13 +462,13 @@ Pick the surface that fits the question:
   the values one takes, most rows first. A key the search does not
   have is refused by name, in `refused`, rather than ignored. Free text
   made only of uuids and handles (an email address, `tel:+…`,
-  `slack:T…/U…`) is looked up in `grid_index/search_terms.sqlite`, not sent to
+  `slack:T…/U…`) is looked up in the grid index's search terms, not sent to
   qmd: every row that answers to each one, best match first, with
   `score` saying how (5 its own id, 4 its author or an addressee,
   3 someone copied or mentioned, or what it is in, 2 its title or a label, 1 a name
   it shows) and `snippet` naming the match.
   `tab=` picks how free text is answered, each its own list:
-  `fields` (the search terms file, any word as the start of one), `words`
+  `fields` (the search terms, any word as the start of one), `words`
   (every document's text by BM25, from qmd's keyword index, a document
   holding the words as typed first) or `meaning` (the 1,000 documents
   nearest the text by cosine over qmd's vectors). Each is ranked within

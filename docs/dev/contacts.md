@@ -737,16 +737,16 @@ link at once, as chips do. A root without the contacts app refuses
 unquoted `me` (`from:me`, `to:me`, `with:me`) matches `me:self`, the
 stand-in the messaging backups write for the owner, and every handle a
 source says is its account's own: the handles of each source contact
-marked `account`, which the search terms file keeps in
-`account_handles`, written whole on each pass beside `names`; and every
+marked `account`, which the grid index keeps in `account_handles`,
+written whole on each pass beside `names`; and every
 handle of each of your contacts marked as you (*This is me* on its
 card, the store's `me` table), as `contact:` reaches them. Both are
 read when the search runs and go into the cache key (`with_me` in the
 applet), so marking a contact, or linking a handle to one that is
 marked, changes the next search with no re-index. More than one
 contact can be marked, for a duplicate not merged yet; a merge carries
-the mark to the survivor. A terms file built before that table
-existed refuses `me` by name until the index's next sync rewrites it. A
+the mark to the survivor. An index built before that table existed
+refuses `me` by name until the index's next sync rebuilds it. A
 quoted `"me"` is the text.
 
 A source marks its owner by putting a record of them marked `account`

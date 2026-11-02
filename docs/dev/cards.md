@@ -533,7 +533,7 @@ besides components:
   typed. Free text has four answers, a
   small tab each at the start of that row (`grid/searchTabs.ts`):
   **Best** (the other three fused, a search with no `tab=`), then
-  **Fields** (the search terms file), **Words** (BM25 over qmd's keyword
+  **Fields** (the search terms), **Words** (BM25 over qmd's keyword
   index) and **Meaning** (qmd's vectors), the search's `tab=`. All four
   are asked at once and Best opens as the search starts; if it fails,
   the first tab with rows opens instead. A tab that comes back while

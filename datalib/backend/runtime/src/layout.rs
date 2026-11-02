@@ -38,8 +38,9 @@ pub const GRID_DB: &str = "db.sqlite";
 /// What [`GRID_DB`] was named while it was a doltlite store. The
 /// `grid_index` step deletes it, and its lock files, when it opens the index.
 pub const RETIRED_GRID_DB: &str = "db.doltlite_db";
-/// The grid's terms index, beside its store.
-pub const SEARCH_TERMS_DB: &str = "search_terms.sqlite";
+/// The file the grid's search terms were kept in before the index held
+/// them. The `grid_index` step deletes it when it opens the index.
+pub const RETIRED_TERMS_DB: &str = "search_terms.sqlite";
 /// The qmd index's directory, relative to [`UNIFIED_DOCUMENT_INDEX_DIR`]: the
 /// `qmd_aggregator` step's tree, so its size is counted against that
 /// step. Every qmd step writes the one index under it, which qmd lays
@@ -139,14 +140,6 @@ pub fn grid_index_dir(data_root: &Path) -> PathBuf {
 /// helper is the contract between them.
 pub fn grid_index_db(data_root: &Path) -> PathBuf {
     grid_index_dir(data_root).join(GRID_DB)
-}
-
-/// `data_root/unified_document_index/grid_index/search_terms.sqlite` — every id, person,
-/// title and name a grid row answers to, as a full-text index. Plain
-/// SQLite: written by the `grid_index` step after each pass, read by the
-/// applet beside the grid generation it reflects.
-pub fn search_terms_db(data_root: &Path) -> PathBuf {
-    grid_index_dir(data_root).join(SEARCH_TERMS_DB)
 }
 
 pub fn unified_time_series_index_dir(data_root: &Path) -> PathBuf {

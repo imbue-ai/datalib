@@ -25,7 +25,7 @@ use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection};
 
 use super::tabs::SearchTab;
-use super::tests::{index_over, search, search_tab, sync_terms, uuids};
+use super::tests::{index_over, search, search_tab, uuids};
 use super::Index;
 
 /// 2369-04-15 08:30:00 UTC.
@@ -335,13 +335,12 @@ async fn render_cast(root: &Path) -> HashSet<(String, SearchTermKind, String)> {
     let pool = open_index(&datalib_runtime::layout::grid_index_db(root))
         .await
         .unwrap();
-    let lock = WriteLock::new(pool.clone());
+    let lock = WriteLock::for_index(pool.clone());
     for md in &docs {
         apply_one(&lock, root, md).await.unwrap();
     }
-    datalib_etl_render::grid_index::seal(&pool).await.unwrap();
+    datalib_etl_render::grid_index::seal(&lock).await.unwrap();
     pool.close().await;
-    sync_terms(root).await;
     supplied
 }
 
@@ -386,7 +385,7 @@ async fn how_it_is_filed(
     }
     grid.close().await.unwrap();
 
-    let mut file = read_only(datalib_runtime::layout::search_terms_db(root))
+    let mut file = read_only(datalib_runtime::layout::grid_index_db(root))
         .connect()
         .await
         .unwrap();

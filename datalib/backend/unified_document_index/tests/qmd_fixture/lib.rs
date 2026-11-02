@@ -54,26 +54,18 @@ pub fn materialize_root_with_grid(dst: &Path) {
     copy_grid_index(dst);
 }
 
-/// The fixture's grid index and its search terms file, where a root keeps them.
+/// The fixture's grid index, where a root keeps it.
 pub fn copy_grid_index(dst: &Path) {
     let db = datalib_runtime::layout::grid_index_db(dst);
     std::fs::create_dir_all(db.parent().expect("a grid index has a directory"))
         .expect("create grid dir");
-    for (from, to) in [
-        ("ingested/backend_index.sqlite", db),
-        (
-            "ingested/backend_search_terms.sqlite",
-            datalib_runtime::layout::search_terms_db(dst),
-        ),
-    ] {
-        std::fs::copy(fixture(from), &to).expect("copy the grid index");
-        // The fixture output is read-only in the runfiles tree; doltlite
-        // wants to open it writable even though we only read.
-        let mut perms = std::fs::metadata(&to).expect("stat").permissions();
-        #[allow(clippy::permissions_set_readonly_false)]
-        perms.set_readonly(false);
-        std::fs::set_permissions(&to, perms).expect("chmod");
-    }
+    std::fs::copy(fixture("ingested/backend_index.sqlite"), &db).expect("copy the grid index");
+    // The fixture output is read-only in the runfiles tree; doltlite
+    // wants to open it writable even though we only read.
+    let mut perms = std::fs::metadata(&db).expect("stat").permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
+    perms.set_readonly(false);
+    std::fs::set_permissions(&db, perms).expect("chmod");
 }
 
 /// The `DATALIB_RUNTIME_DIR` tree `datalib_runtime::node_runtime`

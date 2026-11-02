@@ -1,14 +1,11 @@
 //! The search bar's keys that read the search terms rather than a
 //! `grid_rows` column: a person in one role or in any, and a label
-//! (docs/dev/plans/search_autocomplete.md § "The keys"). The terms file
-//! is attached to the grid's reader under [`ATTACHED_AS`], so a term on
-//! one of these keys is one more clause of the grid's own query.
+//! (docs/dev/plans/search_autocomplete.md § "The keys"). The terms are
+//! tables of the grid index, so a term on one of these keys is one more
+//! clause of the grid's own query.
 
 use datalib_handle::Handle;
 use datalib_schema::search_terms::SearchTermKind as Kind;
-
-/// The schema name the search terms file is attached under.
-pub const ATTACHED_AS: &str = "search_terms";
 
 /// Which kinds of term a key reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
