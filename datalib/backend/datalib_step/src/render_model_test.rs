@@ -1209,6 +1209,37 @@ async fn a_render_reports_its_head_as_the_store_spells_it() {
     assert_eq!(claimed, head.into_iter().collect::<Vec<_>>());
 }
 
+/// Every download commits a `sync_runs` row, so a raw store's head moves
+/// on every sync. A render that then rewrote its cursor moved its own
+/// version too, and everything downstream (the keyword index, the grid
+/// index) ran again with nothing to do: about 8 s a source per refresh.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_raw_commit_with_nothing_to_render_moves_no_version() {
+    let td = tempfile::tempdir().unwrap();
+    let mut world = World::new(td.path()).await;
+    if !world.dolt {
+        return;
+    }
+    let synth = SynthRender::new(world.raw_db.clone());
+    world
+        .commit(&[Mutation::RenameAuthor("a0".into(), "ann".into()), parent(1)])
+        .await;
+    let first = world.render_report(&synth, false).await.unwrap().head;
+
+    let pool = doltlite_raw::open(&world.raw_db, RAW_DDL).await.unwrap();
+    doltlite_raw::start_run(&pool, &serde_json::json!({}))
+        .await
+        .unwrap();
+    doltlite_raw::commit_run(&pool, "a run that fetched nothing")
+        .await
+        .unwrap();
+    pool.close().await;
+
+    let second = world.render_report(&synth, false).await.unwrap();
+    assert_eq!(second.docs, 0);
+    assert_eq!(second.head, first, "nothing was rendered, so nothing moved");
+}
+
 // ── what a bucket that built nothing does to its documents ──────────
 
 fn parent(n: u32) -> Mutation {

@@ -398,7 +398,11 @@ your app's own calls can be refused.
 
 **With the app (`datalib-http`) running**, an edit to `config.toml` is
 picked up at once: a step that is running finishes under the
-definition it started with, and its next start uses the new one.
+definition it started with, and its next start uses the new one. So to
+shrink a first sync that is taking too long (a narrower `since`, fewer
+channels), edit the config, then stop the request
+(`datalib-dag stop`, or `POST /api/requests/<id>/stop`) and sync again:
+what the stopped run sealed is kept.
 
 **With no app up**, the loop is a `datalib-dag`, and it reads the
 config only when it goes from idle to busy. A `datalib-dag --sync`
