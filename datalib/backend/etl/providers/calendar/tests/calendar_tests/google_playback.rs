@@ -86,6 +86,32 @@ async fn try_run_in(
     summary
 }
 
+/// A latchkey gateway whose permissions leave out `calendarList` answers
+/// with its own 403. The download said "the service did not accept the
+/// credential" and to log in again, which cannot help.
+#[tokio::test]
+async fn a_request_latchkey_does_not_permit_is_not_a_refused_credential() {
+    let dir = tempfile::tempdir().unwrap();
+    let (tape, store) = (dir.path().join("tape"), dir.path().join("store"));
+    fixture(
+        &tape,
+        &calendar_list_url(None),
+        HttpResponse {
+            status: 403,
+            headers: Default::default(),
+            body: br#"{"error":"Error: Request not permitted.","latchkeyError":true}"#.to_vec(),
+            duration_ms: 0,
+        },
+    );
+    let err = try_run_in(&tape, &store, None).await.unwrap_err();
+    assert_eq!(
+        datalib_etl::upstream::Upstream::in_chain(&err),
+        Some(datalib_etl::upstream::Upstream::NotPermitted),
+        "{err:#}"
+    );
+    assert!(!format!("{err:#}").contains("Log in"), "{err:#}");
+}
+
 async fn ids(store: &Path) -> Vec<String> {
     let db = RawDb::open(&db_path_for(store))
         .await

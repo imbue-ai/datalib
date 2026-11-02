@@ -9,6 +9,7 @@
 mod append;
 mod check_params;
 mod compact;
+mod config_backup;
 mod dispatch;
 mod embedding_map;
 mod events;
@@ -59,10 +60,12 @@ use crate::source::StepEnv;
 const LONG_ABOUT: &str = "\
 The built-in step program: datalib-dag runs it for every step in a config \
 with no `command`, and tells it through the environment which function to \
-perform (ingest, render_markdown, grid_index, …) for which group. Do not \
-run it that way yourself: to run one step, `datalib-dag <config> --sync \
-<group>/<function>` runs it, and every step that reads it after it, and \
-records what it published. `datalib-step help <function>` shows how for each.
+perform (ingest, render_markdown, grid_index, …) for which group. To run one \
+step in a data root, `datalib-dag <config> --sync <group>/<function>` runs \
+it, and every step that reads it after it, and records what it published. \
+`datalib-step help <function>` shows how for each. Run by hand, with the \
+variables docs/dev/step_protocol.md § \"Running datalib-step by hand\" lists, \
+it works the same, but no step that reads it learns what it wrote.
 
 Its subcommands are tools you can run: ask a source which account its \
 credentials reach, put the runtime and models in place ahead of a first \
@@ -208,7 +211,7 @@ enum Cmd {
         /// and add its steps to the `inputs` of the index steps that read
         /// them. Refused, writing nothing, when the config already has the
         /// group or would not then check clean. The previous file is kept
-        /// as `<file>.bak`.
+        /// as `<file>.<UTC time>.bak`, one per append.
         #[arg(long, value_name = "CONFIG")]
         append: Option<PathBuf>,
         /// With --append: which ingest method's stanza, for a source with
@@ -269,7 +272,8 @@ enum Cmd {
     /// Utility (not a pipeline step): rewrite a config file in the order
     /// data flows — each step below the steps it reads, each group's
     /// entries together — moving an entry only when it has to, and
-    /// its comments with it. The previous text is kept as `<file>.bak`.
+    /// its comments with it. The previous text is kept as
+    /// `<file>.<UTC time>.bak`.
     /// Needs no data root.
     TopoSortConfig {
         /// The config file: `<data root>/config.toml`.
@@ -452,8 +456,9 @@ async fn main() {
         .expect("no data root: set DATALIB_DAG_DATA_ROOT or run inside one");
     let emitter = Emitter::new(step_id);
 
-    // SIGINT (terminal Ctrl-C, or forwarded by the runner on cancel):
-    // raise the stop flag and let the step end at a boundary of its own
+    // SIGINT (terminal Ctrl-C, or forwarded by the runner on cancel) or
+    // SIGTERM (a process manager stopping a step run by hand, as
+    // `datalib-dag` and `datalib-http` take it too): raise the stop flag and let the step end at a boundary of its own
     // choosing — a fetch loop stops taking units, the seal path seals at
     // the next consistent point, `finish` commits — then report
     // `cancelled`. Nothing is committed *from here*: a commit made by a
@@ -463,8 +468,14 @@ async fn main() {
     let stop = datalib_etl::stop::StopFlag::new();
     let sig_stop = stop.clone();
     let sig_emitter = emitter.clone();
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("install the SIGTERM handler");
     tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
+        let asked = tokio::select! {
+            r = tokio::signal::ctrl_c() => r.is_ok(),
+            _ = sigterm.recv() => true,
+        };
+        if asked {
             sig_stop.request();
             tracing::info!("interrupted; stopping at the next consistent point");
             tokio::time::sleep(INTERRUPT_GRACE).await;

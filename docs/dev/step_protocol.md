@@ -623,8 +623,9 @@ writer's `open` discards whatever you wrote after your last commit. So
 is anything you spawned that is still in your process group, even once
 you have exited: stop your children before you exit.
 
-`datalib-step` does this for the built-in ingests: SIGINT raises a
-stop flag (`datalib_etl::stop::StopFlag`, on `DownloadControl`) that
+`datalib-step` does this for the built-in ingests, on SIGINT or
+SIGTERM (what a process manager sends a step run by hand): either one
+raises a stop flag (`datalib_etl::stop::StopFlag`, on `DownloadControl`) that
 the fetch loops read before starting a unit of work — a channel, a
 conversation, a batch of messages — that makes the seal path seal at
 the next consistent point whatever the cadence says, and that ends a
@@ -704,6 +705,55 @@ providers; beeper/signal `period`, perseus `alignment_pairs`, email
 on SIGINT and commits there, and emits versions where it has them (the grid
 index claims the hash of its store's tree). Use it as the
 reference implementation.
+
+### Running `datalib-step` by hand
+
+An app that embeds one download can run `datalib-step` itself, with no
+config and no loop, into a folder of its own. It needs the working
+directory set to that folder, and in the environment:
+
+- `DATALIB_DAG_DATA_ROOT`, the same folder, absolute;
+- `DATALIB_DAG_GROUP` and `DATALIB_DAG_FUNCTION`, such as `slack` and
+  `ingest`;
+- `DATALIB_DAG_STEP`, `<group>/<function>`;
+- `DATALIB_DAG_GROUP_TYPE`, the source type, for `ingest` and the
+  renders;
+- `DATALIB_DAG_INPUTS`, for a step that reads another (a render reads
+  `<group>/ingest`).
+
+The params go in a JSON file passed as `--params-file`, shaped as the
+step's `params` table would be. The step checkpoints as it goes and
+writes the event protocol on stdout, as under the runner. What the
+runner adds is lost: nothing records its version, so no step that reads
+it knows to run, and no other process is told. A run killed part way
+leaves its `sync_runs` row `running` until the next run of that step
+marks it `interrupted`.
+
+Four things a hand run has to get right that the runner does for it:
+
+- **Stop it with SIGINT or SIGTERM, and wait for it.** Either one makes
+  it stop at its next consistent point and seal what it has; one still
+  running ten seconds later exits without that last seal. Give it more
+  than those ten seconds before anything harsher: supervisord's
+  `stopwaitsecs` and Docker's stop timeout both default to exactly ten,
+  so raise them to fifteen. SIGKILL ends it at once: what it fetched
+  since its last seal is discarded, and the next run fetches it again.
+- **Leave `DATALIB_PARENT_PIPE` unset**, unless you hand it a pipe on
+  that descriptor and keep the other end open. A process the applet
+  gateway started has it set to `0`, and a step that inherits it
+  watches its own stdin: `/dev/null` there makes it refuse to start, and
+  a pipe that gets closed makes it exit without sealing.
+- **Don't run a step the app's loop also runs on that data root.** The
+  store's lock refuses a second writer at open, naming the first
+  (`already has a writer: datalib-step (pid N)`). The two never write at
+  once, but whichever comes second fails. When that is the loop's run,
+  it is reported as a `data` failure, not retried, and its request
+  ends failed. Use a folder no loop serves, or turn the step off in the
+  loop (`datalib-dag turn-off`, `POST /api/steps/<id>/turn_off`) while
+  you run it.
+- **Give an absolute `DATALIB_DAG_DATA_ROOT`.** The step runs with the
+  data root as its working directory, so a relative one is resolved a
+  second time, beneath itself.
 
 The index functions' ids are fixed at `unified_document_index/<function>`, and
 the qmd steps share one index file; the rules are in

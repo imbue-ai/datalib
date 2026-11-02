@@ -26,7 +26,7 @@ pub fn classify(e: &anyhow::Error) -> FailureKind {
         return FailureKind::Permission;
     }
     match Upstream::in_chain(e) {
-        Some(Upstream::CredentialRefused) => return FailureKind::Auth,
+        Some(Upstream::CredentialRefused | Upstream::NotPermitted) => return FailureKind::Auth,
         Some(Upstream::RateLimited) => return FailureKind::RateLimited,
         Some(Upstream::Unavailable) => return FailureKind::Transient,
         None => {}
@@ -49,16 +49,43 @@ pub fn emit_hint_on_failure(
     res: &Result<Vec<OutputClaim>>,
 ) {
     let Err(e) = res else { return };
-    let msg = match classify(e) {
-        FailureKind::Auth => auth_hint_for(source_type),
-        FailureKind::Permission => PERMISSION_HINT.to_string(),
-        _ => return,
+    let gateway = std::env::var_os(datalib_env::LATCHKEY_GATEWAY).is_some_and(|v| !v.is_empty());
+    let Some(msg) = hint_for(e, source_type, gateway) else {
+        return;
     };
     emitter.event(&Event::Hint {
         step: String::new(), // re-tagged by the runner
         msg,
     });
 }
+
+/// The fix-it hint for `e`, if a person fixes it. `gateway`: latchkey's
+/// credentials live behind a gateway, where `latchkey auth browser` is
+/// refused and the gateway's own page is where a sign-in or a permission
+/// is granted.
+pub fn hint_for(e: &anyhow::Error, source_type: SourceType, gateway: bool) -> Option<String> {
+    Some(match classify(e) {
+        FailureKind::Auth if Upstream::in_chain(e) == Some(Upstream::NotPermitted) => {
+            NOT_PERMITTED_HINT.to_string()
+        }
+        FailureKind::Auth if gateway => GATEWAY_AUTH_HINT.to_string(),
+        FailureKind::Auth => auth_hint_for(source_type),
+        FailureKind::Permission => PERMISSION_HINT.to_string(),
+        _ => return None,
+    })
+}
+
+const NOT_PERMITTED_HINT: &str = "\
+latchkey refused this request on its permissions before it reached the \
+service, so signing in again will not help. Grant the permission it \
+needs: behind a latchkey gateway, ask for it where the gateway is \
+managed; on this machine, edit latchkey's permissions file. The \
+source's INGEST.md lists the API calls it makes.";
+
+const GATEWAY_AUTH_HINT: &str = "\
+The service did not accept the credential the latchkey gateway holds \
+for it, or the gateway holds none. Sign in again where the gateway is \
+managed; `latchkey auth` commands are refused through a gateway.";
 
 /// macOS keeps some folders private (Desktop, Documents, Downloads,
 /// cloud storage, removable volumes) and lets an app in only once the
@@ -410,6 +437,26 @@ mod tests {
         let e = anyhow::Error::new(datalib_etl::run_problems::GaveUp(said.to_string()))
             .context("source tng-mail");
         assert_eq!(classify(&e), FailureKind::Incomplete);
+    }
+
+    /// latchkey's permissions refusing a call was advised as "log in
+    /// again", which cannot help; and behind a gateway, `latchkey auth
+    /// browser` is refused, so a hint naming it sends the person nowhere.
+    #[test]
+    fn a_hint_says_what_fixes_a_refusal_where_the_credential_lives() {
+        let not_permitted = anyhow::Error::new(Upstream::NotPermitted).context("list calendars");
+        assert_eq!(classify(&not_permitted), FailureKind::Auth);
+        for gateway in [false, true] {
+            let hint = hint_for(&not_permitted, SourceType::Email, gateway).unwrap();
+            assert!(hint.contains("permission"), "{hint}");
+            assert!(!hint.contains("auth browser"), "{hint}");
+        }
+        let refused = anyhow::Error::new(Upstream::CredentialRefused);
+        let local = hint_for(&refused, SourceType::Email, false).unwrap();
+        assert!(local.contains("auth browser"), "{local}");
+        let behind = hint_for(&refused, SourceType::Email, true).unwrap();
+        assert!(behind.contains("gateway"), "{behind}");
+        assert!(!behind.contains("auth browser"), "{behind}");
     }
 
     #[test]

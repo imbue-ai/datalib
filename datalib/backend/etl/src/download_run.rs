@@ -311,6 +311,29 @@ mod tests {
         );
     }
 
+    /// A run killed before `finish` left its row `running` for good, so
+    /// a reader could not tell it from one in progress. A store has one
+    /// writer, so the next run to start knows no other is running.
+    #[tokio::test]
+    async fn a_run_left_running_is_marked_interrupted_when_the_next_starts() {
+        let (pool, _dir) = fresh_pool().await;
+        let killed = DownloadRun::start(&pool, &json!({}))
+            .await
+            .unwrap()
+            .run_id();
+        let next = DownloadRun::start(&pool, &json!({}))
+            .await
+            .unwrap()
+            .run_id();
+        let status = |id: i64| {
+            sqlx::query_scalar::<_, String>("SELECT status FROM sync_runs WHERE run_id = ?")
+                .bind(id)
+                .fetch_one(&pool)
+        };
+        assert_eq!(status(killed).await.unwrap(), "interrupted");
+        assert_eq!(status(next).await.unwrap(), "running");
+    }
+
     #[tokio::test]
     async fn err_path_writes_error_status_and_keeps_partial_summary() {
         let (pool, _dir) = fresh_pool().await;
