@@ -501,6 +501,8 @@ user, channel or message JSON from `users.list`,
 `workspaces.self_user_id` is the account the mirror signs in as, which
 is how to tell "me" from everyone else. A direct message is a
 `channels` row with `is_dm = 1`; `dm_user_ids` lists who is in it.
+`channels` holds every channel Slack listed, archived ones
+(`is_archived = 1`) too, whether or not their messages are mirrored.
 
 **Threads.** `is_thread_root = 1` is set on **every top-level
 message**, whether anyone replied or not; a reply has 0. Every message,

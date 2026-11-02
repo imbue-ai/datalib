@@ -236,7 +236,7 @@ async fn a_channel_listing_cut_short_walks_what_it_stored() {
     let api = d.path().join("api");
     record_auth(&api).unwrap();
     record_users(&api, json!([{"id": "U1", "name": "picard"}])).unwrap();
-    let page = json!({"exclude_archived": "true", "limit": "1000", "types": CHANNEL_TYPES});
+    let page = json!({"exclude_archived": "false", "limit": "1000", "types": CHANNEL_TYPES});
     record_call(
         &api,
         "conversations.list",
@@ -274,7 +274,7 @@ async fn a_channel_listing_that_fails_with_nothing_stored_fails_the_run() {
     record_call(
         &api,
         "conversations.list",
-        json!({"exclude_archived": "true", "limit": "1000", "types": CHANNEL_TYPES}),
+        json!({"exclude_archived": "false", "limit": "1000", "types": CHANNEL_TYPES}),
         refused_by_slack(),
     )
     .unwrap();

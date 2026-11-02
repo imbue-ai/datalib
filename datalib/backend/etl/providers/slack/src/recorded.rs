@@ -70,7 +70,7 @@ pub fn record_conversations(api_dir: &Path, types: &str, channels: Value) -> Res
     record_call(
         api_dir,
         "conversations.list",
-        json!({"exclude_archived": "true", "limit": "1000", "types": types}),
+        json!({"exclude_archived": "false", "limit": "1000", "types": types}),
         json!({"ok": true, "channels": channels, "has_more": false}),
     )
 }

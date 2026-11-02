@@ -393,9 +393,9 @@ export const CATALOG: CatalogEntry[] = [
         label: "Copy archived channels too",
         default: false,
         help:
-          "With every channel you're in, only the archived ones Slack still lists you in. A " +
-          "channel you choose by name is copied whether or not it is archived. Each archived " +
-          "channel can cost a request on every sync.",
+          "Use it with every channel in the workspace: Slack drops almost everyone from a " +
+          "channel it archives, so with every channel you're in it adds almost nothing. Each " +
+          "archived channel is copied once. One you choose by name is copied either way.",
       },
       {
         kind: "bool",

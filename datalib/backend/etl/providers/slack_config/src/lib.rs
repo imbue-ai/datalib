@@ -87,10 +87,11 @@ pub struct SlackApiSync {
     /// Ignored when `channels` is set.
     #[serde(default)]
     pub all_channels: bool,
-    /// Also mirror archived channels. Off unless set. Without
-    /// `all_channels`, only the archived channels Slack still lists the
-    /// account as a member of. A channel named in `channels` is mirrored
-    /// whether or not it is archived.
+    /// Also mirror archived channels, each read once. Off unless set.
+    /// Meant with `all_channels`: Slack mostly drops the members of a
+    /// channel it archives, so on its own this adds only the few archived
+    /// channels that still list the account as a member. A channel named
+    /// in `channels` is mirrored whether or not it is archived.
     #[serde(default)]
     pub archived: bool,
     /// Download file attachments into blobs. Off = JSON metadata only.

@@ -61,9 +61,8 @@ pub const DEFAULT_REFRESH_EVERY_MINUTES: i64 = 60;
 /// and an author with no `users` row is looked up on its own.
 pub const MANIFEST_TTL: chrono::Duration = chrono::Duration::hours(6);
 
-/// `conversations.list` answers fewer than `limit` after dropping the
-/// archived channels: on a real workspace, 381 open channels took 5
-/// calls at 1000 and 23 at 200.
+/// On a real workspace, 381 open channels took 5 calls at 1000 and 23
+/// at 200; listed with its 469 archived ones, 850 took 5 at 1000.
 const CHANNELS_PER_PAGE: &str = "1000";
 
 /// What `conversations.history` and `conversations.replies` are asked
@@ -160,11 +159,12 @@ async fn fetch_channels(
     progress: &datalib_etl::progress::Progress,
     latchkey: &LatchkeySettings,
 ) -> Result<Vec<FetchTarget>> {
+    // Archived channels are listed whatever the config says, so each
+    // stored `is_archived` follows Slack's: a listing that left them out
+    // would never say a mirrored channel had been archived.
+    // `channels_for_fetch` leaves them out of the walk unless asked.
     let mut params = BTreeMap::new();
-    params.insert(
-        "exclude_archived".to_string(),
-        if include_archived { "false" } else { "true" }.to_string(),
-    );
+    params.insert("exclude_archived".to_string(), "false".to_string());
     params.insert("limit".to_string(), CHANNELS_PER_PAGE.to_string());
     params.insert("types".to_string(), conversation_types(dms).to_string());
 
@@ -772,6 +772,12 @@ enum Newest<'a> {
     Closed {
         check_due: bool,
     },
+    /// An archived channel, which takes no new messages. `read` once a
+    /// walk that reached its newest message has finished since Slack
+    /// last listed it open.
+    Archived {
+        read: bool,
+    },
     At(&'a str),
 }
 
@@ -783,6 +789,10 @@ const CLOSED_DM_CHECK_EVERY: chrono::Duration = chrono::Duration::days(1);
 
 fn closed_dm_check_key(channel_id: &str) -> String {
     format!("closed_dm:{channel_id}")
+}
+
+fn archived_read_key(channel_id: &str) -> String {
+    format!("archived:{channel_id}")
 }
 
 /// Whether a stretch a conversation `owes` reaches down to its newest
@@ -799,7 +809,9 @@ fn shows_activity(latest: &str, owes: &[Stretch]) -> bool {
 /// newest message is already covered costs no request, except its
 /// re-read when `refresh_from` says one is due. A closed DM is walked
 /// whole when its check is due, and otherwise only for a gap under
-/// what is held, which a `since` moved earlier leaves.
+/// what is held, which a `since` moved earlier leaves. An archived
+/// channel is walked whole once, and after that only for such a gap:
+/// nothing in it is new or edited.
 fn to_walk(
     wanted: &[Span],
     refresh_from: Option<&str>,
@@ -808,8 +820,10 @@ fn to_walk(
 ) -> Vec<Stretch> {
     let all = stretches(wanted, refresh_from, held);
     match newest {
-        Newest::Unknown | Newest::Closed { check_due: true } => all,
-        Newest::Closed { check_due: false } => all
+        Newest::Unknown | Newest::Closed { check_due: true } | Newest::Archived { read: false } => {
+            all
+        }
+        Newest::Closed { check_due: false } | Newest::Archived { read: true } => all
             .into_iter()
             .filter(|s| !s.reread && s.span.hi != END_OF_TIME)
             .collect(),
@@ -1728,8 +1742,31 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         let mut checking = vec![false; targets.len()];
         let mut rechecking = vec![false; targets.len()];
         let mut closed = 0usize;
+        let archived: HashSet<&str> = listed
+            .iter()
+            .filter(|t| t.is_archived)
+            .map(|t| t.id.as_str())
+            .collect();
+        // Archived channels whose first walk since Slack archived them is
+        // due.
+        let mut reading_archived = vec![false; targets.len()];
         for (target, (cid, _)) in targets.iter().enumerate() {
+            let archived_read = db
+                .manifest_sweep_age(&archived_read_key(cid), &now)
+                .await?
+                .is_some();
+            if archived_read && !archived.contains(cid.as_str()) {
+                // Listed open again: if Slack archives it later, what was
+                // posted in between is read then.
+                db.forget_manifest_sweep(&archived_read_key(cid)).await?;
+            }
             let newest = match (&open_latest, target >= first_dm) {
+                _ if archived.contains(cid.as_str()) => {
+                    reading_archived[target] = !archived_read;
+                    Newest::Archived {
+                        read: archived_read,
+                    }
+                }
                 (None, _) => Newest::Unknown,
                 (Some(open), is_dm) => match open.get(cid) {
                     Some(latest) => Newest::At(latest),
@@ -1763,7 +1800,8 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                 newest,
             );
             refreshing[target] = walks.iter().any(|w| w.reread);
-            quiet[target] = matches!(newest, Newest::At(_)) && walks.iter().all(|w| w.reread);
+            quiet[target] = matches!(newest, Newest::At(_) | Newest::Archived { read: true })
+                && walks.iter().all(|w| w.reread);
             frontier
                 .walks
                 .extend(walks.into_iter().map(|stretch| Walk::new(target, stretch)));
@@ -1786,6 +1824,11 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             refreshing = refreshing.iter().filter(|r| **r).count(),
             closed_dms = closed,
             closed_dms_checked = checking.iter().filter(|c| **c).count(),
+            archived = targets
+                .iter()
+                .filter(|(cid, _)| archived.contains(cid.as_str()))
+                .count(),
+            archived_first_read = reading_archived.iter().filter(|r| **r).count(),
             "left out the history with nothing new since what is held"
         );
 
@@ -1974,6 +2017,10 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                         walked += usize::from(!failed[target]);
                         if refreshing[target] && !failed[target] {
                             db.record_manifest_sweep(&refresh_sweep_key(cid), &now)
+                                .await?;
+                        }
+                        if reading_archived[target] && !failed[target] {
+                            db.record_manifest_sweep(&archived_read_key(cid), &now)
                                 .await?;
                         }
                         if checking[target] && !failed[target] {
@@ -2396,6 +2443,26 @@ mod tests {
         );
     }
 
+    /// An archived channel is read whole once; after that it asks for
+    /// nothing newer and re-reads no window, and only a gap under what
+    /// is held (a `since` moved earlier, a walk cut off) is still owed.
+    #[test]
+    fn an_archived_channel_read_once_owes_only_a_gap_under_what_is_held() {
+        let window = Some("1735000000.000000");
+        let held = [span(SINCE, "1735689600.000300")];
+        assert_eq!(
+            planned_walk(window, &held, Newest::Archived { read: false }).len(),
+            2,
+            "its first read since it was archived also re-reads its window"
+        );
+        assert!(planned_walk(window, &held, Newest::Archived { read: true }).is_empty());
+        let cut_off = [span("1735689600.000050", "1735689600.000300")];
+        assert_eq!(
+            planned_walk(window, &cut_off, Newest::Archived { read: true }),
+            [gap(SINCE, "1735689600.000050", true)]
+        );
+    }
+
     /// A quiet conversation still re-reads its window when one is due,
     /// and only that: the open top above its newest message is not asked.
     #[test]
@@ -2501,6 +2568,7 @@ mod tests {
             id: id.into(),
             name: Some(name.into()),
             is_dm: false,
+            is_archived: false,
             dm_user_ids: Vec::new(),
         }
     }
@@ -2510,6 +2578,7 @@ mod tests {
             id: id.into(),
             name: None,
             is_dm: true,
+            is_archived: false,
             dm_user_ids: vec![user_id.into()],
         }
     }
@@ -2519,6 +2588,7 @@ mod tests {
             id: id.into(),
             name: Some(name.into()),
             is_dm: true,
+            is_archived: false,
             dm_user_ids: members.iter().map(|s| s.to_string()).collect(),
         }
     }
@@ -2640,6 +2710,7 @@ mod tests {
             id: "D9".into(),
             name: None,
             is_dm: true,
+            is_archived: false,
             dm_user_ids: Vec::new(),
         };
         let plan = select_targets(&[legacy_group, nameless], None, None, &labels(), SELF);

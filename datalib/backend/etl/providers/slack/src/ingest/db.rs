@@ -84,6 +84,15 @@ impl RawDb {
         Ok(Some(*now - dt))
     }
 
+    pub async fn forget_manifest_sweep(&self, key: &str) -> Result<()> {
+        sqlx::query("DELETE FROM sync_scope_state WHERE scope = ?")
+            .bind(format!("slack:sweep:{key}"))
+            .execute(self.pool())
+            .await
+            .context("forget manifest sweep marker")?;
+        Ok(())
+    }
+
     pub async fn record_manifest_sweep(&self, key: &str, now: &DateTime<Utc>) -> Result<()> {
         let scope = format!("slack:sweep:{key}");
         dr::upsert_scope_state(self.pool(), &scope, &now.to_rfc3339())
@@ -317,7 +326,8 @@ impl RawDb {
         include_dms: bool,
     ) -> Result<Vec<FetchTarget>> {
         let mut sql = String::from(
-            "SELECT id, name, is_dm, dm_user_ids FROM channels WHERE payload IS NOT NULL",
+            "SELECT id, name, is_dm, dm_user_ids, is_archived FROM channels \
+             WHERE payload IS NOT NULL",
         );
         if !include_dms {
             sql.push_str(" AND (is_dm IS NULL OR is_dm = 0)");
@@ -342,6 +352,7 @@ impl RawDb {
                     id: r.try_get("id")?,
                     name: r.try_get("name")?,
                     is_dm: r.try_get::<Option<i64>, _>("is_dm")? == Some(1),
+                    is_archived: r.try_get::<Option<i64>, _>("is_archived")? == Some(1),
                     dm_user_ids: parse_dm_user_ids(
                         r.try_get::<Option<String>, _>("dm_user_ids")?.as_deref(),
                     ),
@@ -1212,6 +1223,8 @@ pub struct FetchTarget {
     /// handle. Always `None` for a 1:1 DM — Slack gives it no name.
     pub name: Option<String>,
     pub is_dm: bool,
+    /// As Slack's last listing marked it.
+    pub is_archived: bool,
     /// Who is in this DM, as Slack listed them — self included for an
     /// `mpim`. Empty for a channel. See
     /// [`super::schema_raw::ChannelRow::dm_user_ids`].

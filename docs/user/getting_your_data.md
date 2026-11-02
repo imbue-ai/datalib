@@ -923,11 +923,11 @@ latchkey auth browser slack
 2024-01-01. Messages older than a sliding `since` stay mirrored.
 
 Archived channels are left out unless the `api` table sets
-`archived = true`, or names the channel in `channels`. With
-`archived = true` and no `all_channels`, an archived channel is
-mirrored when Slack still lists you as a member of it. Each archived
-channel can cost a request on every sync, which asks it for anything
-new.
+`archived = true`, or names the channel in `channels`. Set it together
+with `all_channels = true`: Slack drops almost everyone from a channel
+it archives, so without `all_channels` it adds almost nothing. Each
+archived channel is read once; later syncs don't ask it for anything
+new unless Slack unarchives it.
 
 ## SMS Backup and Restore
 

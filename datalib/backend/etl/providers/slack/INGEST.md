@@ -119,24 +119,38 @@ contain dashes.
 
 ### Archived channels
 
-A run asks `conversations.list` for archived conversations only when
-the source sets `archived = true` or names channels in `channels`;
-otherwise it sends `exclude_archived=true` and Slack leaves them out.
-A channel named in `channels` is mirrored archived or not.
-With `archived = true` and neither `channels` nor `all_channels`, the
-member filter above still applies: an archived channel is walked when
-its listing says `is_member`.
+Every run lists `conversations.list` with the archived channels in
+(`exclude_archived=false`), whatever the config, so each stored
+`is_archived` follows Slack's. A listing that left them out would
+never say that a channel mirrored while open had since been archived,
+and the run would go on walking it. Listing them costs no extra
+request: on a real workspace, 850 channels, 469 of them archived, took
+5 calls at 1000, as many as its 381 open ones alone.
+
+Which of them a run walks is `channels_for_fetch`'s choice: archived
+ones only when the source sets `archived = true`, or names them in
+`channels` (a named channel is mirrored archived or not). Without
+`all_channels` the member filter above still applies, and Slack mostly
+drops membership when it archives a channel: of those 469, the account
+was still a member of 7. So **`archived` is meant with
+`all_channels`**; on its own it adds next to nothing.
 
 The flag covers every conversation the run mirrors, so with `dms` it
 also brings in a DM Slack marks archived. With `scope = "involves_me"`
 an archived channel is one more channel search can choose.
 
-An archived channel takes no new messages, but the walk has no rule
-for that: unless `client.counts` names it with nothing newer than what
-is held, every run asks it for anything newer, a request apiece.
-Whether `client.counts` lists archived channels has not been checked
-against the live API, nor whether Slack still lists the account as a
-member of a channel archived while it was in it.
+**An archived channel is read once.** It takes no new messages and no
+edits, but `client.counts` rarely says so: it listed 1 of those 469
+archived channels (and 127 of the 381 open ones), so each of the rest
+would have cost a history request every run. Instead, the first run
+that finds a channel archived walks it whole, as any channel
+`client.counts` does not name, and stamps a sweep marker
+(`archived:<id>`) when that walk ends. While the marker is there the
+channel is quiet: no request for anything newer and no refresh-window
+re-read, only a gap under what is held (a `since` moved earlier, a
+walk cut off). The marker is dropped the first time a listing shows
+the channel open again; from then on the usual rules walk it, and if
+Slack archives it again, what was posted in between is read once more.
 
 ### Which conversations a run walks
 
@@ -516,8 +530,8 @@ what is owed is computed from the config a run has now.
 | `media` off → on | Every edge without bytes is owed, and fetched from its stored message. No channel is walked again. |
 | `common.blob_size_limit_bytes` raised | The edges skipped for their size are still without bytes, so they are fetched. |
 | a new channel, or `dms` on | The conversation has no coverage, so it is walked from `since` once `client.counts` shows a message in range, names nothing, or leaves out a DM whose check is due (see [Which conversations a run walks](#which-conversations-a-run-walks)). |
-| `archived` on | Each archived channel the listing now returns has no coverage, so it is walked from `since`. |
-| `archived` off | Nothing. What is stored stays; the archived channels are no longer listed or walked. |
+| `archived` on | Each archived channel the walk now takes in has no coverage, so it is walked from `since`, once. |
+| `archived` off | Nothing. What is stored stays; the archived channels are no longer walked. |
 
 ## What appeared since the last sync
 
@@ -526,10 +540,10 @@ or users, so each is found its own way.
 
 - **Channels.** Every run lists `conversations.list` whole, so a channel
   created a minute ago, or the DMs `dms = true` just asked for, are
-  walked by the next run. It asks for 1000 a page: Slack drops the
-  archived channels from a page after filling it, so it answers fewer
-  than it was asked for, and on a real workspace 381 open channels took
-  5 calls at 1000 and 23 at 200.
+  walked by the next run. It asks for 1000 a page, archived channels
+  included ([Archived channels](#archived-channels)); on a real
+  workspace 850 channels took 5 calls at 1000, where its 381 open ones
+  had taken 23 at 200.
 - **Users.** `users.list` is listed at most once per `MANIFEST_TTL` (six
   hours), since its rows change only when someone edits a profile. A
   person who posts for the first time does not wait for it: storing a
