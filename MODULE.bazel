@@ -550,8 +550,10 @@ crate.annotation(
 # published with aspect_rules_js v3.1.2 (released 2026-05-13).
 bazel_dep(name = "aspect_rules_js", version = "3.5.2")
 # Pulled in transitively by aspect_rules_js, but we use it directly
-# via `copy_to_bin` to stage Vite inputs into bazel-out.
-bazel_dep(name = "aspect_bazel_lib", version = "2.22.5")
+# (`copy_to_bin`, `copy_file`, `copy_to_directory`, platform
+# transitions). This is the module 2.x called `aspect_bazel_lib`; don't
+# bring that name back, it carries a second set of the same toolchains.
+bazel_dep(name = "bazel_lib", version = "3.7.2")
 
 # rules_nodejs is already in the graph transitively (via aspect_rules_js);
 # declared explicitly so we can `use_repo` the host Node toolchain repo.

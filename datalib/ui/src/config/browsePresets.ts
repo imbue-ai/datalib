@@ -88,6 +88,9 @@ const WHOLE: Record<string, BrowseColumn[]> = {
   // the card says. The address book a card is filed in is the channel,
   // last, and shown only when there is more than one.
   contacts: ["subject_ref", "phone", "email", "snippet", "touched_at", "kind", "channel"],
+  // A photo library: the picture beside what it is called and its
+  // caption; its folder is the channel, its creator the author.
+  lightroom: ["kind", "image", "subject_ref", "snippet", "touched_at", "channel", "author_ref"],
 };
 
 /// Columns of `ALWAYS` a source type leaves out.

@@ -292,3 +292,41 @@ describe("a membership cell", () => {
     expect((el as HTMLButtonElement).disabled).toBe(true);
   });
 });
+
+describe("a picture cell", () => {
+  const spec: ColumnSpec = {
+    field: "image",
+    header: "Picture",
+    type: "image",
+    default_visible: false,
+    editable: false,
+  };
+  const draw = (picture: ((name: string) => string | null) | undefined, value: string | null) => {
+    const [col] = typedColumns<Record<string, unknown>>([spec], { picture });
+    return (col.formatter as Formatter)(0, 0, value, col, { image: value }, {} as never);
+  };
+
+  /** The cell asks its host where a name's picture is served; it never
+   *  builds an address from the name itself. */
+  it("draws the picture its host says the name has", () => {
+    const img = draw(
+      (n) => (n === "datalib:photo/p1" ? "/applet/photos/photo/p1/image?size=thumb" : null),
+      "datalib:photo/p1",
+    ) as HTMLImageElement;
+    expect(img.tagName).toBe("IMG");
+    expect(img.getAttribute("src")).toBe("/applet/photos/photo/p1/image?size=thumb");
+    expect(img.loading).toBe("lazy");
+  });
+
+  /** No applet serving photos, or a row with no picture: an empty cell,
+   *  not a broken image. */
+  it("is empty when nothing serves the name", () => {
+    expect(draw(() => null, "datalib:photo/p1")).toBe("");
+    expect(draw(undefined, "datalib:photo/p1")).toBe("");
+    expect(draw(() => "/x", null)).toBe("");
+  });
+
+  it("copies as the name", () => {
+    expect(copyText("image", "datalib:photo/p1")).toBe("datalib:photo/p1");
+  });
+});

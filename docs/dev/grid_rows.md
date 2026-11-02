@@ -398,7 +398,8 @@ says a row came from a diff tree; nothing else about the row changes —
 `image` names the picture a row shows, as a `datalib:` name
 (`datalib:photo/<uuid>`), never an address: the UI asks which applet
 serves the name's kind and draws the thumbnail from it, so moving the
-bytes moves no row. `latitude` and `longitude` are where the thing was,
+bytes moves no row. The search grid's Picture column (column type
+`image`) is hidden until a row in the results has one. `latitude` and `longitude` are where the thing was,
 in degrees. All three are null on every row but a Lightroom photo's
 today.
 

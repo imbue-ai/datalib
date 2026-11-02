@@ -238,6 +238,7 @@ const SEARCH_ROW_COLUMNS: &[GridRowColumn] = {
         G::SourceId,
         G::ByteSize,
         G::ItemCount,
+        G::Image,
         G::DiffStatus,
         G::DiffChangedColumns,
     ]
@@ -350,6 +351,10 @@ fn search_row_from(r: &sqlx::sqlite::SqliteRow) -> SearchRow {
         diff_status: r.try_get::<Option<String>, _>("diff_status").ok().flatten(),
         diff_changed_columns: r
             .try_get::<Option<String>, _>("diff_changed_columns")
+            .ok()
+            .flatten(),
+        image: r
+            .try_get::<Option<String>, _>(G::Image.as_str())
             .ok()
             .flatten(),
         score: None,

@@ -2,6 +2,7 @@
 // `photo` (its component's `serves`, docs/dev/plans/photos_applet.md):
 // its card for the photo, and the address of its pictures.
 
+import { parsePhoto } from "@/uri";
 import { frontendManifest, gallerySource } from "./frontendRegistry";
 
 /// The applet namespace and component that serve `kind`, or null when no
@@ -26,4 +27,11 @@ export function photoImageUrl(photoId: string, size: "thumb" | "full"): string |
   const c = servingComponent("photo");
   if (!c) return null;
   return `/applet/${encodeURIComponent(c.ns)}/photo/${encodeURIComponent(photoId)}/image?size=${size}`;
+}
+
+/// Where the picture a `datalib:photo/…` name names is served, small; null
+/// for any other name, or when no configured applet serves photos.
+export function thumbnailUrl(name: string): string | null {
+  const id = parsePhoto(name);
+  return id ? photoImageUrl(id, "thumb") : null;
 }

@@ -663,6 +663,7 @@ async fn every_wire_field_survives_the_round_trip() {
         .markdown_uuid(Some("row-1".to_string()))
         .byte_size(Some(4096))
         .item_count(Some(7))
+        .image(Some("datalib:photo/row-1".to_string()))
         .build()
         .unwrap();
     // The builder has no setters for these: a diff marks a finished row.
