@@ -2015,14 +2015,17 @@ mod tests {
         pool.close().await;
     }
 
-    /// Whether this process has a file open whose inode is `ino`.
-    fn held_open(ino: u64) -> bool {
+    /// Whether this process has a file open whose inode is `ino`; with
+    /// `deleted`, only a file no name links to any more. The tests are
+    /// threads of one process, and Linux hands a freed inode number to the
+    /// next file another test makes, so an inode alone can name that file.
+    fn held_open(ino: u64, deleted: bool) -> bool {
         use std::os::unix::fs::MetadataExt;
         std::fs::read_dir("/dev/fd")
             .unwrap()
             .flatten()
             .filter_map(|fd| std::fs::metadata(fd.path()).ok())
-            .any(|m| m.ino() == ino)
+            .any(|m| m.ino() == ino && (!deleted || m.nlink() == 0))
     }
 
     /// A reset deletes the grid index, and the next pass makes a new file
@@ -2050,7 +2053,10 @@ mod tests {
 
         let db = datalib_runtime::layout::grid_index_db(root);
         let before = std::fs::metadata(&db).unwrap().ino();
-        assert!(held_open(before), "the first read left no reader open");
+        assert!(
+            held_open(before, false),
+            "the first read left no reader open"
+        );
         for suffix in ["", "-wal", "-shm"] {
             let _ = std::fs::remove_file(format!("{}{suffix}", db.display()));
         }
@@ -2058,7 +2064,7 @@ mod tests {
 
         assert_eq!(found(s.repo.rows_by_uuids(&uuids).await.unwrap()), [c]);
         assert!(
-            !held_open(before),
+            !held_open(before, true),
             "the reader still holds the grid index a reset deleted"
         );
     }
