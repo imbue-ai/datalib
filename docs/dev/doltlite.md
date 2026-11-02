@@ -152,8 +152,8 @@ What the package needs:
   with doltlite preloaded, so it works for `python script.py` and
   `python -m pkg`, and fails under `python -c`, the REPL and Jupyter.
   Each start copies a 3.9 MB library into `$TMPDIR/doltlite-shim-*`, and
-  0.50.16 never reuses the copy, so a long-lived machine wants those
-  cleared now and then.
+  0.50.16 never reuses the copy (dolthub/doltlite-python#2), so a
+  long-lived machine wants those cleared now and then.
 
 ## Recipes
 
