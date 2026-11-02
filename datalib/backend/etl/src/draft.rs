@@ -200,15 +200,11 @@ async fn merge_draft_wins(
         Err(e) => return Err(anyhow::Error::new(e).context(format!("merge the draft {branch}"))),
     }
     let saved = doltlite_raw::commit_on(conn, store, message, None).await?;
-    if saved.is_none() {
-        // A draft equal to the writer's state commits nothing, and may or
-        // may not have left the transaction open.
-        match sqlx::query("COMMIT").execute(&mut *conn).await {
-            Ok(_) => {}
-            Err(e) if e.to_string().contains("no transaction is active") => {}
-            Err(e) => return Err(anyhow::Error::new(e).context("end an empty save")),
-        }
-    }
+    // `dolt_commit` leaves the transaction open, committed or not.
+    sqlx::query("COMMIT")
+        .execute(&mut *conn)
+        .await
+        .context("end the save's transaction")?;
     Ok(saved)
 }
 
@@ -427,6 +423,27 @@ mod tests {
         assert_eq!(main_head(&f.pool).await, hash, "published");
         assert_eq!(people(&f.pool).await[0], row("r", "Will Riker", "x"));
         assert!(!exists(&f.pool, "draft/r").await.unwrap());
+    }
+
+    /// Guards the save against leaving its transaction open on the store's
+    /// one connection: `dolt_commit` inside `BEGIN` does not end it, and a
+    /// `BEGIN` after it is accepted, so only a `ROLLBACK` tells.
+    #[tokio::test]
+    async fn a_save_leaves_no_transaction_open() {
+        for edits in [
+            &["UPDATE people SET name = 'Will Riker' WHERE id = 'r'"][..],
+            &[],
+        ] {
+            let f = store().await;
+            cut(&f.pool, "draft/r").await.unwrap();
+            on_draft(&f.pool, edits).await;
+            save(&f.pool, "draft/r", "saved Riker").await.unwrap();
+            let rollback = sqlx::query("ROLLBACK").execute(&f.pool).await;
+            assert!(
+                rollback.is_err_and(|e| e.to_string().contains("no transaction is active")),
+                "{edits:?}: the save left its transaction open"
+            );
+        }
     }
 
     /// Guards the save against `dolt_conflicts_resolve('--theirs')`,

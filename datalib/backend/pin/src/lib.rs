@@ -67,13 +67,6 @@ impl Pin {
 /// commits yet, or a build without the dolt extensions, which read the
 /// same: nothing to pin.
 pub async fn head(pool: &SqlitePool) -> Result<Option<Pin>> {
-    // A table read first: a bare `dolt_hashof` answers from the session's
-    // last view, so a connection held across a writer's commit would keep
-    // reporting the HEAD it opened at (`a_pinned_read_names_one_commit`;
-    // docs/dev/doltlite.md#what-a-read-only-connection-may-do).
-    let _: i64 = sqlx::query_scalar("SELECT count(*) FROM sqlite_master")
-        .fetch_one(pool)
-        .await?;
     // `dolt_hashof` resolves the ref; ordering `dolt_log()` by its
     // second-resolution `date` ties on every checkpointing writer.
     let commit: Option<String> = sqlx::query_scalar("SELECT dolt_hashof('HEAD')")
@@ -411,8 +404,6 @@ mod tests {
         assert_eq!(head(&r).await.unwrap().unwrap(), first);
 
         commit(&w).await.unwrap();
-        // A `dolt_hashof` alone would still answer `first` here: nothing
-        // has made this session reload the root since the commit.
         let second = head(&r).await.unwrap().unwrap();
         assert_ne!(second, first, "HEAD moved on a connection already open");
         assert_eq!(count_at(&r, &second).await.unwrap(), 2);

@@ -368,11 +368,10 @@ and `a_reader_asking_dolt_status_never_makes_the_writers_commit_fail`
 is what now says it is safe.
 
 A reader that holds its connection across another process's commits
-has two engine facts to respect, both in
+has one engine fact to respect, in
 [what a read-only connection may do](/docs/dev/doltlite.md#what-a-read-only-connection-may-do):
-a bare `dolt_hashof('HEAD')` answers from the session's last view, so
-`datalib_pin::head` reads `sqlite_master` first; and `pragma_module_list`
-is no census of what a commit holds, so ask by reading.
+`pragma_module_list` is no census of what a commit holds, so ask by
+reading.
 
 Open the store once per pass — a stage that needs to load rows, run a
 `dolt_diff` scan and probe for ids does all three on one pool — and
