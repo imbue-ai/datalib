@@ -33,8 +33,11 @@ pub const TIME_SERIES_DB: &str = "time_series.doltlite_db";
 /// directory per app (`datalib_contacts/`). Nothing can rebuild it, and no
 /// reset or removal of a source touches it.
 pub const CURATED_DIR: &str = "datalib_curated";
-/// The doltlite database file inside [`GRID_DIR`].
-pub const GRID_DB: &str = "db.doltlite_db";
+/// The grid index inside [`GRID_DIR`]: plain SQLite, in WAL mode.
+pub const GRID_DB: &str = "db.sqlite";
+/// What [`GRID_DB`] was named while it was a doltlite store. The
+/// `grid_index` step deletes it, and its lock files, when it opens the index.
+pub const RETIRED_GRID_DB: &str = "db.doltlite_db";
 /// The grid's terms index, beside its store.
 pub const SEARCH_TERMS_DB: &str = "search_terms.sqlite";
 /// The qmd index's directory, relative to [`UNIFIED_DOCUMENT_INDEX_DIR`]: the
@@ -130,7 +133,7 @@ pub fn grid_index_dir(data_root: &Path) -> PathBuf {
     unified_document_index_dir(data_root).join(GRID_DIR)
 }
 
-/// `data_root/unified_document_index/grid_index/db.doltlite_db` — the
+/// `data_root/unified_document_index/grid_index/db.sqlite` — the
 /// grid_rows/markdowns/edges index. Resolved from `data_root` alone by
 /// both the step that writes it and the applet that reads it, so this
 /// helper is the contract between them.
@@ -141,7 +144,7 @@ pub fn grid_index_db(data_root: &Path) -> PathBuf {
 /// `data_root/unified_document_index/grid_index/search_terms.sqlite` — every id, person,
 /// title and name a grid row answers to, as a full-text index. Plain
 /// SQLite: written by the `grid_index` step after each pass, read by the
-/// applet beside its grid commit.
+/// applet beside the grid generation it reflects.
 pub fn search_terms_db(data_root: &Path) -> PathBuf {
     grid_index_dir(data_root).join(SEARCH_TERMS_DB)
 }

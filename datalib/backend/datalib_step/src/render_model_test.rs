@@ -17,15 +17,13 @@ use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use datalib_etl::doltlite_raw::{self, DiffScanSpec};
 use datalib_etl::progress::Progress;
-use datalib_etl_render::grid_index::{
-    build_grid_index, doc_md_path, init_schema, RenderedMarkdown,
-};
+use datalib_etl_render::grid_index::{build_grid_index, doc_md_path, open_index, RenderedMarkdown};
 use datalib_etl_render::indexed_markdown::{blocking, IndexedMarkdownStore};
 use datalib_etl_render::processor::{Input, ReadScope, RenderCtx, RenderProcessor, Unparsed};
 use datalib_schema::edges::EdgeRow;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::providers::Provider;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use crate::render::{render_source, RenderSource};
@@ -750,20 +748,9 @@ impl World {
         let raw_dir = data_root.join(SOURCE).join("raw");
         std::fs::create_dir_all(&raw_dir).unwrap();
         let raw_db = doltlite_raw::db_path_for(&raw_dir);
-        let db = data_root.join("unified_document_index/grid/db.doltlite_db");
-        std::fs::create_dir_all(db.parent().unwrap()).unwrap();
-        let index = SqlitePoolOptions::new()
-            .max_connections(1)
-            .idle_timeout(None)
-            .max_lifetime(None)
-            .connect_with(
-                SqliteConnectOptions::new()
-                    .filename(&db)
-                    .create_if_missing(true),
-            )
+        let index = open_index(&datalib_core::layout::grid_index_db(data_root))
             .await
             .unwrap();
-        init_schema(&index).await.unwrap();
         // Create the raw store's schema now, and ask it whether this
         // build links doltlite at all.
         let pool = doltlite_raw::open(&raw_db, RAW_DDL).await.unwrap();
@@ -1207,6 +1194,37 @@ async fn a_render_reports_its_head_as_the_store_spells_it() {
         .map(|c| c.version)
         .collect();
     assert_eq!(claimed, head.into_iter().collect::<Vec<_>>());
+}
+
+/// Every download commits a `sync_runs` row, so a raw store's head moves
+/// on every sync. A render that then rewrote its cursor moved its own
+/// version too, and everything downstream (the keyword index, the grid
+/// index) ran again with nothing to do: about 8 s a source per refresh.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_raw_commit_with_nothing_to_render_moves_no_version() {
+    let td = tempfile::tempdir().unwrap();
+    let mut world = World::new(td.path()).await;
+    if !world.dolt {
+        return;
+    }
+    let synth = SynthRender::new(world.raw_db.clone());
+    world
+        .commit(&[Mutation::RenameAuthor("a0".into(), "ann".into()), parent(1)])
+        .await;
+    let first = world.render_report(&synth, false).await.unwrap().head;
+
+    let pool = doltlite_raw::open(&world.raw_db, RAW_DDL).await.unwrap();
+    doltlite_raw::start_run(&pool, &serde_json::json!({}))
+        .await
+        .unwrap();
+    doltlite_raw::commit_run(&pool, "a run that fetched nothing")
+        .await
+        .unwrap();
+    pool.close().await;
+
+    let second = world.render_report(&synth, false).await.unwrap();
+    assert_eq!(second.docs, 0);
+    assert_eq!(second.head, first, "nothing was rendered, so nothing moved");
 }
 
 // ── what a bucket that built nothing does to its documents ──────────

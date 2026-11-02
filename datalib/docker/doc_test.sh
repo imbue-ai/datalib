@@ -142,7 +142,7 @@ doc_test_after() {
             # that is how the page's reader will look at their data
             # root. A container that leaves it unreadable (root-owned
             # 0700, the umask leak of #469) fails here and nowhere else.
-            for f in unified_document_index/grid_index/db.doltlite_db \
+            for f in unified_document_index/grid_index/db.sqlite \
                      unified_document_index/qmd_aggregator/qmd/index.sqlite; do
                 if ! test -s "$DATA_ROOT/$f"; then
                     echo "doc_test: $DATA_ROOT/$f is missing or empty as seen from the host" >&2

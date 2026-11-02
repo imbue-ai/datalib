@@ -51,7 +51,7 @@ write the one index file under `unified_document_index/qmd_aggregator/`):
 ├── <group>/render_markdown/        # per-source markdown tree
 │   └── indexed_markdown.doltlite_db  #   its rows, edges + render problems
 ├── unified_document_index/                  # derived; carries a CACHEDIR.TAG
-│   ├── grid_index/db.doltlite_db   # the grid_rows SQL index — query this
+│   ├── grid_index/db.sqlite        # the grid_rows SQL index (plain SQLite) — query this
 │   ├── grid_index/search_terms.sqlite     # each row's ids, people, labels and names, full-text (plain SQLite)
 │   └── qmd_aggregator/qmd/index.sqlite  # semantic search index
 └── system/                         # the server's own state
@@ -342,7 +342,7 @@ Pick the surface that fits the question:
   models, which takes 10–20 seconds on a large root; `--tab words` and
   `--tab fields` take well under a second.
 - **SQL over everything** — the `grid_rows` union table in
-  `unified_document_index/grid_index/db.doltlite_db`: one row per
+  `unified_document_index/grid_index/db.sqlite`: one row per
   message/document/entity across all sources, with `provider`, `kind`,
   `created_at`, `modified_at`, `touched_at`, `author`, `channel`, `conversation_uuid`,
   `preview` (the first 240 characters of the row's text; the whole text
@@ -355,28 +355,34 @@ Pick the surface that fits the question:
   and so sits next to `datalib-dag` in `~/.local/bin` (it is plain
   `doltlite` in the docker image, and
   `bazelisk build //third-party/doltlite:doltlite` from a checkout).
-  Its argv is `sqlite3`'s. **Always pass `-readonly`**: a writable
-  session's commits are overwritten by the next sync without an error,
-  and a transaction it holds open stalls the sync:
+  Its argv is `sqlite3`'s. **Always pass `-readonly`**: the index is
+  the `grid_index` step's to write, and a transaction a writable session
+  holds open stalls the sync:
 
   ```sh
-  datalib-doltlite -readonly unified_document_index/grid_index/db.doltlite_db \
+  datalib-doltlite -readonly unified_document_index/grid_index/db.sqlite \
     "SELECT provider, count(*) FROM grid_rows GROUP BY 1;"
   ```
 
-  Stock `sqlite3` **cannot** open the file itself (`file is not a
-  database`), but one pipe writes a plain SQLite database with the same
-  tables, schemas and indexes, for any tool that speaks only SQLite.
+  The index is plain SQLite in WAL mode, rebuilt from the sources and
+  keeping no history. Stock `sqlite3 -readonly` refuses a WAL file that
+  nothing else has open (`unable to open database file`), which
+  `datalib-doltlite` does not. One pipe writes a standalone copy any
+  tool opens, and the same pipe turns a source's doltlite store, which
+  stock `sqlite3` cannot read at all, into plain SQLite:
 
   ```sh
-  datalib-doltlite -readonly unified_document_index/grid_index/db.doltlite_db .dump \
+  datalib-doltlite -readonly unified_document_index/grid_index/db.sqlite .dump \
     | sqlite3 grid.sqlite
   ```
 
-  The snapshot carries the data, not the commit history — see
-  [`docs/dev/doltlite.md`](dev/doltlite.md) for what that costs and for
-  a single-table variant. If you would rather not touch the store at
-  all, `datalib-http`'s endpoints below serve the same rows.
+  A copy of a doltlite store carries the data, not the commit history —
+  see [`docs/dev/doltlite.md`](dev/doltlite.md) for what that costs and
+  for a single-table variant. A Python program that runs many queries
+  can keep a store open instead of starting the shell for each one: see
+  that doc's §"Reading a store from Python". If you would rather not
+  touch the store at all, `datalib-http`'s endpoints below serve the
+  same rows.
 
   Column semantics: [`docs/dev/grid_rows.md`](dev/grid_rows.md).
   Cross-document links: [`docs/dev/edges.md`](dev/edges.md).

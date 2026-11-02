@@ -98,6 +98,43 @@ async fn a_channel_with_nothing_new_costs_no_history_call() {
     );
 }
 
+/// A sync with nothing new must leave the store's content as it was:
+/// render reads a content change as work, and everything downstream of
+/// it (the keyword and grid indexes) runs again for it. The second sync
+/// here adds a `sync_runs` row and nothing else.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_sync_with_nothing_new_changes_no_content() {
+    let dir = tempfile::tempdir().unwrap();
+    let (api, out) = (dir.path().join("api"), dir.path().join("out"));
+    record_listing(&api, &["C1", "C2"]);
+    for c in ["C1", "C2"] {
+        History::cold(c)
+            .record(&api, json!([msg(T1, &format!("in {c}"))]))
+            .unwrap();
+    }
+    record_counts(&api, &[("C1", T1), ("C2", T1)]);
+    let store = db_path_for(&out);
+    let head = || async {
+        datalib_etl::doltlite_raw::head_commit_at_path(&store)
+            .await
+            .unwrap()
+            .expect("a head")
+    };
+
+    sync(&api, &out, |o| o).await;
+    let first = head().await;
+    sync(&api, &out, |o| o).await;
+    let second = head().await;
+    assert_ne!(first, second, "the second sync committed its run");
+
+    let reader = datalib_pin::open_reader(&store).await.unwrap();
+    let changed = datalib_etl::doltlite_raw::content_tables_changed(&reader, &first, &second)
+        .await
+        .unwrap();
+    reader.close().await;
+    assert_eq!(changed, Vec::<String>::new());
+}
+
 /// A `since` old enough that the window below reaches past it.
 const SINCE: &str = "2020-01-01";
 const SINCE_TS: &str = "1577836800.000000";

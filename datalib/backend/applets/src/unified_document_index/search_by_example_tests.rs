@@ -339,9 +339,7 @@ async fn render_cast(root: &Path) -> HashSet<(String, SearchTermKind, String)> {
     for md in &docs {
         apply_one(&lock, root, md).await.unwrap();
     }
-    datalib_etl::doltlite_raw::commit_run(&pool, "the cast")
-        .await
-        .unwrap();
+    datalib_etl_render::grid_index::seal(&pool).await.unwrap();
     pool.close().await;
     sync_terms(root).await;
     supplied

@@ -567,9 +567,9 @@ fn manual_e2e_live_sync_golden() {
     );
     assert!(
         data_root
-            .join("unified_document_index/grid_index/db.doltlite_db")
+            .join("unified_document_index/grid_index/db.sqlite")
             .is_file(),
-        "backend index DB must live at unified_document_index/grid_index/db.doltlite_db"
+        "backend index DB must live at unified_document_index/grid_index/db.sqlite"
     );
     // Only the genuinely-derived index dirs are tagged as rebuildable cache so
     // `--exclude-caches` backups skip them (the per-group `render_markdown/` tags
@@ -632,7 +632,7 @@ fn manual_e2e_live_sync_golden() {
         snapshot_path => snap_base().join("unified_document_index").display().to_string(),
         prepend_module_to_snapshot => false,
         sort_maps => true,
-        description => "unified_document_index/grid_index/db.doltlite_db#problems",
+        description => "unified_document_index/grid_index/db.sqlite#problems",
     }, {
         assert_json_snapshot!("problems", index_problems(&data_root));
     });
@@ -1455,7 +1455,7 @@ async fn latest_sync_run(path: &Path) -> Value {
 /// The unified document index's `problems` table, volatile stamps redacted, ordered
 /// by `problem_uuid` like every dumped table.
 fn index_problems(data_root: &Path) -> Value {
-    let db = data_root.join("unified_document_index/grid_index/db.doltlite_db");
+    let db = data_root.join("unified_document_index/grid_index/db.sqlite");
     let mut dump = dump_store(&db);
     let mut rows = match &mut dump {
         Value::Object(map) => map
@@ -1560,7 +1560,7 @@ fn read_contact_specs(path: &Path) -> Vec<ContactSpec> {
 /// Every handle the specs link is an author in the index, so each link
 /// lands on documents rather than on nothing.
 fn assert_handles_indexed(data_root: &Path, specs: &[ContactSpec], after: &str) {
-    let db = data_root.join("unified_document_index/grid_index/db.doltlite_db");
+    let db = data_root.join("unified_document_index/grid_index/db.sqlite");
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

@@ -4,8 +4,9 @@
 # Runs the staged `datalib-*` binaries (`//datalib/backend:bin_unstamped`
 # — `:bin` minus the per-commit `git-hash`, so this test stays cached
 # across commits — in whatever configuration it is built with) over the two-vCard
-# fixture — ingest, render, grid_index — and reads the commit log of
-# both stores back through the doltlite shell. A binary linked against
+# fixture — ingest, render, grid_index — and reads the raw store's commit
+# log back through the doltlite shell, and the grid index's rows (the index
+# is plain SQLite, the one store with no log). A binary linked against
 # stock SQLite writes files the shell refuses (`dolt version-control
 # features are not available on stock SQLite databases`), and its
 # ingest fails the committed-schema check first anyway; either way this
@@ -86,11 +87,9 @@ commits() {  # <store> — prints the commit count, or fails loudly
 }
 
 raw="$root/contacts/ingest/entities.doltlite_db"
-grid="$root/unified_document_index/grid_index/db.doltlite_db"
+grid="$root/unified_document_index/grid_index/db.sqlite"
 n_raw="$(commits "$raw")"
-n_grid="$(commits "$grid")"
 rows="$("$shell" -readonly "$grid" "SELECT count(*) FROM grid_rows;")"
-echo "raw store commits: $n_raw; grid store commits: $n_grid; grid_rows: $rows"
-[[ "$n_raw" -ge 1 ]]  || { echo "raw store has no commits" >&2; exit 1; }
-[[ "$n_grid" -ge 1 ]] || { echo "grid store has no commits" >&2; exit 1; }
-[[ "$rows" -ge 1 ]]   || { echo "grid_rows is empty" >&2; exit 1; }
+echo "raw store commits: $n_raw; grid_rows: $rows"
+[[ "$n_raw" -ge 1 ]] || { echo "raw store has no commits" >&2; exit 1; }
+[[ "$rows" -ge 1 ]]  || { echo "grid_rows is empty" >&2; exit 1; }

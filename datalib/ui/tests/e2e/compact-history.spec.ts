@@ -1,19 +1,21 @@
 import { test, expect } from "@playwright/test";
 
 // A right-click on the data root's size in the status bar compacts the
-// library's history: the rendered documents and the grid index each keep
-// one commit, holding what they held. It rewrites the stores, so the spec
-// has a root of its own (config-mutating.ts).
+// library's history: each source's rendered documents keep one commit,
+// holding what they held. It rewrites the stores, so the spec has a root
+// of its own (config-mutating.ts).
 
-const GRID = "unified_document_index/grid_index";
+const RENDER = "slack/render_markdown";
 
 test("a right-click on the root's size compacts the history", async ({ page, request }) => {
   const log = async (): Promise<string[]> => {
-    const r = await request.get(`/api/pipeline/history?tree=${encodeURIComponent(GRID)}`);
+    const r = await request.get(`/api/pipeline/history?tree=${encodeURIComponent(RENDER)}`);
     const h = (await r.json()) as { stores: { commits: { message: string }[] }[] };
     return h.stores[0]?.commits.map((c) => c.message) ?? [];
   };
-  expect((await log()).length, "the fixture's index has a history to fold").toBeGreaterThan(2);
+  expect((await log()).length, "the fixture's render store has a history to fold").toBeGreaterThan(
+    2,
+  );
 
   await page.goto("/");
   const root = page.getByTestId("root-storage");

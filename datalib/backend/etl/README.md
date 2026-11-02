@@ -355,13 +355,10 @@ the held read transaction's connection to `main`, an `ATTACH` of a
 plain SQLite file read-only (after a `pragma_database_list` read asking
 whether it is attached already) with an FTS5 `MATCH` on it and a join
 from it to the store's tables — and that list is the allowlist. The plain
-file is in rollback-journal mode (its writer never asks for WAL), so a transaction
-that reads it holds off its writer's commits for as long as it is open:
-keep one to a request's queries. A transaction around one query waits
-a few milliseconds at most
-(`pinned_readers_with_the_terms_attached_hold_off_no_writer`); readers
-that each held one open for 20 ms of queries were measured waiting over
-a second. Any other
+file is in WAL mode, so a transaction that reads it holds off only its
+writer's checkpoint, never a commit; still keep one to a request's
+queries, since the checkpoint at the end of the writer's sync waits for
+it. Any other
 statement a reader adds is presumed guilty until
 `doltlite_two_process_test` has run with it. Looking like a read is not
 enough: a read-only `dolt_status` once failed the writer's commit and
@@ -397,7 +394,7 @@ wrote for good
 What that means here:
 
 - **Batch writes in one transaction.** A render store's transaction is
-  one checkpoint interval, the grid index's is the whole run, a SQLite
+  one checkpoint interval, the grid index's is one source, a SQLite
   mirror's is one table, and Linear's download writes through a
   `raw_store::Batch`, one transaction between two seals; within one of
   those the order rows arrive in does not matter. The downloads that go

@@ -28,7 +28,7 @@ async fn fetch_framed_by(
     let db_path = tempfile::TempDir::with_prefix("datalib-http-csp-itest-")
         .expect("create tempdir")
         .keep()
-        .join("backend_index.doltlite_db");
+        .join("backend_index.sqlite");
     let root: Arc<PathBuf> = Arc::new(db_path.parent().unwrap().to_path_buf());
     let app = AppStore::open(root.as_path())
         .await
