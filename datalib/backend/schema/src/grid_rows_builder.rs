@@ -446,6 +446,10 @@ impl GridRowBuilder {
             image: self.image,
             latitude: self.geo.map(|(lat, _)| lat),
             longitude: self.geo.map(|(_, lng)| lng),
+            h3: self
+                .geo
+                .and_then(|(lat, lng)| datalib_h3::locate(lat, lng))
+                .map(datalib_h3::stored),
         })
     }
 }

@@ -1897,6 +1897,7 @@ grid_rows
     image
     latitude
     longitude
+    h3
 markdowns
     markdown_uuid
     source_id

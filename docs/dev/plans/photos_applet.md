@@ -334,12 +334,16 @@ derived from columns that stay"; the example catalog shows it is not
 
 ## 6. H3
 
+*Superseded as built:* a location is not four `Place` terms but one
+resolution-15 cell in `grid_rows.h3`, and `place:<cell>` at any
+resolution is a range of it; `near:<cell>` adds the neighbours.
+[`datalib/backend/h3/README.md`](../../../datalib/backend/h3/README.md)
+has the rule and the facts. The photo card still names cells at
+resolutions 4, 6, 8 and 10, each the parent of the finest one.
+
 `h3o` (BSD-3-Clause, on `deny.toml`'s allow list), a pure-Rust H3.
-Render computes the cell at resolutions 4, 6, 8 and 10 for every photo
-with a GPS fix and writes them as `Place` terms and in the `photos`
-row. Four resolutions are four exact-match lookups: "this region",
-"this city", "this neighbourhood", "this block". A map card, when one is
-built, turns a click into `place:<cell>` at the zoom it is drawn at.
+A map card, when one is built, turns a click into `place:<cell>` at the
+zoom it is drawn at.
 
 ## 7. Before, after, and what a person notices
 

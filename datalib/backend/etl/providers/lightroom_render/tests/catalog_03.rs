@@ -155,8 +155,14 @@ async fn the_golden_gate_photo_says_what_the_catalog_holds() {
     assert_eq!(row.latitude, Some(geo.latitude));
     let places = terms(b, SearchTermKind::Place);
     assert!(places.contains(&"San Francisco".to_string()), "{places:?}");
+    let located = row.h3.expect("a location");
     for cell in &p.h3 {
-        assert!(places.contains(&cell.cell), "{places:?}");
+        assert!(
+            !places.contains(&cell.cell),
+            "cells are not terms: {places:?}"
+        );
+        let cell = datalib_h3::parse(&cell.cell).unwrap();
+        assert!(datalib_h3::finest_range(cell).contains(&located));
     }
     assert_eq!(
         terms(b, SearchTermKind::Caption),
