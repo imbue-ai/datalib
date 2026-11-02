@@ -225,14 +225,14 @@ fn first_use_fetches_the_manifests_runtime_and_the_second_does_not() {
     // from the fetched tree, at their pinned versions.
     assert!(
         stderr.contains(&format!(
-            "qmd --version: fake-node {}/qmd/{DEFAULT_QMD_VERSION}/node_modules/@tobilu/qmd/dist/cli/qmd.js --version",
+            "qmd --version: fake-node --disable-sigusr1 {}/qmd/{DEFAULT_QMD_VERSION}/node_modules/@tobilu/qmd/dist/cli/qmd.js --version",
             expected_root.display()
         )),
         "{stderr}"
     );
     assert!(
         stderr.contains(&format!(
-            "latchkey --version: fake-node {}/latchkey/{LATCHKEY_VERSION}/{LATCHKEY_ENTRY_REL} --version",
+            "latchkey --version: fake-node --disable-sigusr1 {}/latchkey/{LATCHKEY_VERSION}/{LATCHKEY_ENTRY_REL} --version",
             expected_root.display()
         )),
         "{stderr}"

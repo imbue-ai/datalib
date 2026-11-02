@@ -61,7 +61,10 @@ place — and most of it was written by other people. Three things follow:
   [latchkey](https://github.com/imbue-ai/latchkey), which keeps live
   session cookies and API tokens on your machine. Any process that can
   run commands as you can use them to act as you on those services, with
-  no further prompt. Only do this on a machine you trust.
+  no further prompt. Only do this on a machine you trust. macOS can lock
+  a secret so only one signed app reads it, but datalib doesn't do that
+  yet, and such a lock is weaker than it sounds:
+  [who can use your sign-ins, and why](docs/user/first_time_user.md#who-can-use-your-sign-ins-and-why).
 - **Agents.** Before you let an agent loose on the mirror, read about the
   [lethal trifecta](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/).
   Treat everything in your mirror as both *private* and *untrusted*
