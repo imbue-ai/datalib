@@ -321,8 +321,7 @@ impl HttpResponse {
 
 /// Display and `source` are written by hand rather than derived: the
 /// source is the [`Upstream`] the failure means, which no field holds.
-/// Every field is ours to print: a URL is a [`ShownUrl`], and what
-/// latchkey or curl said is a [`CurlFailure`], never their text.
+/// A URL is a [`ShownUrl`], so a signed one prints without its signature.
 #[derive(Debug)]
 pub enum HttpError {
     Spawn {
@@ -342,6 +341,9 @@ pub enum HttpError {
         url: ShownUrl,
         exit: i32,
         failure: CurlFailure,
+        /// The start of what latchkey or curl printed: their own one-line
+        /// messages, which name no credential.
+        stderr: String,
     },
     Malformed {
         service: HttpService,
@@ -353,6 +355,7 @@ pub enum HttpError {
     NotPermitted {
         service: HttpService,
         url: ShownUrl,
+        message: String,
     },
     PlaybackMiss(String),
     PlaybackInvalid(String),
@@ -376,11 +379,8 @@ pub enum HttpError {
     },
 }
 
-/// What a failed `latchkey curl` said, read off its stderr, which goes no
-/// further: latchkey's and curl's messages are whatever they chose to
-/// print, and a failed request's can carry the credential or a signed
-/// URL. Each kind has a sentence of our own; one we do not recognise is
-/// [`CurlFailure::Unrecognised`], and the exit code is all that is kept.
+/// What kind of failure a `latchkey curl` exit was, read off what it
+/// printed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CurlFailure {
     /// latchkey has no service for the URL.
@@ -439,57 +439,17 @@ impl CurlFailure {
             CurlFailure::Unrecognised
         }
     }
-
-    /// Worded so that `datalib_probe::issue::classify` reads each the way
-    /// it reads latchkey's own message.
-    fn sentence(self, exit: i32) -> &'static str {
-        match self {
-            CurlFailure::NoServiceForUrl => "No service matches URL in latchkey.",
-            CurlFailure::NoCredential => "No credentials found for this service in latchkey.",
-            CurlFailure::NoCredentialForAccount => {
-                "No credentials stored for account named in latchkey_settings.account."
-            }
-            CurlFailure::AccountNotNamed => {
-                "Multiple accounts are stored for this service; name one in \
-                 latchkey_settings.account."
-            }
-            CurlFailure::Expired => "Credentials for this service are expired.",
-            CurlFailure::NotPermitted => "Request not permitted by latchkey's permissions.",
-            CurlFailure::GatewayUnreachable => "Failed to reach latchkey gateway.",
-            CurlFailure::Keychain => "No encryption key available to latchkey.",
-            CurlFailure::TooLarge => "The response was larger than this request accepts.",
-            CurlFailure::Curl => curl_exit_sentence(exit),
-            CurlFailure::Unrecognised => {
-                "latchkey printed a message datalib does not recognise, so it is not shown; \
-                 run the request with latchkey curl by hand to read it."
-            }
-        }
-    }
-}
-
-/// curl's exit codes, from its man page, for the ones a request meets.
-fn curl_exit_sentence(exit: i32) -> &'static str {
-    match exit {
-        6 => "Could not resolve host.",
-        7 => "Failed to connect to host.",
-        28 => "The operation timed out.",
-        35 | 60 => "The TLS handshake or certificate check failed.",
-        52 => "The server sent nothing back.",
-        55 => "Sending the request failed.",
-        56 => "Receiving the response failed.",
-        _ => "curl failed; its exit code says how.",
-    }
 }
 
 impl HttpError {
-    /// `latchkey curl` (or plain `curl`) exiting non-zero with `stderr`,
-    /// which is read here and kept no further.
+    /// `latchkey curl` (or plain `curl`) exiting non-zero with `stderr`.
     pub fn curl_exit(service: HttpService, url: &str, exit: i32, stderr: &str) -> Self {
         HttpError::Curl {
             service,
             url: ShownUrl::new(service, url),
             exit,
             failure: CurlFailure::classify(exit, stderr),
+            stderr: stderr.chars().take(400).collect(),
         }
     }
 
@@ -550,6 +510,11 @@ fn gateway_refusal(req: &HttpRequest, resp: &HttpResponse) -> Option<HttpError> 
     Some(HttpError::NotPermitted {
         service: req.service,
         url: ShownUrl::of(req),
+        message: body
+            .get("error")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
     })
 }
 
@@ -571,12 +536,9 @@ impl std::fmt::Display for HttpError {
                 service,
                 url,
                 exit,
-                failure,
-            } => write!(
-                f,
-                "{service}: latchkey curl exit {exit} ({url}): {}",
-                failure.sentence(*exit)
-            ),
+                stderr,
+                ..
+            } => write!(f, "{service}: latchkey curl exit {exit} ({url}): {stderr}"),
             HttpError::Malformed {
                 service,
                 url,
@@ -585,10 +547,13 @@ impl std::fmt::Display for HttpError {
                 f,
                 "{service}: malformed response from latchkey curl ({url}): {message}"
             ),
-            HttpError::NotPermitted { service, url } => write!(
+            HttpError::NotPermitted {
+                service,
+                url,
+                message,
+            } => write!(
                 f,
-                "{service}: latchkey did not permit this request ({url}): \
-                 Request not permitted by latchkey's permissions."
+                "{service}: latchkey did not permit this request ({url}): {message}"
             ),
             HttpError::PlaybackMiss(m) => write!(f, "playback miss: {m}"),
             HttpError::PlaybackInvalid(m) => write!(f, "playback fixture invalid: {m}"),
@@ -1097,8 +1062,8 @@ mod live {
         async fn plain_curl_refuses_http_before_connecting() {
             // Port 1 answers nothing: a connection attempt is exit 7.
             match send(&plain("http://127.0.0.1:1/x")).await {
-                Err(HttpError::Curl { exit, failure, .. }) => {
-                    assert_eq!(exit, 1, "{failure:?}");
+                Err(HttpError::Curl { exit, stderr, .. }) => {
+                    assert_eq!(exit, 1, "{stderr}");
                 }
                 other => panic!("expected curl to refuse the protocol, got {other:?}"),
             }
@@ -1254,48 +1219,22 @@ mod tests {
         assert_eq!(unreachable.upstream(), Some(Upstream::Unavailable));
     }
 
-    /// What latchkey or curl printed never reaches the error's text: a
-    /// failed request's stderr can carry the credential latchkey put on
-    /// it, or the signed URL. The kinds it is read as keep the words the
-    /// wizard's classifier looks for.
+    /// latchkey's own message is what a failed request says, after the
+    /// URL it was asked for without its query.
     #[test]
-    fn a_curl_failure_prints_our_sentence_not_its_stderr() {
-        let secret = "xoxp-1111-2222-tng-secret";
-        for (exit, stderr, says) in [
-            (
-                1,
-                format!(
-                    "Error: No credentials found for slack. -H 'Authorization: Bearer {secret}'"
-                ),
-                "No credentials found for",
-            ),
-            (
-                7,
-                format!("curl: (7) Failed to connect to slack.com?token={secret}"),
-                "curl exit 7 (",
-            ),
-            (
-                1,
-                format!("TypeError: cannot read {secret}"),
-                "does not recognise",
-            ),
-            (
-                1,
-                format!("Error: Multiple accounts are stored for service 'slack': {secret}"),
-                "Multiple accounts",
-            ),
-        ] {
-            let e = HttpError::curl_exit(
-                HttpService::Slack,
-                &format!("https://slack.com/api/auth.test?token={secret}"),
-                exit,
-                &stderr,
-            );
-            let text = e.to_string();
-            assert!(!text.contains(secret), "{text}");
-            assert!(!format!("{e:?}").contains(secret), "{e:?}");
-            assert!(text.contains(says), "{text}");
-        }
+    fn a_curl_failure_says_what_latchkey_said() {
+        let e = HttpError::curl_exit(
+            HttpService::Notion,
+            "https://s3.test/f.pdf?X-Amz-Signature=s3cret",
+            1,
+            "Error: No credentials found for notion.",
+        );
+        assert_eq!(
+            e.to_string(),
+            "notion: latchkey curl exit 1 (https://s3.test/f.pdf): \
+             Error: No credentials found for notion."
+        );
+        assert_eq!(e.upstream(), Some(Upstream::CredentialRefused));
     }
 
     /// A URL is stored and printed without what signs it: the query,
@@ -1346,6 +1285,7 @@ mod tests {
             HttpError::NotPermitted {
                 service: req.service,
                 url: ShownUrl::of(&req),
+                message: "Error: Request not permitted.".into(),
             },
             HttpError::curl_exit(req.service, &req.url, 28, ""),
         ] {

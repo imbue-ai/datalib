@@ -186,14 +186,14 @@ async fn run(mut child: tokio::process::Child, slot: &Slot, source_type: &str) {
     let succeeded = matches!(exit, Ok(status) if status.success());
     if !succeeded {
         // The step's error chain is the useful message ("Gmail
-        // users.getProfile: HTTP 401 …"), so the wizard shows it. The log
-        // keeps only its kind: the chain can quote what the service
-        // answered, and a log line outlives the dialog.
+        // users.getProfile: HTTP 401 …"), so pass it through rather than
+        // replacing it with our own.
         let failure = failure_from(&stdout, &stderr, latchkey_gateway().is_some());
         tracing::error!(
             source_type = %source_type,
             issue = failure.issue.as_str(),
-            "probe failed"
+            "probe failed: {}",
+            failure.detail
         );
         return fail(slot, failure);
     }

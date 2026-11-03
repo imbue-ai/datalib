@@ -375,8 +375,8 @@ pub struct ConnectStatus {
     /// the one asked for, or with none asked for, the identity the login
     /// yields.
     pub account: Option<String>,
-    /// What went wrong, in our words, once `Failed`. Never what latchkey
-    /// printed ([`LatchkeyFailed`] says why).
+    /// What went wrong, once `Failed`: the tail of latchkey's message, or
+    /// ours when it said nothing useful.
     pub detail: String,
     /// What the attempt is doing now, while it runs.
     pub phase: ConnectPhase,
@@ -458,13 +458,18 @@ pub async fn set_credential(
 }
 
 /// A paste latchkey would not store, as the log and the wizard hear of
-/// it: its kind and our sentence.
+/// it.
 fn refused(service: &str, command: &str, failed: LatchkeyFailed) -> (StatusCode, Json<Value>) {
     let issue = failed.issue();
-    tracing::error!(service, issue = issue.as_str(), "latchkey {command} failed");
+    let detail = failed.detail(command);
+    tracing::error!(
+        service,
+        issue = issue.as_str(),
+        "latchkey {command} failed: {detail}"
+    );
     (
         StatusCode::BAD_GATEWAY,
-        Json(serde_json::json!({ "error": failed.detail(command), "issue": issue })),
+        Json(serde_json::json!({ "error": detail, "issue": issue })),
     )
 }
 
@@ -676,7 +681,7 @@ pub async fn start_connect(
             slot.lock().expect("connect slot mutex").phase = ConnectPhase::DownloadingBrowser;
             if let Err(failed) = latchkey_output(&download_browser_args()).await {
                 let message = format!(
-                    "No browser found for the sign-in, and fetching one failed. {}",
+                    "No browser found for the sign-in, and fetching one failed: {}",
                     failed.detail("ensure-browser --source download-playwright-browser"),
                 );
                 fail(&slot, &service, IssueKind::NoBrowser, message);
@@ -732,8 +737,7 @@ pub async fn start_connect(
 }
 
 /// The attempt's outcome goes to the log as well as to the slot, which
-/// is reaped on the first poll that reads it. `detail` is ours, never
-/// latchkey's output.
+/// is reaped on the first poll that reads it.
 fn fail(slot: &Arc<Mutex<ConnectStatus>>, service: &str, issue: IssueKind, detail: String) {
     if failure_is_an_error(issue) {
         tracing::error!(
@@ -878,11 +882,11 @@ pub async fn connect_status(
 /// `ui/src/config/accountNaming.ts`).
 const EPHEMERAL_BROWSER_ENV: &str = "LATCHKEY_EPHEMERAL_BROWSER";
 
-/// Why a latchkey command failed, read off what it printed, which goes
-/// no further: on a failed `auth set` or `auth prepare` that is whatever
-/// latchkey chose to say about the credential it was handed, and a log
-/// line or an error on screen outlives the dialog. A failure is shown as
-/// its [`IssueKind`] and [`LatchkeyFailed::detail`], both ours.
+/// Why a latchkey command failed. latchkey's own message is kept and
+/// shown: every error latchkey 3.21.0 prints is one of its typed
+/// messages, none of which repeats a header or token it was handed. (The
+/// one that quotes its input, `auth prepare`'s JSON parse error, cannot
+/// happen: `oauth_client.rs` always hands it valid JSON.)
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum LatchkeyFailed {
     /// latchkey could not be started; our own words say where it was
@@ -896,8 +900,8 @@ enum LatchkeyFailed {
     TimedOut(Duration),
     /// It answered with something other than the JSON asked for.
     NotJson,
-    /// Any other failure, as the wizard words its kind.
-    Issue(IssueKind),
+    /// Any other failure: its kind, and the tail of what latchkey said.
+    Said { issue: IssueKind, stderr: String },
 }
 
 impl LatchkeyFailed {
@@ -907,7 +911,10 @@ impl LatchkeyFailed {
         } else if stderr.contains("already exists") {
             LatchkeyFailed::AlreadyRegistered
         } else {
-            LatchkeyFailed::Issue(classify(stderr, gateway))
+            LatchkeyFailed::Said {
+                issue: classify(stderr, gateway),
+                stderr: tail(stderr),
+            }
         }
     }
 
@@ -918,18 +925,13 @@ impl LatchkeyFailed {
             LatchkeyFailed::AlreadyRegistered
             | LatchkeyFailed::TimedOut(_)
             | LatchkeyFailed::NotJson => IssueKind::Unknown,
-            LatchkeyFailed::Issue(kind) => *kind,
+            LatchkeyFailed::Said { issue, .. } => *issue,
         }
     }
 
-    /// `command` is the latchkey subcommand that failed, as words that
-    /// carry no secret (`auth set fastmail-dav`), for a person to run in
-    /// a terminal to read latchkey's own message.
+    /// `command` is the latchkey subcommand that failed, for the
+    /// failures latchkey said nothing useful about.
     fn detail(&self, command: &str) -> String {
-        let cli = datalib_core::node_runtime::latchkey_cli_hint();
-        let unseen = format!(
-            "What latchkey printed is not shown, since it can carry the credential; run              `{cli} {command}` in a terminal to read it."
-        );
         match self {
             LatchkeyFailed::NotRun(why) => format!("Could not run latchkey: {why}"),
             LatchkeyFailed::UnknownService => format!("latchkey {command}: no such service."),
@@ -941,9 +943,9 @@ impl LatchkeyFailed {
                 limit.as_secs()
             ),
             LatchkeyFailed::NotJson => {
-                format!("latchkey {command} printed something that isn't JSON. {unseen}")
+                format!("latchkey {command} printed something that isn't JSON.")
             }
-            LatchkeyFailed::Issue(_) => format!("latchkey {command} failed. {unseen}"),
+            LatchkeyFailed::Said { stderr, .. } => stderr.clone(),
         }
     }
 }
@@ -1046,35 +1048,20 @@ pub(crate) fn err(status: StatusCode, message: &str) -> (StatusCode, Json<Value>
 mod latchkey_failed_tests {
     use super::*;
 
-    /// What latchkey printed reaches neither the log nor the wizard,
-    /// whatever shape the credential in it takes: the failure is its kind
-    /// and our sentence. All but the last got past the pattern scrubber
-    /// this replaced.
+    /// latchkey's own words are what the wizard shows and the log keeps:
+    /// they say what went wrong better than any sentence of ours.
     #[test]
-    fn latchkeys_output_is_never_in_what_a_failure_says() {
-        const SECRET: &str = "tng-s3cret-0451";
-        let printed = [
-            format!("Error: bad header -H 'Authorization: Basic {SECRET}'"),
-            format!("curl https://api.test/x?api_key={SECRET}&pwd={SECRET}&sig={SECRET}"),
-            format!("https://s3.test/f?X-Amz-Signature={SECRET}"),
-            format!(r#"{{"Authorization":"Bearer {SECRET}"}}"#),
-            format!("Bearer\t{SECRET}"),
-            format!("https://picard:{SECRET}@dav.test/"),
-            format!("xoxp-{SECRET} ghp_{SECRET} sk-ant-{SECRET}"),
-            format!("Error: No credentials found for slack. Bearer {SECRET}"),
-        ];
-        for stderr in &printed {
-            let failed = LatchkeyFailed::from_stderr(stderr, false);
-            let detail = failed.detail("auth set slack");
-            assert!(!detail.contains(SECRET), "{detail}");
-            assert!(!format!("{failed:?}").contains(SECRET), "{failed:?}");
-        }
+    fn latchkeys_message_is_the_detail() {
+        let said = "Error: Login failed: access_denied";
+        let failed = LatchkeyFailed::from_stderr(said, false);
+        assert_eq!(failed.issue(), IssueKind::Unknown);
+        assert_eq!(failed.detail("auth browser google-gmail"), said);
     }
 
-    /// The kind is still read off what latchkey said, so the wizard says
-    /// the right sentence.
+    /// The kind is read off what latchkey said, so the wizard says the
+    /// right sentence above it.
     #[test]
-    fn the_kind_is_read_before_the_text_is_dropped() {
+    fn the_kind_is_read_off_latchkeys_message() {
         let f = |s: &str| LatchkeyFailed::from_stderr(s, false);
         assert_eq!(
             f("Error: Unknown service: claude-ai"),

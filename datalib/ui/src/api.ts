@@ -1955,8 +1955,8 @@ export type ConnectAttempt = {
   /// own report is the only reliable answer. Null when the flow had no
   /// identity to derive and used latchkey's unnamed default.
   account: string | null;
-  /// What went wrong, in the server's words, once `failed`; never what
-  /// latchkey printed, which can carry the credential.
+  /// What went wrong, once `failed`: the tail of latchkey's own message,
+  /// or the server's words when latchkey said nothing useful.
   detail: string;
   phase: ConnectPhase;
   /// What kind of trouble it was, once `failed`.

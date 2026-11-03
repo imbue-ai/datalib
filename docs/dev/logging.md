@@ -227,9 +227,7 @@ since the request line has only the total.
 - **A secret.** The request log drops `?token=`; a line you write must
   not carry a credential either. Do it by construction, not by scrubbing
   a pattern out afterwards: print a URL as a `ShownUrl` (scheme, host,
-  path), and read what latchkey or curl printed into a kind of failure
-  rather than passing it on ([`latchkey.md`](latchkey.md) § "When it
-  fails").
+  path), since a signed URL carries its credential in the query.
 
 ## Reading it
 

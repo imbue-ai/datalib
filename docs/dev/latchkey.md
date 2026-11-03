@@ -274,17 +274,13 @@ renews must check the account it got before using it
   permission can. Behind a gateway (`LATCHKEY_GATEWAY` set), a step's
   sign-in hint points at the gateway instead of `latchkey auth browser`,
   which the gateway refuses.
-- **What latchkey prints is never shown, logged or stored.** A failed
-  `auth set` or `auth prepare` can echo the credential it was handed,
-  and a failed request the header latchkey put on it. So its output is
-  read once, into a closed set of kinds, and dropped: `CurlFailure` in
-  `datalib/backend/etl/web/src/http.rs` for a request, `LatchkeyFailed`
-  in `datalib/backend/http/src/connect.rs` for the wizard's commands.
-  Each kind is printed as a sentence of ours; one we do not recognise
-  says which command failed, so a person can run it in a terminal and
-  read latchkey's own words there. A URL in an error or a log line is a
-  `ShownUrl`: scheme, host and path, never the query, where a signed
-  link carries its signature, nor the signed end of a YoLink path.
+- **latchkey's own message is shown and logged as it printed it.**
+  Every error latchkey prints is one of its typed messages, and none
+  repeats a header or token it was handed; curl runs with `-sS` and
+  prints only its own one-line errors. The URL beside it is a
+  `ShownUrl` (`datalib/backend/etl/web/src/http.rs`): scheme, host and
+  path, never the query, where a signed link carries its signature, nor
+  the signed end of a YoLink path.
 - The wizard turns what a sign-in or a probe ran into into one
   sentence per kind of trouble: `IssueKind` in
   `datalib/backend/probe/src/issue.rs`, worded in
