@@ -370,6 +370,13 @@ pub enum HttpError {
         /// The status of the last attempt, when it got an answer.
         last_status: Option<u16>,
     },
+    /// A plain request's body was larger than its `max_bytes`, and curl
+    /// stopped. The same on every try, so it is not retried.
+    TooLarge {
+        service: HttpService,
+        url: ShownUrl,
+        max_bytes: u64,
+    },
     /// The step was asked to stop while this request waited to retry.
     /// Terminal for the unit of work that made the request, the same as
     /// `GaveUp`; the fetch loop's next check of the stop flag ends the run.
@@ -399,8 +406,6 @@ pub enum CurlFailure {
     GatewayUnreachable,
     /// latchkey could not get its encryption key.
     Keychain,
-    /// The body was past the request's `max_bytes` (`--max-filesize`).
-    TooLarge,
     /// curl's own failure; its exit code says which.
     Curl,
     Unrecognised,
@@ -431,8 +436,6 @@ impl CurlFailure {
             CurlFailure::GatewayUnreachable
         } else if has("No encryption key available") || has("Failed to decrypt file") {
             CurlFailure::Keychain
-        } else if has("maximum allowed file size") {
-            CurlFailure::TooLarge
         } else if exit != 1 && has("curl: (") {
             CurlFailure::Curl
         } else {
@@ -459,16 +462,10 @@ impl HttpError {
     /// 55 send, 56 receive) are the service not answering, which is also
     /// what the retry loop retries. 6 is a typo'd host as well as a
     /// network that is not up yet, as after a laptop wakes; the guard's
-    /// budget is what ends the first. A body past `--max-filesize` is
-    /// 63, or 56 when its size was not known up front; it is the same
-    /// on every try, so it is not retried.
+    /// budget is what ends the first.
     pub fn upstream(&self) -> Option<Upstream> {
         match self {
             HttpError::Timeout { .. } => Some(Upstream::Unavailable),
-            HttpError::Curl {
-                failure: CurlFailure::TooLarge,
-                ..
-            } => None,
             HttpError::Curl { exit, .. } if matches!(*exit, 6 | 7 | 28 | 35 | 52 | 55 | 56) => {
                 Some(Upstream::Unavailable)
             }
@@ -563,6 +560,15 @@ impl std::fmt::Display for HttpError {
                 reason,
                 ..
             } => write!(f, "{service}: gave up retrying ({url}): {reason}"),
+            HttpError::TooLarge {
+                service,
+                url,
+                max_bytes,
+            } => write!(
+                f,
+                "{service}: {url} is larger than {} MiB, the most one request takes",
+                max_bytes >> 20
+            ),
             HttpError::Interrupted { service, url } => {
                 write!(f, "{service}: interrupted while waiting to retry ({url})")
             }
@@ -829,6 +835,16 @@ where
     }
 }
 
+/// A plain request whose body passed `max_bytes`, as the transport and
+/// playback both report it.
+pub(crate) fn too_large(req: &HttpRequest, max_bytes: u64) -> HttpError {
+    HttpError::TooLarge {
+        service: req.service,
+        url: ShownUrl::of(req),
+        max_bytes,
+    }
+}
+
 /// One debug line per attempt, so a slow step's log says which calls
 /// its time went to.
 fn log_attempt(req: &HttpRequest, outcome: &Result<HttpResponse, HttpError>, took: Duration) {
@@ -837,6 +853,7 @@ fn log_attempt(req: &HttpRequest, outcome: &Result<HttpResponse, HttpError>, too
         Err(HttpError::Timeout { .. }) => ("timeout".to_string(), 0),
         Err(HttpError::Curl { exit, .. }) => (format!("curl exit {exit}"), 0),
         Err(HttpError::Interrupted { .. }) => ("interrupted".to_string(), 0),
+        Err(HttpError::TooLarge { .. }) => ("too large".to_string(), 0),
         Err(_) => ("error".to_string(), 0),
     };
     let url = ShownUrl::of(req);
@@ -966,12 +983,12 @@ mod live {
         let duration_ms = t0.elapsed().as_millis() as u64;
 
         if !proc.status.success() {
-            return Err(HttpError::curl_exit(
-                req.service,
-                &req.url,
-                proc.status.code().unwrap_or(-1),
-                &String::from_utf8_lossy(&proc.stderr),
-            ));
+            let stderr = String::from_utf8_lossy(&proc.stderr);
+            let exit = proc.status.code().unwrap_or(-1);
+            if req.bypass_latchkey && past_the_cap(exit, &stderr) {
+                return Err(too_large(req, req.max_bytes));
+            }
+            return Err(HttpError::curl_exit(req.service, &req.url, exit, &stderr));
         }
 
         let header_dump = String::from_utf8_lossy(&proc.stdout).into_owned();
@@ -1013,6 +1030,13 @@ mod live {
         .map(String::from)
         .chain([max_bytes.to_string()])
         .collect()
+    }
+
+    /// curl's exit for a body past `--max-filesize`: 63 when the size
+    /// was announced, 56 when it was not, which is also a dropped
+    /// connection, so the message tells the two apart.
+    fn past_the_cap(exit: i32, stderr: &str) -> bool {
+        exit == 63 || (exit == 56 && stderr.contains("maximum allowed file size"))
     }
 
     fn parse_header_block(dump: &str) -> Option<(u16, BTreeMap<String, String>)> {
@@ -1072,15 +1096,24 @@ mod live {
         /// A body past the cap is the same on every try: curl's exit
         /// 56 for it, when the size was not known up front, read as a
         /// dropped connection and was retried until the guard gave up.
+        /// It is its own error now, which a source can record as a skip.
         #[test]
-        fn a_body_past_the_cap_is_not_retried() {
-            let past = HttpError::curl_exit(
-                HttpService::Notion,
-                "https://files.example/x",
+        fn a_body_past_the_cap_is_its_own_error() {
+            let exceeded = "curl: (56) Exceeded the maximum allowed file size (100) with 100 bytes";
+            assert!(past_the_cap(56, exceeded));
+            assert!(past_the_cap(63, ""));
+            assert!(!past_the_cap(
                 56,
-                "curl: (56) Exceeded the maximum allowed file size (100) with 100 bytes",
+                "curl: (56) Recv failure: Connection reset by peer"
+            ));
+            let e = too_large(
+                &plain("https://files.example/x?X-Amz-Signature=s"),
+                100 << 20,
             );
-            assert_eq!(past.upstream(), None);
+            assert_eq!(e.upstream(), None);
+            let said = e.to_string();
+            assert!(said.contains("100 MiB"), "{said}");
+            assert!(!said.contains("Signature"), "{said}");
         }
 
         /// A URL that starts with `-` was an option to curl: this one

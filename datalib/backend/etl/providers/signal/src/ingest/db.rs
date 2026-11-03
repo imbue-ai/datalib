@@ -6,11 +6,11 @@ use anyhow::{Context, Result};
 use datalib_time::IsoOffsetTimestamp;
 
 use super::backups::{self, Held};
-use super::schema_raw::full_ddl;
+use super::schema_raw::{full_ddl, LADDER};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
-datalib_etl::raw_db!(pub RawDb: CasEntityStore, full_ddl());
+datalib_etl::raw_db!(pub RawDb: CasEntityStore, full_ddl(), LADDER);
 
 impl RawDb {
     pub async fn read_ledger(&self) -> Result<Vec<Held>> {

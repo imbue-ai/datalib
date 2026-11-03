@@ -37,6 +37,12 @@ meaning into it is here (`src/render/parse.rs`):
   through Slack's `app_redirect`, from the bridge's `<team>-<channel>`
   id. Other networks' rooms, and every message, have none: the cache
   holds no id that makes one.
+- **Read state** is not drawn: no message renders unread. The mirror
+  holds `mx_room_messages.seenByMeAt`, `countsAsUnread` and
+  `countsAsUnreadInThread`, but the fixture fills none of them and what
+  they mean on a real `index.db` has not been checked
+  ([`chat-common/README.md`](../../chat-common/README.md) §"Unread
+  messages").
 
 Render groups the rooms by network and calls chat-common once per
 network (`src/render/normalize.rs`), because the `grid_rows` taxonomy is

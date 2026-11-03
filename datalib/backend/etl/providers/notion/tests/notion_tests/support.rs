@@ -155,7 +155,7 @@ pub async fn run(tape: &Path, store: &Path, roots: &[&str]) -> anyhow::Result<Fe
 }
 
 pub async fn run_with(
-    tape: &Path,
+    tape: impl Into<playback::Playback>,
     store: &Path,
     adjust: impl FnOnce(FetchOptions) -> FetchOptions,
 ) -> anyhow::Result<FetchSummary> {

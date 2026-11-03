@@ -184,8 +184,8 @@
     ]
   },
   "email": {
-    "schema_hash": "4bad296846f9492c56d7f4774752f95f9180d0c661fb07e77074348e28b49215",
-    "schema_version": 7,
+    "schema_hash": "c32369116f9f56f842a0527c7c4fd015fd549f6fa3ba49a41aea7f56052b8142",
+    "schema_version": 8,
     "shared_schema_version": 1,
     "sql": [
       "CREATE TABLE accounts( id TEXT PRIMARY KEY, payload TEXT NULL, name TEXT NULL, email_address TEXT NULL, is_personal INTEGER NULL, is_read_only INTEGER NULL)",
@@ -212,6 +212,7 @@
       "CREATE TABLE mailboxes_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX mailboxes_by_account ON mailboxes(account_id)",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE read_marks( id TEXT PRIMARY KEY, read_through TEXT NULL, read INTEGER NULL)",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)",
       "CREATE TABLE thread_members(id TEXT PRIMARY KEY, thread_id TEXT NOT NULL)",
@@ -559,8 +560,8 @@
     ]
   },
   "signal": {
-    "schema_hash": "11748125660330fcf21d739c3f353a3909063a5197747801a855a244d9bef6ce",
-    "schema_version": 0,
+    "schema_hash": "c47aa6fbc0ef4b5e991a9d377544c8c851ac8e3fbe35e9589d2446e6e5c2c55f",
+    "schema_version": 1,
     "shared_schema_version": 1,
     "sql": [
       "CREATE TABLE account( id TEXT PRIMARY KEY, payload TEXT NULL)",
@@ -577,6 +578,7 @@
       "CREATE INDEX chats_by_recipient ON chats(recipient_id)",
       "CREATE TABLE ingested_backups( fingerprint TEXT PRIMARY KEY, blake3 TEXT NOT NULL, snapshot_dir TEXT NULL, total_byte_size INTEGER NULL, ingested_at_utc TEXT NOT NULL, tz_offset TEXT NULL)",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE read_marks( id TEXT PRIMARY KEY, read_through TEXT NULL, read INTEGER NULL)",
       "CREATE TABLE recipients( id TEXT PRIMARY KEY, payload TEXT NULL, identifier TEXT NULL, display_name TEXT NULL)",
       "CREATE TABLE recipients_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
@@ -584,8 +586,8 @@
     ]
   },
   "slack": {
-    "schema_hash": "4850d0b2c2d142105d99a87a79a5c00add5764e9d220f88af59709f3bf7cac4a",
-    "schema_version": 1,
+    "schema_hash": "77a4f37a3cb7a0d95743f663dc15d311661e8589111f398f84ae0e7c0ec3dec0",
+    "schema_version": 2,
     "shared_schema_version": 1,
     "sql": [
       "CREATE TABLE bookmarks( id TEXT PRIMARY KEY, payload TEXT NULL, channel_id TEXT NOT NULL)",
@@ -603,6 +605,7 @@
       "CREATE INDEX messages_by_channel_ts ON messages(channel_id, ts)",
       "CREATE INDEX messages_by_thread ON messages(thread_root_uuid)",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE read_marks( id TEXT PRIMARY KEY, read_through TEXT NULL, read INTEGER NULL)",
       "CREATE TABLE saved_items( id TEXT PRIMARY KEY, payload TEXT NULL, item_type TEXT NOT NULL, item_id TEXT NOT NULL, ts TEXT NULL)",
       "CREATE TABLE saved_items_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX saved_items_by_item ON saved_items(item_id)",
@@ -621,12 +624,13 @@
     ]
   },
   "sms_backup_restore": {
-    "schema_hash": "41e31678ec78f49b164b086b64c3ada60c766b62f96866885a247abf67aa0635",
-    "schema_version": 0,
+    "schema_hash": "0158ea8e0b53d77c1d79f5d8c7b56368198dcfd18ec19e36378be21817146fc5",
+    "schema_version": 1,
     "shared_schema_version": 1,
     "sql": [
       "CREATE TABLE ingested_files( scope TEXT NOT NULL, rel_path TEXT NOT NULL, blake3 TEXT NOT NULL, size_bytes INTEGER NOT NULL, last_finished_at_utc TEXT NOT NULL, tz_offset TEXT NULL, PRIMARY KEY(scope, rel_path))",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE read_marks( id TEXT PRIMARY KEY, read_through TEXT NULL, read INTEGER NULL)",
       "CREATE TABLE sms_attachments( id TEXT PRIMARY KEY, message_id TEXT NOT NULL, ref_name TEXT NOT NULL, blake3 TEXT NULL, CHECK(blake3 IS NULL OR length(blake3) = 64))",
       "CREATE TABLE sms_attachments_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX sms_attachments_by_message_id ON sms_attachments(message_id)",

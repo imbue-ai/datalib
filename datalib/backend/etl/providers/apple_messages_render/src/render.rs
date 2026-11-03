@@ -22,6 +22,7 @@ use datalib_etl_chat_common::types::{
     AuthorKind, ItemKind, NamedPerson, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
     NormalizedDoc, NormalizedReaction, Recipient, UpstreamRef,
 };
+use datalib_etl_chat_common::unread::{integer_order, is_unread, Marks, ReadMark};
 use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{changed_rows, Inputs, RawRange};
@@ -332,9 +333,18 @@ async fn load(
         let item_type: i64 = r.get("item_type");
         let system_note = (item_type != 0)
             .then(|| group_event(item_type, r.get("group_action_type"), r.get("group_title")));
-        // `is_read` on an outgoing message is the recipient's receipt,
-        // not the account's reading, so only an incoming one can be unread.
-        let unread = from_me == 0 && r.get::<Option<i64>, _>("is_read") == Some(0);
+        let read_mark = r
+            .get::<Option<i64>, _>("is_read")
+            .map(|read| ReadMark::Read(read != 0));
+        let unread = is_unread(
+            &rowid.to_string(),
+            from_me != 0,
+            Marks {
+                own: read_mark.as_ref(),
+                conversation: None,
+            },
+            integer_order,
+        );
         let kind = match (&system_note, attachments.is_empty()) {
             (Some(_), _) => ItemKind::System,
             (None, false) => ItemKind::Attachment,

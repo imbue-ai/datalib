@@ -9,7 +9,8 @@ pub enum LabelMap {
     Mailbox { role: Option<&'static str> },
     /// A JMAP keyword on the email, not a mailbox of its own.
     Keyword(&'static str),
-    /// Explicitly *not* seen — modeled as the absence of `$seen`.
+    /// Explicitly *not* seen: the absence of `$seen`, which the store
+    /// keeps as a read mark.
     Unread,
     /// Carries no information we store.
     Drop,
@@ -140,14 +141,15 @@ pub fn gmail_mailbox_prefix(account_id: &str) -> String {
     format!("gmail:{account_id}:")
 }
 
-/// The Gmail labels the keywords stand for, the one that is an absence
-/// aside: no `$seen` is `UNREAD`.
+/// The Gmail labels the keywords stand for. `UNREAD` is none of them:
+/// it is a read mark.
 const KEYWORD_LABELS: &[(&str, &str)] = &[("$flagged", "STARRED"), ("$important", "IMPORTANT")];
 
 /// A Gmail message's label ids as the API spells them, sorted, read back
 /// from where the row files them: its mailboxes, and the keywords
-/// `STARRED`, `IMPORTANT` and `UNREAD` became. `None` when a mailbox is
-/// not one of the account's Gmail labels (a Takeout's, keyed by name).
+/// `STARRED` and `IMPORTANT` became. `UNREAD` is left out, as the row
+/// leaves out `$seen`. `None` when a mailbox is not one of the account's
+/// Gmail labels (a Takeout's, keyed by name).
 pub fn gmail_label_ids<'a>(
     account_id: &str,
     mailbox_ids: impl IntoIterator<Item = &'a str>,
@@ -162,9 +164,6 @@ pub fn gmail_label_ids<'a>(
         if keywords.contains(keyword) {
             out.push(label.to_string());
         }
-    }
-    if !keywords.contains(&"$seen") {
-        out.push("UNREAD".to_string());
     }
     out.sort();
     out.dedup();
@@ -348,20 +347,15 @@ mod tests {
         let away = gmail_mailbox_id("a@x", "Label_7");
         assert_eq!(
             gmail_label_ids("a@x", [away.as_str(), inbox.as_str()], &["$flagged"]),
-            Some(vec![
-                "INBOX".into(),
-                "Label_7".into(),
-                "STARRED".into(),
-                "UNREAD".into()
-            ])
+            Some(vec!["INBOX".into(), "Label_7".into(), "STARRED".into()])
         );
         assert_eq!(
-            gmail_label_ids("a@x", [inbox.as_str()], &["$important", "$seen"]),
+            gmail_label_ids("a@x", [inbox.as_str()], &["$important"]),
             Some(vec!["IMPORTANT".into(), "INBOX".into()])
         );
         let by_name = mailbox_id("a@x", "Inbox");
-        assert_eq!(gmail_label_ids("a@x", [by_name.as_str()], &["$seen"]), None);
-        assert_eq!(gmail_label_ids("b@x", [inbox.as_str()], &["$seen"]), None);
+        assert_eq!(gmail_label_ids("a@x", [by_name.as_str()], &[]), None);
+        assert_eq!(gmail_label_ids("b@x", [inbox.as_str()], &[]), None);
     }
 
     #[test]

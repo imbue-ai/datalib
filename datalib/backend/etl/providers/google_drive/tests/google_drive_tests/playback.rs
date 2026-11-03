@@ -27,7 +27,11 @@ pub async fn run(playback: &Path, store: &Path) -> FetchSummary {
     run_with(playback, store, tape::api_with_odf()).await
 }
 
-async fn run_with(playback: &Path, store: &Path, api: GoogleDriveApi) -> FetchSummary {
+async fn run_with(
+    playback: impl Into<playback::Playback>,
+    store: &Path,
+    api: GoogleDriveApi,
+) -> FetchSummary {
     let db = RawDb::open(&db_path_for(store)).await.expect("open store");
     let download = ingest::fetch(ingest::FetchOptions {
         db: db.clone(),
@@ -244,6 +248,53 @@ async fn a_first_sync_captures_every_file_in_its_native_form() {
         .await
         .unwrap();
     assert_eq!(gone, "warning");
+    db.close().await;
+}
+
+/// A plain download past the size cap failed its whole capture, a Doc
+/// lost for one large image, and an old revision's export was owed again
+/// every run. Each is left out now, with a warning, and the rest kept.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_download_past_the_size_cap_is_left_out_with_a_warning() {
+    let d = tempfile::tempdir().unwrap();
+    let t = tape::tape(d.path(), Edition::Before);
+    let store = d.path().join("store");
+    // Every image and the signed revision export are plain; one byte
+    // is less than any of them.
+    let s = run_with(
+        playback::Playback::at(&t).max_bytes(1),
+        &store,
+        tape::api_with_odf(),
+    )
+    .await;
+    assert_eq!((s.captured, s.failed, s.images), (3, 0, 0), "{s:?}");
+
+    let db = open(&store).await;
+    let warning = |key: String| {
+        let db = &db;
+        async move {
+            sqlx::query_as::<_, (String, String)>(
+                "SELECT severity, sample FROM problems WHERE scope_key = ?",
+            )
+            .bind(key)
+            .fetch_one(db.pool())
+            .await
+            .unwrap()
+        }
+    };
+    let doc = parts_of(&db, &format!("{DOC}#12")).await;
+    let image = doc.iter().find(|(p, _)| p.starts_with("image:")).unwrap();
+    assert_eq!(image.1, None, "{doc:?}");
+    assert!(doc
+        .iter()
+        .any(|(p, b)| p == "native.json.gz" && b.is_some()));
+    let (severity, detail) = warning(format!("files:{DOC}")).await;
+    assert_eq!(severity, "warning");
+    assert!(detail.contains("image"), "{detail}");
+
+    let (severity, detail) = warning(format!("revision_exports:{DOC}#1#export.odt")).await;
+    assert_eq!(severity, "warning");
+    assert!(detail.contains("MiB"), "{detail}");
     db.close().await;
 }
 

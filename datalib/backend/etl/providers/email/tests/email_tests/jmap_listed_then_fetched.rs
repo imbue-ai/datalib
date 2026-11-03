@@ -5,6 +5,8 @@
 //! until an enumeration of it finishes, and a thread row is written
 //! with its emails.
 
+use datalib_etl::doltlite_raw as dr;
+use datalib_etl::read_marks::{self, ReadMark};
 use datalib_etl_email::ingest::{FetchOptions, FetchSummary, RawDb};
 
 use crate::jmap_tape::{changes_args, email_get_args, query_args, Account, Tape, HOST};
@@ -38,14 +40,45 @@ async fn a_failed_fetch_leaves_its_emails_owed_and_enumerates_nothing() {
         "email-2",
         "the state waited on the fetch"
     );
-    assert_eq!(keywords(&m, "M1").await, ["$seen"]);
+    assert!(keywords(&m, "M1").await.is_empty());
 
     // Nothing names `M1` again: it is fetched because it is owed.
     tape.gets(&a, &["M1"]);
     let third = run(&m, &[]).await.expect("third run");
     assert_eq!(third.emails_upserted, 1, "{third:?}");
-    assert_eq!(keywords(&m, "M1").await, ["$flagged", "$seen"]);
+    assert_eq!(keywords(&m, "M1").await, ["$flagged"]);
     assert!(problems(&m).await.is_empty(), "{:?}", problems(&m).await);
+}
+
+/// Whether an email was read is its read mark and nothing else: `$seen`
+/// is in no keyword row and no payload, and an email marked unread
+/// upstream moves its mark and the store's version while its row stays
+/// as it was.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn marking_an_email_unread_upstream_moves_only_its_read_mark() {
+    let m = Mirror::new();
+    let tape = Tape::new(&m.playback);
+    let mut a = Account::new(&[("MB1", "Inbox")], &[("M1", &["MB1"]), ("M2", &["MB1"])]);
+    tape.serve(&a);
+    run(&m, &[]).await.expect("first run");
+    assert_eq!(marks(&m).await, [("M1", true), ("M2", true)]);
+    assert!(strings(&m, "SELECT keyword FROM email_keywords")
+        .await
+        .is_empty());
+    let rows = email_rows(&m).await;
+    assert!(rows.iter().all(|r| !r.contains("$seen")), "{rows:?}");
+    let version = content_commit(&m).await;
+
+    a.email_state = "email-2".into();
+    a.emails.get_mut("M1").unwrap().seen = false;
+    tape.serve(&a);
+    tape.email_changes("email-1", &[], &["M1"], &[], "email-2", false);
+    tape.gets(&a, &["M1"]);
+    run(&m, &[]).await.expect("second run");
+
+    assert_eq!(marks(&m).await, [("M1", false), ("M2", true)]);
+    assert_eq!(email_rows(&m).await, rows);
+    assert_ne!(content_commit(&m).await, version);
 }
 
 /// An `Email/changes` that fails is a row, and what is stored stands;
@@ -78,7 +111,7 @@ async fn only_a_state_the_server_cannot_replay_enumerates_the_account() {
     let third = run(&m, &[]).await.expect("third run");
     assert_eq!(third.emails_destroyed, 1, "{third:?}");
     assert_eq!(emails(&m).await, ["M1"]);
-    assert_eq!(keywords(&m, "M1").await, ["$flagged", "$seen"]);
+    assert_eq!(keywords(&m, "M1").await, ["$flagged"]);
     assert_eq!(email_state(&m).await, "email-9");
     assert!(problems(&m).await.is_empty(), "{:?}", problems(&m).await);
 }
@@ -223,6 +256,37 @@ async fn strings(m: &Mirror, sql: &'static str) -> Vec<String> {
 
 async fn problems(m: &Mirror) -> Vec<String> {
     strings(m, "SELECT scope_key FROM problems ORDER BY scope_key").await
+}
+
+/// Each email's read mark, by id.
+async fn marks(m: &Mirror) -> Vec<(&'static str, bool)> {
+    let marks = m
+        .read(|db: RawDb| async move { read_marks::load(db.pool()).await.unwrap() })
+        .await;
+    marks
+        .into_iter()
+        .map(|(id, mark)| {
+            let id: &'static str = id.leak();
+            match mark {
+                ReadMark::Read(read) => (id, read),
+                ReadMark::Through(_) => panic!("{id}: an email's mark is Read"),
+            }
+        })
+        .collect()
+}
+
+/// Every email row as the store holds it, payload and label ids included.
+async fn email_rows(m: &Mirror) -> Vec<String> {
+    strings(
+        m,
+        "SELECT id || ' ' || json(payload) || ' ' || coalesce(label_ids, '-') FROM emails ORDER BY id",
+    )
+    .await
+}
+
+async fn content_commit(m: &Mirror) -> Option<String> {
+    m.read(|db: RawDb| async move { dr::content_commit(db.pool()).await.unwrap() })
+        .await
 }
 
 async fn emails(m: &Mirror) -> Vec<String> {

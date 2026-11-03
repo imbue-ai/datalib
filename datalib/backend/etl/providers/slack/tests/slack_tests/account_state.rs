@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use datalib_etl::doltlite_raw as dr;
+use datalib_etl::read_marks;
 use datalib_etl_slack::ingest::{db_path_for, FetchSummary, RawDb, MESSAGES_PER_PAGE};
 use datalib_etl_slack::recorded::{
     record_auth, record_call, record_conversations, record_users, History, CHANNEL_TYPES,
@@ -186,8 +187,8 @@ async fn independent_setup_calls_go_out_together() {
 }
 
 /// Read states, saved items and bookmarks land for the mirrored
-/// conversations only; `last_read` lives in the volatile sidecar, so a
-/// second run that finds it moved leaves the content table as it was;
+/// conversations only; `last_read` lives in `read_marks`, so a second
+/// run that finds it moved leaves the read-state table as it was;
 /// and a saved item upstream no longer lists is dropped.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn read_states_saved_items_and_bookmarks_are_stored() {
@@ -268,8 +269,9 @@ const C: &str = "1735689600.000300";
 
 /// `C1` with three top-level messages from Riker, the first of them a
 /// thread the account follows (Slack's `replies` copy of its root carries
-/// `last_read`), read up to `channel_mark`.
-fn write_channel_with_marks(api: &Path, channel_mark: &str) {
+/// `last_read`) read up to `thread_mark`, the channel read up to
+/// `channel_mark`.
+fn write_channel_with_marks(api: &Path, channel_mark: &str, thread_mark: &str) {
     record_auth(api).unwrap();
     record_users(
         api,
@@ -304,7 +306,7 @@ fn write_channel_with_marks(api: &Path, channel_mark: &str) {
     .unwrap();
     let mut followed_root = root.clone();
     followed_root["subscribed"] = json!(true);
-    followed_root["last_read"] = json!(A);
+    followed_root["last_read"] = json!(thread_mark);
     call(
         api,
         "conversations.replies",
@@ -388,7 +390,7 @@ async fn read_marks_render_and_a_moved_mark_rerenders_only_what_it_crossed() {
     let out = d.path().join("out_raw");
 
     let api1 = d.path().join("api1");
-    write_channel_with_marks(&api1, A);
+    write_channel_with_marks(&api1, A, A);
     let first = sync_to_commit(&out, &api1, &d.path().join("playback1")).await;
 
     let (_, cold) = render_threads(&out, datalib_etl_render::inputs::RawRange::cold());
@@ -403,7 +405,7 @@ async fn read_marks_render_and_a_moved_mark_rerenders_only_what_it_crossed() {
     assert_eq!(unread_count(&cold["third"]), 1);
 
     let api2 = d.path().join("api2");
-    write_channel_with_marks(&api2, B);
+    write_channel_with_marks(&api2, B, A);
     let second = sync_to_commit(&out, &api2, &d.path().join("playback2")).await;
     assert_ne!(first, second, "the moved mark is a commit of its own");
 
@@ -423,4 +425,95 @@ async fn read_marks_render_and_a_moved_mark_rerenders_only_what_it_crossed() {
         "`third` is unread before and after; nothing about it moved: {named:?}"
     );
     assert_eq!(unread_count(&incremental["second"]), 0, "read now");
+}
+
+fn narrowed_from(out: &Path, from: &str, to: &str) -> (BTreeSet<String>, BTreeMap<String, String>) {
+    let nothing_stale = std::collections::HashSet::new();
+    let (narrowed, docs) = render_threads(
+        out,
+        datalib_etl_render::inputs::RawRange {
+            cursor: Some(from),
+            pin: Some(to),
+            stale: Some(&nothing_stale),
+        },
+    );
+    (
+        narrowed.expect("a narrowed render").into_iter().collect(),
+        docs,
+    )
+}
+
+/// A followed thread's own mark moving re-renders that thread and no
+/// other, its reply read now; a sync where no mark moved re-renders
+/// nothing. The mark is moved in the store: Slack sends a thread's mark
+/// only with the thread's replies, which a sync reads again only once
+/// there is a new one, and that is a change to the thread anyway.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_moved_thread_mark_rerenders_its_thread_and_a_still_one_nothing() {
+    let d = tempdir().unwrap();
+    let out = d.path().join("out_raw");
+
+    let api1 = d.path().join("api1");
+    write_channel_with_marks(&api1, A, A);
+    let first = sync_to_commit(&out, &api1, &d.path().join("playback1")).await;
+
+    let db = RawDb::open(&db_path_for(&out)).await.unwrap();
+    let mut tx = db.pool().begin().await.unwrap();
+    read_marks::write(
+        &mut tx,
+        &[read_marks::ReadMarkRow::through(
+            format!("T1#C1#{A}"),
+            REPLY,
+        )],
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    dr::commit_run(db.pool(), "the thread read").await.unwrap();
+    let second = dr::head_commit(db.pool()).await.unwrap().unwrap();
+    db.close().await;
+    let (named, docs) = narrowed_from(&out, &first, &second);
+    assert_eq!(named, BTreeSet::from([format!("T1#C1#{A}")]));
+    assert_eq!(
+        unread_count(&docs["status report"]),
+        0,
+        "{}",
+        docs["status report"]
+    );
+
+    let third = sync_to_commit(&out, &api1, &d.path().join("playback3")).await;
+    let (named, _) = narrowed_from(&out, &second, &third);
+    assert!(named.is_empty(), "nothing moved: {named:?}");
+}
+
+/// A store's version moves only when a content table does (#1543). A
+/// read mark is content: a sync where the account only read a channel
+/// moves the version, so the render runs; a sync where nothing at all
+/// moved leaves it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_sync_where_only_a_read_mark_moved_moves_the_version() {
+    let d = tempdir().unwrap();
+    let out = d.path().join("out_raw");
+    let version = || async {
+        let db = RawDb::open(&db_path_for(&out)).await.unwrap();
+        let version = dr::content_commit(db.pool()).await.unwrap();
+        db.close().await;
+        version.expect("a version")
+    };
+
+    let api1 = d.path().join("api1");
+    write_channel_with_marks(&api1, A, A);
+    sync_to_commit(&out, &api1, &d.path().join("playback1")).await;
+    let first = version().await;
+    sync_to_commit(&out, &api1, &d.path().join("playback2")).await;
+    assert_eq!(version().await, first, "nothing moved, yet the version did");
+
+    let api2 = d.path().join("api2");
+    write_channel_with_marks(&api2, B, A);
+    sync_to_commit(&out, &api2, &d.path().join("playback3")).await;
+    let channel_read = version().await;
+    assert_ne!(
+        channel_read, first,
+        "the channel's mark moved, the version did not"
+    );
 }

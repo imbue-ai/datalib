@@ -318,11 +318,12 @@ than the source's `blob_size_limit_bytes` is not stored; its
 files mail (Inbox, Sent, a label you made, the inbox categories) is a
 row in `mailboxes`, and an email's labels are its `email_mailboxes`
 rows (also `payload -> '$.mailboxIds'`). A label that is a flag is a
-keyword in `email_keywords` (also `payload -> '$.keywords'`):
+keyword in `email_keywords` (also `payload -> '$.keywords'`). Whether
+a message was read is its row in `read_marks`:
 
 | Gmail | in the mirror |
 |---|---|
-| no `UNREAD` label | keyword `$seen` (so unread is the *absence* of `$seen`) |
+| `UNREAD` | `read_marks.read` = 0 (and 1 without it) |
 | `STARRED` | keyword `$flagged` |
 | `IMPORTANT` | keyword `$important` |
 | `INBOX`, `SENT`, `DRAFT`, `TRASH`, `SPAM` | a mailbox with `role` `inbox`, `sent`, `drafts`, `trash`, `junk` |
@@ -330,8 +331,9 @@ keyword in `email_keywords` (also `payload -> '$.keywords'`):
 | muted | not kept |
 
 For Gmail, `emails.label_ids` puts them back together: every label id
-the message carries, as the API spells them, `UNREAD`, `STARRED` and
-`IMPORTANT` included, as a sorted JSON array (`["INBOX","UNREAD"]`).
+the message carries, as the API spells them, `STARRED` and `IMPORTANT`
+included, as a sorted JSON array (`["INBOX","STARRED"]`). `UNREAD` is
+not among them: it is in `read_marks`.
 `EXISTS (SELECT 1 FROM json_each(label_ids) WHERE value = 'INBOX')`
 asks whether a message is in the inbox.
 
@@ -437,7 +439,19 @@ Which keywords (flags) each email has, rewritten with it the same way.
 |---|---|
 | `id` | `<email id>#<keyword>` |
 | `email_id` | the `emails.id` |
-| `keyword` | `$seen`, `$flagged`, `$important`, or another keyword the server or the mbox file names |
+| `keyword` | `$flagged`, `$important`, or another keyword the server or the mbox file names; never `$seen`, which is in `read_marks` |
+
+### `read_marks`
+
+Whether each email was read, one row per email, rewritten with it and
+gone with it. JMAP's `$seen`, Gmail's `UNREAD` and an mbox's `Unread`
+label all land here and nowhere else.
+
+| column | what it holds |
+|---|---|
+| `id` | the `emails.id` |
+| `read` | 1 if it was read, 0 if not |
+| `read_through` | NULL for email (another source's mark on a whole conversation) |
 
 ### `email_blobs`
 
@@ -572,8 +586,9 @@ replies in that thread.
 
 **Set aside from the payload** (in `volatile_payload`): a user's
 `updated` and `profile.status_*`, `profile.huddle_*`; a channel's
-`updated` and `num_members`; a message's `last_read`, `subscribed` and
-the `block_id` of each block; everything in `channel_read_states`.
+`updated` and `num_members`; a message's `subscribed` and the
+`block_id` of each block; everything in `channel_read_states` but
+`last_read`, which is in `read_marks`.
 
 ### `workspaces`
 
@@ -654,15 +669,26 @@ Which files each message carries, and where their bytes are in
 
 ### `channel_read_states`
 
-How far the account has read in each mirrored conversation, from
-`client.counts`. Reading a conversation is not a change to it, so the
-whole state is in `channel_read_states_bookkeeping.volatile_payload`:
-`last_read`, `latest`, `has_unreads`, `mention_count`.
+The account's state in each mirrored conversation, from
+`client.counts`. How far it has read is in `read_marks`; the rest is in
+`channel_read_states_bookkeeping.volatile_payload`: `latest`,
+`has_unreads`, `mention_count`.
 
 | column | what it holds |
 |---|---|
 | `id` | the conversation id |
 | `payload` | `{"id": …}` only |
+
+### `read_marks`
+
+How far the account has read: each mirrored conversation, and each
+thread it follows.
+
+| column | what it holds |
+|---|---|
+| `id` | the conversation id, or a thread's `{team}#{channel}#{ts}` |
+| `read_through` | the `ts` of the last message read |
+| `read` | NULL; Slack marks nothing message by message |
 
 ### `bookmarks`
 

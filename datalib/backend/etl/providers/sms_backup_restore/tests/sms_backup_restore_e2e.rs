@@ -788,3 +788,309 @@ fn a_backup_that_will_not_open_holds_deletions_back() -> Result<()> {
         Ok::<_, anyhow::Error>(())
     })
 }
+
+// ── read marks ───────────────────────────────────────────────────────
+
+const PICARD_ORDER: &str =
+    r#"body="Make it so. 🚀" toa="null" sc_toa="null" service_center="null" read="1""#;
+const WORF_SAYING: &str =
+    r#"body="Today is a good day to die." toa="null" sc_toa="null" service_center="null" read="1""#;
+
+/// The fixture's texts with Picard's order marked `read="{picard_read}"`
+/// and Worf's saying nothing of whether it was read.
+fn backup_xml(picard_read: &str) -> Result<String> {
+    let xml = fs::read_to_string(fixture_root().join("sms-2369041512000.xml"))?;
+    assert!(xml.contains(PICARD_ORDER) && xml.contains(WORF_SAYING));
+    Ok(xml
+        .replace(
+            PICARD_ORDER,
+            &PICARD_ORDER.replace(r#"read="1""#, &format!(r#"read="{picard_read}""#)),
+        )
+        .replace(WORF_SAYING, WORF_SAYING.trim_end_matches(r#" read="1""#)))
+}
+
+fn write_backup(dir: &std::path::Path, at: &str, xml: &str) -> Result<()> {
+    fs::create_dir_all(dir)?;
+    fs::write(dir.join(format!("sms-{at}.xml")), xml)?;
+    Ok(())
+}
+
+/// Every mark, as `(the message's text, read)`.
+async fn marks(db: &RawDb) -> Result<Vec<(String, i64)>> {
+    Ok(sqlx::query_as(
+        "SELECT coalesce(json_extract(s.payload, '$.body'), json_extract(s.payload, '$.text')), \
+                m.read \
+           FROM read_marks m JOIN sms_messages s ON s.id = m.id \
+          WHERE m.read_through IS NULL ORDER BY 1",
+    )
+    .fetch_all(db.pool())
+    .await?)
+}
+
+async fn payloads(db: &RawDb) -> Result<Vec<(String, String)>> {
+    Ok(
+        sqlx::query_as("SELECT id, hex(payload) FROM sms_messages ORDER BY id")
+            .fetch_all(db.pool())
+            .await?,
+    )
+}
+
+/// Render the store, from `cursor` when given. The driver is taken to
+/// have found nothing stale through the declared inputs, so what renders
+/// is what the provider's own scan names.
+fn render_from(
+    rt: &tokio::runtime::Runtime,
+    raw_dir: &std::path::Path,
+    out_dir: &std::path::Path,
+    cursor: Option<&str>,
+) -> Result<(Vec<RenderedMarkdown>, Option<String>)> {
+    let nothing_stale = std::collections::HashSet::<String>::new();
+    let range = RawRange {
+        cursor,
+        pin: None,
+        stale: cursor.map(|_| &nothing_stale),
+    };
+    let mut docs = Vec::new();
+    // Render blocks in place, which takes a multi-threaded runtime.
+    let outcome = rt.block_on(async {
+        render::render(
+            raw_dir,
+            out_dir,
+            "sms_backup_restore",
+            &Progress::noop(),
+            &mut |d: RenderedMarkdown| {
+                docs.push(d);
+                Ok(())
+            },
+            range,
+            u64::MAX,
+        )
+    })?;
+    Ok((docs, outcome.new_head))
+}
+
+/// The messages a document draws unread, by their wrappers.
+fn unread_in(doc: &RenderedMarkdown) -> Vec<String> {
+    let md = fs::read_to_string(&doc.md_path).unwrap();
+    md.split(r#"<div id="m-"#)
+        .skip(1)
+        .filter(|s| s.split('>').next().unwrap().contains(" unread"))
+        .map(str::to_string)
+        .collect()
+}
+
+fn conversation_of(doc: &RenderedMarkdown) -> &str {
+    doc.rows
+        .iter()
+        .find_map(|r| r.conversation_name.as_deref())
+        .unwrap_or_default()
+}
+
+/// A message's read flag sat in its payload, so a read rewrote the whole
+/// message. It is a row of its own in `read_marks` now and the payload
+/// keeps none; a backup that says nothing leaves no mark, and a message
+/// that goes takes its mark with it. Only a message someone else sent
+/// that the backup says is unread draws unread.
+#[test]
+fn a_messages_read_flag_is_a_mark_of_its_own() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let (input, raw_dir) = (tmp.path().join("in"), tmp.path().join("raw"));
+    let cache = tmp.path().join("fp.sqlite");
+    let xml = backup_xml("0")?;
+    write_backup(&input, "2369041512000", &xml)?;
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        let db = RawDb::open(&db_path_for(&raw_dir)).await?;
+        fetch_dir(&db, &input, &cache).await?;
+        datalib_etl::doltlite_raw::commit_run(db.pool(), "test").await?;
+        let flagged: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM sms_messages WHERE json_type(payload, '$.read') IS NOT NULL",
+        )
+        .fetch_one(db.pool())
+        .await?;
+        assert_eq!(flagged, 0, "no payload keeps a read flag");
+        let held = marks(&db).await?;
+        assert_eq!(held.len(), 6, "every message but Worf's: {held:?}");
+        assert_eq!(
+            held.iter()
+                .filter(|(_, read)| *read == 0)
+                .collect::<Vec<_>>(),
+            [&("Make it so. 🚀".to_string(), 0)]
+        );
+        db.close().await;
+        anyhow::Ok(())
+    })?;
+
+    let (docs, _) = render_from(&rt, &raw_dir, &tmp.path().join("out"), None)?;
+    let unread: Vec<String> = docs.iter().flat_map(unread_in).collect();
+    assert_eq!(unread.len(), 1, "{unread:?}");
+    assert!(unread[0].contains("Make it so."), "{}", unread[0]);
+
+    // Picard's order leaves the backup: its mark goes with it.
+    let start = xml.find(r#"body="Make it so. 🚀""#).unwrap();
+    let start = xml[..start].rfind("<sms ").unwrap();
+    let end = start + xml[start..].find("/>").unwrap() + 2;
+    write_backup(
+        &input,
+        "2369041512000",
+        &format!("{}{}", &xml[..start], &xml[end..]),
+    )?;
+    rt.block_on(async {
+        let db = RawDb::open(&db_path_for(&raw_dir)).await?;
+        assert_eq!(fetch_dir(&db, &input, &cache).await?.removed, 1);
+        let held = marks(&db).await?;
+        let orphans: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM read_marks WHERE id NOT IN (SELECT id FROM sms_messages)",
+        )
+        .fetch_one(db.pool())
+        .await?;
+        db.close().await;
+        assert_eq!(held.len(), 5);
+        assert!(held.iter().all(|(_, read)| *read == 1), "{held:?}");
+        assert_eq!(orphans, 0);
+        anyhow::Ok(())
+    })
+}
+
+/// A newer backup that says only that Picard's order was read changes
+/// no message, so it moved no version and nothing re-rendered: the order
+/// stayed unread. The mark moves the store's version, and the next render
+/// redraws Picard's conversation and no other.
+#[test]
+fn a_read_alone_moves_the_version_and_redraws_its_conversation() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let (input, raw_dir, out) = (
+        tmp.path().join("in"),
+        tmp.path().join("raw"),
+        tmp.path().join("out"),
+    );
+    let cache = tmp.path().join("fp.sqlite");
+    write_backup(&input, "2369041512000", &backup_xml("0")?)?;
+    let rt = tokio::runtime::Runtime::new()?;
+    let version = || -> Result<Option<String>> {
+        rt.block_on(datalib_etl::doltlite_raw::content_commit_at_path(
+            &db_path_for(&raw_dir),
+        ))
+    };
+    let fetch = || -> Result<Option<String>> {
+        rt.block_on(async {
+            let db = RawDb::open(&db_path_for(&raw_dir)).await?;
+            fetch_dir(&db, &input, &cache).await?;
+            let head = datalib_etl::doltlite_raw::commit_run(db.pool(), "test").await?;
+            db.close().await;
+            Ok(head)
+        })
+    };
+    fetch()?;
+    let before = version()?;
+    let (_, cursor) = render_from(&rt, &raw_dir, &out, None)?;
+    let cursor = cursor.expect("a rendered commit");
+
+    write_backup(&input, "2369041612000", &backup_xml("1")?)?;
+    fetch()?;
+    assert_ne!(version()?, before, "the read moved the store's version");
+    rt.block_on(async {
+        let db = RawDb::open(&db_path_for(&raw_dir)).await?;
+        let moved: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM dolt_diff_sms_messages(?, 'HEAD') WHERE diff_type != 'unchanged'",
+        )
+        .bind(&cursor)
+        .fetch_one(db.pool())
+        .await?;
+        db.close().await;
+        assert_eq!(moved, 0, "no message changed");
+        anyhow::Ok(())
+    })?;
+
+    let (docs, _) = render_from(&rt, &raw_dir, &out, Some(&cursor))?;
+    let redrawn: Vec<&str> = docs.iter().map(conversation_of).collect();
+    assert_eq!(redrawn, ["Jean-Luc Picard"]);
+    assert!(
+        unread_in(&docs[0]).is_empty(),
+        "the order now reads as read"
+    );
+    Ok(())
+}
+
+/// A store from before `read_marks` kept each message's flag in its
+/// payload, `null` where the backup said nothing. Opening it moves every
+/// flag to a mark, leaves each payload byte for byte as this build's
+/// ingest writes it, so the next read of the same backup changes
+/// nothing, and keeps the file cursors.
+#[test]
+fn a_store_from_before_read_marks_moves_its_flags_on_open() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let (input, raw_dir) = (tmp.path().join("in"), tmp.path().join("raw"));
+    write_backup(&input, "2369041512000", &backup_xml("0")?)?;
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        let db = RawDb::open(&db_path_for(&raw_dir)).await?;
+        fetch_dir(&db, &input, &tmp.path().join("fp.sqlite")).await?;
+        datalib_etl::doltlite_raw::commit_run(db.pool(), "test").await?;
+        let written = payloads(&db).await?;
+        let held = marks(&db).await?;
+        let files: i64 = sqlx::query_scalar("SELECT count(*) FROM ingested_files")
+            .fetch_one(db.pool())
+            .await?;
+
+        // The shape the build before wrote: `read` in the payload, keys
+        // in serde_json's order, and no `read_marks`.
+        let rows: Vec<(String, String, Option<i64>)> = sqlx::query_as(
+            "SELECT s.id, json(s.payload), m.read FROM sms_messages s \
+               LEFT JOIN read_marks m ON m.id = s.id",
+        )
+        .fetch_all(db.pool())
+        .await?;
+        for (id, payload, read) in rows {
+            let mut v: serde_json::Value = serde_json::from_str(&payload)?;
+            v["read"] = read.map(|r| r != 0).into();
+            sqlx::query("UPDATE sms_messages SET payload = jsonb(?) WHERE id = ?")
+                .bind(v.to_string())
+                .bind(&id)
+                .execute(db.pool())
+                .await?;
+        }
+        for sql in [
+            "DROP TABLE read_marks",
+            "UPDATE _datalib_meta SET value = '0' WHERE key = 'schema_version'",
+        ] {
+            sqlx::query(sql).execute(db.pool()).await?;
+        }
+        let old = datalib_etl::doltlite_raw::commit_run(db.pool(), "a store from before")
+            .await?
+            .expect("a commit");
+        assert_ne!(payloads(&db).await?, written);
+        db.close().await;
+
+        let db = RawDb::open(&db_path_for(&raw_dir)).await?;
+        assert_eq!(
+            payloads(&db).await?,
+            written,
+            "each payload as ingest writes it"
+        );
+        assert_eq!(marks(&db).await?, held);
+        let files_now: i64 = sqlx::query_scalar("SELECT count(*) FROM ingested_files")
+            .fetch_one(db.pool())
+            .await?;
+        assert_eq!(files_now, files, "the file cursors are kept");
+        let changed: Vec<String> = sqlx::query_scalar(
+            "SELECT DISTINCT coalesce(nullif(to_table_name, ''), from_table_name) \
+               FROM dolt_diff_summary WHERE from_ref = ? AND to_ref = 'HEAD' \
+                AND to_table_name != '_datalib_meta' ORDER BY 1",
+        )
+        .bind(&old)
+        .fetch_all(db.pool())
+        .await?;
+        assert_eq!(changed, ["read_marks", "sms_messages"]);
+        let log: Vec<String> = sqlx::query_scalar("SELECT message FROM dolt_log()")
+            .fetch_all(db.pool())
+            .await?;
+        assert!(
+            log.iter()
+                .any(|m| m.starts_with("migrate v1: a message's read flag moves to read_marks")),
+            "{log:?}"
+        );
+        db.close().await;
+        anyhow::Ok(())
+    })
+}

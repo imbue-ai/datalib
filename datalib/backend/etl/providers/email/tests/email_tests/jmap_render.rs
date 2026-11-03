@@ -10,6 +10,7 @@ use std::path::PathBuf;
 
 use datalib_etl::blob_cas::{blake3_hex, BlobBundle};
 use datalib_etl::progress::Progress;
+use datalib_etl::read_marks::ReadMark;
 use datalib_etl_email::ingest::db::{EmailJoins, LoadedAttachment, LoadedEmail};
 use datalib_etl_email_render::render::ids;
 use datalib_etl_email_render::render::parse::{EmailThreadBucket, Shared};
@@ -66,6 +67,7 @@ fn one_thread(
             emails,
             joins,
             blobs,
+            marks: Default::default(),
             inputs: Default::default(),
         }],
     }
@@ -150,10 +152,7 @@ fn make_loaded() -> ParsedEmail {
     let mut joins = EmailJoins::default();
     joins.mailboxes.insert("E1".into(), vec!["M-inbox".into()]);
     joins.mailboxes.insert("E2".into(), vec!["M-inbox".into()]);
-    joins.keywords.insert("E1".into(), vec!["$seen".into()]);
-    joins
-        .keywords
-        .insert("E2".into(), vec!["$seen".into(), "$flagged".into()]);
+    joins.keywords.insert("E2".into(), vec!["$flagged".into()]);
     joins.attachments.insert(
         "E2".into(),
         vec![LoadedAttachment {
@@ -171,7 +170,11 @@ fn make_loaded() -> ParsedEmail {
     insert_eml(&mut bundle, "B-eml-1", EML_E1.as_bytes());
     insert_eml(&mut bundle, "B-eml-2", EML_E2.as_bytes());
 
-    one_thread("T1", emails, joins, bundle)
+    let mut parsed = one_thread("T1", emails, joins, bundle);
+    for id in ["E1", "E2"] {
+        parsed.docs[0].marks.insert(id.into(), ReadMark::Read(true));
+    }
+    parsed
 }
 
 #[test]
@@ -430,15 +433,15 @@ fn inline_image_that_is_also_an_attachment_keeps_its_preview() {
     );
 }
 
-/// An email without `$seen` renders unread and opens the "New" line;
-/// one with it does not.
+/// An email marked unread renders unread and opens the "New" line; one
+/// marked read does not, and neither does one with no mark at all.
 #[test]
-fn an_email_without_seen_renders_unread() {
+fn an_email_marked_unread_renders_unread() {
     let mut parsed = make_loaded();
+    parsed.docs[0].marks.remove("E1");
     parsed.docs[0]
-        .joins
-        .keywords
-        .insert("E2".into(), vec!["$flagged".into()]);
+        .marks
+        .insert("E2".into(), ReadMark::Read(false));
     let (tmp, _) = render(&parsed, "fastmail", OutlinkFormat::Fastmail);
     let md = std::fs::read_to_string(find_one(tmp.path(), ".md")).unwrap();
     let wrappers: Vec<&str> = md

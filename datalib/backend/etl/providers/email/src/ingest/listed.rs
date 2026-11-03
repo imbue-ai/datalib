@@ -22,13 +22,14 @@ use std::collections::BTreeSet;
 use anyhow::{Context, Result};
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw as dr;
+use datalib_etl::read_marks::{self, ReadMarkRow};
 use datalib_etl_web::owed::{self, Listed};
 use datalib_time::IsoOffsetTimestamp;
 use serde_json::json;
 use sqlx::{Sqlite, SqliteConnection, SqlitePool, Transaction};
 
 use super::db::{delete_emails_in_tx, refresh_email_joins};
-use super::schema_raw::{EmailRow, ThreadRow};
+use super::schema_raw::{EmailRow, FetchedEmail, ThreadRow};
 
 pub const LISTED: &str = "listed_messages";
 
@@ -178,9 +179,12 @@ impl Keeps<'_> {
     /// True for an email `e` the filter keeps, the ids bound as `?2`.
     fn kept_sql(&self) -> &'static str {
         match self {
+            // `UNREAD` is a read mark, not one of the row's label ids.
             Keeps::GmailLabels(_) => {
-                "EXISTS (SELECT 1 FROM json_each(e.label_ids)
-                         WHERE value IN (SELECT value FROM json_each(?2)))"
+                "(EXISTS (SELECT 1 FROM json_each(e.label_ids)
+                          WHERE value IN (SELECT value FROM json_each(?2)))
+                  OR (EXISTS (SELECT 1 FROM json_each(?2) WHERE value = 'UNREAD')
+                      AND EXISTS (SELECT 1 FROM read_marks r WHERE r.id = e.id AND r.read = 0)))"
             }
             Keeps::Mailboxes(_) => {
                 "EXISTS (SELECT 1 FROM email_mailboxes em WHERE em.email_id = e.id
@@ -385,16 +389,19 @@ pub async fn holds_any(pool: &SqlitePool) -> Result<bool> {
         .context("ask whether any email is held")
 }
 
-/// Write what a batch came to: the email rows and their joins for the
-/// messages that came, the listing and email rows of the messages that
-/// are gone, and the thread rows of both. Returns how many emails went.
+/// Write what a batch came to: the email rows, their joins and read
+/// marks for the messages that came, the listing and email rows of the
+/// messages that are gone, and the thread rows of both. Returns how many
+/// emails went.
 pub async fn write_batch_in_tx(
     tx: &mut Transaction<'_, Sqlite>,
     now: &IsoOffsetTimestamp,
-    got: Vec<EmailRow>,
+    got: Vec<FetchedEmail>,
     gone: &[String],
     email_id_of: EmailIdOf,
 ) -> Result<usize> {
+    let marks: Vec<ReadMarkRow> = got.iter().map(FetchedEmail::mark).collect();
+    let got: Vec<EmailRow> = got.into_iter().map(|e| e.row).collect();
     let mut threads = BTreeSet::new();
     for row in &got {
         threads.insert((row.account_id.clone(), row.thread_id.clone()));
@@ -403,6 +410,7 @@ pub async fn write_batch_in_tx(
     for row in &got {
         refresh_email_joins(tx, row).await?;
     }
+    read_marks::write(tx, &marks).await?;
 
     let mut emails = Vec::new();
     for id in gone {
@@ -924,6 +932,48 @@ mod tests {
             .collect()
     }
 
+    /// `UNREAD` left the Gmail label ids for the read marks, and a label
+    /// filter naming it still keeps the unread emails and only them: the
+    /// filter decides which threads a run deletes.
+    #[tokio::test]
+    async fn a_filter_on_unread_keeps_the_emails_marked_unread() {
+        let d = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&d.path().join("g.doltlite_db")).await.unwrap();
+        let got: Vec<FetchedEmail> = [("E1", true), ("E2", false)]
+            .into_iter()
+            .map(|(id, read)| {
+                let mut keywords = serde_json::Map::new();
+                if read {
+                    keywords.insert("$seen".into(), true.into());
+                }
+                let envelope = json!({
+                    "id": id, "blobId": format!("B{id}"), "threadId": format!("T{id}"),
+                    "mailboxIds": {"gmail:g@x:INBOX": true}, "keywords": keywords,
+                    "_source": {"via": super::super::schema_raw::GMAIL_API_VIA},
+                });
+                FetchedEmail::from_jmap_envelope("g@x", &envelope).unwrap()
+            })
+            .collect();
+        let mut tx = db.pool().begin().await.unwrap();
+        let now = IsoOffsetTimestamp::now_local();
+        write_batch_in_tx(&mut tx, &now, got, &[], same_id)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        let unread = ["UNREAD".to_string()];
+        let kept = kept_threads(db.pool(), "g@x", Keeps::GmailLabels(&unread))
+            .await
+            .unwrap();
+        assert_eq!(kept, ["TE2".to_string()].into());
+        let inbox = ["INBOX".to_string()];
+        let kept = kept_threads(db.pool(), "g@x", Keeps::GmailLabels(&inbox))
+            .await
+            .unwrap();
+        assert_eq!(kept, ["TE1".to_string(), "TE2".to_string()].into());
+        db.close().await;
+    }
+
     /// A store an older build wrote climbs the whole ladder with its
     /// tokens intact and nothing to fetch again: what `gmail_messages`
     /// mapped and what a JMAP account's state covered are listed and
@@ -1121,7 +1171,8 @@ mod tests {
 
     /// The sixth rung puts Gmail's labels on an email the API answered
     /// for, read from its payload, and leaves an mbox email's empty; the
-    /// thread index is there to be walked.
+    /// thread index is there to be walked. (`UNREAD` is not among them:
+    /// the eighth rung makes it a read mark.)
     #[tokio::test]
     async fn the_sixth_rung_reads_gmails_labels_off_each_email() {
         let d = tempfile::tempdir().unwrap();
@@ -1169,7 +1220,7 @@ mod tests {
             )
             .await,
             [
-                r#"18c9f2a1b2c3d901=["INBOX","STARRED","UNREAD"]"#,
+                r#"18c9f2a1b2c3d901=["INBOX","STARRED"]"#,
                 "picard@enterprise.test=-",
             ]
         );

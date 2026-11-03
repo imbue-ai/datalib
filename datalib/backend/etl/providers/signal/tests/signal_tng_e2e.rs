@@ -1270,3 +1270,299 @@ async fn a_passphrase_that_opens_nothing_fails_the_run() -> Result<()> {
     );
     Ok(())
 }
+
+// ── read marks ───────────────────────────────────────────────────────
+
+const DATA: &str = "e164:+17015550103";
+
+/// A message someone else sent, read or not.
+fn incoming(chat_id: u64, author_id: u64, date_sent: u64, text: &str, read: bool) -> backup::Frame {
+    let mut frame = chat_item(chat_id, author_id, date_sent, text, false);
+    if let Some(backup::frame::Item::ChatItem(ci)) = &mut frame.item {
+        ci.directional_details = Some(backup::chat_item::DirectionalDetails::Incoming(
+            backup::chat_item::IncomingMessageDetails {
+                read,
+                ..Default::default()
+            },
+        ));
+    }
+    frame
+}
+
+/// Two chats: Riker's, where his green-status report is `riker_read`,
+/// and Data's, read.
+fn two_chats(riker_read: bool) -> Vec<backup::Frame> {
+    let mut frames = bridge_crew();
+    frames.extend([
+        recipient_contact(3, "Data Soong", 17015550103),
+        chat_frame(101, 3),
+        chat_item(100, 1, 12442118400000, "Status report.", true),
+        incoming(
+            100,
+            2,
+            12442118460000,
+            "All decks at green status.",
+            riker_read,
+        ),
+        incoming(101, 3, 12442118520000, "Sensor sweep complete.", true),
+    ]);
+    frames
+}
+
+/// Every mark, as `(item id, read)`.
+async fn read_marks(store: &Path) -> Result<Vec<(String, i64)>> {
+    let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(store)).await?;
+    let rows =
+        sqlx::query_as("SELECT id, read FROM read_marks WHERE read_through IS NULL ORDER BY id")
+            .fetch_all(db.pool())
+            .await?;
+    db.close().await;
+    Ok(rows)
+}
+
+async fn render_signal(
+    store: &Path,
+    out: &Path,
+    cursor: Option<String>,
+) -> Result<(Vec<RenderedMarkdown>, Option<String>)> {
+    let (store, out) = (store.to_path_buf(), out.to_path_buf());
+    tokio::task::spawn_blocking(move || {
+        // From a cursor, the driver is taken to have found nothing stale
+        // through the declared inputs: what renders is what the
+        // provider's own scan names.
+        let nothing_stale = std::collections::HashSet::<String>::new();
+        let range = datalib_etl_render::inputs::RawRange {
+            cursor: cursor.as_deref(),
+            pin: None,
+            stale: cursor.as_ref().map(|_| &nothing_stale),
+        };
+        let parsed = datalib_etl_signal_render::render::parse(
+            &store,
+            datalib_etl::periodize::Period::Month,
+            "signal-tng",
+            range,
+        )?;
+        let mut docs = Vec::new();
+        render_all(
+            &parsed,
+            &out,
+            "signal-tng",
+            &Progress::noop(),
+            &mut |d: RenderedMarkdown| {
+                docs.push(d);
+                Ok(())
+            },
+            u64::MAX,
+        )?;
+        Ok((docs, parsed.scan.new_head.clone()))
+    })
+    .await?
+}
+
+/// The messages a document draws unread, by their wrappers.
+fn unread_in(doc: &RenderedMarkdown) -> Vec<String> {
+    let md = std::fs::read_to_string(&doc.md_path).unwrap();
+    md.split(r#"<div id="m-"#)
+        .skip(1)
+        .filter(|s| s.split('>').next().unwrap().contains(" unread"))
+        .map(str::to_string)
+        .collect()
+}
+
+fn chat_of(doc: &RenderedMarkdown) -> &str {
+    doc.rows
+        .iter()
+        .find_map(|r| r.conversation_name.as_deref())
+        .unwrap_or_default()
+}
+
+/// An incoming message's read flag sat in its stored frame, so a read
+/// rewrote the message. It is a row of its own in `read_marks` now, the
+/// frame keeps none, and a message the next backup no longer holds takes
+/// its mark with it. Only an incoming message marked unread draws unread.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_incoming_messages_read_flag_is_a_mark_of_its_own() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let snapshots = tmp.path().join("snapshots");
+    let store = tmp.path().join("raw").join("signal");
+    let cache = tmp.path().join("fingerprints.sqlite");
+    write_day(&snapshots, 0, &two_chats(false))?;
+    fetch_once(&snapshots, &store, &cache).await?;
+
+    let id = |author: &str, chat: &str, sent: i64| {
+        ingest::schema_raw::chat_item_id_recipe(chat, author, sent)
+    };
+    let riker = id(RIKER, BRIDGE, 12442118460000);
+    let data = id(DATA, DATA, 12442118520000);
+    assert_eq!(
+        read_marks(&store).await?,
+        [(riker.clone(), 0), (data.clone(), 1)],
+        "one mark per incoming message, none on Picard's own"
+    );
+    let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(&store)).await?;
+    let flagged: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM chat_items \
+          WHERE json_type(payload, '$.directional_details.Incoming.read') IS NOT NULL",
+    )
+    .fetch_one(db.pool())
+    .await?;
+    let incoming: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM chat_items \
+          WHERE json_type(payload, '$.directional_details.Incoming') = 'object'",
+    )
+    .fetch_one(db.pool())
+    .await?;
+    db.close().await;
+    assert_eq!((flagged, incoming), (0, 2), "no frame keeps its read flag");
+
+    let (docs, _) = render_signal(&store, &tmp.path().join("out"), None).await?;
+    let unread: Vec<String> = docs.iter().flat_map(unread_in).collect();
+    assert_eq!(unread.len(), 1, "{unread:?}");
+    assert!(unread[0].contains("All decks at green status."));
+
+    // The next backup no longer holds Riker's report.
+    let mut day1 = two_chats(false);
+    day1.retain(|f| {
+        !matches!(&f.item, Some(backup::frame::Item::ChatItem(ci)) if ci.date_sent == 12442118460000)
+    });
+    write_day(&snapshots, 1, &day1)?;
+    fetch_once(&snapshots, &store, &cache).await?;
+    assert_eq!(read_marks(&store).await?, [(data, 1)]);
+    Ok(())
+}
+
+/// A newer backup that says only that Riker's report was read changes no
+/// message, so it moved no version and nothing re-rendered: the report
+/// stayed unread. The mark moves the store's version, and the next
+/// render redraws Riker's chat and not Data's.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_read_alone_moves_the_version_and_redraws_its_chat() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let snapshots = tmp.path().join("snapshots");
+    let store = tmp.path().join("raw").join("signal");
+    let (cache, out) = (
+        tmp.path().join("fingerprints.sqlite"),
+        tmp.path().join("out"),
+    );
+    let db_path = datalib_etl::doltlite_raw::db_path_for(&store);
+    write_day(&snapshots, 0, &two_chats(false))?;
+    fetch_once(&snapshots, &store, &cache).await?;
+    let before = datalib_etl::doltlite_raw::content_commit_at_path(&db_path).await?;
+    let (docs, cursor) = render_signal(&store, &out, None).await?;
+    assert_eq!(docs.len(), 2);
+    let cursor = cursor.expect("a rendered commit");
+
+    write_day(&snapshots, 1, &two_chats(true))?;
+    fetch_once(&snapshots, &store, &cache).await?;
+    assert_ne!(
+        datalib_etl::doltlite_raw::content_commit_at_path(&db_path).await?,
+        before,
+        "the read moved the store's version"
+    );
+    let db = ingest::RawDb::open(&db_path).await?;
+    let moved: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM dolt_diff_chat_items(?, 'HEAD') WHERE diff_type != 'unchanged'",
+    )
+    .bind(&cursor)
+    .fetch_one(db.pool())
+    .await?;
+    db.close().await;
+    assert_eq!(moved, 0, "no message changed");
+
+    let (docs, _) = render_signal(&store, &out, Some(cursor)).await?;
+    let redrawn: Vec<&str> = docs.iter().map(chat_of).collect();
+    assert_eq!(redrawn, ["Will Riker"]);
+    assert!(
+        unread_in(&docs[0]).is_empty(),
+        "the report now reads as read"
+    );
+    Ok(())
+}
+
+/// A store from before `read_marks` kept each incoming message's flag in
+/// its frame. Opening it moves every flag to a mark and leaves each frame
+/// byte for byte as this build's ingest writes it, so the next backup
+/// changes nothing it did not change upstream.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_store_from_before_read_marks_moves_its_flags_on_open() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let snapshots = tmp.path().join("snapshots");
+    let store = tmp.path().join("raw").join("signal");
+    let db_path = datalib_etl::doltlite_raw::db_path_for(&store);
+    write_day(&snapshots, 0, &two_chats(false))?;
+    fetch_once(&snapshots, &store, &tmp.path().join("fingerprints.sqlite")).await?;
+
+    let payloads = |db: ingest::RawDb| async move {
+        let rows: Vec<(String, String)> =
+            sqlx::query_as("SELECT id, hex(payload) FROM chat_items ORDER BY id")
+                .fetch_all(db.pool())
+                .await?;
+        anyhow::Ok(rows)
+    };
+    let db = ingest::RawDb::open(&db_path).await?;
+    let written = payloads(db.clone()).await?;
+    let marks: Vec<(String, i64)> = sqlx::query_as("SELECT id, read FROM read_marks ORDER BY id")
+        .fetch_all(db.pool())
+        .await?;
+    let ledger: i64 = sqlx::query_scalar("SELECT count(*) FROM ingested_backups")
+        .fetch_one(db.pool())
+        .await?;
+
+    // The frame as the build before serialized it: `read` in its place
+    // between `date_server_sent` and `sealed_sender`, and no `read_marks`.
+    for (id, read) in &marks {
+        let frame: String = sqlx::query_scalar("SELECT json(payload) FROM chat_items WHERE id = ?")
+            .bind(id)
+            .fetch_one(db.pool())
+            .await?;
+        let old = frame.replacen(
+            r#","sealed_sender":"#,
+            &format!(r#","read":{},"sealed_sender":"#, *read != 0),
+            1,
+        );
+        assert_ne!(old, frame);
+        sqlx::query("UPDATE chat_items SET payload = jsonb(?) WHERE id = ?")
+            .bind(old)
+            .bind(id)
+            .execute(db.pool())
+            .await?;
+    }
+    for sql in [
+        "DROP TABLE read_marks",
+        "UPDATE _datalib_meta SET value = '0' WHERE key = 'schema_version'",
+    ] {
+        sqlx::query(sql).execute(db.pool()).await?;
+    }
+    let old = datalib_etl::doltlite_raw::commit_run(db.pool(), "a store from before")
+        .await?
+        .expect("a commit");
+    assert_ne!(payloads(db.clone()).await?, written);
+    db.close().await;
+
+    let db = ingest::RawDb::open(&db_path).await?;
+    assert_eq!(
+        payloads(db.clone()).await?,
+        written,
+        "each frame as ingest writes it"
+    );
+    let marks_now: Vec<(String, i64)> =
+        sqlx::query_as("SELECT id, read FROM read_marks ORDER BY id")
+            .fetch_all(db.pool())
+            .await?;
+    assert_eq!(marks_now, marks);
+    let ledger_now: i64 = sqlx::query_scalar("SELECT count(*) FROM ingested_backups")
+        .fetch_one(db.pool())
+        .await?;
+    assert_eq!(ledger_now, ledger, "the snapshot ledger is kept");
+    let changed: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT coalesce(nullif(to_table_name, ''), from_table_name) \
+           FROM dolt_diff_summary WHERE from_ref = ? AND to_ref = 'HEAD' \
+            AND to_table_name != '_datalib_meta' ORDER BY 1",
+    )
+    .bind(&old)
+    .fetch_all(db.pool())
+    .await?;
+    db.close().await;
+    assert_eq!(changed, ["chat_items", "read_marks"]);
+    Ok(())
+}
