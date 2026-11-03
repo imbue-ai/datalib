@@ -1,21 +1,25 @@
 # What the Minds evals pilot found, and what is left to fix
 
-**Status: partly built 2026-11-03.** Merged: #1530 (a thread root's
+**Status: mostly built 2026-11-03.** Merged: #1530 (a thread root's
 reply count), #1531 (the standalone ingest binaries deleted;
 `datalib-step` by hand documented instead), #1532 (agent docs in
 `datalib-step help`, checked; the four doc errors; the idle `status`
 line), #1533 (Slack `archived`, pages of 999, three requests at once),
 #1534 (a failed pass is an error line and a warning), #1535 (what a
 stopped or failed step owes), #1538 (a network that goes away ends a
-download `incomplete`; every web source, not only Slack). The PR that
-lands this file: Slack looks up owed authors before its walk too;
-`pull-runtime` reads latchkey's version without running it and takes
-`--into <dir>`. Thad took decisions 2, 4 and 12 and deferred 1
-(`replies`); on 4 he added that diff groups and the time-series index
-are young and need not be preserved as they are. He took 5, 6 and 7
-as well, and the runner-contract PR builds them (§2 PR 6). Still to
-do: decision 4's PR, §2 PR 5's transaction cost and `client.counts`
-fallback, and §3's decisions 3, 8-11 and 13. An audit of main at
+download `incomplete`, every web source), #1540 (Slack looks up owed
+authors before its walk; `pull-runtime` needs no latchkey key and takes
+`--into`), #1543 (decision 4: an ingest's version moves only with its
+content), #1544 (Slack writes its walk in one transaction between
+seals: a 5x smaller store), #1549-#1553 (read marks: one narrow
+`read_marks` table for Slack, Email, SMS and Signal; mirrored apps'
+marks built at render). The migrations those added were run on copies
+of a real root's Slack and Email stores before release, every count
+matching. The `client.counts` fallback (§2 PR 5) was dropped: a live
+check found `conversations.list`'s `updated` does not track posts.
+Thad took decisions 2, 4, 5, 6, 7, 10 and 12, and deferred 1
+(`replies`); 5-7 and 10 are being built. Still open: decisions 3, 8, 9,
+11 and 13, and the work outside this repo. An audit of main at
 `f5533f7a4` against the evals team's reports (v0.40.0 to v0.48.0) and
 datalib#1471. §1 says what is already fixed and how we know; §2 is the
 work, as PRs; §3 lists the decisions Thad has to make before the PRs
@@ -202,7 +206,7 @@ of what the agents saw: a no-op Slack sync would wake nobody.
 1. **Replies as declared scope**: `replies = true | false | [channels]`,
    default true. Or rank every thread after all history while a
    channel has no coverage yet, with no knob.
-2. **Archived channels**: an `archived` option, default off.
+2. *Taken (#1533).* **Archived channels**: an `archived` option, default off.
 3. **"Fetch this first"**: a one-run priority input to the frontier
    (named channels or threads), or leave it to stop and a scoped
    restart.
@@ -214,27 +218,23 @@ of what the agents saw: a no-op Slack sync would wake nobody.
    proposal: an ingest reports the last commit at which a content table
    (or `problems`) moved. Diff groups and the time-series index name
    commits, so this needs a look at both.
-5. **A consumer that wants its inputs settled**: a per-step
+5. *Taken: opt-in, per step.* **A consumer that wants its inputs settled**: a per-step
    `start = "after_inputs_settle"`. Today the only way is
    `reads = "files"`, which also locks writers out while it runs.
-   *Taken: `start = "after_inputs_settle"`; built-in steps keep
-   streaming.*
-6. **First run**: set `DATALIB_DAG_CHANGED_INPUTS` to every input on a
+6. *Taken: list every input.* **First run**: set `DATALIB_DAG_CHANGED_INPUTS` to every input on a
    first run, so an empty list can only mean nothing moved; or add
    `DATALIB_DAG_FIRST_RUN=1`. Either changes the step protocol.
-   *Taken: every input.*
-7. **A failed input**: tell the consumer (`DATALIB_DAG_FAILED_INPUTS`),
-   hold it (`hold_on_failed_inputs`), or both. *Taken: tell it; it
-   still runs.*
+7. *Taken: tell the step.* **A failed input**: tell the consumer (`DATALIB_DAG_FAILED_INPUTS`),
+   hold it (`hold_on_failed_inputs`), or both.
 8. **`datalib-dag wait [request]`**: a verb that blocks until a request
    closes and exits with its outcome, beside `GET /api/requests/{id}`
    (#1524).
 9. **The 6-hour TTL on `users.list` and bookmarks**: drop it (one or two
    pages), or make it a param.
-10. **A remembered refusal of `client.counts`/`saved.list`**: still a
+10. *Taken: one info row.* **A remembered refusal of `client.counts`/`saved.list`**: still a
     row (info), or nothing.
 11. **No `since`**: everything, or 2024-01-01 as now.
-12. **The standalone ingest binaries**: delete, or wrap each in
+12. *Taken: deleted (#1531).* **The standalone ingest binaries**: delete, or wrap each in
     `RawStoreSession`.
 13. **Saying who is calling**: Slack requests carry Chrome's
     User-Agent on purpose. An `X-Datalib-Step` header sent only on the
