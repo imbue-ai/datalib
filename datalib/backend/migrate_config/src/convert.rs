@@ -132,6 +132,8 @@ pub enum Retired {
     TimeSeriesEmbed,
     /// A step of datalib's own with no `command` (`step_commands.rs`).
     ImplicitStepCommand,
+    /// An id that names a folder, with capitals in it (`lowercase_ids.rs`).
+    UpperCaseId,
 }
 
 /// Which retired shape this config is in, or `None` when it is already

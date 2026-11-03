@@ -726,14 +726,24 @@ fn valid_id_segment(seg: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
 }
 
-/// Whether `id` is a group id a config may name: one id segment, never
-/// a reserved directory. What makes `<root>/<id>` that group's tree.
+/// One segment of an id that names a folder: a [`valid_id_segment`] in
+/// lower case. A Mac's disk does not tell `Email/` from `email/`, so
+/// with one spelling per folder no two ids can name one folder anywhere.
+fn valid_folder_segment(seg: &str) -> bool {
+    valid_id_segment(seg) && !seg.chars().any(|c| c.is_ascii_uppercase())
+}
+
+/// Whether `id` is a group id a config may name: one folder segment,
+/// never a reserved directory. What makes `<root>/<id>` that group's tree.
 pub fn usable_group_id(id: &str) -> bool {
-    valid_id_segment(id) && reserved_dir(id).is_none()
+    valid_folder_segment(id) && reserved_dir(id).is_none()
 }
 
 const SEGMENT_RULE: &str = "letters, digits, `.`, `_`, `-`, not starting with `-`, and \
                             never `.` or `..`";
+
+const FOLDER_RULE: &str = "lowercase letters, digits, `.`, `_`, `-`, not starting with \
+                           `-`, and never `.` or `..`";
 
 pub fn validate_steps(cfg: &DagConfig) -> Result<()> {
     let accepted = accept_entries(cfg_candidates(cfg), None);
@@ -1195,7 +1205,7 @@ fn accept_groups(
             diags.push(d);
             continue;
         }
-        if !valid_id_segment(&id) {
+        if !valid_folder_segment(&id) {
             diags.push(c.diag(
                 Severity::Rejected,
                 text,
@@ -1203,7 +1213,7 @@ fn accept_groups(
                 format!(
                     "group id {id:?} is not a usable directory name. Every step under a \
                      group writes into `<group id>/`, so the id must be one portable \
-                     filename — {SEGMENT_RULE} — with no `/` in it."
+                     filename — {FOLDER_RULE} — with no `/` in it."
                 ),
             ));
             continue;
@@ -1385,7 +1395,7 @@ fn accept_steps(
         let mut source_group: Option<(&str, &str)> = None;
         match (&c.entry.group, &c.entry.function) {
             (Some(g), Some(f)) => {
-                if !valid_id_segment(f) {
+                if !valid_folder_segment(f) {
                     diags.push(c.diag(
                         Severity::Rejected,
                         text,
@@ -1393,7 +1403,7 @@ fn accept_steps(
                         format!(
                             "function {f:?} is not a usable directory name. A step writes \
                              `<group>/<function>/`, so the function must be one portable \
-                             filename — {SEGMENT_RULE} — with no `/` in it."
+                             filename — {FOLDER_RULE} — with no `/` in it."
                         ),
                     ));
                     continue;
@@ -1491,7 +1501,7 @@ fn accept_steps(
                 }
             }
             _ => {
-                if id.is_empty() || !id.split('/').all(valid_id_segment) {
+                if id.is_empty() || !id.split('/').all(valid_folder_segment) {
                     diags.push(c.diag(
                         Severity::Rejected,
                         text,
@@ -1499,7 +1509,7 @@ fn accept_steps(
                         format!(
                             "id {id:?} is not a usable directory name. An id is the directory \
                              the step writes, so every `/`-separated segment must be a portable \
-                             filename — {SEGMENT_RULE}."
+                             filename — {FOLDER_RULE}."
                         ),
                     ));
                     continue;
@@ -1990,15 +2000,15 @@ fn accept_applets(
 
     for c in candidates {
         let id = c.entry.id.clone();
-        if !is_js_identifier(&id) {
+        if !is_js_identifier(&id) || id.chars().any(|c| c.is_ascii_uppercase()) {
             diags.push(c.diag(
                 Severity::Rejected,
                 text,
                 Some("id"),
                 format!(
-                    "id {id:?} must be a JavaScript identifier (letters, digits, _ or $, not \
-                     starting with a digit) because it is injected into card source as a \
-                     bare name"
+                    "id {id:?} must be a JavaScript identifier in lower case (letters, digits, \
+                     _ or $, not starting with a digit): it is injected into card source as a \
+                     bare name, and names the folder `system/frontend/<id>/`"
                 ),
             ));
             continue;
@@ -3128,6 +3138,38 @@ mod tests {
             let err = to_specs(&cfg).unwrap_err().to_string();
             assert!(err.contains("reserved"), "{id}: {err}");
         }
+    }
+
+    /// An id is a folder name, and a Mac's disk ignores letter case, so
+    /// `SYSTEM` there is `system/` and `Email` beside `email` is one
+    /// folder with two owners. One spelling per folder: lower case.
+    #[test]
+    fn ids_that_name_folders_are_lower_case() {
+        for id in ["SYSTEM", "System/state", "Email/ingest", "email/Ingest"] {
+            let cfg: DagConfig =
+                toml::from_str(&format!(r#"steps = [{{id = "{id}", command = "a"}}]"#)).unwrap();
+            let err = to_specs(&cfg).unwrap_err().to_string();
+            assert!(err.contains("lowercase"), "{id}: {err}");
+        }
+        for id in ["SYSTEM", "Datalib_Curated", "Email"] {
+            assert!(!usable_group_id(id), "{id}");
+        }
+        let check = check_text(
+            "[[groups]]\nid = \"Email\"\n\n\
+             [[steps]]\ngroup = \"Email\"\nfunction = \"raw\"\ncommand = \"x\"\n\n\
+             [[groups]]\nid = \"g\"\n\n\
+             [[steps]]\ngroup = \"g\"\nfunction = \"Raw\"\ncommand = \"x\"\n",
+        );
+        assert!(
+            check.cfg.groups.iter().all(|g| g.id == "g"),
+            "{:?}",
+            check.diagnostics
+        );
+        assert!(check.cfg.steps.is_empty(), "{:?}", check.diagnostics);
+        let applet: DagConfig =
+            toml::from_str("[[applets]]\nid = \"User\"\ncommand = \"x\"\n").unwrap();
+        let err = validate_applets(&applet).unwrap_err().to_string();
+        assert!(err.contains("lower case"), "{err}");
     }
 
     /// Only a source is kept off an index group's id; the index group

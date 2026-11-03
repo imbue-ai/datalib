@@ -652,7 +652,7 @@ mod tests {
         assert!(refusal(&["gone", "keep"])
             .unwrap()
             .contains("still has \"keep\""));
-        for bad in ["", "..", "system", "a/b", "../elsewhere"] {
+        for bad in ["", "..", "system", "SYSTEM", "Keep", "a/b", "../elsewhere"] {
             assert!(
                 refusal(&[bad]).unwrap().contains("not a group id"),
                 "{bad:?}"

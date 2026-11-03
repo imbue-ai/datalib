@@ -511,6 +511,27 @@ impl Store {
         Ok(())
     }
 
+    /// Carry whether a step is turned off over to its new id, for every
+    /// step at or under `old`, now spelled `new`. Only the switch, which
+    /// is a person's choice; what the loop learned about a step it learns
+    /// again under the new id. A row the new id already has is left as
+    /// it is. Returns how many rows moved.
+    pub async fn rename_switches(&self, old: &str, new: &str) -> Result<u64> {
+        let moved = sqlx::query(
+            "UPDATE OR IGNORE turned_off SET step = ? || substr(step, ?) \
+             WHERE step = ? OR substr(step, 1, ?) = ?",
+        )
+        .bind(new)
+        .bind(old.len() as i64 + 1)
+        .bind(old)
+        .bind(old.len() as i64 + 1)
+        .bind(format!("{old}/"))
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        Ok(moved)
+    }
+
     /// Carry what the loop keeps per step over to the step's new id, for
     /// every step under the group `old` now named `new`: whether it is
     /// turned off, its last success and what it read then, and its tree's
@@ -772,6 +793,22 @@ mod tests {
                 .unwrap(),
             0
         );
+        store.close().await;
+    }
+
+    /// An id whose case changed keeps a person's switch: `Email/embed`
+    /// turned off is `email/embed` turned off, and nothing else moves.
+    #[tokio::test]
+    async fn a_renamed_spelling_keeps_its_switches() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        for step in ["Email/embed", "Email", "g/Raw", "Emailer/x"] {
+            store.turn_off(step, "thad").await.unwrap();
+        }
+        assert_eq!(store.rename_switches("Email", "email").await.unwrap(), 2);
+        assert_eq!(store.rename_switches("g/Raw", "g/raw").await.unwrap(), 1);
+        let off: Vec<String> = store.turned_off().await.unwrap().into_keys().collect();
+        assert_eq!(off, ["Emailer/x", "email", "email/embed", "g/raw"]);
         store.close().await;
     }
 
