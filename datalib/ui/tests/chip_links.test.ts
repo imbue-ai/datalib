@@ -83,6 +83,49 @@ describe("handleFromUri / uriFromHandle", () => {
   });
 });
 
+/// A handle is drawn as a person, so one that reads like another must not
+/// be a chip: a bidi control reorders what is shown, and a zero-width
+/// character makes two handles that look alike different handles.
+describe("handleFromUri refuses a handle that does not show as it is", () => {
+  it("refuses bidi controls and invisible characters in every kind", () => {
+    for (const invisible of [
+      "\u202e",
+      "\u2066",
+      "\u200f",
+      "\u200b",
+      "\u2060",
+      "\ufeff",
+      "\u00ad",
+    ]) {
+      for (const uri of [
+        `mailto:picard${invisible}@enterprise.example`,
+        `datalib:handle/facebook/name/${encodeURIComponent(`Jean${invisible}Luc`)}`,
+        `datalib:handle/google/name/${encodeURIComponent(`Geordi${invisible}`)}`,
+        `datalib:handle/ai_model/${encodeURIComponent(`claude${invisible}`)}`,
+        `https://www.linkedin.com/in/${encodeURIComponent(`jl${invisible}picard`)}`,
+      ]) {
+        expect(handleFromUri(uri), JSON.stringify(uri)).toBeNull();
+      }
+    }
+  });
+
+  it("keeps a joiner inside a name, where a script needs one", () => {
+    expect(
+      handleFromUri(`datalib:handle/facebook/name/${encodeURIComponent("Ro\u200dLaren")}`),
+    ).toBe("facebook:name/Ro\u200dLaren");
+  });
+
+  it("takes a phone number the way `Handle::tel` does", () => {
+    expect(handleFromUri("tel:+15550123456")).toBe("tel:+15550123456");
+    // Under country code 1 a number has ten digits after the 1.
+    expect(handleFromUri("tel:+1555012")).toBeNull();
+    expect(handleFromUri("tel:+155501234567")).toBeNull();
+    // No country code starts with 0.
+    expect(handleFromUri("tel:+0555012345")).toBeNull();
+    expect(handleFromUri("tel:+44 (0)20 7946 0958")).toBe("tel:+442079460958");
+  });
+});
+
 /// The group and step URIs `datalib_columns::Entity` writes and reads.
 describe("entityFromUri", () => {
   it("reads a group and a step, and nothing else", () => {

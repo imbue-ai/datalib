@@ -62,10 +62,10 @@ describe("sanitizeRenderedHtml", () => {
       'data-page-title-uuid="p1"',
       "<table>",
       'loading="lazy"',
-      // A chip link's two extra schemes, its title and its handle.
+      // A chip link's two extra schemes and its title. Its marks come
+      // from the renderer alone (below).
       'href="slack://user?team=T1&amp;id=U2"',
       'title="Data (slack:T1/U2)"',
-      'data-handle="slack:T1/U2"',
       'href="datalib:group/slack"',
       'href="tel:+15550123456"',
     ]) {
@@ -162,3 +162,153 @@ describe("a body's references to our own origin", () => {
     expect(fetchedOnOpen(html)).toEqual([blob, part]);
   });
 });
+
+/// A link in a body is the person's to click, and the app decides where
+/// it goes (`DocCard.ce.vue` `onFrameLink`). What the sanitizer keeps is
+/// the link a renderer writes, `<a href>`, in the schemes the app opens.
+describe("a body's links", () => {
+  it("keep a target only when it opens a new window", () => {
+    const out = renderDocument(
+      ["_blank", "_top", "_parent", "_self", "named", "_BLANK"]
+        .map((t) => `<a href="https://x.example/${t}" target="${t}">${t}</a>`)
+        .join("") +
+        `<svg><a xlink:href="https://x.example/svg" target="_top"><text>s</text></a></svg>`,
+    ).html;
+    const targets = Array.from(dom(out).querySelectorAll("a"), (a) => a.getAttribute("target"));
+    expect(targets).toEqual(["_blank", null, null, null, null, null, null]);
+  });
+
+  it("are never an image map or MathML", () => {
+    const out = renderDocument(
+      `<map name="m"><area shape="rect" coords="0,0,9,9" href="https://x.example/a" target="_top"></map>` +
+        `<img usemap="#m" src="data:,">` +
+        `<math href="https://x.example/m"><mi href="https://x.example/mi">x</mi></math>`,
+    ).html;
+    expect(out).not.toContain("x.example");
+    expect(out).not.toMatch(/<(area|map|math|mi)\b/);
+  });
+
+  it("are only in the schemes the app opens", () => {
+    const kept = [
+      "https://x.example/",
+      "http://x.example/",
+      "mailto:a@x.example",
+      "tel:+15550123456",
+    ];
+    const chips = ["slack://user?team=T1&id=U2", "datalib:group/slack"];
+    const dropped = [
+      "sms:+15550123456",
+      "callto:picard",
+      "cid:part1@x.example",
+      "xmpp:picard@x.example",
+      "matrix:u/picard:x.example",
+      "ftp://x.example/",
+      "facetime:picard@x.example",
+      "file:///etc/passwd",
+    ];
+    for (const href of [...kept, ...chips]) {
+      const a = dom(renderDocument(`<a href="${href}">x</a>`).html).querySelector("a")!;
+      expect(a.getAttribute("href"), href).toBe(href);
+    }
+    for (const href of dropped) {
+      const a = dom(renderDocument(`<a href="${href}">x</a>`).html).querySelector("a")!;
+      expect(a.getAttribute("href"), href).toBeNull();
+    }
+  });
+});
+
+/// A chip is a link the app resolves to a person, a group or a step, and
+/// only the app's own renderer marks one (`chipLinks.js`). A sender's
+/// HTML claiming to be a chip would draw as someone it is not.
+describe("a chip's marks", () => {
+  it("come from the renderer, never from the body's own HTML", () => {
+    const html = renderDocument(
+      `[Picard](mailto:picard@enterprise.example)\n\n` +
+        `<a class="chip x" data-handle="email:picard@enterprise.example" href="https://x.example/">Picard</a>` +
+        `<a class="chip" data-entity="datalib:group/mail" href="https://x.example/">Mail</a>`,
+    ).html;
+    const links = Array.from(dom(html).querySelectorAll("a"));
+    expect(
+      links.map((a) => [a.className, a.dataset.handle ?? null, a.dataset.entity ?? null]),
+    ).toEqual([
+      ["chip", "email:picard@enterprise.example", null],
+      ["x", null, null],
+      ["", null, null],
+    ]);
+    expect(html).not.toContain("data-chip-mark");
+  });
+});
+
+/// What a style can load, read the way a browser reads it: an escape is
+/// the letter it stands for, a quoted URL may hold a `)`, and
+/// `image-set()` takes a bare string as a URL.
+describe("a style's hidden references", () => {
+  it("load nothing, however the URL is spelled", () => {
+    for (const style of [
+      `background:url("https://track.example/a)b")`,
+      `background:url('https://track.example/a)b')`,
+      `background-image:image-set("https://track.example/a.png" 1x)`,
+      `background-image:-webkit-image-set("https://track.example/a.png" 1x)`,
+      `background:\\75 rl(https://track.example/a.png)`,
+      `background:u\\72 l(https://track.example/a.png)`,
+      `background:url(https\\3a //track.example/a.png)`,
+      `background:url(/api/manage/rows\\3f refresh=1)`,
+      `background:\\75 rl(/api/manage/rows?refresh=1)`,
+      `background:image-set("/api/manage/rows?refresh=1" 1x)`,
+      `list-style:url("/api/config")`,
+    ]) {
+      const html = renderDocument(`<div style='${style}'>x</div>`).html;
+      const kept = dom(html).querySelector("div")!.getAttribute("style") ?? "";
+      expect(kept, style).not.toMatch(/track\.example|\/api\/|\\|image-set/i);
+    }
+  });
+
+  it("keep what draws nothing from elsewhere", () => {
+    const html = renderDocument(`<p style="color: red; padding: 2px">x</p>`).html;
+    const style = dom(html).querySelector("p")!.getAttribute("style") ?? "";
+    expect(style).toMatch(/color: red/);
+    expect(style).toMatch(/padding: 2px/);
+  });
+});
+
+/// An SVG filter's image is a fetch like an `<img>`'s.
+describe("an SVG filter's image", () => {
+  it("is held like any other remote image, and loads nothing from our origin", () => {
+    const { html, remote } = renderDocument(
+      `<svg><filter id="f"><feImage href="https://track.example/a.png"/>` +
+        `<feImage xlink:href="/api/manage/rows?refresh=1"/></filter></svg>`,
+    );
+    const images = Array.from(dom(html).querySelectorAll("feImage"));
+    expect(images).toHaveLength(2);
+    for (const el of images) {
+      expect(el.getAttribute("href")).toBeNull();
+      expect(el.getAttribute("xlink:href")).toBeNull();
+    }
+    expect(remote.map((r) => r.url)).toEqual(["https://track.example/a.png"]);
+  });
+});
+
+/// An SVG attribute like `fill` reads as CSS, so a `url(…)` in it is a
+/// fetch, unless it names a part of the body itself.
+describe("an SVG shape's paint", () => {
+  it("names only a part of the body", () => {
+    const html = renderDocument(
+      `<svg><rect id="a" fill="url(#grad)" stroke="url('#g2')"/>` +
+        `<rect id="b" fill="url(/api/manage/rows?refresh=1#x)" filter="url(https://track.example/f.svg#f)"` +
+        ` mask="\\75 rl(/api/config#m)" stroke="red"/></svg>`,
+    ).html;
+    const root = dom(html);
+    const attrs = (id: string) => {
+      const el = root.querySelector(`#${id}`)!;
+      return Object.fromEntries(el.getAttributeNames().map((n) => [n, el.getAttribute(n)]));
+    };
+    expect(attrs("a")).toEqual({ id: "a", fill: "url(#grad)", stroke: "url('#g2')" });
+    expect(attrs("b")).toEqual({ id: "b", stroke: "red" });
+  });
+});
+
+function dom(html: string): HTMLElement {
+  const root = document.createElement("div");
+  root.innerHTML = html;
+  return root;
+}

@@ -3,6 +3,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod launcher;
+mod navigation;
 mod protected;
 mod raw_store;
 mod read_access;
@@ -20,6 +21,8 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_window_state::StateFlags;
 
+use navigation::Destination;
+
 /// The spawned `datalib-http` child, managed in tauri state so the
 /// exit handler can kill it. `None` until boot succeeds.
 struct HttpChild(Mutex<Option<Child>>);
@@ -27,12 +30,9 @@ struct HttpChild(Mutex<Option<Child>>);
 /// The data root the backend was started on; `None` until boot succeeds.
 struct DataRoot(Mutex<Option<PathBuf>>);
 
-/// The open library's server, as an origin (`http://127.0.0.1:<port>`):
-/// what a window may navigate within. `None` on the libraries screen.
-/// Serialized rather than kept as a `url::Origin`: that type is not
-/// re-exported by tauri, and naming it would mean adding a direct `url`
-/// dependency for one comparison.
-struct AppOrigin(Mutex<Option<String>>);
+/// The open library's server (`http://127.0.0.1:<port>/`): what a window
+/// may navigate within (`navigation.rs`). `None` on the libraries screen.
+struct AppOrigin(Mutex<Option<Url>>);
 
 /// The page zoom the View menu set (zoom.rs), applied to every window
 /// and to each page as it loads.
@@ -122,9 +122,12 @@ fn launcher_state(app: AppHandle) -> serde_json::Value {
                 // A library in one of the libraries folders is known by its
                 // name; only one somewhere else shows where it is.
                 let elsewhere = !dirs.iter().any(|d| l.path.parent() == Some(d.as_path()));
-                let protected = container
-                    .as_deref()
-                    .is_some_and(|c| protected::is_protected(&l.path, c));
+                // A library that is not there cannot be followed, which
+                // `is_protected` counts as protected; it is only missing.
+                let protected = l.found
+                    && container
+                        .as_deref()
+                        .is_some_and(|c| protected::is_protected(&l.path, c));
                 serde_json::json!({
                     "name": launcher::display_name(&l.path),
                     "path": l.path.to_string_lossy(),
@@ -862,8 +865,7 @@ async fn boot(app: AppHandle, root: PathBuf, init: bool) {
     let Ok(url) = url.parse::<Url>() else {
         return boot_failed(&app, format!("backend produced an unusable URL: {url}"));
     };
-    *app.state::<AppOrigin>().0.lock().expect("app origin lock") =
-        Some(url.origin().ascii_serialization());
+    *app.state::<AppOrigin>().0.lock().expect("app origin lock") = Some(url.clone());
     let shown = match app.get_webview_window(MAIN_WINDOW) {
         Some(window) => window.navigate(url),
         None => main_window(&app, WebviewUrl::External(url))
@@ -922,20 +924,21 @@ fn under_title_bar<'a>(
     builder
 }
 
-/// The two rules every window of the app follows.
+/// The two rules every window of the app follows (`navigation.rs`).
 ///
-/// **A window shows the app, never someone else's website.** Rendered
+/// **A window shows the app, never someone else's page.** Rendered
 /// documents carry links we did not author — the `↗` outlink, and every
 /// `<a>` that came out of the source content (a "Sent via Superhuman"
 /// footer, a newsletter's tracking link). Following one in place would
 /// replace the whole UI with a marketing page and leave no chrome to
-/// come back from, so an off-origin navigation goes to the OS browser.
+/// come back from, so a web, mail or phone link goes to the OS, and any
+/// other scheme nowhere.
 ///
 /// **A `target="_blank"` link opens a window.** A webview has no tab
 /// strip, so without this the card chrome's "open this card alone" ↗
-/// and the grid's double-click were dead in the app. Same origin gets a
-/// second window of the app, under the same rules; anything else goes
-/// to the OS browser, as above.
+/// and the grid's double-click were dead in the app. A page of the app
+/// gets a second window of the app, under the same rules; anything else
+/// goes where a navigation to it would.
 ///
 /// The app's origin is read at each navigation, not fixed when the
 /// window opens: the main window moves between the libraries screen and
@@ -961,23 +964,28 @@ fn app_window<'a>(
                 let _ = window.set_zoom(page_zoom(&zoom_app));
             }
         })
+        // A file dropped on the window is a `file:` navigation, which goes
+        // nowhere: WebKit would show it in place of the app.
         .on_navigation(move |next| {
-            // A file dropped on the window: WebKit would show it in place
-            // of the app, with no way back.
-            if next.scheme() == "file" {
-                return false;
+            match navigation::navigation(next, app_origin(&nav_app).as_ref(), &launcher_page_url())
+            {
+                Destination::App => true,
+                Destination::Os => {
+                    open_externally(&nav_app, next);
+                    false
+                }
+                Destination::Nowhere => {
+                    eprintln!("refused to navigate to {next}");
+                    false
+                }
             }
-            if !leaves_the_app(next, &nav_app) {
-                return true;
-            }
-            open_externally(&nav_app, next);
-            false
         })
         .on_new_window(move |url, _features: NewWindowFeatures| {
-            if leaves_the_app(&url, &new_app) {
-                open_externally(&new_app, &url);
-            } else {
-                open_card_window(&new_app, url);
+            match navigation::new_window(&url, app_origin(&new_app).as_ref(), &launcher_page_url())
+            {
+                Destination::App => open_card_window(&new_app, url),
+                Destination::Os => open_externally(&new_app, &url),
+                Destination::Nowhere => eprintln!("refused to open a window at {url}"),
             }
             NewWindowResponse::Deny
         })
@@ -1017,22 +1025,12 @@ fn open_externally(app: &AppHandle, url: &Url) {
     }
 }
 
-/// The libraries screen's own page counts as the app: on Windows it is
-/// served from `http://tauri.localhost`.
-fn leaves_the_app(next: &Url, app: &AppHandle) -> bool {
-    let origin = next.origin().ascii_serialization();
-    let app_origin = app
-        .state::<AppOrigin>()
+fn app_origin(app: &AppHandle) -> Option<Url> {
+    app.state::<AppOrigin>()
         .0
         .lock()
         .expect("app origin lock")
-        .clone();
-    let launcher_origin = launcher_page_url().origin().ascii_serialization();
-    match next.scheme() {
-        "http" | "https" => Some(&origin) != app_origin.as_ref() && origin != launcher_origin,
-        "mailto" | "tel" => true,
-        _ => false,
-    }
+        .clone()
 }
 
 /// Spawn the bundled `datalib-http` against `root` on an ephemeral

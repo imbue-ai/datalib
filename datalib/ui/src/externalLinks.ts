@@ -10,8 +10,8 @@
  *
  * - `target="_blank"` (what the `↗` carries) reaches the shell's
  *   `on_new_window` handler (`datalib/tauri/src/main.rs`), which opens
- *   a same-origin URL as a second window of the app and hands anything
- *   else to the OS browser. Before that handler existed the click was
+ *   a page of the app as a second window of the app, hands a web, mail
+ *   or phone link to the OS, and refuses anything else. Before that handler existed the click was
  *   silently swallowed — a webview has no tab strip.
  * - a plain `<a href="https://…">` **navigates the app window** onto
  *   that site. The whole UI is replaced by someone's marketing page,
@@ -34,12 +34,15 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { isDesktopApp } from "./desktop";
 
 /**
- * Schemes that mean "leave the app": the web, and the two handoffs a
- * webview can't service itself. Everything else (`file:`, `data:`,
- * `blob:`, `javascript:`) is deliberately left to the host — see
- * `desktop.ts` for how local files are handled instead.
+ * The schemes a link may leave the app by: the web, mail and phone. A
+ * body's link can name any other, a chip's `slack://` and `datalib:`
+ * among them, and the OS would hand each to whatever app claims it. The
+ * desktop app's opener is scoped to the same four
+ * (`capabilities/open-external-urls.json`), and so is its shell
+ * (`datalib/tauri/src/navigation.rs`). `file:` has its own way out, the
+ * grid's reveal (`desktop.ts`).
  */
-const HANDOFF_SCHEMES = new Set(["mailto:", "tel:"]);
+const LEAVING_SCHEMES = new Set(["http:", "https:", "mailto:", "tel:"]);
 
 /**
  * Should a click on `href` leave the app?
@@ -61,30 +64,51 @@ export function isExternalHref(href: string, base: string, origin: string): bool
     // `/#/chat/<uuid>` — and must keep navigating in place.
     return url.origin !== origin;
   }
-  return HANDOFF_SCHEMES.has(url.protocol);
+  return LEAVING_SCHEMES.has(url.protocol);
+}
+
+/** A page on the web: what the grid's "Open source" opens. A row's
+ *  `source_url` is what its source wrote, in whatever scheme. */
+export function isWebUrl(url: string): boolean {
+  try {
+    const { protocol } = new URL(url);
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 /**
  * Open `url` outside the app: the OS default browser in the desktop
- * app, a new tab in a browser.
+ * app, a new tab in a browser. Any scheme but the four above is refused.
  *
  * Never throws — a link that can't be opened should log, not blow up a
  * click handler.
  */
 export async function openExternal(url: string): Promise<void> {
-  if (isDesktopApp()) {
-    try {
-      await openUrl(url);
-      return;
-    } catch (e) {
-      // Reachable when the opener capability is missing or its scope
-      // stopped matching (see `datalib/tauri/capabilities/`). The
-      // fallback below does nothing in the app, but the warning is how
-      // we find out.
-      console.warn("openUrl failed", e);
-    }
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    console.warn("not opening a link that does not parse", url);
+    return;
   }
-  window.open(url, "_blank", "noopener");
+  if (!LEAVING_SCHEMES.has(parsed.protocol)) {
+    console.warn(`not opening a ${parsed.protocol} link outside the app`);
+    return;
+  }
+  if (!isDesktopApp()) {
+    window.open(parsed.href, "_blank", "noopener");
+    return;
+  }
+  try {
+    await openUrl(parsed.href);
+  } catch (e) {
+    // Reachable when the opener capability is missing or its scope
+    // stopped matching (see `datalib/tauri/capabilities/`). There is no
+    // fallback: `window.open` in the app is a window of the app.
+    console.warn("openUrl failed", e);
+  }
 }
 
 /** The nearest ancestor `<a href>` of the click, across shadow roots. */

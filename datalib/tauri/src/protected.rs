@@ -6,7 +6,7 @@
 //! Nothing here may reference `tauri`: `//datalib/tauri:protected_test`
 //! compiles this file on its own.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 /// The app group `Datalib.entitlements` names. macOS lets an app into a
 /// group container without asking only when the group's name starts
@@ -31,10 +31,17 @@ pub fn latchkey_dir(container: &Path) -> PathBuf {
     container.join("latchkey")
 }
 
-/// `root` is inside the container, judged on the path's text: a `..`
-/// anywhere in it counts as outside, since it could lead anywhere.
+/// `root` is inside the container, judged by where both paths lead once
+/// every `..` and link is followed. A root that cannot be followed counts
+/// as inside; nothing is inside a container that is not there.
 pub fn is_protected(root: &Path, container: &Path) -> bool {
-    root.starts_with(container) && !root.components().any(|c| c == Component::ParentDir)
+    let container = match container.canonicalize() {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(_) => return true,
+    };
+    root.canonicalize()
+        .map_or(true, |root| root.starts_with(container))
 }
 
 /// The folder a protected library named `input` goes in. Only a plain
@@ -114,20 +121,52 @@ mod tests {
     }
 
     /// The latchkey store goes in the container for a library in it,
-    /// and only for one: `..` must not walk a library elsewhere in.
+    /// and only for one, judged by where the path really leads: a `..`
+    /// or a link can make a path's text say either.
+    #[cfg(unix)]
     #[test]
     fn only_a_root_inside_the_container_is_protected() {
-        let c = container(Path::new("/Users/x"));
-        assert!(is_protected(&libraries_dir(&c).join("Mail"), &c));
-        assert!(!is_protected(Path::new("/Users/x/Datalib/Mail"), &c));
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let c = container(home);
+        let mail = libraries_dir(&c).join("Mail");
+        let outside = home.join("Datalib/Mail");
+        std::fs::create_dir_all(&mail).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::create_dir_all(
+            home.join("Library/Group Containers/LDDYAR29MP.com.imbue.datalib-other/Mail"),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(&mail, home.join("Datalib/into")).unwrap();
+        std::os::unix::fs::symlink(&outside, libraries_dir(&c).join("out")).unwrap();
+
+        assert!(is_protected(&mail, &c));
+        assert!(is_protected(&c.join("Libraries/../Libraries/Mail"), &c));
+        assert!(
+            is_protected(&home.join("Datalib/into"), &c),
+            "a link from outside into the container"
+        );
+        assert!(!is_protected(&outside, &c));
         assert!(!is_protected(
             &c.join("Libraries/../../../../Datalib/Mail"),
             &c
         ));
+        assert!(
+            !is_protected(&libraries_dir(&c).join("out"), &c),
+            "a link in the container to a library outside it"
+        );
         assert!(!is_protected(
-            Path::new("/Users/x/Library/Group Containers/LDDYAR29MP.com.imbue.datalib-other/Mail"),
+            &home.join("Library/Group Containers/LDDYAR29MP.com.imbue.datalib-other/Mail"),
             &c
         ));
+        assert!(
+            is_protected(&libraries_dir(&c).join("Missing"), &c),
+            "a path that cannot be followed counts as protected"
+        );
+        assert!(
+            !is_protected(&mail, &container(&home.join("nobody"))),
+            "nothing is in a container that is not there"
+        );
     }
 
     #[test]
