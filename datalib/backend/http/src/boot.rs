@@ -111,6 +111,7 @@ pub async fn build_state(
     })
     .await?;
     crate::config_upgrade::move_index_dir(&root).await;
+    crate::config_upgrade::move_case_folders(&root).await;
     crate::config_upgrade::watch((*root).clone(), root_tx.subscribe());
 
     let sync = supervisor::SyncControl::new(root.clone());

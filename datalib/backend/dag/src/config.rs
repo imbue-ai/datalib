@@ -709,51 +709,7 @@ pub const TIME_SERIES_SOURCE_TYPES: &[&str] = &["garmin", "yolink", "airvisual"]
 pub const TIME_SERIES_INDEX_GROUP: &str = "unified_time_series_index";
 
 fn reserved_dir(top: &str) -> Option<(&'static str, &'static str)> {
-    RESERVED_DIRS
-        .iter()
-        .copied()
-        .find(|(dir, _)| dir.eq_ignore_ascii_case(top))
-}
-
-/// The ids already taken in one namespace whose ids are folder names,
-/// compared without letter case: a Mac's disk does not tell `email/`
-/// from `Email/`, so two such ids would be one folder with two owners.
-#[derive(Default)]
-struct FolderIds(BTreeMap<String, String>);
-
-impl FolderIds {
-    /// The spelling that already holds `id`'s folder, if any.
-    fn holder(&self, id: &str) -> Option<&str> {
-        self.0.get(&id.to_ascii_lowercase()).map(String::as_str)
-    }
-
-    /// The id whose folder contains `id`'s, or is contained by it.
-    fn nested_with(&self, id: &str) -> Option<&str> {
-        let key = id.to_ascii_lowercase();
-        self.0
-            .iter()
-            .find(|(other, _)| nests_with(other, &key))
-            .map(|(_, spelled)| spelled.as_str())
-    }
-
-    fn take(&mut self, id: &str) {
-        self.0
-            .entry(id.to_ascii_lowercase())
-            .or_insert_with(|| id.to_string());
-    }
-}
-
-/// What a duplicate-id diagnostic adds when the two ids differ only in
-/// letter case.
-fn case_note(id: &str, holder: &str) -> String {
-    if id == holder {
-        String::new()
-    } else {
-        format!(
-            " It differs from {holder:?} only in letter case, and a Mac's disk does not \
-             tell the two folders apart."
-        )
-    }
+    RESERVED_DIRS.iter().copied().find(|(dir, _)| *dir == top)
 }
 
 /// One id segment: what a directory name may contain. Deliberately narrower
@@ -770,14 +726,24 @@ fn valid_id_segment(seg: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
 }
 
-/// Whether `id` is a group id a config may name: one id segment, never
-/// a reserved directory. What makes `<root>/<id>` that group's tree.
+/// One segment of an id that names a folder: a [`valid_id_segment`] in
+/// lower case. A Mac's disk does not tell `Email/` from `email/`, so
+/// with one spelling per folder no two ids can name one folder anywhere.
+fn valid_folder_segment(seg: &str) -> bool {
+    valid_id_segment(seg) && !seg.chars().any(|c| c.is_ascii_uppercase())
+}
+
+/// Whether `id` is a group id a config may name: one folder segment,
+/// never a reserved directory. What makes `<root>/<id>` that group's tree.
 pub fn usable_group_id(id: &str) -> bool {
-    valid_id_segment(id) && reserved_dir(id).is_none()
+    valid_folder_segment(id) && reserved_dir(id).is_none()
 }
 
 const SEGMENT_RULE: &str = "letters, digits, `.`, `_`, `-`, not starting with `-`, and \
                             never `.` or `..`";
+
+const FOLDER_RULE: &str = "lowercase letters, digits, `.`, `_`, `-`, not starting with \
+                           `-`, and never `.` or `..`";
 
 pub fn validate_steps(cfg: &DagConfig) -> Result<()> {
     let accepted = accept_entries(cfg_candidates(cfg), None);
@@ -1160,7 +1126,7 @@ fn accept_packages(
 ) -> (Vec<PackageEntry>, Vec<Diagnostic>) {
     let mut accepted = Vec::with_capacity(candidates.len());
     let mut diags = Vec::new();
-    let mut seen = FolderIds::default();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
     for c in candidates {
         let id = c.entry.id.clone();
         if !valid_id_segment(&id) {
@@ -1186,19 +1152,18 @@ fn accept_packages(
             ));
             continue;
         }
-        if let Some(holder) = seen.holder(&id) {
+        if !seen.insert(id.clone()) {
             diags.push(
                 c.diag(
                     Severity::Rejected,
                     text,
                     Some("id"),
-                    format!("duplicate id {id:?}.{}", case_note(&id, holder)),
+                    format!("duplicate id {id:?}"),
                 )
                 .with_help("the earlier entry keeps this id; give this one another"),
             );
             continue;
         }
-        seen.take(&id);
         accepted.push(c.entry);
     }
     (accepted, diags)
@@ -1215,7 +1180,7 @@ fn accept_groups(
 ) -> (Vec<GroupEntry>, Vec<Diagnostic>) {
     let mut accepted = Vec::with_capacity(candidates.len());
     let mut diags = Vec::new();
-    let mut seen = FolderIds::default();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
     // A diff group's `source` may name a group declared after it, so the
     // check reads the whole file rather than what has been accepted so far.
     let declared: BTreeMap<&str, &GroupEntry> = candidates
@@ -1240,7 +1205,7 @@ fn accept_groups(
             diags.push(d);
             continue;
         }
-        if !valid_id_segment(&id) {
+        if !valid_folder_segment(&id) {
             diags.push(c.diag(
                 Severity::Rejected,
                 text,
@@ -1248,7 +1213,7 @@ fn accept_groups(
                 format!(
                     "group id {id:?} is not a usable directory name. Every step under a \
                      group writes into `<group id>/`, so the id must be one portable \
-                     filename — {SEGMENT_RULE} — with no `/` in it."
+                     filename — {FOLDER_RULE} — with no `/` in it."
                 ),
             ));
             continue;
@@ -1265,11 +1230,7 @@ fn accept_groups(
             ));
             continue;
         }
-        if c.entry.r#type.is_some()
-            && RESERVED_STANZA_NAMES
-                .iter()
-                .any(|name| name.eq_ignore_ascii_case(&id))
-        {
+        if c.entry.r#type.is_some() && RESERVED_STANZA_NAMES.contains(&id.as_str()) {
             diags.push(c.diag(
                 Severity::Rejected,
                 text,
@@ -1281,7 +1242,7 @@ fn accept_groups(
             ));
             continue;
         }
-        if let Some(holder) = seen.holder(&id) {
+        if !seen.insert(id.clone()) {
             diags.push(
                 c.diag(
                     Severity::Rejected,
@@ -1289,15 +1250,13 @@ fn accept_groups(
                     Some("id"),
                     format!(
                         "duplicate group id {id:?}. Steps name their group by this id, so \
-                         two groups sharing one would both claim every step under it.{}",
-                        case_note(&id, holder)
+                         two groups sharing one would both claim every step under it."
                     ),
                 )
                 .with_help("the earlier entry keeps this id; give this one a distinct one"),
             );
             continue;
         }
-        seen.take(&id);
         if !named.contains(&id) {
             diags.push(c.diag(
                 Severity::Warning,
@@ -1427,7 +1386,7 @@ fn accept_steps(
 ) -> (Vec<(StepEntry, StepSpec)>, Vec<Diagnostic>) {
     let mut accepted: Vec<(StepEntry, StepSpec)> = Vec::with_capacity(candidates.len());
     let mut diags = Vec::new();
-    let mut seen = FolderIds::default();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
     let aggregated = aggregated_ids(&candidates);
 
     for c in candidates {
@@ -1436,7 +1395,7 @@ fn accept_steps(
         let mut source_group: Option<(&str, &str)> = None;
         match (&c.entry.group, &c.entry.function) {
             (Some(g), Some(f)) => {
-                if !valid_id_segment(f) {
+                if !valid_folder_segment(f) {
                     diags.push(c.diag(
                         Severity::Rejected,
                         text,
@@ -1444,7 +1403,7 @@ fn accept_steps(
                         format!(
                             "function {f:?} is not a usable directory name. A step writes \
                              `<group>/<function>/`, so the function must be one portable \
-                             filename — {SEGMENT_RULE} — with no `/` in it."
+                             filename — {FOLDER_RULE} — with no `/` in it."
                         ),
                     ));
                     continue;
@@ -1542,7 +1501,7 @@ fn accept_steps(
                 }
             }
             _ => {
-                if id.is_empty() || !id.split('/').all(valid_id_segment) {
+                if id.is_empty() || !id.split('/').all(valid_folder_segment) {
                     diags.push(c.diag(
                         Severity::Rejected,
                         text,
@@ -1550,7 +1509,7 @@ fn accept_steps(
                         format!(
                             "id {id:?} is not a usable directory name. An id is the directory \
                              the step writes, so every `/`-separated segment must be a portable \
-                             filename — {SEGMENT_RULE}."
+                             filename — {FOLDER_RULE}."
                         ),
                     ));
                     continue;
@@ -1611,7 +1570,7 @@ fn accept_steps(
             ));
             continue;
         }
-        if let Some(holder) = seen.holder(&id) {
+        if seen.contains(&id) {
             diags.push(
                 c.diag(
                     Severity::Rejected,
@@ -1620,8 +1579,7 @@ fn accept_steps(
                     format!(
                         "duplicate id {id:?}. A step's id is both its bookkeeping key and the \
                          tree it writes, so two steps sharing one would overwrite each \
-                         other's state and each other's output.{}",
-                        case_note(&id, holder)
+                         other's state and each other's output."
                     ),
                 )
                 .with_help("the earlier entry keeps this id; give this one a distinct one"),
@@ -1630,7 +1588,7 @@ fn accept_steps(
         }
         // Containment, which the string equality above cannot see. Checked
         // both ways: either direction is two steps writing one tree.
-        if let Some(other) = seen.nested_with(&id) {
+        if let Some(other) = seen.iter().find(|other| nests_with(other, &id)) {
             diags.push(
                 c.diag(
                     Severity::Rejected,
@@ -1753,7 +1711,7 @@ fn accept_steps(
             );
             continue;
         }
-        seen.take(&id);
+        seen.insert(id);
         accepted.push((c.entry, spec));
     }
     (accepted, diags)
@@ -2038,24 +1996,24 @@ fn accept_applets(
 ) -> (Vec<AppletEntry>, Vec<Diagnostic>) {
     let mut accepted = Vec::with_capacity(candidates.len());
     let mut diags = Vec::new();
-    let mut seen = FolderIds::default();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
 
     for c in candidates {
         let id = c.entry.id.clone();
-        if !is_js_identifier(&id) {
+        if !is_js_identifier(&id) || id.chars().any(|c| c.is_ascii_uppercase()) {
             diags.push(c.diag(
                 Severity::Rejected,
                 text,
                 Some("id"),
                 format!(
-                    "id {id:?} must be a JavaScript identifier (letters, digits, _ or $, not \
-                     starting with a digit) because it is injected into card source as a \
-                     bare name"
+                    "id {id:?} must be a JavaScript identifier in lower case (letters, digits, \
+                     _ or $, not starting with a digit): it is injected into card source as a \
+                     bare name, and names the folder `system/frontend/<id>/`"
                 ),
             ));
             continue;
         }
-        if id.eq_ignore_ascii_case(RESERVED_APPLET_ID) {
+        if id == RESERVED_APPLET_ID {
             diags.push(c.diag(
                 Severity::Rejected,
                 text,
@@ -2068,19 +2026,18 @@ fn accept_applets(
             ));
             continue;
         }
-        if let Some(holder) = seen.holder(&id) {
+        if !seen.insert(id.clone()) {
             diags.push(
                 c.diag(
                     Severity::Rejected,
                     text,
                     Some("id"),
-                    format!("duplicate id {id:?}.{}", case_note(&id, holder)),
+                    format!("duplicate id {id:?}"),
                 )
                 .with_help("the earlier entry keeps this id; give this one another"),
             );
             continue;
         }
-        seen.take(&id);
         if c.entry.command.trim().is_empty() {
             diags.push(c.diag(Severity::Rejected, text, Some("command"), "empty command"));
             continue;
@@ -3183,51 +3140,36 @@ mod tests {
         }
     }
 
-    /// An id is a folder name, and a Mac's disk ignores letter case:
-    /// `SYSTEM` is `system/`, and `Email` beside `email` is two groups
-    /// writing one folder.
+    /// An id is a folder name, and a Mac's disk ignores letter case, so
+    /// `SYSTEM` there is `system/` and `Email` beside `email` is one
+    /// folder with two owners. One spelling per folder: lower case.
     #[test]
-    fn ids_that_name_one_folder_collide_whatever_their_case() {
-        for id in ["SYSTEM", "System/state", "Datalib_Curated/x"] {
+    fn ids_that_name_folders_are_lower_case() {
+        for id in ["SYSTEM", "System/state", "Email/ingest", "email/Ingest"] {
             let cfg: DagConfig =
                 toml::from_str(&format!(r#"steps = [{{id = "{id}", command = "a"}}]"#)).unwrap();
             let err = to_specs(&cfg).unwrap_err().to_string();
-            assert!(err.contains("reserved"), "{id}: {err}");
+            assert!(err.contains("lowercase"), "{id}: {err}");
         }
-        assert!(!usable_group_id("SYSTEM"));
-        assert!(!usable_group_id("Datalib_Curated"));
-
-        let groups = check_text(
-            "[[groups]]\nid = \"email\"\n\n[[groups]]\nid = \"Email\"\n\n\
-             [[steps]]\ngroup = \"email\"\nfunction = \"raw\"\ncommand = \"x\"\n",
+        for id in ["SYSTEM", "Datalib_Curated", "Email"] {
+            assert!(!usable_group_id(id), "{id}");
+        }
+        let check = check_text(
+            "[[groups]]\nid = \"Email\"\n\n\
+             [[steps]]\ngroup = \"Email\"\nfunction = \"raw\"\ncommand = \"x\"\n\n\
+             [[groups]]\nid = \"g\"\n\n\
+             [[steps]]\ngroup = \"g\"\nfunction = \"Raw\"\ncommand = \"x\"\n",
         );
-        assert_eq!(groups.cfg.groups.len(), 1, "{:?}", groups.diagnostics);
-        assert!(groups.diagnostics[0].message.contains("letter case"));
-
-        let steps = check_text(
-            "[[steps]]\nid = \"g/raw\"\ncommand = \"x\"\n\n\
-             [[steps]]\nid = \"G/Raw\"\ncommand = \"y\"\n\n\
-             [[steps]]\nid = \"G\"\ncommand = \"z\"\n",
+        assert!(
+            check.cfg.groups.iter().all(|g| g.id == "g"),
+            "{:?}",
+            check.diagnostics
         );
-        assert_eq!(steps.cfg.steps.len(), 1, "{:?}", steps.diagnostics);
-
-        let source = check_text(
-            "[[groups]]\nid = \"Unified_Document_Index\"\ntype = \"email\"\n\n\
-             [[steps]]\ngroup = \"Unified_Document_Index\"\nfunction = \"ingest\"\n",
-        );
-        assert!(source.cfg.groups.is_empty(), "{:?}", source.diagnostics);
-
-        let applets = |text: &str| {
-            let cfg: DagConfig = toml::from_str(text).unwrap();
-            validate_applets(&cfg).unwrap_err().to_string()
-        };
-        let err = applets("[[applets]]\nid = \"User\"\ncommand = \"x\"\n");
-        assert!(err.contains("reserved"), "{err}");
-        let err = applets(
-            "[[applets]]\nid = \"photos\"\ncommand = \"a\"\n\n\
-             [[applets]]\nid = \"Photos\"\ncommand = \"b\"\n",
-        );
-        assert!(err.contains("letter case"), "{err}");
+        assert!(check.cfg.steps.is_empty(), "{:?}", check.diagnostics);
+        let applet: DagConfig =
+            toml::from_str("[[applets]]\nid = \"User\"\ncommand = \"x\"\n").unwrap();
+        let err = validate_applets(&applet).unwrap_err().to_string();
+        assert!(err.contains("lower case"), "{err}");
     }
 
     /// Only a source is kept off an index group's id; the index group

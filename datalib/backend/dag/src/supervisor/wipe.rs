@@ -61,12 +61,10 @@ pub fn refusal(latest: &Graph, kind: WipeKind, targets: &[String]) -> Option<Str
                 return Some(format!("{bad:?} is not a group id"));
             }
             let named: BTreeSet<&str> = latest.steps.iter().map(|s| tree_group(&s.id)).collect();
-            targets.iter().find_map(|g| {
-                named
-                    .iter()
-                    .find(|n| n.eq_ignore_ascii_case(g))
-                    .map(|n| format!("the config still has {n:?}; remove it from the config first"))
-            })
+            targets
+                .iter()
+                .find(|g| named.contains(g.as_str()))
+                .map(|g| format!("the config still has {g:?}; remove it from the config first"))
         }
     }
 }
@@ -297,10 +295,9 @@ mod tests {
         assert!(purge(&["gone", "keep"])
             .unwrap()
             .contains("still has \"keep\""));
-        for bad in ["", "..", "system", "SYSTEM", "a/b", "../elsewhere"] {
+        for bad in ["", "..", "system", "SYSTEM", "Keep", "a/b", "../elsewhere"] {
             assert!(purge(&[bad]).unwrap().contains("not a group id"), "{bad:?}");
         }
-        assert!(purge(&["KEEP"]).unwrap().contains("still has \"keep\""));
         assert_eq!(refusal(&g, WipeKind::Reset, &strings(&["keep/raw"])), None);
         assert!(refusal(&g, WipeKind::Reset, &strings(&["nope/raw"]))
             .unwrap()

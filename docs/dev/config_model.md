@@ -101,16 +101,15 @@ package's programs by its path under the data root, in its `command`;
 ## Naming rules
 
 - A group id and a function are each one portable filename segment:
-  letters, digits, `.`, `_`, `-`, not starting with `-`, never `.` or
-  `..`, no `/`.
-- `system` is reserved for the runner's and server's own state, and
-  `datalib_curated` for what a person curates by hand.
+  lowercase letters, digits, `.`, `_`, `-`, not starting with `-`,
+  never `.` or `..`, no `/`. Lower case because each names a folder and
+  a Mac's disk does not tell `Email/` from `email/`: with one spelling
+  per folder, no two ids name one folder on any platform. An applet id
+  is a lowercase JavaScript identifier for the same reason (it names
+  `system/frontend/<id>/`).
+- `system` is reserved for the runner's and server's own state.
 - Step ids are unique and never nested: two steps under one tree would
   be two writers on one doltlite file.
-- Every id that names a folder (group, step, applet, package) is
-  compared without letter case, since a Mac's disk does not tell
-  `email/` from `Email/`: `SYSTEM` is reserved too, and `Email` beside
-  `email` is a duplicate.
 - The built-in functions are the directory names: `ingest`,
   `render_markdown`, `render_time_series`, `render_occurrences`,
   `keyword_index`, `embed`, `grid_index`, `qmd_aggregator`,
@@ -488,7 +487,7 @@ download …` command lines become groups and steps whose command is
 `common.input_path` / `common.raw_path` become method tables with
 their own `path` (`convert.rs`). The rewrite is value-level, so comments do not
 survive. The loader and `datalib-step` recognize the old shapes only
-well enough to name the tool. Five rewrites are made without asking,
+well enough to name the tool. Six rewrites are made without asking,
 all text edits that keep comments, and each refuses a result that would
 drop an entry the original ran, other than one it exists to take out. `datalib-http` makes them in this order
 (`http/src/config_upgrade.rs`), at boot, on any change to the file, and
@@ -496,9 +495,19 @@ on a save through `PUT /api/config` before it answers. Its rewrites and
 its saves take turns, since a rewrite that read one save and wrote after
 the next would put the first back:
 
-1. The qmd steps' (`upgrade_qmd_steps`, `qmd_steps.rs`), which also
+1. Ids in lower case (`upgrade_lowercase_ids`, `lowercase_ids.rs`):
+   every group, step and applet id, every function, a diff group's
+   `source`, a step's `group` and `inputs` and an applet's `group` with
+   a capital in it become lower case. At boot the server then moves
+   each folder the config names to that spelling, one path segment at a
+   time (`move_case_folders`), and carries whether each step under it
+   was turned off; the steps themselves run again as new ones, so the
+   grid and the search index take the source under its new id. If both
+   spellings of a folder exist it leaves both and logs an error naming
+   them.
+2. The qmd steps' (`upgrade_qmd_steps`, `qmd_steps.rs`), which also
    leaves the file in data-flow order.
-2. The document index's name (`upgrade_document_index`,
+3. The document index's name (`upgrade_document_index`,
    `document_index.rs`): the untyped `unified_index` group, every step
    filed under it or writing under it, every `inputs` entry naming one,
    and the applet's `group`, `id` and `datalib-applet unified_index`
@@ -511,7 +520,7 @@ the next would put the first back:
    `datalib-applet unified_index` still runs, and the gateway still
    answers `/applet/unified_index/…`, for a config or a card script
    written before the rename.
-3. The time-series steps (`upgrade_time_series_steps`,
+4. The time-series steps (`upgrade_time_series_steps`,
    `time_series_steps.rs`): a config with no `unified_time_series_index`
    group and a source whose type has time series gets each such source's
    `render_time_series` step, the index group with its
@@ -519,7 +528,7 @@ the next would put the first back:
    serves it, appended at the end of the file. Once the group
    is there the time-series steps are the person's, and a step they took
    out is not put back.
-4. The time-series embeds (`upgrade_time_series_embeds`,
+5. The time-series embeds (`upgrade_time_series_embeds`,
    `time_series_embeds.rs`): a source whose type has time series loses
    its `embed` step, with the comments above it, and every `inputs`
    that named the step stops naming it. Its markdown is daily summaries
@@ -528,7 +537,7 @@ the next would put the first back:
    `ui/src/config/sourceSteps.ts`). This rewrite is the only one of the
    five that is meant to take an entry out; it still refuses a result
    that loses any other entry.
-5. The step commands (`upgrade_step_commands`, `step_commands.rs`):
+6. The step commands (`upgrade_step_commands`, `step_commands.rs`):
    a step that writes no `command` was read as `datalib-step`, the
    shape from before every step named its program. The rewrite writes
    `command = "datalib-step"` on the line after its `function`. The

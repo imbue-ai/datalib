@@ -1,7 +1,8 @@
 //! A config in a shape the server can bring forward unattended is
 //! rewritten in place as soon as the server sees it: at boot, on a save
-//! through the API, and whenever the file changes. Five rewrites, in
-//! order: a `qmd_index` step from
+//! through the API, and whenever the file changes. Six rewrites, in
+//! order: an id that names a folder and has capitals in it
+//! (`datalib_migrate_config::upgrade_lowercase_ids`), a `qmd_index` step from
 //! before `qmd_aggregator` (`datalib_migrate_config::upgrade_qmd_steps`),
 //! the index group still named `unified_index`
 //! (`datalib_migrate_config::upgrade_document_index`), a config with
@@ -14,8 +15,9 @@
 //! replaced is kept as `config.toml.bak`.
 //!
 //! At boot only, [`move_index_dir`] then brings the document index's tree
-//! and the loop's record of its steps over to the new name, before
-//! anything opens them.
+//! and the loop's record of its steps over to the new name, and
+//! [`move_case_folders`] moves each folder the config now names in lower
+//! case to that spelling, before anything opens them.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
@@ -27,7 +29,13 @@ use crate::watch::{RootEvent, RootFrame};
 type Rewrite = fn(&str) -> anyhow::Result<Option<String>>;
 
 /// Each unattended rewrite: what it is for, in the log, and what it does.
-const REWRITES: [(&str, &str, Rewrite); 5] = [
+const REWRITES: [(&str, &str, Rewrite); 6] = [
+    (
+        "has an id with capitals in it",
+        "every group, step and applet id, and every function, is lower case, \
+         since each names a folder and a Mac's disk ignores letter case",
+        datalib_migrate_config::upgrade_lowercase_ids,
+    ),
     (
         "still has a `qmd_index` step",
         "`qmd_index` is now `qmd_aggregator`, reading each source's own \
@@ -197,6 +205,124 @@ pub async fn move_index_dir(root: &Path) {
     }
 }
 
+/// What to do about the folder `want`, given the names in the folder
+/// that should hold it.
+#[derive(Debug, PartialEq, Eq)]
+pub enum CaseFolder {
+    /// `want` is there as spelled, or no spelling of it is.
+    Leave,
+    /// Only this other spelling is there: move it to `want`.
+    Move(String),
+    /// `want` and this other spelling are both there; neither is the
+    /// obvious one to keep.
+    Both(String),
+}
+
+pub fn case_folder(names: &[String], want: &str) -> CaseFolder {
+    let other = names
+        .iter()
+        .find(|n| n.as_str() != want && n.eq_ignore_ascii_case(want));
+    match (names.iter().any(|n| n == want), other) {
+        (_, None) => CaseFolder::Leave,
+        (false, Some(o)) => CaseFolder::Move(o.clone()),
+        (true, Some(o)) => CaseFolder::Both(o.clone()),
+    }
+}
+
+fn names_in(dir: &Path) -> Vec<String> {
+    std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Move each folder a group or step of the config names to the spelling
+/// the config now uses, one path segment at a time, and carry whether
+/// each step under it was turned off. Ids that name folders are lower
+/// case, and an older config could have capitals in one. Only the
+/// folders move: the steps under them run again as new steps, so the
+/// grid and the search index take the source under its new id. Before
+/// the loop starts: nothing may have a store open.
+pub async fn move_case_folders(root: &Path) {
+    let config = datalib_dag::config::root_config_path(root);
+    let text = std::fs::read_to_string(&config).unwrap_or_default();
+    let Ok(written) = datalib_dag::written::entries_as_written(&text) else {
+        return;
+    };
+    let trees: std::collections::BTreeSet<&str> = written
+        .groups
+        .iter()
+        .map(|g| g.id.as_str())
+        .chain(written.steps.iter().map(|s| s.id.as_str()))
+        // An id the rewrite could not lower is not a spelling to move to.
+        .filter(|id| !id.chars().any(|c| c.is_ascii_uppercase()))
+        .collect();
+    let mut moved: Vec<(String, String)> = Vec::new();
+    for tree in trees {
+        let segments: Vec<&str> = tree.split('/').collect();
+        for depth in 0..segments.len() {
+            let parent = segments[..depth]
+                .iter()
+                .fold(root.to_path_buf(), |p, s| p.join(s));
+            let want = segments[depth];
+            match case_folder(&names_in(&parent), want) {
+                CaseFolder::Leave => {}
+                CaseFolder::Move(from) => {
+                    match std::fs::rename(parent.join(&from), parent.join(want)) {
+                        Ok(()) => {
+                            let at = segments[..depth].join("/");
+                            let join = |s: &str| {
+                                if at.is_empty() {
+                                    s.to_string()
+                                } else {
+                                    format!("{at}/{s}")
+                                }
+                            };
+                            tracing::warn!(
+                                "moved {} to {}",
+                                parent.join(&from).display(),
+                                parent.join(want).display()
+                            );
+                            moved.push((join(&from), join(want)));
+                        }
+                        Err(e) => tracing::error!(
+                            "could not move {} to {}: {e}; the step under it starts from nothing",
+                            parent.join(&from).display(),
+                            parent.join(want).display()
+                        ),
+                    }
+                }
+                CaseFolder::Both(other) => tracing::error!(
+                    "both {} and {} exist; left as they are. The config names the second; \
+                     delete the first once nothing in it is wanted.",
+                    parent.join(&other).display(),
+                    parent.join(want).display()
+                ),
+            }
+        }
+    }
+    if moved.is_empty() || !datalib_core::layout::supervisor_db(root).exists() {
+        return;
+    }
+    let store = match datalib_dag::supervisor::store::Store::open(root).await {
+        Ok(store) => store,
+        Err(e) => {
+            tracing::error!("supervisor: could not carry the moved steps' switches: {e:#}");
+            return;
+        }
+    };
+    for (from, to) in &moved {
+        if let Err(e) = store.rename_switches(from, to).await {
+            tracing::error!("supervisor: could not carry the switches of {from}/ to {to}/: {e:#}");
+        }
+    }
+    store.close().await;
+}
+
 /// Upgrade on every change the root watcher reports, a hand edit or a save
 /// alike. A rewrite is itself a change, and the next pass finds nothing to do.
 pub fn watch(root: PathBuf, mut rx: broadcast::Receiver<RootFrame>) {
@@ -221,6 +347,61 @@ pub fn watch(root: PathBuf, mut rx: broadcast::Receiver<RootFrame>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_folder_moves_to_its_one_spelling_only_when_that_is_not_there() {
+        let names = |n: &[&str]| n.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(case_folder(&names(&["email"]), "email"), CaseFolder::Leave);
+        assert_eq!(case_folder(&names(&["other"]), "email"), CaseFolder::Leave);
+        assert_eq!(
+            case_folder(&names(&["Email", "other"]), "email"),
+            CaseFolder::Move("Email".into())
+        );
+        assert_eq!(
+            case_folder(&names(&["email", "EMAIL"]), "email"),
+            CaseFolder::Both("EMAIL".into())
+        );
+    }
+
+    /// A config brought to lower case finds its data where the old
+    /// spelling left it: the folders move, the files in them with them,
+    /// and a step someone turned off stays off.
+    #[tokio::test]
+    async fn the_old_spellings_folders_move_and_their_switches_follow() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        std::fs::write(
+            datalib_dag::config::root_config_path(root),
+            "[[groups]]\nid = \"email\"\n\n\
+             [[steps]]\ngroup = \"email\"\nfunction = \"ingest\"\ncommand = \"x\"\n\n\
+             [[steps]]\nid = \"g/raw\"\ncommand = \"y\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("Email/ingest")).unwrap();
+        std::fs::write(root.join("Email/ingest/store"), "held").unwrap();
+        std::fs::create_dir_all(root.join("g/Raw")).unwrap();
+        let store = datalib_dag::supervisor::store::Store::open(root)
+            .await
+            .unwrap();
+        store.turn_off("Email/ingest", "thad").await.unwrap();
+        store.close().await;
+
+        move_case_folders(root).await;
+
+        assert_eq!(names_in(root).iter().filter(|n| *n == "Email").count(), 0);
+        assert!(names_in(root).contains(&"email".to_string()));
+        assert_eq!(names_in(&root.join("g")), ["raw"]);
+        assert_eq!(
+            std::fs::read_to_string(root.join("email/ingest/store")).unwrap(),
+            "held"
+        );
+        let store = datalib_dag::supervisor::store::Store::open(root)
+            .await
+            .unwrap();
+        let off: Vec<String> = store.turned_off().await.unwrap().into_keys().collect();
+        store.close().await;
+        assert_eq!(off, ["email/ingest"]);
+    }
 
     #[test]
     fn the_old_tree_moves_only_when_it_alone_exists_and_nothing_writes_it() {

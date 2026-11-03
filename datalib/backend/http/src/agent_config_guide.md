@@ -181,7 +181,9 @@ source's own `keyword_index` and `embed` steps as soon as it reads the
 file, keeping the old one as `config.toml.bak`, so re-read the config
 after writing one. The same goes for an index group still named
 `unified_index`: the server renames it, its steps and its applet to
-`unified_document_index`.
+`unified_document_index`. And for an id with capitals in it: every
+group, step and applet id is lower case, since each names a folder,
+and the server lowercases one it finds and moves its folder.
 
 ## Adding your own step commands
 

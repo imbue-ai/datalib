@@ -293,8 +293,10 @@ Before any of that, the http server brings the document index from
 before its rename forward (`http/src/config_upgrade.rs`): it moves
 `<root>/unified_index/` to `<root>/unified_document_index/` and the
 record's rows for those steps to their new ids
-(`Store::rename_group_steps`); `docs/dev/config_model.md` §"The
-retired shapes" has the config side.
+(`Store::rename_group_steps`), and moves each folder an older config
+spelled with capitals to the lowercase spelling the config now uses
+(`move_case_folders`); `docs/dev/config_model.md` §"The retired shapes"
+has the config side.
 `datalib/backend/datalib_step/raw_shapes/` holds the raw shape every
 release left, and a test migrates each one
 ([`raw_shapes/README.md`](../datalib_step/raw_shapes/README.md)).
@@ -712,10 +714,7 @@ does not wait for the sync to end. What it decides is in
   `<root>/<group>/` and forgets the group's steps.
 - **Refused, with why**, against the config on disk: a reset of a step it
   lacks, a purge of a group it still has or of anything that is not a
-  group id, both compared without letter case, and a purge of a name
-  that matches a folder under the root only by ignoring case (on a
-  Mac's disk it would delete that folder). The row closes with the
-  reason in `error`.
+  group id. The row closes with the reason in `error`.
 
 The server's `POST /api/reset`, `POST /api/purge` and `POST
 /api/free_disk_space` (a compaction with

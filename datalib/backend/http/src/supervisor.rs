@@ -126,9 +126,7 @@ impl SyncControl {
     /// loop as soon as the groups' steps have stopped.
     pub async fn purge(&self, groups: &[String], by: &str) -> Result<WipeAnswer, String> {
         let checked = load_config(&self.root)?;
-        let folders = folders_under(&self.root)
-            .map_err(|e| format!("could not list {}: {e}", self.root.display()))?;
-        if let Some(why) = purge_refusal(&checked.cfg, groups, &folders) {
+        if let Some(why) = purge_refusal(&checked.cfg, groups) {
             return Err(why);
         }
         self.wipe(WipeKind::Purge, groups, by).await
@@ -559,26 +557,7 @@ async fn fail_open_requests(store: &Store, why: &str) {
 /// Why the trees of `groups` may not be deleted, or `None`. Each must be
 /// an id a config could name as a group — so `<root>/<id>` is that
 /// group's tree and nothing else — and one `cfg` no longer names.
-/// The names of the folders directly under the data root, as the disk
-/// spells them.
-fn folders_under(root: &std::path::Path) -> std::io::Result<BTreeSet<String>> {
-    let mut names = BTreeSet::new();
-    for entry in std::fs::read_dir(root)? {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            names.insert(entry.file_name().to_string_lossy().into_owned());
-        }
-    }
-    Ok(names)
-}
-
-/// Why a purge of `groups` must not run, if it must not. A purge deletes
-/// `<root>/<group>`, and a Mac's disk ignores letter case, so a name is
-/// compared without case against the config and against `folders`, and
-/// one that matches a folder only by ignoring case is refused: it would
-/// delete that folder. A name with no folder at all is fine; its records
-/// still need forgetting.
-fn purge_refusal(cfg: &DagConfig, groups: &[String], folders: &BTreeSet<String>) -> Option<String> {
+fn purge_refusal(cfg: &DagConfig, groups: &[String]) -> Option<String> {
     if groups.is_empty() {
         return Some("no groups to delete".into());
     }
@@ -594,21 +573,10 @@ fn purge_refusal(cfg: &DagConfig, groups: &[String], folders: &BTreeSet<String>)
         .map(|g| g.id.as_str())
         .chain(cfg.steps.iter().map(|s| tree_group(&s.id)))
         .collect();
-    let same = |a: &str, b: &str| a.eq_ignore_ascii_case(b);
-    for g in groups {
-        if let Some(n) = named.iter().find(|n| same(n, g)) {
-            return Some(format!(
-                "the config still has {n:?}; remove it from the config first"
-            ));
-        }
-        if let Some(f) = folders.iter().find(|f| same(f, g) && *f != g) {
-            return Some(format!(
-                "{g:?} is not a folder under the data root, but {f:?} is, and on a Mac's \
-                 disk the two are one; purge {f:?} if that is the one you mean"
-            ));
-        }
-    }
-    None
+    groups
+        .iter()
+        .find(|g| named.contains(g.as_str()))
+        .map(|g| format!("the config still has {g:?}; remove it from the config first"))
 }
 
 #[cfg(test)]
@@ -677,53 +645,19 @@ mod tests {
         let cfg = load_config(td.path()).unwrap().cfg;
         let refusal = |groups: &[&str]| {
             let groups: Vec<String> = groups.iter().map(|g| g.to_string()).collect();
-            purge_refusal(&cfg, &groups, &BTreeSet::new())
+            purge_refusal(&cfg, &groups)
         };
         assert_eq!(refusal(&["gone"]), None);
         assert!(refusal(&[]).is_some());
         assert!(refusal(&["gone", "keep"])
             .unwrap()
             .contains("still has \"keep\""));
-        for bad in ["", "..", "system", "a/b", "../elsewhere"] {
+        for bad in ["", "..", "system", "SYSTEM", "Keep", "a/b", "../elsewhere"] {
             assert!(
                 refusal(&[bad]).unwrap().contains("not a group id"),
                 "{bad:?}"
             );
         }
-    }
-
-    /// A purge is a `remove_dir_all`, and a Mac's disk ignores letter
-    /// case: `SYSTEM` is the API token and the run records, `KEEP` is a
-    /// live group's data, and `Gone` beside a folder `gone` is that folder.
-    #[test]
-    fn a_purge_takes_only_the_folder_it_names_exactly() {
-        let td = root_keeping_one_group();
-        let cfg = load_config(td.path()).unwrap().cfg;
-        let present =
-            |names: &[&str]| -> BTreeSet<String> { names.iter().map(|n| n.to_string()).collect() };
-        let refusal = |groups: &[&str], folders: &BTreeSet<String>| {
-            let groups: Vec<String> = groups.iter().map(|g| g.to_string()).collect();
-            purge_refusal(&cfg, &groups, folders)
-        };
-        let folders = present(&["system", "keep", "gone"]);
-        assert_eq!(refusal(&["gone"], &folders), None);
-        assert_eq!(
-            refusal(&["forgotten"], &folders),
-            None,
-            "a group whose folder is already gone still has records to forget"
-        );
-        for bad in ["SYSTEM", "Datalib_Curated"] {
-            assert!(
-                refusal(&[bad], &folders)
-                    .unwrap()
-                    .contains("not a group id"),
-                "{bad:?}"
-            );
-        }
-        assert!(refusal(&["KEEP"], &folders)
-            .unwrap()
-            .contains("still has \"keep\""));
-        assert!(refusal(&["Gone"], &folders).unwrap().contains("\"gone\""));
     }
 
     #[tokio::test]
