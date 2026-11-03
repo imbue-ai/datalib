@@ -72,6 +72,13 @@ pub struct NotionSync {
     pub roots: Vec<String>,
     /// Stop after this many pages. A guard against a mis-scoped run,
     /// not a tuning knob.
+    ///
+    /// It caps the pages *mirrored*, which is where the cost is. It does
+    /// not cap the listing: a `roots` run lists the whole workspace
+    /// first, to learn where each page sits, and that pass is the same
+    /// length however few pages the roots select — about nine minutes
+    /// for a workspace of 53,000. So a small `max_pages` makes a
+    /// roots-mode first sync cheap but not quick.
     #[serde(default)]
     pub max_pages: Option<u32>,
     #[serde(default = "default_true")]

@@ -1724,11 +1724,20 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             &user_labels,
             self_user_id.as_deref(),
         );
+        // The detail says what the reader can act on and nothing that
+        // moves on its own: a workspace-wide count here rewrote this row
+        // every time anybody created a channel, and a problem recorded
+        // again unchanged is supposed to keep its stamps.
+        let listing_is = if opts.members_only {
+            "the channels this account is a member of; `members_only = false` lists the              workspace's other public channels too"
+        } else {
+            "the workspace's channel listing"
+        };
         for spec in &plan.unmatched {
             grand.problems.push(DownloadProblem::not_found(
                 "channels",
                 spec,
-                format!("no channel by that name among {} listed", listed.len()),
+                format!("no channel by that name among {listing_is}"),
             ));
         }
         for spec in &plan.unmatched_dms {

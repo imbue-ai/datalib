@@ -279,14 +279,18 @@ const TABLE_VOLATILE_KEYS: &[(&str, &[&str])] = &[
 /// lists one a line and `occurrences_vs_service` checks against the
 /// service, so their stores are counted too.
 ///
-/// Keyed by stanza (the group id in dag.toml), which is also what names
-/// the snapshot directory. A store not listed is dumped in full.
-const ROW_COUNT_ONLY_STANZAS: &[&str] = &[
-    "apple_photos",
-    "lightroom",
-    "whatsapp",
-    "google_calendar_primary",
-    "fastmail_calendar_team",
+/// Keyed by `(stanza, step)` — the group id in dag.toml, which is also
+/// what names the snapshot directory, and the step whose tree the store
+/// sits in; `"*"` is every step of that stanza. A store not listed is
+/// dumped in full. Lightroom names only its `ingest`, because its render
+/// store is not a mirror of anything: it is the grid row per photo that
+/// this golden is here to show.
+const ROW_COUNT_ONLY_STEPS: &[(&str, &str)] = &[
+    ("apple_photos", "*"),
+    ("lightroom", "ingest"),
+    ("whatsapp", "*"),
+    ("google_calendar_primary", "*"),
+    ("fastmail_calendar_team", "*"),
 ];
 
 /// Tables dumped as a row count inside an otherwise full dump, as
@@ -305,6 +309,13 @@ const ROW_COUNT_ONLY_STANZAS: &[&str] = &[
 /// - `render_inputs` and the agent transcripts' `records` repeat, row
 ///   by row, what the `.md` files and `grid_rows` beside them already
 ///   show.
+///
+/// Notion's `tree` and `listed_pages` are the first kind: a roots-mode
+/// source lists the whole workspace to learn where each page sits, so
+/// those two tables hold the id, title and parent of every object the
+/// credential can see — tens of thousands of them — however few pages
+/// the roots select. They are also the one entry here that keeps real
+/// data out of the repo rather than merely keeping the dump small.
 const ROW_COUNT_ONLY_TABLES: &[(&str, &str)] = &[
     ("tiny-slack", "channels"),
     ("tiny-slack", "channels_bookkeeping"),
@@ -325,10 +336,19 @@ const ROW_COUNT_ONLY_TABLES: &[(&str, &str)] = &[
     ("airvisual", "airvisual_samples"),
     ("garmin", "garmin_daily"),
     ("garmin", "garmin_daily_bookkeeping"),
+    ("notion-api", "tree"),
+    ("notion-api", "tree_bookkeeping"),
+    ("notion-api", "listed_pages"),
     ("claude_code", "records"),
     ("codex", "records"),
     ("*", "render_inputs"),
 ];
+
+/// The step a store sits in: the `<sub>` of
+/// `<data_root>/<stanza>/<sub>/<file>`.
+fn step_of(path: &Path) -> Option<String> {
+    Some(path.parent()?.file_name()?.to_string_lossy().into_owned())
+}
 
 /// The stanza a store belongs to: `<data_root>/<stanza>/<sub>/<file>`.
 fn stanza_of(path: &Path) -> Option<String> {
@@ -2030,7 +2050,10 @@ async fn dump_store_async(path: &Path) -> Value {
         .collect();
 
     let stanza = stanza_of(path).unwrap_or_default();
-    let store_counts_only = ROW_COUNT_ONLY_STANZAS.contains(&stanza.as_str());
+    let step = step_of(path).unwrap_or_default();
+    let store_counts_only = ROW_COUNT_ONLY_STEPS
+        .iter()
+        .any(|(s, st)| *s == stanza && (*st == "*" || *st == step));
     let table_counts_only = |t: &str| {
         ROW_COUNT_ONLY_TABLES
             .iter()

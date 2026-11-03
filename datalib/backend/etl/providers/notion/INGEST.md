@@ -120,7 +120,11 @@ build left from asking is cleared.
 
 The first run of a roots source lists the whole workspace: one request
 per hundred objects, about nine minutes for 53,000 pages, against the
-hours their bodies and comments would take.
+hours their bodies and comments would take. That pass is the same length
+whether the roots select two pages or two thousand, and `max_pages` does
+not shorten it: the cap is on the pages mirrored, and the listing is
+what tells the run which pages those are. Later runs read one page of
+search results, because the walk has its own `coverage` scope.
 
 **Loops.** One request per record, in this order, each over the whole
 store:
