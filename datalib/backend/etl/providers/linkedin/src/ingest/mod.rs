@@ -159,7 +159,7 @@ async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
                 "CSV not in KNOWN_FILES manifest; ingesting generically",
             );
         }
-        let rows = match read_csv(&table, path) {
+        let rows = match run_problems::catching_panics(|| read_csv(&table, path)) {
             Ok(rows) => rows,
             Err(e) => {
                 // The table keeps what the last good read of this file

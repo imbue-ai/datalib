@@ -136,8 +136,13 @@ async fn ingest_one(
     summary: &mut FetchSummary,
 ) -> Result<usize> {
     let body = std::fs::read_to_string(file).with_context(|| format!("read {}", file.display()))?;
-    let split = ical::split_file(&body);
-    ensure_whole_calendar(&body, &split)?;
+    // The parse is ours, but it reads whatever the file holds, so a
+    // panic in it is this file's failure, not the run's.
+    let split = run_problems::catching_panics(|| {
+        let split = ical::split_file(&body);
+        ensure_whole_calendar(&body, &split)?;
+        Ok(split)
+    })?;
     let calendar_id = calendar_id(root, file);
     let name = split.calendar_name.clone().or_else(|| {
         file.file_stem()

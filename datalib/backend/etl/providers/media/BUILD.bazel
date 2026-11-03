@@ -41,7 +41,10 @@ rust_test(
     size = "small",
     crate = ":datalib_etl_media",
     edition = "2021",
-    deps = ["@datalib_crates//:tempfile"],
+    deps = [
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
 )
 
 # End-to-end: scan the fixture corpus and assert on the store contents.

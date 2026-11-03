@@ -326,10 +326,14 @@ fn exif_timestamp(exif: &exif::Exif) -> Option<String> {
     // EXIF writes `2026:05:04 03:42:05`; ISO-8601 wants
     // `2026-05-04T03:42:05`.
     let (date, time) = raw.split_once(' ')?;
-    if date.len() != 10 || time.len() < 8 {
+    // `raw` came through `from_utf8_lossy`, so a byte length says
+    // nothing about where a character ends.
+    let digits_and_colons = |s: &str| s.bytes().all(|b| b.is_ascii_digit() || b == b':');
+    let time = time.get(..8)?;
+    if date.len() != 10 || !digits_and_colons(date) || !digits_and_colons(time) {
         return None;
     }
-    let iso = format!("{}T{}", date.replace(':', "-"), &time[..8]);
+    let iso = format!("{}T{time}", date.replace(':', "-"));
     Some(match offset {
         Some(o) if !o.trim().is_empty() && o.trim() != "\0" => format!("{iso}{}", o.trim()),
         _ => iso,
@@ -614,7 +618,7 @@ fn read_avi(src: &mut Src, visual: &mut VisualMeta, meta: &mut Meta) -> Result<(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
     #[test]
@@ -630,6 +634,66 @@ mod tests {
         assert_eq!(parse_iso6709(""), None);
         assert_eq!(parse_iso6709("+37.7749"), None);
         assert_eq!(parse_iso6709("garbage"), None);
+    }
+
+    /// A JPEG whose only EXIF field is `DateTimeOriginal = date_time`.
+    pub(crate) fn jpeg_with_date_time_original(date_time: &[u8]) -> Vec<u8> {
+        let mut ascii = date_time.to_vec();
+        ascii.push(0);
+        let ifd = |tag: u16, kind: u16, count: u32, value: u32| {
+            let mut b = 1u16.to_le_bytes().to_vec();
+            b.extend(tag.to_le_bytes());
+            b.extend(kind.to_le_bytes());
+            b.extend(count.to_le_bytes());
+            b.extend(value.to_le_bytes());
+            b.extend(0u32.to_le_bytes());
+            b
+        };
+        const IFD_LEN: u32 = 2 + 12 + 4;
+        const EXIF_IFD_POINTER: u16 = 0x8769;
+        const DATE_TIME_ORIGINAL: u16 = 0x9003;
+        let (long, ascii_kind) = (4, 2);
+        let mut tiff = b"II*\0".to_vec();
+        tiff.extend(8u32.to_le_bytes());
+        tiff.extend(ifd(EXIF_IFD_POINTER, long, 1, 8 + IFD_LEN));
+        tiff.extend(ifd(
+            DATE_TIME_ORIGINAL,
+            ascii_kind,
+            ascii.len() as u32,
+            8 + 2 * IFD_LEN,
+        ));
+        tiff.extend(&ascii);
+
+        let mut app1 = b"Exif\0\0".to_vec();
+        app1.extend(tiff);
+        let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE1];
+        jpeg.extend((app1.len() as u16 + 2).to_be_bytes());
+        jpeg.extend(app1);
+        jpeg.extend([0xFF, 0xD9]);
+        jpeg
+    }
+
+    /// A byte that is not UTF-8 becomes a three-byte U+FFFD, so a time
+    /// of eight characters was more than eight bytes, and slicing it at
+    /// byte 8 cut through a character: the panic stopped the media scan
+    /// on every run until someone deleted the photo.
+    #[test]
+    fn a_capture_time_that_is_not_utf8_is_no_time_not_a_panic() {
+        let dir = tempfile::tempdir().unwrap();
+        let photo = dir.path().join("away_team.jpg");
+        std::fs::write(
+            &photo,
+            jpeg_with_date_time_original(b"2026:05:04 03:42:0\xff"),
+        )
+        .unwrap();
+        assert_eq!(read_exif(&photo).unwrap().captured_at, None);
+
+        std::fs::write(&photo, jpeg_with_date_time_original(b"2026:05:04 03:42:05")).unwrap();
+        assert_eq!(
+            read_exif(&photo).unwrap().captured_at.as_deref(),
+            Some("2026-05-04T03:42:05"),
+            "the crafted JPEG is one kamadak-exif reads"
+        );
     }
 
     #[test]

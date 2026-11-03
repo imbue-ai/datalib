@@ -127,8 +127,12 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
                 continue;
             }
         };
-        match parse::detect_root(&xml) {
-            Ok(RootKind::Smses) => match parse::parse_smses(&xml) {
+        // The parsers read whatever the file holds, so a panic in one is
+        // this file's failure, not the run's.
+        let smses = || run_problems::catching_panics(|| parse::parse_smses(&xml));
+        let calls = || run_problems::catching_panics(|| parse::parse_calls(&xml));
+        match run_problems::catching_panics(|| parse::detect_root(&xml)) {
+            Ok(RootKind::Smses) => match smses() {
                 Ok((smses, mmses)) => {
                     for s in smses {
                         ingest_sms(&s, &mut message_rows, &mut reads);
@@ -152,7 +156,7 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
                     summary.parse_errors += 1;
                 }
             },
-            Ok(RootKind::Calls) => match parse::parse_calls(&xml) {
+            Ok(RootKind::Calls) => match calls() {
                 Ok(calls) => {
                     for c in calls {
                         ingest_call(&c, &mut call_rows);

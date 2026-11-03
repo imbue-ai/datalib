@@ -103,13 +103,28 @@ pub struct FetchSummary {
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    fetch_with(opts, identify).await
+}
+
+/// What reads one file's bytes into its rows: [`identify`], or in a
+/// test, one that panics.
+type Identify = fn(&Path, i64, &str, &FetchOptions) -> Result<Identified>;
+
+async fn fetch_with(opts: FetchOptions, identify: Identify) -> Result<FetchSummary> {
     let pool = opts.db.pool().clone();
     // The scan has no stop to honour, so it always covers the whole tree.
     let never_stops = StopFlag::new();
-    run_problems::collecting(&pool, &never_stops, |found| scan_tree(opts, found)).await
+    run_problems::collecting(&pool, &never_stops, |found| {
+        scan_tree(opts, found, identify)
+    })
+    .await
 }
 
-async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
+async fn scan_tree(
+    opts: FetchOptions,
+    found: RunProblems,
+    identify: Identify,
+) -> Result<FetchSummary> {
     let mut summary = FetchSummary::default();
     let now = datalib_time::parse_strict(&opts.now)
         .with_context(|| format!("parse the run's now {:?}", opts.now))?;
@@ -196,7 +211,10 @@ async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummar
 
         // ── Identify, once per distinct content ──────────────────────
         if !prev.known_items.contains(&hash_hex) && !seen_items.contains(&hash_hex) {
-            match identify(&f.path, f.size, &hash_hex, &opts) {
+            // The parsers are third-party code reading untrusted bytes,
+            // so a panic in one is this file's failure, not the scan's.
+            let read = || identify(&f.path, f.size, &hash_hex, &opts);
+            match run_problems::catching_panics(read) {
                 Ok(id) => {
                     seen_items.insert(hash_hex.clone());
                     summary.items += 1;
@@ -396,7 +414,14 @@ async fn scan_playlists(
             }
         };
 
-        let parsed = playlist::parse(&bytes);
+        let parsed = match run_problems::catching_panics(|| Ok(playlist::parse(&bytes))) {
+            Ok(p) => p,
+            Err(e) => {
+                summary.errors += 1;
+                found.record_failed("media_playlists", &f.rel, format!("{e:#}"));
+                continue;
+            }
+        };
         if parsed.is_hls {
             // A stream manifest, not something a person made. Counted
             // so a corpus full of them is visible rather than puzzling.
@@ -458,4 +483,105 @@ async fn scan_playlists(
     }
     opts.db.write_playlists(&rows, &entries, now).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use meta::tests::jpeg_with_date_time_original;
+
+    fn panics_on_red_alert(
+        path: &Path,
+        size: i64,
+        blake3: &str,
+        opts: &FetchOptions,
+    ) -> Result<Identified> {
+        if path.ends_with("red_alert.jpg") {
+            panic!("a parser met bytes it did not expect");
+        }
+        identify(path, size, blake3, opts)
+    }
+
+    async fn scan(root: &Path, raw: &Path, db: &RawDb, identify: Identify) -> FetchSummary {
+        let cache = FingerprintCache::open(&raw.join("fingerprints.sqlite"))
+            .await
+            .unwrap();
+        let summary = fetch_with(
+            FetchOptions {
+                db: db.clone(),
+                source_id: "tng_media".into(),
+                root: root.to_path_buf(),
+                ignore: vec![],
+                cache: cache.clone(),
+                max_bytes: None,
+                payload_max_bytes: None,
+                playlists: true,
+                skip_dataless: false,
+                now: "2364-04-13T08:45:00-07:00".into(),
+                progress: Progress::noop(),
+            },
+            identify,
+        )
+        .await
+        .unwrap();
+        cache.pool().close().await;
+        summary
+    }
+
+    async fn column(db: &RawDb, sql: &'static str) -> Vec<String> {
+        sqlx::query_scalar(sql).fetch_all(db.pool()).await.unwrap()
+    }
+
+    /// A parser that panicked on one file ended the whole scan, and the
+    /// file was never stored, so every later run met it again and the
+    /// source never synced another file.
+    #[tokio::test]
+    async fn a_file_whose_parser_panics_costs_only_that_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, raw) = (dir.path().join("photos"), dir.path().join("raw"));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&raw).unwrap();
+        for (name, time) in [
+            ("bridge.jpg", "2364:04:13 08:45:00"),
+            ("red_alert.jpg", "2364:04:13 08:46:00"),
+            ("ten_forward.jpg", "2364:04:13 08:47:00"),
+        ] {
+            std::fs::write(
+                root.join(name),
+                jpeg_with_date_time_original(time.as_bytes()),
+            )
+            .unwrap();
+        }
+        let db = RawDb::open(&db_path_for(&raw)).await.unwrap();
+
+        let summary = scan(&root, &raw, &db, panics_on_red_alert).await;
+        assert_eq!((summary.items, summary.errors), (2, 1));
+        assert_eq!(
+            column(&db, "SELECT id FROM media_files ORDER BY id").await,
+            ["bridge.jpg", "ten_forward.jpg"]
+        );
+        let problems: Vec<(String, String)> =
+            sqlx::query_as("SELECT scope_key, sample FROM problems")
+                .fetch_all(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(
+            problems,
+            [(
+                "record:media_files:red_alert.jpg".to_string(),
+                "panicked: a parser met bytes it did not expect".to_string()
+            )]
+        );
+
+        scan(&root, &raw, &db, identify).await;
+        assert_eq!(
+            column(&db, "SELECT id FROM media_files ORDER BY id").await,
+            ["bridge.jpg", "red_alert.jpg", "ten_forward.jpg"],
+            "the next run tries the file again"
+        );
+        assert!(column(&db, "SELECT scope_key FROM problems")
+            .await
+            .is_empty());
+        db.pool().close().await;
+    }
 }

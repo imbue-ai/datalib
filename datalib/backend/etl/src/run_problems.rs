@@ -383,6 +383,15 @@ impl RunProblems {
     }
 }
 
+/// Run one record's work so that a panic in it, a third-party parser's
+/// on a malformed file, is that record's error and not the step's. The
+/// work must not be holding anything shared that a panic would leave
+/// half-changed.
+pub fn catching_panics<T>(work: impl FnOnce() -> Result<T>) -> Result<T> {
+    std::panic::catch_unwind(AssertUnwindSafe(work))
+        .unwrap_or_else(|panic| Err(anyhow::anyhow!("panicked: {}", panic_message(&*panic))))
+}
+
 /// Unwind safety: a piece that panics mid-write drops its transaction, and
 /// a dropped sqlx transaction rolls back, so the store is left as the last
 /// piece that finished left it.
@@ -715,6 +724,25 @@ mod tests {
         run(&pool, |p| p.silent([])).await;
         assert!(keys(&pool).await.is_empty());
         pool.close().await;
+    }
+
+    /// A parser that panicked on one malformed file once ended the
+    /// whole step, on every run.
+    #[test]
+    fn a_record_that_panics_is_that_records_error() {
+        let got: Result<()> = catching_panics(|| panic!("byte index 8 is not a char boundary"));
+        assert_eq!(
+            got.unwrap_err().to_string(),
+            "panicked: byte index 8 is not a char boundary"
+        );
+        let owned = format!("index {} out of range", 9);
+        let got: Result<()> = catching_panics(|| panic!("{owned}"));
+        assert_eq!(
+            got.unwrap_err().to_string(),
+            "panicked: index 9 out of range"
+        );
+        assert_eq!(catching_panics(|| Ok(2)).unwrap(), 2);
+        assert!(catching_panics(|| Err::<(), _>(anyhow::anyhow!("not a PDF"))).is_err());
     }
 
     /// A panic inside one Takeout feed once ended the whole step.

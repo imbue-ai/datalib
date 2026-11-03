@@ -67,13 +67,28 @@ pub struct FetchSummary {
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    fetch_with(opts, identify).await
+}
+
+/// What reads one PDF into its row: [`identify`], or in a test, one
+/// that panics.
+type Identify = fn(&Path) -> Result<PdfDocumentRow>;
+
+async fn fetch_with(opts: FetchOptions, identify: Identify) -> Result<FetchSummary> {
     let pool = opts.db.pool().clone();
     // The scan has no stop to honour, so it always covers the whole tree.
     let never_stops = StopFlag::new();
-    run_problems::collecting(&pool, &never_stops, |found| scan_tree(opts, found)).await
+    run_problems::collecting(&pool, &never_stops, |found| {
+        scan_tree(opts, found, identify)
+    })
+    .await
 }
 
-async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
+async fn scan_tree(
+    opts: FetchOptions,
+    found: RunProblems,
+    identify: Identify,
+) -> Result<FetchSummary> {
     let mut summary = FetchSummary::default();
 
     // Load the cache BEFORE truncating the path table, exactly as
@@ -154,7 +169,9 @@ async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummar
         let hash_hex = if prev.known_docs.contains(&scanned) || seen_docs.contains(&scanned) {
             scanned
         } else {
-            match identify(&f.path) {
+            // lopdf and pdf-inspector read untrusted bytes, so a panic
+            // in either is this file's failure, not the scan's.
+            match run_problems::catching_panics(|| identify(&f.path)) {
                 Ok(row) => {
                     let read = row.blake3.clone();
                     if seen_docs.insert(read.clone()) {
@@ -276,7 +293,91 @@ fn identify(path: &Path) -> Result<PdfDocumentRow> {
 
 #[cfg(test)]
 mod tests {
+    use super::content_hash::tests::doc;
     use super::*;
+
+    fn panics_on_red_alert(path: &Path) -> Result<PdfDocumentRow> {
+        if path.ends_with("red_alert.pdf") {
+            panic!("a parser met bytes it did not expect");
+        }
+        identify(path)
+    }
+
+    async fn scan(root: &Path, raw: &Path, db: &RawDb, identify: Identify) -> FetchSummary {
+        let cache = FingerprintCache::open(&raw.join("fingerprints.sqlite"))
+            .await
+            .unwrap();
+        let summary = fetch_with(
+            FetchOptions {
+                db: db.clone(),
+                source_id: "tng_pdf".into(),
+                root: root.to_path_buf(),
+                ignore: vec![],
+                max_bytes: None,
+                cache: cache.clone(),
+                now: "2364-04-13T08:45:00-07:00".into(),
+                progress: Progress::noop(),
+            },
+            identify,
+        )
+        .await
+        .unwrap();
+        cache.pool().close().await;
+        summary
+    }
+
+    async fn column(db: &RawDb, sql: &'static str) -> Vec<String> {
+        sqlx::query_scalar(sql).fetch_all(db.pool()).await.unwrap()
+    }
+
+    /// A parser that panicked on one PDF ended the whole scan, and the
+    /// file was never stored, so every later run met it again and the
+    /// source never synced another file.
+    #[tokio::test]
+    async fn a_file_whose_parser_panics_costs_only_that_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, raw) = (dir.path().join("logs"), dir.path().join("raw"));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&raw).unwrap();
+        for (name, body) in [
+            ("bridge.pdf", "warp core nominal"),
+            ("red_alert.pdf", "shields up"),
+            ("ten_forward.pdf", "tea, Earl Grey, hot"),
+        ] {
+            std::fs::write(root.join(name), doc(body, name, "01", None)).unwrap();
+        }
+        let db = RawDb::open(&db_path_for(&raw)).await.unwrap();
+
+        let summary = scan(&root, &raw, &db, panics_on_red_alert).await;
+        assert_eq!((summary.documents, summary.errors), (2, 1));
+        assert_eq!(
+            column(&db, "SELECT id FROM pdf_paths ORDER BY id").await,
+            ["bridge.pdf", "ten_forward.pdf"]
+        );
+        let problems: Vec<(String, String)> =
+            sqlx::query_as("SELECT scope_key, sample FROM problems")
+                .fetch_all(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(
+            problems,
+            [(
+                "record:pdf_paths:red_alert.pdf".to_string(),
+                "panicked: a parser met bytes it did not expect".to_string()
+            )]
+        );
+
+        scan(&root, &raw, &db, identify).await;
+        assert_eq!(
+            column(&db, "SELECT id FROM pdf_paths ORDER BY id").await,
+            ["bridge.pdf", "red_alert.pdf", "ten_forward.pdf"],
+            "the next run tries the file again"
+        );
+        assert!(column(&db, "SELECT scope_key FROM problems")
+            .await
+            .is_empty());
+        db.pool().close().await;
+    }
 
     #[test]
     fn pdf_extension_match_is_case_insensitive() {
