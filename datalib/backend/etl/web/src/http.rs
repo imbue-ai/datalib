@@ -399,6 +399,8 @@ pub enum CurlFailure {
     GatewayUnreachable,
     /// latchkey could not get its encryption key.
     Keychain,
+    /// The body was past the request's `max_bytes` (`--max-filesize`).
+    TooLarge,
     /// curl's own failure; its exit code says which.
     Curl,
     Unrecognised,
@@ -429,6 +431,8 @@ impl CurlFailure {
             CurlFailure::GatewayUnreachable
         } else if has("No encryption key available") || has("Failed to decrypt file") {
             CurlFailure::Keychain
+        } else if has("maximum allowed file size") {
+            CurlFailure::TooLarge
         } else if exit != 1 && has("curl: (") {
             CurlFailure::Curl
         } else {
@@ -453,6 +457,7 @@ impl CurlFailure {
             CurlFailure::NotPermitted => "Request not permitted by latchkey's permissions.",
             CurlFailure::GatewayUnreachable => "Failed to reach latchkey gateway.",
             CurlFailure::Keychain => "No encryption key available to latchkey.",
+            CurlFailure::TooLarge => "The response was larger than this request accepts.",
             CurlFailure::Curl => curl_exit_sentence(exit),
             CurlFailure::Unrecognised => {
                 "latchkey printed a message datalib does not recognise, so it is not shown; \
@@ -500,7 +505,10 @@ impl HttpError {
     pub fn upstream(&self) -> Option<Upstream> {
         match self {
             HttpError::Timeout { .. } => Some(Upstream::Unavailable),
-            HttpError::Curl { stderr, .. } if stderr.contains("maximum allowed file size") => None,
+            HttpError::Curl {
+                failure: CurlFailure::TooLarge,
+                ..
+            } => None,
             HttpError::Curl { exit, .. } if matches!(*exit, 6 | 7 | 28 | 35 | 52 | 55 | 56) => {
                 Some(Upstream::Unavailable)
             }
@@ -1089,8 +1097,8 @@ mod live {
         async fn plain_curl_refuses_http_before_connecting() {
             // Port 1 answers nothing: a connection attempt is exit 7.
             match send(&plain("http://127.0.0.1:1/x")).await {
-                Err(HttpError::Curl { exit, stderr, .. }) => {
-                    assert_eq!(exit, 1, "{stderr}");
+                Err(HttpError::Curl { exit, failure, .. }) => {
+                    assert_eq!(exit, 1, "{failure:?}");
                 }
                 other => panic!("expected curl to refuse the protocol, got {other:?}"),
             }
@@ -1101,13 +1109,12 @@ mod live {
         /// dropped connection and was retried until the guard gave up.
         #[test]
         fn a_body_past_the_cap_is_not_retried() {
-            let past = HttpError::Curl {
-                service: HttpService::Notion,
-                url: "https://files.example/x".into(),
-                exit: 56,
-                stderr: "curl: (56) Exceeded the maximum allowed file size (100) with 100 bytes"
-                    .into(),
-            };
+            let past = HttpError::curl_exit(
+                HttpService::Notion,
+                "https://files.example/x",
+                56,
+                "curl: (56) Exceeded the maximum allowed file size (100) with 100 bytes",
+            );
             assert_eq!(past.upstream(), None);
         }
 
