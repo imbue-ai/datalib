@@ -201,14 +201,14 @@ jobs:
       - name: pnpm audit --prod --audit-level high
         run: |
           set -uo pipefail
-          failed=()
+          failed=""
           for tree in datalib/ui third-party/qmd/runtime third-party/latchkey/runtime; do
             echo "::group::$tree"
-            (cd "$tree" && pnpm audit --prod --audit-level high) || failed+=("$tree")
+            (cd "$tree" && pnpm audit --prod --audit-level high) || failed="$failed $tree"
             echo "::endgroup::"
           done
-          if (( ${#failed[@]} )); then
-            echo "::error::advisories at high or above in: ${failed[*]}"
+          if [ -n "$failed" ]; then
+            echo "::error::advisories at high or above in:$failed"
             exit 1
           fi
 
