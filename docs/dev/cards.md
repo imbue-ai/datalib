@@ -573,7 +573,9 @@ besides components:
   (see [`edges.md`](edges.md)); clicking either opens the destination
   via `host.openCards`. The body is drawn in a frame whose policy runs
   no script (`cards/docFrame.ts`). Its links, clicks and selection
-  reach the card as events, and the frame scrolls itself. Above it, a
+  reach the card as events, and the frame scrolls itself. A click no
+  listener of the app's takes does nothing: no link follows itself,
+  whatever shape it has (`chatLink.ts` `finishFrameClick`). Above it, a
   title bar that does not scroll (`cards/DocTitleBar.ce.vue`): the
   source's mark, the title, the source's own page (↗), the ID, and a ⋯
   menu — the same one on a right-click of the bar — whose entries are

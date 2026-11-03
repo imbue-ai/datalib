@@ -100,7 +100,7 @@ import { copyToClipboard } from "@/clipboard";
 import FeedbackModal from "@/components/FeedbackModal.vue";
 import { buildContext, type FeedbackContext } from "@/feedback/context";
 import { filePathFromUrl, isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
-import { openExternal } from "@/externalLinks";
+import { isWebUrl, openExternal } from "@/externalLinks";
 import { oneAtATime, subscribeLive } from "@/live";
 import { encodeColumns } from "@/router/columns";
 import { KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
@@ -1896,7 +1896,7 @@ function menuScope(args: MenuFromCellCallbackArgs): MenuScope {
     filter: filterCtx ? keepExcludeEntries(filterCtx) : [],
     notion: notionCtx ? keepExcludeEntries(notionCtx) : [],
     links: {
-      web: linked.filter((r) => !filePathFromUrl(linkOf(r))),
+      web: linked.filter((r) => isWebUrl(linkOf(r))),
       local: linked.map((r) => filePathFromUrl(linkOf(r))).filter((p): p is string => p !== null),
     },
   };

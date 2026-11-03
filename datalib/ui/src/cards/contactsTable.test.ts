@@ -24,7 +24,7 @@ const riker = row("c1", "Will Riker", "mailto:riker@enterprise.org", {
   note: "Plays the trombone",
 });
 const q = row("c2", "Q", "datalib:contact/c2");
-const troi = row("c3", "Deanna Troi", "tel:+15550100", { phone: "+15550100" });
+const troi = row("c3", "Deanna Troi", "tel:+12025550100", { phone: "+12025550100" });
 
 describe("filterContacts", () => {
   it("keeps every row for blank text", () => {
@@ -41,7 +41,7 @@ describe("filterContacts", () => {
 describe("rowHandle", () => {
   it("is the handle the chip is drawn by, or none for a contact without one", () => {
     expect(rowHandle(riker)).toBe("email:riker@enterprise.org");
-    expect(rowHandle(troi)).toBe("tel:+15550100");
+    expect(rowHandle(troi)).toBe("tel:+12025550100");
     expect(rowHandle(q)).toBeNull();
   });
 });
