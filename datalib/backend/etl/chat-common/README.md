@@ -151,9 +151,11 @@ Who sets it, always only on a message someone else sent:
   past a followed thread's own `last_read` for a reply.
 - Email: no `$seen`.
 - Apple Messages: `message.is_read = 0`, built into `Read` per message.
-- Signal: `IncomingMessageDetails.read` false.
-- SMS Backup & Restore: `read="0"`, from the newest backup file that
-  has the message.
+- Signal: `IncomingMessageDetails.read` false, kept as a `Read` mark
+  per incoming message.
+- SMS Backup & Restore: `read="0"`, kept as a `Read` mark per message;
+  where several backup files hold the message, the one read last has
+  the last word. A file that says nothing leaves no mark.
 - WhatsApp: a `_id` past its chat's `last_read_message_row_id`, built
   into `Through` per chat.
 
@@ -170,6 +172,9 @@ documents it moved across. Email's `$seen` is a row of its own
 (`email_keywords`), whose diff already names the email. Slack keeps its
 marks in volatile sidecars, and its diff scan reads the sidecar's diff
 for the threads a moved mark crossed (`slack_render`'s `parse.rs`).
+SMS and Signal keep theirs in their store's `read_marks` table, and
+their diff scans add the conversation of each mark
+`read_marks::moved` names.
 
 ## Replies not mirrored yet
 

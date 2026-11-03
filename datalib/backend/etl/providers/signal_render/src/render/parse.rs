@@ -1,12 +1,14 @@
 //! Parse the doltlite raw store into a small in-memory `ParsedSignal`
 //! that the renderer can walk without re-querying.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use datalib_etl::periodize::Period;
+use datalib_etl::read_marks;
+use datalib_etl_chat_common::unread::{is_unread, Marks, ReadMark};
 use datalib_etl_chat_common::BlobsAt;
 use datalib_etl_render::inputs::{Inputs, RawRange};
 use datalib_etl_signal::ingest::schema_raw::chat_item_attachment_id_recipe;
@@ -133,8 +135,8 @@ pub struct ParsedChatItem {
     /// True when ChatItem.directionalDetails was `outgoing`. Drives
     /// "me" attribution in the rendered markdown.
     pub outgoing: bool,
-    /// An incoming message the account has not read
-    /// (`IncomingMessageDetails.read` false). Never set on an outgoing one.
+    /// A message someone else sent whose read mark says the account has
+    /// not read it. Never set on an outgoing one.
     pub unread: bool,
     /// Attachments on this item, ordered by their position in the
     /// `StandardMessage.attachments` repeated field (matches the
@@ -243,7 +245,8 @@ async fn parse_open(
     let docs = if to_load_chats.is_empty() {
         Vec::new()
     } else {
-        load_buckets(&pool, period, &to_load_chats).await?
+        let marks = read_marks::load(&pool).await?;
+        load_buckets(&pool, period, &to_load_chats, &marks).await?
     };
 
     let mut inputs: HashMap<String, Inputs> = HashMap::new();
@@ -252,6 +255,9 @@ async fn parse_open(
         read.read("chats", &bucket.chat_id);
         for item in &bucket.items {
             read.read("chat_items", &item.item_pk);
+            if !item.outgoing {
+                read.read(read_marks::TABLE, &item.item_pk);
+            }
             for att in &item.attachments {
                 read.read("chat_item_attachments", &att.row_id);
             }
@@ -417,12 +423,16 @@ async fn scan_diff(
         },
     )
     .await?;
+    let mut forward = scan.render;
+    if let (Some(forward), Some(from)) = (forward.as_mut(), range.cursor) {
+        forward.extend(marked_since(pool, from, pin).await?);
+    }
     // The driver names buckets by the chat uuid; the load wants chat ids.
     let by_uuid: HashMap<String, &str> = chats
         .keys()
         .map(|id| (super::ids::chat(source_id, id).uuid, id.as_str()))
         .collect();
-    let narrowed = range.narrow_by(scan.render.as_ref(), |key| {
+    let narrowed = range.narrow_by(forward.as_ref(), |key| {
         by_uuid.get(key).map(|id| id.to_string())
     });
     Ok(ScanResult {
@@ -431,6 +441,28 @@ async fn scan_diff(
         new_head: scan.new_head,
         scan_elapsed: scan.scan_elapsed,
     })
+}
+
+/// The chats holding a message whose read mark moved since `from`. A
+/// message that went took its mark with it, and the `chat_items` diff
+/// already names its chat.
+async fn marked_since(
+    pool: &SqlitePool,
+    from: &str,
+    pin: &datalib_etl::pin::Pin,
+) -> Result<Vec<String>> {
+    let moved = read_marks::moved(pool, from, pin.commit()).await?;
+    if moved.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ids: Vec<&str> = moved.iter().map(|m| m.id.as_str()).collect();
+    sqlx::query_scalar(
+        "SELECT DISTINCT chat_id FROM chat_items WHERE id IN (SELECT value FROM json_each(?))",
+    )
+    .bind(serde_json::to_string(&ids)?)
+    .fetch_all(pool)
+    .await
+    .context("the chats of the moved read marks")
 }
 
 /// Period::All bucket key — kept in one place so the SQL and Rust
@@ -457,6 +489,7 @@ async fn load_buckets(
     pool: &sqlx::SqlitePool,
     period: Period,
     chat_ids: &HashSet<String>,
+    marks: &BTreeMap<String, ReadMark>,
 ) -> Result<Vec<DocBucket>> {
     if chat_ids.is_empty() {
         return Ok(Vec::new());
@@ -515,10 +548,18 @@ async fn load_buckets(
         let Decoded {
             text,
             outgoing,
-            unread,
             attachments,
             mentions,
         } = decode_chat_item(&payload);
+        let unread = is_unread(
+            &item_pk,
+            outgoing,
+            Marks {
+                own: marks.get(&item_pk),
+                conversation: None,
+            },
+            |_, _| None,
+        );
         // Each slot by the edge download wrote for it, which holds the
         // bytes an older snapshot stored when this one has none.
         let attachments = attachments
@@ -555,7 +596,6 @@ async fn load_buckets(
 struct Decoded {
     text: Option<String>,
     outgoing: bool,
-    unread: bool,
     /// One per `StandardMessage.attachments` slot, in order.
     attachments: Vec<AttachmentMeta>,
     mentions: Vec<Option<String>>,
@@ -582,8 +622,6 @@ fn decode_chat_item(payload: &str) -> Decoded {
         ci.directional_details,
         Some(DirectionalDetails::Outgoing(_))
     );
-    let unread =
-        matches!(&ci.directional_details, Some(DirectionalDetails::Incoming(d)) if !d.read);
     match ci.item {
         Some(backup::chat_item::Item::StandardMessage(sm)) => {
             let mentions = sm.text.as_ref().map(mentioned_acis).unwrap_or_default();
@@ -598,14 +636,12 @@ fn decode_chat_item(payload: &str) -> Decoded {
             Decoded {
                 text,
                 outgoing,
-                unread,
                 attachments,
                 mentions,
             }
         }
         _ => Decoded {
             outgoing,
-            unread,
             ..Decoded::default()
         },
     }
@@ -666,22 +702,33 @@ mod tests {
         .unwrap()
     }
 
-    /// Unread is an incoming message the account has not read, read off
-    /// the JSON the ingest stores; an outgoing one never is.
+    /// The stored frame carries no `read`: the ingest keeps it as a read
+    /// mark. A frame from before still decodes, its `read` ignored.
     #[test]
-    fn only_an_unread_incoming_message_is_unread() {
-        let incoming = |read| {
-            DirectionalDetails::Incoming(IncomingMessageDetails {
-                read,
-                ..Default::default()
-            })
-        };
-        assert!(decode_chat_item(&stored(incoming(false))).unread);
-        assert!(!decode_chat_item(&stored(incoming(true))).unread);
+    fn a_stored_frame_holds_no_read_flag_and_one_with_it_still_decodes() {
+        let unread = stored(DirectionalDetails::Incoming(IncomingMessageDetails {
+            read: false,
+            ..Default::default()
+        }));
+        let frame: serde_json::Value = serde_json::from_str(&unread).unwrap();
+        let details = &frame["directional_details"]["Incoming"];
+        assert!(
+            details.is_object() && details.get("read").is_none(),
+            "{frame}"
+        );
+        assert!(!decode_chat_item(&unread).outgoing);
+
+        let mut before = frame.clone();
+        before["directional_details"]["Incoming"]["read"] = serde_json::json!(false);
+        let decoded = decode_chat_item(&before.to_string());
+        assert_eq!(
+            decoded.text.as_deref(),
+            Some("Hailing frequencies open, sir.")
+        );
         let outgoing = decode_chat_item(&stored(DirectionalDetails::Outgoing(
             OutgoingMessageDetails::default(),
         )));
-        assert!(outgoing.outgoing && !outgoing.unread);
+        assert!(outgoing.outgoing);
     }
 
     /// The mentions come in the order of their placeholders whatever the
@@ -768,7 +815,9 @@ mod load_tests {
         .unwrap();
         let chats: HashSet<String> = (1..=n).map(|i| format!("c{i}")).collect();
 
-        let docs = load_buckets(&pool, Period::All, &chats).await.unwrap();
+        let docs = load_buckets(&pool, Period::All, &chats, &BTreeMap::new())
+            .await
+            .unwrap();
 
         assert_eq!(docs.len(), n);
         assert!(docs.iter().all(|d| d.items.len() == 1));

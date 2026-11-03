@@ -1,6 +1,7 @@
 //! Raw-store schema for the "SMS Backup & Restore" provider.
 
-use datalib_etl::doltlite_raw::{WirePayload, WirePayloadRow};
+use datalib_etl::doltlite_raw::{Migration, WirePayload, WirePayloadRow};
+use datalib_etl::read_marks::ReadMarkRow;
 use datalib_etl_macros::{CasEdgeRow, WirePayloadRow};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -77,6 +78,52 @@ pub struct SmsAttachmentRow {
     pub blake3: Option<String>,
 }
 
+/// The raw store's migration ladder (etl/README.md §"The migration
+/// ladder").
+pub const LADDER: &[Migration] = &[Migration {
+    version: 1,
+    name: "a message's read flag moves to read_marks",
+    apply: |conn| Box::pin(move_read_flags_to_read_marks(conn)),
+}];
+
+/// The table is created here rather than by the DDL, which would clear
+/// the file cursors and leave it empty until every backup changed.
+async fn move_read_flags_to_read_marks(conn: &mut sqlx::SqliteConnection) -> anyhow::Result<()> {
+    for ddl in ReadMarkRow::all_ddl() {
+        // Audited: the DDL is the derive's, from a `&'static` table name.
+        sqlx::query(sqlx::AssertSqlSafe(ddl))
+            .execute(&mut *conn)
+            .await?;
+    }
+    let holds_messages: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'sms_messages'",
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    if holds_messages == 0 {
+        return Ok(());
+    }
+    // `json_type` is SQL NULL where the key is absent and 'null' where
+    // the backup said nothing; neither is a mark.
+    sqlx::query(
+        "INSERT INTO read_marks (id, read_through, read) \
+         SELECT id, NULL, json_extract(payload, '$.read') FROM sms_messages \
+         WHERE json_type(payload, '$.read') IN ('true', 'false')",
+    )
+    .execute(&mut *conn)
+    .await?;
+    // Through text and back, so the stored bytes are the ones this
+    // build's ingest writes for the same message and its next read
+    // changes nothing.
+    sqlx::query(
+        "UPDATE sms_messages SET payload = jsonb(json_remove(json(payload), '$.read')) \
+         WHERE json_type(payload, '$.read') IS NOT NULL",
+    )
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
 pub fn full_ddl() -> Vec<String> {
     use datalib_etl::blob_cas::CasEdgeRow as _;
     use datalib_etl::doltlite_raw::bookkeeping_ddl_for;
@@ -86,6 +133,7 @@ pub fn full_ddl() -> Vec<String> {
         datalib_etl_files::file_checkpoint::INGESTED_FILES_DDL.to_string(),
     ];
     out.extend(SmsAttachmentRow::all_ddl());
+    out.extend(ReadMarkRow::all_ddl());
     for table in DATA_TABLES.iter().chain(EDGE_TABLES.iter()) {
         out.push(bookkeeping_ddl_for(table));
     }
@@ -122,5 +170,6 @@ mod tests {
             );
         }
         assert!(blob.contains("ingested_files"));
+        assert!(blob.contains("read_marks"));
     }
 }

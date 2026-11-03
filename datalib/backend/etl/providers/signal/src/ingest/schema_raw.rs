@@ -1,7 +1,8 @@
 //! Raw-store schema for the Signal provider.
 
 use datalib_etl::blob_cas::CasEdgeRow as _;
-use datalib_etl::doltlite_raw::{self as dr, WirePayload, WirePayloadRow};
+use datalib_etl::doltlite_raw::{self as dr, Migration, WirePayload, WirePayloadRow};
+use datalib_etl::read_marks::ReadMarkRow;
 use datalib_etl_macros::{CasEdgeRow, WirePayloadRow};
 
 /// Names of the entity tables, in the order they should be iterated
@@ -163,6 +164,55 @@ pub fn chat_item_id_recipe(chat_id: &str, author_id: &str, date_sent: i64) -> St
     format!("{chat_id}#{author_id}#{date_sent}")
 }
 
+/// Where an incoming message's read flag sat in its stored frame.
+const READ_IN_FRAME: &str = "$.directional_details.Incoming.read";
+
+/// The raw store's migration ladder (etl/README.md §"The migration
+/// ladder").
+pub const LADDER: &[Migration] = &[Migration {
+    version: 1,
+    name: "an incoming message's read flag moves to read_marks",
+    apply: |conn| Box::pin(move_read_flags_to_read_marks(conn)),
+}];
+
+/// The table is created here rather than by the DDL, which would leave
+/// it empty until the next backup that changes.
+async fn move_read_flags_to_read_marks(conn: &mut sqlx::SqliteConnection) -> anyhow::Result<()> {
+    for ddl in ReadMarkRow::all_ddl() {
+        // Audited: the DDL is the derive's, from a `&'static` table name.
+        sqlx::query(sqlx::AssertSqlSafe(ddl))
+            .execute(&mut *conn)
+            .await?;
+    }
+    let holds_items: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'chat_items'",
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    if holds_items == 0 {
+        return Ok(());
+    }
+    sqlx::query(
+        "INSERT INTO read_marks (id, read_through, read) \
+         SELECT id, NULL, json_extract(payload, ?1) FROM chat_items \
+         WHERE json_type(payload, ?1) IN ('true', 'false')",
+    )
+    .bind(READ_IN_FRAME)
+    .execute(&mut *conn)
+    .await?;
+    // Through text and back, so the stored bytes are the ones this
+    // build's ingest writes for the same frame and the next backup
+    // changes nothing.
+    sqlx::query(
+        "UPDATE chat_items SET payload = jsonb(json_remove(json(payload), ?1)) \
+         WHERE json_type(payload, ?1) IS NOT NULL",
+    )
+    .bind(READ_IN_FRAME)
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
 /// Compose the full DDL list passed to
 /// [`datalib_etl::doltlite_raw::open`]: every entity table DDL,
 /// each entity's CREATE-INDEX statements, and the paired
@@ -181,6 +231,7 @@ pub fn full_ddl() -> Vec<String> {
         INGESTED_BACKUPS_DDL.to_string(),
     ];
     out.extend(ChatItemAttachmentRow::all_ddl());
+    out.extend(ReadMarkRow::all_ddl());
     for table in DATA_TABLES {
         out.push(dr::bookkeeping_ddl_for(table));
     }

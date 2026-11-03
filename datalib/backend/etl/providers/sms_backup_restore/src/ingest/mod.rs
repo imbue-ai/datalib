@@ -15,6 +15,7 @@ use datalib_etl::doltlite_raw::WirePayload;
 use datalib_etl::download_problems::RunProblem;
 use datalib_etl::progress::Progress;
 use datalib_etl::prune;
+use datalib_etl::read_marks::{self, ReadMarkRow};
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl_files::file_checkpoint;
 use datalib_etl_files::fsscan;
@@ -26,13 +27,15 @@ use sqlx::{Sqlite, Transaction};
 use tracing::warn;
 
 use self::parse::{CallRecord, MmsRecord, RootKind, SmsRecord};
-use self::schema_raw::{full_ddl, ns_id, sha8, SmsAttachmentRow, SmsCallRow, SmsMessageRow};
+use self::schema_raw::{
+    full_ddl, ns_id, sha8, SmsAttachmentRow, SmsCallRow, SmsMessageRow, LADDER,
+};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
 const SCOPE: &str = "sms_backup_restore/xml";
 
-datalib_etl::raw_db!(pub RawDb: CasEntityStore, full_ddl());
+datalib_etl::raw_db!(pub RawDb: CasEntityStore, full_ddl(), LADDER);
 
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
@@ -98,6 +101,7 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     };
 
     let mut message_rows: Vec<SmsMessageRow> = Vec::new();
+    let mut reads: Vec<Read> = Vec::new();
     let mut call_rows: Vec<SmsCallRow> = Vec::new();
     let mut acc = CasEdgeAccumulator::new();
     let mut done: Vec<&fsscan::ScannedFile> = Vec::new();
@@ -127,11 +131,17 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
             Ok(RootKind::Smses) => match parse::parse_smses(&xml) {
                 Ok((smses, mmses)) => {
                     for s in smses {
-                        ingest_sms(&s, &mut message_rows);
+                        ingest_sms(&s, &mut message_rows, &mut reads);
                         summary.sms += 1;
                     }
                     for m in mmses {
-                        ingest_mms(&m, &mut message_rows, &mut acc, &mut summary.attachments);
+                        ingest_mms(
+                            &m,
+                            &mut message_rows,
+                            &mut reads,
+                            &mut acc,
+                            &mut summary.attachments,
+                        );
                         summary.mms += 1;
                     }
                     done.push(f);
@@ -208,6 +218,9 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
         .context("begin sms_backup_restore tx")?;
     bulk_upsert_in_tx(&mut tx, &message_rows, &now).await?;
     bulk_upsert_in_tx(&mut tx, &call_rows, &now).await?;
+    let (marks, unknown) = last_word_on_each(&reads);
+    read_marks::write(&mut tx, &marks).await?;
+    read_marks::forget(&mut tx, &unknown).await?;
     for f in done
         .iter()
         .filter(|f| deletes || !rewritten.contains(f.rel.as_str()))
@@ -276,6 +289,7 @@ async fn prune_unseen(
     let keep_calls: HashSet<String> = calls.iter().map(|r| r.id_and_payload.id.clone()).collect();
     let gone_messages = prune::prune_scope_in_tx(tx, "sms_messages", &[], &keep_messages).await?;
     prune::delete_owned_in_tx(tx, "sms_attachments", "message_id", &gone_messages).await?;
+    read_marks::forget(tx, &gone_messages).await?;
     let gone_calls = prune::prune_scope_in_tx(tx, "sms_calls", &[], &keep_calls).await?;
     prune::record(
         "sms_messages",
@@ -290,7 +304,30 @@ async fn prune_unseen(
     Ok(gone_messages.len() + gone_calls.len())
 }
 
-fn ingest_sms(s: &SmsRecord, rows: &mut Vec<SmsMessageRow>) {
+/// What one backup file says of whether a message was read; `None` when
+/// it says nothing.
+type Read = (String, Option<bool>);
+
+/// The marks to write and the ids to forget. A message is in several
+/// backups; the file read last has the last word, as it does on the
+/// message's row.
+fn last_word_on_each(reads: &[Read]) -> (Vec<ReadMarkRow>, Vec<String>) {
+    let last: std::collections::BTreeMap<&str, Option<bool>> = reads
+        .iter()
+        .map(|(id, read)| (id.as_str(), *read))
+        .collect();
+    let mut marks = Vec::new();
+    let mut unknown = Vec::new();
+    for (id, read) in last {
+        match read {
+            Some(read) => marks.push(ReadMarkRow::read(id, read)),
+            None => unknown.push(id.to_string()),
+        }
+    }
+    (marks, unknown)
+}
+
+fn ingest_sms(s: &SmsRecord, rows: &mut Vec<SmsMessageRow>, reads: &mut Vec<Read>) {
     let tel = normalize_tel(&s.address);
     let display = conversation_display(&tel, s.contact_name.as_deref());
     let is_me = s.type_ == 2;
@@ -313,12 +350,12 @@ fn ingest_sms(s: &SmsRecord, rows: &mut Vec<SmsMessageRow>) {
         "is_me": is_me,
         "address": s.address,
         "body": s.body,
-        "read": s.read,
         "date_sent": s.date_sent_ms,
         "readable_date": s.readable_date,
         "contact_name": s.contact_name,
         "attachments": Vec::<String>::new(),
     });
+    reads.push((id.clone(), s.read));
     rows.push(SmsMessageRow {
         id_and_payload: WirePayload {
             id,
@@ -334,6 +371,7 @@ fn ingest_sms(s: &SmsRecord, rows: &mut Vec<SmsMessageRow>) {
 fn ingest_mms(
     m: &MmsRecord,
     rows: &mut Vec<SmsMessageRow>,
+    reads: &mut Vec<Read>,
     acc: &mut CasEdgeAccumulator,
     n_attachments: &mut usize,
 ) {
@@ -391,7 +429,6 @@ fn ingest_mms(
         "text": m.text,
         "m_id": m.m_id,
         "tr_id": m.tr_id,
-        "read": m.read,
         "date_sent": m.date_sent_ms,
         "readable_date": m.readable_date,
         "contact_name": m.contact_name,
@@ -402,6 +439,7 @@ fn ingest_mms(
             .map(|a| json!({"address": a.address, "type": a.type_}))
             .collect::<Vec<_>>(),
     });
+    reads.push((id.clone(), m.read));
     rows.push(SmsMessageRow {
         id_and_payload: WirePayload {
             id,
@@ -546,6 +584,7 @@ mod tests {
                 ..Default::default()
             },
             &mut msgs,
+            &mut Vec::new(),
         );
         let mut calls = Vec::new();
         ingest_call(

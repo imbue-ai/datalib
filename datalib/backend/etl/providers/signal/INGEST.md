@@ -46,6 +46,18 @@ and `src/ingest/mod.rs`:
   the host's fingerprint cache, so an unchanged folder costs a `stat`
   per file and decrypts nothing. A folder renamed or copied is the
   snapshot already held.
+- **Whether the account read a message is a read mark, not part of the
+  message.** An incoming message's `IncomingMessageDetails.read` goes
+  into `read_marks` (`datalib_etl::read_marks`), one `Read` row per
+  incoming message keyed like the message, and the stored frame leaves
+  it out (the generated type never serializes it:
+  `tools/prost_toolchain`). A read on the phone is then one small row,
+  not a rewrite of the message, and the diff between two backups names
+  only the messages that changed. A snapshot read whole forgets the
+  marks of the messages it no longer holds. Left in their frames, since
+  they are not what the account has read: a chat's `markedUnread` (a
+  flag set on the chat by hand, which nothing renders), a call's `read`,
+  and an outgoing message's send statuses (the recipients' receipts).
 - **A row's sidecar is stamped the first time a snapshot holds it**
   (`bulk_upsert_first_seen_in_tx`), so a day's commit holds what that
   day changed and not a re-stamp of every row.

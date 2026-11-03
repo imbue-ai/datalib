@@ -16,6 +16,7 @@ use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw as dr;
 use datalib_etl::progress::Progress;
 use datalib_etl::prune;
+use datalib_etl::read_marks::{self, ReadMarkRow};
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
 use datalib_signal_backup::{backup, decrypt_attachment, local_media_name, Snapshot};
@@ -316,6 +317,7 @@ async fn read_snapshot(
     let mut recipients: Vec<RecipientRow> = Vec::new();
     let mut chats: Vec<ChatRow> = Vec::new();
     let mut chat_items: Vec<ChatItemRow> = Vec::new();
+    let mut marks: Vec<ReadMarkRow> = Vec::new();
     let mut pending_attachments = PendingAttachments::default();
 
     // Every attachment an earlier read stored bytes for, so one shared
@@ -386,6 +388,13 @@ async fn read_snapshot(
                     }
                 }
 
+                if let Some(backup::chat_item::DirectionalDetails::Incoming(d)) =
+                    &ci.directional_details
+                {
+                    marks.push(ReadMarkRow::read(&pk, d.read));
+                }
+                // Without `read`, which the generated type never
+                // serializes: it is the mark above.
                 let payload = serde_json::to_string(ci).context("serialize chat_item frame")?;
                 chat_items.push(ChatItemRow {
                     id_and_payload: datalib_etl::doltlite_raw::WirePayload { id: pk, payload },
@@ -421,6 +430,7 @@ async fn read_snapshot(
     bulk_upsert_first_seen_in_tx(&mut tx, &recipients, &now).await?;
     bulk_upsert_first_seen_in_tx(&mut tx, &chats, &now).await?;
     bulk_upsert_first_seen_in_tx(&mut tx, &chat_items, &now).await?;
+    read_marks::write(&mut tx, &marks).await?;
     if read_whole {
         let kept = [
             (AccountRow::TABLE, ids_of(&accounts)),
@@ -437,6 +447,16 @@ async fn read_snapshot(
             prune::record(table, keep.len() + gone.len(), gone.len());
             summary.pruned += gone.len();
         }
+        let marked: HashSet<&str> = marks.iter().map(|m| m.id.as_str()).collect();
+        let held: Vec<String> = sqlx::query_scalar("SELECT id FROM read_marks")
+            .fetch_all(&mut *tx)
+            .await
+            .context("read the marks held")?;
+        let gone: Vec<String> = held
+            .into_iter()
+            .filter(|id| !marked.contains(id.as_str()))
+            .collect();
+        read_marks::forget(&mut tx, &gone).await?;
     }
     tx.commit().await.context("commit snapshot tx")?;
     // Attachment bulk-flush: one CAS-pool tx (`put_many`) + one
