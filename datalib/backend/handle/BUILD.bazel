@@ -21,5 +21,8 @@ rust_test(
     size = "small",
     crate = ":datalib_handle",
     edition = "2021",
-    deps = ["@datalib_crates//:serde_json"],
+    deps = [
+        "@datalib_crates//:regex",
+        "@datalib_crates//:serde_json",
+    ],
 )

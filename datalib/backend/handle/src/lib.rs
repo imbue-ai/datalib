@@ -26,7 +26,7 @@ use strum::{EnumString, IntoStaticStr, VariantArray};
 /// some input — a spelling newly accepted or refused, a value normalized
 /// another way. A new kind is not that: no handle already stored reads
 /// differently, so it moves nothing.
-pub const RULES_VERSION: u32 = 1;
+pub const RULES_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, IntoStaticStr, VariantArray)]
 #[strum(serialize_all = "snake_case")]
@@ -117,7 +117,7 @@ impl Handle {
             && domain.contains('.')
             && !addr
                 .chars()
-                .any(|c| c.is_whitespace() || matches!(c, '<' | '>' | ','));
+                .any(|c| c.is_whitespace() || is_hidden(c) || matches!(c, '<' | '>' | ','));
         well_formed.then(|| Self::of(HandleKind::Email, &addr.to_lowercase()))
     }
 
@@ -186,8 +186,10 @@ impl Handle {
     /// whitespace or a control character is a sentence, not an id.
     pub fn ai_model(id: &str) -> Option<Self> {
         let id = id.trim().to_lowercase();
-        let well_formed =
-            !id.is_empty() && !id.chars().any(|c| c.is_whitespace() || c.is_control());
+        let well_formed = !id.is_empty()
+            && !id
+                .chars()
+                .any(|c| c.is_whitespace() || c.is_control() || is_hidden(c));
         well_formed.then(|| Self::of(HandleKind::AiModel, &id))
     }
 
@@ -248,8 +250,7 @@ impl Handle {
     /// deleted since — is the caller's to decide.
     pub fn facebook_name(name: &str) -> Option<Self> {
         let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
-        (!name.is_empty() && !name.chars().any(char::is_control))
-            .then(|| Self::of(HandleKind::Facebook, &format!("name/{name}")))
+        is_shown_name(&name).then(|| Self::of(HandleKind::Facebook, &format!("name/{name}")))
     }
 
     /// The deleted account on the other side of the one-to-one Messenger
@@ -264,8 +265,7 @@ impl Handle {
     /// whitespace trimmed and collapsed.
     pub fn google_name(name: &str) -> Option<Self> {
         let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
-        (!name.is_empty() && !name.chars().any(char::is_control))
-            .then(|| Self::of(HandleKind::Google, &format!("name/{name}")))
+        is_shown_name(&name).then(|| Self::of(HandleKind::Google, &format!("name/{name}")))
     }
 
     /// A LinkedIn member by their profile slug, already percent-decoded:
@@ -274,9 +274,12 @@ impl Handle {
     pub fn linkedin(slug: &str) -> Option<Self> {
         let slug = slug.trim().to_lowercase();
         let well_formed = !slug.is_empty()
-            && !slug
-                .chars()
-                .any(|c| c.is_whitespace() || c.is_control() || matches!(c, '/' | '?' | '#' | '%'));
+            && !slug.chars().any(|c| {
+                c.is_whitespace()
+                    || c.is_control()
+                    || is_hidden(c)
+                    || matches!(c, '/' | '?' | '#' | '%')
+            });
         well_formed.then(|| Self::of(HandleKind::Linkedin, &slug))
     }
 
@@ -461,6 +464,46 @@ impl Handle {
     fn of(kind: HandleKind, value: &str) -> Self {
         Self(format!("{}:{value}", kind.as_str()))
     }
+}
+
+/// A character that changes how a handle shows without showing itself:
+/// Unicode's format characters (`Cf`). A bidi control reorders the text
+/// around it, and a zero-width one makes two handles that look alike
+/// different handles. `chipLinks.js` refuses the same set as `\p{Cf}`.
+fn is_hidden(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{0600}'..='\u{0605}'
+            | '\u{061C}'
+            | '\u{06DD}'
+            | '\u{070F}'
+            | '\u{0890}'..='\u{0891}'
+            | '\u{08E2}'
+            | '\u{180E}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206F}'
+            | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{110BD}'
+            | '\u{110CD}'
+            | '\u{13430}'..='\u{1343F}'
+            | '\u{1BCA0}'..='\u{1BCA3}'
+            | '\u{1D173}'..='\u{1D17A}'
+            | '\u{E0001}'
+            | '\u{E0020}'..='\u{E007F}'
+    )
+}
+
+/// A name as a person would see it. A joiner (ZWNJ, ZWJ) may stay in
+/// one: some scripts and emoji need it between two letters.
+fn is_shown_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name
+            .chars()
+            .any(|c| c.is_control() || (is_hidden(c) && !matches!(c, '\u{200C}' | '\u{200D}')))
 }
 
 /// A UUID, 32 hex digits with or without dashes in any case, spelled
@@ -1051,6 +1094,77 @@ mod tests {
         }
         assert_eq!(Handle::parse("linkedin:JLPicard"), None);
         assert_eq!(Handle::rebuild("linkedin:JLPicard"), Some(picard));
+    }
+
+    /// A bidi control or an invisible character let one handle look like
+    /// another's, or reorder what its chip shows; `chip_links.test.ts`
+    /// refuses the same URIs.
+    #[test]
+    fn a_handle_that_does_not_show_as_it_is_is_refused() {
+        for invisible in [
+            "\u{202E}", "\u{2066}", "\u{200F}", "\u{200B}", "\u{2060}", "\u{FEFF}", "\u{00AD}",
+        ] {
+            for uri in [
+                format!("mailto:picard{invisible}@enterprise.example"),
+                format!(
+                    "datalib:handle/facebook/name/{}",
+                    percent_encode(&format!("Jean{invisible}Luc"))
+                ),
+                format!(
+                    "datalib:handle/google/name/{}",
+                    percent_encode(&format!("Geordi{invisible}"))
+                ),
+                format!(
+                    "datalib:handle/ai_model/{}",
+                    percent_encode(&format!("claude{invisible}"))
+                ),
+                format!(
+                    "https://www.linkedin.com/in/{}",
+                    percent_encode(&format!("jl{invisible}picard"))
+                ),
+            ] {
+                assert_eq!(Handle::from_uri(&uri), None, "{uri:?}");
+            }
+        }
+        assert_eq!(
+            Handle::from_uri(&format!(
+                "datalib:handle/facebook/name/{}",
+                percent_encode("Ro\u{200D}Laren")
+            ))
+            .map(|h| h.to_string()),
+            Some("facebook:name/Ro\u{200D}Laren".into()),
+            "a joiner inside a name, where a script needs one, is kept"
+        );
+        assert_eq!(
+            Handle::google_name("Geordi\u{200C}"),
+            Some(Handle::of(HandleKind::Google, "name/Geordi\u{200C}"))
+        );
+        assert_eq!(
+            Handle::linkedin("jl\u{200D}picard"),
+            None,
+            "but not in a slug"
+        );
+        assert_eq!(
+            Handle::rebuild("email:picard\u{200B}@enterprise.example"),
+            None,
+            "a handle an older build stored this way is no handle now"
+        );
+    }
+
+    /// `is_hidden` is Unicode's `Cf`, written by hand; `regex` knows the
+    /// category, so this names the code point a Unicode update moved.
+    #[test]
+    fn hidden_is_every_format_character() {
+        let cf = regex::Regex::new(r"^\p{Cf}$").unwrap();
+        let mut buf = [0; 4];
+        for c in (0..=u32::from(char::MAX)).filter_map(char::from_u32) {
+            assert_eq!(
+                is_hidden(c),
+                cf.is_match(c.encode_utf8(&mut buf)),
+                "U+{:04X}",
+                u32::from(c)
+            );
+        }
     }
 
     #[test]

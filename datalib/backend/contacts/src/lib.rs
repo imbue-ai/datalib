@@ -102,15 +102,22 @@ pub fn check_photo(content_type: &str, len: usize) -> Result<()> {
 /// links move with them: each rules change adds a rung that runs
 /// [`rebuild_handles`], and [`HANDLE_RULES_OF_LADDER`] names the rules
 /// the last such rung brought the links to.
-pub const LADDER: &[Migration] = &[Migration {
-    version: 1,
-    name: "every linked handle respelled under handle rules 1",
-    apply: |conn| Box::pin(rebuild_handles(conn)),
-}];
+pub const LADDER: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "every linked handle respelled under handle rules 1",
+        apply: |conn| Box::pin(rebuild_handles(conn)),
+    },
+    Migration {
+        version: 2,
+        name: "every linked handle respelled under handle rules 2",
+        apply: |conn| Box::pin(rebuild_handles(conn)),
+    },
+];
 
 /// `datalib_handle::RULES_VERSION` as of the ladder's last handle rung.
 #[cfg(test)]
-const HANDLE_RULES_OF_LADDER: u32 = 1;
+const HANDLE_RULES_OF_LADDER: u32 = 2;
 
 /// What a stored link comes to under this build's handle rules.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1405,6 +1412,67 @@ mod tests {
             "the link the rules no longer read is shown as written, not dropped"
         );
         assert_eq!(c.handles[1].medium, Medium::Phone);
+        store.close().await;
+    }
+
+    /// Handle rules 2 refuse a bidi control or an invisible character.
+    /// A link a person made to such a handle under rules 1 stays on its
+    /// contact, shown as written with no handle, rather than vanishing.
+    #[tokio::test]
+    async fn a_link_to_a_handle_that_hides_a_character_stays_on_its_contact() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = store_path(dir.path());
+        let store = Store::open(&path).await.unwrap();
+        let riker = email("riker@enterprise.org");
+        let troi = store
+            .create(
+                "Deanna Troi",
+                ContactKind::Person,
+                std::slice::from_ref(&riker),
+            )
+            .await
+            .unwrap();
+        let hidden = "email:riker\u{202E}@enterprise.org";
+        sqlx::query(
+            "INSERT INTO handles (handle, contact_id, linked_how, linked_at_utc, tz_offset) \
+             VALUES (?, ?, 'manual', '2364-03-01T09:00:00.000000Z', '+00:00')",
+        )
+        .bind(hidden)
+        .bind(&troi)
+        .execute(&store.pool)
+        .await
+        .unwrap();
+        sqlx::query("UPDATE _datalib_meta SET value = '1' WHERE key = 'schema_version'")
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        store
+            .seal("a link made under handle rules 1")
+            .await
+            .unwrap();
+        store.close().await;
+
+        let store = Store::open(&path).await.unwrap();
+        let got = store.resolve(std::slice::from_ref(&riker)).await.unwrap();
+        assert_eq!(
+            got[riker.as_str()].key,
+            troi,
+            "the clean link still resolves"
+        );
+        let c = store.contact(&troi).await.unwrap().unwrap();
+        let shown: Vec<(String, Option<Handle>)> = c
+            .handles
+            .iter()
+            .map(|h| (h.value.clone(), h.handle.clone()))
+            .collect();
+        assert_eq!(
+            shown,
+            vec![
+                ("riker@enterprise.org".to_string(), Some(riker)),
+                (hidden.to_string(), None),
+            ],
+            "the link the rules no longer read is shown as written, not dropped"
+        );
         store.close().await;
     }
 
