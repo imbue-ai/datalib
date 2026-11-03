@@ -59,6 +59,16 @@ pub fn search_body(start_cursor: Option<&str>, in_trash: bool) -> Value {
     body
 }
 
+/// What `POST /v1/data_sources/{id}/query` is sent: a page of
+/// [`PAGE_SIZE`] rows from `start_cursor`.
+pub fn query_body(start_cursor: Option<&str>) -> Value {
+    let mut body = serde_json::json!({ "page_size": PAGE_SIZE });
+    if let Some(c) = start_cursor {
+        body["start_cursor"] = Value::String(c.to_string());
+    }
+    body
+}
+
 pub struct NotionOfficialClient {
     requests: AtomicU64,
     network_ms: AtomicU64,
@@ -234,11 +244,26 @@ impl NotionOfficialClient {
             .await
     }
 
-    /// One database: its title and its parent, for the path above its
-    /// rows. Its rows come from search, never from here.
+    /// One database: its title, its parent, and the data sources that
+    /// hold its rows.
     pub async fn get_database(&self, database_id: &str) -> Result<Value, NotionOfficialError> {
         self.request("GET", &format!("/databases/{database_id}"), None)
             .await
+    }
+
+    /// One page of a data source's rows, each a complete page object.
+    pub async fn query_data_source(
+        &self,
+        data_source_id: &str,
+        start_cursor: Option<&str>,
+    ) -> Result<Value, NotionOfficialError> {
+        let body = query_body(start_cursor);
+        self.request(
+            "POST",
+            &format!("/data_sources/{data_source_id}/query"),
+            Some(&body),
+        )
+        .await
     }
 
     /// One page of `POST /v1/search`, newest-edited first.

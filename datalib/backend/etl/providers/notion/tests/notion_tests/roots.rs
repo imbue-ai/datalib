@@ -1,8 +1,9 @@
-//! Roots mode mirrors what hangs under each root, found by its parent
-//! in the workspace's search rather than by a link in the root's body,
-//! and the pages a root's body links. A database pasted as a root was
-//! refused as "a database, not a page", and a root page's sub-pages
-//! that its body did not link were never found.
+//! Roots mode mirrors what hangs under each root, found by walking down
+//! from the roots rather than by a link in the root's body, and the
+//! pages a root's body links. A database pasted as a root was refused
+//! as "a database, not a page", a root page's sub-pages that its body
+//! did not link were never found, and a first sync listed the whole
+//! workspace to find them.
 
 use datalib_etl::doltlite_raw as dr;
 use datalib_etl::store_handle::RawStoreHandle;
@@ -35,6 +36,20 @@ fn under_page(id: &str, parent: &str) -> Value {
     hanging_off(id, json!({"type": "page_id", "page_id": parent}))
 }
 
+const LATER: &str = "2026-09-02T00:00:00.000Z";
+
+fn on_page(id: &str) -> Value {
+    json!({"type": "page_id", "page_id": id})
+}
+
+/// A block as a children listing returns it.
+fn child(id: &str, kind: &str, has_children: bool, parent: Value) -> Value {
+    json!({
+        "object": "block", "id": id, "type": kind, "has_children": has_children,
+        "last_edited_time": EDITED, "parent": parent, kind: {"title": ""},
+    })
+}
+
 fn mention(id: &str) -> String {
     format!(
         "<mention-page url=\"https://app.notion.com/p/{}\"/>",
@@ -45,8 +60,9 @@ fn mention(id: &str) -> String {
 /// The workspace: a database of missions with a row and a page under
 /// it; the bridge, with a page inside a toggle on it and a mention of
 /// sickbay, and links to things that are not pages (its toggle, the crew
-/// database, something the search does not list); sickbay's own
-/// sub-page, and the holodeck, which nothing reaches.
+/// database, something Notion will not show); sickbay's own sub-page,
+/// and the holodeck, which nothing reaches and which alone was edited
+/// after the walk down began.
 fn workspace(tape: &std::path::Path) {
     let results = json!([
         {
@@ -63,26 +79,80 @@ fn workspace(tape: &std::path::Path) {
         hanging_off(READY_ROOM, json!({"type": "block_id", "block_id": TOGGLE})),
         page(SICKBAY, EDITED),
         under_page(SICKBAY_CHART, SICKBAY),
-        page(HOLODECK, EDITED),
         {
             "object": "data_source", "id": CREW_DS, "last_edited_time": EDITED,
             "parent": {"type": "database_id", "database_id": CREW},
             "database_parent": {"type": "workspace", "workspace": true},
         },
     ]);
-    serve_search(tape, None, results.clone(), None);
-    serve(
-        tape,
-        &format!("{BASE}/blocks/{TOGGLE}"),
-        json!({"object": "block", "id": TOGGLE, "type": "toggle",
-               "parent": {"type": "page_id", "page_id": BRIDGE}}),
-    );
     let pages = results.as_array().unwrap().iter();
     for obj in pages.filter(|o| o["object"] == "page") {
         let id = obj["id"].as_str().unwrap();
-        serve(tape, &format!("{BASE}/pages/{id}"), obj.clone());
+        serve_page_object(tape, obj.clone());
         serve_comments(tape, id);
     }
+    // Only the holodeck was edited since: the search finds nothing else,
+    // so what the roots reach is what the walk down from them found.
+    let mut searched = vec![page(HOLODECK, LATER)];
+    searched.extend(results.as_array().unwrap().iter().cloned());
+    // The workspace goes on past this page; a run that listed all of it
+    // would ask for the next one, which the tape does not hold.
+    serve_search(
+        tape,
+        None,
+        json!(searched),
+        Some("the-rest-of-the-workspace"),
+    );
+
+    serve(
+        tape,
+        &format!("{BASE}/blocks/{MISSIONS}"),
+        child(
+            MISSIONS,
+            "child_database",
+            false,
+            json!({"type": "workspace", "workspace": true}),
+        ),
+    );
+    serve(
+        tape,
+        &format!("{BASE}/databases/{MISSIONS}"),
+        json!({"object": "database", "id": MISSIONS, "title": [{"plain_text": "Missions"}],
+               "parent": {"type": "workspace", "workspace": true},
+               "data_sources": [{"id": MISSIONS_DS, "name": "Missions"}]}),
+    );
+    serve_rows(tape, MISSIONS_DS, json!([results[1].clone()]));
+    serve_children(
+        tape,
+        AWAY_TEAM,
+        json!([child(DEBRIEF, "child_page", false, on_page(AWAY_TEAM))]),
+    );
+    serve_children(
+        tape,
+        BRIDGE,
+        json!([child(TOGGLE, "toggle", true, on_page(BRIDGE))]),
+    );
+    serve_children(
+        tape,
+        TOGGLE,
+        json!([child(
+            READY_ROOM,
+            "child_page",
+            false,
+            json!({"type": "block_id", "block_id": TOGGLE})
+        )]),
+    );
+    serve(
+        tape,
+        &format!("{BASE}/blocks/{CREW}"),
+        child(
+            CREW,
+            "child_database",
+            false,
+            json!({"type": "workspace", "workspace": true}),
+        ),
+    );
+    serve_status(tape, &format!("{BASE}/blocks/{UNSEEN}"), 404);
     serve_body(
         tape,
         BRIDGE,
@@ -249,7 +319,7 @@ async fn a_page_moved_under_a_root_is_mirrored_by_the_next_run() {
         json!([moved.clone(), page(BRIDGE, EDITED)]),
         None,
     );
-    serve(&tape, &format!("{BASE}/pages/{HOLODECK}"), moved);
+    serve_page_object(&tape, moved);
     serve_body(&tape, HOLODECK, "Arch.\n", false);
     serve_comments(&tape, HOLODECK);
     run(&tape, &store, &[BRIDGE]).await.unwrap();
@@ -258,4 +328,44 @@ async fn a_page_moved_under_a_root_is_mirrored_by_the_next_run() {
         vec![BRIDGE.to_string(), HOLODECK.to_string()]
     );
     assert!(problems(&store).await.is_empty());
+}
+
+/// A walk down that a listing interrupted covers nothing and says so;
+/// the run does not fall back to listing the whole workspace, and the
+/// next run walks down again and clears the row.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_walk_a_listing_interrupted_is_walked_again_not_searched() {
+    let d = tempdir().unwrap();
+    let (tape, store) = (d.path().join("tape"), d.path().join("s.doltlite_db"));
+    workspace(&tape);
+    serve_status(&tape, &children_url(TOGGLE), 500);
+
+    run(&tape, &store, &[BRIDGE]).await.unwrap();
+    assert_eq!(
+        problems(&store).await,
+        vec![row("listing:roots", "error")],
+        "and no listing:search: the search past its first page was not asked for"
+    );
+    assert_eq!(stored_pages(&store).await, vec![BRIDGE, SICKBAY]);
+
+    serve_children(
+        &tape,
+        TOGGLE,
+        json!([child(
+            READY_ROOM,
+            "child_page",
+            false,
+            json!({"type": "block_id", "block_id": TOGGLE})
+        )]),
+    );
+    run(&tape, &store, &[BRIDGE]).await.unwrap();
+    assert!(
+        problems(&store).await.is_empty(),
+        "{:?}",
+        problems(&store).await
+    );
+    assert_eq!(
+        stored_pages(&store).await,
+        vec![BRIDGE, SICKBAY, READY_ROOM]
+    );
 }

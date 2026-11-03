@@ -195,7 +195,7 @@ async fn a_user_that_did_not_fetch_is_retried_every_run() {
     let mut obj = page(BRIDGE, EDITED);
     obj["created_by"] = json!({"object": "user", "id": riker});
     serve_workspace(&tape, &[BRIDGE]);
-    serve(&tape, &format!("{BASE}/pages/{BRIDGE}"), obj);
+    serve_page_object(&tape, obj);
     serve_body(&tape, BRIDGE, "", false);
     serve_comments(&tape, BRIDGE);
 
@@ -232,7 +232,7 @@ async fn a_user_notion_will_not_show_is_kept_as_what_the_store_knows() {
         "object": "user", "id": picard, "name": "Jean-Luc Picard", "type": "person",
         "person": {"email": "picard@enterprise.test"}}]}});
     serve_workspace(&tape, &[BRIDGE]);
-    serve(&tape, &format!("{BASE}/pages/{BRIDGE}"), obj);
+    serve_page_object(&tape, obj);
     serve_body(&tape, BRIDGE, "", false);
     let mut c = comment("c1", BRIDGE, None);
     c["created_by"] = json!({"object": "user", "id": worf});
@@ -279,6 +279,7 @@ async fn a_root_notion_does_not_have_is_a_config_problem() {
     serve_workspace(&tape, &[BRIDGE]);
     serve_page(&tape, BRIDGE, EDITED, "");
     serve_status(&tape, &format!("{BASE}/pages/{SICKBAY}"), 404);
+    serve_status(&tape, &format!("{BASE}/blocks/{SICKBAY}"), 404);
 
     run(&tape, &store, &[BRIDGE, SICKBAY]).await.unwrap();
     assert_eq!(
@@ -483,6 +484,8 @@ async fn a_credential_refused_part_way_keeps_what_it_fetched() {
     let (tape, store) = (d.path().join("tape"), d.path().join("s.doltlite_db"));
     serve_workspace(&tape, &[BRIDGE, SICKBAY, HOLODECK]);
     serve_page(&tape, BRIDGE, EDITED, "");
+    serve_object(&tape, SICKBAY, EDITED);
+    serve_object(&tape, HOLODECK, EDITED);
     serve_status(&tape, &format!("{BASE}/pages/{SICKBAY}"), 401);
 
     run(&tape, &store, &[BRIDGE, SICKBAY, HOLODECK])
@@ -511,8 +514,10 @@ async fn comments_the_credential_may_not_read_are_one_row() {
 
     let first = run(&tape, &store, &[BRIDGE, SICKBAY]).await.unwrap();
     assert_eq!(first.new_pages, 2);
-    // The search, two objects, two bodies, and comments asked once.
-    assert_eq!(first.official_requests, 6);
+    // The search for its newest edit, each root as a block and its
+    // children, the search for what changed since, two objects, two
+    // bodies, and comments asked once.
+    assert_eq!(first.official_requests, 11);
     assert_eq!(
         problems(&store).await,
         vec![row("listing:comments", "warning")]
