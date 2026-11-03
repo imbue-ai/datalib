@@ -661,6 +661,35 @@ mod diffs {
         assert_eq!(kinds, vec!["added", "modified", "removed"]);
     }
 
+    /// `dolt_diff_summary` names a table added or dropped between two
+    /// commits with `''`, not NULL, on the side it is missing from, and
+    /// says which by `diff_type`: `added` or `dropped`.
+    #[tokio::test]
+    async fn a_summary_names_an_added_or_dropped_table_with_an_empty_string() {
+        let s = Store::new();
+        let mut w = s.rw().await;
+        let before = head(&mut w).await;
+        ok(&mut w, "CREATE TABLE u (id TEXT PRIMARY KEY)").await;
+        ok(&mut w, "INSERT INTO u VALUES ('a')").await;
+        let added = commit(&mut w, "add u").await;
+        ok(&mut w, "DROP TABLE u").await;
+        let dropped = commit(&mut w, "drop u").await;
+        let row = |from: &str, to: &str| {
+            format!(
+                "SELECT quote(from_table_name) || ' ' || quote(to_table_name) || ' ' || diff_type \
+                 FROM dolt_diff_summary WHERE from_ref = '{from}' AND to_ref = '{to}'"
+            )
+        };
+        assert_eq!(
+            texts(&mut w, &row(&before, &added)).await,
+            vec!["'' 'u' added"]
+        );
+        assert_eq!(
+            texts(&mut w, &row(&added, &dropped)).await,
+            vec!["'u' '' dropped"]
+        );
+    }
+
     #[tokio::test]
     async fn an_unchanged_row_is_no_change() {
         let (s, _) = store_with_rows().await;

@@ -498,7 +498,8 @@ async fn advance_content(conn: &mut sqlx::SqliteConnection) -> Result<()> {
 /// shape, or came or went, between two commits.
 async fn content_moved(conn: &mut sqlx::SqliteConnection, from: &str, to: &str) -> Result<bool> {
     let tables: Vec<String> = sqlx::query_scalar(
-        "SELECT coalesce(to_table_name, from_table_name) FROM dolt_diff_summary \
+        // A table added or dropped has `''` on the side it is missing from.
+        "SELECT coalesce(nullif(to_table_name, ''), from_table_name) FROM dolt_diff_summary \
          WHERE from_ref = ? AND to_ref = ? AND (data_change = 1 OR schema_change = 1)",
     )
     .bind(from)
