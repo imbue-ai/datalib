@@ -40,7 +40,7 @@ const QMD_PKG_REL: &str = "node_modules/@tobilu/qmd";
 /// tree — what the package's `bin/qmd` launcher execs (see
 /// `third-party/qmd/bin/qmd`), so running it via node directly is
 /// equivalent to `npx -y @tobilu/qmd@<v>`.
-const QMD_ENTRY_REL: &str = "node_modules/@tobilu/qmd/dist/cli/qmd.js";
+pub const QMD_ENTRY_REL: &str = "node_modules/@tobilu/qmd/dist/cli/qmd.js";
 
 /// The staged Node and the `@tobilu/qmd` package directory, for a caller
 /// driving qmd's SDK (`dist/index.js`) from its own script instead of

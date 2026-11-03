@@ -1052,6 +1052,22 @@ impl Mirror<'_> {
         owed::drain(&l, owed, &lookup).await
     }
 
+    async fn look_up_authors(&self) -> Result<()> {
+        let started = std::time::Instant::now();
+        let users = self.fetch_users_owed().await?;
+        if users != owed::Drained::default() {
+            info!(
+                event = "slack_users_looked_up",
+                got = users.got,
+                failed = users.failed,
+                left = users.left,
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "looked up the authors no user listing had named"
+            );
+        }
+        Ok(())
+    }
+
     /// A page `history_params` asked for, stored in one transaction with
     /// the stretch it settles. `walk` is left where the page after
     /// starts.
@@ -1849,6 +1865,9 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             sealer: opts.sealer.as_ref(),
             blake3_by_file: &blake3_by_file,
         };
+        // Authors an earlier run named and did not look up, as a stopped
+        // run does not: until they are, their messages show no one.
+        mirror.look_up_authors().await?;
         let mut totals = Totals::default();
         let mut messages_in = vec![0usize; targets.len()];
         // Messages a walk found above everything held.
@@ -2054,18 +2073,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                 "told to stop; leaving the rest for the next run"
             );
         } else {
-            let started = std::time::Instant::now();
-            let users = mirror.fetch_users_owed().await?;
-            if users != owed::Drained::default() {
-                info!(
-                    event = "slack_users_looked_up",
-                    got = users.got,
-                    failed = users.failed,
-                    left = users.left,
-                    elapsed_ms = started.elapsed().as_millis() as u64,
-                    "looked up the authors no user listing had named"
-                );
-            }
+            mirror.look_up_authors().await?;
         }
         grand.messages = totals.messages;
         grand.replies = totals.replies;

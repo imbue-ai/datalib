@@ -116,6 +116,10 @@ const EXAMPLES: &[Example] = &[
         command: "datalib-step pull-runtime",
     },
     Example {
+        what: "put it beside the binaries instead, for an install another user runs",
+        command: "datalib-step pull-runtime --into /opt/datalib/runtime",
+    },
+    Example {
         what: "fetch the search index's embedding models before the first embed",
         command: "datalib-step pull-models",
     },
@@ -266,13 +270,20 @@ enum Cmd {
     /// latchkey in place — the tree beside the binaries when one is
     /// shipped, else the release asset `runtime.manifest` names,
     /// fetched sha256-verified into `$XDG_CACHE_HOME/datalib/runtime`
-    /// (`~/.cache/datalib/runtime` by default) — and run `qmd --version`
-    /// and `latchkey --version` through it. What every sync does on its
-    /// first `qmd` or `latchkey`, runnable ahead of time. Needs no data
-    /// root. Every install on the machine shares that cache, which keeps
-    /// one release's runtime and removes the rest; to try a release
-    /// beside another, set `XDG_CACHE_HOME` for it.
-    PullRuntime,
+    /// (`~/.cache/datalib/runtime` by default) — run `qmd --version`
+    /// through it and read the latchkey it holds. What every sync does on
+    /// its first `qmd` or `latchkey`, runnable ahead of time. Needs no
+    /// data root and no latchkey key. Every install on the machine shares
+    /// that cache, which keeps one release's runtime and removes the rest;
+    /// to try a release beside another, set `XDG_CACHE_HOME` for it.
+    PullRuntime {
+        /// Put the runtime here instead of the cache, replacing what is
+        /// there: `runtime/` beside the binaries, or one level up, is
+        /// where they look first, whatever `HOME` is. For an install that
+        /// runs as another user than the one who installed it.
+        #[arg(long)]
+        into: Option<PathBuf>,
+    },
     /// Utility (not a pipeline step): rewrite a config file in the order
     /// data flows — each step below the steps it reads, each group's
     /// entries together — moving an entry only when it has to, and
@@ -434,8 +445,9 @@ async fn main() {
     }
     // `pull-runtime` likewise. Off the async runtime for the same
     // reason as `pull-models`.
-    if let Some(Cmd::PullRuntime) = &cli.cmd {
-        let out = tokio::task::spawn_blocking(pull_runtime)
+    if let Some(Cmd::PullRuntime { into }) = &cli.cmd {
+        let into = into.clone();
+        let out = tokio::task::spawn_blocking(move || pull_runtime(into.as_deref()))
             .await
             .expect("pull-runtime task panicked");
         match out {
@@ -607,7 +619,7 @@ async fn run(
         Some(Cmd::Examples { .. }) => unreachable!("examples is answered in main"),
         Some(Cmd::CheckParams { .. }) => unreachable!("check-params is answered in main"),
         Some(Cmd::PullModels { .. }) => unreachable!("pull-models is answered in main"),
-        Some(Cmd::PullRuntime) => unreachable!("pull-runtime is answered in main"),
+        Some(Cmd::PullRuntime { .. }) => unreachable!("pull-runtime is answered in main"),
         Some(Cmd::TopoSortConfig { .. }) => {
             unreachable!("topo-sort-config is answered in main")
         }
@@ -730,26 +742,92 @@ async fn run_function(
     }
 }
 
-/// Resolve qmd through the runtime resolver — fetching on a miss, now
-/// that the fetcher is enabled — and run `--version` through it, so
-/// the report names the tree that will serve the next sync and proves
-/// its Node starts.
-fn pull_runtime() -> Result<String> {
-    let qmd = version_through_runtime(datalib_runtime::qmd::qmd_command(
-        datalib_runtime::qmd::DEFAULT_QMD_VERSION,
-    )?)?;
-    let root = datalib_runtime::node_runtime::runtime_root()
-        .context("no runtime root after a successful resolution")?;
-    let latchkey = version_through_runtime(datalib_runtime::node_runtime::latchkey_command()?)?;
+/// Put the runtime in place — resolving qmd fetches it on a miss, now
+/// that the fetcher is enabled, or `into` names where — then run
+/// `qmd --version` through it, so the report names the tree that will
+/// serve the next sync and proves its Node starts. Both tools, because a
+/// tree can hold one and not the other; the .app's post-bundle check
+/// (`datalib/tauri/check-app.sh`) runs this.
+fn pull_runtime(into: Option<&Path>) -> Result<String> {
+    use datalib_runtime::node_runtime as nr;
+    use datalib_runtime::qmd::{DEFAULT_QMD_VERSION, QMD_ENTRY_REL};
+    let root = match into {
+        Some(dir) => install_runtime(dir)?,
+        None => {
+            datalib_runtime::qmd::qmd_command(DEFAULT_QMD_VERSION)?;
+            nr::runtime_root().context("no runtime root after a successful resolution")?
+        }
+    };
+    let qmd = nr::command_in(&root, "qmd", DEFAULT_QMD_VERSION, QMD_ENTRY_REL)
+        .with_context(|| format!("{} holds no qmd {DEFAULT_QMD_VERSION}", root.display()))?;
+    let qmd = version_through_runtime(qmd)?;
+    let latchkey = latchkey_version(&root)?;
     Ok(format!(
-        "runtime: {}\nqmd --version: {qmd}\nlatchkey --version: {latchkey}",
+        "runtime: {}\nqmd --version: {qmd}\nlatchkey: {latchkey}",
         root.display()
     ))
 }
 
-// Both tools, because a tree can hold one and not the other, and
-// because this is what the .app's post-bundle check runs
-// (`datalib/tauri/check-app.sh`).
+/// The manifest's runtime at `dir`: fetched into a scratch directory
+/// beside it, then renamed over whatever `dir` held, so a reader sees
+/// the old tree or the new one and never half of either.
+fn install_runtime(dir: &Path) -> Result<PathBuf> {
+    use datalib_runtime::node_runtime::{manifest, FetchOutcome, MANIFEST_FILE};
+    let manifest = manifest().map_err(|e| match e {
+        FetchOutcome::BadManifest(e) => anyhow::anyhow!("the runtime manifest is unreadable: {e}"),
+        _ => anyhow::anyhow!(
+            "no `{MANIFEST_FILE}` beside this binary, so nothing says which runtime to fetch"
+        ),
+    })?;
+    let name = dir
+        .file_name()
+        .with_context(|| format!("{} names no directory", dir.display()))?
+        .to_string_lossy();
+    let scratch = dir.with_file_name(format!(".{name}.fetch"));
+    let fetched = datalib_fetch::runtime::ensure_runtime(manifest, &scratch)?;
+    let old = dir.with_file_name(format!(".{name}.old-{}", std::process::id()));
+    if dir.exists() {
+        std::fs::rename(dir, &old).with_context(|| format!("move {} aside", dir.display()))?;
+    }
+    std::fs::rename(&fetched, dir)
+        .with_context(|| format!("rename {} -> {}", fetched.display(), dir.display()))?;
+    for leftover in [&old, &scratch] {
+        if leftover.exists() {
+            std::fs::remove_dir_all(leftover)
+                .with_context(|| format!("remove {}", leftover.display()))?;
+        }
+    }
+    Ok(dir.to_path_buf())
+}
+
+/// The latchkey the tree holds, read from its `package.json` rather than
+/// by running it: `latchkey --version` looks up its encryption key first,
+/// fails where there is no key and no keychain, and on a mac makes one.
+fn latchkey_version(root: &Path) -> Result<String> {
+    use datalib_runtime::node_runtime as nr;
+    let version = nr::LATCHKEY_VERSION;
+    let package = root.join("latchkey").join(version);
+    anyhow::ensure!(
+        package.join(nr::LATCHKEY_ENTRY_REL).is_file(),
+        "{} holds no latchkey {version}",
+        root.display()
+    );
+    let manifest = package.join("node_modules/latchkey/package.json");
+    let text = std::fs::read_to_string(&manifest)
+        .with_context(|| format!("read {}", manifest.display()))?;
+    let said: serde_json::Value =
+        serde_json::from_str(&text).with_context(|| format!("parse {}", manifest.display()))?;
+    let said = said["version"]
+        .as_str()
+        .with_context(|| format!("{} has no version", manifest.display()))?;
+    anyhow::ensure!(
+        said == version,
+        "{} is latchkey {said}, not the {version} this build pins",
+        manifest.display()
+    );
+    Ok(format!("{said} ({})", package.display()))
+}
+
 fn version_through_runtime(mut cmd: std::process::Command) -> Result<String> {
     let out = cmd
         .arg("--version")
