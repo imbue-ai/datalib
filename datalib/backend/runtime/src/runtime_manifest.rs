@@ -150,8 +150,10 @@ fn parse_line(line: &str) -> Result<RuntimeAsset, String> {
     let bytes: u64 = bytes
         .parse()
         .map_err(|_| format!("`{bytes}` is not a byte count"))?;
-    if !url.starts_with("https://") && !url.starts_with("http://127.0.0.1") {
-        return Err(format!("`{url}`: only https URLs are fetched"));
+    if !fetchable(url) {
+        return Err(format!(
+            "`{url}`: only https URLs are fetched (or http from 127.0.0.1, for a test)"
+        ));
     }
     Ok(RuntimeAsset {
         kind,
@@ -160,6 +162,18 @@ fn parse_line(line: &str) -> Result<RuntimeAsset, String> {
         bytes,
         url: url.to_string(),
     })
+}
+
+/// `https`, or `http` to exactly `127.0.0.1` for a test's own server.
+fn fetchable(raw: &str) -> bool {
+    let Ok(url) = url::Url::parse(raw) else {
+        return false;
+    };
+    match url.scheme() {
+        "https" => url.host().is_some(),
+        "http" => url.host() == Some(url::Host::Ipv4(std::net::Ipv4Addr::LOCALHOST)),
+        _ => false,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -212,6 +226,21 @@ mod tests {
         assert!(line("cpu r.tar.gz abc 1 https://x/").contains("sha256"));
         assert!(line(&format!("cpu r.tar.gz {SHA_A} many https://x/")).contains("byte count"));
         assert!(line(&format!("cpu r.tar.gz {SHA_A} 1 http://x/")).contains("https"));
+        for url in [
+            "http://127.0.0.1.evil.example/r.tar.gz",
+            "http://127.0.0.1@evil.example/r.tar.gz",
+            "http://127.0.0.1:80@evil.example/r.tar.gz",
+            "ftp://x/r.tar.gz",
+        ] {
+            assert!(
+                line(&format!("cpu r.tar.gz {SHA_A} 1 {url}")).contains("https"),
+                "{url}"
+            );
+        }
+        Manifest::parse(&format!(
+            "cpu r.tar.gz {SHA_A} 1 http://127.0.0.1:8080/r.tar.gz"
+        ))
+        .unwrap();
         assert!(line(&format!("cpu ../r.tar.gz {SHA_A} 1 https://x/")).contains("bare file name"));
         assert!(line(&format!("cpu r.tar.gz {SHA_A} 1")).contains("got 4 fields"));
         let twice = format!("cpu a.tar.gz {SHA_A} 1 https://x/\ncpu b.tar.gz {SHA_B} 1 https://x/");

@@ -9,8 +9,8 @@ exports_files([
 ])
 
 # The data-root layout plus the bundled-Node/npx resolution every binary
-# shares. No first-party dependencies, so any crate can link it; its one
-# third-party one, tempfile, is in every test tree already.
+# shares. No first-party dependencies, so any crate can link it; its
+# third-party ones, tempfile and url, are in every test tree already.
 rust_library(
     name = "datalib_runtime",
     srcs = glob(["src/**/*.rs"]),
@@ -23,7 +23,10 @@ rust_library(
     # //datalib/backend:version_consistency_test asserts that.
     version = "0.48.0",
     visibility = ["//datalib:__subpackages__"],
-    deps = ["@datalib_crates//:tempfile"],
+    deps = [
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:url",
+    ],
 )
 
 rust_test(
