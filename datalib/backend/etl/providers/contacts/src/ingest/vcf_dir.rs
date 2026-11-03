@@ -144,42 +144,26 @@ async fn ingest_one(
     summary: &mut FetchSummary,
 ) -> Result<()> {
     let body = std::fs::read_to_string(file).with_context(|| format!("read {}", file.display()))?;
-    let cards = whole_cards(&body)?;
     let label = addressbook_label(file);
     let book_href = relative_href(root, file);
     let book_id = addressbook_pk(account_id, &book_href);
+    // The parse is ours, but it reads whatever the file holds, so a
+    // panic in it is this file's failure, not the run's.
+    let rows =
+        run_problems::catching_panics(|| card_rows(file, &label, &book_href, &book_id, &body))?;
     db.upsert_addressbook(account_id, &book_href, Some(&label), None, None)
         .await?;
     summary.addressbooks += 1;
 
     let existing = db.contact_uids(&book_id).await?;
     let mut seen: HashSet<String> = HashSet::new();
-    let mut rows: Vec<ContactRow> = Vec::new();
-    // How many cards of each synthesized name this file has had so far,
-    // so a second "John Smith" gets an id of his own.
-    let mut synth_seen: HashMap<String, usize> = HashMap::new();
-    for (idx, block) in cards.into_iter().enumerate() {
-        let href = if idx == 0 {
-            book_href.clone()
-        } else {
-            format!("{book_href}#{idx}")
-        };
-        let uid = contact_uid(file, &label, idx, &block, &mut synth_seen);
-        seen.insert(uid.clone());
-        if existing.contains(&uid) {
+    for row in &rows {
+        seen.insert(row.uid.clone());
+        if existing.contains(&row.uid) {
             summary.contacts_updated += 1;
         } else {
             summary.contacts_new += 1;
         }
-        rows.push(ContactRow::new(
-            book_id.clone(),
-            uid,
-            href,
-            None,
-            vcard_fn(&block),
-            vcard_rev(&block),
-            &block,
-        ));
     }
     db.upsert_contacts(&rows).await?;
     // A `.vcf` file is the whole address book: a card it no longer
@@ -189,6 +173,40 @@ async fn ingest_one(
     summary.contacts_deleted += gone.len();
     db.delete_contacts_by_uid(&book_id, &gone).await?;
     Ok(())
+}
+
+fn card_rows(
+    file: &Path,
+    label: &str,
+    book_href: &str,
+    book_id: &str,
+    body: &str,
+) -> Result<Vec<ContactRow>> {
+    // How many cards of each synthesized name this file has had so far,
+    // so a second "John Smith" gets an id of his own.
+    let mut synth_seen: HashMap<String, usize> = HashMap::new();
+    let cards = whole_cards(body)?;
+    Ok(cards
+        .into_iter()
+        .enumerate()
+        .map(|(idx, block)| {
+            let href = if idx == 0 {
+                book_href.to_string()
+            } else {
+                format!("{book_href}#{idx}")
+            };
+            let uid = contact_uid(file, label, idx, &block, &mut synth_seen);
+            ContactRow::new(
+                book_id.to_string(),
+                uid,
+                href,
+                None,
+                vcard_fn(&block),
+                vcard_rev(&block),
+                &block,
+            )
+        })
+        .collect())
 }
 
 /// The file's cards, or why it cannot stand for its whole address book.

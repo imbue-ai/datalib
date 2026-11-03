@@ -211,7 +211,7 @@ fn push_bytes(out: &mut Vec<u8>, b: &[u8]) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
     fn build(objects: &[Vec<u8>], trailer_extra: &str) -> Vec<u8> {
@@ -247,7 +247,12 @@ mod tests {
         .into_bytes()
     }
 
-    fn doc(body: &str, title: &str, doc_id: &str, xmp_instance: Option<&str>) -> Vec<u8> {
+    pub(crate) fn doc(
+        body: &str,
+        title: &str,
+        doc_id: &str,
+        xmp_instance: Option<&str>,
+    ) -> Vec<u8> {
         let mut catalog = String::from("<< /Type /Catalog /Pages 2 0 R");
         if xmp_instance.is_some() {
             catalog.push_str(" /Metadata 5 0 R");

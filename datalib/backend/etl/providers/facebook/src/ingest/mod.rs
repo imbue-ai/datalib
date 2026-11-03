@@ -178,7 +178,7 @@ async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
     for path in export.with_extension("json") {
         let rel = relative(&opts.input_path, path);
         present.insert(rel.clone());
-        match read_records(path, &rel) {
+        match run_problems::catching_panics(|| read_records(path, &rel)) {
             Ok((records, file)) => {
                 summary.files += 1;
                 for table in tables_of(&rel) {

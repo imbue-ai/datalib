@@ -302,7 +302,8 @@ async fn read_snapshot(
             Ok((blake3, size, snap, info))
         })
         .await
-        .context("join snapshot read task")?
+        // A panic in the decrypt or the parse is this snapshot's failure.
+        .unwrap_or_else(|e| Err(anyhow::anyhow!("read the snapshot: {e}")))
     };
     let (snapshot_blake3, total_byte_size, snap_data, info) = match opened {
         Ok(o) => o,

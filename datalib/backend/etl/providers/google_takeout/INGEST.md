@@ -147,6 +147,9 @@ value's JSON shape (`string(12 chars)`, `object{a,b}`).
 `fetch` runs each feed through `RunProblems::run_phase`, which turns an
 error or a panic into a `phase:<feed>` row in `problems` and goes on to
 the next feed.
+Inside a feed read file by file (`per_file.rs`), a file whose parse
+panics is skipped the way one that will not parse is, and the rest of
+the feed goes on.
 The export is someone else's HTML and JSON, so one odd entry must not
 stop nine products from syncing; the row is what puts the failure on
 the Manage screen. `feeds_failed` in the step summary counts them. A

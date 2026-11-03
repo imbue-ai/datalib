@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use datalib_etl::bulk::{bulk_upsert_in_tx, BulkUpsertable};
 use datalib_etl::download_problems::SkippedRecord;
 use datalib_etl::prune;
-use datalib_etl::run_problems::RunProblems;
+use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl_files::{file_checkpoint, fsscan};
 use datalib_problems::{Problem, Reason};
 use datalib_time::IsoOffsetTimestamp;
@@ -62,7 +62,7 @@ pub async fn ingest<T: FromFile>(
     {
         let parsed = std::fs::read(&f.path)
             .with_context(|| format!("read {}", super::shape::shape_rel(&f.rel)))
-            .and_then(|bytes| parse(f, &bytes));
+            .and_then(|bytes| run_problems::catching_panics(|| parse(f, &bytes)));
         match parsed {
             Ok(r) => {
                 rows.extend(r);
