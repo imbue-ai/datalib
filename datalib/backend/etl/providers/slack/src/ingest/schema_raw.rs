@@ -169,20 +169,17 @@ pub struct MessageRow {
 
 /// Per-read fields split out of the `messages` content payload into
 /// `messages_bookkeeping.volatile_payload`; none is a change to the
-/// message. Slack puts `last_read` (how far into the thread the account
-/// has read) and `subscribed` (whether it follows it) on the root of a
-/// followed thread, only in the copy `conversations.replies` returns.
-/// And it mints a new `block_id` for a rich-text block the poster gave
-/// none on every read of the message.
+/// message. Slack puts `subscribed` (whether the account follows the
+/// thread) on the root of a followed thread, only in the copy
+/// `conversations.replies` returns, beside its read mark
+/// ([`split_read_mark`]). And it mints a new `block_id` for a rich-text
+/// block the poster gave none on every read of the message.
 ///
 /// The `conversations.history` copy of a followed root has block ids but
-/// no `last_read`, so the sidecar is merged by top-level key
-/// ([`dr::merge_volatile`]): storing that copy does not lose the mark.
-pub const MESSAGE_VOLATILE_PATHS: &[dr::VolatilePath] = &[
-    &["last_read"],
-    &["subscribed"],
-    &["blocks", dr::EVERY_ELEMENT, "block_id"],
-];
+/// no `subscribed`, so the sidecar is merged by top-level key
+/// ([`dr::merge_volatile`]): storing that copy does not lose it.
+pub const MESSAGE_VOLATILE_PATHS: &[dr::VolatilePath] =
+    &[&["subscribed"], &["blocks", dr::EVERY_ELEMENT, "block_id"]];
 
 /// Index on `messages(channel_id, ts)` — supports the listing-style
 /// "all messages in a channel, ordered by time" query without a
@@ -223,12 +220,12 @@ pub struct SlackAttachmentRow {
     pub blake3: Option<String>,
 }
 
-/// `channel_read_states` — how far the account has read in each
-/// mirrored conversation, one row per conversation, from `client.counts`.
+/// `channel_read_states` — the account's state in each mirrored
+/// conversation, one row per conversation, from `client.counts`.
 ///
-/// Every field but `id` is volatile ([`READ_STATE_VOLATILE_PATHS`]):
-/// reading a channel is not a change to it, so the content payload is
-/// just `{"id": …}` and the state lives in
+/// Its read mark goes to `read_marks` ([`split_read_mark`]); every other
+/// field but `id` is volatile ([`READ_STATE_VOLATILE_PATHS`]), so the
+/// content payload is just `{"id": …}` and the rest lives in
 /// `channel_read_states_bookkeeping.volatile_payload`.
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "channel_read_states")]
@@ -236,18 +233,38 @@ pub struct ChannelReadStateRow {
     pub id_and_payload: WirePayload,
 }
 
-/// The fields of a `client.counts` entry, as the live API returned them
-/// on 2026-09-24. `last_read` and `latest` are message `ts`es; `updated`
+/// The fields of a `client.counts` entry but its read mark, as the live
+/// API returned them on 2026-09-24. `latest` is a message `ts`; `updated`
 /// and `history_invalid` are `ts`-shaped stamps Slack keeps for its own
 /// cache.
 pub const READ_STATE_VOLATILE_PATHS: &[dr::VolatilePath] = &[
-    &["last_read"],
     &["latest"],
     &["updated"],
     &["history_invalid"],
     &["mention_count"],
     &["has_unreads"],
 ];
+
+/// `payload` without its `last_read`, and the mark. Slack writes the
+/// account's read mark as `last_read`, a message `ts`, on a
+/// conversation's `client.counts` entry and on the root of a followed
+/// thread; it is kept in `read_marks` and nowhere else
+/// (`datalib_etl::read_marks`). A mark that is not a string is dropped.
+pub fn split_read_mark(payload: &serde_json::Value) -> (serde_json::Value, Option<String>) {
+    let mut rest = payload.clone();
+    let mark = rest
+        .as_object_mut()
+        .and_then(|fields| fields.remove("last_read"));
+    (rest, mark.and_then(|m| m.as_str().map(String::from)))
+}
+
+/// The `read_marks` id of a conversation's mark is its conversation id,
+/// as in `channels`; of a followed thread's, its [`slack_thread_key`].
+/// They cannot collide: a thread key has two `#`, and a Slack
+/// conversation id is letters and digits.
+pub fn is_thread_mark(id: &str) -> bool {
+    id.contains('#')
+}
 
 /// `bookmarks` — the links and pinned messages in a conversation's
 /// header bar, from `bookmarks.list`. A bookmark inside a folder names
@@ -324,11 +341,27 @@ pub fn split_key(key: &str) -> Option<(&str, &str, &str)> {
 
 /// The raw store's migration ladder (etl/README.md §"The migration
 /// ladder").
-pub const LADDER: &[Migration] = &[Migration {
-    version: 1,
-    name: "a thread's held version lives in its sidecar",
-    apply: |conn| Box::pin(replies_pages_into_threads(conn)),
-}];
+pub const LADDER: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "a thread's held version lives in its sidecar",
+        apply: |conn| Box::pin(replies_pages_into_threads(conn)),
+    },
+    Migration {
+        version: 2,
+        name: "read marks move out of the sidecars into read_marks",
+        apply: |conn| Box::pin(read_marks_out_of_sidecars(conn)),
+    },
+];
+
+async fn table_exists(conn: &mut sqlx::SqliteConnection, table: &str) -> sqlx::Result<bool> {
+    sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?)",
+    )
+    .bind(table)
+    .fetch_one(conn)
+    .await
+}
 
 /// Rung 1. `replies_pages` held one row per thread with the
 /// `latest_reply` its last whole read reached, null on a thread only
@@ -336,19 +369,13 @@ pub const LADDER: &[Migration] = &[Migration {
 /// `threads` row held at that `latest_reply`, with the sidecar carried
 /// over; each problem row is rekeyed; the old table goes.
 async fn replies_pages_into_threads(conn: &mut sqlx::SqliteConnection) -> anyhow::Result<()> {
-    let has = |table: &'static str| {
-        sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?)",
-        )
-        .bind(table)
-    };
     for ddl in [THREADS_DDL.to_string(), dr::bookkeeping_ddl_for(THREADS)] {
         // Audited: this module's own DDL.
         sqlx::query(sqlx::AssertSqlSafe(ddl))
             .execute(&mut *conn)
             .await?;
     }
-    if !has("replies_pages").fetch_one(&mut *conn).await? {
+    if !table_exists(conn, "replies_pages").await? {
         return Ok(());
     }
     sqlx::query("INSERT OR IGNORE INTO threads (id) SELECT id FROM replies_pages")
@@ -364,7 +391,7 @@ async fn replies_pages_into_threads(conn: &mut sqlx::SqliteConnection) -> anyhow
     )
     .execute(&mut *conn)
     .await?;
-    if has("problems").fetch_one(&mut *conn).await? {
+    if table_exists(conn, "problems").await? {
         sqlx::query(
             "UPDATE problems \
              SET scope_key = 'threads:' || substr(scope_key, length('replies_pages:') + 1) \
@@ -379,6 +406,57 @@ async fn replies_pages_into_threads(conn: &mut sqlx::SqliteConnection) -> anyhow
         "DROP TABLE IF EXISTS replies_pages_bookkeeping",
     ] {
         sqlx::query(sql).execute(&mut *conn).await?;
+    }
+    Ok(())
+}
+
+/// Rung 2. A conversation's `last_read` sat in
+/// `channel_read_states_bookkeeping.volatile_payload`, and a followed
+/// thread's in its root's `messages_bookkeeping.volatile_payload`. Each
+/// becomes a `read_marks` row, keyed as [`is_thread_mark`] says, and
+/// leaves the sidecar. The table is made here rather than by the DDL,
+/// which would clear the store-wide cursors for a new table.
+async fn read_marks_out_of_sidecars(conn: &mut sqlx::SqliteConnection) -> anyhow::Result<()> {
+    for ddl in datalib_etl::read_marks::ReadMarkRow::all_ddl() {
+        // Audited: the shared module's own DDL.
+        sqlx::query(sqlx::AssertSqlSafe(ddl))
+            .execute(&mut *conn)
+            .await?;
+    }
+    let mut moves: Vec<(&str, &str)> = Vec::new();
+    if table_exists(conn, "channel_read_states_bookkeeping").await? {
+        moves.push((
+            "INSERT OR REPLACE INTO read_marks (id, read_through) \
+             SELECT id, json_extract(volatile_payload, '$.last_read') \
+             FROM channel_read_states_bookkeeping \
+             WHERE json_type(volatile_payload, '$.last_read') = 'text'",
+            "channel_read_states_bookkeeping",
+        ));
+    }
+    if table_exists(conn, "messages_bookkeeping").await? {
+        moves.push((
+            "INSERT OR REPLACE INTO read_marks (id, read_through) \
+             SELECT m.thread_root_uuid, json_extract(b.volatile_payload, '$.last_read') \
+             FROM messages m JOIN messages_bookkeeping b ON b.id = m.id \
+             WHERE m.is_thread_root = 1 \
+               AND json_type(b.volatile_payload, '$.last_read') = 'text'",
+            "messages_bookkeeping",
+        ));
+    }
+    for (fill, sidecar) in moves {
+        sqlx::query(fill).execute(&mut *conn).await?;
+        // A sidecar left with nothing in it is NULL, as a fresh write
+        // leaves it.
+        let strip = format!(
+            "UPDATE {sidecar} SET volatile_payload = \
+               CASE WHEN json(json_remove(volatile_payload, '$.last_read')) = '{{}}' THEN NULL \
+                    ELSE jsonb_remove(volatile_payload, '$.last_read') END \
+             WHERE json_type(volatile_payload, '$.last_read') IS NOT NULL"
+        );
+        // Audited: `sidecar` is one of the two names above.
+        sqlx::query(sqlx::AssertSqlSafe(strip))
+            .execute(&mut *conn)
+            .await?;
     }
     Ok(())
 }
@@ -401,6 +479,7 @@ pub fn full_ddl() -> Vec<String> {
         InvolvingRow::ddl(),
     ];
     out.extend(SlackAttachmentRow::all_ddl());
+    out.extend(datalib_etl::read_marks::ReadMarkRow::all_ddl());
     for table in DATA_TABLES {
         out.push(dr::bookkeeping_ddl_for(table));
     }

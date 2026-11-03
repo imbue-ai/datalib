@@ -15,6 +15,7 @@ use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::bulk::{bulk_upsert_in_tx, BulkUpsertable, EventBatch};
 use datalib_etl::doltlite_raw::{self as dr, bulk_upsert_with_tape, bulk_upsert_with_tape_split};
 use datalib_etl::event_tape::EventTape;
+use datalib_etl::read_marks::{self, ReadMarkRow};
 use datalib_etl_web::coverage::{self, Span};
 use datalib_etl_web::owed::{Fetched, Listed, Outcome};
 
@@ -22,9 +23,9 @@ pub use datalib_etl::doltlite_raw::db_path_for;
 
 use super::schema_raw::{
     full_ddl, join_dm_user_ids, parse_dm_user_ids, saved_item_key, slack_message_key,
-    slack_thread_key, BookmarkRow, ChannelReadStateRow, ChannelRow, InvolvingRow, MessageRow,
-    SavedItemRow, SlackAttachmentRow, UserRow, WorkspaceRow, CHANNEL_VOLATILE_PATHS, LADDER,
-    MESSAGE_VOLATILE_PATHS, READ_STATE_VOLATILE_PATHS, THREADS, USER_VOLATILE_PATHS,
+    slack_thread_key, split_read_mark, BookmarkRow, ChannelReadStateRow, ChannelRow, InvolvingRow,
+    MessageRow, SavedItemRow, SlackAttachmentRow, UserRow, WorkspaceRow, CHANNEL_VOLATILE_PATHS,
+    LADDER, MESSAGE_VOLATILE_PATHS, READ_STATE_VOLATILE_PATHS, THREADS, USER_VOLATILE_PATHS,
 };
 use datalib_etl::doltlite_raw::WirePayload;
 
@@ -645,21 +646,27 @@ impl RawDb {
 
     // ── read states, bookmarks, saved items ─────────────────────────
 
+    /// Each conversation's `client.counts` entry: its read mark into
+    /// `read_marks`, keyed by the conversation id, and the rest into
+    /// `channel_read_states`, in one transaction.
     pub async fn upsert_read_states(&self, entries: &[Value]) -> Result<()> {
         let mut rows: Vec<ChannelReadStateRow> = Vec::with_capacity(entries.len());
+        let mut marks: Vec<ReadMarkRow> = Vec::new();
         let mut tape_pairs: Vec<(&str, &Value)> = Vec::with_capacity(entries.len());
         let mut volatile_store: Vec<(&str, Value)> = Vec::with_capacity(entries.len());
         for entry in entries {
             let Some(id) = entry.get("id").and_then(|v| v.as_str()) else {
                 continue;
             };
-            let (base, volatile) = dr::split_volatile(entry, READ_STATE_VOLATILE_PATHS);
+            let (rest, mark) = split_read_mark(entry);
+            let (base, volatile) = dr::split_volatile(&rest, READ_STATE_VOLATILE_PATHS);
             rows.push(ChannelReadStateRow {
                 id_and_payload: WirePayload {
                     id: id.to_string(),
                     payload: serde_json::to_string(&base).context("serialize read state")?,
                 },
             });
+            marks.extend(mark.map(|m| ReadMarkRow::through(id, m)));
             tape_pairs.push((id, entry));
             if let Some(v) = volatile {
                 volatile_store.push((id, v));
@@ -670,23 +677,41 @@ impl RawDb {
         }
         let volatile_pairs: Vec<(&str, &Value)> =
             volatile_store.iter().map(|(id, v)| (*id, v)).collect();
-        bulk_upsert_with_tape_split(
-            self.pool(),
-            self.tape_ref(),
-            &rows,
-            &tape_pairs,
-            &volatile_pairs,
-        )
-        .await
+        let now = datalib_time::IsoOffsetTimestamp::now_local();
+        let mut tx = self.pool().begin().await.context("begin read states")?;
+        bulk_upsert_in_tx(&mut tx, &rows, &now).await?;
+        dr::set_volatile_payloads_in_tx(&mut tx, ChannelReadStateRow::TABLE, &volatile_pairs)
+            .await?;
+        read_marks::write(&mut tx, &marks).await?;
+        tx.commit().await.context("commit read states")?;
+        if let Some(tape) = self.tape_ref() {
+            let batch = EventBatch {
+                table: ChannelReadStateRow::TABLE,
+                rows: &tape_pairs,
+            };
+            if let Err(e) = tape.append_batch(&batch) {
+                tracing::error!(
+                    event = "event_tape_append_failed",
+                    table = ChannelReadStateRow::TABLE,
+                    count = tape_pairs.len(),
+                    error = %format!("{e:#}"),
+                    "the read states are stored, but the event tape is missing their lines"
+                );
+            }
+        }
+        Ok(())
     }
 
-    /// Each conversation's read state with its volatile half laid back
-    /// over it: the whole `client.counts` entry, keyed by conversation id.
+    /// Each conversation's read state with its volatile half and its read
+    /// mark laid back over it: the whole `client.counts` entry, keyed by
+    /// conversation id.
     pub async fn load_read_states(&self) -> Result<Vec<Value>> {
         let rows = sqlx::query(
-            "SELECT json(r.payload) AS payload, json(b.volatile_payload) AS volatile \
+            "SELECT json(r.payload) AS payload, json(b.volatile_payload) AS volatile, \
+                    m.read_through AS last_read \
              FROM channel_read_states r \
              LEFT JOIN channel_read_states_bookkeeping b ON b.id = r.id \
+             LEFT JOIN read_marks m ON m.id = r.id \
              WHERE r.payload IS NOT NULL ORDER BY r.id",
         )
         .fetch_all(self.pool())
@@ -703,10 +728,15 @@ impl RawDb {
             let Some(base) = parse("payload") else {
                 continue;
             };
-            out.push(match parse("volatile") {
+            let mut entry = match parse("volatile") {
                 Some(v) => dr::overlay(&base, &v),
                 None => base,
-            });
+            };
+            let last_read: Option<String> = r.try_get("last_read").ok().flatten();
+            if let (Some(fields), Some(mark)) = (entry.as_object_mut(), last_read) {
+                fields.insert("last_read".into(), Value::String(mark));
+            }
+            out.push(entry);
         }
         Ok(out)
     }
@@ -1040,6 +1070,8 @@ struct Prepared<'a> {
     row: MessageRow,
     payload: &'a Value,
     volatile: Option<Value>,
+    /// The thread's read mark, on a root copy that carries one.
+    read_mark: Option<String>,
 }
 
 fn prepare(inputs: &[MessageInput]) -> Result<Vec<Prepared<'_>>> {
@@ -1047,7 +1079,8 @@ fn prepare(inputs: &[MessageInput]) -> Result<Vec<Prepared<'_>>> {
         .iter()
         .map(|m| {
             let effective_thread_ts = m.thread_ts.as_deref().unwrap_or(m.ts.as_str());
-            let (base, volatile) = dr::split_volatile(&m.payload, MESSAGE_VOLATILE_PATHS);
+            let (rest, read_mark) = split_read_mark(&m.payload);
+            let (base, volatile) = dr::split_volatile(&rest, MESSAGE_VOLATILE_PATHS);
             Ok(Prepared {
                 row: MessageRow {
                     id_and_payload: WirePayload {
@@ -1068,23 +1101,34 @@ fn prepare(inputs: &[MessageInput]) -> Result<Vec<Prepared<'_>>> {
                 },
                 payload: &m.payload,
                 volatile,
+                read_mark: read_mark.filter(|_| m.is_thread_root),
             })
         })
         .collect()
 }
 
-/// The messages, and an edge with no bytes for each file one carries
-/// that Slack serves. An edge already there is left alone: it may hold
-/// the bytes.
+/// The messages, the read mark of each followed thread whose root
+/// carries one, and an edge with no bytes for each file one carries that
+/// Slack serves. An edge already there is left alone: it may hold the
+/// bytes. A root copy without a mark (the `conversations.history` one)
+/// leaves the thread's mark as it was.
 async fn write_messages(tx: &mut Transaction<'_, Sqlite>, page: &[Prepared<'_>]) -> Result<()> {
     let rows: Vec<MessageRow> = page.iter().map(|p| p.row.clone()).collect();
     let volatile: Vec<(&str, &Value)> = page
         .iter()
         .filter_map(|p| Some((p.row.id_and_payload.id.as_str(), p.volatile.as_ref()?)))
         .collect();
+    let marks: Vec<ReadMarkRow> = page
+        .iter()
+        .filter_map(|p| {
+            let mark = p.read_mark.as_ref()?;
+            Some(ReadMarkRow::through(&p.row.thread_root_uuid, mark))
+        })
+        .collect();
     let now = datalib_time::IsoOffsetTimestamp::now_local();
     bulk_upsert_in_tx(tx, &rows, &now).await?;
     dr::merge_volatile_payloads_in_tx(tx, MessageRow::TABLE, &volatile).await?;
+    read_marks::write(tx, &marks).await?;
     list_authors(tx, page).await?;
     for p in page {
         let message_uuid = &p.row.id_and_payload.id;
@@ -1182,6 +1226,8 @@ async fn prune_enumerated(
         datalib_etl::prune::prune_scope_in_tx(tx, THREADS, &own, &none).await?;
         gone += messages.len();
     }
+    let gone_marks: Vec<String> = gone_threads.iter().map(|t| t.to_string()).collect();
+    read_marks::forget(tx, &gone_marks).await?;
     datalib_etl::prune::record(
         &format!("slack channel {channel_id} history"),
         top_level.len(),
@@ -1665,7 +1711,8 @@ mod tests {
 
     /// The history copy of a followed root has block ids to split but no
     /// read mark; storing it after the replies copy (a refresh does) must
-    /// not take the mark away from the thread.
+    /// not take the mark away from the thread. The mark is in
+    /// `read_marks` under the thread's key, and nowhere else.
     #[tokio::test]
     async fn the_history_copy_of_a_followed_root_keeps_its_read_mark() {
         let d = tempfile::tempdir().unwrap();
@@ -1681,10 +1728,26 @@ mod tests {
         let (second, volatile) = message_payload_and_volatile(&db, "1.0").await;
 
         assert_eq!(first, second);
+        assert!(!second.contains("last_read"), "{second}");
         assert_eq!(
             volatile.unwrap(),
-            json!({"last_read": "1.0", "subscribed": true,
-                   "blocks": [{"block_id": "Zz9"}]})
+            json!({"subscribed": true, "blocks": [{"block_id": "Zz9"}]})
+        );
+        let marks = read_marks::load(db.pool()).await.unwrap();
+        assert_eq!(
+            marks.into_iter().collect::<Vec<_>>(),
+            [(
+                slack_thread_key("T1", "C1", "1.0"),
+                read_marks::ReadMark::Through("1.0".into())
+            )]
+        );
+
+        let mut read_further = with_block_id(root("1.0", 1, Some("2.0")), "Qq1");
+        read_further.payload["last_read"] = json!("2.0");
+        db.upsert_messages(&[read_further]).await.unwrap();
+        assert_eq!(
+            read_marks::load(db.pool()).await.unwrap()[&slack_thread_key("T1", "C1", "1.0")],
+            read_marks::ReadMark::Through("2.0".into())
         );
     }
 
