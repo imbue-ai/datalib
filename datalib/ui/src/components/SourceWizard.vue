@@ -494,8 +494,8 @@ const idError = computed(() => {
   if (RESERVED.has(n)) return `"${n}" is reserved — it names a directory the pipeline owns.`;
   if (n === "." || n === "..") return "The id must not be '.' or '..'.";
   if (n.startsWith("-")) return "The id must not start with '-'.";
-  if (!/^[A-Za-z0-9._-]+$/.test(n))
-    return "Use only letters, digits, '.', '_' and '-' — the id becomes a directory.";
+  if (!/^[a-z0-9._-]+$/.test(n))
+    return "Use only lowercase letters, digits, '.', '_' and '-' — the id becomes a directory.";
   if (mode.value === "create" && props.takenIds.has(n)) return `"${n}" is already configured.`;
   return null;
 });

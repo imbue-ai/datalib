@@ -295,7 +295,7 @@ mod tests {
         assert!(purge(&["gone", "keep"])
             .unwrap()
             .contains("still has \"keep\""));
-        for bad in ["", "..", "system", "a/b", "../elsewhere"] {
+        for bad in ["", "..", "system", "SYSTEM", "Keep", "a/b", "../elsewhere"] {
             assert!(purge(&[bad]).unwrap().contains("not a group id"), "{bad:?}");
         }
         assert_eq!(refusal(&g, WipeKind::Reset, &strings(&["keep/raw"])), None);

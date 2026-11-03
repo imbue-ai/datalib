@@ -110,7 +110,10 @@ export function addSourceApplets(
   );
   let next = text;
   for (const a of applets) {
-    const base = `${group}_${a.id}`.replace(/[^A-Za-z0-9_]/g, "_").replace(/^(?=\d)/, "_");
+    const base = `${group}_${a.id}`
+      .toLowerCase()
+      .replace(/[^a-z0-9_]/g, "_")
+      .replace(/^(?=\d)/, "_");
     const appletId = suggestId(taken, base, base).replace(/-/g, "_");
     taken.add(appletId);
     next = `${next.replace(/\s*$/, "")}\n\n${appletBlock(appletId, group, dir, a)}\n`;

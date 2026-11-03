@@ -74,7 +74,7 @@ command = "bin/weather-chart"
   source of the type is added, filed under the source's group, and
   removed with it. A package has no applets of its own. `id` is the
   applet's name within the source (letters, digits, `_`); the config's
-  id is `<group>_<id>`. The applet gets `source = "<group>"` in its
+  id is `<group>_<id>` in lower case. The applet gets `source = "<group>"` in its
   params, so it knows which source's trees to read. `applets.md` is the
   contract; the command's first word is a path inside the package, as
   for a step.

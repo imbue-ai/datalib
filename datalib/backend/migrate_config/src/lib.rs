@@ -11,7 +11,8 @@
 //! What the rewrite covers today is the header of `convert.rs` — the
 //! `datalib-step download <type>` command lines, the `_api` / `_backup`
 //! type words, and the `sync` / `common.input_path` / `common.raw_path`
-//! params — and, after it, `qmd_steps.rs`: the `qmd_index` fan-in becomes
+//! params — and, after it, `lowercase_ids.rs`: every id that names a
+//! folder becomes lower case; then `qmd_steps.rs`: the `qmd_index` fan-in becomes
 //! `qmd_aggregator`, downstream of each source's own qmd steps; then
 //! `document_index.rs`: the `unified_index` group, its steps and its
 //! applet become `unified_document_index`; then `time_series_steps.rs`:
@@ -19,13 +20,14 @@
 //! config its time-series index; then `time_series_embeds.rs`: a
 //! time-series source loses its `embed` step; then `step_commands.rs`: a
 //! step of datalib's own names `datalib-step` as its `command`. Those
-//! last five rewrites are also the ones `datalib-http` makes by itself
-//! (`upgrade_qmd_steps`, `upgrade_document_index`,
+//! last six rewrites are also the ones `datalib-http` makes by itself
+//! (`upgrade_lowercase_ids`, `upgrade_qmd_steps`, `upgrade_document_index`,
 //! `upgrade_time_series_steps`, `upgrade_time_series_embeds`,
 //! `upgrade_step_commands`).
 
 pub mod convert;
 pub mod document_index;
+pub mod lowercase_ids;
 pub mod qmd_steps;
 pub mod step_commands;
 pub mod time_series_embeds;
@@ -50,6 +52,9 @@ pub fn detect(text: &str) -> Result<LegacyFormat> {
     if let Some(shape) = convert::retired_shape(text)? {
         return Ok(shape);
     }
+    if lowercase_ids::is_retired(text)? {
+        return Ok(LegacyFormat::UpperCaseId);
+    }
     if qmd_steps::is_retired(text)? {
         return Ok(LegacyFormat::QmdIndex);
     }
@@ -70,13 +75,15 @@ pub fn detect(text: &str) -> Result<LegacyFormat> {
 
 pub fn convert(text: &str) -> Result<String> {
     let out = match detect(text)? {
-        LegacyFormat::QmdIndex
+        LegacyFormat::UpperCaseId
+        | LegacyFormat::QmdIndex
         | LegacyFormat::UnifiedIndex
         | LegacyFormat::NoTimeSeries
         | LegacyFormat::TimeSeriesEmbed
         | LegacyFormat::ImplicitStepCommand => text.to_string(),
         _ => convert::rewrite(text)?,
     };
+    let out = lowercase_ids::rewrite(&out)?;
     let out = qmd_steps::rewrite(&out)?;
     let out = document_index::rewrite(&out)?;
     let out = if time_series_steps::is_retired(&out)? {
@@ -126,6 +133,19 @@ pub fn upgrade_document_index(text: &str) -> Result<Option<String>> {
             None => e.to_string(),
         }
     })?;
+    Ok(Some(out))
+}
+
+/// The rewrite `datalib-http` makes unattended, to a config with an id
+/// that names a folder and has capitals in it. `None` when there is
+/// nothing to do. Refused, as [`upgrade_qmd_steps`] is, when the result
+/// would not load every entry the original did, each under its new id.
+pub fn upgrade_lowercase_ids(text: &str) -> Result<Option<String>> {
+    if !lowercase_ids::is_retired(text).unwrap_or(false) {
+        return Ok(None);
+    }
+    let out = lowercase_ids::rewrite(text)?;
+    refuse_a_loss(text, &out, |e| e.to_ascii_lowercase())?;
     Ok(Some(out))
 }
 
