@@ -919,9 +919,9 @@ latchkey auth browser slack
 ```
 
 `since` in the `api` table is the oldest message to mirror: a day
-(`"2025-01-01"`) or an offset from the sync (`"-30d"`); unset is
-2024-01-01. Any day before 1970 (`"1900-01-01"`) asks for the whole
-history. Messages older than a sliding `since` stay mirrored. The
+(`"2025-01-01"`) or an offset from the sync (`"-30d"`); unset is the
+whole history, and a first sync of a big workspace then takes hours.
+Messages older than a sliding `since` stay mirrored. The
 user list and bookmarks are re-read at most every `list_every_hours`
 (6 unless set).
 

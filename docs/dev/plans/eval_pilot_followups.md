@@ -17,9 +17,10 @@ marks built at render). The migrations those added were run on copies
 of a real root's Slack and Email stores before release, every count
 matching. The `client.counts` fallback (§2 PR 5) was dropped: a live
 check found `conversations.list`'s `updated` does not track posts.
-Thad took decisions 2, 4, 5, 6, 7, 10 and 12, and deferred 1
-(`replies`); 5-7 and 10 are being built. Still open: decisions 3, 8, 9,
-11 and 13, and the work outside this repo. An audit of main at
+Thad took decisions 2, 4-7, 9-12, and deferred 1 (`replies`); 5-7 and
+10 are #1557 and #1558, 9 is #1559, 11 is a Slack source with no
+`since` mirroring its whole history. Still open: decisions 3, 8 and 13,
+and the work outside this repo. An audit of main at
 `f5533f7a4` against the evals team's reports (v0.40.0 to v0.48.0) and
 datalib#1471. §1 says what is already fixed and how we know; §2 is the
 work, as PRs; §3 lists the decisions Thad has to make before the PRs
@@ -229,11 +230,11 @@ of what the agents saw: a no-op Slack sync would wake nobody.
 8. **`datalib-dag wait [request]`**: a verb that blocks until a request
    closes and exits with its outcome, beside `GET /api/requests/{id}`
    (#1524).
-9. **The 6-hour TTL on `users.list` and bookmarks**: drop it (one or two
+9. *Taken: a param, `list_every_hours` (#1559).* **The 6-hour TTL on `users.list` and bookmarks**: drop it (one or two
    pages), or make it a param.
 10. *Taken: one info row.* **A remembered refusal of `client.counts`/`saved.list`**: still a
     row (info), or nothing.
-11. **No `since`**: everything, or 2024-01-01 as now.
+11. *Taken: everything.* **No `since`**: everything, or 2024-01-01 as now.
 12. *Taken: deleted (#1531).* **The standalone ingest binaries**: delete, or wrap each in
     `RawStoreSession`.
 13. **Saying who is calling**: Slack requests carry Chrome's

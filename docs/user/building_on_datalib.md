@@ -399,8 +399,8 @@ recipe and its edge cases are in [raw_stores.md](raw_stores.md)
 The mirror answers for what it has fetched. Ask the service when a
 question reaches outside that:
 
-- **Slack**: anything before the source's `since` (2024-01-01 unless
-  set); a time in a conversation outside every `coverage` span; direct
+- **Slack**: anything before the source's `since`, when it sets one;
+  a time in a conversation outside every `coverage` span; direct
   messages unless the source sets `dms = true`; the newest messages of a
   DM closed in the account's sidebar, for up to a day (a closed DM is
   checked once a day); channels the account is

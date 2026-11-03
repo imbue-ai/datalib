@@ -214,7 +214,7 @@ field.
 
 | method | keys, and unset | what the window bounds | a record the window leaves behind |
 |---|---|---|---|
-| slack `api` | `since`: 2024-01-01 | a message's time | stays |
+| slack `api` | `since`: everything | a message's time | stays |
 | claude `api`, chatgpt `api` | `since`: everything | a conversation's last update | stays |
 | email `gmail` | `since`: everything | `after:` on the listing walk | stays |
 | garmin `api` | `since`: a year before the first run, recorded; `until`: today | days | stays |
