@@ -6,8 +6,8 @@ beside it. The
 tables (`src/ingest/schema_raw.rs`) are `workspaces`, `users`,
 `channels`, `messages`, `threads` (one id per thread whose replies have
 been asked for), `slack_attachments` (the edges to file bytes in the
-CAS), and the account's own state: `channel_read_states`, `saved_items`
-and `bookmarks`. Each row is keyed by its upstream Slack identifier — a
+CAS), and the account's own state: `channel_read_states`, `read_marks`,
+`saved_items` and `bookmarks`. Each row is keyed by its upstream Slack identifier — a
 message and a thread by `{team}#{channel}#{ts}` — with the response
 stored as JSONB in `payload` and a `<table>_bookkeeping` sidecar beside
 each table.
@@ -643,21 +643,33 @@ otherwise), leaves that table as it was, and does not stop the sync.
 - **`channel_read_states`**, from one `client.counts` call: each
   conversation's `last_read`, `latest`, `has_unreads` and
   `mention_count`. Its `latest` also decides which DMs are walked
-  ([Which conversations a run walks](#which-conversations-a-run-walks)). **All of it is volatile**: the content payload is just
-  `{"id": …}`, and the state lives in the `volatile_payload` column of
-  `channel_read_states_bookkeeping`. Reading a channel is not a change to
-  it, so it must not show in `dolt_diff_channel_read_states` or wake the
-  render. `RawDb::load_read_states` lays the two halves back together.
-  Upserted every run; never pruned.
+  ([Which conversations a run walks](#which-conversations-a-run-walks)).
+  `last_read` goes to `read_marks` (below); **the rest is volatile**:
+  the content payload is just `{"id": …}`, and the state lives in the
+  `volatile_payload` column of `channel_read_states_bookkeeping`, so a
+  new `latest` alone does not wake the render.
+  `RawDb::load_read_states` lays the three back together. Upserted every
+  run; never pruned.
 - **A followed thread's own mark.** `conversations.replies` puts
   `last_read` and `subscribed` on its copy of the root of a thread the
   account follows (the `conversations.history` copy has neither).
-  Those two are volatile on `messages` too
-  (`MESSAGE_VOLATILE_PATHS`), so reading a thread is not an edit to its
-  root. The sidecar is merged by top-level key, so the history copy,
-  which has neither, does not take them away. A
-  thread is only re-fetched when it has a new reply, so its mark is as
-  fresh as its last reply, not as the last sync.
+  `last_read` goes to `read_marks`; `subscribed` is volatile on
+  `messages` (`MESSAGE_VOLATILE_PATHS`), so following a thread is not
+  an edit to its root. A copy without a mark leaves the thread's mark as
+  it was, and the sidecar is merged by top-level key, so the history
+  copy takes neither away. A thread is only re-fetched when it has a
+  new reply, so its mark is as fresh as its last reply, not as the last
+  sync.
+- **`read_marks`** (`datalib_etl::read_marks`), the account's read
+  marks, `last_read` in `read_through`, and nowhere else in the store.
+  A conversation's mark is keyed by its conversation id, a followed
+  thread's by its thread key, `{team}#{channel}#{ts}`; the two cannot
+  collide, as a thread key has two `#` and a conversation id none
+  (`schema_raw::is_thread_mark`). A mark is content: reading a channel
+  moves the store's version and wakes the render, which redraws only
+  the threads the mark crossed. A thread's mark goes with the thread
+  when history prunes it. A store from before the table has its marks
+  moved out of the two sidecars by rung 2 of the raw ladder.
 - **`saved_items`**, from `saved.list`: in progress, completed and
   archived. With no `filter` Slack returns only the in-progress ones, so
   the walk asks for each of `saved`, `completed` and `archived` (checked

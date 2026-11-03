@@ -1465,6 +1465,10 @@ messages_bookkeeping
     volatile_payload
     tz_offset
     held_version
+read_marks
+    id
+    read_through
+    read
 saved_items
     id
     payload
