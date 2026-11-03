@@ -67,7 +67,11 @@ impl Fetcher<File> for FileFetcher<'_> {
         &self,
         batch: Vec<Listed>,
     ) -> std::result::Result<Vec<Fetched<File>>, BatchError> {
-        let objects = self.objects(&batch).await.map_err(BatchError::Abort)?;
+        let objects = async {
+            let mut conn = self.db.pool().acquire().await?;
+            self.objects(&mut conn, &batch).await
+        };
+        let objects = objects.await.map_err(BatchError::Abort)?;
         self.fetch_objects(batch, objects).await
     }
 
@@ -126,12 +130,16 @@ impl Fetcher<File> for FileFetcher<'_> {
 
 impl FileFetcher<'_> {
     /// The stored file object each of `batch` names. A run with requests
-    /// out at once reads these before the request goes out, since a
-    /// request waiting on the store would hold the connection the writer
-    /// needs.
-    pub async fn objects(&self, batch: &[Listed]) -> Result<Vec<OwedFile>> {
+    /// out at once reads these before the request goes out, through the
+    /// writer's transaction: the store has one connection, and a request
+    /// waiting on it would stall the writer.
+    pub async fn objects(
+        &self,
+        conn: &mut sqlx::SqliteConnection,
+        batch: &[Listed],
+    ) -> Result<Vec<OwedFile>> {
         let keys: Vec<&str> = batch.iter().map(|l| l.key.as_str()).collect();
-        self.db.file_objects(&keys).await
+        self.db.file_objects(conn, &keys).await
     }
 
     /// `batch`, fetched from the file `objects` its edges name. Touches
