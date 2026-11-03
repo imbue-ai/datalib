@@ -36,6 +36,7 @@ rust_library(
         "@datalib_crates//:thiserror",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
+        "@datalib_crates//:url",
     ],
 )
 

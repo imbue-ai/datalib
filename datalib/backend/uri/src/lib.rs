@@ -45,16 +45,16 @@ impl Name {
     }
 
     /// `None` for anything that is not a name this build knows, never a
-    /// guess.
+    /// guess. Every id is a uuid (docs/dev/entity_ids.md): an id goes
+    /// into a route, so one of any other shape (`..`) could name another.
     pub fn parse(s: &str) -> Option<Self> {
         let rest = s.strip_prefix(SCHEME)?;
         if let Some(id) = rest.strip_prefix(PHOTO) {
-            let plain = !id.is_empty() && !id.contains(['/', '#']);
-            return plain.then(|| Name::photo(id));
+            return is_uuid(id).then(|| Name::photo(id));
         }
         let rest = rest.strip_prefix(DOC)?;
         let (page, section) = rest.split_once('#').unwrap_or((rest, ""));
-        if page.is_empty() || page.contains('/') {
+        if !is_uuid(page) || !(section.is_empty() || is_uuid(section)) {
             return None;
         }
         Some(Name::Doc {
@@ -62,6 +62,15 @@ impl Name {
             section: (!section.is_empty()).then(|| section.to_string()),
         })
     }
+}
+
+/// Hex digits in the groups 8-4-4-4-12, in either case.
+fn is_uuid(s: &str) -> bool {
+    let groups: Vec<&str> = s.split('-').collect();
+    groups.iter().map(|g| g.len()).eq([8, 4, 4, 4, 12])
+        && groups
+            .iter()
+            .all(|g| g.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
 #[cfg(test)]

@@ -588,7 +588,9 @@ Everything is in `datalib/ui/src/cards/`:
   [`chips.md`](chips.md)); a link `linkify` made from a
   bare address in running text is left alone, so a signature's address
   stays an address. Plain JavaScript, so the render preview runs it
-  too. It mirrors `to_uri` and `from_uri` over the same test cases.
+  too. It mirrors `to_uri` and `from_uri` over the same test cases,
+  and refuses besides a handle with a bidi control or an invisible
+  character in it, which `Handle` still accepts.
 - `contacts.ts` holds the pure rules, unit-tested in `contacts.test.ts`:
   `chipLook` (what a chip shows, from the contact if there is one,
   else the best-ranked source contact, else what the source showed),

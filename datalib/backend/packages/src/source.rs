@@ -1,6 +1,7 @@
 //! What a person types to name a package, and where its manifest is.
 
 use anyhow::{bail, Result};
+use url::Url;
 
 /// The manifest's file name in a GitHub release.
 pub const MANIFEST_FILE: &str = "datalib-package.toml";
@@ -33,28 +34,48 @@ pub fn manifest_url(source: &str) -> Result<String> {
             None => format!("https://github.com/{repo}/releases/latest/download/{MANIFEST_FILE}"),
         });
     }
-    if source.starts_with("https://") || source.starts_with("file:///") {
-        return Ok(source.to_string());
+    match manifest(source) {
+        Ok(url) => Ok(url.into()),
+        Err(_) => bail!(
+            "{source:?} is not a package: give `github:owner/repo`, or the https link to a \
+             {MANIFEST_FILE}"
+        ),
     }
-    bail!(
-        "{source:?} is not a package: give `github:owner/repo`, or the https link to a \
-         {MANIFEST_FILE}"
-    )
+}
+
+/// A manifest's URL, as one a package may be fetched from: `https`, or
+/// a `file` on this machine for a package being developed.
+pub fn manifest(url: &str) -> Result<Url> {
+    let parsed = Url::parse(url)?;
+    match parsed.scheme() {
+        "https" if parsed.host().is_some() => Ok(parsed),
+        "file" => Ok(parsed),
+        _ => bail!("manifest url {url:?}: a package is fetched over https, or from a file:// path"),
+    }
 }
 
 /// An artifact's URL, which the manifest may write relative to itself.
-pub fn join(manifest_url: &str, artifact: &str) -> Result<String> {
-    if artifact.contains("://") {
-        return Ok(artifact.to_string());
-    }
-    if artifact.starts_with('/') || artifact.split('/').any(|s| s == "..") {
-        bail!("artifact url {artifact:?}: write it relative to the manifest, without `/` or `..`");
-    }
-    let base = match manifest_url.rfind('/') {
-        Some(i) => &manifest_url[..=i],
-        None => bail!("manifest url {manifest_url:?} has no directory"),
+/// A relative one stays in the manifest's directory once parsed; an
+/// absolute one is `https`, or a `file` only beside a `file` manifest,
+/// so a published manifest cannot name a file on this machine.
+pub fn join(manifest_url: &str, artifact: &str) -> Result<Url> {
+    let base = manifest(manifest_url)?;
+    let dir = base.join("./")?;
+    let joined = base.join(artifact)?;
+    let relative = Url::parse(artifact).is_err();
+    let ok = if relative {
+        joined.as_str().starts_with(dir.as_str())
+    } else {
+        (joined.scheme() == "https" && joined.host().is_some())
+            || (joined.scheme() == "file" && base.scheme() == "file")
     };
-    Ok(format!("{base}{artifact}"))
+    if !ok {
+        bail!(
+            "artifact url {artifact:?}: write it relative to the manifest, inside its \
+             directory, or as an https link"
+        );
+    }
+    Ok(joined)
 }
 
 #[cfg(test)]
@@ -74,17 +95,51 @@ mod tests {
         assert!(manifest_url("github:alice").is_err());
         assert!(manifest_url("github:alice/x/y").is_err());
         assert!(manifest_url("http://example.org/x.toml").is_err());
+        assert!(manifest_url("ftp://example.org/x.toml").is_err());
+        assert_eq!(
+            manifest_url("file:///pkg/datalib-package.toml").unwrap(),
+            "file:///pkg/datalib-package.toml"
+        );
     }
 
     #[test]
     fn artifacts_resolve_against_the_manifest() {
         let m = "https://h/releases/download/v1/datalib-package.toml";
+        let joined = |a: &str| join(m, a).map(String::from);
         assert_eq!(
-            join(m, "w.tar.gz").unwrap(),
+            joined("w.tar.gz").unwrap(),
             "https://h/releases/download/v1/w.tar.gz"
         );
-        assert_eq!(join(m, "https://o/w.tar.gz").unwrap(), "https://o/w.tar.gz");
-        assert!(join(m, "../w.tar.gz").is_err());
-        assert!(join(m, "/w.tar.gz").is_err());
+        assert_eq!(joined("https://o/w.tar.gz").unwrap(), "https://o/w.tar.gz");
+        assert!(joined("../w.tar.gz").is_err());
+        assert!(joined("/w.tar.gz").is_err());
+    }
+
+    /// What climbs or leaves once parsed is refused, not only what is
+    /// spelled `..`; and a published manifest cannot name a file here
+    /// or send the build over http.
+    #[test]
+    fn an_artifact_cannot_leave_the_manifests_directory_or_https() {
+        let m = "https://h/releases/download/v1/datalib-package.toml";
+        for artifact in [
+            "%2e%2e/w.tar.gz",
+            "%2E%2E/%2e%2e/w.tar.gz",
+            "..\\w.tar.gz",
+            ".%2e/w.tar.gz",
+            "//evil.example/w.tar.gz",
+            "\\\\evil.example/w.tar.gz",
+            "http://h/w.tar.gz",
+            "file:///etc/passwd",
+            "ftp://h/w.tar.gz",
+        ] {
+            assert!(join(m, artifact).is_err(), "{artifact}");
+        }
+        let local = "file:///pkg/datalib-package.toml";
+        assert_eq!(
+            String::from(join(local, "w.tar.gz").unwrap()),
+            "file:///pkg/w.tar.gz"
+        );
+        assert!(join(local, "file:///elsewhere/w.tar.gz").is_ok());
+        assert!(join("http://h/datalib-package.toml", "w.tar.gz").is_err());
     }
 }

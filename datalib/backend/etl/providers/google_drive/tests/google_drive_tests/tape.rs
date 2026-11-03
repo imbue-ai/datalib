@@ -266,7 +266,7 @@ pub fn tape(dir: &Path, edition: Edition) -> PathBuf {
         revision_export(
             &t,
             &doc_revision_link("41"),
-            "https://doc-0c-docstext.googleusercontent.test/export/log-rev41",
+            "https://doc-0c-docstext.googleusercontent.com/export/log-rev41",
             DOC_ODT_REV41,
         );
     } else {
@@ -281,7 +281,7 @@ pub fn tape(dir: &Path, edition: Edition) -> PathBuf {
         revision_export(
             &t,
             &doc_revision_link("1"),
-            "https://doc-0c-docstext.googleusercontent.test/export/log-rev1",
+            "https://doc-0c-docstext.googleusercontent.com/export/log-rev1",
             DOC_ODT_REV1,
         );
     }
