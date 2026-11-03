@@ -72,7 +72,7 @@ expression: snapshot
       "md_path": "tng_email/render_markdown/c6/00000000-0000-80b3-8c56-6d41b85ab9c6.md",
       "modified_at": "2026-01-07T14:00:00+00:00",
       "provider": "email",
-      "renderer_version": "rust-v1.17",
+      "renderer_version": "rust-v1.18",
       "source_id": "tng_email",
       "title": "Captain's Log — Stardate 80124.1"
     },
@@ -660,7 +660,7 @@ expression: snapshot
       "md_path": "tng_email/render_markdown/e9/00000000-0000-85ec-8481-370bffc3afe9.md",
       "modified_at": "2026-01-08T09:00:00+00:00",
       "provider": "email",
-      "renderer_version": "rust-v1.17",
+      "renderer_version": "rust-v1.18",
       "source_id": "tng_email",
       "title": "You've won a holosuite upgrade!"
     },
@@ -1152,7 +1152,7 @@ expression: snapshot
       "md_path": "tng_email/render_markdown/76/00000000-0000-89ac-8ef1-ba5e79d09b76.md",
       "modified_at": "2026-01-09T21:00:00+00:00",
       "provider": "email",
-      "renderer_version": "rust-v1.17",
+      "renderer_version": "rust-v1.18",
       "source_id": "tng_email",
       "title": "Your bar tab"
     },
@@ -1236,7 +1236,7 @@ expression: snapshot
       "md_path": "tng_email/render_markdown/59/00000000-0000-8a58-a8a4-0d3e51a39a59.md",
       "modified_at": "2026-01-06T08:00:00+00:00",
       "provider": "email",
-      "renderer_version": "rust-v1.17",
+      "renderer_version": "rust-v1.18",
       "source_id": "tng_email",
       "title": "Your shore leave awaits!"
     },
@@ -1680,7 +1680,7 @@ expression: snapshot
       "md_path": "tng_email/render_markdown/52/00000000-0000-8ce7-94d1-18948b029452.md",
       "modified_at": "2026-01-05T11:15:00+00:00",
       "provider": "email",
-      "renderer_version": "rust-v1.17",
+      "renderer_version": "rust-v1.18",
       "source_id": "tng_email",
       "title": "Mission Briefing — Sector 001"
     },
@@ -1860,7 +1860,7 @@ expression: snapshot
       "md_path": "tng_email/render_markdown/be/00000000-0000-8e37-8bef-9f0edb66b8be.md",
       "modified_at": "2026-01-07T09:00:00+00:00",
       "provider": "email",
-      "renderer_version": "rust-v1.17",
+      "renderer_version": "rust-v1.18",
       "source_id": "tng_email",
       "title": "Bridge status display"
     },
@@ -19156,14 +19156,14 @@ expression: snapshot
     },
     {
       "kind": "Table",
-      "members_sha": "sha256:e7280f1184a3edee25f487fb0c6e3aa1b0aa88fab179ff6bbc705cd1908675a6",
-      "rows": 191,
+      "members_sha": "sha256:49cd17343c0ae8b7e81fb4f7aad1bf69691194c617265928fc8d004cdab11fdd",
+      "rows": 192,
       "source": ""
     }
   ],
   "summary": {
     "documents_count": 177,
     "grid_rows_count": 567,
-    "storage_rows_count": 252
+    "storage_rows_count": 253
   }
 }
