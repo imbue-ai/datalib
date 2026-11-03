@@ -422,8 +422,29 @@ pub struct StepReport {
     /// Invocations this run (0 when skipped/blocked).
     pub attempts: u32,
     pub error: Option<String>,
+    /// Passes that failed and were run again; `status` is the last one's.
+    pub failed_passes: u32,
     /// (artifact path, version now, changed this run)
     pub outputs: Vec<(String, String, bool)>,
+}
+
+impl StepReport {
+    /// The step's line in `datalib-dag`'s report on stdout.
+    pub fn line(&self) -> String {
+        let error = self
+            .error
+            .as_deref()
+            .map(|e| format!("  ({e})"))
+            .unwrap_or_default();
+        let failed = match self.failed_passes {
+            0 => String::new(),
+            1 => "  (1 pass failed and was run again; its error is in the step's log)".into(),
+            n => format!(
+                "  ({n} passes failed and were run again; their errors are in the step's log)"
+            ),
+        };
+        format!("{:<32} {:?}{error}{failed}", self.id, self.status)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -539,6 +560,7 @@ pub(crate) fn step_summary(r: &StepReport) -> crate::events::StepSummary {
         failure,
         attempts: r.attempts,
         error: r.error.clone(),
+        failed_passes: r.failed_passes,
         outputs: r
             .outputs
             .iter()

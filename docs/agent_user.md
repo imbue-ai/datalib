@@ -197,7 +197,11 @@ command for each kind of step.
 **The stderr stream is NDJSON and made for you**: `run_plan` (every step's
 id and group, in topo order), then `step_start` / `progress_*` / `log` / `hint` /
 `step_finish` per step, closed by one `run_summary` — parse it instead
-of scraping human output. Failures carry a kind
+of scraping human output. A step that reads one that streams its
+output runs once per seal it reads, each pass but the last closed by a `pass_end`
+whose `status` says how it went; one that failed and was run again is
+an `error` line in the step's log even when the step ends `succeeded`,
+and `run_summary` counts them in the step's `failed_passes`. Failures carry a kind
 (`transient` / `rate_limited` / `auth` / `permission` / `data` /
 `cancelled` / `incomplete`); the
 runner already retries transient/rate-limited ones with backoff, and

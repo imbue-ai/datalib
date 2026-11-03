@@ -155,7 +155,7 @@ has the server's, since the bundle is embedded in the binary.
 | you are writing | do this | it becomes |
 |---|---|---|
 | Rust in the runner or the server | `tracing::info!(target: "…", key = value, "the sentence")` | a row with `target`, `msg`, and the keys as a JSON object in `fields`; `filename` / `line_number` added ([`runs/src/tracing_layer.rs`](../../datalib/backend/runs/src/tracing_layer.rs)) |
-| the runner, about a step — a checkpoint sealed, why it ended, a hint | nothing — the runner writes these itself | `target:datalib_dag::runner` under the step, with the runner as author |
+| the runner, about a step — a checkpoint sealed, a pass that failed, why it ended, a hint | nothing — the runner writes these itself | `target:datalib_dag::runner` under the step, with the runner as author |
 | Rust in a built-in step (`datalib-step`) | the same `tracing` call | a JSON envelope on the step's stderr, which the runner unwraps into the same columns; the line's own timestamp wins |
 | Rust in an applet (`datalib-applet`) | the same `tracing` call | a JSON envelope on the applet's stderr, which the gateway logs again as the server's line at the envelope's level: `target:datalib_http::applets`, with `applet` naming it and the applet's own target and fields in `applet_target` and `applet_fields`. The row's `filename` / `line_number` are the gateway's; the applet's are inside `applet_fields` ([`applets.md`](applets.md)) |
 | a custom step, any language | print a line on stderr (or a non-event line on stdout) | an `info` row with `stream` set; the last lines before a non-zero exit also become the step's error |

@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use datalib_dag::config;
+use datalib_dag::events::FanOutSink;
 use datalib_dag::scheduler::RetryPolicy;
 use datalib_dag::supervisor::announce::{
     announce, missed_announcements, Listener, CONFIG_CHANGED, FROM_SERVER,
@@ -226,6 +227,16 @@ impl Harness {
 
     /// With `[[locks]]` entries of the scenario's own, as TOML.
     pub async fn with_locks(steps: &[Step], clocks: Clocks, locks: &str) -> Harness {
+        Harness::build(steps, clocks, locks, false).await
+    }
+
+    /// Each busy period also writes the run store, as the server's does:
+    /// for a scenario about what a person reads there.
+    pub async fn recording(steps: &[Step]) -> Harness {
+        Harness::build(steps, Clocks::default(), "", true).await
+    }
+
+    async fn build(steps: &[Step], clocks: Clocks, locks: &str, record: bool) -> Harness {
         let root = tempfile::tempdir().unwrap();
         let puppets = root.path().join("puppets");
         std::fs::create_dir_all(&puppets).unwrap();
@@ -280,11 +291,11 @@ impl Harness {
             root,
         };
         h.write_config(steps);
-        h.start_host(tx, clocks).await;
+        h.start_host(tx, clocks, record).await;
         h
     }
 
-    async fn start_host(&mut self, tx: mpsc::UnboundedSender<Seen>, clocks: Clocks) {
+    async fn start_host(&mut self, tx: mpsc::UnboundedSender<Seen>, clocks: Clocks, record: bool) {
         let root = self.root.path().to_path_buf();
         let mut stop = self.stop.subscribe();
         let store = Store::open(&root).await.unwrap();
@@ -295,6 +306,7 @@ impl Harness {
             sink: Arc::new(ChannelSink(tx)),
             clocks,
             stop: stop.clone(),
+            record,
         };
         self.host = Some(tokio::spawn(async move {
             host::run_idle(&store, &mut listener, &mut periods, &mut stop).await;
@@ -704,6 +716,8 @@ struct Periods {
     clocks: Clocks,
     stop: watch::Receiver<bool>,
     report: mpsc::UnboundedSender<Seen>,
+    /// Whether a busy period writes the run store too.
+    record: bool,
 }
 
 impl Periods {
@@ -732,8 +746,16 @@ impl host::Periods for Periods {
         let run_id = datalib_dag::scheduler::new_run_id();
         let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs();
         let env = host::step_env(&checked.cfg, None, &[], &now, &run_id).unwrap();
+        let sink: Arc<dyn EventSink> = match self.record {
+            true => {
+                let store = host::start_record(&self.root, &checked.cfg, &run_id, &now)
+                    .expect("open the run store");
+                Arc::new(FanOutSink(vec![self.sink.clone(), Arc::new(store)]))
+            }
+            false => self.sink.clone(),
+        };
         let mut runner = Runner::new(&self.root)
-            .sink(self.sink.clone())
+            .sink(sink)
             .child_env(env.vars)
             .stop_on(self.stop.clone())
             .retry(RetryPolicy {
@@ -746,6 +768,9 @@ impl host::Periods for Periods {
         if let Err(e) = runner.serve(&checked.graph, store).await {
             let _ = self.report.send(Seen::Broke(format!("{e:#}")));
         }
+        // Dropping the runner drops the run store's writer, which flushes
+        // and joins: the period is over once what it wrote can be read.
+        drop(runner);
         let _ = self.report.send(Seen::Host("busy period over".into()));
     }
 
@@ -772,7 +797,7 @@ fn ids(steps: &[Step]) -> Vec<&str> {
 fn describe(e: &Event) -> String {
     match e {
         Event::StepStart { step, attempt, .. } => format!("start {step} attempt {attempt}"),
-        Event::PassEnd { step, .. } => format!("pass-end {step}"),
+        Event::PassEnd { step, status, .. } => format!("pass-end {step} {status:?}"),
         Event::StepFinish {
             step,
             status,

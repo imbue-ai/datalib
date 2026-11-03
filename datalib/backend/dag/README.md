@@ -159,6 +159,20 @@ settled, so the index behind a render waits for as long as the download
 runs. Each pass's process is closed with a `PassEnd`; the `StepFinish`
 comes once its producers are done.
 
+**A failed pass is reported even when the next one succeeds.** A pass
+that fails while what it reads is still moving runs again once it moves
+(rule 4), and the run then reports the pass that ran last: a consumer
+whose first pass crashed and whose second worked has succeeded. So the
+`PassEnd` carries the pass's status and error, and the run store keeps
+a failed one as an `error` line of the step's log (`pass 1 failed: …`,
+with the exit status and the end of its stderr). The loop counts the
+passes that failed and were run again, and reports the count as the
+step's `failed_passes` metric when the step finishes, zero included, so
+each run that invokes the step replaces the last one's: the Manage row
+adds it to the step's warnings, and `run_summary` and `datalib-dag`'s
+report on stdout say it too. A pass that fails and is not run again is
+the step's last, and its failure is the step's.
+
 A failed step does not stop its dependents. Whatever it committed and
 reported is a version like any other, and a dependent reads it; a fan-in
 reads every source that worked. A step whose inputs have *never* been
