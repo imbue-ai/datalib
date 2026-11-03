@@ -35,6 +35,9 @@ struct Acc {
     /// The labels of every `queued` series written for the step, so its
     /// finish can empty them all.
     queued: BTreeSet<String>,
+    /// The passes started so far: a streaming consumer runs once per
+    /// seal it reads, each pass a first attempt.
+    passes: u32,
     /// This attempt's last value of each running total (`name`, labels),
     /// and whether it has already been caught going down.
     counters: HashMap<(String, String), (i64, bool)>,
@@ -188,7 +191,7 @@ impl RunStoreSink {
             target: Some(RUNNER_TARGET.into()),
             msg: format!(
                 "{series} went down, {before} to {now}, but a name ending in `_total` says it only \
-                 grows; name it without the suffix if it can fall (docs/dev/step_protocol.md)"
+                 grows; name it without the suffix if it can fall (`datalib-step help step-protocol`)"
             ),
             fields: Some(
                 serde_json::json!({ "counter_fell": series, "from": before, "to": now })
@@ -238,6 +241,50 @@ impl RunStoreSink {
             .and_then(|a| a.process.as_ref())
             .map(|p| p.process_id.clone())
             .unwrap_or_default()
+    }
+
+    /// A pass that failed, at error level, as the runner's line about the
+    /// step: which pass, and why — the error carries the exit status and
+    /// the end of the pass's stderr.
+    fn log_failed_pass(
+        &self,
+        step: &StepId,
+        error: Option<&str>,
+        exit_code: Option<i32>,
+        signal: Option<i32>,
+    ) {
+        let pass = self
+            .steps
+            .lock()
+            .expect("run store sink mutex")
+            .get(step)
+            .map_or(0, |a| a.passes);
+        let why = match (error, exit_code, signal) {
+            (Some(error), _, _) => error.to_string(),
+            (None, Some(code), _) => format!("exit code {code}"),
+            (None, None, Some(signal)) => format!("signal {signal}"),
+            (None, None, None) => "no reason given".to_string(),
+        };
+        let (ts_utc, tz_offset) = now();
+        self.writer.log(LogRow {
+            step: Some(step.clone()),
+            group_id: self.group_of(step),
+            attempt: self.attempt_of(step),
+            ts_utc,
+            tz_offset,
+            level: LogLevel::Error.as_str().into(),
+            target: Some(RUNNER_TARGET.into()),
+            msg: format!("pass {pass} failed: {why}"),
+            fields: Some(
+                serde_json::json!({
+                    "pass_failed": pass,
+                    "exit_code": exit_code,
+                    "signal": signal,
+                })
+                .to_string(),
+            ),
+            ..Default::default()
+        });
     }
 
     /// The sugar: `done` is the increments so far, `queued` what the
@@ -294,6 +341,7 @@ impl EventSink for RunStoreSink {
                 self.update(step, |a| {
                     *a = Acc {
                         queued: std::mem::take(&mut a.queued),
+                        passes: a.passes + u32::from(*attempt == 1),
                         row: StepRunRow {
                             state: LiveState::Running.as_str().into(),
                             attempt: *attempt as i64,
@@ -365,12 +413,19 @@ impl EventSink for RunStoreSink {
                 }
             }
             // The pass's process is closed the way a finished attempt's
-            // is; the step row is not touched, since the step goes on.
+            // is; the step row is not touched, since the step goes on. A
+            // pass that failed is an error line now: the next pass may
+            // succeed, and the step's finish then says nothing of it.
             Event::PassEnd {
                 step,
+                status,
+                error,
                 exit_code,
                 signal,
             } => {
+                if *status == RunState::Failed {
+                    self.log_failed_pass(step, error.as_deref(), *exit_code, *signal);
+                }
                 let finished_at_utc = now().0;
                 let mut ended = None;
                 self.update(step, |a| {
@@ -673,6 +728,8 @@ mod tests {
             start(),
             Event::PassEnd {
                 step: "unified_document_index/grid".into(),
+                status: RunState::Succeeded,
+                error: None,
                 exit_code: Some(0),
                 signal: None,
             },
@@ -695,6 +752,52 @@ mod tests {
             .find(|s| s.step == "unified_document_index/grid")
             .expect("the step row");
         assert_eq!(step.state, "running");
+    }
+
+    /// A pass that failed and was followed by one that succeeded left no
+    /// trace but the step's own stderr at info: the finish reports the
+    /// last pass, and a clean finish writes no line. The failed pass is
+    /// its own error line, naming the pass and why.
+    #[tokio::test]
+    async fn a_failed_pass_is_an_error_line_though_the_next_one_succeeds() {
+        let start = || Event::StepStart {
+            step: "evals/score".into(),
+            attempt: 1,
+            builtin: false,
+        };
+        let (td, snap) = run(&[
+            start(),
+            Event::PassEnd {
+                step: "evals/score".into(),
+                status: RunState::Failed,
+                error: Some("step evals/score exited with exit status: 1: Traceback".into()),
+                exit_code: Some(1),
+                signal: None,
+            },
+            start(),
+            Event::StepFinish {
+                step: "evals/score".into(),
+                status: RunState::Succeeded,
+                error: None,
+                exit_code: Some(0),
+                signal: None,
+            },
+        ])
+        .await;
+        assert_eq!(snap.steps[0].state, "succeeded");
+        let log = log_after(td.path(), "run-1", Some("evals/score"), 0, 100).await;
+        let errors: Vec<(&str, Option<&str>)> = log
+            .iter()
+            .filter(|l| l.level == "error")
+            .map(|l| (l.msg.as_str(), l.fields.as_deref()))
+            .collect();
+        assert_eq!(
+            errors,
+            [(
+                "pass 1 failed: step evals/score exited with exit status: 1: Traceback",
+                Some(r#"{"exit_code":1,"pass_failed":1,"signal":null}"#)
+            )]
+        );
     }
 
     /// The most memory a step's attempt held goes on that attempt's

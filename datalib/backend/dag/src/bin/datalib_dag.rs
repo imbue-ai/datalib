@@ -395,15 +395,7 @@ async fn main() -> Result<()> {
 
         #[allow(clippy::disallowed_macros)]
         for s in &report.steps {
-            println!(
-                "{:<32} {:?}{}",
-                s.id,
-                s.status,
-                s.error
-                    .as_deref()
-                    .map(|e| format!("  ({e})"))
-                    .unwrap_or_default()
-            );
+            println!("{}", s.line());
         }
         // A dropped config entry is reported here as well as before
         // the run, because the per-step report is the thing a person
@@ -732,8 +724,13 @@ fn init(data_root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// One line per open request and per step turned off, in a shape a script can split
-/// on two spaces.
+/// What `status` prints when there is nothing to list. It starts with none
+/// of the other lines' first words, and never says "running": agents waited
+/// with `grep -q running`, which matched the idle line and looped forever.
+const IDLE: &str = "idle: no open requests, no steps turned off";
+
+/// One line per open request, per step turned off and per step running,
+/// in a shape a script can split on two spaces.
 async fn status_lines(store: &Store) -> Result<Vec<String>> {
     let mut lines = Vec::new();
     for r in store.open_requests().await? {
@@ -758,7 +755,7 @@ async fn status_lines(store: &Store) -> Result<Vec<String>> {
         ));
     }
     if lines.is_empty() {
-        lines.push("nothing open, nothing off, nothing running".to_string());
+        lines.push(IDLE.to_string());
     }
     Ok(lines)
 }

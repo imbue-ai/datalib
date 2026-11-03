@@ -1,0 +1,41 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# The docs `datalib-step help` prints whole, compiled in, and the link
+# rewriting that keeps an agent off GitHub (README.md). Each binary's own
+# tests run the doc commands that name it through its parser.
+rust_library(
+    name = "datalib_agent_docs",
+    srcs = glob(["src/**/*.rs"]),
+    compile_data = [
+        "//configs:dag_example.toml",
+        "//datalib/backend/dag:README.md",
+        "//docs:agent_user.md",
+        "//docs/dev:config_model.md",
+        "//docs/dev:contacts.md",
+        "//docs/dev:doltlite.md",
+        "//docs/dev:edges.md",
+        "//docs/dev:grid_rows.md",
+        "//docs/dev:logging.md",
+        "//docs/dev:step_protocol.md",
+        "//docs/user:building_on_datalib.md",
+        "//docs/user:docker.md",
+        "//docs/user:first_time_user.md",
+        "//docs/user:getting_your_data.md",
+        "//docs/user:raw_stores.md",
+        "//docs/user:searching.md",
+        "//docs/user/config_examples:all_sources.toml",
+        "//docs/user/config_examples:claude_only.toml",
+        "//docs/user/config_examples:sample_config.toml",
+    ],
+    crate_name = "datalib_agent_docs",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = ["@datalib_crates//:shlex"],
+)
+
+rust_test(
+    name = "datalib_agent_docs_unittests",
+    size = "small",
+    crate = ":datalib_agent_docs",
+    edition = "2021",
+)

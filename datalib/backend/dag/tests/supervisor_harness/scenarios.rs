@@ -439,6 +439,65 @@ async fn a_consumer_runs_on_each_seal_of_a_streaming_producer() {
     h.finish().await;
 }
 
+/// A consumer whose first pass crashed and whose next, on the producer's
+/// next seal, succeeded was recorded as succeeded with no error: the crash
+/// was only its own stderr, at info. The failed pass is an error line in
+/// the run store, and a count of failed passes the Manage row reads.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_pass_that_runs_again_is_an_error_and_a_count() {
+    let mut h = Harness::recording(&chain()).await;
+    let sync = h.sync(&["a"]).await;
+    h.started("a").await;
+    h.run("a", "streams").await;
+    h.run("a", "seal s1").await;
+    h.started("c").await;
+    h.run("c", "stderr Traceback: boom").await;
+    h.run("c", "exit 1").await;
+    assert_eq!(h.ended("c", 1).await.outcome, "failed");
+    h.run("a", "ok s2").await;
+    h.started("c").await;
+    h.run("c", "ok c1").await;
+    assert_eq!(h.closed(&sync).await, RequestOutcome::Done);
+    assert_eq!(
+        h.state().await.record.steps["c"]
+            .last_run
+            .as_ref()
+            .map(|r| r.status.as_str()),
+        Some("succeeded"),
+        "the run reports the last pass"
+    );
+    h.wait("the busy period to end", |s| {
+        matches!(s, Seen::Host(l) if l == "busy period over").then_some(())
+    })
+    .await;
+
+    let root = h.root.path().to_path_buf();
+    let run = datalib_runs::snapshot(&root)
+        .await
+        .run_id
+        .expect("the run is in the store");
+    let errors: Vec<String> = datalib_runs::log_after(&root, &run, Some("c"), 0, 100)
+        .await
+        .into_iter()
+        .filter(|l| l.level == "error")
+        .map(|l| l.msg.clone())
+        .collect();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0].starts_with("pass 1 failed: step c exited with exit status: 1")
+            && errors[0].contains("Traceback: boom"),
+        "{errors:?}"
+    );
+    let failed: Vec<(String, i64)> =
+        datalib_runs::latest_metric(&root, datalib_metrics::FAILED_PASSES)
+            .await
+            .into_iter()
+            .map(|m| (m.step, m.value))
+            .collect();
+    assert_eq!(failed, [("a".to_string(), 0), ("c".to_string(), 1)]);
+    h.finish().await;
+}
+
 /// A producer that does not stream holds its consumer back even when it
 /// seals: what it wrote may be half-done.
 #[tokio::test(flavor = "multi_thread")]

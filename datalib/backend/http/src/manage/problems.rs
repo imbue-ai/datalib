@@ -1,10 +1,11 @@
 //! The counts after a Manage row's name: how many errors and warnings a
 //! step found, from the `problems{severity=…}` metrics it reported at
-//! the end of its last run. A red and a yellow number when there are
-//! any; nothing when there are none, or when the step has never
-//! counted. A group's is the sum of its steps', since each step counts
-//! only what it found itself. The System row's count is the config's
-//! own warnings.
+//! the end of its last run, and the passes of that run that failed and
+//! were run again, from the runner's `failed_passes`, counted as
+//! warnings. A red and a yellow number when there are any; nothing when
+//! there are none, or when the step has never counted. A group's is the
+//! sum of its steps', since each step counts only what it found itself.
+//! The System row's count is the config's own warnings.
 
 use std::collections::HashMap;
 
@@ -12,22 +13,39 @@ use datalib_columns::{Chip, ChipKind};
 use datalib_problems::{Severity, METRIC};
 use datalib_runs::MetricRow;
 
-/// What one step last counted.
+/// What one step last counted, and what the runner counted of it.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ProblemCounts {
     pub errors: i64,
     pub warnings: i64,
-    /// The run the count comes from.
+    /// The run the step's own count comes from; empty when it never counted.
     pub run_id: String,
+    /// Passes that failed and were run again in the last run that invoked
+    /// the step, which reports only its last pass.
+    pub failed_passes: i64,
+    /// The run that count comes from.
+    pub failed_passes_run_id: String,
 }
 
-/// `step id → counts`, from the newest [`METRIC`] samples per step. A
-/// step with only one of the two series reported is still counted —
-/// the other reads as zero — but a label this build cannot name is
-/// skipped rather than guessed at.
-pub fn counts_by_step(latest: &[MetricRow]) -> HashMap<String, ProblemCounts> {
+/// `step id → counts`, from the newest [`METRIC`] samples per step and
+/// the newest [`datalib_metrics::FAILED_PASSES`] ones. A step with only
+/// one of the two severities reported is still counted — the other
+/// reads as zero — but a label this build cannot name is skipped rather
+/// than guessed at.
+pub fn counts_by_step(
+    problems: &[MetricRow],
+    failed_passes: &[MetricRow],
+) -> HashMap<String, ProblemCounts> {
     let mut out: HashMap<String, ProblemCounts> = HashMap::new();
-    for m in latest.iter().filter(|m| m.name == METRIC) {
+    for m in failed_passes
+        .iter()
+        .filter(|m| m.name == datalib_metrics::FAILED_PASSES)
+    {
+        let entry = out.entry(m.step.clone()).or_default();
+        entry.failed_passes = m.value;
+        entry.failed_passes_run_id = m.run_id.clone();
+    }
+    for m in problems.iter().filter(|m| m.name == METRIC) {
         let Some(severity) = Severity::from_metric_labels(&m.labels) else {
             continue;
         };
@@ -51,7 +69,9 @@ pub fn chips(counts: Option<&ProblemCounts>) -> Vec<Chip> {
     draw(
         c.errors,
         c.warnings,
+        c.failed_passes,
         &format!("this step found, as of run {}", c.run_id),
+        &format!("as of run {}", c.failed_passes_run_id),
     )
 }
 
@@ -61,11 +81,15 @@ pub fn group_chips(steps: &[Option<&ProblemCounts>]) -> Vec<Chip> {
     draw(
         counted.iter().map(|c| c.errors).sum(),
         counted.iter().map(|c| c.warnings).sum(),
+        counted.iter().map(|c| c.failed_passes).sum(),
         "its steps found, as of each one's last run",
+        "as of each step's last run",
     )
 }
 
-fn draw(errors: i64, warnings: i64, whose: &str) -> Vec<Chip> {
+/// `found` says whose the errors and warnings are; `ran`, when the
+/// failed passes were counted.
+fn draw(errors: i64, warnings: i64, failed_passes: i64, found: &str, ran: &str) -> Vec<Chip> {
     let plural = |n: i64| if n == 1 { "" } else { "s" };
     let mut out = Vec::new();
     if errors > 0 {
@@ -73,19 +97,36 @@ fn draw(errors: i64, warnings: i64, whose: &str) -> Vec<Chip> {
             kind: ChipKind::Error,
             text: errors.to_string(),
             title: format!(
-                "{errors} error{s} {whose} \u{2014} double-click to see them",
+                "{errors} error{s} {found} \u{2014} double-click to see them",
                 s = plural(errors)
             ),
         });
     }
+    // A failed pass is not in the problems a double-click opens; its
+    // error is in the step's log.
+    let mut said = Vec::new();
     if warnings > 0 {
+        said.push(format!(
+            "{warnings} warning{s} {found} \u{2014} double-click to see them",
+            s = plural(warnings)
+        ));
+    }
+    match failed_passes {
+        0 => {}
+        1 => said.push(format!(
+            "1 pass failed and was run again, {ran} \u{2014} its error is in the log, a \
+             double-click on the status away"
+        )),
+        n => said.push(format!(
+            "{n} passes failed and were run again, {ran} \u{2014} their errors are in the \
+             log, a double-click on the status away"
+        )),
+    }
+    if !said.is_empty() {
         out.push(Chip {
             kind: ChipKind::Warning,
-            text: warnings.to_string(),
-            title: format!(
-                "{warnings} warning{s} {whose} \u{2014} double-click to see them",
-                s = plural(warnings)
-            ),
+            text: (warnings + failed_passes).to_string(),
+            title: said.join("\n"),
         });
     }
     out
@@ -142,13 +183,14 @@ mod tests {
                 ..sample("mail/ingest", "", 500, "r8")
             },
         ];
-        let by = counts_by_step(&latest);
+        let by = counts_by_step(&latest, &[]);
         assert_eq!(
             by["slack/render_markdown"],
             ProblemCounts {
                 errors: 3,
                 warnings: 12,
-                run_id: "r9".into()
+                run_id: "r9".into(),
+                ..Default::default()
             }
         );
         assert_eq!(
@@ -156,7 +198,8 @@ mod tests {
             ProblemCounts {
                 errors: 0,
                 warnings: 0,
-                run_id: "r8".into()
+                run_id: "r8".into(),
+                ..Default::default()
             }
         );
         assert!(
@@ -179,6 +222,7 @@ mod tests {
             errors: 1,
             warnings: 12,
             run_id: "r1".into(),
+            ..Default::default()
         }));
         assert_eq!(
             some.iter()
@@ -215,6 +259,7 @@ mod tests {
             errors: 2,
             warnings: 1,
             run_id: "r2".into(),
+            ..Default::default()
         };
         let drawn = group_chips(&[Some(&ingest), Some(&render), None]);
         assert_eq!(
@@ -225,5 +270,63 @@ mod tests {
             vec![(ChipKind::Error, "2"), (ChipKind::Warning, "2")]
         );
         assert!(group_chips(&[None, None]).is_empty());
+    }
+
+    /// A pass that failed and was run again left the row clean: the run
+    /// reports only its last pass, and the runner never writes a step's
+    /// `problems`. The runner's own count of such passes is a warning on
+    /// the row, said on hover with the run it is from, and a group sums
+    /// it with the rest.
+    #[test]
+    fn a_failed_pass_that_ran_again_is_a_warning_on_its_row() {
+        let failed = |step: &str, value: i64, run: &str| MetricRow {
+            name: datalib_metrics::FAILED_PASSES.into(),
+            ..sample(step, "", value, run)
+        };
+        let by = counts_by_step(
+            &[sample("evals/score", "severity=warning", 2, "r8")],
+            &[
+                failed("evals/score", 1, "r9"),
+                failed("evals/ingest", 0, "r9"),
+                failed("evals/render", 3, "r9"),
+            ],
+        );
+        let score = chips(by.get("evals/score"));
+        assert_eq!(
+            score
+                .iter()
+                .map(|c| (c.kind, c.text.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(ChipKind::Warning, "3")]
+        );
+        assert_eq!(
+            score[0].title,
+            "2 warnings this step found, as of run r8 \u{2014} double-click to see them\n\
+             1 pass failed and was run again, as of run r9 \u{2014} its error is in the log, a \
+             double-click on the status away"
+        );
+        assert!(
+            chips(by.get("evals/ingest")).is_empty(),
+            "no failed pass and nothing found: nothing drawn"
+        );
+        assert!(
+            chips(by.get("evals/render"))[0]
+                .title
+                .starts_with("3 passes failed and were run again, as of run r9"),
+            "{:?}",
+            chips(by.get("evals/render"))
+        );
+        let group = group_chips(&[
+            by.get("evals/ingest"),
+            by.get("evals/score"),
+            by.get("evals/render"),
+        ]);
+        assert_eq!(
+            group
+                .iter()
+                .map(|c| (c.kind, c.text.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(ChipKind::Warning, "6")]
+        );
     }
 }

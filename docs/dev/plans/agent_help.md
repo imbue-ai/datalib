@@ -75,8 +75,14 @@ these pages quote are tested against its parser, which lives in
 
 The tarball (and so the Docker image) carries the agent guide as
 `docs/agent_user.md`, written at staging by the staged `datalib-step
-help agent`. Every relative link in what `help` prints points at the
-build's commit on GitHub, so nothing a doc links to has to ship.
+help agent`. ~~Every relative link in what `help` prints points at the
+build's commit on GitHub, so nothing a doc links to has to ship.~~
+Changed after an eval sent agents to GitHub's HTML pages for these
+docs, fifteen times the size of the file, which overflowed their tool
+output: every doc the guides link to is compiled in
+(`datalib/backend/agent_docs`), `datalib-step help docs` lists them,
+a release writes each beside the binaries, and a link between two of
+them prints as the `datalib-step help` command for the other.
 
 ### 2.3 Examples and fields from the config crates (PR 3)
 
