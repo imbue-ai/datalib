@@ -433,6 +433,14 @@ export const CATALOG: CatalogEntry[] = [
           "New messages are fetched on every sync either way. Empty is 60; 0 re-queries every sync.",
       },
       {
+        kind: "int",
+        target: "api.list_every_hours",
+        label: "Re-read the user list and bookmarks every (hours)",
+        help:
+          "How long after the last read a sync reads the workspace's user list and bookmarks again. " +
+          "A new author is looked up as their first message lands either way. Empty is 6; 0 re-reads every sync.",
+      },
+      {
         kind: "string_list",
         target: "api.involves_me",
         label: "What involves me",

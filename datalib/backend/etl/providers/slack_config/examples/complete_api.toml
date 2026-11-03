@@ -30,8 +30,11 @@ enabled = false
 account = "enterprise"
 
 [steps.params.api]
-since = "2025-01-01"           # oldest message: a day, an RFC 3339 instant, or an offset
-                               # from the sync ("-30d"); default 2024-01-01
+since = "2025-01-01"           # oldest message; default 2024-01-01. A day ("2025-01-01"),
+                               # an RFC 3339 instant ("2025-01-01T09:00:00-08:00"), or an
+                               # offset back from each sync ("-30d", "-2w": a rolling window).
+                               # For the whole history, a day before the workspace began
+                               # ("2013-01-01"); a first sync of a big workspace then takes hours
 channels = ["bridge", "engineering"]  # by name, without `#`; omit for every channel you are in
 all_channels = false           # also channels you can see but are not in (ignored with `channels`)
 archived = false               # also archived channels, each read once; meant with
@@ -48,6 +51,9 @@ refresh_window_days = 30       # re-walk this many trailing days for edits, reac
                                # and deletions; default 30, 0 turns it off
 refresh_every_minutes = 60     # re-walk that window at most this often; default 60,
                                # 0 re-walks it on every sync
+list_every_hours = 6           # re-read the user list and bookmarks at most this often;
+                               # default 6, 0 re-reads them on every sync. New authors are
+                               # looked up as their messages land either way
 scope = "involves_me"          # walk only the channels where something involves you;
                                # default "every_conversation". DMs follow `dms` either way
 involves_me = ["mention", "from_me", "broadcast"]

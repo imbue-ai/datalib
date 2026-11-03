@@ -56,10 +56,11 @@ pub const DEFAULT_REFRESH_WINDOW_DAYS: i64 = 30;
 /// whole before a run reads it again.
 pub const DEFAULT_REFRESH_EVERY_MINUTES: i64 = 60;
 
-/// Max age of a successful user or bookmark sweep before we refetch.
-/// A new poster does not wait for it: the messages name their authors,
-/// and an author with no `users` row is looked up on its own.
-pub const MANIFEST_TTL: chrono::Duration = chrono::Duration::hours(6);
+/// How long after the user listing and the bookmarks were last read
+/// whole before a run reads them again. A new poster does not wait for
+/// it: the messages name their authors, and an author with no `users`
+/// row is looked up on its own.
+pub const DEFAULT_LIST_EVERY_HOURS: i64 = 6;
 
 /// On a real workspace, 381 open channels took 5 calls at 1000 and 23
 /// at 200; listed with its 469 archived ones, 850 took 5 at 1000.
@@ -213,23 +214,24 @@ async fn fetch_channels(
 async fn fetch_users(
     db: &RawDb,
     now: &DateTime<Utc>,
+    list_every: chrono::Duration,
     progress: &datalib_etl::progress::Progress,
     latchkey: &LatchkeySettings,
 ) -> Result<usize> {
     let sweep_key = "users";
     if let Some(age) = db.manifest_sweep_age(sweep_key, now).await? {
-        if age < MANIFEST_TTL {
+        if age < list_every {
             let age_s = age.num_seconds().max(0);
             info!(
                 event = "slack_fetch_users_skipped",
                 reason = "ttl",
                 age_s = age_s,
-                ttl_s = MANIFEST_TTL.num_seconds(),
+                ttl_s = list_every.num_seconds(),
                 "the user listing is fresh enough; not re-listing"
             );
             progress.set_message(&format!(
                 "users.list cached ({age_s}s old, TTL {}s)",
-                MANIFEST_TTL.num_seconds()
+                list_every.num_seconds()
             ));
             return Ok(0);
         }
@@ -415,24 +417,31 @@ fn saved_items_in_scope(items: Vec<Value>, in_scope: &HashSet<String>) -> Vec<Va
         .collect()
 }
 
+/// When a run is, and how long a whole listing it made stays fresh.
+#[derive(Clone, Copy)]
+struct Listing<'a> {
+    now: &'a DateTime<Utc>,
+    every: chrono::Duration,
+}
+
 /// `bookmarks.list` for each mirrored conversation whose header has a
 /// bookmarks bar (see [`RawDb::channels_to_list_bookmarks`]): on a real
 /// workspace 75 of 128 channels had none, and none of the 25 of those
-/// asked held a bookmark. At most once per [`MANIFEST_TTL`], like the
+/// asked held a bookmark. At most once per `list_every`, like the
 /// channel listing. Returns `(stored, pruned)`; a conversation that
 /// could not be listed keeps what it had.
 async fn fetch_bookmarks(
     db: &RawDb,
     targets: &[(String, String)],
-    now: &DateTime<Utc>,
+    listing: Listing<'_>,
     stop: &datalib_etl::stop::StopFlag,
     progress: &datalib_etl::progress::Progress,
     latchkey: &LatchkeySettings,
     problems: &mut Vec<RunProblem>,
 ) -> Result<(usize, usize)> {
     let sweep_key = "bookmarks";
-    if let Some(age) = db.manifest_sweep_age(sweep_key, now).await? {
-        if age < MANIFEST_TTL {
+    if let Some(age) = db.manifest_sweep_age(sweep_key, listing.now).await? {
+        if age < listing.every {
             info!(
                 event = "slack_fetch_bookmarks_skipped",
                 reason = "ttl",
@@ -479,7 +488,7 @@ async fn fetch_bookmarks(
         );
         problems.push(problem_for(M_BOOKMARKS, detail, refused(first)));
     } else if !stopped {
-        db.record_manifest_sweep(sweep_key, now).await?;
+        db.record_manifest_sweep(sweep_key, listing.now).await?;
     }
     Ok((stored, pruned))
 }
@@ -501,7 +510,7 @@ async fn fetch_account_state(
     db: &RawDb,
     targets: &[(String, String)],
     counts: Option<Result<Value>>,
-    now: &DateTime<Utc>,
+    listing: Listing<'_>,
     stop: &datalib_etl::stop::StopFlag,
     progress: &datalib_etl::progress::Progress,
     latchkey: &LatchkeySettings,
@@ -521,7 +530,7 @@ async fn fetch_account_state(
         fetch_bookmarks(
             db,
             targets,
-            now,
+            listing,
             stop,
             progress,
             latchkey,
@@ -1398,6 +1407,9 @@ pub struct FetchOptions {
     /// Minutes before a conversation's refresh window is re-read again;
     /// `0` re-reads it every run.
     pub refresh_every_minutes: i64,
+    /// Hours before the user listing and the bookmarks are read again;
+    /// `0` reads them every run.
+    pub list_every_hours: i64,
     pub members_only: bool,
     /// Also mirror archived conversations. A channel named in `channels`
     /// is mirrored archived or not.
@@ -1438,6 +1450,7 @@ impl FetchOptions {
             since: DEFAULT_SINCE.to_string(),
             refresh_window_days: DEFAULT_REFRESH_WINDOW_DAYS,
             refresh_every_minutes: DEFAULT_REFRESH_EVERY_MINUTES,
+            list_every_hours: DEFAULT_LIST_EVERY_HOURS,
             members_only: true,
             archived: false,
             media: true,
@@ -1506,6 +1519,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         "since": opts.since,
         "refresh_window_days": opts.refresh_window_days,
         "refresh_every_minutes": opts.refresh_every_minutes,
+        "list_every_hours": opts.list_every_hours,
         "members_only": opts.members_only,
         "archived": opts.archived,
         "media": opts.media,
@@ -1543,8 +1557,9 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         // which needs the user directory, is worked out once both are in.
         // A listing that fails leaves the stored one.
         let include_archived = opts.archived || opts.channels.is_some();
+        let list_every = chrono::Duration::hours(opts.list_every_hours);
         let (users, listed) = tokio::join!(
-            fetch_users(&db, &now, &setup, &opts.latchkey),
+            fetch_users(&db, &now, list_every, &setup, &opts.latchkey),
             fetch_channels(
                 &db,
                 opts.members_only,
@@ -1709,7 +1724,10 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                 &db,
                 &targets,
                 counts,
-                &now,
+                Listing {
+                    now: &now,
+                    every: list_every,
+                },
                 &opts.control.stop,
                 &setup,
                 &opts.latchkey,
