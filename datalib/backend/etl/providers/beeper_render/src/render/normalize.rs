@@ -402,20 +402,38 @@ mod tests {
     use super::*;
 
     /// A bucket whose room the parse did not read was skipped with a
-    /// log line; its document now carries why it was not rendered.
+    /// log line; its document now carries why it was not rendered. A
+    /// bucket beside it whose room is there renders.
     #[test]
     fn a_bucket_with_no_room_is_unrendered() {
+        let bucket = |room_uuid: &str| DocBucket {
+            room_uuid: room_uuid.into(),
+            period_key: "2364-03".into(),
+            messages: Vec::new(),
+            reactions_by_target: BTreeMap::new(),
+        };
+        let bridge = Room {
+            room_uuid: "!bridge:beeper.local".into(),
+            network: "signal".into(),
+            native_room_id: "!bridge:beeper.local".into(),
+            external_room_id: None,
+            external_workspace_id: None,
+            account_id: None,
+            title: Some("Bridge".into()),
+            is_dm: false,
+            source_url: None,
+        };
         let parsed = ParsedBeeper {
-            docs: vec![DocBucket {
-                room_uuid: "!enterprise:beeper.local".into(),
-                period_key: "2364-03".into(),
-                messages: Vec::new(),
-                reactions_by_target: BTreeMap::new(),
-            }],
+            rooms: [(bridge.room_uuid.clone(), bridge)].into(),
+            docs: vec![
+                bucket("!bridge:beeper.local"),
+                bucket("!enterprise:beeper.local"),
+            ],
             ..ParsedBeeper::default()
         };
         let (networks, unrendered) = to_networks(&parsed, "beeper", &Avatars::new());
-        assert!(networks.is_empty());
+        assert_eq!(networks.len(), 1);
+        assert_eq!(networks[0].chats.len(), 1);
         assert_eq!(unrendered.len(), 1);
         assert_eq!(
             unrendered[0].markdown_uuid,

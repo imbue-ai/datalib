@@ -445,7 +445,9 @@ fn an_xml_file_that_is_no_export_is_a_problem() -> Result<()> {
             "file:sms_backup_restore/xml:sms-2369040112000.xml".to_string(),
             "warning".to_string(),
         )];
-        fetch_dir(&db, &input, &cache).await?;
+        let first = fetch_dir(&db, &input, &cache).await?;
+        assert_eq!(first.files, 1, "the calls export beside it reads");
+        assert!(first.calls > 0);
         assert_eq!(problems(&db).await?, foreign);
 
         let quiet = fetch_dir(&db, &input, &cache).await?;

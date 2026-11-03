@@ -199,6 +199,16 @@ PDF_THAT_WILL_NOT_IDENTIFY = (
     "|record:pdf_paths:holodeck/corrupt.pdf"
     "|||fetch_failed|classify: Invalid PDF structure"
 )
+# The TNG backup keeps the message row of a photo deleted off the phone;
+# the other attachments resolve and say nothing.
+WHATSAPP_PHOTO_NOT_IN_BACKUP = (
+    "75ba5daf-7447-52d6-9873-7e01a563a8f5"
+    "|warning|parse|markdown"
+    "|00000000-0000-8cd7-b2e8-b8443ce69b19"
+    "|0b50e817-2480-8dbf-8855-78fecef33dc9"  # message TNG0013
+    "|attachment|fetch_failed|Media/WhatsApp Images/holodeck-poker-night.jpg"
+    " is not among the media files the backup holds"
+)
 TAKEOUT_POST_NOT_A_VIDEO = (
     "50d82e65-dc5d-522f-afdd-0ded04b3d8f0"
     "|warning|fetch|entity"
@@ -307,6 +317,7 @@ EXPECTED_PROBLEMS = {
         ]
     ),
     "tng_pdfs": [PDF_THAT_WILL_NOT_IDENTIFY],
+    "whatsapp": [WHATSAPP_PHOTO_NOT_IN_BACKUP],
     "google-takeout": sorted(
         [
             TAKEOUT_POST_NOT_A_VIDEO,

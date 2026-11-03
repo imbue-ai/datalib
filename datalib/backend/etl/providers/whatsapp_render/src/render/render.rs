@@ -611,7 +611,9 @@ mod tests {
 
     /// Rows parse cannot place in a chat were dropped with a log line
     /// only, and an attachment missing from the backup was a count in
-    /// the log; each is now something the problems sink can carry.
+    /// the log; each is now something the problems sink can carry. The
+    /// rows beside them that do place, and an attachment the backup
+    /// holds, say nothing.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn rows_parse_drops_and_media_it_lacks_are_reported() {
         use crate::render::parse::Dropped;
@@ -643,15 +645,23 @@ mod tests {
                 text_data, sort_id) VALUES \
                 (2, 99, 'k_lost', 0, 1700000000000, 0, 'Red alert.', 1), \
                 (3, 1, 'k_p1', 0, 1700000001000, 0, 'Engage, again.', 2), \
-                (4, -1, '-1', 0, NULL, 0, NULL, 0)",
+                (4, -1, '-1', 0, NULL, 0, NULL, 0), \
+                (5, 1, 'k_p2', 0, 1700000004000, 1, NULL, 3)",
+            // Message 1's photo is not in the backup; message 5's is.
             "INSERT INTO message_media (message_row_id, file_path, mime_type) VALUES \
-                (1, 'Media/WhatsApp Images/IMG-ENTERPRISE.jpg', 'image/jpeg')",
-            // A reaction in no chat, and one whose message is gone.
+                (1, 'Media/WhatsApp Images/IMG-ENTERPRISE.jpg', 'image/jpeg'), \
+                (5, 'Media/WhatsApp Images/IMG-STARGAZER.jpg', 'image/jpeg')",
+            "INSERT INTO wa_media_files (blake3, relative_path, size_bytes, mime_type) VALUES \
+                ('5ea85bd0fc9b4b9c5ef4d8a1a7c2e3f405b6c7d8e9fa0b1c2d3e4f5a6b7c8d9e', \
+                 'Media/WhatsApp Images/IMG-STARGAZER.jpg', 768, 'image/jpeg')",
+            // A reaction in no chat, one whose message is gone, and one
+            // that lands.
             "INSERT INTO message_add_on (_id, chat_row_id, key_id, from_me, \
                 parent_message_row_id, timestamp) VALUES \
-                (1, 99, 'r1', 0, 1, 1700000002000), (2, 1, 'r2', 0, 42, 1700000003000)",
+                (1, 99, 'r1', 0, 1, 1700000002000), (2, 1, 'r2', 0, 42, 1700000003000), \
+                (3, 1, 'r3', 1, 1, 1700000005000)",
             "INSERT INTO message_add_on_reaction (message_add_on_row_id, reaction) VALUES \
-                (1, '🖖'), (2, '🖖')",
+                (1, '🖖'), (2, '🖖'), (3, '🖖')",
         ] {
             sqlx::query(q).execute(&pool).await.expect("seed");
         }
@@ -687,11 +697,15 @@ mod tests {
             .dropped
             .iter()
             .all(|d| d.problem.reason == Reason::NoIdentity));
+        assert_eq!(parsed.chats.len(), 1, "only the chat with a jid renders");
         let items: Vec<_> = parsed.chats[0].buckets[0].items.iter().collect();
-        assert_eq!(items.len(), 1);
+        assert_eq!(items.len(), 2);
         assert_eq!(items[0].problems.len(), 1, "{:?}", items[0].problems);
         assert_eq!(items[0].problems[0].reason, Reason::FetchFailed);
         assert!(items[0].problems[0].sample.contains("IMG-ENTERPRISE.jpg"));
+        assert_eq!(items[0].reactions.len(), 1, "the reaction that lands");
+        assert!(items[1].problems.is_empty(), "{:?}", items[1].problems);
+        assert!(items[1].attachments[0].ref_id.is_some());
     }
 
     /// One jid, chat and message, all sharing `rowid` — the shape the

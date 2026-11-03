@@ -324,19 +324,30 @@ mod tests {
     use crate::render::parse::DocBucket;
 
     /// A bucket whose chat the parse did not read was skipped with a
-    /// log line; its document now carries why it was not rendered.
+    /// log line; its document now carries why it was not rendered. A
+    /// bucket beside it whose chat is there renders.
     #[test]
     fn a_bucket_with_no_chat_is_unrendered() {
+        let bucket = |chat_id: &str| DocBucket {
+            chat_id: chat_id.into(),
+            period_key: "2364-03".into(),
+            items: Vec::new(),
+        };
         let parsed = ParsedSignal {
-            docs: vec![DocBucket {
-                chat_id: "1701".into(),
-                period_key: "2364-03".into(),
-                items: Vec::new(),
-            }],
+            chats: [(
+                "1".to_string(),
+                ParsedChat {
+                    id: "1".into(),
+                    recipient_id: "7".into(),
+                },
+            )]
+            .into(),
+            docs: vec![bucket("1"), bucket("1701")],
             ..ParsedSignal::default()
         };
         let (chats, unrendered) = to_chats(&parsed, "signal");
-        assert!(chats.is_empty());
+        assert_eq!(chats.len(), 1);
+        assert_eq!(chats[0].chat_uuid, ids::chat("signal", "1").uuid);
         assert_eq!(unrendered.len(), 1);
         assert_eq!(
             unrendered[0].markdown_uuid,

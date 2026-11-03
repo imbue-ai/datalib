@@ -1229,11 +1229,26 @@ async fn nothing_to_mirror_is_a_problem_inside_a_collector() -> Result<()> {
 
 /// A source table named like the store's own `problems` failed the step
 /// with nothing in the problems table, for every source but the two that
-/// caught every error themselves.
+/// caught every error themselves. The same source without it mirrors
+/// and says nothing.
 #[tokio::test]
 async fn a_colliding_table_is_a_problem_inside_a_collector() -> Result<()> {
     let f = Fixture::new();
     f.ingest().await?;
+    let pool = mirror::open_mirror(&f.mirror).await?;
+    let stop = datalib_etl::stop::StopFlag::new();
+    let ran = datalib_etl::run_problems::collecting(&pool, &stop, |found| {
+        let (pool, opts) = (pool.clone(), f.options());
+        async move { mirror::run_or_report(&pool, &opts, &Progress::noop(), &found).await }
+    })
+    .await?;
+    assert!(ran.is_some(), "a clean source mirrors");
+    let clean: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM problems")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(clean, 0);
+    pool.close().await;
+
     f.edit_catalog(&["CREATE TABLE Problems (id INTEGER PRIMARY KEY, what TEXT)"])
         .await?;
     let pool = mirror::open_mirror(&f.mirror).await?;

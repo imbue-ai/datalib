@@ -889,7 +889,9 @@ async fn an_unchanged_catalog_commits_nothing() -> Result<()> {
 async fn a_live_catalog_the_mirror_refuses_is_a_problem() -> Result<()> {
     let f = Fixture::new();
     let live = f.live(&[]).await;
-    f.sync_catalog(&options(), &live).await?;
+    let run = f.sync_catalog(&options(), &live).await?;
+    assert!(run.live.is_some(), "a clean catalog mirrors");
+    assert!(problem_keys(&f).await.is_empty());
 
     let live = f
         .live(&["CREATE TABLE Problems (id INTEGER PRIMARY KEY, what TEXT)"])
