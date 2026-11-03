@@ -415,9 +415,13 @@ Three pieces make that possible, and each is small:
   a delay is a window that a slow runner can miss.
   `DATALIB_HTTP_PLAYBACK_HOLD_SEALED` is the same, except a request waits
   only once its process has sealed a checkpoint, so a download publishes
-  something before it parks; the streaming spec uses it. A Rust test
-  sets the same three on its scope (`Playback::delay`, `hold`,
-  `hold_sealed`).
+  something before it parks; the streaming spec uses it.
+  `DATALIB_HTTP_PLAYBACK_OFFLINE` names a file too: while it exists every
+  replayed request fails as an offline machine's does (curl exit 6), so
+  a test can take the network away mid-run
+  (`datalib_step`'s `step_tests/offline.rs`). A Rust test sets the same
+  four on its scope (`Playback::delay`, `hold`, `hold_sealed`,
+  `offline`).
 * The tapes come from `datalib-step synthesize`, run by `run_e2e.sh` at
   startup over the checked-in `chatgpt_api` / `claude_export` fixtures —
   the same call `tests/fixtures/run_sync_pipeline.py` makes.

@@ -29,6 +29,10 @@ pub const PLAYBACK_HOLD_ENV: &str = "DATALIB_HTTP_PLAYBACK_HOLD";
 /// ([`Playback::hold_sealed`]).
 pub const PLAYBACK_HOLD_SEALED_ENV: &str = "DATALIB_HTTP_PLAYBACK_HOLD_SEALED";
 
+/// A file whose presence makes every replayed request fail as an offline
+/// machine's does ([`Playback::offline`]).
+pub const PLAYBACK_OFFLINE_ENV: &str = "DATALIB_HTTP_PLAYBACK_OFFLINE";
+
 const HOLD_POLL: Duration = Duration::from_millis(50);
 
 /// Where replayed requests are answered from, and how they are paced.
@@ -38,6 +42,7 @@ pub struct Playback {
     delay: Duration,
     hold: Option<PathBuf>,
     hold_sealed: Option<PathBuf>,
+    offline: Option<PathBuf>,
     meet: Option<std::sync::Arc<Meet>>,
 }
 
@@ -55,6 +60,7 @@ impl Playback {
             delay: Duration::ZERO,
             hold: None,
             hold_sealed: None,
+            offline: None,
             meet: None,
         }
     }
@@ -91,6 +97,15 @@ impl Playback {
         self
     }
 
+    /// While `file` exists every request fails the way it does on a
+    /// machine with no network: curl exit 6, could not resolve the host.
+    /// A test takes the network away at a moment it chooses, such as
+    /// after the first unit is stored, and can give it back.
+    pub fn offline(mut self, file: impl Into<PathBuf>) -> Self {
+        self.offline = Some(file.into());
+        self
+    }
+
     /// Like [`Playback::hold`], but a request waits only once its process
     /// has sealed a checkpoint, so a download publishes something before
     /// it parks.
@@ -110,6 +125,7 @@ impl Playback {
             delay: delay_from_env(),
             hold: path_in(PLAYBACK_HOLD_ENV),
             hold_sealed: path_in(PLAYBACK_HOLD_SEALED_ENV),
+            offline: path_in(PLAYBACK_OFFLINE_ENV),
             meet: None,
         })
     }
@@ -142,6 +158,14 @@ impl Playback {
             if !meet.arrive(&req.url, stop).await {
                 return Err(interrupted());
             }
+        }
+        if self.offline.as_ref().is_some_and(|f| f.exists()) {
+            return Err(HttpError::Curl {
+                service: req.service,
+                url: req.url.clone(),
+                exit: 6,
+                stderr: "curl: (6) Could not resolve host".to_string(),
+            });
         }
         match crate::interrupt::before_request().await {
             Some(crate::interrupt::Strike::Interrupted) => Err(interrupted()),

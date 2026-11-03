@@ -308,6 +308,10 @@ enum Cmd {
 /// from a newer config should not take the run down, and the step's own
 /// default is a safe answer. It is logged, though — a fallback that fires
 /// silently is the kind this repo has been burned by.
+fn asked_to_stop(stop: &datalib_etl::stop::StopFlag) -> bool {
+    stop.requested() && stop.gave_up().is_none()
+}
+
 /// What a step that did not finish reports: the version its store is
 /// at. Nothing for a command that is not a step.
 async fn published_claims(data_root: &Path) -> Vec<events::OutputClaim> {
@@ -529,15 +533,16 @@ async fn main() {
         // A run that ended because it was asked to is not a success, even
         // though it committed: it did not finish, and saying so is how the
         // runner knows not to mark it done. What it committed stands, and
-        // the version it reports is how that reaches its consumers.
-        Ok(outputs) if stop.requested() => {
+        // the version it reports is how that reaches its consumers. A
+        // download that stopped itself is not this: it ends `incomplete`.
+        Ok(outputs) if asked_to_stop(&stop) => {
             emitter.outcome(&outputs, Some(FailureKind::Cancelled));
             std::process::exit(130);
         }
         // Likewise an error after the stop: the transport refuses new
         // requests once the flag is up, so a phase that does not read the
         // flag ends with `Interrupted`. That is the stop, not a failure.
-        Err(e) if stop.requested() => {
+        Err(e) if asked_to_stop(&stop) => {
             tracing::info!("stopped: {e:#}");
             emitter.outcome(
                 &published_claims(&data_root).await,

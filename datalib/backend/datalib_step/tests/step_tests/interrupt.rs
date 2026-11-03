@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 
 const STEP: &str = "work-slack/ingest";
 
-fn doltlite(db: &Path, sql: &str) -> Vec<String> {
+pub(crate) fn doltlite(db: &Path, sql: &str) -> Vec<String> {
     let bin = std::env::var_os("DOLTLITE_BIN").expect("DOLTLITE_BIN");
     let out = Command::new(bin)
         .arg("-readonly")
