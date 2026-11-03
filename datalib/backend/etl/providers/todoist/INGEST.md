@@ -183,7 +183,8 @@ bazel run //datalib/backend/etl/providers/todoist:todoist_live
 
 runs `tests/todoist_tests/live.rs` against the account latchkey holds
 for `todoist` (`TODOIST_TEST_ACCOUNT` picks one of several;
-`TODOIST_TEST_COMPLETED_SINCE=YYYY-MM-DD` keeps the first run short).
+`TODOIST_TEST_SINCE`, a day or an offset such as `-30d`, keeps the
+first run short).
 It runs a full sync, checks no API token reached the store, and runs
 again to check the second run is incremental. It prints only counts and
 the store's path.

@@ -202,15 +202,21 @@ every one reads the same grammar, `datalib_time::TimeBound`
 | `2026-09-01T09:00:00-07:00` | that instant (RFC 3339, offset required); where a day is wanted, its date in its own offset |
 | `-30d`, `+21d`, `-12h`, `-2w` | that far from the run's `now` (`DATALIB_DAG_NOW`), sign required, in hours, days or weeks |
 
-A day or an offset is resolved once, at the start of each run, by the
-source's processor, which hands its download an absolute value; so a
-relative window slides forward run by run. A config's `validate` reads
+A day or an offset is resolved once per run, against the run's `now`,
+and the download is handed an absolute value; so a relative window
+slides forward run by run. A day before 1970 reaches back past
+anything a source holds: Slack and Gmail, whose services count seconds
+from 1970, ask from 1970 itself rather than from a negative time. A config's `validate` reads
 every bound and refuses an `until` before its `since` wherever neither
 the run's clock nor its offset is needed to tell, so `datalib-dag
 --check` names the key; a day against an offset or an instant is
 checked when a run resolves them. A method that cannot
 honor `until` has no such key, and naming one is refused as an unknown
 field.
+
+Leaving `since` out means everything, except where the table below
+says otherwise; Garmin's year is there because it costs one request per
+metric per day.
 
 | method | keys, and unset | what the window bounds | a record the window leaves behind |
 |---|---|---|---|

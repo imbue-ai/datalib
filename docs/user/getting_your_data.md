@@ -521,7 +521,8 @@ or answer "Start from a Takeout?" in the Gmail form. The Takeout alone
 is the no-credentials route — see [Email](#email-mbox-or-jmap).
 
 To mirror only recent mail, set `since` in the `gmail` table: a day
-(`"2026-09-01"`) or an offset from the sync (`"-30d"`). The first sync
+(`"2026-09-01"`), an RFC 3339 instant, or an offset from the sync
+(`"-30d"`); unset is every message. The first sync
 then lists only the mail after it, which takes minutes where a whole
 mailbox takes hours. Mail older than a sliding `since` stays mirrored,
 and an earlier `since` brings the older mail in on the next sync.
@@ -985,9 +986,10 @@ latchkey auth set todoist -H "Authorization: Bearer $(pbpaste)"
 ```
 
 An empty `api` table copies everything. Completed tasks are read back
-to the day you joined Todoist, a quarter at a time; set
-`since` (a day, or an offset such as `"-90d"`) to stop sooner, or `completed = false`
-to leave them out. Each sync after the first reads only what changed.
+to the day you joined Todoist, a quarter at a time; set `since` (a
+day, an RFC 3339 instant, or an offset from the sync such as `"-90d"`)
+to stop sooner, or `completed = false` to leave them out. A config that
+still says `completed_since` is renamed to `since` by the app. Each sync after the first reads only what changed.
 [The provider's INGEST.md](../../datalib/backend/etl/providers/todoist/INGEST.md) has the details.
 
 ## WhatsApp backups
