@@ -91,7 +91,8 @@ travel with the row. The step then reports whole-store counts as
 rows it found itself: render leaves the download's copied rows out and
 `grid_index` every source's, counting only a render store it could not
 read. So a download's warning is counted on the Download row alone,
-and a group's count is the sum of its steps'. A
+and a group's count is the sum of its steps'. An `info` row is counted
+nowhere: nothing failed, and the problems grid is where it is seen. A
 download reports them at every seal as well, right after it has written
 the problems its run has found so far (`run_problems::collecting_sealed`),
 and again when it ends, failed or not: a checkpoint's rows, its

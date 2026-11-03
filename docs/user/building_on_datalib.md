@@ -348,13 +348,19 @@ first:
   [raw_stores.md](raw_stores.md) § "Reading one commit, and following
   changes") rather than `main`, which may have moved on.
   `DATALIB_DAG_CHANGED_INPUTS` names the inputs that moved since its
-  last success; empty, it means all of them.
+  last success, and every input on its first run; empty, nothing moved.
+  `DATALIB_DAG_FAILED_INPUTS` names the inputs whose last run did not
+  succeed: the step still runs, on what they committed before they
+  ended, and decides for itself whether a partial input is worth
+  reading.
 - **It is run again, often, and may start before a download ends.** A
   long download lets the steps that read it run at each of its seals
   and once more when it ends, so make it safe to repeat. Keep the last
   commit you processed per input, under your tree, and process only
-  what `dolt_diff_<table>` says changed since then. The rules, from the
-  step's side, are
+  what `dolt_diff_<table>` says changed since then. A step that would
+  rather run once, after the downloads it reads have ended, says
+  `start = "after_inputs_settle"` beside its `inputs`. The rules, from
+  the step's side, are
   [When you are started](../dev/step_protocol.md#when-you-are-started).
 - **Stop when told.** On SIGINT, finish or abandon the current unit of
   work, write nothing half-done, and exit; you have fifteen seconds.

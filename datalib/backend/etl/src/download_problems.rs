@@ -187,41 +187,77 @@ pub struct RunProblem {
     pub name: String,
     /// What went wrong, in the words of the error.
     pub detail: String,
-    /// Whether the credential was refused: a listing the service
-    /// would not give this token is a warning the reader can act on
-    /// (ask for access), where one that failed is an error.
-    #[serde(default)]
-    pub forbidden: bool,
+    pub reason: datalib_problems::Reason,
+    pub severity: datalib_problems::Severity,
 }
 
 impl RunProblem {
-    pub fn listing(name: &str, detail: impl Into<String>) -> Self {
+    fn new(
+        kind: RunProblemKind,
+        name: &str,
+        detail: impl Into<String>,
+        reason: datalib_problems::Reason,
+        severity: datalib_problems::Severity,
+    ) -> Self {
         Self {
-            kind: RunProblemKind::Listing,
+            kind,
             name: name.to_string(),
             detail: detail.into(),
-            forbidden: false,
+            reason,
+            severity,
         }
+    }
+
+    pub fn listing(name: &str, detail: impl Into<String>) -> Self {
+        use datalib_problems::{Reason, Severity};
+        Self::new(
+            RunProblemKind::Listing,
+            name,
+            detail,
+            Reason::FetchFailed,
+            Severity::Error,
+        )
     }
 
     pub fn phase(name: &str, detail: impl Into<String>) -> Self {
-        Self {
-            kind: RunProblemKind::Phase,
-            name: name.to_string(),
-            detail: detail.into(),
-            forbidden: false,
-        }
+        use datalib_problems::{Reason, Severity};
+        Self::new(
+            RunProblemKind::Phase,
+            name,
+            detail,
+            Reason::FetchFailed,
+            Severity::Error,
+        )
     }
 
     /// A listing the service refused this credential: an org, a
-    /// workspace, a scope the token does not reach.
+    /// workspace, a scope the token does not reach. A warning, since the
+    /// reader can act on it (ask for access).
     pub fn forbidden(name: &str, detail: impl Into<String>) -> Self {
-        Self {
-            kind: RunProblemKind::Listing,
-            name: name.to_string(),
-            detail: detail.into(),
-            forbidden: true,
-        }
+        use datalib_problems::{Reason, Severity};
+        Self::new(
+            RunProblemKind::Listing,
+            name,
+            detail,
+            Reason::Forbidden,
+            Severity::Warning,
+        )
+    }
+
+    /// A listing the run did not ask for, because the service refused
+    /// this credential it recently and a refusal does not pass by
+    /// itself. Only `info`: nothing failed this run, and a warning every
+    /// sync about a call the token was never going to be allowed reads
+    /// as something broken.
+    pub fn not_asked(name: &str, detail: impl Into<String>) -> Self {
+        use datalib_problems::{Reason, Severity};
+        Self::new(
+            RunProblemKind::Listing,
+            name,
+            detail,
+            Reason::Forbidden,
+            Severity::Info,
+        )
     }
 
     pub fn key(&self) -> String {
@@ -318,15 +354,11 @@ pub(crate) fn config_rows(problems: &[DownloadProblem]) -> Vec<Row> {
 }
 
 pub(crate) fn run_rows(problems: &[RunProblem]) -> Vec<Row> {
-    use datalib_problems::{Outcome, Problem, Reason, Severity};
+    use datalib_problems::{Outcome, Problem};
     problems
         .iter()
         .map(|p| {
-            let problem = if p.forbidden {
-                Problem::explained(Reason::Forbidden, None, &p.detail).severity(Severity::Warning)
-            } else {
-                Problem::explained(Reason::FetchFailed, None, &p.detail).severity(Severity::Error)
-            };
+            let problem = Problem::explained(p.reason, None, &p.detail).severity(p.severity);
             (p.key(), Outcome::Dropped, problem)
         })
         .collect()
@@ -602,6 +634,43 @@ mod tests {
         }]);
         assert_eq!(about(&silent[0].0).as_deref(), Some("config entry porch"));
         assert_eq!(about("users:u1"), None, "not a download's key");
+    }
+
+    /// A refusal a run remembered and did not ask again is `info`,
+    /// which the Manage row does not count; one it was refused is a
+    /// warning, and one that failed an error.
+    #[test]
+    fn a_run_rows_severity_says_how_it_went() {
+        use datalib_problems::{Reason, Severity};
+        let rows = run_rows(&[
+            RunProblem::listing("users.list", "HTTP 500"),
+            RunProblem::forbidden("saved.list", "missing_scope"),
+            RunProblem::not_asked("client.counts", "refused on 2369-01-01"),
+        ]);
+        let got: Vec<_> = rows
+            .iter()
+            .map(|(key, _, p)| (key.as_str(), p.reason, p.severity))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (
+                    "listing:users.list",
+                    Reason::FetchFailed,
+                    Some(Severity::Error)
+                ),
+                (
+                    "listing:saved.list",
+                    Reason::Forbidden,
+                    Some(Severity::Warning)
+                ),
+                (
+                    "listing:client.counts",
+                    Reason::Forbidden,
+                    Some(Severity::Info)
+                ),
+            ]
+        );
     }
 
     #[test]
