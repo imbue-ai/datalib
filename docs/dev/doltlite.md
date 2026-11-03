@@ -745,6 +745,13 @@ Three consequences, each measured with `scripts/doltlite_commit_cost.py`
   keys are uuidv4s, uuidv5s and content hashes; adjacent keys are
   `(device_id, ts_ms)`, `"{metric}#{date}"`, and the time-prefixed ids
   `datalib_id` mints.
+- **A row is stored whole.** Changing one small column rewrites the
+  row and the leaf it sits in, whatever else the row holds: in 400
+  rows, one integer changed on a 4 KB row grew the file by 15 KB, and
+  50 changed beside 1 KB payloads by 235 KB, against 9 KB for the same
+  50 in a table of `(id, mark)` alone. A value that changes often and
+  on its own, such as a read mark, belongs in a narrow table of its
+  own (`a_small_column_change_rewrites_its_whole_row`).
 - **A commit pins whatever its transaction wrote.** Commit once at the
   end and `dolt_gc()` reclaims every intermediate page (439 MB → 15 MB).
   Commit after each of 200 transactions and gc reclaims nothing

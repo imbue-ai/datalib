@@ -273,6 +273,20 @@ A crash between the commit and the publication leaves the branch ahead
 of `main`; that commit is a seal the last run meant to make, so the
 next `open` finishes it.
 
+**A raw store's version is a third branch, `datalib_content`**
+(`CONTENT_BRANCH`). Every sync commits its own record and stamps, so
+`main` moves on every run; this branch moves, at the same publish, only
+when a table a reader reads changed its rows or its shape
+(`moves_version`: every content table, `problems`, `ingested_files`;
+not a `*_bookkeeping` sidecar, `sync_runs`, the cursors or `coverage`).
+An ingest reports the commit it names, so a sync that found nothing new
+wakes no consumer. A raw store gets the branch at its first open by a
+build that knows it, at `main`, before that open's own schema commit,
+so the version it last reported stands. **A value a reader must see
+belongs in a table that moves the version**, not in a sidecar: a
+consumer is woken by the version, and a change only a sidecar holds
+reaches it at the next content change, not before.
+
 Two things deliberately stay off this path. `fsindex` keeps one branch
 per scan root and publishes none of them — the reserved branch name is
 the signal, so a connection on any other branch seals without touching

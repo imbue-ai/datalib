@@ -334,6 +334,23 @@ pub fn lock_path_for(db_path: &Path) -> PathBuf {
 /// alone.
 pub const WRITER_BRANCH: &str = "datalib_writer";
 
+/// The branch a raw store's version names: the last seal at which
+/// something its readers read moved ([`moves_version`]). `main` moves at
+/// every seal, a sync's own bookkeeping included (its `sync_runs` row,
+/// its sidecar stamps); this moves only when content did, so a sync that
+/// found nothing new wakes no consumer. Only raw stores have one
+/// ([`start_content_branch`]); [`content_commit`] reads it.
+pub const CONTENT_BRANCH: &str = "datalib_content";
+
+/// Whether a change to `table` is one a raw store's consumers must see:
+/// every table `datalib_history::holds_records` counts, plus `problems`,
+/// so a new problem reaches the index, and `ingested_files`, which a
+/// render may read. The sidecars, the run log, the cursors and the
+/// coverage are the sync's own.
+pub fn moves_version(table: &str) -> bool {
+    datalib_history::holds_records(table) || table == "problems" || table == "ingested_files"
+}
+
 /// Whether an error is "this build has no doltlite", rather than
 /// anything about the store.
 fn is_missing_function(e: &sqlx::Error) -> bool {
@@ -444,14 +461,73 @@ async fn publish_on(conn: &mut sqlx::SqliteConnection) -> Result<()> {
     // few hundred bytes, on a store nobody touched. Only
     // `reopening_an_untouched_store_does_not_grow_it` would notice: the
     // leak leaves `dolt_log` unchanged and `dolt_status` clean.
-    if branch_head(conn, WRITER_BRANCH).await == branch_head(conn, "main").await {
+    if branch_head(conn, WRITER_BRANCH).await != branch_head(conn, "main").await {
+        sqlx::query("SELECT dolt_branch('-f', 'main', ?)")
+            .bind(WRITER_BRANCH)
+            .execute(&mut *conn)
+            .await
+            .context("fast-forward main to the writer branch")?;
+    }
+    // After `main`, and on every publish rather than only one that moved
+    // it, so a crash between the two moves is finished by the next.
+    advance_content(conn).await
+}
+
+/// Move [`CONTENT_BRANCH`] to the writer's head if content moved since
+/// it last did. A no-op in a store with no such branch.
+async fn advance_content(conn: &mut sqlx::SqliteConnection) -> Result<()> {
+    let Some(content) = branch_head(conn, CONTENT_BRANCH).await else {
+        return Ok(());
+    };
+    let Some(head) = branch_head(conn, WRITER_BRANCH).await else {
+        return Ok(());
+    };
+    if content == head || !content_moved(conn, &content, &head).await? {
         return Ok(());
     }
-    sqlx::query("SELECT dolt_branch('-f', 'main', ?)")
+    sqlx::query("SELECT dolt_branch('-f', ?, ?)")
+        .bind(CONTENT_BRANCH)
         .bind(WRITER_BRANCH)
         .execute(&mut *conn)
         .await
-        .context("fast-forward main to the writer branch")?;
+        .context("move the content branch")?;
+    Ok(())
+}
+
+/// Whether any table [`moves_version`] counts changed its rows or its
+/// shape, or came or went, between two commits.
+async fn content_moved(conn: &mut sqlx::SqliteConnection, from: &str, to: &str) -> Result<bool> {
+    let tables: Vec<String> = sqlx::query_scalar(
+        "SELECT coalesce(to_table_name, from_table_name) FROM dolt_diff_summary \
+         WHERE from_ref = ? AND to_ref = ? AND (data_change = 1 OR schema_change = 1)",
+    )
+    .bind(from)
+    .bind(to)
+    .fetch_all(&mut *conn)
+    .await
+    .context("dolt_diff_summary")?;
+    Ok(tables.iter().any(|t| moves_version(t)))
+}
+
+/// Give a raw store its [`CONTENT_BRANCH`], at `main`, the one time it
+/// has none: before this open's own schema commit, so a store a build
+/// before this one wrote keeps the version it last reported unless the
+/// commit changes content.
+async fn start_content_branch(pool: &SqlitePool) -> Result<()> {
+    let mut conn = pool
+        .acquire()
+        .await
+        .context("take the store's connection to start its content branch")?;
+    if branch_head(&mut conn, CONTENT_BRANCH).await.is_some()
+        || branch_head(&mut conn, "main").await.is_none()
+    {
+        return Ok(());
+    }
+    sqlx::query("SELECT dolt_branch(?, 'main')")
+        .bind(CONTENT_BRANCH)
+        .execute(&mut *conn)
+        .await
+        .context("start the content branch")?;
     Ok(())
 }
 
@@ -906,6 +982,9 @@ async fn open_inner(
     // make, so finish it rather than leaving it stranded where no reader
     // can see it.
     publish_to_main(&pool).await?;
+    if kind == StoreKind::Raw {
+        start_content_branch(&pool).await?;
+    }
     // The ladder, before the DDL is compared to anything: a rung is how
     // the store gets from the shape an older build left to the one this
     // DDL declares. Each rung is its own commit, so a crash between two
@@ -1810,10 +1889,9 @@ pub(crate) async fn commit_on(
     Ok(hash)
 }
 
-/// The store's current HEAD, which is its *content version*: doltlite
-/// advances HEAD only when a commit changed something, so two downloads that
-/// pulled the same rows leave the same hash. That is what a step reports to
-/// the DAG runner as its version.
+/// The store's current HEAD. It moves at every seal that changed
+/// anything, a sync's own bookkeeping included; a raw store reports
+/// [`content_commit`] as its version instead.
 ///
 /// `Ok(None)` against stock libsqlite3 or an empty log; the step then
 /// reports no version, and the runner takes each success as new.
@@ -1833,9 +1911,9 @@ pub async fn head_commit(pool: &SqlitePool) -> Result<Option<String>> {
 /// it, so a run that changed nothing reports the same string, and folding
 /// the store's history into one commit moves no version.
 ///
-/// A raw or time-series store reports its [`head_commit`] instead: a diff
-/// group names a raw commit, and the time-series index reads each store at
-/// the commit it recorded.
+/// A raw store reports its [`content_commit`] and a time-series store its
+/// [`head_commit`] instead: a diff group names a raw commit, and the
+/// time-series index reads each store at the commit it recorded.
 ///
 /// `Ok(None)` against stock libsqlite3 or an empty log; the step then
 /// reports no version, and the runner takes each success as new.
@@ -1921,6 +1999,34 @@ pub async fn content_tables_changed(
     changed.sort();
     changed.dedup();
     Ok(changed)
+}
+
+/// A raw store's version: the commit [`CONTENT_BRANCH`] names, the last
+/// seal at which content moved. Still a commit, so a consumer can pin a
+/// read to it; its content tables are `main`'s. A store with no content
+/// branch yet (one no build since has opened, fsindex's scans) reports
+/// its [`head_commit`].
+pub async fn content_commit(pool: &SqlitePool) -> Result<Option<String>> {
+    if !has_dolt_extensions(pool).await {
+        return Ok(None);
+    }
+    let content = {
+        let mut conn = pool
+            .acquire()
+            .await
+            .context("take the store's connection to read its version")?;
+        branch_head(&mut conn, CONTENT_BRANCH).await
+    };
+    match content {
+        Some(commit) => Ok(Some(commit)),
+        None => head_commit(pool).await,
+    }
+}
+
+/// [`content_commit`] against a store on disk, read the way
+/// [`head_commit_at_path`] reads.
+pub async fn content_commit_at_path(db_path: &Path) -> Result<Option<String>> {
+    read_at_path(db_path, |pool| Box::pin(content_commit(pool))).await
 }
 
 /// [`head_commit`] against a store on disk; `Ok(None)` if nobody has
@@ -2139,6 +2245,21 @@ async fn fold_on(pool: &SqlitePool) -> Result<Option<Folded>> {
     )
     .await?
     .context("the fold committed nothing")?;
+    // The content branch names a commit the fold just dropped, and would
+    // keep all of it from gc. The fold holds the same tree.
+    {
+        let mut conn = pool
+            .acquire()
+            .await
+            .context("take the store's connection")?;
+        if branch_head(&mut conn, CONTENT_BRANCH).await.is_some() {
+            sqlx::query("SELECT dolt_branch('-f', ?, 'HEAD')")
+                .bind(CONTENT_BRANCH)
+                .execute(&mut *conn)
+                .await
+                .context("move the content branch onto the fold")?;
+        }
+    }
     sqlx::query("SELECT dolt_gc()")
         .execute(pool)
         .await
@@ -3223,6 +3344,88 @@ mod tests {
         let v3 = head_commit(&pool).await.unwrap().unwrap();
         pool.close().await;
         assert_ne!(v1, v3, "new rows must move the version");
+    }
+
+    /// A sync that found nothing new still commits its own bookkeeping, and
+    /// that moved the reported version, so every consumer ran again for
+    /// nothing. The version moves only when a reader's table does.
+    #[tokio::test]
+    async fn a_raw_stores_version_moves_only_with_its_content() {
+        let td = tempfile::tempdir().unwrap();
+        let path = td.path().join("entities.doltlite_db");
+        let pool = open_test(&path).await;
+        let exec = |sql: &'static str| {
+            let pool = pool.clone();
+            async move { sqlx::query(sql).execute(&pool).await.unwrap() }
+        };
+        exec("INSERT INTO widgets (id, payload) VALUES ('a', '{}')").await;
+        commit_run(&pool, "content").await.unwrap();
+        let v1 = content_commit(&pool).await.unwrap().expect("a version");
+        assert_eq!(Some(v1.clone()), head_commit(&pool).await.unwrap());
+
+        // A run's own record and a sidecar stamp: `main` moves, the version not.
+        start_run(&pool, &serde_json::json!({})).await.unwrap();
+        exec("INSERT INTO widgets_bookkeeping (id, attempt_count) VALUES ('a', 1)").await;
+        commit_run(&pool, "bookkeeping").await.unwrap();
+        assert_ne!(Some(v1.clone()), head_commit(&pool).await.unwrap());
+        assert_eq!(content_commit(&pool).await.unwrap(), Some(v1.clone()));
+
+        // A problem reaches the index, so it moves the version.
+        let mut tx = pool.begin().await.unwrap();
+        record_object_error(&mut tx, "widgets", "b", "HTTP 500")
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        commit_run(&pool, "problem").await.unwrap();
+        let v2 = content_commit(&pool).await.unwrap().unwrap();
+        assert_ne!(v1, v2);
+        assert_eq!(Some(v2.clone()), head_commit(&pool).await.unwrap());
+
+        pool.close().await;
+
+        // Reopening keeps it, and reads it from disk the same.
+        let pool = open_test(&path).await;
+        start_run(&pool, &serde_json::json!({})).await.unwrap();
+        commit_run(&pool, "bookkeeping again").await.unwrap();
+        assert_eq!(content_commit(&pool).await.unwrap(), Some(v2.clone()));
+
+        // A new column, even with no rows changed, is a shape a reader sees.
+        sqlx::query("ALTER TABLE widgets ADD COLUMN tag TEXT")
+            .execute(&pool)
+            .await
+            .unwrap();
+        commit_run(&pool, "shape").await.unwrap();
+        let v3 = content_commit(&pool).await.unwrap().unwrap();
+        assert_ne!(v2, v3);
+        pool.close().await;
+        assert_eq!(content_commit_at_path(&path).await.unwrap(), Some(v3));
+    }
+
+    /// A store an older build wrote has no content branch. Its first open
+    /// here starts one where `main` is, so the version it last reported
+    /// stands and no consumer re-runs for the upgrade.
+    #[tokio::test]
+    async fn an_upgraded_store_keeps_the_version_it_had() {
+        let td = tempfile::tempdir().unwrap();
+        let path = td.path().join("entities.doltlite_db");
+        let pool = open_test(&path).await;
+        sqlx::query("INSERT INTO widgets (id, payload) VALUES ('a', '{}')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        commit_run(&pool, "content").await.unwrap();
+        sqlx::query("SELECT dolt_branch('-D', ?)")
+            .bind(CONTENT_BRANCH)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let reported = head_commit(&pool).await.unwrap();
+        pool.close().await;
+        assert_eq!(content_commit_at_path(&path).await.unwrap(), reported);
+
+        let pool = open_test(&path).await;
+        assert_eq!(content_commit(&pool).await.unwrap(), reported);
+        pool.close().await;
     }
 
     /// Reading a version must not write. `open` provisions shared DDL and
