@@ -31,6 +31,7 @@ pub mod progress;
 pub mod prune;
 pub mod raw_layout;
 pub mod raw_store;
+pub mod read_marks;
 pub mod run_problems;
 pub mod scope_state;
 pub mod sniff;
