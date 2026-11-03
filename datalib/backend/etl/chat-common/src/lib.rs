@@ -12,6 +12,7 @@ pub mod period;
 pub mod render;
 pub mod samples;
 pub mod types;
+pub mod unread;
 
 pub use account::account_label;
 pub use blobs::{render_batched, render_batched_at, render_changed_batched, BlobsAt, ChatBlobs};
