@@ -1387,8 +1387,23 @@ fn say_wiping(graph: &Graph, state: &mut Record, t: &Tick, wiping: &BTreeMap<usi
 }
 
 /// The trees of `groups` under the data root. One already gone is not an
-/// error: the record still needs forgetting.
+/// error: the record still needs forgetting. A folder is deleted only by
+/// its own name: on a Mac's disk, which ignores letter case, `Gone` would
+/// otherwise delete `gone`.
 async fn delete_trees(root: &std::path::Path, groups: &[String]) -> Result<()> {
+    let folders: Vec<String> = std::fs::read_dir(root)
+        .with_context(|| format!("list {}", root.display()))?
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    if let Some((group, folder)) = groups.iter().find_map(|g| {
+        folders
+            .iter()
+            .find(|f| f.eq_ignore_ascii_case(g) && *f != g)
+            .map(|f| (g, f))
+    }) {
+        anyhow::bail!("not deleting {folder:?}: it was asked for as {group:?}");
+    }
     for group in groups {
         let tree = root.join(group);
         let removed = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(tree))
@@ -1750,6 +1765,25 @@ mod tests {
     use crate::supervisor::reload::GraphSource;
     use crate::supervisor::tick::StateKind;
     use crate::EventSink;
+
+    /// A purge's last stop before `remove_dir_all`. A Mac's disk ignores
+    /// letter case, so `Gone` there is the folder `gone`; it is never
+    /// deleted under a name that is not its own.
+    #[tokio::test]
+    async fn a_purge_deletes_no_folder_by_another_case() {
+        let td = tempfile::tempdir().unwrap();
+        std::fs::create_dir(td.path().join("gone")).unwrap();
+        let err = delete_trees(td.path(), &["Gone".to_string()])
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("\"gone\""), "{err}");
+        assert!(td.path().join("gone").is_dir(), "the folder was deleted");
+        delete_trees(td.path(), &["gone".to_string(), "never".to_string()])
+            .await
+            .unwrap();
+        assert!(!td.path().join("gone").exists());
+    }
 
     /// Wait for what the next assertion is about, with a deadline that
     /// names what never came.

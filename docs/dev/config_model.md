@@ -103,9 +103,14 @@ package's programs by its path under the data root, in its `command`;
 - A group id and a function are each one portable filename segment:
   letters, digits, `.`, `_`, `-`, not starting with `-`, never `.` or
   `..`, no `/`.
-- `system` is reserved for the runner's and server's own state.
+- `system` is reserved for the runner's and server's own state, and
+  `datalib_curated` for what a person curates by hand.
 - Step ids are unique and never nested: two steps under one tree would
   be two writers on one doltlite file.
+- Every id that names a folder (group, step, applet, package) is
+  compared without letter case, since a Mac's disk does not tell
+  `email/` from `Email/`: `SYSTEM` is reserved too, and `Email` beside
+  `email` is a duplicate.
 - The built-in functions are the directory names: `ingest`,
   `render_markdown`, `render_time_series`, `render_occurrences`,
   `keyword_index`, `embed`, `grid_index`, `qmd_aggregator`,

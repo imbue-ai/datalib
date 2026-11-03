@@ -705,7 +705,10 @@ does not wait for the sync to end. What it decides is in
   `<root>/<group>/` and forgets the group's steps.
 - **Refused, with why**, against the config on disk: a reset of a step it
   lacks, a purge of a group it still has or of anything that is not a
-  group id. The row closes with the reason in `error`.
+  group id, both compared without letter case, and a purge of a name
+  that matches a folder under the root only by ignoring case (on a
+  Mac's disk it would delete that folder). The row closes with the
+  reason in `error`.
 
 The server's `POST /api/reset`, `POST /api/purge` and `POST
 /api/free_disk_space` (a compaction with
