@@ -287,8 +287,10 @@ first:
   environment is a JSON object from each input to the version the loop
   started it against, written `<fingerprint>:<version>`: a hash of the
   producing step's definition, a colon, then the version that step
-  reported. For a raw store that version is the store's commit, so the
-  commit is everything after the first `:`
+  reported. For a raw store that version is a commit: the last one at
+  which the store's content moved, which can be older than `main`, since
+  every sync commits its own record whether or not it found anything.
+  The commit is everything after the first `:`
   (`v=$(printf '%s' "$DATALIB_READS" | jq -r '."gmail/ingest"')`, then
   `${v#*:}`). Open that commit
   (`<data_root>/gmail/ingest/entities.doltlite_db/<commit>`, see
@@ -327,8 +329,10 @@ datalib-doltlite -readonly -json slack/ingest/entities.doltlite_db \
 Store `NEW` as the cursor only once your own work is saved. With no
 cursor yet, read the whole commit instead. Read `NEW`, not `main`:
 `main` may already be past it, and the loop runs your step again for
-what it moved to. Outside a step, `dolt_hashof('main')` is the store's
-current commit. A raw
+what it moved to. Outside a step, `dolt_hashof('datalib_content')` is
+the commit the loop would hand you, and `dolt_hashof('main')` the
+store's latest, which may be later only by the sync's own record: read
+`sync_runs` or `coverage` at `main`. A raw
 store's history is never folded away, so a cursor stays good; the
 recipe and its edge cases are in [raw_stores.md](raw_stores.md)
 § "Reading one commit, and following changes".

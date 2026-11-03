@@ -311,13 +311,19 @@ impl SealState {
                 .await;
         }
         let msg = format!("checkpoint {}: entities", self.source_id);
+        let before = crate::doltlite_raw::content_commit(&self.pool).await?;
         let sealed = crate::doltlite_raw::commit_run(&self.pool, &msg).await?;
-        // `None` means there was nothing dirty after all; no version moved,
-        // so there is nothing to announce.
-        if let Some(hash) = sealed {
-            self.publish_problem_counts().await;
-            self.progress.checkpoint_rows(&hash, rows);
-            record_seal();
+        // `None` means there was nothing dirty after all.
+        if sealed.is_none() {
+            return Ok(());
+        }
+        self.publish_problem_counts().await;
+        record_seal();
+        // A seal of the sync's own bookkeeping moves no version, so no
+        // consumer is woken for it.
+        let version = crate::doltlite_raw::content_commit(&self.pool).await?;
+        if let Some(version) = version.filter(|v| Some(v) != before.as_ref()) {
+            self.progress.checkpoint_rows(&version, rows);
         }
         Ok(())
     }

@@ -133,11 +133,18 @@ which fields move.
 ## Reading one commit, and following changes
 
 Every seal is a commit. Its hash names the store exactly as it was, and
-the hash of `main` is the store's current version:
+`main` is the latest:
 
 ```sh
 datalib-doltlite -readonly slack/ingest/entities.doltlite_db "SELECT dolt_hashof('main')"
 ```
+
+The store's *version*, the commit the loop hands a step that reads it,
+is the branch `datalib_content`: the last commit at which the source's
+content or its problems moved. Every sync commits its own record
+(`sync_runs`, its stamps) whether or not it found anything, so `main`
+moves on every run and `datalib_content` only when there is something
+new to read.
 
 **To read several queries at one moment**, open that commit by path
 (with `/` in the shell, not `@`). The open is read-only and stays on
