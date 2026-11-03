@@ -60,7 +60,7 @@ test("the auth button is offered even when the service can't do it yet", async (
   let connectCalls = 0;
   await page.route("**/api/latchkey/claude-ai/connect", (route) => {
     connectCalls += 1;
-    return route.fulfill({ json: { id: "x", status: "running", output: "" } });
+    return route.fulfill({ json: { id: "x", status: "running", detail: "" } });
   });
   await auth.click();
 
@@ -96,7 +96,7 @@ test("the login runs as the account named in the box", async ({ page }) => {
   let connectBody: { account?: string; ephemeral_browser?: boolean } | null = null;
   await page.route("**/api/latchkey/claude-ai/connect", (route) => {
     connectBody = route.request().postDataJSON();
-    return route.fulfill({ json: { id: "a1", status: "running", output: "" } });
+    return route.fulfill({ json: { id: "a1", status: "running", detail: "" } });
   });
   await wizard(page).getByRole("button", { name: "Sign in with browser" }).click();
   await expect.poll(() => connectBody?.account).toBe("riker@enterprise.gov");
@@ -121,7 +121,7 @@ test("signing in again to the only account keeps the saved session", async ({ pa
   let connectBody: { account?: string; ephemeral_browser?: boolean } | null = null;
   await page.route("**/api/latchkey/claude-ai/connect", (route) => {
     connectBody = route.request().postDataJSON();
-    return route.fulfill({ json: { id: "a1", status: "running", output: "" } });
+    return route.fulfill({ json: { id: "a1", status: "running", detail: "" } });
   });
   await wizard(page).getByRole("button", { name: "Sign in with browser" }).click();
   await expect.poll(() => connectBody?.account).toBe(STORED_ACCOUNT);
@@ -161,10 +161,10 @@ test("a failed Check connection points back at the login button", async ({ page 
   await expect(failed.locator("details")).toContainText("sessionKey");
 
   await page.route("**/api/latchkey/claude-ai/connect", (route) =>
-    route.fulfill({ json: { id: "a1", status: "running", output: "" } }),
+    route.fulfill({ json: { id: "a1", status: "running", detail: "" } }),
   );
   await page.route("**/api/latchkey/connect/a1/status", (route) =>
-    route.fulfill({ json: { id: "a1", status: "ok", account: null, output: "" } }),
+    route.fulfill({ json: { id: "a1", status: "ok", account: null, detail: "" } }),
   );
   // A login is checked at once, with the credential it just stored.
   await page.unroute("**/api/probe");

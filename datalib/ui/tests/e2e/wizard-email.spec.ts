@@ -370,13 +370,13 @@ test("the account follows the login, not the box", async ({ page }) => {
   let connectBody: { ephemeral_browser?: boolean } | null = null;
   await page.route("**/api/latchkey/fastmail/connect", (route) => {
     connectBody = route.request().postDataJSON();
-    return route.fulfill({ json: { id: "c1", status: "running", account: null, output: "" } });
+    return route.fulfill({ json: { id: "c1", status: "running", account: null, detail: "" } });
   });
   // What `auth browser` reports for an OAuth service: a different
   // address from the one selected above, because that is who signed in.
   await page.route("**/api/latchkey/connect/c1/status", (route) =>
     route.fulfill({
-      json: { id: "c1", status: "ok", account: "crusher@enterprise.gov", output: "Done." },
+      json: { id: "c1", status: "ok", account: "crusher@enterprise.gov", detail: "" },
     }),
   );
 

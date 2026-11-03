@@ -12,7 +12,8 @@
 //! tree); `seal <version> [rows]`; `streams`; `metric <name> <value>`;
 //! `progress_len <n>`, `progress_inc <n>`, `progress_msg <text>`;
 //! `log <level> <msg>`; `raw <line>`; `stderr <line>`; `reads` (acks
-//! `DATALIB_READS`);
+//! `DATALIB_READS`); `env <name>` (acks that variable, its lines joined
+//! with `,`);
 //! `on_stop graceful|ignore|exit <code>`; `stall` (blocks until a signal
 //! ends it); `spin`; and the endings `ok [version]`, `fail <kind>`,
 //! `exit <code>`, `crash` (abort), `kill` (SIGKILL itself).
@@ -160,6 +161,10 @@ impl Puppet {
             "reads" => {
                 let reads = std::env::var("DATALIB_READS").unwrap_or_default();
                 return self.ack(&format!("reads {reads}"));
+            }
+            "env" => {
+                let value = std::env::var(args[0]).unwrap_or_default();
+                return self.ack(&format!("env {} {}", args[0], value.replace('\n', ",")));
             }
             "on_stop" => {
                 let mode = match args[0] {

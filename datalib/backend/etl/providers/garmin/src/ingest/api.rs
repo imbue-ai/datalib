@@ -155,12 +155,12 @@ mod tests {
     use super::*;
 
     fn curl_exit(exit: i32) -> HttpError {
-        HttpError::Curl {
-            service: HttpService::Garmin,
-            url: "https://connectapi.garmin.com/hrv-service/hrv/2369-04-14".into(),
+        HttpError::curl_exit(
+            HttpService::Garmin,
+            "https://connectapi.garmin.com/hrv-service/hrv/2369-04-14",
             exit,
-            stderr: "Error: No credentials found for garmin.".into(),
-        }
+            "Error: No credentials found for garmin.",
+        )
     }
 
     /// A request latchkey would not send (no credential, or the bearer

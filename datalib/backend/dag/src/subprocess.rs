@@ -45,6 +45,7 @@ pub const ENV_FUNCTION: &str = datalib_env::DATALIB_DAG_FUNCTION;
 pub const ENV_DATA_ROOT: &str = datalib_env::DATALIB_DAG_DATA_ROOT;
 pub const ENV_INPUTS: &str = datalib_env::DATALIB_DAG_INPUTS;
 pub const ENV_CHANGED_INPUTS: &str = datalib_env::DATALIB_DAG_CHANGED_INPUTS;
+pub const ENV_FAILED_INPUTS: &str = datalib_env::DATALIB_DAG_FAILED_INPUTS;
 /// `StepCtx::reads` as a JSON object: input path → version.
 pub const ENV_READS: &str = datalib_env::DATALIB_READS;
 /// Run-wide pinned timestamp (RFC 3339), set by the runner on every
@@ -182,6 +183,33 @@ impl WireOutcome {
     }
 }
 
+/// The variables a step's params name under a key ending in `_env_var`
+/// (`key_env_var = "WHATSAPP_KEY"`), at any depth: the step reads a
+/// secret from each, so it is handed them.
+pub fn env_vars_named_in(params_json: &str) -> Vec<String> {
+    fn walk(v: &serde_json::Value, out: &mut Vec<String>) {
+        match v {
+            serde_json::Value::Object(map) => {
+                for (key, value) in map {
+                    match value {
+                        serde_json::Value::String(name) if key.ends_with("_env_var") => {
+                            out.push(name.clone())
+                        }
+                        _ => walk(value, out),
+                    }
+                }
+            }
+            serde_json::Value::Array(items) => items.iter().for_each(|i| walk(i, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(params_json) {
+        walk(&v, &mut out);
+    }
+    out
+}
+
 pub(crate) async fn run_subprocess(
     argv: &[String],
     env: &BTreeMap<String, String>,
@@ -198,6 +226,7 @@ pub(crate) async fn run_subprocess(
         .ok_or_else(|| internal(anyhow::anyhow!("empty argv")))?;
     let inputs: Vec<&str> = ctx.inputs.iter().map(|a| a.as_str()).collect();
     let changed: Vec<&str> = ctx.changed_inputs.iter().map(|a| a.as_str()).collect();
+    let failed: Vec<&str> = ctx.failed_inputs.iter().map(|a| a.as_str()).collect();
     // Held until the child has exited: dropping it deletes the file.
     let params_file = match params {
         Some(json) => {
@@ -237,6 +266,7 @@ pub(crate) async fn run_subprocess(
         .env(ENV_DATA_ROOT, &ctx.data_root)
         .env(ENV_INPUTS, inputs.join("\n"))
         .env(ENV_CHANGED_INPUTS, changed.join("\n"))
+        .env(ENV_FAILED_INPUTS, failed.join("\n"))
         .env(
             ENV_READS,
             serde_json::to_string(&ctx.reads).expect("a string map is JSON"),
@@ -252,6 +282,15 @@ pub(crate) async fn run_subprocess(
         // If the runner dies (or a step future is dropped), don't
         // leave an orphaned download running.
         .kill_on_drop(true);
+    let mut named = params.map(env_vars_named_in).unwrap_or_default();
+    if crate::config::is_datalib_step(prog) {
+        named.extend(
+            datalib_env::BUILT_IN_SOURCE_KEYS
+                .iter()
+                .map(|k| k.to_string()),
+        );
+    }
+    datalib_env::inherit_only(cmd.as_std_mut(), datalib_env::Child::Step, &named);
 
     // Every step is handed the runner's pipe, and reading EOF on it is
     // how a step notices a runner that died without running any code — a
@@ -1659,6 +1698,51 @@ mod tests {
             "2026-07-21T00:00:00Z/step\n",
             "run-wide env is visible; the step's own env wins on collision"
         );
+    }
+
+    /// A step is handed what it is listed for and nothing else of the
+    /// runner's environment: not a secret the server holds for itself
+    /// (its API token, say), but the variable its params name as a key.
+    #[tokio::test]
+    async fn a_step_sees_only_the_environment_it_is_handed() {
+        const UNRELATED: &str = "DATALIB_TEST_STEP_ENV_UNRELATED_SECRET";
+        const NAMED: &str = "DATALIB_TEST_STEP_ENV_NAMED_KEY";
+        std::env::set_var(UNRELATED, "tng-unrelated");
+        std::env::set_var(NAMED, "tng-named");
+        let root = tempfile::tempdir().unwrap();
+        let spec = StepSpec::new(
+            "env/out",
+            StepRun::Subprocess {
+                argv: vec![
+                    "/bin/sh".into(),
+                    "-c".into(),
+                    format!(
+                        r#"mkdir -p env/out
+                        echo "${{{UNRELATED}:-unset}}/${{{NAMED}:-unset}}/${{PATH:+path}}" \
+                          > env/out/probe.txt"#
+                    ),
+                ],
+                env: BTreeMap::new(),
+                params: Some(serde_json::json!({ "backup": { "key_env_var": NAMED } }).to_string()),
+            },
+        );
+        let g = Graph::build(vec![spec]).unwrap();
+        let rep = Runner::new(root.path()).run(&g).await.unwrap();
+        assert!(rep.all_ok(), "{rep:#?}");
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("env/out/probe.txt")).unwrap(),
+            "unset/tng-named/path\n"
+        );
+    }
+
+    #[test]
+    fn the_variables_a_steps_params_name_are_found_at_any_depth() {
+        let params = r#"{"key_env_var":"A","backup":{"aep_env_var":"B","path":"~/x"},
+                         "list":[{"token_env_var":"C"}],"env_var_note":"not one"}"#;
+        let mut named = env_vars_named_in(params);
+        named.sort();
+        assert_eq!(named, ["A", "B", "C"]);
+        assert!(env_vars_named_in("not json").is_empty());
     }
 
     /// macOS's allocator keeps freed large blocks unless told not to; with

@@ -24,6 +24,7 @@ rust_library(
         "@datalib_crates//:async-trait",
     ],
     deps = [
+        "//datalib/backend/env:datalib_env",
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/files:datalib_etl_files",
         "//datalib/backend/etl/providers/whatsapp_config:datalib_etl_whatsapp_config",

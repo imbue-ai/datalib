@@ -47,6 +47,9 @@ pub struct StepShape {
     /// False for a step that reads its inputs off disk rather than at a
     /// pinned commit: it and a writer of what it reads never overlap.
     pub pins_reads: bool,
+    /// It starts only once nothing upstream of it is running or due:
+    /// one run on what its producers finished with, not one per seal.
+    pub waits_for_settled_inputs: bool,
 }
 
 /// What people have asked for: the open requests and the steps turned off.
@@ -223,11 +226,18 @@ pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts) -> Tick {
     let mut failed_for: Vec<Vec<bool>> = vec![vec![false; intent.requests.len()]; n];
     let mut starts = Vec::new();
     let mut stops = Vec::new();
+    // Something upstream of the step, not the step itself, is running or
+    // due. Every producer comes first in `topo`, so its state is final.
+    let mut moving_above = vec![false; n];
 
     for &i in &shape.topo {
         let step = &shape.steps[i];
         let f = &facts.steps[i];
         let now = consumed_now(step, facts);
+        moving_above[i] = step
+            .reads
+            .iter()
+            .any(|&w| moving(states[w]) || moving_above[w]);
 
         if f.running.is_some() {
             states[i] = StepState::Running;
@@ -281,7 +291,15 @@ pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts) -> Tick {
             continue;
         }
 
-        if let Some(w) = blocking_producer(i, shape, facts, &states) {
+        let unsettled = match step.waits_for_settled_inputs {
+            true => step
+                .reads
+                .iter()
+                .copied()
+                .find(|&w| moving(states[w]) || moving_above[w]),
+            false => None,
+        };
+        if let Some(w) = unsettled.or_else(|| blocking_producer(i, shape, facts, &states)) {
             pending[i] = true;
             states[i] = StepState::Waiting(Wait::Upstream(w));
             continue;
@@ -347,6 +365,11 @@ pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts) -> Tick {
         closed,
         scopes,
     }
+}
+
+/// Running, or due and held back: what it writes may still move.
+fn moving(state: StepState) -> bool {
+    matches!(state, StepState::Running | StepState::Waiting(_))
 }
 
 /// How much of one named lock the running steps hold.
@@ -476,6 +499,7 @@ mod tests {
                 fingerprint: format!("fp{i}"),
                 locks: vec![(if r.is_empty() { NETWORK } else { CPU }, Hold::Shared)],
                 pins_reads: true,
+                waits_for_settled_inputs: false,
             })
             .collect();
         Shape {
@@ -830,6 +854,48 @@ mod tests {
         let t = tick(&s, &request(&[0, 2], 5), &facts);
         assert_eq!(t.states[3], StepState::Waiting(Wait::Upstream(2)));
         assert!(started(&t).contains(&4), "{t:?}");
+    }
+
+    /// A step that waits for its inputs to settle reads a streaming
+    /// producer as one that does not stream, and waits for what is above
+    /// that too: a render between its download's seals has not settled.
+    #[test]
+    fn a_step_waiting_for_settled_inputs_starts_once_after_its_producers_end() {
+        let mut s = chain();
+        s.steps[2].waits_for_settled_inputs = true;
+        let mut facts = all_fresh(&s, 1);
+        facts.steps[0].streams_output = true;
+        facts.steps[1].streams_output = true;
+        run(&mut facts, 0, 6);
+        let intent = request(&[0], 5);
+
+        facts.sinks[0] = Some("seal-1".into());
+        let t = tick(&s, &intent, &facts);
+        assert_eq!(started(&t), vec![1], "the render reads each seal");
+        let c1 = start_of(&t, 1);
+        run(&mut facts, 1, 7);
+        facts.sinks[1] = Some("v1-sealed".into());
+        let t = tick(&s, &intent, &facts);
+        assert!(t.starts.is_empty(), "{t:?}");
+        assert_eq!(t.states[2], StepState::Waiting(Wait::Upstream(1)));
+
+        finish(&mut facts, 1, c1, Ok("v1-a"));
+        let t = tick(&s, &intent, &facts);
+        assert!(t.starts.is_empty(), "the download still runs: {t:?}");
+        assert_eq!(t.states[2], StepState::Waiting(Wait::Upstream(1)));
+
+        let c0 = facts.steps[0].last_success.clone().unwrap();
+        finish(&mut facts, 0, c0, Ok("v0-final"));
+        let t = tick(&s, &intent, &facts);
+        assert_eq!(started(&t), vec![1]);
+        assert_eq!(t.states[2], StepState::Waiting(Wait::Upstream(1)));
+        let c1 = start_of(&t, 1);
+        run(&mut facts, 1, 8);
+        finish(&mut facts, 1, c1, Ok("v1-final"));
+
+        let t = tick(&s, &intent, &facts);
+        assert_eq!(started(&t), vec![2]);
+        assert_eq!(start_of(&t, 2).reads[&1].as_deref(), Some("v1-final"));
     }
 
     /// A render that is about to start will rewrite what the index would

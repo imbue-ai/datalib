@@ -604,12 +604,12 @@ mod tests {
         let refused_by_latchkey = |url: &str| {
             Some(DavError::Transport {
                 service: HttpService::Caldav,
-                source: crate::http::HttpError::Curl {
-                    service: HttpService::Caldav,
-                    url: url.into(),
-                    exit: 1,
-                    stderr: "Multiple accounts are stored for service 'fastmail-dav'".into(),
-                },
+                source: crate::http::HttpError::curl_exit(
+                    HttpService::Caldav,
+                    url,
+                    1,
+                    "Multiple accounts are stored for service 'fastmail-dav'",
+                ),
             })
         };
         let misses = vec![

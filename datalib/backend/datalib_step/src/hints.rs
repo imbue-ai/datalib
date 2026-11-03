@@ -369,29 +369,32 @@ mod tests {
     /// through any provider error that keeps them as a source.
     #[test]
     fn the_transports_failures_classify_through_its_source() {
-        use datalib_etl_web::http::{HttpError, HttpService};
+        use datalib_etl_web::http::{HttpError, HttpService, ShownUrl};
         let timeout = HttpError::Timeout {
             service: HttpService::Slack,
-            url: "https://slack.com/api/auth.test".into(),
+            url: ShownUrl::new(HttpService::Slack, "https://slack.com/api/auth.test"),
             timeout_ms: 60_000,
         };
         assert_eq!(
             classify(&anyhow::Error::new(timeout).context("list channels")),
             FailureKind::Transient
         );
-        let unregistered = HttpError::Curl {
-            service: HttpService::Claude,
-            url: "https://claude.ai/api/organizations".into(),
-            exit: 1,
-            stderr: "Error: No service matches URL: https://claude.ai/api/organizations".into(),
-        };
+        let unregistered = HttpError::curl_exit(
+            HttpService::Claude,
+            "https://claude.ai/api/organizations",
+            1,
+            "Error: No service matches URL: https://claude.ai/api/organizations",
+        );
         assert_eq!(
             classify(&anyhow::Error::new(unregistered)),
             FailureKind::Auth
         );
         let throttled = HttpError::GaveUp {
             service: HttpService::Slack,
-            url: "https://slack.com/api/conversations.history".into(),
+            url: ShownUrl::new(
+                HttpService::Slack,
+                "https://slack.com/api/conversations.history",
+            ),
             reason: "50 failed in a row; last attempt: HTTP 429".into(),
             last_status: Some(429),
         };
@@ -401,7 +404,10 @@ mod tests {
         );
         let gave_up_on_500s = HttpError::GaveUp {
             service: HttpService::Slack,
-            url: "https://slack.com/api/conversations.history".into(),
+            url: ShownUrl::new(
+                HttpService::Slack,
+                "https://slack.com/api/conversations.history",
+            ),
             reason: "50 failed in a row; last attempt: HTTP 500".into(),
             last_status: Some(500),
         };

@@ -14,7 +14,7 @@ use datalib_etl::upstream::Upstream;
 use datalib_etl_google_drive_config::{ExportFormat, FileKind};
 use datalib_etl_web::http::{
     default_retryability, latchkey_curl_classified, percent_encode, HttpError, HttpRequest,
-    HttpResponse, HttpService, LatchkeySettings, Retryability,
+    HttpResponse, HttpService, LatchkeySettings, Retryability, ShownUrl,
 };
 
 pub const HTTP_SERVICE: HttpService = HttpService::GoogleDrive;
@@ -248,7 +248,8 @@ pub fn is_export_not_allowed(e: &anyhow::Error) -> bool {
 
 pub async fn get_json(url: &str, lk: &LatchkeySettings) -> Result<Value> {
     let body = get(req_json(url).latchkey(lk.clone())).await?;
-    serde_json::from_slice(&body).with_context(|| format!("parse JSON from {url}"))
+    serde_json::from_slice(&body)
+        .with_context(|| format!("parse JSON from {}", ShownUrl::new(HTTP_SERVICE, url)))
 }
 
 /// The body as received, for bytes we keep verbatim.
@@ -274,11 +275,15 @@ pub async fn get_revision_export(url: &str, lk: &LatchkeySettings) -> Result<Vec
     match resp.status {
         200 => Ok(resp.body),
         301 | 302 | 303 | 307 | 308 => {
+            let shown = ShownUrl::new(HTTP_SERVICE, url);
             let to = resp
                 .header("location")
-                .ok_or_else(|| anyhow!("GET {url}: {} with no Location", resp.status))?;
+                .ok_or_else(|| anyhow!("GET {shown}: {} with no Location", resp.status))?;
             if !is_signed_download(to) {
-                bail!("GET {url}: redirected to {to:?}, not an https googleusercontent.com link");
+                bail!(
+                    "GET {shown}: redirected to {}, not an https googleusercontent.com link",
+                    ShownUrl::new(HTTP_SERVICE, to)
+                );
             }
             get(req_signed(to)).await
         }
@@ -342,7 +347,11 @@ fn retryability(resp: &HttpResponse) -> Retryability {
 fn transport_error(e: HttpError, url: &str) -> ApiError {
     match e {
         HttpError::Curl { exit: 1, .. } | HttpError::Spawn { .. } => ApiError::Service(
-            format!("GET {url}: {e}{}", sign_in_hint(url)),
+            format!(
+                "GET {}: {e}{}",
+                ShownUrl::new(HTTP_SERVICE, url),
+                sign_in_hint(url)
+            ),
             Upstream::CredentialRefused,
         ),
         HttpError::TooLarge { .. } => ApiError::TooLarge(e.to_string()),
@@ -360,7 +369,11 @@ pub fn status_error(url: &str, resp: &HttpResponse) -> ApiError {
                 .map(str::to_string)
         })
         .unwrap_or_else(|| body.chars().take(300).collect());
-    let said = format!("GET {url}: {}: {message}", resp.status);
+    let said = format!(
+        "GET {}: {}: {message}",
+        ShownUrl::new(HTTP_SERVICE, url),
+        resp.status
+    );
     let service_wide = resp.status == 401
         || (resp.status == 403
             && [
@@ -463,12 +476,12 @@ mod tests {
     #[test]
     fn a_request_latchkey_will_not_send_is_service_wide() {
         let e = transport_error(
-            HttpError::Curl {
-                service: HTTP_SERVICE,
-                url: native_url(FileKind::Spreadsheet, "x", true),
-                exit: 1,
-                stderr: "Error: No credentials found for google-sheets.".into(),
-            },
+            HttpError::curl_exit(
+                HTTP_SERVICE,
+                &native_url(FileKind::Spreadsheet, "x", true),
+                1,
+                "Error: No credentials found for google-sheets.",
+            ),
             &native_url(FileKind::Spreadsheet, "x", true),
         );
         assert!(matches!(e, ApiError::Service(..)), "{e}");
@@ -477,15 +490,7 @@ mod tests {
 
     #[test]
     fn a_network_failure_is_one_request() {
-        let e = transport_error(
-            HttpError::Curl {
-                service: HTTP_SERVICE,
-                url: "u".into(),
-                exit: 7,
-                stderr: String::new(),
-            },
-            "u",
-        );
+        let e = transport_error(HttpError::curl_exit(HTTP_SERVICE, "u", 7, ""), "u");
         assert!(matches!(e, ApiError::Request(_)), "{e}");
     }
 

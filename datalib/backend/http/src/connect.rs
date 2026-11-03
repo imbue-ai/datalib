@@ -169,18 +169,17 @@ pub async fn get_service(
 ) -> Result<Json<ServiceInfo>, (StatusCode, Json<Value>)> {
     let service = validated_service(&service)?;
     let gateway = latchkey_gateway();
+    let command = format!("services info {service}");
     match latchkey_json(&["services", "info", &service], SERVICES_TIMEOUT).await {
         Ok(v) => Ok(Json(ServiceInfo {
             gateway,
             ..parse_service_info(&service, &v)
         })),
-        Err(e) => {
-            // latchkey says "Unknown service: <name>" for a name nobody
-            // has registered. That is a state the wizard can act on, so
-            // it is reported as `registered: false` rather than folded
-            // into the "latchkey could not be asked" note.
-            let message = e.to_string();
-            let unknown = message.contains("Unknown service");
+        Err(failed) => {
+            // A name nobody has registered is a state the wizard can act
+            // on, so it is reported as `registered: false` rather than
+            // folded into the "latchkey could not be asked" note.
+            let unknown = failed == LatchkeyFailed::UnknownService;
             if let Some(info) = unknown
                 .then(|| plugin_service_info(&service, gateway.as_deref()))
                 .flatten()
@@ -194,9 +193,9 @@ pub async fn get_service(
                 accounts: Vec::new(),
                 registered: !unknown,
                 cli: datalib_core::node_runtime::latchkey_cli_hint(),
-                issue: (!unknown).then(|| classify(&message, gateway.is_some())),
+                issue: (!unknown).then(|| failed.issue()),
                 gateway,
-                error: if unknown { None } else { Some(message) },
+                error: (!unknown).then(|| failed.detail(&command)),
                 installs_plugin: None,
                 // Not registered yet: the wizard registers it, and a
                 // registered service names nothing. Unreachable latchkey:
@@ -376,13 +375,12 @@ pub struct ConnectStatus {
     /// the one asked for, or with none asked for, the identity the login
     /// yields.
     pub account: Option<String>,
-    /// The command's combined output, so a failure is diagnosable
-    /// without going to a terminal. Trimmed to the tail — latchkey can
-    /// be chatty and the useful part is always at the end.
-    pub output: String,
+    /// What went wrong, once `Failed`: the tail of latchkey's message, or
+    /// ours when it said nothing useful.
+    pub detail: String,
     /// What the attempt is doing now, while it runs.
     pub phase: ConnectPhase,
-    /// What kind of trouble `output` is, once `Failed`.
+    /// What kind of trouble it was, once `Failed`.
     pub issue: Option<IssueKind>,
 }
 
@@ -433,7 +431,9 @@ pub struct SetCredentialRequest {
 /// Store a pasted credential with `latchkey auth set`. latchkey takes
 /// the credential only as arguments, so it is on this child's command
 /// line for the second it runs — the same exposure as the
-/// `auth set … $(pbpaste)` the docs give for a terminal.
+/// `auth set … $(pbpaste)` the docs give for a terminal, and one only an
+/// upstream change can close (`docs/dev/latchkey.md` §"A pasted
+/// credential is on latchkey's command line").
 pub async fn set_credential(
     State(_s): State<AppState>,
     Path(service): Path<String>,
@@ -453,18 +453,24 @@ pub async fn set_credential(
             tracing::info!(service, "latchkey stored a pasted credential");
             Ok(Json(serde_json::json!({ "ok": true })))
         }
-        Err(e) => {
-            let message = scrub(&e.to_string());
-            tracing::error!(service, "latchkey auth set failed: {message}");
-            Err((
-                StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({
-                    "error": message,
-                    "issue": classify(&message, false),
-                })),
-            ))
-        }
+        Err(failed) => Err(refused(&service, &format!("auth set {service}"), failed)),
     }
+}
+
+/// A paste latchkey would not store, as the log and the wizard hear of
+/// it.
+fn refused(service: &str, command: &str, failed: LatchkeyFailed) -> (StatusCode, Json<Value>) {
+    let issue = failed.issue();
+    let detail = failed.detail(command);
+    tracing::error!(
+        service,
+        issue = issue.as_str(),
+        "latchkey {command} failed: {detail}"
+    );
+    (
+        StatusCode::BAD_GATEWAY,
+        Json(serde_json::json!({ "error": detail, "issue": issue })),
+    )
 }
 
 // POST /api/latchkey/{service}/oauth_client
@@ -479,7 +485,7 @@ pub struct SetOauthClientRequest {
 /// Store a pasted OAuth client as the service's preparation, with
 /// `latchkey auth prepare`, so that a browser login can follow. Like a
 /// pasted credential, the secret is on the child's command line for the
-/// second it runs.
+/// second it runs ([`set_credential`] says why).
 pub async fn set_oauth_client(
     State(_s): State<AppState>,
     Path(service): Path<String>,
@@ -502,17 +508,11 @@ pub async fn set_oauth_client(
             tracing::info!(service, "latchkey stored a pasted OAuth client");
             Ok(Json(serde_json::json!({ "ok": true })))
         }
-        Err(e) => {
-            let message = scrub(&e.to_string());
-            tracing::error!(service, "latchkey auth prepare failed: {message}");
-            Err((
-                StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({
-                    "error": message,
-                    "issue": classify(&message, false),
-                })),
-            ))
-        }
+        Err(failed) => Err(refused(
+            &service,
+            &format!("auth prepare {service}"),
+            failed,
+        )),
     }
 }
 
@@ -632,7 +632,7 @@ pub async fn start_connect(
         id: id.clone(),
         status: ConnectState::Running,
         account: None,
-        output: String::new(),
+        detail: String::new(),
         phase: ConnectPhase::Preparing,
         issue: None,
     }));
@@ -654,7 +654,7 @@ pub async fn start_connect(
 
     tokio::spawn(async move {
         if let Err(message) = install_plugin_for(&service).await {
-            fail(&slot, &service, message);
+            fail(&slot, &service, IssueKind::Unknown, message);
             return;
         }
         // Registering is what makes the browser login exist at all, so
@@ -662,10 +662,11 @@ pub async fn start_connect(
         // holds; that refusal is the desired outcome, not a failure —
         // it is what keeps a hand-made registration untouched.
         if let Some(args) = register {
-            if let Err(e) = latchkey_output(&args).await {
-                let message = e.to_string();
-                if !message.contains("already exists") {
-                    fail(&slot, &service, tail(&message));
+            match latchkey_output(&args).await {
+                Ok(_) | Err(LatchkeyFailed::AlreadyRegistered) => {}
+                Err(failed) => {
+                    let command = format!("services register {service}");
+                    fail(&slot, &service, failed.issue(), failed.detail(&command));
                     return;
                 }
             }
@@ -678,12 +679,12 @@ pub async fn start_connect(
             // with browser", so fetching one is what they asked for;
             // the wizard says it is happening, since it takes a while.
             slot.lock().expect("connect slot mutex").phase = ConnectPhase::DownloadingBrowser;
-            if let Err(e) = latchkey_output(&download_browser_args()).await {
+            if let Err(failed) = latchkey_output(&download_browser_args()).await {
                 let message = format!(
                     "No browser found for the sign-in, and fetching one failed: {}",
-                    tail(&e.to_string()),
+                    failed.detail("ensure-browser --source download-playwright-browser"),
                 );
-                fail(&slot, &service, message);
+                fail(&slot, &service, IssueKind::NoBrowser, message);
                 return;
             }
         }
@@ -692,14 +693,15 @@ pub async fn start_connect(
             let prepare = browser_prepare_args(&service);
             match tokio::time::timeout(CONNECT_TIMEOUT, latchkey_output(&prepare)).await {
                 Ok(Ok(_)) => tracing::info!(service, "latchkey created an OAuth client"),
-                Ok(Err(e)) => {
-                    fail(&slot, &service, tail(&e.to_string()));
+                Ok(Err(failed)) => {
+                    let command = prepare.join(" ");
+                    fail(&slot, &service, failed.issue(), failed.detail(&command));
                     return;
                 }
                 Err(_) => {
                     let message = "creating the OAuth client did not finish within 15 minutes; \
                                    start it again";
-                    fail(&slot, &service, message.to_string());
+                    fail(&slot, &service, IssueKind::Unknown, message.to_string());
                     return;
                 }
             }
@@ -710,11 +712,15 @@ pub async fn start_connect(
             tokio::time::timeout(CONNECT_TIMEOUT, latchkey_output_env(&args, &login_env)).await;
 
         match outcome {
-            Ok(Ok(output)) => succeed(&slot, &service, stored_account(&output), tail(&output)),
-            Ok(Err(e)) => fail(&slot, &service, tail(&e.to_string())),
+            Ok(Ok(output)) => succeed(&slot, &service, stored_account(&output)),
+            Ok(Err(failed)) => {
+                let command = format!("auth browser {service}");
+                fail(&slot, &service, failed.issue(), failed.detail(&command));
+            }
             Err(_) => fail(
                 &slot,
                 &service,
+                IssueKind::Unknown,
                 "the browser login did not finish within 15 minutes; start it again".to_string(),
             ),
         }
@@ -724,33 +730,32 @@ pub async fn start_connect(
         id,
         status: ConnectState::Running,
         account: None,
-        output: String::new(),
+        detail: String::new(),
         phase: ConnectPhase::Preparing,
         issue: None,
     }))
 }
 
-/// The attempt's outcome goes to this process's stderr as well as to
-/// the slot: the slot is reaped on the first poll that reads it, and a
-/// login that "worked" but stored a dead credential (latchkey#152) is
-/// only diagnosable afterwards if something durable says what latchkey
-/// printed. The output is latchkey's, so it is scrubbed first.
-fn fail(slot: &Arc<Mutex<ConnectStatus>>, service: &str, output: String) {
-    let issue = classify(&output, false);
+/// The attempt's outcome goes to the log as well as to the slot, which
+/// is reaped on the first poll that reads it.
+fn fail(slot: &Arc<Mutex<ConnectStatus>>, service: &str, issue: IssueKind, detail: String) {
     if failure_is_an_error(issue) {
-        tracing::error!(service, "latchkey login failed: {}", scrub(&output));
+        tracing::error!(
+            service,
+            issue = issue.as_str(),
+            "latchkey login failed: {detail}"
+        );
     } else {
         tracing::info!(
             service,
             issue = issue.as_str(),
-            "latchkey login stopped: {}",
-            scrub(&output)
+            "latchkey login stopped: {detail}"
         );
     }
     let mut slot = slot.lock().expect("connect slot mutex");
     slot.status = ConnectState::Failed;
     slot.issue = Some(issue);
-    slot.output = output;
+    slot.detail = detail;
 }
 
 /// latchkey holding no OAuth client is how every first Google sign-in
@@ -759,12 +764,7 @@ fn failure_is_an_error(issue: IssueKind) -> bool {
     issue != IssueKind::NoOauthClient
 }
 
-fn succeed(
-    slot: &Arc<Mutex<ConnectStatus>>,
-    service: &str,
-    account: Option<String>,
-    output: String,
-) {
+fn succeed(slot: &Arc<Mutex<ConnectStatus>>, service: &str, account: Option<String>) {
     match &account {
         Some(a) => tracing::info!(service, account = %a, "latchkey login stored a credential"),
         None => tracing::info!(service, "latchkey login stored a credential"),
@@ -772,7 +772,6 @@ fn succeed(
     let mut slot = slot.lock().expect("connect slot mutex");
     slot.status = ConnectState::Ok;
     slot.account = account;
-    slot.output = output;
 }
 
 /// `ensure-browser`, restricted to the sources that use a browser
@@ -883,14 +882,87 @@ pub async fn connect_status(
 /// `ui/src/config/accountNaming.ts`).
 const EPHEMERAL_BROWSER_ENV: &str = "LATCHKEY_EPHEMERAL_BROWSER";
 
-async fn latchkey_output(args: &[String]) -> anyhow::Result<String> {
+/// Why a latchkey command failed. latchkey's own message is kept and
+/// shown: every error latchkey 3.21.0 prints is one of its typed
+/// messages, none of which repeats a header or token it was handed. (The
+/// one that quotes its input, `auth prepare`'s JSON parse error, cannot
+/// happen: `oauth_client.rs` always hands it valid JSON.)
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LatchkeyFailed {
+    /// latchkey could not be started; our own words say where it was
+    /// looked for.
+    NotRun(String),
+    /// latchkey has never heard of the service.
+    UnknownService,
+    /// `services register` for a name latchkey already holds.
+    AlreadyRegistered,
+    /// latchkey did not answer in the time allowed.
+    TimedOut(Duration),
+    /// It answered with something other than the JSON asked for.
+    NotJson,
+    /// Any other failure: its kind, and the tail of what latchkey said.
+    Said { issue: IssueKind, stderr: String },
+}
+
+impl LatchkeyFailed {
+    fn from_stderr(stderr: &str, gateway: bool) -> Self {
+        if stderr.contains("Error: Unknown service:") {
+            LatchkeyFailed::UnknownService
+        } else if stderr.contains("already exists") {
+            LatchkeyFailed::AlreadyRegistered
+        } else {
+            LatchkeyFailed::Said {
+                issue: classify(stderr, gateway),
+                stderr: tail(stderr),
+            }
+        }
+    }
+
+    fn issue(&self) -> IssueKind {
+        match self {
+            LatchkeyFailed::NotRun(_) => IssueKind::NoRuntime,
+            LatchkeyFailed::UnknownService => IssueKind::NoCredential,
+            LatchkeyFailed::AlreadyRegistered
+            | LatchkeyFailed::TimedOut(_)
+            | LatchkeyFailed::NotJson => IssueKind::Unknown,
+            LatchkeyFailed::Said { issue, .. } => *issue,
+        }
+    }
+
+    /// `command` is the latchkey subcommand that failed, for the
+    /// failures latchkey said nothing useful about.
+    fn detail(&self, command: &str) -> String {
+        match self {
+            LatchkeyFailed::NotRun(why) => format!("Could not run latchkey: {why}"),
+            LatchkeyFailed::UnknownService => format!("latchkey {command}: no such service."),
+            LatchkeyFailed::AlreadyRegistered => {
+                format!("latchkey {command}: the service is already registered.")
+            }
+            LatchkeyFailed::TimedOut(limit) => format!(
+                "latchkey {command} did not answer within {}s.",
+                limit.as_secs()
+            ),
+            LatchkeyFailed::NotJson => {
+                format!("latchkey {command} printed something that isn't JSON.")
+            }
+            LatchkeyFailed::Said { stderr, .. } => stderr.clone(),
+        }
+    }
+}
+
+async fn latchkey_output(args: &[String]) -> Result<String, LatchkeyFailed> {
     latchkey_output_env(args, &[]).await
 }
 
-async fn latchkey_output_env(args: &[String], env: &[(&str, &str)]) -> anyhow::Result<String> {
+async fn latchkey_output_env(
+    args: &[String],
+    env: &[(&str, &str)],
+) -> Result<String, LatchkeyFailed> {
     // The same resolution `datalib_etl_web::latchkey` uses, reached through
     // `datalib_core` so the pin is not spelled twice.
-    let mut cmd: Command = datalib_core::node_runtime::latchkey_command()?.into();
+    let mut cmd: Command = datalib_core::node_runtime::latchkey_command()
+        .map_err(|e| LatchkeyFailed::NotRun(format!("{e:#}")))?
+        .into();
     // A login that runs past `CONNECT_TIMEOUT` is dropped, and
     // `auth browser-prepare` waits for a Google sign-in with no limit of
     // its own; without this it would outlive the attempt indefinitely.
@@ -902,25 +974,28 @@ async fn latchkey_output_env(args: &[String], env: &[(&str, &str)]) -> anyhow::R
     for (key, value) in env {
         cmd.env(key, value);
     }
+    datalib_env::inherit_only(cmd.as_std_mut(), datalib_env::Child::Latchkey, &[]);
     let out = cmd.output().await.map_err(|e| {
-        anyhow::anyhow!(
-            "could not run latchkey ({e}). Install it, or check that {} works.",
+        LatchkeyFailed::NotRun(format!(
+            "{e}. Install it, or check that {} works.",
             datalib_core::node_runtime::latchkey_cli_hint()
-        )
+        ))
     })?;
     if !out.status.success() {
-        anyhow::bail!("{}", tail(&String::from_utf8_lossy(&out.stderr)));
+        return Err(LatchkeyFailed::from_stderr(
+            &String::from_utf8_lossy(&out.stderr),
+            latchkey_gateway().is_some(),
+        ));
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-async fn latchkey_json(args: &[&str], timeout: Duration) -> anyhow::Result<Value> {
+async fn latchkey_json(args: &[&str], timeout: Duration) -> Result<Value, LatchkeyFailed> {
     let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
     let text = tokio::time::timeout(timeout, latchkey_output(&owned))
         .await
-        .map_err(|_| anyhow::anyhow!("latchkey did not answer within {}s", timeout.as_secs()))??;
-    serde_json::from_str(&text)
-        .map_err(|e| anyhow::anyhow!("latchkey printed something that isn't JSON: {e}"))
+        .map_err(|_| LatchkeyFailed::TimedOut(timeout))??;
+    serde_json::from_str(&text).map_err(|_| LatchkeyFailed::NotJson)
 }
 
 pub(crate) fn tail(s: &str) -> String {
@@ -936,105 +1011,6 @@ pub(crate) fn tail(s: &str) -> String {
         .find(|i| s.is_char_boundary(*i))
         .unwrap_or(s.len());
     format!("…{}", &s[cut..])
-}
-
-/// The `error: …` lines `datalib-step probe` prints on failure, without
-/// the tracing output around them. Falls back to the whole tail when a
-/// crash left no chain.
-pub(crate) fn error_chain(stderr: &str) -> String {
-    let chain: Vec<&str> = stderr
-        .lines()
-        .filter(|l| l.starts_with("error: "))
-        .collect();
-    if chain.is_empty() {
-        tail(stderr)
-    } else {
-        chain.join(" | ")
-    }
-}
-
-/// Blank anything credential-shaped before a line goes to the log.
-/// Nothing logged here is *meant* to carry one — `latchkey curl` runs
-/// without `-v`, and a probe's error is a status line and a body
-/// preview — but latchkey's own output on a failed login is whatever it
-/// chose to print, and a log file outlives the dialog.
-///
-/// Word-based, so it is deliberately blunt: the word after `Bearer`,
-/// the rest of a line after `Cookie:` / `Set-Cookie:`, any JWT, and the
-/// value of any `k=v` whose key mentions a token, secret, password,
-/// session or cookie.
-pub(crate) fn scrub(s: &str) -> String {
-    const BLANK: &str = "<redacted>";
-    let mut out = String::with_capacity(s.len());
-    for (i, line) in s.lines().enumerate() {
-        if i > 0 {
-            out.push('\n');
-        }
-        let mut blank_next = false;
-        let mut words = line.split(' ').peekable();
-        let mut first = true;
-        while let Some(word) = words.next() {
-            if !first {
-                out.push(' ');
-            }
-            first = false;
-            let lower = word.to_ascii_lowercase();
-            if blank_next && !word.is_empty() {
-                out.push_str(BLANK);
-                blank_next = false;
-                continue;
-            }
-            if lower == "cookie:" || lower == "set-cookie:" {
-                out.push_str(word);
-                if words.peek().is_some() {
-                    out.push(' ');
-                    out.push_str(BLANK);
-                }
-                break;
-            }
-            if lower == "bearer" {
-                out.push_str(word);
-                blank_next = true;
-                continue;
-            }
-            if looks_like_jwt(word) {
-                out.push_str(BLANK);
-                continue;
-            }
-            if let Some((key, _)) = word.split_once('=') {
-                let k = key.to_ascii_lowercase();
-                if ["token", "secret", "password", "session", "cookie"]
-                    .iter()
-                    .any(|needle| k.contains(needle))
-                {
-                    out.push_str(key);
-                    out.push('=');
-                    out.push_str(BLANK);
-                    continue;
-                }
-            }
-            out.push_str(word);
-        }
-    }
-    out
-}
-
-/// Three base64url segments, the first a `{"` header (`eyJ`), which is
-/// what every JWT starts with.
-fn looks_like_jwt(word: &str) -> bool {
-    let trimmed = word.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_');
-    let mut parts = trimmed.split('.');
-    let (Some(h), Some(p), Some(sig), None) =
-        (parts.next(), parts.next(), parts.next(), parts.next())
-    else {
-        return false;
-    };
-    let b64url = |s: &str| {
-        !s.is_empty()
-            && s.chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-    };
-    h.starts_with("eyJ") && b64url(h) && b64url(p) && b64url(sig)
 }
 
 fn validated_service(service: &str) -> Result<String, (StatusCode, Json<Value>)> {
@@ -1069,51 +1045,41 @@ pub(crate) fn err(status: StatusCode, message: &str) -> (StatusCode, Json<Value>
 }
 
 #[cfg(test)]
-mod scrub_tests {
-    use super::{error_chain, scrub};
+mod latchkey_failed_tests {
+    use super::*;
 
-    /// The message this exists for — the chatgpt 401 — must survive
-    /// whole: it names the endpoint, the status and the body's code.
+    /// latchkey's own words are what the wizard shows and the log keeps:
+    /// they say what went wrong better than any sentence of ours.
     #[test]
-    fn keeps_the_chatgpt_401_intact() {
-        let msg = "error: chatgpt.com credentials are not set up: GET /backend-api/me -> \
-                   HTTP 401 cf-mitigated=None body=\"{\\n \"code\": \"token_expired\"}\"";
-        assert_eq!(scrub(msg), msg);
+    fn latchkeys_message_is_the_detail() {
+        let said = "Error: Login failed: access_denied";
+        let failed = LatchkeyFailed::from_stderr(said, false);
+        assert_eq!(failed.issue(), IssueKind::Unknown);
+        assert_eq!(failed.detail("auth browser google-gmail"), said);
     }
 
+    /// The kind is read off what latchkey said, so the wizard says the
+    /// right sentence above it.
     #[test]
-    fn blanks_bearer_tokens_cookies_and_jwts() {
-        let jwt = "eyJhbGciOiJSUzI1NiJ9.eyJleHAiOjE3NTc3NjAwMDB9.c2lnbmF0dXJl";
+    fn the_kind_is_read_off_latchkeys_message() {
+        let f = |s: &str| LatchkeyFailed::from_stderr(s, false);
         assert_eq!(
-            scrub(&format!("-H Authorization: Bearer {jwt} sent")),
-            "-H Authorization: Bearer <redacted> sent"
+            f("Error: Unknown service: claude-ai"),
+            LatchkeyFailed::UnknownService
         );
         assert_eq!(
-            scrub(&format!("stored {jwt} for chatgpt")),
-            "stored <redacted> for chatgpt"
+            f("Error: Service 'claude-ai' already exists."),
+            LatchkeyFailed::AlreadyRegistered
         );
         assert_eq!(
-            scrub("Cookie: sessionKey=sk-abc; other=1"),
-            "Cookie: <redacted>"
+            f("Error: Service google-gmail requires preparation first.").issue(),
+            IssueKind::NoOauthClient
         );
         assert_eq!(
-            scrub("GET https://x/y?access_token=abc&limit=5 ok"),
-            "GET https://x/y?access_token=<redacted> ok"
+            f("No browser configured. Run 'latchkey ensure-browser' first.").issue(),
+            IssueKind::NoBrowser
         );
-        assert_eq!(
-            scrub("line one\nSet-Cookie: a=b\nline three"),
-            "line one\nSet-Cookie: <redacted>\nline three"
-        );
-    }
-
-    #[test]
-    fn error_chain_keeps_only_the_error_lines() {
-        let stderr = "{\"level\":\"INFO\",\"msg\":\"probing\"}\nerror: fetch /me: boom\nerror: caused by x\n";
-        assert_eq!(
-            error_chain(stderr),
-            "error: fetch /me: boom | error: caused by x"
-        );
-        assert_eq!(error_chain("segfault\n"), "segfault");
+        assert_eq!(f("anything else").issue(), IssueKind::Unknown);
     }
 }
 

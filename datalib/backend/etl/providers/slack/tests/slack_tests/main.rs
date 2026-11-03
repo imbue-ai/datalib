@@ -22,6 +22,7 @@ mod playback_roundtrip;
 mod probe;
 mod progress_countdown;
 mod quiet_channels;
+mod refused_calls;
 mod reply_count;
 mod reply_search;
 mod requests_at_once;

@@ -112,9 +112,14 @@ fn a_watching_step_exits_when_the_runner_itself_is_sigkilled() {
     let pid_file = root.join("step.pid");
     std::fs::write(
         root.join("config.toml"),
+        // The step's own `env`: the runner hands a step none of its own
+        // environment but a short list, and the runner's stdout is the
+        // event stream, so this file is where the step's pid can be read.
         format!(
-            "[[steps]]\nid = \"watched/step\"\ncommand = \"'{}' child\"\n",
-            env_path("PARENT_WATCH_PROBE")
+            "[[steps]]\nid = \"watched/step\"\ncommand = \"'{}' child\"\n\
+             env = {{ PARENT_WATCH_PID_FILE = \"{}\" }}\n",
+            env_path("PARENT_WATCH_PROBE"),
+            pid_file.display()
         ),
     )
     .unwrap();
@@ -122,10 +127,6 @@ fn a_watching_step_exits_when_the_runner_itself_is_sigkilled() {
     let mut parent = Command::new(env_path("PARENT_WATCH_PROBE"))
         .args(["exec", &env_path("DATALIB_DAG_BIN")])
         .arg(root.join("config.toml"))
-        // Inherited down through the runner to the step. The runner's own
-        // stdout is the event stream, so there is nowhere else to read
-        // the step's pid from.
-        .env("PARENT_WATCH_PID_FILE", &pid_file)
         .stdout(Stdio::piped())
         .spawn()
         .expect("spawn the probe parent");

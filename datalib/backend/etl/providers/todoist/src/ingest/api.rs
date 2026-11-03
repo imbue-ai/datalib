@@ -233,12 +233,7 @@ mod tests {
             "{e}"
         );
         let missing = transport_error(
-            HttpError::Curl {
-                service: HTTP_SERVICE,
-                url: "u".into(),
-                exit: 1,
-                stderr: "No credentials found for todoist".into(),
-            },
+            HttpError::curl_exit(HTTP_SERVICE, "u", 1, "No credentials found for todoist"),
             "u",
         );
         assert!(missing.ends_the_run());
