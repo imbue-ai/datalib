@@ -142,6 +142,10 @@ impl HttpService {
     }
 }
 
+/// The body is read into memory whole, so a plain request past this
+/// is refused rather than held.
+pub const DEFAULT_MAX_BYTES: u64 = 1 << 30;
+
 /// A single outbound HTTP request. Do **not** include the Authorization
 /// header — that is injected by `latchkey` based on the URL host.
 #[derive(Debug, Clone)]
@@ -157,6 +161,9 @@ pub struct HttpRequest {
     /// latchkey service registered and would fail the host allowlist. Not part
     /// of [`fixture_key`], so a synthesizer's fixtures match either way.
     pub bypass_latchkey: bool,
+    /// The largest body a plain request takes; curl stops past it.
+    /// latchkey's own curl is not given it.
+    pub max_bytes: u64,
     /// The source's latchkey knobs, forwarded whole from its config's
     /// `latchkey_settings:` block (see
     /// [`datalib_source_common::LatchkeySettings`]) — today just which
@@ -175,6 +182,7 @@ impl HttpRequest {
             body: None,
             timeout: Duration::from_secs(60),
             bypass_latchkey: false,
+            max_bytes: DEFAULT_MAX_BYTES,
             latchkey: LatchkeySettings::default(),
         }
     }
@@ -190,6 +198,7 @@ impl HttpRequest {
             body: Some(body),
             timeout: Duration::from_secs(60),
             bypass_latchkey: false,
+            max_bytes: DEFAULT_MAX_BYTES,
             latchkey: LatchkeySettings::default(),
         }
     }
@@ -206,6 +215,11 @@ impl HttpRequest {
 
     pub fn plain(mut self) -> Self {
         self.bypass_latchkey = true;
+        self
+    }
+
+    pub fn max_bytes(mut self, max_bytes: u64) -> Self {
+        self.max_bytes = max_bytes;
         self
     }
 
@@ -305,10 +319,13 @@ impl HttpError {
     /// 55 send, 56 receive) are the service not answering, which is also
     /// what the retry loop retries. 6 is a typo'd host as well as a
     /// network that is not up yet, as after a laptop wakes; the guard's
-    /// budget is what ends the first.
+    /// budget is what ends the first. A body past `--max-filesize` is
+    /// 63, or 56 when its size was not known up front; it is the same
+    /// on every try, so it is not retried.
     pub fn upstream(&self) -> Option<Upstream> {
         match self {
             HttpError::Timeout { .. } => Some(Upstream::Unavailable),
+            HttpError::Curl { stderr, .. } if stderr.contains("maximum allowed file size") => None,
             HttpError::Curl { exit, .. } if matches!(*exit, 6 | 7 | 28 | 35 | 52 | 55 | 56) => {
                 Some(Upstream::Unavailable)
             }
@@ -723,7 +740,9 @@ mod live {
         // `latchkey curl …` for the credential-injecting shim, or plain
         // `curl …` when the caller opted out (public, auth-free fetch).
         let mut cmd = if req.bypass_latchkey {
-            tokio::process::Command::new("curl")
+            let mut curl = tokio::process::Command::new("curl");
+            curl.args(plain_curl_guards(req.max_bytes));
+            curl
         } else {
             // `latchkey [--account <acct>] curl` — the account selector is a
             // latchkey *global* option and so must precede the subcommand;
@@ -764,6 +783,10 @@ mod live {
             // round-trip cleanly).
             cmd.arg("--data-binary").arg("@-");
             cmd.stdin(Stdio::piped());
+        }
+        if req.bypass_latchkey {
+            // A URL someone else wrote cannot be read as an option.
+            cmd.arg("--url");
         }
         cmd.arg(maybe_via_desktop_url(
             &req.url,
@@ -846,6 +869,25 @@ mod live {
         })
     }
 
+    /// What plain curl is told first, for a URL that carries its own
+    /// authority and so came from upstream: no `~/.curlrc` (`-q` works
+    /// only as the first argument), https and nothing else, and a body
+    /// no larger than the request allows.
+    pub(super) fn plain_curl_guards(max_bytes: u64) -> Vec<String> {
+        [
+            "-q",
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
+            "--max-filesize",
+        ]
+        .into_iter()
+        .map(String::from)
+        .chain([max_bytes.to_string()])
+        .collect()
+    }
+
     fn parse_header_block(dump: &str) -> Option<(u16, BTreeMap<String, String>)> {
         let normalized = dump.replace("\r\n", "\n");
         let blocks: Vec<&str> = normalized
@@ -872,6 +914,58 @@ mod live {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn plain_curl_reads_no_curlrc_and_speaks_only_https() {
+            let args = plain_curl_guards(1234);
+            assert_eq!(args[0], "-q");
+            let joined = args.join(" ");
+            assert!(joined.contains("--proto =https"), "{joined}");
+            assert!(joined.contains("--proto-redir =https"), "{joined}");
+            assert!(joined.ends_with("--max-filesize 1234"), "{joined}");
+        }
+
+        fn plain(url: &str) -> HttpRequest {
+            HttpRequest::get(HttpService::Notion, url).plain()
+        }
+
+        /// A signed URL comes from upstream; plain curl took an http
+        /// one, and connected to whatever it named.
+        #[tokio::test]
+        async fn plain_curl_refuses_http_before_connecting() {
+            // Port 1 answers nothing: a connection attempt is exit 7.
+            match send(&plain("http://127.0.0.1:1/x")).await {
+                Err(HttpError::Curl { exit, stderr, .. }) => {
+                    assert_eq!(exit, 1, "{stderr}");
+                }
+                other => panic!("expected curl to refuse the protocol, got {other:?}"),
+            }
+        }
+
+        /// A body past the cap is the same on every try: curl's exit
+        /// 56 for it, when the size was not known up front, read as a
+        /// dropped connection and was retried until the guard gave up.
+        #[test]
+        fn a_body_past_the_cap_is_not_retried() {
+            let past = HttpError::Curl {
+                service: HttpService::Notion,
+                url: "https://files.example/x".into(),
+                exit: 56,
+                stderr: "curl: (56) Exceeded the maximum allowed file size (100) with 100 bytes"
+                    .into(),
+            };
+            assert_eq!(past.upstream(), None);
+        }
+
+        /// A URL that starts with `-` was an option to curl: this one
+        /// printed curl's version and exited 0.
+        #[tokio::test]
+        async fn plain_curl_reads_a_url_as_a_url() {
+            match send(&plain("--version")).await {
+                Err(HttpError::Curl { .. }) => {}
+                other => panic!("expected curl to refuse the url, got {other:?}"),
+            }
+        }
 
         #[test]
         fn parses_simple_header_block() {

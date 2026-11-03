@@ -265,6 +265,7 @@ pub fn http_request(
         body: Some(body.as_bytes().to_vec()),
         timeout: Duration::from_secs(180),
         bypass_latchkey: false,
+        max_bytes: crate::http::DEFAULT_MAX_BYTES,
         latchkey: latchkey.clone(),
     }
 }
