@@ -7,7 +7,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -23,11 +23,37 @@ pub struct QueryEmbedding {
     pub vector: Vec<f32>,
 }
 
+/// Where the pinned models are, once something has verified them. The
+/// embedder starts qmd only with an answer, because qmd fetches a model
+/// it does not find, unpinned. This crate cannot verify them itself: it
+/// is an input to the fixture's embed action, and `datalib_qmd_models`
+/// would pull the fetcher in.
+pub trait VerifiedModels: Send + Sync {
+    /// The directory holding the verified models, waiting until
+    /// `deadline` at most. An error, a [`ModelsNotReady`] when they are
+    /// still being fetched or could not be, fails the query.
+    fn dir(&self, deadline: Instant) -> Result<PathBuf>;
+}
+
+/// The models a query needs are not verified yet: what a search says
+/// instead of an answer by meaning.
+#[derive(Debug)]
+pub struct ModelsNotReady(pub String);
+
+impl std::fmt::Display for ModelsNotReady {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for ModelsNotReady {}
+
 pub struct QueryEmbedder {
     /// `None` resolves the pinned runtime at the first query, so a root
     /// that never searches by meaning never needs one.
     qmd: Option<Qmd>,
     root: PathBuf,
+    models: Arc<dyn VerifiedModels>,
     deadline: Duration,
     live: Mutex<Option<Live>>,
 }
@@ -44,11 +70,18 @@ struct Live {
 }
 
 impl QueryEmbedder {
-    /// Spawns nothing until the first query.
-    pub fn new(root: &Path, qmd: Option<Qmd>, deadline: Duration) -> Self {
+    /// Spawns nothing until the first query, and nothing then until
+    /// `models` says where they are.
+    pub fn new(
+        root: &Path,
+        qmd: Option<Qmd>,
+        models: Arc<dyn VerifiedModels>,
+        deadline: Duration,
+    ) -> Self {
         Self {
             qmd,
             root: root.to_path_buf(),
+            models,
             deadline,
             live: Mutex::new(None),
         }
@@ -57,14 +90,17 @@ impl QueryEmbedder {
     /// On any error, a missed deadline included, the process is stopped so
     /// the next query starts a fresh one.
     pub fn embed(&self, text: &str) -> Result<QueryEmbedding> {
+        let deadline = Instant::now() + self.deadline;
+        // Before the lock, so a query waiting on the models holds up no
+        // other.
+        let models = self.models.dir(deadline)?;
         let mut guard = self
             .live
             .lock()
             .map_err(|_| anyhow!("query embedder mutex poisoned"))?;
-        let deadline = Instant::now() + self.deadline;
         let res = (|| {
             if guard.is_none() {
-                *guard = Some(self.spawn(deadline)?);
+                *guard = Some(self.spawn(&models, deadline)?);
             }
             let live = guard.as_mut().expect("just started");
             if let Some(known) = live.recent.get(text) {
@@ -83,7 +119,7 @@ impl QueryEmbedder {
         res
     }
 
-    fn spawn(&self, deadline: Instant) -> Result<Live> {
+    fn spawn(&self, models: &Path, deadline: Instant) -> Result<Live> {
         let qmd = match &self.qmd {
             Some(qmd) => qmd.clone(),
             None => Qmd::pinned()?,
@@ -96,7 +132,7 @@ impl QueryEmbedder {
             .arg(&qmd.package)
             .arg(datalib_runtime::qmd::qmd_index_path(&self.root))
             .arg("serve")
-            .arg("{}")
+            .arg(json!({ "models": crate::model_files(models) }).to_string())
             .env("XDG_CACHE_HOME", &cache_home)
             .env("XDG_CONFIG_HOME", &cache_home)
             .env("NO_COLOR", "1")
@@ -235,6 +271,31 @@ mod tests {
             model: "m".into(),
             vector: vec![x],
         }
+    }
+
+    struct NotYet;
+
+    impl VerifiedModels for NotYet {
+        fn dir(&self, _: Instant) -> Result<PathBuf> {
+            Err(ModelsNotReady("still fetching".into()).into())
+        }
+    }
+
+    /// Until the models are verified, a query starts no qmd (which would
+    /// fetch its own unpinned copy) and says why instead. The node here
+    /// does not exist, so a spawn would fail differently.
+    #[test]
+    fn a_query_before_the_models_are_verified_starts_nothing() {
+        let root = tempfile::tempdir().unwrap();
+        let embedder = QueryEmbedder::new(
+            root.path(),
+            Some(Qmd::new("/nonexistent/node", "/nonexistent/qmd")),
+            Arc::new(NotYet),
+            Duration::from_secs(1),
+        );
+        let err = embedder.embed("warp").unwrap_err();
+        assert!(err.downcast_ref::<ModelsNotReady>().is_some(), "{err:#}");
+        assert!(embedder.live.lock().unwrap().is_none());
     }
 
     /// A search asking twice for one text embeds it once, and an old text

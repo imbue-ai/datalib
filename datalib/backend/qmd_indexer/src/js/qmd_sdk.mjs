@@ -10,6 +10,10 @@
 //   status    {}
 //   serve     {}   long-lived: embeds search queries, one per stdin line
 //
+// and every verb's <json> also carries `models`, `{<uri>: <file>}`: the
+// only models qmd may load, each by the name qmd asks for it and the
+// file the caller verified (see `pinModels`).
+//
 // Why the SDK and not the CLI: `qmd update` cannot be scoped to one
 // collection, and `qmd embed` reports progress only to a terminal
 // (docs/dev/qmd_behaviour.md, findings 1 and 11).
@@ -27,6 +31,7 @@
 // `--input-type`). node-llama-cpp probes its prebuilt binary by forking
 // exactly such a child, and on linux-x64 that child then fails to
 // start, which surfaces as NoBinaryFoundError and no embeddings at all.
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -53,6 +58,37 @@ const {
   getStoreCollections,
   reindexCollection,
 } = await load("dist/store.js");
+
+// Left to itself, qmd fetches a model it does not find from HuggingFace's
+// `resolve/main`, which no pin holds, and compiles llama.cpp from a git
+// clone when no prebuilt binding loads. Neither may happen here. A model
+// is the file the caller names for it, verified by datalib_qmd_models,
+// or an error; and the runtime's prebuilt binding is the only one
+// (scripts/stage_runtime.sh proves it loads with `build: "never"`). Both
+// hooks are qmd internals, so a qmd without them refuses to run rather
+// than fetching.
+async function pinModels(models) {
+  const llm = await load("dist/llm.js");
+  if (
+    typeof llm.LlamaCpp?.prototype?.resolveModel !== "function" ||
+    typeof llm.setLlamaDirWritableForTest !== "function"
+  ) {
+    throw new Error("this qmd finds its models some other way; update qmd_sdk.mjs's pinModels for it");
+  }
+  llm.setLlamaDirWritableForTest(false);
+  llm.LlamaCpp.prototype.resolveModel = async (uri) => {
+    const file = Object.hasOwn(models, uri) ? models[uri] : undefined;
+    if (!file) throw new Error(`qmd asked for the model ${uri}, which it was not given`);
+    if (!existsSync(file)) throw new Error(`the model ${uri} is not at ${file}`);
+    return file;
+  };
+}
+try {
+  await pinModels(args.models ?? {});
+} catch (err) {
+  emit({ event: "error", message: err.message });
+  process.exit(1);
+}
 
 // Milliseconds since node started, so a phase's start includes node's own
 // start-up and qmd's imports.
@@ -178,6 +214,9 @@ async function serve() {
   const { getDefaultLlamaCpp, formatQueryForEmbedding } = await load("dist/llm.js");
   const llm = getDefaultLlamaCpp();
   const model = llm.embedModelName;
+  // qmd's `embed` logs a model that will not load and answers nothing, so
+  // a missing one is looked for here, where the error can say which.
+  await llm.resolveModel(model);
   emit({ event: "ready", model });
   for await (const line of createInterface({ input: process.stdin })) {
     if (!line.trim()) continue;

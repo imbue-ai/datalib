@@ -209,6 +209,18 @@ does not carry over to `createStore()` without being re-measured.
     index on `model`, which every row shares, and scanned it once per
     document.
 
+15. **qmd fetches what it does not find, and compiles what will not
+    load.** Read from the code (`llm.ts`, `LlamaCpp.resolveModel` and
+    `loadLlamaRuntime`), and the first half measured. A model missing
+    from `<XDG_CACHE_HOME>/qmd/models` is downloaded from HuggingFace's
+    `resolve/main`, which no pin holds: with the old script, a query
+    embedder started against an empty models directory fetched the
+    embedding model in about 30 s and answered with it. And when
+    node-llama-cpp's own directory is writable, as a fetched runtime's
+    is, a prebuilt binding that will not load makes it clone llama.cpp
+    with `simple-git` and build it. No environment variable turns
+    either off.
+
 ## What the shipped steps do with these
 
 `qmd_aggregator` keeps the collection set to the sources it reads and
@@ -238,6 +250,18 @@ Finding 6 is fixed rather than looped around: the script calls
 until it embeds nothing would never end on a document with a chunk that
 always fails, because `removeIncompleteEmbeddings` drops that
 document's good chunks at the end of each pass.
+
+Finding 15 is closed in `qmd_sdk.mjs`'s `pinModels`, before any verb
+runs: `resolveModel` answers only the files its caller names, by the
+name qmd asks for each (`PinnedModel::qmd_uri`), and fails on
+anything else; and `setLlamaDirWritableForTest(false)` turns the
+source build off. The files named are ones `datalib_qmd_models` has
+verified, and the search applet's query embedder asks for them before
+it starts qmd at all (`VerifiedModels`), so a search during the first
+download says the model is not in place yet. Both hooks are qmd
+internals: a qmd without them refuses to run, and a qmd bump re-checks
+them (`qmd_indexer_tests`' `a_query_without_its_model_fetches_nothing`
+fails if a missing model is fetched).
 
 Finding 13 is why a stopped step kills the script outright
 (`qmd_indexer::kill_on_stop`) rather than waiting for it to hear its
