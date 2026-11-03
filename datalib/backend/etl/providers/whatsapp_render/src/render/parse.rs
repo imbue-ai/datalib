@@ -16,6 +16,7 @@ use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact};
 use datalib_etl::doltlite_raw::table_exists;
 use datalib_etl::periodize::Period;
 use datalib_etl_chat_common::types::{AuthorKind, NamedPerson, Recipient, UpstreamRef};
+use datalib_etl_chat_common::unread::{integer_order, is_unread, Marks, ReadMark};
 use datalib_etl_chat_common::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
     NormalizedReaction,
@@ -152,7 +153,9 @@ async fn parse_async(
             chat_jid,
             display,
             named_after,
-            last_read_rowid: r.get("last_read_message_row_id"),
+            read_mark: r
+                .get::<Option<i64>, _>("last_read_message_row_id")
+                .map(|rowid| ReadMark::Through(rowid.to_string())),
             items_by_period: HashMap::new(),
             person_jids: Vec::new(),
             inputs,
@@ -379,8 +382,15 @@ async fn parse_async(
             }
         }
         let rowid: i64 = r.get("_id");
-        let unread =
-            key.from_me == 0 && chats[idx].last_read_rowid.is_some_and(|mark| rowid > mark);
+        let unread = is_unread(
+            &rowid.to_string(),
+            key.from_me != 0,
+            Marks {
+                own: None,
+                conversation: chats[idx].read_mark.as_ref(),
+            },
+            integer_order,
+        );
         let item = build_item(
             source_id,
             key,
@@ -558,7 +568,7 @@ struct ChatHeader {
     chat_jid: String,
     display: String,
     named_after: Vec<NamedPerson>,
-    last_read_rowid: Option<i64>,
+    read_mark: Option<ReadMark>,
     items_by_period: HashMap<String, Vec<NormalizedChatItem>>,
     /// Who wrote or reacted in the chat, in the order they first did;
     /// the account itself is not among them.
