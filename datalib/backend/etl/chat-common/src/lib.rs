@@ -22,5 +22,5 @@ pub use render::{render_all, RenderProfile, RenderSummary, TextFormat, LAYOUT_VE
 pub use datalib_time::RecordStampPrecision;
 pub use types::{
     own_stamp_ms, AuthorKind, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
-    NormalizedDoc, NormalizedReaction,
+    NormalizedDoc, NormalizedReaction, Replies,
 };

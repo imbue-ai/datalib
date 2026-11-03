@@ -56,6 +56,7 @@ pub fn item(
         is_aside,
         branch: Vec::new(),
         unread: false,
+        replies: None,
         recipients: Vec::new(),
         mentions: Vec::new(),
         problems: Vec::new(),

@@ -31,6 +31,30 @@ link on bare `slack.com` opens in whichever workspace the browser is
 signed into, so that form, with `?team=<T…>`, is only for a store with
 no workspace URL. `render::slack_link` is the one place either is built.
 
+## Replies not mirrored yet
+
+A thread's root says how many replies it has, `2 replies`, and while
+the store holds fewer than that, how many it does not: `2 replies · 2
+not mirrored yet`. A first sync reads the newest of the whole
+workspace first, and a stopped run leaves threads owed, so a root can
+sit in the store for hours before its replies do
+([`../slack/INGEST.md`](../slack/INGEST.md) §"What a run still owes").
+Without the line it reads like a message nobody answered.
+
+The count is the root payload's `reply_count`. What is held is the
+replies stored under the thread, counted, a broadcast reply among
+them: what the page shows. The thread's `held_version` would say only
+whether the last read of it was whole, not how many replies are
+missing, and lives in a sidecar every attempt rewrites. A
+`reply_count` that is not a number is a problem on the root, and the
+root shows no line.
+
+The line needs nothing extra to stay true. A reply's row carries its
+root's key, which is the thread's bucket key, so a reply that arrives
+renders its thread again, and the root's own row changes when Slack's
+count does. `slack_tests`'s `reply_count` module holds a thread whose
+read failed, then reads it, and checks the incremental render.
+
 ## mrkdwn
 
 `src/render/mrkdwn.rs` converts Slack's mrkdwn dialect to CommonMark:

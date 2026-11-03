@@ -450,6 +450,12 @@
 .chat-body .msg-recipients a.chip:not(.handle-resolved) {
   color: var(--datalib-fg, inherit);
 }
+/* Under a thread's first message: how many replies, and how many are not
+   mirrored yet. */
+.chat-body .msg-replies {
+  font-size: 0.8rem;
+  color: var(--datalib-muted, #94a3b8);
+}
 /* A list longer than two lines folds to two, beside a button saying how
    many people it names (`foldRecipients` in chatSections.js). */
 .chat-body p:has(> .msg-recipients--folded),
