@@ -416,6 +416,48 @@ fn a_file_that_will_not_parse_is_a_problem_until_it_does() -> Result<()> {
     })
 }
 
+/// An XML file that is not an export was stamped as done with a log
+/// line, so nothing ever said it was there and not read.
+#[test]
+fn an_xml_file_that_is_no_export_is_a_problem() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let raw_dir = tmp.path().join("raw");
+    let input = tmp.path().join("input");
+    fs::create_dir_all(&raw_dir)?;
+    fs::create_dir_all(&input)?;
+    fs::copy(
+        fixture_root().join("calls-2369041512000.xml"),
+        input.join("calls-2369041512000.xml"),
+    )?;
+    fs::write(
+        input.join("sms-2369040112000.xml"),
+        r#"<captains_log stardate="41153.7">Our destination is Deneb IV.</captains_log>"#,
+    )?;
+    let cache = tmp.path().join("fpcache.sqlite");
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?;
+    rt.block_on(async {
+        let db = RawDb::open(&db_path_for(&raw_dir)).await?;
+        let foreign = vec![(
+            "file:sms_backup_restore/xml:sms-2369040112000.xml".to_string(),
+            "warning".to_string(),
+        )];
+        let first = fetch_dir(&db, &input, &cache).await?;
+        assert_eq!(first.files, 1, "the calls export beside it reads");
+        assert!(first.calls > 0);
+        assert_eq!(problems(&db).await?, foreign);
+
+        let quiet = fetch_dir(&db, &input, &cache).await?;
+        assert_eq!(quiet.files, 0, "it is not read again until it changes");
+        assert_eq!(problems(&db).await?, foreign);
+        db.close().await;
+        Ok::<_, anyhow::Error>(())
+    })
+}
+
 /// An MMS part whose base64 would not decode vanished from the message,
 /// with only a log line to say it had been there.
 #[test]

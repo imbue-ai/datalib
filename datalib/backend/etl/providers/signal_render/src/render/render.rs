@@ -18,7 +18,7 @@ use datalib_etl_chat_common::{RenderProfile, RenderSummary as ChatSummary};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_schema::providers::Provider;
 
-use super::normalize::to_chats;
+use super::normalize::{to_chats, Unrendered};
 use super::parse::{ParsedSignal, ATTACHMENTS_PROJECTION_SQL};
 
 /// Bump when Signal's own contribution to the rendered output changes.
@@ -51,6 +51,7 @@ pub struct RenderSummary {
     /// Every chat rendered, by uuid — what the processor declares
     /// through `RenderCtx::declare_bucket`.
     pub buckets: Buckets,
+    pub unrendered: Vec<Unrendered>,
 }
 
 /// The render params recorded alongside the cursor. `period` decides
@@ -107,7 +108,7 @@ pub fn render_all(
     progress.set_length(Some((parsed.docs.len() + parsed.docs_skipped) as u64));
     progress.inc(parsed.docs_skipped as u64);
 
-    let chats = to_chats(parsed, source_id);
+    let (chats, unrendered) = to_chats(parsed, source_id);
     let profile = profile();
     let mut renderer = ChatRenderer::new(
         &profile,
@@ -144,5 +145,6 @@ pub fn render_all(
         docs_skipped: parsed.docs_skipped,
         messages_rendered: items_rendered,
         buckets,
+        unrendered,
     })
 }

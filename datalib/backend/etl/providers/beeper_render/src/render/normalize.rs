@@ -32,25 +32,39 @@ pub struct NetworkChats {
     pub chats: Vec<NormalizedChat>,
 }
 
+/// A bucket whose document this run could not build, and why: a
+/// `problems` row on that document rather than a skip nobody sees.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unrendered {
+    pub markdown_uuid: String,
+    pub why: String,
+}
+
 /// Group every bucket by network, then by room.
 ///
 /// One `NormalizedChat` per *bucket* rather than per room, so a room
 /// spanning three periods yields three chats over one `chat_uuid`. That
 /// keeps the chat-level grid row per-document, which is what beeper has
 /// always emitted, and it keeps each bucket's attachments keyed apart.
-pub fn to_networks(parsed: &ParsedBeeper, source_id: &str, avatars: &Avatars) -> Vec<NetworkChats> {
+pub fn to_networks(
+    parsed: &ParsedBeeper,
+    source_id: &str,
+    avatars: &Avatars,
+) -> (Vec<NetworkChats>, Vec<Unrendered>) {
     let mut by_network: BTreeMap<String, Vec<NormalizedChat>> = BTreeMap::new();
+    let mut unrendered = Vec::new();
 
     for doc in &parsed.docs {
+        // The parser fills the room map from the same store, so this
+        // should not happen; the bucket is dropped rather than the pass.
         let Some(room) = parsed.rooms.get(&doc.room_uuid) else {
-            // The parser populates the room map from the same store, so
-            // this should not happen; log and drop the bucket rather
-            // than abort the whole render pass.
-            tracing::warn!(
-                event = "beeper_render_missing_room",
-                room_uuid = %doc.room_uuid,
-                "bucket names a room the parse did not produce; skipping"
-            );
+            unrendered.push(Unrendered {
+                markdown_uuid: ids::period(source_id, &doc.room_uuid, &doc.period_key).uuid,
+                why: format!(
+                    "its events name room {}, which the parse did not read",
+                    doc.room_uuid
+                ),
+            });
             continue;
         };
         let no_inputs = Inputs::default();
@@ -66,13 +80,14 @@ pub fn to_networks(parsed: &ParsedBeeper, source_id: &str, avatars: &Avatars) ->
             .push(to_chat(source_id, room, people, avatars, doc, inputs));
     }
 
-    by_network
+    let networks = by_network
         .into_iter()
         .map(|(network, chats)| NetworkChats {
             profile: profile_for(&network),
             chats,
         })
-        .collect()
+        .collect();
+    (networks, unrendered)
 }
 
 /// The bundle key for a bucket — matches `NormalizedChat::id`.
@@ -385,6 +400,46 @@ pub fn network_label(network: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A bucket whose room the parse did not read was skipped with a
+    /// log line; its document now carries why it was not rendered. A
+    /// bucket beside it whose room is there renders.
+    #[test]
+    fn a_bucket_with_no_room_is_unrendered() {
+        let bucket = |room_uuid: &str| DocBucket {
+            room_uuid: room_uuid.into(),
+            period_key: "2364-03".into(),
+            messages: Vec::new(),
+            reactions_by_target: BTreeMap::new(),
+        };
+        let bridge = Room {
+            room_uuid: "!bridge:beeper.local".into(),
+            network: "signal".into(),
+            native_room_id: "!bridge:beeper.local".into(),
+            external_room_id: None,
+            external_workspace_id: None,
+            account_id: None,
+            title: Some("Bridge".into()),
+            is_dm: false,
+            source_url: None,
+        };
+        let parsed = ParsedBeeper {
+            rooms: [(bridge.room_uuid.clone(), bridge)].into(),
+            docs: vec![
+                bucket("!bridge:beeper.local"),
+                bucket("!enterprise:beeper.local"),
+            ],
+            ..ParsedBeeper::default()
+        };
+        let (networks, unrendered) = to_networks(&parsed, "beeper", &Avatars::new());
+        assert_eq!(networks.len(), 1);
+        assert_eq!(networks[0].chats.len(), 1);
+        assert_eq!(unrendered.len(), 1);
+        assert_eq!(
+            unrendered[0].markdown_uuid,
+            ids::period("beeper", "!enterprise:beeper.local", "2364-03").uuid
+        );
+    }
 
     #[test]
     fn a_message_in_markup_renders_escaped_under_its_reply_line() {

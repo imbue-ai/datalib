@@ -201,7 +201,7 @@ async fn list(
         return Ok(Json(json!({ "photos": [], "next_offset": null })));
     };
     let rows = sqlx::query(
-        "SELECT sp.photo_json FROM source_photos sp \
+        "SELECT sp.photo_uuid, sp.photo_json FROM source_photos sp \
            JOIN grid_rows g ON g.uuid = sp.photo_uuid \
           WHERE ?1 IS NULL OR sp.source_id = ?1 \
           ORDER BY g.touched_at_utc DESC, sp.photo_uuid \
@@ -219,10 +219,19 @@ async fn list(
         Err(e) => return Err(ours(anyhow::Error::new(e).context("list source_photos"))),
     };
     let more = rows.len() as i64 > PAGE;
-    let photos: Vec<Listed> = rows
+    let photos: Vec<NormalizedPhoto> = rows
         .iter()
         .take(PAGE as usize)
-        .filter_map(|r| serde_json::from_str::<NormalizedPhoto>(r.get("photo_json")).ok())
+        .map(|r| {
+            serde_json::from_str(r.get("photo_json")).with_context(|| {
+                let uuid: String = r.get("photo_uuid");
+                format!("the stored photo {uuid} does not read")
+            })
+        })
+        .collect::<Result<_>>()
+        .map_err(ours)?;
+    let photos: Vec<Listed> = photos
+        .into_iter()
         .map(|p| Listed {
             title: p
                 .title
@@ -535,4 +544,121 @@ fn chunks(
             }
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ten_forward() -> NormalizedPhoto {
+        use datalib_photo_schema::{Exposure, MediaKind, Original, Place};
+        NormalizedPhoto {
+            uuid: "ten-forward".into(),
+            source_id: "lr".into(),
+            kind: MediaKind::Photo,
+            title: Some("Ten Forward".into()),
+            headline: None,
+            caption: None,
+            copyright: None,
+            creator: None,
+            captured_at: Some("2369-04-01T20:00:00-08:00".into()),
+            offset_from: None,
+            edited_at_utc: None,
+            camera: None,
+            lens: None,
+            exposure: Exposure::default(),
+            rating: None,
+            pick: None,
+            color_label: None,
+            keywords: Vec::new(),
+            people: Vec::new(),
+            albums: Vec::new(),
+            place: Place::default(),
+            geo: None,
+            h3: Vec::new(),
+            width: None,
+            height: None,
+            duration_seconds: None,
+            file_name: "ten_forward.jpg".into(),
+            folder: None,
+            original: Original::default(),
+            pictures: Pictures::Lightroom {
+                catalog: None,
+                image_id_local: 1,
+                file_uuid: "F1".into(),
+            },
+        }
+    }
+
+    /// A grid index holding only what `list` reads, with one more photo
+    /// in it each call.
+    async fn index_photo(root: &Path, uuid: &str, photo_json: &str, touched: &str) {
+        let db = datalib_runtime::layout::grid_index_db(root);
+        std::fs::create_dir_all(db.parent().unwrap()).unwrap();
+        let opts = SqliteConnectOptions::new()
+            .filename(&db)
+            .create_if_missing(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        for (_, ddl) in datalib_schema::source_photos::DDL {
+            sqlx::query(*ddl).execute(&pool).await.unwrap();
+        }
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS grid_rows (uuid TEXT PRIMARY KEY, touched_at_utc TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO source_photos VALUES (?1, ?1, 'lr', ?2)")
+            .bind(uuid)
+            .bind(photo_json)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO grid_rows VALUES (?, ?)")
+            .bind(uuid)
+            .bind(touched)
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+    }
+
+    async fn list_all(root: &Path) -> Result<serde_json::Value, ApiError> {
+        let listed = list(
+            State(Arc::new(root.to_path_buf())),
+            Query(ListQuery::default()),
+        )
+        .await;
+        listed.map(|Json(body)| body)
+    }
+
+    /// A photo a newer build wrote, with a kind this one does not know,
+    /// left the gallery as if the photo were not there.
+    #[tokio::test]
+    async fn a_photo_that_does_not_read_fails_the_list() {
+        let root = tempfile::tempdir().unwrap();
+        let good = serde_json::to_string(&ten_forward()).unwrap();
+        index_photo(root.path(), "ten-forward", &good, "2369-04-01T00:00:00Z").await;
+        let Ok(body) = list_all(root.path()).await else {
+            panic!("a readable photo failed the list");
+        };
+        assert_eq!(body["photos"][0]["uuid"], "ten-forward");
+        assert_eq!(body["photos"][0]["title"], "Ten Forward");
+
+        let bad = r#"{"uuid": "holodeck-3", "kind": "hologram"}"#;
+        index_photo(root.path(), "holodeck-3", bad, "2369-04-02T00:00:00Z").await;
+        match list_all(root.path()).await {
+            Ok(body) => panic!("listed as {body}"),
+            Err(ApiError(status, msg)) => {
+                assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+                assert!(msg.contains("holodeck-3"), "{msg}");
+            }
+        }
+    }
 }

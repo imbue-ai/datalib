@@ -181,9 +181,12 @@ async fn mirror_inputs(
     // HEAD ends on the newest state, mirrored under this run's filters.
     // When it already is, the mirror changes nothing and commits nothing.
     if let Some(catalog) = inputs.catalog {
-        let stats = unpack::mirror_file(pool, catalog, &options, progress)
+        let Some(stats) = unpack::mirror_file_or_report(pool, catalog, &options, progress, found)
             .await
-            .with_context(|| format!("mirror the catalog {}", catalog.display()))?;
+            .with_context(|| format!("mirror the catalog {}", catalog.display()))?
+        else {
+            return Ok(run);
+        };
         let msg = format!(
             "download {label}: catalog {}\n\n{}",
             catalog.display(),

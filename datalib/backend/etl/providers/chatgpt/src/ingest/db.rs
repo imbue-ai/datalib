@@ -53,13 +53,20 @@ impl RawDb {
     // ── `me` ────────────────────────────────────────────────────────
 
     pub async fn load_me(&self) -> Result<Option<Value>> {
-        let row = sqlx::query("SELECT json(payload) AS payload FROM me ORDER BY id LIMIT 1")
+        let row = sqlx::query("SELECT id, json(payload) AS payload FROM me ORDER BY id LIMIT 1")
             .fetch_optional(self.pool())
             .await
             .context("select me")?;
         let Some(row) = row else { return Ok(None) };
         let payload: Option<String> = row.try_get("payload").context("me payload")?;
-        Ok(payload.and_then(|s: String| serde_json::from_str(&s).ok()))
+        payload
+            .map(|s| {
+                serde_json::from_str(&s).with_context(|| {
+                    let id: String = row.try_get("id").unwrap_or_default();
+                    format!("me {id}: the payload does not parse")
+                })
+            })
+            .transpose()
     }
 
     // ── what the store lists ───────────────────────────────────────
@@ -367,6 +374,29 @@ mod tests {
         let loaded = db.load_me().await.unwrap().expect("me present");
         assert_eq!(loaded["id"], "u1");
         assert_eq!(loaded["email"], "x@y");
+    }
+
+    /// A stored `me` that would not parse read as no account, which
+    /// skips the check that keeps one account's export from pruning
+    /// another's conversations. `1e999` passes SQLite's `json()` and
+    /// overflows serde_json's f64.
+    #[tokio::test]
+    async fn a_me_that_does_not_parse_is_an_error() {
+        let d = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&d.path().join("c.doltlite_db")).await.unwrap();
+        sqlx::query(r#"INSERT INTO me (id, payload) VALUES ('u1', '{"id": "u1"}')"#)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let me = db.load_me().await.unwrap().expect("a parsed me");
+        assert_eq!(me["id"], "u1");
+
+        sqlx::query(r#"UPDATE me SET payload = '{"id": "u1", "warp": 1e999}'"#)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let err = db.load_me().await.unwrap_err();
+        assert!(format!("{err:#}").contains("u1"), "{err:#}");
     }
 
     fn conversation(id: &str, files: &[&str]) -> Conversation {

@@ -143,13 +143,20 @@ impl RawDb {
 
     pub async fn load_workspace(&self) -> Result<Option<Value>> {
         let row =
-            sqlx::query("SELECT json(payload) AS payload FROM workspaces ORDER BY id LIMIT 1")
+            sqlx::query("SELECT id, json(payload) AS payload FROM workspaces ORDER BY id LIMIT 1")
                 .fetch_optional(self.pool())
                 .await
                 .context("select workspace")?;
         let Some(row) = row else { return Ok(None) };
         let payload: Option<String> = row.try_get("payload").context("workspace payload")?;
-        Ok(payload.and_then(|s| serde_json::from_str(&s).ok()))
+        payload
+            .map(|s| {
+                serde_json::from_str(&s).with_context(|| {
+                    let id: String = row.try_get("id").unwrap_or_default();
+                    format!("workspace {id}: the payload does not parse")
+                })
+            })
+            .transpose()
     }
 
     // ── users ───────────────────────────────────────────────────────
@@ -1425,6 +1432,30 @@ mod tests {
         let w = db.load_workspace().await.unwrap().expect("workspace");
         assert_eq!(w["team_id"], "T1");
         assert_eq!(db.cached_team_id().await.unwrap().as_deref(), Some("T1"));
+    }
+
+    /// A workspace payload that would not parse read as no workspace.
+    /// `1e999` passes SQLite's `json()` and overflows serde_json's f64.
+    #[tokio::test]
+    async fn a_workspace_that_does_not_parse_is_an_error() {
+        let d = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&d.path().join("s.doltlite_db")).await.unwrap();
+        db.upsert_workspace(&json!({"team_id": "T1", "team": "Enterprise"}))
+            .await
+            .unwrap();
+        let w = db
+            .load_workspace()
+            .await
+            .unwrap()
+            .expect("a parsed workspace");
+        assert_eq!(w["team"], "Enterprise");
+
+        sqlx::query(r#"UPDATE workspaces SET payload = '{"team_id": "T1", "warp": 1e999}'"#)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let err = db.load_workspace().await.unwrap_err();
+        assert!(format!("{err:#}").contains("T1"), "{err:#}");
     }
 
     #[tokio::test]

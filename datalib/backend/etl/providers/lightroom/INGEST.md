@@ -79,11 +79,14 @@ SQLite opens a 0-byte file as an empty database, so a catalog truncated
 or replaced by a placeholder reads as one with no tables, and the drop
 above would empty the mirror. The engine refuses any source that leaves
 it no table to mirror — no tables at all, or filters that match none —
-before it drops anything (`NothingToMirror`). Run through
-`mirror::run_or_report` inside a download's problem collector, that is
-a `phase:source` row and the run seals with the mirror as it was;
-through `mirror::run`, it fails the run. A file that is not SQLite at
-all fails at the `ATTACH` the same way.
+before it drops anything (`NothingToMirror`). It refuses a source
+table named like one the store keeps for itself, `problems` or a
+provider's sidecar, the same way (`TableCollides`); the fix is to
+exclude that table. Run through `mirror::run_or_report` inside a
+download's problem collector, as every source's own file is, either
+refusal is a `phase:source` row and the run seals with the mirror as it
+was; through `mirror::run`, it fails the run. A file that is not SQLite
+at all fails at the `ATTACH` the same way.
 
 ### A source that evicts: `append_only`
 

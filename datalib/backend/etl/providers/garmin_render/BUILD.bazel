@@ -36,6 +36,7 @@ rust_test(
     size = "small",
     crate = ":datalib_etl_garmin_render",
     edition = "2021",
+    deps = ["@datalib_crates//:tempfile"],
 )
 
 # Ingest the TNG fixture through playback, then render: the page, its

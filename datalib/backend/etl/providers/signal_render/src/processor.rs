@@ -70,6 +70,28 @@ impl SourceRender for SignalRender {
             })
             .collect();
         ctx.report_entity_problems(&ReadScope::Whole(vec!["recipients"]), &aci_rows)?;
+        let orphan_rows: Vec<ProblemRow> = parsed
+            .orphan_chats
+            .iter()
+            .map(|(chat_id, messages)| {
+                ProblemRow::new(
+                    ctx.name,
+                    Stage::Parse,
+                    Scope::Entity(&format!("chats:{chat_id}")),
+                    None,
+                    Outcome::Dropped,
+                    Problem::explained(
+                        Reason::NoIdentity,
+                        None,
+                        &format!(
+                            "{messages} messages name this chat, which the backup does not hold"
+                        ),
+                    ),
+                    Some(self.render_version()),
+                )
+            })
+            .collect();
+        ctx.report_entity_problems(&ReadScope::Whole(vec!["chats"]), &orphan_rows)?;
         let mut on_doc = |md| ctx.emit_doc(md);
         let summary = render_all(
             &parsed,
@@ -80,6 +102,9 @@ impl SourceRender for SignalRender {
             ctx.page_size.bytes,
         )
         .context("signal render_all")?;
+        for u in &summary.unrendered {
+            ctx.report_document_failed(&u.markdown_uuid, &u.why, Some(self.render_version()))?;
+        }
         // A chat this run looked at that came back with no items builds
         // no chat at all, so chat-common never sees it: declared with
         // nothing, its documents go. The rendered ones follow and

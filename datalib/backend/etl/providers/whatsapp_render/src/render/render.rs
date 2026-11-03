@@ -609,6 +609,105 @@ mod tests {
         assert_eq!(docs.len(), 1, "rendered {docs:?}");
     }
 
+    /// Rows parse cannot place in a chat were dropped with a log line
+    /// only, and an attachment missing from the backup was a count in
+    /// the log; each is now something the problems sink can carry. The
+    /// rows beside them that do place, and an attachment the backup
+    /// holds, say nothing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn rows_parse_drops_and_media_it_lacks_are_reported() {
+        use crate::render::parse::Dropped;
+        use datalib_schema::problems::Reason;
+
+        let td = tempfile::tempdir().expect("tempdir");
+        let raw_dir = td.path().join("raw");
+        std::fs::create_dir_all(&raw_dir).expect("mkdir raw");
+        let db_path = datalib_etl::doltlite_raw::db_path_for(&raw_dir);
+        let pool = open_doltlite(&db_path, MSGSTORE_DDL)
+            .await
+            .expect("open doltlite");
+        if !has_dolt_extensions(&pool).await {
+            return;
+        }
+        for q in [
+            "SELECT dolt_config('user.name', 'datalib-test')",
+            "SELECT dolt_config('user.email', 'test@datalib.local')",
+        ] {
+            sqlx::query(q).execute(&pool).await.expect("dolt_config");
+        }
+        seed_chat(&pool, 1, "picard@s.whatsapp.net", "k_p1", "Engage.").await;
+        for q in [
+            // A chat whose jid row is gone.
+            "INSERT INTO chat (_id, jid_row_id, subject) VALUES (2, 77, 'Ten Forward')",
+            // A message in no chat, a second with message 1's natural
+            // key, and the msgstore seed row, which is no message.
+            "INSERT INTO message (_id, chat_row_id, key_id, from_me, timestamp, message_type, \
+                text_data, sort_id) VALUES \
+                (2, 99, 'k_lost', 0, 1700000000000, 0, 'Red alert.', 1), \
+                (3, 1, 'k_p1', 0, 1700000001000, 0, 'Engage, again.', 2), \
+                (4, -1, '-1', 0, NULL, 0, NULL, 0), \
+                (5, 1, 'k_p2', 0, 1700000004000, 1, NULL, 3)",
+            // Message 1's photo is not in the backup; message 5's is.
+            "INSERT INTO message_media (message_row_id, file_path, mime_type) VALUES \
+                (1, 'Media/WhatsApp Images/IMG-ENTERPRISE.jpg', 'image/jpeg'), \
+                (5, 'Media/WhatsApp Images/IMG-STARGAZER.jpg', 'image/jpeg')",
+            "INSERT INTO wa_media_files (blake3, relative_path, size_bytes, mime_type) VALUES \
+                ('5ea85bd0fc9b4b9c5ef4d8a1a7c2e3f405b6c7d8e9fa0b1c2d3e4f5a6b7c8d9e', \
+                 'Media/WhatsApp Images/IMG-STARGAZER.jpg', 768, 'image/jpeg')",
+            // A reaction in no chat, one whose message is gone, and one
+            // that lands.
+            "INSERT INTO message_add_on (_id, chat_row_id, key_id, from_me, \
+                parent_message_row_id, timestamp) VALUES \
+                (1, 99, 'r1', 0, 1, 1700000002000), (2, 1, 'r2', 0, 42, 1700000003000), \
+                (3, 1, 'r3', 1, 1, 1700000005000)",
+            "INSERT INTO message_add_on_reaction (message_add_on_row_id, reaction) VALUES \
+                (1, '🖖'), (2, '🖖'), (3, '🖖')",
+        ] {
+            sqlx::query(q).execute(&pool).await.expect("seed");
+        }
+        commit_run(&pool, "seed").await.expect("commit_run");
+        pool.close().await;
+
+        let parsed = tokio::task::spawn_blocking(move || {
+            let range = RawRange {
+                cursor: None,
+                pin: None,
+                stale: None,
+            };
+            parse(&raw_dir, Period::All, "test", range)
+                .expect("parse")
+                .expect("a mirrored store")
+        })
+        .await
+        .expect("spawn_blocking joined");
+
+        let mut dropped: Vec<String> = parsed.dropped.iter().map(Dropped::entity_id).collect();
+        dropped.sort();
+        assert_eq!(
+            dropped,
+            [
+                "chat:2",
+                "message:2",
+                "message:3",
+                "message_add_on:1",
+                "message_add_on:2"
+            ]
+        );
+        assert!(parsed
+            .dropped
+            .iter()
+            .all(|d| d.problem.reason == Reason::NoIdentity));
+        assert_eq!(parsed.chats.len(), 1, "only the chat with a jid renders");
+        let items: Vec<_> = parsed.chats[0].buckets[0].items.iter().collect();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].problems.len(), 1, "{:?}", items[0].problems);
+        assert_eq!(items[0].problems[0].reason, Reason::FetchFailed);
+        assert!(items[0].problems[0].sample.contains("IMG-ENTERPRISE.jpg"));
+        assert_eq!(items[0].reactions.len(), 1, "the reaction that lands");
+        assert!(items[1].problems.is_empty(), "{:?}", items[1].problems);
+        assert!(items[1].attachments[0].ref_id.is_some());
+    }
+
     /// One jid, chat and message, all sharing `rowid` — the shape the
     /// mirror engine lays down from a real msgstore.
     async fn seed_chat(pool: &SqlitePool, rowid: i64, chat_jid: &str, key_id: &str, text: &str) {

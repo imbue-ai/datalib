@@ -54,6 +54,10 @@ pub struct ParsedSignal {
     /// read, by recipient id, with what it looked like. The recipient is
     /// kept without it; the processor reports each.
     pub aci_unreadable: Vec<(String, String)>,
+    /// Chat ids that `chat_items` rows name and `chats` does not hold,
+    /// with how many messages each has. Read whole every run, cold or
+    /// incremental, and rendered by neither; the processor reports each.
+    pub orphan_chats: Vec<(String, i64)>,
     /// Chats indexed by `chat_id` for lookup from `DocBucket`. The
     /// chats themselves carry no items — each item ends up in the
     /// matching bucket in `docs`.
@@ -219,6 +223,7 @@ async fn parse_open(
 
     let (recipients, aci_unreadable) = load_recipients(&pool).await?;
     let chats = load_chats(&pool).await?;
+    let orphan_chats = load_orphan_chats(&pool).await?;
 
     // ── Phase 1: which chats changed since the cursor? ────────────
     let scan = scan_diff(&pool, range, &pin, source_id, &chats).await?;
@@ -227,6 +232,13 @@ async fn parse_open(
     let (to_load_chats, docs_skipped) = match &scan.render {
         None => {
             let ids = load_all_chat_ids(&pool).await?;
+            // The incremental load below keeps only chats that exist, so
+            // the cold one must too, or the two disagree on a message
+            // whose chat is gone.
+            let ids = ids
+                .into_iter()
+                .filter(|id| chats.contains_key(id))
+                .collect();
             (ids, 0usize)
         }
         Some(changed) => {
@@ -267,6 +279,7 @@ async fn parse_open(
     Ok(ParsedSignal {
         recipients,
         aci_unreadable,
+        orphan_chats,
         chats,
         docs,
         docs_skipped,
@@ -368,6 +381,17 @@ async fn load_chats(pool: &sqlx::SqlitePool) -> Result<HashMap<String, ParsedCha
         );
     }
     Ok(chats)
+}
+
+async fn load_orphan_chats(pool: &sqlx::SqlitePool) -> Result<Vec<(String, i64)>> {
+    sqlx::query_as(
+        "SELECT i.chat_id, COUNT(*) FROM chat_items i \
+         WHERE NOT EXISTS (SELECT 1 FROM chats c WHERE c.id = i.chat_id) \
+         GROUP BY i.chat_id ORDER BY i.chat_id",
+    )
+    .fetch_all(pool)
+    .await
+    .context("find messages whose chat is gone")
 }
 
 async fn load_all_chat_ids(pool: &sqlx::SqlitePool) -> Result<HashSet<String>> {
@@ -782,7 +806,7 @@ mod load_tests {
     use datalib_etl::blob_cas::CasEdgeRow;
     use datalib_etl::bulk::SQLITE_MAX_VARIABLES;
     use datalib_etl::doltlite_raw::WirePayloadRow;
-    use datalib_etl_signal::ingest::schema_raw::{ChatItemAttachmentRow, ChatItemRow};
+    use datalib_etl_signal::ingest::schema_raw::{ChatItemAttachmentRow, ChatItemRow, ChatRow};
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
 
@@ -821,6 +845,38 @@ mod load_tests {
 
         assert_eq!(docs.len(), n);
         assert!(docs.iter().all(|d| d.items.len() == 1));
+    }
+
+    /// Messages whose `chats` row is gone were loaded by a cold render
+    /// only, then skipped with a log line; each such chat is now named.
+    #[tokio::test]
+    async fn messages_whose_chat_is_gone_are_counted_by_chat() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
+            .connect_with(SqliteConnectOptions::from_str("sqlite::memory:").unwrap())
+            .await
+            .unwrap();
+        for ddl in [ChatRow::ddl(), ChatItemRow::ddl()] {
+            sqlx::query(sqlx::AssertSqlSafe(ddl))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        for q in [
+            "INSERT INTO chats (id, recipient_id, payload) VALUES ('enterprise', 'picard', '{}')",
+            "INSERT INTO chat_items (id, chat_id, author_id, date_sent, payload) VALUES \
+                ('i1', 'enterprise', 'worf', 1, '{}'), \
+                ('i2', 'stargazer', 'worf', 2, '{}'), \
+                ('i3', 'stargazer', 'worf', 3, '{}')",
+        ] {
+            sqlx::query(q).execute(&pool).await.unwrap();
+        }
+        assert_eq!(
+            load_orphan_chats(&pool).await.unwrap(),
+            [("stargazer".to_string(), 2)]
+        );
     }
 }
 

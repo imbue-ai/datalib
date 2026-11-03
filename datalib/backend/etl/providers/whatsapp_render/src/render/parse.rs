@@ -23,16 +23,46 @@ use datalib_etl_chat_common::{
 };
 use datalib_etl_render::inputs::{Inputs, RawRange};
 use datalib_handle::Handle;
+use datalib_schema::problems::{Problem, Reason};
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use super::ids;
 
-/// What `parse` returns to render: the chat tree, and the commit it was
-/// read at, which render reads the chats' attachment bytes at.
+/// What `parse` returns to render: the chat tree, the commit it was
+/// read at, which render reads the chats' attachment bytes at, and the
+/// rows it could not place in the tree.
 pub struct ParsedWhatsApp {
     pub chats: Vec<NormalizedChat>,
     pub commit: String,
+    pub dropped: Vec<Dropped>,
+}
+
+/// The tables parse reads every row of, so its [`Dropped`] report is
+/// whole for them.
+pub const READ_WHOLE: &[&str] = &["chat", "message", "message_add_on"];
+
+/// A row of one of [`READ_WHOLE`]'s tables that parse dropped, and why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Dropped {
+    pub table: &'static str,
+    pub rowid: i64,
+    pub problem: Problem,
+}
+
+impl Dropped {
+    fn new(table: &'static str, rowid: i64, why: &str) -> Self {
+        Dropped {
+            table,
+            rowid,
+            problem: Problem::explained(Reason::NoIdentity, None, why),
+        }
+    }
+
+    /// The sweep key, spelled as `Unparsed::entity_id` spells one.
+    pub fn entity_id(&self) -> String {
+        format!("{}:{}", self.table, self.rowid)
+    }
 }
 
 /// The natural key of a message, resolved from its rowid.
@@ -119,13 +149,18 @@ async fn parse_async(
         .fetch_all(&pool)
         .await
         .context("select chat")?;
+    let mut dropped: Vec<Dropped> = Vec::new();
     let mut chats: Vec<ChatHeader> = Vec::with_capacity(chat_rows.len());
     let mut chat_idx_by_rowid: HashMap<i64, usize> = HashMap::with_capacity(chat_rows.len());
     for r in &chat_rows {
         let rowid: i64 = r.get("_id");
         let jid_row_id: Option<i64> = r.get("jid_row_id");
         let Some(chat_jid) = jid_row_id.and_then(|i| jids.get(&i).cloned()) else {
-            tracing::warn!(chat_rowid = rowid, "chat: jid_row_id not in jid; dropping");
+            dropped.push(Dropped::new(
+                "chat",
+                rowid,
+                &format!("its jid_row_id {jid_row_id:?} names no jid row, so the chat has no id"),
+            ));
             continue;
         };
         // Every row this chat reads, recorded as it is read: its own
@@ -181,18 +216,13 @@ async fn parse_async(
         let key_id: String = r.get("key_id");
         let Some(&idx) = chat_idx_by_rowid.get(&chat_row_id) else {
             // Every msgstore ships a synthetic seed row at `_id=1` — an
-            // Android schema artifact, not a message. Other orphan rows
-            // still WARN, since a pruned chat or a corrupt source is worth
-            // flagging.
-            if chat_row_id == -1 && key_id == "-1" {
-                tracing::debug!(message_rowid = rowid, "message: dropping msgstore seed row");
-            } else {
-                tracing::warn!(
-                    message_rowid = rowid,
-                    chat_row_id,
-                    key_id,
-                    "message: chat_row_id not in chat; dropping"
-                );
+            // Android schema artifact, not a message.
+            if chat_row_id != -1 || key_id != "-1" {
+                dropped.push(Dropped::new(
+                    "message",
+                    rowid,
+                    &format!("its chat_row_id {chat_row_id} names no chat this render kept"),
+                ));
             }
             continue;
         };
@@ -205,11 +235,14 @@ async fn parse_async(
         // Two rows with one natural key would mint one uuid twice; keep
         // the first, the way the store's old unique key did.
         if !seen_keys.insert(key.clone()) {
-            tracing::warn!(
-                message_rowid = rowid,
-                ?key,
-                "message: duplicate natural key; dropping"
-            );
+            dropped.push(Dropped::new(
+                "message",
+                rowid,
+                &format!(
+                    "another message in {} has its key_id {} and from_me {}; the first is kept",
+                    key.chat_jid, key.key_id, key.from_me
+                ),
+            ));
             continue;
         }
         msg_key_by_rowid.insert(rowid, key);
@@ -230,7 +263,7 @@ async fn parse_async(
     .await
     .context("select message_media")?;
     let mut media_by_msg: HashMap<MsgKey, Vec<NormalizedAttachment>> = HashMap::new();
-    let mut unresolved: Vec<String> = Vec::new();
+    let mut unresolved: HashMap<MsgKey, Vec<String>> = HashMap::new();
     for r in &media_rows {
         let message_row_id: i64 = r.get("message_row_id");
         let Some(key) = msg_key_by_rowid.get(&message_row_id) else {
@@ -252,15 +285,16 @@ async fn parse_async(
         }
         // `None` means either the file went missing between scan and put, or
         // the message's `file_path` didn't resolve to a `wa_media_files` row.
-        // Either way the renderer's "(not yet fetched)" placeholder fires —
-        // which is indistinguishable, in the rendered markdown, from a backup
-        // whose `Media/` tree was never copied. The warning below is what tells
-        // the two apart, so don't drop it: a join that silently matched nothing
-        // is exactly how every attachment once rendered as a placeholder while
-        // its bytes sat in the CAS.
+        // Either way the renderer's "(not yet fetched)" placeholder fires,
+        // so the item's problem is what says which attachment it is: a join
+        // that silently matched nothing is exactly how every attachment once
+        // rendered as a placeholder while its bytes sat in the CAS.
         if ref_id.is_none() {
             if let Some(p) = file_path.as_deref() {
-                unresolved.push(p.to_string());
+                unresolved
+                    .entry(key.clone())
+                    .or_default()
+                    .push(p.to_string());
             }
         }
         media_by_msg
@@ -280,18 +314,6 @@ async fn parse_async(
                 ref_id,
             });
     }
-    if !unresolved.is_empty() {
-        unresolved.sort();
-        unresolved.dedup();
-        tracing::warn!(
-            event = "wa_media_unresolved",
-            count = unresolved.len(),
-            total_media = media_rows.len(),
-            examples = %unresolved.iter().take(3).cloned().collect::<Vec<_>>().join(", "),
-            "message_media.file_path matched no wa_media_files row; \
-             those attachments render as placeholders",
-        );
-    }
 
     // 4) Reactions: an add-on row keyed like a message, plus its emoji.
     let react_rows = sqlx::query(
@@ -306,17 +328,29 @@ async fn parse_async(
     .context("select message_add_on")?;
     let mut reactions_by_parent: HashMap<MsgKey, Vec<NormalizedReaction>> = HashMap::new();
     for r in &react_rows {
-        let Some(parent) = msg_key_by_rowid.get(&r.get::<i64, _>("parent_message_row_id")) else {
+        let addon_row_id: i64 = r.get("_id");
+        let parent_row_id: i64 = r.get("parent_message_row_id");
+        let Some(parent) = msg_key_by_rowid.get(&parent_row_id) else {
+            dropped.push(Dropped::new(
+                "message_add_on",
+                addon_row_id,
+                &format!("the reaction's message {parent_row_id} is not one this render kept"),
+            ));
             continue;
         };
         let chat_row_id: Option<i64> = r.get("chat_row_id");
         let Some(&chat_idx) = chat_row_id.and_then(|i| chat_idx_by_rowid.get(&i)) else {
-            tracing::warn!("message_add_on: chat_row_id not in chat; dropping reaction");
+            dropped.push(Dropped::new(
+                "message_add_on",
+                addon_row_id,
+                &format!(
+                    "the reaction's chat_row_id {chat_row_id:?} names no chat this render kept"
+                ),
+            ));
             continue;
         };
         let chat_jid = chats[chat_idx].chat_jid.as_str();
         let inputs = &chats[chat_idx].inputs;
-        let addon_row_id: i64 = r.get("_id");
         inputs.read("message_add_on", &addon_row_id.to_string());
         inputs.read("message_add_on_reaction", &addon_row_id.to_string());
         let key_id: String = r.get("key_id");
@@ -391,7 +425,7 @@ async fn parse_async(
             },
             integer_order,
         );
-        let item = build_item(
+        let mut item = build_item(
             source_id,
             key,
             sender_jid,
@@ -401,6 +435,13 @@ async fn parse_async(
             media_by_msg.remove(key).unwrap_or_default(),
             reactions_by_parent.remove(key).unwrap_or_default(),
             unread,
+        );
+        item.problems.extend(
+            unresolved
+                .remove(key)
+                .into_iter()
+                .flatten()
+                .map(|path| unresolved_media(&path)),
         );
         let period_key = match r.get::<Option<i64>, _>("timestamp") {
             Some(ts) => period.key_for_ms(ts),
@@ -466,7 +507,21 @@ async fn parse_async(
     let commit = reader.pin().commit().to_string();
     reader.close().await;
 
-    Ok(Some(ParsedWhatsApp { chats: out, commit }))
+    Ok(Some(ParsedWhatsApp {
+        chats: out,
+        commit,
+        dropped,
+    }))
+}
+
+/// An attachment whose `file_path` matched no file the download found in
+/// the backup's `Media/` tree: it renders as a placeholder.
+fn unresolved_media(path: &str) -> Problem {
+    Problem::explained(
+        Reason::FetchFailed,
+        Some("attachment".to_string()),
+        &format!("{path} is not among the media files the backup holds"),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]

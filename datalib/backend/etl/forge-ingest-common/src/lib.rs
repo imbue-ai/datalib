@@ -811,25 +811,30 @@ pub async fn prune_children(
 
 /// The account the store was synced as: its one `self_identity` row.
 pub async fn load_self_identity(pool: &SqlitePool) -> Result<Option<Value>> {
-    use sqlx::Row as _;
     let row = sqlx::query(
-        "SELECT json(payload) AS payload FROM self_identity \
+        "SELECT id, json(payload) AS payload FROM self_identity \
          WHERE payload IS NOT NULL ORDER BY id LIMIT 1",
     )
     .fetch_optional(pool)
     .await
     .context("select self_identity")?;
     let Some(row) = row else { return Ok(None) };
-    let payload: Option<String> = row.try_get("payload").context("self_identity payload")?;
-    Ok(payload.and_then(|s| serde_json::from_str(&s).ok()))
+    row_payload(&row).context("self_identity")
 }
 
-/// A loaded row's `payload` column, parsed; `None` for a row the load
-/// steps over.
+/// A loaded row's `payload` column, parsed; `None` only for a SQL `NULL`.
+/// A payload that does not parse is an error naming the row's `id`.
 pub fn row_payload(row: &sqlx::sqlite::SqliteRow) -> Result<Option<Value>> {
     use sqlx::Row as _;
     let payload: Option<String> = row.try_get("payload").context("payload column")?;
-    Ok(payload.and_then(|s| serde_json::from_str(&s).ok()))
+    payload
+        .map(|s| {
+            serde_json::from_str(&s).with_context(|| {
+                let id: String = row.try_get("id").unwrap_or_default();
+                format!("row {id}: the payload does not parse")
+            })
+        })
+        .transpose()
 }
 
 /// A payload's string field, owned. For the promoted columns of a raw row.
@@ -1017,6 +1022,48 @@ mod tests {
         let ordered = never_fetched_first(&pool, T, owed).await.unwrap();
         let keys: Vec<&str> = ordered.iter().map(|l| l.key.as_str()).collect();
         assert_eq!(keys, ["o/r#4", "o/r#3", "o/r#2"]);
+        pool.close().await;
+    }
+
+    /// A payload SQLite's `json()` accepts and serde_json refuses: the
+    /// number overflows an f64.
+    const UNPARSEABLE: &str = r#"{"login": "picard", "warp": 1e999}"#;
+
+    /// A stored payload that would not parse read as no row at all, so
+    /// the forge renders lost the record and the self identity without
+    /// a word.
+    #[tokio::test]
+    async fn a_payload_that_does_not_parse_is_an_error_not_a_missing_row() {
+        let d = tempfile::tempdir().unwrap();
+        let ddl =
+            ["CREATE TABLE IF NOT EXISTS self_identity (id TEXT PRIMARY KEY, payload TEXT NULL)"];
+        let pool = datalib_etl::doltlite_raw::open(&d.path().join("f.doltlite_db"), &ddl)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO self_identity (id, payload) VALUES ('me', ?)")
+            .bind(r#"{"login": "picard"}"#)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let me = load_self_identity(&pool)
+            .await
+            .unwrap()
+            .expect("a parsed self");
+        assert_eq!(me["login"], "picard");
+
+        sqlx::query("UPDATE self_identity SET payload = ?")
+            .bind(UNPARSEABLE)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let err = load_self_identity(&pool).await.unwrap_err();
+        assert!(format!("{err:#}").contains("row me"), "{err:#}");
+
+        let row = sqlx::query("SELECT id, json(payload) AS payload FROM self_identity")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(row_payload(&row).is_err());
         pool.close().await;
     }
 }

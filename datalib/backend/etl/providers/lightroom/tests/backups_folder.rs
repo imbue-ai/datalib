@@ -882,6 +882,32 @@ async fn an_unchanged_catalog_commits_nothing() -> Result<()> {
     Ok(())
 }
 
+/// A live catalog the mirror refuses — here, a table named like the
+/// store's own `problems` — failed the step with nothing on its Manage
+/// row; now it leaves HEAD as it was and is a problem.
+#[tokio::test]
+async fn a_live_catalog_the_mirror_refuses_is_a_problem() -> Result<()> {
+    let f = Fixture::new();
+    let live = f.live(&[]).await;
+    let run = f.sync_catalog(&options(), &live).await?;
+    assert!(run.live.is_some(), "a clean catalog mirrors");
+    assert!(problem_keys(&f).await.is_empty());
+
+    let live = f
+        .live(&["CREATE TABLE Problems (id INTEGER PRIMARY KEY, what TEXT)"])
+        .await;
+    let run = f.sync_catalog(&options(), &live).await?;
+    assert!(run.live.is_none(), "{run:?}");
+    assert_eq!(problem_keys(&f).await, ["phase:source"]);
+    let pool = f.read().await;
+    assert!(
+        table_exists(&pool, "Adobe_images").await,
+        "the mirror kept the catalog"
+    );
+    pool.close().await;
+    Ok(())
+}
+
 #[tokio::test]
 async fn a_missing_catalog_fails_the_run() {
     let f = Fixture::new();

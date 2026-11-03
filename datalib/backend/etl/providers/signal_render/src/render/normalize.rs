@@ -18,6 +18,14 @@ use datalib_etl_render::inputs::{Inputs, Lookup};
 use super::ids;
 use super::parse::{ParsedChat, ParsedChatItem, ParsedRecipient, ParsedSignal};
 
+/// A bucket whose document this run could not build, and why: a
+/// `problems` row on that document rather than a skip nobody sees.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unrendered {
+    pub markdown_uuid: String,
+    pub why: String,
+}
+
 /// One `NormalizedChat` per *bucket*, not per chat.
 ///
 /// `chat-common` keys attachment bundles by `NormalizedChat::id`, and
@@ -27,17 +35,19 @@ use super::parse::{ParsedChat, ParsedChatItem, ParsedRecipient, ParsedSignal};
 /// bytes around. Nothing downstream notices: each document is filed by
 /// its own id either way, and the chat-level grid row was already one
 /// per document.
-pub fn to_chats(parsed: &ParsedSignal, source_id: &str) -> Vec<NormalizedChat> {
+pub fn to_chats(parsed: &ParsedSignal, source_id: &str) -> (Vec<NormalizedChat>, Vec<Unrendered>) {
     let mut chats = Vec::with_capacity(parsed.docs.len());
+    let mut unrendered = Vec::new();
 
     for doc in &parsed.docs {
         let Some(chat) = parsed.chats.get(&doc.chat_id) else {
-            tracing::warn!(
-                event = "signal_render_missing_chat",
-                chat_id = %doc.chat_id,
-                period_key = %doc.period_key,
-                "bucket names a chat the parse did not produce; skipping"
-            );
+            unrendered.push(Unrendered {
+                markdown_uuid: ids::period(source_id, &doc.chat_id, &doc.period_key).uuid,
+                why: format!(
+                    "its messages name chat {}, which the parse did not read",
+                    doc.chat_id
+                ),
+            });
             continue;
         };
         let chat_id = ids::chat(source_id, &chat.id);
@@ -96,7 +106,7 @@ pub fn to_chats(parsed: &ParsedSignal, source_id: &str) -> Vec<NormalizedChat> {
             inputs: inputs.declared(),
         });
     }
-    chats
+    (chats, unrendered)
 }
 
 fn to_item(
@@ -311,6 +321,40 @@ fn author_display(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::render::parse::DocBucket;
+
+    /// A bucket whose chat the parse did not read was skipped with a
+    /// log line; its document now carries why it was not rendered. A
+    /// bucket beside it whose chat is there renders.
+    #[test]
+    fn a_bucket_with_no_chat_is_unrendered() {
+        let bucket = |chat_id: &str| DocBucket {
+            chat_id: chat_id.into(),
+            period_key: "2364-03".into(),
+            items: Vec::new(),
+        };
+        let parsed = ParsedSignal {
+            chats: [(
+                "1".to_string(),
+                ParsedChat {
+                    id: "1".into(),
+                    recipient_id: "7".into(),
+                },
+            )]
+            .into(),
+            docs: vec![bucket("1"), bucket("1701")],
+            ..ParsedSignal::default()
+        };
+        let (chats, unrendered) = to_chats(&parsed, "signal");
+        assert_eq!(chats.len(), 1);
+        assert_eq!(chats[0].chat_uuid, ids::chat("signal", "1").uuid);
+        assert_eq!(unrendered.len(), 1);
+        assert_eq!(
+            unrendered[0].markdown_uuid,
+            ids::period("signal", "1701", "2364-03").uuid
+        );
+        assert!(unrendered[0].why.contains("1701"), "{}", unrendered[0].why);
+    }
 
     fn recipient(id: &str, name: &str, number: Option<&str>, aci: &str) -> ParsedRecipient {
         ParsedRecipient {
