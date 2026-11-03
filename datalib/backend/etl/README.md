@@ -394,13 +394,17 @@ What that means here:
 
 - **Batch writes in one transaction.** A render store's transaction is
   one checkpoint interval, the grid index's is one source, a SQLite
-  mirror's is one table, and Linear's download writes through a
-  `raw_store::Batch`, one transaction between two seals; within one of
-  those the order rows arrive in does not matter. The downloads that go
-  through `datalib_etl_web::owed::drain` still commit a transaction per
-  flush (Slack's walk, one per answer), and their stores keep each
-  one's pages until something runs gc. A `Batch` holds the store's one connection while it is open, so a
-  download that adopts one has to read through it too.
+  mirror's is one table, and the Linear, Todoist and Slack downloads
+  write through a `raw_store::Batch`, one transaction between two
+  seals; within one of those the order rows arrive in does not matter.
+  `datalib_etl_web::owed` writes into a batch with `drain_into` and
+  `write_answer_into`. The downloads that go through plain `owed::drain`
+  still commit a transaction per flush, and their stores keep each
+  one's pages until something runs gc. A `Batch` holds the store's one
+  connection while it is open, so a download that adopts one has to
+  read through it too. A download that can write more between two
+  seals than it should hold in memory sets a `byte_limit`, past which
+  the batch commits without sealing (Slack's is 32 MB).
 - **Key for adjacency where the key is ours.** Rows a run writes
   together should sort together: `(device_id, ts_ms)`,
   `"{metric}#{date}"`, and the time-prefixed ids `datalib_id` mints (a

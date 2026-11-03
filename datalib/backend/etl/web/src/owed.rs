@@ -14,7 +14,8 @@
 //! diff between two commits of a store. [`drain`] fetches what is owed,
 //! a batch per request and as many requests at once as the provider
 //! allows, writes what came back a flush at a time in one transaction
-//! each, and records what did not come. A provider is what it lists,
+//! each (or into the caller's [`Batch`], [`drain_into`]), and records
+//! what did not come. A provider is what it lists,
 //! how it fetches a batch, and how it stores one ([`Fetcher`]); how a
 //! stop, a failure, a skip or a give-up is handled is here, once.
 
@@ -25,7 +26,7 @@ use async_trait::async_trait;
 use futures::stream::{FuturesUnordered, StreamExt};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
-use datalib_etl::raw_store::Sealer;
+use datalib_etl::raw_store::{Batch, Sealer};
 use datalib_etl::run_problems::RunProblems;
 use datalib_etl::stop::StopFlag;
 
@@ -66,7 +67,17 @@ impl Held {
 /// Of `listed`, the records `table` does not hold at that version.
 /// Order is the listing's.
 pub async fn owed(pool: &SqlitePool, table: &str, listed: Vec<Listed>) -> Result<Vec<Listed>> {
-    let held = held_versions(pool, table, listed.iter().map(|l| l.key.as_str())).await?;
+    let mut conn = pool.acquire().await.context("reach the store")?;
+    owed_in(&mut conn, table, listed).await
+}
+
+/// [`owed`] on a connection, an open transaction's included.
+pub async fn owed_in(
+    conn: &mut sqlx::SqliteConnection,
+    table: &str,
+    listed: Vec<Listed>,
+) -> Result<Vec<Listed>> {
+    let held = held_versions_in(conn, table, listed.iter().map(|l| l.key.as_str())).await?;
     Ok(listed
         .into_iter()
         .filter(|l| !held.get(&l.key).is_some_and(|h| h.satisfies(&l.version)))
@@ -251,7 +262,8 @@ pub struct Loop<'a> {
     pub batch: usize,
     /// Fetches in flight at once.
     pub concurrency: usize,
-    /// Records per transaction. A stop or a give-up writes what was
+    /// Records per write: a transaction each, or into the caller's
+    /// batch ([`drain_into`]). A stop or a give-up writes what was
     /// answered so far whatever the count.
     pub flush: usize,
     /// Bytes of fetched content per transaction, by [`Fetcher::weight`],
@@ -284,6 +296,28 @@ pub struct Drained {
 /// what was answered is written. An abort is returned after that.
 pub async fn drain<T: Send, F: Fetcher<T>>(
     l: &Loop<'_>,
+    owed: Vec<Listed>,
+    f: &F,
+) -> Result<Drained> {
+    drain_to(l, &mut Sink::Own, owed, f).await
+}
+
+/// [`drain`], each flush written into `writes`, which commits when a
+/// seal is due rather than once a flush. The loop's own pool and sealer
+/// go unused, and `fetch` must not touch the store: the batch holds its
+/// one connection.
+pub async fn drain_into<T: Send, F: Fetcher<T>>(
+    l: &Loop<'_>,
+    writes: &mut Batch<'_>,
+    owed: Vec<Listed>,
+    f: &F,
+) -> Result<Drained> {
+    drain_to(l, &mut Sink::Batch(writes), owed, f).await
+}
+
+async fn drain_to<T: Send, F: Fetcher<T>>(
+    l: &Loop<'_>,
+    sink: &mut Sink<'_, '_>,
     owed: Vec<Listed>,
     f: &F,
 ) -> Result<Drained> {
@@ -338,14 +372,14 @@ pub async fn drain<T: Send, F: Fetcher<T>>(
         }
         let heavy = l.flush_bytes > 0 && pending_bytes >= l.flush_bytes;
         if pending.len() >= flush || heavy || ended.is_some() {
-            write(l, f, &mut pending, &mut done).await?;
+            write(l, sink, f, &mut pending, &mut done).await?;
             pending_bytes = 0;
         }
     }
     // Requests still in flight at a stop or an end are dropped
     // unanswered; their records stay owed.
     drop(in_flight);
-    write(l, f, &mut pending, &mut done).await?;
+    write(l, sink, f, &mut pending, &mut done).await?;
     done.left = total - done.got - done.gone - done.failed - done.skipped;
     match ended {
         None | Some(End::Stopped) => {}
@@ -374,10 +408,31 @@ pub async fn write_answer<T: Send, F: Fetcher<T>>(
     asked: Vec<Listed>,
     answer: std::result::Result<Vec<Fetched<T>>, BatchError>,
 ) -> Result<Drained> {
+    write_answer_to(l, &mut Sink::Own, f, asked, answer).await
+}
+
+/// [`write_answer`] into `writes`, as [`drain_into`] writes a flush.
+pub async fn write_answer_into<T: Send, F: Fetcher<T>>(
+    l: &Loop<'_>,
+    writes: &mut Batch<'_>,
+    f: &F,
+    asked: Vec<Listed>,
+    answer: std::result::Result<Vec<Fetched<T>>, BatchError>,
+) -> Result<Drained> {
+    write_answer_to(l, &mut Sink::Batch(writes), f, asked, answer).await
+}
+
+async fn write_answer_to<T: Send, F: Fetcher<T>>(
+    l: &Loop<'_>,
+    sink: &mut Sink<'_, '_>,
+    f: &F,
+    asked: Vec<Listed>,
+    answer: std::result::Result<Vec<Fetched<T>>, BatchError>,
+) -> Result<Drained> {
     let total = asked.len();
     let mut done = Drained::default();
     match read(l, asked, answer) {
-        Ok(mut answered) => write(l, f, &mut answered, &mut done).await?,
+        Ok(mut answered) => write(l, sink, f, &mut answered, &mut done).await?,
         Err(End::Stopped | End::GaveUp(_)) => done.left = total,
         Err(End::Terminal(said)) => {
             done.left = total;
@@ -431,8 +486,6 @@ impl<T> Outcome<T> {
     }
 }
 
-/// One transaction for everything answered so far: the provider's
-/// content, then what each record is held at or failed with.
 fn weigh<T: Send, F: Fetcher<T>>(f: &F, answered: &[Fetched<T>]) -> usize {
     answered
         .iter()
@@ -443,8 +496,19 @@ fn weigh<T: Send, F: Fetcher<T>>(f: &F, answered: &[Fetched<T>]) -> usize {
         .sum()
 }
 
+/// Where a flush is written.
+enum Sink<'w, 'b> {
+    /// A transaction of its own, then the loop's sealer.
+    Own,
+    /// The caller's batch, which commits when a seal is due.
+    Batch(&'w mut Batch<'b>),
+}
+
+/// Everything answered so far: the provider's content, then what each
+/// record is held at or failed with, in one transaction.
 async fn write<T: Send, F: Fetcher<T>>(
     l: &Loop<'_>,
+    sink: &mut Sink<'_, '_>,
     f: &F,
     pending: &mut Vec<Fetched<T>>,
     done: &mut Drained,
@@ -453,44 +517,60 @@ async fn write<T: Send, F: Fetcher<T>>(
         return Ok(());
     }
     let answered = std::mem::take(pending);
-    let mut tx = l.pool.begin().await.context("begin a flush")?;
-    f.store(&mut tx, &answered).await?;
-    for a in &answered {
+    let rows = answered.len() as u64;
+    match sink {
+        Sink::Own => {
+            let mut tx = l.pool.begin().await.context("begin a flush")?;
+            write_in(l, &mut tx, f, &answered, done).await?;
+            tx.commit().await.context("commit a flush")?;
+            if let Some(sealer) = l.sealer {
+                sealer.wrote(rows).await;
+            }
+        }
+        Sink::Batch(writes) => {
+            write_in(l, writes.tx().await?, f, &answered, done).await?;
+            writes.wrote_bytes(rows, weigh(f, &answered)).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn write_in<T: Send, F: Fetcher<T>>(
+    l: &Loop<'_>,
+    tx: &mut Transaction<'static, Sqlite>,
+    f: &F,
+    answered: &[Fetched<T>],
+    done: &mut Drained,
+) -> Result<()> {
+    f.store(tx, answered).await?;
+    for a in answered {
         let key = a.listed.key.as_str();
         let version = a.listed.version.as_deref();
         match &a.outcome {
             Outcome::Got(_) => {
-                hold(&mut tx, l.table, key, version).await?;
+                hold(tx, l.table, key, version).await?;
                 done.got += 1;
             }
             Outcome::Unusable(_, reason, said) => {
-                hold(&mut tx, l.table, key, version).await?;
-                datalib_etl::doltlite_raw::record_object_unusable(
-                    &mut tx, l.table, key, *reason, said,
-                )
-                .await?;
+                hold(tx, l.table, key, version).await?;
+                datalib_etl::doltlite_raw::record_object_unusable(tx, l.table, key, *reason, said)
+                    .await?;
                 done.got += 1;
             }
             Outcome::Gone => {
-                forget(&mut tx, l.table, key).await?;
+                forget(tx, l.table, key).await?;
                 done.gone += 1;
             }
             Outcome::Failed(said) => {
-                datalib_etl::doltlite_raw::record_object_error(&mut tx, l.table, key, said).await?;
+                datalib_etl::doltlite_raw::record_object_error(tx, l.table, key, said).await?;
                 done.failed += 1;
             }
             Outcome::Skipped(reason, said) => {
-                datalib_etl::doltlite_raw::record_object_skipped(
-                    &mut tx, l.table, key, *reason, said,
-                )
-                .await?;
+                datalib_etl::doltlite_raw::record_object_skipped(tx, l.table, key, *reason, said)
+                    .await?;
                 done.skipped += 1;
             }
         }
-    }
-    tx.commit().await.context("commit a flush")?;
-    if let Some(sealer) = l.sealer {
-        sealer.wrote(answered.len() as u64).await;
     }
     Ok(())
 }
@@ -960,6 +1040,48 @@ mod tests {
                 listed("k4", None)
             ]
         );
+        pool.close().await;
+    }
+
+    /// Into a batch, a drain's flushes are one transaction with
+    /// whatever else the batch holds, committed by the batch and not
+    /// once a flush: a batch dropped keeps none of them, and one
+    /// finished keeps them all.
+    #[tokio::test]
+    async fn a_drain_into_a_batch_commits_nothing_of_its_own() {
+        let d = tempfile::tempdir().unwrap();
+        let pool = store_at(&d).await;
+        let stop = StopFlag::new();
+        let found = RunProblems::unwritten();
+        let l = a_loop(&pool, &stop, &found, 1, 0);
+        let listing: Vec<Listed> = ["a", "b", "c"]
+            .iter()
+            .map(|k| listed(k, Some("v1")))
+            .collect();
+
+        let mut writes = Batch::new(&pool, None);
+        let drained = drain_into(&l, &mut writes, listing.clone(), &Scripted::all_got())
+            .await
+            .unwrap();
+        assert_eq!(drained.got, 3);
+        drop(writes);
+        assert!(
+            bodies(&pool).await.is_empty(),
+            "three flushes, all rolled back"
+        );
+
+        let mut writes = Batch::new(&pool, None);
+        drain_into(&l, &mut writes, listing.clone(), &Scripted::all_got())
+            .await
+            .unwrap();
+        let f = Scripted::all_got();
+        let answer = f.fetch(vec![listed("d", None)]).await;
+        write_answer_into(&l, &mut writes, &f, vec![listed("d", None)], answer)
+            .await
+            .unwrap();
+        writes.finish().await.unwrap();
+        assert_eq!(bodies(&pool).await.len(), 4);
+        assert!(owed(&pool, T, listing).await.unwrap().is_empty());
         pool.close().await;
     }
 

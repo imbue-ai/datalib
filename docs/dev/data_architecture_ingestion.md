@@ -606,7 +606,9 @@ how it lists, how it fetches a batch and how it stores one; how a stop,
 a failure, a skip or a give-up is handled is in `owed.rs`, once. A
 provider whose next request depends on the last answer (Slack's
 newest-first walk) makes its own requests and writes each answer
-through `owed::write_answer`, which writes it as `drain` would.
+through `owed::write_answer`, which writes it as `drain` would. Both
+have an `_into` form that writes into the caller's `raw_store::Batch`,
+one transaction between two seals, instead of a transaction per flush.
 
 The one position kept is upstream's own **delta token** (JMAP `state`,
 Gmail `historyId`, RFC 6578 `sync-token`, Google's `syncToken`,

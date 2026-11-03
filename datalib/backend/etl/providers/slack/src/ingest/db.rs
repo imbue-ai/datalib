@@ -9,7 +9,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use sqlx::{Row, Sqlite, Transaction};
+use sqlx::{Row, Sqlite, SqliteConnection, Transaction};
 
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::bulk::{bulk_upsert_in_tx, BulkUpsertable, EventBatch};
@@ -94,11 +94,7 @@ impl RawDb {
     }
 
     pub async fn record_manifest_sweep(&self, key: &str, now: &DateTime<Utc>) -> Result<()> {
-        let scope = format!("slack:sweep:{key}");
-        dr::upsert_scope_state(self.pool(), &scope, &now.to_rfc3339())
-            .await
-            .context("record manifest sweep marker")?;
-        Ok(())
+        record_sweep(self.pool(), key, now).await
     }
 
     // ── workspace ───────────────────────────────────────────────────
@@ -172,10 +168,10 @@ impl RawDb {
     /// The authors stored messages name that no `users.list` or
     /// `users.info` has answered for, each listed with no version: a
     /// user only has to have been fetched.
-    pub async fn users_owed(&self) -> Result<Vec<Listed>> {
+    pub async fn users_owed(&self, conn: &mut SqliteConnection) -> Result<Vec<Listed>> {
         let ids: Vec<String> =
             sqlx::query_scalar("SELECT id FROM users WHERE payload IS NULL ORDER BY id")
-                .fetch_all(self.pool())
+                .fetch_all(conn)
                 .await
                 .context("select the users owed")?;
         Ok(ids
@@ -186,22 +182,17 @@ impl RawDb {
 
     /// Clears the failed lookup of each user a `users.list` has since
     /// returned. Returns how many.
-    pub async fn settle_listed_users(&self) -> Result<usize> {
+    pub async fn settle_listed_users(&self, tx: &mut Transaction<'_, Sqlite>) -> Result<usize> {
         let ids: Vec<String> = sqlx::query_scalar(
             "SELECT u.id FROM users u JOIN users_bookkeeping b ON b.id = u.id \
              WHERE u.payload IS NOT NULL AND b.last_error IS NOT NULL",
         )
-        .fetch_all(self.pool())
+        .fetch_all(&mut **tx)
         .await
         .context("select the listed users with a failed lookup")?;
-        if ids.is_empty() {
-            return Ok(0);
-        }
-        let mut tx = self.pool().begin().await.context("begin settling users")?;
         for id in &ids {
-            dr::record_object_attempt(&mut tx, UserRow::TABLE, id, None).await?;
+            dr::record_object_attempt(tx, UserRow::TABLE, id, None).await?;
         }
-        tx.commit().await.context("commit settling users")?;
         Ok(ids.len())
     }
 
@@ -398,31 +389,30 @@ impl RawDb {
         Ok(())
     }
 
-    /// One `conversations.history` page, in one transaction: its
+    /// One `conversations.history` page, in `tx` and so together: its
     /// messages, an edge for each file they carry, the stretch of the
     /// channel the page `covered`, and the deletion of what it
     /// `enumerated` and did not return. Returns how many rows went.
     pub async fn store_history_page(
         &self,
+        tx: &mut Transaction<'_, Sqlite>,
         channel_id: &str,
         inputs: &[MessageInput],
         covered: Option<&Span>,
         enumerated: Option<&Enumerated>,
     ) -> Result<usize> {
         let page = prepare(inputs)?;
-        let mut tx = self.pool().begin().await.context("begin history page")?;
-        write_messages(&mut tx, &page).await?;
+        write_messages(tx, &page).await?;
         if let Some(span) = covered {
-            coverage::cover(&mut tx, &history_scope(channel_id), span.clone()).await?;
+            coverage::cover(tx, &history_scope(channel_id), span.clone()).await?;
         }
         let pruned = match enumerated {
             Some(stretch) => {
                 let returned: HashSet<&str> = inputs.iter().map(|m| m.ts.as_str()).collect();
-                prune_enumerated(&mut tx, channel_id, stretch, &returned).await?
+                prune_enumerated(tx, channel_id, stretch, &returned).await?
             }
             None => 0,
         };
-        tx.commit().await.context("commit history page")?;
         self.tape_messages(&page);
         Ok(pruned)
     }
@@ -856,7 +846,11 @@ impl RawDb {
 
     /// Of the edges `rows` carry, the ones without bytes, each with its
     /// message's `ts`: what storing `rows` left owed.
-    pub async fn files_owed_by(&self, rows: &[MessageInput]) -> Result<Vec<(String, Listed)>> {
+    pub async fn files_owed_by(
+        &self,
+        conn: &mut SqliteConnection,
+        rows: &[MessageInput],
+    ) -> Result<Vec<(String, Listed)>> {
         let mut ts_of: HashMap<String, &str> = HashMap::new();
         for m in rows {
             let message_uuid = slack_message_key(&m.team_id, &m.channel_id, &m.ts);
@@ -881,7 +875,7 @@ impl RawDb {
              WHERE id IN (SELECT value FROM json_each(?)) AND blake3 IS NULL ORDER BY id",
         )
         .bind(serde_json::to_string(&keys)?)
-        .fetch_all(self.pool())
+        .fetch_all(conn)
         .await
         .context("list the files just stored messages carry")?;
         Ok(owed
@@ -896,7 +890,11 @@ impl RawDb {
     /// The file object each of `keys` names, as its stored message
     /// carries it: what a fetch asks Slack with. An edge whose message no
     /// longer carries the file is left out.
-    pub async fn file_objects(&self, keys: &[&str]) -> Result<Vec<OwedFile>> {
+    pub async fn file_objects(
+        &self,
+        conn: &mut SqliteConnection,
+        keys: &[&str],
+    ) -> Result<Vec<OwedFile>> {
         let mut out = Vec::with_capacity(keys.len());
         for chunk in keys.chunks(datalib_etl::bulk::SQL_CHUNK) {
             // Audited: the placeholders are one `?` per key, every key
@@ -915,7 +913,7 @@ impl RawDb {
                 q = q.bind(*key);
             }
             let rows = q
-                .fetch_all(self.pool())
+                .fetch_all(&mut *conn)
                 .await
                 .context("read the file objects of a batch")?;
             for (key, message_uuid, file) in rows {
@@ -928,6 +926,18 @@ impl RawDb {
         }
         Ok(out)
     }
+}
+
+/// Record that `key` was listed whole at `now`, the run's own.
+pub async fn record_sweep<'e>(
+    db: impl sqlx::SqliteExecutor<'e>,
+    key: &str,
+    now: &DateTime<Utc>,
+) -> Result<()> {
+    let scope = format!("slack:sweep:{key}");
+    dr::upsert_scope_state(db, &scope, &now.to_rfc3339())
+        .await
+        .context("record manifest sweep marker")
 }
 
 /// The `coverage` scope of one channel's history.
@@ -1716,8 +1726,11 @@ mod tests {
         db.upsert_messages(&messages).await.unwrap();
         let listed = db.files_listed("T1", "C1").await.unwrap();
         assert_eq!(listed, [Listed::new("T1#C1#1.0#F1", None::<String>)]);
+        let mut conn = db.pool().acquire().await.unwrap();
+        let objects = db.file_objects(&mut conn, &["T1#C1#1.0#F1"]).await.unwrap();
+        drop(conn);
         assert_eq!(
-            db.file_objects(&["T1#C1#1.0#F1"]).await.unwrap(),
+            objects,
             [OwedFile {
                 key: "T1#C1#1.0#F1".into(),
                 message_uuid: "T1#C1#1.0".into(),
