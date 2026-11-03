@@ -185,7 +185,11 @@ fn current_shapes() -> BTreeMap<String, Tables> {
 
 #[test]
 fn the_raw_stores_doc_names_every_table_and_column_of_what_it_covers() {
-    let doc = documented(crate::help::RAW_STORES);
+    let doc = documented(
+        datalib_agent_docs::doc("raw-stores")
+            .expect("compiled in")
+            .text,
+    );
     for covered in ["email", "slack", "calendar"] {
         assert!(
             doc.sources.get(covered).is_some_and(|t| !t.is_empty()),

@@ -74,6 +74,7 @@ rust_test(
         "RUST_TEST_THREADS": "1",
     },
     deps = [
+        "//datalib/backend/agent_docs:datalib_agent_docs",
         "//datalib/backend/etl/chat-common:datalib_etl_chat_common",
         "//datalib/backend/etl/contact-common:datalib_etl_contact_common",
         "//datalib/backend/unified_document_index:qmd_fixture",

@@ -20,7 +20,7 @@ use datalib_time::RecordStampPrecision;
 use crate::render::{render_all, RenderProfile, TextFormat, ENTITY_KIND_CONVERSATION};
 use crate::types::{
     AuthorKind, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
-    NormalizedReaction, Recipient, RecipientRole,
+    NormalizedReaction, Recipient, RecipientRole, Replies,
 };
 
 /// 2369-04-15 08:30:00 UTC, the fixture corpus's era.
@@ -88,6 +88,7 @@ fn text(uuid: &str, author: &str, at: i64, body: &str) -> NormalizedChatItem {
         is_aside: false,
         branch: Vec::new(),
         unread: false,
+        replies: None,
         recipients: Vec::new(),
         mentions: Vec::new(),
         problems: Vec::new(),
@@ -197,7 +198,8 @@ fn assistant_turn_with_tools() -> NormalizedChat {
 }
 
 /// The ordinary case: several people, a reaction, an attachment, a
-/// per-message linkout.
+/// per-message linkout, and a thread whose replies are not all mirrored
+/// yet.
 fn group_chat() -> NormalizedChat {
     let mut picard = text(
         "s2-picard",
@@ -226,6 +228,10 @@ fn group_chat() -> NormalizedChat {
         },
     ];
     picard.source_url = Some("https://example.invalid/archive/s2-picard".to_string());
+    picard.replies = Some(Replies {
+        upstream: 4,
+        held: 1,
+    });
 
     let mut data = NormalizedChatItem {
         kind: ItemKind::Attachment,

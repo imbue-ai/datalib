@@ -6,7 +6,7 @@ from a shell (no app or server needed; it prints JSON), and
 `GET /applet/unified_document_index/search?q=…` on a running
 `datalib-http`. This page is that language. `datalib-step help search`
 prints it, and a release ships it beside the binaries as
-`docs/searching.md`.
+`docs/user/searching.md`.
 
 ```sh
 datalib-applet search ~/datalib 'from:me after:2026-10-20'
@@ -89,7 +89,8 @@ A person is found by the part they played:
 | `mention:` | was mentioned, where the source marks mentions up |
 | `with:` (also `involves:`) | played any of those parts, or took part in the conversation the row is or is named after (a direct message's other party, even where only you wrote), or is who an address-book card is about |
 | `label:` | (not a person) an email's labels; a photo's keywords (and the keywords above them), the people tagged in it and its albums |
-| `place:` | (not a person) where a photo was taken: a city, a landmark, or an H3 cell its GPS fix falls in |
+| `place:` | (not a person) where a photo was taken: a city or a landmark; or, given an [H3](https://h3geo.org) cell at any resolution (`place:86283082fffffff`), every row whose location falls in it |
+| `near:` | (not a person) given an H3 cell, every row in it or in one of its six neighbours: what the photo card's "photos in this area" writes. `place:` with a cell can miss a row just inside the cell's edge, because H3's coarse cells do not exactly hold their finer ones; `near:` never does, and also finds some rows just outside |
 | `caption:` | (not a person) a photo's caption; the free text in the search box does not reach photos, which have no page |
 
 The value can be:

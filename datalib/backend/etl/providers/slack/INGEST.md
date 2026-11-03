@@ -305,6 +305,9 @@ for one at a time, `conversations.replies` is walked to its end, and one
 transaction stores the thread's row and messages, deletes the stored
 replies the walk did not return, and holds the thread at the version it
 was listed at. A walk cut off part way stores nothing of the thread.
+Until a thread is read, its root's page says how many replies are not
+mirrored yet ([`../slack_render/TRANSLATE.md`](../slack_render/TRANSLATE.md)
+§"Replies not mirrored yet").
 
 A root's `latest_reply` only moves when history lists the root again,
 and outside the refresh window it never does. So before the channels are

@@ -229,6 +229,7 @@ fn build_chats(
                     is_aside: false,
                     branch: Vec::new(),
                     unread: false,
+                    replies: None,
                     recipients: Vec::new(),
                     mentions: Vec::new(),
                     problems,

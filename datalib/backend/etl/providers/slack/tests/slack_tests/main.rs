@@ -18,6 +18,7 @@ mod playback_roundtrip;
 mod probe;
 mod progress_countdown;
 mod quiet_channels;
+mod reply_count;
 mod reply_search;
 mod run_problems;
 mod slack_render;

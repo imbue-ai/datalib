@@ -158,6 +158,19 @@ documents it moved across. Email's `$seen` is a row of its own
 marks in volatile sidecars, and its diff scan reads the sidecar's diff
 for the threads a moved mark crossed (`slack_render`'s `parse.rs`).
 
+## Replies not mirrored yet
+
+Where upstream keeps a count of a thread's replies apart from the
+replies themselves, a provider sets `replies` on the thread's first
+item: what upstream counts and how many the mirror holds. The item
+then ends with one line, `<span class="msg-replies">12 replies · 9 not
+mirrored yet</span>`, the second half only while some are missing, so a
+reader can tell a thread nobody answered from one whose answers are
+still to be fetched. It is text, so qmd and an agent reading the file
+see it too; it is not in the item's grid text, which is what was said.
+Slack is the one provider that sets it
+(`slack_render/TRANSLATE.md`).
+
 ## Long messages are the frontend's problem, not this crate's
 
 A hundred-line message is one the reader has to scroll past, and none of

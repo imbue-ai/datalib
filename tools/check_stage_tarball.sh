@@ -6,7 +6,8 @@
 # notices landed in the wrong directory. Then unpacks the tarball and
 # checks what a release ships: every binary, the launcher, the commit,
 # the manifest naming this triple's runtime asset (the gnu one for a
-# musl triple), the agent guide with its links on the release's commit,
+# musl triple), every doc `datalib-step help` prints, its links on the
+# release's commit or the command that prints the doc,
 # the example configs beside it, and the notices. RELEASE_SHELL picks
 # the bash the script runs under; the macOS variant sets /bin/bash, the
 # 3.2 the mac runner has.
@@ -95,13 +96,19 @@ check() { # triple, expected runtime triple, expect cuda line (yes/no)
 
     local guide="$dir/docs/agent_user.md"
     grep -q '^# datalib — agent user guide' "$guide" || { echo "ERROR: docs/agent_user.md missing or not the guide" >&2; exit 1; }
-    grep -q 'github.com/imbue-ai/datalib/blob/0123456789abcdef0123456789abcdef01234567/' "$guide" \
-        || { echo "ERROR: the guide's links do not name the release's commit" >&2; exit 1; }
-    ! grep -q '/blob/main/' "$guide" || { echo "ERROR: the guide links to main, not the release's commit" >&2; exit 1; }
-    grep -q '^# Reading the raw stores' "$dir/docs/raw_stores.md" \
-        || { echo "ERROR: docs/raw_stores.md missing or not the guide" >&2; exit 1; }
-    grep -q '^# Building an app on datalib' "$dir/docs/building_on_datalib.md" \
-        || { echo "ERROR: docs/building_on_datalib.md missing or not the guide" >&2; exit 1; }
+    grep -q 'raw.githubusercontent.com/imbue-ai/datalib/0123456789abcdef0123456789abcdef01234567/AGENTS.md' "$guide" \
+        || { echo "ERROR: the guide's link to a file not compiled in does not name the release's commit" >&2; exit 1; }
+    grep -q '(`datalib-step help step-protocol`)' "$guide" \
+        || { echo "ERROR: the guide's link to the step protocol is not the command that prints it" >&2; exit 1; }
+    ! grep -rq 'github.com/imbue-ai/datalib/\(blob\|tree\)/' "$dir/docs" \
+        || { echo "ERROR: a doc links to a GitHub page" >&2; grep -rn 'github.com/imbue-ai/datalib/\(blob\|tree\)/' "$dir/docs" >&2; exit 1; }
+    grep -q '^# Reading the raw stores' "$dir/docs/user/raw_stores.md" \
+        || { echo "ERROR: docs/user/raw_stores.md missing or not the guide" >&2; exit 1; }
+    grep -q '^# Building an app on datalib' "$dir/docs/user/building_on_datalib.md" \
+        || { echo "ERROR: docs/user/building_on_datalib.md missing or not the guide" >&2; exit 1; }
+    grep -q '^# Writing a step command' "$dir/docs/dev/step_protocol.md" \
+        || { echo "ERROR: docs/dev/step_protocol.md missing or not the guide" >&2; exit 1; }
+    [[ ! -e "$dir/.docs" ]] || { echo "ERROR: the staging list was left in the tarball" >&2; exit 1; }
 
     for f in configs/dag_example.toml docs/user/config_examples/all_sources.toml; do
         [[ -f "$dir/$f" && ! -L "$dir/$f" ]] || { echo "ERROR: $f missing from the tarball" >&2; exit 1; }
