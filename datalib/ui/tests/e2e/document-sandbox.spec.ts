@@ -427,3 +427,76 @@ test.describe("Quark's prize email", () => {
     });
   });
 });
+
+// Quark's bar tab is an attachment typed `text/xsl`. Browsers render that type
+// as a page, and a server that sandboxed only the types it knew to be
+// dangerous served it with none, in the app's origin and with the session.
+// Two guards stand between it and a click now: the server names a type it
+// does not know to be shown as bytes, and it serves every attachment under
+// the sandbox policy. Each test turns one more off.
+
+async function barTabHref(page: Page): Promise<string> {
+  const resp = await page.request.get("/applet/unified_document_index/search?q=&limit=2000");
+  expect(resp.ok()).toBeTruthy();
+  const { rows } = (await resp.json()) as {
+    rows: { markdown_uuid: string | null; conversation_name: string }[];
+  };
+  const tab = rows.find((r) => r.markdown_uuid && /bar tab/i.test(r.conversation_name));
+  expect(tab, "the fixture must have Quark's bar tab").toBeTruthy();
+  await page.goto(`/chat/${tab!.markdown_uuid}`);
+  const link = page.frameLocator("iframe.doc-frame").getByRole("link", { name: "bar_tab.xsl" });
+  await expect(link).toBeAttached({ timeout: 10_000 });
+  const href = await link.getAttribute("href");
+  expect(href).toMatch(/^\/data\/.+\/part\/[0-9a-f]{64}$/);
+  return href!;
+}
+
+/** Serves the attachment under the type its sender gave it, and without the
+ *  sandbox too unless `sandboxed`. */
+async function asItsSenderTypedIt(page: Page, href: string, sandboxed: boolean): Promise<void> {
+  await page.route(`**${href}`, async (route) => {
+    const resp = await route.fetch();
+    const headers: Record<string, string> = {
+      ...resp.headers(),
+      "content-type": "text/xsl; charset=utf-8",
+    };
+    if (!sandboxed) delete headers["content-security-policy"];
+    await route.fulfill({ response: resp, headers });
+  });
+}
+
+const hostileRan = (page: Page) =>
+  page.evaluate(() => (window as unknown as { __hostileRan?: unknown }).__hostileRan ?? null);
+
+test.describe("Quark's bar tab", () => {
+  test.afterEach(({ page }) => page.unrouteAll({ behavior: "ignoreErrors" }));
+
+  test("is served as bytes, in the sandbox", async ({ page }) => {
+    const resp = await page.request.get(await barTabHref(page));
+    expect(resp.status()).toBe(200);
+    expect(await resp.text(), "the bytes are Quark's").toContain("__hostileRan");
+    expect(resp.headers()["content-type"]).toBe("application/octet-stream");
+    expect(resp.headers()["x-content-type-options"]).toBe("nosniff");
+    expect(resp.headers()["content-security-policy"]).toMatch(/^sandbox;/);
+  });
+
+  test("typed as Quark typed it, the sandbox still runs nothing", async ({ page }) => {
+    const href = await barTabHref(page);
+    await asItsSenderTypedIt(page, href, true);
+    await page.goto(href);
+    // The control: the browser took the bytes for a page.
+    await expect(page.locator("h1")).toHaveText(/gold-pressed latinum/);
+    expect(await hostileRan(page)).toBeNull();
+  });
+
+  test.describe("with both guards turned off", () => {
+    test.use({ bypassCSP: true });
+
+    test("the tab runs its script in the app's origin", async ({ page }) => {
+      const href = await barTabHref(page);
+      await asItsSenderTypedIt(page, href, false);
+      await page.goto(href);
+      await expect.poll(() => hostileRan(page)).toBe("bar_tab");
+    });
+  });
+});

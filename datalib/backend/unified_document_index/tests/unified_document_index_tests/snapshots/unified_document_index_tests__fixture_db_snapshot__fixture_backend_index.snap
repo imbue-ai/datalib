@@ -1145,6 +1145,18 @@ expression: snapshot
       "title": "@Lt. Cmdr. Data"
     },
     {
+      "bucket_key": "00000000-0000-89ac-8ef1-ba5e79d09b76",
+      "created_at": "2026-01-09T21:00:00+00:00",
+      "kind": "chat",
+      "markdown_uuid": "00000000-0000-89ac-8ef1-ba5e79d09b76",
+      "md_path": "tng_email/render_markdown/76/00000000-0000-89ac-8ef1-ba5e79d09b76.md",
+      "modified_at": "2026-01-09T21:00:00+00:00",
+      "provider": "email",
+      "renderer_version": "rust-v1.17",
+      "source_id": "tng_email",
+      "title": "Your bar tab"
+    },
+    {
       "bucket_key": "00000000-0000-89af-8390-876943e6455b",
       "created_at": "2370-10-26T08:00:00+00:00",
       "kind": "chat",
@@ -5209,6 +5221,36 @@ expression: snapshot
       "uuid": "00000000-0000-89a0-9bd6-7e928c9b2396"
     },
     {
+      "account": "picard@enterprise.starfleet",
+      "author": null,
+      "byte_size": 281,
+      "channel": null,
+      "content_hash": "e9a140a5ff028c4e",
+      "conversation_name": "Your bar tab",
+      "conversation_uuid": "00000000-0000-89ac-8ef1-ba5e79d09b76",
+      "created_at": "2026-01-09T21:00:00+00:00",
+      "entire_chat": "/chat/00000000-0000-89ac-8ef1-ba5e79d09b76",
+      "git_sha": null,
+      "item_count": 1,
+      "kind": "Email Thread",
+      "markdown_uuid": "00000000-0000-89ac-8ef1-ba5e79d09b76",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "preview_len": 107,
+      "project": null,
+      "provider": "email",
+      "qmd_path": "tng_email/render_markdown/76/00000000-0000-89ac-8ef1-ba5e79d09b76.md",
+      "source_label": "Mail",
+      "source_url": "https://mail.google.com/mail/u/0/#search/rfc822msgid:bar-tab-001%40quarks.example",
+      "upstream_account": "picard@enterprise.starfleet",
+      "upstream_entity_kind": "thread",
+      "upstream_id": "19ba1d49ef3ddc17",
+      "uuid": "00000000-0000-89ac-8ef1-ba5e79d09b76"
+    },
+    {
       "account": "data@enterprise.starfleet.test",
       "author": null,
       "byte_size": 1519,
@@ -8417,6 +8459,36 @@ expression: snapshot
       "upstream_entity_kind": "email",
       "upstream_id": "19b9ceb55deedc16",
       "uuid": "019b9cd5-8e80-8562-98ed-abfb7e8a4cac"
+    },
+    {
+      "account": "picard@enterprise.starfleet",
+      "author": "Quark's Bar <prizes@quarks.example>",
+      "byte_size": 281,
+      "channel": null,
+      "content_hash": "e9a140a5ff028c4e",
+      "conversation_name": "Your bar tab",
+      "conversation_uuid": "00000000-0000-89ac-8ef1-ba5e79d09b76",
+      "created_at": "2026-01-09T21:00:00+00:00",
+      "entire_chat": "/chat/00000000-0000-89ac-8ef1-ba5e79d09b76",
+      "git_sha": null,
+      "item_count": 1,
+      "kind": "Email",
+      "markdown_uuid": "00000000-0000-89ac-8ef1-ba5e79d09b76",
+      "message_index": 0,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "preview_len": 107,
+      "project": null,
+      "provider": "email",
+      "qmd_path": "tng_email/render_markdown/76/00000000-0000-89ac-8ef1-ba5e79d09b76.md",
+      "source_label": "Mail",
+      "source_url": "https://mail.google.com/mail/u/0/#search/rfc822msgid:bar-tab-001%40quarks.example",
+      "upstream_account": "picard@enterprise.starfleet",
+      "upstream_entity_kind": "email",
+      "upstream_id": "19ba1d49ef3ddc17",
+      "uuid": "019ba48f-1880-8caa-a85b-c2355321c4d0"
     },
     {
       "account": null,
@@ -19084,14 +19156,14 @@ expression: snapshot
     },
     {
       "kind": "Table",
-      "members_sha": "sha256:4f2c16af4ee837c1073c0aa0e47cf080f64cca3256f17e41817d81b629724d67",
+      "members_sha": "sha256:e7280f1184a3edee25f487fb0c6e3aa1b0aa88fab179ff6bbc705cd1908675a6",
       "rows": 191,
       "source": ""
     }
   ],
   "summary": {
-    "documents_count": 176,
-    "grid_rows_count": 565,
+    "documents_count": 177,
+    "grid_rows_count": 567,
     "storage_rows_count": 252
   }
 }

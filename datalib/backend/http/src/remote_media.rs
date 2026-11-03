@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use url::{Host, Url};
 
-use crate::embed::{is_scriptable_document, DATA_DOCUMENT_CSP};
+use crate::embed::{mime_essence, set_data_headers};
 use crate::AppState;
 
 /// Set to `1` to let the route reach loopback and private addresses —
@@ -182,16 +182,15 @@ pub fn target(raw: &str) -> Result<Url, Refusal> {
 }
 
 fn media_type(content_type: &str) -> Result<String, Refusal> {
-    let mime = content_type
-        .split(';')
-        .next()
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase();
-    if mime.starts_with("image/") || mime.starts_with("video/") || mime.starts_with("audio/") {
-        Ok(mime)
-    } else {
-        Err(Refusal::NotMedia(content_type.to_string()))
+    match mime_essence(content_type) {
+        Some(mime)
+            if mime.starts_with("image/")
+                || mime.starts_with("video/")
+                || mime.starts_with("audio/") =>
+        {
+            Ok(mime)
+        }
+        _ => Err(Refusal::NotMedia(content_type.to_string())),
     }
 }
 
@@ -446,27 +445,11 @@ fn hex(bytes: &[u8]) -> String {
 pub fn response(content_type: &str, body: Vec<u8>) -> Response<Body> {
     let mut resp = Response::new(Body::from(body));
     let headers = resp.headers_mut();
-    headers.insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_str(content_type)
-            .unwrap_or(HeaderValue::from_static("application/octet-stream")),
-    );
+    set_data_headers(headers, content_type);
     headers.insert(
         header::CACHE_CONTROL,
         HeaderValue::from_static("private, max-age=86400"),
     );
-    headers.insert(
-        header::X_CONTENT_TYPE_OPTIONS,
-        HeaderValue::from_static("nosniff"),
-    );
-    // An SVG is an image in an `<img>` and a document with scripts when
-    // navigated to; the data policy keeps the second case inert.
-    if is_scriptable_document(content_type) {
-        headers.insert(
-            header::CONTENT_SECURITY_POLICY,
-            HeaderValue::from_static(DATA_DOCUMENT_CSP),
-        );
-    }
     resp
 }
 
@@ -578,6 +561,21 @@ pub async fn list_media(State(s): State<AppState>) -> Response<Body> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Chromium and Firefox render `image/png, text/html` as a page; it
+    /// is not one media type, so it is not fetched.
+    #[test]
+    fn only_one_media_type_is_media() {
+        assert_eq!(media_type("image/PNG; q=1").unwrap(), "image/png");
+        for declared in [
+            "image/png, text/html",
+            "image/png,text/html",
+            "text/html",
+            "",
+        ] {
+            assert!(media_type(declared).is_err(), "{declared:?}");
+        }
+    }
 
     #[test]
     fn addresses_the_machine_or_its_lan_answer_on_are_not_public() {

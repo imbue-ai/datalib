@@ -51,8 +51,14 @@ the data root by the path it was given: the root also holds
 row that is not an email and a part the email does not have are all
 "not found".
 
-A row never changes, so the answer tells the browser to keep it.
-Bytes that a browser would run script from if it opened them (HTML,
-SVG) are sent with a sandbox policy, and script itself is sent as
-plain bytes, so an attachment cannot run in the app's own origin. For a
-part, the part's own type decides this.
+A row never changes, so the answer tells the browser to keep it. Every
+answer is sent with a sandbox policy that runs no script, whatever type
+the row names, so an attachment cannot run in the app's own origin;
+the one exception is a PDF, whose viewer the sandbox would turn off and
+which runs in an origin of its own. The answer keeps the row's type
+only when it is one type a browser shows rather than runs (an image,
+audio, video, PDF, JSON, HTML or plain text); anything else, a comma
+list included, is sent as `application/octet-stream`, which no page
+loads as script. For a part, the part's own type decides this. The
+rule is `set_data_headers` in `http/src/embed.rs`; the applet proxy and
+`/api/remote_media` answer the same way.
