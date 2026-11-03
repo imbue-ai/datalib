@@ -88,8 +88,8 @@ unpacks it into `~/.local/lib/datalib` and links the tools into
   datalib (step 3).
 
 Also installed: `latchkey` (the credential tool, step 2, running on
-the fetched Node runtime), `datalib-fsindex` and `datalib-dirtree-diff` (a
-standalone directory scanner and a diff of two scans) and the two
+the fetched Node runtime), `datalib-fsindex` (a standalone directory
+scanner) and the two
 `latchkey-curl-*` binaries the web-API sources fetch through. If
 `~/.local/bin` isn't already on your `PATH`, the script prints the exact
 line to add to your `~/.zshrc` — add it and restart your shell.

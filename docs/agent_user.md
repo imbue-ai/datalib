@@ -67,19 +67,24 @@ and fully derived, `system/` is the server's own state. Canonical
 definition — the constants both sides read — is
 [`datalib/backend/runtime/src/layout.rs`](../datalib/backend/runtime/src/layout.rs).
 
-Ten binaries ship in a release: `datalib-dag` (the sync runner),
-`datalib-step` (the built-in step commands), `datalib-http` (API
-server + web UI), `datalib-applet` (the applet host, spawned on demand
-by the http gateway; `datalib-applet search` is the search box from the
-command line), `latchkey-curl-router` +
-`curl-impersonate` (Cloudflare-safe HTTP for downloaders),
-`datalib-doltlite` (the shell for reading and exporting the stores —
-see "Reading the mirrored data" below), `datalib-fsindex` (the
-directory-tree scanner, also reachable as a step) and
-`datalib-dirtree-diff` (diffs two of its scans into one HTML page),
-and `datalib-migrate-config` (rewrites a `config.toml` from a retired
-shape; see below). The authoritative list is the `:dist`
-filegroup in
+The binaries a release ships:
+
+- `datalib-dag` — the sync runner.
+- `datalib-step` — the built-in step commands.
+- `datalib-http` — the API server and web UI.
+- `datalib-applet` — the applet host, which the http gateway spawns on
+  demand; `datalib-applet search` is the search box from the command
+  line.
+- `datalib-doltlite` — the shell for reading and exporting the stores
+  (see "Reading the mirrored data" below).
+- `datalib-migrate-config` — rewrites a `config.toml` from a retired
+  shape (see below).
+- `datalib-fsindex` — the directory-tree scanner, also reachable as a
+  step.
+- `latchkey-curl-router` and `curl-impersonate` — Cloudflare-safe HTTP
+  for the downloaders.
+
+The authoritative list is the `:dist` filegroup in
 [`datalib/backend/BUILD.bazel`](../datalib/backend/BUILD.bazel).
 End-to-end setup walkthrough:
 [`docs/user/first_time_user.md`](user/first_time_user.md).
