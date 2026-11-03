@@ -519,17 +519,22 @@ pub async fn set_oauth_client(
 /// `[--account <a>] auth set <service> <curl args>`, or why the pasted
 /// credential cannot be one. Every piece is its own argv element, so
 /// nothing is parsed by a shell; the checks are about what curl will
-/// later make of it.
+/// later make of it. A header is printable ASCII; a name, a password or
+/// a folder may be any text without a control character.
 fn set_args(
     service: &str,
     account: &str,
     credential: &PastedCredential,
 ) -> Result<Vec<String>, String> {
-    let one_line = |s: &str| !s.contains(['\r', '\n']);
+    let ascii = |s: &str| s.chars().all(|c| c == ' ' || c.is_ascii_graphic());
+    let text = |s: &str| {
+        s.chars()
+            .all(|c| c == ' ' || c.is_ascii_graphic() || (!c.is_ascii() && !c.is_control()))
+    };
     let mut args: Vec<String> = Vec::new();
     if !account.is_empty() {
-        if account.starts_with('-') || !one_line(account) {
-            return Err("an account name is one line and does not start with '-'".into());
+        if account.starts_with('-') || !text(account) {
+            return Err("an account name is one line of text and does not start with '-'".into());
         }
         args.extend(["--account".to_string(), account.to_string()]);
     }
@@ -551,7 +556,7 @@ fn set_args(
                     && name
                         .chars()
                         .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-                if !name_ok || !one_line(header) || value.trim().is_empty() {
+                if !name_ok || !ascii(header) || value.trim().is_empty() {
                     return Err(format!(
                         "a header is one line, `Name: value`, with a value; got {:?}",
                         redact(header)
@@ -565,15 +570,18 @@ fn set_args(
             if username.is_empty() || password.is_empty() {
                 return Err("both the username and the password are needed".into());
             }
-            if username.contains(':') || !one_line(username) || !one_line(password) {
-                return Err("the username has no ':' and neither has a line break".into());
+            if username.contains(':') || !text(username) || !text(password) {
+                return Err(
+                    "the username has no ':' and neither has a line break or control character"
+                        .into(),
+                );
             }
             args.extend(["-u".to_string(), format!("{username}:{password}")]);
         }
         PastedCredential::Directory { path } => {
             let path = path.trim();
-            if path.is_empty() || path.starts_with('-') || !one_line(path) {
-                return Err("a folder is one line and does not start with '-'".into());
+            if path.is_empty() || path.starts_with('-') || !text(path) {
+                return Err("a folder is one line of text and does not start with '-'".into());
             }
             args.push(path.to_string());
         }
@@ -1388,6 +1396,47 @@ mod tests {
             headers: vec!["Authorization: Bearer t".into()],
         };
         assert!(set_args("fastmail", "--all", &flag_account).is_err());
+    }
+
+    /// Only a line break was refused, so a NUL, a tab or an escape
+    /// sequence reached latchkey's argv and curl's header. A header is
+    /// printable ASCII; a name, password or folder is text without a
+    /// control character.
+    #[test]
+    fn a_control_character_is_refused_anywhere() {
+        let bearer = || PastedCredential::Headers {
+            headers: vec!["Authorization: Bearer t".into()],
+        };
+        for bad in ["\0", "\t", "\x1b[2J", "\x7f", "\u{85}"] {
+            assert!(
+                set_args("fastmail", &format!("pic{bad}ard"), &bearer()).is_err(),
+                "account {bad:?}"
+            );
+            let header = PastedCredential::Headers {
+                headers: vec![format!("Authorization: Bearer t{bad}t")],
+            };
+            assert!(set_args("fastmail", "", &header).is_err(), "header {bad:?}");
+            let basic = PastedCredential::Basic {
+                username: "picard".into(),
+                password: format!("en{bad}gage"),
+            };
+            assert!(
+                set_args("fastmail", "", &basic).is_err(),
+                "password {bad:?}"
+            );
+            let folder = PastedCredential::Directory {
+                path: format!("/tmp/gar{bad}min"),
+            };
+            assert!(set_args("garmin", "", &folder).is_err(), "folder {bad:?}");
+        }
+        let header = PastedCredential::Headers {
+            headers: vec!["Authorization: Bearer tö".into()],
+        };
+        assert!(set_args("fastmail", "", &header).is_err());
+        let folder = PastedCredential::Directory {
+            path: "/Users/picard/Téléchargements/garmin".into(),
+        };
+        assert!(set_args("garmin", "Jean-Luc Picard", &folder).is_ok());
     }
 
     /// A set-only service's paste note has to name the credential's

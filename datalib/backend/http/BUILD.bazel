@@ -297,6 +297,19 @@ rust_test(
     ],
 )
 
+# Remote media ignores a proxy the environment names. Alone, because
+# the variables it sets would reach every test in a shared process.
+rust_test(
+    name = "remote_media_proxy_test",
+    size = "small",
+    srcs = ["tests/remote_media_proxy.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_http",
+        "@datalib_crates//:tokio",
+    ],
+)
+
 # A relative data root, given from the server's own working directory:
 # every step is handed it absolute.
 rust_test(
