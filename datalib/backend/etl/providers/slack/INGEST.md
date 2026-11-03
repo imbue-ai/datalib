@@ -592,8 +592,9 @@ or users, so each is found its own way.
   included ([Archived channels](#archived-channels)); on a real
   workspace 850 channels took 5 calls at 1000, where its 381 open ones
   had taken 23 at 200.
-- **Users.** `users.list` is listed at most once per `MANIFEST_TTL` (six
-  hours), since its rows change only when someone edits a profile. A
+- **Users.** `users.list` is listed at most once per `list_every_hours`
+  (six by default), since its rows change only when someone edits a
+  profile. A
   person who posts for the first time does not wait for it: storing a
   message adds a `users` row with no payload for an author not already
   there, and each run then asks `users.info` for every such row, before
@@ -759,7 +760,7 @@ and is an `info` row instead
   `bookmarks` or `folder` tab, or when we already hold bookmarks for it.
   On a real workspace 75 of 128 channels had no such tab, and
   none of the 25 of those we asked held a bookmark. Listed at most once
-  per `MANIFEST_TTL`, like the user list. The listing is not paged,
+  per `list_every_hours`, like the user list. The listing is not paged,
   so it is the conversation's whole set, and a bookmark it no longer
   names is deleted.
 

@@ -67,6 +67,7 @@ describe("layoutOf", () => {
       ["Copy until", true],
       ["Edit-catcher window (days)", true],
       ["Re-query that window every (minutes)", true],
+      ["Re-read the user list and bookmarks every (hours)", true],
       ["What involves me", true],
       ["Start before the first one", true],
       ["Stop after each one", true],

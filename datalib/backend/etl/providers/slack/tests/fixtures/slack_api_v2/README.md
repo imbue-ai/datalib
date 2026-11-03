@@ -19,7 +19,7 @@ every run. `#bridge` is read through Data's log in both, which leaves
 Riker's red alert unread here. In `saved.list` Worf's
 recommendation has moved from saved to completed. `#bridge`'s bookmarks
 are not asked again: the first sync listed them less than
-`MANIFEST_TTL` ago.
+`list_every_hours` (six by default) ago.
 
 What a re-sync cannot carry is a deletion — an incremental
 `conversations.history` returns only what is newer than `oldest` — so

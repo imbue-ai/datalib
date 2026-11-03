@@ -70,6 +70,13 @@ pub struct SlackApiSync {
     /// re-reads it on every run.
     #[serde(default)]
     pub refresh_every_minutes: Option<i64>,
+    /// How many hours after the user listing and the bookmarks were last
+    /// read before a run reads them again. A new author is looked up on
+    /// its own the run their first message lands, so this only decides
+    /// how soon a profile edit or a bookmark shows. Unset is 6; `0`
+    /// reads them on every run.
+    #[serde(default)]
+    pub list_every_hours: Option<i64>,
     /// Channel names to mirror, without the `#`. Unset means every
     /// channel the account is a member of (or every channel it can see,
     /// with `all_channels`).
@@ -235,6 +242,7 @@ impl Default for SlackApiSync {
         Self {
             refresh_window_days: None,
             refresh_every_minutes: None,
+            list_every_hours: None,
             channels: None,
             since: None,
             all_channels: false,
@@ -266,6 +274,8 @@ impl SlackApiSync {
             self.refresh_every_minutes,
         )
         .map_err(anyhow::Error::msg)?;
+        datalib_source_common::not_negative("api.list_every_hours", self.list_every_hours)
+            .map_err(anyhow::Error::msg)?;
         if !self.dms {
             if let Some(convs) = &self.dm_conversations {
                 if !convs.is_empty() {
