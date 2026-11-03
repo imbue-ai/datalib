@@ -8,6 +8,7 @@ use anyhow::{bail, Context, Result};
 use sqlx::sqlite::SqlitePool;
 
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::RunProblems;
 use datalib_etl_sqlite_mirror::{mirror, MirrorOptions, MirrorStats};
 
 pub struct Unpacked {
@@ -69,12 +70,28 @@ pub async fn mirror_file(
     progress: &Progress,
 ) -> Result<MirrorStats> {
     let catalog = unpack(file).await?;
-    let options = MirrorOptions {
+    mirror::run(pool, &catalog_options(&catalog, options), progress).await
+}
+
+/// [`mirror_file`] through [`mirror::run_or_report`]: a catalog the
+/// engine refuses is a problem, and `None`.
+pub async fn mirror_file_or_report(
+    pool: &SqlitePool,
+    file: &Path,
+    options: &MirrorOptions,
+    progress: &Progress,
+    found: &RunProblems,
+) -> Result<Option<MirrorStats>> {
+    let catalog = unpack(file).await?;
+    mirror::run_or_report(pool, &catalog_options(&catalog, options), progress, found).await
+}
+
+fn catalog_options(catalog: &Unpacked, options: &MirrorOptions) -> MirrorOptions {
+    MirrorOptions {
         source_path: catalog.path().to_path_buf(),
         snapshot: options.snapshot && !catalog.is_copy(),
         ..options.clone()
-    };
-    mirror::run(pool, &options, progress).await
+    }
 }
 
 fn extract_catalog(zip_path: &Path, dest: &Path) -> Result<PathBuf> {

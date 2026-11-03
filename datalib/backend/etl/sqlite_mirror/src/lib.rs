@@ -6,7 +6,8 @@
 //! storage turn that into an incremental, versioned backup; a source that
 //! evicts is upserted instead, keeping what it let go
 //! (`MirrorOptions::append_only`). A source with no table in it is
-//! refused before anything is dropped (`NothingToMirror`). A provider
+//! refused before anything is dropped (`NothingToMirror`), and so is one
+//! with a table named like one the store keeps (`TableCollides`). A provider
 //! crate adds the path to the file and its defaults; `whatsapp` also
 //! decrypts first and keeps a media registry beside the mirror
 //! (`MirrorOptions::sidecar_tables`).
@@ -18,6 +19,6 @@ pub mod plan;
 pub use ingest::{fetch, FetchOptions};
 pub use mirror::{
     open_mirror, open_sqlite, run, run_or_report, snapshot, MirrorOptions, MirrorStats,
-    NothingToMirror, Snapshot,
+    NothingToMirror, Snapshot, TableCollides,
 };
 pub use plan::{KeyOrigin, TableKind};

@@ -119,6 +119,29 @@ impl std::fmt::Display for NothingToMirror {
 
 impl std::error::Error for NothingToMirror {}
 
+/// A source table named like one the store keeps for itself (`problems`,
+/// a provider's sidecar). Mirroring it would overwrite datalib's own
+/// rows, so [`run`] refuses before it drops anything.
+#[derive(Debug)]
+pub struct TableCollides {
+    pub source: PathBuf,
+    pub table: String,
+}
+
+impl std::fmt::Display for TableCollides {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (source, table) = (self.source.display(), &self.table);
+        write!(
+            f,
+            "{source} has a table {table:?}, which collides with a table the store keeps \
+             for itself, so the mirror keeps what it had; exclude it with \
+             exclude_tables = [{table:?}]"
+        )
+    }
+}
+
+impl std::error::Error for TableCollides {}
+
 /// What one mirror run did. Feeds the run summary and the tests.
 #[derive(Debug, Default, Clone)]
 pub struct MirrorStats {
@@ -322,10 +345,11 @@ pub async fn run(
     Ok(stats)
 }
 
-/// [`run`] inside a download's problem collector: a source that is
-/// [`NothingToMirror`] leaves the mirror as it was and is a
-/// `phase:source` problem, so the run's seal publishes the problem rather
-/// than the step failing with nothing to show for it. `None` then.
+/// [`run`] inside a download's problem collector: a source it refuses —
+/// [`NothingToMirror`], [`TableCollides`] — leaves the mirror as it was
+/// and is a `phase:source` problem, so the run's seal publishes the
+/// problem rather than the step failing with nothing to show for it.
+/// `None` then.
 pub async fn run_or_report(
     pool: &SqlitePool,
     opts: &MirrorOptions,
@@ -334,7 +358,10 @@ pub async fn run_or_report(
 ) -> Result<Option<MirrorStats>> {
     match run(pool, opts, progress).await {
         Ok(stats) => Ok(Some(stats)),
-        Err(e) if e.downcast_ref::<NothingToMirror>().is_some() => {
+        Err(e)
+            if e.downcast_ref::<NothingToMirror>().is_some()
+                || e.downcast_ref::<TableCollides>().is_some() =>
+        {
             found.phase("source", format!("{e:#}"));
             Ok(None)
         }
@@ -420,10 +447,11 @@ async fn build_specs(
             continue;
         }
         if opts.is_kept(&name) {
-            bail!(
-                "source table {name:?} collides with a table the store keeps for itself; \
-                 exclude it with exclude_tables = [{name:?}]"
-            );
+            return Err(TableCollides {
+                source: opts.source_path.clone(),
+                table: name,
+            }
+            .into());
         }
         if table.kind == TableKind::Shadow {
             stats.shadow_tables_skipped += 1;
