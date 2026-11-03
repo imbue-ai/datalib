@@ -111,8 +111,29 @@ on yet), `running`, or `done` (nothing left for it). Once a root is
 or `stopped`. A step turned off is done without running, and its
 `state` says `off`. `progress` is what the step has reported in the
 loop's current run: the same numbers as `GET /api/runs/{run}/steps`
-(see "How fresh is the mirror?"). Ask again every second or two, or
-when `GET /api/sync/stream` pushes a frame.
+(see "How fresh is the mirror?").
+
+**Don't poll on a timer; subscribe.** `GET /api/sync/stream` is the
+server-sent-event stream the app's own pages use to know when to fetch
+again, and any client with the token can hold it. Each frame names
+what moved and carries nothing else:
+
+```sh
+curl -N -H "Authorization: Bearer $(cat <data_root>/system/api-token)" \
+  <origin>/api/sync/stream
+```
+
+```text
+event: root
+data: {"kind":"table_changed","table":"dag"}
+```
+
+Open the stream first, then read `GET /api/requests/<id>`, then read
+it again on every `table_changed` frame whose `table` is `dag` (the
+loop's record moved, so a phase may have) or `manage.rows` (a step's
+progress moved). A frame with `"kind":"heartbeat"` says only that the
+stream is alive. If the stream drops, reconnect and read again, since
+frames sent while you were away are not replayed.
 
 With no app up, read the loop's record yourself. A download is done
 for your request once its `steps` row says it started after the
