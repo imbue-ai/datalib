@@ -6,9 +6,10 @@
 use std::path::Path;
 
 use datalib_etl_notion::ingest::official::BASE;
-use datalib_etl_notion::ingest::RawDb;
+use datalib_etl_notion::ingest::{FetchOptions, RawDb};
 use datalib_etl_web::http::{HttpRequest, HttpResponse, HttpService};
 use datalib_etl_web::owed;
+use datalib_etl_web::playback::Playback;
 use datalib_etl_web::synthesize::write_fixture;
 use serde_json::json;
 use tempfile::tempdir;
@@ -82,6 +83,47 @@ async fn an_attachment_that_did_not_fetch_is_retried_through_its_page() {
     let db = RawDb::open(&store).await.unwrap();
     assert!(db.blob_exists(slot).await.unwrap());
     db.close().await;
+}
+
+/// An attachment past the size cap failed like a dropped connection:
+/// an error, and owed again in full every run. It is a skip by the size
+/// rule now, a warning, and the page is kept.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_attachment_past_the_size_cap_is_a_skip() {
+    let d = tempdir().unwrap();
+    let (tape, store) = (d.path().join("tape"), d.path().join("s.doltlite_db"));
+    let signed =
+        "https://prod-files-secure.s3.us-west-2.amazonaws.com/ws/warp-core.png?X-Amz-Signature=abc";
+    let slot = "https://prod-files-secure.s3.us-west-2.amazonaws.com/ws/warp-core.png";
+    serve_workspace(&tape, &[SICKBAY]);
+    serve_page(&tape, SICKBAY, EDITED, &format!("![schematic]({signed})\n"));
+    let bytes = HttpResponse {
+        status: 200,
+        headers: [("content-type".to_string(), "image/png".to_string())].into(),
+        body: b"\x89PNG and then some".to_vec(),
+        duration_ms: 0,
+    };
+    write_fixture(
+        &tape,
+        &HttpRequest::get(HttpService::Notion, signed).plain(),
+        &bytes,
+    )
+    .unwrap();
+
+    run_with(Playback::at(&tape).max_bytes(4), &store, |o| FetchOptions {
+        subtree_pages: vec![SICKBAY.to_string()],
+        ..o
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        problems(&store).await,
+        vec![row(
+            &format!("notion_attachments:{SICKBAY}#{slot}"),
+            "warning"
+        )]
+    );
+    assert_eq!(stored_pages(&store).await, vec![SICKBAY.to_string()]);
 }
 
 /// A comments listing that failed was swallowed as "no comments".
