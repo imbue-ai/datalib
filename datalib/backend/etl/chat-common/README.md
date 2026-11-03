@@ -136,19 +136,32 @@ reaches the text: the rule is CSS, so qmd's chunks are the same either
 way. `false` means read *or* unknown; a provider that cannot tell leaves
 it there.
 
+Read state has one shape, `ReadMark` (`datalib_etl::read_marks`):
+`Through(item)` on a conversation or thread, everything up to that item
+read; `Read(bool)` on one item. A source whose raw store is a straight
+mirror of an app's database keeps the app's columns as they are, and its
+render builds the marks from them. `unread::is_unread` turns marks into
+`unread`: never for the account's own message, else by the item's own
+mark, else past its conversation's `Through` in the source's order of
+keys.
+
 Who sets it, always only on a message someone else sent:
 
 - Slack: past the conversation's `last_read` for a top-level message,
   past a followed thread's own `last_read` for a reply.
 - Email: no `$seen`.
-- Apple Messages: `message.is_read = 0`.
+- Apple Messages: `message.is_read = 0`, built into `Read` per message.
 - Signal: `IncomingMessageDetails.read` false.
 - SMS Backup & Restore: `read="0"`, from the newest backup file that
   has the message.
-- WhatsApp: a `_id` past its chat's `last_read_message_row_id`.
+- WhatsApp: a `_id` past its chat's `last_read_message_row_id`, built
+  into `Through` per chat.
 
-LinkedIn, Facebook, Beeper
-and Google Takeout carry no read state we store; the assistant
+Beeper's mirror holds read columns on each message (`seenByMeAt`,
+`countsAsUnread`, `countsAsUnreadInThread` in `mx_room_messages`), but
+its render leaves `unread` false: the TNG fixture fills none of them,
+and what they say on a real `index.db` has not been checked. LinkedIn,
+Facebook and Google Takeout carry no read state we store; the assistant
 transcripts have none to carry.
 
 A read mark is state that moves while the message does not, so a
