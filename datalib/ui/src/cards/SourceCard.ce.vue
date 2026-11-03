@@ -416,6 +416,10 @@ onUnmounted(() => {
           <dt>ETA</dt>
           <dd v-cell="renderQuantity(groupRow.eta)" />
         </div>
+        <div v-if="groupRow.owed.value !== null">
+          <dt>Owed</dt>
+          <dd v-cell="renderQuantity(groupRow.owed)" />
+        </div>
         <div v-if="groupRow.items.value !== null" :title="groupRow.items.detail ?? ''">
           <dt>Items</dt>
           <dd>{{ groupRow.items.value.toLocaleString() }}</dd>
@@ -530,6 +534,10 @@ onUnmounted(() => {
             <span v-cell="renderQuantity(row.queue)" />
             <span class="sd-inline-key">ETA</span>
             <span v-cell="renderQuantity(row.eta)" />
+            <template v-if="row.owed.value !== null">
+              <span class="sd-inline-key">Owed</span>
+              <span v-cell="renderQuantity(row.owed)" />
+            </template>
             <template v-if="row.disk.value !== null">
               <span class="sd-inline-key">Size</span>
               <span :title="row.disk.detail ?? ''">{{ formatBytes(row.disk.value) }}</span>

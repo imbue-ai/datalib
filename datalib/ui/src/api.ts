@@ -1295,6 +1295,10 @@ export type ManageRow = {
   /// When that queue empties at its recent pace; a group's is its
   /// slowest step's, or a stall anywhere.
   eta: Quantity;
+  /// At rest, what the step's own queue still held when its last run
+  /// ended: work the next sync starts on. A group's is its first step
+  /// that owes.
+  owed: Quantity;
   /// Errors and warnings the step's store holds, as of its last run:
   /// a red and a yellow chip, each only when above zero. A group shows
   /// its last counting step's.

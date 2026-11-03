@@ -583,6 +583,26 @@ the sink sets every `queued` series of that step to zero, its own and
 each `queued{from=…}`: a step that is not running has nothing ahead of
 it in this run.
 
+When the step ended short of done — stopped, turned off, failed, or
+given up with work owed (`incomplete`, a failure) — what its own
+`queued` held at that moment is what it still owes: the conversations,
+threads and files a Slack sync saw waiting and did not get to. The sink
+writes it first as the step's `owed` (`datalib_metrics::OWED`), which
+nothing zeroes. A step that succeeded owes nothing, whatever its bar
+still showed: a render or an embed often ends a successful run with
+thousands announced that it then found it had no need to do, and a
+download that cannot finish says so by ending `incomplete`. So every
+step a run invokes gets an `owed` as it ends — zero when it succeeded,
+when its own queue was empty or when it never counted — and the next
+run that invokes the step replaces it; a step the run did not invoke
+keeps its last (`runs_sink::owed_at_end`). A `queued{from=…}` is not owed — it is the producer's
+seals the step has not read, which its next run reads anyway. The
+Manage row of a step at rest draws it ("412 owed", and on the group the
+first of its steps that owes), and `datalib-dag status` lists it. A
+record the step reached and failed is usually counted done, so the
+count can fall short of what the store says is owed by the records
+that failed, which are errors on the row.
+
 The trap is that `done` accumulates across **everything** the step
 reported, while `total` is simply whichever length it announced last —
 and the runner relabels every event to the step that emitted it, so a
@@ -592,10 +612,15 @@ zero from the second one onward: `done` already carries the first bar's
 work, and the subtraction saturates.
 
 So a download reports through one `datalib_etl::progress::RunBar` for
-the whole run, whose total only ever grows — each phase adding what it
-has learned it will do. Announcing no total at all is fine and means
-"size unknown"; the sink then publishes no `queued`, which is not the
-same as publishing zero, because zero means finished.
+the whole run, whose total only grows — each phase adding what it
+has learned it will do — but for work the run takes back
+(`RunBar::forgo`): what a cap in the config leaves out, what upstream
+refuses to show, what the store turned out to hold already. What is
+still on the bar when the step ends is read as owed, so a tick
+announced has to be done, owed or taken back. Announcing no total at
+all is fine and means "size unknown"; the sink then publishes no
+`queued`, which is not the same as publishing zero, because zero means
+finished.
 
 **Count only work the run can see waiting.** Something announced in the
 same breath as it is done — a page's messages, when upstream names no

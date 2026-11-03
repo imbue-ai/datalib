@@ -95,7 +95,9 @@ function quantityPart(cls: string, q: Quantity, counted: string): HTMLElement {
 
 /// The status as a word first, then when: "Failed · 2 hours ago". A row
 /// with work queued goes on to say how much and when it is done:
-/// "Running · 2 minutes ago · 1,204 to go · 3m left". The mark carries
+/// "Running · 2 minutes ago · 1,204 to go · 3m left"; a row at rest whose
+/// last run left work undone says how much: "Stopped · 1 hour ago · 412
+/// owed". The mark carries
 /// the word for assistive tech (`role="img"`), and the cell keeps the
 /// shared `tg-status*` classes the tests read it by.
 function statusCell(s: StatusView | null, row: Row | undefined): HTMLElement {
@@ -125,6 +127,7 @@ function statusCell(s: StatusView | null, row: Row | undefined): HTMLElement {
     wrap.appendChild(quantityPart("sx-queue", row.queue, "to go"));
   }
   if (row && quantityText(row.eta)) wrap.appendChild(quantityPart("sx-eta", row.eta, "left"));
+  if (row && quantityText(row.owed)) wrap.appendChild(quantityPart("sx-owed", row.owed, "owed"));
   return wrap;
 }
 

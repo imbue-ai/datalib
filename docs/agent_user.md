@@ -253,8 +253,13 @@ instead of a second one.
 newest closed ones: each with its `roots`, `by`, and `state` (`open`, or
 how it ended: `done`, `failed`, `stopped`). `datalib-dag status
 <config>` prints the open ones from the shell, with the steps turned off and the steps
-running now: one line each, starting `request `, `off ` or `running `,
-or one line starting `idle:` when there is none. To wait for your own
+running now: one line each, starting `request `, `off ` or `running `.
+A line `owed <step>  <n>  as of run <id>` follows for each step at rest
+whose last run ended short of done (stopped, failed, given up) with work
+it saw waiting and did not get to — a Slack sync that was stopped, say,
+with the conversations, threads and files it had not reached; the next
+sync starts on them. With none of these there is one line starting
+`idle:`. To wait for your own
 sync, don't poll: `datalib-dag <config> --sync <step>` returns when its
 request closes. What each step is doing is in the loop's record, which the
 Manage screen's Status column reads directly:
