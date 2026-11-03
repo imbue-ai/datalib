@@ -12,10 +12,12 @@
 # fetches only what the lockfiles added since), so a release's worth of
 # drift costs seconds. Every build is tagged `:sha-<commit>`, a tag
 # build also `:X.Y.Z`; `:latest` — the tag `test.yml` pulls — moves from
-# a tag, or when a dispatch asks, and only after the image has proved
-# it can analyse the tree. To try a Dockerfile change before a release,
-# dispatch this workflow on the branch, then `test.yml` with the `sha-`
-# tag it prints. Old `sha-` versions are pruned after each push.
+# a tag, or when a dispatch on `main` asks, and only after the image has
+# proved it can analyse the tree. Never from another branch: every run
+# on `main` runs in `:latest` holding the release cache's write key. To
+# try a Dockerfile change before a release, dispatch this workflow on
+# the branch, then `test.yml` with the `sha-` tag it prints. Old `sha-`
+# versions are pruned after each push.
 #
 # Read docs/dev/ci.md before changing this file.
 name: devcontainer
@@ -27,7 +29,7 @@ on:
   workflow_dispatch:
     inputs:
       publish_latest:
-        description: Also move the `latest` tag to this build.
+        description: Also move the `latest` tag to this build (from `main` only).
         type: boolean
         default: false
 
@@ -44,6 +46,15 @@ jobs:
     name: build and push (ghcr.io)
     runs-on: ubuntu-latest
     steps:
+      - name: Refuse to move latest from a branch other than main
+        env:
+          PUBLISH_LATEST: ${{ inputs.publish_latest }}
+        run: |
+          if [[ "${PUBLISH_LATEST}" == "true" && "${GITHUB_REF}" != refs/heads/main ]]; then
+              echo "::error::publish_latest moves the image every main run uses; dispatch it on main, not ${GITHUB_REF}"
+              exit 1
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The pre-fetch pulls the Rust toolchains and ~300 crates into the
@@ -120,13 +131,14 @@ jobs:
       - name: Push
         env:
           BUILDKIT_PROGRESS: plain
+          PUBLISH_LATEST: ${{ inputs.publish_latest }}
         run: |
           set -euo pipefail
           tags=("${IMAGE}:sha-${GITHUB_SHA::12}")
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
               tags+=("${IMAGE}:${GITHUB_REF#refs/tags/v}")
           fi
-          if [[ "${GITHUB_REF}" == refs/tags/v* || "${{ inputs.publish_latest }}" == "true" ]]; then
+          if [[ "${GITHUB_REF}" == refs/tags/v* || ( "${PUBLISH_LATEST}" == "true" && "${GITHUB_REF}" == refs/heads/main ) ]]; then
               tags+=("${IMAGE}:latest")
           fi
           names=$(IFS=,; echo "${tags[*]}")

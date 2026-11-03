@@ -68,7 +68,10 @@ and on demand — not on pushes or PRs, since a build is ~8 min and
 Dockerfile change early, dispatch it on the branch and then `test.yml`
 with the `sha-` tag it prints. Every build is tagged `sha-<commit>`,
 a tag build also `:X.Y.Z`. `latest` moves on a tag build, or on a
-dispatch with `publish_latest` set, and only after
+dispatch on `main` with `publish_latest` set — a dispatch on any other
+branch that sets it fails at once, because every `main` run of
+`test.yml` runs in `latest` holding the release cache's write key — and
+only after
 `.devcontainer/smoke_test.sh` has analysed `//...` from the image
 under a different path and HOME than it was built with, with zero
 downloads. The newest six `sha-` versions are kept and older ones
