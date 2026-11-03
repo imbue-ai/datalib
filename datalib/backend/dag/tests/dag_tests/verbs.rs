@@ -83,6 +83,22 @@ fn a_missing_config_names_init_and_init_makes_one() {
     assert!(out.status.success(), "{out:?}");
 }
 
+/// Agents waited for an idle root with `status | grep -q running`, and the
+/// idle line said "nothing running", so the wait never ended.
+#[test]
+fn an_idle_status_says_so_without_naming_a_line_kind() {
+    let td = root_with_a_source();
+    let out = dag(td.path(), &["status"]);
+    assert!(out.status.success(), "{out:?}");
+    let status = stdout(&out);
+    assert_eq!(
+        status.trim(),
+        "idle: no open requests, no steps turned off, nothing owed",
+        "{out:?}"
+    );
+    assert!(!status.contains("running"), "{status}");
+}
+
 #[test]
 fn a_source_turned_off_does_not_run_until_it_is_turned_on() {
     let td = root_with_a_source();

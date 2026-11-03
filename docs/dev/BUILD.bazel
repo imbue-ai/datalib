@@ -1,3 +1,12 @@
 # The step protocol doc is a test input: `//datalib/backend/env` checks
-# that its variable table and the runner agree.
-exports_files(["step_protocol.md"])
+# that its variable table and the runner agree. It and the references
+# below are compiled into `datalib-step help` (//datalib/backend/agent_docs).
+exports_files([
+    "config_model.md",
+    "contacts.md",
+    "doltlite.md",
+    "edges.md",
+    "grid_rows.md",
+    "logging.md",
+    "step_protocol.md",
+])

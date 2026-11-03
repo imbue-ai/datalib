@@ -1,5 +1,6 @@
 //! The worked examples at the end of a binary's `--help`, kept as data so
-//! a test can run every one through that binary's own parser. An example
+//! a test can run every one through that binary's own parser, and the same
+//! check for the commands the docs show (`datalib_agent_docs`). An example
 //! that no longer parses fails the build instead of teaching an agent a
 //! command that does not work.
 
@@ -45,6 +46,31 @@ pub fn assert_examples_parse(cmd: clap::Command, examples: &[Example]) {
         }
         if let Err(err) = cmd.clone().try_get_matches_from(&argv) {
             failures.push(format!("{:?}:\n{err}", e.command));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// The command lines a doc shows, each with where it is, put through the
+/// binary's parser. `--help` and `--version` count as parsing.
+pub fn assert_argvs_parse(cmd: clap::Command, commands: &[(String, Vec<String>)]) {
+    use clap::error::ErrorKind;
+    let mut failures = Vec::new();
+    for (place, argv) in commands {
+        if argv.first().map(String::as_str) != Some(cmd.get_name()) {
+            failures.push(format!(
+                "{place}: {argv:?} does not run {:?}",
+                cmd.get_name()
+            ));
+            continue;
+        }
+        match cmd.clone().try_get_matches_from(argv) {
+            Ok(_) => {}
+            Err(e) if matches!(e.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion) => {}
+            Err(e) => failures.push(format!(
+                "{place}: {}\n{e}",
+                shlex::try_join(argv.iter().map(String::as_str)).unwrap_or_default()
+            )),
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
@@ -103,6 +129,21 @@ mod tests {
                 command: "A_B=1 C=x tool a",
             }],
         );
+    }
+
+    /// A doc's command with a flag the binary does not take fails, named
+    /// by where it is.
+    #[test]
+    #[should_panic(expected = "guide.md:3")]
+    fn a_doc_command_with_an_unknown_flag_fails() {
+        let argv = ["tool", "a", "--slow"].map(String::from).to_vec();
+        assert_argvs_parse(cmd(), &[("guide.md:3".to_string(), argv)]);
+    }
+
+    #[test]
+    fn a_doc_command_asking_for_help_parses() {
+        let argv = ["tool", "--help"].map(String::from).to_vec();
+        assert_argvs_parse(cmd(), &[("guide.md:3".to_string(), argv)]);
     }
 
     #[test]

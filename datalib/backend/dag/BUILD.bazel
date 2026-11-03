@@ -4,6 +4,7 @@ load("//tools:insta.bzl", "insta_update")
 
 exports_files([
     "BUILD.bazel",  # read by //datalib/backend:version_consistency_test
+    "README.md",  # compiled into `datalib-step help runner`
 ])
 
 # Prototype DAG runner (see /dag-runner.md): step contract, edge
@@ -267,6 +268,8 @@ rust_test(
     env = {"PUPPET": "$(rootpath :puppet)"},
     deps = [
         ":datalib_dag",
+        "//datalib/backend/metrics:datalib_metrics",
+        "//datalib/backend/runs:datalib_runs",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:libc",
         "@datalib_crates//:serde_json",
