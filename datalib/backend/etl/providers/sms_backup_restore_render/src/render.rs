@@ -1,19 +1,21 @@
 //! Render the SMS/MMS texts and calls into markdown via the shared chat
 //! renderer.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use anyhow::Result;
 use datalib_contact_schema::NormalizedContact;
 use datalib_etl::blob_cas::CasEdgeRow;
 use datalib_etl::progress::Progress;
+use datalib_etl::read_marks;
 use datalib_etl_chat_common::people::account_contact;
 use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
 use datalib_etl_chat_common::types::{
     AuthorKind, ItemKind, NamedPerson, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
     NormalizedDoc, Recipient, RecipientRole, UpstreamRef,
 };
+use datalib_etl_chat_common::unread::{is_unread, Marks, ReadMark};
 use datalib_etl_chat_common::{render_changed_batched, ChatBlobs, RenderTarget};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{Inputs, RawRange};
@@ -122,10 +124,14 @@ fn render_open(
             datalib_etl::doltlite_raw::load_payloads_with_id(db.pool(), "sms_messages").await?;
         let calls =
             datalib_etl::doltlite_raw::load_payloads_with_id(db.pool(), "sms_calls").await?;
-        let scan = scan_diff(db.pool(), range.cursor, &pin).await?;
+        let marks = read_marks::load(db.pool()).await?;
+        let mut scan = scan_diff(db.pool(), range.cursor, &pin).await?;
+        if let (Some(render), Some(from)) = (scan.render.as_mut(), range.cursor) {
+            render.extend(marked_since(db.pool(), from, &pin, &messages).await?);
+        }
         // No early return on an empty store: a reset one still has to
         // name the conversations it lost, so their documents go.
-        anyhow::Ok((build_chats(source_id, &messages, &calls), scan))
+        anyhow::Ok((build_chats(source_id, &messages, &calls, &marks), scan))
     })?;
     let projection = |_: &NormalizedChat| SMS_BLOB_PROJECTION;
     let blobs = ChatBlobs::new(db.pool(), Some(db.cas()), &projection);
@@ -183,6 +189,26 @@ async fn scan_diff(
     .await
 }
 
+/// The conversations holding a message whose read mark moved since
+/// `from`. A message that went took its mark with it, and the
+/// `sms_messages` diff already names its conversation.
+async fn marked_since(
+    pool: &sqlx::SqlitePool,
+    from: &str,
+    pin: &datalib_etl::pin::Pin,
+    messages: &[(String, Value)],
+) -> Result<Vec<String>> {
+    let moved = read_marks::moved(pool, from, pin.commit()).await?;
+    if moved.is_empty() {
+        return Ok(Vec::new());
+    }
+    let chat_of: HashMap<&str, &Value> = messages.iter().map(|(id, v)| (id.as_str(), v)).collect();
+    Ok(moved
+        .iter()
+        .filter_map(|m| chat_of.get(m.id.as_str()).map(|v| chat_id(v)))
+        .collect())
+}
+
 fn chat_id(v: &Value) -> String {
     let key = v
         .get("conversation_key")
@@ -208,11 +234,13 @@ fn build_chats(
     source_id: &str,
     messages: &[(String, Value)],
     calls: &[(String, Value)],
+    marks: &BTreeMap<String, ReadMark>,
 ) -> Vec<NormalizedChat> {
     let mut by_chat: BTreeMap<String, (Vec<&Value>, Inputs)> = BTreeMap::new();
     for (row_id, v) in messages {
         let (rows, inputs) = by_chat.entry(chat_id(v)).or_default();
         inputs.read("sms_messages", row_id);
+        inputs.read(read_marks::TABLE, row_id);
         for ref_name in attachment_refs(v) {
             inputs.read(
                 "sms_attachments",
@@ -247,7 +275,8 @@ fn build_chats(
             })
             .unwrap_or(&id)
             .to_string();
-        let mut items: Vec<NormalizedChatItem> = rows.iter().map(|v| item(source_id, v)).collect();
+        let mut items: Vec<NormalizedChatItem> =
+            rows.iter().map(|v| item(source_id, v, marks)).collect();
         items.sort_by_key(|i| i.date_ms);
 
         let mut by_month: BTreeMap<String, Vec<NormalizedChatItem>> = BTreeMap::new();
@@ -329,7 +358,7 @@ fn account(source_id: &str, rows: &[&Value]) -> Option<NormalizedContact> {
 /// An MMS `<addr>`'s `type` for its sender (the PDU's `From` header).
 const PDU_FROM: i64 = 137;
 
-fn item(source_id: &str, v: &Value) -> NormalizedChatItem {
+fn item(source_id: &str, v: &Value, marks: &BTreeMap<String, ReadMark>) -> NormalizedChatItem {
     let kind = v.get("kind").and_then(Value::as_str).unwrap_or("sms");
     // Missing or non-numeric `date` is "we don't know when", which is a
     // null `created_at` — not the epoch.
@@ -447,8 +476,16 @@ fn item(source_id: &str, v: &Value) -> NormalizedChatItem {
                 is_aside: false,
                 branch: Vec::new(),
                 // Only an explicit `read="0"` on a message someone else
-                // sent: an older store's rows carry no `read` at all.
-                unread: !is_me && v.get("read").and_then(Value::as_bool) == Some(false),
+                // sent: a backup that says nothing leaves no mark.
+                unread: is_unread(
+                    row_id,
+                    is_me,
+                    Marks {
+                        own: marks.get(row_id),
+                        conversation: None,
+                    },
+                    |_, _| None,
+                ),
                 replies: None,
                 recipients: if is_me {
                     sent_to(v, display)
@@ -576,7 +613,7 @@ mod tests {
             json!({"id":"nd1","kind":"sms","conversation_key":"+1410","conversation_display":"Jean-Luc Picard","is_me":false,"body":"When?","attachments":[]}),
             json!({"id":"nd2","kind":"sms","conversation_key":"+1410","conversation_display":"+1410","date":"not-a-number","is_me":true,"body":"Unclear","attachments":[]}),
         ];
-        let chats = build_chats("sms", &with_ids(&messages), &[]);
+        let chats = build_chats("sms", &with_ids(&messages), &[], &BTreeMap::new());
         let items: Vec<_> = chats[0].buckets.iter().flat_map(|b| &b.items).collect();
         assert_eq!(items.len(), 2, "undated rows are kept, not dropped");
         for i in &items {
@@ -588,20 +625,29 @@ mod tests {
     }
 
     /// Only a message someone else sent, and the backup says is
-    /// unread, renders unread; `read` absent (an older store) is unknown.
+    /// unread, renders unread; one with no mark is unknown, and a
+    /// `read` left in its payload is not read at all.
     #[test]
     fn only_an_incoming_message_marked_unread_is_unread() {
-        let row = |id: &str, is_me: bool, read: Value| {
+        let row = |id: &str, is_me: bool| {
             json!({"id":id,"kind":"sms","conversation_key":"+1410","conversation_display":"Jean-Luc Picard",
-                   "date":1778277198761i64,"is_me":is_me,"body":id,"read":read,"attachments":[]})
+                   "date":1778277198761i64,"is_me":is_me,"body":id,"read":false,"attachments":[]})
         };
         let messages = vec![
-            row("unread", false, json!(false)),
-            row("read", false, json!(true)),
-            row("unknown", false, Value::Null),
-            row("mine", true, json!(false)),
+            row("unread", false),
+            row("read", false),
+            row("unknown", false),
+            row("mine", true),
         ];
-        let chats = build_chats("sms", &with_ids(&messages), &[]);
+        let marks: BTreeMap<String, ReadMark> = [
+            ("unread", ReadMark::Read(false)),
+            ("read", ReadMark::Read(true)),
+            ("mine", ReadMark::Read(false)),
+        ]
+        .into_iter()
+        .map(|(id, mark)| (id.to_string(), mark))
+        .collect();
+        let chats = build_chats("sms", &with_ids(&messages), &[], &marks);
         let unread: Vec<&str> = chats[0]
             .buckets
             .iter()
@@ -627,7 +673,7 @@ mod tests {
             row("local", "sms", "5550123456", false),
             row("group", "mms", "+15550123456~+15550109876", false),
         ];
-        let chats = build_chats("sms", &with_ids(&messages), &[]);
+        let chats = build_chats("sms", &with_ids(&messages), &[], &BTreeMap::new());
         let handle_of = |id: &str| {
             chats
                 .iter()
@@ -658,7 +704,7 @@ mod tests {
             call("intl", "+1 (202) 555-0103"),
             call("local", "2025550103"),
         ];
-        let chats = build_chats("sms", &[], &with_ids(&calls));
+        let chats = build_chats("sms", &[], &with_ids(&calls), &BTreeMap::new());
         let handle_of = |id: &str| {
             chats
                 .iter()
@@ -730,7 +776,7 @@ mod tests {
                    "is_me": true, "address": "+12025550104", "body": "text",
                    "attachments": []}),
         ];
-        let chats = build_chats("sms", &with_ids(&messages), &[]);
+        let chats = build_chats("sms", &with_ids(&messages), &[], &BTreeMap::new());
         let author = |id: &str| {
             let item = chats
                 .iter()
@@ -774,7 +820,7 @@ mod tests {
             row("local", "sms", "2025550104", true),
             row("group", "mms", "+12025550104~+12025550105", true),
         ];
-        let chats = build_chats("sms", &with_ids(&messages), &[]);
+        let chats = build_chats("sms", &with_ids(&messages), &[], &BTreeMap::new());
         let recipients_of = |id: &str| -> Vec<(String, Option<String>, bool)> {
             chats
                 .iter()
@@ -821,7 +867,12 @@ mod tests {
         let calls = vec![
             json!({"id":"c1","kind":"call","conversation_key":"+1410","conversation_display":"Jean-Luc Picard","date":1778277000000i64,"call_type":"missed","duration":0}),
         ];
-        let chats = build_chats("sms", &with_ids(&messages), &with_ids(&calls));
+        let chats = build_chats(
+            "sms",
+            &with_ids(&messages),
+            &with_ids(&calls),
+            &BTreeMap::new(),
+        );
         assert_eq!(chats.len(), 1, "calls + texts on one number → one chat");
         assert_eq!(chats[0].display, "Jean-Luc Picard");
         // 3 items across the buckets (2 texts + 1 call).
@@ -849,7 +900,7 @@ mod tests {
             "date":1781811656000i64,"is_me":false,"text":"Happy Thurs",
             "attachments":["x1/image000001.gif"]
         })];
-        let chats = build_chats("sms", &with_ids(&messages), &[]);
+        let chats = build_chats("sms", &with_ids(&messages), &[], &BTreeMap::new());
         let it = chats[0].buckets[0]
             .items
             .iter()
@@ -875,7 +926,7 @@ mod tests {
             "id":"c9","kind":"call","conversation_key":"+1999","conversation_display":"Q",
             "date":1778277000000i64,"call_type":"missed","duration":0
         })];
-        let chats = build_chats("sms", &[], &with_ids(&calls));
+        let chats = build_chats("sms", &[], &with_ids(&calls), &BTreeMap::new());
         let it = &chats[0].buckets[0].items[0];
         assert_eq!(it.kind, ItemKind::System);
         assert_eq!(it.system_note.as_deref(), Some("Missed call — Q"));

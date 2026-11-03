@@ -30,9 +30,16 @@ rust_prost_toolchain(
     # can't pass `#[derive(A, B)]` as one option — split into two
     # separate `type_attribute` directives. Both get applied to
     # every generated type.
+    #
+    # A Signal message's `read` is the person's read mark, which the
+    # signal ingest keeps in its store's `read_marks` table instead
+    # (signal/INGEST.md): it is never written into the stored frame, and a
+    # stored frame without it still reads back.
     prost_opts = [
         "type_attribute=.=#[derive(::serde::Serialize)]",
         "type_attribute=.=#[derive(::serde::Deserialize)]",
+        "field_attribute=.signal.backup.ChatItem.IncomingMessageDetails.read=#[serde(skip_serializing)]",
+        "field_attribute=.signal.backup.ChatItem.IncomingMessageDetails.read=#[serde(default)]",
     ],
     prost_plugin = "@datalib_crates//:protoc-gen-prost__protoc-gen-prost",
     prost_runtime = ":prost_runtime",

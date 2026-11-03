@@ -1332,6 +1332,10 @@ ingested_backups
     total_byte_size
     ingested_at_utc
     tz_offset
+read_marks
+    id
+    read_through
+    read
 recipients
     id
     payload
@@ -1553,6 +1557,10 @@ ingested_files
     size_bytes
     last_finished_at_utc
     tz_offset
+read_marks
+    id
+    read_through
+    read
 sms_attachments
     id
     message_id
