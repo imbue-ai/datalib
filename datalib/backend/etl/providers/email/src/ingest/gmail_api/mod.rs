@@ -42,7 +42,7 @@ use super::envelope::GmailId;
 use super::labels;
 use super::listed::{self, Keeps, Named, WHOLE_ACCOUNT};
 use super::mbox;
-use super::schema_raw::{EmailRow, EmlBlobRow, GMAIL_API_VIA};
+use super::schema_raw::{EmlBlobRow, FetchedEmail, GMAIL_API_VIA};
 use api::{Client, GmailMessage, QuotaThrottle};
 use ingest::{Ingested, LabelIndex};
 
@@ -1041,9 +1041,10 @@ struct MessagesGet<'a> {
     relabeled_one_by_one: AtomicUsize,
 }
 
-/// A fetched message: its row, its `.eml` edge, and its bytes.
+/// A fetched message: its row and read mark, its `.eml` edge, and its
+/// bytes.
 struct Stored {
-    row: EmailRow,
+    email: FetchedEmail,
     eml: EmlBlobRow,
     body: Body,
 }
@@ -1084,7 +1085,7 @@ impl MessagesGet<'_> {
             }
         };
         Outcome::Got(Stored {
-            row: ingested.row,
+            email: ingested.email,
             eml,
             body,
         })
@@ -1103,9 +1104,9 @@ impl MessagesGet<'_> {
         }
         let mut kept = self.kept_threads.lock().expect("kept threads");
         if matches {
-            kept.insert(ingested.row.thread_id.clone());
+            kept.insert(ingested.email.row.thread_id.clone());
         }
-        matches || kept.contains(&ingested.row.thread_id)
+        matches || kept.contains(&ingested.email.row.thread_id)
     }
 
     /// A message whose bytes the store holds: its labels from the walks
@@ -1211,9 +1212,9 @@ impl Fetcher<Stored> for MessagesGet<'_> {
         for f in batch {
             match &f.outcome {
                 Outcome::Got(s) | Outcome::Unusable(s, ..) => {
-                    got.push(s.row.clone());
+                    got.push(s.email.clone());
                     edges.push(s);
-                    members.push((f.listed.key.clone(), s.row.thread_id.clone()));
+                    members.push((f.listed.key.clone(), s.email.row.thread_id.clone()));
                 }
                 Outcome::Gone => gone.push(f.listed.key.clone()),
                 Outcome::Failed(_) | Outcome::Skipped(..) => {}

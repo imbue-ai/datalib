@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use datalib_etl::progress::Progress;
+use datalib_etl::read_marks::ReadMark;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_email::ingest::db::{db_path_for, RawDb};
 use datalib_etl_email::ingest::mbox;
@@ -172,10 +173,12 @@ async fn star_trek_mbox_lands_envelope_rows_and_joins() {
     // `has_attachment` flag here; the rendered-blobs test exercises
     // the parse-time mail-parsing path.
 
-    // Geordi tagged Unread → no $seen (and possibly no keyword row at all if
-    // Unread was the only label that mapped to a keyword).
-    let geordi_kws = joins.keywords.get(&geordi.id).cloned().unwrap_or_default();
-    assert!(!geordi_kws.iter().any(|k| k == "$seen"));
+    // Geordi tagged Unread → marked unread; the rest are read. The mark
+    // is all there is of it: no `$seen` keyword row.
+    let marks = datalib_etl::read_marks::load(db.pool()).await.unwrap();
+    assert_eq!(marks.len(), emails.len());
+    assert_eq!(marks[&geordi.id], ReadMark::Read(false));
+    assert!(!joins.keywords.values().flatten().any(|k| k == "$seen"));
     let hayes = emails
         .iter()
         .find(|e| e.message_id.as_deref() == Some("briefing-001@enterprise.starfleet"))
@@ -185,7 +188,7 @@ async fn star_trek_mbox_lands_envelope_rows_and_joins() {
     let kws = &joins.keywords[&hayes.id];
     assert!(kws.iter().any(|k| k == "$flagged"));
     assert!(kws.iter().any(|k| k == "$important"));
-    assert!(kws.iter().any(|k| k == "$seen"));
+    assert_eq!(marks[&hayes.id], ReadMark::Read(true));
 
     // .eml bytes are in the CAS keyed by the email_blobs edge's blake3
     // (which mbox sets to the .eml's content hash at flush time).

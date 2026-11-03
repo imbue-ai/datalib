@@ -318,11 +318,12 @@ than the source's `blob_size_limit_bytes` is not stored; its
 files mail (Inbox, Sent, a label you made, the inbox categories) is a
 row in `mailboxes`, and an email's labels are its `email_mailboxes`
 rows (also `payload -> '$.mailboxIds'`). A label that is a flag is a
-keyword in `email_keywords` (also `payload -> '$.keywords'`):
+keyword in `email_keywords` (also `payload -> '$.keywords'`). Whether
+a message was read is its row in `read_marks`:
 
 | Gmail | in the mirror |
 |---|---|
-| no `UNREAD` label | keyword `$seen` (so unread is the *absence* of `$seen`) |
+| `UNREAD` | `read_marks.read` = 0 (and 1 without it) |
 | `STARRED` | keyword `$flagged` |
 | `IMPORTANT` | keyword `$important` |
 | `INBOX`, `SENT`, `DRAFT`, `TRASH`, `SPAM` | a mailbox with `role` `inbox`, `sent`, `drafts`, `trash`, `junk` |
@@ -330,8 +331,9 @@ keyword in `email_keywords` (also `payload -> '$.keywords'`):
 | muted | not kept |
 
 For Gmail, `emails.label_ids` puts them back together: every label id
-the message carries, as the API spells them, `UNREAD`, `STARRED` and
-`IMPORTANT` included, as a sorted JSON array (`["INBOX","UNREAD"]`).
+the message carries, as the API spells them, `STARRED` and `IMPORTANT`
+included, as a sorted JSON array (`["INBOX","STARRED"]`). `UNREAD` is
+not among them: it is in `read_marks`.
 `EXISTS (SELECT 1 FROM json_each(label_ids) WHERE value = 'INBOX')`
 asks whether a message is in the inbox.
 
@@ -437,7 +439,19 @@ Which keywords (flags) each email has, rewritten with it the same way.
 |---|---|
 | `id` | `<email id>#<keyword>` |
 | `email_id` | the `emails.id` |
-| `keyword` | `$seen`, `$flagged`, `$important`, or another keyword the server or the mbox file names |
+| `keyword` | `$flagged`, `$important`, or another keyword the server or the mbox file names; never `$seen`, which is in `read_marks` |
+
+### `read_marks`
+
+Whether each email was read, one row per email, rewritten with it and
+gone with it. JMAP's `$seen`, Gmail's `UNREAD` and an mbox's `Unread`
+label all land here and nowhere else.
+
+| column | what it holds |
+|---|---|
+| `id` | the `emails.id` |
+| `read` | 1 if it was read, 0 if not |
+| `read_through` | NULL for email (another source's mark on a whole conversation) |
 
 ### `email_blobs`
 

@@ -32,6 +32,7 @@ pub const MIRRORED: &[&str] = &[
     "emails",
     "email_mailboxes",
     "email_keywords",
+    "read_marks",
     "email_blobs",
     "listed_messages",
     "listed_whole",
@@ -138,6 +139,7 @@ fn before() -> Account {
                 mailboxes,
                 thread: format!("T{}", 1 + (n - 1) / 20),
                 flagged: false,
+                seen: true,
             },
         );
     }
@@ -157,6 +159,7 @@ fn after() -> Account {
             mailboxes: vec!["MB1".into()],
             thread: "T3".into(),
             flagged: false,
+            seen: true,
         },
     );
     a.emails.get_mut("M03").unwrap().mailboxes = vec!["MB3".into()];

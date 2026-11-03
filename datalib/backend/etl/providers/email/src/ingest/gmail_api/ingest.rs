@@ -7,7 +7,7 @@ use datalib_etl::blob_cas::blake3_hex;
 
 use super::super::envelope::{self, GmailId, TransportFacts};
 use super::super::labels::{self, LabelMap};
-use super::super::schema_raw::{EmailRow, GMAIL_API_VIA};
+use super::super::schema_raw::{FetchedEmail, GMAIL_API_VIA};
 use super::super::K_ONLY_EXTRACT_LABELS;
 use super::api::{GmailMessage, Label};
 use datalib_etl::download_problems;
@@ -134,7 +134,7 @@ impl LabelIndex {
         }
         // JMAP models read-ness as the presence of `$seen`; Gmail models
         // it as the presence of `UNREAD`. Same convention the mbox path
-        // uses, so the two agree.
+        // uses, so the two agree; the row keeps it as a read mark.
         if !is_unread {
             keywords.insert("$seen".to_string());
         }
@@ -231,7 +231,7 @@ pub struct MailboxPlan {
 
 /// What one ingested message contributes.
 pub struct Ingested {
-    pub row: EmailRow,
+    pub email: FetchedEmail,
     pub email_id: String,
     pub blob_id: String,
     pub raw: Vec<u8>,
@@ -280,11 +280,11 @@ pub fn ingest(account_id: &str, index: &LabelIndex, msg: &GmailMessage) -> Resul
         );
     }
 
-    let row = EmailRow::from_jmap_envelope(account_id, &env).ok_or_else(|| {
+    let email = FetchedEmail::from_jmap_envelope(account_id, &env).ok_or_else(|| {
         anyhow::anyhow!("could not build an email row for Gmail message {}", msg.id)
     })?;
     Ok(Ingested {
-        row,
+        email,
         email_id,
         blob_id,
         raw: msg.raw.clone(),
