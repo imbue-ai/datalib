@@ -139,6 +139,13 @@ deleted person in two conversations is two handles; several in one
 group are none. A `google:name/` handle is a name for the same reason: a
 comment on a Drive file names its author and nothing else.
 
+No handle holds a character that changes how it shows without showing
+itself: Unicode's format characters (`Cf`), such as a bidi control
+(U+202E), which reorders the text around it, or a zero-width space
+(U+200B), which makes two handles that look alike different handles. A
+`facebook` or `google` name may still hold a joiner (U+200C, U+200D),
+which some scripts and emoji need between two letters.
+
 `Handle::parse` reads back exactly what `as_str` wrote and refuses any
 other spelling, which is what every store and every wire format goes
 through (serde uses it). `Handle::rebuild` is looser: it runs a stored
@@ -182,10 +189,9 @@ or refused, a value normalized another way. Two things hang off it:
   new rules cannot read, or whose new spelling another contact holds,
   is kept as written and logged, never dropped.
 
-A change to `tel` or `email` has a second copy to keep in step:
-`handleFromUri` in `ui/src/cards/chipLinks.js`. Its `tel` rule today is
-looser than Rust's (no ten-digit rule under `+1`, no trunk `(0)`), so
-the UI can mark a chip that `Handle::from_uri` would refuse.
+Every rule has a second copy to keep in step: `handleFromUri` in
+`ui/src/cards/chipLinks.js`, tested over the same cases in
+`tests/chip_links.test.ts`.
 
 **A new kind is not a rules change**: no stored handle reads
 differently, so the version stays. It touches these places. The
@@ -588,9 +594,7 @@ Everything is in `datalib/ui/src/cards/`:
   [`chips.md`](chips.md)); a link `linkify` made from a
   bare address in running text is left alone, so a signature's address
   stays an address. Plain JavaScript, so the render preview runs it
-  too. It mirrors `to_uri` and `from_uri` over the same test cases,
-  and refuses besides a handle with a bidi control or an invisible
-  character in it, which `Handle` still accepts.
+  too. It mirrors `to_uri` and `from_uri` over the same test cases.
 - `contacts.ts` holds the pure rules, unit-tested in `contacts.test.ts`:
   `chipLook` (what a chip shows, from the contact if there is one,
   else the best-ranked source contact, else what the source showed),
