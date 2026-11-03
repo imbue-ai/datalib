@@ -8,10 +8,20 @@
 // is the vocabulary the renderers actually emit — the `div.msg` section
 // wrappers and their `data-*` ids (a chart's `data-time-series` among
 // them), `details`/`summary`, `time`, `audio` and `video`, links with
-// `target`, and tables — plus whatever the UI decorates onto it
+// `target="_blank"`, and tables — plus whatever the UI decorates onto it
 // afterwards. No iframe survives: nothing a renderer writes frames a
 // page, and an `.html` attachment framed would sit inside the app's own
 // chrome.
+//
+// A link is an `<a>`, in one of the schemes the app opens, and opens in
+// place or in a new window, never over the frame's parent: no `<area>`,
+// no MathML `href`, no other `target`. What a click on one does is the
+// document card's to decide (`chatLink.ts`).
+//
+// A chip — a link the app draws as a person, a group or a step — is
+// marked only by the app's own markdown plugin (`chipLinks.js`), which
+// signs its marks with the `chipMark` the caller passes; a mark the
+// body's own HTML carries is taken off.
 //
 // A reference to a remote host — an image, a video, a CSS background —
 // is not a script but a request the browser would make on the sender's
@@ -44,6 +54,9 @@ import {
 } from "./remoteMedia";
 
 export type SanitizeOptions = {
+  /** The value the markdown plugin signed this render's chip links
+   *  with. Absent: no link is a chip. */
+  chipMark?: string;
   /** Which remote references may load, through the server — the
    *  server's own answer, asked beforehand. Absent: none. */
   accept?: (url: string) => boolean;
@@ -64,6 +77,17 @@ export type Sanitized = {
 let accept: (url: string) => boolean = () => false;
 let context: RemoteContext = NO_CONTEXT;
 let found: RemoteRef[] = [];
+let chipMark: string | null = null;
+
+const CHIP_MARK = "data-chip-mark";
+const CHIP_ATTRS = ["data-handle", "data-entity", "data-contact"];
+
+// A presentation attribute of SVG's (`fill`, `filter`, `mask`, …) reads
+// as CSS, so a `url(…)` in one is a fetch. One naming a part of the
+// body itself (`url(#gradient)`) is not.
+const SVG_LOCAL_REF = /^\s*url\(\s*(["']?)#[\w.:-]+\1\s*\)\s*$/i;
+const SVG_REF = /url\(|image-set\(|\\/i;
+const SVG_NS = "http://www.w3.org/2000/svg";
 
 /** Neither remote nor another scheme (`data:`, `blob:`, which the CSP
  *  judges): a path the browser resolves against this origin. */
@@ -90,6 +114,18 @@ DOMPurify.addHook("afterSanitizeAttributes", (node) => {
   // this page held.
   for (const name of Array.from(el.attributes, (a) => a.name)) {
     if (name.startsWith("data-remote-")) el.removeAttribute(name);
+  }
+  // `_blank` is the one target a link may name: any other loads the link
+  // over the frame's parent, the whole app.
+  if (el.hasAttribute("target") && el.getAttribute("target") !== "_blank") {
+    el.removeAttribute("target");
+  }
+  keepOnlyRenderedChips(el);
+  if (el.namespaceURI === SVG_NS) {
+    for (const { name, value } of Array.from(el.attributes)) {
+      if (name === "style" || loadingAttributes(el.nodeName).includes(name)) continue;
+      if (SVG_REF.test(value) && !SVG_LOCAL_REF.test(value)) el.removeAttribute(name);
+    }
   }
   for (const attr of loadingAttributes(el.nodeName)) {
     const raw = el.getAttribute(attr);
@@ -120,6 +156,17 @@ DOMPurify.addHook("afterSanitizeAttributes", (node) => {
   }
 });
 
+function keepOnlyRenderedChips(el: Element): void {
+  const signed = chipMark !== null && el.getAttribute(CHIP_MARK) === chipMark;
+  el.removeAttribute(CHIP_MARK);
+  if (signed) return;
+  for (const name of CHIP_ATTRS) el.removeAttribute(name);
+  if (el.classList.contains("chip")) {
+    el.classList.remove("chip");
+    if (el.classList.length === 0) el.removeAttribute("class");
+  }
+}
+
 /** The attribute with its references to our own origin made safe, and
  *  written back; null when nothing is left of it. */
 function ownPass(el: Element, attr: string, value: string): string | null {
@@ -137,23 +184,43 @@ function ownPass(el: Element, attr: string, value: string): string | null {
 export function sanitizeRenderedHtml(html: string, options: SanitizeOptions = {}): Sanitized {
   accept = options.accept ?? (() => false);
   context = options.context ?? NO_CONTEXT;
+  chipMark = options.chipMark ?? null;
   found = [];
   const clean = DOMPurify.sanitize(html, {
-    // DOMPurify's own list plus the two schemes a chip link can carry:
-    // Slack's deep link for a user, and `datalib:` for our own entities
-    // (docs/dev/chips.md). An href in any other scheme is dropped.
+    // The schemes the app opens (`externalLinks.ts`), the two a chip link
+    // can carry — Slack's deep link for a user, and `datalib:` for our
+    // own entities (docs/dev/chips.md) — and a relative path. An href in
+    // any other scheme is dropped. An email's `cid:` image the renderer
+    // could not match to an attachment would load nothing anyway.
     ALLOWED_URI_REGEXP:
-      /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|matrix|slack|datalib):|[^a-z]|[a-z+.-]+(?:[^a-z+.\-:]|$))/i,
-    // `target` is what makes an outlink open outside the app.
+      /^(?:(?:https?|mailto|tel|slack|datalib):|[^a-z]|[a-z+.-]+(?:[^a-z+.\-:]|$))/i,
+    // `target` is what makes an outlink open outside the app; the hook
+    // keeps only `_blank`.
     ADD_ATTR: ["target", "controls", "datetime", "loading"],
     // An inline document would be a second page in our origin.
     FORBID_ATTR: ["srcdoc"],
     // No renderer emits a form or a control, and a form is a request the
     // page would send with its session attached. The copy button the UI
     // adds is injected after this runs, so it is unaffected.
-    FORBID_TAGS: ["form", "input", "button", "select", "textarea", "style", "link", "meta", "base"],
+    // An image map's `<area>` and MathML are links of other shapes, which
+    // nothing a renderer writes uses.
+    FORBID_TAGS: [
+      "form",
+      "input",
+      "button",
+      "select",
+      "textarea",
+      "style",
+      "link",
+      "meta",
+      "base",
+      "map",
+      "area",
+      "math",
+    ],
   });
   const remote = found;
   found = [];
+  chipMark = null;
   return { html: clean, remote };
 }

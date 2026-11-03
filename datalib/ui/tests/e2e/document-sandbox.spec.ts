@@ -121,6 +121,82 @@ test("the app's own controls still work inside the frame", async ({ page }) => {
   await expect(copy).toHaveClass(/copied|copy-failed/);
 });
 
+// A link need not be an `<a>`: an image map's `<area>` and SVG's `<a>` are links
+// too, and with `target=_top` one takes the whole app's tab. Two guards stand
+// between a body's and a click: the sanitizer drops the `<area>` and any target
+// but `_blank` (`sanitize.test.ts` holds it to that), and the frame cancels
+// every click the app did not take itself (`finishFrameClick`). These write the
+// links in past the sanitizer; the second turns the frame's guard off too, and
+// checks each link then really takes the tab.
+
+const OTHER_LINKS =
+  `<map name="p-map"><area id="p-area" shape="rect" coords="0,0,200,40" href="/?hijacked=area" target="_top"></map>` +
+  `<img id="p-map-img" usemap="#p-map" width="200" height="40" style="display:block;width:200px;height:40px;background:#08f" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">` +
+  `<svg id="p-svg" width="200" height="40" style="display:block;margin-top:20px">` +
+  `<a xlink:href="/?hijacked=svg" target="_top"><rect width="200" height="40" fill="#f80"/></a></svg>`;
+
+/** Where each link is clicked — the image its map covers, the SVG link's
+ *  shape — and the element the click lands on. */
+const OTHER_LINK_SPOTS = [
+  { name: "area", at: "#p-map-img", target: "p-area" },
+  { name: "svg", at: "#p-svg rect", target: "rect" },
+];
+
+async function writeOtherLinks(page: Page): Promise<void> {
+  await openADocument(page);
+  await page.locator("iframe.doc-frame").evaluate((el: HTMLIFrameElement, html: string) => {
+    const host = el.contentDocument!.createElement("div");
+    host.innerHTML = html;
+    el.contentDocument!.body.prepend(host);
+    // The control: the test's own listener, last on the frame's window, sees
+    // each click after every listener of the app's.
+    const seen: string[] = [];
+    (window as unknown as { __clicks: string[] }).__clicks = seen;
+    el.contentWindow!.addEventListener("click", (ev) => {
+      const t = ev.target as Element;
+      seen.push(`${t.id || t.localName}: ${ev.defaultPrevented ? "cancelled" : "followed"}`);
+    });
+  }, OTHER_LINKS);
+}
+
+/** The clicks the frame saw; null once a link has taken the tab, with the page that held them. */
+const clicksSeen = (page: Page) =>
+  page.evaluate(() => {
+    const seen = (window as unknown as { __clicks?: string[] }).__clicks;
+    return seen ? [...seen] : null;
+  });
+
+test("a link of another shape in a body cannot take the app's tab", async ({ page }) => {
+  await writeOtherLinks(page);
+  const before = page.url();
+  const frame = page.frameLocator("iframe.doc-frame");
+  const expected: string[] = [];
+  for (const { at, target } of OTHER_LINK_SPOTS) {
+    await frame.locator(at).click({ position: { x: 10, y: 10 } });
+    expected.push(`${target}: cancelled`);
+    await expect.poll(() => clicksSeen(page)).toEqual(expected);
+  }
+  expect(page.url()).toBe(before);
+});
+
+test.describe("with the frame's click guard turned off", () => {
+  for (const { name, at } of OTHER_LINK_SPOTS) {
+    test(`the ${name} link takes the app's tab`, async ({ page }) => {
+      await writeOtherLinks(page);
+      // The guard is the app's listener on the frame's document; a capturing
+      // listener on the frame's window runs first and keeps every click from it.
+      await page.locator("iframe.doc-frame").evaluate((el: HTMLIFrameElement) => {
+        el.contentWindow!.addEventListener("click", (ev) => ev.stopImmediatePropagation(), true);
+      });
+      await page
+        .frameLocator("iframe.doc-frame")
+        .locator(at)
+        .click({ position: { x: 10, y: 10 } });
+      await page.waitForURL(new RegExp(`hijacked=${name}`), { timeout: 10_000 });
+    });
+  }
+});
+
 // Quark's prize email in the TNG fixture carries every trick the audits found in a
 // body. Between its sender and a click stand five guards:
 //
@@ -352,7 +428,8 @@ test.describe("Quark's prize email", () => {
     expect(await whatIsInFrame(page)).toEqual({
       unsubscribe: null, // the `javascript:` href taken off
       askQuark: "datalib:person/%%%", // the malformed link reaches the app: `errors` below
-      claimStyle: "display:block;padding:12px;background:#fc0", // so the renderer was skipped
+      // so the renderer was skipped; the style as the browser's CSS parser writes it back
+      claimStyle: "display: block; padding: 12px; background: rgb(255, 204, 0);",
       iframes: "0", // every iframe dropped
       handlers: "", // and every handler
     });

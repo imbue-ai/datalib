@@ -63,7 +63,7 @@ describe("sanitizeRenderedHtml and remote references", () => {
     expect(html).not.toMatch(/(?<![\w-])(src|poster|background|href|srcset)="(https?:|\/\/)/);
     expect(html).not.toMatch(/ style="[^"]*url\(["']?(https?:|\/\/)/);
     expect(root.querySelector("p")!.getAttribute("style")).toBe(
-      "color: red; background-image: none",
+      "color: red; background-image: none;",
     );
     expect(root.querySelector("source")!.getAttribute("srcset")).toBeNull();
     expect(root.querySelector("td")!.getAttribute("background")).toBeNull();

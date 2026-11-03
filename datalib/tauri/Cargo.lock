@@ -662,6 +662,7 @@ dependencies = [
  "tauri-plugin-window-state",
  "tempfile",
  "trash",
+ "url",
 ]
 
 [[package]]

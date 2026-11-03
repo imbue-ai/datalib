@@ -42,6 +42,42 @@ export function linkFromClick(ev: MouseEvent): ClickedLink | null {
   return { href, resolved: a.href, browserClick: isBrowserClick(ev) };
 }
 
+/**
+ * The frame's last listener on a click: one no listener of the app's
+ * took has its default cancelled, so no kind of link in a body follows
+ * itself — an `<area>`, SVG's `<a>`, MathML's `href`, or whatever the
+ * sanitizer let through. The browser keeps only what a body needs it
+ * for: a `<summary>` opening its `<details>`, and a media element's own
+ * controls. A same-page anchor is scrolled to here: followed, it would
+ * load the app's own URL in the frame, which is what an `about:srcdoc`
+ * document resolves `#id` against.
+ */
+export function finishFrameClick(ev: MouseEvent): void {
+  if (ev.defaultPrevented) return;
+  const t = ev.target as Node | null;
+  const el = t?.nodeType === Node.ELEMENT_NODE ? (t as Element) : (t?.parentElement ?? null);
+  if (el && keepsDefault(el)) return;
+  ev.preventDefault();
+  if (el && ev.type === "click" && !isBrowserClick(ev)) samePageTarget(el)?.scrollIntoView?.();
+}
+
+function keepsDefault(el: Element): boolean {
+  return el.closest("summary, audio, video") !== null && el.closest("a, area, [href]") === null;
+}
+
+function samePageTarget(el: Element): Element | null {
+  const href = el.closest("a[href]")?.getAttribute("href") ?? "";
+  if (!href.startsWith("#") || chatUuidFromHref(href)) return null;
+  let id: string;
+  try {
+    id = decodeURIComponent(href.slice(1));
+  } catch {
+    return null;
+  }
+  const doc = el.ownerDocument;
+  return doc.getElementById(id) ?? doc.getElementsByName(id)[0] ?? null;
+}
+
 /** The markdown uuid an internal `/chat/<uuid>` href names, or null. */
 export function chatUuidFromHref(href: string): string | null {
   const m = CHAT_HREF_RE.exec(href);

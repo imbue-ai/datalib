@@ -24,11 +24,29 @@ const KINDS = new Set([
   "ai_model",
 ]);
 
+// A character that changes how a handle shows without showing itself:
+// a bidi control reorders the text around it, and a zero-width one makes
+// two handles that look alike different handles. A name may hold a
+// joiner, which some scripts and emoji need between two letters.
+const HIDDEN = /\p{Cf}/u;
+const HIDDEN_IN_A_NAME = /(?![\u200c\u200d])\p{Cf}/u;
+
 /** The handle (`email:…`, `tel:…`, `slack:T/U`) a URI names, or null
- *  when it names none this build knows.
+ *  when it names none this build knows, or one that would not show as
+ *  what it is.
  *  @param {string} href
  *  @returns {string | null} */
 export function handleFromUri(href) {
+  const handle = readHandle(href);
+  if (!handle) return null;
+  const kind = handle.slice(0, handle.indexOf(":"));
+  const hidden = kind === "facebook" || kind === "google" ? HIDDEN_IN_A_NAME : HIDDEN;
+  return hidden.test(handle) ? null : handle;
+}
+
+/** @param {string} href
+ *  @returns {string | null} */
+function readHandle(href) {
   const uri = href.trim();
   const scheme = uri.slice(0, uri.indexOf(":")).toLowerCase();
   if (scheme === "mailto") {
@@ -39,10 +57,7 @@ export function handleFromUri(href) {
       .toLowerCase();
     return /^[^\s<>,@]+@[^\s<>,@]*\.[^\s<>,@]*$/.test(addr) ? `email:${addr}` : null;
   }
-  if (scheme === "tel") {
-    const number = uri.slice("tel:".length).split(";")[0].replace(/[\s().-]/g, "");
-    return /^\+\d{7,15}$/.test(number) ? `tel:${number}` : null;
-  }
+  if (scheme === "tel") return telHandle(uri.slice("tel:".length));
   if (uri.toLowerCase().startsWith("datalib:handle/")) {
     // The spelling for a kind with no standard scheme of its own.
     const rest = uri.slice("datalib:handle/".length);
@@ -121,6 +136,38 @@ export function uriFromHandle(handle) {
   return null;
 }
 
+/** `Handle::tel`: a number in international form, its separators and a
+ *  trunk `(0)` after the country code dropped, its `;` parameters too.
+ *  @param {string} raw
+ *  @returns {string | null} */
+function telHandle(raw) {
+  const folded = raw.split(";")[0].replace(/[\s\-.\u2010-\u2015\u2212\ufe58\ufe63\uff0d]/gu, " ");
+  const plus = folded.trimStart();
+  if (!plus.startsWith("+")) return null;
+  let digits = "";
+  for (const c of dropTrunkZero(plus.slice(1))) {
+    if (c >= "0" && c <= "9") digits += c;
+    else if (c !== " " && c !== "(" && c !== ")") return null;
+  }
+  // E.164 allows at most 15 digits; fewer than 7 is a short code. Under
+  // country code 1 (NANP) every number has ten digits after the 1.
+  const plausible = digits.startsWith("1")
+    ? digits.length === 11
+    : digits.length >= 7 && digits.length <= 15 && !digits.startsWith("0");
+  return plausible ? `tel:+${digits}` : null;
+}
+
+/** `rest` (what follows the `+`) without a `(0)` after the country code.
+ *  @param {string} rest
+ *  @returns {string} */
+function dropTrunkZero(rest) {
+  const squeezed = rest.replace(/ /g, "");
+  const at = squeezed.indexOf("(0)");
+  return at >= 1 && at <= 3 && /^\d+$/.test(squeezed.slice(0, at))
+    ? squeezed.slice(0, at) + squeezed.slice(at + 3)
+    : rest;
+}
+
 /** A UUID, with or without dashes in any case, lowercase with dashes.
  *  @param {string} value
  *  @returns {string | null} */
@@ -189,7 +236,7 @@ function facebookHandle(value) {
   const form = value.slice(0, slash);
   const rest = value.slice(slash + 1);
   if (slash > 0 && form === "name") {
-    const name = rest.trim().split(/\s+/).join(" ");
+    const name = collapseWhitespace(rest);
     // eslint-disable-next-line no-control-regex
     return name && !/[\u0000-\u001f\u007f-\u009f]/.test(name) ? `facebook:name/${name}` : null;
   }
@@ -206,9 +253,21 @@ function facebookHandle(value) {
  *  @returns {string | null} */
 function googleHandle(value) {
   if (!value.startsWith("name/")) return null;
-  const name = value.slice("name/".length).trim().split(/\s+/).join(" ");
+  const name = collapseWhitespace(value.slice("name/".length));
   // eslint-disable-next-line no-control-regex
   return name && !/[\u0000-\u001f\u007f-\u009f]/.test(name) ? `google:name/${name}` : null;
+}
+
+/** A name's words joined by one space, as Rust's `split_whitespace`
+ *  splits them: on Unicode's White_Space, which unlike `\s` leaves a
+ *  U+FEFF in place for the check that refuses it.
+ *  @param {string} name
+ *  @returns {string} */
+function collapseWhitespace(name) {
+  return name
+    .split(/\p{White_Space}+/u)
+    .filter((w) => w !== "")
+    .join(" ");
 }
 
 /** Every byte but an unreserved one and `/` as `%XX`, as `to_uri` does.
@@ -251,7 +310,9 @@ export function contactFromUri(href) {
  *  gets `class="chip"` and `data-handle`; one naming a group or a step,
  *  `class="chip"` and `data-entity` (its URI). A link linkify made from a bare
  *  address in running text is left alone — its token says so — so a
- *  signature's address stays an address.
+ *  signature's address stays an address. With `env.chipMark`, each mark
+ *  is signed with it in `data-chip-mark`, for the sanitizer to tell this
+ *  plugin's chips from ones the body's own HTML claims to be.
  *  @param {import("markdown-it").MarkdownIt} md */
 export function chipLinks(md) {
   const fallback =
@@ -262,12 +323,12 @@ export function chipLinks(md) {
     const href = token.attrGet("href");
     if (token.markup !== "linkify" && typeof href === "string") {
       const handle = handleFromUri(href);
-      if (handle) {
+      const entity = handle ? null : entityFromUri(href);
+      if (handle || entity) {
         token.attrJoin("class", "chip");
-        token.attrSet("data-handle", handle);
-      } else if (entityFromUri(href)) {
-        token.attrJoin("class", "chip");
-        token.attrSet("data-entity", href.trim());
+        if (handle) token.attrSet("data-handle", handle);
+        else token.attrSet("data-entity", href.trim());
+        if (typeof env?.chipMark === "string") token.attrSet("data-chip-mark", env.chipMark);
       }
     }
     return fallback(tokens, idx, options, env, self);

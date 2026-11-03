@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { chatUuidFromHref, linkFromClick, rewriteIdButtonsForCopy } from "../src/cards/chatLink";
+import {
+  chatUuidFromHref,
+  finishFrameClick,
+  linkFromClick,
+  rewriteIdButtonsForCopy,
+} from "../src/cards/chatLink";
 import { copyWithHandles } from "../src/cards/contacts";
 
 // Forge a MouseEvent-shaped object whose `target` is an `<a>` carrying
@@ -75,6 +80,67 @@ describe("linkFromClick", () => {
     for (const opts of [{ metaKey: true }, { ctrlKey: true }, { shiftKey: true }, { button: 1 }]) {
       expect(linkFromClick(clickOn("/chat/u4", opts))?.browserClick).toBe(true);
     }
+  });
+});
+
+/// The frame's last listener: a click the app did not take is cancelled,
+/// so no kind of link in a body follows itself, whatever the sanitizer
+/// let through (`ChatBody.ce.vue`).
+describe("finishFrameClick", () => {
+  /** Whether a click on the element `pick` finds in `html` keeps the
+   *  browser's own action after the frame's last listener. */
+  function keptAfterClick(html: string, pick: string, init: MouseEventInit = {}): boolean {
+    const root = document.createElement("div");
+    root.innerHTML = html;
+    document.body.append(root);
+    document.addEventListener("click", finishFrameClick);
+    document.addEventListener("auxclick", finishFrameClick);
+    try {
+      const ev = new MouseEvent(init.button === 1 ? "auxclick" : "click", {
+        bubbles: true,
+        cancelable: true,
+        ...init,
+      });
+      root.querySelector(pick)!.dispatchEvent(ev);
+      return !ev.defaultPrevented;
+    } finally {
+      document.removeEventListener("click", finishFrameClick);
+      document.removeEventListener("auxclick", finishFrameClick);
+      root.remove();
+    }
+  }
+
+  it("cancels every kind of link, plain click or not", () => {
+    const area = `<map name="m"><area id="t" shape="rect" coords="0,0,9,9" href="https://x.example/" target="_top"></map>`;
+    const svg = `<svg><a xlink:href="https://x.example/" target="_top"><text id="t">s</text></a></svg>`;
+    const math = `<math><mi id="t" href="https://x.example/">x</mi></math>`;
+    const anchor = `<a href="https://x.example/" target="_top"><span id="t">a</span></a>`;
+    for (const html of [area, svg, math, anchor]) {
+      expect(keptAfterClick(html, "#t"), html).toBe(false);
+      expect(keptAfterClick(html, "#t", { metaKey: true }), html).toBe(false);
+      expect(keptAfterClick(html, "#t", { button: 1 }), html).toBe(false);
+    }
+  });
+
+  it("keeps a summary opening its details, and a media element's controls", () => {
+    expect(
+      keptAfterClick(`<details><summary><b id="t">3 tool calls</b></summary></details>`, "#t"),
+    ).toBe(true);
+    expect(keptAfterClick(`<video id="t" controls></video>`, "#t")).toBe(true);
+    expect(keptAfterClick(`<audio id="t" controls></audio>`, "#t")).toBe(true);
+  });
+
+  it("does not keep a link that sits in a summary", () => {
+    expect(
+      keptAfterClick(
+        `<details><summary><a id="t" href="https://x.example/">x</a></summary></details>`,
+        "#t",
+      ),
+    ).toBe(false);
+  });
+
+  it("scrolls a same-page anchor itself rather than let the frame navigate", () => {
+    expect(keptAfterClick(`<a id="t" href="#fn-1">1</a><p id="fn-1">note</p>`, "#t")).toBe(false);
   });
 });
 

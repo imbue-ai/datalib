@@ -87,9 +87,14 @@ each store's step in a column.
    link whose href names a handle `class="chip" data-handle="<handle>"`,
    and one naming a group or step `class="chip" data-entity="<uri>"`.
    A link `linkify` made from a bare address in running text is left
-   alone, so a signature's address stays an address. The sanitizer
-   (`sanitize.ts`) admits the `slack:` and `datalib:` schemes beside
-   the standard ones.
+   alone, so a signature's address stays an address. The plugin signs
+   each mark with a value fresh for that render, and the sanitizer
+   (`sanitize.ts`) takes `class="chip"`, `data-handle`, `data-entity`
+   and `data-contact` off anything not signed, so a body's own HTML
+   cannot claim to be a chip. It admits the `slack:` and `datalib:`
+   schemes beside the web, mail and phone. A handle holding a bidi
+   control or an invisible character is not one: two handles that look
+   alike would draw as one person.
 2. **Asking.** The surface asks the resolver for that kind what each
    chip names ([Resolving](#resolving)).
 3. **Drawing.** `drawChip(el, look)` in `contacts.ts` draws a chip from
@@ -429,8 +434,10 @@ is known); everywhere else both open a search beside the card. The
 row's Browse opens its browse card, with the source's columns, from
 every surface. A
 contact chip (`data-contact`) has no card of its own yet, so it
-offers copy and "Everything with" only. A click with a modifier on a person chip is the browser's, as
-on any link; no click on a `datalib:` link ever leaves the app. The mail
+offers copy and "Everything with" only. A click with a modifier on a person chip opens its link
+outside the app, as on any link, when it is a web, mail or phone link; a
+`slack://` one goes nowhere, and no click on a `datalib:` link ever
+leaves the app (`externalLinks.ts`). The mail
 app opens only from the menu's Compose entry, through `openExternal`. A
 double-click opens a card by its card source (`cardSources.ts`, which
 carries no components, so naming a card does not load it).
