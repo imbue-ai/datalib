@@ -1138,7 +1138,7 @@ function loginFailed(name: string, status: ConnectAttempt) {
     message: "",
     failure: {
       issue: status.issue ?? "unknown",
-      detail: status.output || "The login did not complete.",
+      detail: status.detail || "The login did not complete.",
     },
   };
 }

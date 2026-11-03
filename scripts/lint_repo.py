@@ -22,10 +22,11 @@ instead from `bazel run //:precommit` and as a plain step in
      grid within each tier's table).
  10. No workflow step initializes an empty bash array: expanding one
      is "unbound variable" on the macOS runners' bash 3.2.
- 11. No doc, config or script tells anyone to run `npx -y latchkey` or
-     `npx -y @tobilu/qmd` without a version: bare `npx -y` resolves
-     `latest` at run time, and those two commands are the ones a
-     person pastes a live session cookie into.
+ 11. No doc, config or script tells anyone to run latchkey or
+     `@tobilu/qmd` through a package runner (`npx`, `npm exec`,
+     `pnpm dlx`, `yarn dlx`, `bunx`) without an exact version: a runner
+     resolves anything else at run time, and those two commands are the
+     ones a person pastes a live session cookie into.
  12. Every sqlx SQLite pool turns off `idle_timeout` and `max_lifetime`,
      and none is built by a shortcut that takes sqlx's defaults: either
      setting gives the pool a maintenance task, and sqlx 0.9's can spin
@@ -691,13 +692,72 @@ def _check_manual_targets_still_build(root: Path) -> int:
 # the PATH, and the app renders the pinned form in every hint it shows.
 # The docs were the one place the version floated (#140): `npx -y
 # latchkey auth set … $(pbpaste)` hands a session cookie to whatever npm
-# served as `latest` that minute. So the only spellings allowed in prose
-# are the bare launcher (`latchkey …`) or a pinned `npx -y latchkey@<v>`.
+# served as `latest` that minute. So the only spellings allowed are the
+# bare launcher (`latchkey …`), or a runner given the package at an exact
+# version: `npx -y latchkey@3.21.0`, or the pin as a placeholder
+# (`@<LATCHKEY_VERSION>`, `@{LATCHKEY_VERSION}`, `@${LATCHKEY_VERSION}`).
+# `@latest`, `@3` and no version at all are refused.
 #
-# The name must be followed by whitespace to count: a mention in
-# backticks (`npx -y latchkey` in a sentence about the rule) is prose
-# about the command, not the command.
-_FLOATING_NPX = re.compile(r"npx\s+(?:-y\s+)?(?:latchkey|@tobilu/qmd)(?=\s)")
+# Every package a runner is handed counts, `-p`/`--package` included;
+# after one of those, the next word is the command, not a package. A
+# package named last in a backtick span (`npx -y latchkey` in a sentence
+# about the rule) is prose about the command, not the command.
+_PACKAGE_RUNNER = re.compile(
+    r"(?<![\w-])(?:npx|bunx|bun\s+x|npm\s+exec|npm\s+x|pnpm\s+dlx|yarn\s+dlx)\b"
+)
+_PINNED_PACKAGES = ("latchkey", "@tobilu/qmd")
+_EXACT_VERSION = re.compile(r"\d+\.\d+\.\d+|<[A-Za-z_]+>|\{[A-Za-z_]+\}|\$\{?[A-Za-z_]+\}?")
+_COMMAND_ENDS = re.compile(r"[;|&)`]")
+
+
+def _runner_packages(command: str) -> list[str]:
+    """The packages a runner invocation names, from the words after it."""
+    words = command.split()
+    packages: list[str] = []
+    named_by_flag = False
+    i = 0
+    while i < len(words):
+        word = words[i]
+        if word in ("-p", "--package"):
+            packages.append(words[i + 1] if i + 1 < len(words) else "")
+            named_by_flag = True
+            i += 2
+        elif word.startswith("--package="):
+            packages.append(word.split("=", 1)[1])
+            named_by_flag = True
+            i += 1
+        elif word.startswith("-"):
+            i += 1
+        else:
+            if not named_by_flag:
+                packages.append(word)
+            break
+    return [p.strip("\"'") for p in packages]
+
+
+def _unpinned(package: str) -> bool:
+    for name in _PINNED_PACKAGES:
+        if package == name:
+            return True
+        if package.startswith(name + "@"):
+            return _EXACT_VERSION.fullmatch(package[len(name) + 1 :]) is None
+    return False
+
+
+def floating_npx(line: str) -> bool:
+    """Whether `line` runs latchkey or qmd through a runner at no exact version."""
+    for runner in _PACKAGE_RUNNER.finditer(line):
+        rest = line[runner.end() :]
+        end = _COMMAND_ENDS.search(rest)
+        command = rest[: end.start()] if end else rest
+        packages = _runner_packages(command)
+        last_word_is_a_package = command.split()[-1:] == packages[-1:]
+        prose = end is not None and end.group() == "`" and last_word_is_a_package
+        if any(_unpinned(p) for p in packages) and not prose:
+            return True
+    return False
+
+
 _NPX_LINT_SUFFIXES = (
     ".md",
     ".toml",
@@ -716,12 +776,14 @@ def _check_no_floating_npx(root: Path) -> int:
     for rel in _git_ls_files(root, "."):
         if rel.startswith("third-party/") or not rel.endswith(_NPX_LINT_SUFFIXES):
             continue
+        if rel == "scripts/lint_repo_test.py":  # the refused spellings, as fixtures
+            continue
         try:
             text = (root / rel).read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
         for lineno, line in enumerate(text.splitlines(), 1):
-            if _FLOATING_NPX.search(line):
+            if floating_npx(line):
                 hits.append(f"  {rel}:{lineno}: {line.strip()}")
     if not hits:
         print("OK: no floating `npx -y latchkey` / `npx -y @tobilu/qmd`.")
@@ -730,7 +792,7 @@ def _check_no_floating_npx(root: Path) -> int:
         "ERROR: a command that resolves `latest` from npm at run time:\n\n"
         + "\n".join(hits)
         + "\n\n  Write `latchkey …` (the launcher the installer puts on the PATH)\n"
-        "  or pin it: `npx -y latchkey@<LATCHKEY_VERSION>`. The pins live in\n"
+        "  or pin it exactly: `npx -y latchkey@<LATCHKEY_VERSION>`. The pins live in\n"
         "  datalib/backend/runtime/src/node_runtime.rs and runtime/src/qmd.rs.",
         file=sys.stderr,
     )

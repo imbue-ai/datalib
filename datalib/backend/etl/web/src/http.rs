@@ -140,6 +140,69 @@ impl HttpService {
                 | HttpService::Gitlab
         )
     }
+
+    /// How many path segments of this service's URLs may be shown, for a
+    /// service that signs its URLs in the path rather than the query:
+    /// YoLink's `/download/<device>/<signature>` keeps its first two.
+    const fn unsigned_path_segments(self) -> Option<usize> {
+        match self {
+            HttpService::Yolink => Some(2),
+            _ => None,
+        }
+    }
+}
+
+/// The part of a request's URL that may be stored or printed: its scheme,
+/// host and path. The query, the fragment and any `user:password@` are
+/// left off, since a signed URL carries its credential there (S3's
+/// `X-Amz-Signature`, Google's export links), and so is the signed end of
+/// the path for a service that signs there. Anything that does not parse
+/// as `scheme://host…` is shown as nothing at all.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShownUrl(String);
+
+impl ShownUrl {
+    pub fn new(service: HttpService, url: &str) -> Self {
+        let Some((scheme, rest)) = url.split_once("://") else {
+            return Self("(not a URL)".to_string());
+        };
+        if scheme.is_empty() || !scheme.bytes().all(|b| b.is_ascii_alphanumeric()) {
+            return Self("(not a URL)".to_string());
+        }
+        let rest = rest.split(['?', '#']).next().unwrap_or_default();
+        let (authority, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
+        let host = authority.rsplit('@').next().unwrap_or_default();
+        let path = match service.unsigned_path_segments() {
+            None => path.to_string(),
+            Some(keep) => {
+                let segments: Vec<&str> = path.split('/').skip(1).collect();
+                let mut shown: String = segments
+                    .iter()
+                    .take(keep)
+                    .map(|s| format!("/{s}"))
+                    .collect();
+                if segments.len() > keep {
+                    shown.push_str("/…");
+                }
+                shown
+            }
+        };
+        Self(format!("{scheme}://{host}{path}"))
+    }
+
+    pub fn of(req: &HttpRequest) -> Self {
+        Self::new(req.service, &req.url)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ShownUrl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
 }
 
 /// A single outbound HTTP request. Do **not** include the Authorization
@@ -244,6 +307,8 @@ impl HttpResponse {
 
 /// Display and `source` are written by hand rather than derived: the
 /// source is the [`Upstream`] the failure means, which no field holds.
+/// Every field is ours to print: a URL is a [`ShownUrl`], and what
+/// latchkey or curl said is a [`CurlFailure`], never their text.
 #[derive(Debug)]
 pub enum HttpError {
     Spawn {
@@ -252,7 +317,7 @@ pub enum HttpError {
     },
     Timeout {
         service: HttpService,
-        url: String,
+        url: ShownUrl,
         timeout_ms: u64,
     },
     /// `latchkey curl` exited non-zero. This is a transport-level failure
@@ -260,21 +325,20 @@ pub enum HttpError {
     /// errors, inspect `HttpResponse::status` on the Ok path.
     Curl {
         service: HttpService,
-        url: String,
+        url: ShownUrl,
         exit: i32,
-        stderr: String,
+        failure: CurlFailure,
     },
     Malformed {
         service: HttpService,
-        url: String,
+        url: ShownUrl,
         message: String,
     },
     /// latchkey's permissions, or its gateway's, refused the request
     /// before it reached the service.
     NotPermitted {
         service: HttpService,
-        url: String,
-        message: String,
+        url: ShownUrl,
     },
     PlaybackMiss(String),
     PlaybackInvalid(String),
@@ -284,7 +348,7 @@ pub enum HttpError {
     /// surface it as a hard error for this source.
     GaveUp {
         service: HttpService,
-        url: String,
+        url: ShownUrl,
         reason: String,
         /// The status of the last attempt, when it got an answer.
         last_status: Option<u16>,
@@ -294,11 +358,122 @@ pub enum HttpError {
     /// `GaveUp`; the fetch loop's next check of the stop flag ends the run.
     Interrupted {
         service: HttpService,
-        url: String,
+        url: ShownUrl,
     },
 }
 
+/// What a failed `latchkey curl` said, read off its stderr, which goes no
+/// further: latchkey's and curl's messages are whatever they chose to
+/// print, and a failed request's can carry the credential or a signed
+/// URL. Each kind has a sentence of our own; one we do not recognise is
+/// [`CurlFailure::Unrecognised`], and the exit code is all that is kept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CurlFailure {
+    /// latchkey has no service for the URL.
+    NoServiceForUrl,
+    /// latchkey holds no credential for the service.
+    NoCredential,
+    /// latchkey holds none under the account the source names.
+    NoCredentialForAccount,
+    /// latchkey holds several accounts, and the source names none.
+    AccountNotNamed,
+    /// latchkey's record says the credential has expired.
+    Expired,
+    /// latchkey's permissions refused the request.
+    NotPermitted,
+    /// The latchkey gateway did not answer.
+    GatewayUnreachable,
+    /// latchkey could not get its encryption key.
+    Keychain,
+    /// curl's own failure; its exit code says which.
+    Curl,
+    Unrecognised,
+}
+
+impl CurlFailure {
+    /// latchkey's own exit code for a request its permissions refuse
+    /// (`PERMISSION_DENIED_EXIT_CODE`).
+    const LATCHKEY_NOT_PERMITTED_EXIT: i32 = 126;
+
+    pub fn classify(exit: i32, stderr: &str) -> Self {
+        let has = |needle: &str| stderr.contains(needle);
+        if exit == Self::LATCHKEY_NOT_PERMITTED_EXIT || has("Error: Request not permitted.") {
+            CurlFailure::NotPermitted
+        } else if has("Error: No service matches URL") {
+            CurlFailure::NoServiceForUrl
+        } else if has("Error: No credentials found for") {
+            CurlFailure::NoCredential
+        } else if has("has no credentials stored for account")
+            || has("No credentials stored for account")
+        {
+            CurlFailure::NoCredentialForAccount
+        } else if has("Multiple accounts are stored") {
+            CurlFailure::AccountNotNamed
+        } else if has("Error: Credentials for ") && has(" are expired.") {
+            CurlFailure::Expired
+        } else if has("Failed to reach latchkey gateway") {
+            CurlFailure::GatewayUnreachable
+        } else if has("No encryption key available") || has("Failed to decrypt file") {
+            CurlFailure::Keychain
+        } else if exit != 1 && has("curl: (") {
+            CurlFailure::Curl
+        } else {
+            CurlFailure::Unrecognised
+        }
+    }
+
+    /// Worded so that `datalib_probe::issue::classify` reads each the way
+    /// it reads latchkey's own message.
+    fn sentence(self, exit: i32) -> &'static str {
+        match self {
+            CurlFailure::NoServiceForUrl => "No service matches URL in latchkey.",
+            CurlFailure::NoCredential => "No credentials found for this service in latchkey.",
+            CurlFailure::NoCredentialForAccount => {
+                "No credentials stored for account named in latchkey_settings.account."
+            }
+            CurlFailure::AccountNotNamed => {
+                "Multiple accounts are stored for this service; name one in \
+                 latchkey_settings.account."
+            }
+            CurlFailure::Expired => "Credentials for this service are expired.",
+            CurlFailure::NotPermitted => "Request not permitted by latchkey's permissions.",
+            CurlFailure::GatewayUnreachable => "Failed to reach latchkey gateway.",
+            CurlFailure::Keychain => "No encryption key available to latchkey.",
+            CurlFailure::Curl => curl_exit_sentence(exit),
+            CurlFailure::Unrecognised => {
+                "latchkey printed a message datalib does not recognise, so it is not shown; \
+                 run the request with latchkey curl by hand to read it."
+            }
+        }
+    }
+}
+
+/// curl's exit codes, from its man page, for the ones a request meets.
+fn curl_exit_sentence(exit: i32) -> &'static str {
+    match exit {
+        6 => "Could not resolve host.",
+        7 => "Failed to connect to host.",
+        28 => "The operation timed out.",
+        35 | 60 => "The TLS handshake or certificate check failed.",
+        52 => "The server sent nothing back.",
+        55 => "Sending the request failed.",
+        56 => "Receiving the response failed.",
+        _ => "curl failed; its exit code says how.",
+    }
+}
+
 impl HttpError {
+    /// `latchkey curl` (or plain `curl`) exiting non-zero with `stderr`,
+    /// which is read here and kept no further.
+    pub fn curl_exit(service: HttpService, url: &str, exit: i32, stderr: &str) -> Self {
+        HttpError::Curl {
+            service,
+            url: ShownUrl::new(service, url),
+            exit,
+            failure: CurlFailure::classify(exit, stderr),
+        }
+    }
+
     /// What this failure says about the service. A timeout and the curl
     /// exits for a connection that never completed (6 could not resolve
     /// the host, 7 could not connect, 28 timeout, 35 TLS, 52 empty reply,
@@ -312,12 +487,15 @@ impl HttpError {
             HttpError::Curl { exit, .. } if matches!(*exit, 6 | 7 | 28 | 35 | 52 | 55 | 56) => {
                 Some(Upstream::Unavailable)
             }
-            HttpError::Curl { exit, stderr, .. } if latchkey_did_not_permit(*exit, stderr) => {
-                Some(Upstream::NotPermitted)
-            }
-            HttpError::Curl { stderr, .. } if latchkey_had_no_credential(stderr) => {
-                Some(Upstream::CredentialRefused)
-            }
+            HttpError::Curl {
+                failure: CurlFailure::NotPermitted,
+                ..
+            } => Some(Upstream::NotPermitted),
+            HttpError::Curl {
+                failure:
+                    CurlFailure::NoServiceForUrl | CurlFailure::NoCredential | CurlFailure::Expired,
+                ..
+            } => Some(Upstream::CredentialRefused),
             HttpError::NotPermitted { .. } => Some(Upstream::NotPermitted),
             HttpError::GaveUp {
                 last_status: Some(429),
@@ -326,23 +504,6 @@ impl HttpError {
             _ => None,
         }
     }
-}
-
-/// latchkey's own refusals to send (its `errorMessages.js`): no service
-/// for the URL, none stored for it, or one past its expiry. It exits 1
-/// for these and for every other error of its own, gateway transport
-/// failures included, so the exit code alone says nothing.
-fn latchkey_had_no_credential(stderr: &str) -> bool {
-    stderr.contains("Error: No service matches URL")
-        || stderr.contains("Error: No credentials found for")
-        || (stderr.contains("Error: Credentials for ") && stderr.contains(" are expired."))
-}
-
-/// A local latchkey refusing on its permissions: its own exit code for
-/// it (`PERMISSION_DENIED_EXIT_CODE`), or the words when a wrapper changed
-/// the code.
-fn latchkey_did_not_permit(exit: i32, stderr: &str) -> bool {
-    exit == 126 || stderr.contains("Error: Request not permitted.")
 }
 
 /// A latchkey gateway's refusal: every 403 it sends itself, marked
@@ -363,12 +524,7 @@ fn gateway_refusal(req: &HttpRequest, resp: &HttpResponse) -> Option<HttpError> 
     }
     Some(HttpError::NotPermitted {
         service: req.service,
-        url: req.url.clone(),
-        message: body
-            .get("error")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
+        url: ShownUrl::of(req),
     })
 }
 
@@ -390,8 +546,12 @@ impl std::fmt::Display for HttpError {
                 service,
                 url,
                 exit,
-                stderr,
-            } => write!(f, "{service}: latchkey curl exit {exit} ({url}): {stderr}"),
+                failure,
+            } => write!(
+                f,
+                "{service}: latchkey curl exit {exit} ({url}): {}",
+                failure.sentence(*exit)
+            ),
             HttpError::Malformed {
                 service,
                 url,
@@ -400,13 +560,10 @@ impl std::fmt::Display for HttpError {
                 f,
                 "{service}: malformed response from latchkey curl ({url}): {message}"
             ),
-            HttpError::NotPermitted {
-                service,
-                url,
-                message,
-            } => write!(
+            HttpError::NotPermitted { service, url } => write!(
                 f,
-                "{service}: latchkey did not permit this request ({url}): {message}"
+                "{service}: latchkey did not permit this request ({url}): \
+                 Request not permitted by latchkey's permissions."
             ),
             HttpError::PlaybackMiss(m) => write!(f, "playback miss: {m}"),
             HttpError::PlaybackInvalid(m) => write!(f, "playback fixture invalid: {m}"),
@@ -565,7 +722,7 @@ where
         if guard.stop().requested() {
             return Err(HttpError::Interrupted {
                 service: req.service,
-                url: req.url.clone(),
+                url: ShownUrl::of(req),
             });
         }
         // Count every outbound *attempt* against the current source's
@@ -624,7 +781,7 @@ where
             ));
             return Err(HttpError::GaveUp {
                 service: req.service,
-                url: req.url.clone(),
+                url: ShownUrl::of(req),
                 reason: format!("{reason}; last attempt: {detail}"),
                 last_status: outcome.as_ref().ok().map(|resp| resp.status),
             });
@@ -649,7 +806,7 @@ where
         let budget = guard.budget();
         tracing::warn!(
             service = %req.service,
-            url = %req.url,
+            url = %ShownUrl::of(req),
             status = %what,
             wait_ms = wait.as_millis() as u64,
             retry_after_ms = retry_after.map(|d| d.as_millis() as u64),
@@ -675,7 +832,7 @@ where
         if guard.stop().sleep_unless_stopped(wait).await {
             return Err(HttpError::Interrupted {
                 service: req.service,
-                url: req.url.clone(),
+                url: ShownUrl::of(req),
             });
         }
         backoff = next_backoff;
@@ -683,8 +840,7 @@ where
 }
 
 /// One debug line per attempt, so a slow step's log says which calls
-/// its time went to. The query is left off: a signed URL carries its
-/// credential there.
+/// its time went to.
 fn log_attempt(req: &HttpRequest, outcome: &Result<HttpResponse, HttpError>, took: Duration) {
     let (status, bytes) = match outcome {
         Ok(resp) => (resp.status.to_string(), resp.body.len()),
@@ -693,7 +849,8 @@ fn log_attempt(req: &HttpRequest, outcome: &Result<HttpResponse, HttpError>, too
         Err(HttpError::Interrupted { .. }) => ("interrupted".to_string(), 0),
         Err(_) => ("error".to_string(), 0),
     };
-    let url = req.url.split('?').next().unwrap_or_default();
+    let url = ShownUrl::of(req);
+    let url = url.as_str();
     tracing::debug!(
         event = "http_request",
         service = %req.service,
@@ -806,35 +963,32 @@ mod live {
         .await
         .map_err(|_| HttpError::Timeout {
             service: req.service,
-            url: req.url.clone(),
+            url: ShownUrl::of(req),
             timeout_ms,
         })?;
         let proc = proc_result?;
         let duration_ms = t0.elapsed().as_millis() as u64;
 
         if !proc.status.success() {
-            let stderr = String::from_utf8_lossy(&proc.stderr);
-            return Err(HttpError::Curl {
-                service: req.service,
-                url: req.url.clone(),
-                exit: proc.status.code().unwrap_or(-1),
-                stderr: stderr.chars().take(400).collect(),
-            });
+            return Err(HttpError::curl_exit(
+                req.service,
+                &req.url,
+                proc.status.code().unwrap_or(-1),
+                &String::from_utf8_lossy(&proc.stderr),
+            ));
         }
 
         let header_dump = String::from_utf8_lossy(&proc.stdout).into_owned();
         let (status, headers) =
             parse_header_block(&header_dump).ok_or_else(|| HttpError::Malformed {
                 service: req.service,
-                url: req.url.clone(),
-                message: format!(
-                    "no HTTP status line in header dump: {:?}",
-                    header_dump.chars().take(120).collect::<String>()
-                ),
+                url: ShownUrl::of(req),
+                // Not the dump itself: its headers can set a cookie.
+                message: "no HTTP status line in curl's header dump".to_string(),
             })?;
         let body = std::fs::read(&body_path).map_err(|e| HttpError::Malformed {
             service: req.service,
-            url: req.url.clone(),
+            url: ShownUrl::of(req),
             message: format!("read body tempfile: {e}"),
         })?;
 
@@ -970,11 +1124,13 @@ mod tests {
     /// be reached is not one, though it exits 1 the same way.
     #[test]
     fn only_latchkeys_refusals_to_send_are_a_refused_credential() {
-        let curl = |stderr: &str| HttpError::Curl {
-            service: HttpService::Slack,
-            url: "https://slack.com/api/auth.test".into(),
-            exit: 1,
-            stderr: stderr.into(),
+        let curl = |stderr: &str| {
+            HttpError::curl_exit(
+                HttpService::Slack,
+                "https://slack.com/api/auth.test",
+                1,
+                stderr,
+            )
         };
         for refused in [
             "Error: No service matches URL: https://slack.com/api/auth.test",
@@ -988,13 +1144,112 @@ mod tests {
             );
         }
         assert_eq!(curl("Error: Upstream request failed.").upstream(), None);
-        let unreachable = HttpError::Curl {
-            service: HttpService::Slack,
-            url: "https://slack.com/api/auth.test".into(),
-            exit: 7,
-            stderr: "curl: (7) Failed to connect".into(),
-        };
+        let unreachable = HttpError::curl_exit(
+            HttpService::Slack,
+            "https://slack.com/api/auth.test",
+            7,
+            "curl: (7) Failed to connect",
+        );
         assert_eq!(unreachable.upstream(), Some(Upstream::Unavailable));
+    }
+
+    /// What latchkey or curl printed never reaches the error's text: a
+    /// failed request's stderr can carry the credential latchkey put on
+    /// it, or the signed URL. The kinds it is read as keep the words the
+    /// wizard's classifier looks for.
+    #[test]
+    fn a_curl_failure_prints_our_sentence_not_its_stderr() {
+        let secret = "xoxp-1111-2222-tng-secret";
+        for (exit, stderr, says) in [
+            (
+                1,
+                format!(
+                    "Error: No credentials found for slack. -H 'Authorization: Bearer {secret}'"
+                ),
+                "No credentials found for",
+            ),
+            (
+                7,
+                format!("curl: (7) Failed to connect to slack.com?token={secret}"),
+                "curl exit 7 (",
+            ),
+            (
+                1,
+                format!("TypeError: cannot read {secret}"),
+                "does not recognise",
+            ),
+            (
+                1,
+                format!("Error: Multiple accounts are stored for service 'slack': {secret}"),
+                "Multiple accounts",
+            ),
+        ] {
+            let e = HttpError::curl_exit(
+                HttpService::Slack,
+                &format!("https://slack.com/api/auth.test?token={secret}"),
+                exit,
+                &stderr,
+            );
+            let text = e.to_string();
+            assert!(!text.contains(secret), "{text}");
+            assert!(!format!("{e:?}").contains(secret), "{e:?}");
+            assert!(text.contains(says), "{text}");
+        }
+    }
+
+    /// A URL is stored and printed without what signs it: the query,
+    /// user info, a fragment, and the signed end of a YoLink path.
+    #[test]
+    fn a_shown_url_keeps_scheme_host_and_path_only() {
+        let shown = |service, url: &str| ShownUrl::new(service, url).to_string();
+        assert_eq!(
+            shown(
+                HttpService::Notion,
+                "https://prod-files-secure.s3.us-west-2.amazonaws.com/a/b/file.pdf\
+                 ?X-Amz-Signature=deadbeef&X-Amz-Credential=AKIA"
+            ),
+            "https://prod-files-secure.s3.us-west-2.amazonaws.com/a/b/file.pdf"
+        );
+        assert_eq!(
+            shown(HttpService::Caldav, "https://picard:tea@dav.test/cal/#frag"),
+            "https://dav.test/cal/"
+        );
+        assert_eq!(
+            shown(
+                HttpService::Yolink,
+                "https://us.yosmart.com/download/ncc1701/c2lnbmF0dXJl?start=1&end=2"
+            ),
+            "https://us.yosmart.com/download/ncc1701/…"
+        );
+        assert_eq!(shown(HttpService::Slack, "api_key=s3cret"), "(not a URL)");
+        assert_eq!(
+            shown(HttpService::Slack, "https://slack.com"),
+            "https://slack.com"
+        );
+    }
+
+    /// A refusal, a give-up and a timeout print the shown URL, never the
+    /// query a presigned link carries.
+    #[test]
+    fn no_error_prints_the_query() {
+        let req = HttpRequest::get(
+            HttpService::GoogleDrive,
+            "https://docs.google.com/export?id=1&X-Amz-Signature=s3cret",
+        );
+        for e in [
+            HttpError::Timeout {
+                service: req.service,
+                url: ShownUrl::of(&req),
+                timeout_ms: 1,
+            },
+            HttpError::NotPermitted {
+                service: req.service,
+                url: ShownUrl::of(&req),
+            },
+            HttpError::curl_exit(req.service, &req.url, 28, ""),
+        ] {
+            assert!(!e.to_string().contains("s3cret"), "{e}");
+        }
     }
 
     fn with_via_desktop_prefix<T>(prefix: Option<&str>, body: impl FnOnce() -> T) -> T {
@@ -1156,12 +1411,12 @@ mod tests {
             .unwrap();
         assert_eq!(got.status, 403);
 
-        let local = HttpError::Curl {
-            service: HttpService::GoogleCalendar,
-            url: url.into(),
-            exit: 126,
-            stderr: "Error: Request not permitted.".into(),
-        };
+        let local = HttpError::curl_exit(
+            HttpService::GoogleCalendar,
+            url,
+            126,
+            "Error: Request not permitted.",
+        );
         assert_eq!(local.upstream(), Some(Upstream::NotPermitted));
     }
 

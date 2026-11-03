@@ -46,7 +46,10 @@ test("a pasted client is stored for all four services, and the sign-in starts at
   );
   await panel.getByRole("button", { name: "Save client and sign in" }).click();
 
-  await expect(wizard(page).locator(".wiz-connect-failed")).toContainText("access_denied", LOGIN);
+  await expect(wizard(page).locator(".wiz-connect-failed")).toContainText(
+    "latchkey auth browser google-drive failed",
+    LOGIN,
+  );
   const runs: Run[] = world.latchkeyRuns();
   expect(runsSince(runs, from, "auth prepare").map((r) => r.args.slice(-2))).toEqual(
     SERVICES.map((s) => [s, CLIENT]),
@@ -86,7 +89,10 @@ test("a half-done sign-in goes on from the first service that lacks the account"
   await wizard(page)
     .getByRole("button", { name: `Finish signing in as ${PICARD}` })
     .click();
-  await expect(wizard(page).locator(".wiz-connect-failed")).toContainText("access_denied", LOGIN);
+  await expect(wizard(page).locator(".wiz-connect-failed")).toContainText(
+    "latchkey auth browser google-docs failed",
+    LOGIN,
+  );
   const browser = runsSince(world.latchkeyRuns(), from, "auth browser");
   expect(browser.map((r) => r.args.at(-1))).toEqual(["google-docs"]);
   expect(browser[0].args).not.toContain("--account");

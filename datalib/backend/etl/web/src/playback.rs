@@ -140,7 +140,7 @@ impl Playback {
     ) -> Result<HttpResponse, HttpError> {
         let interrupted = || HttpError::Interrupted {
             service: req.service,
-            url: req.url.clone(),
+            url: crate::http::ShownUrl::of(req),
         };
         if !self.delay.is_zero() {
             tokio::time::sleep(self.delay).await;
@@ -160,12 +160,12 @@ impl Playback {
             }
         }
         if self.offline.as_ref().is_some_and(|f| f.exists()) {
-            return Err(HttpError::Curl {
-                service: req.service,
-                url: req.url.clone(),
-                exit: 6,
-                stderr: "curl: (6) Could not resolve host".to_string(),
-            });
+            return Err(HttpError::curl_exit(
+                req.service,
+                &req.url,
+                6,
+                "curl: (6) Could not resolve host",
+            ));
         }
         match crate::interrupt::before_request().await {
             Some(crate::interrupt::Strike::Interrupted) => Err(interrupted()),

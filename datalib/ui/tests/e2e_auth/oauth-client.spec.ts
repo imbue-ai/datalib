@@ -40,8 +40,11 @@ test("a pasted client is stored for the service and the sign-in goes out with it
   await panel.getByRole("textbox").fill(DOWNLOADED_CLIENT);
   await panel.getByRole("button", { name: "Save client and sign in" }).click();
 
-  // Google turned it down, which is as far as the fake goes.
-  await expect(wizard(page).locator(".wiz-connect-failed")).toContainText("access_denied", LOGIN);
+  // Google turned it down, which is as far as the fake goes. What
+  // latchkey printed about it is not shown, only which command failed.
+  const failed = wizard(page).locator(".wiz-connect-failed");
+  await expect(failed).toContainText("latchkey auth browser google-gmail failed", LOGIN);
+  await expect(failed).not.toContainText("access_denied");
   const prepare = world.latchkeyRuns().find((r) => subcommand(r) === "auth prepare");
   expect(prepare?.args.slice(-2)).toEqual([
     "google-gmail",
@@ -75,9 +78,10 @@ test("Create one for me runs browser-prepare on the Cloud console before the sig
   );
   await expect(wizard(page).getByRole("button", { name: "Creating the client…" })).toBeDisabled();
   // The fake console wants 2-Step Verification, as Google's does of an
-  // account without it, and latchkey says so.
+  // account without it; latchkey says so, and the wizard names the
+  // command to run to read it.
   await expect(wizard(page).locator(".wiz-connect-failed")).toContainText(
-    "Enable multi-factor authentication",
+    "latchkey auth browser-prepare google-gmail failed",
     LOGIN,
   );
   expect(internet.to("console.cloud.google.com")).not.toHaveLength(0);

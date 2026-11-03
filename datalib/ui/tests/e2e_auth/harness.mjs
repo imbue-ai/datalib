@@ -348,6 +348,11 @@ export async function startWorld(internet, options) {
   // latchkey refuses a browser login on Linux with no display named,
   // though the headless browser above never opens one.
   if (process.platform === "linux" && !env.DISPLAY && !env.WAYLAND_DISPLAY) env.DISPLAY = ":0";
+  // The server hands its children only the variables it lists, and
+  // fake_node.mjs, run as latchkey's node, reads these.
+  env.DATALIB_CHILD_ENV = Object.keys(env)
+    .filter((k) => k.startsWith("DATALIB_TEST_AUTH_"))
+    .join(",");
 
   const urlFile = path.join(dir, "url");
   const log = path.join(dir, "datalib-http.log");

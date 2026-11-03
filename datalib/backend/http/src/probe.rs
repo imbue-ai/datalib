@@ -20,7 +20,7 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::Command;
 
-use crate::connect::{err, error_chain, latchkey_gateway, scrub, tail, validated_type};
+use crate::connect::{err, latchkey_gateway, tail, validated_type};
 use crate::AppState;
 
 /// A probe that has not answered by now is not going to.
@@ -115,6 +115,8 @@ pub async fn start_probe(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    let named = datalib_dag::subprocess::env_vars_named_in(&params);
+    datalib_env::inherit_only(cmd.as_std_mut(), datalib_env::Child::Step, &named);
     let child = cmd
         .spawn()
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
@@ -183,18 +185,17 @@ async fn run(mut child: tokio::process::Child, slot: &Slot, source_type: &str) {
     };
     let succeeded = matches!(exit, Ok(status) if status.success());
     if !succeeded {
-        // The step prints its error chain to stderr; that chain is the
-        // useful message ("Gmail users.getProfile: HTTP 401 …"), so
-        // pass it through rather than replacing it with our own.
+        // The step's error chain is the useful message ("Gmail
+        // users.getProfile: HTTP 401 …"), so the wizard shows it. The log
+        // keeps only its kind: the chain can quote what the service
+        // answered, and a log line outlives the dialog.
+        let failure = failure_from(&stdout, &stderr, latchkey_gateway().is_some());
         tracing::error!(
             source_type = %source_type,
-            "probe failed: {}",
-            scrub(&error_chain(&stderr))
+            issue = failure.issue.as_str(),
+            "probe failed"
         );
-        return fail(
-            slot,
-            failure_from(&stdout, &stderr, latchkey_gateway().is_some()),
-        );
+        return fail(slot, failure);
     }
     match serde_json::from_str::<Value>(&stdout) {
         Ok(report) => {
