@@ -302,6 +302,40 @@ impl Reads {
     }
 }
 
+/// When a step may start on inputs that are still being written.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Deserialize,
+    Serialize,
+    strum::EnumString,
+    strum::IntoStaticStr,
+    strum::VariantArray,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum StartWhen {
+    /// On each seal of a producer that streams, and again once it ends.
+    OnEachSeal,
+    /// Once nothing upstream of it is running or about to: one run on
+    /// what its producers finished with, however often they sealed.
+    AfterInputsSettle,
+}
+
+impl StartWhen {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+
+    /// `None` for a spelling this build does not know.
+    pub fn parse(s: &str) -> Option<Self> {
+        s.parse().ok()
+    }
+}
+
 /// One `[[groups]]` entry: the thing a person thinks of as "Work Slack".
 /// Its `id` is one path segment and the directory every step under it
 /// writes into; its `name` is free text nothing depends on.
@@ -470,6 +504,9 @@ pub struct StepEntry {
     /// How it reads its inputs. `None` is at a pinned commit, but for the
     /// built-in steps that read files (`UNPINNED_BUILTINS`).
     pub reads: Option<Reads>,
+    /// When it may start on inputs still being written. `None` is
+    /// [`StartWhen::OnEachSeal`].
+    pub start: Option<StartWhen>,
 }
 
 /// A `[[steps]]` table exactly as a person writes it. Either `group` and
@@ -500,6 +537,8 @@ struct StepTable {
     locks: Option<StepLocks>,
     #[serde(default)]
     reads: Option<Reads>,
+    #[serde(default)]
+    start: Option<StartWhen>,
 }
 
 impl TryFrom<StepTable> for StepEntry {
@@ -550,6 +589,7 @@ impl TryFrom<StepTable> for StepEntry {
             code_version: t.code_version,
             locks: t.locks,
             reads: t.reads,
+            start: t.start,
         })
     }
 }
@@ -1970,6 +2010,7 @@ fn spec_of(
         Some(reads) => reads == Reads::Pinned,
         None => !e.runs_datalib_step() || !reads_unpinned(group_type, e.function.as_deref()),
     };
+    spec.waits_for_settled_inputs = e.start == Some(StartWhen::AfterInputsSettle);
     spec.locks = match &e.locks {
         Some(locks) => Some(locks.held()),
         None if e.runs_datalib_step() => builtin_lock(e.function.as_deref())
@@ -4356,6 +4397,25 @@ inputs = ["a"]
     }
 
     #[test]
+    fn start_after_inputs_settle_loads_and_a_misspelling_is_rejected() {
+        let check = check_text(
+            "[[steps]]\nid = \"a\"\ncommand = \"x\"\n\n\
+             [[steps]]\nid = \"b\"\ncommand = \"x\"\ninputs = [\"a\"]\nstart = \"after_inputs_settle\"\n\n\
+             [[steps]]\nid = \"c\"\ncommand = \"x\"\ninputs = [\"a\"]\nstart = \"on_each_seal\"\n",
+        );
+        assert!(check.is_clean(), "{:?}", check.diagnostics);
+        assert!(step(&check, "b").waits_for_settled_inputs);
+        assert!(!step(&check, "c").waits_for_settled_inputs);
+        assert!(!step(&check, "a").waits_for_settled_inputs);
+
+        let check = check_text("[[steps]]\nid = \"a\"\ncommand = \"x\"\nstart = \"later\"\n");
+        assert!(check.graph.steps.is_empty());
+        let d = &check.diagnostics[0];
+        assert_eq!(d.severity, Severity::Rejected);
+        assert!(d.message.contains("later"), "{}", d.message);
+    }
+
+    #[test]
     fn a_lock_declared_twice_or_with_no_slots_is_rejected() {
         let check = check_text(
             "[[locks]]\nname = \"q\"\n\n[[locks]]\nname = \"q\"\n\n[[locks]]\nname = \"z\"\nslots = 0\n",
@@ -4594,12 +4654,22 @@ inputs = ["slack-diff/keyword_index", "slack-diff/embed"]
 
     /// When a step may run is not what it makes: neither re-runs anything.
     #[test]
-    fn locks_and_reads_are_not_in_the_fingerprint() {
+    fn locks_reads_and_start_are_not_in_the_fingerprint() {
         let plain = check_text("[[steps]]\nid = \"a\"\ncommand = \"x\"\n");
         let held = check_text(
-            "[[locks]]\nname = \"q\"\n\n[[steps]]\nid = \"a\"\ncommand = \"x\"\nlocks = [\"q\"]\nreads = \"files\"\n",
+            "[[locks]]\nname = \"q\"\n\n[[steps]]\nid = \"a\"\ncommand = \"x\"\nlocks = [\"q\"]\nreads = \"files\"\nstart = \"after_inputs_settle\"\n",
         );
         assert_eq!(plain.graph.fingerprints, held.graph.fingerprints);
+    }
+
+    #[test]
+    fn start_when_as_str_matches_the_serde_spelling() {
+        use strum::VariantArray;
+        for &v in StartWhen::VARIANTS {
+            let json = serde_json::to_string(&v).unwrap();
+            assert_eq!(json, format!("\"{}\"", v.as_str()), "{v:?}");
+            assert_eq!(StartWhen::parse(v.as_str()), Some(v));
+        }
     }
 
     /// strum and serde spell these independently: the config is read with

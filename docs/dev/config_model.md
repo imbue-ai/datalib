@@ -349,7 +349,7 @@ none reads its own group's `ingest` tree and logs a warning. A store
 kept on another disk is a symlink at `<group>/ingest` — no params key
 can point elsewhere.
 
-## What keeps steps apart: `[[locks]]`, `locks`, `reads`
+## What keeps steps apart: `[[locks]]`, `locks`, `reads`, `start`
 
 A `[[locks]]` entry names a lock and its `slots`; a step's `locks` names
 the ones it holds (`["q"]` takes one slot, `{ q = "exclusive" }` all of
@@ -360,7 +360,10 @@ the two one-slot locks every config has too: `qmd_keyword`, held by
 `embed`. qmd lets a keyword update run beside an embed, but not two of
 either ([`qmd_behaviour.md`](qmd_behaviour.md), findings 4, 5 and 12).
 `reads = "files"` says a step reads its inputs off disk, so no writer of
-them runs beside it. None of these is in the
+them runs beside it. `start = "after_inputs_settle"` says a step waits
+until nothing upstream of it is running or due, rather than starting on
+each seal of a download that streams (`"on_each_seal"`, the default);
+no built-in step says it. None of these is in the
 fingerprint. The rules are the dag README's "What keeps steps apart";
 `configs/dag_example.toml` shows the syntax.
 

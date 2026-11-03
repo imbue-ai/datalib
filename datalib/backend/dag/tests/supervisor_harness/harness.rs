@@ -49,14 +49,15 @@ impl Default for Clocks {
 }
 
 /// A step in the harness's config: a puppet, reading `inputs`, holding
-/// `locks` (as the config writes them, `locks = …`) and reading as
-/// `reads` says.
+/// `locks` (as the config writes them, `locks = …`), reading as `reads`
+/// says and starting as `start` says.
 #[derive(Clone, Debug, Default)]
 pub struct Step {
     pub id: String,
     pub inputs: Vec<String>,
     pub locks: Option<String>,
     pub reads: Option<&'static str>,
+    pub start: Option<&'static str>,
 }
 
 pub fn source(id: &str) -> Step {
@@ -84,6 +85,12 @@ impl Step {
     /// Reads its inputs off disk, so no writer of them runs beside it.
     pub fn reads_files(mut self) -> Step {
         self.reads = Some("files");
+        self
+    }
+
+    /// Starts once what it reads has settled, not on each seal.
+    pub fn after_inputs_settle(mut self) -> Step {
+        self.start = Some("after_inputs_settle");
         self
     }
 }
@@ -330,6 +337,9 @@ impl Harness {
             if let Some(reads) = s.reads {
                 text.push_str(&format!("reads = {reads:?}\n"));
             }
+            if let Some(start) = s.start {
+                text.push_str(&format!("start = {start:?}\n"));
+            }
             text.push_str(&format!(
                 "[steps.env]\nPUPPET_DIR = {:?}\n\n",
                 self.puppets.display().to_string()
@@ -429,6 +439,29 @@ impl Harness {
                 what: w,
             } if st == step && w.starts_with(what) => Some(*pid),
             _ => None,
+        })
+        .await
+    }
+
+    /// The environment variable `name` of `step`'s running puppet, its
+    /// lines joined with `,`.
+    pub async fn env(&mut self, step: &str, name: &str) -> String {
+        self.tell(step, &format!("env {name}"));
+        let prefix = format!("env {name} ");
+        let desc = format!("{step}'s {name}");
+        self.wait(&desc, |s| match s {
+            Seen::Ack { step: st, what, .. } if st == step && what.starts_with(&prefix) => {
+                Some(what[prefix.len()..].to_string())
+            }
+            _ => None,
+        })
+        .await
+    }
+
+    /// Wait for the loop's busy period to end, as the host says.
+    pub async fn period_over(&mut self) {
+        self.wait("the busy period to end", |s| {
+            matches!(s, Seen::Host(l) if l == "busy period over").then_some(())
         })
         .await
     }

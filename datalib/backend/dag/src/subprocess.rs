@@ -45,6 +45,7 @@ pub const ENV_FUNCTION: &str = datalib_env::DATALIB_DAG_FUNCTION;
 pub const ENV_DATA_ROOT: &str = datalib_env::DATALIB_DAG_DATA_ROOT;
 pub const ENV_INPUTS: &str = datalib_env::DATALIB_DAG_INPUTS;
 pub const ENV_CHANGED_INPUTS: &str = datalib_env::DATALIB_DAG_CHANGED_INPUTS;
+pub const ENV_FAILED_INPUTS: &str = datalib_env::DATALIB_DAG_FAILED_INPUTS;
 /// `StepCtx::reads` as a JSON object: input path → version.
 pub const ENV_READS: &str = datalib_env::DATALIB_READS;
 /// Run-wide pinned timestamp (RFC 3339), set by the runner on every
@@ -198,6 +199,7 @@ pub(crate) async fn run_subprocess(
         .ok_or_else(|| internal(anyhow::anyhow!("empty argv")))?;
     let inputs: Vec<&str> = ctx.inputs.iter().map(|a| a.as_str()).collect();
     let changed: Vec<&str> = ctx.changed_inputs.iter().map(|a| a.as_str()).collect();
+    let failed: Vec<&str> = ctx.failed_inputs.iter().map(|a| a.as_str()).collect();
     // Held until the child has exited: dropping it deletes the file.
     let params_file = match params {
         Some(json) => {
@@ -237,6 +239,7 @@ pub(crate) async fn run_subprocess(
         .env(ENV_DATA_ROOT, &ctx.data_root)
         .env(ENV_INPUTS, inputs.join("\n"))
         .env(ENV_CHANGED_INPUTS, changed.join("\n"))
+        .env(ENV_FAILED_INPUTS, failed.join("\n"))
         .env(
             ENV_READS,
             serde_json::to_string(&ctx.reads).expect("a string map is JSON"),

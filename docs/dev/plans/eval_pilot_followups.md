@@ -12,9 +12,10 @@ lands this file: Slack looks up owed authors before its walk too;
 `pull-runtime` reads latchkey's version without running it and takes
 `--into <dir>`. Thad took decisions 2, 4 and 12 and deferred 1
 (`replies`); on 4 he added that diff groups and the time-series index
-are young and need not be preserved as they are. Still to do: decision
-4's PR, §2 PR 5's transaction cost and `client.counts` fallback, and
-§3's decisions 3, 5-11 and 13. An audit of main at
+are young and need not be preserved as they are. He took 5, 6 and 7
+as well, and the runner-contract PR builds them (§2 PR 6). Still to
+do: decision 4's PR, §2 PR 5's transaction cost and `client.counts`
+fallback, and §3's decisions 3, 8-11 and 13. An audit of main at
 `f5533f7a4` against the evals team's reports (v0.40.0 to v0.48.0) and
 datalib#1471. §1 says what is already fixed and how we know; §2 is the
 work, as PRs; §3 lists the decisions Thad has to make before the PRs
@@ -216,11 +217,15 @@ of what the agents saw: a no-op Slack sync would wake nobody.
 5. **A consumer that wants its inputs settled**: a per-step
    `start = "after_inputs_settle"`. Today the only way is
    `reads = "files"`, which also locks writers out while it runs.
+   *Taken: `start = "after_inputs_settle"`; built-in steps keep
+   streaming.*
 6. **First run**: set `DATALIB_DAG_CHANGED_INPUTS` to every input on a
    first run, so an empty list can only mean nothing moved; or add
    `DATALIB_DAG_FIRST_RUN=1`. Either changes the step protocol.
+   *Taken: every input.*
 7. **A failed input**: tell the consumer (`DATALIB_DAG_FAILED_INPUTS`),
-   hold it (`hold_on_failed_inputs`), or both.
+   hold it (`hold_on_failed_inputs`), or both. *Taken: tell it; it
+   still runs.*
 8. **`datalib-dag wait [request]`**: a verb that blocks until a request
    closes and exits with its outcome, beside `GET /api/requests/{id}`
    (#1524).
