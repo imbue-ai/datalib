@@ -544,7 +544,7 @@ pub async fn load_conversations_from(pool: &SqlitePool) -> Result<Vec<LoadedConv
     .context("load_conversations")?;
     let mut out = Vec::with_capacity(rows.len());
     for r in &rows {
-        let Some(payload) = row_payload(r)? else {
+        let Some(payload) = row_payload(r, "conversations")? else {
             continue;
         };
         out.push(LoadedConversation {
@@ -577,7 +577,7 @@ pub async fn load_projects_from(pool: &SqlitePool) -> Result<Vec<LoadedProject>>
     .context("load_projects")?;
     let mut out = Vec::with_capacity(rows.len());
     for r in &rows {
-        let Some(payload) = row_payload(r)? else {
+        let Some(payload) = row_payload(r, "projects")? else {
             continue;
         };
         out.push(LoadedProject {
@@ -600,7 +600,7 @@ pub async fn load_project_docs_from(pool: &SqlitePool) -> Result<Vec<LoadedProje
     .context("load_project_docs")?;
     let mut out = Vec::with_capacity(rows.len());
     for r in &rows {
-        let Some(payload) = row_payload(r)? else {
+        let Some(payload) = row_payload(r, "project_docs")? else {
             continue;
         };
         let Ok(project_uuid) = r.try_get::<String, _>("project_uuid") else {
@@ -615,9 +615,17 @@ pub async fn load_project_docs_from(pool: &SqlitePool) -> Result<Vec<LoadedProje
     Ok(out)
 }
 
-fn row_payload(r: &sqlx::sqlite::SqliteRow) -> Result<Option<Value>> {
+/// `None` only for a SQL `NULL`; a payload that does not parse is an
+/// error naming the row.
+fn row_payload(r: &sqlx::sqlite::SqliteRow, table: &str) -> Result<Option<Value>> {
     let s: Option<String> = r.try_get("payload").context("payload column")?;
-    Ok(s.and_then(|s| serde_json::from_str(&s).ok()))
+    s.map(|s| {
+        serde_json::from_str(&s).with_context(|| {
+            let id: String = r.try_get("id").unwrap_or_default();
+            format!("{table} {id}: the payload does not parse")
+        })
+    })
+    .transpose()
 }
 
 #[derive(Debug, Clone)]
@@ -723,6 +731,32 @@ mod tests {
     /// A cold store has no marker, so `fetch` still makes the live
     /// `/organizations` call — which is what keeps that call working as a
     /// credential preflight on the run where a bad credential is likely.
+    /// A stored payload that would not parse read as no row, so render
+    /// lost the conversation without a word. `1e999` passes SQLite's
+    /// `json()` and overflows serde_json's f64.
+    #[tokio::test]
+    async fn a_conversation_that_does_not_parse_is_an_error() {
+        let d = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&d.path().join("a.doltlite_db")).await.unwrap();
+        sqlx::query(r#"INSERT INTO conversations (id, payload) VALUES ('c0', '{"uuid": "c0"}')"#)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let loaded = load_conversations_from(db.pool()).await.unwrap();
+        let ids: Vec<&str> = loaded.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, ["c0"]);
+        assert_eq!(loaded[0].payload["uuid"], "c0");
+
+        sqlx::query(
+            r#"INSERT INTO conversations (id, payload) VALUES ('c1', '{"uuid": "c1", "warp": 1e999}')"#,
+        )
+        .execute(db.pool())
+        .await
+        .unwrap();
+        let err = load_conversations_from(db.pool()).await.unwrap_err();
+        assert!(format!("{err:#}").contains("conversations c1"), "{err:#}");
+    }
+
     #[tokio::test]
     async fn sweep_age_is_none_before_any_sweep() {
         let d = tempfile::tempdir().unwrap();

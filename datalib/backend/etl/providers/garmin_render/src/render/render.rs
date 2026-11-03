@@ -805,6 +805,7 @@ mod tests {
             activity_files: 0,
             items: Vec::new(),
             days: Default::default(),
+            unparsed: Vec::new(),
         };
         let mut out = String::new();
         render_device_section(&mut out, &parsed, "garmin");

@@ -4,6 +4,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl_render::inputs::{Input, RawRange};
+use datalib_etl_render::processor::Unparsed;
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
@@ -74,24 +75,25 @@ pub struct ParsedGarmin {
     pub activity_files: i64,
     pub items: Vec<Item>,
     pub days: Days,
+    /// Rows left out because their payload would not parse.
+    pub unparsed: Vec<Unparsed>,
 }
 
 /// The tables the page reads, whole: any row of any of them moving
 /// re-renders it.
+pub const TABLES: [&str; 8] = [
+    "garmin_account",
+    "garmin_weigh_ins",
+    "garmin_devices",
+    "garmin_daily",
+    "garmin_activities",
+    "garmin_activity_details",
+    "garmin_activity_files",
+    "garmin_items",
+];
+
 pub fn inputs() -> Vec<Input> {
-    [
-        "garmin_account",
-        "garmin_weigh_ins",
-        "garmin_devices",
-        "garmin_daily",
-        "garmin_activities",
-        "garmin_activity_details",
-        "garmin_activity_files",
-        "garmin_items",
-    ]
-    .into_iter()
-    .map(Input::whole_table)
-    .collect()
+    TABLES.into_iter().map(Input::whole_table).collect()
 }
 
 pub fn parse(raw_path: &Path, range: RawRange<'_>) -> Result<ParsedGarmin> {
@@ -122,18 +124,19 @@ pub fn parse(raw_path: &Path, range: RawRange<'_>) -> Result<ParsedGarmin> {
 }
 
 async fn parse_pinned(pool: &SqlitePool, pin: &datalib_etl::pin::Pin) -> Result<ParsedGarmin> {
-    let (display_name, full_name) = load_account(pool).await?;
-    let weigh_ins = load_weigh_ins(pool).await?;
-    let devices = load_devices(pool).await?;
+    let mut unparsed = Vec::new();
+    let (display_name, full_name) = load_account(pool, &mut unparsed).await?;
+    let weigh_ins = load_weigh_ins(pool, &mut unparsed).await?;
+    let devices = load_devices(pool, &mut unparsed).await?;
     let metrics = load_metric_counts(pool).await?;
-    let activities = load_activities(pool).await?;
+    let activities = load_activities(pool, &mut unparsed).await?;
     let activity_files = scalar(
         pool,
         "SELECT COUNT(*) FROM garmin_activity_files WHERE blake3 IS NOT NULL",
     )
     .await?;
-    let items = load_items(pool).await?;
-    let days = load_days(pool).await?;
+    let items = load_items(pool, &mut unparsed).await?;
+    let days = load_days(pool, &mut unparsed).await?;
     Ok(ParsedGarmin {
         head: Some(pin.commit().to_string()),
         display_name,
@@ -145,6 +148,7 @@ async fn parse_pinned(pool: &SqlitePool, pin: &datalib_etl::pin::Pin) -> Result<
         activity_files,
         items,
         days,
+        unparsed,
     })
 }
 
@@ -155,7 +159,10 @@ async fn scalar(pool: &SqlitePool, sql: &'static str) -> Result<i64> {
         .with_context(|| format!("garmin render: {sql}"))
 }
 
-async fn load_account(pool: &SqlitePool) -> Result<(Option<String>, Option<String>)> {
+async fn load_account(
+    pool: &SqlitePool,
+    unparsed: &mut Vec<Unparsed>,
+) -> Result<(Option<String>, Option<String>)> {
     let row = sqlx::query(
         "SELECT json(payload) AS payload FROM garmin_account \
          WHERE id = 'social_profile'",
@@ -166,15 +173,22 @@ async fn load_account(pool: &SqlitePool) -> Result<(Option<String>, Option<Strin
     let Some(row) = row else {
         return Ok((None, None));
     };
-    let payload: String = row.try_get("payload").unwrap_or_default();
-    let v: Value = serde_json::from_str(&payload).unwrap_or(Value::Null);
+    let Some(v) = json_column(
+        &row,
+        "payload",
+        "garmin_account",
+        "social_profile",
+        unparsed,
+    ) else {
+        return Ok((None, None));
+    };
     Ok((
         v["displayName"].as_str().map(str::to_string),
         v["fullName"].as_str().map(str::to_string),
     ))
 }
 
-async fn load_weigh_ins(pool: &SqlitePool) -> Result<Vec<WeighIn>> {
+async fn load_weigh_ins(pool: &SqlitePool, unparsed: &mut Vec<Unparsed>) -> Result<Vec<WeighIn>> {
     let rows = sqlx::query(
         "SELECT id, calendar_date, timestamp_gmt, weight_g, source_type, json(payload) AS payload \
            FROM garmin_weigh_ins \
@@ -186,11 +200,11 @@ async fn load_weigh_ins(pool: &SqlitePool) -> Result<Vec<WeighIn>> {
     .context("load garmin_weigh_ins")?;
     Ok(rows
         .into_iter()
-        .map(|r| {
-            let payload: String = r.try_get("payload").unwrap_or_default();
-            let v: Value = serde_json::from_str(&payload).unwrap_or(Value::Null);
-            WeighIn {
-                id: r.get::<String, _>("id"),
+        .filter_map(|r| {
+            let id: String = r.get("id");
+            let v = json_column(&r, "payload", "garmin_weigh_ins", &id, unparsed)?;
+            Some(WeighIn {
+                id,
                 calendar_date: r
                     .get::<Option<String>, _>("calendar_date")
                     .unwrap_or_default(),
@@ -199,12 +213,12 @@ async fn load_weigh_ins(pool: &SqlitePool) -> Result<Vec<WeighIn>> {
                 bmi: v["bmi"].as_f64(),
                 body_fat_pct: v["bodyFat"].as_f64(),
                 source_type: r.get::<Option<String>, _>("source_type"),
-            }
+            })
         })
         .collect())
 }
 
-async fn load_devices(pool: &SqlitePool) -> Result<Vec<Device>> {
+async fn load_devices(pool: &SqlitePool, unparsed: &mut Vec<Unparsed>) -> Result<Vec<Device>> {
     let rows = sqlx::query(
         "SELECT id, product_display_name, json(payload) AS payload \
            FROM garmin_devices ORDER BY id",
@@ -214,18 +228,17 @@ async fn load_devices(pool: &SqlitePool) -> Result<Vec<Device>> {
     .context("load garmin_devices")?;
     Ok(rows
         .into_iter()
-        .map(|r| {
+        .filter_map(|r| {
             let id: String = r.get("id");
-            let payload: String = r.try_get("payload").unwrap_or_default();
-            let v: Value = serde_json::from_str(&payload).unwrap_or(Value::Null);
-            Device {
+            let v = json_column(&r, "payload", "garmin_devices", &id, unparsed)?;
+            Some(Device {
                 name: r
                     .get::<Option<String>, _>("product_display_name")
                     .or_else(|| v["displayName"].as_str().map(str::to_string))
                     .unwrap_or_else(|| id.clone()),
                 last_sync: v["lastSyncTimestampGMT"].as_str().map(str::to_string),
                 id,
-            }
+            })
         })
         .collect())
 }
@@ -249,7 +262,7 @@ async fn load_metric_counts(pool: &SqlitePool) -> Result<Vec<MetricCount>> {
         .collect())
 }
 
-async fn load_activities(pool: &SqlitePool) -> Result<Vec<Activity>> {
+async fn load_activities(pool: &SqlitePool, unparsed: &mut Vec<Unparsed>) -> Result<Vec<Activity>> {
     let rows = sqlx::query(
         "SELECT a.id, json(a.payload) AS listing, json(d.payload) AS detail, \
                 (SELECT f.blake3 FROM garmin_activity_files f \
@@ -263,16 +276,21 @@ async fn load_activities(pool: &SqlitePool) -> Result<Vec<Activity>> {
     .context("load garmin_activities")?;
     Ok(rows
         .into_iter()
-        .map(|r| Activity {
-            id: r.get("id"),
-            listing: json_column(&r, "listing"),
-            detail: json_column(&r, "detail"),
-            fit_blake3: r.get("fit"),
+        .filter_map(|r| {
+            let id: String = r.get("id");
+            let listing = json_column(&r, "listing", "garmin_activities", &id, unparsed);
+            let detail = json_column(&r, "detail", "garmin_activity_details", &id, unparsed);
+            Some(Activity {
+                listing: listing?,
+                detail: detail?,
+                fit_blake3: r.get("fit"),
+                id,
+            })
         })
         .collect())
 }
 
-async fn load_items(pool: &SqlitePool) -> Result<Vec<Item>> {
+async fn load_items(pool: &SqlitePool, unparsed: &mut Vec<Unparsed>) -> Result<Vec<Item>> {
     let rows = sqlx::query(
         "SELECT id, kind, upstream_id, json(payload) AS payload \
            FROM garmin_items ORDER BY kind, id",
@@ -282,26 +300,48 @@ async fn load_items(pool: &SqlitePool) -> Result<Vec<Item>> {
     .context("load garmin_items")?;
     Ok(rows
         .into_iter()
-        .map(|r| Item {
-            id: r.get("id"),
-            kind: r.get("kind"),
-            upstream_id: r.get("upstream_id"),
-            payload: json_column(&r, "payload"),
+        .filter_map(|r| {
+            let id: String = r.get("id");
+            let payload = json_column(&r, "payload", "garmin_items", &id, unparsed)?;
+            Some(Item {
+                kind: r.get("kind"),
+                upstream_id: r.get("upstream_id"),
+                payload,
+                id,
+            })
         })
         .collect())
 }
 
-fn json_column(r: &sqlx::sqlite::SqliteRow, name: &str) -> Value {
-    r.try_get::<Option<String>, _>(name)
-        .ok()
-        .flatten()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or(Value::Null)
+/// The JSON in column `name`, `Null` for a SQL `NULL`. `None`, with the
+/// row noted in `unparsed`, when it will not read.
+fn json_column(
+    r: &sqlx::sqlite::SqliteRow,
+    name: &str,
+    table: &'static str,
+    id: &str,
+    unparsed: &mut Vec<Unparsed>,
+) -> Option<Value> {
+    let text = match r.try_get::<Option<String>, _>(name) {
+        Ok(Some(text)) => text,
+        Ok(None) => return Some(Value::Null),
+        Err(e) => {
+            unparsed.push(Unparsed::new(table, id, &e.to_string()));
+            return None;
+        }
+    };
+    match serde_json::from_str(&text) {
+        Ok(v) => Some(v),
+        Err(_) => {
+            unparsed.push(Unparsed::new(table, id, &text));
+            None
+        }
+    }
 }
 
 /// Every value in [`FIELDS`], by day. A path is extracted in SQL, so a
 /// day's minute-by-minute arrays are never read into memory.
-async fn load_days(pool: &SqlitePool) -> Result<Days> {
+async fn load_days(pool: &SqlitePool, unparsed: &mut Vec<Unparsed>) -> Result<Days> {
     let mut days = Days::new();
     let mut put = |date: String, key: &'static str, v: DayValue| {
         days.entry(date).or_default().values.insert(key, v);
@@ -343,18 +383,22 @@ async fn load_days(pool: &SqlitePool) -> Result<Days> {
             }
             Extract::Readiness(key) => {
                 if readiness.is_none() {
-                    let rows: Vec<(String, Option<String>)> = sqlx::query_as(
-                        "SELECT calendar_date, json(payload) FROM garmin_daily \
+                    let rows: Vec<(String, String, Option<String>)> = sqlx::query_as(
+                        "SELECT id, calendar_date, json(payload) FROM garmin_daily \
                           WHERE metric = 'training_readiness'",
                     )
                     .fetch_all(pool)
                     .await
                     .context("load garmin_daily training_readiness")?;
-                    readiness = Some(
-                        rows.into_iter()
-                            .filter_map(|(d, p)| Some((d, serde_json::from_str(&p?).ok()?)))
-                            .collect(),
-                    );
+                    let mut parsed = Vec::with_capacity(rows.len());
+                    for (id, date, payload) in rows {
+                        let Some(payload) = payload else { continue };
+                        match serde_json::from_str(&payload) {
+                            Ok(v) => parsed.push((date, v)),
+                            Err(_) => unparsed.push(Unparsed::new("garmin_daily", id, &payload)),
+                        }
+                    }
+                    readiness = Some(parsed);
                 }
                 for (date, payload) in readiness.iter().flatten() {
                     match pick_readiness(payload, key) {
@@ -400,5 +444,109 @@ impl ParsedGarmin {
     pub fn measurements(&self) -> i64 {
         let days: i64 = self.metrics.iter().map(|m| m.days_with_data).sum();
         days + self.weigh_ins.len() as i64 + self.activities.len() as i64
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Passes SQLite's `json()` and overflows serde_json's f64.
+    const UNPARSEABLE: &str = r#"{"bmi": 22.5, "warp": 1e999}"#;
+    const GOOD: &str = r#"{"bmi": 22.5, "displayName": "Data"}"#;
+
+    async fn store(dir: &Path) -> SqlitePool {
+        let ddl = [
+            "CREATE TABLE garmin_account (id TEXT PRIMARY KEY, payload TEXT)",
+            "CREATE TABLE garmin_weigh_ins (id TEXT PRIMARY KEY, calendar_date TEXT, \
+             timestamp_gmt INTEGER, weight_g REAL, source_type TEXT, payload TEXT)",
+            "CREATE TABLE garmin_devices (id TEXT PRIMARY KEY, product_display_name TEXT, payload TEXT)",
+            "CREATE TABLE garmin_daily (id TEXT PRIMARY KEY, calendar_date TEXT, metric TEXT, payload TEXT)",
+            "CREATE TABLE garmin_activities (id TEXT PRIMARY KEY, start_time_gmt TEXT, payload TEXT)",
+            "CREATE TABLE garmin_activity_details (id TEXT PRIMARY KEY, payload TEXT)",
+            "CREATE TABLE garmin_activity_files (id TEXT PRIMARY KEY, activity_id TEXT, blake3 TEXT)",
+            "CREATE TABLE garmin_items (id TEXT PRIMARY KEY, kind TEXT, upstream_id TEXT, payload TEXT)",
+        ];
+        let pool = datalib_etl::doltlite_raw::open(&dir.join("g.doltlite_db"), &ddl)
+            .await
+            .unwrap();
+        let inserts = [
+            "INSERT INTO garmin_account VALUES ('social_profile', ?2)",
+            "INSERT INTO garmin_weigh_ins VALUES ('w1', '2369-04-01', 1, 70000, NULL, ?1), \
+                                                 ('w2', '2369-04-02', 2, 70000, NULL, ?2)",
+            "INSERT INTO garmin_devices VALUES ('d1', NULL, ?1), ('d2', NULL, ?2)",
+            "INSERT INTO garmin_daily VALUES ('r1', '2369-04-01', 'training_readiness', ?2), \
+                ('r0', '2369-04-03', 'training_readiness', '[{\"score\": 71}]')",
+            "INSERT INTO garmin_activities VALUES ('a1', '1', ?1), ('a2', '2', ?2), ('a3', '3', ?1)",
+            "INSERT INTO garmin_activity_details VALUES ('a1', ?1), ('a3', ?2)",
+            "INSERT INTO garmin_items VALUES ('i1', 'gear', '1', ?1), ('i2', 'gear', '2', ?2)",
+        ];
+        for sql in inserts {
+            sqlx::query(sqlx::AssertSqlSafe(sql))
+                .bind(GOOD)
+                .bind(UNPARSEABLE)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        pool
+    }
+
+    /// A payload that would not parse read as JSON `null`: the weigh-in,
+    /// device, activity or item rendered with its fields quietly blank,
+    /// and nothing said so.
+    #[tokio::test]
+    async fn a_payload_that_does_not_parse_is_reported_not_read_as_an_empty_one() {
+        let d = tempfile::tempdir().unwrap();
+        let pool = store(d.path()).await;
+        let mut unparsed = Vec::new();
+
+        let (display_name, _) = load_account(&pool, &mut unparsed).await.unwrap();
+        assert_eq!(display_name, None);
+        let weigh_ins = load_weigh_ins(&pool, &mut unparsed).await.unwrap();
+        let w: Vec<(&str, Option<f64>)> = weigh_ins.iter().map(|w| (&*w.id, w.bmi)).collect();
+        assert_eq!(w, [("w1", Some(22.5))]);
+        let devices = load_devices(&pool, &mut unparsed).await.unwrap();
+        let d: Vec<(&str, &str)> = devices.iter().map(|d| (&*d.id, &*d.name)).collect();
+        assert_eq!(d, [("d1", "Data")]);
+        let activities = load_activities(&pool, &mut unparsed).await.unwrap();
+        let a: Vec<(&str, &Value)> = activities
+            .iter()
+            .map(|a| (&*a.id, &a.detail["bmi"]))
+            .collect();
+        assert_eq!(a, [("a1", &serde_json::json!(22.5))]);
+        let items = load_items(&pool, &mut unparsed).await.unwrap();
+        let i: Vec<(&str, &Value)> = items.iter().map(|i| (&*i.id, &i.payload["bmi"])).collect();
+        assert_eq!(i, [("i1", &serde_json::json!(22.5))]);
+        let days = load_days(&pool, &mut unparsed).await.unwrap();
+        assert_eq!(
+            days["2369-04-03"].values.get("readiness"),
+            Some(&super::super::daily::DayValue::Num(71.0))
+        );
+
+        let reported: Vec<String> = unparsed.iter().map(Unparsed::entity_id).collect();
+        assert_eq!(
+            reported,
+            [
+                "garmin_account:social_profile",
+                "garmin_weigh_ins:w2",
+                "garmin_devices:d2",
+                "garmin_activities:a2",
+                "garmin_activity_details:a3",
+                "garmin_items:i2",
+                "garmin_daily:r1",
+            ]
+        );
+
+        sqlx::query("UPDATE garmin_account SET payload = ?")
+            .bind(GOOD)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let mut unparsed = Vec::new();
+        let (display_name, _) = load_account(&pool, &mut unparsed).await.unwrap();
+        assert_eq!(display_name.as_deref(), Some("Data"));
+        assert!(unparsed.is_empty(), "{unparsed:?}");
+        pool.close().await;
     }
 }
