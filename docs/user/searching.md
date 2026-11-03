@@ -6,7 +6,7 @@ from a shell (no app or server needed; it prints JSON), and
 `GET /applet/unified_document_index/search?q=…` on a running
 `datalib-http`. This page is that language. `datalib-step help search`
 prints it, and a release ships it beside the binaries as
-`docs/searching.md`.
+`docs/user/searching.md`.
 
 ```sh
 datalib-applet search ~/datalib 'from:me after:2026-10-20'

@@ -165,7 +165,8 @@ pub enum Verb {
         data_root: PathBuf,
     },
     /// Print the open sync requests, the steps turned off, and the steps
-    /// running now.
+    /// running now, one line each starting `request`, `off` or `running`;
+    /// a line starting `idle:` when there are none.
     Status {
         /// The config file, `<data_root>/config.toml`.
         config: PathBuf,

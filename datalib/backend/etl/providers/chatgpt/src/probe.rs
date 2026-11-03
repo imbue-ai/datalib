@@ -165,8 +165,8 @@ fn credential_hint(e: ChatGPTError) -> anyhow::Error {
         "chatgpt.com credentials are not set up.\n\
          Sign in through latchkey, which captures the access token itself:\n  \
          {lk} auth browser chatgpt\n\
-         If that says the service has no browser login, see the ChatGPT section of\n\
-         docs/user/getting_your_data.md for the one-time registration."
+         If that says the service has no browser login, `datalib-step help chatgpt`\n\
+         has the one-time registration."
     ))
 }
 

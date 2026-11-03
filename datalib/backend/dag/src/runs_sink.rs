@@ -188,7 +188,7 @@ impl RunStoreSink {
             target: Some(RUNNER_TARGET.into()),
             msg: format!(
                 "{series} went down, {before} to {now}, but a name ending in `_total` says it only \
-                 grows; name it without the suffix if it can fall (docs/dev/step_protocol.md)"
+                 grows; name it without the suffix if it can fall (`datalib-step help step-protocol`)"
             ),
             fields: Some(
                 serde_json::json!({ "counter_fell": series, "from": before, "to": now })

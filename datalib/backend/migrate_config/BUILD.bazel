@@ -51,10 +51,12 @@ rust_binary(
     ],
 )
 
-# The command line's parse: its `--help` examples.
+# The command line's parse: its `--help` examples, and the commands the
+# docs `datalib-step help` prints show for it.
 rust_test(
     name = "migrate_config_bin_unittests",
     size = "small",
     crate = ":datalib_migrate_config_bin",
     edition = "2021",
+    deps = ["//datalib/backend/agent_docs:datalib_agent_docs"],
 )
