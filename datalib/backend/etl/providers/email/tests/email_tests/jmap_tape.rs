@@ -20,6 +20,7 @@ pub struct Email {
     pub mailboxes: Vec<String>,
     pub thread: String,
     pub flagged: bool,
+    pub seen: bool,
 }
 
 #[derive(Clone)]
@@ -48,6 +49,7 @@ impl Account {
                         mailboxes: filed.iter().map(|m| m.to_string()).collect(),
                         thread: format!("T{id}"),
                         flagged: false,
+                        seen: true,
                     };
                     (id.to_string(), email)
                 })
@@ -66,7 +68,10 @@ impl Account {
             .iter()
             .map(|m| (m.clone(), Value::Bool(true)))
             .collect();
-        let mut keywords = json!({ "$seen": true });
+        let mut keywords = json!({});
+        if e.seen {
+            keywords["$seen"] = json!(true);
+        }
         if e.flagged {
             keywords["$flagged"] = json!(true);
         }

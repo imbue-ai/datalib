@@ -288,7 +288,8 @@ impl RawDb {
     }
 }
 
-/// Delete these email rows with their joins, `.eml` edges and sidecars.
+/// Delete these email rows with their joins, read marks, `.eml` edges and
+/// sidecars.
 pub async fn delete_emails_in_tx(tx: &mut Transaction<'_, Sqlite>, ids: &[String]) -> Result<()> {
     for id in ids {
         // The `.eml`'s fetch problem goes with it: an email upstream no
@@ -318,7 +319,7 @@ pub async fn delete_emails_in_tx(tx: &mut Transaction<'_, Sqlite>, ids: &[String
                 .with_context(|| format!("delete email {id}"))?;
         }
     }
-    Ok(())
+    datalib_etl::read_marks::forget(tx, ids).await
 }
 
 /// Write `.eml` edges. One that holds bytes is upserted; one without (a
@@ -639,6 +640,134 @@ mod tests {
         db.close().await;
     }
 
+    /// The eighth rung: every email of a store an older build wrote gets a
+    /// read mark, read where it had `$seen`; `$seen` leaves the keyword
+    /// rows and the payload and `UNREAD` the Gmail label ids, and every
+    /// other keyword and label stays.
+    #[tokio::test]
+    async fn the_eighth_rung_moves_seen_into_read_marks() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("j.doltlite_db");
+        {
+            let ddl: Vec<String> = full_ddl()
+                .into_iter()
+                .filter(|sql| !sql.contains("read_marks"))
+                .collect();
+            let ddl: Vec<&str> = ddl.iter().map(String::as_str).collect();
+            let pool = dr::open(&path, &ddl).await.unwrap();
+            for sql in [
+                r#"INSERT INTO emails (id, payload, account_id, thread_id, blob_id, label_ids) VALUES
+                   ('E1', jsonb('{"id":"E1","keywords":{"$flagged":true,"$seen":true},"mailboxIds":{"M1":true}}'),
+                    'A1', 'T1', 'B1', '["INBOX","STARRED"]'),
+                   ('E2', jsonb('{"id":"E2","keywords":{"$important":true},"mailboxIds":{"M1":true}}'),
+                    'A1', 'T1', 'B2', '["IMPORTANT","INBOX","UNREAD"]'),
+                   ('E3', jsonb('{"id":"E3","keywords":{"$seen":true}}'), 'A1', 'T2', 'B3', NULL)"#,
+                r#"INSERT INTO email_keywords (id, email_id, keyword) VALUES
+                   ('E1#$flagged', 'E1', '$flagged'), ('E1#$seen', 'E1', '$seen'),
+                   ('E2#$important', 'E2', '$important'), ('E3#$seen', 'E3', '$seen')"#,
+                "UPDATE _datalib_meta SET value = '7' WHERE key = 'schema_version'",
+            ] {
+                sqlx::query(sql).execute(&pool).await.unwrap();
+            }
+            dr::commit_run(&pool, "the seventh rung's rows")
+                .await
+                .unwrap();
+            pool.close().await;
+        }
+
+        let db = RawDb::open(&path)
+            .await
+            .expect("the eighth rung carries it");
+        use datalib_etl::read_marks::ReadMark::Read;
+        let marks = datalib_etl::read_marks::load(db.pool()).await.unwrap();
+        assert_eq!(
+            marks.into_iter().collect::<Vec<_>>(),
+            vec![
+                ("E1".to_string(), Read(true)),
+                ("E2".to_string(), Read(false)),
+                ("E3".to_string(), Read(true)),
+            ]
+        );
+        let keywords: Vec<String> = sqlx::query_scalar("SELECT id FROM email_keywords ORDER BY id")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(keywords, ["E1#$flagged", "E2#$important"]);
+        let rows: Vec<(String, String, Option<String>)> =
+            sqlx::query_as("SELECT id, json(payload), label_ids FROM emails ORDER BY id")
+                .fetch_all(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                (
+                    "E1".into(),
+                    r#"{"id":"E1","keywords":{"$flagged":true},"mailboxIds":{"M1":true}}"#.into(),
+                    Some(r#"["INBOX","STARRED"]"#.into())
+                ),
+                (
+                    "E2".into(),
+                    r#"{"id":"E2","keywords":{"$important":true},"mailboxIds":{"M1":true}}"#.into(),
+                    Some(r#"["IMPORTANT","INBOX"]"#.into())
+                ),
+                ("E3".into(), r#"{"id":"E3","keywords":{}}"#.into(), None),
+            ]
+        );
+        db.close().await;
+    }
+
+    /// What the eighth rung leaves of a payload is what a download writes
+    /// for the same envelope, byte for byte, so the first sync after it
+    /// rewrites no email.
+    #[tokio::test]
+    async fn a_payload_the_eighth_rung_strips_is_the_one_a_download_writes() {
+        let envelope = json!({
+            "id": "E1", "blobId": "B1", "threadId": "T1",
+            "keywords": {"$flagged": true, "$seen": true},
+            "mailboxIds": {"M1": true},
+            "subject": "Caf\u{e9} \"quoted\" \\ \u{1} tab\t",
+        });
+        let (_d, db) = tmp_db().await;
+        let migrated: Vec<u8> = sqlx::query_scalar(
+            r#"SELECT jsonb(json(jsonb_remove(jsonb(?), '$.keywords."$seen"')))"#,
+        )
+        .bind(serde_json::to_string(&envelope).unwrap())
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+        let row = EmailRow::from_jmap_envelope("A", &envelope).unwrap();
+        let fresh: Vec<u8> = sqlx::query_scalar("SELECT jsonb(?)")
+            .bind(&row.id_and_payload.payload)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(migrated, fresh);
+        db.close().await;
+    }
+
+    /// An email that goes takes its read mark with it.
+    #[tokio::test]
+    async fn deleting_an_email_forgets_its_read_mark() {
+        use datalib_etl::read_marks::{self, ReadMarkRow};
+        let (_d, db) = tmp_db().await;
+        let mut tx = db.pool().begin().await.unwrap();
+        read_marks::write(
+            &mut tx,
+            &[
+                ReadMarkRow::read("E1", true),
+                ReadMarkRow::read("E2", false),
+            ],
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        db.delete_emails(&["E1".to_string()]).await.unwrap();
+        let marks = read_marks::load(db.pool()).await.unwrap();
+        assert_eq!(marks.keys().collect::<Vec<_>>(), ["E2"]);
+        db.close().await;
+    }
+
     #[tokio::test]
     async fn email_round_trips_with_joins() {
         let (_d, db) = tmp_db().await;
@@ -674,9 +803,7 @@ mod tests {
         let mut mboxes = joins.mailboxes["E1"].clone();
         mboxes.sort();
         assert_eq!(mboxes, vec!["M1", "M2"]);
-        let mut kws = joins.keywords["E1"].clone();
-        kws.sort();
-        assert_eq!(kws, vec!["$flagged", "$seen"]);
+        assert_eq!(joins.keywords["E1"], vec!["$flagged"]);
     }
 
     /// Re-upserting an email with a different set of keywords drops the
@@ -688,7 +815,7 @@ mod tests {
         let mut payload = json!({
             "id": "E1", "blobId": "B", "threadId": "T",
             "mailboxIds": {"M1": true},
-            "keywords": {"$seen": true},
+            "keywords": {"$important": true},
         });
         upsert_email(&db, &EmailRow::from_jmap_envelope("A", &payload).unwrap()).await;
         payload["keywords"] = json!({"$flagged": true});

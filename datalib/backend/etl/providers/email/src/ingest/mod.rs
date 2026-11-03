@@ -38,7 +38,9 @@ use api::call;
 use datalib_etl::doltlite_raw as dr;
 use db::{refresh_email_joins, write_eml_edges_in_tx};
 use listed::{Keeps, Named, WHOLE_ACCOUNT};
-use schema_raw::{AccountRow, EmailRow, EmlBlobRow, MailboxRow, MAILBOX_VOLATILE_PATHS};
+use schema_raw::{
+    AccountRow, EmailRow, EmlBlobRow, FetchedEmail, MailboxRow, MAILBOX_VOLATILE_PATHS,
+};
 
 async fn upsert_account(
     db: &RawDb,
@@ -85,7 +87,8 @@ async fn upsert_mailboxes(
 /// Move every email filed under each `from` mailbox to its `to`, or off
 /// it when `to` is `None`, then drop the `from` row. Payload and join rows
 /// move together, so the `emails` diff and the `email_mailboxes` diff tell
-/// the same story. Returns how many emails moved.
+/// the same story; the read marks stay as they are. Returns how many
+/// emails moved.
 ///
 /// For a label that went away upstream (`None`), and for a row whose id
 /// changed recipe while the label stayed (`Some`).
@@ -1059,11 +1062,11 @@ struct EmailGet<'a> {
 }
 
 #[async_trait]
-impl Fetcher<EmailRow> for EmailGet<'_> {
+impl Fetcher<FetchedEmail> for EmailGet<'_> {
     async fn fetch(
         &self,
         batch: Vec<Listed>,
-    ) -> std::result::Result<Vec<Fetched<EmailRow>>, BatchError> {
+    ) -> std::result::Result<Vec<Fetched<FetchedEmail>>, BatchError> {
         let ids: Vec<String> = batch.iter().map(|l| l.key.clone()).collect();
         let resp = email_get(self.session, self.account_id, &ids).await;
         self.bar.did(ids.len() as u64);
@@ -1090,7 +1093,7 @@ impl Fetcher<EmailRow> for EmailGet<'_> {
     async fn store(
         &self,
         tx: &mut Transaction<'static, Sqlite>,
-        batch: &[Fetched<EmailRow>],
+        batch: &[Fetched<FetchedEmail>],
     ) -> Result<()> {
         let (got, gone) = got_and_gone(batch);
         let n = listed::write_batch_in_tx(tx, self.now, got, &gone, listed::same_id).await?;
@@ -1134,12 +1137,12 @@ fn answered(
     keep: &Keep<'_>,
     asked: Vec<Listed>,
     resp: &Value,
-) -> Vec<Fetched<EmailRow>> {
+) -> Vec<Fetched<FetchedEmail>> {
     let not_found = string_array(resp, "notFound");
-    let mut rows: BTreeMap<String, EmailRow> = jmap_list(resp)
+    let mut rows: BTreeMap<String, FetchedEmail> = jmap_list(resp)
         .iter()
-        .filter_map(|envelope| EmailRow::from_jmap_envelope(account_id, envelope))
-        .map(|row| (row.id().to_string(), row))
+        .filter_map(|envelope| FetchedEmail::from_jmap_envelope(account_id, envelope))
+        .map(|email| (email.row.id().to_string(), email))
         .collect();
     let mut kept_threads = keep
         .kept_threads
@@ -1147,6 +1150,7 @@ fn answered(
     if let Some(kept) = kept_threads.as_mut() {
         kept.extend(
             rows.values()
+                .map(|email| &email.row)
                 .filter(|row| keep.admits(row))
                 .map(|row| row.thread_id.clone()),
         );
@@ -1161,7 +1165,7 @@ fn answered(
         .into_iter()
         .filter_map(|listed| {
             let outcome = match rows.remove(&listed.key) {
-                Some(row) if kept(&row) => Outcome::Got(row),
+                Some(email) if kept(&email.row) => Outcome::Got(email),
                 Some(_) => Outcome::Gone,
                 None if not_found.contains(&listed.key) => Outcome::Gone,
                 None => return None,
@@ -1173,7 +1177,7 @@ fn answered(
 
 /// A batch's answers split for [`listed::write_batch_in_tx`]: the rows
 /// that came, and the ids of the messages that are gone.
-fn got_and_gone(fetched: &[Fetched<EmailRow>]) -> (Vec<EmailRow>, Vec<String>) {
+fn got_and_gone(fetched: &[Fetched<FetchedEmail>]) -> (Vec<FetchedEmail>, Vec<String>) {
     let mut got = Vec::new();
     let mut gone = Vec::new();
     for f in fetched {
