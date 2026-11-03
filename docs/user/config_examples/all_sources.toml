@@ -2388,11 +2388,12 @@ maximum_sequential_failed_requests = 50        # the default
 account = "picard@enterprise.test"
 
 # Open tasks always come. Completed ones come too unless `completed` is
-# false; `completed_since` stops the first run's read of them at a date
-# rather than at the day the account joined Todoist.
+# false; `since` stops the first run's read of them at a day ("2024-01-01"),
+# an RFC 3339 instant, or an offset back from each sync ("-90d"), rather
+# than at the day the account joined Todoist.
 [steps.params.api]
 completed = true
-completed_since = "2024-01-01"
+since = "2024-01-01"
 
 # One document per project: its sections, its tasks and their comments,
 # completed tasks folded under each section. No options.

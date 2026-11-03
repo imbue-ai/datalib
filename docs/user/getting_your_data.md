@@ -986,7 +986,7 @@ latchkey auth set todoist -H "Authorization: Bearer $(pbpaste)"
 
 An empty `api` table copies everything. Completed tasks are read back
 to the day you joined Todoist, a quarter at a time; set
-`completed_since = "YYYY-MM-DD"` to stop sooner, or `completed = false`
+`since` (a day, or an offset such as `"-90d"`) to stop sooner, or `completed = false`
 to leave them out. Each sync after the first reads only what changed.
 [The provider's INGEST.md](../../datalib/backend/etl/providers/todoist/INGEST.md) has the details.
 

@@ -217,6 +217,7 @@ field.
 | slack `api` | `since`: everything | a message's time | stays |
 | claude `api`, chatgpt `api` | `since`: everything | a conversation's last update | stays |
 | email `gmail` | `since`: everything | `after:` on the listing walk | stays |
+| todoist `api` | `since`: the day the account joined | a task's completion time | stays |
 | garmin `api` | `since`: a year before the first run, recorded; `until`: today | days | stays |
 | calendar `google`, `fastmail`, `caldav` | `since`, `until`: no bound | events with any part inside | **dropped**: a windowed calendar is listed whole every run, and an event the listing no longer names goes (`calendar/INGEST.md` §"A window") |
 
@@ -490,7 +491,7 @@ download …` command lines become groups and steps whose command is
 `common.input_path` / `common.raw_path` become method tables with
 their own `path` (`convert.rs`). The rewrite is value-level, so comments do not
 survive. The loader and `datalib-step` recognize the old shapes only
-well enough to name the tool. Six rewrites are made without asking,
+well enough to name the tool. Seven rewrites are made without asking,
 all text edits that keep comments, and each refuses a result that would
 drop an entry the original ran, other than one it exists to take out. `datalib-http` makes them in this order
 (`http/src/config_upgrade.rs`), at boot, on any change to the file, and
@@ -538,13 +539,16 @@ the next would put the first back:
    of numbers, which the keyword index already finds, so the wizard
    never offers the step (`embedAllowed` in
    `ui/src/config/sourceSteps.ts`). This rewrite is the only one of the
-   five that is meant to take an entry out; it still refuses a result
+   seven that is meant to take an entry out; it still refuses a result
    that loses any other entry.
 6. The step commands (`upgrade_step_commands`, `step_commands.rs`):
    a step that writes no `command` was read as `datalib-step`, the
    shape from before every step named its program. The rewrite writes
    `command = "datalib-step"` on the line after its `function`. The
    loader still reads a step without one the same way.
+7. Todoist's window (`upgrade_todoist_since`, `todoist_since.rs`): a
+   Todoist ingest's `api.completed_since` becomes `api.since`, its value
+   as it was. The loader refuses the old key.
 
 A source may not take `unified_index`, `unified_document_index` or
 `unified_time_series_index` as its id

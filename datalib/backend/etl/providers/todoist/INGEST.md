@@ -58,7 +58,7 @@ Two parts, in this order (`src/ingest/mod.rs`):
    `limit=200` and the `next_cursor` of the page before. A window's
    span is written to `coverage` (scope `completed_items`) in the
    transaction that stores its last page. What is left to read is the
-   range wanted, from `completed_since` (else the account's
+   range wanted, from `since` (else the account's
    `joined_at`) up to now, less the spans held.
 
 The one position kept is Todoist's own sync token, which AGENTS.md

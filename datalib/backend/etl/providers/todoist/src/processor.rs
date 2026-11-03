@@ -51,6 +51,7 @@ impl DataProcessor for TodoistIngest {
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
+        let now = datalib_time::parse_strict(ctx.now)?;
         let db = ingest::RawDb::open(&ingest::db_path_for(&self.raw_path)).await?;
         let pool = db.pool().clone();
         ctx.run_store(pool, None, |sealer| async {
@@ -60,6 +61,7 @@ impl DataProcessor for TodoistIngest {
                 progress: ctx.progress.clone(),
                 control: ctx.control.clone(),
                 sealer: Some(sealer),
+                now: Some(now),
                 ..ingest::FetchOptions::new(db)
             })
             .await?;

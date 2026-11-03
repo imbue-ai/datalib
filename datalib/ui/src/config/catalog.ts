@@ -835,7 +835,7 @@ export const CATALOG: CatalogEntry[] = [
       { kind: "bool", target: "api.completed", label: "Copy completed tasks", default: true },
       {
         kind: "date",
-        target: "api.completed_since",
+        target: "api.since",
         label: "Completed since",
         requires: "api.completed",
         help:

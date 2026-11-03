@@ -39,7 +39,7 @@ async fn a_full_sync_then_a_second_run_that_reads_almost_nothing() {
     let since = std::env::var("TODOIST_TEST_COMPLETED_SINCE").ok();
     let sync = TodoistSync {
         completed: true,
-        completed_since: since,
+        since,
     };
     let store = tempfile::TempDir::with_prefix("todoist-live-")
         .unwrap()
