@@ -1250,14 +1250,22 @@ pub async fn table_exists(pool: &SqlitePool, table: &str) -> Result<bool> {
 /// Empty vec if the table does not exist (no error).
 /// Every table in the file that is ours to touch.
 async fn table_is_empty(pool: &SqlitePool, table: &str) -> Result<bool> {
-    // Audited: `table` is parsed from our own static DDL.
+    // Audited: the name is quoted.
     let any: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-        "SELECT EXISTS(SELECT 1 FROM \"{table}\")"
+        "SELECT EXISTS(SELECT 1 FROM {})",
+        quote_ident(table)
     )))
     .fetch_one(pool)
     .await
     .with_context(|| format!("is {table} empty"))?;
     Ok(!any)
+}
+
+/// `name` as an SQL identifier, whatever it holds. A store's table and
+/// column names are not always ours: a mirrored store's come from the
+/// source file, so every name read back out of a catalog is quoted.
+pub fn quote_ident(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
 }
 
 async fn user_tables(pool: &SqlitePool) -> Result<Vec<String>> {
@@ -1270,10 +1278,10 @@ async fn user_tables(pool: &SqlitePool) -> Result<Vec<String>> {
 }
 
 async fn table_columns(pool: &SqlitePool, table: &str) -> Result<Vec<ColumnInfo>> {
-    // Audited: `table` is a quoted identifier from a `&'static str` or from
-    // `parse_create_table_name` over our own DDL; never user input.
+    // Audited: the name is quoted.
     let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "PRAGMA table_xinfo(\"{table}\")"
+        "PRAGMA table_xinfo({})",
+        quote_ident(table)
     )))
     .fetch_all(pool)
     .await
@@ -2127,11 +2135,15 @@ pub async fn reset_store(db_path: &Path) -> Result<()> {
         let tables = user_tables(&pool).await?;
         let mut tx = pool.begin().await.context("begin reset tx")?;
         for table in tables.iter().filter(|t| *t != datalib_store_meta::TABLE) {
-            // Audited: `table` is a name read out of `sqlite_master`.
-            sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM \"{table}\"")))
-                .execute(&mut *tx)
-                .await
-                .with_context(|| format!("reset: empty {table}"))?;
+            // Audited: the name is quoted; a mirrored store's come from
+            // the source file.
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "DELETE FROM {}",
+                quote_ident(table)
+            )))
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("reset: empty {table}"))?;
         }
         tx.commit().await.context("commit reset tx")?;
         commit_run(&pool, "reset").await.map(|_| ())
@@ -2972,15 +2984,20 @@ pub async fn changed_keys(
     }
     let parts: Vec<String> = pk
         .iter()
-        .map(|c| format!("CAST(coalesce(to_{c}, from_{c}) AS TEXT)"))
+        .map(|c| {
+            let to = quote_ident(&format!("to_{c}"));
+            let from = quote_ident(&format!("from_{c}"));
+            format!("CAST(coalesce({to}, {from}) AS TEXT)")
+        })
         .collect();
     let sql = format!(
-        "SELECT {}, diff_type FROM dolt_diff_{table} \
+        "SELECT {}, diff_type FROM {} \
           WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'",
-        parts.join(" || '|' || ")
+        parts.join(" || '|' || "),
+        quote_ident(&format!("dolt_diff_{table}"))
     );
-    // Audited: `table` and its columns come from `sqlite_master` and
-    // `pragma_table_info` of the store itself; both refs are bound.
+    // Audited: every name is quoted, since a mirrored table's come from
+    // the source file; both refs are bound.
     let rows = sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(sql))
         .bind(from_ref)
         .bind(to_ref)
@@ -4191,6 +4208,69 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(logged, 1, "and it is still in history");
+        pool.close().await;
+    }
+
+    /// A mirrored store holds tables named by whoever wrote the source
+    /// file, so a reset must quote what it reads out of `sqlite_master`:
+    /// unquoted, this name dropped `edges` on the writer.
+    #[tokio::test]
+    async fn a_reset_runs_no_table_name_as_sql() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("entities.doltlite_db");
+        const EDGE: &str =
+            "CREATE TABLE IF NOT EXISTS edges (id TEXT PRIMARY KEY, blake3 TEXT NULL)";
+        let pool = open(&p, &[WIDGETS_DDL, EDGE]).await.unwrap();
+        if !has_dolt_extensions(&pool).await {
+            pool.close().await;
+            return;
+        }
+        for sql in [
+            r#"CREATE TABLE "odd""; DROP TABLE ""edges" (id TEXT PRIMARY KEY)"#,
+            r#"INSERT INTO "odd""; DROP TABLE ""edges" VALUES ('o1')"#,
+            "INSERT INTO edges VALUES ('e1', 'aa')",
+        ] {
+            sqlx::query(sql).execute(&pool).await.unwrap();
+        }
+        commit_run(&pool, "setup").await.unwrap();
+        pool.close().await;
+
+        reset_store(&p).await.unwrap();
+        let pool = open(&p, &[WIDGETS_DDL, EDGE]).await.unwrap();
+        assert_eq!(count(&pool, "edges").await, 0, "edges kept, and emptied");
+        assert_eq!(count(&pool, r#"odd""; DROP TABLE ""edges"#).await, 0);
+        pool.close().await;
+    }
+
+    /// The key columns of a mirrored table are named by the source file;
+    /// `changed_keys` reads them back and must quote them.
+    #[tokio::test]
+    async fn changed_keys_quote_the_names_they_read() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("entities.doltlite_db");
+        let pool = open(&p, &[WIDGETS_DDL]).await.unwrap();
+        if !has_dolt_extensions(&pool).await {
+            pool.close().await;
+            return;
+        }
+        sqlx::query(r#"CREATE TABLE "odd t" ("my ""key" TEXT PRIMARY KEY, v TEXT)"#)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let from = commit_run(&pool, "empty").await.unwrap().unwrap();
+        sqlx::query(r#"INSERT INTO "odd t" VALUES ('k1', 'a')"#)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let to = commit_run(&pool, "one row").await.unwrap().unwrap();
+        let got = changed_keys(&pool, "odd t", &from, &to).await.unwrap();
+        assert_eq!(
+            got,
+            vec![ChangedKey {
+                key: "k1".into(),
+                change: RowChange::Added,
+            }]
+        );
         pool.close().await;
     }
 

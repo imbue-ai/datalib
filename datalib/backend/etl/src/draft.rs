@@ -10,7 +10,7 @@ use anyhow::{bail, Context, Result};
 use sqlx::pool::PoolConnection;
 use sqlx::{Sqlite, SqliteConnection, SqlitePool};
 
-use crate::doltlite_raw::{self, WRITER_BRANCH};
+use crate::doltlite_raw::{self, quote_ident, WRITER_BRANCH};
 
 /// The branch the draft of `key` lives on.
 pub fn branch_of(key: &str) -> String {
@@ -237,19 +237,15 @@ async fn draft_wins(conn: &mut SqliteConnection) -> Result<()> {
     Ok(())
 }
 
-fn quote(name: &str) -> String {
-    format!("\"{}\"", name.replace('"', "\"\""))
-}
-
 /// The statements that settle `table`'s conflicts, the draft winning:
 /// a row the draft deleted goes, a row the writer deleted and the draft
 /// changed comes back as the draft has it, and in a row both kept each
 /// cell the draft changed takes the draft's value. `columns` is every
 /// column, with whether it is part of the key.
 fn draft_wins_sql(table: &str, columns: &[(String, bool)]) -> Vec<String> {
-    let t = quote(table);
-    let conf = quote(&format!("dolt_conflicts_{table}"));
-    let side = |prefix: &str, col: &str| format!("c.{}", quote(&format!("{prefix}{col}")));
+    let t = quote_ident(table);
+    let conf = quote_ident(&format!("dolt_conflicts_{table}"));
+    let side = |prefix: &str, col: &str| format!("c.{}", quote_ident(&format!("{prefix}{col}")));
     let keys: Vec<&str> = columns
         .iter()
         .filter(|(_, pk)| *pk)
@@ -257,7 +253,7 @@ fn draft_wins_sql(table: &str, columns: &[(String, bool)]) -> Vec<String> {
         .collect();
     let same_row = keys
         .iter()
-        .map(|k| format!("{} = {t}.{}", side("our_", k), quote(k)))
+        .map(|k| format!("{} = {t}.{}", side("our_", k), quote_ident(k)))
         .collect::<Vec<_>>()
         .join(" AND ");
     let both_kept = "c.our_diff_type <> 'removed' AND c.their_diff_type <> 'removed'";
@@ -271,7 +267,7 @@ fn draft_wins_sql(table: &str, columns: &[(String, bool)]) -> Vec<String> {
               WHERE c.our_diff_type = 'removed' AND c.their_diff_type <> 'removed'",
             cols = columns
                 .iter()
-                .map(|(c, _)| quote(c))
+                .map(|(c, _)| quote_ident(c))
                 .collect::<Vec<_>>()
                 .join(", "),
             theirs = columns
@@ -287,7 +283,7 @@ fn draft_wins_sql(table: &str, columns: &[(String, bool)]) -> Vec<String> {
             "UPDATE {t} SET {c} = (SELECT {theirs} FROM {conf} c WHERE {same_row}) \
               WHERE EXISTS (SELECT 1 FROM {conf} c \
                 WHERE {same_row} AND {both_kept} AND {theirs} IS NOT {base})",
-            c = quote(col),
+            c = quote_ident(col),
         ));
     }
     out.push(format!("DELETE FROM {conf}"));
