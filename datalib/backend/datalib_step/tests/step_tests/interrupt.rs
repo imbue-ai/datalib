@@ -144,9 +144,9 @@ fn stops_at_a_channel_boundary_with_a_final_commit(signal: libc::c_int) {
 
     // The store is at a commit the run made on its way out, not at the
     // working set the signal found: `finish` ran, and what the walk had
-    // done stands. The interrupt landed after channel 1 and before the
-    // loop reached channel 3 at the latest; nothing after the boundary
-    // was started.
+    // done stands. The walk asks for three channels' first pages at once,
+    // so the interrupt landed after channel 1 and before the answers of
+    // any channel after the third were written.
     let db = root.join("work-slack/ingest/entities.doltlite_db");
     let messages = doltlite(
         &db,
@@ -164,7 +164,7 @@ fn stops_at_a_channel_boundary_with_a_final_commit(signal: libc::c_int) {
     );
     let n: usize = channels[0].parse().unwrap();
     assert!(
-        (1..=2).contains(&n),
-        "one channel finished before the signal and at most one was in flight; got {n}"
+        (1..=3).contains(&n),
+        "one channel finished before the signal, and at most the two asked for with it; got {n}"
     );
 }

@@ -7,7 +7,7 @@ use std::path::Path;
 
 use datalib_etl::doltlite_raw as dr;
 use datalib_etl_render::inputs::RawRange;
-use datalib_etl_slack::ingest::{db_path_for, RawDb};
+use datalib_etl_slack::ingest::{db_path_for, RawDb, MESSAGES_PER_PAGE};
 use datalib_etl_slack::recorded::{
     record_auth, record_call, record_conversations, record_users, History, CHANNEL_TYPES,
 };
@@ -57,7 +57,7 @@ fn record_run(api: &Path, history: History<'_>, messages: Value, replies: Value)
     record_call(
         api,
         "conversations.replies",
-        json!({"channel": "C1", "ts": A, "limit": "200"}),
+        json!({"channel": "C1", "ts": A, "limit": MESSAGES_PER_PAGE}),
         replies,
     )
     .unwrap();

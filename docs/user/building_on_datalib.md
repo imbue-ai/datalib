@@ -343,7 +343,8 @@ question reaches outside that:
   messages unless the source sets `dms = true`; the newest messages of a
   DM closed in the account's sidebar, for up to a day (a closed DM is
   checked once a day); channels the account is
-  not in unless it sets `all_channels`; with `scope = "involves_me"`,
+  not in unless it sets `all_channels`; archived channels unless it
+  sets `archived = true` or names them; with `scope = "involves_me"`,
   a channel where nothing involves the account, and a chosen channel
   before `context_before` ahead of its first such message; files when
   `media = false`. A

@@ -313,9 +313,8 @@ pub async fn drain<T: Send, F: Fetcher<T>>(
         let Some((asked, answer)) = in_flight.next().await else {
             break;
         };
-        match answer {
+        match read(l, asked, answer) {
             Ok(answered) => {
-                let answered = with_the_unanswered(asked, answered);
                 if answered.iter().any(|a| a.outcome.is_fruit()) {
                     fruitless = 0;
                 } else {
@@ -324,19 +323,7 @@ pub async fn drain<T: Send, F: Fetcher<T>>(
                 pending_bytes += weigh(f, &answered);
                 pending.extend(answered);
             }
-            Err(_) if l.stop.requested() => {
-                ended = Some(End::Stopped);
-            }
-            Err(BatchError::Batch(e)) => {
-                let said = format!("{e:#}");
-                pending.extend(asked.into_iter().map(|listed| Fetched {
-                    listed,
-                    outcome: Outcome::Failed(said.clone()),
-                }));
-                fruitless += 1;
-            }
-            Err(BatchError::Terminal(e)) => ended = Some(End::Terminal(format!("{e:#}"))),
-            Err(BatchError::Abort(e)) => ended = Some(End::Abort(e)),
+            Err(end) => ended = Some(end),
         }
         if ended.is_none() && l.failures_in_a_row > 0 && fruitless >= l.failures_in_a_row {
             let said = pending
@@ -375,6 +362,57 @@ pub async fn drain<T: Send, F: Fetcher<T>>(
         Some(End::Abort(e)) => return Err(e),
     }
     Ok(done)
+}
+
+/// One answer to `asked`, written as [`drain`] writes a flush, for a
+/// provider whose own loop picks what to ask for next from what came
+/// back. Of `l`, only the store, the stop, the problems and the sealer
+/// are read; how many to ask for and when to give up are the caller's.
+pub async fn write_answer<T: Send, F: Fetcher<T>>(
+    l: &Loop<'_>,
+    f: &F,
+    asked: Vec<Listed>,
+    answer: std::result::Result<Vec<Fetched<T>>, BatchError>,
+) -> Result<Drained> {
+    let total = asked.len();
+    let mut done = Drained::default();
+    match read(l, asked, answer) {
+        Ok(mut answered) => write(l, f, &mut answered, &mut done).await?,
+        Err(End::Stopped | End::GaveUp(_)) => done.left = total,
+        Err(End::Terminal(said)) => {
+            done.left = total;
+            give_up(l, &done, "a failure nothing after it would escape", &said);
+            done.terminal = Some(said);
+        }
+        Err(End::Abort(e)) => return Err(e),
+    }
+    Ok(done)
+}
+
+/// What one answer comes to: a record each, the ones `fetch` said
+/// nothing about and the whole of a failed batch as failed; or how the
+/// loop ends.
+fn read<T>(
+    l: &Loop<'_>,
+    asked: Vec<Listed>,
+    answer: std::result::Result<Vec<Fetched<T>>, BatchError>,
+) -> std::result::Result<Vec<Fetched<T>>, End> {
+    match answer {
+        Ok(answered) => Ok(with_the_unanswered(asked, answered)),
+        Err(_) if l.stop.requested() => Err(End::Stopped),
+        Err(BatchError::Batch(e)) => {
+            let said = format!("{e:#}");
+            Ok(asked
+                .into_iter()
+                .map(|listed| Fetched {
+                    listed,
+                    outcome: Outcome::Failed(said.clone()),
+                })
+                .collect())
+        }
+        Err(BatchError::Terminal(e)) => Err(End::Terminal(format!("{e:#}"))),
+        Err(BatchError::Abort(e)) => Err(End::Abort(e)),
+    }
 }
 
 enum End {
@@ -879,6 +917,48 @@ mod tests {
         assert_eq!(
             owed(&pool, T, listing).await.unwrap(),
             [listed("k05", Some("v1"))]
+        );
+        pool.close().await;
+    }
+
+    /// An answer written on its own is held, failed and left as `drain`
+    /// would leave it: a failed batch owes every record again, and an
+    /// answer that came after a stop writes nothing.
+    #[tokio::test]
+    async fn one_answer_is_written_as_drain_writes_it() {
+        let d = tempfile::tempdir().unwrap();
+        let pool = store_at(&d).await;
+        let stop = StopFlag::new();
+        let found = RunProblems::unwritten();
+        let l = a_loop(&pool, &stop, &found, 1, 0);
+        let f = Scripted::all_got().with("k2", Answer::Silent);
+        let asked = vec![listed("k1", Some("v1")), listed("k2", Some("v1"))];
+        let answer = f.fetch(asked.clone()).await;
+        let done = write_answer(&l, &f, asked.clone(), answer).await.unwrap();
+        assert_eq!((done.got, done.failed, done.left), (1, 1, 0));
+
+        let refused = Err(BatchError::Batch(anyhow::anyhow!("HTTP 500")));
+        let done = write_answer::<String, _>(&l, &f, vec![listed("k3", None)], refused)
+            .await
+            .unwrap();
+        assert_eq!((done.got, done.failed), (0, 1));
+
+        stop.request();
+        let late = Err(BatchError::Batch(anyhow::anyhow!("interrupted")));
+        let done = write_answer::<String, _>(&l, &f, vec![listed("k4", None)], late)
+            .await
+            .unwrap();
+        assert_eq!((done.failed, done.left), (0, 1));
+
+        let mut listing = asked;
+        listing.extend([listed("k3", None), listed("k4", None)]);
+        assert_eq!(
+            owed(&pool, T, listing).await.unwrap(),
+            [
+                listed("k2", Some("v1")),
+                listed("k3", None),
+                listed("k4", None)
+            ]
         );
         pool.close().await;
     }

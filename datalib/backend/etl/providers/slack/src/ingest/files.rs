@@ -36,7 +36,8 @@ pub struct FileFetcher<'a> {
     /// run, grown as files land.
     pub blake3_by_file: &'a Mutex<HashMap<String, String>>,
     pub bar: &'a RunBar,
-    /// Files whose bytes this run fetched, as against found in the CAS.
+    /// Files whose bytes this run fetched and stored, as against found
+    /// in the CAS.
     pub downloaded: AtomicUsize,
 }
 
@@ -66,27 +67,8 @@ impl Fetcher<File> for FileFetcher<'_> {
         &self,
         batch: Vec<Listed>,
     ) -> std::result::Result<Vec<Fetched<File>>, BatchError> {
-        let keys: Vec<&str> = batch.iter().map(|l| l.key.as_str()).collect();
-        let objects = self
-            .db
-            .file_objects(&keys)
-            .await
-            .map_err(BatchError::Abort)?;
-        let by_key: HashMap<&str, &OwedFile> =
-            objects.iter().map(|o| (o.key.as_str(), o)).collect();
-        // Files this batch fetched, so a file twice in it is fetched
-        // once; later batches learn their hashes from `store`.
-        let mut fresh: HashSet<String> = HashSet::new();
-        let mut out = Vec::with_capacity(batch.len());
-        for listed in batch {
-            let outcome = self
-                .one(by_key.get(listed.key.as_str()).copied(), &mut fresh)
-                .await
-                .map_err(BatchError::Batch)?;
-            self.bar.did(1);
-            out.push(Fetched { listed, outcome });
-        }
-        Ok(out)
+        let objects = self.objects(&batch).await.map_err(BatchError::Abort)?;
+        self.fetch_objects(batch, objects).await
     }
 
     async fn store(
@@ -109,7 +91,9 @@ impl Fetcher<File> for FileFetcher<'_> {
                 Got::Held(_) | Got::FetchedAbove => None,
             })
             .collect();
+        let downloaded = inserts.len();
         let stored = self.db.cas().put_many(inserts).await?;
+        self.downloaded.fetch_add(downloaded, Ordering::Relaxed);
         let blake3_of = |file: &File| match &file.got {
             Got::Held(held) => held.clone(),
             Got::Fetched(_) | Got::FetchedAbove => stored[file.file_id.as_str()].clone(),
@@ -141,6 +125,39 @@ impl Fetcher<File> for FileFetcher<'_> {
 }
 
 impl FileFetcher<'_> {
+    /// The stored file object each of `batch` names. A run with requests
+    /// out at once reads these before the request goes out, since a
+    /// request waiting on the store would hold the connection the writer
+    /// needs.
+    pub async fn objects(&self, batch: &[Listed]) -> Result<Vec<OwedFile>> {
+        let keys: Vec<&str> = batch.iter().map(|l| l.key.as_str()).collect();
+        self.db.file_objects(&keys).await
+    }
+
+    /// `batch`, fetched from the file `objects` its edges name. Touches
+    /// no store.
+    pub async fn fetch_objects(
+        &self,
+        batch: Vec<Listed>,
+        objects: Vec<OwedFile>,
+    ) -> std::result::Result<Vec<Fetched<File>>, BatchError> {
+        let by_key: HashMap<&str, &OwedFile> =
+            objects.iter().map(|o| (o.key.as_str(), o)).collect();
+        // Files this batch fetched, so a file twice in it is fetched
+        // once; later batches learn their hashes from `store`.
+        let mut fresh: HashSet<String> = HashSet::new();
+        let mut out = Vec::with_capacity(batch.len());
+        for listed in batch {
+            let outcome = self
+                .one(by_key.get(listed.key.as_str()).copied(), &mut fresh)
+                .await
+                .map_err(BatchError::Batch)?;
+            self.bar.did(1);
+            out.push(Fetched { listed, outcome });
+        }
+        Ok(out)
+    }
+
     /// What one owed edge comes to. `Err` only when the run was told to
     /// stop; a download that fails is the record's own outcome.
     async fn one(
@@ -213,7 +230,6 @@ impl FileFetcher<'_> {
             "downloaded one file"
         );
         fresh.insert(file_id.to_string());
-        self.downloaded.fetch_add(1, Ordering::Relaxed);
         Ok(Outcome::Got(File {
             file_id: file_id.to_string(),
             got: Got::Fetched(Bytes {

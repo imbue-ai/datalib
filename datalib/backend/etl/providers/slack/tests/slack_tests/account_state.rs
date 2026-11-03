@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use datalib_etl::doltlite_raw as dr;
-use datalib_etl_slack::ingest::{db_path_for, FetchSummary, RawDb};
+use datalib_etl_slack::ingest::{db_path_for, FetchSummary, RawDb, MESSAGES_PER_PAGE};
 use datalib_etl_slack::recorded::{
     record_auth, record_call, record_conversations, record_users, History, CHANNEL_TYPES,
 };
@@ -308,7 +308,7 @@ fn write_channel_with_marks(api: &Path, channel_mark: &str) {
     call(
         api,
         "conversations.replies",
-        json!({"channel": "C1", "ts": A, "limit": "200"}),
+        json!({"channel": "C1", "ts": A, "limit": MESSAGES_PER_PAGE}),
         json!({"ok": true, "has_more": false, "messages": [
             followed_root,
             {"ts": REPLY, "user": "U2", "text": "all nominal", "thread_ts": A},

@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use datalib_etl_slack::ingest::{db_path_for, FetchOptions, RawDb};
+use datalib_etl_slack::ingest::{db_path_for, FetchOptions, RawDb, MESSAGES_PER_PAGE};
 use datalib_etl_slack::recorded::{record_call, History};
 use serde_json::{json, Value};
 
@@ -37,7 +37,7 @@ fn record_replies(api: &Path, messages: Value) {
     record_call(
         api,
         "conversations.replies",
-        json!({"channel": "C1", "ts": ROOT, "limit": "200"}),
+        json!({"channel": "C1", "ts": ROOT, "limit": MESSAGES_PER_PAGE}),
         json!({"ok": true, "has_more": false, "messages": messages}),
     )
     .unwrap();

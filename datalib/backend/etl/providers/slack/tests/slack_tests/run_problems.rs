@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use datalib_etl_slack::ingest::{db_path_for, RawDb};
+use datalib_etl_slack::ingest::{db_path_for, RawDb, MESSAGES_PER_PAGE};
 use datalib_etl_slack::recorded::{
     record_auth, record_call, record_conversations, record_users, History, CHANNEL_TYPES,
 };
@@ -93,7 +93,7 @@ async fn a_channel_that_fails_is_a_problem_until_it_walks() {
         &api1,
         "conversations.history",
         json!({"channel": "C2", "include_all_metadata": "true", "inclusive": "true",
-               "limit": "200", "oldest": History::cold("C2").oldest}),
+               "limit": MESSAGES_PER_PAGE, "oldest": History::cold("C2").oldest}),
         refused_by_slack(),
     )
     .unwrap();
@@ -130,7 +130,7 @@ async fn a_thread_that_fails_is_a_problem_on_the_thread_until_it_fetches() {
     let d = tempdir().unwrap();
     let out = d.path().join("out_raw");
     let channels = json!([channel("C1", "bridge")]);
-    let replies_params = json!({"channel": "C1", "ts": A, "limit": "200"});
+    let replies_params = json!({"channel": "C1", "ts": A, "limit": MESSAGES_PER_PAGE});
 
     let api1 = d.path().join("api1");
     record_listings(&api1, channels.clone());
@@ -236,7 +236,7 @@ async fn a_channel_listing_cut_short_walks_what_it_stored() {
     let api = d.path().join("api");
     record_auth(&api).unwrap();
     record_users(&api, json!([{"id": "U1", "name": "picard"}])).unwrap();
-    let page = json!({"exclude_archived": "true", "limit": "1000", "types": CHANNEL_TYPES});
+    let page = json!({"exclude_archived": "false", "limit": "1000", "types": CHANNEL_TYPES});
     record_call(
         &api,
         "conversations.list",
@@ -274,7 +274,7 @@ async fn a_channel_listing_that_fails_with_nothing_stored_fails_the_run() {
     record_call(
         &api,
         "conversations.list",
-        json!({"exclude_archived": "true", "limit": "1000", "types": CHANNEL_TYPES}),
+        json!({"exclude_archived": "false", "limit": "1000", "types": CHANNEL_TYPES}),
         refused_by_slack(),
     )
     .unwrap();

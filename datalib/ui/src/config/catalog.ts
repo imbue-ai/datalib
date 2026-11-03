@@ -327,6 +327,7 @@ export const CATALOG: CatalogEntry[] = [
         ],
       },
       { heading: "Files people shared", fields: ["api.media", "common.blob_size_limit_bytes"] },
+      { heading: "Archived channels", fields: ["api.archived"], advanced: true },
     ],
     fields: [
       {
@@ -385,6 +386,16 @@ export const CATALOG: CatalogEntry[] = [
         label: "Include channels you're not a member of",
         default: false,
         help: "Ignored when Channels is set.",
+      },
+      {
+        kind: "bool",
+        target: "api.archived",
+        label: "Copy archived channels too",
+        default: false,
+        help:
+          "Use it with every channel in the workspace: Slack drops almost everyone from a " +
+          "channel it archives, so with every channel you're in it adds almost nothing. Each " +
+          "archived channel is copied once. One you choose by name is copied either way.",
       },
       {
         kind: "bool",
