@@ -33,6 +33,7 @@ use datalib_etl::progress::RunBar;
 use datalib_etl::raw_store::{Batch, Sealer};
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
+use datalib_etl::upstream::Upstream;
 use datalib_etl_web::coverage::{self, Span};
 use datalib_etl_web::http::LatchkeySettings;
 use datalib_etl_web::owed::{self, BatchError, Fetched, Fetcher, Listed, Outcome};
@@ -303,6 +304,99 @@ fn interrupted(e: &anyhow::Error) -> bool {
     )
 }
 
+/// How long a run remembers that Slack refused this credential
+/// `client.counts` or `saved.list`, and does not ask. A refusal says what
+/// the token is (its kind, its scopes), which changes only when someone
+/// issues a new one, so asking every sync is only refused again. A week
+/// bounds how long a token since granted the call goes without it.
+pub const REFUSAL_REMEMBERED_FOR: chrono::Duration = chrono::Duration::days(7);
+
+/// Whether `e` says this credential may not make the call at all, so
+/// asking again will be refused again until the token changes: Slack's
+/// refusal codes, or latchkey's permissions (its own or its gateway's)
+/// not allowing the request. Not a failure that may pass.
+fn refused_for_good(e: &anyhow::Error) -> bool {
+    refused(e) || Upstream::in_chain(e) == Some(Upstream::NotPermitted)
+}
+
+fn refusal_key(method: &str) -> String {
+    format!("refused:{method}")
+}
+
+/// What became of a call a credential may be refused for good.
+enum Optional<T> {
+    Answered(T),
+    Failed(anyhow::Error),
+    /// Refused at `since`, this run or one within
+    /// [`REFUSAL_REMEMBERED_FOR`], and not asked again this run.
+    Refused {
+        since: DateTime<Utc>,
+    },
+}
+
+/// `ask`, unless `method` was refused within [`REFUSAL_REMEMBERED_FOR`].
+/// A refusal is remembered as a sweep marker (`refused:<method>`); an
+/// answer forgets it; any other failure leaves it as it was, so a
+/// transient one is asked again next run.
+async fn ask_unless_refused<T>(
+    db: &RawDb,
+    method: &str,
+    now: &DateTime<Utc>,
+    ask: impl Future<Output = Result<T>>,
+) -> Result<Optional<T>> {
+    let key = refusal_key(method);
+    let remembered = db.manifest_sweep_age(&key, now).await?;
+    if let Some(age) = remembered.filter(|age| *age < REFUSAL_REMEMBERED_FOR) {
+        info!(
+            event = "slack_refused_call_skipped",
+            method,
+            age_s = age.num_seconds().max(0),
+            "Slack refused this call recently; not asking again yet"
+        );
+        return Ok(Optional::Refused { since: *now - age });
+    }
+    match ask.await {
+        Ok(answer) => {
+            if remembered.is_some() {
+                db.forget_manifest_sweep(&key).await?;
+            }
+            Ok(Optional::Answered(answer))
+        }
+        Err(e) if refused_for_good(&e) => {
+            info!(
+                event = "slack_call_refused",
+                method,
+                error = %format!("{e:#}"),
+                "Slack refused this credential the call; not asking again for a while"
+            );
+            db.record_manifest_sweep(&key, now).await?;
+            Ok(Optional::Refused { since: *now })
+        }
+        Err(e) => Ok(Optional::Failed(e)),
+    }
+}
+
+/// The one `info` row a remembered refusal of `method` is, saying what
+/// the mirror goes without. Worded from the stored refusal alone, so a
+/// run that skips the call writes the row the refusing run wrote.
+fn refusal_problem(method: &str, since: DateTime<Utc>, without: &str) -> RunProblem {
+    let again = since + REFUSAL_REMEMBERED_FOR;
+    RunProblem::not_asked(
+        method,
+        format!(
+            "Slack refused {method} to this credential on {}, so it is not asked again until {}; \
+             {without}. Nothing else is affected.",
+            since.format("%Y-%m-%d"),
+            again.format("%Y-%m-%d"),
+        ),
+    )
+}
+
+const WITHOUT_COUNTS: &str = "until then conversations' read marks are not updated, and each \
+                              sync asks every conversation for new messages rather than only \
+                              those with some";
+const WITHOUT_SAVED: &str = "until then saved-for-later items are not mirrored";
+
 fn listing_problem(name: &str, e: &anyhow::Error) -> RunProblem {
     problem_for(name, format!("{e:#}"), refused(e))
 }
@@ -324,20 +418,25 @@ pub struct AccountTotals {
     pub pruned: usize,
 }
 
+/// `client.counts`, unless a refusal of it is remembered.
+async fn ask_counts(
+    db: &RawDb,
+    now: &DateTime<Utc>,
+    latchkey: &LatchkeySettings,
+) -> Result<Optional<Value>> {
+    let no_params = empty_params();
+    ask_unless_refused(db, M_COUNTS, now, call(M_COUNTS, &no_params, latchkey)).await
+}
+
 /// `client.counts` has one entry per conversation open in the account's
 /// sidebar, mirrored or not; only the mirrored ones are kept, so
 /// `dms = false` keeps DMs out of this table as it does out of
 /// `channels`. Returns the entries kept.
-async fn fetch_read_states(
+async fn store_read_states(
     db: &RawDb,
     in_scope: &HashSet<String>,
-    counts: Option<Result<Value>>,
-    latchkey: &LatchkeySettings,
+    resp: &Value,
 ) -> Result<Vec<Value>> {
-    let resp = match counts {
-        Some(counts) => counts?,
-        None => call(M_COUNTS, &empty_params(), latchkey).await?,
-    };
     let mut entries: Vec<Value> = Vec::new();
     for surface in ["channels", "mpims", "ims"] {
         let listed = resp
@@ -496,11 +595,12 @@ struct AccountState {
 /// Read states, saved items and bookmarks for the conversations this run
 /// mirrors. Each listing that fails becomes a `problems` row and costs
 /// only its own table; none of them sinks the message walk. `counts` is
-/// a `client.counts` answer the run already asked for, if it did.
+/// what became of the `client.counts` the run already asked for, if it
+/// did.
 async fn fetch_account_state(
     db: &RawDb,
     targets: &[(String, String)],
-    counts: Option<Result<Value>>,
+    counts: Option<Optional<Value>>,
     now: &DateTime<Utc>,
     stop: &datalib_etl::stop::StopFlag,
     progress: &datalib_etl::progress::Progress,
@@ -515,9 +615,20 @@ async fn fetch_account_state(
     let (read_states, saved, bookmarks) = tokio::join!(
         async {
             progress.set_message(M_COUNTS);
-            fetch_read_states(db, &in_scope, counts, latchkey).await
+            let counts = match counts {
+                Some(counts) => counts,
+                None => ask_counts(db, now, latchkey).await?,
+            };
+            anyhow::Ok(match counts {
+                Optional::Answered(resp) => match store_read_states(db, &in_scope, &resp).await {
+                    Ok(entries) => Optional::Answered(entries),
+                    Err(e) => Optional::Failed(e),
+                },
+                Optional::Failed(e) => Optional::Failed(e),
+                Optional::Refused { since } => Optional::Refused { since },
+            })
         },
-        list_saved_items(latchkey),
+        ask_unless_refused(db, M_SAVED, now, list_saved_items(latchkey)),
         fetch_bookmarks(
             db,
             targets,
@@ -528,19 +639,23 @@ async fn fetch_account_state(
             &mut bookmark_problems
         ),
     );
-    let open_latest = match read_states {
-        Ok(entries) => {
+    let open_latest = match read_states? {
+        Optional::Answered(entries) => {
             totals.read_states = entries.len();
             Some(self::open_latest(&entries))
         }
-        Err(e) => {
+        Optional::Failed(e) => {
             problems.push(listing_problem(M_COUNTS, &e));
+            None
+        }
+        Optional::Refused { since } => {
+            problems.push(refusal_problem(M_COUNTS, since, WITHOUT_COUNTS));
             None
         }
     };
 
-    match saved {
-        Ok(items) => {
+    match saved? {
+        Optional::Answered(items) => {
             let listed = items.len();
             let kept = saved_items_in_scope(items, &in_scope);
             totals.saved_items = kept.len();
@@ -552,7 +667,10 @@ async fn fetch_account_state(
                 "listed the saved-for-later items; kept those in mirrored conversations"
             );
         }
-        Err(e) => problems.push(listing_problem(M_SAVED, &e)),
+        Optional::Failed(e) => problems.push(listing_problem(M_SAVED, &e)),
+        Optional::Refused { since } => {
+            problems.push(refusal_problem(M_SAVED, since, WITHOUT_SAVED))
+        }
     }
 
     let (bookmarks, pruned) = bookmarks?;
@@ -1643,10 +1761,9 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             };
             // The search and `client.counts` need nothing from each
             // other, so they go out together.
-            let no_params = empty_params();
             let (searched_ok, answer) = tokio::join!(
                 search.run(&queries, &since, &top, &mut searched),
-                call(M_COUNTS, &no_params, &opts.latchkey),
+                ask_counts(&db, &now, &opts.latchkey),
             );
             // No fallback: walking every channel instead is the cost this
             // scope exists to avoid, so a search that fails fails the run.
@@ -1660,9 +1777,12 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                     ))
                 }
             }
+            let answer = answer?;
             let mentioned = match &answer {
-                Ok(answer) => involving::mentioned(answer, &datetime_to_slack_ts(&now)),
-                Err(_) => BTreeMap::new(),
+                Optional::Answered(answer) => {
+                    involving::mentioned(answer, &datetime_to_slack_ts(&now))
+                }
+                Optional::Failed(_) | Optional::Refused { .. } => BTreeMap::new(),
             };
             counts = Some(answer);
             let first_dm = targets.len() - plan.dm_targets;
