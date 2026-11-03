@@ -661,6 +661,35 @@ mod diffs {
         assert_eq!(kinds, vec!["added", "modified", "removed"]);
     }
 
+    /// `dolt_diff_summary` names a table added or dropped between two
+    /// commits with `''`, not NULL, on the side it is missing from, and
+    /// says which by `diff_type`: `added` or `dropped`.
+    #[tokio::test]
+    async fn a_summary_names_an_added_or_dropped_table_with_an_empty_string() {
+        let s = Store::new();
+        let mut w = s.rw().await;
+        let before = head(&mut w).await;
+        ok(&mut w, "CREATE TABLE u (id TEXT PRIMARY KEY)").await;
+        ok(&mut w, "INSERT INTO u VALUES ('a')").await;
+        let added = commit(&mut w, "add u").await;
+        ok(&mut w, "DROP TABLE u").await;
+        let dropped = commit(&mut w, "drop u").await;
+        let row = |from: &str, to: &str| {
+            format!(
+                "SELECT quote(from_table_name) || ' ' || quote(to_table_name) || ' ' || diff_type \
+                 FROM dolt_diff_summary WHERE from_ref = '{from}' AND to_ref = '{to}'"
+            )
+        };
+        assert_eq!(
+            texts(&mut w, &row(&before, &added)).await,
+            vec!["'' 'u' added"]
+        );
+        assert_eq!(
+            texts(&mut w, &row(&added, &dropped)).await,
+            vec!["'u' '' dropped"]
+        );
+    }
+
     #[tokio::test]
     async fn an_unchanged_row_is_no_change() {
         let (s, _) = store_with_rows().await;
@@ -1486,6 +1515,72 @@ mod plans {
         let (s, _) = store_with_rows().await;
         let mut r = s.ro().await;
         err_contains(exec(&mut r, "SELECT * FROM dbstat").await, "not supported");
+    }
+}
+
+// ── What a write costs ──────────────────────────────────────────────
+
+mod write_cost {
+    use super::*;
+
+    /// Bytes the file grew by when one commit changed `changed` rows' small
+    /// `mark` column, in a table of `rows` rows whose other column holds
+    /// `payload` bytes each, or no other column when `payload` is 0.
+    async fn growth(rows: i64, payload: i64, changed: i64) -> u64 {
+        let s = Store::new();
+        let mut w = s.rw().await;
+        let ddl = if payload == 0 {
+            "CREATE TABLE t (id INTEGER PRIMARY KEY, mark INTEGER)".to_string()
+        } else {
+            "CREATE TABLE t (id INTEGER PRIMARY KEY, payload TEXT, mark INTEGER)".to_string()
+        };
+        ok(&mut w, &ddl).await;
+        let fill = if payload == 0 {
+            format!(
+                "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < {rows}) \
+                 INSERT INTO t SELECT i, 0 FROM n"
+            )
+        } else {
+            format!(
+                "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < {rows}) \
+                 INSERT INTO t SELECT i, hex(randomblob({})), 0 FROM n",
+                payload / 2
+            )
+        };
+        ok(&mut w, &fill).await;
+        commit(&mut w, "fill").await;
+        let before = s.size();
+        // Spread across the table, as read marks on many channels are.
+        let step = (rows / changed).max(1);
+        ok(
+            &mut w,
+            &format!(
+                "UPDATE t SET mark = mark + 1 WHERE id % {step} = 0 AND id <= {}",
+                step * changed
+            ),
+        )
+        .await;
+        commit(&mut w, "mark").await;
+        s.size() - before
+    }
+
+    /// A row is stored whole: changing one small column of a wide row
+    /// rewrites the row, so a value that changes often and alone (a read
+    /// mark) costs far less in a narrow table of its own than as a column
+    /// beside a large payload.
+    #[tokio::test]
+    async fn a_small_column_change_rewrites_its_whole_row() {
+        let one_wide = growth(400, 4_000, 1).await;
+        assert!(
+            one_wide >= 4_000,
+            "one mark on a 4 KB row grew the file by only {one_wide} bytes"
+        );
+        let many_wide = growth(400, 1_000, 50).await;
+        let many_narrow = growth(400, 0, 50).await;
+        assert!(
+            many_narrow * 10 < many_wide,
+            "50 marks: {many_narrow} bytes in a narrow table, {many_wide} beside 1 KB payloads"
+        );
     }
 }
 

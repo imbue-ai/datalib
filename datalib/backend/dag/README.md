@@ -412,10 +412,17 @@ store's history is folded into fewer commits
 ([Trees](../../../docs/dev/doltlite.md#trees-and-keeping-one-through-a-fold)).
 `render_markdown` reports the tree, since nothing reads its history;
 `grid_index`, whose index is plain SQLite, reports its generation, a
-count it raises only when a reader would see a change; an ingest and
-the time-series steps report the commit,
-since a diff group names a raw commit and the time-series index reads
-each store at the commit it recorded. Each spells its version the same
+count it raises only when a reader would see a change; the time-series
+steps report the head commit, since the time-series index reads each
+store at the commit it recorded. An ingest reports a commit too, so a
+consumer can pin a read to it, but not its head: every sync commits its
+own record and stamps, so the head moves even when nothing upstream
+changed. It reports the last commit at which a table its readers read
+moved, rows or shape (`doltlite_raw::moves_version`: every content table,
+`problems`, `ingested_files`; never a `*_bookkeeping` sidecar,
+`sync_runs`, the cursors or `coverage`). The writer keeps that commit on
+a branch, `datalib_content`, moved at each seal
+(`doltlite_raw::CONTENT_BRANCH`). Each spells its version the same
 way on a seal and in the outcome, so finishing on the commit last
 sealed moves nothing downstream.
 
@@ -427,8 +434,8 @@ happens, and a step that wants its readers to skip reports a version.
 
 **A failed or stopped step's reported version stands**: what it committed
 before it ended, its consumers read (`plans/supervisor.md` §2.5).
-`datalib-step` reports its store's head however it ends, so a commit its
-writer published at open, or at the stop, reaches them. One that reports
+`datalib-step` reports its store's version however it ends, so a commit
+its writer published at open, or at the stop, reaches them. One that reports
 nothing moves nothing, since its tree may be half-written. The one thing
 no report can carry: a step killed outright after publishing and before
 saying so reaches its consumers at its next run, not at once.

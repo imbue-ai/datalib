@@ -31,5 +31,7 @@ md.use(chipLinks);
 /// body is whatever the source sent and `html: true` lets it through as
 /// HTML.
 export function renderDocument(body: string, options: SanitizeOptions = {}): Sanitized {
-  return sanitizeRenderedHtml(md.render(body), options);
+  // Fresh each render, so a body cannot carry one forward.
+  const chipMark = crypto.randomUUID();
+  return sanitizeRenderedHtml(md.render(body, { chipMark }), { ...options, chipMark });
 }

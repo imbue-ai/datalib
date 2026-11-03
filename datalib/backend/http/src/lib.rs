@@ -53,6 +53,7 @@ pub mod probe;
 pub mod prometheus;
 pub mod remote_media;
 pub mod request_log;
+pub mod request_progress;
 pub mod supervisor;
 pub mod ui_events;
 mod ui_mirror;
@@ -253,6 +254,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/pipeline/disk", get(pipeline_disk))
         .route("/api/pipeline/history", get(history::tree_history))
         .route("/api/requests", get(requests_list).post(request_open))
+        .route("/api/requests/{id}", get(request_progress::get))
         .route("/api/requests/{id}/stop", post(request_stop))
         .route("/api/steps/{id}/turn_off", post(step_turn_off))
         .route("/api/steps/{id}/turn_on", post(step_turn_on))
@@ -1405,19 +1407,8 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
         .map(|r| r.states.clone())
         .unwrap_or_default();
 
-    // Live progress, but only when the store's newest run is the one we
-    // are reporting. In the window between a run opening its record and
-    // the runner writing its first row, the newest run in the store is
-    // still the run before — and painting its numbers onto this run's
-    // steps is worse than showing none at all.
     let loop_record = started.elapsed();
-    let store = datalib_runs::snapshot(root).await;
-    let progress = match (&run, &store.run_id) {
-        (Some(r), Some(store_run)) if &r.run_id == store_run => {
-            progress_by_step(&store, &now_utc())
-        }
-        _ => Default::default(),
-    };
+    let progress = live_progress(root, run.as_ref().map(|r| r.run_id.as_str())).await;
     let run_progress = started.elapsed() - loop_record;
 
     let problems = manage::counts_by_step(
@@ -1449,6 +1440,23 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
         items,
         owed,
         took,
+    }
+}
+
+/// What each step has reported in `run`, the loop's run in flight or the
+/// one that finished last. Only when the run store's newest run is that
+/// one: in the window between a run opening its record and the runner
+/// writing its first row, the newest run in the store is still the run
+/// before, and painting its numbers onto this run's steps is worse than
+/// showing none at all.
+async fn live_progress(
+    root: &std::path::Path,
+    run: Option<&str>,
+) -> std::collections::HashMap<String, DagStepProgress> {
+    let store = datalib_runs::snapshot(root).await;
+    match (run, store.run_id.as_deref()) {
+        (Some(run), Some(store_run)) if run == store_run => progress_by_step(&store, &now_utc()),
+        _ => Default::default(),
     }
 }
 

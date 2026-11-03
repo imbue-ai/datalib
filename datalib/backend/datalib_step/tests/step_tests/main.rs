@@ -9,6 +9,7 @@ mod embedding_map;
 mod final_message;
 mod interrupt;
 mod item_table;
+mod no_op_ingest;
 mod offline;
 mod probe;
 mod reset;

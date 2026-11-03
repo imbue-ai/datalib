@@ -739,6 +739,7 @@ upstream (block types, MIME types), free-form display text
 | a log line's severity and pipe | `LogLevel`, `Stream` | `app_schema/src/runs/log.rs` |
 | what the loop made of a step (`steps.state`) | `StateKind` | `dag/src/supervisor/tick.rs` |
 | how a sync request ended | `RequestOutcome` | `dag/src/supervisor/store.rs` |
+| where a step stands for one sync request | `RequestStepPhase` | `http/src/request_progress.rs` |
 | a browser-login attempt, and what it is doing | `ConnectState`, `ConnectPhase` | `http/src/connect.rs` |
 | who names a latchkey account a browser login adds | `AccountNaming` | `http/src/connect.rs` |
 | what kind of trouble a sign-in or probe ran into | `IssueKind` | `probe/src/issue.rs` (`datalib_probe`) |
@@ -867,7 +868,9 @@ and its requests go out as `latchkey curl`:
 [`docs/dev/latchkey.md`](docs/dev/latchkey.md). A URL that carries its
 own authority skips latchkey and goes out as plain `curl` through the
 same HTTP layer (`HttpRequest::plain`): YoLink's signed CSV downloads,
-Notion's pre-signed file links.
+Notion's pre-signed file links. Such a URL came from upstream, so plain
+curl reads no `~/.curlrc`, speaks https only, takes the URL after
+`--url` and stops at the request's `max_bytes`.
 Cloudflare-fronted hosts go through the bundled `curl-impersonate`
 ([`docs/dev/curl_impersonate.md`](docs/dev/curl_impersonate.md)); if
 Cloudflare still 403s, the IP or user agent may be flagged — wait it

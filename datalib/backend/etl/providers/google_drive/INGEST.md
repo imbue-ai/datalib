@@ -105,7 +105,8 @@ its own, and the kinds drain side by side.
      latchkey signs (≥ 3.19.2) and Drive answers with a `307`;
    - the `Location` it names, a signed `googleusercontent.com` download,
      fetched plain so the credential never follows it to another host
-     (`api::get_revision_export`).
+     (`api::get_revision_export`). A `Location` that is not https on
+     `googleusercontent.com` fails the export rather than being fetched.
 
    A `404` means Drive no longer has that revision's content: the edge
    is kept with no bytes and a warning, and not asked for again. A

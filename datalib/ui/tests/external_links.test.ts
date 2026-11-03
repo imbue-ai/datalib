@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { installExternalLinkHandler, isExternalHref, openExternal } from "../src/externalLinks";
+import {
+  installExternalLinkHandler,
+  isExternalHref,
+  isWebUrl,
+  openExternal,
+} from "../src/externalLinks";
 
 const APP = "http://127.0.0.1:8765";
 const BASE = `${APP}/`;
@@ -63,6 +68,26 @@ describe("isExternalHref", () => {
   });
 });
 
+/// The grid's "Open source" offers a row's `source_url` only when it is a
+/// page on the web; a source can write any scheme there.
+describe("isWebUrl", () => {
+  it("is http and https, and nothing else", () => {
+    expect(isWebUrl("https://enterprise.example/log")).toBe(true);
+    expect(isWebUrl("http://enterprise.example/log")).toBe(true);
+    for (const url of [
+      "file:///corpus/a.pdf",
+      "slack://channel?team=T01&id=C03",
+      "datalib:doc/00000000-0000-8000-a000-000000000001",
+      "javascript:alert(1)",
+      "mailto:picard@enterprise.example",
+      "",
+      "/chat/abc",
+    ]) {
+      expect(isWebUrl(url), url).toBe(false);
+    }
+  });
+});
+
 describe("openExternal", () => {
   it("reaches the opener plugin's open_url command in the app", async () => {
     // Asserted through `@tauri-apps/plugin-opener` rather than around
@@ -87,6 +112,51 @@ describe("openExternal", () => {
     vi.spyOn(window, "open").mockReturnValue(null);
     fakeTauri(() => Promise.reject(new Error("not allowed")));
     await expect(openExternal("https://x.test/")).resolves.toBeUndefined();
+  });
+
+  /// A refusal by the opener's scope is the answer: `window.open` in the
+  /// app is a new window of the app, at whatever URL it was given.
+  it("opens nothing else in the app when the opener refuses", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    fakeTauri(() => Promise.reject(new Error("not allowed")));
+    await openExternal("https://x.test/");
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  /// A body's link reaches this with whatever scheme it was written in.
+  it("opens only the web, mail and phone, in the app and in a browser", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    const refused = [
+      "slack://user?team=T01&id=U02",
+      "datalib:person/%25%25%25",
+      "sms:+15550123456",
+      "javascript:alert(1)",
+      "data:text/html,<p>x</p>",
+      "file:///etc/passwd",
+      "x-apple-systempreferences:",
+      "not a url",
+    ];
+    for (const url of refused) await openExternal(url);
+    expect(open).not.toHaveBeenCalled();
+    const invoke = fakeTauri();
+    for (const url of refused) await openExternal(url);
+    expect(invoke).not.toHaveBeenCalled();
+    for (const url of [
+      "https://x.test/",
+      "http://x.test/",
+      "mailto:a@x.test",
+      "tel:+15550123456",
+    ]) {
+      await openExternal(url);
+    }
+    expect(invoke.mock.calls.map(([, args]) => (args as { url: string }).url)).toEqual([
+      "https://x.test/",
+      "http://x.test/",
+      "mailto:a@x.test",
+      "tel:+15550123456",
+    ]);
   });
 });
 

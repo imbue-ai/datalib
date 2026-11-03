@@ -133,14 +133,7 @@ impl TableSpec {
     }
 }
 
-/// Double-quote an identifier, escaping embedded quotes. Table and
-/// column names here come out of `sqlite_master` rather than from the
-/// user, but they still get quoted: SQLite permits spaces, keywords, and
-/// punctuation in identifiers, and a mirror that only worked on
-/// well-behaved schemas would be a mirror with a footgun in it.
-pub fn quote_ident(ident: &str) -> String {
-    format!("\"{}\"", ident.replace('"', "\"\""))
-}
+pub use datalib_etl::doltlite_raw::quote_ident;
 
 /// How SQLite classifies an entry in `sqlite_master`. Only two kinds
 /// hold rows we copy; the others exist so the mirror can say why it

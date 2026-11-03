@@ -584,8 +584,8 @@
     ]
   },
   "slack": {
-    "schema_hash": "4850d0b2c2d142105d99a87a79a5c00add5764e9d220f88af59709f3bf7cac4a",
-    "schema_version": 1,
+    "schema_hash": "77a4f37a3cb7a0d95743f663dc15d311661e8589111f398f84ae0e7c0ec3dec0",
+    "schema_version": 2,
     "shared_schema_version": 1,
     "sql": [
       "CREATE TABLE bookmarks( id TEXT PRIMARY KEY, payload TEXT NULL, channel_id TEXT NOT NULL)",
@@ -603,6 +603,7 @@
       "CREATE INDEX messages_by_channel_ts ON messages(channel_id, ts)",
       "CREATE INDEX messages_by_thread ON messages(thread_root_uuid)",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE read_marks( id TEXT PRIMARY KEY, read_through TEXT NULL, read INTEGER NULL)",
       "CREATE TABLE saved_items( id TEXT PRIMARY KEY, payload TEXT NULL, item_type TEXT NOT NULL, item_id TEXT NOT NULL, ts TEXT NULL)",
       "CREATE TABLE saved_items_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX saved_items_by_item ON saved_items(item_id)",

@@ -334,6 +334,23 @@ pub fn lock_path_for(db_path: &Path) -> PathBuf {
 /// alone.
 pub const WRITER_BRANCH: &str = "datalib_writer";
 
+/// The branch a raw store's version names: the last seal at which
+/// something its readers read moved ([`moves_version`]). `main` moves at
+/// every seal, a sync's own bookkeeping included (its `sync_runs` row,
+/// its sidecar stamps); this moves only when content did, so a sync that
+/// found nothing new wakes no consumer. Only raw stores have one
+/// ([`start_content_branch`]); [`content_commit`] reads it.
+pub const CONTENT_BRANCH: &str = "datalib_content";
+
+/// Whether a change to `table` is one a raw store's consumers must see:
+/// every table `datalib_history::holds_records` counts, plus `problems`,
+/// so a new problem reaches the index, and `ingested_files`, which a
+/// render may read. The sidecars, the run log, the cursors and the
+/// coverage are the sync's own.
+pub fn moves_version(table: &str) -> bool {
+    datalib_history::holds_records(table) || table == "problems" || table == "ingested_files"
+}
+
 /// Whether an error is "this build has no doltlite", rather than
 /// anything about the store.
 fn is_missing_function(e: &sqlx::Error) -> bool {
@@ -444,14 +461,74 @@ async fn publish_on(conn: &mut sqlx::SqliteConnection) -> Result<()> {
     // few hundred bytes, on a store nobody touched. Only
     // `reopening_an_untouched_store_does_not_grow_it` would notice: the
     // leak leaves `dolt_log` unchanged and `dolt_status` clean.
-    if branch_head(conn, WRITER_BRANCH).await == branch_head(conn, "main").await {
+    if branch_head(conn, WRITER_BRANCH).await != branch_head(conn, "main").await {
+        sqlx::query("SELECT dolt_branch('-f', 'main', ?)")
+            .bind(WRITER_BRANCH)
+            .execute(&mut *conn)
+            .await
+            .context("fast-forward main to the writer branch")?;
+    }
+    // After `main`, and on every publish rather than only one that moved
+    // it, so a crash between the two moves is finished by the next.
+    advance_content(conn).await
+}
+
+/// Move [`CONTENT_BRANCH`] to the writer's head if content moved since
+/// it last did. A no-op in a store with no such branch.
+async fn advance_content(conn: &mut sqlx::SqliteConnection) -> Result<()> {
+    let Some(content) = branch_head(conn, CONTENT_BRANCH).await else {
+        return Ok(());
+    };
+    let Some(head) = branch_head(conn, WRITER_BRANCH).await else {
+        return Ok(());
+    };
+    if content == head || !content_moved(conn, &content, &head).await? {
         return Ok(());
     }
-    sqlx::query("SELECT dolt_branch('-f', 'main', ?)")
+    sqlx::query("SELECT dolt_branch('-f', ?, ?)")
+        .bind(CONTENT_BRANCH)
         .bind(WRITER_BRANCH)
         .execute(&mut *conn)
         .await
-        .context("fast-forward main to the writer branch")?;
+        .context("move the content branch")?;
+    Ok(())
+}
+
+/// Whether any table [`moves_version`] counts changed its rows or its
+/// shape, or came or went, between two commits.
+async fn content_moved(conn: &mut sqlx::SqliteConnection, from: &str, to: &str) -> Result<bool> {
+    let tables: Vec<String> = sqlx::query_scalar(
+        // A table added or dropped has `''` on the side it is missing from.
+        "SELECT coalesce(nullif(to_table_name, ''), from_table_name) FROM dolt_diff_summary \
+         WHERE from_ref = ? AND to_ref = ? AND (data_change = 1 OR schema_change = 1)",
+    )
+    .bind(from)
+    .bind(to)
+    .fetch_all(&mut *conn)
+    .await
+    .context("dolt_diff_summary")?;
+    Ok(tables.iter().any(|t| moves_version(t)))
+}
+
+/// Give a raw store its [`CONTENT_BRANCH`], at `main`, the one time it
+/// has none: before this open's own schema commit, so a store a build
+/// before this one wrote keeps the version it last reported unless the
+/// commit changes content.
+async fn start_content_branch(pool: &SqlitePool) -> Result<()> {
+    let mut conn = pool
+        .acquire()
+        .await
+        .context("take the store's connection to start its content branch")?;
+    if branch_head(&mut conn, CONTENT_BRANCH).await.is_some()
+        || branch_head(&mut conn, "main").await.is_none()
+    {
+        return Ok(());
+    }
+    sqlx::query("SELECT dolt_branch(?, 'main')")
+        .bind(CONTENT_BRANCH)
+        .execute(&mut *conn)
+        .await
+        .context("start the content branch")?;
     Ok(())
 }
 
@@ -906,6 +983,9 @@ async fn open_inner(
     // make, so finish it rather than leaving it stranded where no reader
     // can see it.
     publish_to_main(&pool).await?;
+    if kind == StoreKind::Raw {
+        start_content_branch(&pool).await?;
+    }
     // The ladder, before the DDL is compared to anything: a rung is how
     // the store gets from the shape an older build left to the one this
     // DDL declares. Each rung is its own commit, so a crash between two
@@ -1170,14 +1250,22 @@ pub async fn table_exists(pool: &SqlitePool, table: &str) -> Result<bool> {
 /// Empty vec if the table does not exist (no error).
 /// Every table in the file that is ours to touch.
 async fn table_is_empty(pool: &SqlitePool, table: &str) -> Result<bool> {
-    // Audited: `table` is parsed from our own static DDL.
+    // Audited: the name is quoted.
     let any: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-        "SELECT EXISTS(SELECT 1 FROM \"{table}\")"
+        "SELECT EXISTS(SELECT 1 FROM {})",
+        quote_ident(table)
     )))
     .fetch_one(pool)
     .await
     .with_context(|| format!("is {table} empty"))?;
     Ok(!any)
+}
+
+/// `name` as an SQL identifier, whatever it holds. A store's table and
+/// column names are not always ours: a mirrored store's come from the
+/// source file, so every name read back out of a catalog is quoted.
+pub fn quote_ident(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
 }
 
 async fn user_tables(pool: &SqlitePool) -> Result<Vec<String>> {
@@ -1190,10 +1278,10 @@ async fn user_tables(pool: &SqlitePool) -> Result<Vec<String>> {
 }
 
 async fn table_columns(pool: &SqlitePool, table: &str) -> Result<Vec<ColumnInfo>> {
-    // Audited: `table` is a quoted identifier from a `&'static str` or from
-    // `parse_create_table_name` over our own DDL; never user input.
+    // Audited: the name is quoted.
     let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "PRAGMA table_xinfo(\"{table}\")"
+        "PRAGMA table_xinfo({})",
+        quote_ident(table)
     )))
     .fetch_all(pool)
     .await
@@ -1802,10 +1890,9 @@ pub(crate) async fn commit_on(
     Ok(hash)
 }
 
-/// The store's current HEAD, which is its *content version*: doltlite
-/// advances HEAD only when a commit changed something, so two downloads that
-/// pulled the same rows leave the same hash. That is what a step reports to
-/// the DAG runner as its version.
+/// The store's current HEAD. It moves at every seal that changed
+/// anything, a sync's own bookkeeping included; a raw store reports
+/// [`content_commit`] as its version instead.
 ///
 /// `Ok(None)` against stock libsqlite3 or an empty log; the step then
 /// reports no version, and the runner takes each success as new.
@@ -1825,9 +1912,9 @@ pub async fn head_commit(pool: &SqlitePool) -> Result<Option<String>> {
 /// it, so a run that changed nothing reports the same string, and folding
 /// the store's history into one commit moves no version.
 ///
-/// A raw or time-series store reports its [`head_commit`] instead: a diff
-/// group names a raw commit, and the time-series index reads each store at
-/// the commit it recorded.
+/// A raw store reports its [`content_commit`] and a time-series store its
+/// [`head_commit`] instead: a diff group names a raw commit, and the
+/// time-series index reads each store at the commit it recorded.
 ///
 /// `Ok(None)` against stock libsqlite3 or an empty log; the step then
 /// reports no version, and the runner takes each success as new.
@@ -1913,6 +2000,34 @@ pub async fn content_tables_changed(
     changed.sort();
     changed.dedup();
     Ok(changed)
+}
+
+/// A raw store's version: the commit [`CONTENT_BRANCH`] names, the last
+/// seal at which content moved. Still a commit, so a consumer can pin a
+/// read to it; its content tables are `main`'s. A store with no content
+/// branch yet (one no build since has opened, fsindex's scans) reports
+/// its [`head_commit`].
+pub async fn content_commit(pool: &SqlitePool) -> Result<Option<String>> {
+    if !has_dolt_extensions(pool).await {
+        return Ok(None);
+    }
+    let content = {
+        let mut conn = pool
+            .acquire()
+            .await
+            .context("take the store's connection to read its version")?;
+        branch_head(&mut conn, CONTENT_BRANCH).await
+    };
+    match content {
+        Some(commit) => Ok(Some(commit)),
+        None => head_commit(pool).await,
+    }
+}
+
+/// [`content_commit`] against a store on disk, read the way
+/// [`head_commit_at_path`] reads.
+pub async fn content_commit_at_path(db_path: &Path) -> Result<Option<String>> {
+    read_at_path(db_path, |pool| Box::pin(content_commit(pool))).await
 }
 
 /// [`head_commit`] against a store on disk; `Ok(None)` if nobody has
@@ -2020,11 +2135,15 @@ pub async fn reset_store(db_path: &Path) -> Result<()> {
         let tables = user_tables(&pool).await?;
         let mut tx = pool.begin().await.context("begin reset tx")?;
         for table in tables.iter().filter(|t| *t != datalib_store_meta::TABLE) {
-            // Audited: `table` is a name read out of `sqlite_master`.
-            sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM \"{table}\"")))
-                .execute(&mut *tx)
-                .await
-                .with_context(|| format!("reset: empty {table}"))?;
+            // Audited: the name is quoted; a mirrored store's come from
+            // the source file.
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "DELETE FROM {}",
+                quote_ident(table)
+            )))
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("reset: empty {table}"))?;
         }
         tx.commit().await.context("commit reset tx")?;
         commit_run(&pool, "reset").await.map(|_| ())
@@ -2127,6 +2246,21 @@ async fn fold_on(pool: &SqlitePool) -> Result<Option<Folded>> {
     )
     .await?
     .context("the fold committed nothing")?;
+    // The content branch names a commit the fold just dropped, and would
+    // keep all of it from gc. The fold holds the same tree.
+    {
+        let mut conn = pool
+            .acquire()
+            .await
+            .context("take the store's connection")?;
+        if branch_head(&mut conn, CONTENT_BRANCH).await.is_some() {
+            sqlx::query("SELECT dolt_branch('-f', ?, 'HEAD')")
+                .bind(CONTENT_BRANCH)
+                .execute(&mut *conn)
+                .await
+                .context("move the content branch onto the fold")?;
+        }
+    }
     sqlx::query("SELECT dolt_gc()")
         .execute(pool)
         .await
@@ -2850,15 +2984,20 @@ pub async fn changed_keys(
     }
     let parts: Vec<String> = pk
         .iter()
-        .map(|c| format!("CAST(coalesce(to_{c}, from_{c}) AS TEXT)"))
+        .map(|c| {
+            let to = quote_ident(&format!("to_{c}"));
+            let from = quote_ident(&format!("from_{c}"));
+            format!("CAST(coalesce({to}, {from}) AS TEXT)")
+        })
         .collect();
     let sql = format!(
-        "SELECT {}, diff_type FROM dolt_diff_{table} \
+        "SELECT {}, diff_type FROM {} \
           WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'",
-        parts.join(" || '|' || ")
+        parts.join(" || '|' || "),
+        quote_ident(&format!("dolt_diff_{table}"))
     );
-    // Audited: `table` and its columns come from `sqlite_master` and
-    // `pragma_table_info` of the store itself; both refs are bound.
+    // Audited: every name is quoted, since a mirrored table's come from
+    // the source file; both refs are bound.
     let rows = sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(sql))
         .bind(from_ref)
         .bind(to_ref)
@@ -2977,7 +3116,11 @@ pub async fn load_scope_state(pool: &SqlitePool) -> Result<HashMap<String, Strin
 /// the row keeps it as UTC with the offset beside it. A value that is
 /// not a stamp at all (email keeps its opaque JMAP state tokens and
 /// Gmail history ids here) is kept as written, with no offset.
-pub async fn upsert_scope_state(pool: &SqlitePool, scope: &str, last_seen_at: &str) -> Result<()> {
+pub async fn upsert_scope_state<'e>(
+    db: impl sqlx::SqliteExecutor<'e>,
+    scope: &str,
+    last_seen_at: &str,
+) -> Result<()> {
     let stamp = datalib_time::split_stamp(last_seen_at);
     sqlx::query(
         "INSERT INTO sync_scope_state (scope, last_seen_at_utc, tz_offset) VALUES (?, ?, ?)
@@ -2987,7 +3130,7 @@ pub async fn upsert_scope_state(pool: &SqlitePool, scope: &str, last_seen_at: &s
     .bind(scope)
     .bind(&stamp.utc)
     .bind(&stamp.tz_offset)
-    .execute(pool)
+    .execute(db)
     .await
     .with_context(|| format!("upsert sync_scope_state {scope}"))?;
     Ok(())
@@ -3206,6 +3349,88 @@ mod tests {
         let v3 = head_commit(&pool).await.unwrap().unwrap();
         pool.close().await;
         assert_ne!(v1, v3, "new rows must move the version");
+    }
+
+    /// A sync that found nothing new still commits its own bookkeeping, and
+    /// that moved the reported version, so every consumer ran again for
+    /// nothing. The version moves only when a reader's table does.
+    #[tokio::test]
+    async fn a_raw_stores_version_moves_only_with_its_content() {
+        let td = tempfile::tempdir().unwrap();
+        let path = td.path().join("entities.doltlite_db");
+        let pool = open_test(&path).await;
+        let exec = |sql: &'static str| {
+            let pool = pool.clone();
+            async move { sqlx::query(sql).execute(&pool).await.unwrap() }
+        };
+        exec("INSERT INTO widgets (id, payload) VALUES ('a', '{}')").await;
+        commit_run(&pool, "content").await.unwrap();
+        let v1 = content_commit(&pool).await.unwrap().expect("a version");
+        assert_eq!(Some(v1.clone()), head_commit(&pool).await.unwrap());
+
+        // A run's own record and a sidecar stamp: `main` moves, the version not.
+        start_run(&pool, &serde_json::json!({})).await.unwrap();
+        exec("INSERT INTO widgets_bookkeeping (id, attempt_count) VALUES ('a', 1)").await;
+        commit_run(&pool, "bookkeeping").await.unwrap();
+        assert_ne!(Some(v1.clone()), head_commit(&pool).await.unwrap());
+        assert_eq!(content_commit(&pool).await.unwrap(), Some(v1.clone()));
+
+        // A problem reaches the index, so it moves the version.
+        let mut tx = pool.begin().await.unwrap();
+        record_object_error(&mut tx, "widgets", "b", "HTTP 500")
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        commit_run(&pool, "problem").await.unwrap();
+        let v2 = content_commit(&pool).await.unwrap().unwrap();
+        assert_ne!(v1, v2);
+        assert_eq!(Some(v2.clone()), head_commit(&pool).await.unwrap());
+
+        pool.close().await;
+
+        // Reopening keeps it, and reads it from disk the same.
+        let pool = open_test(&path).await;
+        start_run(&pool, &serde_json::json!({})).await.unwrap();
+        commit_run(&pool, "bookkeeping again").await.unwrap();
+        assert_eq!(content_commit(&pool).await.unwrap(), Some(v2.clone()));
+
+        // A new column, even with no rows changed, is a shape a reader sees.
+        sqlx::query("ALTER TABLE widgets ADD COLUMN tag TEXT")
+            .execute(&pool)
+            .await
+            .unwrap();
+        commit_run(&pool, "shape").await.unwrap();
+        let v3 = content_commit(&pool).await.unwrap().unwrap();
+        assert_ne!(v2, v3);
+        pool.close().await;
+        assert_eq!(content_commit_at_path(&path).await.unwrap(), Some(v3));
+    }
+
+    /// A store an older build wrote has no content branch. Its first open
+    /// here starts one where `main` is, so the version it last reported
+    /// stands and no consumer re-runs for the upgrade.
+    #[tokio::test]
+    async fn an_upgraded_store_keeps_the_version_it_had() {
+        let td = tempfile::tempdir().unwrap();
+        let path = td.path().join("entities.doltlite_db");
+        let pool = open_test(&path).await;
+        sqlx::query("INSERT INTO widgets (id, payload) VALUES ('a', '{}')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        commit_run(&pool, "content").await.unwrap();
+        sqlx::query("SELECT dolt_branch('-D', ?)")
+            .bind(CONTENT_BRANCH)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let reported = head_commit(&pool).await.unwrap();
+        pool.close().await;
+        assert_eq!(content_commit_at_path(&path).await.unwrap(), reported);
+
+        let pool = open_test(&path).await;
+        assert_eq!(content_commit(&pool).await.unwrap(), reported);
+        pool.close().await;
     }
 
     /// Reading a version must not write. `open` provisions shared DDL and
@@ -3987,6 +4212,69 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(logged, 1, "and it is still in history");
+        pool.close().await;
+    }
+
+    /// A mirrored store holds tables named by whoever wrote the source
+    /// file, so a reset must quote what it reads out of `sqlite_master`:
+    /// unquoted, this name dropped `edges` on the writer.
+    #[tokio::test]
+    async fn a_reset_runs_no_table_name_as_sql() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("entities.doltlite_db");
+        const EDGE: &str =
+            "CREATE TABLE IF NOT EXISTS edges (id TEXT PRIMARY KEY, blake3 TEXT NULL)";
+        let pool = open(&p, &[WIDGETS_DDL, EDGE]).await.unwrap();
+        if !has_dolt_extensions(&pool).await {
+            pool.close().await;
+            return;
+        }
+        for sql in [
+            r#"CREATE TABLE "odd""; DROP TABLE ""edges" (id TEXT PRIMARY KEY)"#,
+            r#"INSERT INTO "odd""; DROP TABLE ""edges" VALUES ('o1')"#,
+            "INSERT INTO edges VALUES ('e1', 'aa')",
+        ] {
+            sqlx::query(sql).execute(&pool).await.unwrap();
+        }
+        commit_run(&pool, "setup").await.unwrap();
+        pool.close().await;
+
+        reset_store(&p).await.unwrap();
+        let pool = open(&p, &[WIDGETS_DDL, EDGE]).await.unwrap();
+        assert_eq!(count(&pool, "edges").await, 0, "edges kept, and emptied");
+        assert_eq!(count(&pool, r#"odd""; DROP TABLE ""edges"#).await, 0);
+        pool.close().await;
+    }
+
+    /// The key columns of a mirrored table are named by the source file;
+    /// `changed_keys` reads them back and must quote them.
+    #[tokio::test]
+    async fn changed_keys_quote_the_names_they_read() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("entities.doltlite_db");
+        let pool = open(&p, &[WIDGETS_DDL]).await.unwrap();
+        if !has_dolt_extensions(&pool).await {
+            pool.close().await;
+            return;
+        }
+        sqlx::query(r#"CREATE TABLE "odd t" ("my ""key" TEXT PRIMARY KEY, v TEXT)"#)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let from = commit_run(&pool, "empty").await.unwrap().unwrap();
+        sqlx::query(r#"INSERT INTO "odd t" VALUES ('k1', 'a')"#)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let to = commit_run(&pool, "one row").await.unwrap().unwrap();
+        let got = changed_keys(&pool, "odd t", &from, &to).await.unwrap();
+        assert_eq!(
+            got,
+            vec![ChangedKey {
+                key: "k1".into(),
+                change: RowChange::Added,
+            }]
+        );
         pool.close().await;
     }
 

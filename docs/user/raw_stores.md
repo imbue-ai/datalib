@@ -133,11 +133,18 @@ which fields move.
 ## Reading one commit, and following changes
 
 Every seal is a commit. Its hash names the store exactly as it was, and
-the hash of `main` is the store's current version:
+`main` is the latest:
 
 ```sh
 datalib-doltlite -readonly slack/ingest/entities.doltlite_db "SELECT dolt_hashof('main')"
 ```
+
+The store's *version*, the commit the loop hands a step that reads it,
+is the branch `datalib_content`: the last commit at which the source's
+content or its problems moved. Every sync commits its own record
+(`sync_runs`, its stamps) whether or not it found anything, so `main`
+moves on every run and `datalib_content` only when there is something
+new to read.
 
 **To read several queries at one moment**, open that commit by path
 (with `/` in the shell, not `@`). The open is read-only and stays on
@@ -565,8 +572,9 @@ replies in that thread.
 
 **Set aside from the payload** (in `volatile_payload`): a user's
 `updated` and `profile.status_*`, `profile.huddle_*`; a channel's
-`updated` and `num_members`; a message's `last_read`, `subscribed` and
-the `block_id` of each block; everything in `channel_read_states`.
+`updated` and `num_members`; a message's `subscribed` and the
+`block_id` of each block; everything in `channel_read_states` but
+`last_read`, which is in `read_marks`.
 
 ### `workspaces`
 
@@ -647,15 +655,26 @@ Which files each message carries, and where their bytes are in
 
 ### `channel_read_states`
 
-How far the account has read in each mirrored conversation, from
-`client.counts`. Reading a conversation is not a change to it, so the
-whole state is in `channel_read_states_bookkeeping.volatile_payload`:
-`last_read`, `latest`, `has_unreads`, `mention_count`.
+The account's state in each mirrored conversation, from
+`client.counts`. How far it has read is in `read_marks`; the rest is in
+`channel_read_states_bookkeeping.volatile_payload`: `latest`,
+`has_unreads`, `mention_count`.
 
 | column | what it holds |
 |---|---|
 | `id` | the conversation id |
 | `payload` | `{"id": …}` only |
+
+### `read_marks`
+
+How far the account has read: each mirrored conversation, and each
+thread it follows.
+
+| column | what it holds |
+|---|---|
+| `id` | the conversation id, or a thread's `{team}#{channel}#{ts}` |
+| `read_through` | the `ts` of the last message read |
+| `read` | NULL; Slack marks nothing message by message |
 
 ### `bookmarks`
 

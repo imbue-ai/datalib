@@ -62,6 +62,7 @@ rust_library(
         "src/prometheus.rs",
         "src/remote_media.rs",
         "src/request_log.rs",
+        "src/request_progress.rs",
         "src/supervisor.rs",
         "src/ui_events.rs",
         "src/ui_mirror.rs",
@@ -293,6 +294,19 @@ rust_test(
     },
     deps = [
         "@datalib_crates//:tempfile",
+    ],
+)
+
+# Remote media ignores a proxy the environment names. Alone, because
+# the variables it sets would reach every test in a shared process.
+rust_test(
+    name = "remote_media_proxy_test",
+    size = "small",
+    srcs = ["tests/remote_media_proxy.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_http",
+        "@datalib_crates//:tokio",
     ],
 )
 

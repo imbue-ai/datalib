@@ -11,7 +11,8 @@
 // reaching a remote host at all. Which rows cover what is decided on
 // the server only (`http/src/remote_media.rs`); nothing here reads
 // the rows. The rules are pure so they are unit-testable; only
-// `decorateRemoteMedia` touches a DOM.
+// `decorateRemoteMedia` touches a DOM, and `rewriteStyleUrls` borrows
+// the browser's CSS parser.
 import { remoteMediaUrl, type RemoteContext } from "@/api";
 
 export type { RemoteContext };
@@ -79,33 +80,64 @@ export function rewriteSrcset(
   return { srcset: kept.join(", "), remote };
 }
 
-const CSS_URL = /url\(\s*(['"]?)([^'")]*)\1\s*\)/gi;
+// A `url(…)` as the browser's CSS parser writes it back: quoted, or
+// bare. One holding a backslash is not matched, and so is dropped below.
+const CSS_URL = /url\(\s*(?:"([^"\\\n]*)"|'([^'\\\n]*)'|([^\s"'()\\]*))\s*\)/gi;
+
+// What may still load once every `url(…)` this reads is taken out: one
+// it could not read, `image-set()`, which takes a bare string as a URL,
+// and an escape the parser kept as written.
+const STILL_LOADS = /url\(|image-set\(|\bimage\(|\bsrc\(|\\/i;
 
 /** Every remote `url(…)` in an inline style (or every one `which`
  *  picks), and the style with each mapped — `null` from `map` replaces
  *  the whole `url(…)` with `none`, which is a valid value wherever an
- *  image was. */
+ *  image was. The style is read through the browser's own CSS parser,
+ *  so an escape (`\75 rl(`) or a quoted `)` reads as it would load;
+ *  a declaration that could still load anything after that is dropped,
+ *  as is one the map left invalid. */
 export function rewriteStyleUrls(
   style: string,
   map: (url: string) => string | null,
   which: (url: string) => boolean = isRemoteUrl,
 ): { style: string; remote: string[] } {
+  const decl = document.createElement("div").style;
+  decl.cssText = style;
   const remote: string[] = [];
-  const rewritten = style.replace(CSS_URL, (whole: string, _quote: string, url: string) => {
-    if (!which(url)) return whole;
-    remote.push(url);
-    const mapped = map(url);
-    return mapped === null ? "none" : `url("${mapped}")`;
-  });
-  return { style: rewritten, remote };
+  const names = Array.from({ length: decl.length }, (_, i) => decl.item(i));
+  for (const name of names) {
+    const value = decl.getPropertyValue(name);
+    const important = decl.getPropertyPriority(name);
+    if (STILL_LOADS.test(value.replace(CSS_URL, ""))) {
+      decl.removeProperty(name);
+      continue;
+    }
+    let changed = false;
+    const next = value.replace(
+      CSS_URL,
+      (whole: string, dq?: string, sq?: string, bare?: string) => {
+        const url = dq ?? sq ?? bare ?? "";
+        if (!which(url)) return whole;
+        remote.push(url);
+        changed = true;
+        const mapped = map(url);
+        return mapped === null ? "none" : `url("${mapped}")`;
+      },
+    );
+    if (!changed) continue;
+    decl.removeProperty(name);
+    decl.setProperty(name, next, important);
+  }
+  return { style: decl.cssText, remote };
 }
 
 /** The attributes a browser fetches from, by element. `href` fetches
- *  only on the SVG image element (`<use>` cannot reach another origin);
- *  on `<a>` it is a link, which is the person's to click. */
+ *  on SVG's `<image>` and a filter's `<feImage>` (`<use>` cannot reach
+ *  another origin); on `<a>` it is a link, which is the person's to
+ *  click. */
 export function loadingAttributes(nodeName: string): string[] {
   const name = nodeName.toLowerCase();
-  if (name === "image") return ["href", "xlink:href"];
+  if (name === "image" || name === "feimage") return ["href", "xlink:href", "style"];
   return ["src", "poster", "background", "srcset", "style"];
 }
 

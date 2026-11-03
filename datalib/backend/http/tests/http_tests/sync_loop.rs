@@ -347,6 +347,91 @@ async fn sync_everything_gives_each_source_a_stop_of_its_own() {
     state.sync.shutdown(Duration::from_secs(5)).await;
 }
 
+/// One step's entry in `GET /api/requests/{id}`.
+async fn step_of(state: &AppState, request: &str, step: &str) -> serde_json::Value {
+    let progress = call(state, "GET", &format!("/api/requests/{request}"), None).await;
+    progress["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == step)
+        .cloned()
+        .unwrap_or_else(|| panic!("no step {step} in {progress}"))
+}
+
+/// An app that reads only the raw stores waited for the whole request,
+/// which stays open until the index after its download has run. The
+/// request's own answer says when the download is done.
+#[tokio::test]
+async fn a_requests_root_reads_done_while_the_index_after_it_runs() {
+    let td = tempfile::tempdir().unwrap();
+    let root = td.path();
+    let index = root.join("index.sh");
+    std::fs::write(
+        &index,
+        r#"
+        mkdir -p "$DATALIB_DAG_DATA_ROOT/$DATALIB_DAG_STEP"
+        touch "$DATALIB_DAG_DATA_ROOT/started-index"
+        while [ ! -e "$DATALIB_DAG_DATA_ROOT/release-index" ]; do sleep 0.05; done
+        "#,
+    )
+    .unwrap();
+    let config = source(root, "a", HELD)
+        + &format!(
+            "[[groups]]\nid = \"index\"\n\n\
+             [[steps]]\ngroup = \"index\"\nfunction = \"out\"\ncommand = \"/bin/sh {}\"\n\
+             inputs = [\"a/out\"]\n",
+            index.display()
+        );
+    std::fs::write(root.join("config.toml"), config).unwrap();
+    let state = server(root).await;
+
+    let id = sync(&state, "a/out").await;
+    let progress = call(&state, "GET", &format!("/api/requests/{id}"), None).await;
+    assert_eq!(progress["state"], "open", "{progress}");
+    let steps: Vec<(&serde_json::Value, &serde_json::Value)> = progress["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| (&s["id"], &s["root"]))
+        .collect();
+    assert_eq!(
+        steps,
+        [
+            (&json!("a/out"), &json!(true)),
+            (&json!("index/out"), &json!(false))
+        ],
+        "{progress}"
+    );
+    until("a to read running", Duration::from_secs(30), || async {
+        step_of(&state, &id, "a/out").await["phase"] == "running"
+    })
+    .await;
+    assert_eq!(step_of(&state, &id, "index/out").await["phase"], "pending");
+
+    std::fs::write(root.join("release"), "").unwrap();
+    until("a to read done", Duration::from_secs(30), || async {
+        step_of(&state, &id, "a/out").await["phase"] == "done"
+    })
+    .await;
+    let a = step_of(&state, &id, "a/out").await;
+    assert_eq!(a["last_run"]["status"], "succeeded", "{a}");
+    assert_eq!(
+        request(&state, &id).await["state"],
+        "open",
+        "the index still holds the request open"
+    );
+    assert_ne!(step_of(&state, &id, "index/out").await["phase"], "done");
+
+    std::fs::write(root.join("release-index"), "").unwrap();
+    until("the request to close", Duration::from_secs(30), || async {
+        request(&state, &id).await["state"] == "done"
+    })
+    .await;
+    assert_eq!(step_of(&state, &id, "index/out").await["phase"], "done");
+    state.sync.shutdown(Duration::from_secs(5)).await;
+}
+
 /// Waits until the loop's record and requests satisfy `ready`, looking
 /// again each time a commit is announced, never on a timer.
 async fn when(
