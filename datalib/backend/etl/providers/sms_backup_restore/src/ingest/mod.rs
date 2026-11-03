@@ -19,12 +19,11 @@ use datalib_etl::read_marks::{self, ReadMarkRow};
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl_files::file_checkpoint;
 use datalib_etl_files::fsscan;
-use datalib_problems::{Outcome, Problem, Reason};
+use datalib_problems::{Outcome, Problem, Reason, Severity};
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::json;
 use sqlx::{Sqlite, Transaction};
-use tracing::warn;
 
 use self::parse::{CallRecord, MmsRecord, RootKind, SmsRecord};
 use self::schema_raw::{
@@ -113,6 +112,8 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     // same answer, so they are stamped with their problem and read again
     // only once they change.
     let mut unparsed: Vec<(&fsscan::ScannedFile, String)> = Vec::new();
+    // XML that is not an export: stamped with its problem the same way.
+    let mut foreign: Vec<&fsscan::ScannedFile> = Vec::new();
 
     for f in to_read {
         let path = &f.path;
@@ -166,12 +167,7 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
                     summary.parse_errors += 1;
                 }
             },
-            // Stamped, so it is not read again until it changes.
-            Ok(RootKind::Other) => {
-                warn!(event = "sms_unknown_xml", path = %path.display(),
-                      "not an <smses>/<calls> export; skipping");
-                done.push(f);
-            }
+            Ok(RootKind::Other) => foreign.push(f),
             Err(e) => {
                 unparsed.push((f, format!("{e:#}")));
                 summary.parse_errors += 1;
@@ -232,6 +228,20 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
             Reason::Undeserializable,
             &format!("the file did not parse, so none of its records were read: {why}"),
         );
+        file_checkpoint::record_file_with_problem(
+            &mut tx,
+            SCOPE,
+            f,
+            Some((Outcome::Dropped, problem)),
+        )
+        .await?;
+    }
+    for f in &foreign {
+        let problem = Problem::record(
+            Reason::Undeserializable,
+            "the file is XML but not an <smses> or <calls> export, so nothing in it was read",
+        )
+        .severity(Severity::Warning);
         file_checkpoint::record_file_with_problem(
             &mut tx,
             SCOPE,
