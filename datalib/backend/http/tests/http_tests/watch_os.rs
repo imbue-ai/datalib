@@ -18,7 +18,7 @@ const HEARD_WITHIN: Duration = Duration::from_secs(60);
 fn at_once() -> Timing {
     Timing {
         debounce: Duration::ZERO,
-        manage_rows_every: Duration::ZERO,
+        progress_every: Duration::ZERO,
         heartbeat: Duration::from_secs(3600),
     }
 }

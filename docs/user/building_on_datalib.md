@@ -125,13 +125,15 @@ curl -N -H "Authorization: Bearer $(cat <data_root>/system/api-token)" \
 
 ```text
 event: root
-data: {"kind":"table_changed","table":"dag"}
+data: {"kind":"table_changed","table":"requests"}
 ```
 
 Open the stream first, then read `GET /api/requests/<id>`, then read
-it again on every `table_changed` frame whose `table` is `dag` (the
-loop's record moved, so a phase may have) or `manage.rows` (a step's
-progress moved). A frame with `"kind":"heartbeat"` says only that the
+it again on every frame whose `table` is `requests`: one is sent when
+a step's phase may have moved, and at most once a second while a
+step's progress moves. Each `table` names the route to read again
+(`dag` is `GET /api/dag`, `runs` is `GET /api/runs`); skip the ones
+you don't read. A frame with `"kind":"heartbeat"` says only that the
 stream is alive. If the stream drops, reconnect and read again, since
 frames sent while you were away are not replayed.
 
