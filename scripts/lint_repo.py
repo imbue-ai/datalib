@@ -706,7 +706,9 @@ _PACKAGE_RUNNER = re.compile(
     r"(?<![\w-])(?:npx|bunx|bun\s+x|npm\s+exec|npm\s+x|pnpm\s+dlx|yarn\s+dlx)\b"
 )
 _PINNED_PACKAGES = ("latchkey", "@tobilu/qmd")
-_EXACT_VERSION = re.compile(r"\d+\.\d+\.\d+|<[A-Za-z_]+>|\{[A-Za-z_]+\}|\$\{?[A-Za-z_]+\}?")
+_EXACT_VERSION = re.compile(
+    r"\d+\.\d+\.\d+|<[A-Za-z_]+>|\{[A-Za-z_]+\}|\$\{?[A-Za-z_]+\}?"
+)
 _COMMAND_ENDS = re.compile(r"[;|&)`]")
 
 

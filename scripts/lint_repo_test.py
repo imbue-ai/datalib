@@ -8,7 +8,9 @@ from lint_repo import floating_npx
 
 
 class FloatingNpxTest(unittest.TestCase):
-    def test_every_runner_and_spelling_without_an_exact_version_is_refused(self) -> None:
+    def test_every_runner_and_spelling_without_an_exact_version_is_refused(
+        self,
+    ) -> None:
         """Each of these got past the check's first pattern."""
         for line in [
             "npx --yes latchkey auth set slack",
@@ -44,7 +46,9 @@ class FloatingNpxTest(unittest.TestCase):
                 self.assertFalse(floating_npx(line))
 
     def test_a_mention_in_a_backtick_span_is_prose(self) -> None:
-        self.assertFalse(floating_npx("Docs said to run bare `npx -y latchkey` (no version)."))
+        self.assertFalse(
+            floating_npx("Docs said to run bare `npx -y latchkey` (no version).")
+        )
         self.assertTrue(floating_npx("Run `npx -y latchkey auth list` to see them."))
 
 
