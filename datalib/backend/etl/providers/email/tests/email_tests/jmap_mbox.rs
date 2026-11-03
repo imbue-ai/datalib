@@ -130,8 +130,8 @@ async fn star_trek_mbox_lands_envelope_rows_and_joins() {
     let mailboxes = db.load_mailboxes().await.unwrap();
     let joins = db.load_email_joins().await.unwrap();
 
-    assert_eq!(emails.len(), 7);
-    assert_eq!(threads.len(), 5);
+    assert_eq!(emails.len(), 8);
+    assert_eq!(threads.len(), 6);
 
     let briefing = threads
         .iter()
@@ -415,7 +415,7 @@ async fn star_trek_mbox_renders_through_render_all() {
     );
 
     // One rendered document per thread.
-    assert_eq!(docs.len(), 5);
+    assert_eq!(docs.len(), 6);
 
     // chat-common owns the layout; locate each thread's page by its
     // markdown_uuid (= thread_uuid) from the captured RenderedMarkdowns.

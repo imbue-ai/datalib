@@ -3,7 +3,7 @@
 # Prove a built Datalib.app can run the tools it bundles: spawn the
 # bundled `datalib-step pull-runtime`, which resolves the runtime the
 # way the shipped binaries do (the `runtime/` beside `binaries/`) and
-# runs `qmd --version` and `latchkey --version` through it; then run
+# runs `qmd --version` through it and reads the latchkey it holds; then run
 # the bundled `latchkey ensure-browser` the way the wizard's "Latchkey
 # auth" button does, which is what loads playwright. Run after
 # `tauri build`, on the .app it produced, because the bundler's copy of
