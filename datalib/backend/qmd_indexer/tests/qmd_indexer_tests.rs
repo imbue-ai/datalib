@@ -3,9 +3,12 @@
 //! tests runs without a model and takes well under a second.
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
-use datalib_qmd_indexer::{Collection, Embedded, Index, Qmd, UpdateProgress, Updated};
+use datalib_qmd_indexer::{
+    Collection, Embedded, Index, Qmd, QueryEmbedder, UpdateProgress, Updated, VerifiedModels,
+};
 
 fn runfile(var: &str) -> PathBuf {
     let rel = std::env::var(var).unwrap_or_else(|_| panic!("{var} unset: is it on the test rule?"));
@@ -331,4 +334,88 @@ fn an_embed_fills_only_the_collections_it_names() {
         index.embed(&["bridge", "sickbay"], &|_| {}).unwrap().done,
         Embedded::default()
     );
+}
+
+/// Models already verified, at `0`.
+struct VerifiedAt(PathBuf);
+
+impl VerifiedModels for VerifiedAt {
+    fn dir(&self, _: Instant) -> anyhow::Result<PathBuf> {
+        Ok(self.0.clone())
+    }
+}
+
+fn query_embedder(root: &Path, models: &Path) -> QueryEmbedder {
+    QueryEmbedder::new(
+        root,
+        Some(qmd()),
+        Arc::new(VerifiedAt(models.to_path_buf())),
+        Duration::from_secs(120),
+    )
+}
+
+/// A query embeds with the file it was given, and under the name qmd
+/// records beside the index's vectors, so the two compare.
+#[test]
+fn a_query_embeds_with_the_model_it_was_given() {
+    let root = tempfile::tempdir().unwrap();
+    let models = tempfile::tempdir().unwrap();
+    let name = &datalib_qmd_indexer::embed_model_names()[0];
+    std::os::unix::fs::symlink(
+        runfile("QMD_TEST_EMBED_MODEL_RLOC"),
+        models.path().join(name),
+    )
+    .unwrap();
+    let embedded = query_embedder(root.path(), models.path())
+        .embed("warp core breach")
+        .unwrap();
+    assert_eq!(
+        embedded.model,
+        "hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf"
+    );
+    assert!(!embedded.vector.is_empty());
+}
+
+/// The regression: with the model absent, qmd fetched it from
+/// HuggingFace's `resolve/main`, unpinned, into the root. Now it is an
+/// error naming where the model should be, and nothing is fetched.
+#[test]
+fn a_query_without_its_model_fetches_nothing() {
+    let root = tempfile::tempdir().unwrap();
+    let models = tempfile::tempdir().unwrap();
+    let err = query_embedder(root.path(), models.path())
+        .embed("warp core breach")
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("is not at"), "{err:#}");
+    let qmd_models = datalib_runtime::qmd::qmd_state_dir(root.path()).join("models");
+    assert!(!qmd_models.exists(), "qmd made {}", qmd_models.display());
+    assert_eq!(std::fs::read_dir(models.path()).unwrap().count(), 0);
+}
+
+/// An embed loads only the models its caller names, through the same
+/// store qmd's own `generateEmbeddings` uses: with none named, it refuses
+/// the embedding model even though qmd would find it in its cache.
+#[test]
+fn an_embed_loads_no_model_it_was_not_given() {
+    let root = root_with(LOGS);
+    let index = open(root.path());
+    let work = tempfile::tempdir().unwrap();
+    link_model(&index, work.path());
+    index.keyword_index(&["bridge"], &quiet).unwrap();
+    let qmd_dir = datalib_runtime::qmd::qmd_state_dir(&root.path().canonicalize().unwrap());
+    let cache_home = datalib_runtime::qmd::qmd_cache_home(&root.path().canonicalize().unwrap());
+    let out = std::process::Command::new(runfile("QMD_TEST_NODE_RLOC"))
+        .arg(runfile("QMD_TEST_SDK_RLOC"))
+        .arg(runfile("QMD_TEST_PACKAGE_RLOC"))
+        .arg(qmd_dir.join("index.sqlite"))
+        .arg("embed")
+        .arg(r#"{"collections":["bridge"],"models":{}}"#)
+        .env("XDG_CACHE_HOME", &cache_home)
+        .env("XDG_CONFIG_HOME", &cache_home)
+        .env("NO_COLOR", "1")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(!out.status.success(), "{stdout}");
+    assert!(stdout.contains("which it was not given"), "{stdout}");
 }

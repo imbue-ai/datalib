@@ -153,16 +153,11 @@ fn update_progress_sink(progress: Progress) -> datalib_qmd_indexer::OnUpdateProg
     })
 }
 
-/// The embedding model alone, first in the pinned table: all an embed
-/// loads. The search applet fetches the rest itself.
-const EMBED_MODELS: &[datalib_runtime::qmd::PinnedModel] =
-    datalib_qmd_models::PINNED_MODELS.split_at(1).0;
-
 /// Put the embedding model in place, sha256-verified, and link the index
 /// to it: qmd then finds it already there and never fetches it itself. A
 /// no-op once it is.
 fn provision_embed_model(index: &Index, root: &Path, models_dir: Option<PathBuf>) -> Result<()> {
-    let models = EMBED_MODELS;
+    let models = datalib_runtime::qmd::EMBED_MODELS;
     let models_dir = models_dir.unwrap_or_else(datalib_qmd_indexer::default_models_dir);
     let effective = datalib_qmd_models::effective_models_dir(
         &datalib_runtime::qmd::qmd_state_dir(root),

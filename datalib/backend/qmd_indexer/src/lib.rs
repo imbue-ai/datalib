@@ -11,7 +11,7 @@
 //! `docs/dev/qmd_behaviour.md`. Read it before changing how qmd is driven.
 
 mod query_embedder;
-pub use query_embedder::{QueryEmbedder, QueryEmbedding};
+pub use query_embedder::{ModelsNotReady, QueryEmbedder, QueryEmbedding, VerifiedModels};
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -156,11 +156,21 @@ fn models_dir_under(xdg_cache_home: Option<OsString>, home: Option<OsString>) ->
 /// embed action stages only that one, and query expansion / reranking
 /// are the applet's concern.
 pub fn embed_model_names() -> Vec<String> {
-    datalib_runtime::qmd::PINNED_MODELS
+    datalib_runtime::qmd::EMBED_MODELS
         .iter()
-        .take(1)
         .map(|m| m.cache_name())
         .collect()
+}
+
+/// Every model our script lets qmd load, by the name qmd asks for it,
+/// mapped to its file in `models_dir`. qmd may load nothing else: a
+/// model it does not find it would fetch from HuggingFace unpinned.
+fn model_files(models_dir: &Path) -> Value {
+    datalib_runtime::qmd::EMBED_MODELS
+        .iter()
+        .map(|m| (m.qmd_uri(), json!(models_dir.join(m.cache_name()))))
+        .collect::<serde_json::Map<_, _>>()
+        .into()
 }
 
 /// True when every file in `names` exists and is non-empty under
@@ -480,6 +490,9 @@ impl Index {
 
     /// Run one verb of the script and return its `done` line.
     fn run(&self, verb: &str, args: Value, on_progress: &mut dyn FnMut(&Value)) -> Result<Value> {
+        status_line!("[qmd-indexer] qmd {verb} {args}");
+        let mut args = args;
+        args["models"] = model_files(&self.qmd_dir.join("models"));
         let script = SdkScript::write()?;
         let mut cmd = std::process::Command::new(&self.qmd.node);
         // No node flags before the script. Anything here is inherited by
@@ -489,12 +502,10 @@ impl Index {
             .arg(self.qmd_dir.join("index.sqlite"))
             .arg(verb)
             .arg(args.to_string());
-        // Where qmd looks for its models: `<cache home>/qmd/models`.
         cmd.env("XDG_CACHE_HOME", &self.cache_home);
         cmd.env("XDG_CONFIG_HOME", &self.cache_home);
         cmd.env("NO_COLOR", "1");
         cmd.stdout(std::process::Stdio::piped());
-        status_line!("[qmd-indexer] qmd {verb} {args}");
         read_events(&mut cmd, on_progress, &*self.stop.0).with_context(|| format!("qmd {verb}"))
     }
 }

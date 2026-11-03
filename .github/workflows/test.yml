@@ -80,8 +80,8 @@ concurrency:
   group: test-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Three bazel jobs gate a merge, deliberately (`deny` is a fourth job, a
-# one-minute lockfile scan with no bazel in it; `e2e` has its reason
+# Three bazel jobs gate a merge, deliberately (`deny` and `npm-audit`
+# are one-minute lockfile scans with no bazel in them; `e2e` has its reason
 # above its definition). `bazel-test` and `musl-dist` share nothing at
 # execution time — different configurations, disjoint action sets — so
 # running them in sequence just parked the musl build (~80s, of which
@@ -179,6 +179,38 @@ jobs:
 
       - name: cargo deny check (tauri shell)
         run: cd datalib/tauri && cargo deny check
+
+  # The same for the three npm trees a release ships: the UI bundle, and
+  # the qmd and latchkey trees in the runtime asset, the app and the
+  # docker image. A high or critical advisory against a production
+  # dependency of any of them fails this job; the fix is a bump, or a
+  # pnpm `overrides` entry in that tree's pnpm-workspace.yaml
+  # (third-party/qmd/runtime has some). `pnpm audit` reads the lockfile
+  # and asks the registry; nothing is installed.
+  npm-audit:
+    name: pnpm audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: datalib/ui/package.json
+
+      - name: pnpm audit --prod --audit-level high
+        run: |
+          set -uo pipefail
+          failed=()
+          for tree in datalib/ui third-party/qmd/runtime third-party/latchkey/runtime; do
+            echo "::group::$tree"
+            (cd "$tree" && pnpm audit --prod --audit-level high) || failed+=("$tree")
+            echo "::endgroup::"
+          done
+          if (( ${#failed[@]} )); then
+            echo "::error::advisories at high or above in: ${failed[*]}"
+            exit 1
+          fi
 
   bazel-test:
     name: bazel test //...
