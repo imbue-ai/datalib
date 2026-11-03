@@ -367,6 +367,11 @@ impl Fetcher<RevisionExport> for RevisionExports<'_> {
                         "Drive no longer has this revision's content".to_string(),
                     )
                 }
+                Err(e) if api::is_too_large(&e) => Outcome::Unusable(
+                    export(None),
+                    datalib_problems::Reason::OverSizeLimit,
+                    format!("{e:#}"),
+                ),
                 Err(e) if api::is_service(&e) => return Err(BatchError::Terminal(e)),
                 Err(e) if self.stop.requested() => return Err(BatchError::Batch(e)),
                 Err(e) => Outcome::Failed(format!("{e:#}")),
@@ -586,23 +591,32 @@ impl Captures<'_> {
             }
             held_at.push((name, held));
         }
-        let fetched: HashMap<String, String> = futures::stream::iter(wanted)
+        // An image past the size cap is left out, and the rest kept.
+        let fetched: HashMap<String, Option<String>> = futures::stream::iter(wanted)
             .map(|(pointer, url)| async move {
-                let (bytes, content_type) = api::get_image(&url)
-                    .await
-                    .with_context(|| format!("image at {pointer}"))?;
+                let (bytes, content_type) = match api::get_image(&url).await {
+                    Ok(got) => got,
+                    Err(e) if api::is_too_large(&e) => return anyhow::Ok((url, None)),
+                    Err(e) => return Err(e.context(format!("image at {pointer}"))),
+                };
                 self.images.fetch_add(1, Ordering::Relaxed);
-                anyhow::Ok((url, self.stash(bytes, content_type).await?))
+                anyhow::Ok((url, Some(self.stash(bytes, content_type).await?)))
             })
             .buffer_unordered(IMAGES_AT_ONCE)
             .try_collect()
             .await?;
+        let mut images_too_large = 0;
         for ((name, held), (_, url)) in held_at.into_iter().zip(&links) {
-            let blake3 = held.map_or_else(|| fetched[url.as_str()].clone(), str::to_string);
-            parts.push(Part {
-                name,
-                body: Body::Held(blake3),
-            });
+            let blake3 =
+                held.map_or_else(|| fetched[url.as_str()].clone(), |h| Some(h.to_string()));
+            let body = match blake3 {
+                Some(blake3) => Body::Held(blake3),
+                None => {
+                    images_too_large += 1;
+                    Body::Declined
+                }
+            };
+            parts.push(Part { name, body });
         }
 
         // An owner can turn off download for those who may not edit, and
@@ -667,10 +681,25 @@ impl Captures<'_> {
             })?,
             parts,
         };
-        Ok(match declined_exports(&too_large, &not_allowed) {
-            None => Outcome::Got(capture),
-            Some(why) => Outcome::Unusable(capture, datalib_problems::Reason::FetchFailed, why),
-        })
+        let images_left_out = (images_too_large > 0).then(|| {
+            format!("{images_too_large} image(s) larger than one download takes were left out")
+        });
+        Ok(
+            match (declined_exports(&too_large, &not_allowed), images_left_out) {
+                (None, None) => Outcome::Got(capture),
+                (None, Some(why)) => {
+                    Outcome::Unusable(capture, datalib_problems::Reason::OverSizeLimit, why)
+                }
+                (Some(why), None) => {
+                    Outcome::Unusable(capture, datalib_problems::Reason::FetchFailed, why)
+                }
+                (Some(exports), Some(images)) => Outcome::Unusable(
+                    capture,
+                    datalib_problems::Reason::FetchFailed,
+                    format!("{exports}; {images}"),
+                ),
+            },
+        )
     }
 
     /// Drive's first listing after a quiet spell can leave out a file's

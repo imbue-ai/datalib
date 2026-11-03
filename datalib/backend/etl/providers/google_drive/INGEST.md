@@ -26,6 +26,9 @@ signed by Google for about 30 minutes and go out as plain `curl`
 (`api::req_image`). Google signs them afresh on every read, so they are
 taken out of the JSON that is stored (`shape::take_image_links`). The
 image bytes, which do not change, are stored by where each link was.
+An image larger than one plain request takes (1 GiB) is left out: its
+part has no bytes, the rest of the capture is kept, and a warning on the
+file says how many were left out.
 
 A refusal from one service (latchkey has no sign-in for it, the token
 lacks a scope, or the API is off for the OAuth project) ends that kind
@@ -107,6 +110,8 @@ its own, and the kinds drain side by side.
      fetched plain so the credential never follows it to another host
      (`api::get_revision_export`). A `Location` that is not https on
      `googleusercontent.com` fails the export rather than being fetched.
+     A download past the 1 GiB cap is kept like a `404`: an edge with no
+     bytes and a warning, not asked for again.
 
    A `404` means Drive no longer has that revision's content: the edge
    is kept with no bytes and a warning, and not asked for again. A

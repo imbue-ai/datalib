@@ -44,6 +44,7 @@ pub struct Playback {
     hold_sealed: Option<PathBuf>,
     offline: Option<PathBuf>,
     meet: Option<std::sync::Arc<Meet>>,
+    max_bytes: Option<u64>,
 }
 
 /// Requests held until every one named has arrived ([`Playback::meet`]).
@@ -62,6 +63,7 @@ impl Playback {
             hold_sealed: None,
             offline: None,
             meet: None,
+            max_bytes: None,
         }
     }
 
@@ -106,6 +108,15 @@ impl Playback {
         self
     }
 
+    /// A plain request whose taped body is longer than `max_bytes`, or
+    /// than its own `max_bytes`, fails as curl does past
+    /// `--max-filesize`. A test sets it low rather than taping a body of
+    /// the real cap's size.
+    pub fn max_bytes(mut self, max_bytes: u64) -> Self {
+        self.max_bytes = Some(max_bytes);
+        self
+    }
+
     /// Like [`Playback::hold`], but a request waits only once its process
     /// has sealed a checkpoint, so a download publishes something before
     /// it parks.
@@ -127,6 +138,7 @@ impl Playback {
             hold_sealed: path_in(PLAYBACK_HOLD_SEALED_ENV),
             offline: path_in(PLAYBACK_OFFLINE_ENV),
             meet: None,
+            max_bytes: None,
         })
     }
 
@@ -169,7 +181,14 @@ impl Playback {
         }
         match crate::interrupt::before_request().await {
             Some(crate::interrupt::Strike::Interrupted) => Err(interrupted()),
-            None => lookup(req, &self.root).await,
+            None => {
+                let resp = lookup(req, &self.root).await?;
+                let cap = self.max_bytes.unwrap_or(u64::MAX).min(req.max_bytes);
+                if req.bypass_latchkey && resp.body.len() as u64 > cap {
+                    return Err(crate::http::too_large(req, cap));
+                }
+                Ok(resp)
+            }
         }
     }
 }
