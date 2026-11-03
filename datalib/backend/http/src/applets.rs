@@ -116,6 +116,7 @@ fn base_command(
     for (k, v) in &entry.env {
         cmd.env(k, v);
     }
+    datalib_env::inherit_only(&mut cmd, datalib_env::Child::Applet, &[]);
     Ok(cmd)
 }
 

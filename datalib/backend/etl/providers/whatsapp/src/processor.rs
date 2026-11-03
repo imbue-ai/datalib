@@ -66,7 +66,7 @@ impl DataProcessor for WhatsappIngest {
             .sync
             .key_env_var
             .as_deref()
-            .unwrap_or("WHATSAPP_BACKUP_DECRYPTION_KEY");
+            .unwrap_or(datalib_env::WHATSAPP_BACKUP_DECRYPTION_KEY);
         let key_hex = std::env::var(env_var)
             .with_context(|| format!("read WhatsApp root key from env var `{env_var}`"))?;
         let root_key = datalib_whatsapp_backup::decode_hex_key(&key_hex)?;

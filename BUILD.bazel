@@ -1,4 +1,4 @@
-load("@rules_python//python:defs.bzl", "py_binary")
+load("@rules_python//python:defs.bzl", "py_binary", "py_test")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 
 exports_files([
@@ -94,6 +94,18 @@ py_binary(
     data = ["pyproject.toml"],
     main = "scripts/lint_repo.py",
     visibility = ["//visibility:public"],
+)
+
+# Check 11's parsing of a package runner's command line.
+py_test(
+    name = "lint_repo_test",
+    size = "small",
+    srcs = [
+        "scripts/lint_repo.py",
+        "scripts/lint_repo_test.py",
+    ],
+    imports = ["scripts"],
+    main = "scripts/lint_repo_test.py",
 )
 
 sh_binary(

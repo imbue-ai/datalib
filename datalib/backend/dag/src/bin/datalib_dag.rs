@@ -454,11 +454,10 @@ fn check_params(
         .map(|d| d.join("datalib-step"))
         .filter(|p| p.is_file());
     let program = beside.unwrap_or_else(|| "datalib-step".into());
-    let out = match std::process::Command::new(&program)
-        .arg("check-params")
-        .arg(config_path)
-        .output()
-    {
+    let mut cmd = std::process::Command::new(&program);
+    cmd.arg("check-params").arg(config_path);
+    datalib_env::inherit_only(&mut cmd, datalib_env::Child::Step, &[]);
+    let out = match cmd.output() {
         Ok(out) if out.status.success() => out,
         Ok(out) => {
             eprintln!(

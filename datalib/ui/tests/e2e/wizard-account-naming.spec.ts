@@ -38,11 +38,11 @@ async function stubLogin(page: Page, landed: string) {
   const sent: { account?: string }[] = [];
   await page.route("**/api/latchkey/slack/connect", (route) => {
     sent.push(route.request().postDataJSON());
-    return route.fulfill({ json: { id: "s1", status: "running", output: "", phase: "preparing" } });
+    return route.fulfill({ json: { id: "s1", status: "running", detail: "", phase: "preparing" } });
   });
   await page.route("**/api/latchkey/connect/s1/status", (route) =>
     route.fulfill({
-      json: { id: "s1", status: "ok", account: landed, output: "", phase: "signing_in" },
+      json: { id: "s1", status: "ok", account: landed, detail: "", phase: "signing_in" },
     }),
   );
   return sent;

@@ -43,7 +43,10 @@ how an applet runs a package's program (`packages.md`).
 when the applet stops — params can hold tokens, and `ps` shows every
 user every command line), the working directory is the data root, and
 `env` is merged into the child — all as for a step, so there is one set
-of rules.
+of rules. The same goes for what an applet is handed of the server's
+own environment, except that it gets none of latchkey's `LATCHKEY_*`
+variables ([`step_protocol.md`](step_protocol.md) § "What your command
+receives").
 
 The child also gets four variables:
 

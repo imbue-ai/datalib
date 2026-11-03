@@ -125,6 +125,21 @@ plus `PATH` (with the binary dir first), `PYTHONUNBUFFERED=1`, and
 anything in the entry's `env` table (which wins over the run-wide values
 on collision).
 
+**Nothing else of the runner's own environment reaches a step but a
+short list** (`datalib_env::inherit_only`): what any program needs to
+run (`HOME`, `TMPDIR`, the locale and time zone, proxy and certificate
+settings), latchkey's `LATCHKEY_*` variables and what latchkey reads,
+and how this build logs and finds its runtime. A variable the step's
+`params` name under a key ending in `_env_var`, at any depth
+(`key_env_var = "WHATSAPP_KEY"`), is handed too, and so is every name
+in `DATALIB_CHILD_ENV` (comma-separated) where the runner or the server
+was started. `datalib-step` is also handed `WHATSAPP_BACKUP_DECRYPTION_KEY`
+and `SIGNAL_BACKUP_PASSPHRASE`, which its WhatsApp and Signal sources
+read when the config names no variable. Anything else a person exported,
+another tool's token or the server's own API token, never reaches a
+step: a value a step needs goes in its `env`, or its name in
+`DATALIB_CHILD_ENV`.
+
 ## The rules you must follow
 
 These are what the scheduler's correctness rests on:

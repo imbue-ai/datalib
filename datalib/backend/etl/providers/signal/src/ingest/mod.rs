@@ -27,7 +27,7 @@ use backups::{Found, Top, LEDGER};
 pub use db::{db_path_for, RawDb};
 pub use schema_raw::{AccountRow, ChatItemRow, ChatRow, RecipientRow};
 
-pub const DEFAULT_AEP_ENV: &str = "SIGNAL_BACKUP_PASSPHRASE";
+pub const DEFAULT_AEP_ENV: &str = datalib_env::SIGNAL_BACKUP_PASSPHRASE;
 
 #[derive(Debug, Clone)]
 pub struct FetchOptions {

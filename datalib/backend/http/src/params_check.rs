@@ -51,11 +51,10 @@ pub async fn refused_by(step_bin: &Path, text: &str) -> Result<Vec<Diagnostic>> 
     tokio::fs::write(&path, text)
         .await
         .with_context(|| format!("write {}", path.display()))?;
-    let run = tokio::process::Command::new(step_bin)
-        .arg("check-params")
-        .arg(&path)
-        .kill_on_drop(true)
-        .output();
+    let mut cmd = tokio::process::Command::new(step_bin);
+    cmd.arg("check-params").arg(&path).kill_on_drop(true);
+    datalib_env::inherit_only(cmd.as_std_mut(), datalib_env::Child::Step, &[]);
+    let run = cmd.output();
     let out = tokio::time::timeout(TIMEOUT, run)
         .await
         .with_context(|| {

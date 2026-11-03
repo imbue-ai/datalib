@@ -274,10 +274,51 @@ renews must check the account it got before using it
   permission can. Behind a gateway (`LATCHKEY_GATEWAY` set), a step's
   sign-in hint points at the gateway instead of `latchkey auth browser`,
   which the gateway refuses.
-- The wizard turns whatever latchkey or a probe printed into one
+- **latchkey's own message is shown and logged as it printed it.**
+  Every error latchkey prints is one of its typed messages, and none
+  repeats a header or token it was handed; curl runs with `-sS` and
+  prints only its own one-line errors. The URL beside it is a
+  `ShownUrl` (`datalib/backend/etl/web/src/http.rs`): scheme, host and
+  path, never the query, where a signed link carries its signature, nor
+  the signed end of a YoLink path.
+- The wizard turns what a sign-in or a probe ran into into one
   sentence per kind of trouble: `IssueKind` in
   `datalib/backend/probe/src/issue.rs`, worded in
   `datalib/ui/src/config/issues.ts`.
+
+## A pasted credential is on latchkey's command line
+
+The wizard's paste form stores a credential with `latchkey auth set
+<service> -H '<header>'` (or `-u user:password`, or `auth set-nocurl
+<service> <folder>`), and a pasted OAuth client with `latchkey auth
+prepare <service> '<json with the secret>'`. latchkey 3.21.0 takes all
+of these only as arguments, so for the second the command runs, the
+secret is on its command line, where another user on the machine can
+read it with `ps`. It is the same exposure as the `auth set … $(pbpaste)`
+a person would type, and the wizard cannot close it from its side:
+latchkey has to read the secret from somewhere else. What would close
+it, upstream:
+
+- `auth set <service> --stdin`, reading the curl arguments from stdin,
+  one per line (a header line stays one argument, spaces and all);
+- `auth set-nocurl <service> --stdin`, the same for a plugin's
+  arguments;
+- `auth prepare <service> -` reading the JSON from stdin.
+
+latchkey already reads a secret from stdin once, for `re-encrypt`'s new
+key. Once a pinned latchkey has these, `connect.rs` writes the secret
+to the child's stdin and nothing else changes.
+
+## What latchkey is handed of the server's environment
+
+Every child datalib starts is handed only the variables it is listed
+for (`datalib_env::inherit_only`). latchkey, from the wizard, gets what
+any program needs (`HOME`, `PATH`, `TMPDIR`, the locale, proxy and
+certificate settings), every `LATCHKEY_*` variable, and what its
+browser and keyring need on Linux (`DISPLAY`, `WAYLAND_DISPLAY`,
+`XAUTHORITY`, `DBUS_SESSION_BUS_ADDRESS`, `PLAYWRIGHT_BROWSERS_PATH`). A
+step gets the same, since it may run `latchkey curl`; an applet gets no
+`LATCHKEY_*` at all, so a package's applet never sees the store's key.
 
 ## Testing against the real thing
 
